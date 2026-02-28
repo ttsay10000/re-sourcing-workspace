@@ -214,7 +214,7 @@ function runPropertyToNormalized(raw: Record<string, unknown>, index: number): L
   };
 }
 
-/** Send this run's properties to property data (listings + snapshots). No auto-populate; user-triggered only. */
+/** Send this run's properties to property data (listings + snapshots). No auto-populate; user-triggered only. Uses a transaction so all-or-nothing. */
 router.post("/test-agent/runs/:id/send-to-property-data", async (req: Request, res: Response) => {
   const run = testRunsStore.find((r) => r.id === req.params.id);
   if (!run) {
@@ -228,36 +228,87 @@ router.post("/test-agent/runs/:id/send-to-property-data", async (req: Request, r
   try {
     const db = await import("@re-sourcing/db");
     const pool = db.getPool();
-    const listingRepo = new db.ListingRepo({ pool });
-    const snapshotRepo = new db.SnapshotRepo({ pool });
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const listingRepo = new db.ListingRepo({ pool, client });
+      const snapshotRepo = new db.SnapshotRepo({ pool, client });
 
-    const results: { listingId: string; externalId: string; created: boolean }[] = [];
-    for (let i = 0; i < run.properties.length; i++) {
-      const normalized = runPropertyToNormalized(run.properties[i] as Record<string, unknown>, i);
-      const { listing, created } = await listingRepo.upsert(normalized);
-      const rawPayload = run.properties[i] as Record<string, unknown>;
-      await snapshotRepo.create({
-        listingId: listing.id,
-        runId: null,
-        rawPayloadPath: "inline",
-        metadata: {
-          testRunId: run.id,
-          capturedAt: new Date().toISOString(),
-          rawPayload,
-        },
-      });
-      results.push({ listingId: listing.id, externalId: normalized.externalId, created });
+      const results: { listingId: string; externalId: string; created: boolean }[] = [];
+      for (let i = 0; i < run.properties.length; i++) {
+        const normalized = runPropertyToNormalized(run.properties[i] as Record<string, unknown>, i);
+        const { listing, created } = await listingRepo.upsert(normalized);
+        const rawPayload = run.properties[i] as Record<string, unknown>;
+        let metadata: Record<string, unknown>;
+        try {
+          metadata = {
+            testRunId: run.id,
+            capturedAt: new Date().toISOString(),
+            rawPayload,
+          };
+          JSON.stringify(metadata);
+        } catch (_ser) {
+          throw new Error("Snapshot payload could not be serialized (e.g. circular reference).");
+        }
+        await snapshotRepo.create({
+          listingId: listing.id,
+          runId: null,
+          rawPayloadPath: "inline",
+          metadata,
+        });
+        results.push({ listingId: listing.id, externalId: normalized.externalId, created });
+      }
+      await client.query("COMMIT");
+      res.json({ ok: true, sent: results.length, results });
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw err;
+    } finally {
+      client.release();
     }
-    res.json({ ok: true, sent: results.length, results });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[send-to-property-data]", err);
-    const isEnvOrConfig =
-      /DATABASE_URL|connection|ECONNREFUSED|getPool|config/i.test(message);
-    const errorMessage = isEnvOrConfig
-      ? "Database unavailable. Set DATABASE_URL in the API environment, ensure Postgres is running, and run migrations (e.g. npm run db:migrate)."
-      : "Database unavailable or failed to persist.";
+    let errorMessage: string;
+    if (/DATABASE_URL is required|connection|ECONNREFUSED|getPool|config/i.test(message)) {
+      errorMessage =
+        "Database unavailable. Set DATABASE_URL in the API environment and ensure Postgres is running.";
+    } else if (/column.*does not exist|relation.*does not exist/i.test(message)) {
+      errorMessage =
+        "Database schema is out of date. Run migrations: npm run db:migrate (with DATABASE_URL set).";
+    } else {
+      errorMessage = "Database unavailable or failed to persist.";
+    }
     res.status(503).json({ error: errorMessage, details: message });
+  }
+});
+
+/** Clear all raw listings (and their snapshots via CASCADE). For testing. Requires ?confirm=1 or body { confirm: true }. */
+router.delete("/test-agent/property-data", async (req: Request, res: Response) => {
+  const confirm = req.query.confirm === "1" || req.query.confirm === "true" || (req.body && req.body.confirm === true);
+  if (!confirm) {
+    res.status(400).json({
+      error: "Confirmation required. Use ?confirm=1 or body { confirm: true } to clear all raw listings and snapshots.",
+    });
+    return;
+  }
+  try {
+    const db = await import("@re-sourcing/db");
+    const pool = db.getPool();
+    const r = await pool.query("DELETE FROM listings RETURNING id");
+    const deleted = r.rowCount ?? 0;
+    res.json({ ok: true, deleted });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[clear-property-data]", err);
+    if (/DATABASE_URL is required|connection|ECONNREFUSED|getPool|config/i.test(message)) {
+      res.status(503).json({
+        error: "Database unavailable. Set DATABASE_URL and ensure Postgres is running.",
+        details: message,
+      });
+    } else {
+      res.status(503).json({ error: "Failed to clear property data.", details: message });
+    }
   }
 });
 

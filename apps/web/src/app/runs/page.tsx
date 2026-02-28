@@ -200,9 +200,13 @@ export default function RunsPage() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
     })
-      .then((r) => r.json())
-      .then((data) => {
-        if (data.error) throw new Error(data.error);
+      .then((r) => r.json().then((data) => ({ ok: r.ok, status: r.status, data })))
+      .then(({ ok, data }) => {
+        if (!ok && data?.error) {
+          const detail = data.details ? ` — ${data.details}` : "";
+          throw new Error(data.error + detail);
+        }
+        if (data?.error) throw new Error(data.error);
         setSendingRunId(null);
         window.location.href = "/property-data";
       })

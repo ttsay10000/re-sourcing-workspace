@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { PropertyCard } from "./PropertyCard";
+import React, { useCallback, useEffect, useState } from "react";
+import { PropertyDetailCollapsible } from "./PropertyDetailCollapsible";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
 
@@ -34,6 +34,8 @@ export default function PropertyDataPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [expandedRowId, setExpandedRowId] = useState<string | null>(null);
+  const [clearing, setClearing] = useState(false);
 
   const fetchListings = useCallback(() => {
     setLoading(true);
@@ -59,6 +61,24 @@ export default function PropertyDataPage() {
     n != null && !Number.isNaN(n)
       ? new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(n)
       : "—";
+
+  const handleClearPropertyData = () => {
+    if (!confirm("Clear all raw listings and their snapshots? This cannot be undone.")) return;
+    setClearing(true);
+    setError(null);
+    fetch(`${API_BASE}/api/test-agent/property-data?confirm=1`, { method: "DELETE" })
+      .then((r) => r.json().then((data) => ({ ok: r.ok, data })))
+      .then(({ ok, data }) => {
+        if (!ok && data?.error) {
+          const detail = data.details ? ` — ${data.details}` : "";
+          throw new Error(data.error + detail);
+        }
+        if (data?.error) throw new Error(data.error);
+        fetchListings();
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : "Failed to clear property data"))
+      .finally(() => setClearing(false));
+  };
 
   return (
     <div className="property-data-layout">
@@ -127,6 +147,7 @@ export default function PropertyDataPage() {
             <table className="property-data-table">
               <thead>
                 <tr>
+                  <th className="property-data-table-expand-col" aria-label="Expand row" />
                   <th>Listing ID</th>
                   <th>Source</th>
                   <th>Raw Address</th>
@@ -139,34 +160,58 @@ export default function PropertyDataPage() {
               <tbody>
                 {listings.length === 0 ? (
                   <tr>
-                    <td colSpan={7} style={{ padding: "2rem", color: "#737373", textAlign: "center" }}>
+                    <td colSpan={8} style={{ padding: "2rem", color: "#737373", textAlign: "center" }}>
                       No raw listings yet. Run a flow from Runs, then use &quot;Send to property data&quot; for a
                       completed run.
                     </td>
                   </tr>
                 ) : (
                   listings.map((row) => (
-                    <tr
-                      key={row.id}
-                      className={`property-data-row--clickable ${selectedId === row.id ? "property-data-row--selected" : ""}`}
-                      onClick={() => setSelectedId(row.id)}
-                    >
-                      <td>{row.externalId}</td>
-                      <td>{row.source === "streeteasy" ? "Streeteasy" : row.source}</td>
-                      <td>{row.address || "—"}</td>
-                      <td>—</td>
-                      <td>—</td>
-                      <td>{formatPrice(row.price)}</td>
-                      <td>
-                        {row.url && row.url !== "#" ? (
-                          <a href={row.url} target="_blank" rel="noopener noreferrer">
-                            view source
-                          </a>
-                        ) : (
-                          "—"
-                        )}
-                      </td>
-                    </tr>
+                    <React.Fragment key={row.id}>
+                      <tr
+                        className={`property-data-row--clickable ${selectedId === row.id ? "property-data-row--selected" : ""}`}
+                        onClick={() => setSelectedId(row.id)}
+                      >
+                        <td className="property-data-table-expand-col">
+                          <button
+                            type="button"
+                            className="property-data-row-expand-btn"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setExpandedRowId((id) => (id === row.id ? null : row.id));
+                            }}
+                            aria-expanded={expandedRowId === row.id}
+                            aria-label={expandedRowId === row.id ? "Collapse row" : "Expand row"}
+                          >
+                            <span className={`property-data-row-expand-chevron ${expandedRowId === row.id ? "property-data-row-expand-chevron--open" : ""}`}>
+                              ▼
+                            </span>
+                          </button>
+                        </td>
+                        <td>{row.externalId}</td>
+                        <td>{row.source === "streeteasy" ? "Streeteasy" : row.source}</td>
+                        <td>{row.address || "—"}</td>
+                        <td>—</td>
+                        <td>—</td>
+                        <td>{formatPrice(row.price)}</td>
+                        <td>
+                          {row.url && row.url !== "#" ? (
+                            <a href={row.url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
+                              view source
+                            </a>
+                          ) : (
+                            "—"
+                          )}
+                        </td>
+                      </tr>
+                      {expandedRowId === row.id && (
+                        <tr key={`${row.id}-detail`} className="property-data-detail-row">
+                          <td colSpan={8} className="property-data-detail-cell">
+                            <PropertyDetailCollapsible listing={row} />
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
                   ))
                 )}
               </tbody>
@@ -178,7 +223,7 @@ export default function PropertyDataPage() {
           {selectedListing ? (
             <>
               <h3 className="sidebar-title">Property</h3>
-              <PropertyCard listing={selectedListing} />
+              <PropertyDetailCollapsible listing={selectedListing} />
             </>
           ) : (
             <>
@@ -238,6 +283,15 @@ export default function PropertyDataPage() {
           {activeTab === "raw" && total > 0 ? `${total} raw listing(s)` : "Reset of filters"}
         </span>
         <div className="property-data-bottom-actions">
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={handleClearPropertyData}
+            disabled={clearing || activeTab !== "raw"}
+            title="Remove all raw listings and snapshots (for testing)"
+          >
+            {clearing ? "Clearing…" : "Clear all (test)"}
+          </button>
           <button type="button" className="btn-secondary" disabled>Reset</button>
           <button type="button" className="btn-primary" disabled>Apply</button>
         </div>
