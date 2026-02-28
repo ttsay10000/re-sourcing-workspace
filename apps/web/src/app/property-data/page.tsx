@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useState } from "react";
+import React, { Suspense, useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { PropertyDetailCollapsible } from "./PropertyDetailCollapsible";
 
@@ -39,7 +39,7 @@ interface ListingRow {
   uploadedRunId?: string | null;
 }
 
-export default function PropertyDataPage() {
+function PropertyDataContent() {
   const [activeTab, setActiveTab] = useState<TabId>("raw");
   const [listings, setListings] = useState<ListingRow[]>([]);
   const [total, setTotal] = useState(0);
@@ -315,5 +315,13 @@ export default function PropertyDataPage() {
         )}
       </div>
     </div>
+  );
+}
+
+export default function PropertyDataPage() {
+  return (
+    <Suspense fallback={<div className="property-data-layout"><h1 className="page-title">Property Data</h1><p style={{ padding: "2rem", color: "#737373" }}>Loading…</p></div>}>
+      <PropertyDataContent />
+    </Suspense>
   );
 }
