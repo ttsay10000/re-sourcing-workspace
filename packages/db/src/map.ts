@@ -109,6 +109,8 @@ export function mapListing(row: Record<string, unknown>): ListingRow {
     listedAt: row.listed_at != null ? toIso(row.listed_at) : null,
     agentNames: (row.agent_names as string[]) ?? null,
     extra: (row.extra as Record<string, unknown>) ?? null,
+    uploadedAt: row.uploaded_at != null ? toIso(row.uploaded_at) : null,
+    uploadedRunId: (row.uploaded_run_id as string) ?? null,
     createdAt: toIso(row.created_at),
     updatedAt: toIso(row.updated_at),
   };

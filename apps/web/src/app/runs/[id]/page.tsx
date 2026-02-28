@@ -63,14 +63,6 @@ export default function RunDetailPage() {
       <h1 className="page-title">Run at {formatTime(run.startedAt)}</h1>
       <p className="card" style={{ marginBottom: "1rem" }}>
         <Link href="/runs">← Back to Runs</Link>
-        {" · "}
-        <a
-          href="https://rapidapi.com/realestator/api/nyc-real-estate-api"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          NYC Real Estate API
-        </a>
       </p>
       <p style={{ marginBottom: "1rem" }}>
         Step 1: {run.step1Status} ({run.step1Count} URLs) — Step 2: {run.step2Status} (

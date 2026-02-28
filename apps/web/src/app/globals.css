@@ -744,6 +744,10 @@ textarea {
   min-height: 0;
 }
 
+.property-data-content--no-sidebar {
+  grid-template-columns: 1fr;
+}
+
 .property-data-table-wrap {
   overflow: auto;
   min-height: 320px;
@@ -852,6 +856,18 @@ textarea {
   font-size: 0.875rem;
 }
 
+.property-detail-address-block {
+  margin-bottom: 0.75rem;
+}
+
+.property-detail-address-block .property-card-title {
+  margin-bottom: 0.25rem;
+}
+
+.property-detail-address-block .property-card-meta {
+  margin-top: 0.25rem;
+}
+
 .property-detail-section {
   border: 1px solid #e5e5e5;
   border-radius: 6px;
@@ -919,20 +935,20 @@ textarea {
 }
 
 .property-card-title {
-  font-size: 1.1rem;
+  font-size: 1rem;
   font-weight: 600;
   margin: 0;
-  line-height: 1.3;
+  line-height: 1.35;
   color: #111;
 }
 
 .property-card-neighborhood {
   color: #525252;
-  font-size: 0.8rem;
+  font-size: 0.8125rem;
 }
 
 .property-card-price {
-  font-size: 1.25rem;
+  font-size: 1rem;
   font-weight: 600;
   color: #111;
 }
@@ -941,14 +957,15 @@ textarea {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem 1rem;
-  font-size: 0.8rem;
+  font-size: 0.8125rem;
   color: #525252;
 }
 
 .property-card-dl {
   display: grid;
-  gap: 0.35rem 1rem;
+  gap: 0.25rem 1rem;
   margin: 0;
+  font-size: 0.8125rem;
 }
 
 .property-card-dl div {
@@ -962,10 +979,13 @@ textarea {
   font-weight: 500;
   color: #525252;
   min-width: 6rem;
+  font-size: inherit;
 }
 
 .property-card-dl dd {
   margin: 0;
+  font-size: inherit;
+  color: #111;
 }
 
 .property-card-heading {
@@ -978,11 +998,16 @@ textarea {
 .property-card-amenities {
   margin: 0;
   padding-left: 1.25rem;
+  list-style: disc;
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.25rem 0.75rem;
-  font-size: 0.8rem;
-  color: #525252;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.8125rem;
+  color: #404040;
+}
+
+.property-card-amenities li {
+  text-transform: capitalize;
 }
 
 .property-card-description-wrap {
@@ -1029,6 +1054,16 @@ textarea {
   font-family: ui-monospace, monospace;
 }
 
+.property-card-footer-uploaded {
+  margin-top: 0.5rem;
+  font-size: 0.75rem;
+  color: #737373;
+}
+
+.property-card-uploaded {
+  display: block;
+}
+
 .property-card-footer a.property-card-source-link {
   margin-left: 0.75rem;
   color: #2563eb;
@@ -1047,7 +1082,9 @@ textarea {
 
 .property-card-gallery-main-wrap {
   display: block;
-  aspect-ratio: 4/3;
+  max-height: 220px;
+  width: auto;
+  margin: 0 auto;
   border-radius: 8px;
   overflow: hidden;
   background: #f0f0f0;
@@ -1152,6 +1189,17 @@ textarea {
 .property-data-bottom-actions {
   display: flex;
   gap: 0.5rem;
+}
+
+.property-data-run-log-section {
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid #e5e5e5;
+}
+
+.property-data-run-log-table-wrap {
+  margin-top: 0.5rem;
+  padding: 0.75rem 0;
 }
 
 /* Placeholder pages (Deal Analysis, Rental Analysis) */

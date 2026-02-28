@@ -3,7 +3,7 @@
  *
  * Step 1 — GET active properties:
  *   GET https://nyc-real-estate-api.p.rapidapi.com/sales/search
- *   Querystring: areas, minPrice, maxPrice, minBeds, maxBeds, minBaths, amenities, types, limit, offset
+ *   Querystring: areas, minPrice, maxPrice, minBeds, maxBeds, minBaths, maxHoa, maxTax, amenities, types, limit, offset
  *   (each from run filters / UI when starting a run).
  *
  * Step 2 — GET sale details per listing:
@@ -17,7 +17,12 @@ const SALES_SEARCH_URL = "https://nyc-real-estate-api.p.rapidapi.com/sales/searc
 const SALES_URL_ENDPOINT = "https://nyc-real-estate-api.p.rapidapi.com/sales/url";
 const HOST = "nyc-real-estate-api.p.rapidapi.com";
 
-/** Criteria for GET Active Sales; areas is required (e.g. "all-downtown,all-midtown"). */
+/**
+ * Criteria for GET Active Sales; areas is required (e.g. "all-downtown,all-midtown").
+ * types: comma-separated, API allows only condo, coop, house (no multifamily).
+ * amenities: e.g. washer_dryer, dishwasher, private_outdoor_space, laundry, elevator, doorman.
+ * See https://streasy.gitbook.io/search-api
+ */
 export interface NycsSearchCriteria {
   areas: string;
   minPrice?: number;
@@ -25,6 +30,8 @@ export interface NycsSearchCriteria {
   minBeds?: number;
   maxBeds?: number;
   minBaths?: number;
+  maxHoa?: number;
+  maxTax?: number;
   amenities?: string;
   types?: string;
   limit?: number;
@@ -148,6 +155,8 @@ export async function fetchActiveSalesWithCriteria(criteria: NycsSearchCriteria)
   if (criteria.minBeds != null) params.minBeds = criteria.minBeds;
   if (criteria.maxBeds != null) params.maxBeds = criteria.maxBeds;
   if (criteria.minBaths != null) params.minBaths = criteria.minBaths;
+  if (criteria.maxHoa != null) params.maxHoa = criteria.maxHoa;
+  if (criteria.maxTax != null) params.maxTax = criteria.maxTax;
   if (criteria.amenities != null && criteria.amenities.trim()) params.amenities = criteria.amenities.trim();
   if (criteria.types != null && criteria.types.trim()) params.types = criteria.types.trim();
   if (criteria.limit != null) params.limit = criteria.limit;

@@ -78,10 +78,14 @@ export class ListingRepo {
   }
 
   /**
-   * Upsert listing by (source, external_id). If exists: update normalized fields and last_seen_at.
-   * If new: set first_seen_at and last_seen_at, lifecycle_state = 'active'.
+   * Upsert listing by (source, external_id). Dedupes by listing ID (external_id).
+   * If exists: update normalized fields and last_seen_at.
+   * If new: set first_seen_at, last_seen_at, lifecycle_state = 'active', and optional uploadedAt/uploadedRunId.
    */
-  async upsert(normalized: ListingNormalized): Promise<{ listing: ListingRow; created: boolean }> {
+  async upsert(
+    normalized: ListingNormalized,
+    options?: { uploadedRunId?: string | null }
+  ): Promise<{ listing: ListingRow; created: boolean }> {
     const existing = await this.bySourceAndExternalId(normalized.source, normalized.externalId);
     const row = listingNormalizedToRow(normalized) as Record<string, unknown>;
     if (existing) {
@@ -115,14 +119,16 @@ export class ListingRepo {
       );
       return { listing: mapListing(r.rows[0]), created: false };
     }
+    const uploadedRunId = options?.uploadedRunId ?? null;
     const r = await this.client.query(
       `INSERT INTO listings (
         source, external_id, lifecycle_state, first_seen_at, last_seen_at,
         address, city, state, zip, price, beds, baths, sqft, url, title, description,
-        lat, lon, image_urls, listed_at, agent_names, extra
+        lat, lon, image_urls, listed_at, agent_names, extra, uploaded_at, uploaded_run_id
       ) VALUES (
         $1, $2, 'active', now(), now(),
-        $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
+        $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19,
+        $20, $21
       ) RETURNING *`,
       [
         normalized.source,
@@ -144,6 +150,8 @@ export class ListingRepo {
         row.listed_at,
         row.agent_names,
         row.extra,
+        uploadedRunId != null ? new Date() : null,
+        uploadedRunId,
       ]
     );
     return { listing: mapListing(r.rows[0]), created: true };

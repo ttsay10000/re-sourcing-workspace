@@ -8,11 +8,11 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
 
 const BEDS_BATHS_OPTIONS = [1, 1.5, 2, 2.5, 3, 3.5, 4] as const;
 
+// Active Sales Search API supports only: condo, coop, house (https://streasy.gitbook.io/search-api)
 const TYPE_OPTIONS: { value: string; label: string }[] = [
   { value: "condo", label: "Condo" },
-  { value: "co-op", label: "Co-op" },
+  { value: "coop", label: "Co-op" },
   { value: "house", label: "House" },
-  { value: "multifamily", label: "Multifamily" },
 ];
 
 interface RunCriteria {
@@ -22,8 +22,12 @@ interface RunCriteria {
   minBeds?: number | null;
   maxBeds?: number | null;
   minBaths?: number | null;
+  maxHoa?: number | null;
+  maxTax?: number | null;
   amenities?: string | null;
   types?: string | null;
+  /** Exclude these types after fetch (e.g. condo,coop,house → multifamily only). */
+  excludeTypes?: string | null;
   limit?: number | null;
   offset?: number | null;
 }
@@ -57,7 +61,10 @@ export default function RunsPage() {
   const [minBeds, setMinBeds] = useState<string>("");
   const [maxBeds, setMaxBeds] = useState<string>("");
   const [minBaths, setMinBaths] = useState<string>("");
+  const [maxHoa, setMaxHoa] = useState<string>("");
+  const [maxTax, setMaxTax] = useState<string>("");
   const [amenities, setAmenities] = useState<string>("");
+  const [multifamilyOnly, setMultifamilyOnly] = useState(false);
   const [selectedTypes, setSelectedTypes] = useState<string[]>([]);
   const [limit, setLimit] = useState<string>("100");
 
@@ -92,15 +99,21 @@ export default function RunsPage() {
       selectedAreas.length > 0 ? selectedAreas.join(",") : "all-downtown,all-midtown";
     const body: RunCriteria = {
       areas: areasValue,
-      limit: limit ? Math.min(Number(limit), 200) : 100,
+      limit: limit ? Math.min(Number(limit), 500) : 100,
     };
     if (minPrice !== "") body.minPrice = Number(minPrice);
     if (maxPrice !== "") body.maxPrice = Number(maxPrice);
     if (minBeds !== "") body.minBeds = Number(minBeds);
     if (maxBeds !== "") body.maxBeds = Number(maxBeds);
     if (minBaths !== "") body.minBaths = Number(minBaths);
+    if (maxHoa !== "") body.maxHoa = Number(maxHoa);
+    if (maxTax !== "") body.maxTax = Number(maxTax);
     if (amenities.trim()) body.amenities = amenities.trim();
-    if (selectedTypes.length > 0) body.types = selectedTypes.join(",");
+    if (multifamilyOnly) {
+      body.excludeTypes = "condo,coop,house";
+    } else if (selectedTypes.length > 0) {
+      body.types = selectedTypes.join(",");
+    }
 
     fetch(`${API_BASE}/api/test-agent/run`, {
       method: "POST",
@@ -161,6 +174,11 @@ export default function RunsPage() {
     );
   };
 
+  const handleMultifamilyOnlyChange = (checked: boolean) => {
+    setMultifamilyOnly(checked);
+    if (checked) setSelectedTypes([]);
+  };
+
   const formatTime = (iso: string) => {
     const d = new Date(iso);
     return d.toLocaleString();
@@ -208,7 +226,11 @@ export default function RunsPage() {
         }
         if (data?.error) throw new Error(data.error);
         setSendingRunId(null);
-        window.location.href = "/property-data";
+        const runNum = data?.runNumber != null ? ` Run #${data.runNumber} logged.` : "";
+        const msg = [data?.created ?? 0, data?.updated ?? 0].some((n) => n > 0)
+          ? `${data?.created ?? 0} created, ${data?.updated ?? 0} updated.${runNum}`
+          : runNum || "Sent.";
+        window.location.href = `/property-data?sent=${encodeURIComponent(msg)}`;
       })
       .catch((err) => {
         setError(err instanceof Error ? err.message : "Failed to send to property data");
@@ -245,6 +267,11 @@ export default function RunsPage() {
           <strong>Send</strong>. Each run appears in the log with step progress. When a run is
           complete, use <strong>Send to property data</strong> to persist that run&apos;s
           properties into Property Data (raw listings). Data is not auto-populated.
+        </p>
+        <p style={{ fontSize: "0.875rem", color: "#525252", marginTop: "0.5rem" }}>
+          <strong>Filters (Active Sales API):</strong> Property type is limited to Condo, Co-op, House
+          (multifamily is not supported by the API). Step 2 (Get Sale by URL) returns full details
+          (e.g. propertyType, monthlyHoa, monthlyTax) per listing but has no filter parameters.
         </p>
         <p style={{ fontSize: "0.875rem", color: "#525252", marginTop: "0.75rem" }}>
           Ensure <code>RAPIDAPI_KEY</code> is set in the API server environment (see{" "}
@@ -367,12 +394,40 @@ export default function RunsPage() {
           </div>
           <div>
             <label style={{ display: "block", marginBottom: "0.25rem", fontSize: "0.85rem" }}>
+              Max HOA/mo
+            </label>
+            <input
+              type="number"
+              min={0}
+              value={maxHoa}
+              onChange={(e) => setMaxHoa(e.target.value)}
+              className="input-text"
+              placeholder="—"
+              style={{ width: "100%" }}
+            />
+          </div>
+          <div>
+            <label style={{ display: "block", marginBottom: "0.25rem", fontSize: "0.85rem" }}>
+              Max tax/mo
+            </label>
+            <input
+              type="number"
+              min={0}
+              value={maxTax}
+              onChange={(e) => setMaxTax(e.target.value)}
+              className="input-text"
+              placeholder="—"
+              style={{ width: "100%" }}
+            />
+          </div>
+          <div>
+            <label style={{ display: "block", marginBottom: "0.25rem", fontSize: "0.85rem" }}>
               Limit (properties)
             </label>
             <input
               type="number"
               min={1}
-              max={200}
+              max={500}
               value={limit}
               onChange={(e) => setLimit(e.target.value)}
               className="input-text"
@@ -395,8 +450,22 @@ export default function RunsPage() {
           />
         </div>
         <div style={{ marginBottom: "1rem" }}>
-          <label style={{ display: "block", marginBottom: "0.35rem", fontSize: "0.85rem" }}>
-            Types (select multiple)
+          <label
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "0.35rem",
+              marginBottom: "0.5rem",
+              fontSize: "0.85rem",
+              cursor: "pointer",
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={multifamilyOnly}
+              onChange={(e) => handleMultifamilyOnlyChange(e.target.checked)}
+            />
+            <strong>Multifamily only</strong> (exclude Condo, Co-op, House — run returns multifamily and other types)
           </label>
           <div
             style={{
@@ -407,6 +476,9 @@ export default function RunsPage() {
               border: "1px solid #e5e5e5",
               borderRadius: 6,
               background: "#f5f5f5",
+              marginTop: "0.35rem",
+              opacity: multifamilyOnly ? 0.5 : 1,
+              pointerEvents: multifamilyOnly ? "none" : "auto",
             }}
           >
             {TYPE_OPTIONS.map((opt) => (
@@ -417,18 +489,24 @@ export default function RunsPage() {
                   alignItems: "center",
                   gap: "0.35rem",
                   fontSize: "0.85rem",
-                  cursor: "pointer",
+                  cursor: multifamilyOnly ? "default" : "pointer",
                 }}
               >
                 <input
                   type="checkbox"
                   checked={selectedTypes.includes(opt.value)}
+                  disabled={multifamilyOnly}
                   onChange={() => toggleType(opt.value)}
                 />
                 {opt.label}
               </label>
             ))}
           </div>
+          <p style={{ fontSize: "0.75rem", color: "#525252", marginTop: "0.35rem" }}>
+            {multifamilyOnly
+              ? "Include types are disabled when Multifamily only is on."
+              : "Optionally include only these property types (API filter). Leave unchecked for all types."}
+          </p>
         </div>
 
         <button type="submit" disabled={sending} className="btn-primary">

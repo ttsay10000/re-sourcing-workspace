@@ -33,7 +33,7 @@ interface StoredTestRun {
 
 const testRunsStore: StoredTestRun[] = [];
 
-/** Request body: filters sent from frontend (no hardcoded numbers). */
+/** Request body: filters sent from frontend; matches Active Sales Search API params. */
 export interface RunRequestBody {
   areas: string;
   minPrice?: number | null;
@@ -41,13 +41,19 @@ export interface RunRequestBody {
   minBeds?: number | null;
   maxBeds?: number | null;
   minBaths?: number | null;
+  maxHoa?: number | null;
+  maxTax?: number | null;
   amenities?: string | null;
   types?: string | null;
+  /** Exclude these property types after Step 2 (e.g. "condo,coop,house" → multifamily only). Step 1 is sent without types so API returns all. */
+  excludeTypes?: string | null;
   limit?: number | null;
   offset?: number | null;
 }
 
 function toCriteria(body: RunRequestBody): NycsSearchCriteria {
+  // When excluding types (e.g. multifamily only), do not send types so Step 1 returns all; we filter after Step 2.
+  const useExclude = (body.excludeTypes ?? "").trim().length > 0;
   return {
     areas: body.areas?.trim() || "all-downtown,all-midtown",
     minPrice: body.minPrice != null ? Number(body.minPrice) : undefined,
@@ -55,11 +61,35 @@ function toCriteria(body: RunRequestBody): NycsSearchCriteria {
     minBeds: body.minBeds != null ? Number(body.minBeds) : undefined,
     maxBeds: body.maxBeds != null ? Number(body.maxBeds) : undefined,
     minBaths: body.minBaths != null ? Number(body.minBaths) : undefined,
+    maxHoa: body.maxHoa != null ? Number(body.maxHoa) : undefined,
+    maxTax: body.maxTax != null ? Number(body.maxTax) : undefined,
     amenities: body.amenities ?? undefined,
-    types: body.types ?? undefined,
-    limit: body.limit != null ? Math.min(Number(body.limit), 200) : 100,
+    types: useExclude ? undefined : (body.types ?? undefined),
+    limit: body.limit != null ? Math.min(Number(body.limit), 500) : 100,
     offset: body.offset != null ? Number(body.offset) : undefined,
   };
+}
+
+/** Normalize property type for exclude matching (API may return "co-op" or "coop"). */
+function normalizePropertyType(pt: unknown): string {
+  if (pt == null || typeof pt !== "string") return "";
+  return pt.toLowerCase().trim().replace(/-/g, "");
+}
+
+/** Filter out properties whose propertyType is in the exclude list (e.g. condo, coop, house → keep multifamily). */
+function applyExcludeTypes(properties: Record<string, unknown>[], excludeTypesCsv: string): void {
+  const exclude = excludeTypesCsv
+    .split(",")
+    .map((s) => normalizePropertyType(s.trim()))
+    .filter(Boolean);
+  if (exclude.length === 0) return;
+  const toRemove = new Set<number>();
+  properties.forEach((p, i) => {
+    const pt = normalizePropertyType(p.propertyType ?? p.property_type);
+    if (pt && exclude.includes(pt)) toRemove.add(i);
+  });
+  // Remove in reverse order so indices stay valid
+  [...toRemove].sort((a, b) => b - a).forEach((i) => properties.splice(i, 1));
 }
 
 /** Run the two-step flow in the background and update the stored run. */
@@ -91,6 +121,9 @@ async function runTwoStepFlow(run: StoredTestRun): Promise<void> {
       if (i < urls.length - 1) await new Promise((r) => setTimeout(r, 200));
     }
     run.step2Status = "completed";
+    // Apply exclude-types filter (e.g. exclude condo, coop, house → keep multifamily)
+    const excludeCsv = (run.criteria.excludeTypes ?? "").trim();
+    if (excludeCsv) applyExcludeTypes(run.properties, excludeCsv);
   } catch (err) {
     run.step1Status = "failed";
     run.step1Error = err instanceof Error ? err.message : String(err);
@@ -173,9 +206,15 @@ function runPropertyToNormalized(raw: Record<string, unknown>, index: number): L
   const city = borough.charAt(0).toUpperCase() + borough.slice(1).toLowerCase().replace(/-/g, " ");
   const zip = (raw.zipcode != null ? String(raw.zipcode) : raw.zip != null ? String(raw.zip) : "").trim() || "";
   const price = Number(raw.price ?? raw.closedPrice ?? 0) || 0;
-  const beds = Number(raw.bedrooms ?? raw.beds ?? 0) || 0;
-  const baths = Number(raw.bathrooms ?? raw.baths ?? 0) || 0;
-  const sqft = raw.sqft != null ? Number(raw.sqft) : null;
+  // Preserve decimals (e.g. 7.5 baths); DB stores NUMERIC(4,1). Only clamp to >= 0.
+  const bedsNum = Number(raw.bedrooms ?? raw.beds ?? 0) || 0;
+  const bathsNum = Number(raw.bathrooms ?? raw.baths ?? 0) || 0;
+  const beds = bedsNum >= 0 ? bedsNum : 0;
+  const baths = bathsNum >= 0 ? bathsNum : 0;
+  // DB sqft is INTEGER; API may return decimals — coerce to whole number or null
+  const sqftRaw = raw.sqft != null ? Number(raw.sqft) : NaN;
+  const sqft =
+    !Number.isNaN(sqftRaw) && sqftRaw >= 0 ? Math.round(sqftRaw) : null;
   const url = (raw._fetchUrl != null ? String(raw._fetchUrl) : raw.url != null ? String(raw.url) : "").trim() || "#";
   const listedAt = raw.listedAt != null ? String(raw.listedAt) : null;
   const images = raw.images;
@@ -201,7 +240,7 @@ function runPropertyToNormalized(raw: Record<string, unknown>, index: number): L
     price,
     beds,
     baths,
-    sqft: sqft && !Number.isNaN(sqft) ? sqft : null,
+    sqft,
     url,
     title: address !== "—" ? address : null,
     description: raw.description != null ? String(raw.description) : null,
@@ -235,9 +274,16 @@ router.post("/test-agent/runs/:id/send-to-property-data", async (req: Request, r
       const snapshotRepo = new db.SnapshotRepo({ pool, client });
 
       const results: { listingId: string; externalId: string; created: boolean }[] = [];
+      let listingsCreated = 0;
+      let listingsUpdated = 0;
       for (let i = 0; i < run.properties.length; i++) {
         const normalized = runPropertyToNormalized(run.properties[i] as Record<string, unknown>, i);
-        const { listing, created } = await listingRepo.upsert(normalized);
+        // Dedupe by listing ID (source + external_id): upsert updates existing or inserts new
+        const { listing, created } = await listingRepo.upsert(normalized, {
+          uploadedRunId: run.id,
+        });
+        if (created) listingsCreated++;
+        else listingsUpdated++;
         const rawPayload = run.properties[i] as Record<string, unknown>;
         let metadata: Record<string, unknown>;
         try {
@@ -258,8 +304,30 @@ router.post("/test-agent/runs/:id/send-to-property-data", async (req: Request, r
         });
         results.push({ listingId: listing.id, externalId: normalized.externalId, created });
       }
+      let runNumber: number | null = null;
+      try {
+        await client.query(
+          `INSERT INTO property_data_run_log (run_id, criteria, listings_created, listings_updated)
+           VALUES ($1, $2, $3, $4)`,
+          [run.id, JSON.stringify(run.criteria), listingsCreated, listingsUpdated]
+        );
+        const logRow = await client.query(
+          "SELECT run_number FROM property_data_run_log WHERE run_id = $1 ORDER BY sent_at DESC LIMIT 1",
+          [run.id]
+        );
+        runNumber = logRow.rows[0]?.run_number ?? null;
+      } catch (logErr) {
+        if (!/relation "property_data_run_log" does not exist/i.test(String(logErr))) throw logErr;
+      }
       await client.query("COMMIT");
-      res.json({ ok: true, sent: results.length, results });
+      res.json({
+        ok: true,
+        sent: results.length,
+        created: listingsCreated,
+        updated: listingsUpdated,
+        runNumber,
+        results,
+      });
     } catch (err) {
       await client.query("ROLLBACK").catch(() => {});
       throw err;
@@ -280,6 +348,37 @@ router.post("/test-agent/runs/:id/send-to-property-data", async (req: Request, r
       errorMessage = "Database unavailable or failed to persist.";
     }
     res.status(503).json({ error: errorMessage, details: message });
+  }
+});
+
+/** List property data run log (all "Send to property data" runs) for data integrity comparison. */
+router.get("/test-agent/property-data/runs", async (_req: Request, res: Response) => {
+  try {
+    const db = await import("@re-sourcing/db");
+    const pool = db.getPool();
+    const r = await pool.query(
+      `SELECT run_number, run_id, sent_at, criteria, listings_created, listings_updated
+       FROM property_data_run_log
+       ORDER BY sent_at DESC
+       LIMIT 200`
+    );
+    const runs = r.rows.map((row: Record<string, unknown>) => ({
+      runNumber: row.run_number,
+      runId: row.run_id,
+      sentAt: row.sent_at != null ? new Date(row.sent_at as Date).toISOString() : null,
+      criteria: row.criteria,
+      listingsCreated: Number(row.listings_created ?? 0),
+      listingsUpdated: Number(row.listings_updated ?? 0),
+    }));
+    res.json({ runs });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (/relation "property_data_run_log" does not exist/i.test(message)) {
+      res.json({ runs: [] });
+      return;
+    }
+    console.error("[property-data runs list]", err);
+    res.status(503).json({ error: "Failed to load run log.", details: message });
   }
 });
 

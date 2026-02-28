@@ -55,6 +55,10 @@ export interface ListingRow extends ListingNormalized {
   lastSeenAt: string;
   missingSince?: string | null;
   prunedAt?: string | null;
+  /** When this listing was first sent to property data from a run. */
+  uploadedAt?: string | null;
+  /** Test run ID that first sent this listing to property data. */
+  uploadedRunId?: string | null;
   createdAt: string;
   updatedAt: string;
 }

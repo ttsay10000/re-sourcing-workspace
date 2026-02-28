@@ -1,11 +1,21 @@
 "use client";
 
 import React, { useCallback, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { PropertyDetailCollapsible } from "./PropertyDetailCollapsible";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
 
 type TabId = "raw" | "canonical";
+
+interface RunLogEntry {
+  runNumber: number;
+  runId: string;
+  sentAt: string;
+  criteria?: Record<string, unknown>;
+  listingsCreated: number;
+  listingsUpdated: number;
+}
 
 interface ListingRow {
   id: string;
@@ -25,6 +35,8 @@ interface ListingRow {
   imageUrls?: string[] | null;
   agentNames?: string[] | null;
   extra?: Record<string, unknown> | null;
+  uploadedAt?: string | null;
+  uploadedRunId?: string | null;
 }
 
 export default function PropertyDataPage() {
@@ -36,6 +48,8 @@ export default function PropertyDataPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [expandedRowId, setExpandedRowId] = useState<string | null>(null);
   const [clearing, setClearing] = useState(false);
+  const [runLog, setRunLog] = useState<RunLogEntry[]>([]);
+  const [runLogOpen, setRunLogOpen] = useState(false);
 
   const fetchListings = useCallback(() => {
     setLoading(true);
@@ -51,9 +65,20 @@ export default function PropertyDataPage() {
       .finally(() => setLoading(false));
   }, []);
 
+  const fetchRunLog = useCallback(() => {
+    fetch(`${API_BASE}/api/test-agent/property-data/runs`)
+      .then((r) => r.json())
+      .then((data) => setRunLog(data.runs ?? []))
+      .catch(() => setRunLog([]));
+  }, []);
+
   useEffect(() => {
     if (activeTab === "raw") fetchListings();
   }, [activeTab, fetchListings]);
+
+  useEffect(() => {
+    fetchRunLog();
+  }, [fetchRunLog]);
 
   const selectedListing = selectedId ? listings.find((l) => l.id === selectedId) ?? null : null;
 
@@ -80,9 +105,17 @@ export default function PropertyDataPage() {
       .finally(() => setClearing(false));
   };
 
+  const searchParams = useSearchParams();
+  const sentMessage = searchParams.get("sent");
+
   return (
     <div className="property-data-layout">
       <h1 className="page-title">Property Data</h1>
+      {sentMessage && (
+        <div className="card" style={{ marginBottom: "1rem", padding: "0.75rem 1rem", background: "#f0fdf4", borderColor: "#86efac" }}>
+          {decodeURIComponent(sentMessage)}
+        </div>
+      )}
 
       <div className="property-data-search-row">
         <input
@@ -126,7 +159,7 @@ export default function PropertyDataPage() {
         </div>
       </div>
 
-      <div className="property-data-content">
+      <div className="property-data-content property-data-content--no-sidebar">
         <div className="property-data-table-wrap">
           {error && (
             <div className="card error" style={{ margin: "1rem" }}>
@@ -218,64 +251,6 @@ export default function PropertyDataPage() {
             </table>
           )}
         </div>
-
-        <aside className="property-data-sidebar">
-          {selectedListing ? (
-            <>
-              <h3 className="sidebar-title">Property</h3>
-              <PropertyDetailCollapsible listing={selectedListing} />
-            </>
-          ) : (
-            <>
-              <h3 className="sidebar-title">QA Actions</h3>
-              <p style={{ fontSize: "0.875rem", color: "#737373", margin: 0 }}>
-                Select a listing from the table to view its details.
-              </p>
-              <div className="sidebar-section">
-                <span className="sidebar-section-label">Select one</span>
-                <label className="sidebar-radio">
-                  <input type="radio" name="qa-action" disabled />
-                  Re-run dedupe
-                </label>
-                <label className="sidebar-radio">
-                  <input type="radio" name="qa-action" disabled />
-                  Override match
-                </label>
-                <label className="sidebar-radio">
-                  <input type="radio" name="qa-action" disabled />
-                  Flag incorrect merge
-                </label>
-                <label className="sidebar-radio">
-                  <input type="radio" name="qa-action" disabled />
-                  Re-trigger enrichment
-                </label>
-              </div>
-              <div className="sidebar-section">
-                <span className="sidebar-section-label">Batch (check all that apply)</span>
-                <label className="sidebar-checkbox">
-                  <input type="checkbox" disabled />
-                  Re-run dedupe
-                </label>
-                <label className="sidebar-checkbox">
-                  <input type="checkbox" disabled />
-                  Flag incorrect merge
-                </label>
-                <label className="sidebar-checkbox">
-                  <input type="checkbox" disabled />
-                  Re-trigger enrichment
-                </label>
-                <label className="sidebar-checkbox">
-                  <input type="checkbox" disabled />
-                  Recompute features
-                </label>
-                <label className="sidebar-checkbox">
-                  <input type="checkbox" disabled />
-                  Re-score property
-                </label>
-              </div>
-            </>
-          )}
-        </aside>
       </div>
 
       <div className="property-data-bottom-bar">
@@ -295,6 +270,49 @@ export default function PropertyDataPage() {
           <button type="button" className="btn-secondary" disabled>Reset</button>
           <button type="button" className="btn-primary" disabled>Apply</button>
         </div>
+      </div>
+
+      <div className="property-data-run-log-section">
+        <button
+          type="button"
+          className="property-detail-section-header"
+          onClick={() => setRunLogOpen((o) => !o)}
+          aria-expanded={runLogOpen}
+          style={{ width: "100%", maxWidth: "640px" }}
+        >
+          <span className="property-detail-section-title">Run log (data integrity)</span>
+          <span className={`property-detail-section-chevron ${runLogOpen ? "property-detail-section-chevron--open" : ""}`} aria-hidden>▼</span>
+        </button>
+        {runLogOpen && (
+          <div className="property-data-run-log-table-wrap">
+            {runLog.length === 0 ? (
+              <p style={{ color: "#737373", fontSize: "0.875rem" }}>No runs sent to property data yet.</p>
+            ) : (
+              <table className="property-data-table" style={{ maxWidth: "640px" }}>
+                <thead>
+                  <tr>
+                    <th>Run #</th>
+                    <th>Run ID</th>
+                    <th>Sent</th>
+                    <th>Created</th>
+                    <th>Updated</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {runLog.map((entry) => (
+                    <tr key={entry.runNumber}>
+                      <td>{entry.runNumber}</td>
+                      <td style={{ fontFamily: "ui-monospace, monospace", fontSize: "0.8rem" }}>{entry.runId.slice(0, 8)}…</td>
+                      <td>{new Date(entry.sentAt).toLocaleString()}</td>
+                      <td>{entry.listingsCreated}</td>
+                      <td>{entry.listingsUpdated}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

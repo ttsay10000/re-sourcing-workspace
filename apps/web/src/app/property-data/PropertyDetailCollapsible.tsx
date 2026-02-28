@@ -55,6 +55,8 @@ export interface PropertyDetailListing {
   imageUrls?: string[] | null;
   agentNames?: string[] | null;
   extra?: Record<string, unknown> | null;
+  uploadedAt?: string | null;
+  uploadedRunId?: string | null;
 }
 
 function formatPrice(n: number | null | undefined): string {
@@ -183,14 +185,28 @@ export function PropertyDetailCollapsible({ listing }: { listing: PropertyDetail
       String(v)
     );
 
+  const formatUploaded = (at: string | null | undefined, runId: string | null | undefined) => {
+    if (!at && !runId) return null;
+    const d = at ? (() => { const x = new Date(at); return Number.isNaN(x.getTime()) ? null : x.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" }); })() : null;
+    return (
+      <span className="property-card-uploaded">
+        {d && <>Uploaded: {d}</>}
+        {d && runId && " · "}
+        {runId && <>Run: {runId.slice(0, 8)}…</>}
+      </span>
+    );
+  };
+
   return (
     <div className="property-detail-collapsible">
-      <h3 className="property-card-title">{title}</h3>
-      {neighborhood !== "—" && (
-        <div className="property-card-meta">
-          <span className="property-card-neighborhood">{neighborhood}</span>
-        </div>
-      )}
+      <div className="property-detail-address-block">
+        <h3 className="property-card-title">{title}</h3>
+        {neighborhood !== "—" && (
+          <div className="property-card-meta">
+            <span className="property-card-neighborhood">{neighborhood}</span>
+          </div>
+        )}
+      </div>
 
       {photoUrls.length > 0 && (
         <CollapsibleSection
@@ -324,9 +340,13 @@ export function PropertyDetailCollapsible({ listing }: { listing: PropertyDetail
           onToggle={() => toggle("amenities")}
         >
           <ul className="property-card-amenities">
-            {amenities.map((a, i) => (
-              <li key={i}>{String(a).replace(/_/g, " ")}</li>
-            ))}
+            {amenities.map((a, i) => {
+              const label = String(a)
+                .replace(/_/g, " ")
+                .trim();
+              const capitalized = label.replace(/\b\w/g, (c) => c.toUpperCase());
+              return <li key={i}>{capitalized}</li>;
+            })}
           </ul>
         </CollapsibleSection>
       )}
@@ -375,6 +395,11 @@ export function PropertyDetailCollapsible({ listing }: { listing: PropertyDetail
             >
               view source
             </a>
+          )}
+          {(listing.uploadedAt || listing.uploadedRunId) && (
+            <div className="property-card-footer-uploaded">
+              {formatUploaded(listing.uploadedAt, listing.uploadedRunId)}
+            </div>
           )}
         </div>
       </CollapsibleSection>
