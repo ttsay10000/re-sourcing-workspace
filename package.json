@@ -1,0 +1,24 @@
+{
+  "name": "re-sourcing-workspace",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "npm run build -w @re-sourcing/contracts && npm run build -w @re-sourcing/db && npm run build --workspaces --if-present",
+    "dev": "concurrently -n api,web -c blue,green \"npm run dev -w @re-sourcing/api\" \"npm run dev -w @re-sourcing/web\"",
+    "start": "npm run build && concurrently -n api,web -c blue,green \"npm run start -w @re-sourcing/api\" \"npm run start -w @re-sourcing/web\"",
+    "test": "npm run test --workspaces --if-present",
+    "db:migrate": "npm run build -w @re-sourcing/db && npm run migrate -w @re-sourcing/db",
+    "db:seed": "npm run seed -w @re-sourcing/db",
+    "verify": "npm run build -w @re-sourcing/contracts && npm run build -w @re-sourcing/api",
+    "check": "npm test && npm run verify"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

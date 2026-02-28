@@ -1,0 +1,14 @@
+{
+  "name": "@re-sourcing/contracts",
+  "version": "1.0.0",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "echo \"No tests in contracts\""
+  },
+  "devDependencies": {
+    "typescript": "~5.3.0"
+  }
+}

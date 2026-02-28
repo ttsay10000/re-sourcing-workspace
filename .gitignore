@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+.next/
+dist/
+out/
+*.tsbuildinfo
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+*.log
+
+# Debug
+npm-debug.log*
+.pnpm-debug.log*
+
+# Vercel (if used later)
+.vercel
