@@ -12,7 +12,7 @@ services:
     name: re-sourcing-api
     runtime: node
     plan: free
-    buildCommand: npm install && npm run build -w @re-sourcing/contracts && npm run build -w @re-sourcing/api
+    buildCommand: npm install --include=dev && npm run build -w @re-sourcing/contracts && npm run build -w @re-sourcing/api
     startCommand: npm run start -w @re-sourcing/api
     envVars:
       - key: NODE_ENV
