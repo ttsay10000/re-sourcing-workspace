@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 
 /** Sale details shape from GET sale details (stored in listing.extra). */
 interface SaleDetails {
@@ -27,7 +27,13 @@ interface SaleDetails {
   description?: string;
   building?: { id?: string };
   agents?: string[];
+  broker_name?: string;
+  broker?: string;
+  listing_agent?: string;
+  agent_name?: string;
   images?: string[];
+  videos?: string[];
+  floorplans?: string[];
   [key: string]: unknown;
 }
 
@@ -47,6 +53,9 @@ interface PropertyCardProps {
     sqft?: number | null;
     description?: string | null;
     listedAt?: string | null;
+    url?: string;
+    imageUrls?: string[] | null;
+    agentNames?: string[] | null;
     extra?: Record<string, unknown> | null;
   };
 }
@@ -82,7 +91,12 @@ function formatNeighborhood(s: string | null | undefined): string {
 
 export function PropertyCard({ listing }: PropertyCardProps) {
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
+  const [galleryIndex, setGalleryIndex] = useState(0);
   const details = (listing.extra ?? {}) as SaleDetails;
+
+  useEffect(() => {
+    setGalleryIndex(0);
+  }, [listing.id]);
 
   const title = [listing.address || details.address, listing.zip || details.zipcode]
     .filter(Boolean)
@@ -101,6 +115,21 @@ export function PropertyCard({ listing }: PropertyCardProps) {
   const monthlyTax = details.monthlyTax;
   const builtIn = details.builtIn;
   const daysOnMarket = details.daysOnMarket;
+  const brokerDisplay = (() => {
+    if (listing.agentNames && listing.agentNames.length > 0) {
+      return listing.agentNames.join(", ");
+    }
+    if (Array.isArray(details.agents) && details.agents.length > 0) {
+      return details.agents.map((a) => (a != null ? String(a) : "")).filter(Boolean).join(", ");
+    }
+    const single = details.broker_name ?? details.broker ?? details.listing_agent ?? details.agent_name;
+    return single != null && String(single).trim() ? String(single).trim() : null;
+  })();
+
+  const photoUrls = (listing.imageUrls && listing.imageUrls.length > 0)
+    ? listing.imageUrls
+    : (Array.isArray(details.images) ? details.images.filter((u): u is string => typeof u === "string") : []);
+  const floorplanUrls = Array.isArray(details.floorplans) ? details.floorplans.filter((u): u is string => typeof u === "string") : [];
 
   const na = (v: unknown) =>
     v === null || v === undefined || v === "" ? (
@@ -117,6 +146,68 @@ export function PropertyCard({ listing }: PropertyCardProps) {
           <span className="property-card-neighborhood">{neighborhood}</span>
         )}
       </div>
+
+      {photoUrls.length > 0 && (
+        <div className="property-card-section property-card-gallery-wrap">
+          <h4 className="property-card-heading">Photos ({photoUrls.length})</h4>
+          <div className="property-card-gallery">
+            <a
+              href={photoUrls[galleryIndex]}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="property-card-gallery-main-wrap"
+            >
+              <img
+                key={galleryIndex}
+                src={photoUrls[galleryIndex]}
+                alt=""
+                className="property-card-gallery-main"
+              />
+            </a>
+            <div className="property-card-gallery-thumbs">
+              {photoUrls.map((src, i) => (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => setGalleryIndex(i)}
+                  className={`property-card-gallery-thumb-wrap ${i === galleryIndex ? "property-card-gallery-thumb-wrap--active" : ""}`}
+                >
+                  <img
+                    src={src}
+                    alt=""
+                    loading="lazy"
+                    className="property-card-gallery-thumb"
+                  />
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {floorplanUrls.length > 0 && (
+        <div className="property-card-section">
+          <h4 className="property-card-heading">Floor plans ({floorplanUrls.length})</h4>
+          <div className="property-card-photos">
+            {floorplanUrls.map((src, i) => (
+              <a
+                key={i}
+                href={src}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="property-card-photo-wrap"
+              >
+                <img
+                  src={src}
+                  alt=""
+                  loading="lazy"
+                  className="property-card-photo"
+                />
+              </a>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="property-card-section">
         <div className="property-card-price">{formatPrice(price)}</div>
@@ -144,6 +235,12 @@ export function PropertyCard({ listing }: PropertyCardProps) {
           <dt>Property type</dt>
           <dd>{na(propertyType)}</dd>
         </div>
+        {brokerDisplay && (
+          <div>
+            <dt>Broker / Agent</dt>
+            <dd>{brokerDisplay}</dd>
+          </div>
+        )}
         {builtIn != null && !Number.isNaN(builtIn) && (
           <div>
             <dt>Built</dt>
@@ -193,6 +290,16 @@ export function PropertyCard({ listing }: PropertyCardProps) {
 
       <div className="property-card-footer">
         <span className="property-card-id">Listing ID: {listing.externalId}</span>
+        {listing.url && listing.url !== "#" && (
+          <a
+            href={listing.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="property-card-source-link"
+          >
+            view source
+          </a>
+        )}
       </div>
     </div>
   );

@@ -179,7 +179,16 @@ function runPropertyToNormalized(raw: Record<string, unknown>, index: number): L
   const url = (raw._fetchUrl != null ? String(raw._fetchUrl) : raw.url != null ? String(raw.url) : "").trim() || "#";
   const listedAt = raw.listedAt != null ? String(raw.listedAt) : null;
   const images = raw.images;
-  const imageUrls = Array.isArray(images) ? (images as string[]) : null;
+  const imageUrls = Array.isArray(images) ? (images as string[]).filter((u): u is string => typeof u === "string") : null;
+  const agentNames = (() => {
+    const a = raw.agents;
+    if (Array.isArray(a) && a.length > 0) {
+      return a.map((x) => (x != null ? String(x).trim() : "")).filter(Boolean);
+    }
+    const single = raw.broker_name ?? raw.broker ?? raw.listing_agent ?? raw.agent_name ?? raw.agent;
+    if (single != null && String(single).trim()) return [String(single).trim()];
+    return null;
+  })();
   const { _fetchUrl: _u, ...rest } = raw;
   const extra = rest as Record<string, unknown>;
   return {
@@ -200,6 +209,7 @@ function runPropertyToNormalized(raw: Record<string, unknown>, index: number): L
     lon: null,
     imageUrls,
     listedAt,
+    agentNames,
     extra: Object.keys(extra).length ? extra : null,
   };
 }
@@ -225,11 +235,16 @@ router.post("/test-agent/runs/:id/send-to-property-data", async (req: Request, r
     for (let i = 0; i < run.properties.length; i++) {
       const normalized = runPropertyToNormalized(run.properties[i] as Record<string, unknown>, i);
       const { listing, created } = await listingRepo.upsert(normalized);
+      const rawPayload = run.properties[i] as Record<string, unknown>;
       await snapshotRepo.create({
         listingId: listing.id,
         runId: null,
         rawPayloadPath: "inline",
-        metadata: { testRunId: run.id, capturedAt: new Date().toISOString() },
+        metadata: {
+          testRunId: run.id,
+          capturedAt: new Date().toISOString(),
+          rawPayload,
+        },
       });
       results.push({ listingId: listing.id, externalId: normalized.externalId, created });
     }
@@ -237,7 +252,12 @@ router.post("/test-agent/runs/:id/send-to-property-data", async (req: Request, r
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[send-to-property-data]", err);
-    res.status(503).json({ error: "Database unavailable or failed to persist.", details: message });
+    const isEnvOrConfig =
+      /DATABASE_URL|connection|ECONNREFUSED|getPool|config/i.test(message);
+    const errorMessage = isEnvOrConfig
+      ? "Database unavailable. Set DATABASE_URL in the API environment, ensure Postgres is running, and run migrations (e.g. npm run db:migrate)."
+      : "Database unavailable or failed to persist.";
+    res.status(503).json({ error: errorMessage, details: message });
   }
 });
 

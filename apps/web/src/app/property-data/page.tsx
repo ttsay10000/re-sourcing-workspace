@@ -21,6 +21,9 @@ interface ListingRow {
   sqft?: number | null;
   description?: string | null;
   listedAt?: string | null;
+  url?: string;
+  imageUrls?: string[] | null;
+  agentNames?: string[] | null;
   extra?: Record<string, unknown> | null;
 }
 
@@ -130,12 +133,13 @@ export default function PropertyDataPage() {
                   <th>Property ID</th>
                   <th>Dup. Conf.</th>
                   <th>Price History</th>
+                  <th>Link</th>
                 </tr>
               </thead>
               <tbody>
                 {listings.length === 0 ? (
                   <tr>
-                    <td colSpan={6} style={{ padding: "2rem", color: "#737373", textAlign: "center" }}>
+                    <td colSpan={7} style={{ padding: "2rem", color: "#737373", textAlign: "center" }}>
                       No raw listings yet. Run a flow from Runs, then use &quot;Send to property data&quot; for a
                       completed run.
                     </td>
@@ -153,6 +157,15 @@ export default function PropertyDataPage() {
                       <td>—</td>
                       <td>—</td>
                       <td>{formatPrice(row.price)}</td>
+                      <td>
+                        {row.url && row.url !== "#" ? (
+                          <a href={row.url} target="_blank" rel="noopener noreferrer">
+                            view source
+                          </a>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
                     </tr>
                   ))
                 )}

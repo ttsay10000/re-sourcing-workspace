@@ -39,6 +39,8 @@ export interface ListingNormalized {
   imageUrls?: string[] | null;
   /** Listed date (ISO string). */
   listedAt?: string | null;
+  /** Agent names from source (e.g. GET sale details); for LLM enrichment. */
+  agentNames?: string[] | null;
   /** Any extra fields that don't map to core schema. */
   extra?: Record<string, unknown> | null;
 }

@@ -107,6 +107,7 @@ export function mapListing(row: Record<string, unknown>): ListingRow {
     lon: row.lon != null ? Number(row.lon) : null,
     imageUrls: (row.image_urls as string[]) ?? null,
     listedAt: row.listed_at != null ? toIso(row.listed_at) : null,
+    agentNames: (row.agent_names as string[]) ?? null,
     extra: (row.extra as Record<string, unknown>) ?? null,
     createdAt: toIso(row.created_at),
     updatedAt: toIso(row.updated_at),
@@ -176,6 +177,7 @@ export function listingNormalizedToRow(l: ListingNormalized): Record<string, unk
     lon: l.lon ?? null,
     image_urls: l.imageUrls ?? null,
     listed_at: l.listedAt ?? null,
+    agent_names: l.agentNames ?? null,
     extra: l.extra ?? null,
   };
 }

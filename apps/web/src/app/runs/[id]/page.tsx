@@ -123,10 +123,26 @@ export default function RunDetailPage() {
                   <th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
                     Link
                   </th>
+                  <th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
+                    Broker / Agent
+                  </th>
+                  <th style={{ textAlign: "center", padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
+                    Photos
+                  </th>
                 </tr>
               </thead>
               <tbody>
-                {run.properties.map((p, i) => (
+                {run.properties.map((p, i) => {
+                  const brokerDisplay = (() => {
+                    const agents = p.agents;
+                    if (Array.isArray(agents) && agents.length > 0) {
+                      return agents.map((a) => (a != null ? String(a) : "")).filter(Boolean).join(", ") || "—";
+                    }
+                    return pick(p, "broker_name", "broker", "listing_agent", "agent_name", "agent");
+                  })();
+                  const imgs = Array.isArray(p.images) ? (p.images as string[]).filter((u): u is string => typeof u === "string") : [];
+                  const firstImg = imgs[0];
+                  return (
                   <tr key={i}>
                     <td style={{ padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
                       {pick(p, "address", "formatted_address", "street_address", "title")}
@@ -146,20 +162,38 @@ export default function RunDetailPage() {
                       {pick(p, "square_feet", "sqft", "sqft_feet")}
                     </td>
                     <td style={{ padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
-                      {(p.url || p.link || p.listing_url) ? (
+                      {(p._fetchUrl != null && String(p._fetchUrl).trim()) || (p.url || p.link || p.listing_url) ? (
                         <a
-                          href={String(p.url ?? p.link ?? p.listing_url)}
+                          href={String((p._fetchUrl != null && String(p._fetchUrl).trim()) ? p._fetchUrl : (p.url ?? p.link ?? p.listing_url))}
                           target="_blank"
                           rel="noopener noreferrer"
                         >
-                          View
+                          view source
                         </a>
                       ) : (
                         "—"
                       )}
                     </td>
+                    <td style={{ padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
+                      {brokerDisplay}
+                    </td>
+                    <td style={{ padding: "0.5rem", borderBottom: "1px solid #e5e5e5", textAlign: "center" }}>
+                      {imgs.length > 0 ? (
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem" }}>
+                          {firstImg && (
+                            <a href={firstImg} target="_blank" rel="noopener noreferrer" style={{ display: "block", flexShrink: 0 }}>
+                              <img src={firstImg} alt="" loading="lazy" style={{ width: 36, height: 27, objectFit: "cover", borderRadius: 4 }} />
+                            </a>
+                          )}
+                          <span style={{ fontSize: "0.8em", color: "#525252" }}>{imgs.length} photo{imgs.length !== 1 ? "s" : ""}</span>
+                        </span>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
                   </tr>
-                ))}
+                );
+                })}
               </tbody>
             </table>
           </div>

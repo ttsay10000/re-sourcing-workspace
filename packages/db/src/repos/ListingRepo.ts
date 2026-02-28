@@ -90,8 +90,8 @@ export class ListingRepo {
           last_seen_at = now(),
           address = $1, city = $2, state = $3, zip = $4, price = $5, beds = $6, baths = $7,
           sqft = $8, url = $9, title = $10, description = $11, lat = $12, lon = $13,
-          image_urls = $14, listed_at = $15, extra = $16, updated_at = now()
-         WHERE id = $17 RETURNING *`,
+          image_urls = $14, listed_at = $15, agent_names = $16, extra = $17, updated_at = now()
+         WHERE id = $18 RETURNING *`,
         [
           row.address,
           row.city,
@@ -108,6 +108,7 @@ export class ListingRepo {
           row.lon,
           row.image_urls,
           row.listed_at,
+          row.agent_names,
           row.extra,
           existing.id,
         ]
@@ -118,10 +119,10 @@ export class ListingRepo {
       `INSERT INTO listings (
         source, external_id, lifecycle_state, first_seen_at, last_seen_at,
         address, city, state, zip, price, beds, baths, sqft, url, title, description,
-        lat, lon, image_urls, listed_at, extra
+        lat, lon, image_urls, listed_at, agent_names, extra
       ) VALUES (
         $1, $2, 'active', now(), now(),
-        $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18
+        $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
       ) RETURNING *`,
       [
         normalized.source,
@@ -141,6 +142,7 @@ export class ListingRepo {
         row.lon,
         row.image_urls,
         row.listed_at,
+        row.agent_names,
         row.extra,
       ]
     );
