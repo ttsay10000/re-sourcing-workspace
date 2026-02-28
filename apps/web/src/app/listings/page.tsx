@@ -101,25 +101,25 @@ export default function ListingsPage() {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.875rem" }}>
             <thead>
               <tr>
-                <th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #27272a" }}>
+                <th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
                   Run at
                 </th>
-                <th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #27272a" }}>
+                <th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
                   Address
                 </th>
-                <th style={{ textAlign: "right", padding: "0.5rem", borderBottom: "1px solid #27272a" }}>
+                <th style={{ textAlign: "right", padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
                   Price
                 </th>
-                <th style={{ textAlign: "center", padding: "0.5rem", borderBottom: "1px solid #27272a" }}>
+                <th style={{ textAlign: "center", padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
                   Beds
                 </th>
-                <th style={{ textAlign: "center", padding: "0.5rem", borderBottom: "1px solid #27272a" }}>
+                <th style={{ textAlign: "center", padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
                   Baths
                 </th>
-                <th style={{ textAlign: "right", padding: "0.5rem", borderBottom: "1px solid #27272a" }}>
+                <th style={{ textAlign: "right", padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
                   Sqft
                 </th>
-                <th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #27272a" }}>
+                <th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
                   Link
                 </th>
               </tr>
@@ -127,25 +127,25 @@ export default function ListingsPage() {
             <tbody>
               {listings.map((row, i) => (
                 <tr key={`${row.runId}-${i}`}>
-                  <td style={{ padding: "0.5rem", borderBottom: "1px solid #27272a" }}>
+                  <td style={{ padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
                     <Link href={`/runs/${row.runId}`}>{formatTime(row.runAt)}</Link>
                   </td>
-                  <td style={{ padding: "0.5rem", borderBottom: "1px solid #27272a" }}>
+                  <td style={{ padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
                     {row.address}
                   </td>
-                  <td style={{ textAlign: "right", padding: "0.5rem", borderBottom: "1px solid #27272a" }}>
+                  <td style={{ textAlign: "right", padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
                     ${row.price.toLocaleString()}
                   </td>
-                  <td style={{ textAlign: "center", padding: "0.5rem", borderBottom: "1px solid #27272a" }}>
+                  <td style={{ textAlign: "center", padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
                     {row.beds}
                   </td>
-                  <td style={{ textAlign: "center", padding: "0.5rem", borderBottom: "1px solid #27272a" }}>
+                  <td style={{ textAlign: "center", padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
                     {row.baths}
                   </td>
-                  <td style={{ textAlign: "right", padding: "0.5rem", borderBottom: "1px solid #27272a" }}>
+                  <td style={{ textAlign: "right", padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
                     {row.sqft}
                   </td>
-                  <td style={{ padding: "0.5rem", borderBottom: "1px solid #27272a" }}>
+                  <td style={{ padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
                     {row.url !== "#" ? (
                       <a href={row.url} target="_blank" rel="noopener noreferrer">
                         View

@@ -6,6 +6,15 @@ import { AREA_OPTIONS } from "./areas";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
 
+const BEDS_BATHS_OPTIONS = [1, 1.5, 2, 2.5, 3, 3.5, 4] as const;
+
+const TYPE_OPTIONS: { value: string; label: string }[] = [
+  { value: "condo", label: "Condo" },
+  { value: "co-op", label: "Co-op" },
+  { value: "house", label: "House" },
+  { value: "multifamily", label: "Multifamily" },
+];
+
 interface RunCriteria {
   areas: string;
   minPrice?: number | null;
@@ -13,8 +22,6 @@ interface RunCriteria {
   minBeds?: number | null;
   maxBeds?: number | null;
   minBaths?: number | null;
-  maxHoa?: number | null;
-  maxTax?: number | null;
   amenities?: string | null;
   types?: string | null;
   limit?: number | null;
@@ -49,10 +56,8 @@ export default function RunsPage() {
   const [minBeds, setMinBeds] = useState<string>("");
   const [maxBeds, setMaxBeds] = useState<string>("");
   const [minBaths, setMinBaths] = useState<string>("");
-  const [maxHoa, setMaxHoa] = useState<string>("");
-  const [maxTax, setMaxTax] = useState<string>("");
   const [amenities, setAmenities] = useState<string>("");
-  const [types, setTypes] = useState<string>("");
+  const [selectedTypes, setSelectedTypes] = useState<string[]>([]);
   const [limit, setLimit] = useState<string>("100");
 
   const fetchRuns = useCallback(() => {
@@ -93,10 +98,8 @@ export default function RunsPage() {
     if (minBeds !== "") body.minBeds = Number(minBeds);
     if (maxBeds !== "") body.maxBeds = Number(maxBeds);
     if (minBaths !== "") body.minBaths = Number(minBaths);
-    if (maxHoa !== "") body.maxHoa = Number(maxHoa);
-    if (maxTax !== "") body.maxTax = Number(maxTax);
     if (amenities.trim()) body.amenities = amenities.trim();
-    if (types.trim()) body.types = types.trim();
+    if (selectedTypes.length > 0) body.types = selectedTypes.join(",");
 
     fetch(`${API_BASE}/api/test-agent/run`, {
       method: "POST",
@@ -115,6 +118,12 @@ export default function RunsPage() {
   const toggleArea = (value: string) => {
     setSelectedAreas((prev) =>
       prev.includes(value) ? prev.filter((a) => a !== value) : [...prev, value]
+    );
+  };
+
+  const toggleType = (value: string) => {
+    setSelectedTypes((prev) =>
+      prev.includes(value) ? prev.filter((t) => t !== value) : [...prev, value]
     );
   };
 
@@ -151,13 +160,39 @@ export default function RunsPage() {
   };
 
   return (
-    <>
+    <div className="runs-page">
       <h1 className="page-title">Runs</h1>
-      <p className="card" style={{ marginBottom: "1rem" }}>
-        Two-step flow: GET Active Sales with filters → GET Sale details by URL for each listing.
-        Results appear as properties in the raw data lake (Property Data). Set{" "}
-        <code>RAPIDAPI_KEY</code> in the API server.
-      </p>
+
+      <div className="card" style={{ marginBottom: "1.5rem" }}>
+        <h2 style={{ fontSize: "1.1rem", marginBottom: "0.75rem", fontWeight: 600 }}>
+          How it works
+        </h2>
+        <p style={{ marginBottom: "0.75rem", lineHeight: 1.5 }}>
+          Runs use a two-step flow to pull NYC real estate data into your raw data lake:
+        </p>
+        <ol style={{ marginBottom: "0.75rem", paddingLeft: "1.5rem", lineHeight: 1.6 }}>
+          <li>
+            <strong>Step 1 — GET Active Sales:</strong> The API returns a list of active listings
+            that match your filters (areas, price, beds, baths, types, etc.). Each listing includes
+            a StreetEasy URL.
+          </li>
+          <li>
+            <strong>Step 2 — GET Sale details by URL:</strong> For each URL from step 1, the API
+            is called again to fetch full property details. Those results are stored as separate
+            properties and appear in the runs log below and in{" "}
+            <Link href="/property-data">Property Data</Link> (raw data lake).
+          </li>
+        </ol>
+        <p style={{ marginBottom: "0.5rem", lineHeight: 1.5 }}>
+          Choose your filters, set a limit on how many properties to fetch, then click{" "}
+          <strong>Send</strong>. Each run appears in the log with step progress and a link to view
+          its properties.
+        </p>
+        <p style={{ fontSize: "0.875rem", color: "#525252", marginTop: "0.75rem" }}>
+          Ensure <code>RAPIDAPI_KEY</code> is set in the API server environment (see{" "}
+          <code>ENV.md</code>).
+        </p>
+      </div>
 
       <form onSubmit={handleSubmit} className="card" style={{ marginBottom: "1.5rem" }}>
         <h2 style={{ fontSize: "1rem", marginBottom: "0.75rem" }}>Filters</h2>
@@ -167,26 +202,25 @@ export default function RunsPage() {
             Areas (required)
           </label>
           <div
+            className="runs-areas-grid"
             style={{
-              display: "flex",
-              flexWrap: "wrap",
-              gap: "0.35rem",
-              maxHeight: "8rem",
+              maxHeight: "10rem",
               overflowY: "auto",
-              padding: "0.5rem",
-              border: "1px solid #27272a",
+              padding: "0.75rem 1rem",
+              border: "1px solid #e5e5e5",
               borderRadius: 6,
-              background: "#18181b",
+              background: "#f5f5f5",
             }}
           >
             {AREA_OPTIONS.map((opt) => (
               <label
                 key={opt.value}
                 style={{
-                  display: "inline-flex",
+                  display: "flex",
                   alignItems: "center",
-                  gap: "0.35rem",
-                  fontSize: "0.8rem",
+                  justifyContent: "flex-start",
+                  gap: "0.5rem",
+                  fontSize: "0.85rem",
                   cursor: "pointer",
                 }}
               >
@@ -199,7 +233,7 @@ export default function RunsPage() {
               </label>
             ))}
           </div>
-          <p style={{ fontSize: "0.75rem", color: "#a1a1aa", marginTop: "0.25rem" }}>
+          <p style={{ fontSize: "0.75rem", color: "#525252", marginTop: "0.35rem" }}>
             Selected: {selectedAreas.length > 0 ? selectedAreas.join(", ") : "all-downtown, all-midtown (default)"}
           </p>
         </div>
@@ -242,70 +276,55 @@ export default function RunsPage() {
             <label style={{ display: "block", marginBottom: "0.25rem", fontSize: "0.85rem" }}>
               Min beds
             </label>
-            <input
-              type="number"
-              min={0}
+            <select
               value={minBeds}
               onChange={(e) => setMinBeds(e.target.value)}
               className="input-text"
-              placeholder="—"
               style={{ width: "100%" }}
-            />
+            >
+              <option value="">—</option>
+              {BEDS_BATHS_OPTIONS.map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))}
+            </select>
           </div>
           <div>
             <label style={{ display: "block", marginBottom: "0.25rem", fontSize: "0.85rem" }}>
               Max beds
             </label>
-            <input
-              type="number"
-              min={0}
+            <select
               value={maxBeds}
               onChange={(e) => setMaxBeds(e.target.value)}
               className="input-text"
-              placeholder="—"
               style={{ width: "100%" }}
-            />
+            >
+              <option value="">—</option>
+              {BEDS_BATHS_OPTIONS.map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))}
+            </select>
           </div>
           <div>
             <label style={{ display: "block", marginBottom: "0.25rem", fontSize: "0.85rem" }}>
               Min baths
             </label>
-            <input
-              type="number"
-              min={0}
-              step={0.5}
+            <select
               value={minBaths}
               onChange={(e) => setMinBaths(e.target.value)}
               className="input-text"
-              placeholder="—"
               style={{ width: "100%" }}
-            />
-          </div>
-          <div>
-            <label style={{ display: "block", marginBottom: "0.25rem", fontSize: "0.85rem" }}>
-              Max HOA
-            </label>
-            <input
-              type="number"
-              value={maxHoa}
-              onChange={(e) => setMaxHoa(e.target.value)}
-              className="input-text"
-              placeholder="—"
-              style={{ width: "100%" }}
-            />
-          </div>
-          <div>
-            <label style={{ display: "block", marginBottom: "0.25rem", fontSize: "0.85rem" }}>
-              Max tax
-            </label>
-            <input
-              type="number"
-              value={maxTax}
-              onChange={(e) => setMaxTax(e.target.value)}
-              className="input-text"
-              placeholder="—"
-              style={{ width: "100%" }}
-            />
+            >
+              <option value="">—</option>
+              {BEDS_BATHS_OPTIONS.map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))}
+            </select>
           </div>
           <div>
             <label style={{ display: "block", marginBottom: "0.25rem", fontSize: "0.85rem" }}>
@@ -337,17 +356,40 @@ export default function RunsPage() {
           />
         </div>
         <div style={{ marginBottom: "1rem" }}>
-          <label style={{ display: "block", marginBottom: "0.25rem", fontSize: "0.85rem" }}>
-            Types (e.g. condo)
+          <label style={{ display: "block", marginBottom: "0.35rem", fontSize: "0.85rem" }}>
+            Types (select multiple)
           </label>
-          <input
-            type="text"
-            value={types}
-            onChange={(e) => setTypes(e.target.value)}
-            className="input-text"
-            placeholder="—"
-            style={{ width: "100%", maxWidth: "20rem" }}
-          />
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              gap: "0.35rem",
+              padding: "0.5rem",
+              border: "1px solid #e5e5e5",
+              borderRadius: 6,
+              background: "#f5f5f5",
+            }}
+          >
+            {TYPE_OPTIONS.map((opt) => (
+              <label
+                key={opt.value}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "0.35rem",
+                  fontSize: "0.85rem",
+                  cursor: "pointer",
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={selectedTypes.includes(opt.value)}
+                  onChange={() => toggleType(opt.value)}
+                />
+                {opt.label}
+              </label>
+            ))}
+          </div>
         </div>
 
         <button type="submit" disabled={sending} className="btn-primary">
@@ -367,25 +409,25 @@ export default function RunsPage() {
         <div className="card" style={{ maxWidth: "none" }}>
           <h2 style={{ fontSize: "1rem", marginBottom: "0.75rem" }}>Runs log</h2>
           {runs.length === 0 ? (
-            <p style={{ color: "#a1a1aa" }}>No runs yet. Use filters above and click Send.</p>
+            <p style={{ color: "#525252" }}>No runs yet. Use filters above and click Send.</p>
           ) : (
             <div style={{ overflowX: "auto" }}>
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" }}>
                 <thead>
                   <tr>
-                    <th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #27272a" }}>
+                    <th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
                       Started (timer)
                     </th>
-                    <th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #27272a" }}>
+                    <th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
                       Step 1
                     </th>
-                    <th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #27272a" }}>
+                    <th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
                       Step 2
                     </th>
-                    <th style={{ textAlign: "right", padding: "0.5rem", borderBottom: "1px solid #27272a" }}>
+                    <th style={{ textAlign: "right", padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
                       Properties
                     </th>
-                    <th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #27272a" }}>
+                    <th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
                       Action
                     </th>
                   </tr>
@@ -393,13 +435,13 @@ export default function RunsPage() {
                 <tbody>
                   {runs.map((run) => (
                     <tr key={run.id}>
-                      <td style={{ padding: "0.5rem", borderBottom: "1px solid #27272a" }}>
+                      <td style={{ padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
                         <div>{formatTime(run.startedAt)}</div>
-                        <div style={{ fontSize: "0.75rem", color: "#a1a1aa" }}>
+                        <div style={{ fontSize: "0.75rem", color: "#525252" }}>
                           Elapsed: {elapsed(run.startedAt)}
                         </div>
                       </td>
-                      <td style={{ padding: "0.5rem", borderBottom: "1px solid #27272a" }}>
+                      <td style={{ padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
                         <span
                           className={
                             run.step1Status === "failed" ? "error" : run.step1Status === "running" ? "" : ""
@@ -408,7 +450,7 @@ export default function RunsPage() {
                           {step1Label(run)}
                         </span>
                       </td>
-                      <td style={{ padding: "0.5rem", borderBottom: "1px solid #27272a" }}>
+                      <td style={{ padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
                         <span
                           className={
                             run.step2Status === "failed" ? "error" : run.step2Status === "running" ? "" : ""
@@ -417,7 +459,7 @@ export default function RunsPage() {
                           {step2Label(run)}
                         </span>
                       </td>
-                      <td style={{ textAlign: "right", padding: "0.5rem", borderBottom: "1px solid #27272a" }}>
+                      <td style={{ textAlign: "right", padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
                         {run.propertiesCount}
                         {run.errorsCount > 0 && (
                           <span className="error" style={{ marginLeft: "0.35rem" }}>
@@ -425,7 +467,7 @@ export default function RunsPage() {
                           </span>
                         )}
                       </td>
-                      <td style={{ padding: "0.5rem", borderBottom: "1px solid #27272a" }}>
+                      <td style={{ padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
                         <Link href={`/runs/${run.id}`}>View properties</Link>
                       </td>
                     </tr>
@@ -436,6 +478,6 @@ export default function RunsPage() {
           )}
         </div>
       )}
-    </>
+    </div>
   );
 }

@@ -18,8 +18,6 @@ export interface NycsSearchCriteria {
   minBeds?: number;
   maxBeds?: number;
   minBaths?: number;
-  maxHoa?: number;
-  maxTax?: number;
   amenities?: string;
   types?: string;
   limit?: number;
@@ -143,8 +141,6 @@ export async function fetchActiveSalesWithCriteria(criteria: NycsSearchCriteria)
   if (criteria.minBeds != null) params.minBeds = criteria.minBeds;
   if (criteria.maxBeds != null) params.maxBeds = criteria.maxBeds;
   if (criteria.minBaths != null) params.minBaths = criteria.minBaths;
-  if (criteria.maxHoa != null) params.maxHoa = criteria.maxHoa;
-  if (criteria.maxTax != null) params.maxTax = criteria.maxTax;
   if (criteria.amenities != null && criteria.amenities.trim()) params.amenities = criteria.amenities.trim();
   if (criteria.types != null && criteria.types.trim()) params.types = criteria.types.trim();
   if (criteria.limit != null) params.limit = criteria.limit;

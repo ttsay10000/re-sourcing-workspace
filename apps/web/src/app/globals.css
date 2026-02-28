@@ -1,12 +1,21 @@
+@import url("https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap");
+
 * {
   box-sizing: border-box;
 }
 
 body {
   margin: 0;
-  font-family: system-ui, -apple-system, sans-serif;
-  background: #0f0f12;
-  color: #e4e4e7;
+  font-family: "EB Garamond", Garamond, "Times New Roman", Georgia, serif;
+  background: #fff;
+  color: #111;
+}
+
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
 }
 
 /* App shell – top header layout */
@@ -22,15 +31,15 @@ body {
   justify-content: space-between;
   padding: 0 1.5rem;
   height: 3.5rem;
-  background: #18181b;
-  border-bottom: 1px solid #27272a;
+  background: #fff;
+  border-bottom: 1px solid #e5e5e5;
   flex-shrink: 0;
 }
 
 .app-header-title {
   font-weight: 700;
   font-size: 1.1rem;
-  color: #e4e4e7;
+  color: #111;
 }
 
 .app-nav {
@@ -41,21 +50,21 @@ body {
 
 .app-nav-link {
   padding: 0.5rem 1rem;
-  color: #a1a1aa;
+  color: #525252;
   text-decoration: none;
   font-size: 0.9rem;
   border-radius: 6px;
 }
 
 .app-nav-link:hover {
-  color: #fff;
-  background: #27272a;
+  color: #111;
+  background: #f5f5f5;
 }
 
 .app-nav-link--active {
-  color: #fff;
+  color: #111;
   font-weight: 600;
-  background: #27272a;
+  background: #e5e5e5;
 }
 
 .app-header-right {
@@ -65,7 +74,7 @@ body {
 
 .app-user-profile {
   font-size: 0.875rem;
-  color: #a1a1aa;
+  color: #525252;
 }
 
 .app-main {
@@ -87,15 +96,15 @@ body {
 
 .nav {
   width: 220px;
-  background: #18181b;
-  border-right: 1px solid #27272a;
+  background: #fafafa;
+  border-right: 1px solid #e5e5e5;
   padding: 1rem 0;
 }
 
 .nav-brand {
   font-weight: 700;
   padding: 0 1rem 0.75rem;
-  border-bottom: 1px solid #27272a;
+  border-bottom: 1px solid #e5e5e5;
   margin-bottom: 0.5rem;
 }
 
@@ -106,13 +115,13 @@ body {
 
 .nav-links a {
   padding: 0.5rem 1rem;
-  color: #a1a1aa;
+  color: #525252;
   text-decoration: none;
 }
 
 .nav-links a:hover {
-  color: #fff;
-  background: #27272a;
+  color: #111;
+  background: #e5e5e5;
 }
 
 .page-title {
@@ -122,11 +131,32 @@ body {
 }
 
 .card {
-  background: #18181b;
-  border: 1px solid #27272a;
+  background: #fafafa;
+  border: 1px solid #e5e5e5;
   border-radius: 8px;
   padding: 1rem 1.25rem;
   max-width: 32rem;
+}
+
+/* Runs page: use full width for intro, form, and log */
+.runs-page .card {
+  max-width: none;
+}
+
+.runs-areas-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.5rem 1.5rem;
+}
+@media (max-width: 900px) {
+  .runs-areas-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+@media (max-width: 600px) {
+  .runs-areas-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
 }
 
 .card pre {
@@ -136,11 +166,11 @@ body {
 }
 
 .error {
-  color: #f87171;
+  color: #b91c1c;
 }
 
 .success {
-  color: #4ade80;
+  color: #15803d;
 }
 
 /* Primary action button */
@@ -149,15 +179,16 @@ body {
   padding: 0.6rem 1.25rem;
   font-size: 1rem;
   font-weight: 600;
-  color: #0f0f12;
-  background: #4ade80;
+  font-family: "EB Garamond", Garamond, Georgia, serif;
+  color: #fff;
+  background: #15803d;
   border: none;
   border-radius: 8px;
   cursor: pointer;
 }
 
 .btn-primary:hover:not(:disabled) {
-  background: #22c55e;
+  background: #166534;
 }
 
 .btn-primary:disabled {
@@ -167,16 +198,17 @@ body {
 
 /* Form inputs */
 .input-text {
-  background: #27272a;
-  border: 1px solid #3f3f46;
+  background: #fff;
+  border: 1px solid #d4d4d4;
   border-radius: 6px;
-  color: #e4e4e7;
+  color: #111;
   padding: 0.35rem 0.5rem;
+  font-family: "EB Garamond", Garamond, Georgia, serif;
 }
 
 .input-text:focus {
   outline: none;
-  border-color: #4ade80;
+  border-color: #15803d;
 }
 
 /* Area grid */
@@ -210,8 +242,8 @@ body {
 }
 
 .metric-card {
-  background: #18181b;
-  border: 1px solid #27272a;
+  background: #fafafa;
+  border: 1px solid #e5e5e5;
   border-radius: 8px;
   padding: 1rem 1.25rem;
   min-height: 5rem;
@@ -219,14 +251,14 @@ body {
 
 .metric-label {
   font-size: 0.8rem;
-  color: #a1a1aa;
+  color: #525252;
   margin-bottom: 0.35rem;
 }
 
 .metric-value {
   font-size: 1.25rem;
   font-weight: 600;
-  color: #e4e4e7;
+  color: #111;
 }
 
 .home-content {
@@ -248,7 +280,7 @@ body {
   font-size: 1.1rem;
   font-weight: 600;
   margin: 0;
-  color: #e4e4e7;
+  color: #111;
 }
 
 .home-cards-container {
@@ -261,40 +293,215 @@ body {
 }
 
 .property-card {
-  background: #18181b;
-  border: 1px solid #27272a;
+  background: #fafafa;
+  border: 1px solid #e5e5e5;
   border-radius: 8px;
-  padding: 1rem 1.25rem;
+  padding: 0;
   flex-shrink: 0;
-  min-height: 7rem;
+  overflow: hidden;
+}
+
+.property-card--selected {
+  border-color: #15803d;
+  box-shadow: 0 0 0 1px #15803d;
+}
+
+.property-card-inner {
+  display: flex;
+  align-items: stretch;
+  min-height: 140px;
+}
+
+.property-card-checkbox-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  padding: 1rem;
+  min-width: 3.5rem;
+  background: #e5e5e5;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.property-card-checkbox {
+  width: 1.25rem;
+  height: 1.25rem;
+  cursor: pointer;
+  accent-color: #15803d;
+}
+
+.property-card-checkbox:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.property-card-checkbox-label {
+  font-size: 0.7rem;
+  color: #525252;
+}
+
+.property-card-image-wrap {
+  flex-shrink: 0;
+  width: 160px;
+  min-height: 100%;
+  background: #e5e5e5;
+}
+
+.property-card-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  min-height: 140px;
+}
+
+.property-card-body {
+  flex: 1;
+  padding: 1rem 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.property-card-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
 }
 
 .property-card-score {
-  font-size: 1.5rem;
+  font-size: 1.25rem;
   font-weight: 700;
-  color: #e4e4e7;
-  margin-bottom: 0.5rem;
+  color: #111;
+  margin: 0;
 }
 
-.property-card-placeholder {
-  font-size: 0.875rem;
-  color: #71717a;
-  margin-bottom: 0.25rem;
+.property-card-address {
+  font-size: 0.9rem;
+  color: #525252;
+}
+
+.property-card-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0 1.5rem;
+  font-size: 0.8rem;
+}
+
+.property-card-metrics-col {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.property-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 0.05rem;
+}
+
+.property-metric-label {
+  color: #737373;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.property-metric-value {
+  color: #111;
+  font-weight: 500;
+}
+
+.property-metric-value--wrap {
+  white-space: normal;
+  word-break: break-word;
 }
 
 .property-card-actions {
   display: flex;
   gap: 0.5rem;
-  margin-top: 0.75rem;
+  margin-top: auto;
+  padding-top: 0.5rem;
+}
+
+/* Dossiers section (bottom) */
+.home-dossiers {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid #e5e5e5;
+}
+
+.home-dossiers-title {
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 0 0 0.75rem;
+  color: #111;
+}
+
+.home-dossiers-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.dossier-card {
+  background: #fafafa;
+  border: 1px solid #e5e5e5;
+  border-radius: 8px;
+  overflow: hidden;
+  display: flex;
+  align-items: stretch;
+}
+
+.dossier-card-image {
+  width: 120px;
+  flex-shrink: 0;
+  background: #e5e5e5;
+}
+
+.dossier-card-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  min-height: 78px;
+}
+
+.dossier-card-body {
+  padding: 1rem 1.25rem;
+  flex: 1;
+  min-width: 0;
+}
+
+.dossier-card-address {
+  font-weight: 600;
+  color: #111;
+  margin-bottom: 0.25rem;
+}
+
+.dossier-card-meta {
+  font-size: 0.8rem;
+  color: #525252;
+  margin-bottom: 0.5rem;
+}
+
+.dossier-card-placeholder {
+  font-size: 0.8rem;
+  color: #737373;
 }
 
 .btn-card {
   padding: 0.35rem 0.75rem;
   font-size: 0.8rem;
-  background: #27272a;
-  border: 1px solid #3f3f46;
+  font-family: "EB Garamond", Garamond, Georgia, serif;
+  background: #e5e5e5;
+  border: 1px solid #d4d4d4;
   border-radius: 6px;
-  color: #e4e4e7;
+  color: #111;
   cursor: default;
 }
 
@@ -304,7 +511,7 @@ body {
   gap: 1rem;
   flex-wrap: wrap;
   padding: 0.75rem 0;
-  border-top: 1px solid #27272a;
+  border-top: 1px solid #e5e5e5;
 }
 
 .home-action-checkbox {
@@ -312,7 +519,7 @@ body {
   align-items: center;
   gap: 0.5rem;
   font-size: 0.875rem;
-  color: #a1a1aa;
+  color: #525252;
   cursor: default;
 }
 
@@ -327,8 +534,8 @@ body {
 }
 
 .home-sidebar {
-  background: #18181b;
-  border: 1px solid #27272a;
+  background: #fafafa;
+  border: 1px solid #e5e5e5;
   border-radius: 8px;
   padding: 1rem 1.25rem;
   min-height: 320px;
@@ -341,7 +548,7 @@ body {
   font-size: 1rem;
   font-weight: 600;
   margin: 0;
-  color: #e4e4e7;
+  color: #111;
 }
 
 .sidebar-section {
@@ -352,7 +559,7 @@ body {
 
 .sidebar-section-label {
   font-size: 0.8rem;
-  color: #a1a1aa;
+  color: #525252;
   margin-bottom: 0.25rem;
 }
 
@@ -361,17 +568,18 @@ body {
   align-items: center;
   gap: 0.5rem;
   font-size: 0.875rem;
-  color: #e4e4e7;
+  color: #111;
   cursor: default;
 }
 
 .btn-sidebar {
   padding: 0.35rem 0.75rem;
   font-size: 0.8rem;
-  background: #27272a;
-  border: 1px solid #3f3f46;
+  font-family: "EB Garamond", Garamond, Georgia, serif;
+  background: #e5e5e5;
+  border: 1px solid #d4d4d4;
   border-radius: 6px;
-  color: #e4e4e7;
+  color: #111;
   cursor: default;
   text-align: left;
   width: 100%;
@@ -380,10 +588,11 @@ body {
 .btn-secondary {
   padding: 0.5rem 1rem;
   font-size: 0.9rem;
-  background: #27272a;
-  border: 1px solid #3f3f46;
+  font-family: "EB Garamond", Garamond, Georgia, serif;
+  background: #e5e5e5;
+  border: 1px solid #d4d4d4;
   border-radius: 6px;
-  color: #e4e4e7;
+  color: #111;
   cursor: default;
 }
 
@@ -422,22 +631,23 @@ body {
 .property-data-tab {
   padding: 0.5rem 1rem;
   font-size: 0.9rem;
+  font-family: "EB Garamond", Garamond, Georgia, serif;
   background: transparent;
-  border: 1px solid #27272a;
+  border: 1px solid #e5e5e5;
   border-radius: 6px;
-  color: #a1a1aa;
+  color: #525252;
   cursor: pointer;
 }
 
 .property-data-tab:hover {
-  background: #27272a;
-  color: #e4e4e7;
+  background: #f5f5f5;
+  color: #111;
 }
 
 .property-data-tab--active {
-  background: #27272a;
-  color: #e4e4e7;
-  border-color: #3f3f46;
+  background: #e5e5e5;
+  color: #111;
+  border-color: #d4d4d4;
 }
 
 .property-data-filters {
@@ -462,8 +672,8 @@ body {
 .property-data-table-wrap {
   overflow: auto;
   min-height: 320px;
-  background: #18181b;
-  border: 1px solid #27272a;
+  background: #fff;
+  border: 1px solid #e5e5e5;
   border-radius: 8px;
 }
 
@@ -477,28 +687,28 @@ body {
 .property-data-table td {
   text-align: left;
   padding: 0.5rem 0.75rem;
-  border-bottom: 1px solid #27272a;
+  border-bottom: 1px solid #e5e5e5;
 }
 
 .property-data-table th {
   font-weight: 600;
-  color: #a1a1aa;
-  background: #18181b;
+  color: #525252;
+  background: #fafafa;
   position: sticky;
   top: 0;
 }
 
 .property-data-table td {
-  color: #e4e4e7;
+  color: #111;
 }
 
 .property-data-table tbody tr:hover {
-  background: #27272a;
+  background: #f5f5f5;
 }
 
 .property-data-sidebar {
-  background: #18181b;
-  border: 1px solid #27272a;
+  background: #fafafa;
+  border: 1px solid #e5e5e5;
   border-radius: 8px;
   padding: 1rem 1.25rem;
   min-height: 320px;
@@ -512,7 +722,7 @@ body {
   align-items: center;
   gap: 0.5rem;
   font-size: 0.875rem;
-  color: #e4e4e7;
+  color: #111;
   cursor: default;
 }
 
@@ -521,13 +731,13 @@ body {
   align-items: center;
   justify-content: space-between;
   padding: 0.75rem 0;
-  border-top: 1px solid #27272a;
+  border-top: 1px solid #e5e5e5;
   flex-shrink: 0;
 }
 
 .property-data-bottom-label {
   font-size: 0.875rem;
-  color: #71717a;
+  color: #737373;
 }
 
 .property-data-bottom-actions {
@@ -544,7 +754,7 @@ body {
 }
 
 .placeholder-message {
-  color: #71717a;
+  color: #737373;
   font-size: 1rem;
   margin: 0;
 }

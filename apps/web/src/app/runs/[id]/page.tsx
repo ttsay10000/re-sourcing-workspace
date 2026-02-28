@@ -105,22 +105,22 @@ export default function RunDetailPage() {
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.875rem" }}>
               <thead>
                 <tr>
-                  <th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #27272a" }}>
+                  <th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
                     Address
                   </th>
-                  <th style={{ textAlign: "right", padding: "0.5rem", borderBottom: "1px solid #27272a" }}>
+                  <th style={{ textAlign: "right", padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
                     Price
                   </th>
-                  <th style={{ textAlign: "center", padding: "0.5rem", borderBottom: "1px solid #27272a" }}>
+                  <th style={{ textAlign: "center", padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
                     Beds
                   </th>
-                  <th style={{ textAlign: "center", padding: "0.5rem", borderBottom: "1px solid #27272a" }}>
+                  <th style={{ textAlign: "center", padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
                     Baths
                   </th>
-                  <th style={{ textAlign: "right", padding: "0.5rem", borderBottom: "1px solid #27272a" }}>
+                  <th style={{ textAlign: "right", padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
                     Sqft
                   </th>
-                  <th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #27272a" }}>
+                  <th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
                     Link
                   </th>
                 </tr>
@@ -128,24 +128,24 @@ export default function RunDetailPage() {
               <tbody>
                 {run.properties.map((p, i) => (
                   <tr key={i}>
-                    <td style={{ padding: "0.5rem", borderBottom: "1px solid #27272a" }}>
+                    <td style={{ padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
                       {pick(p, "address", "formatted_address", "street_address", "title")}
                     </td>
-                    <td style={{ textAlign: "right", padding: "0.5rem", borderBottom: "1px solid #27272a" }}>
+                    <td style={{ textAlign: "right", padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
                       {p.price != null || p.list_price != null
                         ? `$${Number(p.price ?? p.list_price ?? 0).toLocaleString()}`
                         : "—"}
                     </td>
-                    <td style={{ textAlign: "center", padding: "0.5rem", borderBottom: "1px solid #27272a" }}>
+                    <td style={{ textAlign: "center", padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
                       {pick(p, "bedrooms", "beds")}
                     </td>
-                    <td style={{ textAlign: "center", padding: "0.5rem", borderBottom: "1px solid #27272a" }}>
+                    <td style={{ textAlign: "center", padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
                       {pick(p, "bathrooms", "baths")}
                     </td>
-                    <td style={{ textAlign: "right", padding: "0.5rem", borderBottom: "1px solid #27272a" }}>
+                    <td style={{ textAlign: "right", padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
                       {pick(p, "square_feet", "sqft", "sqft_feet")}
                     </td>
-                    <td style={{ padding: "0.5rem", borderBottom: "1px solid #27272a" }}>
+                    <td style={{ padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
                       {(p.url || p.link || p.listing_url) ? (
                         <a
                           href={String(p.url ?? p.link ?? p.listing_url)}

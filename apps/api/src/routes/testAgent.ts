@@ -39,8 +39,6 @@ export interface RunRequestBody {
   minBeds?: number | null;
   maxBeds?: number | null;
   minBaths?: number | null;
-  maxHoa?: number | null;
-  maxTax?: number | null;
   amenities?: string | null;
   types?: string | null;
   limit?: number | null;
@@ -55,8 +53,6 @@ function toCriteria(body: RunRequestBody): NycsSearchCriteria {
     minBeds: body.minBeds != null ? Number(body.minBeds) : undefined,
     maxBeds: body.maxBeds != null ? Number(body.maxBeds) : undefined,
     minBaths: body.minBaths != null ? Number(body.minBaths) : undefined,
-    maxHoa: body.maxHoa != null ? Number(body.maxHoa) : undefined,
-    maxTax: body.maxTax != null ? Number(body.maxTax) : undefined,
     amenities: body.amenities ?? undefined,
     types: body.types ?? undefined,
     limit: body.limit != null ? Math.min(Number(body.limit), 200) : 100,
