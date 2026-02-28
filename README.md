@@ -28,6 +28,12 @@ docker compose up -d
 # Then set DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres
 ```
 
+**First-time DB setup (Runs → Send to property data):** If you see "relation \"listings\" does not exist", create the schema by setting `DATABASE_URL` (e.g. in `.env` or your shell) and running from the repo root:
+
+```bash
+npm run db:migrate
+```
+
 ## Scripts
 
 | Script | Description |
@@ -52,8 +58,8 @@ docker compose up -d
 
 1. **Blueprint**: Use `render.yaml` in the repo (or create two web services + one Postgres manually).
 2. **API service**
-   - Build: `npm install && npm run build -w @re-sourcing/contracts && npm run build -w @re-sourcing/api`
-   - Start: `npm run start -w @re-sourcing/api`
+   - Build: `npm install && npm run build -w @re-sourcing/contracts && npm run build -w @re-sourcing/db && npm run build -w @re-sourcing/api`
+   - Start: `npm run db:migrate && npm run start -w @re-sourcing/api` (migrations run automatically on each deploy; safe to run every time).
    - Env: `DATABASE_URL` (from Postgres), `CORS_ORIGIN` = your web service URL (e.g. `https://re-sourcing-web.onrender.com`).
 3. **Web service**
    - Build: `npm install && npm run build -w @re-sourcing/web`

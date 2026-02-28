@@ -1,12 +1,14 @@
 /**
  * Run migrations in order from packages/db/migrations/*.sql
  * Uses DATABASE_URL. Creates schema_migrations table to track applied migrations.
- * Run from repo root or packages/db; migrations path is relative to packages/db.
+ * Resolves migrations dir relative to this file (dist/migrate.js -> ../migrations).
  */
 
 import { readdir, readFile } from "fs/promises";
 import { join } from "path";
 import { getPool } from "./pool.js";
+
+declare const __dirname: string;
 
 async function main(): Promise<void> {
   const pool = getPool();
@@ -20,10 +22,7 @@ async function main(): Promise<void> {
       );
     `);
 
-    const migrationsDir = join(process.cwd(), "packages", "db", "migrations");
-    const altMigrationsDir = join(process.cwd(), "migrations");
-    const { existsSync } = await import("fs");
-    const migrationsPath = existsSync(migrationsDir) ? migrationsDir : altMigrationsDir;
+    const migrationsPath = join(__dirname, "..", "migrations");
     const files = (await readdir(migrationsPath))
       .filter((f) => f.endsWith(".sql"))
       .sort();
@@ -39,8 +38,8 @@ async function main(): Promise<void> {
         continue;
       }
 
-      const path = join(migrationsPath, file);
-      const sql = await readFile(path, "utf-8");
+      const filePath = join(migrationsPath, file);
+      const sql = await readFile(filePath, "utf-8");
       await client.query(sql);
       await client.query(
         "INSERT INTO schema_migrations (name) VALUES ($1)",
