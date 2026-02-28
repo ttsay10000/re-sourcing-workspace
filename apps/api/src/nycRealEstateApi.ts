@@ -1,13 +1,20 @@
 /**
- * NYC Real Estate API (RapidAPI) client.
- * Two endpoints:
- * - GET Active Sales (sales/search): areas + filters → list of listings with URLs.
- * - GET Sale details by URL: single url param → full property details.
+ * NYC Real Estate API (RapidAPI) client. Uses RAPIDAPI_KEY env for both endpoints.
+ *
+ * Step 1 — GET active properties:
+ *   GET https://nyc-real-estate-api.p.rapidapi.com/sales/search
+ *   Querystring: areas, minPrice, maxPrice, minBeds, maxBeds, minBaths, amenities, types, limit, offset
+ *   (each from run filters / UI when starting a run).
+ *
+ * Step 2 — GET sale details per listing:
+ *   GET https://nyc-real-estate-api.p.rapidapi.com/sales/url
+ *   Querystring: url=<StreetEasy URL from step 1>. No areas or other search params.
  */
 
 import type { ListingNormalized } from "@re-sourcing/contracts";
 
-const BASE_URL = "https://nyc-real-estate-api.p.rapidapi.com/sales/search";
+const SALES_SEARCH_URL = "https://nyc-real-estate-api.p.rapidapi.com/sales/search";
+const SALES_URL_ENDPOINT = "https://nyc-real-estate-api.p.rapidapi.com/sales/url";
 const HOST = "nyc-real-estate-api.p.rapidapi.com";
 
 /** Criteria for GET Active Sales; areas is required (e.g. "all-downtown,all-midtown"). */
@@ -105,7 +112,7 @@ function mapListing(raw: ApiListing, sourceLabel: "active" | "past"): ListingNor
 
 /** Fetch from sales/search with optional query params. */
 async function fetchSales(params: Record<string, string | number> = {}): Promise<ApiListing[]> {
-  const url = new URL(BASE_URL);
+  const url = new URL(SALES_SEARCH_URL);
   Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, String(v)));
 
   const res = await fetch(url.toString(), { headers: headers() });
@@ -154,10 +161,10 @@ export async function fetchActiveSalesWithCriteria(criteria: NycsSearchCriteria)
 
 /**
  * Fetch sale details for a single listing by its StreetEasy URL.
- * GET Sale details by URL; response shape is API-specific (returned as-is for property data).
+ * Uses GET /sales/url (not /sales/search); only the url querystring param is required.
  */
 export async function fetchSaleDetailsByUrl(streeteasyUrl: string): Promise<Record<string, unknown>> {
-  const url = new URL(BASE_URL);
+  const url = new URL(SALES_URL_ENDPOINT);
   url.searchParams.set("url", streeteasyUrl);
   const res = await fetch(url.toString(), { headers: headers() });
   if (!res.ok) {

@@ -59,7 +59,7 @@ export default function RunDetailPage() {
   };
 
   return (
-    <>
+    <div className="run-detail-page">
       <h1 className="page-title">Run at {formatTime(run.startedAt)}</h1>
       <p className="card" style={{ marginBottom: "1rem" }}>
         <Link href="/runs">← Back to Runs</Link>
@@ -165,6 +165,6 @@ export default function RunDetailPage() {
           </div>
         </div>
       )}
-    </>
+    </div>
   );
 }

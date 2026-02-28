@@ -2,9 +2,11 @@
  * Test agent route: two-step NYC Real Estate API flow.
  * POST starts a run (returns runId immediately); backend runs GET Active Sales then GET Sale details per URL.
  * Runs are stored in memory with step progress, timer, and properties (raw data lake).
+ * Data is NOT auto-populated to property data; user must click "Send to property data" per run.
  */
 
 import { Router, type Request, type Response } from "express";
+import type { ListingNormalized } from "@re-sourcing/contracts";
 import type { NycsSearchCriteria } from "../nycRealEstateApi.js";
 import { fetchActiveSalesWithCriteria, fetchSaleDetailsByUrl } from "../nycRealEstateApi.js";
 
@@ -79,7 +81,7 @@ async function runTwoStepFlow(run: StoredTestRun): Promise<void> {
     for (let i = 0; i < urls.length; i++) {
       try {
         const details = await fetchSaleDetailsByUrl(urls[i]);
-        run.properties.push(details);
+        run.properties.push({ ...details, _fetchUrl: urls[i] });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         run.errors.push({ url: urls[i], message });
@@ -161,6 +163,82 @@ router.get("/test-agent/runs/:id", (req: Request, res: Response) => {
     return;
   }
   res.json(run);
+});
+
+/** Map one run property (GET sale details + _fetchUrl) to ListingNormalized. */
+function runPropertyToNormalized(raw: Record<string, unknown>, index: number): ListingNormalized {
+  const id = raw.id != null ? String(raw.id) : raw.address != null ? String(raw.address) : `run-${index}`;
+  const address = (raw.address != null ? String(raw.address) : "").trim() || "—";
+  const borough = (raw.borough != null ? String(raw.borough) : "").trim() || "New York";
+  const city = borough.charAt(0).toUpperCase() + borough.slice(1).toLowerCase().replace(/-/g, " ");
+  const zip = (raw.zipcode != null ? String(raw.zipcode) : raw.zip != null ? String(raw.zip) : "").trim() || "";
+  const price = Number(raw.price ?? raw.closedPrice ?? 0) || 0;
+  const beds = Number(raw.bedrooms ?? raw.beds ?? 0) || 0;
+  const baths = Number(raw.bathrooms ?? raw.baths ?? 0) || 0;
+  const sqft = raw.sqft != null ? Number(raw.sqft) : null;
+  const url = (raw._fetchUrl != null ? String(raw._fetchUrl) : raw.url != null ? String(raw.url) : "").trim() || "#";
+  const listedAt = raw.listedAt != null ? String(raw.listedAt) : null;
+  const images = raw.images;
+  const imageUrls = Array.isArray(images) ? (images as string[]) : null;
+  const { _fetchUrl: _u, ...rest } = raw;
+  const extra = rest as Record<string, unknown>;
+  return {
+    source: "streeteasy",
+    externalId: id,
+    address,
+    city,
+    state: "NY",
+    zip,
+    price,
+    beds,
+    baths,
+    sqft: sqft && !Number.isNaN(sqft) ? sqft : null,
+    url,
+    title: address !== "—" ? address : null,
+    description: raw.description != null ? String(raw.description) : null,
+    lat: null,
+    lon: null,
+    imageUrls,
+    listedAt,
+    extra: Object.keys(extra).length ? extra : null,
+  };
+}
+
+/** Send this run's properties to property data (listings + snapshots). No auto-populate; user-triggered only. */
+router.post("/test-agent/runs/:id/send-to-property-data", async (req: Request, res: Response) => {
+  const run = testRunsStore.find((r) => r.id === req.params.id);
+  if (!run) {
+    res.status(404).json({ error: "Test run not found." });
+    return;
+  }
+  if (run.properties.length === 0) {
+    res.status(400).json({ error: "Run has no properties to send." });
+    return;
+  }
+  try {
+    const db = await import("@re-sourcing/db");
+    const pool = db.getPool();
+    const listingRepo = new db.ListingRepo({ pool });
+    const snapshotRepo = new db.SnapshotRepo({ pool });
+
+    const results: { listingId: string; externalId: string; created: boolean }[] = [];
+    for (let i = 0; i < run.properties.length; i++) {
+      const normalized = runPropertyToNormalized(run.properties[i] as Record<string, unknown>, i);
+      const { listing, created } = await listingRepo.upsert(normalized);
+      await snapshotRepo.create({
+        listingId: listing.id,
+        runId: null,
+        rawPayloadPath: "inline",
+        metadata: { testRunId: run.id, capturedAt: new Date().toISOString() },
+      });
+      results.push({ listingId: listing.id, externalId: normalized.externalId, created });
+    }
+    res.json({ ok: true, sent: results.length, results });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[send-to-property-data]", err);
+    res.status(503).json({ error: "Database unavailable or failed to persist.", details: message });
+  }
 });
 
 export default router;

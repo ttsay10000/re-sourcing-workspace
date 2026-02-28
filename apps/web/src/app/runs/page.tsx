@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { AREA_OPTIONS } from "./areas";
+import { AREA_TREE, isIncludedByParent, type AreaNode } from "./areas";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
 
@@ -48,6 +48,7 @@ export default function RunsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
+  const [sendingRunId, setSendingRunId] = useState<string | null>(null);
 
   // Filters (all variable, no hardcoded numbers in request)
   const [selectedAreas, setSelectedAreas] = useState<string[]>([]);
@@ -121,6 +122,39 @@ export default function RunsPage() {
     );
   };
 
+  const renderAreaNodes = (nodes: AreaNode[], depth: number) =>
+    nodes.map((opt) => {
+      const includedByParent = isIncludedByParent(opt.value, selectedAreas);
+      const isChecked = selectedAreas.includes(opt.value) || includedByParent;
+      const isBold = /^all\s/i.test(opt.label);
+      return (
+        <div key={opt.value}>
+          <label
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "flex-start",
+              gap: "0.5rem",
+              fontSize: "0.85rem",
+              cursor: includedByParent ? "default" : "pointer",
+              paddingLeft: depth * 1.25 + "rem",
+              opacity: includedByParent ? 0.6 : 1,
+              color: includedByParent ? "#525252" : undefined,
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={isChecked}
+              disabled={includedByParent}
+              onChange={() => !includedByParent && toggleArea(opt.value)}
+            />
+            <span style={{ fontWeight: isBold ? 700 : 400 }}>{opt.label}</span>
+          </label>
+          {opt.children?.length ? renderAreaNodes(opt.children, depth + 1) : null}
+        </div>
+      );
+    });
+
   const toggleType = (value: string) => {
     setSelectedTypes((prev) =>
       prev.includes(value) ? prev.filter((t) => t !== value) : [...prev, value]
@@ -159,6 +193,25 @@ export default function RunsPage() {
     return "GET Sale Details pending";
   };
 
+  const handleSendToPropertyData = (runId: string) => {
+    setSendingRunId(runId);
+    setError(null);
+    fetch(`${API_BASE}/api/test-agent/runs/${runId}/send-to-property-data`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    })
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.error) throw new Error(data.error);
+        setSendingRunId(null);
+        window.location.href = "/property-data";
+      })
+      .catch((err) => {
+        setError(err instanceof Error ? err.message : "Failed to send to property data");
+        setSendingRunId(null);
+      });
+  };
+
   return (
     <div className="runs-page">
       <h1 className="page-title">Runs</h1>
@@ -185,8 +238,9 @@ export default function RunsPage() {
         </ol>
         <p style={{ marginBottom: "0.5rem", lineHeight: 1.5 }}>
           Choose your filters, set a limit on how many properties to fetch, then click{" "}
-          <strong>Send</strong>. Each run appears in the log with step progress and a link to view
-          its properties.
+          <strong>Send</strong>. Each run appears in the log with step progress. When a run is
+          complete, use <strong>Send to property data</strong> to persist that run&apos;s
+          properties into Property Data (raw listings). Data is not auto-populated.
         </p>
         <p style={{ fontSize: "0.875rem", color: "#525252", marginTop: "0.75rem" }}>
           Ensure <code>RAPIDAPI_KEY</code> is set in the API server environment (see{" "}
@@ -202,7 +256,7 @@ export default function RunsPage() {
             Areas (required)
           </label>
           <div
-            className="runs-areas-grid"
+            className="runs-areas-list"
             style={{
               maxHeight: "10rem",
               overflowY: "auto",
@@ -212,26 +266,7 @@ export default function RunsPage() {
               background: "#f5f5f5",
             }}
           >
-            {AREA_OPTIONS.map((opt) => (
-              <label
-                key={opt.value}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "flex-start",
-                  gap: "0.5rem",
-                  fontSize: "0.85rem",
-                  cursor: "pointer",
-                }}
-              >
-                <input
-                  type="checkbox"
-                  checked={selectedAreas.includes(opt.value)}
-                  onChange={() => toggleArea(opt.value)}
-                />
-                {opt.label}
-              </label>
-            ))}
+            {AREA_TREE.map((node) => renderAreaNodes([node], 0))}
           </div>
           <p style={{ fontSize: "0.75rem", color: "#525252", marginTop: "0.35rem" }}>
             Selected: {selectedAreas.length > 0 ? selectedAreas.join(", ") : "all-downtown, all-midtown (default)"}
@@ -468,7 +503,20 @@ export default function RunsPage() {
                         )}
                       </td>
                       <td style={{ padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
-                        <Link href={`/runs/${run.id}`}>View properties</Link>
+                        <Link href={`/runs/${run.id}`} style={{ marginRight: "0.75rem" }}>
+                          View properties
+                        </Link>
+                        {run.step2Status === "completed" && run.propertiesCount > 0 ? (
+                          <button
+                            type="button"
+                            className="btn-primary"
+                            style={{ padding: "0.25rem 0.5rem", fontSize: "0.8rem" }}
+                            disabled={sendingRunId === run.id}
+                            onClick={() => handleSendToPropertyData(run.id)}
+                          >
+                            {sendingRunId === run.id ? "Sending…" : "Send to property data"}
+                          </button>
+                        ) : null}
                       </td>
                     </tr>
                   ))}
