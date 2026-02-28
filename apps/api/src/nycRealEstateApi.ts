@@ -1,19 +1,30 @@
 /**
  * NYC Real Estate API (RapidAPI) client.
- * Endpoint: https://nyc-real-estate-api.p.rapidapi.com/sales/search
- * - Active sales: current listings on the market.
- * - Past sales: recently sold/off-market in the last 3 months.
- *
- * If the API returns empty or wrong fields, verify in RapidAPI playground and update:
- * - fetchSales() response parsing (which key holds the array: data, results, listings, etc.)
- * - ApiListing / mapListing() field names (e.g. list_price, formatted_address, etc.)
- * - fetchPastSalesLast3Months() query param names if the API supports a date range or status.
+ * Two endpoints:
+ * - GET Active Sales (sales/search): areas + filters → list of listings with URLs.
+ * - GET Sale details by URL: single url param → full property details.
  */
 
 import type { ListingNormalized } from "@re-sourcing/contracts";
 
 const BASE_URL = "https://nyc-real-estate-api.p.rapidapi.com/sales/search";
 const HOST = "nyc-real-estate-api.p.rapidapi.com";
+
+/** Criteria for GET Active Sales; areas is required (e.g. "all-downtown,all-midtown"). */
+export interface NycsSearchCriteria {
+  areas: string;
+  minPrice?: number;
+  maxPrice?: number;
+  minBeds?: number;
+  maxBeds?: number;
+  minBaths?: number;
+  maxHoa?: number;
+  maxTax?: number;
+  amenities?: string;
+  types?: string;
+  limit?: number;
+  offset?: number;
+}
 
 /** Raw listing shape from API (flexible for varying response structure). */
 interface ApiListing {
@@ -117,7 +128,52 @@ async function fetchSales(params: Record<string, string | number> = {}): Promise
 }
 
 /**
- * Fetch active (current) sales from the API.
+ * Fetch active sales with full criteria. Always sends areas (required); other params only if set.
+ * Returns listings and their URLs for use in GET Sale details by URL.
+ */
+export async function fetchActiveSalesWithCriteria(criteria: NycsSearchCriteria): Promise<{
+  listings: ListingNormalized[];
+  urls: string[];
+}> {
+  const params: Record<string, string | number> = {
+    areas: criteria.areas.trim() || "all-downtown,all-midtown",
+  };
+  if (criteria.minPrice != null) params.minPrice = criteria.minPrice;
+  if (criteria.maxPrice != null) params.maxPrice = criteria.maxPrice;
+  if (criteria.minBeds != null) params.minBeds = criteria.minBeds;
+  if (criteria.maxBeds != null) params.maxBeds = criteria.maxBeds;
+  if (criteria.minBaths != null) params.minBaths = criteria.minBaths;
+  if (criteria.maxHoa != null) params.maxHoa = criteria.maxHoa;
+  if (criteria.maxTax != null) params.maxTax = criteria.maxTax;
+  if (criteria.amenities != null && criteria.amenities.trim()) params.amenities = criteria.amenities.trim();
+  if (criteria.types != null && criteria.types.trim()) params.types = criteria.types.trim();
+  if (criteria.limit != null) params.limit = criteria.limit;
+  if (criteria.offset != null) params.offset = criteria.offset;
+
+  const raw = await fetchSales(params);
+  const listings = raw.map((r) => mapListing(r, "active"));
+  const urls = listings.map((l) => l.url).filter((u) => u && u !== "#");
+  return { listings, urls };
+}
+
+/**
+ * Fetch sale details for a single listing by its StreetEasy URL.
+ * GET Sale details by URL; response shape is API-specific (returned as-is for property data).
+ */
+export async function fetchSaleDetailsByUrl(streeteasyUrl: string): Promise<Record<string, unknown>> {
+  const url = new URL(BASE_URL);
+  url.searchParams.set("url", streeteasyUrl);
+  const res = await fetch(url.toString(), { headers: headers() });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`NYC Real Estate API sale details error ${res.status}: ${text || res.statusText}`);
+  }
+  const data = (await res.json()) as unknown;
+  return (data && typeof data === "object" ? data : {}) as Record<string, unknown>;
+}
+
+/**
+ * Fetch active (current) sales from the API (legacy; no areas).
  */
 export async function fetchActiveSales(options: { limit?: number; offset?: number } = {}): Promise<ListingNormalized[]> {
   const params: Record<string, string | number> = {};

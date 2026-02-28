@@ -5,50 +5,36 @@ import Link from "next/link";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
 
-interface ListingRow {
-  address: string;
-  city: string;
-  state: string;
-  zip: string;
-  price: number;
-  beds: number;
-  baths: number;
-  sqft?: number | null;
-  url: string;
-  title?: string | null;
-  extra?: { apiSegment?: string } | null;
-}
-
 interface TestRunSummary {
   id: string;
-  createdAt: string;
-  searchUrl: string;
-  stubsCount: number;
-  listingsCount: number;
+  startedAt: string;
+  propertiesCount: number;
   errorsCount: number;
 }
 
 interface TestRunDetail {
   id: string;
-  createdAt: string;
-  listings: ListingRow[];
+  startedAt: string;
+  properties: Record<string, unknown>[];
 }
 
-/** Flatten all listings from all runs with run time for display. */
+function pick(p: Record<string, unknown>, ...keys: string[]): string {
+  for (const k of keys) {
+    if (p[k] != null && p[k] !== "") return String(p[k]);
+  }
+  return "—";
+}
+
+/** Flatten all properties from all runs for display. */
 interface ListingWithRun {
   runId: string;
   runAt: string;
   address: string;
-  city: string;
-  state: string;
-  zip: string;
   price: number;
-  beds: number;
-  baths: number;
-  sqft?: number | null;
+  beds: string;
+  baths: string;
+  sqft: string;
   url: string;
-  title?: string | null;
-  extra?: { apiSegment?: string } | null;
 }
 
 export default function ListingsPage() {
@@ -66,22 +52,17 @@ export default function ListingsPage() {
           const detailRes = await fetch(`${API_BASE}/api/test-agent/runs/${run.id}`);
           if (!detailRes.ok) continue;
           const detail: TestRunDetail = await detailRes.json();
-          const runAt = detail.createdAt;
-          for (const row of detail.listings ?? []) {
+          const runAt = detail.startedAt;
+          for (const p of detail.properties ?? []) {
             all.push({
               runId: detail.id,
               runAt,
-              address: row.address,
-              city: row.city,
-              state: row.state,
-              zip: row.zip,
-              price: row.price,
-              beds: row.beds,
-              baths: row.baths,
-              sqft: row.sqft,
-              url: row.url,
-              title: row.title,
-              extra: row.extra,
+              address: pick(p, "address", "formatted_address", "street_address", "title"),
+              price: Number(p.price ?? p.list_price ?? 0),
+              beds: pick(p, "bedrooms", "beds"),
+              baths: pick(p, "bathrooms", "baths"),
+              sqft: pick(p, "square_feet", "sqft", "sqft_feet"),
+              url: String(p.url ?? p.link ?? p.listing_url ?? "#"),
             });
           }
         }
@@ -111,9 +92,7 @@ export default function ListingsPage() {
 
       {!loading && !error && listings.length === 0 && (
         <div className="card">
-          No test run listings yet. Run a test from{" "}
-          <Link href="/agent-test">Agent test</Link>, then view runs from{" "}
-          <Link href="/runs">Runs</Link>.
+          No properties yet. Start a run from <Link href="/runs">Runs</Link> (filters + Send).
         </div>
       )}
 
@@ -124,9 +103,6 @@ export default function ListingsPage() {
               <tr>
                 <th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #27272a" }}>
                   Run at
-                </th>
-                <th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #27272a" }}>
-                  Type
                 </th>
                 <th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #27272a" }}>
                   Address
@@ -155,9 +131,6 @@ export default function ListingsPage() {
                     <Link href={`/runs/${row.runId}`}>{formatTime(row.runAt)}</Link>
                   </td>
                   <td style={{ padding: "0.5rem", borderBottom: "1px solid #27272a" }}>
-                    {row.extra?.apiSegment === "past" ? "Past" : row.extra?.apiSegment === "active" ? "Active" : "—"}
-                  </td>
-                  <td style={{ padding: "0.5rem", borderBottom: "1px solid #27272a" }}>
                     {row.address}
                   </td>
                   <td style={{ textAlign: "right", padding: "0.5rem", borderBottom: "1px solid #27272a" }}>
@@ -170,12 +143,16 @@ export default function ListingsPage() {
                     {row.baths}
                   </td>
                   <td style={{ textAlign: "right", padding: "0.5rem", borderBottom: "1px solid #27272a" }}>
-                    {row.sqft ?? "—"}
+                    {row.sqft}
                   </td>
                   <td style={{ padding: "0.5rem", borderBottom: "1px solid #27272a" }}>
-                    <a href={row.url} target="_blank" rel="noopener noreferrer">
-                      View
-                    </a>
+                    {row.url !== "#" ? (
+                      <a href={row.url} target="_blank" rel="noopener noreferrer">
+                        View
+                      </a>
+                    ) : (
+                      "—"
+                    )}
                   </td>
                 </tr>
               ))}
