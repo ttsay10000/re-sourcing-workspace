@@ -16,6 +16,10 @@ interface SaleDetails {
   neighborhood?: string;
   zipcode?: string;
   propertyType?: string;
+  property_type?: string;
+  type?: string;
+  listing_type?: string;
+  category?: string;
   sqft?: number;
   ppsqft?: number;
   bedrooms?: number;
@@ -25,7 +29,7 @@ interface SaleDetails {
   amenities?: string[];
   builtIn?: number;
   description?: string;
-  building?: { id?: string };
+  building?: { id?: string; type?: string; propertyType?: string; property_type?: string };
   agents?: string[];
   broker_name?: string;
   broker?: string;
@@ -35,6 +39,21 @@ interface SaleDetails {
   videos?: string[];
   floorplans?: string[];
   [key: string]: unknown;
+}
+
+/** Get property type from detail object; API may use propertyType, property_type, type, listing_type, or building.type. */
+function getPropertyType(details: SaleDetails): string | undefined {
+  const keys: (keyof SaleDetails)[] = ["propertyType", "property_type", "type", "listing_type", "category"];
+  for (const key of keys) {
+    const v = details[key];
+    if (v != null && typeof v === "string" && v.trim()) return v.trim();
+  }
+  const building = details.building;
+  if (building && typeof building === "object") {
+    const v = building.type ?? building.propertyType ?? building.property_type;
+    if (v != null && typeof v === "string" && v.trim()) return v.trim();
+  }
+  return undefined;
 }
 
 export interface PropertyDetailListing {
@@ -155,7 +174,7 @@ export function PropertyDetailCollapsible({ listing }: { listing: PropertyDetail
   const beds = details.bedrooms ?? listing.beds;
   const baths = details.bathrooms ?? listing.baths;
   const sqft = details.sqft ?? listing.sqft;
-  const propertyType = details.propertyType;
+  const propertyType = getPropertyType(details);
   const amenities = Array.isArray(details.amenities) ? details.amenities : [];
   const description = details.description ?? listing.description;
   const monthlyHoa = details.monthlyHoa;

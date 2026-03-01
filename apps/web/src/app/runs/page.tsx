@@ -272,6 +272,9 @@ export default function RunsPage() {
           <strong>Filters (Active Sales API):</strong> Property type is limited to Condo, Co-op, House
           (multifamily is not supported by the API). Step 2 (Get Sale by URL) returns full details
           (e.g. propertyType, monthlyHoa, monthlyTax) per listing but has no filter parameters.
+          If you use <strong>Exclude types</strong> (e.g. Multifamily only), the step counts show
+          how many were fetched; the <strong>Properties</strong> column shows how many remain after
+          excluding those types.
         </p>
         <p style={{ fontSize: "0.875rem", color: "#525252", marginTop: "0.75rem" }}>
           Ensure <code>RAPIDAPI_KEY</code> is set in the API server environment (see{" "}
@@ -577,7 +580,13 @@ export default function RunsPage() {
                         </span>
                       </td>
                       <td style={{ textAlign: "right", padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
-                        {run.propertiesCount}
+                        {run.criteria.excludeTypes?.trim() ? (
+                          <span title={`Exclude types: ${run.criteria.excludeTypes}. ${run.propertiesCount} properties remain after filtering.`}>
+                            {run.propertiesCount} of {run.step2Total} (after type filter)
+                          </span>
+                        ) : (
+                          run.propertiesCount
+                        )}
                         {run.errorsCount > 0 && (
                           <span className="error" style={{ marginLeft: "0.35rem" }}>
                             ({run.errorsCount} errors)

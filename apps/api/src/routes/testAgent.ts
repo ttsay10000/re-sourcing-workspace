@@ -70,13 +70,38 @@ function toCriteria(body: RunRequestBody): NycsSearchCriteria {
   };
 }
 
-/** Normalize property type for exclude matching (API may return "co-op" or "coop"). */
-function normalizePropertyType(pt: unknown): string {
-  if (pt == null || typeof pt !== "string") return "";
-  return pt.toLowerCase().trim().replace(/-/g, "");
+/** Keys the NYC/StreetEasy API may use for property type in sale details (camelCase and snake_case). */
+const PROPERTY_TYPE_KEYS = ["propertyType", "property_type", "type", "listing_type", "category"] as const;
+
+/** Get property type from a detail object, checking multiple possible API response keys. */
+function getPropertyType(p: Record<string, unknown>): string {
+  for (const key of PROPERTY_TYPE_KEYS) {
+    const v = p[key];
+    if (v != null && typeof v === "string" && v.trim()) return v.trim();
+  }
+  const building = p.building;
+  if (building && typeof building === "object" && building !== null && !Array.isArray(building)) {
+    const b = building as Record<string, unknown>;
+    const v = b.type ?? b.propertyType ?? b.property_type;
+    if (v != null && typeof v === "string" && v.trim()) return v.trim();
+  }
+  return "";
 }
 
-/** Filter out properties whose propertyType is in the exclude list (e.g. condo, coop, house → keep multifamily). */
+/**
+ * Normalize property type for matching (API may return "co-op", "Multi-Family", "multi family").
+ * Lowercase, trim, remove hyphens and spaces so "multi family" and "Multi-Family" both become "multifamily".
+ */
+function normalizePropertyType(pt: unknown): string {
+  if (pt == null || typeof pt !== "string") return "";
+  return pt
+    .toLowerCase()
+    .trim()
+    .replace(/-/g, "")
+    .replace(/\s+/g, "");
+}
+
+/** Filter out properties whose type is in the exclude list (e.g. condo, coop, house → keep multifamily and others). */
 function applyExcludeTypes(properties: Record<string, unknown>[], excludeTypesCsv: string): void {
   const exclude = excludeTypesCsv
     .split(",")
@@ -85,7 +110,10 @@ function applyExcludeTypes(properties: Record<string, unknown>[], excludeTypesCs
   if (exclude.length === 0) return;
   const toRemove = new Set<number>();
   properties.forEach((p, i) => {
-    const pt = normalizePropertyType(p.propertyType ?? p.property_type);
+    const raw = getPropertyType(p);
+    const pt = normalizePropertyType(raw);
+    // Only exclude when normalized type exactly matches an excluded type (e.g. "condo", "coop", "house").
+    // "multifamily", "multi family", "townhouse", "sfr", etc. are not excluded.
     if (pt && exclude.includes(pt)) toRemove.add(i);
   });
   // Remove in reverse order so indices stay valid
