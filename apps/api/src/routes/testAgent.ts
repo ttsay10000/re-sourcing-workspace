@@ -443,9 +443,17 @@ function runPropertyToNormalized(raw: Record<string, unknown>, index: number): L
   };
 }
 
+/** Parse date string (ISO or locale) to timestamp for ordering; invalid → 0. */
+function parsePriceHistoryDate(dateStr: string): number {
+  const s = String(dateStr).trim();
+  if (!s) return 0;
+  const d = new Date(s);
+  return Number.isFinite(d.getTime()) ? d.getTime() : 0;
+}
+
 /**
  * Compute price change since listed for display (listed price vs current price).
- * Uses first LISTED event in price history, or earliest entry if no LISTED. Stored in listing.extra.
+ * Uses the most recent LISTED event in price history (the listing that is active today), or earliest entry if no LISTED. Stored in listing.extra.
  */
 function computePriceChangeSinceListed(
   currentPrice: number,
@@ -455,13 +463,14 @@ function computePriceChangeSinceListed(
   const toNum = (p: string | number): number =>
     typeof p === "number" && Number.isFinite(p) ? p : typeof p === "string" ? parseFloat(String(p).replace(/[$,]/g, "")) : NaN;
   const withNums = priceHistory
-    .map((e) => ({ ...e, priceNum: toNum(e.price) }))
+    .map((e) => ({ ...e, priceNum: toNum(e.price), dateTs: parsePriceHistoryDate(e.date) }))
     .filter((e) => Number.isFinite(e.priceNum));
   if (withNums.length === 0) return null;
   const listedCandidates = withNums.filter((e) => String(e.event).toUpperCase() === "LISTED");
+  // Most recent Listed = the one that started the current listing (max date); fallback to earliest entry if no Listed.
   const listedEntry = listedCandidates.length > 0
-    ? listedCandidates.reduce((a, b) => (a.date < b.date ? a : b))
-    : withNums.reduce((a, b) => (a.date < b.date ? a : b));
+    ? listedCandidates.reduce((a, b) => (a.dateTs > b.dateTs ? a : b))
+    : withNums.reduce((a, b) => (a.dateTs < b.dateTs ? a : b));
   const listedPrice = listedEntry.priceNum;
   if (!Number.isFinite(listedPrice) || listedPrice <= 0) return null;
   const changeAmount = currentPrice - listedPrice;
