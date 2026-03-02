@@ -43,6 +43,8 @@ npm run db:migrate
 | `npm run start` | Build then run API + web (production style) |
 | `npm run db:migrate` | Apply migrations (requires `DATABASE_URL`) |
 | `npm run db:seed` | Seed DB (run after migrate) |
+| `npm run enrich:permits -w @re-sourcing/api -- --property-id <uuid>` | Enrich one property with DOB permits |
+| `npm run enrich:permits -w @re-sourcing/api -- --all` | Batch enrich properties (optional `--batch-size N`) |
 
 ## Environment variables
 
@@ -52,6 +54,9 @@ npm run db:migrate
 | API | `DATABASE_URL` | Postgres connection string (optional for health; required for DB routes) |
 | API | `CORS_ORIGIN` | Allowed origins, comma-separated (default includes `http://localhost:3000`) |
 | API | `NODE_ENV` | `development` / `production` |
+| API | `SOCRATA_APP_TOKEN` | Optional; NYC Open Data app token (improves rate limits for permit enrichment) |
+| API | `PERMITS_RATE_LIMIT_DELAY_MS` | Delay (ms) between property requests when batching (default 300 in API, 500 in cron) |
+| API | `PERMITS_BATCH_SIZE` | Batch size for `enrich:permits --all` (default 50) |
 | Web | `NEXT_PUBLIC_API_URL` | API base URL (e.g. `http://localhost:4000` locally, Render URL in prod) |
 
 ## Render deployment
@@ -66,6 +71,7 @@ npm run db:migrate
    - Start: `npm run start -w @re-sourcing/web`
    - Env: `NEXT_PUBLIC_API_URL` = your API service URL (e.g. `https://re-sourcing-api.onrender.com`).
 4. **Postgres**: Create a database and attach `DATABASE_URL` to the API service. The API starts even if the DB is empty; health does not require DB.
+5. **Permit enrichment (optional)**: A weekly cron job `re-sourcing-permits-refresh` in `render.yaml` runs DOB permit enrichment for canonical properties. Set `SOCRATA_APP_TOKEN` on the cron service for better rate limits. When you click "Add to canonical properties" in Property Data, permit enrichment runs automatically unless you pass `?skipPermitEnrichment=1`.
 
 ## One source of truth
 

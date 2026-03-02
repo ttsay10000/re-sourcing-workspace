@@ -56,4 +56,43 @@ export class PropertyRepo {
     );
     return mapProperty(r.rows[0]);
   }
+
+  /**
+   * Merge a nested value into properties.details (e.g. enrichment.permits_summary).
+   * Path is dot-separated; preserves other keys. Use mergeDetails for root-level merge.
+   */
+  async updateDetails(
+    propertyId: string,
+    path: string,
+    value: Record<string, unknown>
+  ): Promise<void> {
+    const pathKeys = path.split(".").filter(Boolean);
+    if (pathKeys.length === 0) return;
+    await this.client.query(
+      `UPDATE properties
+       SET details = jsonb_set(
+         COALESCE(details, '{}'::jsonb),
+         $2::text[],
+         $3::jsonb,
+         true
+       ),
+       updated_at = now()
+       WHERE id = $1`,
+      [propertyId, pathKeys, JSON.stringify(value)]
+    );
+  }
+
+  /**
+   * Shallow merge an object into properties.details (e.g. { enrichment: { permits_summary: {...} } }).
+   * Preserves other top-level keys; overwrites only the keys present in merge.
+   */
+  async mergeDetails(propertyId: string, merge: Record<string, unknown>): Promise<void> {
+    await this.client.query(
+      `UPDATE properties
+       SET details = COALESCE(details, '{}'::jsonb) || $2::jsonb,
+           updated_at = now()
+       WHERE id = $1`,
+      [propertyId, JSON.stringify(merge)]
+    );
+  }
 }

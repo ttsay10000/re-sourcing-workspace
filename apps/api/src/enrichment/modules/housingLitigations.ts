@@ -1,0 +1,166 @@
+/**
+ * Housing Litigations 59kj-x8nc – multi-row by BBL or BIN.
+ */
+
+import {
+  getPool,
+  PropertyRepo,
+  HousingLitigationsRepo,
+  PropertyEnrichmentStateRepo,
+} from "@re-sourcing/db";
+import { resourceUrl, escapeSoQLString, fetchAllPages, type SoQLQueryParams } from "../socrata/index.js";
+import { getBblFromDetails, getBinFromDetails } from "../propertyKeys.js";
+import { parseDateToYyyyMmDd } from "../normalizeDate.js";
+import type { EnrichmentModule, EnrichmentRunOptions, EnrichmentRunResult } from "../types.js";
+
+const DATASET_ID = "59kj-x8nc";
+const REFRESH_CADENCE_DAYS = 7;
+
+function col(row: Record<string, unknown>, ...keys: string[]): string | null {
+  for (const k of keys) {
+    const v = row[k];
+    if (v != null && typeof v === "string" && v.trim()) return v.trim();
+    if (v != null && typeof v === "number") return String(v);
+  }
+  return null;
+}
+
+function num(val: unknown): number | null {
+  if (val == null) return null;
+  if (typeof val === "number" && !Number.isNaN(val)) return val;
+  const n = parseFloat(String(val).replace(/[$,]/g, ""));
+  return Number.isNaN(n) ? null : n;
+}
+
+function rowId(row: Record<string, unknown>): string {
+  const id = row.caseid ?? row.case_id ?? row.id ?? row.unique_id;
+  if (id != null) return String(id);
+  return JSON.stringify({
+    t: row.casetype,
+    d: row.findingdate,
+    r: row.respondent,
+  });
+}
+
+async function run(propertyId: string, options: EnrichmentRunOptions): Promise<EnrichmentRunResult> {
+  const pool = getPool();
+  const propertyRepo = new PropertyRepo({ pool });
+  const litRepo = new HousingLitigationsRepo({ pool });
+  const stateRepo = new PropertyEnrichmentStateRepo({ pool });
+  const now = new Date();
+
+  const property = await propertyRepo.byId(propertyId);
+  if (!property) return { ok: false, error: "Property not found" };
+  const details = (property.details as Record<string, unknown>) ?? {};
+  const bbl = getBblFromDetails(details);
+  const bin = getBinFromDetails(details);
+  if (!bbl && !bin) {
+    await stateRepo.upsert({
+      propertyId,
+      enrichmentName: "housing_litigations",
+      lastRefreshedAt: now,
+      lastSuccessAt: null,
+      lastError: "missing_bbl_and_bin",
+      statsJson: { rows_fetched: 0 },
+    });
+    return { ok: false, error: "missing_bbl_and_bin" };
+  }
+
+  const conditions: string[] = [];
+  if (bbl) conditions.push(`bbl = '${escapeSoQLString(bbl)}'`);
+  if (bin) conditions.push(`bin = '${escapeSoQLString(bin)}'`);
+  const where = conditions.join(" OR ");
+  const select =
+    "bbl, bin, casetype, casestatus, openjudgement, findingdate, penalty, respondent";
+  const buildParams = (limit: number, offset: number): SoQLQueryParams => ({
+    $select: select,
+    $where: where,
+    $order: "findingdate DESC",
+    $limit: limit,
+    $offset: offset,
+  });
+
+  try {
+    const baseUrl = resourceUrl(DATASET_ID);
+    const rows = await fetchAllPages<Record<string, unknown>>(baseUrl, buildParams, {
+      appToken: options.appToken,
+    });
+
+    let upserted = 0;
+    for (const row of rows) {
+      const findingDate = parseDateToYyyyMmDd(col(row, "findingdate", "finding_date"));
+      const normalized = {
+        caseType: col(row, "casetype", "case_type"),
+        caseStatus: col(row, "casestatus", "case_status"),
+        openJudgement: row.openjudgement ?? row.open_judgement,
+        findingDate,
+        penalty: num(row.penalty),
+        respondent: col(row, "respondent"),
+      };
+      await litRepo.upsert({
+        propertyId,
+        sourceRowId: rowId(row),
+        bbl: bbl ?? null,
+        bin: bin ?? null,
+        normalizedJson: normalized,
+        rawJson: row,
+      });
+      upserted++;
+    }
+
+    let openCount = 0;
+    let lastFindingDate: string | null = null;
+    let totalPenalty = 0;
+    const byCaseType: Record<string, number> = {};
+    const byStatus: Record<string, number> = {};
+    for (const row of rows) {
+      const status = (col(row, "casestatus", "case_status") ?? "").toLowerCase();
+      if (status.includes("open")) openCount++;
+      byStatus[status || "unknown"] = (byStatus[status || "unknown"] ?? 0) + 1;
+      const ct = col(row, "casetype", "case_type") ?? "unknown";
+      byCaseType[ct] = (byCaseType[ct] ?? 0) + 1;
+      const d = parseDateToYyyyMmDd(col(row, "findingdate", "finding_date"));
+      if (d && (!lastFindingDate || d > lastFindingDate)) lastFindingDate = d;
+      const p = num(row.penalty);
+      if (p != null) totalPenalty += p;
+    }
+
+    const summary = {
+      total: rows.length,
+      openCount,
+      lastFindingDate,
+      totalPenalty,
+      byCaseType,
+      byStatus,
+      lastRefreshedAt: now.toISOString(),
+    };
+    await propertyRepo.updateDetails(propertyId, "enrichment.housing_litigations_summary", summary as Record<string, unknown>);
+    await stateRepo.upsert({
+      propertyId,
+      enrichmentName: "housing_litigations",
+      lastRefreshedAt: now,
+      lastSuccessAt: now,
+      lastError: null,
+      statsJson: { rows_fetched: rows.length, rows_upserted: upserted },
+    });
+    return { ok: true, rowsFetched: rows.length, rowsUpserted: upserted };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await stateRepo.upsert({
+      propertyId,
+      enrichmentName: "housing_litigations",
+      lastRefreshedAt: now,
+      lastSuccessAt: null,
+      lastError: message,
+      statsJson: null,
+    }).catch(() => {});
+    return { ok: false, error: message };
+  }
+}
+
+export const housingLitigationsModule: EnrichmentModule = {
+  name: "housing_litigations",
+  requiredKeys: ["bbl"],
+  refreshCadenceDays: REFRESH_CADENCE_DAYS,
+  run,
+};

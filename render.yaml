@@ -34,6 +34,25 @@ services:
       - key: NEXT_PUBLIC_API_URL
         sync: false  # set to your API service URL, e.g. https://re-sourcing-api.onrender.com
 
+  # Weekly cron: refresh permit + all enrichment modules for canonical properties
+  - type: cron
+    name: re-sourcing-permits-refresh
+    runtime: node
+    schedule: "0 3 * * 0"
+    buildCommand: npm install --include=dev && npm run build -w @re-sourcing/contracts && npm run build -w @re-sourcing/db && npm run build -w @re-sourcing/api
+    startCommand: cd apps/api && node dist/scripts/enrichAll.js --all
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: re-sourcing-db
+          property: connectionString
+      - key: SOCRATA_APP_TOKEN
+        sync: false
+      - key: PERMITS_RATE_LIMIT_DELAY_MS
+        value: "500"
+      - key: PERMITS_BATCH_SIZE
+        value: "50"
+
 databases:
   - name: re-sourcing-db
     plan: free

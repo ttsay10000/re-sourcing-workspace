@@ -1,11 +1,25 @@
 /**
  * Canonical properties API: list, create from raw listings, link matches.
+ * Optionally runs permit + 7 enrichment modules after creating/linking properties.
  */
 
 import { Router, type Request, type Response } from "express";
-import { getPool, ListingRepo, PropertyRepo, MatchRepo } from "@re-sourcing/db";
+import {
+  getPool,
+  ListingRepo,
+  PropertyRepo,
+  MatchRepo,
+  PropertyEnrichmentStateRepo,
+  HpdViolationsRepo,
+  DobComplaintsRepo,
+  HousingLitigationsRepo,
+  AffordableHousingRepo,
+} from "@re-sourcing/db";
+import { runEnrichmentForProperty } from "../enrichment/runEnrichment.js";
 
 const router = Router();
+
+const ENRICHMENT_RATE_LIMIT_DELAY_MS = Number(process.env.ENRICHMENT_RATE_LIMIT_DELAY_MS || process.env.PERMITS_RATE_LIMIT_DELAY_MS) || 300;
 
 /** GET /api/properties - list canonical properties. */
 router.get("/properties", async (_req: Request, res: Response) => {
@@ -21,8 +35,8 @@ router.get("/properties", async (_req: Request, res: Response) => {
   }
 });
 
-/** POST /api/properties/from-listings - create canonical properties from all active raw listings, link via matches. */
-router.post("/properties/from-listings", async (_req: Request, res: Response) => {
+/** POST /api/properties/from-listings - create canonical properties from all active raw listings, link via matches. Runs permit enrichment unless ?skipPermitEnrichment=1. */
+router.post("/properties/from-listings", async (req: Request, res: Response) => {
   try {
     const pool = getPool();
     const client = await pool.connect();
@@ -46,11 +60,72 @@ router.post("/properties/from-listings", async (_req: Request, res: Response) =>
           confidence: 1,
           reasons: { addressMatch: true, normalizedAddressDistance: 0 },
         });
+        // If GET sale details (listing.extra) included BBL/BIN or monthly HOA/tax, persist on property.
+        const extra = listing.extra as Record<string, unknown> | null | undefined;
+        if (extra && typeof extra === "object") {
+          const bbl = extra.bbl ?? extra.BBL ?? extra.borough_block_lot;
+          const bin = extra.bin ?? extra.BIN ?? extra.building_identification_number;
+          const bblStr = typeof bbl === "string" && /^\d{10}$/.test(bbl.trim()) ? bbl.trim() : null;
+          const merge: Record<string, unknown> = {};
+          if (bblStr) {
+            merge.bbl = bblStr;
+            if (typeof bin === "string" && bin.trim()) merge.bin = bin.trim();
+          }
+          const hoa = extra.monthlyHoa ?? extra.monthly_hoa ?? extra.hoa;
+          const tax = extra.monthlyTax ?? extra.monthly_tax ?? extra.tax;
+          if (typeof hoa === "number" && !Number.isNaN(hoa) && hoa >= 0) merge.monthlyHoa = hoa;
+          else if (typeof hoa === "string" && hoa.trim()) {
+            const n = parseFloat(hoa.replace(/[$,]/g, ""));
+            if (!Number.isNaN(n) && n >= 0) merge.monthlyHoa = n;
+          }
+          if (typeof tax === "number" && !Number.isNaN(tax) && tax >= 0) merge.monthlyTax = tax;
+          else if (typeof tax === "string" && tax.trim()) {
+            const n = parseFloat(tax.replace(/[$,]/g, ""));
+            if (!Number.isNaN(n) && n >= 0) merge.monthlyTax = n;
+          }
+          if (Object.keys(merge).length > 0) await propertyRepo.mergeDetails(property.id, merge);
+        }
         results.push({ listingId: listing.id, propertyId: property.id, canonicalAddress });
       }
 
       await client.query("COMMIT");
-      res.json({ ok: true, created: results.length, results });
+
+      const skipPermitEnrichment = req.query.skipPermitEnrichment === "1" || req.query.skipPermitEnrichment === "true";
+      const propertyIds = [...new Set(results.map((r) => r.propertyId))];
+      let enrichmentSummary: { ran: boolean; success: number; failed: number; byModule?: Record<string, number> } = {
+        ran: false,
+        success: 0,
+        failed: 0,
+      };
+
+      if (!skipPermitEnrichment && propertyIds.length > 0) {
+        enrichmentSummary.ran = true;
+        const appToken = process.env.SOCRATA_APP_TOKEN ?? null;
+        const byModule: Record<string, number> = {};
+        for (let i = 0; i < propertyIds.length; i++) {
+          if (i > 0) await new Promise((r) => setTimeout(r, ENRICHMENT_RATE_LIMIT_DELAY_MS));
+          const out = await runEnrichmentForProperty(propertyIds[i]!, undefined, {
+            appToken,
+            rateLimitDelayMs: ENRICHMENT_RATE_LIMIT_DELAY_MS,
+          });
+          const allOk = out.ok;
+          if (allOk) enrichmentSummary.success++;
+          else enrichmentSummary.failed++;
+          for (const [name, r] of Object.entries(out.results)) {
+            byModule[name] = (byModule[name] ?? 0) + (r.ok ? 1 : 0);
+          }
+        }
+        enrichmentSummary.byModule = byModule;
+      }
+
+      res.json({
+        ok: true,
+        created: results.length,
+        results,
+        permitEnrichment: enrichmentSummary.ran
+          ? { ran: true, success: enrichmentSummary.success, failed: enrichmentSummary.failed, byModule: enrichmentSummary.byModule }
+          : { ran: false },
+      });
     } catch (err) {
       await client.query("ROLLBACK").catch(() => {});
       throw err;
@@ -65,6 +140,102 @@ router.post("/properties/from-listings", async (_req: Request, res: Response) =>
     } else {
       res.status(503).json({ error: "Failed to create properties from listings.", details: message });
     }
+  }
+});
+
+/** GET /api/properties/:id/enrichment/state - last run and outcome per enrichment module. */
+router.get("/properties/:id/enrichment/state", async (req: Request, res: Response) => {
+  try {
+    const { id: propertyId } = req.params;
+    const pool = getPool();
+    const stateRepo = new PropertyEnrichmentStateRepo({ pool });
+    const names = [
+      "permits",
+      "zoning_ztl",
+      "certificate_of_occupancy",
+      "hpd_registration",
+      "hpd_violations",
+      "dob_complaints",
+      "housing_litigations",
+      "affordable_housing",
+    ];
+    const states: Record<string, { lastRefreshedAt: string; lastSuccessAt: string | null; lastError: string | null; statsJson: unknown }> = {};
+    for (const name of names) {
+      const row = await stateRepo.get(propertyId, name);
+      if (row) {
+        states[name] = {
+          lastRefreshedAt: row.lastRefreshedAt,
+          lastSuccessAt: row.lastSuccessAt,
+          lastError: row.lastError,
+          statsJson: row.statsJson ?? null,
+        };
+      }
+    }
+    res.json({ propertyId, states });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[properties enrichment state]", err);
+    res.status(503).json({ error: "Failed to load enrichment state.", details: message });
+  }
+});
+
+/** GET /api/properties/:id/enrichment/violations - HPD violations rows. */
+router.get("/properties/:id/enrichment/violations", async (req: Request, res: Response) => {
+  try {
+    const { id: propertyId } = req.params;
+    const pool = getPool();
+    const repo = new HpdViolationsRepo({ pool });
+    const rows = await repo.listByPropertyId(propertyId);
+    res.json({ propertyId, violations: rows, total: rows.length });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[properties enrichment violations]", err);
+    res.status(503).json({ error: "Failed to load violations.", details: message });
+  }
+});
+
+/** GET /api/properties/:id/enrichment/complaints - DOB complaints rows. */
+router.get("/properties/:id/enrichment/complaints", async (req: Request, res: Response) => {
+  try {
+    const { id: propertyId } = req.params;
+    const pool = getPool();
+    const repo = new DobComplaintsRepo({ pool });
+    const rows = await repo.listByPropertyId(propertyId);
+    res.json({ propertyId, complaints: rows, total: rows.length });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[properties enrichment complaints]", err);
+    res.status(503).json({ error: "Failed to load complaints.", details: message });
+  }
+});
+
+/** GET /api/properties/:id/enrichment/litigations - Housing litigations rows. */
+router.get("/properties/:id/enrichment/litigations", async (req: Request, res: Response) => {
+  try {
+    const { id: propertyId } = req.params;
+    const pool = getPool();
+    const repo = new HousingLitigationsRepo({ pool });
+    const rows = await repo.listByPropertyId(propertyId);
+    res.json({ propertyId, litigations: rows, total: rows.length });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[properties enrichment litigations]", err);
+    res.status(503).json({ error: "Failed to load litigations.", details: message });
+  }
+});
+
+/** GET /api/properties/:id/enrichment/affordable-housing - Affordable housing rows. */
+router.get("/properties/:id/enrichment/affordable-housing", async (req: Request, res: Response) => {
+  try {
+    const { id: propertyId } = req.params;
+    const pool = getPool();
+    const repo = new AffordableHousingRepo({ pool });
+    const rows = await repo.listByPropertyId(propertyId);
+    res.json({ propertyId, affordableHousing: rows, total: rows.length });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[properties enrichment affordable-housing]", err);
+    res.status(503).json({ error: "Failed to load affordable housing.", details: message });
   }
 });
 

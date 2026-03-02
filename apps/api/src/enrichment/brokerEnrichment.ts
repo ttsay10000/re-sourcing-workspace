@@ -5,6 +5,7 @@
 
 import type { AgentEnrichmentEntry } from "@re-sourcing/contracts";
 import OpenAI from "openai";
+import { getEnrichmentModel } from "./openaiModels.js";
 
 function getApiKey(): string | null {
   const key = process.env.OPENAI_API_KEY;
@@ -37,7 +38,7 @@ Respond with a JSON object with a single key "entries" that is an array of objec
 
   try {
     const completion = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
+      model: getEnrichmentModel(),
       messages: [
         {
           role: "user",

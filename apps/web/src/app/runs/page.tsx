@@ -14,11 +14,12 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
 
 const BEDS_BATHS_OPTIONS = [1, 1.5, 2, 2.5, 3, 3.5, 4] as const;
 
-// Active Sales Search API supports only: condo, coop, house (https://streasy.gitbook.io/search-api)
+// Active Sales Search API supports exactly 4 types. No "Multifamily only" toggle — only these 4 checkboxes.
 const TYPE_OPTIONS: { value: string; label: string }[] = [
   { value: "condo", label: "Condo" },
   { value: "coop", label: "Co-op" },
   { value: "house", label: "House" },
+  { value: "multi_family", label: "Multi-family" },
 ];
 
 interface RunCriteria {
@@ -32,8 +33,6 @@ interface RunCriteria {
   maxTax?: number | null;
   amenities?: string | null;
   types?: string | null;
-  /** Exclude these types after fetch (e.g. condo,coop,house → multifamily only). */
-  excludeTypes?: string | null;
   limit?: number | null;
   offset?: number | null;
 }
@@ -72,7 +71,6 @@ export default function RunsPage() {
   const [maxHoa, setMaxHoa] = useState<string>("");
   const [maxTax, setMaxTax] = useState<string>("");
   const [amenities, setAmenities] = useState<string>("");
-  const [multifamilyOnly, setMultifamilyOnly] = useState(false);
   const [selectedTypes, setSelectedTypes] = useState<string[]>([]);
   const [limit, setLimit] = useState<string>("100");
 
@@ -137,11 +135,7 @@ export default function RunsPage() {
     if (maxHoa !== "") body.maxHoa = Number(maxHoa);
     if (maxTax !== "") body.maxTax = Number(maxTax);
     if (amenities.trim()) body.amenities = amenities.trim();
-    if (multifamilyOnly) {
-      body.excludeTypes = "condo,coop,house,townhouse";
-    } else if (selectedTypes.length > 0) {
-      body.types = selectedTypes.join(",");
-    }
+    if (selectedTypes.length > 0) body.types = selectedTypes.join(",");
 
     fetch(`${API_BASE}/api/test-agent/run`, {
       method: "POST",
@@ -200,11 +194,6 @@ export default function RunsPage() {
     setSelectedTypes((prev) =>
       prev.includes(value) ? prev.filter((t) => t !== value) : [...prev, value]
     );
-  };
-
-  const handleMultifamilyOnlyChange = (checked: boolean) => {
-    setMultifamilyOnly(checked);
-    if (checked) setSelectedTypes([]);
   };
 
   const formatTime = (iso: string) => {
@@ -322,12 +311,8 @@ export default function RunsPage() {
           properties into Property Data (raw listings). Data is not auto-populated.
         </p>
         <p style={{ fontSize: "0.875rem", color: "#525252", marginTop: "0.5rem" }}>
-          <strong>Filters (Active Sales API):</strong> Property type is limited to Condo, Co-op, House
-          (multifamily is not supported by the API). Step 2 (Get Sale by URL) returns full details
-          (e.g. propertyType, monthlyHoa, monthlyTax) per listing but has no filter parameters.
-          If you use <strong>Exclude types</strong> (e.g. Multifamily only), the step counts show
-          how many were fetched; the <strong>Properties</strong> column shows how many remain after
-          excluding those types.
+          <strong>Filters (Active Sales API):</strong> Property type filter is sent in Step 1 (condo, coop, house, multi_family).
+          Only matching listings are fetched; Step 2 then loads full details per listing. Leave types unchecked for all.
         </p>
         <p style={{ fontSize: "0.875rem", color: "#525252", marginTop: "0.75rem" }}>
           Ensure <code>RAPIDAPI_KEY</code> is set in the API server environment (see{" "}
@@ -506,22 +491,8 @@ export default function RunsPage() {
           />
         </div>
         <div style={{ marginBottom: "1rem" }}>
-          <label
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: "0.35rem",
-              marginBottom: "0.5rem",
-              fontSize: "0.85rem",
-              cursor: "pointer",
-            }}
-          >
-            <input
-              type="checkbox"
-              checked={multifamilyOnly}
-              onChange={(e) => handleMultifamilyOnlyChange(e.target.checked)}
-            />
-            <strong>Multifamily only</strong> (exclude Condo, Co-op, House, Townhouse — run returns multifamily and other types)
+          <label style={{ display: "block", marginBottom: "0.35rem", fontSize: "0.85rem", fontWeight: 600 }}>
+            Property types (4 types)
           </label>
           <div
             style={{
@@ -532,9 +503,6 @@ export default function RunsPage() {
               border: "1px solid #e5e5e5",
               borderRadius: 6,
               background: "#f5f5f5",
-              marginTop: "0.35rem",
-              opacity: multifamilyOnly ? 0.5 : 1,
-              pointerEvents: multifamilyOnly ? "none" : "auto",
             }}
           >
             {TYPE_OPTIONS.map((opt) => (
@@ -545,13 +513,12 @@ export default function RunsPage() {
                   alignItems: "center",
                   gap: "0.35rem",
                   fontSize: "0.85rem",
-                  cursor: multifamilyOnly ? "default" : "pointer",
+                  cursor: "pointer",
                 }}
               >
                 <input
                   type="checkbox"
                   checked={selectedTypes.includes(opt.value)}
-                  disabled={multifamilyOnly}
                   onChange={() => toggleType(opt.value)}
                 />
                 {opt.label}
@@ -559,9 +526,7 @@ export default function RunsPage() {
             ))}
           </div>
           <p style={{ fontSize: "0.75rem", color: "#525252", marginTop: "0.35rem" }}>
-            {multifamilyOnly
-              ? "Include types are disabled when Multifamily only is on."
-              : "Optionally include only these property types (API filter). Leave unchecked for all types."}
+            Condo, Co-op, House, Multi-family. Check any combination; leave all unchecked for all types.
           </p>
         </div>
 
@@ -633,13 +598,7 @@ export default function RunsPage() {
                         </span>
                       </td>
                       <td style={{ textAlign: "right", padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
-                        {run.criteria.excludeTypes?.trim() ? (
-                          <span title={`Exclude types: ${run.criteria.excludeTypes}. ${run.propertiesCount} properties remain after filtering.`}>
-                            {run.propertiesCount} of {run.step2Total} (after type filter)
-                          </span>
-                        ) : (
-                          run.propertiesCount
-                        )}
+                        {run.propertiesCount}
                         {run.errorsCount > 0 && (
                           <span className="error" style={{ marginLeft: "0.35rem" }}>
                             ({run.errorsCount} errors)

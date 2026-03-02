@@ -1,15 +1,69 @@
 /**
- * Price history enrichment: ask the LLM to find price history from the listing URL
- * and return a clean bulleted list. No HTML fetch; prompt includes the link only.
+ * Price history enrichment: fetch listing page HTML and ask the LLM to extract
+ * price history into a clean bulleted list. (The LLM cannot browse URLs; we must send the content.)
  */
 
 import type { PriceHistoryEntry } from "@re-sourcing/contracts";
 import OpenAI from "openai";
+import { getPriceHistoryModel } from "./openaiModels.js";
 
 function getApiKey(): string | null {
   const key = process.env.OPENAI_API_KEY;
   if (!key || typeof key !== "string" || key.trim() === "") return null;
   return key.trim();
+}
+
+function isStreetEasyUrl(url: string): boolean {
+  try {
+    const u = new URL(url);
+    return u.hostname === "streeteasy.com" || u.hostname.endsWith(".streeteasy.com");
+  } catch {
+    return false;
+  }
+}
+
+/** Detect StreetEasy bot-block (PerimeterX captcha) page so we don't send it to the LLM. */
+function isCaptchaOrBlockPage(html: string): boolean {
+  const lower = html.toLowerCase();
+  return (
+    lower.includes("access to this page has been denied") ||
+    lower.includes("perimeterx") ||
+    lower.includes("px-captcha")
+  );
+}
+
+/** Fetch page HTML; may be blocked by bot protection (e.g. StreetEasy returns 403 or captcha body). */
+async function fetchPageHtml(url: string): Promise<string | null> {
+  try {
+    const res = await fetch(url, {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        Accept: "text/html,application/xhtml+xml",
+      },
+      redirect: "follow",
+    });
+    if (!res.ok) {
+      if (isStreetEasyUrl(url)) {
+        console.warn(
+          `[priceHistoryEnrichment] StreetEasy returned ${res.status} for ${url.slice(0, 60)}… — price history unavailable (site blocks server-side requests).`
+        );
+      }
+      return null;
+    }
+    const text = await res.text();
+    if (text.length < 500) return null;
+    if (isStreetEasyUrl(url) && isCaptchaOrBlockPage(text)) {
+      console.warn(
+        "[priceHistoryEnrichment] StreetEasy returned a captcha/bot-block page instead of listing — price history unavailable."
+      );
+      return null;
+    }
+    return text.slice(0, 120000);
+  } catch (err) {
+    console.warn("[priceHistoryEnrichment] Fetch failed:", err instanceof Error ? err.message : String(err));
+    return null;
+  }
 }
 
 export interface PriceHistoryEnrichmentResult {
@@ -43,8 +97,8 @@ function parseBulletedPriceHistory(text: string): PriceHistoryEntry[] {
 }
 
 /**
- * Ask the LLM to find price history from the given listing URL and produce a clean bulleted list.
- * No HTML fetch; the model uses the link (e.g. with browsing if available) or returns what it can.
+ * Fetch listing page HTML, then ask the LLM to extract price history from it into a bulleted list.
+ * If the fetch fails or returns a captcha/minimal page, we get no data (LLM cannot browse the URL).
  */
 export async function extractPriceHistory(listingUrl: string): Promise<PriceHistoryEnrichmentResult> {
   const empty: PriceHistoryEnrichmentResult = { priceHistory: null, rentalPriceHistory: null };
@@ -52,24 +106,28 @@ export async function extractPriceHistory(listingUrl: string): Promise<PriceHist
   if (!key) return empty;
   if (!listingUrl || listingUrl === "#" || !listingUrl.startsWith("http")) return empty;
 
-  const openai = new OpenAI({ apiKey: key });
-  const prompt = `Please find the price history from this link and produce the results in a clean bulleted list.
+  const html = await fetchPageHtml(listingUrl);
+  if (!html) return empty;
 
-Use this format for each entry:
+  const openai = new OpenAI({ apiKey: key });
+  const prompt = `Below is HTML from a real estate listing page (often StreetEasy). Extract the price history table(s) and produce a clean bulleted list.
+
+Use this format for each row:
 • Date: [date], Price: [price], Event: [event]
 
-If the page has both sale/list price history and rental price history, list the sale/list entries first, then add a line "Rental price history", then list rental entries with the same bullet format.
+Look for sections like "Property history" or "Price history" (sale/list) and "Rental price history" or "Rent history". List sale/list entries first, then add a line "Rental price history", then any rental entries with the same bullet format. If you find no price history table, reply with only: No price history found.
 
-Link: ${listingUrl}`;
+HTML:
+${html}`;
 
   try {
     const completion = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
+      model: getPriceHistoryModel(),
       messages: [{ role: "user", content: prompt }],
     });
 
-    const content = completion.choices[0]?.message?.content;
-    if (!content || typeof content !== "string") return empty;
+    const content = completion.choices[0]?.message?.content?.trim() ?? "";
+    if (!content || content.toLowerCase().startsWith("no price history")) return empty;
 
     const allEntries = parseBulletedPriceHistory(content);
     if (allEntries.length === 0) return empty;

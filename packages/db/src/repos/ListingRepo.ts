@@ -163,6 +163,7 @@ export class ListingRepo {
       row.agent_names,
       toJsonb(row.agent_enrichment),
       toJsonb(row.price_history),
+      toJsonb(row.rental_price_history),
       toJsonb(row.extra),
       uploadedRunId != null ? new Date() : null,
       uploadedRunId,
@@ -171,24 +172,14 @@ export class ListingRepo {
       `INSERT INTO listings (
         source, external_id, lifecycle_state, first_seen_at, last_seen_at,
         address, city, state, zip, price, beds, baths, sqft, url, title, description,
-        lat, lon, image_urls, listed_at, agent_names, agent_enrichment, price_history, extra, uploaded_at, uploaded_run_id
+        lat, lon, image_urls, listed_at, agent_names, agent_enrichment, price_history, rental_price_history, extra, uploaded_at, uploaded_run_id
       ) VALUES (
         $1, $2, 'active', now(), now(),
-        $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23
+        $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25
       ) RETURNING *`,
       insertValues
     );
-    const listing = mapListing(r.rows[0]);
-    const rentalPriceHistory = toJsonb(row.rental_price_history);
-    if (rentalPriceHistory != null && listing.id) {
-      await this.client.query(
-        "UPDATE listings SET rental_price_history = $1, updated_at = now() WHERE id = $2",
-        [rentalPriceHistory, listing.id]
-      );
-      const refreshed = await this.byId(listing.id);
-      return { listing: refreshed ?? listing, created: true };
-    }
-    return { listing, created: true };
+    return { listing: mapListing(r.rows[0]), created: true };
   }
 
   async setLifecycle(id: string, lifecycleState: ListingLifecycleState): Promise<ListingRow | null> {

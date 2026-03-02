@@ -16,6 +16,9 @@ Set these in `apps/api/.env` (local) or in the API service’s environment (e.g.
 | **CORS_ORIGIN** | No | Omit (defaults to `http://localhost:3000` and `http://127.0.0.1:3000`) | Your **web** app URL, e.g. `https://re-sourcing-web.onrender.com` (comma-separated if multiple) |
 | **DATABASE_URL** | No for API server | Omit unless you use DB routes | Omit unless you use DB; if so, your Postgres connection string (e.g. Render Postgres internal URL) |
 | **NODE_ENV** | No | Omit, or `development` | `production` (often set by host) |
+| **SOCRATA_APP_TOKEN** | No | Omit | Optional; NYC Open Data app token (improves rate limits for DOB permit enrichment) |
+| **PERMITS_RATE_LIMIT_DELAY_MS** | No | Omit (default 300) | Delay in ms between property requests when batching permit enrichment (e.g. 500 for cron) |
+| **PERMITS_BATCH_SIZE** | No | Omit (default 50) | Batch size for `enrich:permits --all` |
 
 **Example `apps/api/.env` (local):**
 

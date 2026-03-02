@@ -19,7 +19,7 @@ const HOST = "nyc-real-estate-api.p.rapidapi.com";
 
 /**
  * Criteria for GET Active Sales; areas is required (e.g. "all-downtown,all-midtown").
- * types: comma-separated, API allows only condo, coop, house (no multifamily).
+ * types: comma-separated; API supports condo, coop, house, multi_family.
  * amenities: e.g. washer_dryer, dishwasher, private_outdoor_space, laundry, elevator, doorman.
  * See https://streasy.gitbook.io/search-api
  */
