@@ -6,6 +6,9 @@
 #   Web:  NEXT_PUBLIC_API_URL=<API service URL>
 #
 # After linking repo, add a Postgres database and attach its DATABASE_URL to the api service.
+#
+# Deploy order: Web often finishes before API (lighter build). API runs db:migrate in startCommand
+# before listening; Render does not send traffic until the process is up, so migrations run first.
 
 services:
   - type: web
@@ -13,6 +16,7 @@ services:
     runtime: node
     plan: free
     buildCommand: npm install --include=dev && npm run build -w @re-sourcing/contracts && npm run build -w @re-sourcing/db && npm run build -w @re-sourcing/api
+    # Migrations must complete before API starts; Render doesn't route traffic until startCommand is running.
     startCommand: npm run db:migrate && npm run start -w @re-sourcing/api
     envVars:
       - key: NODE_ENV

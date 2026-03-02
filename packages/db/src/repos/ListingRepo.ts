@@ -184,7 +184,7 @@ export class ListingRepo {
         lat, lon, image_urls, listed_at, agent_names, agent_enrichment, price_history, rental_price_history, extra, uploaded_at, uploaded_run_id, duplicate_score
       ) VALUES (
         $1, $2, 'active', now(), now(),
-        $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26
+        $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25
       ) RETURNING *`,
       insertValues
     );
