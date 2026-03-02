@@ -266,10 +266,10 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
               {bbl != null && <><dt style={{ marginTop: "0.25rem" }}>BBL</dt><dd style={{ marginLeft: "1rem" }}>{String(bbl)}</dd></>}
               {bin != null && <><dt style={{ marginTop: "0.25rem" }}>BIN</dt><dd style={{ marginLeft: "1rem" }}>{String(bin)}</dd></>}
               {(lat != null || lon != null) && <><dt style={{ marginTop: "0.25rem" }}>Lat / Lon</dt><dd style={{ marginLeft: "1rem" }}>{String(lat)} / {String(lon)}</dd></>}
-              {co && (co.issuanceDate ?? co.status ?? co.jobType) && <><dt style={{ marginTop: "0.25rem" }}>Certificate of occupancy</dt><dd style={{ marginLeft: "1rem" }}>{[co.issuanceDate, co.status, co.jobType].filter(Boolean).map(String).join(" · ")}</dd></>}
-              {hpdReg && (hpdReg.registrationId ?? hpdReg.lastRegistrationDate) && <><dt style={{ marginTop: "0.25rem" }}>HPD registration</dt><dd style={{ marginLeft: "1rem" }}>{[hpdReg.registrationId, hpdReg.lastRegistrationDate].filter(Boolean).map(String).join(" · ")}</dd></>}
+              {co && Boolean(co.issuanceDate ?? co.status ?? co.jobType) && <><dt style={{ marginTop: "0.25rem" }}>Certificate of occupancy</dt><dd style={{ marginLeft: "1rem" }}>{[co.issuanceDate, co.status, co.jobType].filter(Boolean).map(String).join(" · ")}</dd></>}
+              {hpdReg && Boolean(hpdReg.registrationId ?? hpdReg.lastRegistrationDate) && <><dt style={{ marginTop: "0.25rem" }}>HPD registration</dt><dd style={{ marginLeft: "1rem" }}>{[hpdReg.registrationId, hpdReg.lastRegistrationDate].filter(Boolean).map(String).join(" · ")}</dd></>}
               {taxCode != null && <><dt style={{ marginTop: "0.25rem" }}>Tax code</dt><dd style={{ marginLeft: "1rem" }}>{String(taxCode)}</dd></>}
-              {zoning && (zoning.zoningDistrict1 ?? zoning.zoningMapNumber ?? zoning.zoningMapCode) && <><dt style={{ marginTop: "0.25rem" }}>Zoning</dt><dd style={{ marginLeft: "1rem" }}>{[zoning.zoningDistrict1, zoning.zoningDistrict2, zoning.zoningMapNumber, zoning.zoningMapCode].filter(Boolean).map(String).join(", ")}</dd></>}
+              {zoning && Boolean(zoning.zoningDistrict1 ?? zoning.zoningMapNumber ?? zoning.zoningMapCode) && <><dt style={{ marginTop: "0.25rem" }}>Zoning</dt><dd style={{ marginLeft: "1rem" }}>{[zoning.zoningDistrict1, zoning.zoningDistrict2, zoning.zoningMapNumber, zoning.zoningMapCode].filter(Boolean).map(String).join(", ")}</dd></>}
               {(monthlyHoa != null || monthlyTax != null) && <><dt style={{ marginTop: "0.25rem" }}>HOA / Tax (monthly)</dt><dd style={{ marginLeft: "1rem" }}>{formatPrice(monthlyHoa as number)} / {formatPrice(monthlyTax as number)}</dd></>}
             </dl>
           </div>
@@ -328,10 +328,10 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
       <CollapsibleSection id="owner" title="Owner information" open={!!openSections.owner} onToggle={() => toggle("owner")}>
         {ownerInfo != null && String(ownerInfo).trim() ? (
           <p style={{ margin: 0, fontSize: "0.875rem" }}>{String(ownerInfo)}</p>
-        ) : ps && (ps.owner_name ?? ps.owner_business_name) ? (
+        ) : ps && Boolean(ps.owner_name ?? ps.owner_business_name) ? (
           <div style={{ fontSize: "0.875rem" }}>
-            {ps.owner_name && <div><strong>Owner:</strong> {String(ps.owner_name)}</div>}
-            {ps.owner_business_name && <div><strong>Business:</strong> {String(ps.owner_business_name)}</div>}
+            {Boolean(ps.owner_name) && <div><strong>Owner:</strong> {String(ps.owner_name)}</div>}
+            {Boolean(ps.owner_business_name) && <div><strong>Business:</strong> {String(ps.owner_business_name)}</div>}
           </div>
         ) : (
           <p style={{ color: "#737373", margin: 0 }}>—</p>
