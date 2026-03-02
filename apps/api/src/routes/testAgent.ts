@@ -6,11 +6,10 @@
  */
 
 import { Router, type Request, type Response } from "express";
-import type { ListingNormalized } from "@re-sourcing/contracts";
+import type { ListingNormalized, PriceHistoryEntry } from "@re-sourcing/contracts";
 import type { NycsSearchCriteria } from "../nycRealEstateApi.js";
 import { fetchActiveSalesWithCriteria, fetchSaleDetailsByUrl } from "../nycRealEstateApi.js";
 import { enrichBrokers } from "../enrichment/brokerEnrichment.js";
-import { extractPriceHistory } from "../enrichment/priceHistoryEnrichment.js";
 import { computeDuplicateScores } from "../dedup/addressDedup.js";
 
 const router = Router();
@@ -48,15 +47,11 @@ export interface RunRequestBody {
   maxTax?: number | null;
   amenities?: string | null;
   types?: string | null;
-  /** Exclude these property types after Step 2 (e.g. "condo,coop,house" → multifamily only). Step 1 is sent without types so API returns all. */
-  excludeTypes?: string | null;
   limit?: number | null;
   offset?: number | null;
 }
 
 function toCriteria(body: RunRequestBody): NycsSearchCriteria {
-  // When excluding types (e.g. multifamily only), do not send types so Step 1 returns all; we filter after Step 2.
-  const useExclude = (body.excludeTypes ?? "").trim().length > 0;
   return {
     areas: body.areas?.trim() || "all-downtown,all-midtown",
     minPrice: body.minPrice != null ? Number(body.minPrice) : undefined,
@@ -67,134 +62,10 @@ function toCriteria(body: RunRequestBody): NycsSearchCriteria {
     maxHoa: body.maxHoa != null ? Number(body.maxHoa) : undefined,
     maxTax: body.maxTax != null ? Number(body.maxTax) : undefined,
     amenities: body.amenities ?? undefined,
-    types: useExclude ? undefined : (body.types ?? undefined),
+    types: body.types ?? undefined,
     limit: body.limit != null ? Math.min(Number(body.limit), 500) : 100,
     offset: body.offset != null ? Number(body.offset) : undefined,
   };
-}
-
-/** Keys the NYC/StreetEasy API may use for property type in sale details (camelCase and snake_case). */
-const PROPERTY_TYPE_KEYS = ["propertyType", "property_type", "type", "listing_type", "category"] as const;
-
-/** Get property type from a detail object, checking multiple possible API response keys. */
-function getPropertyType(p: Record<string, unknown>): string {
-  for (const key of PROPERTY_TYPE_KEYS) {
-    const v = p[key];
-    if (v != null && typeof v === "string" && v.trim()) return v.trim();
-  }
-  const building = p.building;
-  if (building && typeof building === "object" && building !== null && !Array.isArray(building)) {
-    const b = building as Record<string, unknown>;
-    const v = b.type ?? b.propertyType ?? b.property_type;
-    if (v != null && typeof v === "string" && v.trim()) return v.trim();
-  }
-  return "";
-}
-
-/**
- * Normalize property type for matching (API may return "co-op", "Multi-Family", "Three–Family Home" with en-dash).
- * Lowercase, trim, remove hyphens (including Unicode en/em dash) and spaces.
- */
-function normalizePropertyType(pt: unknown): string {
-  if (pt == null || typeof pt !== "string") return "";
-  return pt
-    .toLowerCase()
-    .trim()
-    .replace(/-/g, "")
-    .replace(/\u2013/g, "") // en-dash
-    .replace(/\u2014/g, "") // em-dash
-    .replace(/\s+/g, "");
-}
-
-/**
- * Classify a normalized property type into a canonical bucket so type math is consistent.
- * This is intentionally heuristic because the upstream API is not consistent in naming.
- */
-function classifyPropertyType(normalizedType: string): "condo" | "coop" | "house" | "multifamily" | "townhouse" | "other" {
-  if (!normalizedType) return "other";
-
-  // Coop / co-op
-  if (normalizedType === "coop" || normalizedType === "cooperative" || normalizedType.includes("coop")) return "coop";
-
-  // Condo / condominium
-  if (normalizedType === "condo" || normalizedType === "condominium" || normalizedType.includes("condo")) return "condo";
-
-  // Townhouse should not be treated as "house" for multifamily-only.
-  if (normalizedType === "townhouse" || normalizedType.includes("townhouse")) return "townhouse";
-
-  // Multifamily: "multifamily", "multi-family", "2 family", "three family home", "3-family home", etc.
-  // Explicitly match "N family home" (word or digit) so e.g. StreetEasy 1796192 "Three-family home" is included
-  if (
-    normalizedType.includes("multifamily") ||
-    normalizedType.includes("multiunit") ||
-    normalizedType.includes("multiunits") ||
-    normalizedType.includes("multifam") ||
-    normalizedType.includes("rentalbuilding") ||
-    normalizedType.includes("mixedusebuilding") ||
-    /^(two|three|four|five|six|seven|eight|nine|ten)family(home)?/.test(normalizedType) ||
-    /^[2-9]familyhome$|^10familyhome$/.test(normalizedType) ||
-    normalizedType.includes("twofamily") ||
-    normalizedType.includes("threefamily") ||
-    normalizedType.includes("fourfamily") ||
-    normalizedType.includes("fivefamily") ||
-    normalizedType.includes("sixfamily") ||
-    normalizedType.includes("sevenfamily") ||
-    normalizedType.includes("eightfamily") ||
-    normalizedType.includes("ninefamily") ||
-    normalizedType.includes("2family") ||
-    normalizedType.includes("3family") ||
-    normalizedType.includes("4family") ||
-    normalizedType.includes("5family") ||
-    normalizedType.includes("6family") ||
-    normalizedType.includes("7family") ||
-    normalizedType.includes("8family") ||
-    normalizedType.includes("9family") ||
-    normalizedType.includes("2unit") ||
-    normalizedType.includes("3unit") ||
-    normalizedType.includes("4unit") ||
-    normalizedType.includes("5unit") ||
-    normalizedType.includes("6unit") ||
-    // be careful: "singlefamily..." should not match this
-    (normalizedType.includes("family") && normalizedType.includes("unit") && !normalizedType.includes("singlefamily")) ||
-    (normalizedType.includes("family") && !normalizedType.includes("singlefamily") && normalizedType.match(/\b(2|3|4|5|6|7|8|9|10)\b/) != null)
-  ) {
-    return "multifamily";
-  }
-
-  // House: single-family residence / home / house
-  if (
-    normalizedType === "house" ||
-    normalizedType === "sfr" ||
-    normalizedType.includes("singlefamily") ||
-    normalizedType.includes("singlefamilyresidence") ||
-    normalizedType.includes("singlefamilyhome") ||
-    normalizedType.includes("singlefamilyhouse") ||
-    normalizedType.includes("home") ||
-    normalizedType.includes("house")
-  ) {
-    return "house";
-  }
-
-  return "other";
-}
-
-/** Filter out properties whose type is in the exclude list (e.g. condo, coop, house → keep multifamily and others). */
-function applyExcludeTypes(properties: Record<string, unknown>[], excludeTypesCsv: string): void {
-  const exclude = excludeTypesCsv
-    .split(",")
-    .map((s) => normalizePropertyType(s.trim()))
-    .filter(Boolean);
-  if (exclude.length === 0) return;
-  const excludeSet = new Set(exclude);
-  const toRemove = new Set<number>();
-  properties.forEach((p, i) => {
-    const raw = getPropertyType(p);
-    const pt = normalizePropertyType(raw);
-    const bucket = classifyPropertyType(pt);
-    if (excludeSet.has(bucket)) toRemove.add(i);
-  });
-  // Remove in reverse order so indices stay valid
-  [...toRemove].sort((a, b) => b - a).forEach((i) => properties.splice(i, 1));
 }
 
 /** Run the two-step flow in the background and update the stored run. */
@@ -226,9 +97,6 @@ async function runTwoStepFlow(run: StoredTestRun): Promise<void> {
       if (i < urls.length - 1) await new Promise((r) => setTimeout(r, 200));
     }
     run.step2Status = "completed";
-    // Apply exclude-types filter (e.g. exclude condo, coop, house → keep multifamily)
-    const excludeCsv = (run.criteria.excludeTypes ?? "").trim();
-    if (excludeCsv) applyExcludeTypes(run.properties, excludeCsv);
   } catch (err) {
     run.step1Status = "failed";
     run.step1Error = err instanceof Error ? err.message : String(err);
@@ -333,8 +201,13 @@ function runPropertyToNormalized(raw: Record<string, unknown>, index: number): L
     if (single != null && String(single).trim()) return [String(single).trim()];
     return null;
   })();
+  const latLon = parseLatLonFromRaw(raw);
   const { _fetchUrl: _u, ...rest } = raw;
   const extra = rest as Record<string, unknown>;
+  const { monthlyHoa, monthlyTax } = parseMonthlyHoaTaxFromRaw(raw);
+  if (monthlyHoa != null) extra.monthlyHoa = monthlyHoa;
+  if (monthlyTax != null) extra.monthlyTax = monthlyTax;
+  const { priceHistory, rentalPriceHistory } = parsePriceHistoriesFromRaw(raw);
   return {
     source: "streeteasy",
     externalId: id,
@@ -349,16 +222,100 @@ function runPropertyToNormalized(raw: Record<string, unknown>, index: number): L
     url,
     title: address !== "—" ? address : null,
     description: raw.description != null ? String(raw.description) : null,
-    lat: null,
-    lon: null,
+    lat: latLon?.lat ?? null,
+    lon: latLon?.lon ?? null,
     imageUrls,
     listedAt,
     agentNames,
+    priceHistory: priceHistory ?? undefined,
+    rentalPriceHistory: rentalPriceHistory ?? undefined,
     extra: Object.keys(extra).length ? extra : null,
   };
 }
 
-/** Send this run's properties to property data (listings + snapshots). No auto-populate; user-triggered only. Uses a transaction so all-or-nothing. */
+/** Extract sale and rental price history arrays from GET sale details payload. */
+function parsePriceHistoriesFromRaw(raw: Record<string, unknown>): {
+  priceHistory?: PriceHistoryEntry[] | null;
+  rentalPriceHistory?: PriceHistoryEntry[] | null;
+} {
+  const coerceEntries = (value: unknown): PriceHistoryEntry[] | null => {
+    if (!Array.isArray(value)) return null;
+    const out: PriceHistoryEntry[] = [];
+    for (const row of value) {
+      if (!row || typeof row !== "object") continue;
+      const obj = row as Record<string, unknown>;
+      const date = obj.date ?? (obj as Record<string, unknown>).Date ?? obj.listedDate ?? obj.timestamp;
+      const price = obj.price ?? (obj as Record<string, unknown>).Price ?? obj.amount;
+      const event = obj.event ?? (obj as Record<string, unknown>).Event ?? obj.type ?? obj.reason;
+      if (date == null || price == null || event == null) continue;
+      out.push({
+        date: String(date),
+        price: typeof price === "number" || typeof price === "string" ? price : String(price),
+        event: String(event),
+      });
+    }
+    return out.length ? out : null;
+  };
+
+  const saleHistorySource =
+    (raw as Record<string, unknown>).priceHistory ??
+    (raw as Record<string, unknown>).price_history ??
+    (raw as Record<string, unknown>).history ??
+    (raw as Record<string, unknown>).saleHistory ??
+    (raw as Record<string, unknown>).sale_history;
+
+  const rentalHistorySource =
+    (raw as Record<string, unknown>).rentalPriceHistory ??
+    (raw as Record<string, unknown>).rental_price_history ??
+    (raw as Record<string, unknown>).rentHistory ??
+    (raw as Record<string, unknown>).rental_history;
+
+  const priceHistory = coerceEntries(saleHistorySource);
+  const rentalPriceHistory = coerceEntries(rentalHistorySource);
+
+  return {
+    priceHistory: priceHistory ?? undefined,
+    rentalPriceHistory: rentalPriceHistory ?? undefined,
+  };
+}
+
+/** Extract monthly HOA and tax from GET sale details (for display and financial calculations). */
+function parseMonthlyHoaTaxFromRaw(raw: Record<string, unknown>): { monthlyHoa?: number; monthlyTax?: number } {
+  const hoaRaw = raw.monthlyHoa ?? raw.monthly_hoa ?? raw.hoa ?? raw.hoa_fee ?? (raw.fees as Record<string, unknown>)?.hoa ?? (raw.fees as Record<string, unknown>)?.monthly_hoa;
+  const taxRaw = raw.monthlyTax ?? raw.monthly_tax ?? raw.tax ?? raw.monthly_taxes ?? (raw.fees as Record<string, unknown>)?.tax ?? (raw.fees as Record<string, unknown>)?.monthly_tax;
+  const toNum = (v: unknown): number | undefined => {
+    if (v == null) return undefined;
+    const n = typeof v === "number" && !Number.isNaN(v) ? v : typeof v === "string" ? parseFloat(String(v).replace(/[$,]/g, "")) : NaN;
+    return !Number.isNaN(n) && n >= 0 ? n : undefined;
+  };
+  return { monthlyHoa: toNum(hoaRaw), monthlyTax: toNum(taxRaw) };
+}
+
+/** Extract latitude and longitude from GET sale details payload (defensive to common key names). */
+function parseLatLonFromRaw(raw: Record<string, unknown>): { lat: number; lon: number } | null {
+  const coords = raw.coordinates as Record<string, unknown> | undefined;
+  const loc = raw.location as Record<string, unknown> | undefined;
+  const geo = raw.geo as Record<string, unknown> | undefined;
+  const geom = raw.geometry as Record<string, unknown> | undefined;
+  const geomCoords = Array.isArray(geom?.coordinates) ? (geom!.coordinates as number[]) : null;
+  const latRaw =
+    raw.latitude ?? raw.lat ?? coords?.latitude ?? coords?.lat
+    ?? loc?.lat ?? geo?.lat ?? (geomCoords != null && geomCoords.length >= 2 ? geomCoords[1] : undefined);
+  const lonRaw =
+    raw.longitude ?? raw.lon ?? coords?.longitude ?? coords?.lon
+    ?? loc?.lon ?? geo?.lon ?? (geomCoords != null && geomCoords.length >= 2 ? geomCoords[0] : undefined);
+  const lat = typeof latRaw === "number" && !Number.isNaN(latRaw) ? latRaw : (typeof latRaw === "string" ? parseFloat(latRaw) : NaN);
+  const lon = typeof lonRaw === "number" && !Number.isNaN(lonRaw) ? lonRaw : (typeof lonRaw === "string" ? parseFloat(lonRaw) : NaN);
+  if (Number.isNaN(lat) || Number.isNaN(lon)) return null;
+  if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return null;
+  return { lat, lon };
+}
+
+/**
+ * Send this run's properties to property data (listings + snapshots). No auto-populate; user-triggered only.
+ * Flow: for new listings run broker LLM enrichment only; price history comes from GET sale details (Step 2).
+ * Upsert listing (with enrichment) → create snapshot with full metadata.
+ */
 router.post("/test-agent/runs/:id/send-to-property-data", async (req: Request, res: Response) => {
   const run = testRunsStore.find((r) => r.id === req.params.id);
   if (!run) {
@@ -396,11 +353,7 @@ router.post("/test-agent/runs/:id/send-to-property-data", async (req: Request, r
           if (agentEnrichment && agentEnrichment.length > 0) {
             normalized.agentEnrichment = agentEnrichment;
           }
-          if (normalized.url && normalized.url !== "#") {
-            const extracted = await extractPriceHistory(normalized.url);
-            if (extracted.priceHistory?.length) normalized.priceHistory = extracted.priceHistory;
-            if (extracted.rentalPriceHistory?.length) normalized.rentalPriceHistory = extracted.rentalPriceHistory;
-          }
+          // Price history comes only from GET sale details (Step 2); no LLM extraction.
         }
 
         // Dedupe by listing ID (source + external_id): upsert updates existing or inserts new
