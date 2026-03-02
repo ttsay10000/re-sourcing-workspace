@@ -110,7 +110,7 @@ export default function RunsPage() {
     if (maxTax !== "") body.maxTax = Number(maxTax);
     if (amenities.trim()) body.amenities = amenities.trim();
     if (multifamilyOnly) {
-      body.excludeTypes = "condo,coop,house";
+      body.excludeTypes = "condo,coop,house,townhouse";
     } else if (selectedTypes.length > 0) {
       body.types = selectedTypes.join(",");
     }
@@ -468,7 +468,7 @@ export default function RunsPage() {
               checked={multifamilyOnly}
               onChange={(e) => handleMultifamilyOnlyChange(e.target.checked)}
             />
-            <strong>Multifamily only</strong> (exclude Condo, Co-op, House — run returns multifamily and other types)
+            <strong>Multifamily only</strong> (exclude Condo, Co-op, House, Townhouse — run returns multifamily and other types)
           </label>
           <div
             style={{

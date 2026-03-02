@@ -101,6 +101,77 @@ function normalizePropertyType(pt: unknown): string {
     .replace(/\s+/g, "");
 }
 
+/**
+ * Classify a normalized property type into a canonical bucket so type math is consistent.
+ * This is intentionally heuristic because the upstream API is not consistent in naming.
+ */
+function classifyPropertyType(normalizedType: string): "condo" | "coop" | "house" | "multifamily" | "townhouse" | "other" {
+  if (!normalizedType) return "other";
+
+  // Coop / co-op
+  if (normalizedType === "coop" || normalizedType === "cooperative" || normalizedType.includes("coop")) return "coop";
+
+  // Condo / condominium
+  if (normalizedType === "condo" || normalizedType === "condominium" || normalizedType.includes("condo")) return "condo";
+
+  // Townhouse should not be treated as "house" for multifamily-only.
+  if (normalizedType === "townhouse" || normalizedType.includes("townhouse")) return "townhouse";
+
+  // Multifamily: "multifamily", "multi-family", "2 family", "three family home", "four family home",
+  // "five family home", etc., "rental building", "mixed-use building"
+  if (
+    normalizedType.includes("multifamily") ||
+    normalizedType.includes("multiunit") ||
+    normalizedType.includes("multiunits") ||
+    normalizedType.includes("multifam") ||
+    normalizedType.includes("rentalbuilding") ||
+    normalizedType.includes("mixedusebuilding") ||
+    /^(two|three|four|five|six|seven|eight|nine|ten)family(home)?/.test(normalizedType) ||
+    normalizedType.includes("twofamily") ||
+    normalizedType.includes("threefamily") ||
+    normalizedType.includes("fourfamily") ||
+    normalizedType.includes("fivefamily") ||
+    normalizedType.includes("sixfamily") ||
+    normalizedType.includes("sevenfamily") ||
+    normalizedType.includes("eightfamily") ||
+    normalizedType.includes("ninefamily") ||
+    normalizedType.includes("2family") ||
+    normalizedType.includes("3family") ||
+    normalizedType.includes("4family") ||
+    normalizedType.includes("5family") ||
+    normalizedType.includes("6family") ||
+    normalizedType.includes("7family") ||
+    normalizedType.includes("8family") ||
+    normalizedType.includes("9family") ||
+    normalizedType.includes("2unit") ||
+    normalizedType.includes("3unit") ||
+    normalizedType.includes("4unit") ||
+    normalizedType.includes("5unit") ||
+    normalizedType.includes("6unit") ||
+    // be careful: "singlefamily..." should not match this
+    (normalizedType.includes("family") && normalizedType.includes("unit") && !normalizedType.includes("singlefamily")) ||
+    (normalizedType.includes("family") && !normalizedType.includes("singlefamily") && normalizedType.match(/\b(2|3|4|5|6|7|8|9|10)\b/) != null)
+  ) {
+    return "multifamily";
+  }
+
+  // House: single-family residence / home / house
+  if (
+    normalizedType === "house" ||
+    normalizedType === "sfr" ||
+    normalizedType.includes("singlefamily") ||
+    normalizedType.includes("singlefamilyresidence") ||
+    normalizedType.includes("singlefamilyhome") ||
+    normalizedType.includes("singlefamilyhouse") ||
+    normalizedType.includes("home") ||
+    normalizedType.includes("house")
+  ) {
+    return "house";
+  }
+
+  return "other";
+}
+
 /** Filter out properties whose type is in the exclude list (e.g. condo, coop, house → keep multifamily and others). */
 function applyExcludeTypes(properties: Record<string, unknown>[], excludeTypesCsv: string): void {
   const exclude = excludeTypesCsv
@@ -108,13 +179,13 @@ function applyExcludeTypes(properties: Record<string, unknown>[], excludeTypesCs
     .map((s) => normalizePropertyType(s.trim()))
     .filter(Boolean);
   if (exclude.length === 0) return;
+  const excludeSet = new Set(exclude);
   const toRemove = new Set<number>();
   properties.forEach((p, i) => {
     const raw = getPropertyType(p);
     const pt = normalizePropertyType(raw);
-    // Only exclude when normalized type exactly matches an excluded type (e.g. "condo", "coop", "house").
-    // "multifamily", "multi family", "townhouse", "sfr", etc. are not excluded.
-    if (pt && exclude.includes(pt)) toRemove.add(i);
+    const bucket = classifyPropertyType(pt);
+    if (excludeSet.has(bucket)) toRemove.add(i);
   });
   // Remove in reverse order so indices stay valid
   [...toRemove].sort((a, b) => b - a).forEach((i) => properties.splice(i, 1));

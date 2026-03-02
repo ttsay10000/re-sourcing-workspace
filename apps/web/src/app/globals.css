@@ -846,7 +846,7 @@ textarea {
 }
 
 .property-data-detail-cell {
-  padding: 1rem 1.25rem !important;
+  padding: 1.25rem 1.5rem 1.25rem 2rem !important;
 }
 
 .property-detail-collapsible {
@@ -858,10 +858,13 @@ textarea {
 
 .property-detail-address-block {
   margin-bottom: 0.75rem;
+  padding-left: 0;
 }
 
 .property-detail-address-block .property-card-title {
-  margin-bottom: 0.25rem;
+  margin-bottom: 0.35rem;
+  font-size: 1.0625rem;
+  letter-spacing: 0.01em;
 }
 
 .property-detail-address-block .property-card-meta {
@@ -910,7 +913,7 @@ textarea {
 }
 
 .property-detail-section-body {
-  padding: 0.75rem 1rem;
+  padding: 0.875rem 1.25rem 0.875rem 1.5rem;
   background: #fff;
   border-top: 1px solid #e5e5e5;
 }
@@ -944,28 +947,34 @@ textarea {
 
 .property-card-neighborhood {
   color: #525252;
-  font-size: 0.8125rem;
+  font-size: 0.875rem;
+}
+
+.property-card-section {
+  margin-bottom: 0.75rem;
 }
 
 .property-card-price {
-  font-size: 1rem;
+  font-size: 1.0625rem;
   font-weight: 600;
   color: #111;
+  margin-bottom: 0.5rem;
 }
 
 .property-card-dates {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem 1rem;
-  font-size: 0.8125rem;
+  font-size: 0.875rem;
   color: #525252;
+  margin-bottom: 0.75rem;
 }
 
 .property-card-dl {
   display: grid;
-  gap: 0.25rem 1rem;
+  gap: 0.5rem 1.25rem;
   margin: 0;
-  font-size: 0.8125rem;
+  font-size: 0.875rem;
 }
 
 .property-card-dl div {
@@ -978,7 +987,7 @@ textarea {
   margin: 0;
   font-weight: 500;
   color: #525252;
-  min-width: 6rem;
+  min-width: 6.5rem;
   font-size: inherit;
 }
 
@@ -1081,9 +1090,12 @@ textarea {
 }
 
 .property-card-gallery-main-wrap {
-  display: block;
-  max-height: 220px;
-  width: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  max-width: 300px;
+  max-height: 200px;
+  width: 100%;
   margin: 0 auto;
   border-radius: 8px;
   overflow: hidden;
@@ -1091,9 +1103,12 @@ textarea {
 }
 
 .property-card-gallery-main {
-  width: 100%;
-  height: 100%;
+  max-width: 100%;
+  max-height: 200px;
+  width: auto;
+  height: auto;
   object-fit: contain;
+  object-position: center;
   display: block;
 }
 
