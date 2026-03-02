@@ -477,7 +477,7 @@ router.post("/test-agent/runs/:id/send-to-property-data", async (req: Request, r
     if (/DATABASE_URL is required|connection|ECONNREFUSED|getPool|config/i.test(message)) {
       errorMessage =
         "Database unavailable. Set DATABASE_URL in the API environment and ensure Postgres is running.";
-    } else if (/column.*does not exist|relation.*does not exist/i.test(message)) {
+    } else if (/column.*does not exist|relation.*does not exist|more expressions than target columns/i.test(message)) {
       errorMessage =
         "Database schema is out of date. Run migrations: npm run db:migrate (with DATABASE_URL set).";
     } else {

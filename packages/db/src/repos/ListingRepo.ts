@@ -3,6 +3,24 @@ import type { ListingRow, ListingNormalized } from "@re-sourcing/contracts";
 import type { ListingLifecycleState } from "@re-sourcing/contracts";
 import { mapListing, listingNormalizedToRow } from "../map.js";
 
+/** Ensure value is safe for a JSONB column: null, or a JSON-serializable object/array. Avoids "invalid input syntax for type json" from empty string or non-JSON strings. */
+function toJsonb(val: unknown): unknown {
+  if (val == null) return null;
+  if (typeof val === "string") {
+    const s = val.trim();
+    if (s === "") return null;
+    try {
+      return JSON.parse(s) as unknown;
+    } catch {
+      return null;
+    }
+  }
+  if (typeof val === "object" && (Array.isArray(val) || (typeof val === "object" && val !== null && Object.prototype.toString.call(val) === "[object Object]")) {
+    return val;
+  }
+  return null;
+}
+
 export interface ListingRepoOptions {
   client?: PoolClient;
   pool: import("pg").Pool;
@@ -113,53 +131,63 @@ export class ListingRepo {
           row.image_urls,
           row.listed_at,
           row.agent_names,
-          row.agent_enrichment,
-          row.price_history,
-          row.rental_price_history,
-          row.extra,
+          toJsonb(row.agent_enrichment),
+          toJsonb(row.price_history),
+          toJsonb(row.rental_price_history),
+          toJsonb(row.extra),
           existing.id,
         ]
       );
       return { listing: mapListing(r.rows[0]), created: false };
     }
     const uploadedRunId = options?.uploadedRunId ?? null;
+    const insertValues = [
+      normalized.source,
+      normalized.externalId,
+      row.address,
+      row.city,
+      row.state,
+      row.zip,
+      row.price,
+      row.beds,
+      row.baths,
+      row.sqft,
+      row.url,
+      row.title,
+      row.description,
+      row.lat,
+      row.lon,
+      row.image_urls,
+      row.listed_at,
+      row.agent_names,
+      toJsonb(row.agent_enrichment),
+      toJsonb(row.price_history),
+      toJsonb(row.extra),
+      uploadedRunId != null ? new Date() : null,
+      uploadedRunId,
+    ];
     const r = await this.client.query(
       `INSERT INTO listings (
         source, external_id, lifecycle_state, first_seen_at, last_seen_at,
         address, city, state, zip, price, beds, baths, sqft, url, title, description,
-        lat, lon, image_urls, listed_at, agent_names, agent_enrichment, price_history, rental_price_history, extra, uploaded_at, uploaded_run_id
+        lat, lon, image_urls, listed_at, agent_names, agent_enrichment, price_history, extra, uploaded_at, uploaded_run_id
       ) VALUES (
         $1, $2, 'active', now(), now(),
-        $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24
+        $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23
       ) RETURNING *`,
-      [
-        normalized.source,
-        normalized.externalId,
-        row.address,
-        row.city,
-        row.state,
-        row.zip,
-        row.price,
-        row.beds,
-        row.baths,
-        row.sqft,
-        row.url,
-        row.title,
-        row.description,
-        row.lat,
-        row.lon,
-        row.image_urls,
-        row.listed_at,
-        row.agent_names,
-        row.agent_enrichment,
-        row.price_history,
-        row.rental_price_history,
-        row.extra,
-        uploadedRunId != null ? new Date() : null,
-        uploadedRunId,
-      ]
+      insertValues
     );
-    return { listing: mapListing(r.rows[0]), created: true };
+    const listing = mapListing(r.rows[0]);
+    const rentalPriceHistory = toJsonb(row.rental_price_history);
+    if (rentalPriceHistory != null && listing.id) {
+      await this.client.query(
+        "UPDATE listings SET rental_price_history = $1, updated_at = now() WHERE id = $2",
+        [rentalPriceHistory, listing.id]
+      );
+      const refreshed = await this.byId(listing.id);
+      return { listing: refreshed ?? listing, created: true };
+    }
+    return { listing, created: true };
   }
 
   async setLifecycle(id: string, lifecycleState: ListingLifecycleState): Promise<ListingRow | null> {
