@@ -75,9 +75,10 @@ function formatPriceEventLabel(event: string | null | undefined): string {
 }
 
 /** Title-case property type for display (e.g. "multi family" → "Multi Family"). */
-function formatPropertyType(value: string | null | undefined): string {
-  if (value == null || String(value).trim() === "") return "—";
-  const normalized = String(value).trim().replace(/_/g, " ").toLowerCase();
+function formatPropertyType(value: string | null | undefined | unknown): string {
+  if (value == null || typeof value !== "string") return "—";
+  const normalized = value.trim().replace(/_/g, " ").toLowerCase();
+  if (!normalized) return "—";
   return normalized.replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
@@ -428,7 +429,7 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
                     <div className="initial-info-dl-row">
                       <dt>HOA / Tax</dt>
                       <dd>
-                        {(monthlyHoa == null || monthlyHoa === 0) ? "NA" : formatPrice(monthlyHoa)} / {(monthlyTax == null || monthlyTax === 0) ? "NA" : formatPrice(monthlyTax)}
+                        {(monthlyHoa == null || monthlyHoa === 0) ? "NA" : formatPrice(typeof monthlyHoa === "number" ? monthlyHoa : null)} / {(monthlyTax == null || monthlyTax === 0) ? "NA" : formatPrice(typeof monthlyTax === "number" ? monthlyTax : null)}
                       </dd>
                     </div>
                   )}
