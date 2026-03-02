@@ -16,6 +16,7 @@ export interface CanonicalProperty {
 interface ListingRow {
   id: string;
   externalId: string;
+  source: string;
   address: string;
   city: string;
   state: string;
