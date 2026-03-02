@@ -55,6 +55,7 @@ interface ListingRow {
   agentNames?: string[] | null;
   agentEnrichment?: AgentEnrichmentEntry[] | null;
   priceHistory?: PriceHistoryEntry[] | null;
+  rentalPriceHistory?: PriceHistoryEntry[] | null;
   extra?: Record<string, unknown> | null;
   uploadedAt?: string | null;
   uploadedRunId?: string | null;

@@ -389,6 +389,7 @@ router.post("/test-agent/runs/:id/send-to-property-data", async (req: Request, r
         if (existing) {
           normalized.agentEnrichment = existing.agentEnrichment ?? null;
           normalized.priceHistory = existing.priceHistory ?? null;
+          normalized.rentalPriceHistory = existing.rentalPriceHistory ?? null;
         } else {
           const propertyContext = [normalized.address, normalized.city, normalized.zip].filter(Boolean).join(", ") || undefined;
           const agentEnrichment = await enrichBrokers(normalized.agentNames, propertyContext);
@@ -396,10 +397,9 @@ router.post("/test-agent/runs/:id/send-to-property-data", async (req: Request, r
             normalized.agentEnrichment = agentEnrichment;
           }
           if (normalized.url && normalized.url !== "#") {
-            const priceHistory = await extractPriceHistory(normalized.url);
-            if (priceHistory && priceHistory.length > 0) {
-              normalized.priceHistory = priceHistory;
-            }
+            const extracted = await extractPriceHistory(normalized.url);
+            if (extracted.priceHistory?.length) normalized.priceHistory = extracted.priceHistory;
+            if (extracted.rentalPriceHistory?.length) normalized.rentalPriceHistory = extracted.rentalPriceHistory;
           }
         }
 
@@ -419,6 +419,7 @@ router.post("/test-agent/runs/:id/send-to-property-data", async (req: Request, r
             // Store LLM outputs in snapshot so they're persisted and we have a full record
             agentEnrichment: normalized.agentEnrichment ?? null,
             priceHistory: normalized.priceHistory ?? null,
+            rentalPriceHistory: normalized.rentalPriceHistory ?? null,
           };
           JSON.stringify(metadata);
         } catch (_ser) {

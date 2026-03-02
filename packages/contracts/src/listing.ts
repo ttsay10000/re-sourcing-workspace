@@ -45,6 +45,8 @@ export interface ListingNormalized {
   agentEnrichment?: AgentEnrichmentEntry[] | null;
   /** Price history (date, price, event) extracted from listing URL. */
   priceHistory?: PriceHistoryEntry[] | null;
+  /** Rental/rent price history (date, price, event) when applicable. */
+  rentalPriceHistory?: PriceHistoryEntry[] | null;
   /** Any extra fields that don't map to core schema. */
   extra?: Record<string, unknown> | null;
 }

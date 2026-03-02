@@ -113,6 +113,7 @@ export function mapListing(row: Record<string, unknown>): ListingRow {
     agentNames: (row.agent_names as string[]) ?? null,
     agentEnrichment: (row.agent_enrichment as AgentEnrichmentEntry[] | null) ?? null,
     priceHistory: (row.price_history as PriceHistoryEntry[] | null) ?? null,
+    rentalPriceHistory: (row.rental_price_history as PriceHistoryEntry[] | null) ?? null,
     extra: (row.extra as Record<string, unknown>) ?? null,
     uploadedAt: row.uploaded_at != null ? toIso(row.uploaded_at) : null,
     uploadedRunId: (row.uploaded_run_id as string) ?? null,
@@ -189,6 +190,7 @@ export function listingNormalizedToRow(l: ListingNormalized): Record<string, unk
     agent_names: l.agentNames ?? null,
     agent_enrichment: l.agentEnrichment ?? null,
     price_history: l.priceHistory ?? null,
+    rental_price_history: l.rentalPriceHistory ?? null,
     extra: l.extra ?? null,
   };
 }
