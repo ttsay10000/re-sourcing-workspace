@@ -16,10 +16,9 @@ export function getDuplicateScoreThreshold(): number {
   return DUPLICATE_SCORE_THRESHOLD;
 }
 
-function normalizeAddress(address: string, city: string, state: string, zip: string): string {
-  const parts = [address, city, state, zip].filter((p) => p != null && String(p).trim());
-  return parts
-    .join(" ")
+/** Normalize only the address line for similarity; avoid inflating scores with shared city/state/zip. */
+function normalizeAddressForCompare(address: string): string {
+  return (address ?? "")
     .toLowerCase()
     .replace(/\s+/g, " ")
     .trim();
@@ -40,7 +39,7 @@ export interface ListingForDedup {
 export function computeDuplicateScores(listings: ListingForDedup[]): { id: string; duplicateScore: number }[] {
   if (listings.length === 0) return [];
 
-  const normalized = listings.map((l) => normalizeAddress(l.address, l.city, l.state, l.zip));
+  const normalized = listings.map((l) => normalizeAddressForCompare(l.address));
 
   return listings.map((listing, i) => {
     let maxSim = 0;

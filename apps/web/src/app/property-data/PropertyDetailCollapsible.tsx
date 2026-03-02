@@ -352,67 +352,71 @@ export function PropertyDetailCollapsible({ listing }: { listing: PropertyDetail
       <CollapsibleSection
         id="price-history"
         title="Price history"
-        count={listing.priceHistory?.length}
+        count={(listing.priceHistory?.length ?? 0) + (listing.rentalPriceHistory?.length ?? 0)}
         open={!!openSections.priceHistory}
         onToggle={() => toggle("priceHistory")}
       >
-        {listing.priceHistory && listing.priceHistory.length > 0 ? (
-          <div className="property-detail-price-history-wrap" style={{ maxHeight: "280px", overflowY: "auto" }}>
-            <table className="property-detail-price-history-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.9rem" }}>
-              <thead>
-                <tr style={{ borderBottom: "1px solid #e5e5e5" }}>
-                  <th style={{ textAlign: "left", padding: "0.5rem 0.75rem" }}>Date</th>
-                  <th style={{ textAlign: "left", padding: "0.5rem 0.75rem" }}>Price</th>
-                  <th style={{ textAlign: "left", padding: "0.5rem 0.75rem" }}>Event</th>
-                </tr>
-              </thead>
-              <tbody>
-                {listing.priceHistory.map((row, idx) => (
-                  <tr key={idx} style={{ borderBottom: "1px solid #f0f0f0" }}>
-                    <td style={{ padding: "0.5rem 0.75rem" }}>{row.date}</td>
-                    <td style={{ padding: "0.5rem 0.75rem" }}>{typeof row.price === "number" ? formatPrice(row.price) : row.price}</td>
-                    <td style={{ padding: "0.5rem 0.75rem" }}>{row.event}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <p className="property-detail-text" style={{ color: "#737373" }}>Unavailable. Run enrichment (Send to property data with OPENAI_API_KEY set) to fetch.</p>
-        )}
-      </CollapsibleSection>
-
-      <CollapsibleSection
-        id="rental-price-history"
-        title="Rental price history"
-        count={listing.rentalPriceHistory?.length}
-        open={!!openSections.rentalPriceHistory}
-        onToggle={() => toggle("rentalPriceHistory")}
-      >
-        {listing.rentalPriceHistory && listing.rentalPriceHistory.length > 0 ? (
-          <div className="property-detail-price-history-wrap" style={{ maxHeight: "280px", overflowY: "auto" }}>
-            <table className="property-detail-price-history-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.9rem" }}>
-              <thead>
-                <tr style={{ borderBottom: "1px solid #e5e5e5" }}>
-                  <th style={{ textAlign: "left", padding: "0.5rem 0.75rem" }}>Date</th>
-                  <th style={{ textAlign: "left", padding: "0.5rem 0.75rem" }}>Price</th>
-                  <th style={{ textAlign: "left", padding: "0.5rem 0.75rem" }}>Event</th>
-                </tr>
-              </thead>
-              <tbody>
-                {listing.rentalPriceHistory.map((row, idx) => (
-                  <tr key={idx} style={{ borderBottom: "1px solid #f0f0f0" }}>
-                    <td style={{ padding: "0.5rem 0.75rem" }}>{row.date}</td>
-                    <td style={{ padding: "0.5rem 0.75rem" }}>{typeof row.price === "number" ? formatPrice(row.price) : row.price}</td>
-                    <td style={{ padding: "0.5rem 0.75rem" }}>{row.event}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <p className="property-detail-text" style={{ color: "#737373" }}>Unavailable. Populated when sending to property data if the listing has rental/rent history on the source page.</p>
-        )}
+        {(() => {
+          const hasSale = listing.priceHistory && listing.priceHistory.length > 0;
+          const hasRental = listing.rentalPriceHistory && listing.rentalPriceHistory.length > 0;
+          if (!hasSale && !hasRental) {
+            return (
+              <p className="property-detail-text" style={{ color: "#737373" }}>
+                No price history yet. It’s filled when you use “Send to property data” (with OPENAI_API_KEY set in the API). The listing must have a valid URL and the source page must include a price history section.
+              </p>
+            );
+          }
+          return (
+            <div className="property-detail-price-history-wrap" style={{ maxHeight: "360px", overflowY: "auto" }}>
+              {hasSale && (
+                <>
+                  {hasRental && <p className="property-detail-text" style={{ fontWeight: 600, marginBottom: "0.5rem" }}>Sale / list</p>}
+                  <table className="property-detail-price-history-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.9rem", marginBottom: hasRental ? "1rem" : 0 }}>
+                    <thead>
+                      <tr style={{ borderBottom: "1px solid #e5e5e5" }}>
+                        <th style={{ textAlign: "left", padding: "0.5rem 0.75rem" }}>Date</th>
+                        <th style={{ textAlign: "left", padding: "0.5rem 0.75rem" }}>Price</th>
+                        <th style={{ textAlign: "left", padding: "0.5rem 0.75rem" }}>Event</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {listing.priceHistory!.map((row, idx) => (
+                        <tr key={idx} style={{ borderBottom: "1px solid #f0f0f0" }}>
+                          <td style={{ padding: "0.5rem 0.75rem" }}>{row.date}</td>
+                          <td style={{ padding: "0.5rem 0.75rem" }}>{typeof row.price === "number" ? formatPrice(row.price) : row.price}</td>
+                          <td style={{ padding: "0.5rem 0.75rem" }}>{row.event}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </>
+              )}
+              {hasRental && (
+                <>
+                  {hasSale && <p className="property-detail-text" style={{ fontWeight: 600, marginBottom: "0.5rem" }}>Rental</p>}
+                  <table className="property-detail-price-history-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.9rem" }}>
+                    <thead>
+                      <tr style={{ borderBottom: "1px solid #e5e5e5" }}>
+                        <th style={{ textAlign: "left", padding: "0.5rem 0.75rem" }}>Date</th>
+                        <th style={{ textAlign: "left", padding: "0.5rem 0.75rem" }}>Price</th>
+                        <th style={{ textAlign: "left", padding: "0.5rem 0.75rem" }}>Event</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {listing.rentalPriceHistory!.map((row, idx) => (
+                        <tr key={idx} style={{ borderBottom: "1px solid #f0f0f0" }}>
+                          <td style={{ padding: "0.5rem 0.75rem" }}>{row.date}</td>
+                          <td style={{ padding: "0.5rem 0.75rem" }}>{typeof row.price === "number" ? formatPrice(row.price) : row.price}</td>
+                          <td style={{ padding: "0.5rem 0.75rem" }}>{row.event}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </>
+              )}
+            </div>
+          );
+        })()}
       </CollapsibleSection>
 
       <CollapsibleSection
