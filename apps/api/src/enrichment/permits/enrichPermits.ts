@@ -15,7 +15,7 @@ import {
 import { normalizeBorough, normalizeHouseNo, normalizeStreetName, streetNameForPermitApi, parseDateToYyyyMmDd, parseEstimatedCost } from "./normalizers.js";
 import { normalizeBblForQuery } from "../socrata/index.js";
 import { resolveCondoBblForQuery } from "../resolveCondoBbl.js";
-import { resolveBBLFromListing } from "../resolvePropertyBBL.js";
+import { resolveBBLFromListing, normalizeAddressLineForDisplay } from "../resolvePropertyBBL.js";
 import {
   buildSoQLParamsByBBL,
   buildSoQLParamsByAddress,
@@ -136,6 +136,7 @@ export async function enrichPropertyWithPermits(
       const bblNormalized = normalizeBblForQuery(bblStr);
       if (bblNormalized) bblStr = bblNormalized;
       const bblForQueries = (await resolveCondoBblForQuery(bblStr, { appToken: options.appToken })) ?? bblStr;
+      await propertyRepo.mergeDetails(propertyId, { bblBase: bblForQueries });
       rows = await fetchAllPermits(
         (limit, offset) => buildSoQLParamsByBBL(bblForQueries, cutoffDate, limit, offset),
         { appToken: options.appToken }
@@ -215,6 +216,11 @@ export async function enrichPropertyWithPermits(
   }
 }
 
+/**
+ * Resolve borough, houseNo, streetName for permit/address lookups. Uses same normalization as
+ * test flow and getBBLForProperty: strip listing-type suffixes (MULTIFAMILY, CONDO, etc.) so
+ * permit API and Geoclient see the same clean address.
+ */
 async function resolveAddressFromListing(
   property: Property,
   _propertyRepo: PropertyRepo,
@@ -227,7 +233,8 @@ async function resolveAddressFromListing(
     const listing = await listingRepo.byId(match.listingId);
     if (listing) {
       const borough = normalizeBorough(listing.city);
-      const { houseNo, streetName } = splitAddress(listing.address);
+      const addressLine = normalizeAddressLineForDisplay(listing.address?.trim() ?? "");
+      const { houseNo, streetName } = splitAddress(addressLine);
       const h = normalizeHouseNo(houseNo);
       const s = normalizeStreetName(streetName);
       if (borough && h && s) return { borough, houseNo: h, streetName: s };
@@ -236,7 +243,7 @@ async function resolveAddressFromListing(
 
   const addr = property.canonicalAddress || "";
   const commaIdx = addr.indexOf(",");
-  const addressPart = commaIdx >= 0 ? addr.slice(0, commaIdx).trim() : addr.trim();
+  const addressPart = normalizeAddressLineForDisplay(commaIdx >= 0 ? addr.slice(0, commaIdx).trim() : addr.trim());
   const rest = commaIdx >= 0 ? addr.slice(commaIdx + 1).trim() : "";
   const borough = normalizeBorough(rest.split(",")[0]?.trim() ?? "");
   const { houseNo, streetName } = splitAddress(addressPart);

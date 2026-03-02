@@ -45,7 +45,7 @@ async function run(propertyId: string, options: EnrichmentRunOptions): Promise<E
 
   const property = await propertyRepo.byId(propertyId);
   if (!property) return { ok: false, error: "Property not found" };
-  const resolved = await getBBLForProperty(propertyId);
+  const resolved = await getBBLForProperty(propertyId, { appToken: options.appToken });
   const bin = resolved?.bin ?? null;
   if (!bin) {
     await stateRepo.upsert({

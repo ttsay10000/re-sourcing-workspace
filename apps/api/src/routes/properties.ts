@@ -17,6 +17,7 @@ import {
   AffordableHousingRepo,
 } from "@re-sourcing/db";
 import { runEnrichmentForProperty } from "../enrichment/runEnrichment.js";
+import { normalizeAddressLineForDisplay } from "../enrichment/resolvePropertyBBL.js";
 
 const router = Router();
 
@@ -33,6 +34,26 @@ router.get("/properties", async (_req: Request, res: Response) => {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[properties list]", err);
     res.status(503).json({ error: "Failed to load properties.", details: message });
+  }
+});
+
+/** DELETE /api/properties - clear all canonical properties (matches and enrichment data CASCADE). Requires ?confirm=1. */
+router.delete("/properties", async (req: Request, res: Response) => {
+  const confirmed = req.query.confirm === "1";
+  if (!confirmed) {
+    res.status(400).json({
+      error: "Confirmation required. Use ?confirm=1 to clear all canonical properties.",
+    });
+    return;
+  }
+  try {
+    const pool = getPool();
+    await pool.query("DELETE FROM properties");
+    res.json({ ok: true, deleted: true });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[properties delete all]", err);
+    res.status(503).json({ error: "Failed to clear canonical properties.", details: message });
   }
 });
 
@@ -56,7 +77,8 @@ router.post("/properties/from-listings", async (req: Request, res: Response) => 
       const results: { listingId: string; propertyId: string; canonicalAddress: string }[] = [];
 
       for (const listing of listings) {
-        const canonicalAddress = [listing.address, listing.city, listing.state, listing.zip]
+        const addressLine = normalizeAddressLineForDisplay(listing.address?.trim() ?? "");
+        const canonicalAddress = [addressLine, listing.city, listing.state, listing.zip]
           .filter(Boolean)
           .join(", ") || listing.address || "Unknown";
         const property = await propertyRepo.create(canonicalAddress);

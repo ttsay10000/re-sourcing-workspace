@@ -72,6 +72,7 @@ function PropertyDataContent() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [expandedRowId, setExpandedRowId] = useState<string | null>(null);
   const [clearing, setClearing] = useState(false);
+  const [clearingCanonical, setClearingCanonical] = useState(false);
   const [runLog, setRunLog] = useState<RunLogEntry[]>([]);
   const [runLogOpen, setRunLogOpen] = useState(false);
   const [reviewDupOpen, setReviewDupOpen] = useState(false);
@@ -192,7 +193,7 @@ function PropertyDataContent() {
     };
   };
 
-  const handleClearPropertyData = () => {
+  const handleClearRawListings = () => {
     if (!confirm("Clear all raw listings and their snapshots? This cannot be undone.")) return;
     setClearing(true);
     setError(null);
@@ -206,8 +207,26 @@ function PropertyDataContent() {
         if (data?.error) throw new Error(data.error);
         fetchListings();
       })
-      .catch((e) => setError(e instanceof Error ? e.message : "Failed to clear property data"))
+      .catch((e) => setError(e instanceof Error ? e.message : "Failed to clear raw listings"))
       .finally(() => setClearing(false));
+  };
+
+  const handleClearCanonicalProperties = () => {
+    if (!confirm("Clear all canonical properties and their matches/enrichment data? This cannot be undone.")) return;
+    setClearingCanonical(true);
+    setError(null);
+    fetch(`${API_BASE}/api/properties?confirm=1`, { method: "DELETE" })
+      .then((r) => r.json().then((data) => ({ ok: r.ok, data })))
+      .then(({ ok, data }) => {
+        if (!ok && data?.error) {
+          const detail = data.details ? ` — ${data.details}` : "";
+          throw new Error(data.error + detail);
+        }
+        if (data?.error) throw new Error(data.error);
+        fetchCanonicalProperties();
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : "Failed to clear canonical properties"))
+      .finally(() => setClearingCanonical(false));
   };
 
   const searchParams = useSearchParams();
@@ -428,7 +447,7 @@ function PropertyDataContent() {
                           </tr>
                           {expandedCanonicalId === prop.id && (
                             <tr className="property-data-detail-row">
-                              <td colSpan={2} className="property-data-detail-cell" style={{ padding: "1rem" }}>
+                              <td colSpan={2} className="property-data-detail-cell" style={{ padding: "1rem 1rem 1rem 2.5rem", backgroundColor: "#fafafa" }}>
                                 <CanonicalPropertyDetail property={prop} />
                               </td>
                             </tr>
@@ -532,7 +551,7 @@ function PropertyDataContent() {
                       </tr>
                       {expandedRowId === row.id && (
                         <tr key={`${row.id}-detail`} className="property-data-detail-row">
-                          <td colSpan={10} className="property-data-detail-cell">
+                          <td colSpan={10} className="property-data-detail-cell" style={{ paddingLeft: "2.5rem", backgroundColor: "#fafafa" }}>
                             <PropertyDetailCollapsible listing={row} />
                           </td>
                         </tr>
@@ -548,11 +567,15 @@ function PropertyDataContent() {
 
       <div className="property-data-bottom-bar">
         <span className="property-data-bottom-label">
-          {activeTab === "raw" && total > 0
-            ? someSelected
-              ? `${selectedListingIds.size} of ${total} selected`
-              : `${total} raw listing(s)`
-            : "Reset of filters"}
+          {activeTab === "raw"
+            ? total > 0
+              ? someSelected
+                ? `${selectedListingIds.size} of ${total} selected`
+                : `${total} raw listing(s)`
+              : "No raw listings"
+            : canonicalProperties.length > 0
+              ? `${canonicalProperties.length} canonical propert${canonicalProperties.length === 1 ? "y" : "ies"}`
+              : "No canonical properties"}
         </span>
         <div className="property-data-bottom-actions">
           {activeTab === "raw" && total > 0 && (
@@ -589,14 +612,21 @@ function PropertyDataContent() {
           <button
             type="button"
             className="btn-secondary"
-            onClick={handleClearPropertyData}
-            disabled={clearing || activeTab !== "raw"}
-            title="Remove all raw listings and snapshots (for testing)"
+            onClick={handleClearRawListings}
+            disabled={clearing || total === 0}
+            title="Remove all raw listings and their snapshots. Cannot be undone."
           >
-            {clearing ? "Clearing…" : "Clear all (test)"}
+            {clearing ? "Clearing…" : "Clear raw listings"}
           </button>
-          <button type="button" className="btn-secondary" disabled>Reset</button>
-          <button type="button" className="btn-primary" disabled>Apply</button>
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={handleClearCanonicalProperties}
+            disabled={clearingCanonical || canonicalProperties.length === 0}
+            title="Remove all canonical properties and their matches/enrichment data. Cannot be undone."
+          >
+            {clearingCanonical ? "Clearing…" : "Clear canonical properties"}
+          </button>
         </div>
       </div>
 

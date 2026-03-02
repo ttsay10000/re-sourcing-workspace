@@ -1,9 +1,11 @@
 /**
  * Unified enrichment runner: permits + 7 modules. Run one module or all for a property or batch.
+ * After permits, we resolve BBL (details, listing extra, or Geoclient) so modules have it—same as test flow.
  */
 
 import { getPool, PropertyRepo } from "@re-sourcing/db";
 import { enrichPropertyWithPermits } from "./permits/enrichPermits.js";
+import { getBBLForProperty } from "./resolvePropertyBBL.js";
 import { ENRICHMENT_MODULES, getEnrichmentModule } from "./modules/index.js";
 import type { EnrichmentRunOptions } from "./types.js";
 
@@ -36,10 +38,11 @@ export async function runEnrichmentForProperty(
   const modules = moduleName ? [getEnrichmentModule(moduleName)].filter(Boolean) : ENRICHMENT_MODULES;
   let runOtherModules = true;
   if (!moduleName && modules.length > 0) {
+    const resolved = await getBBLForProperty(propertyId, { appToken: options.appToken });
+    const hasBbl = !!resolved?.bbl;
     const pool = getPool();
     const property = await new PropertyRepo({ pool }).byId(propertyId);
     const details = (property?.details as Record<string, unknown>) ?? {};
-    const hasBbl = typeof details.bbl === "string" && /^\d{10}$/.test(String(details.bbl).trim());
     const hasBin = typeof details.bin === "string" && String(details.bin).trim().length > 0;
     if (!hasBbl && !hasBin) {
       runOtherModules = false;

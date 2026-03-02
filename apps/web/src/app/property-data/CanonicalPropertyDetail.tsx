@@ -32,6 +32,7 @@ interface ListingRow {
   agentEnrichment?: { name: string; firm?: string | null; email?: string | null; phone?: string | null }[] | null;
   priceHistory?: { date: string; price: string | number; event: string }[] | null;
   rentalPriceHistory?: { date: string; price: string | number; event: string }[] | null;
+  duplicateScore?: number | null;
   extra?: Record<string, unknown> | null;
 }
 
@@ -45,6 +46,27 @@ interface UnifiedEnrichmentRow {
 function formatPrice(n: number | null | undefined): string {
   if (n == null || Number.isNaN(n)) return "—";
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n);
+}
+
+function formatListedDate(listedAt: string | null | undefined): string {
+  if (!listedAt) return "—";
+  const d = new Date(listedAt);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
+}
+
+function daysOnMarket(listedAt: string | null | undefined): number | null {
+  if (!listedAt) return null;
+  const d = new Date(listedAt);
+  if (Number.isNaN(d.getTime())) return null;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  d.setHours(0, 0, 0, 0);
+  return Math.floor((today.getTime() - d.getTime()) / (1000 * 60 * 60 * 24));
+}
+
+function fullAddress(row: ListingRow): string {
+  return [row.address, row.city, row.state, row.zip].filter(Boolean).join(", ") || "—";
 }
 
 function CollapsibleSection({
@@ -122,16 +144,12 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
   const d = property.details as Record<string, unknown> | null | undefined;
   const enrichment = d?.enrichment as Record<string, unknown> | undefined;
   const ps = enrichment?.permits_summary as Record<string, unknown> | undefined;
-  const zoning = enrichment?.zoning as Record<string, unknown> | undefined;
-  const co = enrichment?.certificateOfOccupancy as Record<string, unknown> | undefined;
-  const hpdReg = enrichment?.hpdRegistration as Record<string, unknown> | undefined;
-  const bbl = d?.bbl ?? d?.BBL;
-  const bin = d?.bin ?? d?.BIN;
+  const bbl = d?.bbl ?? d?.BBL ?? d?.buildingLotBlock;
+  const bblBase = d?.bblBase ?? d?.condoBaseBbl;
   const lat = d?.lat ?? d?.latitude;
   const lon = d?.lon ?? d?.longitude;
   const monthlyHoa = d?.monthlyHoa ?? d?.monthly_hoa;
   const monthlyTax = d?.monthlyTax ?? d?.monthly_tax;
-  const taxCode = d?.taxCode ?? d?.tax_code;
   const ownerInfo = d?.ownerInfo ?? d?.owner_info;
   const omFurnishedPricing = d?.omFurnishedPricing ?? d?.om_furnished_pricing;
 
@@ -191,8 +209,51 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
   const [galleryIndex, setGalleryIndex] = useState(0);
 
   return (
-    <div className="property-detail-collapsible">
-      <h3 className="property-card-title" style={{ marginBottom: "0.5rem" }}>{property.canonicalAddress}</h3>
+    <div className="property-detail-collapsible" style={{ paddingLeft: "1.5rem", borderLeft: "3px solid #e5e5e5" }}>
+      {/* Linked listing(s) — raw table format + source link */}
+      {primaryListing !== "loading" && listingForDisplay && (
+        <div style={{ marginBottom: "1rem" }}>
+          <h4 style={{ fontSize: "0.9rem", fontWeight: 600, marginBottom: "0.5rem" }}>Linked listing(s)</h4>
+          <div style={{ overflowX: "auto" }}>
+            <table className="property-data-table" style={{ width: "100%", minWidth: "600px", borderCollapse: "collapse", fontSize: "0.875rem" }}>
+              <thead>
+                <tr style={{ backgroundColor: "#f5f5f5", borderBottom: "1px solid #e5e5e5" }}>
+                  <th style={{ textAlign: "left", padding: "0.4rem 0.5rem" }}>Listing ID</th>
+                  <th style={{ textAlign: "left", padding: "0.4rem 0.5rem" }}>Source</th>
+                  <th style={{ textAlign: "left", padding: "0.4rem 0.5rem" }}>Raw Address</th>
+                  <th style={{ textAlign: "left", padding: "0.4rem 0.5rem" }}>Listed date</th>
+                  <th style={{ textAlign: "left", padding: "0.4rem 0.5rem" }}>Days on market</th>
+                  <th style={{ textAlign: "left", padding: "0.4rem 0.5rem" }}>Dup. Conf.</th>
+                  <th style={{ textAlign: "left", padding: "0.4rem 0.5rem" }}>Price History</th>
+                  <th style={{ textAlign: "left", padding: "0.4rem 0.5rem" }}>Link</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr style={{ borderBottom: "1px solid #eee" }}>
+                  <td style={{ padding: "0.4rem 0.5rem" }}>{listingForDisplay.externalId}</td>
+                  <td style={{ padding: "0.4rem 0.5rem" }}>{listingForDisplay.source === "streeteasy" ? "Streeteasy" : listingForDisplay.source}</td>
+                  <td style={{ padding: "0.4rem 0.5rem" }}>{fullAddress(listingForDisplay)}</td>
+                  <td style={{ padding: "0.4rem 0.5rem" }}>{formatListedDate(listingForDisplay.listedAt)}</td>
+                  <td style={{ padding: "0.4rem 0.5rem" }}>{daysOnMarket(listingForDisplay.listedAt) != null ? `${daysOnMarket(listingForDisplay.listedAt)} days` : "—"}</td>
+                  <td style={{ padding: "0.4rem 0.5rem", color: (listingForDisplay.duplicateScore ?? 0) >= 80 ? "#b91c1c" : (listingForDisplay.duplicateScore ?? 0) <= 20 ? "#15803d" : "#854d0e" }}>
+                    {listingForDisplay.duplicateScore != null ? listingForDisplay.duplicateScore : "—"}
+                  </td>
+                  <td style={{ padding: "0.4rem 0.5rem" }}>
+                    {listingForDisplay.priceHistory?.length ? `${listingForDisplay.priceHistory.length} entries` : formatPrice(listingForDisplay.price)}
+                  </td>
+                  <td style={{ padding: "0.4rem 0.5rem" }}>
+                    {listingForDisplay.url && listingForDisplay.url !== "#" ? (
+                      <a href={listingForDisplay.url} target="_blank" rel="noopener noreferrer">view source</a>
+                    ) : (
+                      "—"
+                    )}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {/* 1. Photos / floor plans — side by side, same layout as raw listings */}
       <CollapsibleSection
@@ -245,7 +306,7 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
         )}
       </CollapsibleSection>
 
-      {/* 2. Initial property info: details + Enriched data + broker + amenities + price history */}
+      {/* 2. Initial property info: same as raw (details, broker, amenities, price history) + Geospatial data */}
       <CollapsibleSection
         id="details-broker-amenities-price-history"
         title="Initial property info"
@@ -255,22 +316,32 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
         <div style={{ display: "flex", gap: "1.5rem", flexWrap: "wrap" }}>
           <div style={{ flex: "1 1 240px", minWidth: 0 }}>
             <h4 style={{ fontSize: "0.9rem", fontWeight: 600, marginBottom: "0.5rem" }}>Details</h4>
-            <p style={{ fontSize: "0.875rem", margin: 0 }}>{property.canonicalAddress}</p>
-            {(monthlyHoa != null || monthlyTax != null) && (
-              <p style={{ fontSize: "0.875rem", marginTop: "0.25rem" }}>
-                HOA: {formatPrice(monthlyHoa as number)} / Tax: {formatPrice(monthlyTax as number)}
-              </p>
+            {listingForDisplay && (
+              <>
+                <div style={{ fontSize: "1rem", fontWeight: 600, marginBottom: "0.25rem" }}>{formatPrice(listingForDisplay.price)}</div>
+                <div style={{ fontSize: "0.875rem", marginBottom: "0.5rem" }}>
+                  <span>Listed: {formatListedDate(listingForDisplay.listedAt)}</span>
+                  {daysOnMarket(listingForDisplay.listedAt) != null && (
+                    <span style={{ marginLeft: "0.5rem" }}>{daysOnMarket(listingForDisplay.listedAt)} days on market</span>
+                  )}
+                </div>
+                <dl style={{ fontSize: "0.875rem", margin: 0 }}>
+                  <div><dt style={{ marginTop: "0.25rem" }}>Beds / Baths</dt><dd style={{ marginLeft: "1rem" }}>{listingForDisplay.beds ?? "—"} / {listingForDisplay.baths ?? "—"}</dd></div>
+                  <div><dt style={{ marginTop: "0.25rem" }}>Sqft</dt><dd style={{ marginLeft: "1rem" }}>{listingForDisplay.sqft ?? "—"}</dd></div>
+                  <div><dt style={{ marginTop: "0.25rem" }}>Property type</dt><dd style={{ marginLeft: "1rem" }}>{String((extra?.propertyType ?? extra?.property_type ?? extra?.type ?? "—"))}</dd></div>
+                  {(extra?.builtIn ?? extra?.built_in ?? extra?.yearBuilt) != null && <div><dt style={{ marginTop: "0.25rem" }}>Built</dt><dd style={{ marginLeft: "1rem" }}>{String(extra?.builtIn ?? extra?.built_in ?? extra?.yearBuilt)}</dd></div>}
+                  {(monthlyHoa != null || monthlyTax != null) && <div><dt style={{ marginTop: "0.25rem" }}>HOA / Tax</dt><dd style={{ marginLeft: "1rem" }}>{formatPrice(monthlyHoa as number)} / {formatPrice(monthlyTax as number)}</dd></div>}
+                </dl>
+              </>
             )}
-            <h4 style={{ fontSize: "0.9rem", fontWeight: 600, marginTop: "0.75rem", marginBottom: "0.5rem" }}>Enriched data</h4>
+            {!listingForDisplay && primaryListing === "loading" && <p style={{ fontSize: "0.875rem", color: "#737373" }}>Loading listing…</p>}
+            {!listingForDisplay && primaryListing !== "loading" && <p style={{ fontSize: "0.875rem", color: "#737373" }}>No linked listing.</p>}
+            <h4 style={{ fontSize: "0.9rem", fontWeight: 600, marginTop: "1rem", marginBottom: "0.5rem" }}>Geospatial data</h4>
             <dl style={{ fontSize: "0.875rem", margin: 0 }}>
-              {bbl != null && <><dt style={{ marginTop: "0.25rem" }}>BBL</dt><dd style={{ marginLeft: "1rem" }}>{String(bbl)}</dd></>}
-              {bin != null && <><dt style={{ marginTop: "0.25rem" }}>BIN</dt><dd style={{ marginLeft: "1rem" }}>{String(bin)}</dd></>}
+              {bbl != null && <><dt style={{ marginTop: "0.25rem" }}>BBL (tax / billing)</dt><dd style={{ marginLeft: "1rem" }}>{String(bbl)}</dd></>}
+              {bblBase != null && <><dt style={{ marginTop: "0.25rem" }}>BBL (base)</dt><dd style={{ marginLeft: "1rem" }}>{String(bblBase)}</dd></>}
               {(lat != null || lon != null) && <><dt style={{ marginTop: "0.25rem" }}>Lat / Lon</dt><dd style={{ marginLeft: "1rem" }}>{String(lat)} / {String(lon)}</dd></>}
-              {co && Boolean(co.issuanceDate ?? co.status ?? co.jobType) && <><dt style={{ marginTop: "0.25rem" }}>Certificate of occupancy</dt><dd style={{ marginLeft: "1rem" }}>{[co.issuanceDate, co.status, co.jobType].filter(Boolean).map(String).join(" · ")}</dd></>}
-              {hpdReg && Boolean(hpdReg.registrationId ?? hpdReg.lastRegistrationDate) && <><dt style={{ marginTop: "0.25rem" }}>HPD registration</dt><dd style={{ marginLeft: "1rem" }}>{[hpdReg.registrationId, hpdReg.lastRegistrationDate].filter(Boolean).map(String).join(" · ")}</dd></>}
-              {taxCode != null && <><dt style={{ marginTop: "0.25rem" }}>Tax code</dt><dd style={{ marginLeft: "1rem" }}>{String(taxCode)}</dd></>}
-              {zoning && Boolean(zoning.zoningDistrict1 ?? zoning.zoningMapNumber ?? zoning.zoningMapCode) && <><dt style={{ marginTop: "0.25rem" }}>Zoning</dt><dd style={{ marginLeft: "1rem" }}>{[zoning.zoningDistrict1, zoning.zoningDistrict2, zoning.zoningMapNumber, zoning.zoningMapCode].filter(Boolean).map(String).join(", ")}</dd></>}
-              {(monthlyHoa != null || monthlyTax != null) && <><dt style={{ marginTop: "0.25rem" }}>HOA / Tax (monthly)</dt><dd style={{ marginLeft: "1rem" }}>{formatPrice(monthlyHoa as number)} / {formatPrice(monthlyTax as number)}</dd></>}
+              {bbl == null && bblBase == null && lat == null && lon == null && <p style={{ color: "#737373", margin: 0 }}>—</p>}
             </dl>
           </div>
           <div style={{ flex: "1 1 200px", minWidth: 0 }}>

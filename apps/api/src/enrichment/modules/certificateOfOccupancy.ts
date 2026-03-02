@@ -11,6 +11,7 @@ import {
 } from "@re-sourcing/db";
 import { resourceUrl, escapeSoQLString, fetchAllPages, normalizeBblForQuery, type SoQLQueryParams } from "../socrata/index.js";
 import { getBBLForProperty } from "../resolvePropertyBBL.js";
+import { getBblBaseFromDetails } from "../propertyKeys.js";
 import { resolveCondoBblForQuery } from "../resolveCondoBbl.js";
 import { parseDateToYyyyMmDd } from "../normalizeDate.js";
 import type { EnrichmentModule, EnrichmentRunOptions, EnrichmentRunResult } from "../types.js";
@@ -34,9 +35,9 @@ async function run(propertyId: string, options: EnrichmentRunOptions): Promise<E
   const stateRepo = new PropertyEnrichmentStateRepo({ pool });
   const now = new Date();
 
-  const property = await propertyRepo.byId(propertyId);
+  let property = await propertyRepo.byId(propertyId);
   if (!property) return { ok: false, error: "Property not found" };
-  const resolved = await getBBLForProperty(propertyId);
+  const resolved = await getBBLForProperty(propertyId, { appToken: options.appToken });
   const bbl = normalizeBblForQuery(resolved?.bbl) ?? null;
   if (!bbl) {
     await stateRepo.upsert({
@@ -49,7 +50,9 @@ async function run(propertyId: string, options: EnrichmentRunOptions): Promise<E
     });
     return { ok: false, error: "missing_bbl" };
   }
-  const bblForQueries = (await resolveCondoBblForQuery(bbl, { appToken: options.appToken })) ?? bbl;
+  property = (await propertyRepo.byId(propertyId)) ?? property;
+  const bblBase = getBblBaseFromDetails(property.details as Record<string, unknown>);
+  const bblForQueries = bblBase ?? (await resolveCondoBblForQuery(bbl, { appToken: options.appToken })) ?? bbl;
 
   const where = `bbl = '${escapeSoQLString(bblForQueries)}'`;
   const select =
