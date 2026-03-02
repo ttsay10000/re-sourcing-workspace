@@ -79,6 +79,15 @@ export class SnapshotRepo {
     rawPayloadPath: string;
     metadata?: SnapshotMetadata;
   }): Promise<ListingSnapshot> {
+    let metadataJson = "{}";
+    try {
+      metadataJson = JSON.stringify(params.metadata ?? {});
+      if (typeof metadataJson !== "string" || metadataJson.trim() === "") {
+        metadataJson = "{}";
+      }
+    } catch {
+      metadataJson = "{}";
+    }
     const r = await this.client.query(
       `INSERT INTO listing_snapshots (listing_id, run_id, raw_payload_path, metadata)
        VALUES ($1, $2, $3, $4)
@@ -87,7 +96,7 @@ export class SnapshotRepo {
         params.listingId,
         params.runId ?? null,
         params.rawPayloadPath,
-        JSON.stringify(params.metadata ?? {}),
+        metadataJson,
       ]
     );
     return mapSnapshot(r.rows[0]);

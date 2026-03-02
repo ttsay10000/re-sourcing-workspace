@@ -3,20 +3,21 @@ import type { ListingRow, ListingNormalized } from "@re-sourcing/contracts";
 import type { ListingLifecycleState } from "@re-sourcing/contracts";
 import { mapListing, listingNormalizedToRow } from "../map.js";
 
-/** Ensure value is safe for a JSONB column: null, or a JSON-serializable object/array. Avoids "invalid input syntax for type json" from empty string or non-JSON strings. */
-function toJsonb(val: unknown): unknown {
+/** Ensure value is safe for a JSONB column: null or a valid JSON string. Avoids "invalid input syntax for type json". */
+function toJsonb(val: unknown): string | null {
   if (val == null) return null;
-  if (typeof val === "string") {
-    const s = val.trim();
-    if (s === "") return null;
-    try {
-      return JSON.parse(s) as unknown;
-    } catch {
-      return null;
+  try {
+    if (typeof val === "string") {
+      const s = val.trim();
+      if (s === "") return null;
+      JSON.parse(s);
+      return s;
     }
-  }
-  if (typeof val === "object" && val !== null) {
-    return val;
+    if (typeof val === "object") {
+      return JSON.stringify(val);
+    }
+  } catch {
+    return null;
   }
   return null;
 }
