@@ -37,14 +37,20 @@ export async function enrichBrokers(
   const openai = new OpenAI({ apiKey: key });
   const model = getEnrichmentModel();
 
-  const prompt = `You are a real estate data assistant. For each of the following broker or agent names (NYC area), look up their contact information and return:
-- company: brokerage/firm name
-- email: contact email if found
-- phone: contact phone if found
+  const prompt = `You are a real estate data assistant. Each of the following is an NYC-area broker or agent name (or a firm/office name). Look up contact information from your knowledge of real estate professionals, firm websites, and public listings.
+
+For PERSON names (individual brokers/agents): You MUST attempt to find professional email and phone. Use common patterns (e.g. firstname.lastname@firm.com, office numbers). Return null for email/phone only if you truly cannot find anything for that person.
+
+For FIRM or OFFICE names only (e.g. "Compass", "Douglas Elliman"): Firm name is sufficient; email and phone may be null unless you have a general contact.
+
+Return for each:
+- firm: brokerage/company name (string or null)
+- email: work or professional email (string or null)
+- phone: office or direct phone (string or null)
 
 Names to look up (one per line):\n${names.map((n) => `- ${n}`).join("\n")}
 
-Reply with a single JSON object with key "entries": an array of objects in the SAME ORDER as the names above. Each object must have: "name" (string, the name you looked up), "firm" (string or null), "email" (string or null), "phone" (string or null). Use null for any field you cannot find. Example:
+Reply with a single JSON object with key "entries": an array of objects in the SAME ORDER as the names above. Each object must have: "name" (string), "firm" (string or null), "email" (string or null), "phone" (string or null). Use null only when you cannot find a value. Example:
 {"entries":[{"name":"John Smith","firm":"Compass","email":"john@compass.com","phone":"212-555-0100"},{"name":"Jane Doe","firm":null,"email":null,"phone":null}]}`;
 
   try {

@@ -190,7 +190,19 @@ export async function enrichPropertyWithPermits(
     }
 
     const summary = buildPermitsSummary(rows);
-    await propertyRepo.updateDetails(propertyId, "enrichment.permits_summary", summary as Record<string, unknown>);
+    // Don't overwrite existing owner: many rows may match BBL/address; we want the first (most recent) only and to keep it once set.
+    const current = await propertyRepo.byId(propertyId);
+    const currentDetails = current?.details as Record<string, unknown> | null | undefined;
+    const existingPs = currentDetails?.enrichment as Record<string, unknown> | undefined;
+    const existingSummary = existingPs?.permits_summary as Record<string, unknown> | undefined;
+    const existingOwnerName = existingSummary?.owner_name;
+    const existingOwnerBusiness = existingSummary?.owner_business_name;
+    const mergedSummary: Record<string, unknown> = {
+      ...summary,
+      owner_name: existingOwnerName != null && String(existingOwnerName).trim() !== "" ? existingOwnerName : (summary as Record<string, unknown>).owner_name,
+      owner_business_name: existingOwnerBusiness != null && String(existingOwnerBusiness).trim() !== "" ? existingOwnerBusiness : (summary as Record<string, unknown>).owner_business_name,
+    };
+    await propertyRepo.updateDetails(propertyId, "enrichment.permits_summary", mergedSummary);
 
     await stateRepo.upsert({
       propertyId,
@@ -364,7 +376,8 @@ async function resolveBBLFromPermitAddress(
 
 /**
  * Build permits summary for property.details.enrichment.permits_summary.
- * Owner is taken from the most recent permit (first row with owner data, since rows are issued_date DESC).
+ * Owner is taken from the most recent permit only (first row with owner data; rows are issued_date DESC).
+ * Stop once we have owner so we don't overwrite with other matching rows.
  * Source: DOB NOW Build (rbx6-tga4) columns owner_business_name, owner_name.
  */
 function buildPermitsSummary(rows: SocrataPermitRow[]): PermitsSummary {
@@ -375,9 +388,13 @@ function buildPermitsSummary(rows: SocrataPermitRow[]): PermitsSummary {
   for (const row of rows) {
     const d = parseDateToYyyyMmDd(row.issued_date) ?? parseDateToYyyyMmDd(row.approved_date);
     if (d && (!lastIssuedDate || d > lastIssuedDate)) lastIssuedDate = d;
-    // Prefer owner from most recent permit (first row that has it; rows are issued_date DESC)
-    if (ownerBusinessName == null && row.owner_business_name?.trim()) ownerBusinessName = row.owner_business_name.trim();
-    if (ownerName == null && row.owner_name?.trim()) ownerName = row.owner_name.trim();
+    // Take owner only from the first (most recent) row that has it; then stop so we don't overwrite.
+    const hasOwner = (row.owner_business_name?.trim() || row.owner_name?.trim());
+    if (hasOwner) {
+      if (ownerBusinessName == null && row.owner_business_name?.trim()) ownerBusinessName = row.owner_business_name.trim();
+      if (ownerName == null && row.owner_name?.trim()) ownerName = row.owner_name.trim();
+      break;
+    }
   }
 
   return {

@@ -49,6 +49,38 @@ function formatPrice(n: number | null | undefined): string {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n);
 }
 
+/** Format price for history rows: no decimals when whole dollars. */
+function formatPriceCompact(value: string | number | null | undefined): string {
+  if (value == null) return "—";
+  const n = typeof value === "number" ? value : parseFloat(String(value).replace(/[$,]/g, ""));
+  if (Number.isNaN(n)) return "—";
+  const opts = n % 1 === 0 ? { maximumFractionDigits: 0, minimumFractionDigits: 0 } : { minimumFractionDigits: 2, maximumFractionDigits: 2 };
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", ...opts }).format(n);
+}
+
+/** Format YYYY-MM-DD or ISO date for display. */
+function formatPriceHistoryDate(dateStr: string | null | undefined): string {
+  if (!dateStr || typeof dateStr !== "string") return "—";
+  const d = new Date(dateStr.trim().split("T")[0] + "T12:00:00Z");
+  if (Number.isNaN(d.getTime())) return dateStr;
+  return d.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
+}
+
+/** Human-readable event label for price history. */
+function formatPriceEventLabel(event: string | null | undefined): string {
+  if (!event || typeof event !== "string") return "—";
+  const lower = event.trim().toLowerCase().replace(/_/g, " ");
+  if (!lower) return "—";
+  return lower.replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+/** Title-case property type for display (e.g. "multi family" → "Multi Family"). */
+function formatPropertyType(value: string | null | undefined): string {
+  if (value == null || String(value).trim() === "") return "—";
+  const normalized = String(value).trim().replace(/_/g, " ").toLowerCase();
+  return normalized.replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 function formatListedDate(listedAt: string | null | undefined): string {
   if (!listedAt) return "—";
   const d = new Date(listedAt);
@@ -131,6 +163,7 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
   const [unifiedRows, setUnifiedRows] = useState<UnifiedEnrichmentRow[]>([]);
   const [unifiedLoading, setUnifiedLoading] = useState(false);
   const [unifiedFetched, setUnifiedFetched] = useState(false);
+  const [ownerFromPermits, setOwnerFromPermits] = useState<{ owner_name?: string; owner_business_name?: string } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -177,13 +210,21 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
     ])
       .then(([permits, violations, complaints, litigations]) => {
         const rows: UnifiedEnrichmentRow[] = [];
+        let firstOwner: { owner_name?: string; owner_business_name?: string } | null = null;
         for (const p of permits as Record<string, unknown>[]) {
           const n = p.normalizedJson as Record<string, unknown> | undefined;
+          const raw = p.rawJson as Record<string, unknown> | undefined;
           const date = (p.approvedDate ?? p.approved_date ?? p.issuedDate ?? p.issued_date ?? n?.approvedDate ?? n?.issuedDate ?? "") as string;
           const workType = (n?.workType ?? n?.work_type ?? p.workPermit ?? p.work_permit ?? "") as string;
           const status = (n?.status ?? p.status ?? "") as string;
           rows.push({ date: formatDateOnly(date) || "—", category: "Permit", info: [workType, status].filter(Boolean).join(" · ") || "—" });
+          if (!firstOwner && (raw || n)) {
+            const r = raw ?? n ?? {};
+            const on = (r.owner_name ?? r.owner_business_name) ? { owner_name: String(r.owner_name ?? "").trim() || undefined, owner_business_name: String(r.owner_business_name ?? "").trim() || undefined } : null;
+            if (on && (on.owner_name || on.owner_business_name)) firstOwner = on;
+          }
         }
+        setOwnerFromPermits(firstOwner);
         for (const v of violations as Record<string, unknown>[]) {
           const n = v.normalizedJson as Record<string, unknown> | undefined;
           const date = (n?.approvedDate ?? "") as string;
@@ -368,10 +409,11 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
                   return (
                     <div className="initial-info-price-change">
                       <span>Listed at {formatPrice(p.listedPrice)}</span>
-                      <span> · Now {formatPrice(p.currentPrice)}</span>
-                      {p.changeAmount !== 0 && (
-                        <span className={isDecrease ? "initial-info-price-change--down" : isIncrease ? "initial-info-price-change--up" : ""}>
-                          {" "}{isDecrease ? "−" : "+"}{formatPrice(Math.abs(p.changeAmount))} ({isDecrease ? "" : "+"}{p.changePercent.toFixed(1)}%)
+                      {p.changeAmount === 0 ? (
+                        <span> — No change</span>
+                      ) : (
+                        <span className={isDecrease ? "initial-info-price-change--down" : "initial-info-price-change--up"}>
+                          {" → "}{isDecrease ? "−" : "+"}{formatPrice(Math.abs(p.changeAmount))} ({isDecrease ? "" : "+"}{p.changePercent.toFixed(1)}%)
                         </span>
                       )}
                     </div>
@@ -380,9 +422,16 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
                 <dl className="initial-info-dl">
                   <div className="initial-info-dl-row"><dt>Beds / Baths</dt><dd>{listingForDisplay.beds ?? "—"} / {listingForDisplay.baths ?? "—"}</dd></div>
                   <div className="initial-info-dl-row"><dt>Sqft</dt><dd>{listingForDisplay.sqft ?? "—"}</dd></div>
-                  <div className="initial-info-dl-row"><dt>Property type</dt><dd>{String((extra?.propertyType ?? extra?.property_type ?? extra?.type ?? "—")).replace(/_/g, " ")}</dd></div>
+                  <div className="initial-info-dl-row"><dt>Property type</dt><dd>{formatPropertyType(extra?.propertyType ?? extra?.property_type ?? extra?.type ?? "")}</dd></div>
                   {(extra?.builtIn ?? extra?.built_in ?? extra?.yearBuilt) != null && <div className="initial-info-dl-row"><dt>Built</dt><dd>{String(extra?.builtIn ?? extra?.built_in ?? extra?.yearBuilt)}</dd></div>}
-                  {(monthlyHoa != null || monthlyTax != null) && <div className="initial-info-dl-row"><dt>HOA / Tax</dt><dd>{formatPrice(monthlyHoa as number)} / {formatPrice(monthlyTax as number)}</dd></div>}
+                  {(monthlyHoa != null || monthlyTax != null) && (
+                    <div className="initial-info-dl-row">
+                      <dt>HOA / Tax</dt>
+                      <dd>
+                        {(monthlyHoa == null || monthlyHoa === 0) ? "NA" : formatPrice(monthlyHoa)} / {(monthlyTax == null || monthlyTax === 0) ? "NA" : formatPrice(monthlyTax)}
+                      </dd>
+                    </div>
+                  )}
                 </dl>
               </>
             )}
@@ -412,9 +461,13 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
                 {listingForDisplay.agentEnrichment.map((e, i) => (
                   <li key={i}>
                     <span className="initial-info-broker-name">{e.name}</span>
-                    {[e.firm, e.email, e.phone].filter(Boolean).length > 0 && (
-                      <span className="initial-info-broker-meta">{[e.firm, e.email, e.phone].filter(Boolean).join(" · ")}</span>
-                    )}
+                    <span className="initial-info-broker-meta">
+                      {e.firm && <span>{e.firm}</span>}
+                      <span className={!e.email && !e.phone ? "initial-info-broker-contact-missing" : ""}>
+                        {e.firm && " · "}
+                        Email: {e.email ?? "—"} · Phone: {e.phone ?? "—"}
+                      </span>
+                    </span>
                   </li>
                 ))}
               </ul>
@@ -436,21 +489,22 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
               <p className="initial-info-empty">From linked listing when available.</p>
             )}
           </div>
-          <div className="initial-info-card">
-            <h4 className="initial-info-subtitle">Price history</h4>
-            {listingForDisplay?.priceHistory?.length || listingForDisplay?.rentalPriceHistory?.length ? (
+          {(listingForDisplay?.priceHistory?.length ?? 0) > 0 && (
+            <div className="initial-info-card initial-info-card--price-history">
+              <h4 className="initial-info-subtitle">Price history</h4>
               <div className="initial-info-price-history-list">
-                {listingForDisplay!.priceHistory?.slice(0, 10).map((r, i) => (
-                  <div key={i}>{r.date} · {typeof r.price === "number" ? formatPrice(r.price) : r.price} · {r.event}</div>
-                ))}
-                {listingForDisplay!.rentalPriceHistory?.slice(0, 5).map((r, i) => (
-                  <div key={`r${i}`}>Rental: {r.date} · {typeof r.price === "number" ? formatPrice(r.price) : r.price}</div>
+                {listingForDisplay!.priceHistory!.map((r, i) => (
+                  <div key={i} className="initial-info-price-history-row">
+                    <span className="initial-info-price-history-date">{formatPriceHistoryDate(r.date)}</span>
+                    <span className="initial-info-price-history-sep">·</span>
+                    <span className="initial-info-price-history-price">{formatPriceCompact(r.price)}</span>
+                    <span className="initial-info-price-history-sep">·</span>
+                    <span className="initial-info-price-history-event">{formatPriceEventLabel(r.event)}</span>
+                  </div>
                 ))}
               </div>
-            ) : (
-              <p className="initial-info-empty">From linked listing when available.</p>
-            )}
-          </div>
+            </div>
+          )}
           {listingForDisplay?.description && (
             <div className="initial-info-card initial-info-card--description">
               <h4 className="initial-info-subtitle">Description</h4>
@@ -486,6 +540,11 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
             {Boolean(ps.owner_name) && <div><strong>Owner:</strong> {String(ps.owner_name)}</div>}
             {Boolean(ps.owner_business_name) && <div><strong>Business:</strong> {String(ps.owner_business_name)}</div>}
           </div>
+        ) : ownerFromPermits && (ownerFromPermits.owner_name || ownerFromPermits.owner_business_name) ? (
+          <div style={{ fontSize: "0.875rem" }}>
+            {ownerFromPermits.owner_name && <div><strong>Owner:</strong> {ownerFromPermits.owner_name}</div>}
+            {ownerFromPermits.owner_business_name && <div><strong>Business:</strong> {ownerFromPermits.owner_business_name}</div>}
+          </div>
         ) : (
           <p style={{ color: "#737373", margin: 0 }}>—</p>
         )}
@@ -496,9 +555,15 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
         {omFurnishedPricing != null && String(omFurnishedPricing).trim() ? (
           <p style={{ margin: 0, fontSize: "0.875rem" }}>{String(omFurnishedPricing)}</p>
         ) : listingForDisplay?.rentalPriceHistory?.length ? (
-          <div style={{ fontSize: "0.875rem" }}>
+          <div className="initial-info-price-history-list">
             {listingForDisplay.rentalPriceHistory.slice(0, 10).map((r, i) => (
-              <div key={i}>{r.date} — {typeof r.price === "number" ? formatPrice(r.price) : r.price} — {r.event}</div>
+              <div key={i} className="initial-info-price-history-row">
+                <span className="initial-info-price-history-date">{formatPriceHistoryDate(r.date)}</span>
+                <span className="initial-info-price-history-sep">·</span>
+                <span className="initial-info-price-history-price">{formatPriceCompact(r.price)}</span>
+                <span className="initial-info-price-history-sep">·</span>
+                <span className="initial-info-price-history-event">{formatPriceEventLabel(r.event)}</span>
+              </div>
             ))}
           </div>
         ) : (

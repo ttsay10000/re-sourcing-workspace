@@ -109,6 +109,34 @@ function formatPrice(n: number | null | undefined): string {
   }).format(n);
 }
 
+function formatPriceCompact(value: string | number | null | undefined): string {
+  if (value == null) return "—";
+  const n = typeof value === "number" ? value : parseFloat(String(value).replace(/[$,]/g, ""));
+  if (Number.isNaN(n)) return "—";
+  const opts = n % 1 === 0 ? { maximumFractionDigits: 0, minimumFractionDigits: 0 } : { minimumFractionDigits: 2, maximumFractionDigits: 2 };
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", ...opts }).format(n);
+}
+
+function formatPriceHistoryDate(dateStr: string | null | undefined): string {
+  if (!dateStr || typeof dateStr !== "string") return "—";
+  const d = new Date(dateStr.trim().split("T")[0] + "T12:00:00Z");
+  if (Number.isNaN(d.getTime())) return dateStr;
+  return d.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
+}
+
+function formatPriceEventLabel(event: string | null | undefined): string {
+  if (!event || typeof event !== "string") return "—";
+  const lower = event.trim().toLowerCase().replace(/_/g, " ");
+  if (!lower) return "—";
+  return lower.replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function formatPropertyType(value: string | null | undefined): string {
+  if (value == null || String(value).trim() === "") return "—";
+  const normalized = String(value).trim().replace(/_/g, " ").toLowerCase();
+  return normalized.replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 function formatDate(s: string | null | undefined): string {
   if (!s || typeof s !== "string") return "—";
   const d = new Date(s);
@@ -317,14 +345,14 @@ export function PropertyDetailCollapsible({ listing }: { listing: PropertyDetail
             {details.priceChangeSinceListed && (() => {
               const p = details.priceChangeSinceListed;
               const isDecrease = p.changeAmount < 0;
-              const isIncrease = p.changeAmount > 0;
               return (
                 <div className="initial-info-price-change">
                   <span>Listed at {formatPrice(p.listedPrice)}</span>
-                  <span> · Now {formatPrice(p.currentPrice)}</span>
-                  {p.changeAmount !== 0 && (
-                    <span className={isDecrease ? "initial-info-price-change--down" : isIncrease ? "initial-info-price-change--up" : ""}>
-                      {" "}{isDecrease ? "−" : "+"}{formatPrice(Math.abs(p.changeAmount))} ({isDecrease ? "" : "+"}{p.changePercent.toFixed(1)}%)
+                  {p.changeAmount === 0 ? (
+                    <span> — No change</span>
+                  ) : (
+                    <span className={isDecrease ? "initial-info-price-change--down" : "initial-info-price-change--up"}>
+                      {" → "}{isDecrease ? "−" : "+"}{formatPrice(Math.abs(p.changeAmount))} ({isDecrease ? "" : "+"}{p.changePercent.toFixed(1)}%)
                     </span>
                   )}
                 </div>
@@ -333,10 +361,15 @@ export function PropertyDetailCollapsible({ listing }: { listing: PropertyDetail
             <dl className="initial-info-dl">
               <div className="initial-info-dl-row"><dt>Beds / Baths</dt><dd>{na(beds)} / {na(baths)}</dd></div>
               <div className="initial-info-dl-row"><dt>Sqft</dt><dd>{na(sqft)}</dd></div>
-              <div className="initial-info-dl-row"><dt>Property type</dt><dd>{na(propertyType)}</dd></div>
+              <div className="initial-info-dl-row"><dt>Property type</dt><dd>{na(propertyType != null && propertyType !== "" ? formatPropertyType(propertyType) : propertyType)}</dd></div>
               {builtIn != null && !Number.isNaN(builtIn) && <div className="initial-info-dl-row"><dt>Built</dt><dd>{builtIn}</dd></div>}
               {(monthlyHoa != null || monthlyTax != null) && (
-                <div className="initial-info-dl-row"><dt>HOA / Tax</dt><dd>{formatPrice(monthlyHoa)} / {formatPrice(monthlyTax)}</dd></div>
+                <div className="initial-info-dl-row">
+                  <dt>HOA / Tax</dt>
+                  <dd>
+                    {(monthlyHoa == null || monthlyHoa === 0) ? "NA" : formatPrice(monthlyHoa)} / {(monthlyTax == null || monthlyTax === 0) ? "NA" : formatPrice(monthlyTax)}
+                  </dd>
+                </div>
               )}
             </dl>
           </div>
@@ -348,9 +381,13 @@ export function PropertyDetailCollapsible({ listing }: { listing: PropertyDetail
                   {listing.agentEnrichment!.map((entry, idx) => (
                     <li key={idx}>
                       <span className="initial-info-broker-name">{entry.name}</span>
-                      {(entry.firm || entry.email || entry.phone) && (
-                        <span className="initial-info-broker-meta">{[entry.firm, entry.email, entry.phone].filter(Boolean).join(" · ")}</span>
-                      )}
+                      <span className="initial-info-broker-meta">
+                        {entry.firm && <span>{entry.firm}</span>}
+                        <span className={!entry.email && !entry.phone ? "initial-info-broker-contact-missing" : ""}>
+                          {entry.firm && " · "}
+                          Email: {entry.email ?? "—"} · Phone: {entry.phone ?? "—"}
+                        </span>
+                      </span>
                     </li>
                   ))}
                 </ul>
@@ -374,40 +411,22 @@ export function PropertyDetailCollapsible({ listing }: { listing: PropertyDetail
               <p className="initial-info-empty">—</p>
             )}
           </div>
-          <div className="initial-info-card">
-            <h4 className="initial-info-subtitle">Price history</h4>
-            {(() => {
-              const hasSale = listing.priceHistory && listing.priceHistory.length > 0;
-              const hasRental = listing.rentalPriceHistory && listing.rentalPriceHistory.length > 0;
-              if (!hasSale && !hasRental) {
-                return (
-                  <p className="initial-info-empty">
-                    No price history. Filled from GET sale details when you use “Send to property data”.
-                  </p>
-                );
-              }
-              return (
-                <div className="initial-info-price-history-list">
-                  {hasSale && (
-                    <>
-                      {hasRental && <div style={{ fontWeight: 600, marginBottom: "0.4rem", fontSize: "0.75rem", color: "#64748b" }}>Sale / list</div>}
-                      {listing.priceHistory!.map((row, idx) => (
-                        <div key={idx}>{row.date} · {typeof row.price === "number" ? formatPrice(row.price) : row.price} · {row.event}</div>
-                      ))}
-                    </>
-                  )}
-                  {hasRental && (
-                    <>
-                      {hasSale && <div style={{ fontWeight: 600, marginTop: "0.5rem", marginBottom: "0.4rem", fontSize: "0.75rem", color: "#64748b" }}>Rental</div>}
-                      {listing.rentalPriceHistory!.map((row, idx) => (
-                        <div key={idx}>{row.date} · {typeof row.price === "number" ? formatPrice(row.price) : row.price} · {row.event}</div>
-                      ))}
-                    </>
-                  )}
-                </div>
-              );
-            })()}
-          </div>
+          {(listing.priceHistory?.length ?? 0) > 0 && (
+            <div className="initial-info-card initial-info-card--price-history">
+              <h4 className="initial-info-subtitle">Price history</h4>
+              <div className="initial-info-price-history-list">
+                {listing.priceHistory!.map((r, i) => (
+                  <div key={i} className="initial-info-price-history-row">
+                    <span className="initial-info-price-history-date">{formatPriceHistoryDate(r.date)}</span>
+                    <span className="initial-info-price-history-sep">·</span>
+                    <span className="initial-info-price-history-price">{formatPriceCompact(r.price)}</span>
+                    <span className="initial-info-price-history-sep">·</span>
+                    <span className="initial-info-price-history-event">{formatPriceEventLabel(r.event)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           {description && (
             <div className="initial-info-card initial-info-card--description">
               <h4 className="initial-info-subtitle">Description</h4>

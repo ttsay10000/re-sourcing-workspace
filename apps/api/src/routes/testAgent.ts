@@ -610,28 +610,28 @@ router.post("/test-agent/runs/:id/send-to-property-data", async (req: Request, r
         const normalized = runPropertyToNormalized(run.properties[i] as Record<string, unknown>, i);
         const existing = await listingRepo.bySourceAndExternalId(normalized.source, normalized.externalId);
 
-        // LLM enrichment only for new listings; existing rows in raw listings keep their current data
         if (existing) {
-          normalized.agentEnrichment = existing.agentEnrichment ?? null;
           normalized.priceHistory = existing.priceHistory ?? null;
           normalized.rentalPriceHistory = existing.rentalPriceHistory ?? null;
-        } else {
+        }
+
+        // Run broker LLM whenever we have agent names (new or existing), so every listing gets contact info when names are present
+        const agentNames = normalized.agentNames ?? [];
+        const hasAgentNames = Array.isArray(agentNames) && agentNames.length > 0;
+        if (hasAgentNames) {
           const propertyContext = [normalized.address, normalized.city, normalized.zip].filter(Boolean).join(", ") || undefined;
-          const agentNames = normalized.agentNames ?? [];
-          const hasAgentNames = Array.isArray(agentNames) && agentNames.length > 0;
           const agentEnrichment = await enrichBrokers(normalized.agentNames, propertyContext);
           if (agentEnrichment && agentEnrichment.length > 0) {
             normalized.agentEnrichment = agentEnrichment;
-            if (hasAgentNames) {
-              console.log(`[send-to-property-data] Broker LLM enriched ${agentEnrichment.length} agent(s) for ${normalized.externalId}`);
-            }
+            console.log(`[send-to-property-data] Broker LLM enriched ${agentEnrichment.length} agent(s) for ${normalized.externalId}`);
           } else {
             normalized.agentEnrichment = null;
-            if (hasAgentNames) {
-              console.warn(`[send-to-property-data] Broker LLM returned no enrichment for ${normalized.externalId} (agentNames: ${agentNames.length}). Check OPENAI_API_KEY and OPENAI_MODEL.`);
-            }
+            console.warn(`[send-to-property-data] Broker LLM returned no enrichment for ${normalized.externalId} (agentNames: ${agentNames.length}). Check OPENAI_API_KEY and OPENAI_MODEL.`);
           }
-          // Price history comes only from GET sale details (Step 2); no LLM extraction.
+        } else if (existing) {
+          normalized.agentEnrichment = existing.agentEnrichment ?? null;
+        } else {
+          normalized.agentEnrichment = null;
         }
 
         // Dedupe by listing ID (source + external_id): upsert updates existing or inserts new

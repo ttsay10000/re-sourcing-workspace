@@ -11,7 +11,7 @@ import {
   ListingRepo,
 } from "@re-sourcing/db";
 import { getBblFromDetails, getBblBaseFromDetails, getBinFromDetails } from "./propertyKeys.js";
-import { resolveBBLFromAddress } from "./geoclient.js";
+import { resolveBBLFromAddress, resolveBBLFromLatLon } from "./geoclient.js";
 import { resolveCondoBblForQuery } from "./resolveCondoBbl.js";
 import { normalizeBorough } from "./permits/normalizers.js";
 
@@ -135,6 +135,19 @@ export async function getBBLForProperty(
     if (bblBase) merge.bblBase = bblBase;
     await propertyRepo.mergeDetails(propertyId, merge);
     return { bbl: fromListing.bbl, bin: fromListing.bin ?? null };
+  }
+
+  // Listing has lat/lon but no BBL (e.g. building page URL): resolve BBL via Geoclient reverse geocode.
+  if (fromListing?.lat != null && fromListing?.lon != null) {
+    const fromLatLon = await resolveBBLFromLatLon(fromListing.lat, fromListing.lon);
+    if (fromLatLon?.bbl) {
+      const merge: Record<string, unknown> = { bbl: fromLatLon.bbl, lat: fromListing.lat, lon: fromListing.lon };
+      if (fromLatLon.bin) merge.bin = fromLatLon.bin;
+      const bblBase = await resolveCondoBblForQuery(fromLatLon.bbl, { appToken: options.appToken });
+      if (bblBase) merge.bblBase = bblBase;
+      await propertyRepo.mergeDetails(propertyId, merge);
+      return { bbl: fromLatLon.bbl, bin: fromLatLon.bin ?? null };
+    }
   }
 
   const { matches } = await matchRepo.list({ propertyId, limit: 1 });
