@@ -21,7 +21,7 @@ function getApiKey(): string | null {
  */
 export async function enrichBrokers(
   agentNames: string[] | null | undefined,
-  _propertyContext?: string | null
+  propertyContext?: string | null
 ): Promise<AgentEnrichmentEntry[] | null> {
   const key = getApiKey();
   if (!key) {
@@ -37,21 +37,20 @@ export async function enrichBrokers(
   const openai = new OpenAI({ apiKey: key });
   const model = getEnrichmentModel();
 
-  const prompt = `You are a real estate data assistant. Each of the following is an NYC-area broker or agent name (or a firm/office name). Look up contact information from your knowledge of real estate professionals, firm websites, and public listings.
+  const contextLine = propertyContext?.trim()
+    ? `\nProperty/listing context (use to disambiguate): ${propertyContext.trim()}`
+    : "";
 
-For PERSON names (individual brokers/agents): You MUST attempt to find professional email and phone. Use common patterns (e.g. firstname.lastname@firm.com, office numbers). Return null for email/phone only if you truly cannot find anything for that person.
+  const prompt = `You are helping find contact info for NYC real estate brokers and agents who appear on StreetEasy (and similar NYC listing sites).
 
-For FIRM or OFFICE names only (e.g. "Compass", "Douglas Elliman"): Firm name is sufficient; email and phone may be null unless you have a general contact.
+TASK: For each name below, search as you would to find who represents NYC properties on StreetEasy and get their professional contact info. Think: "NYC broker [name] contact", "[name] real estate agent New York", "[name] StreetEasy", firm websites, and licensee directories. The correct broker/agent is usually in the top 5–10 search results; accept fuzzy name matches (e.g. spelling or format variations, nicknames, middle initials) when the person is clearly the same NYC professional. For each PERSON (individual broker/agent), you MUST find at least one result from your search and return the most likely contact: provide the best-matching email and/or phone you can identify (use common patterns like firstname.lastname@firm.com, firm switchboards, known NYC brokerages). Only use null for email/phone when there is genuinely no findable or inferable contact for that person. For FIRM/OFFICE names only (e.g. "Compass", "Douglas Elliman"), firm name is enough; email/phone may be null.
+${contextLine}
 
-Return for each:
-- firm: brokerage/company name (string or null)
-- email: work or professional email (string or null)
-- phone: office or direct phone (string or null)
+Names to look up (one per line, same order in your reply):
+${names.map((n) => `- ${n}`).join("\n")}
 
-Names to look up (one per line):\n${names.map((n) => `- ${n}`).join("\n")}
-
-Reply with a single JSON object with key "entries": an array of objects in the SAME ORDER as the names above. Each object must have: "name" (string), "firm" (string or null), "email" (string or null), "phone" (string or null). Use null only when you cannot find a value. Example:
-{"entries":[{"name":"John Smith","firm":"Compass","email":"john@compass.com","phone":"212-555-0100"},{"name":"Jane Doe","firm":null,"email":null,"phone":null}]}`;
+Reply with a single JSON object with key "entries": an array of objects in the SAME ORDER as the names above. Each object: "name" (string), "firm" (string or null), "email" (string or null), "phone" (string or null). For each person, include at least one of email or phone with your best/most likely result; use null only when you cannot find or infer any value.
+Example: {"entries":[{"name":"John Smith","firm":"Compass","email":"john.smith@compass.com","phone":"212-555-0100"},{"name":"Jane Doe","firm":"Corcoran","email":"jane.doe@corcoran.com","phone":null}]}`;
 
   try {
     const completion = await openai.chat.completions.create({

@@ -19,6 +19,10 @@ export interface RunEnrichmentForPropertyOptions extends EnrichmentRunOptions {
  * Run enrichment for a single property. If moduleName is set, run only that module.
  * Otherwise run permits first; only run the 7 other modules if BBL/BIN are present (enrichment
  * has not failed). If no BBL/BIN after permits, other modules are skipped—no point running them.
+ *
+ * Every call uses only the given propertyId for all reads/writes (permits, state, details);
+ * no shared state is used, so when invoked in a loop over many property IDs, each property
+ * goes through the same pipeline (permits + all modules) independently.
  */
 export async function runEnrichmentForProperty(
   propertyId: string,

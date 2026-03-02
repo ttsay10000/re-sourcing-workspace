@@ -483,14 +483,13 @@ function PropertyDataContent() {
                   <th>Listed date</th>
                   <th>Days on market</th>
                   <th>Dup. Conf.</th>
-                  <th>Price History</th>
                   <th>Link</th>
                 </tr>
               </thead>
               <tbody>
                 {listings.length === 0 ? (
                   <tr>
-                    <td colSpan={10} style={{ padding: "2rem", color: "#737373", textAlign: "center" }}>
+                    <td colSpan={9} style={{ padding: "2rem", color: "#737373", textAlign: "center" }}>
                       No raw listings yet. Run a flow from Runs, then use &quot;Send to property data&quot; for a
                       completed run.
                     </td>
@@ -535,11 +534,6 @@ function PropertyDataContent() {
                           {row.duplicateScore != null ? row.duplicateScore : "—"}
                         </td>
                         <td>
-                          {row.priceHistory && row.priceHistory.length > 0
-                            ? `${row.priceHistory.length} entries`
-                            : formatPrice(row.price)}
-                        </td>
-                        <td>
                           {row.url && row.url !== "#" ? (
                             <a href={row.url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
                               view source
@@ -551,7 +545,7 @@ function PropertyDataContent() {
                       </tr>
                       {expandedRowId === row.id && (
                         <tr key={`${row.id}-detail`} className="property-data-detail-row">
-                          <td colSpan={10} className="property-data-detail-cell" style={{ paddingLeft: "2.5rem", backgroundColor: "#fafafa" }}>
+                          <td colSpan={9} className="property-data-detail-cell" style={{ paddingLeft: "2.5rem", backgroundColor: "#fafafa" }}>
                             <PropertyDetailCollapsible listing={row} />
                           </td>
                         </tr>

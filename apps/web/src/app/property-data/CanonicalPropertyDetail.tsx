@@ -216,9 +216,11 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
           const n = p.normalizedJson as Record<string, unknown> | undefined;
           const raw = p.rawJson as Record<string, unknown> | undefined;
           const date = (p.approvedDate ?? p.approved_date ?? p.issuedDate ?? p.issued_date ?? n?.approvedDate ?? n?.issuedDate ?? "") as string;
-          const workType = (n?.workType ?? n?.work_type ?? p.workPermit ?? p.work_permit ?? "") as string;
+          const workType = (n?.workType ?? n?.work_type ?? p.workPermit ?? p.work_permit ?? raw?.work_type ?? "") as string;
           const status = (n?.status ?? p.status ?? "") as string;
-          rows.push({ date: formatDateOnly(date) || "—", category: "Permit", info: [workType, status].filter(Boolean).join(" · ") || "—" });
+          const jobDesc = (n?.jobDescription ?? n?.job_description ?? raw?.job_description ?? "") as string;
+          const infoParts = [workType, status, jobDesc].filter(Boolean);
+          rows.push({ date: formatDateOnly(date) || "—", category: "Permit", info: infoParts.join(" · ") || "—" });
           if (!firstOwner && (raw || n)) {
             const r = raw ?? n ?? {};
             const on = (r.owner_name ?? r.owner_business_name) ? { owner_name: String(r.owner_name ?? "").trim() || undefined, owner_business_name: String(r.owner_business_name ?? "").trim() || undefined } : null;
@@ -228,18 +230,22 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
         setOwnerFromPermits(firstOwner);
         for (const v of violations as Record<string, unknown>[]) {
           const n = v.normalizedJson as Record<string, unknown> | undefined;
+          const raw = v.rawJson as Record<string, unknown> | undefined;
           const date = (n?.approvedDate ?? "") as string;
           const cls = (n?.class ?? "") as string;
           const status = (n?.currentStatus ?? n?.current_status ?? "") as string;
-          const desc = (n?.novDescription ?? n?.nov_description ?? "") as string;
+          const desc = (n?.novDescription ?? n?.nov_description ?? raw?.novdescription ?? raw?.nov_description ?? "") as string;
           rows.push({ date: formatDateOnly(date) || "—", category: "HPD Violation", info: [cls, status, desc].filter(Boolean).join(" · ") || "—" });
         }
         for (const c of complaints as Record<string, unknown>[]) {
           const n = c.normalizedJson as Record<string, unknown> | undefined;
-          const date = (n?.dateEntered ?? n?.date_entered ?? "") as string;
-          const cat = (n?.complaintCategory ?? n?.complaint_category ?? "") as string;
-          const status = (n?.status ?? "") as string;
-          rows.push({ date: formatDateOnly(date) || "—", category: "DOB Complaint", info: [cat, status].filter(Boolean).join(" · ") || "—" });
+          const raw = c.rawJson as Record<string, unknown> | undefined;
+          const date = (n?.dateEntered ?? n?.date_entered ?? raw?.date_entered ?? "") as string;
+          const cat = (n?.complaintCategory ?? n?.complaint_category ?? raw?.complaint_category ?? "") as string;
+          const status = (n?.status ?? raw?.status ?? "") as string;
+          const unit = (n?.unit ?? raw?.unit ?? "") as string;
+          const infoParts = [cat, status, unit].filter(Boolean);
+          rows.push({ date: formatDateOnly(date) || "—", category: "DOB Complaint", info: infoParts.join(" · ") || "—" });
         }
         for (const l of litigations as Record<string, unknown>[]) {
           const n = l.normalizedJson as Record<string, unknown> | undefined;
@@ -307,14 +313,6 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
                 }}
               >
                 {listingForDisplay.duplicateScore != null ? listingForDisplay.duplicateScore : "—"}
-              </div>
-            </div>
-            <div className="property-metric">
-              <div className="property-metric-label">Price / history</div>
-              <div className="property-metric-value">
-                {listingForDisplay.priceHistory?.length
-                  ? `${listingForDisplay.priceHistory.length} entries`
-                  : formatPrice(listingForDisplay.price)}
               </div>
             </div>
             <div className="property-metric">

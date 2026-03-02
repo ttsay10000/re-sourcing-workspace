@@ -191,6 +191,7 @@ export async function enrichPropertyWithPermits(
 
     const summary = buildPermitsSummary(rows);
     // Don't overwrite existing owner: many rows may match BBL/address; we want the first (most recent) only and to keep it once set.
+    // Each property is updated by its own propertyId; owner is stored per property in details.enrichment.permits_summary.
     const current = await propertyRepo.byId(propertyId);
     const currentDetails = current?.details as Record<string, unknown> | null | undefined;
     const existingPs = currentDetails?.enrichment as Record<string, unknown> | undefined;
