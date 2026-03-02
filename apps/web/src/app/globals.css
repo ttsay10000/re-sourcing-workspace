@@ -765,7 +765,7 @@ textarea {
 .property-data-table th,
 .property-data-table td {
   text-align: left;
-  padding: 0.5rem 0.75rem;
+  padding: 0.5rem 0.75rem 0.5rem 1rem;
   border-bottom: 1px solid #e5e5e5;
 }
 
@@ -846,7 +846,7 @@ textarea {
 }
 
 .property-data-detail-cell {
-  padding: 1.25rem 1.5rem 1.25rem 2rem !important;
+  padding: 1.25rem 1.5rem 1.25rem 2.5rem !important;
 }
 
 .property-detail-collapsible {
@@ -858,7 +858,7 @@ textarea {
 
 .property-detail-address-block {
   margin-bottom: 0.75rem;
-  padding-left: 0;
+  padding-left: 0.5rem;
 }
 
 .property-detail-address-block .property-card-title {

@@ -89,8 +89,8 @@ function getPropertyType(p: Record<string, unknown>): string {
 }
 
 /**
- * Normalize property type for matching (API may return "co-op", "Multi-Family", "multi family").
- * Lowercase, trim, remove hyphens and spaces so "multi family" and "Multi-Family" both become "multifamily".
+ * Normalize property type for matching (API may return "co-op", "Multi-Family", "Three–Family Home" with en-dash).
+ * Lowercase, trim, remove hyphens (including Unicode en/em dash) and spaces.
  */
 function normalizePropertyType(pt: unknown): string {
   if (pt == null || typeof pt !== "string") return "";
@@ -98,6 +98,8 @@ function normalizePropertyType(pt: unknown): string {
     .toLowerCase()
     .trim()
     .replace(/-/g, "")
+    .replace(/\u2013/g, "") // en-dash
+    .replace(/\u2014/g, "") // em-dash
     .replace(/\s+/g, "");
 }
 
@@ -117,8 +119,8 @@ function classifyPropertyType(normalizedType: string): "condo" | "coop" | "house
   // Townhouse should not be treated as "house" for multifamily-only.
   if (normalizedType === "townhouse" || normalizedType.includes("townhouse")) return "townhouse";
 
-  // Multifamily: "multifamily", "multi-family", "2 family", "three family home", "four family home",
-  // "five family home", etc., "rental building", "mixed-use building"
+  // Multifamily: "multifamily", "multi-family", "2 family", "three family home", "3-family home", etc.
+  // Explicitly match "N family home" (word or digit) so e.g. StreetEasy 1796192 "Three-family home" is included
   if (
     normalizedType.includes("multifamily") ||
     normalizedType.includes("multiunit") ||
@@ -127,6 +129,7 @@ function classifyPropertyType(normalizedType: string): "condo" | "coop" | "house
     normalizedType.includes("rentalbuilding") ||
     normalizedType.includes("mixedusebuilding") ||
     /^(two|three|four|five|six|seven|eight|nine|ten)family(home)?/.test(normalizedType) ||
+    /^[2-9]familyhome$|^10familyhome$/.test(normalizedType) ||
     normalizedType.includes("twofamily") ||
     normalizedType.includes("threefamily") ||
     normalizedType.includes("fourfamily") ||
