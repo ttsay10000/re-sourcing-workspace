@@ -15,7 +15,7 @@ function toJsonb(val: unknown): unknown {
       return null;
     }
   }
-  if (typeof val === "object" && (Array.isArray(val) || (typeof val === "object" && val !== null && Object.prototype.toString.call(val) === "[object Object]")) {
+  if (typeof val === "object" && val !== null) {
     return val;
   }
   return null;
