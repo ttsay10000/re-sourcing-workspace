@@ -30,6 +30,8 @@ export interface ListingRepoOptions {
 export interface ListListingsFilters {
   source?: string;
   lifecycleState?: ListingLifecycleState;
+  /** When set, only return listings whose id is in this array. */
+  ids?: string[];
   limit?: number;
   offset?: number;
 }
@@ -72,6 +74,12 @@ export class ListingRepo {
       sql += ` AND lifecycle_state = $${i}`;
       countSql += ` AND lifecycle_state = $${i}`;
       values.push(filters.lifecycleState);
+      i++;
+    }
+    if (filters?.ids != null && filters.ids.length > 0) {
+      sql += ` AND id = ANY($${i}::uuid[])`;
+      countSql += ` AND id = ANY($${i}::uuid[])`;
+      values.push(filters.ids);
       i++;
     }
     sql += " ORDER BY last_seen_at DESC";
@@ -167,15 +175,16 @@ export class ListingRepo {
       toJsonb(row.extra),
       uploadedRunId != null ? new Date() : null,
       uploadedRunId,
+      null, // duplicate_score (migration 014; set by dedup after insert)
     ];
     const r = await this.client.query(
       `INSERT INTO listings (
         source, external_id, lifecycle_state, first_seen_at, last_seen_at,
         address, city, state, zip, price, beds, baths, sqft, url, title, description,
-        lat, lon, image_urls, listed_at, agent_names, agent_enrichment, price_history, rental_price_history, extra, uploaded_at, uploaded_run_id
+        lat, lon, image_urls, listed_at, agent_names, agent_enrichment, price_history, rental_price_history, extra, uploaded_at, uploaded_run_id, duplicate_score
       ) VALUES (
         $1, $2, 'active', now(), now(),
-        $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25
+        $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26
       ) RETURNING *`,
       insertValues
     );

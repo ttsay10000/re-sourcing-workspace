@@ -386,8 +386,10 @@ function PropertyDataContent() {
   const [loadingCanonical, setLoadingCanonical] = useState(false);
   const [sendingToCanonical, setSendingToCanonical] = useState(false);
   const [expandedCanonicalId, setExpandedCanonicalId] = useState<string | null>(null);
+  const [selectedListingIds, setSelectedListingIds] = useState<Set<string>>(new Set());
   const [enrichmentTimerSeconds, setEnrichmentTimerSeconds] = useState(0);
   const enrichmentTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const selectAllCheckboxRef = useRef<HTMLInputElement | null>(null);
 
   const fetchListings = useCallback(() => {
     setLoading(true);
@@ -544,20 +546,59 @@ function PropertyDataContent() {
   };
 
   const handleSendToCanonical = () => {
-    if (total === 0) return;
-    if (!confirm(`Create canonical properties from all ${total} raw listing(s) and link them?`)) return;
+    const toSend = selectedListingIds.size > 0 ? selectedListingIds.size : total;
+    if (toSend === 0) return;
+    const message =
+      selectedListingIds.size > 0
+        ? `Create canonical properties from ${selectedListingIds.size} selected listing(s) and run enrichment?`
+        : `Create canonical properties from all ${total} raw listing(s) and link them?`;
+    if (!confirm(message)) return;
     setSendingToCanonical(true);
     setError(null);
-    fetch(`${API_BASE}/api/properties/from-listings`, { method: "POST" })
+    const body =
+      selectedListingIds.size > 0
+        ? { listingIds: Array.from(selectedListingIds) }
+        : undefined;
+    fetch(`${API_BASE}/api/properties/from-listings`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: body ? JSON.stringify(body) : undefined,
+    })
       .then((r) => r.json())
       .then((data) => {
         if (data.error) throw new Error(data.error);
+        setSelectedListingIds(new Set());
         fetchCanonicalProperties();
         setActiveTab("canonical");
       })
       .catch((e) => setError(e.message || "Failed to send to canonical"))
       .finally(() => setSendingToCanonical(false));
   };
+
+  const toggleListingSelection = (id: string) => {
+    setSelectedListingIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const selectAllListings = () => {
+    setSelectedListingIds(new Set(listings.map((r) => r.id)));
+  };
+
+  const clearListingSelection = () => {
+    setSelectedListingIds(new Set());
+  };
+
+  const allSelected = listings.length > 0 && selectedListingIds.size === listings.length;
+  const someSelected = selectedListingIds.size > 0;
+
+  useEffect(() => {
+    const el = selectAllCheckboxRef.current;
+    if (el) el.indeterminate = someSelected && !allSelected;
+  }, [someSelected, allSelected]);
 
   return (
     <div className="property-data-layout">
@@ -709,6 +750,18 @@ function PropertyDataContent() {
               <thead>
                 <tr>
                   <th className="property-data-table-expand-col" aria-label="Expand row" />
+                  <th className="property-data-table-checkbox-col" aria-label="Select for canonical">
+                    {listings.length > 0 && (
+                      <input
+                        type="checkbox"
+                        ref={selectAllCheckboxRef}
+                        checked={allSelected}
+                        onChange={() => (allSelected ? clearListingSelection() : selectAllListings())}
+                        aria-label={allSelected ? "Clear selection" : "Select all"}
+                        title={allSelected ? "Clear selection" : "Select all"}
+                      />
+                    )}
+                  </th>
                   <th>Listing ID</th>
                   <th>Source</th>
                   <th>Raw Address</th>
@@ -722,7 +775,7 @@ function PropertyDataContent() {
               <tbody>
                 {listings.length === 0 ? (
                   <tr>
-                    <td colSpan={9} style={{ padding: "2rem", color: "#737373", textAlign: "center" }}>
+                    <td colSpan={10} style={{ padding: "2rem", color: "#737373", textAlign: "center" }}>
                       No raw listings yet. Run a flow from Runs, then use &quot;Send to property data&quot; for a
                       completed run.
                     </td>
@@ -750,6 +803,14 @@ function PropertyDataContent() {
                             </span>
                           </button>
                         </td>
+                        <td className="property-data-table-checkbox-col" onClick={(e) => e.stopPropagation()}>
+                          <input
+                            type="checkbox"
+                            checked={selectedListingIds.has(row.id)}
+                            onChange={() => toggleListingSelection(row.id)}
+                            aria-label={`Select ${fullAddress(row)} for canonical`}
+                          />
+                        </td>
                         <td>{row.externalId}</td>
                         <td>{row.source === "streeteasy" ? "Streeteasy" : row.source}</td>
                         <td>{fullAddress(row)}</td>
@@ -775,7 +836,7 @@ function PropertyDataContent() {
                       </tr>
                       {expandedRowId === row.id && (
                         <tr key={`${row.id}-detail`} className="property-data-detail-row">
-                          <td colSpan={9} className="property-data-detail-cell">
+                          <td colSpan={10} className="property-data-detail-cell">
                             <PropertyDetailCollapsible listing={row} />
                           </td>
                         </tr>
@@ -791,17 +852,34 @@ function PropertyDataContent() {
 
       <div className="property-data-bottom-bar">
         <span className="property-data-bottom-label">
-          {activeTab === "raw" && total > 0 ? `${total} raw listing(s)` : "Reset of filters"}
+          {activeTab === "raw" && total > 0
+            ? someSelected
+              ? `${selectedListingIds.size} of ${total} selected`
+              : `${total} raw listing(s)`
+            : "Reset of filters"}
         </span>
         <div className="property-data-bottom-actions">
+          {activeTab === "raw" && total > 0 && (
+            <>
+              {someSelected ? (
+                <button type="button" className="btn-secondary" onClick={clearListingSelection} title="Clear selection">
+                  Clear selection
+                </button>
+              ) : (
+                <button type="button" className="btn-secondary" onClick={selectAllListings} title="Select all listings">
+                  Select all
+                </button>
+              )}
+            </>
+          )}
           <button
             type="button"
             className="btn-primary"
             onClick={handleSendToCanonical}
             disabled={activeTab !== "raw" || total === 0 || sendingToCanonical}
-            title="Create canonical properties from all raw listings and link them"
+            title={someSelected ? "Send selected to canonical and run enrichment" : "Create canonical properties from all raw listings and link them"}
           >
-            {sendingToCanonical ? "Sending…" : "Add to canonical properties"}
+            {sendingToCanonical ? "Sending…" : someSelected ? `Add ${selectedListingIds.size} to canonical` : "Add to canonical properties"}
           </button>
           <button
             type="button"

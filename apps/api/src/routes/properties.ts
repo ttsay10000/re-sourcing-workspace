@@ -35,7 +35,7 @@ router.get("/properties", async (_req: Request, res: Response) => {
   }
 });
 
-/** POST /api/properties/from-listings - create canonical properties from all active raw listings, link via matches. Runs permit enrichment unless ?skipPermitEnrichment=1. */
+/** POST /api/properties/from-listings - create canonical properties from raw listings, link via matches. Runs permit enrichment unless ?skipPermitEnrichment=1. Body may include listingIds: string[] to send only those listings (must be active); otherwise all active listings are used. */
 router.post("/properties/from-listings", async (req: Request, res: Response) => {
   try {
     const pool = getPool();
@@ -46,7 +46,12 @@ router.post("/properties/from-listings", async (req: Request, res: Response) => 
       const propertyRepo = new PropertyRepo({ pool, client });
       const matchRepo = new MatchRepo({ pool, client });
 
-      const { listings } = await listingRepo.list({ lifecycleState: "active", limit: 1000 });
+      const listingIds = Array.isArray(req.body?.listingIds) && req.body.listingIds.length > 0
+        ? (req.body.listingIds as string[]).filter((id: unknown) => typeof id === "string" && id.trim().length > 0)
+        : undefined;
+      const listFilters: { lifecycleState: "active"; limit: number; ids?: string[] } = { lifecycleState: "active", limit: 1000 };
+      if (listingIds != null && listingIds.length > 0) listFilters.ids = listingIds;
+      const { listings } = await listingRepo.list(listFilters);
       const results: { listingId: string; propertyId: string; canonicalAddress: string }[] = [];
 
       for (const listing of listings) {

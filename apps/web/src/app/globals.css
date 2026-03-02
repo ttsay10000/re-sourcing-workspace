@@ -800,6 +800,17 @@ textarea {
   vertical-align: middle;
 }
 
+.property-data-table-checkbox-col {
+  width: 2.25rem;
+  padding-left: 0.25rem !important;
+  padding-right: 0.25rem !important;
+  vertical-align: middle;
+}
+
+.property-data-table-checkbox-col input[type="checkbox"] {
+  cursor: pointer;
+}
+
 .property-data-row-expand-btn {
   display: inline-flex;
   align-items: center;
