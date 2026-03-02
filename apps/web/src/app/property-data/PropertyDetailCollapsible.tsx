@@ -56,6 +56,21 @@ function getPropertyType(details: SaleDetails): string | undefined {
   return undefined;
 }
 
+/** Enriched broker entry (firm, email, phone). */
+export interface AgentEnrichmentEntry {
+  name: string;
+  firm?: string | null;
+  email?: string | null;
+  phone?: string | null;
+}
+
+/** Price history row (date, price, event). */
+export interface PriceHistoryEntry {
+  date: string;
+  price: string | number;
+  event: string;
+}
+
 export interface PropertyDetailListing {
   id: string;
   externalId: string;
@@ -73,9 +88,12 @@ export interface PropertyDetailListing {
   url?: string;
   imageUrls?: string[] | null;
   agentNames?: string[] | null;
+  agentEnrichment?: AgentEnrichmentEntry[] | null;
+  priceHistory?: PriceHistoryEntry[] | null;
   extra?: Record<string, unknown> | null;
   uploadedAt?: string | null;
   uploadedRunId?: string | null;
+  duplicateScore?: number | null;
 }
 
 function formatPrice(n: number | null | undefined): string {
@@ -192,6 +210,8 @@ export function PropertyDetailCollapsible({ listing }: { listing: PropertyDetail
     return single != null && String(single).trim() ? String(single).trim() : null;
   })();
 
+  const hasEnrichment = listing.agentEnrichment && listing.agentEnrichment.length > 0;
+
   const photoUrls = (listing.imageUrls && listing.imageUrls.length > 0)
     ? listing.imageUrls
     : (Array.isArray(details.images) ? details.images.filter((u): u is string => typeof u === "string") : []);
@@ -224,6 +244,17 @@ export function PropertyDetailCollapsible({ listing }: { listing: PropertyDetail
           <div className="property-card-meta">
             <span className="property-card-neighborhood">{neighborhood}</span>
           </div>
+        )}
+        {listing.url && listing.url !== "#" && (
+          <a
+            href={listing.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="property-card-source-link"
+            style={{ fontSize: "0.875rem", marginTop: "0.25rem", display: "inline-block" }}
+          >
+            view source
+          </a>
         )}
       </div>
 
@@ -291,16 +322,64 @@ export function PropertyDetailCollapsible({ listing }: { listing: PropertyDetail
         </CollapsibleSection>
       )}
 
-      {brokerDisplay && (
+      {(brokerDisplay || hasEnrichment) && (
         <CollapsibleSection
           id="broker"
           title="Broker / Agent"
           open={!!openSections.broker}
           onToggle={() => toggle("broker")}
         >
-          <p className="property-detail-text">{brokerDisplay}</p>
+          {hasEnrichment ? (
+            <ul className="property-detail-broker-list" style={{ listStyle: "none", padding: 0, margin: 0 }}>
+              {listing.agentEnrichment!.map((entry, idx) => (
+                <li key={idx} className="property-detail-broker-entry" style={{ marginBottom: "0.75rem" }}>
+                  <strong>{entry.name}</strong>
+                  {(entry.firm || entry.email || entry.phone) && (
+                    <span className="property-detail-text" style={{ display: "block", marginTop: "0.25rem", fontSize: "0.9rem" }}>
+                      {[entry.firm, entry.email, entry.phone].filter(Boolean).join(" · ") || "N/A"}
+                    </span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="property-detail-text">{brokerDisplay}</p>
+          )}
         </CollapsibleSection>
       )}
+
+      <CollapsibleSection
+        id="price-history"
+        title="Price history"
+        count={listing.priceHistory?.length}
+        open={!!openSections.priceHistory}
+        onToggle={() => toggle("priceHistory")}
+      >
+        {listing.priceHistory && listing.priceHistory.length > 0 ? (
+          <div className="property-detail-price-history-wrap" style={{ maxHeight: "280px", overflowY: "auto" }}>
+            <table className="property-detail-price-history-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.9rem" }}>
+              <thead>
+                <tr style={{ borderBottom: "1px solid #e5e5e5" }}>
+                  <th style={{ textAlign: "left", padding: "0.5rem 0.75rem" }}>Date</th>
+                  <th style={{ textAlign: "left", padding: "0.5rem 0.75rem" }}>Price</th>
+                  <th style={{ textAlign: "left", padding: "0.5rem 0.75rem" }}>Event</th>
+                </tr>
+              </thead>
+              <tbody>
+                {listing.priceHistory.map((row, idx) => (
+                  <tr key={idx} style={{ borderBottom: "1px solid #f0f0f0" }}>
+                    <td style={{ padding: "0.5rem 0.75rem" }}>{row.date}</td>
+                    <td style={{ padding: "0.5rem 0.75rem" }}>{typeof row.price === "number" ? formatPrice(row.price) : row.price}</td>
+                    <td style={{ padding: "0.5rem 0.75rem" }}>{row.event}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className="property-detail-text" style={{ color: "#737373" }}>Unavailable. Run enrichment (Send to property data with OPENAI_API_KEY set) to fetch.</p>
+        )}
+      </CollapsibleSection>
 
       <CollapsibleSection
         id="details"
@@ -397,31 +476,11 @@ export function PropertyDetailCollapsible({ listing }: { listing: PropertyDetail
         </CollapsibleSection>
       )}
 
-      <CollapsibleSection
-        id="footer"
-        title="Listing ID & link"
-        open={!!openSections.footer}
-        onToggle={() => toggle("footer")}
-      >
-        <div className="property-card-footer">
-          <span className="property-card-id">Listing ID: {listing.externalId}</span>
-          {listing.url && listing.url !== "#" && (
-            <a
-              href={listing.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="property-card-source-link"
-            >
-              view source
-            </a>
-          )}
-          {(listing.uploadedAt || listing.uploadedRunId) && (
-            <div className="property-card-footer-uploaded">
-              {formatUploaded(listing.uploadedAt, listing.uploadedRunId)}
-            </div>
-          )}
+      {(listing.uploadedAt || listing.uploadedRunId) && (
+        <div className="property-card-footer" style={{ marginTop: "1rem", paddingTop: "0.75rem", borderTop: "1px solid #e5e5e5", fontSize: "0.8rem", color: "#737373" }}>
+          {formatUploaded(listing.uploadedAt, listing.uploadedRunId)}
         </div>
-      </CollapsibleSection>
+      )}
     </div>
   );
 }

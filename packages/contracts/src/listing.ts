@@ -41,8 +41,27 @@ export interface ListingNormalized {
   listedAt?: string | null;
   /** Agent names from source (e.g. GET sale details); for LLM enrichment. */
   agentNames?: string[] | null;
+  /** Enriched broker/agent data (firm, email, phone) from OpenAI lookup. */
+  agentEnrichment?: AgentEnrichmentEntry[] | null;
+  /** Price history (date, price, event) extracted from listing URL. */
+  priceHistory?: PriceHistoryEntry[] | null;
   /** Any extra fields that don't map to core schema. */
   extra?: Record<string, unknown> | null;
+}
+
+/** Single enriched agent entry (firm, email, phone). */
+export interface AgentEnrichmentEntry {
+  name: string;
+  firm?: string | null;
+  email?: string | null;
+  phone?: string | null;
+}
+
+/** Single price history row (from Property history section). */
+export interface PriceHistoryEntry {
+  date: string;
+  price: string | number;
+  event: string;
 }
 
 /**
@@ -59,6 +78,8 @@ export interface ListingRow extends ListingNormalized {
   uploadedAt?: string | null;
   /** Test run ID that first sent this listing to property data. */
   uploadedRunId?: string | null;
+  /** Duplicate likelihood score 0–100 (100 = likely duplicate). */
+  duplicateScore?: number | null;
   createdAt: string;
   updatedAt: string;
 }

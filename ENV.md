@@ -11,6 +11,7 @@ Set these in `apps/api/.env` (local) or in the API service’s environment (e.g.
 | Variable | Required | What to put (local) | What to put (deployed) |
 |----------|----------|---------------------|------------------------|
 | **RAPIDAPI_KEY** | **Yes** (for Runs) | Your RapidAPI key from [NYC Real Estate API](https://rapidapi.com/realestator/api/nyc-real-estate-api) (subscribe → copy key) | Same: your RapidAPI key |
+| **OPENAI_API_KEY** | **Yes** (for enrichment) | Your OpenAI API key (broker enrichment and price-history extraction) | Same: your OpenAI API key |
 | **PORT** | No | Omit, or `4000` | Omit (Render sets port), or e.g. `4000` |
 | **CORS_ORIGIN** | No | Omit (defaults to `http://localhost:3000` and `http://127.0.0.1:3000`) | Your **web** app URL, e.g. `https://re-sourcing-web.onrender.com` (comma-separated if multiple) |
 | **DATABASE_URL** | No for API server | Omit unless you use DB routes | Omit unless you use DB; if so, your Postgres connection string (e.g. Render Postgres internal URL) |
@@ -20,12 +21,14 @@ Set these in `apps/api/.env` (local) or in the API service’s environment (e.g.
 
 ```env
 RAPIDAPI_KEY=your_actual_rapidapi_key_here
+OPENAI_API_KEY=your_openai_api_key_here
 ```
 
 **Example API env (deployed, e.g. Render):**
 
 ```env
 RAPIDAPI_KEY=your_actual_rapidapi_key_here
+OPENAI_API_KEY=your_openai_api_key_here
 CORS_ORIGIN=https://re-sourcing-web.onrender.com
 ```
 
@@ -74,6 +77,7 @@ For a public deployment (e.g. Render) you should set **all** of the following.
 | Variable | What to put |
 |----------|-------------|
 | **RAPIDAPI_KEY** | Your RapidAPI key from [NYC Real Estate API](https://rapidapi.com/realestator/api/nyc-real-estate-api) |
+| **OPENAI_API_KEY** | Your OpenAI API key (for broker enrichment and price-history extraction) |
 | **CORS_ORIGIN** | Your **web** app URL, e.g. `https://your-web-app.onrender.com` (so the browser can call the API) |
 | **DATABASE_URL** | The **Internal Database URL** from your Render Postgres (paste as-is; Render may inject it automatically if you link the DB to the service) |
 | **PORT** | Leave blank (Render sets it) |
@@ -98,6 +102,7 @@ For a public deployment (e.g. Render) you should set **all** of the following.
 | Service | Variable | Local value | Deployed value |
 |---------|----------|-------------|----------------|
 | **API** | RAPIDAPI_KEY | Your RapidAPI key | Your RapidAPI key |
+| **API** | OPENAI_API_KEY | Your OpenAI API key | Your OpenAI API key |
 | **API** | PORT | Omit or `4000` | Omit (host sets it) |
 | **API** | CORS_ORIGIN | Omit | Your web URL (e.g. `https://re-sourcing-web.onrender.com`) |
 | **API** | DATABASE_URL | Omit unless using DB | **Render Postgres Internal (or External) URL** |

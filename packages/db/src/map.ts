@@ -10,9 +10,12 @@ import type {
   IngestionJob,
   ListingRow,
   ListingNormalized,
+  AgentEnrichmentEntry,
+  PriceHistoryEntry,
   ListingSnapshot,
   SnapshotMetadata,
   Property,
+  PropertyDetails,
   ListingPropertyMatch,
   DedupeReasons,
   SystemEvent,
@@ -108,9 +111,12 @@ export function mapListing(row: Record<string, unknown>): ListingRow {
     imageUrls: (row.image_urls as string[]) ?? null,
     listedAt: row.listed_at != null ? toIso(row.listed_at) : null,
     agentNames: (row.agent_names as string[]) ?? null,
+    agentEnrichment: (row.agent_enrichment as AgentEnrichmentEntry[] | null) ?? null,
+    priceHistory: (row.price_history as PriceHistoryEntry[] | null) ?? null,
     extra: (row.extra as Record<string, unknown>) ?? null,
     uploadedAt: row.uploaded_at != null ? toIso(row.uploaded_at) : null,
     uploadedRunId: (row.uploaded_run_id as string) ?? null,
+    duplicateScore: row.duplicate_score != null ? Number(row.duplicate_score) : null,
     createdAt: toIso(row.created_at),
     updatedAt: toIso(row.updated_at),
   };
@@ -133,6 +139,7 @@ export function mapProperty(row: Record<string, unknown>): Property {
   return {
     id: row.id as string,
     canonicalAddress: row.canonical_address as string,
+    details: (row.details as PropertyDetails | null) ?? null,
     createdAt: toIso(row.created_at),
     updatedAt: toIso(row.updated_at),
   };
@@ -180,6 +187,8 @@ export function listingNormalizedToRow(l: ListingNormalized): Record<string, unk
     image_urls: l.imageUrls ?? null,
     listed_at: l.listedAt ?? null,
     agent_names: l.agentNames ?? null,
+    agent_enrichment: l.agentEnrichment ?? null,
+    price_history: l.priceHistory ?? null,
     extra: l.extra ?? null,
   };
 }

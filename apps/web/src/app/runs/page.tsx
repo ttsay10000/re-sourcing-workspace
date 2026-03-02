@@ -1,8 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { AREA_TREE, isIncludedByParent, type AreaNode } from "./areas";
+
+function formatElapsed(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return m > 0 ? `${m}:${String(s).padStart(2, "0")}` : `0:${String(s).padStart(2, "0")}`;
+}
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
 
@@ -53,6 +59,8 @@ export default function RunsPage() {
   const [error, setError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [sendingRunId, setSendingRunId] = useState<string | null>(null);
+  const [sendTimerSeconds, setSendTimerSeconds] = useState(0);
+  const sendTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Filters (all variable, no hardcoded numbers in request)
   const [selectedAreas, setSelectedAreas] = useState<string[]>([]);
@@ -79,6 +87,26 @@ export default function RunsPage() {
   useEffect(() => {
     fetchRuns();
   }, [fetchRuns]);
+
+  // Timer while sending to property data (LLM enrichment in progress)
+  useEffect(() => {
+    if (sendingRunId) {
+      setSendTimerSeconds(0);
+      sendTimerRef.current = setInterval(() => setSendTimerSeconds((s) => s + 1), 1000);
+    } else {
+      if (sendTimerRef.current) {
+        clearInterval(sendTimerRef.current);
+        sendTimerRef.current = null;
+      }
+      setSendTimerSeconds(0);
+    }
+    return () => {
+      if (sendTimerRef.current) {
+        clearInterval(sendTimerRef.current);
+        sendTimerRef.current = null;
+      }
+    };
+  }, [sendingRunId]);
 
   // Poll when any run is still in progress
   const hasRunning = runs.some(
@@ -241,6 +269,31 @@ export default function RunsPage() {
   return (
     <div className="runs-page">
       <h1 className="page-title">Runs</h1>
+
+      {sendingRunId && (
+        <div
+          className="card"
+          role="status"
+          aria-live="polite"
+          style={{
+            marginBottom: "1.5rem",
+            padding: "0.75rem 1rem",
+            background: "#fef9c3",
+            borderColor: "#facc15",
+            display: "flex",
+            alignItems: "center",
+            gap: "0.5rem",
+            flexWrap: "wrap",
+          }}
+        >
+          <span style={{ fontWeight: 600 }}>
+            Sending to property data — enriching brokers &amp; price history…
+          </span>
+          <span style={{ fontVariantNumeric: "tabular-nums", fontWeight: 600 }}>
+            {formatElapsed(sendTimerSeconds)}
+          </span>
+        </div>
+      )}
 
       <div className="card" style={{ marginBottom: "1.5rem" }}>
         <h2 style={{ fontSize: "1.1rem", marginBottom: "0.75rem", fontWeight: 600 }}>

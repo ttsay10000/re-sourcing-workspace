@@ -94,8 +94,8 @@ export class ListingRepo {
           last_seen_at = now(),
           address = $1, city = $2, state = $3, zip = $4, price = $5, beds = $6, baths = $7,
           sqft = $8, url = $9, title = $10, description = $11, lat = $12, lon = $13,
-          image_urls = $14, listed_at = $15, agent_names = $16, extra = $17, updated_at = now()
-         WHERE id = $18 RETURNING *`,
+          image_urls = $14, listed_at = $15, agent_names = $16, agent_enrichment = $17, price_history = $18, extra = $19, updated_at = now()
+         WHERE id = $20 RETURNING *`,
         [
           row.address,
           row.city,
@@ -113,6 +113,8 @@ export class ListingRepo {
           row.image_urls,
           row.listed_at,
           row.agent_names,
+          row.agent_enrichment,
+          row.price_history,
           row.extra,
           existing.id,
         ]
@@ -124,11 +126,10 @@ export class ListingRepo {
       `INSERT INTO listings (
         source, external_id, lifecycle_state, first_seen_at, last_seen_at,
         address, city, state, zip, price, beds, baths, sqft, url, title, description,
-        lat, lon, image_urls, listed_at, agent_names, extra, uploaded_at, uploaded_run_id
+        lat, lon, image_urls, listed_at, agent_names, agent_enrichment, price_history, extra, uploaded_at, uploaded_run_id
       ) VALUES (
         $1, $2, 'active', now(), now(),
-        $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19,
-        $20, $21
+        $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24
       ) RETURNING *`,
       [
         normalized.source,
@@ -149,6 +150,8 @@ export class ListingRepo {
         row.image_urls,
         row.listed_at,
         row.agent_names,
+        row.agent_enrichment,
+        row.price_history,
         row.extra,
         uploadedRunId != null ? new Date() : null,
         uploadedRunId,
@@ -171,5 +174,18 @@ export class ListingRepo {
       values
     );
     return r.rows[0] ? mapListing(r.rows[0]) : null;
+  }
+
+  /** Bulk update duplicate_score for listings (e.g. after fuzzy match). */
+  async updateDuplicateScores(updates: { id: string; duplicateScore: number }[]): Promise<void> {
+    if (updates.length === 0) return;
+    const ids = updates.map((u) => u.id);
+    const scores = updates.map((u) => u.duplicateScore);
+    await this.client.query(
+      `UPDATE listings AS l SET duplicate_score = v.score, updated_at = now()
+       FROM (SELECT unnest($1::text[])::uuid AS id, unnest($2::int[]) AS score) AS v
+       WHERE l.id = v.id`,
+      [ids, scores]
+    );
   }
 }

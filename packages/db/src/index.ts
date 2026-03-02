@@ -5,6 +5,7 @@
 
 export { getPool, closePool } from "./pool.js";
 export { dbConfig, getDatabaseUrl } from "./config.js";
+export { mapListing, listingNormalizedToRow } from "./map.js";
 export { ProfileRepo } from "./repos/ProfileRepo.js";
 export { RunRepo } from "./repos/RunRepo.js";
 export { JobRepo } from "./repos/JobRepo.js";

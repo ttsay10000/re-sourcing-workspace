@@ -8,6 +8,7 @@ import cors from "cors";
 import type { HealthResponse } from "@re-sourcing/contracts";
 import testAgentRouter from "./routes/testAgent.js";
 import listingsRouter from "./routes/listings.js";
+import propertiesRouter from "./routes/properties.js";
 
 const PORT = Number(process.env.PORT) || 4000;
 const version = process.env.npm_package_version || "1.0.0";
@@ -37,6 +38,7 @@ app.get("/api/health", (_req, res) => {
 
 app.use("/api", testAgentRouter);
 app.use("/api", listingsRouter);
+app.use("/api", propertiesRouter);
 
 // Optional: read DATABASE_URL for future routes; do not connect at startup
 const databaseUrl = process.env.DATABASE_URL;

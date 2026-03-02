@@ -9,6 +9,9 @@ import { Router, type Request, type Response } from "express";
 import type { ListingNormalized } from "@re-sourcing/contracts";
 import type { NycsSearchCriteria } from "../nycRealEstateApi.js";
 import { fetchActiveSalesWithCriteria, fetchSaleDetailsByUrl } from "../nycRealEstateApi.js";
+import { enrichBrokers } from "../enrichment/brokerEnrichment.js";
+import { extractPriceHistory } from "../enrichment/priceHistoryEnrichment.js";
+import { computeDuplicateScores } from "../dedup/addressDedup.js";
 
 const router = Router();
 
@@ -380,6 +383,26 @@ router.post("/test-agent/runs/:id/send-to-property-data", async (req: Request, r
       let listingsUpdated = 0;
       for (let i = 0; i < run.properties.length; i++) {
         const normalized = runPropertyToNormalized(run.properties[i] as Record<string, unknown>, i);
+        const existing = await listingRepo.bySourceAndExternalId(normalized.source, normalized.externalId);
+
+        // LLM enrichment only for new listings; existing rows in raw listings keep their current data
+        if (existing) {
+          normalized.agentEnrichment = existing.agentEnrichment ?? null;
+          normalized.priceHistory = existing.priceHistory ?? null;
+        } else {
+          const propertyContext = [normalized.address, normalized.city, normalized.zip].filter(Boolean).join(", ") || undefined;
+          const agentEnrichment = await enrichBrokers(normalized.agentNames, propertyContext);
+          if (agentEnrichment && agentEnrichment.length > 0) {
+            normalized.agentEnrichment = agentEnrichment;
+          }
+          if (normalized.url && normalized.url !== "#") {
+            const priceHistory = await extractPriceHistory(normalized.url);
+            if (priceHistory && priceHistory.length > 0) {
+              normalized.priceHistory = priceHistory;
+            }
+          }
+        }
+
         // Dedupe by listing ID (source + external_id): upsert updates existing or inserts new
         const { listing, created } = await listingRepo.upsert(normalized, {
           uploadedRunId: run.id,
@@ -393,6 +416,9 @@ router.post("/test-agent/runs/:id/send-to-property-data", async (req: Request, r
             testRunId: run.id,
             capturedAt: new Date().toISOString(),
             rawPayload,
+            // Store LLM outputs in snapshot so they're persisted and we have a full record
+            agentEnrichment: normalized.agentEnrichment ?? null,
+            priceHistory: normalized.priceHistory ?? null,
           };
           JSON.stringify(metadata);
         } catch (_ser) {
@@ -406,6 +432,13 @@ router.post("/test-agent/runs/:id/send-to-property-data", async (req: Request, r
         });
         results.push({ listingId: listing.id, externalId: normalized.externalId, created });
       }
+      // Dedup: always scan all active listings so duplicate_score is correct for every row (new and existing)
+      const { listings: allActive } = await listingRepo.list({ lifecycleState: "active", limit: 1000 });
+      const dedupUpdates = computeDuplicateScores(
+        allActive.map((l) => ({ id: l.id, address: l.address, city: l.city, state: l.state, zip: l.zip }))
+      );
+      await listingRepo.updateDuplicateScores(dedupUpdates);
+
       let runNumber: number | null = null;
       try {
         await client.query(
