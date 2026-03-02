@@ -491,6 +491,23 @@ textarea {
   word-break: break-word;
 }
 
+.linked-listing-bar {
+  margin-bottom: 1rem;
+  padding: 0.6rem 1rem;
+  border-radius: 8px;
+  border: 1px solid #e5e5e5;
+  background: #fafafa;
+  overflow-x: auto;
+}
+
+.linked-listing-bar-inner {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 0.75rem 1.25rem;
+  min-width: 0;
+  font-size: 0.8rem;
+}
+
 .property-card-actions {
   display: flex;
   gap: 0.5rem;
@@ -1175,6 +1192,211 @@ textarea {
   height: 100%;
   object-fit: cover;
   display: block;
+}
+
+/* Initial property info — card grid layout */
+.initial-info-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1.25rem;
+  align-items: start;
+}
+
+.initial-info-card {
+  background: #fafafa;
+  border: 1px solid #e8e8e8;
+  border-radius: 10px;
+  padding: 1rem 1.25rem;
+  min-height: 0;
+}
+
+.initial-info-card--details {
+  grid-column: 1 / -1;
+}
+
+.initial-info-card--description {
+  grid-column: 1 / -1;
+}
+
+@media (min-width: 640px) {
+  .initial-info-card--details {
+    grid-column: span 1;
+    min-width: 260px;
+  }
+}
+
+.initial-info-price {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: #0f172a;
+  letter-spacing: -0.02em;
+  margin-bottom: 0.35rem;
+  line-height: 1.2;
+}
+
+.initial-info-listing-meta {
+  font-size: 0.8125rem;
+  color: #64748b;
+  margin-bottom: 0.5rem;
+  line-height: 1.4;
+}
+
+.initial-info-price-change {
+  font-size: 0.8125rem;
+  color: #64748b;
+  margin-bottom: 1rem;
+  line-height: 1.4;
+}
+
+.initial-info-price-change--down {
+  color: #b91c1c;
+  font-weight: 500;
+}
+
+.initial-info-price-change--up {
+  color: #15803d;
+  font-weight: 500;
+}
+
+.initial-info-subtitle {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #64748b;
+  margin: 0 0 0.6rem 0;
+}
+
+.initial-info-card .initial-info-subtitle:not(:first-child) {
+  margin-top: 1.1rem;
+}
+
+.initial-info-dl {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin: 0;
+  font-size: 0.875rem;
+}
+
+.initial-info-dl-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.initial-info-dl dt {
+  margin: 0;
+  font-weight: 500;
+  color: #64748b;
+  min-width: 6rem;
+  font-size: inherit;
+}
+
+.initial-info-dl dd {
+  margin: 0;
+  color: #0f172a;
+  font-size: inherit;
+}
+
+.initial-info-geo {
+  margin-top: 0.5rem;
+}
+
+.initial-info-geo-link {
+  color: #2563eb;
+  text-decoration: none;
+  font-size: 0.8125rem;
+}
+
+.initial-info-geo-link:hover {
+  text-decoration: underline;
+}
+
+.initial-info-amenities-pills {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.initial-info-amenities-pills li {
+  background: #e2e8f0;
+  color: #334155;
+  font-size: 0.75rem;
+  font-weight: 500;
+  padding: 0.25rem 0.6rem;
+  border-radius: 9999px;
+  text-transform: capitalize;
+}
+
+.initial-info-empty {
+  font-size: 0.8125rem;
+  color: #94a3b8;
+  margin: 0;
+  font-style: normal;
+}
+
+.initial-info-price-history-list {
+  max-height: 240px;
+  overflow-y: auto;
+  font-size: 0.8125rem;
+}
+
+.initial-info-price-history-list > div {
+  padding: 0.4rem 0;
+  border-bottom: 1px solid #e2e8f0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: baseline;
+}
+
+.initial-info-price-history-list > div:last-child {
+  border-bottom: none;
+}
+
+.initial-info-broker-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.initial-info-broker-list li {
+  margin-bottom: 0.6rem;
+  font-size: 0.875rem;
+}
+
+.initial-info-broker-list li:last-child {
+  margin-bottom: 0;
+}
+
+.initial-info-broker-name {
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.initial-info-broker-meta {
+  display: block;
+  margin-top: 0.2rem;
+  font-size: 0.8rem;
+  color: #64748b;
+}
+
+.initial-info-description-wrap {
+  margin-top: 0.25rem;
+}
+
+.initial-info-description-wrap .property-card-description {
+  font-size: 0.8125rem;
+  max-height: 4.5em;
+}
+
+.initial-info-description-wrap .property-card-description--expanded {
+  max-height: none;
 }
 
 .property-data-sidebar {

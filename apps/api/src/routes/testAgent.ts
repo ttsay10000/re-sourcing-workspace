@@ -206,6 +206,19 @@ router.get("/test-agent/sale-details", async (req: Request, res: Response) => {
     else if (typeof latRaw === "string") lat = parseFloat(latRaw);
     if (typeof lonRaw === "number" && !Number.isNaN(lonRaw)) lon = lonRaw;
     else if (typeof lonRaw === "string") lon = parseFloat(lonRaw);
+    const priceHistoryKeys = [
+      "priceHistory", "price_history", "history", "saleHistory", "sale_history",
+      "property_history", "listing_history", "price_changes", "events",
+      "rentalPriceHistory", "rental_price_history", "rentHistory", "rental_history",
+    ];
+    const priceHistoryInRaw: Record<string, unknown> = {};
+    for (const k of priceHistoryKeys) {
+      const v = r[k];
+      if (v !== undefined && v !== null) {
+        priceHistoryInRaw[k] = Array.isArray(v) ? { length: (v as unknown[]).length, sample: (v as unknown[])[0] } : v;
+      }
+    }
+
     const summary = {
       bbl: bbl ?? null,
       bin: bin ?? null,
@@ -216,6 +229,7 @@ router.get("/test-agent/sale-details", async (req: Request, res: Response) => {
       city: r.city ?? null,
       zip: r.zip ?? r.zipcode ?? null,
       topLevelKeys: Object.keys(raw).sort(),
+      priceHistoryInRaw: Object.keys(priceHistoryInRaw).length ? priceHistoryInRaw : null,
     };
     res.json({ url, summary, raw });
   } catch (err) {
@@ -399,6 +413,11 @@ function runPropertyToNormalized(raw: Record<string, unknown>, index: number): L
   if (monthlyHoa != null) extra.monthlyHoa = monthlyHoa;
   if (monthlyTax != null) extra.monthlyTax = monthlyTax;
   const { priceHistory, rentalPriceHistory } = parsePriceHistoriesFromRaw(raw);
+  const priceChangeSinceListed = computePriceChangeSinceListed(
+    Number(raw.price ?? raw.closedPrice ?? 0) || 0,
+    priceHistory ?? undefined,
+  );
+  if (priceChangeSinceListed != null) extra.priceChangeSinceListed = priceChangeSinceListed;
   return {
     source: "streeteasy",
     externalId: id,
@@ -424,7 +443,33 @@ function runPropertyToNormalized(raw: Record<string, unknown>, index: number): L
   };
 }
 
-/** Extract sale and rental price history arrays from GET sale details payload. */
+/**
+ * Compute price change since listed for display (listed price vs current price).
+ * Uses first LISTED event in price history, or earliest entry if no LISTED. Stored in listing.extra.
+ */
+function computePriceChangeSinceListed(
+  currentPrice: number,
+  priceHistory: PriceHistoryEntry[] | undefined | null,
+): { listedPrice: number; currentPrice: number; changeAmount: number; changePercent: number } | null {
+  if (!priceHistory?.length || !Number.isFinite(currentPrice) || currentPrice <= 0) return null;
+  const toNum = (p: string | number): number =>
+    typeof p === "number" && Number.isFinite(p) ? p : typeof p === "string" ? parseFloat(String(p).replace(/[$,]/g, "")) : NaN;
+  const withNums = priceHistory
+    .map((e) => ({ ...e, priceNum: toNum(e.price) }))
+    .filter((e) => Number.isFinite(e.priceNum));
+  if (withNums.length === 0) return null;
+  const listedCandidates = withNums.filter((e) => String(e.event).toUpperCase() === "LISTED");
+  const listedEntry = listedCandidates.length > 0
+    ? listedCandidates.reduce((a, b) => (a.date < b.date ? a : b))
+    : withNums.reduce((a, b) => (a.date < b.date ? a : b));
+  const listedPrice = listedEntry.priceNum;
+  if (!Number.isFinite(listedPrice) || listedPrice <= 0) return null;
+  const changeAmount = currentPrice - listedPrice;
+  const changePercent = (changeAmount / listedPrice) * 100;
+  return { listedPrice, currentPrice, changeAmount, changePercent };
+}
+
+/** Extract sale and rental price history arrays from GET sale details payload (top-level or nested under listing/data). */
 function parsePriceHistoriesFromRaw(raw: Record<string, unknown>): {
   priceHistory?: PriceHistoryEntry[] | null;
   rentalPriceHistory?: PriceHistoryEntry[] | null;
@@ -454,25 +499,43 @@ function parsePriceHistoriesFromRaw(raw: Record<string, unknown>): {
     return out.length ? out : null;
   };
 
-  const saleHistorySource =
-    (raw as Record<string, unknown>).priceHistory ??
-    (raw as Record<string, unknown>).price_history ??
-    (raw as Record<string, unknown>).history ??
-    (raw as Record<string, unknown>).saleHistory ??
-    (raw as Record<string, unknown>).sale_history ??
-    (raw as Record<string, unknown>).property_history ??
-    (raw as Record<string, unknown>).listing_history ??
-    (raw as Record<string, unknown>).price_changes ??
-    (raw as Record<string, unknown>).events;
+  const from = (r: Record<string, unknown>): { sale: unknown; rental: unknown } => ({
+    sale:
+      r.priceHistory ?? r.price_history ?? r.history ?? r.saleHistory ?? r.sale_history
+      ?? r.property_history ?? r.listing_history ?? r.price_changes ?? r.events,
+    rental:
+      r.rentalPriceHistory ?? r.rental_price_history ?? r.rentHistory ?? r.rental_history,
+  });
 
-  const rentalHistorySource =
-    (raw as Record<string, unknown>).rentalPriceHistory ??
-    (raw as Record<string, unknown>).rental_price_history ??
-    (raw as Record<string, unknown>).rentHistory ??
-    (raw as Record<string, unknown>).rental_history;
+  /** If API returns price history as a JSON string (e.g. RapidAPI sales/url), parse it. */
+  const ensureArray = (value: unknown): unknown => {
+    if (value == null) return null;
+    if (Array.isArray(value)) return value;
+    if (typeof value === "string") {
+      try {
+        const parsed = JSON.parse(value) as unknown;
+        return Array.isArray(parsed) ? parsed : value;
+      } catch {
+        return value;
+      }
+    }
+    return value;
+  };
 
-  const priceHistory = coerceEntries(saleHistorySource);
-  const rentalPriceHistory = coerceEntries(rentalHistorySource);
+  const top = from(raw);
+  let saleHistorySource = top.sale;
+  let rentalHistorySource = top.rental;
+  if (saleHistorySource == null || rentalHistorySource == null) {
+    const listing = raw.listing != null && typeof raw.listing === "object" ? (raw.listing as Record<string, unknown>) : null;
+    const data = raw.data != null && typeof raw.data === "object" ? (raw.data as Record<string, unknown>) : null;
+    if (saleHistorySource == null && listing) saleHistorySource = from(listing).sale;
+    if (saleHistorySource == null && data) saleHistorySource = from(data).sale;
+    if (rentalHistorySource == null && listing) rentalHistorySource = from(listing).rental;
+    if (rentalHistorySource == null && data) rentalHistorySource = from(data).rental;
+  }
+
+  const priceHistory = coerceEntries(ensureArray(saleHistorySource));
+  const rentalPriceHistory = coerceEntries(ensureArray(rentalHistorySource));
 
   return {
     priceHistory: priceHistory ?? undefined,

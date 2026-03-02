@@ -38,6 +38,8 @@ interface SaleDetails {
   images?: string[];
   videos?: string[];
   floorplans?: string[];
+  /** Computed from price history: listed vs current price (from send-to-property-data). */
+  priceChangeSinceListed?: { listedPrice: number; currentPrice: number; changeAmount: number; changePercent: number };
   [key: string]: unknown;
 }
 
@@ -118,14 +120,6 @@ function formatDate(s: string | null | undefined): string {
   });
 }
 
-function formatNeighborhood(s: string | null | undefined): string {
-  if (!s || typeof s !== "string") return "—";
-  return s
-    .split("-")
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
-    .join(" ");
-}
-
 function CollapsibleSection({
   id,
   title,
@@ -172,7 +166,6 @@ export function PropertyDetailCollapsible({ listing }: { listing: PropertyDetail
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({
     photosFloorplans: true,
     detailsBrokerAmenitiesPriceHistory: true,
-    description: false,
   });
 
   const details = (listing.extra ?? {}) as SaleDetails;
@@ -185,10 +178,6 @@ export function PropertyDetailCollapsible({ listing }: { listing: PropertyDetail
     setOpenSections((prev) => ({ ...prev, [key]: !prev[key] }));
   };
 
-  const title = [listing.address || details.address, listing.zip || details.zipcode]
-    .filter(Boolean)
-    .join(", ") || "—";
-  const neighborhood = formatNeighborhood(details.neighborhood);
   const price = details.closedPrice ?? details.price ?? listing.price;
   const listedAt = details.listedAt ?? listing.listedAt;
   const closedAt = details.closedAt;
@@ -241,26 +230,6 @@ export function PropertyDetailCollapsible({ listing }: { listing: PropertyDetail
 
   return (
     <div className="property-detail-collapsible">
-      <div className="property-detail-address-block">
-        <h3 className="property-card-title">{title}</h3>
-        {neighborhood !== "—" && (
-          <div className="property-card-meta">
-            <span className="property-card-neighborhood">{neighborhood}</span>
-          </div>
-        )}
-        {listing.url && listing.url !== "#" && (
-          <a
-            href={listing.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="property-card-source-link"
-            style={{ fontSize: "0.875rem", marginTop: "0.25rem", display: "inline-block" }}
-          >
-            view source
-          </a>
-        )}
-      </div>
-
       {/* 1. Photos & floor plans — side by side */}
       <CollapsibleSection
         id="photos-floorplans"
@@ -334,180 +303,136 @@ export function PropertyDetailCollapsible({ listing }: { listing: PropertyDetail
         open={!!openSections.detailsBrokerAmenitiesPriceHistory}
         onToggle={() => toggle("detailsBrokerAmenitiesPriceHistory")}
       >
-        <div className="property-detail-info-columns" style={{ display: "flex", gap: "1.5rem", flexWrap: "wrap" }}>
-          <div style={{ flex: "1 1 200px", minWidth: 0 }}>
-            <div className="property-card-section">
-              <div className="property-card-price">{formatPrice(price)}</div>
-              {listedAt !== "—" && (
-                <div className="property-card-dates">
-                  <span>Listed: {formatDate(listedAt)}</span>
-                  {closedAt && <span>Closed: {formatDate(closedAt)}</span>}
-                  {daysOnMarket != null && !Number.isNaN(daysOnMarket) && (
-                    <span>{daysOnMarket} days on market</span>
+        <div className="initial-info-grid">
+          <div className="initial-info-card initial-info-card--details">
+            <h4 className="initial-info-subtitle">Details</h4>
+            <div className="initial-info-price">{formatPrice(price)}</div>
+            {(listedAt !== "—" || closedAt || (daysOnMarket != null && !Number.isNaN(daysOnMarket))) && (
+              <div className="initial-info-listing-meta">
+                {listedAt !== "—" && <span>Listed {formatDate(listedAt)}</span>}
+                {closedAt && <span> · Closed {formatDate(closedAt)}</span>}
+                {daysOnMarket != null && !Number.isNaN(daysOnMarket) && <span> · {daysOnMarket} days on market</span>}
+              </div>
+            )}
+            {details.priceChangeSinceListed && (() => {
+              const p = details.priceChangeSinceListed;
+              const isDecrease = p.changeAmount < 0;
+              const isIncrease = p.changeAmount > 0;
+              return (
+                <div className="initial-info-price-change">
+                  <span>Listed at {formatPrice(p.listedPrice)}</span>
+                  <span> · Now {formatPrice(p.currentPrice)}</span>
+                  {p.changeAmount !== 0 && (
+                    <span className={isDecrease ? "initial-info-price-change--down" : isIncrease ? "initial-info-price-change--up" : ""}>
+                      {" "}{isDecrease ? "−" : "+"}{formatPrice(Math.abs(p.changeAmount))} ({isDecrease ? "" : "+"}{p.changePercent.toFixed(1)}%)
+                    </span>
                   )}
                 </div>
-              )}
-            </div>
-            <dl className="property-card-dl">
-              <div>
-                <dt>Beds / Baths</dt>
-                <dd>{na(beds)} / {na(baths)}</dd>
-              </div>
-              <div>
-                <dt>Sqft</dt>
-                <dd>{na(sqft)}</dd>
-              </div>
-              <div>
-                <dt>Property type</dt>
-                <dd>{na(propertyType)}</dd>
-              </div>
-              {builtIn != null && !Number.isNaN(builtIn) && (
-                <div>
-                  <dt>Built</dt>
-                  <dd>{builtIn}</dd>
-                </div>
-              )}
+              );
+            })()}
+            <dl className="initial-info-dl">
+              <div className="initial-info-dl-row"><dt>Beds / Baths</dt><dd>{na(beds)} / {na(baths)}</dd></div>
+              <div className="initial-info-dl-row"><dt>Sqft</dt><dd>{na(sqft)}</dd></div>
+              <div className="initial-info-dl-row"><dt>Property type</dt><dd>{na(propertyType)}</dd></div>
+              {builtIn != null && !Number.isNaN(builtIn) && <div className="initial-info-dl-row"><dt>Built</dt><dd>{builtIn}</dd></div>}
               {(monthlyHoa != null || monthlyTax != null) && (
-                <div>
-                  <dt>HOA / Tax</dt>
-                  <dd>
-                    {formatPrice(monthlyHoa)} / {formatPrice(monthlyTax)}
-                  </dd>
-                </div>
+                <div className="initial-info-dl-row"><dt>HOA / Tax</dt><dd>{formatPrice(monthlyHoa)} / {formatPrice(monthlyTax)}</dd></div>
               )}
             </dl>
           </div>
-          <div style={{ flex: "1 1 200px", minWidth: 0 }}>
-            <h4 className="property-detail-subsection-title" style={{ fontSize: "0.9rem", fontWeight: 600, marginBottom: "0.5rem" }}>Broker / Agent</h4>
+          <div className="initial-info-card">
+            <h4 className="initial-info-subtitle">Broker / Agent</h4>
             {brokerDisplay || hasEnrichment ? (
               hasEnrichment ? (
-                <ul className="property-detail-broker-list" style={{ listStyle: "none", padding: 0, margin: 0 }}>
+                <ul className="initial-info-broker-list">
                   {listing.agentEnrichment!.map((entry, idx) => (
-                    <li key={idx} className="property-detail-broker-entry" style={{ marginBottom: "0.75rem" }}>
-                      <strong>{entry.name}</strong>
+                    <li key={idx}>
+                      <span className="initial-info-broker-name">{entry.name}</span>
                       {(entry.firm || entry.email || entry.phone) && (
-                        <span className="property-detail-text" style={{ display: "block", marginTop: "0.25rem", fontSize: "0.9rem" }}>
-                          {[entry.firm, entry.email, entry.phone].filter(Boolean).join(" · ") || "N/A"}
-                        </span>
+                        <span className="initial-info-broker-meta">{[entry.firm, entry.email, entry.phone].filter(Boolean).join(" · ")}</span>
                       )}
                     </li>
                   ))}
                 </ul>
               ) : (
-                <p className="property-detail-text">{brokerDisplay}</p>
+                <p style={{ margin: 0, color: "#0f172a", fontSize: "0.875rem" }}>{brokerDisplay}</p>
               )
             ) : (
-              <p className="property-detail-text" style={{ color: "#737373" }}>—</p>
+              <p className="initial-info-empty">—</p>
             )}
           </div>
-          <div style={{ flex: "1 1 180px", minWidth: 0 }}>
-            <h4 className="property-detail-subsection-title" style={{ fontSize: "0.9rem", fontWeight: 600, marginBottom: "0.5rem" }}>Amenities</h4>
+          <div className="initial-info-card">
+            <h4 className="initial-info-subtitle">Amenities</h4>
             {amenities.length > 0 ? (
-              <ul className="property-card-amenities" style={{ margin: 0, paddingLeft: "1.25rem" }}>
+              <ul className="initial-info-amenities-pills">
                 {amenities.map((a, i) => {
-                  const label = String(a).replace(/_/g, " ").trim();
-                  const capitalized = label.replace(/\b\w/g, (c) => c.toUpperCase());
+                  const capitalized = String(a).replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
                   return <li key={i}>{capitalized}</li>;
                 })}
               </ul>
             ) : (
-              <p className="property-detail-text" style={{ color: "#737373" }}>—</p>
+              <p className="initial-info-empty">—</p>
             )}
           </div>
-          <div style={{ flex: "1 1 280px", minWidth: 0 }}>
-            <h4 className="property-detail-subsection-title" style={{ fontSize: "0.9rem", fontWeight: 600, marginBottom: "0.5rem" }}>Price history</h4>
+          <div className="initial-info-card">
+            <h4 className="initial-info-subtitle">Price history</h4>
             {(() => {
               const hasSale = listing.priceHistory && listing.priceHistory.length > 0;
               const hasRental = listing.rentalPriceHistory && listing.rentalPriceHistory.length > 0;
               if (!hasSale && !hasRental) {
                 return (
-                  <p className="property-detail-text" style={{ color: "#737373", fontSize: "0.875rem" }}>
+                  <p className="initial-info-empty">
                     No price history. Filled from GET sale details when you use “Send to property data”.
                   </p>
                 );
               }
               return (
-                <div className="property-detail-price-history-wrap" style={{ maxHeight: "360px", overflowY: "auto" }}>
+                <div className="initial-info-price-history-list">
                   {hasSale && (
                     <>
-                      {hasRental && <p className="property-detail-text" style={{ fontWeight: 600, marginBottom: "0.5rem", fontSize: "0.875rem" }}>Sale / list</p>}
-                      <table className="property-detail-price-history-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem", marginBottom: hasRental ? "0.75rem" : 0 }}>
-                        <thead>
-                          <tr style={{ borderBottom: "1px solid #e5e5e5" }}>
-                            <th style={{ textAlign: "left", padding: "0.4rem 0.5rem" }}>Date</th>
-                            <th style={{ textAlign: "left", padding: "0.4rem 0.5rem" }}>Price</th>
-                            <th style={{ textAlign: "left", padding: "0.4rem 0.5rem" }}>Event</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {listing.priceHistory!.map((row, idx) => (
-                            <tr key={idx} style={{ borderBottom: "1px solid #f0f0f0" }}>
-                              <td style={{ padding: "0.4rem 0.5rem" }}>{row.date}</td>
-                              <td style={{ padding: "0.4rem 0.5rem" }}>{typeof row.price === "number" ? formatPrice(row.price) : row.price}</td>
-                              <td style={{ padding: "0.4rem 0.5rem" }}>{row.event}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                      {hasRental && <div style={{ fontWeight: 600, marginBottom: "0.4rem", fontSize: "0.75rem", color: "#64748b" }}>Sale / list</div>}
+                      {listing.priceHistory!.map((row, idx) => (
+                        <div key={idx}>{row.date} · {typeof row.price === "number" ? formatPrice(row.price) : row.price} · {row.event}</div>
+                      ))}
                     </>
                   )}
                   {hasRental && (
                     <>
-                      {hasSale && <p className="property-detail-text" style={{ fontWeight: 600, marginBottom: "0.5rem", fontSize: "0.875rem" }}>Rental</p>}
-                      <table className="property-detail-price-history-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" }}>
-                        <thead>
-                          <tr style={{ borderBottom: "1px solid #e5e5e5" }}>
-                            <th style={{ textAlign: "left", padding: "0.4rem 0.5rem" }}>Date</th>
-                            <th style={{ textAlign: "left", padding: "0.4rem 0.5rem" }}>Price</th>
-                            <th style={{ textAlign: "left", padding: "0.4rem 0.5rem" }}>Event</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {listing.rentalPriceHistory!.map((row, idx) => (
-                            <tr key={idx} style={{ borderBottom: "1px solid #f0f0f0" }}>
-                              <td style={{ padding: "0.4rem 0.5rem" }}>{row.date}</td>
-                              <td style={{ padding: "0.4rem 0.5rem" }}>{typeof row.price === "number" ? formatPrice(row.price) : row.price}</td>
-                              <td style={{ padding: "0.4rem 0.5rem" }}>{row.event}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                      {hasSale && <div style={{ fontWeight: 600, marginTop: "0.5rem", marginBottom: "0.4rem", fontSize: "0.75rem", color: "#64748b" }}>Rental</div>}
+                      {listing.rentalPriceHistory!.map((row, idx) => (
+                        <div key={idx}>{row.date} · {typeof row.price === "number" ? formatPrice(row.price) : row.price} · {row.event}</div>
+                      ))}
                     </>
                   )}
                 </div>
               );
             })()}
           </div>
+          {description && (
+            <div className="initial-info-card initial-info-card--description">
+              <h4 className="initial-info-subtitle">Description</h4>
+              <div className="initial-info-description-wrap property-card-description-wrap">
+                <p
+                  className={`property-card-description ${descriptionExpanded ? "property-card-description--expanded" : ""}`}
+                  style={{ whiteSpace: "pre-wrap" }}
+                >
+                  {description}
+                </p>
+                <button
+                  type="button"
+                  className="property-card-expand"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setDescriptionExpanded((prev) => !prev);
+                  }}
+                >
+                  {descriptionExpanded ? "Collapse" : "Expand"}
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </CollapsibleSection>
-
-      {/* 3. Description — collapsed by default, expandable */}
-      {description && (
-        <CollapsibleSection
-          id="description"
-          title="Description"
-          open={!!openSections.description}
-          onToggle={() => toggle("description")}
-        >
-          <div className="property-card-description-wrap">
-            <p
-              className={`property-card-description ${descriptionExpanded ? "property-card-description--expanded" : ""}`}
-            >
-              {description}
-            </p>
-            <button
-              type="button"
-              className="property-card-expand"
-              onClick={(e) => {
-                e.stopPropagation();
-                setDescriptionExpanded((prev) => !prev);
-              }}
-            >
-              {descriptionExpanded ? "Collapse" : "Expand"}
-            </button>
-          </div>
-        </CollapsibleSection>
-      )}
 
       {(listing.uploadedAt || listing.uploadedRunId) && (
         <div className="property-card-footer" style={{ marginTop: "1rem", paddingTop: "0.75rem", borderTop: "1px solid #e5e5e5", fontSize: "0.8rem", color: "#737373" }}>

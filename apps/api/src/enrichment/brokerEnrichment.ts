@@ -1,13 +1,12 @@
 /**
- * Broker/agent enrichment via OpenAI: find NYC broker by name and return firm, email, phone.
- * If OPENAI_API_KEY is missing, returns null (no-op).
+ * Broker/agent enrichment: one OpenAI call to look up contact info (email, phone, company)
+ * from broker/agent names. Used when "Send to property data" runs on raw listings.
  */
 
 import type { AgentEnrichmentEntry } from "@re-sourcing/contracts";
 import OpenAI from "openai";
 import { getEnrichmentModel } from "./openaiModels.js";
 
-/** Normalize API key: trim and remove surrounding quotes (e.g. from Render env). */
 function getApiKey(): string | null {
   const raw = process.env.OPENAI_API_KEY;
   if (raw == null || typeof raw !== "string") return null;
@@ -17,76 +16,65 @@ function getApiKey(): string | null {
 }
 
 /**
- * Call OpenAI to find broker/agent in NYC by name and return contact info.
- * For general inboxes (team name, rental office) returns whatever is possible or N/A.
+ * Call OpenAI to search for each broker/agent name and return contact info:
+ * email, phone, company (firm). Returns one entry per input name in the same order.
  */
 export async function enrichBrokers(
   agentNames: string[] | null | undefined,
-  propertyContext?: string | null
+  _propertyContext?: string | null
 ): Promise<AgentEnrichmentEntry[] | null> {
   const key = getApiKey();
   if (!key) {
-    console.warn("[brokerEnrichment] OPENAI_API_KEY missing or invalid (set a non-empty key in .env or Render).");
+    console.warn("[brokerEnrichment] OPENAI_API_KEY missing or invalid.");
     return null;
   }
 
-  const names = Array.isArray(agentNames) ? agentNames.filter((n) => n != null && String(n).trim()) : [];
+  const names = Array.isArray(agentNames)
+    ? agentNames.map((n) => (n != null ? String(n).trim() : "")).filter(Boolean)
+    : [];
   if (names.length === 0) return null;
 
   const openai = new OpenAI({ apiKey: key });
-  const context = propertyContext && propertyContext.trim() ? ` representing the property: ${propertyContext.trim()}` : "";
+  const model = getEnrichmentModel();
 
-  const prompt = `You are a real estate data assistant. For each of the following broker/agent names in NYC, find their firm (brokerage name), email, and phone if possible. Most of the time you do not need the specific property. If the name looks like a general inbox (team name, rental office, etc.), try to get whatever info you can or use "N/A" for unavailable fields.
+  const prompt = `You are a real estate data assistant. For each of the following broker or agent names (NYC area), look up their contact information and return:
+- company: brokerage/firm name
+- email: contact email if found
+- phone: contact phone if found
 
-Names to look up: ${names.map((n) => `"${n}"`).join(", ")}${context}
+Names to look up (one per line):\n${names.map((n) => `- ${n}`).join("\n")}
 
-Respond with a JSON object with a single key "entries" that is an array of objects, one per name in the same order. Each object must have: "name" (string), "firm" (string or null), "email" (string or null), "phone" (string or null). Use "N/A" or null when information is not available. Example: {"entries":[{"name":"John Smith","firm":"Compass","email":"john@compass.com","phone":"212-555-0100"},{"name":"Rental Office","firm":null,"email":null,"phone":null}]}`;
+Reply with a single JSON object with key "entries": an array of objects in the SAME ORDER as the names above. Each object must have: "name" (string, the name you looked up), "firm" (string or null), "email" (string or null), "phone" (string or null). Use null for any field you cannot find. Example:
+{"entries":[{"name":"John Smith","firm":"Compass","email":"john@compass.com","phone":"212-555-0100"},{"name":"Jane Doe","firm":null,"email":null,"phone":null}]}`;
 
   try {
     const completion = await openai.chat.completions.create({
-      model: getEnrichmentModel(),
-      messages: [
-        {
-          role: "user",
-          content: prompt,
-        },
-      ],
+      model,
+      messages: [{ role: "user", content: prompt }],
       response_format: { type: "json_object" },
     });
 
     const content = completion.choices[0]?.message?.content;
     if (!content || typeof content !== "string") return null;
 
-    // Strip markdown code fence if present so JSON.parse works
     let jsonStr = content.trim();
     const codeBlock = jsonStr.match(/^```(?:json)?\s*([\s\S]*?)```$/);
     if (codeBlock) jsonStr = codeBlock[1].trim();
 
-    let parsed: unknown;
+    let parsed: { entries?: unknown[] };
     try {
-      parsed = JSON.parse(jsonStr);
-    } catch (parseErr) {
-      console.error("[brokerEnrichment] LLM response was not valid JSON:", (parseErr as Error)?.message ?? parseErr);
+      parsed = JSON.parse(jsonStr) as { entries?: unknown[] };
+    } catch (e) {
+      console.error("[brokerEnrichment] Invalid JSON from OpenAI:", (e as Error).message);
       return null;
     }
 
-    let arr: unknown[] = [];
-    if (parsed && typeof parsed === "object" && "entries" in parsed && Array.isArray((parsed as { entries: unknown[] }).entries)) {
-      arr = (parsed as { entries: unknown[] }).entries;
-    } else if (Array.isArray(parsed)) {
-      arr = parsed;
-    } else if (parsed && typeof parsed === "object" && "results" in parsed && Array.isArray((parsed as { results: unknown[] }).results)) {
-      arr = (parsed as { results: unknown[] }).results;
-    } else if (parsed && typeof parsed === "object") {
-      const obj = parsed as Record<string, unknown>;
-      const firstArray = obj.entries ?? obj.results ?? obj.agents ?? obj.list;
-      arr = Array.isArray(firstArray) ? firstArray : [];
-    }
-
+    const arr = Array.isArray(parsed?.entries) ? parsed.entries : [];
     const result: AgentEnrichmentEntry[] = [];
+
     for (let i = 0; i < names.length; i++) {
-      const raw = arr[i];
       const name = names[i];
+      const raw = arr[i];
       if (raw && typeof raw === "object" && raw !== null && "name" in raw) {
         const o = raw as Record<string, unknown>;
         result.push({
@@ -99,15 +87,11 @@ Respond with a JSON object with a single key "entries" that is an array of objec
         result.push({ name, firm: null, email: null, phone: null });
       }
     }
+
     return result;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    const status = err && typeof err === "object" && "status" in err ? (err as { status?: number }).status : null;
-    console.error(
-      "[brokerEnrichment] OpenAI request failed:",
-      status != null ? `status=${status}` : "",
-      msg
-    );
+    console.error("[brokerEnrichment] OpenAI request failed:", msg);
     return null;
   }
 }

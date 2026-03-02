@@ -189,10 +189,24 @@ function unwrapSaleDetailsResponse(data: unknown): Record<string, unknown> {
  * Uses GET /sales/url (not /sales/search); only the url querystring param is required.
  * Unwraps nested responses (e.g. { data: { ... } }) so price history and agents are at top level.
  */
+/**
+ * Normalize StreetEasy URL so RapidAPI returns 200 (API may 302 when URL has long query string).
+ * Keeps path (e.g. /sale/1686201) and drops UTM/other query params.
+ */
+function normalizeStreeteasyUrl(url: string): string {
+  try {
+    const u = new URL(url.trim());
+    if (u.hostname !== "streeteasy.com" && !u.hostname.endsWith(".streeteasy.com")) return url;
+    return `${u.origin}${u.pathname}`;
+  } catch {
+    return url;
+  }
+}
+
 export async function fetchSaleDetailsByUrl(streeteasyUrl: string): Promise<Record<string, unknown>> {
   const url = new URL(SALES_URL_ENDPOINT);
-  url.searchParams.set("url", streeteasyUrl);
-  const res = await fetch(url.toString(), { headers: headers() });
+  url.searchParams.set("url", normalizeStreeteasyUrl(streeteasyUrl));
+  const res = await fetch(url.toString(), { headers: headers(), redirect: "follow" });
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`NYC Real Estate API sale details error ${res.status}: ${text || res.statusText}`);

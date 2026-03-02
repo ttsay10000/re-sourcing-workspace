@@ -56,6 +56,18 @@ function formatListedDate(listedAt: string | null | undefined): string {
   return d.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
 }
 
+/** Normalize date strings to YYYY-MM-DD (strip time/timezone). */
+function formatDateOnly(value: string | null | undefined): string {
+  if (!value || typeof value !== "string") return "—";
+  const trimmed = value.trim();
+  if (!trimmed) return "—";
+  const datePart = trimmed.split("T")[0];
+  if (/^\d{4}-\d{2}-\d{2}$/.test(datePart)) return datePart;
+  const d = new Date(trimmed);
+  if (Number.isNaN(d.getTime())) return trimmed;
+  return d.toISOString().slice(0, 10);
+}
+
 function daysOnMarket(listedAt: string | null | undefined): number | null {
   if (!listedAt) return null;
   const d = new Date(listedAt);
@@ -112,7 +124,6 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({
     photosFloorplans: true,
     detailsBrokerAmenitiesPriceHistory: true,
-    description: false,
     owner: true,
     rentalOm: true,
     violationsComplaintsPermits: true,
@@ -171,7 +182,7 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
           const date = (p.approvedDate ?? p.approved_date ?? p.issuedDate ?? p.issued_date ?? n?.approvedDate ?? n?.issuedDate ?? "") as string;
           const workType = (n?.workType ?? n?.work_type ?? p.workPermit ?? p.work_permit ?? "") as string;
           const status = (n?.status ?? p.status ?? "") as string;
-          rows.push({ date: date || "—", category: "Permit", info: [workType, status].filter(Boolean).join(" · ") || "—" });
+          rows.push({ date: formatDateOnly(date) || "—", category: "Permit", info: [workType, status].filter(Boolean).join(" · ") || "—" });
         }
         for (const v of violations as Record<string, unknown>[]) {
           const n = v.normalizedJson as Record<string, unknown> | undefined;
@@ -179,21 +190,21 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
           const cls = (n?.class ?? "") as string;
           const status = (n?.currentStatus ?? n?.current_status ?? "") as string;
           const desc = (n?.novDescription ?? n?.nov_description ?? "") as string;
-          rows.push({ date: date || "—", category: "HPD Violation", info: [cls, status, desc].filter(Boolean).join(" · ") || "—" });
+          rows.push({ date: formatDateOnly(date) || "—", category: "HPD Violation", info: [cls, status, desc].filter(Boolean).join(" · ") || "—" });
         }
         for (const c of complaints as Record<string, unknown>[]) {
           const n = c.normalizedJson as Record<string, unknown> | undefined;
           const date = (n?.dateEntered ?? n?.date_entered ?? "") as string;
           const cat = (n?.complaintCategory ?? n?.complaint_category ?? "") as string;
           const status = (n?.status ?? "") as string;
-          rows.push({ date: date || "—", category: "DOB Complaint", info: [cat, status].filter(Boolean).join(" · ") || "—" });
+          rows.push({ date: formatDateOnly(date) || "—", category: "DOB Complaint", info: [cat, status].filter(Boolean).join(" · ") || "—" });
         }
         for (const l of litigations as Record<string, unknown>[]) {
           const n = l.normalizedJson as Record<string, unknown> | undefined;
           const date = (n?.findingDate ?? n?.finding_date ?? "") as string;
           const caseType = (n?.caseType ?? n?.case_type ?? "") as string;
           const status = (n?.caseStatus ?? n?.case_status ?? "") as string;
-          rows.push({ date: date || "—", category: "Housing Litigation", info: [caseType, status].filter(Boolean).join(" · ") || "—" });
+          rows.push({ date: formatDateOnly(date) || "—", category: "Housing Litigation", info: [caseType, status].filter(Boolean).join(" · ") || "—" });
         }
         rows.sort((a, b) => (b.date === "—" ? -1 : a.date === "—" ? 1 : b.date.localeCompare(a.date)));
         setUnifiedRows(rows);
@@ -208,50 +219,74 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
   const photoUrls = (listingForDisplay?.imageUrls?.length ? listingForDisplay.imageUrls : Array.isArray(extra?.images) ? (extra!.images as string[]).filter((u): u is string => typeof u === "string") : []) ?? [];
   const floorplanUrls = (Array.isArray(extra?.floorplans) ? (extra.floorplans as string[]).filter((u): u is string => typeof u === "string") : []) ?? [];
   const [galleryIndex, setGalleryIndex] = useState(0);
+  const [descriptionExpanded, setDescriptionExpanded] = useState(false);
 
   return (
     <div className="property-detail-collapsible" style={{ paddingLeft: "1.5rem", borderLeft: "3px solid #e5e5e5" }}>
-      {/* Linked listing(s) — raw table format + source link */}
+      {/* Linked listing — single header row, since there should only be one per canonical property */}
       {primaryListing !== "loading" && listingForDisplay && (
-        <div style={{ marginBottom: "1rem" }}>
-          <h4 style={{ fontSize: "0.9rem", fontWeight: 600, marginBottom: "0.5rem" }}>Linked listing(s)</h4>
-          <div style={{ overflowX: "auto" }}>
-            <table className="property-data-table" style={{ width: "100%", minWidth: "600px", borderCollapse: "collapse", fontSize: "0.875rem" }}>
-              <thead>
-                <tr style={{ backgroundColor: "#f5f5f5", borderBottom: "1px solid #e5e5e5" }}>
-                  <th style={{ textAlign: "left", padding: "0.4rem 0.5rem" }}>Listing ID</th>
-                  <th style={{ textAlign: "left", padding: "0.4rem 0.5rem" }}>Source</th>
-                  <th style={{ textAlign: "left", padding: "0.4rem 0.5rem" }}>Raw Address</th>
-                  <th style={{ textAlign: "left", padding: "0.4rem 0.5rem" }}>Listed date</th>
-                  <th style={{ textAlign: "left", padding: "0.4rem 0.5rem" }}>Days on market</th>
-                  <th style={{ textAlign: "left", padding: "0.4rem 0.5rem" }}>Dup. Conf.</th>
-                  <th style={{ textAlign: "left", padding: "0.4rem 0.5rem" }}>Price History</th>
-                  <th style={{ textAlign: "left", padding: "0.4rem 0.5rem" }}>Link</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr style={{ borderBottom: "1px solid #eee" }}>
-                  <td style={{ padding: "0.4rem 0.5rem" }}>{listingForDisplay.externalId}</td>
-                  <td style={{ padding: "0.4rem 0.5rem" }}>{listingForDisplay.source === "streeteasy" ? "Streeteasy" : listingForDisplay.source}</td>
-                  <td style={{ padding: "0.4rem 0.5rem" }}>{fullAddress(listingForDisplay)}</td>
-                  <td style={{ padding: "0.4rem 0.5rem" }}>{formatListedDate(listingForDisplay.listedAt)}</td>
-                  <td style={{ padding: "0.4rem 0.5rem" }}>{daysOnMarket(listingForDisplay.listedAt) != null ? `${daysOnMarket(listingForDisplay.listedAt)} days` : "—"}</td>
-                  <td style={{ padding: "0.4rem 0.5rem", color: (listingForDisplay.duplicateScore ?? 0) >= 80 ? "#b91c1c" : (listingForDisplay.duplicateScore ?? 0) <= 20 ? "#15803d" : "#854d0e" }}>
-                    {listingForDisplay.duplicateScore != null ? listingForDisplay.duplicateScore : "—"}
-                  </td>
-                  <td style={{ padding: "0.4rem 0.5rem" }}>
-                    {listingForDisplay.priceHistory?.length ? `${listingForDisplay.priceHistory.length} entries` : formatPrice(listingForDisplay.price)}
-                  </td>
-                  <td style={{ padding: "0.4rem 0.5rem" }}>
-                    {listingForDisplay.url && listingForDisplay.url !== "#" ? (
-                      <a href={listingForDisplay.url} target="_blank" rel="noopener noreferrer">view source</a>
-                    ) : (
-                      "—"
-                    )}
-                  </td>
-                </tr>
-              </tbody>
-            </table>
+        <div className="linked-listing-bar">
+          <div className="linked-listing-bar-inner">
+            <div className="property-metric">
+              <div className="property-metric-label">Listing ID</div>
+              <div className="property-metric-value">{listingForDisplay.externalId}</div>
+            </div>
+            <div className="property-metric">
+              <div className="property-metric-label">Source</div>
+              <div className="property-metric-value">
+                {listingForDisplay.source === "streeteasy" ? "Streeteasy" : listingForDisplay.source}
+              </div>
+            </div>
+            <div className="property-metric">
+              <div className="property-metric-label">Raw address</div>
+              <div className="property-metric-value">{fullAddress(listingForDisplay)}</div>
+            </div>
+            <div className="property-metric">
+              <div className="property-metric-label">Listed date</div>
+              <div className="property-metric-value">{formatListedDate(listingForDisplay.listedAt)}</div>
+            </div>
+            <div className="property-metric">
+              <div className="property-metric-label">Days on market</div>
+              <div className="property-metric-value">
+                {daysOnMarket(listingForDisplay.listedAt) != null ? `${daysOnMarket(listingForDisplay.listedAt)} days` : "—"}
+              </div>
+            </div>
+            <div className="property-metric">
+              <div className="property-metric-label">Dup. conf.</div>
+              <div
+                className="property-metric-value"
+                style={{
+                  color:
+                    (listingForDisplay.duplicateScore ?? 0) >= 80
+                      ? "#b91c1c"
+                      : (listingForDisplay.duplicateScore ?? 0) <= 20
+                        ? "#15803d"
+                        : "#854d0e",
+                }}
+              >
+                {listingForDisplay.duplicateScore != null ? listingForDisplay.duplicateScore : "—"}
+              </div>
+            </div>
+            <div className="property-metric">
+              <div className="property-metric-label">Price / history</div>
+              <div className="property-metric-value">
+                {listingForDisplay.priceHistory?.length
+                  ? `${listingForDisplay.priceHistory.length} entries`
+                  : formatPrice(listingForDisplay.price)}
+              </div>
+            </div>
+            <div className="property-metric">
+              <div className="property-metric-label">Link</div>
+              <div className="property-metric-value">
+                {listingForDisplay.url && listingForDisplay.url !== "#" ? (
+                  <a href={listingForDisplay.url} target="_blank" rel="noopener noreferrer">
+                    view source
+                  </a>
+                ) : (
+                  "—"
+                )}
+              </div>
+            </div>
           </div>
         </div>
       )}
@@ -314,89 +349,135 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
         open={!!openSections.detailsBrokerAmenitiesPriceHistory}
         onToggle={() => toggle("detailsBrokerAmenitiesPriceHistory")}
       >
-        <div style={{ display: "flex", gap: "1.5rem", flexWrap: "wrap" }}>
-          <div style={{ flex: "1 1 240px", minWidth: 0 }}>
-            <h4 style={{ fontSize: "0.9rem", fontWeight: 600, marginBottom: "0.5rem" }}>Details</h4>
+        <div className="initial-info-grid">
+          <div className="initial-info-card initial-info-card--details">
+            <h4 className="initial-info-subtitle">Details</h4>
             {listingForDisplay && (
               <>
-                <div style={{ fontSize: "1rem", fontWeight: 600, marginBottom: "0.25rem" }}>{formatPrice(listingForDisplay.price)}</div>
-                <div style={{ fontSize: "0.875rem", marginBottom: "0.5rem" }}>
-                  <span>Listed: {formatListedDate(listingForDisplay.listedAt)}</span>
+                <div className="initial-info-price">{formatPrice(listingForDisplay.price)}</div>
+                <div className="initial-info-listing-meta">
+                  <span>Listed {formatListedDate(listingForDisplay.listedAt)}</span>
                   {daysOnMarket(listingForDisplay.listedAt) != null && (
-                    <span style={{ marginLeft: "0.5rem" }}>{daysOnMarket(listingForDisplay.listedAt)} days on market</span>
+                    <span> · {daysOnMarket(listingForDisplay.listedAt)} days on market</span>
                   )}
                 </div>
-                <dl style={{ fontSize: "0.875rem", margin: 0 }}>
-                  <div><dt style={{ marginTop: "0.25rem" }}>Beds / Baths</dt><dd style={{ marginLeft: "1rem" }}>{listingForDisplay.beds ?? "—"} / {listingForDisplay.baths ?? "—"}</dd></div>
-                  <div><dt style={{ marginTop: "0.25rem" }}>Sqft</dt><dd style={{ marginLeft: "1rem" }}>{listingForDisplay.sqft ?? "—"}</dd></div>
-                  <div><dt style={{ marginTop: "0.25rem" }}>Property type</dt><dd style={{ marginLeft: "1rem" }}>{String((extra?.propertyType ?? extra?.property_type ?? extra?.type ?? "—"))}</dd></div>
-                  {(extra?.builtIn ?? extra?.built_in ?? extra?.yearBuilt) != null && <div><dt style={{ marginTop: "0.25rem" }}>Built</dt><dd style={{ marginLeft: "1rem" }}>{String(extra?.builtIn ?? extra?.built_in ?? extra?.yearBuilt)}</dd></div>}
-                  {(monthlyHoa != null || monthlyTax != null) && <div><dt style={{ marginTop: "0.25rem" }}>HOA / Tax</dt><dd style={{ marginLeft: "1rem" }}>{formatPrice(monthlyHoa as number)} / {formatPrice(monthlyTax as number)}</dd></div>}
+                {(extra?.priceChangeSinceListed as { listedPrice: number; currentPrice: number; changeAmount: number; changePercent: number } | undefined) && (() => {
+                  const p = extra!.priceChangeSinceListed as { listedPrice: number; currentPrice: number; changeAmount: number; changePercent: number };
+                  const isDecrease = p.changeAmount < 0;
+                  const isIncrease = p.changeAmount > 0;
+                  return (
+                    <div className="initial-info-price-change">
+                      <span>Listed at {formatPrice(p.listedPrice)}</span>
+                      <span> · Now {formatPrice(p.currentPrice)}</span>
+                      {p.changeAmount !== 0 && (
+                        <span className={isDecrease ? "initial-info-price-change--down" : isIncrease ? "initial-info-price-change--up" : ""}>
+                          {" "}{isDecrease ? "−" : "+"}{formatPrice(Math.abs(p.changeAmount))} ({isDecrease ? "" : "+"}{p.changePercent.toFixed(1)}%)
+                        </span>
+                      )}
+                    </div>
+                  );
+                })()}
+                <dl className="initial-info-dl">
+                  <div className="initial-info-dl-row"><dt>Beds / Baths</dt><dd>{listingForDisplay.beds ?? "—"} / {listingForDisplay.baths ?? "—"}</dd></div>
+                  <div className="initial-info-dl-row"><dt>Sqft</dt><dd>{listingForDisplay.sqft ?? "—"}</dd></div>
+                  <div className="initial-info-dl-row"><dt>Property type</dt><dd>{String((extra?.propertyType ?? extra?.property_type ?? extra?.type ?? "—")).replace(/_/g, " ")}</dd></div>
+                  {(extra?.builtIn ?? extra?.built_in ?? extra?.yearBuilt) != null && <div className="initial-info-dl-row"><dt>Built</dt><dd>{String(extra?.builtIn ?? extra?.built_in ?? extra?.yearBuilt)}</dd></div>}
+                  {(monthlyHoa != null || monthlyTax != null) && <div className="initial-info-dl-row"><dt>HOA / Tax</dt><dd>{formatPrice(monthlyHoa as number)} / {formatPrice(monthlyTax as number)}</dd></div>}
                 </dl>
               </>
             )}
-            {!listingForDisplay && primaryListing === "loading" && <p style={{ fontSize: "0.875rem", color: "#737373" }}>Loading listing…</p>}
-            {!listingForDisplay && primaryListing !== "loading" && <p style={{ fontSize: "0.875rem", color: "#737373" }}>No linked listing.</p>}
-            <h4 style={{ fontSize: "0.9rem", fontWeight: 600, marginTop: "1rem", marginBottom: "0.5rem" }}>Geospatial data</h4>
-            <dl style={{ fontSize: "0.875rem", margin: 0 }}>
-              {bbl != null && <><dt style={{ marginTop: "0.25rem" }}>BBL (tax / billing)</dt><dd style={{ marginLeft: "1rem" }}>{String(bbl)}</dd></>}
-              {bblBase != null && <><dt style={{ marginTop: "0.25rem" }}>BBL (base)</dt><dd style={{ marginLeft: "1rem" }}>{String(bblBase)}</dd></>}
-              {(lat != null || lon != null) && <><dt style={{ marginTop: "0.25rem" }}>Lat / Lon</dt><dd style={{ marginLeft: "1rem" }}>{String(lat)} / {String(lon)}</dd></>}
-              {bbl == null && bblBase == null && lat == null && lon == null && <p style={{ color: "#737373", margin: 0 }}>—</p>}
-            </dl>
+            {!listingForDisplay && primaryListing === "loading" && <p className="initial-info-empty">Loading listing…</p>}
+            {!listingForDisplay && primaryListing !== "loading" && <p className="initial-info-empty">No linked listing.</p>}
+            <h4 className="initial-info-subtitle">Geospatial data</h4>
+            <div className="initial-info-geo">
+              {bbl != null && <dl className="initial-info-dl"><div className="initial-info-dl-row"><dt>BBL (tax)</dt><dd>{String(bbl)}</dd></div></dl>}
+              {bblBase != null && <dl className="initial-info-dl"><div className="initial-info-dl-row"><dt>BBL (base)</dt><dd>{String(bblBase)}</dd></div></dl>}
+              {(lat != null && lon != null) && (
+                <dl className="initial-info-dl">
+                  <div className="initial-info-dl-row">
+                    <dt>Location</dt>
+                    <dd>
+                      <a className="initial-info-geo-link" href={`https://www.google.com/maps?q=${lat},${lon}`} target="_blank" rel="noopener noreferrer">{String(lat)}, {String(lon)}</a>
+                    </dd>
+                  </div>
+                </dl>
+              )}
+              {bbl == null && bblBase == null && lat == null && lon == null && <p className="initial-info-empty">—</p>}
+            </div>
           </div>
-          <div style={{ flex: "1 1 200px", minWidth: 0 }}>
-            <h4 style={{ fontSize: "0.9rem", fontWeight: 600, marginBottom: "0.5rem" }}>Broker / Agent</h4>
+          <div className="initial-info-card">
+            <h4 className="initial-info-subtitle">Broker / Agent</h4>
             {listingForDisplay?.agentEnrichment?.length ? (
-              <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+              <ul className="initial-info-broker-list">
                 {listingForDisplay.agentEnrichment.map((e, i) => (
-                  <li key={i} style={{ marginBottom: "0.5rem" }}><strong>{e.name}</strong>{[e.firm, e.email, e.phone].filter(Boolean).length ? ` — ${[e.firm, e.email, e.phone].filter(Boolean).join(" · ")}` : ""}</li>
+                  <li key={i}>
+                    <span className="initial-info-broker-name">{e.name}</span>
+                    {[e.firm, e.email, e.phone].filter(Boolean).length > 0 && (
+                      <span className="initial-info-broker-meta">{[e.firm, e.email, e.phone].filter(Boolean).join(" · ")}</span>
+                    )}
+                  </li>
                 ))}
               </ul>
             ) : listingForDisplay?.agentNames?.length ? (
-              <p style={{ margin: 0 }}>{listingForDisplay.agentNames.join(", ")}</p>
+              <p style={{ margin: 0, color: "#0f172a", fontSize: "0.875rem" }}>{listingForDisplay.agentNames.join(", ")}</p>
             ) : (
-              <p style={{ color: "#737373", margin: 0 }}>—</p>
+              <p className="initial-info-empty">—</p>
             )}
           </div>
-          <div style={{ flex: "1 1 180px", minWidth: 0 }}>
-            <h4 style={{ fontSize: "0.9rem", fontWeight: 600, marginBottom: "0.5rem" }}>Amenities</h4>
+          <div className="initial-info-card">
+            <h4 className="initial-info-subtitle">Amenities</h4>
             {listingForDisplay && Array.isArray(extra?.amenities) && (extra!.amenities as string[]).length > 0 ? (
-              <ul style={{ margin: 0, paddingLeft: "1.25rem", fontSize: "0.875rem" }}>
+              <ul className="initial-info-amenities-pills">
                 {(extra!.amenities as string[]).map((a, i) => (
                   <li key={i}>{String(a).replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())}</li>
                 ))}
               </ul>
             ) : (
-              <p style={{ color: "#737373", margin: 0 }}>From linked listing when available.</p>
+              <p className="initial-info-empty">From linked listing when available.</p>
             )}
           </div>
-          <div style={{ flex: "1 1 280px", minWidth: 0 }}>
-            <h4 style={{ fontSize: "0.9rem", fontWeight: 600, marginBottom: "0.5rem" }}>Price history</h4>
+          <div className="initial-info-card">
+            <h4 className="initial-info-subtitle">Price history</h4>
             {listingForDisplay?.priceHistory?.length || listingForDisplay?.rentalPriceHistory?.length ? (
-              <div style={{ maxHeight: "240px", overflowY: "auto", fontSize: "0.85rem" }}>
+              <div className="initial-info-price-history-list">
                 {listingForDisplay!.priceHistory?.slice(0, 10).map((r, i) => (
-                  <div key={i} style={{ borderBottom: "1px solid #eee", padding: "0.25rem 0" }}>{r.date} — {typeof r.price === "number" ? formatPrice(r.price) : r.price} — {r.event}</div>
+                  <div key={i}>{r.date} · {typeof r.price === "number" ? formatPrice(r.price) : r.price} · {r.event}</div>
                 ))}
                 {listingForDisplay!.rentalPriceHistory?.slice(0, 5).map((r, i) => (
-                  <div key={`r${i}`} style={{ borderBottom: "1px solid #eee", padding: "0.25rem 0" }}>Rental: {r.date} — {typeof r.price === "number" ? formatPrice(r.price) : r.price}</div>
+                  <div key={`r${i}`}>Rental: {r.date} · {typeof r.price === "number" ? formatPrice(r.price) : r.price}</div>
                 ))}
               </div>
             ) : (
-              <p style={{ color: "#737373", margin: 0 }}>From linked listing when available.</p>
+              <p className="initial-info-empty">From linked listing when available.</p>
             )}
           </div>
+          {listingForDisplay?.description && (
+            <div className="initial-info-card initial-info-card--description">
+              <h4 className="initial-info-subtitle">Description</h4>
+              <div className="initial-info-description-wrap property-card-description-wrap">
+                <p
+                  className={`property-card-description ${descriptionExpanded ? "property-card-description--expanded" : ""}`}
+                  style={{ whiteSpace: "pre-wrap" }}
+                >
+                  {listingForDisplay.description}
+                </p>
+                <button
+                  type="button"
+                  className="property-card-expand"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setDescriptionExpanded((prev) => !prev);
+                  }}
+                >
+                  {descriptionExpanded ? "Collapse" : "Expand"}
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </CollapsibleSection>
 
-      {/* 3. Description — collapsed by default; from listing */}
-      {listingForDisplay?.description && (
-        <CollapsibleSection id="description" title="Description" open={!!openSections.description} onToggle={() => toggle("description")}>
-          <p className="property-card-description" style={{ whiteSpace: "pre-wrap", margin: 0 }}>{listingForDisplay.description}</p>
-        </CollapsibleSection>
-      )}
-
-      {/* 4. Owner information */}
+      {/* 3. Owner information */}
       <CollapsibleSection id="owner" title="Owner information" open={!!openSections.owner} onToggle={() => toggle("owner")}>
         {ownerInfo != null && String(ownerInfo).trim() ? (
           <p style={{ margin: 0, fontSize: "0.875rem" }}>{String(ownerInfo)}</p>
@@ -439,20 +520,25 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
           <p style={{ color: "#737373" }}>No permits, violations, complaints, or litigations on file. Open this section to load data.</p>
         ) : (
           <div style={{ overflowX: "auto", maxHeight: "400px", overflowY: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem", tableLayout: "fixed" }}>
+              <colgroup>
+                <col style={{ width: "7rem", minWidth: "7rem" }} />
+                <col style={{ width: "8rem", minWidth: "8rem" }} />
+                <col style={{ width: "auto" }} />
+              </colgroup>
               <thead>
                 <tr style={{ borderBottom: "1px solid #e5e5e5" }}>
-                  <th style={{ textAlign: "left", padding: "0.4rem 0.5rem" }}>Date</th>
-                  <th style={{ textAlign: "left", padding: "0.4rem 0.5rem" }}>Category</th>
-                  <th style={{ textAlign: "left", padding: "0.4rem 0.5rem" }}>Info</th>
+                  <th style={{ textAlign: "left", padding: "0.5rem 0.75rem 0.5rem 0" }}>Date</th>
+                  <th style={{ textAlign: "left", padding: "0.5rem 0.75rem" }}>Category</th>
+                  <th style={{ textAlign: "left", padding: "0.5rem 0 0.5rem 0.75rem" }}>Info</th>
                 </tr>
               </thead>
               <tbody>
                 {unifiedRows.map((row, i) => (
                   <tr key={i} style={{ borderBottom: "1px solid #f0f0f0" }}>
-                    <td style={{ padding: "0.4rem 0.5rem" }}>{row.date}</td>
-                    <td style={{ padding: "0.4rem 0.5rem" }}>{row.category}</td>
-                    <td style={{ padding: "0.4rem 0.5rem" }}>{row.info}</td>
+                    <td style={{ padding: "0.5rem 0.75rem 0.5rem 0", whiteSpace: "nowrap", verticalAlign: "top" }}>{row.date}</td>
+                    <td style={{ padding: "0.5rem 0.75rem", verticalAlign: "top" }}>{row.category}</td>
+                    <td style={{ padding: "0.5rem 0 0.5rem 0.75rem", wordBreak: "break-word", verticalAlign: "top" }}>{row.info}</td>
                   </tr>
                 ))}
               </tbody>

@@ -362,6 +362,11 @@ async function resolveBBLFromPermitAddress(
   return out;
 }
 
+/**
+ * Build permits summary for property.details.enrichment.permits_summary.
+ * Owner is taken from the most recent permit (first row with owner data, since rows are issued_date DESC).
+ * Source: DOB NOW Build (rbx6-tga4) columns owner_business_name, owner_name.
+ */
 function buildPermitsSummary(rows: SocrataPermitRow[]): PermitsSummary {
   let lastIssuedDate: string | undefined;
   let ownerBusinessName: string | undefined;
@@ -370,8 +375,9 @@ function buildPermitsSummary(rows: SocrataPermitRow[]): PermitsSummary {
   for (const row of rows) {
     const d = parseDateToYyyyMmDd(row.issued_date) ?? parseDateToYyyyMmDd(row.approved_date);
     if (d && (!lastIssuedDate || d > lastIssuedDate)) lastIssuedDate = d;
-    if (row.owner_business_name?.trim()) ownerBusinessName = row.owner_business_name.trim();
-    if (row.owner_name?.trim()) ownerName = row.owner_name.trim();
+    // Prefer owner from most recent permit (first row that has it; rows are issued_date DESC)
+    if (ownerBusinessName == null && row.owner_business_name?.trim()) ownerBusinessName = row.owner_business_name.trim();
+    if (ownerName == null && row.owner_name?.trim()) ownerName = row.owner_name.trim();
   }
 
   return {

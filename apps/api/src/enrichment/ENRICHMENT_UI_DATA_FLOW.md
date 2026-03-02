@@ -32,10 +32,12 @@ All of this comes from **property.details** (and thus from the enrichment summar
 
 ## 3. Owner information section
 
-- **Primary:** `details.ownerInfo` (or `details.owner_info`).
+There is **no dedicated owner enrichment module**. Owner info is derived only from permit enrichment.
+
+- **Primary:** `details.ownerInfo` (or `details.owner_info`) — if set by another flow (e.g. listing/sale details).
 - **Fallback:** `details.enrichment.permits_summary` → `owner_name`, `owner_business_name`.
 
-Permit enrichment calls `updateDetails(..., "enrichment.permits_summary", summary)` and `buildPermitsSummary()` sets `owner_name` and `owner_business_name` on that summary. The UI uses `ps.owner_name` and `ps.owner_business_name`, so the Owner block will fill from permits when no explicit owner info exists.
+Permit enrichment fetches DOB NOW Build (Socrata rbx6-tga4) with columns `owner_business_name` and `owner_name`. It calls `updateDetails(..., "enrichment.permits_summary", summary)`; `buildPermitsSummary()` sets `owner_name` and `owner_business_name` from the **most recent** permit row that has them (rows are ordered by `issued_date` DESC). The UI shows `ps.owner_name` and `ps.owner_business_name` when `ownerInfo` is not set. If the DOB data has no owner fields populated for any permit, the Owner block will show "—".
 
 ---
 
