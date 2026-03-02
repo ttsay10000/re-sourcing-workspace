@@ -171,6 +171,185 @@ router.get("/test-agent/runs/:id", (req: Request, res: Response) => {
   res.json(run);
 });
 
+/**
+ * GET /api/test-agent/sale-details?url=<StreetEasy URL>
+ * Fetches GET sale details for a single URL and returns raw payload + summary of
+ * BBL/BIN/lat/lon (used by permit enrichment). Use to debug why enrichment may not have data.
+ */
+router.get("/test-agent/sale-details", async (req: Request, res: Response) => {
+  const url = typeof req.query.url === "string" ? req.query.url.trim() : null;
+  if (!url) {
+    res.status(400).json({ error: "Query param 'url' required (e.g. ?url=https://streeteasy.com/sale/1795579)" });
+    return;
+  }
+  try {
+    const raw = await fetchSaleDetailsByUrl(url);
+    const bbl =
+      (typeof (raw as Record<string, unknown>).bbl === "string" && (raw as Record<string, unknown>).bbl) ||
+      (typeof (raw as Record<string, unknown>).BBL === "string" && (raw as Record<string, unknown>).BBL) ||
+      (typeof (raw as Record<string, unknown>).borough_block_lot === "string" && (raw as Record<string, unknown>).borough_block_lot) ||
+      null;
+    const bin =
+      (typeof (raw as Record<string, unknown>).bin === "string" && (raw as Record<string, unknown>).bin) ||
+      (typeof (raw as Record<string, unknown>).BIN === "string" && (raw as Record<string, unknown>).BIN) ||
+      (typeof (raw as Record<string, unknown>).building_identification_number === "string" && (raw as Record<string, unknown>).building_identification_number) ||
+      null;
+    const r = raw as Record<string, unknown>;
+    let lat: number | null = null;
+    let lon: number | null = null;
+    const coords = r.coordinates as Record<string, unknown> | undefined;
+    const loc = r.location as Record<string, unknown> | undefined;
+    const geo = r.geo as Record<string, unknown> | undefined;
+    const latRaw = r.latitude ?? r.lat ?? coords?.latitude ?? coords?.lat ?? loc?.lat ?? geo?.lat;
+    const lonRaw = r.longitude ?? r.lon ?? coords?.longitude ?? coords?.lon ?? loc?.lon ?? geo?.lon;
+    if (typeof latRaw === "number" && !Number.isNaN(latRaw)) lat = latRaw;
+    else if (typeof latRaw === "string") lat = parseFloat(latRaw);
+    if (typeof lonRaw === "number" && !Number.isNaN(lonRaw)) lon = lonRaw;
+    else if (typeof lonRaw === "string") lon = parseFloat(lonRaw);
+    const summary = {
+      bbl: bbl ?? null,
+      bin: bin ?? null,
+      lat,
+      lon,
+      address: r.address ?? r.street_address ?? r.formatted_address ?? null,
+      borough: r.borough ?? null,
+      city: r.city ?? null,
+      zip: r.zip ?? r.zipcode ?? null,
+      topLevelKeys: Object.keys(raw).sort(),
+    };
+    res.json({ url, summary, raw });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[test-agent/sale-details]", err);
+    res.status(502).json({ error: "Failed to fetch sale details.", details: message });
+  }
+});
+
+const ENRICHMENT_RATE_LIMIT_MS = Number(process.env.ENRICHMENT_RATE_LIMIT_DELAY_MS || process.env.PERMITS_RATE_LIMIT_DELAY_MS) || 300;
+
+/**
+ * POST /api/test-agent/test-single-property
+ * Body: { url: "https://streeteasy.com/sale/1795579" }
+ * Full flow: fetch sale details → create raw listing → create canonical property + match → run permit + 7 enrichment modules.
+ * Returns whether BBL/BIN was captured and the property details. Requires DB and RAPIDAPI_KEY.
+ */
+router.post("/test-agent/test-single-property", async (req: Request, res: Response) => {
+  const url = typeof req.body?.url === "string" ? req.body.url.trim() : null;
+  if (!url) {
+    res.status(400).json({ error: "Body 'url' required (e.g. { \"url\": \"https://streeteasy.com/sale/1795579\" })" });
+    return;
+  }
+  try {
+    const raw = await fetchSaleDetailsByUrl(url);
+    const rawWithUrl = { ...raw, _fetchUrl: url } as Record<string, unknown>;
+    const normalized = runPropertyToNormalized(rawWithUrl, 0);
+
+    const db = await import("@re-sourcing/db");
+    const pool = db.getPool();
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const listingRepo = new db.ListingRepo({ pool, client });
+      const propertyRepo = new db.PropertyRepo({ pool, client });
+      const matchRepo = new db.MatchRepo({ pool, client });
+
+      const existing = await listingRepo.bySourceAndExternalId(normalized.source, normalized.externalId);
+      if (!existing) {
+        const propertyContext = [normalized.address, normalized.city, normalized.zip].filter(Boolean).join(", ") || undefined;
+        const agentEnrichment = await enrichBrokers(normalized.agentNames, propertyContext);
+        if (agentEnrichment?.length) normalized.agentEnrichment = agentEnrichment;
+      } else {
+        normalized.agentEnrichment = existing.agentEnrichment ?? null;
+        normalized.priceHistory = existing.priceHistory ?? null;
+        normalized.rentalPriceHistory = existing.rentalPriceHistory ?? null;
+      }
+
+      const { listing } = await listingRepo.upsert(normalized, { uploadedRunId: null });
+
+      const canonicalAddress = [listing.address, listing.city, listing.state, listing.zip]
+        .filter(Boolean)
+        .join(", ") || listing.address || "Unknown";
+      const property = await propertyRepo.create(canonicalAddress);
+      await matchRepo.create({
+        listingId: listing.id,
+        propertyId: property.id,
+        confidence: 1,
+        reasons: { addressMatch: true, normalizedAddressDistance: 0 },
+      });
+
+      const merge: Record<string, unknown> = {};
+      if (listing.lat != null && typeof listing.lat === "number" && !Number.isNaN(listing.lat) &&
+          listing.lon != null && typeof listing.lon === "number" && !Number.isNaN(listing.lon)) {
+        merge.lat = listing.lat;
+        merge.lon = listing.lon;
+      }
+      const extra = listing.extra as Record<string, unknown> | null | undefined;
+      if (extra && typeof extra === "object") {
+        const bbl = extra.bbl ?? extra.BBL ?? extra.borough_block_lot;
+        const bin = extra.bin ?? extra.BIN ?? extra.building_identification_number;
+        const bblStr = typeof bbl === "string" && /^\d{10}$/.test(bbl.trim()) ? bbl.trim() : null;
+        if (bblStr) {
+          merge.bbl = bblStr;
+          if (typeof bin === "string" && bin.trim()) merge.bin = bin.trim();
+        }
+        const hoa = extra.monthlyHoa ?? extra.monthly_hoa ?? extra.hoa;
+        const tax = extra.monthlyTax ?? extra.monthly_tax ?? extra.tax;
+        if (typeof hoa === "number" && !Number.isNaN(hoa) && hoa >= 0) merge.monthlyHoa = hoa;
+        else if (typeof hoa === "string" && hoa.trim()) {
+          const n = parseFloat(hoa.replace(/[$,]/g, ""));
+          if (!Number.isNaN(n) && n >= 0) merge.monthlyHoa = n;
+        }
+        if (typeof tax === "number" && !Number.isNaN(tax) && tax >= 0) merge.monthlyTax = tax;
+        else if (typeof tax === "string" && tax.trim()) {
+          const n = parseFloat(tax.replace(/[$,]/g, ""));
+          if (!Number.isNaN(n) && n >= 0) merge.monthlyTax = n;
+        }
+      }
+      if (Object.keys(merge).length > 0) await propertyRepo.mergeDetails(property.id, merge);
+
+      await client.query("COMMIT");
+      client.release();
+
+      const { runEnrichmentForProperty } = await import("../enrichment/runEnrichment.js");
+      const appToken = process.env.SOCRATA_APP_TOKEN ?? null;
+      const out = await runEnrichmentForProperty(property.id, undefined, {
+        appToken,
+        rateLimitDelayMs: ENRICHMENT_RATE_LIMIT_MS,
+      });
+
+      const repoWithPool = new db.PropertyRepo({ pool });
+      const propertyAfter = await repoWithPool.byId(property.id);
+      const details = (propertyAfter?.details as Record<string, unknown>) ?? {};
+      const bblCaptured = typeof details.bbl === "string" && /^\d{10}$/.test(details.bbl.trim());
+      const binCaptured = typeof details.bin === "string" && String(details.bin).trim().length > 0;
+
+      res.json({
+        ok: true,
+        url,
+        listingId: listing.id,
+        propertyId: property.id,
+        canonicalAddress: propertyAfter?.canonicalAddress ?? canonicalAddress,
+        bblCaptured,
+        binCaptured,
+        bbl: bblCaptured ? details.bbl : null,
+        bin: binCaptured ? details.bin : null,
+        detailsKeys: Object.keys(details),
+        enrichment: { ok: out.ok, results: out.results },
+      });
+    } finally {
+      client.release();
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[test-agent/test-single-property]", err);
+    if (/DATABASE_URL|connection|ECONNREFUSED|getPool/i.test(message)) {
+      res.status(503).json({ error: "Database unavailable.", details: message });
+    } else {
+      res.status(502).json({ error: "Failed to run test flow.", details: message });
+    }
+  }
+});
+
 /** Map one run property (GET sale details + _fetchUrl) to ListingNormalized. */
 function runPropertyToNormalized(raw: Record<string, unknown>, index: number): ListingNormalized {
   const id = raw.id != null ? String(raw.id) : raw.address != null ? String(raw.address) : `run-${index}`;
@@ -193,11 +372,23 @@ function runPropertyToNormalized(raw: Record<string, unknown>, index: number): L
   const images = raw.images;
   const imageUrls = Array.isArray(images) ? (images as string[]).filter((u): u is string => typeof u === "string") : null;
   const agentNames = (() => {
-    const a = raw.agents;
-    if (Array.isArray(a) && a.length > 0) {
-      return a.map((x) => (x != null ? String(x).trim() : "")).filter(Boolean);
+    const arr = raw.agents ?? (raw as Record<string, unknown>).agent_names ?? (raw as Record<string, unknown>).listing_agents;
+    if (Array.isArray(arr) && arr.length > 0) {
+      const names = arr.map((x) => {
+        if (x == null) return "";
+        if (typeof x === "string") return x.trim();
+        if (typeof x === "object" && x !== null) {
+          const o = x as Record<string, unknown>;
+          const n = o.name ?? o.full_name ?? o.agent_name ?? o.displayName;
+          return n != null ? String(n).trim() : "";
+        }
+        return String(x).trim();
+      }).filter(Boolean);
+      if (names.length > 0) return names;
     }
-    const single = raw.broker_name ?? raw.broker ?? raw.listing_agent ?? raw.agent_name ?? raw.agent;
+    const single =
+      raw.broker_name ?? raw.broker ?? raw.listing_agent ?? raw.agent_name ?? raw.agent
+      ?? (raw as Record<string, unknown>).listing_agent_name;
     if (single != null && String(single).trim()) return [String(single).trim()];
     return null;
   })();
@@ -244,14 +435,20 @@ function parsePriceHistoriesFromRaw(raw: Record<string, unknown>): {
     for (const row of value) {
       if (!row || typeof row !== "object") continue;
       const obj = row as Record<string, unknown>;
-      const date = obj.date ?? (obj as Record<string, unknown>).Date ?? obj.listedDate ?? obj.timestamp;
-      const price = obj.price ?? (obj as Record<string, unknown>).Price ?? obj.amount;
-      const event = obj.event ?? (obj as Record<string, unknown>).Event ?? obj.type ?? obj.reason;
-      if (date == null || price == null || event == null) continue;
+      const date =
+        obj.date ?? obj.Date ?? obj.listedDate ?? obj.timestamp
+        ?? obj.listed_date ?? obj.event_date ?? obj.eventDate;
+      const price =
+        obj.price ?? obj.Price ?? obj.amount ?? obj.list_price ?? obj.listPrice
+        ?? obj.sale_price ?? obj.salePrice;
+      const event =
+        obj.event ?? obj.Event ?? obj.type ?? obj.reason ?? obj.description
+        ?? obj.event_type ?? obj.eventType;
+      if (date == null || price == null) continue;
       out.push({
         date: String(date),
         price: typeof price === "number" || typeof price === "string" ? price : String(price),
-        event: String(event),
+        event: event != null ? String(event) : "—",
       });
     }
     return out.length ? out : null;
@@ -262,7 +459,11 @@ function parsePriceHistoriesFromRaw(raw: Record<string, unknown>): {
     (raw as Record<string, unknown>).price_history ??
     (raw as Record<string, unknown>).history ??
     (raw as Record<string, unknown>).saleHistory ??
-    (raw as Record<string, unknown>).sale_history;
+    (raw as Record<string, unknown>).sale_history ??
+    (raw as Record<string, unknown>).property_history ??
+    (raw as Record<string, unknown>).listing_history ??
+    (raw as Record<string, unknown>).price_changes ??
+    (raw as Record<string, unknown>).events;
 
   const rentalHistorySource =
     (raw as Record<string, unknown>).rentalPriceHistory ??
@@ -291,7 +492,10 @@ function parseMonthlyHoaTaxFromRaw(raw: Record<string, unknown>): { monthlyHoa?:
   return { monthlyHoa: toNum(hoaRaw), monthlyTax: toNum(taxRaw) };
 }
 
-/** Extract latitude and longitude from GET sale details payload (defensive to common key names). */
+/**
+ * Extract latitude and longitude from GET sale details payload (defensive to common key names).
+ * These values flow into the run's properties and, when sent to property data, into raw listings (lat/lon columns).
+ */
 function parseLatLonFromRaw(raw: Record<string, unknown>): { lat: number; lon: number } | null {
   const coords = raw.coordinates as Record<string, unknown> | undefined;
   const loc = raw.location as Record<string, unknown> | undefined;
@@ -315,6 +519,7 @@ function parseLatLonFromRaw(raw: Record<string, unknown>): { lat: number; lon: n
  * Send this run's properties to property data (listings + snapshots). No auto-populate; user-triggered only.
  * Flow: for new listings run broker LLM enrichment only; price history comes from GET sale details (Step 2).
  * Upsert listing (with enrichment) → create snapshot with full metadata.
+ * Lat/lon from GET sale details are included in each run property and are persisted to raw listings (listings.lat, listings.lon).
  */
 router.post("/test-agent/runs/:id/send-to-property-data", async (req: Request, res: Response) => {
   const run = testRunsStore.find((r) => r.id === req.params.id);
@@ -349,9 +554,19 @@ router.post("/test-agent/runs/:id/send-to-property-data", async (req: Request, r
           normalized.rentalPriceHistory = existing.rentalPriceHistory ?? null;
         } else {
           const propertyContext = [normalized.address, normalized.city, normalized.zip].filter(Boolean).join(", ") || undefined;
+          const agentNames = normalized.agentNames ?? [];
+          const hasAgentNames = Array.isArray(agentNames) && agentNames.length > 0;
           const agentEnrichment = await enrichBrokers(normalized.agentNames, propertyContext);
           if (agentEnrichment && agentEnrichment.length > 0) {
             normalized.agentEnrichment = agentEnrichment;
+            if (hasAgentNames) {
+              console.log(`[send-to-property-data] Broker LLM enriched ${agentEnrichment.length} agent(s) for ${normalized.externalId}`);
+            }
+          } else {
+            normalized.agentEnrichment = null;
+            if (hasAgentNames) {
+              console.warn(`[send-to-property-data] Broker LLM returned no enrichment for ${normalized.externalId} (agentNames: ${agentNames.length}). Check OPENAI_API_KEY and OPENAI_MODEL.`);
+            }
           }
           // Price history comes only from GET sale details (Step 2); no LLM extraction.
         }

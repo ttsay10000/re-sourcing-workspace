@@ -15,16 +15,17 @@ export interface RunEnrichmentForPropertyOptions extends EnrichmentRunOptions {
 
 /**
  * Run enrichment for a single property. If moduleName is set, run only that module.
- * Otherwise run permits first, then all 7 new modules in order (single-row first, then multi-row).
+ * Otherwise run permits first; only run the 7 other modules if BBL/BIN are present (enrichment
+ * has not failed). If no BBL/BIN after permits, other modules are skipped—no point running them.
  */
 export async function runEnrichmentForProperty(
   propertyId: string,
   moduleName?: string,
   options: RunEnrichmentForPropertyOptions = {}
-): Promise<{ ok: boolean; results: Record<string, { ok: boolean; error?: string }> }> {
+): Promise<{ ok: boolean; results: Record<string, { ok: boolean; error?: string; skipped?: boolean }> }> {
   const delayMs = options.rateLimitDelayMs ?? DEFAULT_RATE_LIMIT_DELAY_MS;
   const delay = () => new Promise((r) => setTimeout(r, delayMs));
-  const results: Record<string, { ok: boolean; error?: string }> = {};
+  const results: Record<string, { ok: boolean; error?: string; skipped?: boolean }> = {};
 
   if (!moduleName) {
     const permitResult = await enrichPropertyWithPermits(propertyId, { appToken: options.appToken });
@@ -33,14 +34,30 @@ export async function runEnrichmentForProperty(
   }
 
   const modules = moduleName ? [getEnrichmentModule(moduleName)].filter(Boolean) : ENRICHMENT_MODULES;
+  let runOtherModules = true;
+  if (!moduleName && modules.length > 0) {
+    const pool = getPool();
+    const property = await new PropertyRepo({ pool }).byId(propertyId);
+    const details = (property?.details as Record<string, unknown>) ?? {};
+    const hasBbl = typeof details.bbl === "string" && /^\d{10}$/.test(String(details.bbl).trim());
+    const hasBin = typeof details.bin === "string" && String(details.bin).trim().length > 0;
+    if (!hasBbl && !hasBin) {
+      runOtherModules = false;
+    }
+  }
+
   for (const mod of modules) {
     if (!mod) continue;
+    if (!runOtherModules) {
+      results[mod.name] = { ok: false, error: "skipped: no BBL/BIN after permit enrichment", skipped: true };
+      continue;
+    }
     const result = await mod.run(propertyId, { appToken: options.appToken });
     results[mod.name] = { ok: result.ok, error: result.error };
     await delay();
   }
 
-  const ok = Object.values(results).every((r) => r.ok);
+  const ok = Object.values(results).every((r) => r.skipped || r.ok);
   return { ok, results };
 }
 

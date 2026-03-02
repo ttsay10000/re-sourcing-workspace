@@ -1,6 +1,10 @@
 /**
  * Socrata client for NYC DOB NOW Build – Approved Permits (rbx6-tga4).
- * Selective queries only: BBL or borough+house_no+street_name, 10-year date filter, pagination.
+ * Two usage patterns:
+ * 1) BBL lookup (resolve address → BBL): Targeted queries by address or borough+house_no;
+ *    fuzzy match fetches up to FUZZY_BBLLOOKUP_LIMIT rows (default 1000) to find matching street.
+ * 2) Full permit list: Once BBL (or address) is known, fetchAllPermits paginates with limit 1000
+ *    until no more rows, so the entire matching set is retrieved.
  */
 
 import type { SocrataPermitRow } from "./types.js";
@@ -91,6 +95,73 @@ export function buildSoQLParamsByAddress(
   const s = escapeSoQLString(streetName.trim());
   const cut = escapeSoQLString(cutoffDate);
   const where = `borough = '${b}' AND house_no = '${h}' AND street_name = '${s}' AND (issued_date >= '${cut}' OR approved_date >= '${cut}')`;
+  return {
+    $select: SELECT_COLUMNS.join(", "),
+    $where: where,
+    $order: "issued_date DESC",
+    $limit: limit,
+    $offset: offset,
+  };
+}
+
+/**
+ * Build SoQL query params for borough + house_no only (for fuzzy street match fallback).
+ * Caller should use a large limit (e.g. 1000) so we search enough rows to find the street.
+ */
+export function buildSoQLParamsByBoroughAndHouseNo(
+  borough: string,
+  houseNo: string,
+  cutoffDate: string,
+  limit: number = 1000,
+  offset: number = 0
+): SoQLQueryParams {
+  const b = escapeSoQLString(borough.trim());
+  const h = escapeSoQLString(houseNo.trim());
+  const cut = escapeSoQLString(cutoffDate);
+  const where = `borough = '${b}' AND house_no = '${h}' AND (issued_date >= '${cut}' OR approved_date >= '${cut}')`;
+  return {
+    $select: SELECT_COLUMNS.join(", "),
+    $where: where,
+    $order: "issued_date DESC",
+    $limit: limit,
+    $offset: offset,
+  };
+}
+
+/**
+ * Address lookup without date filter (for BBL resolution when no rows in 10-year window).
+ * Many buildings have older permits only; this maximizes chance of finding a row to get BBL.
+ */
+export function buildSoQLParamsByAddressNoDate(
+  borough: string,
+  houseNo: string,
+  streetName: string,
+  limit: number = 100,
+  offset: number = 0
+): SoQLQueryParams {
+  const b = escapeSoQLString(borough.trim());
+  const h = escapeSoQLString(houseNo.trim());
+  const s = escapeSoQLString(streetName.trim());
+  const where = `borough = '${b}' AND house_no = '${h}' AND street_name = '${s}'`;
+  return {
+    $select: SELECT_COLUMNS.join(", "),
+    $where: where,
+    $order: "issued_date DESC",
+    $limit: limit,
+    $offset: offset,
+  };
+}
+
+/** Borough + house_no only, no date filter (for fuzzy BBL resolution). Use limit 1000+ to search enough rows. */
+export function buildSoQLParamsByBoroughAndHouseNoNoDate(
+  borough: string,
+  houseNo: string,
+  limit: number = 1000,
+  offset: number = 0
+): SoQLQueryParams {
+  const b = escapeSoQLString(borough.trim());
+  const h = escapeSoQLString(houseNo.trim());
+  const where = `borough = '${b}' AND house_no = '${h}'`;
   return {
     $select: SELECT_COLUMNS.join(", "),
     $where: where,

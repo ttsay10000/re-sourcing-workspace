@@ -1,5 +1,6 @@
 /**
- * Housing Litigations 59kj-x8nc – multi-row by BBL or BIN.
+ * Housing Litigations 59kj-x8nc – multi-row by BBL only.
+ * Dataset has bbl column; we do not use BIN (Geoclient BIN unreliable).
  */
 
 import {
@@ -8,8 +9,9 @@ import {
   HousingLitigationsRepo,
   PropertyEnrichmentStateRepo,
 } from "@re-sourcing/db";
-import { resourceUrl, escapeSoQLString, fetchAllPages, type SoQLQueryParams } from "../socrata/index.js";
-import { getBblFromDetails, getBinFromDetails } from "../propertyKeys.js";
+import { resourceUrl, escapeSoQLString, fetchAllPages, normalizeBblForQuery, type SoQLQueryParams } from "../socrata/index.js";
+import { getBBLForProperty } from "../resolvePropertyBBL.js";
+import { resolveCondoBblForQuery } from "../resolveCondoBbl.js";
 import { parseDateToYyyyMmDd } from "../normalizeDate.js";
 import type { EnrichmentModule, EnrichmentRunOptions, EnrichmentRunResult } from "../types.js";
 
@@ -51,31 +53,28 @@ async function run(propertyId: string, options: EnrichmentRunOptions): Promise<E
 
   const property = await propertyRepo.byId(propertyId);
   if (!property) return { ok: false, error: "Property not found" };
-  const details = (property.details as Record<string, unknown>) ?? {};
-  const bbl = getBblFromDetails(details);
-  const bin = getBinFromDetails(details);
-  if (!bbl && !bin) {
+  const resolved = await getBBLForProperty(propertyId);
+  const bbl = normalizeBblForQuery(resolved?.bbl) ?? null;
+  if (!bbl) {
     await stateRepo.upsert({
       propertyId,
       enrichmentName: "housing_litigations",
       lastRefreshedAt: now,
       lastSuccessAt: null,
-      lastError: "missing_bbl_and_bin",
+      lastError: "missing_bbl",
       statsJson: { rows_fetched: 0 },
     });
-    return { ok: false, error: "missing_bbl_and_bin" };
+    return { ok: false, error: "missing_bbl" };
   }
+  const bblForQueries = (await resolveCondoBblForQuery(bbl, { appToken: options.appToken })) ?? bbl;
 
-  const conditions: string[] = [];
-  if (bbl) conditions.push(`bbl = '${escapeSoQLString(bbl)}'`);
-  if (bin) conditions.push(`bin = '${escapeSoQLString(bin)}'`);
-  const where = conditions.join(" OR ");
+  const where = `bbl = '${escapeSoQLString(bblForQueries)}'`;
   const select =
-    "bbl, bin, casetype, casestatus, openjudgement, findingdate, penalty, respondent";
+    "bbl, bin, casetype, casestatus, casejudgement, caseopendate, respondent";
   const buildParams = (limit: number, offset: number): SoQLQueryParams => ({
     $select: select,
     $where: where,
-    $order: "findingdate DESC",
+    $order: "caseopendate DESC",
     $limit: limit,
     $offset: offset,
   });
@@ -88,12 +87,12 @@ async function run(propertyId: string, options: EnrichmentRunOptions): Promise<E
 
     let upserted = 0;
     for (const row of rows) {
-      const findingDate = parseDateToYyyyMmDd(col(row, "findingdate", "finding_date"));
+      const caseOpenDate = parseDateToYyyyMmDd(col(row, "caseopendate", "case_open_date"));
       const normalized = {
         caseType: col(row, "casetype", "case_type"),
         caseStatus: col(row, "casestatus", "case_status"),
-        openJudgement: row.openjudgement ?? row.open_judgement,
-        findingDate,
+        openJudgement: row.casejudgement ?? row.case_judgement ?? row.openjudgement ?? row.open_judgement,
+        findingDate: caseOpenDate,
         penalty: num(row.penalty),
         respondent: col(row, "respondent"),
       };
@@ -101,7 +100,7 @@ async function run(propertyId: string, options: EnrichmentRunOptions): Promise<E
         propertyId,
         sourceRowId: rowId(row),
         bbl: bbl ?? null,
-        bin: bin ?? null,
+        bin: col(row, "bin") ?? null,
         normalizedJson: normalized,
         rawJson: row,
       });

@@ -1,5 +1,6 @@
 /**
  * DOB Complaints Received eabe-havv – multi-row by BIN only.
+ * Dataset has no BBL column; only BIN is available for filtering.
  */
 
 import {
@@ -9,7 +10,7 @@ import {
   PropertyEnrichmentStateRepo,
 } from "@re-sourcing/db";
 import { resourceUrl, escapeSoQLString, fetchAllPages, type SoQLQueryParams } from "../socrata/index.js";
-import { getBinFromDetails } from "../propertyKeys.js";
+import { getBBLForProperty } from "../resolvePropertyBBL.js";
 import { parseDateToYyyyMmDd } from "../normalizeDate.js";
 import type { EnrichmentModule, EnrichmentRunOptions, EnrichmentRunResult } from "../types.js";
 
@@ -44,8 +45,8 @@ async function run(propertyId: string, options: EnrichmentRunOptions): Promise<E
 
   const property = await propertyRepo.byId(propertyId);
   if (!property) return { ok: false, error: "Property not found" };
-  const details = (property.details as Record<string, unknown>) ?? {};
-  const bin = getBinFromDetails(details);
+  const resolved = await getBBLForProperty(propertyId);
+  const bin = resolved?.bin ?? null;
   if (!bin) {
     await stateRepo.upsert({
       propertyId,
@@ -60,11 +61,11 @@ async function run(propertyId: string, options: EnrichmentRunOptions): Promise<E
 
   const where = `bin = '${escapeSoQLString(bin)}'`;
   const select =
-    "bin, dateentered, status, unit, dispositiondate, complaintcategory";
+    "bin, date_entered, status, unit, disposition_date, complaint_category";
   const buildParams = (limit: number, offset: number): SoQLQueryParams => ({
     $select: select,
     $where: where,
-    $order: "dateentered DESC",
+    $order: "date_entered DESC",
     $limit: limit,
     $offset: offset,
   });
@@ -77,14 +78,14 @@ async function run(propertyId: string, options: EnrichmentRunOptions): Promise<E
 
     let upserted = 0;
     for (const row of rows) {
-      const dateEntered = parseDateToYyyyMmDd(col(row, "dateentered", "date_entered"));
-      const dispositionDate = parseDateToYyyyMmDd(col(row, "dispositiondate", "disposition_date"));
+      const dateEntered = parseDateToYyyyMmDd(col(row, "date_entered", "dateentered"));
+      const dispositionDate = parseDateToYyyyMmDd(col(row, "disposition_date", "dispositiondate"));
       const normalized = {
         dateEntered,
         status: col(row, "status"),
         unit: col(row, "unit"),
         dispositionDate,
-        complaintCategory: col(row, "complaintcategory", "complaint_category"),
+        complaintCategory: col(row, "complaint_category", "complaintcategory"),
       };
       await complaintsRepo.upsert({
         propertyId,

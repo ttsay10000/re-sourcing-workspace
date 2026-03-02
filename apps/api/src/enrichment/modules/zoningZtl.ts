@@ -1,5 +1,6 @@
 /**
- * NYC Zoning Tax Lot Database (ZTL) fdkv-4t4z – single row per property by borough+block+lot.
+ * NYC Zoning Tax Lot Database (ZTL) fdkv-4t4z – lookup by BBL.
+ * Fetches in batches of 1000 until result found or dataset exhausted (no batch limit).
  */
 
 import {
@@ -8,9 +9,9 @@ import {
   ZoningZtlRepo,
   PropertyEnrichmentStateRepo,
 } from "@re-sourcing/db";
-import { resourceUrl, escapeSoQLString, fetchSocrataQuery, type SoQLQueryParams } from "../socrata/index.js";
-import { bblToBoroughBlockLot } from "../socrata/index.js";
-import { getBblFromDetails } from "../propertyKeys.js";
+import { resourceUrl, escapeSoQLString, fetchAllPages, normalizeBblForQuery, type SoQLQueryParams } from "../socrata/index.js";
+import { getBBLForProperty } from "../resolvePropertyBBL.js";
+import { resolveCondoBblForQuery } from "../resolveCondoBbl.js";
 import type { EnrichmentModule, EnrichmentRunOptions, EnrichmentRunResult } from "../types.js";
 
 const DATASET_ID = "fdkv-4t4z";
@@ -33,8 +34,8 @@ async function run(propertyId: string, options: EnrichmentRunOptions): Promise<E
 
   const property = await propertyRepo.byId(propertyId);
   if (!property) return { ok: false, error: "Property not found" };
-  const details = (property.details as Record<string, unknown>) ?? {};
-  const bbl = getBblFromDetails(details);
+  const resolved = await getBBLForProperty(propertyId);
+  const bbl = normalizeBblForQuery(resolved?.bbl) ?? null;
   if (!bbl) {
     await stateRepo.upsert({
       propertyId,
@@ -46,37 +47,22 @@ async function run(propertyId: string, options: EnrichmentRunOptions): Promise<E
     });
     return { ok: false, error: "missing_bbl" };
   }
+  const bblForQueries = (await resolveCondoBblForQuery(bbl, { appToken: options.appToken })) ?? bbl;
 
-  const bblParts = bblToBoroughBlockLot(bbl);
-  if (!bblParts) {
-    await stateRepo.upsert({
-      propertyId,
-      enrichmentName: "zoning_ztl",
-      lastRefreshedAt: now,
-      lastSuccessAt: null,
-      lastError: "invalid_bbl",
-      statsJson: null,
-    });
-    return { ok: false, error: "invalid_bbl" };
-  }
-
-  const borough = escapeSoQLString(bblParts.borough);
-  const block = escapeSoQLString(bblParts.block);
-  const lot = escapeSoQLString(bblParts.lot);
-  const where = `borough = '${borough}' AND block = '${block}' AND lot = '${lot}'`;
+  const where = `bbl = '${escapeSoQLString(bblForQueries)}'`;
   const select =
-    "borough, block, lot, zoning_district_1, zoning_district_2, special_district_1, zoning_map_number, zoning_map_code";
-  const params: SoQLQueryParams = {
+    "bbl, borough_code, tax_block, tax_lot, zoning_district_1, zoning_district_2, special_district_1, zoning_map_number, zoning_map_code";
+  const buildParams = (limit: number, offset: number): SoQLQueryParams => ({
     $select: select,
     $where: where,
     $order: "1",
-    $limit: 1,
-    $offset: 0,
-  };
+    $limit: limit,
+    $offset: offset,
+  });
 
   try {
     const baseUrl = resourceUrl(DATASET_ID);
-    const rows = await fetchSocrataQuery<Record<string, unknown>>(baseUrl, params, {
+    const rows = await fetchAllPages<Record<string, unknown>>(baseUrl, buildParams, {
       appToken: options.appToken,
     });
 
@@ -91,7 +77,7 @@ async function run(propertyId: string, options: EnrichmentRunOptions): Promise<E
         }
       : {};
 
-    const rid = row && (row.id ?? (row.borough != null && row.block != null && row.lot != null ? `${row.borough}-${row.block}-${row.lot}` : null));
+    const rid = row && (row.id ?? (row.bbl ?? (row.borough_code != null && row.tax_block != null && row.tax_lot != null ? `${row.borough_code}-${row.tax_block}-${row.tax_lot}` : null)));
     const sourceRowId = rid != null ? String(rid) : null;
     await zoningRepo.upsert({
       propertyId,

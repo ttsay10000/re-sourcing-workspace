@@ -7,10 +7,13 @@ import type { PriceHistoryEntry } from "@re-sourcing/contracts";
 import OpenAI from "openai";
 import { getPriceHistoryModel } from "./openaiModels.js";
 
+/** Normalize API key: trim and remove surrounding quotes (e.g. from Render env). */
 function getApiKey(): string | null {
-  const key = process.env.OPENAI_API_KEY;
-  if (!key || typeof key !== "string" || key.trim() === "") return null;
-  return key.trim();
+  const raw = process.env.OPENAI_API_KEY;
+  if (raw == null || typeof raw !== "string") return null;
+  const key = raw.trim().replace(/^["']|["']$/g, "");
+  if (!key || key.length < 10) return null;
+  return key;
 }
 
 function isStreetEasyUrl(url: string): boolean {
@@ -150,7 +153,13 @@ ${html}`;
       rentalPriceHistory: rentalPriceHistory && rentalPriceHistory.length > 0 ? rentalPriceHistory : null,
     };
   } catch (err) {
-    console.error("[priceHistoryEnrichment]", err);
+    const msg = err instanceof Error ? err.message : String(err);
+    const status = err && typeof err === "object" && "status" in err ? (err as { status?: number }).status : null;
+    console.error(
+      "[priceHistoryEnrichment] OpenAI request failed:",
+      status != null ? `status=${status}` : "",
+      msg
+    );
     return empty;
   }
 }

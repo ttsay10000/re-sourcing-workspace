@@ -144,3 +144,95 @@ export async function fetchAllPages<T = Record<string, unknown>>(
   }
   return all;
 }
+
+/**
+ * Run a count query using the same $where filter. Socrata returns [{"count":"123"}].
+ * Returns null if the count query fails or returns an unexpected format.
+ */
+export async function fetchSocrataCount(
+  baseUrl: string,
+  where: string,
+  options: FetchSocrataOptions = {}
+): Promise<number | null> {
+  const params: SoQLQueryParams = {
+    $select: "count(*)",
+    $where: where,
+    $order: "1",
+    $limit: 1,
+    $offset: 0,
+  };
+  try {
+    const rows = await fetchSocrataQuery<Record<string, unknown>>(baseUrl, params, options);
+    const row = rows[0];
+    if (!row) return null;
+    const c = row.count ?? row.count_;
+    if (typeof c === "number" && Number.isInteger(c) && c >= 0) return c;
+    if (typeof c === "string") {
+      const n = parseInt(c, 10);
+      return Number.isNaN(n) || n < 0 ? null : n;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export interface SocrataIngestionDiagnostics {
+  datasetId: string;
+  where: string;
+  expectedCount: number | null;
+  rowsDownloaded: number;
+  pagesRequested: number;
+  countMismatch: boolean;
+  durationMs: number;
+}
+
+/**
+ * Fetch all pages with optional count preflight and structured diagnostics.
+ * If runCountPreflight is true, runs a count query first and sets expectedCount; after fetch, sets countMismatch when rowsDownloaded !== expectedCount.
+ */
+export async function fetchAllPagesWithDiagnostics<T = Record<string, unknown>>(
+  datasetId: string,
+  baseUrl: string,
+  where: string,
+  buildParams: (limit: number, offset: number) => SoQLQueryParams,
+  options: FetchSocrataOptions & { runCountPreflight?: boolean } = {}
+): Promise<{ rows: T[]; diagnostics: SocrataIngestionDiagnostics }> {
+  const { runCountPreflight = false, ...fetchOptions } = options;
+  const start = Date.now();
+  let expectedCount: number | null = null;
+  if (runCountPreflight) {
+    expectedCount = await fetchSocrataCount(baseUrl, where, fetchOptions);
+  }
+  const limit = 1000;
+  const all: T[] = [];
+  let offset = 0;
+  let pagesRequested = 0;
+  while (true) {
+    const params = buildParams(limit, offset);
+    const page = await fetchSocrataQuery<T>(baseUrl, params, fetchOptions);
+    all.push(...page);
+    pagesRequested++;
+    if (page.length < limit) break;
+    offset += limit;
+  }
+  const durationMs = Date.now() - start;
+  const countMismatch = expectedCount != null && all.length !== expectedCount;
+  if (countMismatch && process.env.NODE_ENV !== "test") {
+    console.warn(
+      `[socrata] ${datasetId} count mismatch: expected ${expectedCount}, downloaded ${all.length} (where: ${where})`
+    );
+  }
+  return {
+    rows: all,
+    diagnostics: {
+      datasetId,
+      where,
+      expectedCount,
+      rowsDownloaded: all.length,
+      pagesRequested,
+      countMismatch,
+      durationMs,
+    },
+  };
+}

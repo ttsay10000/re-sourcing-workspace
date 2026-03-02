@@ -1,5 +1,5 @@
+export type { SoQLQueryParams, FetchSocrataOptions, SocrataIngestionDiagnostics } from "./client.js";
 export {
-  SoQLQueryParams,
   escapeSoQLString,
   paramsToSearchParams,
   v3ViewQueryUrl,
@@ -7,6 +7,13 @@ export {
   mapV3ResponseToRows,
   fetchSocrataQuery,
   fetchAllPages,
-  type FetchSocrataOptions,
+  fetchSocrataCount,
+  fetchAllPagesWithDiagnostics,
 } from "./client.js";
-export { bblToBoroughBlockLot, BOROUGH_CODES, type BoroughBlockLot } from "./bblUtils.js";
+export {
+  bblToBoroughBlockLot,
+  normalizeBblForQuery,
+  rowToBblFromBoroughBlockLot,
+  BOROUGH_CODES,
+  type BoroughBlockLot,
+} from "./bblUtils.js";

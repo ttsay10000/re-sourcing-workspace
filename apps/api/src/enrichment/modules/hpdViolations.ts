@@ -1,5 +1,7 @@
 /**
- * HPD Housing Maintenance Code Violations wvxf-dwi5 – multi-row by BBL or BIN.
+ * HPD Housing Maintenance Code Violations wvxf-dwi5 – by BBL only.
+ * Dataset has no bbl column; we query by boro + block + lot (from BBL), then filter
+ * results by constructing BBL from each row (boroid + block + lot) to match Geoclient BBL.
  */
 
 import {
@@ -8,8 +10,9 @@ import {
   HpdViolationsRepo,
   PropertyEnrichmentStateRepo,
 } from "@re-sourcing/db";
-import { resourceUrl, escapeSoQLString, fetchAllPages, type SoQLQueryParams } from "../socrata/index.js";
-import { getBblFromDetails, getBinFromDetails } from "../propertyKeys.js";
+import { resourceUrl, escapeSoQLString, fetchAllPages, normalizeBblForQuery, bblToBoroughBlockLot, rowToBblFromBoroughBlockLot, type SoQLQueryParams } from "../socrata/index.js";
+import { getBBLForProperty } from "../resolvePropertyBBL.js";
+import { resolveCondoBblForQuery } from "../resolveCondoBbl.js";
 import { parseDateToYyyyMmDd } from "../normalizeDate.js";
 import type { EnrichmentModule, EnrichmentRunOptions, EnrichmentRunResult } from "../types.js";
 
@@ -29,7 +32,7 @@ function rowId(row: Record<string, unknown>): string {
   const id = row.violationid ?? row.violation_id ?? row.id;
   if (id != null) return String(id);
   return JSON.stringify({
-    b: row.bbl ?? row.bin,
+    b: rowToBblFromBoroughBlockLot(row) ?? row.boroid,
     s: row.story,
     c: row.class,
     d: row.approveddate ?? row.approved_date,
@@ -45,27 +48,37 @@ async function run(propertyId: string, options: EnrichmentRunOptions): Promise<E
 
   const property = await propertyRepo.byId(propertyId);
   if (!property) return { ok: false, error: "Property not found" };
-  const details = (property.details as Record<string, unknown>) ?? {};
-  const bbl = getBblFromDetails(details);
-  const bin = getBinFromDetails(details);
-  if (!bbl && !bin) {
+  const resolved = await getBBLForProperty(propertyId);
+  const bbl = normalizeBblForQuery(resolved?.bbl) ?? null;
+  if (!bbl) {
     await stateRepo.upsert({
       propertyId,
       enrichmentName: "hpd_violations",
       lastRefreshedAt: now,
       lastSuccessAt: null,
-      lastError: "missing_bbl_and_bin",
+      lastError: "missing_bbl",
       statsJson: { rows_fetched: 0 },
     });
-    return { ok: false, error: "missing_bbl_and_bin" };
+    return { ok: false, error: "missing_bbl" };
+  }
+  const bblForQueries = (await resolveCondoBblForQuery(bbl, { appToken: options.appToken })) ?? bbl;
+
+  const parts = bblToBoroughBlockLot(bblForQueries);
+  if (!parts) {
+    await stateRepo.upsert({
+      propertyId,
+      enrichmentName: "hpd_violations",
+      lastRefreshedAt: now,
+      lastSuccessAt: null,
+      lastError: "invalid_bbl",
+      statsJson: null,
+    });
+    return { ok: false, error: "invalid_bbl" };
   }
 
-  const conditions: string[] = [];
-  if (bbl) conditions.push(`bbl = '${escapeSoQLString(bbl)}'`);
-  if (bin) conditions.push(`bin = '${escapeSoQLString(bin)}'`);
-  const where = conditions.join(" OR ");
+  const where = `boro = '${escapeSoQLString(parts.borough)}' AND block = '${escapeSoQLString(parts.block)}' AND lot = '${escapeSoQLString(parts.lot)}'`;
   const select =
-    "violationid, bbl, bin, story, class, approveddate, novdescription, currentstatus, violationstatus, rentimpairing";
+    "violationid, boroid, boro, block, lot, story, class, approveddate, novdescription, currentstatus, violationstatus, rentimpairing";
   const buildParams = (limit: number, offset: number): SoQLQueryParams => ({
     $select: select,
     $where: where,
@@ -76,9 +89,10 @@ async function run(propertyId: string, options: EnrichmentRunOptions): Promise<E
 
   try {
     const baseUrl = resourceUrl(DATASET_ID);
-    const rows = await fetchAllPages<Record<string, unknown>>(baseUrl, buildParams, {
+    const rawRows = await fetchAllPages<Record<string, unknown>>(baseUrl, buildParams, {
       appToken: options.appToken,
     });
+    const rows = rawRows.filter((r) => rowToBblFromBoroughBlockLot(r) === bblForQueries);
 
     let upserted = 0;
     for (const row of rows) {
@@ -96,8 +110,8 @@ async function run(propertyId: string, options: EnrichmentRunOptions): Promise<E
       await violationsRepo.upsert({
         propertyId,
         sourceRowId: rowId(row),
-        bbl: bbl ?? null,
-        bin: bin ?? null,
+        bbl,
+        bin: col(row, "bin") ?? null,
         normalizedJson: normalized,
         rawJson: row,
       });
@@ -139,7 +153,7 @@ async function run(propertyId: string, options: EnrichmentRunOptions): Promise<E
       lastRefreshedAt: now,
       lastSuccessAt: now,
       lastError: null,
-      statsJson: { rows_fetched: rows.length, rows_upserted: upserted },
+      statsJson: { rows_fetched: rawRows.length, rows_matching_bbl: rows.length, rows_upserted: upserted },
     });
     return { ok: true, rowsFetched: rows.length, rowsUpserted: upserted };
   } catch (err) {

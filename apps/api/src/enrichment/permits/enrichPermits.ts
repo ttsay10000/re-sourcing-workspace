@@ -12,11 +12,16 @@ import {
   PermitRepo,
   PropertyEnrichmentStateRepo,
 } from "@re-sourcing/db";
-import { normalizeBorough, normalizeHouseNo, normalizeStreetName, parseDateToYyyyMmDd, parseEstimatedCost } from "./normalizers.js";
-import { resolveBBLFromLatLon } from "../geoclient.js";
+import { normalizeBorough, normalizeHouseNo, normalizeStreetName, streetNameForPermitApi, parseDateToYyyyMmDd, parseEstimatedCost } from "./normalizers.js";
+import { normalizeBblForQuery } from "../socrata/index.js";
+import { resolveCondoBblForQuery } from "../resolveCondoBbl.js";
+import { resolveBBLFromListing } from "../resolvePropertyBBL.js";
 import {
   buildSoQLParamsByBBL,
   buildSoQLParamsByAddress,
+  buildSoQLParamsByAddressNoDate,
+  buildSoQLParamsByBoroughAndHouseNo,
+  buildSoQLParamsByBoroughAndHouseNoNoDate,
   fetchAllPermits,
   fetchPermitsPage,
 } from "./socrataClient.js";
@@ -91,7 +96,7 @@ export async function enrichPropertyWithPermits(
     let bblStr = (typeof details?.bbl === "string" ? details.bbl.trim() : "") ||
       (typeof details?.buildingLotBlock === "string" && /^\d{10}$/.test(String(details.buildingLotBlock).trim()) ? String(details.buildingLotBlock).trim() : "");
 
-    // If no BBL on property, try linked listing: extra (bbl/bin), then lat/lon reverse geocode, then address-based lookup.
+    // If no BBL on property, try: (1) linked listing extra.bbl/bin, (2) address-based permit lookup (exact then fuzzy).
     if (!bblStr) {
       const fromListing = await resolveBBLFromListing(matchRepo, listingRepo, property.id);
       if (fromListing?.bbl) {
@@ -104,30 +109,35 @@ export async function enrichPropertyWithPermits(
       }
     }
 
-    // If still no BBL, do one address-based lookup to permit dataset; take first row's BBL/BIN and persist, then use BBL for main fetch.
+    // Address-based lookup: try exact then fuzzy (with 10-year date); if no rows, retry without date filter so older permits can supply BBL.
     if (!bblStr) {
-      const { borough, houseNo, streetName } = await resolveAddressFromListing(
+      const resolved = await resolveBBLFromPermitAddress(
         property,
         propertyRepo,
         matchRepo,
-        listingRepo
+        listingRepo,
+        cutoffDate,
+        (borough, houseNo, streetName) =>
+          fetchPermitsPage(buildSoQLParamsByAddress(borough, houseNo, streetName, cutoffDate, 1, 0), { appToken: options.appToken }),
+        (borough, houseNo, limit, offset) =>
+          fetchPermitsPage(buildSoQLParamsByBoroughAndHouseNo(borough, houseNo, cutoffDate, limit, offset), { appToken: options.appToken }),
+        (borough, houseNo, streetName) =>
+          fetchPermitsPage(buildSoQLParamsByAddressNoDate(borough, houseNo, streetName, 1, 0), { appToken: options.appToken }),
+        (borough, houseNo, limit, offset) =>
+          fetchPermitsPage(buildSoQLParamsByBoroughAndHouseNoNoDate(borough, houseNo, limit, offset), { appToken: options.appToken })
       );
-      if (borough && houseNo && streetName) {
-        const oneRow = await fetchPermitsPage(
-          buildSoQLParamsByAddress(borough, houseNo, streetName, cutoffDate, 1, 0),
-          { appToken: options.appToken }
-        );
-        const first = oneRow[0];
-        if (first?.bbl?.trim()) {
-          bblStr = first.bbl.trim();
-          await propertyRepo.mergeDetails(propertyId, { bbl: bblStr, ...(first.bin?.trim() && { bin: first.bin.trim() }) });
-        }
+      if (resolved?.bbl) {
+        bblStr = resolved.bbl;
+        await propertyRepo.mergeDetails(propertyId, { bbl: resolved.bbl, ...(resolved.bin && { bin: resolved.bin }) });
       }
     }
 
     if (bblStr) {
+      const bblNormalized = normalizeBblForQuery(bblStr);
+      if (bblNormalized) bblStr = bblNormalized;
+      const bblForQueries = (await resolveCondoBblForQuery(bblStr, { appToken: options.appToken })) ?? bblStr;
       rows = await fetchAllPermits(
-        (limit, offset) => buildSoQLParamsByBBL(bblStr, cutoffDate, limit, offset),
+        (limit, offset) => buildSoQLParamsByBBL(bblForQueries, cutoffDate, limit, offset),
         { appToken: options.appToken }
       );
     } else {
@@ -148,9 +158,11 @@ export async function enrichPropertyWithPermits(
         });
         return { ok: false, permitsFetched: 0, permitsUpserted: 0, error: "No BBL or address" };
       }
+      const variants = streetNameForPermitApi(streetName);
+      const streetToUse = variants[0] ?? streetName;
       rows = await fetchAllPermits(
         (limit, offset) =>
-          buildSoQLParamsByAddress(borough, houseNo, streetName, cutoffDate, limit, offset),
+          buildSoQLParamsByAddress(borough, houseNo, streetToUse, cutoffDate, limit, offset),
         { appToken: options.appToken }
       );
     }
@@ -203,43 +215,6 @@ export async function enrichPropertyWithPermits(
   }
 }
 
-/**
- * Try to get BBL/BIN from the linked listing: first extra (GET sale details),
- * then lat/lon reverse geocode (Geoclient), then caller falls back to address-based lookup.
- */
-async function resolveBBLFromListing(
-  matchRepo: MatchRepo,
-  listingRepo: ListingRepo,
-  propertyId: string
-): Promise<{ bbl: string; bin?: string; lat?: number; lon?: number } | null> {
-  const { matches } = await matchRepo.list({ propertyId, limit: 1 });
-  const match = matches[0];
-  if (!match) return null;
-  const listing = await listingRepo.byId(match.listingId);
-  if (!listing) return null;
-
-  const extra = listing.extra && typeof listing.extra === "object" ? (listing.extra as Record<string, unknown>) : null;
-  if (extra) {
-    const bbl = extra.bbl ?? extra.BBL ?? extra.borough_block_lot;
-    const bin = extra.bin ?? extra.BIN ?? extra.building_identification_number;
-    const bblStr = typeof bbl === "string" && /^\d{10}$/.test(bbl.trim()) ? bbl.trim() : null;
-    if (bblStr) {
-      return { bbl: bblStr, bin: typeof bin === "string" ? bin.trim() : undefined };
-    }
-  }
-
-  const lat = listing.lat != null && typeof listing.lat === "number" && !Number.isNaN(listing.lat) ? listing.lat : null;
-  const lon = listing.lon != null && typeof listing.lon === "number" && !Number.isNaN(listing.lon) ? listing.lon : null;
-  if (lat != null && lon != null && lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180) {
-    const fromGeo = await resolveBBLFromLatLon(lat, lon);
-    if (fromGeo?.bbl) {
-      return { ...fromGeo, lat, lon };
-    }
-  }
-
-  return null;
-}
-
 async function resolveAddressFromListing(
   property: Property,
   _propertyRepo: PropertyRepo,
@@ -270,6 +245,114 @@ async function resolveAddressFromListing(
     houseNo: normalizeHouseNo(houseNo),
     streetName: normalizeStreetName(streetName),
   };
+}
+
+/** Normalize for fuzzy compare: single space, uppercase. */
+function norm(s: string): string {
+  return String(s).toUpperCase().replace(/\s+/g, " ").trim();
+}
+
+/** Extract digit sequences from street name (e.g. "22" from "WEST 22ND ST"). Used to require street number match in fuzzy fallback. */
+function streetNumbersIn(streetName: string): string[] {
+  const matches = String(streetName).match(/\d+/g);
+  return matches ? [...new Set(matches)] : [];
+}
+
+/**
+ * Resolve BBL/BIN from permit API by address: try exact match with permit-style street variants,
+ * then fallback to borough+house_no fetch and pick row with best street name match.
+ * Both conditions required: (1) linked raw listing has lat/lon (from GET sale details), and
+ * (2) we find a matching permit row by address (exact or fuzzy). Only then do we assign BBL/BIN.
+ * Fuzzy match requires street number to match: if our street has a number (e.g. 22 in "West 22nd St"),
+ * the permit row's street_name must contain that number (so we don't match 485 Lexington when we want 485 West 22nd).
+ */
+async function resolveBBLFromPermitAddress(
+  property: Property,
+  propertyRepo: PropertyRepo,
+  matchRepo: MatchRepo,
+  listingRepo: ListingRepo,
+  _cutoffDate: string,
+  fetchByAddress: (borough: string, houseNo: string, streetName: string) => Promise<SocrataPermitRow[]>,
+  fetchByBoroughHouseNo: (borough: string, houseNo: string, limit: number, offset: number) => Promise<SocrataPermitRow[]>,
+  fetchByAddressNoDate: (borough: string, houseNo: string, streetName: string) => Promise<SocrataPermitRow[]>,
+  fetchByBoroughHouseNoNoDate: (borough: string, houseNo: string, limit: number, offset: number) => Promise<SocrataPermitRow[]>
+): Promise<{ bbl: string; bin?: string } | null> {
+  const { matches } = await matchRepo.list({ propertyId: property.id, limit: 1 });
+  const match = matches[0];
+  if (!match) return null;
+  const listing = await listingRepo.byId(match.listingId);
+  if (!listing) return null;
+  const latVal = listing.lat != null ? (typeof listing.lat === "number" ? listing.lat : parseFloat(String(listing.lat))) : NaN;
+  const lonVal = listing.lon != null ? (typeof listing.lon === "number" ? listing.lon : parseFloat(String(listing.lon))) : NaN;
+  const hasLatLon =
+    !Number.isNaN(latVal) && latVal >= -90 && latVal <= 90 &&
+    !Number.isNaN(lonVal) && lonVal >= -180 && lonVal <= 180;
+  if (!hasLatLon) return null;
+
+  const { borough, houseNo, streetName } = await resolveAddressFromListing(
+    property,
+    propertyRepo,
+    matchRepo,
+    listingRepo
+  );
+  if (!borough || !houseNo || !streetName) return null;
+
+  const variants = streetNameForPermitApi(streetName);
+
+  const tryExact = async (fetchAddr: (b: string, h: string, s: string) => Promise<SocrataPermitRow[]>): Promise<{ bbl: string; bin?: string } | null> => {
+    for (const variant of variants) {
+      const rows = await fetchAddr(borough, houseNo, variant);
+      const first = rows[0];
+      if (first?.bbl?.trim()) return { bbl: first.bbl.trim(), bin: first.bin?.trim() || undefined };
+    }
+    return null;
+  };
+
+  /** Batch size and max batches for fuzzy street match (borough+house_no). We paginate until we find a match or run out. */
+  const FUZZY_BATCH_SIZE = 1000;
+  const FUZZY_MAX_BATCHES = 20; // cap at 20k rows per fuzzy attempt to avoid runaway
+  const tryFuzzy = async (
+    fetchBoroughHouse: (b: string, h: string, limit: number, offset: number) => Promise<SocrataPermitRow[]>
+  ): Promise<{ bbl: string; bin?: string } | null> => {
+    const permitStyleVariants = streetNameForPermitApi(streetName);
+    const targetNorm = permitStyleVariants[0] ? norm(permitStyleVariants[0]) : norm(streetName);
+    const requiredNumbers = streetNumbersIn(streetName);
+    let best: SocrataPermitRow | null = null;
+    let bestScore = 0;
+    let offset = 0;
+    for (let batch = 0; batch < FUZZY_MAX_BATCHES; batch++) {
+      const page = await fetchBoroughHouse(borough, houseNo, FUZZY_BATCH_SIZE, offset);
+      if (page.length === 0) break;
+      for (const row of page) {
+        const rowStreet = (row.street_name ?? "").trim();
+        if (!rowStreet) continue;
+        const rowNorm = norm(rowStreet);
+        if (requiredNumbers.length > 0) {
+          const allPresent = requiredNumbers.every((num) => rowNorm.includes(num));
+          if (!allPresent) continue;
+        }
+        const score = rowNorm === targetNorm ? 100 : (rowNorm.includes(targetNorm) || targetNorm.includes(rowNorm) ? 50 : 0);
+        if (score > bestScore) {
+          bestScore = score;
+          best = row;
+        }
+      }
+      if (best?.bbl?.trim()) return { bbl: best.bbl.trim(), bin: best.bin?.trim() || undefined };
+      if (page.length < FUZZY_BATCH_SIZE) break;
+      offset += FUZZY_BATCH_SIZE;
+    }
+    if (best?.bbl?.trim()) return { bbl: best.bbl.trim(), bin: best.bin?.trim() || undefined };
+    return null;
+  };
+
+  let out = await tryExact(fetchByAddress);
+  if (out) return out;
+  out = await tryFuzzy(fetchByBoroughHouseNo);
+  if (out) return out;
+  out = await tryExact(fetchByAddressNoDate);
+  if (out) return out;
+  out = await tryFuzzy(fetchByBoroughHouseNoNoDate);
+  return out;
 }
 
 function buildPermitsSummary(rows: SocrataPermitRow[]): PermitsSummary {

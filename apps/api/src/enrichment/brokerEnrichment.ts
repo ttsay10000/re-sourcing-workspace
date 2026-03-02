@@ -7,10 +7,13 @@ import type { AgentEnrichmentEntry } from "@re-sourcing/contracts";
 import OpenAI from "openai";
 import { getEnrichmentModel } from "./openaiModels.js";
 
+/** Normalize API key: trim and remove surrounding quotes (e.g. from Render env). */
 function getApiKey(): string | null {
-  const key = process.env.OPENAI_API_KEY;
-  if (!key || typeof key !== "string" || key.trim() === "") return null;
-  return key.trim();
+  const raw = process.env.OPENAI_API_KEY;
+  if (raw == null || typeof raw !== "string") return null;
+  const key = raw.trim().replace(/^["']|["']$/g, "");
+  if (!key || key.length < 10) return null;
+  return key;
 }
 
 /**
@@ -22,7 +25,10 @@ export async function enrichBrokers(
   propertyContext?: string | null
 ): Promise<AgentEnrichmentEntry[] | null> {
   const key = getApiKey();
-  if (!key) return null;
+  if (!key) {
+    console.warn("[brokerEnrichment] OPENAI_API_KEY missing or invalid (set a non-empty key in .env or Render).");
+    return null;
+  }
 
   const names = Array.isArray(agentNames) ? agentNames.filter((n) => n != null && String(n).trim()) : [];
   if (names.length === 0) return null;
@@ -51,7 +57,19 @@ Respond with a JSON object with a single key "entries" that is an array of objec
     const content = completion.choices[0]?.message?.content;
     if (!content || typeof content !== "string") return null;
 
-    const parsed = JSON.parse(content) as unknown;
+    // Strip markdown code fence if present so JSON.parse works
+    let jsonStr = content.trim();
+    const codeBlock = jsonStr.match(/^```(?:json)?\s*([\s\S]*?)```$/);
+    if (codeBlock) jsonStr = codeBlock[1].trim();
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(jsonStr);
+    } catch (parseErr) {
+      console.error("[brokerEnrichment] LLM response was not valid JSON:", (parseErr as Error)?.message ?? parseErr);
+      return null;
+    }
+
     let arr: unknown[] = [];
     if (parsed && typeof parsed === "object" && "entries" in parsed && Array.isArray((parsed as { entries: unknown[] }).entries)) {
       arr = (parsed as { entries: unknown[] }).entries;
@@ -83,7 +101,13 @@ Respond with a JSON object with a single key "entries" that is an array of objec
     }
     return result;
   } catch (err) {
-    console.error("[brokerEnrichment]", err);
+    const msg = err instanceof Error ? err.message : String(err);
+    const status = err && typeof err === "object" && "status" in err ? (err as { status?: number }).status : null;
+    console.error(
+      "[brokerEnrichment] OpenAI request failed:",
+      status != null ? `status=${status}` : "",
+      msg
+    );
     return null;
   }
 }

@@ -169,8 +169,25 @@ export async function fetchActiveSalesWithCriteria(criteria: NycsSearchCriteria)
 }
 
 /**
+ * Unwrap GET sale details response: many APIs return { data }, { listing }, or { result }.
+ * Returns the inner listing payload so callers see flat priceHistory, agents, etc.
+ */
+function unwrapSaleDetailsResponse(data: unknown): Record<string, unknown> {
+  if (!data || typeof data !== "object") return {};
+  const obj = data as Record<string, unknown>;
+  for (const key of ["data", "listing", "result", "property", "details"]) {
+    const inner = obj[key];
+    if (inner && typeof inner === "object" && !Array.isArray(inner)) {
+      return { ...(inner as Record<string, unknown>), _responseRoot: obj };
+    }
+  }
+  return obj;
+}
+
+/**
  * Fetch sale details for a single listing by its StreetEasy URL.
  * Uses GET /sales/url (not /sales/search); only the url querystring param is required.
+ * Unwraps nested responses (e.g. { data: { ... } }) so price history and agents are at top level.
  */
 export async function fetchSaleDetailsByUrl(streeteasyUrl: string): Promise<Record<string, unknown>> {
   const url = new URL(SALES_URL_ENDPOINT);
@@ -181,7 +198,7 @@ export async function fetchSaleDetailsByUrl(streeteasyUrl: string): Promise<Reco
     throw new Error(`NYC Real Estate API sale details error ${res.status}: ${text || res.statusText}`);
   }
   const data = (await res.json()) as unknown;
-  return (data && typeof data === "object" ? data : {}) as Record<string, unknown>;
+  return unwrapSaleDetailsResponse(data);
 }
 
 /**

@@ -119,6 +119,42 @@ export function normalizeStreetName(str: string | null | undefined): string {
   return out.join(" ").replace(/\s+/g, " ").trim();
 }
 
+/** Ordinal suffix to number for permit API (dataset uses "22" not "22ND"). */
+const ORDINAL_SUFFIX = /^(\d+)(ST|ND|RD|TH)$/i;
+function ordinalToNumber(word: string): string {
+  const m = word.match(ORDINAL_SUFFIX);
+  return m ? m[1] ?? word : word;
+}
+
+/**
+ * Normalize street name to match NYC permit API format (rbx6-tga4).
+ * API uses e.g. "WEST   22 STREET" (full "STREET", ordinals as numbers, variable spaces).
+ * Returns one or more variants to try (exact single-space, then multi-space).
+ */
+export function streetNameForPermitApi(str: string | null | undefined): string[] {
+  if (str == null || typeof str !== "string") return [];
+  let s = normalizeStreetName(str);
+  if (!s) return [];
+  const parts = s.split(/\s+/).filter(Boolean);
+  const out: string[] = [];
+  for (let i = 0; i < parts.length; i++) {
+    out.push(ordinalToNumber(parts[i]!));
+  }
+  let base = out.join(" ");
+  if (/\s+ST\s*$/.test(base) || base === "ST") {
+    base = base.replace(/\s+ST\s*$/, " STREET").trim();
+  }
+  if (/\s+AVE\s*$/.test(base) || base === "AVE") {
+    base = base.replace(/\s+AVE\s*$/, " AVENUE").trim();
+  }
+  const variants: string[] = [base];
+  const withTwoSpaces = out.join("  ");
+  if (withTwoSpaces !== base) variants.push(withTwoSpaces);
+  const withThreeSpaces = out.join("   ");
+  if (withThreeSpaces !== base && withThreeSpaces !== withTwoSpaces) variants.push(withThreeSpaces);
+  return variants;
+}
+
 /**
  * Parse common date formats to YYYY-MM-DD or null.
  */

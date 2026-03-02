@@ -1,5 +1,6 @@
 /**
- * Affordable Housing Production by Building hg8x-zxpr – multi-row by BBL or BIN; summary from latest by completion date.
+ * Affordable Housing Production by Building hg8x-zxpr – multi-row by BBL only.
+ * Dataset has bbl column; we do not use BIN (Geoclient BIN unreliable).
  */
 
 import {
@@ -8,8 +9,9 @@ import {
   AffordableHousingRepo,
   PropertyEnrichmentStateRepo,
 } from "@re-sourcing/db";
-import { resourceUrl, escapeSoQLString, fetchAllPages, type SoQLQueryParams } from "../socrata/index.js";
-import { getBblFromDetails, getBinFromDetails } from "../propertyKeys.js";
+import { resourceUrl, escapeSoQLString, fetchAllPages, normalizeBblForQuery, type SoQLQueryParams } from "../socrata/index.js";
+import { getBBLForProperty } from "../resolvePropertyBBL.js";
+import { resolveCondoBblForQuery } from "../resolveCondoBbl.js";
 import { parseDateToYyyyMmDd } from "../normalizeDate.js";
 import type { EnrichmentModule, EnrichmentRunOptions, EnrichmentRunResult } from "../types.js";
 
@@ -49,34 +51,30 @@ async function run(propertyId: string, options: EnrichmentRunOptions): Promise<E
 
   const property = await propertyRepo.byId(propertyId);
   if (!property) return { ok: false, error: "Property not found" };
-  const details = (property.details as Record<string, unknown>) ?? {};
-  const bbl = getBblFromDetails(details);
-  const bin = getBinFromDetails(details);
-  if (!bbl && !bin) {
+  const resolved = await getBBLForProperty(propertyId);
+  const bbl = normalizeBblForQuery(resolved?.bbl) ?? null;
+  if (!bbl) {
     await stateRepo.upsert({
       propertyId,
       enrichmentName: "affordable_housing",
       lastRefreshedAt: now,
       lastSuccessAt: null,
-      lastError: "missing_bbl_and_bin",
+      lastError: "missing_bbl",
       statsJson: { rows_fetched: 0 },
     });
-    return { ok: false, error: "missing_bbl_and_bin" };
+    return { ok: false, error: "missing_bbl" };
   }
+  const bblForQueries = (await resolveCondoBblForQuery(bbl, { appToken: options.appToken })) ?? bbl;
 
-  const conditions: string[] = [];
-  if (bbl) conditions.push(`bbl = '${escapeSoQLString(bbl)}'`);
-  if (bin) conditions.push(`bin = '${escapeSoQLString(bin)}'`);
-  const where = conditions.join(" OR ");
+  const where = `bbl = '${escapeSoQLString(bblForQueries)}'`;
   const select =
-    "bbl, bin, projectname, projectstartdate, projectcompletiondate, reportingconstructiontype, " +
-    "extremelylowincomeunits, verylowincomeunits, lowincomeunits, moderateincomeunits, middleincomeunits, otherincomeunits, " +
-    "studiounits, onebr, twobr, threebr, fourbr, fivebr, sixbrplus, " +
-    "countedrentalunits, countedhomeownershipunits, totalunits";
+    "bbl, bin, project_name, project_start_date, project_completion_date, reporting_construction_type, " +
+    "extremely_low_income_units, very_low_income_units, low_income_units, moderate_income_units, middle_income_units, other_income_units, " +
+    "studio_units, total_units";
   const buildParams = (limit: number, offset: number): SoQLQueryParams => ({
     $select: select,
     $where: where,
-    $order: "projectcompletiondate DESC",
+    $order: "project_completion_date DESC",
     $limit: limit,
     $offset: offset,
   });
@@ -117,7 +115,7 @@ async function run(propertyId: string, options: EnrichmentRunOptions): Promise<E
         propertyId,
         sourceRowId: rowId(row),
         bbl: bbl ?? null,
-        bin: bin ?? null,
+        bin: col(row, "bin") ?? null,
         normalizedJson: normalized,
         rawJson: row,
       });

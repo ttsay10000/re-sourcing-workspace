@@ -1,5 +1,6 @@
 /**
- * DOB NOW Certificate of Occupancy pkdm-hqz6 – single row per property by BBL or BIN.
+ * DOB NOW Certificate of Occupancy pkdm-hqz6 – by BBL only.
+ * Dataset has bbl column. Fetches in batches of 1000 until exhausted (no batch limit).
  */
 
 import {
@@ -8,8 +9,9 @@ import {
   CertificateOfOccupancyRepo,
   PropertyEnrichmentStateRepo,
 } from "@re-sourcing/db";
-import { resourceUrl, escapeSoQLString, fetchSocrataQuery, type SoQLQueryParams } from "../socrata/index.js";
-import { getBblFromDetails, getBinFromDetails } from "../propertyKeys.js";
+import { resourceUrl, escapeSoQLString, fetchAllPages, normalizeBblForQuery, type SoQLQueryParams } from "../socrata/index.js";
+import { getBBLForProperty } from "../resolvePropertyBBL.js";
+import { resolveCondoBblForQuery } from "../resolveCondoBbl.js";
 import { parseDateToYyyyMmDd } from "../normalizeDate.js";
 import type { EnrichmentModule, EnrichmentRunOptions, EnrichmentRunResult } from "../types.js";
 
@@ -34,48 +36,45 @@ async function run(propertyId: string, options: EnrichmentRunOptions): Promise<E
 
   const property = await propertyRepo.byId(propertyId);
   if (!property) return { ok: false, error: "Property not found" };
-  const details = (property.details as Record<string, unknown>) ?? {};
-  const bbl = getBblFromDetails(details);
-  const bin = getBinFromDetails(details);
-  if (!bbl && !bin) {
+  const resolved = await getBBLForProperty(propertyId);
+  const bbl = normalizeBblForQuery(resolved?.bbl) ?? null;
+  if (!bbl) {
     await stateRepo.upsert({
       propertyId,
       enrichmentName: "certificate_of_occupancy",
       lastRefreshedAt: now,
       lastSuccessAt: null,
-      lastError: "missing_bbl_and_bin",
+      lastError: "missing_bbl",
       statsJson: { rows_fetched: 0 },
     });
-    return { ok: false, error: "missing_bbl_and_bin" };
+    return { ok: false, error: "missing_bbl" };
   }
+  const bblForQueries = (await resolveCondoBblForQuery(bbl, { appToken: options.appToken })) ?? bbl;
 
-  const conditions: string[] = [];
-  if (bbl) conditions.push(`bbl = '${escapeSoQLString(bbl)}'`);
-  if (bin) conditions.push(`bin = '${escapeSoQLString(bin)}'`);
-  const where = conditions.join(" OR ");
+  const where = `bbl = '${escapeSoQLString(bblForQueries)}'`;
   const select =
-    "bbl, bin, job_type, co_status, co_filing_type, co_issuance_date, number_of_dwelling_units";
-  const params: SoQLQueryParams = {
+    "bbl, bin, job_type, c_of_o_status, c_of_o_filing_type, c_of_o_issuance_date, number_of_dwelling_units";
+  const buildParams = (limit: number, offset: number): SoQLQueryParams => ({
     $select: select,
     $where: where,
-    $order: "co_issuance_date DESC",
-    $limit: 1,
-    $offset: 0,
-  };
+    $order: "c_of_o_issuance_date DESC",
+    $limit: limit,
+    $offset: offset,
+  });
 
   try {
     const baseUrl = resourceUrl(DATASET_ID);
-    const rows = await fetchSocrataQuery<Record<string, unknown>>(baseUrl, params, {
+    const rows = await fetchAllPages<Record<string, unknown>>(baseUrl, buildParams, {
       appToken: options.appToken,
     });
 
     const row = rows[0];
-    const issuanceDate = row ? parseDateToYyyyMmDd(col(row, "co_issuance_date", "co_issuance_date")) : null;
+    const issuanceDate = row ? parseDateToYyyyMmDd(col(row, "c_of_o_issuance_date", "co_issuance_date")) : null;
     const normalized = row
       ? {
           jobType: col(row, "job_type", "job_type"),
-          status: col(row, "co_status", "co_status"),
-          filingType: col(row, "co_filing_type", "co_filing_type"),
+          status: col(row, "c_of_o_status", "co_status"),
+          filingType: col(row, "c_of_o_filing_type", "co_filing_type"),
           issuanceDate,
           dwellingUnits: row.number_of_dwelling_units != null ? Number(row.number_of_dwelling_units) : null,
         }
@@ -87,7 +86,7 @@ async function run(propertyId: string, options: EnrichmentRunOptions): Promise<E
         propertyId,
         sourceRowId,
         bbl: bbl ?? null,
-        bin: bin ?? null,
+        bin: col(row, "bin") ?? null,
         normalizedJson: normalized,
         rawJson: row,
       });

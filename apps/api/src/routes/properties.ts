@@ -9,6 +9,7 @@ import {
   ListingRepo,
   PropertyRepo,
   MatchRepo,
+  PermitRepo,
   PropertyEnrichmentStateRepo,
   HpdViolationsRepo,
   DobComplaintsRepo,
@@ -66,12 +67,18 @@ router.post("/properties/from-listings", async (req: Request, res: Response) => 
           reasons: { addressMatch: true, normalizedAddressDistance: 0 },
         });
         // If GET sale details (listing.extra) included BBL/BIN or monthly HOA/tax, persist on property.
+        // Also copy lat/lon from listing so enrichment can resolve BBL via Geoclient when needed.
         const extra = listing.extra as Record<string, unknown> | null | undefined;
+        const merge: Record<string, unknown> = {};
+        if (listing.lat != null && typeof listing.lat === "number" && !Number.isNaN(listing.lat) &&
+            listing.lon != null && typeof listing.lon === "number" && !Number.isNaN(listing.lon)) {
+          merge.lat = listing.lat;
+          merge.lon = listing.lon;
+        }
         if (extra && typeof extra === "object") {
           const bbl = extra.bbl ?? extra.BBL ?? extra.borough_block_lot;
           const bin = extra.bin ?? extra.BIN ?? extra.building_identification_number;
           const bblStr = typeof bbl === "string" && /^\d{10}$/.test(bbl.trim()) ? bbl.trim() : null;
-          const merge: Record<string, unknown> = {};
           if (bblStr) {
             merge.bbl = bblStr;
             if (typeof bin === "string" && bin.trim()) merge.bin = bin.trim();
@@ -88,8 +95,8 @@ router.post("/properties/from-listings", async (req: Request, res: Response) => 
             const n = parseFloat(tax.replace(/[$,]/g, ""));
             if (!Number.isNaN(n) && n >= 0) merge.monthlyTax = n;
           }
-          if (Object.keys(merge).length > 0) await propertyRepo.mergeDetails(property.id, merge);
         }
+        if (Object.keys(merge).length > 0) await propertyRepo.mergeDetails(property.id, merge);
         results.push({ listingId: listing.id, propertyId: property.id, canonicalAddress });
       }
 
@@ -145,6 +152,43 @@ router.post("/properties/from-listings", async (req: Request, res: Response) => 
     } else {
       res.status(503).json({ error: "Failed to create properties from listings.", details: message });
     }
+  }
+});
+
+/** GET /api/properties/:id/listing - primary (first) linked listing for this property, for display in canonical detail. */
+router.get("/properties/:id/listing", async (req: Request, res: Response) => {
+  try {
+    const { id: propertyId } = req.params;
+    const pool = getPool();
+    const matchRepo = new MatchRepo({ pool });
+    const listingRepo = new ListingRepo({ pool });
+    const { matches } = await matchRepo.list({ propertyId, limit: 1 });
+    const match = matches[0];
+    if (!match) {
+      res.json({ propertyId, listing: null });
+      return;
+    }
+    const listing = await listingRepo.byId(match.listingId);
+    res.json({ propertyId, listing });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[properties listing]", err);
+    res.status(503).json({ error: "Failed to load primary listing.", details: message });
+  }
+});
+
+/** GET /api/properties/:id/enrichment/permits - DOB permit rows for unified violations/permits table. */
+router.get("/properties/:id/enrichment/permits", async (req: Request, res: Response) => {
+  try {
+    const { id: propertyId } = req.params;
+    const pool = getPool();
+    const repo = new PermitRepo({ pool });
+    const rows = await repo.listByPropertyId(propertyId);
+    res.json({ propertyId, permits: rows, total: rows.length });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[properties enrichment permits]", err);
+    res.status(503).json({ error: "Failed to load permits.", details: message });
   }
 });
 
