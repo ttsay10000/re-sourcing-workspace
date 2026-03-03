@@ -27,6 +27,7 @@ import {
 } from "./socrataClient.js";
 import type { SocrataPermitRow } from "./types.js";
 import type { PermitsSummary } from "./types.js";
+import { fetchPlutoOwnerByBbl } from "../plutoOwner.js";
 
 const TEN_YEARS_MS = 10 * 365.25 * 24 * 60 * 60 * 1000;
 
@@ -166,6 +167,8 @@ export async function enrichPropertyWithPermits(
           buildSoQLParamsByAddress(borough, houseNo, streetToUse, cutoffDate, limit, offset),
         { appToken: options.appToken }
       );
+      // Use first row BBL for PLUTO owner fallback when DOB has no owner
+      if (rows.length > 0 && rows[0].bbl?.trim()) bblStr = normalizeBblForQuery(rows[0].bbl) ?? bblStr;
     }
 
     let upserted = 0;
@@ -189,7 +192,24 @@ export async function enrichPropertyWithPermits(
       upserted++;
     }
 
-    const summary = buildPermitsSummary(rows);
+    let summary = buildPermitsSummary(rows);
+    // If DOB permits had no owner but we have BBL, fall back to PLUTO (tax lot owner).
+    const hasOwnerFromDob = !!(summary.owner_name?.trim() || summary.owner_business_name?.trim());
+    if (!hasOwnerFromDob && bblStr) {
+      try {
+        const pluto = await fetchPlutoOwnerByBbl(bblStr, { appToken: options.appToken });
+        if (pluto?.ownername) {
+          summary = { ...summary, owner_name: pluto.ownername };
+          // If name looks like a business, also set business name for UI
+          if (/ LLC| INC| CORP| L\.?L\.?C\.?| I\.?N\.?C\.?/i.test(pluto.ownername)) {
+            summary = { ...summary, owner_business_name: pluto.ownername };
+          }
+        }
+      } catch (e) {
+        // Non-fatal: permit enrichment still succeeds; owner stays empty
+        console.warn("[enrichPermits] PLUTO owner fallback failed for BBL", bblStr, e);
+      }
+    }
     // Don't overwrite existing owner: many rows may match BBL/address; we want the first (most recent) only and to keep it once set.
     // Each property is updated by its own propertyId; owner is stored per property in details.enrichment.permits_summary.
     const current = await propertyRepo.byId(propertyId);

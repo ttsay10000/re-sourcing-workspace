@@ -1,6 +1,7 @@
 /**
- * Example: run the owner flow (permit-based) for a single BBL.
- * Fetches one page of DOB permits from Socrata, builds permits_summary (first/most recent owner), prints result.
+ * Example: run the owner flow for a single BBL.
+ * 1) DOB NOW Build permits (rbx6-tga4): owner from most recent permit with owner_name/owner_business_name.
+ * 2) PLUTO fallback (64uk-42ks): when DOB has no permits or no owner, use tax lot ownername.
  * No database required.
  *
  * Run from repo root or apps/api:
@@ -13,6 +14,8 @@ import { buildSoQLParamsByBBL, fetchPermitsPage } from "../enrichment/permits/so
 import type { SocrataPermitRow } from "../enrichment/permits/types.js";
 import { parseDateToYyyyMmDd } from "../enrichment/permits/normalizers.js";
 import type { PermitsSummary } from "../enrichment/permits/types.js";
+import { fetchPlutoOwnerByBbl } from "../enrichment/plutoOwner.js";
+import { normalizeBblForQuery } from "../enrichment/socrata/index.js";
 
 const TEN_YEARS_MS = 10 * 365.25 * 24 * 60 * 60 * 1000;
 function getCutoffDate(): string {
@@ -48,7 +51,7 @@ async function main(): Promise<void> {
   const cutoff = getCutoffDate();
   const appToken = process.env.SOCRATA_APP_TOKEN ?? null;
 
-  console.log("Owner example (permit-derived)");
+  console.log("Owner example (DOB permits + PLUTO fallback)");
   console.log("BBL:", bbl, "| 10-year cutoff:", cutoff);
   console.log("");
 
@@ -79,7 +82,26 @@ async function main(): Promise<void> {
   }
   console.log("");
 
-  const summary = buildPermitsSummary(rows);
+  let summary = buildPermitsSummary(rows);
+  // PLUTO fallback when DOB has no owner (same as enrichPermits)
+  const hasOwnerFromDob = !!(summary.owner_name?.trim() || summary.owner_business_name?.trim());
+  if (!hasOwnerFromDob && normalizeBblForQuery(bbl)) {
+    try {
+      const pluto = await fetchPlutoOwnerByBbl(bbl, { appToken, timeoutMs: 15_000 });
+      if (pluto?.ownername) {
+        summary = { ...summary, owner_name: pluto.ownername };
+        if (/ LLC| INC| CORP| L\.?L\.?C\.?| I\.?N\.?C\.?/i.test(pluto.ownername)) {
+          summary = { ...summary, owner_business_name: pluto.ownername };
+        }
+        console.log("PLUTO fallback: ownername =", pluto.ownername);
+      } else {
+        console.log("PLUTO: no row or empty ownername for this BBL.");
+      }
+    } catch (e) {
+      console.warn("PLUTO fallback error:", e);
+    }
+  }
+  console.log("");
   console.log("permits_summary (written to property.details when enrichment runs):");
   console.log(JSON.stringify(summary, null, 2));
 }
