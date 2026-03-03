@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { AREA_TREE, isIncludedByParent, type AreaNode } from "./areas";
+import { BOROUGH_TABS, isIncludedByParent, type AreaNode } from "./areas";
 
 function formatElapsed(seconds: number): string {
   const m = Math.floor(seconds / 60);
@@ -73,6 +73,7 @@ export default function RunsPage() {
   const [amenities, setAmenities] = useState<string>("");
   const [selectedTypes, setSelectedTypes] = useState<string[]>([]);
   const [limit, setLimit] = useState<string>("100");
+  const [areaBoroughTab, setAreaBoroughTab] = useState<string>(BOROUGH_TABS[0]?.id ?? "MANHATTAN");
 
   const fetchRuns = useCallback(() => {
     fetch(`${API_BASE}/api/test-agent/runs`)
@@ -325,12 +326,42 @@ export default function RunsPage() {
 
         <div style={{ marginBottom: "1rem" }}>
           <label style={{ display: "block", marginBottom: "0.35rem", fontWeight: 600 }}>
-            Areas (required)
+            Areas (required) — select from one or more boroughs for the same run
           </label>
+          <div
+            style={{
+              display: "flex",
+              gap: "0.25rem",
+              marginBottom: "0.5rem",
+              flexWrap: "wrap",
+              borderBottom: "1px solid #e5e5e5",
+              paddingBottom: "0.5rem",
+            }}
+          >
+            {BOROUGH_TABS.map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setAreaBoroughTab(tab.id)}
+                style={{
+                  padding: "0.35rem 0.6rem",
+                  fontSize: "0.8rem",
+                  fontWeight: areaBoroughTab === tab.id ? 600 : 400,
+                  border: "1px solid #e5e5e5",
+                  borderRadius: 4,
+                  background: areaBoroughTab === tab.id ? "#e5e5e5" : "#fafafa",
+                  color: areaBoroughTab === tab.id ? "#171717" : "#525252",
+                  cursor: "pointer",
+                }}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
           <div
             className="runs-areas-list"
             style={{
-              maxHeight: "10rem",
+              maxHeight: "14rem",
               overflowY: "auto",
               padding: "0.75rem 1rem",
               border: "1px solid #e5e5e5",
@@ -338,7 +369,9 @@ export default function RunsPage() {
               background: "#f5f5f5",
             }}
           >
-            {AREA_TREE.map((node) => renderAreaNodes([node], 0))}
+            {BOROUGH_TABS.find((t) => t.id === areaBoroughTab)?.tree.map((node) =>
+              renderAreaNodes([node], 0)
+            )}
           </div>
           <p style={{ fontSize: "0.75rem", color: "#525252", marginTop: "0.35rem" }}>
             Selected: {selectedAreas.length > 0 ? selectedAreas.join(", ") : "all-downtown, all-midtown (default)"}
