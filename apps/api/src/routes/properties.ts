@@ -23,12 +23,46 @@ const router = Router();
 
 const ENRICHMENT_RATE_LIMIT_DELAY_MS = Number(process.env.ENRICHMENT_RATE_LIMIT_DELAY_MS || process.env.PERMITS_RATE_LIMIT_DELAY_MS) || 300;
 
-/** GET /api/properties - list canonical properties. */
-router.get("/properties", async (_req: Request, res: Response) => {
+/** GET /api/properties - list canonical properties. ?includeListingSummary=1 adds primary listing price, listedAt, city for filter/sort. */
+router.get("/properties", async (req: Request, res: Response) => {
   try {
     const pool = getPool();
-    const repo = new PropertyRepo({ pool });
-    const properties = await repo.list({ limit: 500 });
+    const includeListingSummary = req.query.includeListingSummary === "1" || req.query.includeListingSummary === "true";
+    if (!includeListingSummary) {
+      const repo = new PropertyRepo({ pool });
+      const properties = await repo.list({ limit: 500 });
+      res.json({ properties, total: properties.length });
+      return;
+    }
+    const r = await pool.query(
+      `SELECT DISTINCT ON (p.id)
+         p.id, p.canonical_address, p.details, p.created_at, p.updated_at,
+         l.price AS listing_price, l.listed_at AS listing_listed_at, l.city AS listing_city
+       FROM properties p
+       LEFT JOIN listing_property_matches m ON m.property_id = p.id
+       LEFT JOIN listings l ON l.id = m.listing_id
+       ORDER BY p.id, m.confidence DESC NULLS LAST, m.created_at DESC
+       LIMIT 500`
+    );
+    const properties = r.rows.map((row: Record<string, unknown>) => {
+      const createdAt = row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at ?? "");
+      const updatedAt = row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at ?? "");
+      const listingListedAt = row.listing_listed_at != null
+        ? (row.listing_listed_at instanceof Date ? row.listing_listed_at.toISOString() : String(row.listing_listed_at))
+        : null;
+      return {
+        id: row.id,
+        canonicalAddress: row.canonical_address,
+        details: row.details ?? null,
+        createdAt,
+        updatedAt,
+        primaryListing: {
+          price: row.listing_price != null ? Number(row.listing_price) : null,
+          listedAt: listingListedAt,
+          city: (row.listing_city as string) ?? null,
+        },
+      };
+    });
     res.json({ properties, total: properties.length });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -175,6 +209,55 @@ router.post("/properties/from-listings", async (req: Request, res: Response) => 
     } else {
       res.status(503).json({ error: "Failed to create properties from listings.", details: message });
     }
+  }
+});
+
+/** Enrichment module names used in property_enrichment_state (order matches pipeline). */
+const ENRICHMENT_MODULES: { key: string; label: string }[] = [
+  { key: "permits", label: "Permits" },
+  { key: "hpd_registration", label: "HPD Registration" },
+  { key: "certificate_of_occupancy", label: "Certificate of Occupancy" },
+  { key: "zoning_ztl", label: "Zoning" },
+  { key: "dob_complaints", label: "DOB Complaints" },
+  { key: "hpd_violations", label: "HPD Violations" },
+  { key: "housing_litigations", label: "Housing Litigations" },
+  { key: "affordable_housing", label: "Affordable Housing" },
+];
+
+/** GET /api/properties/pipeline-stats - counts for raw listings, canonical properties, and per-module completion for pipeline progress. */
+router.get("/properties/pipeline-stats", async (_req: Request, res: Response) => {
+  try {
+    const pool = getPool();
+    const [rawResult, canonicalResult, enrichmentResult] = await Promise.all([
+      pool.query<{ count: string }>("SELECT count(*)::text AS count FROM listings WHERE lifecycle_state = 'active'"),
+      pool.query<{ count: string }>("SELECT count(*)::text AS count FROM properties"),
+      pool.query<{ enrichment_name: string; count: string }>(
+        `SELECT enrichment_name, count(DISTINCT property_id)::text AS count
+         FROM property_enrichment_state
+         WHERE last_success_at IS NOT NULL
+         GROUP BY enrichment_name`
+      ),
+    ]);
+    const rawListings = parseInt(rawResult.rows[0]?.count ?? "0", 10);
+    const canonicalProperties = parseInt(canonicalResult.rows[0]?.count ?? "0", 10);
+    const byModule: Record<string, number> = {};
+    for (const row of enrichmentResult.rows) {
+      byModule[row.enrichment_name] = parseInt(row.count, 10);
+    }
+    const enrichment = ENRICHMENT_MODULES.map(({ key, label }) => ({
+      key,
+      label,
+      completed: byModule[key] ?? 0,
+    }));
+    res.json({
+      rawListings,
+      canonicalProperties,
+      enrichment,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[properties pipeline-stats]", err);
+    res.status(503).json({ error: "Failed to load pipeline stats.", details: message });
   }
 });
 

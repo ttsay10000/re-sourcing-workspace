@@ -10,6 +10,12 @@ export interface CanonicalProperty {
   details?: Record<string, unknown> | null;
   createdAt: string;
   updatedAt: string;
+  /** Present when listed with ?includeListingSummary=1 for filter/sort. */
+  primaryListing?: {
+    price: number | null;
+    listedAt: string | null;
+    city: string | null;
+  } | null;
 }
 
 /** Listing row shape returned by GET /api/properties/:id/listing */

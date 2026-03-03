@@ -1,6 +1,6 @@
 /**
- * Unified enrichment runner: permits + 7 modules. Run one module or all for a property or batch.
- * After permits, we resolve BBL (details, listing extra, or Geoclient) so modules have it—same as test flow.
+ * Unified enrichment runner: resolve BBL first, then permits + 7 modules. BBL comes from
+ * property details, linked listing extra, or Geoclient so every module has it when it runs.
  */
 
 import { getPool, PropertyRepo } from "@re-sourcing/db";
@@ -17,12 +17,8 @@ export interface RunEnrichmentForPropertyOptions extends EnrichmentRunOptions {
 
 /**
  * Run enrichment for a single property. If moduleName is set, run only that module.
- * Otherwise run permits first; only run the 7 other modules if BBL/BIN are present (enrichment
- * has not failed). If no BBL/BIN after permits, other modules are skipped—no point running them.
- *
- * Every call uses only the given propertyId for all reads/writes (permits, state, details);
- * no shared state is used, so when invoked in a loop over many property IDs, each property
- * goes through the same pipeline (permits + all modules) independently.
+ * Otherwise: resolve BBL first (details, listing, or Geoclient), then permits, then the 7 other
+ * modules. Modules are skipped only if BBL/BIN could not be resolved.
  */
 export async function runEnrichmentForProperty(
   propertyId: string,
@@ -33,15 +29,11 @@ export async function runEnrichmentForProperty(
   const delay = () => new Promise((r) => setTimeout(r, delayMs));
   const results: Record<string, { ok: boolean; error?: string; skipped?: boolean }> = {};
 
-  if (!moduleName) {
-    const permitResult = await enrichPropertyWithPermits(propertyId, { appToken: options.appToken });
-    results.permits = { ok: permitResult.ok, error: permitResult.error };
-    await delay();
-  }
-
   const modules = moduleName ? [getEnrichmentModule(moduleName)].filter(Boolean) : ENRICHMENT_MODULES;
   let runOtherModules = true;
-  if (!moduleName && modules.length > 0) {
+
+  if (!moduleName) {
+    // Resolve BBL first so every module (including permits) has it when it runs.
     const resolved = await getBBLForProperty(propertyId, { appToken: options.appToken });
     const hasBbl = !!resolved?.bbl;
     const pool = getPool();
@@ -51,12 +43,17 @@ export async function runEnrichmentForProperty(
     if (!hasBbl && !hasBin) {
       runOtherModules = false;
     }
+    await delay();
+
+    const permitResult = await enrichPropertyWithPermits(propertyId, { appToken: options.appToken });
+    results.permits = { ok: permitResult.ok, error: permitResult.error };
+    await delay();
   }
 
   for (const mod of modules) {
     if (!mod) continue;
     if (!runOtherModules) {
-      results[mod.name] = { ok: false, error: "skipped: no BBL/BIN after permit enrichment", skipped: true };
+      results[mod.name] = { ok: false, error: "skipped: no BBL/BIN resolved", skipped: true };
       continue;
     }
     const result = await mod.run(propertyId, { appToken: options.appToken });

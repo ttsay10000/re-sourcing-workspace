@@ -1,9 +1,10 @@
 "use client";
 
-import React, { Suspense, useCallback, useEffect, useRef, useState } from "react";
+import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { PropertyDetailCollapsible } from "./PropertyDetailCollapsible";
 import { CanonicalPropertyDetail, type CanonicalProperty } from "./CanonicalPropertyDetail";
+import { AREA_OPTIONS, cityToArea, cityFromCanonicalAddress } from "./areas";
 
 function formatElapsed(seconds: number): string {
   const m = Math.floor(seconds / 60);
@@ -22,6 +23,18 @@ interface RunLogEntry {
   criteria?: Record<string, unknown>;
   listingsCreated: number;
   listingsUpdated: number;
+}
+
+interface PipelineEnrichmentRow {
+  key: string;
+  label: string;
+  completed: number;
+}
+
+interface PipelineStats {
+  rawListings: number;
+  canonicalProperties: number;
+  enrichment: PipelineEnrichmentRow[];
 }
 
 interface AgentEnrichmentEntry {
@@ -75,6 +88,8 @@ function PropertyDataContent() {
   const [clearingCanonical, setClearingCanonical] = useState(false);
   const [runLog, setRunLog] = useState<RunLogEntry[]>([]);
   const [runLogOpen, setRunLogOpen] = useState(false);
+  const [pipelineStats, setPipelineStats] = useState<PipelineStats | null>(null);
+  const [pipelineStatsOpen, setPipelineStatsOpen] = useState(false);
   const [reviewDupOpen, setReviewDupOpen] = useState(false);
   const [duplicateCandidates, setDuplicateCandidates] = useState<ListingRow[]>([]);
   const [loadingDup, setLoadingDup] = useState(false);
@@ -87,6 +102,15 @@ function PropertyDataContent() {
   const [enrichmentTimerSeconds, setEnrichmentTimerSeconds] = useState(0);
   const enrichmentTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const selectAllCheckboxRef = useRef<HTMLInputElement | null>(null);
+
+  // Filter/sort state (shared concept for raw and canonical)
+  const [sortBy, setSortBy] = useState<"price" | "listedAt" | "area">("listedAt");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const [areaFilter, setAreaFilter] = useState<string>("");
+  const [minPrice, setMinPrice] = useState<string>("");
+  const [maxPrice, setMaxPrice] = useState<string>("");
+  const [listedAfter, setListedAfter] = useState<string>("");
+  const [listedBefore, setListedBefore] = useState<string>("");
 
   const fetchListings = useCallback(() => {
     setLoading(true);
@@ -109,9 +133,23 @@ function PropertyDataContent() {
       .catch(() => setRunLog([]));
   }, []);
 
+  const fetchPipelineStats = useCallback(() => {
+    fetch(`${API_BASE}/api/properties/pipeline-stats`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.error) throw new Error(data.error);
+        setPipelineStats({
+          rawListings: data.rawListings ?? 0,
+          canonicalProperties: data.canonicalProperties ?? 0,
+          enrichment: data.enrichment ?? [],
+        });
+      })
+      .catch(() => setPipelineStats(null));
+  }, []);
+
   const fetchCanonicalProperties = useCallback(() => {
     setLoadingCanonical(true);
-    fetch(`${API_BASE}/api/properties`)
+    fetch(`${API_BASE}/api/properties?includeListingSummary=1`)
       .then((r) => r.json())
       .then((data) => {
         if (data.error) throw new Error(data.error);
@@ -156,7 +194,90 @@ function PropertyDataContent() {
     fetchRunLog();
   }, [fetchRunLog]);
 
+  useEffect(() => {
+    fetchPipelineStats();
+  }, [fetchPipelineStats]);
+
   const selectedListing = selectedId ? listings.find((l) => l.id === selectedId) ?? null : null;
+
+  const parseNum = (s: string): number | null => {
+    const n = parseFloat(s.replace(/[$,]/g, "").trim());
+    return s.trim() === "" || Number.isNaN(n) ? null : n;
+  };
+  const parseDate = (s: string): number | null => {
+    if (!s.trim()) return null;
+    const t = new Date(s.trim()).getTime();
+    return Number.isNaN(t) ? null : t;
+  };
+
+  const filteredSortedListings = useMemo(() => {
+    let out = listings.filter((row) => {
+      if (areaFilter) {
+        const area = cityToArea(row.city);
+        if (area !== areaFilter) return false;
+      }
+      const price = row.price;
+      if (minPrice != null && parseNum(minPrice) != null && price < parseNum(minPrice)!) return false;
+      if (maxPrice != null && parseNum(maxPrice) != null && price > parseNum(maxPrice)!) return false;
+      const listedTs = row.listedAt ? new Date(row.listedAt).getTime() : null;
+      if (listedAfter && parseDate(listedAfter) != null && (listedTs == null || listedTs < parseDate(listedAfter)!)) return false;
+      if (listedBefore && parseDate(listedBefore) != null && (listedTs == null || listedTs > parseDate(listedBefore)!)) return false;
+      return true;
+    });
+    const mult = sortDir === "asc" ? 1 : -1;
+    out = [...out].sort((a, b) => {
+      if (sortBy === "price") {
+        const pa = a.price ?? 0;
+        const pb = b.price ?? 0;
+        return mult * (pa - pb);
+      }
+      if (sortBy === "listedAt") {
+        const ta = a.listedAt ? new Date(a.listedAt).getTime() : 0;
+        const tb = b.listedAt ? new Date(b.listedAt).getTime() : 0;
+        return mult * (ta - tb);
+      }
+      const areaA = cityToArea(a.city);
+      const areaB = cityToArea(b.city);
+      return mult * areaA.localeCompare(areaB);
+    });
+    return out;
+  }, [listings, areaFilter, minPrice, maxPrice, listedAfter, listedBefore, sortBy, sortDir]);
+
+  const filteredSortedCanonical = useMemo(() => {
+    let out = canonicalProperties.filter((prop) => {
+      const area = prop.primaryListing?.city != null
+        ? cityToArea(prop.primaryListing.city)
+        : cityFromCanonicalAddress(prop.canonicalAddress);
+      if (areaFilter && area !== areaFilter) return false;
+      const price = prop.primaryListing?.price ?? null;
+      if (price != null) {
+        if (parseNum(minPrice) != null && price < parseNum(minPrice)!) return false;
+        if (parseNum(maxPrice) != null && price > parseNum(maxPrice)!) return false;
+      } else if (minPrice.trim() || maxPrice.trim()) return false;
+      const listedAt = prop.primaryListing?.listedAt ?? null;
+      const listedTs = listedAt ? new Date(listedAt).getTime() : null;
+      if (listedAfter && parseDate(listedAfter) != null && (listedTs == null || listedTs < parseDate(listedAfter)!)) return false;
+      if (listedBefore && parseDate(listedBefore) != null && (listedTs == null || listedTs > parseDate(listedBefore)!)) return false;
+      return true;
+    });
+    const mult = sortDir === "asc" ? 1 : -1;
+    out = [...out].sort((a, b) => {
+      if (sortBy === "price") {
+        const pa = a.primaryListing?.price ?? 0;
+        const pb = b.primaryListing?.price ?? 0;
+        return mult * (pa - pb);
+      }
+      if (sortBy === "listedAt") {
+        const ta = a.primaryListing?.listedAt ? new Date(a.primaryListing.listedAt).getTime() : 0;
+        const tb = b.primaryListing?.listedAt ? new Date(b.primaryListing.listedAt).getTime() : 0;
+        return mult * (ta - tb);
+      }
+      const areaA = a.primaryListing?.city != null ? cityToArea(a.primaryListing.city) : cityFromCanonicalAddress(a.canonicalAddress);
+      const areaB = b.primaryListing?.city != null ? cityToArea(b.primaryListing.city) : cityFromCanonicalAddress(b.canonicalAddress);
+      return mult * areaA.localeCompare(areaB);
+    });
+    return out;
+  }, [canonicalProperties, areaFilter, minPrice, maxPrice, listedAfter, listedBefore, sortBy, sortDir]);
 
   const formatPrice = (n: number) =>
     n != null && !Number.isNaN(n)
@@ -206,6 +327,7 @@ function PropertyDataContent() {
         }
         if (data?.error) throw new Error(data.error);
         fetchListings();
+        fetchPipelineStats();
       })
       .catch((e) => setError(e instanceof Error ? e.message : "Failed to clear raw listings"))
       .finally(() => setClearing(false));
@@ -224,6 +346,7 @@ function PropertyDataContent() {
         }
         if (data?.error) throw new Error(data.error);
         fetchCanonicalProperties();
+        fetchPipelineStats();
       })
       .catch((e) => setError(e instanceof Error ? e.message : "Failed to clear canonical properties"))
       .finally(() => setClearingCanonical(false));
@@ -284,6 +407,7 @@ function PropertyDataContent() {
         if (data.error) throw new Error(data.error);
         setSelectedListingIds(new Set());
         fetchCanonicalProperties();
+        fetchPipelineStats();
         setActiveTab("canonical");
       })
       .catch((e) => setError(e.message || "Failed to send to canonical"))
@@ -300,14 +424,14 @@ function PropertyDataContent() {
   };
 
   const selectAllListings = () => {
-    setSelectedListingIds(new Set(listings.map((r) => r.id)));
+    setSelectedListingIds(new Set(filteredSortedListings.map((r) => r.id)));
   };
 
   const clearListingSelection = () => {
     setSelectedListingIds(new Set());
   };
 
-  const allSelected = listings.length > 0 && selectedListingIds.size === listings.length;
+  const allSelected = filteredSortedListings.length > 0 && filteredSortedListings.every((l) => selectedListingIds.has(l.id));
   const someSelected = selectedListingIds.size > 0;
 
   useEffect(() => {
@@ -350,19 +474,89 @@ function PropertyDataContent() {
             Canonical Properties
           </button>
         </div>
-        <div className="property-data-filters">
-          <select className="input-text property-data-filter-select" disabled>
-            <option>Filters</option>
-          </select>
-          <select className="input-text property-data-filter-select" disabled>
-            <option>Source...</option>
-          </select>
-          <select className="input-text property-data-filter-select" disabled>
-            <option>Dedup Confidence</option>
-          </select>
-          <select className="input-text property-data-filter-select" disabled>
-            <option>Missing Data</option>
-          </select>
+        <div className="property-data-filters" style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", alignItems: "center" }}>
+          <label className="property-data-filter-label" style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}>
+            <span style={{ whiteSpace: "nowrap", fontSize: "0.875rem" }}>Sort by</span>
+            <select
+              className="input-text property-data-filter-select"
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value as "price" | "listedAt" | "area")}
+              aria-label="Sort by"
+            >
+              <option value="price">Price</option>
+              <option value="listedAt">Listed date</option>
+              <option value="area">Area</option>
+            </select>
+          </label>
+          <label className="property-data-filter-label" style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}>
+            <span style={{ whiteSpace: "nowrap", fontSize: "0.875rem" }}>Direction</span>
+            <select
+              className="input-text property-data-filter-select"
+              value={sortDir}
+              onChange={(e) => setSortDir(e.target.value as "asc" | "desc")}
+              aria-label="Sort direction"
+            >
+              <option value="asc">Ascending</option>
+              <option value="desc">Descending</option>
+            </select>
+          </label>
+          <label className="property-data-filter-label" style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}>
+            <span style={{ whiteSpace: "nowrap", fontSize: "0.875rem" }}>Area</span>
+            <select
+              className="input-text property-data-filter-select"
+              value={areaFilter}
+              onChange={(e) => setAreaFilter(e.target.value)}
+              aria-label="Filter by area"
+            >
+              {AREA_OPTIONS.map((opt) => (
+                <option key={opt.value || "all"} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+          </label>
+          <label className="property-data-filter-label" style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}>
+            <span style={{ whiteSpace: "nowrap", fontSize: "0.875rem" }}>Min price</span>
+            <input
+              type="text"
+              className="input-text"
+              placeholder="Min"
+              value={minPrice}
+              onChange={(e) => setMinPrice(e.target.value)}
+              aria-label="Minimum price"
+              style={{ width: "5rem" }}
+            />
+          </label>
+          <label className="property-data-filter-label" style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}>
+            <span style={{ whiteSpace: "nowrap", fontSize: "0.875rem" }}>Max price</span>
+            <input
+              type="text"
+              className="input-text"
+              placeholder="Max"
+              value={maxPrice}
+              onChange={(e) => setMaxPrice(e.target.value)}
+              aria-label="Maximum price"
+              style={{ width: "5rem" }}
+            />
+          </label>
+          <label className="property-data-filter-label" style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}>
+            <span style={{ whiteSpace: "nowrap", fontSize: "0.875rem" }}>Listed after</span>
+            <input
+              type="date"
+              className="input-text"
+              value={listedAfter}
+              onChange={(e) => setListedAfter(e.target.value)}
+              aria-label="Listed after date"
+            />
+          </label>
+          <label className="property-data-filter-label" style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}>
+            <span style={{ whiteSpace: "nowrap", fontSize: "0.875rem" }}>Listed before</span>
+            <input
+              type="date"
+              className="input-text"
+              value={listedBefore}
+              onChange={(e) => setListedBefore(e.target.value)}
+              aria-label="Listed before date"
+            />
+          </label>
         </div>
       </div>
 
@@ -414,46 +608,57 @@ function PropertyDataContent() {
                     <tr>
                       <th className="property-data-table-expand-col" aria-label="Expand row" />
                       <th>Canonical address</th>
+                      <th>Area</th>
+                      <th>Price</th>
+                      <th>Listed date</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {canonicalProperties.length === 0 ? (
+                    {filteredSortedCanonical.length === 0 ? (
                       <tr>
-                        <td colSpan={2} style={{ padding: "2rem", color: "#737373", textAlign: "center" }}>
-                          No canonical properties yet. Add raw listings, then use &quot;Add to canonical properties&quot; from the Raw Listings tab.
+                        <td colSpan={5} style={{ padding: "2rem", color: "#737373", textAlign: "center" }}>
+                          {canonicalProperties.length === 0
+                            ? "No canonical properties yet. Add raw listings, then use \"Add to canonical properties\" from the Raw Listings tab."
+                            : "No properties match the current filters."}
                         </td>
                       </tr>
                     ) : (
-                      canonicalProperties.map((prop) => (
-                        <React.Fragment key={prop.id}>
-                          <tr
-                            className="property-data-row--clickable"
-                            onClick={() => setExpandedCanonicalId((id) => (id === prop.id ? null : prop.id))}
-                          >
-                            <td className="property-data-table-expand-col">
-                              <button
-                                type="button"
-                                className="property-data-row-expand-btn"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setExpandedCanonicalId((id) => (id === prop.id ? null : prop.id));
-                                }}
-                                aria-expanded={expandedCanonicalId === prop.id}
-                              >
-                                <span className={`property-data-row-expand-chevron ${expandedCanonicalId === prop.id ? "property-data-row-expand-chevron--open" : ""}`}>▼</span>
-                              </button>
-                            </td>
-                            <td>{prop.canonicalAddress}</td>
-                          </tr>
-                          {expandedCanonicalId === prop.id && (
-                            <tr className="property-data-detail-row">
-                              <td colSpan={2} className="property-data-detail-cell" style={{ padding: "1rem 1rem 1rem 2.5rem", backgroundColor: "#fafafa" }}>
-                                <CanonicalPropertyDetail property={prop} />
+                      filteredSortedCanonical.map((prop) => {
+                        const area = prop.primaryListing?.city != null ? cityToArea(prop.primaryListing.city) : cityFromCanonicalAddress(prop.canonicalAddress);
+                        return (
+                          <React.Fragment key={prop.id}>
+                            <tr
+                              className="property-data-row--clickable"
+                              onClick={() => setExpandedCanonicalId((id) => (id === prop.id ? null : prop.id))}
+                            >
+                              <td className="property-data-table-expand-col">
+                                <button
+                                  type="button"
+                                  className="property-data-row-expand-btn"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setExpandedCanonicalId((id) => (id === prop.id ? null : prop.id));
+                                  }}
+                                  aria-expanded={expandedCanonicalId === prop.id}
+                                >
+                                  <span className={`property-data-row-expand-chevron ${expandedCanonicalId === prop.id ? "property-data-row-expand-chevron--open" : ""}`}>▼</span>
+                                </button>
                               </td>
+                              <td>{prop.canonicalAddress}</td>
+                              <td>{area}</td>
+                              <td>{prop.primaryListing?.price != null ? formatPrice(prop.primaryListing.price) : "—"}</td>
+                              <td>{formatListedDate(prop.primaryListing?.listedAt ?? null)}</td>
                             </tr>
-                          )}
-                        </React.Fragment>
-                      ))
+                            {expandedCanonicalId === prop.id && (
+                              <tr className="property-data-detail-row">
+                                <td colSpan={5} className="property-data-detail-cell" style={{ padding: "1rem 1rem 1rem 2.5rem", backgroundColor: "#fafafa" }}>
+                                  <CanonicalPropertyDetail property={prop} />
+                                </td>
+                              </tr>
+                            )}
+                          </React.Fragment>
+                        );
+                      })
                     )}
                   </tbody>
                 </table>
@@ -466,7 +671,7 @@ function PropertyDataContent() {
                 <tr>
                   <th className="property-data-table-expand-col" aria-label="Expand row" />
                   <th className="property-data-table-checkbox-col" aria-label="Select for canonical">
-                    {listings.length > 0 && (
+                    {filteredSortedListings.length > 0 && (
                       <input
                         type="checkbox"
                         ref={selectAllCheckboxRef}
@@ -480,6 +685,8 @@ function PropertyDataContent() {
                   <th>Listing ID</th>
                   <th>Source</th>
                   <th>Raw Address</th>
+                  <th>Price</th>
+                  <th>Area</th>
                   <th>Listed date</th>
                   <th>Days on market</th>
                   <th>Dup. Conf.</th>
@@ -487,15 +694,16 @@ function PropertyDataContent() {
                 </tr>
               </thead>
               <tbody>
-                {listings.length === 0 ? (
+                {filteredSortedListings.length === 0 ? (
                   <tr>
-                    <td colSpan={9} style={{ padding: "2rem", color: "#737373", textAlign: "center" }}>
-                      No raw listings yet. Run a flow from Runs, then use &quot;Send to property data&quot; for a
-                      completed run.
+                    <td colSpan={11} style={{ padding: "2rem", color: "#737373", textAlign: "center" }}>
+                      {listings.length === 0
+                        ? "No raw listings yet. Run a flow from Runs, then use \"Send to property data\" for a completed run."
+                        : "No listings match the current filters."}
                     </td>
                   </tr>
                 ) : (
-                  listings.map((row) => (
+                  filteredSortedListings.map((row) => (
                     <React.Fragment key={row.id}>
                       <tr
                         className={`property-data-row--clickable ${selectedId === row.id ? "property-data-row--selected" : ""}`}
@@ -528,6 +736,8 @@ function PropertyDataContent() {
                         <td>{row.externalId}</td>
                         <td>{row.source === "streeteasy" ? "Streeteasy" : row.source}</td>
                         <td>{fullAddress(row)}</td>
+                        <td>{formatPrice(row.price)}</td>
+                        <td>{cityToArea(row.city)}</td>
                         <td>{formatListedDate(row.listedAt)}</td>
                         <td>{daysOnMarket(row.listedAt) != null ? `${daysOnMarket(row.listedAt)} days` : "—"}</td>
                         <td style={dupConfStyle(row.duplicateScore)} title="Duplicate likelihood (100 = likely duplicate)">
@@ -545,7 +755,7 @@ function PropertyDataContent() {
                       </tr>
                       {expandedRowId === row.id && (
                         <tr key={`${row.id}-detail`} className="property-data-detail-row">
-                          <td colSpan={9} className="property-data-detail-cell" style={{ paddingLeft: "2.5rem", backgroundColor: "#fafafa" }}>
+                          <td colSpan={11} className="property-data-detail-cell" style={{ paddingLeft: "2.5rem", backgroundColor: "#fafafa" }}>
                             <PropertyDetailCollapsible listing={row} />
                           </td>
                         </tr>
@@ -564,11 +774,15 @@ function PropertyDataContent() {
           {activeTab === "raw"
             ? total > 0
               ? someSelected
-                ? `${selectedListingIds.size} of ${total} selected`
-                : `${total} raw listing(s)`
+                ? `${selectedListingIds.size} of ${filteredSortedListings.length} selected`
+                : filteredSortedListings.length < total
+                  ? `${filteredSortedListings.length} of ${total} raw listing(s)`
+                  : `${total} raw listing(s)`
               : "No raw listings"
             : canonicalProperties.length > 0
-              ? `${canonicalProperties.length} canonical propert${canonicalProperties.length === 1 ? "y" : "ies"}`
+              ? filteredSortedCanonical.length < canonicalProperties.length
+                ? `${filteredSortedCanonical.length} of ${canonicalProperties.length} canonical propert${canonicalProperties.length === 1 ? "y" : "ies"}`
+                : `${canonicalProperties.length} canonical propert${canonicalProperties.length === 1 ? "y" : "ies"}`
               : "No canonical properties"}
         </span>
         <div className="property-data-bottom-actions">
@@ -677,9 +891,61 @@ function PropertyDataContent() {
         <button
           type="button"
           className="property-detail-section-header"
+          onClick={() => setPipelineStatsOpen((o) => !o)}
+          aria-expanded={pipelineStatsOpen}
+          style={{ width: "100%", maxWidth: "720px" }}
+        >
+          <span className="property-detail-section-title">Pipeline progress (raw → canonical → enrichment)</span>
+          <span className={`property-detail-section-chevron ${pipelineStatsOpen ? "property-detail-section-chevron--open" : ""}`} aria-hidden>▼</span>
+        </button>
+        {pipelineStatsOpen && (
+          <div className="property-data-run-log-table-wrap">
+            {pipelineStats == null ? (
+              <p style={{ color: "#737373", fontSize: "0.875rem" }}>Loading pipeline stats…</p>
+            ) : (
+              <table className="property-data-table" style={{ maxWidth: "720px", fontSize: "0.875rem" }}>
+                <thead>
+                  <tr>
+                    <th>Stage</th>
+                    <th style={{ textAlign: "right" }}>Count</th>
+                    <th style={{ textAlign: "right" }}>Remaining</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>Raw listings</td>
+                    <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{pipelineStats.rawListings}</td>
+                    <td style={{ textAlign: "right", color: "#737373" }}>—</td>
+                  </tr>
+                  <tr>
+                    <td>Canonical properties</td>
+                    <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{pipelineStats.canonicalProperties}</td>
+                    <td style={{ textAlign: "right", color: "#737373" }}>—</td>
+                  </tr>
+                  {pipelineStats.enrichment.map((row) => {
+                    const remaining = Math.max(0, pipelineStats.canonicalProperties - row.completed);
+                    return (
+                      <tr key={row.key}>
+                        <td>{row.label}</td>
+                        <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{row.completed}</td>
+                        <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", color: remaining > 0 ? "#854d0e" : "#737373" }}>
+                          {remaining > 0 ? `${remaining} left` : "—"}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+          </div>
+        )}
+
+        <button
+          type="button"
+          className="property-detail-section-header"
           onClick={() => setRunLogOpen((o) => !o)}
           aria-expanded={runLogOpen}
-          style={{ width: "100%", maxWidth: "640px" }}
+          style={{ width: "100%", maxWidth: "640px", marginTop: "1rem" }}
         >
           <span className="property-detail-section-title">Run log (data integrity)</span>
           <span className={`property-detail-section-chevron ${runLogOpen ? "property-detail-section-chevron--open" : ""}`} aria-hidden>▼</span>

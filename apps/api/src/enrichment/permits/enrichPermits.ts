@@ -192,22 +192,21 @@ export async function enrichPropertyWithPermits(
       upserted++;
     }
 
-    let summary = buildPermitsSummary(rows);
-    // If DOB permits had no owner but we have BBL, fall back to PLUTO (tax lot owner).
-    const hasOwnerFromDob = !!(summary.owner_name?.trim() || summary.owner_business_name?.trim());
-    if (!hasOwnerFromDob && bblStr) {
+    // Owner: PLUTO is primary (tax lot owner for every BBL). DOB permits only used when PLUTO has no result.
+    let plutoOwner: string | null = null;
+    if (bblStr) {
       try {
         const pluto = await fetchPlutoOwnerByBbl(bblStr, { appToken: options.appToken });
-        if (pluto?.ownername) {
-          summary = { ...summary, owner_name: pluto.ownername };
-          // If name looks like a business, also set business name for UI
-          if (/ LLC| INC| CORP| L\.?L\.?C\.?| I\.?N\.?C\.?/i.test(pluto.ownername)) {
-            summary = { ...summary, owner_business_name: pluto.ownername };
-          }
-        }
+        if (pluto?.ownername) plutoOwner = pluto.ownername;
       } catch (e) {
-        // Non-fatal: permit enrichment still succeeds; owner stays empty
-        console.warn("[enrichPermits] PLUTO owner fallback failed for BBL", bblStr, e);
+        console.warn("[enrichPermits] PLUTO owner fetch failed for BBL", bblStr, e);
+      }
+    }
+    let summary = buildPermitsSummary(rows);
+    if (plutoOwner) {
+      summary = { ...summary, owner_name: plutoOwner };
+      if (/ LLC| INC| CORP| L\.?L\.?C\.?| I\.?N\.?C\.?/i.test(plutoOwner)) {
+        summary = { ...summary, owner_business_name: plutoOwner };
       }
     }
     // Don't overwrite existing owner: many rows may match BBL/address; we want the first (most recent) only and to keep it once set.

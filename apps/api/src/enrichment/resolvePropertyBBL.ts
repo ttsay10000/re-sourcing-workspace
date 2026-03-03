@@ -54,18 +54,42 @@ export async function resolveBBLFromListing(
 const STREET_SUFFIXES_TO_STRIP = new Set([
   "MULTIFAMILY", "CONDO", "CONDOMINIUM", "COOP", "CO-OP", "COOPERATIVE",
   "RENTAL", "BUILDING", "CONDOMINIUMS", "CONDOS",
+  "MIXED-USE", "MIXED-USE-TO", "MIXED-USE-TOWER", "TOWNHOUSE", "TWNH",
 ]);
+
+/** Unit/apt tokens (e.g. #1, #2A, #TWNH) that Geoclient and permit API expect to be omitted from street name. */
+function isUnitLikeToken(word: string): boolean {
+  return /^#\S+$/.test(word.trim());
+}
+
+/** Unit/suite patterns to strip so Geoclient and permit API get building-level address only. */
+const UNIT_SUFFIX_REGEX = /\s+(Apt\.?|Apartment|Unit|Suite|Ste\.?|Floor|Fl\.?|Bsmt\.?|Basement)(\s*[#\dA-Za-z\-]+)?$/i;
+const HASH_UNIT_REGEX = /\s+#\S*$/;
+
+/**
+ * Strip unit numbers and suite/apt designators from an address line so geo lookup uses building address only.
+ * e.g. "123 Main St Apt 4B" → "123 Main St", "456 Park Ave #5" → "456 Park Ave".
+ */
+export function stripUnitFromAddressLine(addressLine: string): string {
+  let s = addressLine.trim();
+  if (!s) return s;
+  s = s.replace(HASH_UNIT_REGEX, "");
+  s = s.replace(UNIT_SUFFIX_REGEX, "");
+  return s.trim();
+}
 
 function stripListingTypeFromStreet(street: string): string {
   const words = street.trim().split(/\s+/);
-  const filtered = words.filter((w) => !STREET_SUFFIXES_TO_STRIP.has(w.toUpperCase()));
+  const filtered = words.filter(
+    (w) => !STREET_SUFFIXES_TO_STRIP.has(w.toUpperCase()) && !isUnitLikeToken(w)
+  );
   return filtered.join(" ").trim();
 }
 
-/** Normalize a listing address line (e.g. "18 Christopher Street MULTIFAMILY" → "18 Christopher Street") for Geoclient and display. */
+/** Normalize a listing address line (e.g. "18 Christopher Street MULTIFAMILY" → "18 Christopher Street") for Geoclient and display. Strips unit numbers so geo lookup uses building-level address. */
 export function normalizeAddressLineForDisplay(addressLine: string): string {
-  const t = addressLine.trim();
-  if (!t) return t;
+  const t = stripUnitFromAddressLine(addressLine.trim());
+  if (!t) return addressLine.trim();
   const parts = t.split(/\s+/);
   if (parts.length <= 1) return t;
   const houseNumber = parts[0];
@@ -73,12 +97,13 @@ export function normalizeAddressLineForDisplay(addressLine: string): string {
   return [houseNumber, street].filter(Boolean).join(" ");
 }
 
-/** Parse canonical_address or listing into houseNumber, street, borough, zip for Geoclient. */
+/** Parse canonical_address or listing into houseNumber, street, borough, zip for Geoclient. Strips unit numbers so lookup uses building-level address. */
 function parseAddressForGeoclient(
   canonicalAddress: string,
   listing: { address?: string | null; city?: string | null; state?: string | null; zip?: string | null } | null
 ): { houseNumber: string; street: string; borough: string; zip: string } | null {
-  const addressPart = listing?.address?.trim() ?? (canonicalAddress.split(",")[0]?.trim() ?? "");
+  let addressPart = listing?.address?.trim() ?? (canonicalAddress.split(",")[0]?.trim() ?? "");
+  addressPart = stripUnitFromAddressLine(addressPart);
   const parts = addressPart.split(/\s+/);
   const houseNumber = parts[0] ?? "";
   let street = parts.slice(1).join(" ").trim();
