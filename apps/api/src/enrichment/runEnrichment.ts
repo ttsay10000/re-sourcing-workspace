@@ -1,11 +1,14 @@
 /**
- * Unified enrichment runner: resolve BBL first, then permits + 7 modules. BBL comes from
- * property details, linked listing extra, or Geoclient so every module has it when it runs.
+ * Unified enrichment runner: resolve BBL first, then Phase 1 (owner cascade + tax code),
+ * then permits, then the 7 modules. Owner: PLUTO → valuations → HPD → permits; once set, source of truth.
  */
 
 import { getPool, PropertyRepo } from "@re-sourcing/db";
 import { enrichPropertyWithPermits } from "./permits/enrichPermits.js";
 import { getBBLForProperty } from "./resolvePropertyBBL.js";
+import { getBblBaseFromDetails } from "./propertyKeys.js";
+import { resolveCondoBblForQuery } from "./resolveCondoBbl.js";
+import { runOwnerAndTaxCodeStep } from "./ownerAndTaxCode.js";
 import { ENRICHMENT_MODULES, getEnrichmentModule } from "./modules/index.js";
 import type { EnrichmentRunOptions } from "./types.js";
 
@@ -17,8 +20,8 @@ export interface RunEnrichmentForPropertyOptions extends EnrichmentRunOptions {
 
 /**
  * Run enrichment for a single property. If moduleName is set, run only that module.
- * Otherwise: resolve BBL first (details, listing, or Geoclient), then permits, then the 7 other
- * modules. Modules are skipped only if BBL/BIN could not be resolved.
+ * Otherwise: resolve BBL → Phase 1 (owner cascade + tax code) → permits → 7 modules.
+ * Modules are skipped only if BBL/BIN could not be resolved.
  */
 export async function runEnrichmentForProperty(
   propertyId: string,
@@ -37,7 +40,8 @@ export async function runEnrichmentForProperty(
     const resolved = await getBBLForProperty(propertyId, { appToken: options.appToken });
     const hasBbl = !!resolved?.bbl;
     const pool = getPool();
-    const property = await new PropertyRepo({ pool }).byId(propertyId);
+    const propertyRepo = new PropertyRepo({ pool });
+    const property = await propertyRepo.byId(propertyId);
     const details = (property?.details as Record<string, unknown>) ?? {};
     const hasBin = typeof details.bin === "string" && String(details.bin).trim().length > 0;
     if (!hasBbl && !hasBin) {
@@ -45,7 +49,20 @@ export async function runEnrichmentForProperty(
     }
     await delay();
 
-    const permitResult = await enrichPropertyWithPermits(propertyId, { appToken: options.appToken });
+    let cascadeOwner: string | null = null;
+    if (hasBbl && resolved?.bbl) {
+      const bbl = resolved.bbl;
+      const bblBase = getBblBaseFromDetails(details);
+      const bblForQueries = bblBase ?? (await resolveCondoBblForQuery(bbl, { appToken: options.appToken })) ?? bbl;
+      const phase1 = await runOwnerAndTaxCodeStep(propertyId, bbl, bblForQueries, { appToken: options.appToken });
+      cascadeOwner = phase1.owner;
+      await delay();
+    }
+
+    const permitResult = await enrichPropertyWithPermits(propertyId, {
+      appToken: options.appToken,
+      cascadeOwner: cascadeOwner ?? undefined,
+    });
     results.permits = { ok: permitResult.ok, error: permitResult.error };
     await delay();
   }

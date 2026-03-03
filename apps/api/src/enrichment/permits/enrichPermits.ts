@@ -27,7 +27,6 @@ import {
 } from "./socrataClient.js";
 import type { SocrataPermitRow } from "./types.js";
 import type { PermitsSummary } from "./types.js";
-import { fetchPlutoOwnerByBbl } from "../plutoOwner.js";
 
 const TEN_YEARS_MS = 10 * 365.25 * 24 * 60 * 60 * 1000;
 
@@ -66,6 +65,8 @@ function rowToNormalized(row: SocrataPermitRow): Record<string, unknown> {
 
 export interface EnrichPermitsOptions {
   appToken?: string | null;
+  /** Owner from Phase 1 cascade (PLUTO → valuations → HPD). Merged with existing > cascade > DOB. */
+  cascadeOwner?: string | null;
 }
 
 /**
@@ -192,35 +193,30 @@ export async function enrichPropertyWithPermits(
       upserted++;
     }
 
-    // Owner: PLUTO is primary (tax lot owner for every BBL). DOB permits only used when PLUTO has no result.
-    let plutoOwner: string | null = null;
-    if (bblStr) {
-      try {
-        const pluto = await fetchPlutoOwnerByBbl(bblStr, { appToken: options.appToken });
-        if (pluto?.ownername) plutoOwner = pluto.ownername;
-      } catch (e) {
-        console.warn("[enrichPermits] PLUTO owner fetch failed for BBL", bblStr, e);
-      }
-    }
-    let summary = buildPermitsSummary(rows);
-    if (plutoOwner) {
-      summary = { ...summary, owner_name: plutoOwner };
-      if (/ LLC| INC| CORP| L\.?L\.?C\.?| I\.?N\.?C\.?/i.test(plutoOwner)) {
-        summary = { ...summary, owner_business_name: plutoOwner };
-      }
-    }
-    // Don't overwrite existing owner: many rows may match BBL/address; we want the first (most recent) only and to keep it once set.
-    // Each property is updated by its own propertyId; owner is stored per property in details.enrichment.permits_summary.
+    // Owner: existing (source of truth) > Phase 1 cascade > DOB from permit rows. Once set, do not overwrite.
+    const summary = buildPermitsSummary(rows);
+    const summaryOwnerName = (summary as Record<string, unknown>).owner_name as string | undefined;
+    const summaryOwnerBusiness = (summary as Record<string, unknown>).owner_business_name as string | undefined;
+    const cascadeOwner = options.cascadeOwner != null && String(options.cascadeOwner).trim() !== "" ? String(options.cascadeOwner).trim() : null;
+
     const current = await propertyRepo.byId(propertyId);
     const currentDetails = current?.details as Record<string, unknown> | null | undefined;
     const existingPs = currentDetails?.enrichment as Record<string, unknown> | undefined;
     const existingSummary = existingPs?.permits_summary as Record<string, unknown> | undefined;
     const existingOwnerName = existingSummary?.owner_name;
     const existingOwnerBusiness = existingSummary?.owner_business_name;
+
+    const has = (s: unknown) => s != null && String(s).trim() !== "";
+    const ownerName = (has(existingOwnerName) ? existingOwnerName : null) ?? cascadeOwner ?? summaryOwnerName ?? null;
+    const ownerBusinessName =
+      (has(existingOwnerBusiness) ? existingOwnerBusiness : null)
+      ?? (cascadeOwner && / LLC| INC| CORP| L\.?L\.?C\.?| I\.?N\.?C\.?/i.test(cascadeOwner) ? cascadeOwner : null)
+      ?? summaryOwnerBusiness ?? null;
+
     const mergedSummary: Record<string, unknown> = {
       ...summary,
-      owner_name: existingOwnerName != null && String(existingOwnerName).trim() !== "" ? existingOwnerName : (summary as Record<string, unknown>).owner_name,
-      owner_business_name: existingOwnerBusiness != null && String(existingOwnerBusiness).trim() !== "" ? existingOwnerBusiness : (summary as Record<string, unknown>).owner_business_name,
+      owner_name: ownerName,
+      owner_business_name: ownerBusinessName,
     };
     await propertyRepo.updateDetails(propertyId, "enrichment.permits_summary", mergedSummary);
 

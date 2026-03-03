@@ -458,6 +458,63 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
               )}
               {bbl == null && bblBase == null && lat == null && lon == null && <p className="initial-info-empty">—</p>}
             </div>
+            <h4 className="initial-info-subtitle">Enriched data</h4>
+            <div className="initial-info-geo">
+              <dl className="initial-info-dl">
+                <div className="initial-info-dl-row"><dt>Tax code</dt><dd>{d?.taxCode != null && String(d.taxCode).trim() !== "" ? String(d.taxCode) : "—"}</dd></div>
+                {(() => {
+                  const co = enrichment?.certificateOfOccupancy as Record<string, unknown> | undefined;
+                  const coStatus = co?.status ?? co?.c_of_o_status;
+                  const coDate = co?.issuanceDate ?? co?.issuance_date ?? co?.c_of_o_issuance_date;
+                  const coJobType = co?.jobType ?? co?.job_type;
+                  const hasCo = co != null && (coStatus != null || coDate != null || coJobType != null);
+                  return (
+                    <>
+                      <div className="initial-info-dl-row"><dt>Certificate of occupancy</dt><dd>{coStatus != null && String(coStatus).trim() !== "" ? String(coStatus) : "—"}</dd></div>
+                      <div className="initial-info-dl-row"><dt>CO issuance date</dt><dd>{formatDateOnly(coDate) ?? "—"}</dd></div>
+                      <div className="initial-info-dl-row"><dt>CO job type</dt><dd>{coJobType != null && String(coJobType).trim() !== "" ? String(coJobType) : "—"}</dd></div>
+                      {!hasCo && (
+                        <p className="initial-info-empty" style={{ marginTop: "0.25rem", fontSize: "0.8rem" }}>From certificate_of_occupancy enrichment (BBL). Run enrichment to populate.</p>
+                      )}
+                    </>
+                  );
+                })()}
+                {(() => {
+                  const z = enrichment?.zoning as Record<string, unknown> | undefined;
+                  const zd1 = z?.zoningDistrict1 ?? z?.zoning_district_1;
+                  const zd2 = z?.zoningDistrict2 ?? z?.zoning_district_2;
+                  const zMap = z?.zoningMapNumber ?? z?.zoning_map_number ?? z?.zoningMapCode ?? z?.zoning_map_code;
+                  const hasZoning = z != null && (zd1 != null || zd2 != null || zMap != null);
+                  return (
+                    <>
+                      <div className="initial-info-dl-row"><dt>Zoning district</dt><dd>{[zd1, zd2].filter(Boolean).map(String).join(", ") || "—"}</dd></div>
+                      <div className="initial-info-dl-row"><dt>Zoning map</dt><dd>{zMap != null && String(zMap).trim() !== "" ? String(zMap) : "—"}</dd></div>
+                      {!hasZoning && (
+                        <p className="initial-info-empty" style={{ marginTop: "0.25rem", fontSize: "0.8rem" }}>From zoning_ztl enrichment (BBL). Run enrichment to populate.</p>
+                      )}
+                    </>
+                  );
+                })()}
+                {(() => {
+                  const hpd = enrichment?.hpdRegistration as Record<string, unknown> | undefined;
+                  const hpdId = hpd?.registrationId ?? hpd?.registration_id;
+                  const hpdDate = hpd?.lastRegistrationDate ?? hpd?.last_registration_date;
+                  const hasHpd = hpd != null && (hpdId != null || hpdDate != null);
+                  return (
+                    <>
+                      <div className="initial-info-dl-row"><dt>HPD registration</dt><dd>{hpdId != null && String(hpdId).trim() !== "" ? String(hpdId) : "—"}</dd></div>
+                      <div className="initial-info-dl-row"><dt>HPD last registration</dt><dd>{formatDateOnly(hpdDate) ?? "—"}</dd></div>
+                      {!hasHpd && (
+                        <p className="initial-info-empty" style={{ marginTop: "0.25rem", fontSize: "0.8rem" }}>From hpd_registration enrichment (BBL). Run enrichment to populate.</p>
+                      )}
+                    </>
+                  );
+                })()}
+              </dl>
+              {!enrichment?.certificateOfOccupancy && !enrichment?.zoning && !enrichment?.hpdRegistration && (d?.taxCode == null || String(d.taxCode).trim() === "") && (
+                <p className="initial-info-empty">Run enrichment to populate tax code, certificate of occupancy, zoning, and HPD registration.</p>
+              )}
+            </div>
           </div>
           <div className="initial-info-card">
             <h4 className="initial-info-subtitle">Broker / Agent</h4>

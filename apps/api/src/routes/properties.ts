@@ -166,7 +166,7 @@ router.post("/properties/from-listings", async (req: Request, res: Response) => 
         failed: 0,
       };
 
-      // Enrichment runs the same pipeline for every property: permits first, then all 7 modules (zoning, CO, HPD reg, HPD violations, DOB complaints, litigations, affordable housing). Each property is processed independently by propertyId; there is no shared state between iterations.
+      // Enrichment runs the same pipeline for every property: BBL resolve → Phase 1 (owner cascade + tax code) → permits → 7 modules (zoning, CO, HPD reg, HPD violations, DOB complaints, litigations, affordable housing). Each property is processed independently by propertyId; there is no shared state between iterations.
       if (!skipPermitEnrichment && propertyIds.length > 0) {
         enrichmentSummary.ran = true;
         const appToken = process.env.SOCRATA_APP_TOKEN ?? null;
