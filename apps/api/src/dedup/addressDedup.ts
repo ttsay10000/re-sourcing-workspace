@@ -1,9 +1,11 @@
 /**
- * Fuzzy address deduplication: compute duplicate likelihood score (0-100) per listing
- * by comparing normalized address strings. 100 = likely duplicate.
+ * Address deduplication: duplicate likelihood score (0-100) per listing.
+ * Only scores high when both street number and street name match; otherwise 0.
+ * 100 = likely duplicate (same building).
  */
 
 import stringSimilarity from "string-similarity";
+import { stripUnitFromAddressLine } from "../enrichment/resolvePropertyBBL.js";
 
 const DUPLICATE_SCORE_THRESHOLD = 80;
 
@@ -16,12 +18,29 @@ export function getDuplicateScoreThreshold(): number {
   return DUPLICATE_SCORE_THRESHOLD;
 }
 
-/** Normalize only the address line for similarity; avoid inflating scores with shared city/state/zip. */
 function normalizeAddressForCompare(address: string): string {
   return (address ?? "")
     .toLowerCase()
     .replace(/\s+/g, " ")
     .trim();
+}
+
+/** Parse address line into street number (first token) and street name (rest). Strips units first. */
+function parseAddressParts(addressLine: string): { streetNumber: string; streetName: string } {
+  const normalized = normalizeAddressForCompare(addressLine);
+  const stripped = stripUnitFromAddressLine(normalized);
+  const parts = stripped.split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return { streetNumber: "", streetName: "" };
+  if (parts.length === 1) return { streetNumber: parts[0] ?? "", streetName: "" };
+  return {
+    streetNumber: parts[0] ?? "",
+    streetName: parts.slice(1).join(" "),
+  };
+}
+
+/** Normalize street number for comparison (e.g. "123-A" → "123a"). */
+function normalizeStreetNumber(token: string): string {
+  return (token ?? "").toLowerCase().replace(/\W/g, "").trim();
 }
 
 export interface ListingForDedup {
@@ -33,22 +52,28 @@ export interface ListingForDedup {
 }
 
 /**
- * For each listing, compute max similarity (0-1) with any other listing by normalized address.
- * Return duplicate score 0-100 (100 = duplicate). Same listing is skipped (no self-match).
+ * For each listing, compute duplicate score 0-100. Only scores high when another listing
+ * has the same street number and a similar street name (same building). If street number
+ * or street name does not match, score is 0. Same listing is skipped (no self-match).
  */
 export function computeDuplicateScores(listings: ListingForDedup[]): { id: string; duplicateScore: number }[] {
   if (listings.length === 0) return [];
 
-  const normalized = listings.map((l) => normalizeAddressForCompare(l.address));
+  const parts = listings.map((l) => parseAddressParts(l.address));
 
   return listings.map((listing, i) => {
-    let maxSim = 0;
+    let maxScore = 0;
+    const numI = normalizeStreetNumber(parts[i].streetNumber);
+    const nameI = parts[i].streetName;
     for (let j = 0; j < listings.length; j++) {
       if (i === j) continue;
-      const sim = stringSimilarity.compareTwoStrings(normalized[i], normalized[j]);
-      if (sim > maxSim) maxSim = sim;
+      const numJ = normalizeStreetNumber(parts[j].streetNumber);
+      if (!numI || !numJ || numI !== numJ) continue;
+      if (!nameI || !parts[j].streetName) continue;
+      const sim = stringSimilarity.compareTwoStrings(nameI, parts[j].streetName);
+      const score = Math.round(sim * 100);
+      if (score > maxScore) maxScore = score;
     }
-    const duplicateScore = Math.round(maxSim * 100);
-    return { id: listing.id, duplicateScore };
+    return { id: listing.id, duplicateScore: maxScore };
   });
 }
