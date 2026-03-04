@@ -240,7 +240,7 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
   const omFurnishedPricing = d?.omFurnishedPricing ?? d?.om_furnished_pricing;
   const rentalFinancials = d?.rentalFinancials as {
     rentalUnits?: Array<{ unit?: string | null; rentalPrice?: number | null; status?: string | null; sqft?: number | null; listedDate?: string | null; lastRentedDate?: string | null; beds?: number | null; baths?: number | null; images?: string[] | null; source?: string | null }> | null;
-    fromLlm?: { noi?: number | null; capRate?: number | null; rentalEstimates?: string | null; rentalNumbersPerUnit?: Array<{ unit?: string; rent?: number; note?: string }> | null; otherFinancials?: string | null } | null;
+    fromLlm?: { noi?: number | null; capRate?: number | null; rentalEstimates?: string | null; rentalNumbersPerUnit?: Array<{ unit?: string; rent?: number; note?: string }> | null; otherFinancials?: string | null; dataGapSuggestions?: string | null } | null;
     source?: string | null;
     lastUpdatedAt?: string | null;
   } | null | undefined;
