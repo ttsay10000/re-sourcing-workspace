@@ -1,6 +1,7 @@
 /**
  * Phase 1 owner cascade + tax code: PLUTO → valuations (tax code) → HPD (owner if col).
- * Does not write enrichment.permits_summary; returns cascade owner for the permits step.
+ * Writes owner to details.ownerInfo when we get it (so we don't rely on permits to persist it).
+ * Also returns cascade owner for the permits step so permits_summary can merge for backward compat.
  */
 
 import { getPool, PropertyRepo } from "@re-sourcing/db";
@@ -22,8 +23,8 @@ export interface RunOwnerAndTaxCodeOptions {
 
 /**
  * Run owner cascade (PLUTO → valuations → HPD) and write tax code from valuations.
- * Uses bblForQueries (base BBL for condos) for dataset lookups.
- * Does not write to enrichment.permits_summary; caller (permits step) merges owner.
+ * Writes owner to details.ownerInfo when we have one so the UI and downstream steps see it
+ * even when permits returns no rows. Uses bblForQueries (base BBL for condos) for lookups.
  */
 export async function runOwnerAndTaxCodeStep(
   propertyId: string,
@@ -33,6 +34,8 @@ export async function runOwnerAndTaxCodeStep(
 ): Promise<OwnerAndTaxCodeResult> {
   let owner: string | null = null;
   let taxCodeWritten = false;
+  const pool = getPool();
+  const propertyRepo = new PropertyRepo({ pool });
 
   const normalizedBbl = normalizeBblForQuery(bbl);
   if (!normalizedBbl) return { owner: null, taxCodeWritten: false };
@@ -44,8 +47,6 @@ export async function runOwnerAndTaxCodeStep(
       owner = pluto.ownername.trim();
     }
     if (pluto?.censusBlock2010 && pluto.censusBlock2010.trim()) {
-      const pool = getPool();
-      const propertyRepo = new PropertyRepo({ pool });
       await propertyRepo.mergeDetails(propertyId, { censusBlock2010: pluto.censusBlock2010.trim() });
     }
   } catch (e) {
@@ -67,8 +68,6 @@ export async function runOwnerAndTaxCodeStep(
     });
     const row = rows[0];
     if (row?.curtaxclass != null && String(row.curtaxclass).trim() !== "") {
-      const pool = getPool();
-      const propertyRepo = new PropertyRepo({ pool });
       await propertyRepo.mergeDetails(propertyId, { taxCode: String(row.curtaxclass).trim() });
       taxCodeWritten = true;
     }
@@ -81,6 +80,15 @@ export async function runOwnerAndTaxCodeStep(
   }
 
   // 3. HPD registration: tesw-yqqr has no owner/registrant column in schema; skip owner from HPD for now
+
+  // Persist owner from Phase 1 so UI can show "Owner module: name, business" (PLUTO has one field → name).
+  if (owner) {
+    await propertyRepo.mergeDetails(propertyId, {
+      ownerInfo: owner,
+      ownerModuleName: owner,
+      ownerModuleBusiness: null,
+    });
+  }
 
   return { owner, taxCodeWritten };
 }

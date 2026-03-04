@@ -129,7 +129,22 @@ async function run(propertyId: string, options: EnrichmentRunOptions): Promise<E
     return { ok: false, error: "invalid_bbl" };
   }
 
-  const where = `boro = '${escapeSoQLString(parts.borough)}' AND block = '${escapeSoQLString(parts.block)}' AND lot = '${escapeSoQLString(parts.lot)}'`;
+  // HPD dataset tesw-yqqr has block/lot as text; use quoted string in $where so SoQL matches.
+  // Use unpadded block/lot (e.g. 1382, 133) to match how the API returns values (e.g. "450", "31").
+  const blockNum = parseInt(parts.block, 10);
+  const lotNum = parseInt(parts.lot, 10);
+  if (Number.isNaN(blockNum) || Number.isNaN(lotNum)) {
+    await stateRepo.upsert({
+      propertyId,
+      enrichmentName: "hpd_registration",
+      lastRefreshedAt: now,
+      lastSuccessAt: null,
+      lastError: "invalid_bbl",
+      statsJson: null,
+    });
+    return { ok: false, error: "invalid_bbl" };
+  }
+  const where = `boro = '${escapeSoQLString(parts.borough)}' AND block = '${escapeSoQLString(String(blockNum))}' AND lot = '${escapeSoQLString(String(lotNum))}'`;
   const select = "registrationid, lastregistrationdate, bin, boroid, boro, block, lot";
   const buildParams = (limit: number, offset: number): SoQLQueryParams => ({
     $select: select,
@@ -145,6 +160,12 @@ async function run(propertyId: string, options: EnrichmentRunOptions): Promise<E
       appToken: options.appToken,
     });
     let rows = rawRows.filter((r) => rowToBblFromBoroughBlockLot(r) === bblForQueries);
+
+    if (process.env.ENRICHMENT_DEBUG) {
+      const first = rawRows[0] as Record<string, unknown> | undefined;
+      const rowBbl = first ? rowToBblFromBoroughBlockLot(first) : null;
+      console.log(`[enrichment:hpd_reg] boro=${parts.borough} block=${parts.block} lot=${parts.lot} raw_rows=${rawRows.length} matching_bbl=${rows.length} first_row.bbl=${rowBbl ?? "—"}`);
+    }
 
     // Second check: if 0 rows from boro/block/lot, query by housenumber + streetname + zip.
     if (rows.length === 0) {

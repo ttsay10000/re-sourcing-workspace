@@ -1,6 +1,9 @@
 /**
  * DOB Complaints Received eabe-havv – multi-row by BIN only.
- * Dataset has no BBL column; only BIN is available for filtering.
+ * The NYC dataset (eabe-havv) is keyed by BIN, not BBL, so we query with bin = '...'.
+ * BIN is supplied by: (1) permit enrichment (DOB permits include BIN, we persist it to details.bin),
+ * (2) listing/sale details, or (3) Geoclient when resolving by address. So when you see DOB
+ * complaints "for a BBL" it's because that property already had BIN from permits or listing.
  */
 
 import {
@@ -80,6 +83,11 @@ async function run(propertyId: string, options: EnrichmentRunOptions): Promise<E
     const rows = await fetchAllPages<Record<string, unknown>>(baseUrl, buildParams, {
       appToken: options.appToken,
     });
+
+    if (process.env.ENRICHMENT_DEBUG) {
+      const firstBin = rows[0] != null ? (rows[0] as Record<string, unknown>).bin : null;
+      console.log(`[enrichment:dob_complaints] BIN=${bin} rows=${rows.length} first_row.bin=${firstBin ?? "—"}`);
+    }
 
     let upserted = 0;
     for (const row of rows) {

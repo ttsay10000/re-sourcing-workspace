@@ -269,10 +269,11 @@ const ENRICHMENT_MODULES: { key: string; label: string }[] = [
   { key: "affordable_housing", label: "Affordable Housing" },
 ];
 
-/** GET /api/properties/pipeline-stats - counts for raw listings, canonical properties, and per-module completion for pipeline progress. */
-router.get("/properties/pipeline-stats", async (_req: Request, res: Response) => {
+/** GET /api/properties/pipeline-stats - counts for raw listings, canonical properties, and per-module completion for pipeline progress. ?includeRemaining=1 adds remainingByModule (property IDs not yet completed per module). */
+router.get("/properties/pipeline-stats", async (req: Request, res: Response) => {
   try {
     const pool = getPool();
+    const includeRemaining = req.query.includeRemaining === "1" || req.query.includeRemaining === "true";
     const [rawResult, canonicalResult, enrichmentResult] = await Promise.all([
       pool.query<{ count: string }>("SELECT count(*)::text AS count FROM listings WHERE lifecycle_state = 'active'"),
       pool.query<{ count: string }>("SELECT count(*)::text AS count FROM properties"),
@@ -294,15 +295,62 @@ router.get("/properties/pipeline-stats", async (_req: Request, res: Response) =>
       label,
       completed: byModule[key] ?? 0,
     }));
-    res.json({
+    const payload: Record<string, unknown> = {
       rawListings,
       canonicalProperties,
       enrichment,
-    });
+    };
+    if (includeRemaining) {
+      const remainingResult = await pool.query<{ enrichment_name: string; property_id: string }>(
+        `WITH completed AS (
+          SELECT property_id, enrichment_name FROM property_enrichment_state WHERE last_success_at IS NOT NULL
+        ),
+        modules AS (
+          SELECT unnest(ARRAY['permits','hpd_registration','certificate_of_occupancy','zoning_ztl','dob_complaints','hpd_violations','housing_litigations','affordable_housing']) AS enrichment_name
+        )
+        SELECT m.enrichment_name, p.id AS property_id
+        FROM properties p
+        CROSS JOIN modules m
+        LEFT JOIN completed c ON c.property_id = p.id AND c.enrichment_name = m.enrichment_name
+        WHERE c.property_id IS NULL`
+      );
+      const remainingByModule: Record<string, { count: number; propertyIds: string[] }> = {};
+      for (const { key } of ENRICHMENT_MODULES) {
+        const ids = remainingResult.rows.filter((r) => r.enrichment_name === key).map((r) => r.property_id);
+        remainingByModule[key] = { count: ids.length, propertyIds: ids };
+      }
+      payload.remainingByModule = remainingByModule;
+    }
+    res.json(payload);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[properties pipeline-stats]", err);
     res.status(503).json({ error: "Failed to load pipeline stats.", details: message });
+  }
+});
+
+/** GET /api/properties/:id - single property with full details (for fresh enrichment data in UI). */
+router.get("/properties/:id", async (req: Request, res: Response) => {
+  try {
+    const { id: propertyId } = req.params;
+    const pool = getPool();
+    const repo = new PropertyRepo({ pool });
+    const property = await repo.byId(propertyId);
+    if (!property) {
+      res.status(404).json({ error: "Property not found", propertyId });
+      return;
+    }
+    res.json({
+      id: property.id,
+      canonicalAddress: property.canonicalAddress,
+      details: property.details ?? null,
+      createdAt: property.createdAt,
+      updatedAt: property.updatedAt,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[properties get by id]", err);
+    res.status(503).json({ error: "Failed to load property.", details: message });
   }
 });
 

@@ -160,6 +160,8 @@ function CollapsibleSection({
 
 export function CanonicalPropertyDetail({ property }: { property: CanonicalProperty }) {
   const [primaryListing, setPrimaryListing] = useState<ListingRow | null | "loading">("loading");
+  /** Fresh details from GET /api/properties/:id so enriched data (CO, zoning, HPD) is current after re-run. */
+  const [detailsFromApi, setDetailsFromApi] = useState<Record<string, unknown> | null | undefined>(undefined);
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({
     photosFloorplans: true,
     detailsBrokerAmenitiesPriceHistory: true,
@@ -184,6 +186,20 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
     return () => { cancelled = true; };
   }, [property.id]);
 
+  // Refetch full property when expanded so enrichment (CO, zoning, HPD) shows latest after re-run
+  useEffect(() => {
+    let cancelled = false;
+    setDetailsFromApi(undefined);
+    fetch(`${API_BASE}/api/properties/${property.id}`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (!cancelled && !data?.error && data?.details != null) setDetailsFromApi(data.details as Record<string, unknown>);
+        else if (!cancelled) setDetailsFromApi(null);
+      })
+      .catch(() => { if (!cancelled) setDetailsFromApi(null); });
+    return () => { cancelled = true; };
+  }, [property.id]);
+
   useEffect(() => {
     if (openSections.violationsComplaintsPermits && !unifiedFetched && !unifiedLoading) {
       fetchUnifiedTable();
@@ -193,7 +209,7 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
 
   const toggle = (key: string) => setOpenSections((p) => ({ ...p, [key]: !p[key] }));
 
-  const d = property.details as Record<string, unknown> | null | undefined;
+  const d = (detailsFromApi != null && typeof detailsFromApi === "object" ? detailsFromApi : property.details) as Record<string, unknown> | null | undefined;
   const enrichment = d?.enrichment as Record<string, unknown> | undefined;
   const ps = enrichment?.permits_summary as Record<string, unknown> | undefined;
   const bbl = d?.bbl ?? d?.BBL ?? d?.buildingLotBlock;
@@ -203,6 +219,8 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
   const monthlyHoa = d?.monthlyHoa ?? d?.monthly_hoa;
   const monthlyTax = d?.monthlyTax ?? d?.monthly_tax;
   const ownerInfo = d?.ownerInfo ?? d?.owner_info;
+  const ownerModuleName = d?.ownerModuleName ?? d?.owner_module_name ?? null;
+  const ownerModuleBusiness = d?.ownerModuleBusiness ?? d?.owner_module_business ?? null;
   const omFurnishedPricing = d?.omFurnishedPricing ?? d?.om_furnished_pricing;
 
   const fetchUnifiedTable = () => {
@@ -465,14 +483,16 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
                 <div className="initial-info-dl-row"><dt>2010 Census Block</dt><dd>{d?.censusBlock2010 != null && String(d.censusBlock2010).trim() !== "" ? String(d.censusBlock2010) : "—"}</dd></div>
                 {(() => {
                   const co = enrichment?.certificateOfOccupancy as Record<string, unknown> | undefined;
+                  const coJobNumber = co?.jobNumber ?? co?.job_number;
                   const coStatus = co?.status ?? co?.c_of_o_status;
                   const coDate = co?.issuanceDate ?? co?.issuance_date ?? co?.c_of_o_issuance_date;
                   const coJobType = co?.jobType ?? co?.job_type;
-                  const hasCo = co != null && (coStatus != null || coDate != null || coJobType != null);
+                  const hasCo = co != null && (coJobNumber != null || coStatus != null || coDate != null || coJobType != null);
                   return (
                     <>
-                      <div className="initial-info-dl-row"><dt>Certificate of occupancy</dt><dd>{coStatus != null && String(coStatus).trim() !== "" ? String(coStatus) : "—"}</dd></div>
+                      <div className="initial-info-dl-row"><dt>CO ID (job number)</dt><dd>{coJobNumber != null && String(coJobNumber).trim() !== "" ? String(coJobNumber) : "—"}</dd></div>
                       <div className="initial-info-dl-row"><dt>CO issuance date</dt><dd>{formatDateOnly(coDate as string | null | undefined) ?? "—"}</dd></div>
+                      <div className="initial-info-dl-row"><dt>Certificate of occupancy</dt><dd>{coStatus != null && String(coStatus).trim() !== "" ? String(coStatus) : "—"}</dd></div>
                       <div className="initial-info-dl-row"><dt>CO job type</dt><dd>{coJobType != null && String(coJobType).trim() !== "" ? String(coJobType) : "—"}</dd></div>
                       {!hasCo && (
                         <p className="initial-info-empty" style={{ marginTop: "0.25rem", fontSize: "0.8rem" }}>From certificate_of_occupancy enrichment (BBL). Run enrichment to populate.</p>
@@ -594,23 +614,20 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
         </div>
       </CollapsibleSection>
 
-      {/* 3. Owner information */}
+      {/* 3. Owner information: Owner module (Phase 1 / PLUTO) + Permit module (permits_summary) */}
       <CollapsibleSection id="owner" title="Owner information" open={!!openSections.owner} onToggle={() => toggle("owner")}>
-        {ownerInfo != null && String(ownerInfo).trim() ? (
-          <p style={{ margin: 0, fontSize: "0.875rem" }}>{String(ownerInfo)}</p>
-        ) : ps && Boolean(ps.owner_name ?? ps.owner_business_name) ? (
-          <div style={{ fontSize: "0.875rem" }}>
-            {Boolean(ps.owner_name) && <div><strong>Owner:</strong> {String(ps.owner_name)}</div>}
-            {Boolean(ps.owner_business_name) && <div><strong>Business:</strong> {String(ps.owner_business_name)}</div>}
+        <div style={{ fontSize: "0.875rem" }}>
+          <div style={{ marginBottom: "0.75rem" }}>
+            <strong style={{ display: "block", marginBottom: "0.25rem" }}>Owner module: name, business</strong>
+            <div><strong>Name:</strong> {ownerModuleName != null && String(ownerModuleName).trim() !== "" ? String(ownerModuleName).trim() : "—"}</div>
+            <div><strong>Business:</strong> {ownerModuleBusiness != null && String(ownerModuleBusiness).trim() !== "" ? String(ownerModuleBusiness).trim() : "—"}</div>
           </div>
-        ) : ownerFromPermits && (ownerFromPermits.owner_name || ownerFromPermits.owner_business_name) ? (
-          <div style={{ fontSize: "0.875rem" }}>
-            {ownerFromPermits.owner_name && <div><strong>Owner:</strong> {ownerFromPermits.owner_name}</div>}
-            {ownerFromPermits.owner_business_name && <div><strong>Business:</strong> {ownerFromPermits.owner_business_name}</div>}
+          <div>
+            <strong style={{ display: "block", marginBottom: "0.25rem" }}>Permit module: name, business</strong>
+            <div><strong>Name:</strong> {ps?.owner_name != null && String(ps.owner_name).trim() !== "" ? String(ps.owner_name).trim() : "—"}</div>
+            <div><strong>Business:</strong> {ps?.owner_business_name != null && String(ps.owner_business_name).trim() !== "" ? String(ps.owner_business_name).trim() : "—"}</div>
           </div>
-        ) : (
-          <p style={{ color: "#737373", margin: 0 }}>—</p>
-        )}
+        </div>
       </CollapsibleSection>
 
       {/* 5. Rental pricing / OM */}

@@ -28,7 +28,11 @@ export async function runEnrichmentForProperty(
   moduleName?: string,
   options: RunEnrichmentForPropertyOptions = {}
 ): Promise<{ ok: boolean; results: Record<string, { ok: boolean; error?: string; skipped?: boolean }> }> {
-  const delayMs = options.rateLimitDelayMs ?? DEFAULT_RATE_LIMIT_DELAY_MS;
+  // Use app token from options or env so all Socrata/NYC Open Data calls get it (avoids rate limits).
+  const appToken = options.appToken ?? process.env.SOCRATA_APP_TOKEN ?? null;
+  const opts = { ...options, appToken };
+
+  const delayMs = opts.rateLimitDelayMs ?? DEFAULT_RATE_LIMIT_DELAY_MS;
   const delay = () => new Promise((r) => setTimeout(r, delayMs));
   const results: Record<string, { ok: boolean; error?: string; skipped?: boolean }> = {};
 
@@ -37,7 +41,7 @@ export async function runEnrichmentForProperty(
 
   if (!moduleName) {
     // Resolve BBL first so every module (including permits) has it when it runs.
-    const resolved = await getBBLForProperty(propertyId, { appToken: options.appToken });
+    const resolved = await getBBLForProperty(propertyId, { appToken: opts.appToken });
     const hasBbl = !!resolved?.bbl;
     const pool = getPool();
     const propertyRepo = new PropertyRepo({ pool });
@@ -53,14 +57,14 @@ export async function runEnrichmentForProperty(
     if (hasBbl && resolved?.bbl) {
       const bbl = resolved.bbl;
       const bblBase = getBblBaseFromDetails(details);
-      const bblForQueries = bblBase ?? (await resolveCondoBblForQuery(bbl, { appToken: options.appToken })) ?? bbl;
-      const phase1 = await runOwnerAndTaxCodeStep(propertyId, bbl, bblForQueries, { appToken: options.appToken });
+      const bblForQueries = bblBase ?? (await resolveCondoBblForQuery(bbl, { appToken: opts.appToken })) ?? bbl;
+      const phase1 = await runOwnerAndTaxCodeStep(propertyId, bbl, bblForQueries, { appToken: opts.appToken });
       cascadeOwner = phase1.owner;
       await delay();
     }
 
     const permitResult = await enrichPropertyWithPermits(propertyId, {
-      appToken: options.appToken,
+      appToken: opts.appToken,
       cascadeOwner: cascadeOwner ?? undefined,
     });
     results.permits = { ok: permitResult.ok, error: permitResult.error };
@@ -76,7 +80,7 @@ export async function runEnrichmentForProperty(
         resolved.bbl;
       const bblBase = getBblBaseFromDetails(detailsAfter);
       const bblForQueries =
-        bblBase ?? (await resolveCondoBblForQuery(bblStr, { appToken: options.appToken })) ?? bblStr;
+        bblBase ?? (await resolveCondoBblForQuery(bblStr, { appToken: opts.appToken })) ?? bblStr;
       const bin =
         typeof detailsAfter.bin === "string" && String(detailsAfter.bin).trim().length > 0
           ? String(detailsAfter.bin).trim()
@@ -91,8 +95,8 @@ export async function runEnrichmentForProperty(
         continue;
       }
       const runOptions: RunEnrichmentForPropertyOptions = {
-        appToken: options.appToken,
-        rateLimitDelayMs: options.rateLimitDelayMs,
+        appToken: opts.appToken,
+        rateLimitDelayMs: opts.rateLimitDelayMs,
         ...(resolvedContext ? { resolvedContext } : {}),
       };
       const result = await mod.run(propertyId, runOptions);
@@ -106,7 +110,7 @@ export async function runEnrichmentForProperty(
         results[mod.name] = { ok: false, error: "skipped: no BBL/BIN resolved", skipped: true };
         continue;
       }
-      const result = await mod.run(propertyId, { appToken: options.appToken });
+      const result = await mod.run(propertyId, { appToken: opts.appToken });
       results[mod.name] = { ok: result.ok, error: result.error };
       await delay();
     }

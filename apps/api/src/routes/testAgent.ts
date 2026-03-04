@@ -624,10 +624,12 @@ router.post("/test-agent/runs/:id/send-to-property-data", async (req: Request, r
           normalized.rentalPriceHistory = existing.rentalPriceHistory ?? null;
         }
 
-        // Run broker LLM whenever we have agent names (new or existing), so every listing gets contact info when names are present
+        // Run broker LLM only once per property when initially uploaded (or when existing has no enrichment yet). Re-sends use stored agentEnrichment; no LLM call on every load.
         const agentNames = normalized.agentNames ?? [];
         const hasAgentNames = Array.isArray(agentNames) && agentNames.length > 0;
-        if (hasAgentNames) {
+        const existingHasEnrichment = existing?.agentEnrichment != null && Array.isArray(existing.agentEnrichment) && existing.agentEnrichment.length > 0;
+        const shouldRunBrokerLlm = hasAgentNames && (!existing || !existingHasEnrichment);
+        if (shouldRunBrokerLlm) {
           const propertyContext = [normalized.address, normalized.city, normalized.zip].filter(Boolean).join(", ") || undefined;
           const agentEnrichment = await enrichBrokers(normalized.agentNames, propertyContext);
           if (agentEnrichment && agentEnrichment.length > 0) {

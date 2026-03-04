@@ -60,6 +60,8 @@ export class PropertyRepo {
   /**
    * Merge a nested value into properties.details (e.g. enrichment.permits_summary).
    * Path is dot-separated; preserves other keys. Use mergeDetails for root-level merge.
+   * Uses single-level jsonb_set and merges into parent for two-level paths (e.g. enrichment.zoning)
+   * so that sibling keys under the parent are preserved.
    */
   async updateDetails(
     propertyId: string,
@@ -68,17 +70,30 @@ export class PropertyRepo {
   ): Promise<void> {
     const pathKeys = path.split(".").filter(Boolean);
     if (pathKeys.length === 0) return;
+    const valueJson = JSON.stringify(value);
+    if (pathKeys.length === 1) {
+      await this.client.query(
+        `UPDATE properties
+         SET details = jsonb_set(COALESCE(details, '{}'::jsonb), ARRAY[$2]::text[], $3::jsonb, true),
+             updated_at = now()
+         WHERE id = $1`,
+        [propertyId, pathKeys[0], valueJson]
+      );
+      return;
+    }
+    // Two-level path (e.g. enrichment.zoning): merge value into parent so siblings are preserved.
+    const [parent, key] = pathKeys;
     await this.client.query(
       `UPDATE properties
        SET details = jsonb_set(
          COALESCE(details, '{}'::jsonb),
-         $2::text[],
-         $3::jsonb,
+         ARRAY[$2]::text[],
+         COALESCE(details->$2, '{}'::jsonb) || jsonb_build_object($3::text, $4::jsonb),
          true
        ),
        updated_at = now()
        WHERE id = $1`,
-      [propertyId, pathKeys, JSON.stringify(value)]
+      [propertyId, parent, key, valueJson]
     );
   }
 

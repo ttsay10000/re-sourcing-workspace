@@ -22,6 +22,7 @@ function col(row: Record<string, unknown>, ...keys: string[]): string | null {
   for (const k of keys) {
     const v = row[k];
     if (v != null && typeof v === "string" && v.trim()) return v.trim();
+    if (v != null && typeof v === "number") return String(v);
   }
   return null;
 }
@@ -90,7 +91,7 @@ async function run(propertyId: string, options: EnrichmentRunOptions): Promise<E
   const buildParams = (limit: number, offset: number): SoQLQueryParams => ({
     $select: select,
     $where: where,
-    $order: "1",
+    $order: "bbl",
     $limit: limit,
     $offset: offset,
   });
@@ -100,6 +101,11 @@ async function run(propertyId: string, options: EnrichmentRunOptions): Promise<E
     const rows = await fetchAllPages<Record<string, unknown>>(baseUrl, buildParams, {
       appToken: options.appToken,
     });
+
+    if (process.env.ENRICHMENT_DEBUG) {
+      const firstBbl = rows[0] != null ? (rows[0] as Record<string, unknown>).bbl : null;
+      console.log(`[enrichment:zoning] BBL=${bblForQueries} rows=${rows.length} first_row.bbl=${firstBbl ?? "—"}`);
+    }
 
     const row = rows[0];
     const normalized = row

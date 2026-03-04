@@ -32,12 +32,12 @@ All of this comes from **property.details** (and thus from the enrichment summar
 
 ## 3. Owner information section
 
-There is **no dedicated owner enrichment module**. Owner info is derived only from permit enrichment.
+Owner has two sources; both are persisted so we don't rely only on permits.
 
-- **Primary:** `details.ownerInfo` (or `details.owner_info`) — if set by another flow (e.g. listing/sale details).
-- **Fallback:** `details.enrichment.permits_summary` → `owner_name`, `owner_business_name`.
+- **Phase 1 (owner module):** PLUTO (64uk-42ks) and optionally valuations/HPD. When Phase 1 gets an owner, it **writes `details.ownerInfo`** so owner is stored even when permits returns no rows.
+- **Permits:** DOB NOW Build (rbx6-tga4) has `owner_business_name`, `owner_name`. Permits step merges existing **>** Phase 1 cascade **>** DOB from permit rows into `enrichment.permits_summary`.
 
-Permit enrichment fetches DOB NOW Build (Socrata rbx6-tga4) with columns `owner_business_name` and `owner_name`. It calls `updateDetails(..., "enrichment.permits_summary", mergedSummary)`. Owner is taken from the **first (most recent) permit row** that has owner data (rows are ordered by `issued_date` DESC); `buildPermitsSummary()` stops after that row so we don't overwrite with other matching rows. When writing the summary, existing `permits_summary.owner_name` and `owner_business_name` are preserved if already set (so we don't overwrite once we have owner). The UI shows `ps.owner_name` and `ps.owner_business_name` when `ownerInfo` is not set. If the DOB data has no owner fields populated for any permit, the Owner block will show "—".
+UI order: **Primary** `details.ownerInfo` (Phase 1 or listing) **→** **Fallback** `details.enrichment.permits_summary` (owner_name, owner_business_name).
 
 ---
 

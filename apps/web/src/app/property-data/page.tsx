@@ -47,6 +47,8 @@ interface PipelineStats {
   rawListings: number;
   canonicalProperties: number;
   enrichment: PipelineEnrichmentRow[];
+  /** When requested with includeRemaining=1: property IDs not yet completed per module. */
+  remainingByModule?: Record<string, { count: number; propertyIds: string[] }>;
 }
 
 /** Result of last enrichment run (from POST from-listings permitEnrichment). */
@@ -155,8 +157,9 @@ function PropertyDataContent() {
       .catch(() => setRunLog([]));
   }, []);
 
-  const fetchPipelineStats = useCallback(() => {
-    fetch(`${API_BASE}/api/properties/pipeline-stats`)
+  const fetchPipelineStats = useCallback((includeRemaining = false) => {
+    const url = `${API_BASE}/api/properties/pipeline-stats${includeRemaining ? "?includeRemaining=1" : ""}`;
+    fetch(url)
       .then((r) => r.json())
       .then((data) => {
         if (data.error) throw new Error(data.error);
@@ -164,6 +167,7 @@ function PropertyDataContent() {
           rawListings: data.rawListings ?? 0,
           canonicalProperties: data.canonicalProperties ?? 0,
           enrichment: data.enrichment ?? [],
+          remainingByModule: data.remainingByModule ?? undefined,
         });
       })
       .catch(() => setPipelineStats(null));
@@ -217,8 +221,16 @@ function PropertyDataContent() {
   }, [fetchRunLog]);
 
   useEffect(() => {
-    fetchPipelineStats();
+    fetchPipelineStats(true);
   }, [fetchPipelineStats]);
+
+  // While re-run enrichment is in progress, poll pipeline stats so counts and remaining update live
+  useEffect(() => {
+    if (!rerunningEnrichment) return;
+    fetchPipelineStats(true);
+    const interval = setInterval(() => fetchPipelineStats(true), 2500);
+    return () => clearInterval(interval);
+  }, [rerunningEnrichment, fetchPipelineStats]);
 
   const selectedListing = selectedId ? listings.find((l) => l.id === selectedId) ?? null : null;
 
@@ -349,7 +361,7 @@ function PropertyDataContent() {
         }
         if (data?.error) throw new Error(data.error);
         fetchListings();
-        fetchPipelineStats();
+        fetchPipelineStats(true);
       })
       .catch((e) => setError(e instanceof Error ? e.message : "Failed to clear raw listings"))
       .finally(() => setClearing(false));
@@ -368,7 +380,7 @@ function PropertyDataContent() {
         }
         if (data?.error) throw new Error(data.error);
         fetchCanonicalProperties();
-        fetchPipelineStats();
+        fetchPipelineStats(true);
       })
       .catch((e) => setError(e instanceof Error ? e.message : "Failed to clear canonical properties"))
       .finally(() => setClearingCanonical(false));
@@ -439,7 +451,7 @@ function PropertyDataContent() {
         }
         setSelectedListingIds(new Set());
         fetchCanonicalProperties();
-        fetchPipelineStats();
+        fetchPipelineStats(true);
         setActiveTab("canonical");
       })
       .catch((e) => setError(e.message || "Failed to send to canonical"))
@@ -501,7 +513,7 @@ function PropertyDataContent() {
           });
         }
         fetchCanonicalProperties();
-        fetchPipelineStats();
+        fetchPipelineStats(true);
       })
       .catch((e) => setError(e.message || "Failed to re-run enrichment"))
       .finally(() => setRerunningEnrichment(false));
@@ -1064,14 +1076,28 @@ function PropertyDataContent() {
                   </tr>
                   {pipelineStats.enrichment.map((row) => {
                     const remaining = Math.max(0, pipelineStats.canonicalProperties - row.completed);
+                    const remainingInfo = pipelineStats.remainingByModule?.[row.key];
+                    const remainingIds = remainingInfo?.propertyIds ?? [];
                     return (
-                      <tr key={row.key}>
-                        <td>{row.label}</td>
-                        <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{row.completed}</td>
-                        <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", color: remaining > 0 ? "#854d0e" : "#737373" }}>
-                          {remaining > 0 ? `${remaining} left` : "—"}
-                        </td>
-                      </tr>
+                      <React.Fragment key={row.key}>
+                        <tr>
+                          <td>{row.label}</td>
+                          <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{row.completed}</td>
+                          <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", color: remaining > 0 ? "#854d0e" : "#737373" }}>
+                            {remaining > 0 ? `${remaining} left` : "—"}
+                          </td>
+                        </tr>
+                        {remaining > 0 && remainingIds.length > 0 && (
+                          <tr>
+                            <td colSpan={3} style={{ paddingTop: 0, paddingLeft: "1.5rem", fontSize: "0.8125rem", color: "#737373", verticalAlign: "top" }}>
+                              Not yet completed:{" "}
+                              {remainingIds
+                                .map((id) => canonicalProperties.find((p) => p.id === id)?.canonicalAddress ?? id)
+                                .join(", ")}
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
                     );
                   })}
                 </tbody>

@@ -172,6 +172,27 @@ export async function enrichPropertyWithPermits(
       if (rows.length > 0 && rows[0].bbl?.trim()) bblStr = normalizeBblForQuery(rows[0].bbl) ?? bblStr;
     }
 
+    // Pull BIN from permit rows when property has none (so DOB complaints and other BIN-based APIs can run).
+    const BIN_PLACEHOLDER_IGNORE = new Set(["1000000", "0", ""]);
+    const binFromPermits =
+      rows.length > 0
+        ? (() => {
+            for (const row of rows) {
+              const raw = row.bin != null ? String(row.bin).trim() : "";
+              if (raw && !BIN_PLACEHOLDER_IGNORE.has(raw)) return raw;
+            }
+            return null;
+          })()
+        : null;
+    if (binFromPermits) {
+      const currentForBin = await propertyRepo.byId(propertyId);
+      const detailsForBin = (currentForBin?.details as Record<string, unknown>) ?? {};
+      const existingBin = detailsForBin.bin != null ? String(detailsForBin.bin).trim() : "";
+      if (!existingBin || BIN_PLACEHOLDER_IGNORE.has(existingBin)) {
+        await propertyRepo.mergeDetails(propertyId, { bin: binFromPermits });
+      }
+    }
+
     let upserted = 0;
     for (const row of rows) {
       const workPermit = row.work_permit ?? row.job_filing_number ?? "";

@@ -11,16 +11,14 @@
    Full enrichment (e.g. "Add to canonical properties" or run all modules). CO runs as one of the 7 modules after Phase 1 and permits.
 
 2. **Module**  
-   `certificateOfOccupancy.ts` (dataset **pkdm-hqz6**):
-   - Resolves BBL (from `resolvedContext` in full run, or `getBBLForProperty` + `bblForQueries` when running alone).
-   - SoQL: `bbl = '${bblForQueries}'` (dataset **BBL column is text**; string query is correct).
-   - Select: `bbl, bin, job_type, c_of_o_status, c_of_o_filing_type, c_of_o_issuance_date, number_of_dwelling_units`.
-   - Takes the first row (ordered by `c_of_o_issuance_date DESC`).
+   `certificateOfOccupancy.ts`:
+   - **Primary:** DOB NOW dataset **pkdm-hqz6**. Resolves BBL (from `resolvedContext` or `getBBLForProperty` + `bblForQueries`). SoQL: `bbl = '...'` (BBL column is text). If 0 rows and property has **BIN**, retries with `bin = '...'`. Select: `bbl, bin, job_type, c_of_o_status, c_of_o_filing_type, c_of_o_issuance_date, number_of_dwelling_units`; first row by `c_of_o_issuance_date DESC`.
+   - **Historical fallback:** If DOB NOW (BBL + BIN) still returns 0 rows, queries **historical CO** dataset **bs8b-p36w** (`https://data.cityofnewyork.us/resource/bs8b-p36w.json`): `bbl = '...'` then if 0 rows `bin = '...'`. Select: `bbl, bin, job_type, c_o_issue_date`. Uses most recent row; `status` is set to `"Historical"`, `filingType`/`dwellingUnits` left null. Summary includes `source: "dob_now" | "historical"` when a row was found.
 
 3. **Write**  
    - If there is a row: upserts into `certificate_of_occupancy` table.
    - **Always** calls `propertyRepo.updateDetails(propertyId, "enrichment.certificateOfOccupancy", summary)`:
-     - `summary = { jobType, status, filingType, issuanceDate, dwellingUnits, lastRefreshedAt }`.
+     - `summary = { jobType, status, filingType, issuanceDate, dwellingUnits, source, lastRefreshedAt }` (`source` is `"dob_now"` or `"historical"` when a row was found).
      - When the API returns **0 rows**, `summary` has `jobType: null`, `status: null`, `issuanceDate: null`, etc., and `lastRefreshedAt: now`.
    - Updates `property_enrichment_state` for `certificate_of_occupancy` (`lastSuccessAt`, `statsJson.rows_fetched`).
 
@@ -33,8 +31,8 @@
 
 ## When CO shows "—"
 
-- **0 rows from API** for that BBL. Dataset pkdm-hqz6 only has COs issued since July 2012; not every BBL has a row.
-- **Example:** BBL 1013820133 was checked via the resource API; the CO dataset returned 0 rows, so for that property the section appears but status/date/job type show "—".
+- **0 rows** from both DOB NOW (pkdm-hqz6) and historical (bs8b-p36w) for BBL and (if tried) BIN. DOB NOW has COs from July 2012 onward; historical has older records. If either source returns a row, it is used (historical rows get `status: "Historical"`).
+- **Example:** Some BBLs have no CO in either dataset; the flow is correct, the sources simply have no record for that building.
 
 ## Checklist if CO never shows data
 
