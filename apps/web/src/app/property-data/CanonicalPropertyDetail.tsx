@@ -268,7 +268,8 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
           const cat = (n?.complaintCategory ?? n?.complaint_category ?? raw?.complaint_category ?? "") as string;
           const status = (n?.status ?? raw?.status ?? "") as string;
           const unit = (n?.unit ?? raw?.unit ?? "") as string;
-          const infoParts = [cat, status, unit].filter(Boolean);
+          const disposition = (n?.dispositionCode ?? n?.disposition_code ?? raw?.disposition_code ?? "") as string;
+          const infoParts = [cat, disposition, status, unit].filter(Boolean);
           rows.push({ date: formatDateOnly(date) || "—", category: "DOB Complaint", info: infoParts.join(" · ") || "—" });
         }
         for (const l of litigations as Record<string, unknown>[]) {

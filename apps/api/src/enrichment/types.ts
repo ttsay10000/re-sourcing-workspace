@@ -40,7 +40,6 @@ export const ENRICHMENT_MODULE_NAMES = [
   "hpd_violations",
   "dob_complaints",
   "housing_litigations",
-  "affordable_housing",
 ] as const;
 
 export type EnrichmentModuleName = (typeof ENRICHMENT_MODULE_NAMES)[number];

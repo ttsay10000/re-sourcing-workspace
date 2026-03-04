@@ -1,5 +1,5 @@
 /**
- * Test script: run full enrichment (permits + 7 modules) for a property with given BBL/BIN,
+ * Test script: run full enrichment (permits + 6 modules) for a property with given BBL/BIN,
  * then print the combined output from all modules.
  *
  * Uses a TEST-ONLY canonical address (prefix [TEST]) so it never matches real properties
@@ -34,7 +34,6 @@ import {
   HpdViolationsRepo,
   DobComplaintsRepo,
   HousingLitigationsRepo,
-  AffordableHousingRepo,
 } from "@re-sourcing/db";
 import { runEnrichmentForProperty } from "../enrichment/runEnrichment.js";
 
@@ -53,7 +52,6 @@ const ENRICHMENT_NAMES = [
   "hpd_violations",
   "dob_complaints",
   "housing_litigations",
-  "affordable_housing",
 ];
 
 async function main(): Promise<void> {
@@ -102,7 +100,6 @@ async function main(): Promise<void> {
   const hpdViolRepo = new HpdViolationsRepo({ pool });
   const dobRepo = new DobComplaintsRepo({ pool });
   const litRepo = new HousingLitigationsRepo({ pool });
-  const affRepo = new AffordableHousingRepo({ pool });
 
   const permits = await permitRepo.listByPropertyId(property.id);
   const zoning = await zoningRepo.listByPropertyId(property.id);
@@ -111,7 +108,6 @@ async function main(): Promise<void> {
   const hpdViol = await hpdViolRepo.listByPropertyId(property.id);
   const dobComplaints = await dobRepo.listByPropertyId(property.id);
   const litigations = await litRepo.listByPropertyId(property.id);
-  const affordable = await affRepo.listByPropertyId(property.id);
 
   const state: Record<string, unknown> = {};
   for (const name of ENRICHMENT_NAMES) {
@@ -133,7 +129,6 @@ async function main(): Promise<void> {
       hpd_violations: { count: hpdViol.length, rows: hpdViol.map((v) => ({ normalizedJson: v.normalizedJson })) },
       dob_complaints: { count: dobComplaints.length, rows: dobComplaints.map((d) => ({ normalizedJson: d.normalizedJson })) },
       housing_litigations: { count: litigations.length, rows: litigations.map((l) => ({ normalizedJson: l.normalizedJson })) },
-      affordable_housing: { count: affordable.length, rows: affordable.map((a) => ({ normalizedJson: a.normalizedJson })) },
     },
   };
 

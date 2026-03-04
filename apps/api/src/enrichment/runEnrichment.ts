@@ -1,6 +1,6 @@
 /**
  * Unified enrichment runner: resolve BBL first, then Phase 1 (owner cascade + tax code),
- * then permits, then the 7 modules. Owner: PLUTO → valuations → HPD → permits; once set, source of truth.
+ * then permits, then the 6 modules. Owner: PLUTO → valuations → HPD → permits; once set, source of truth.
  */
 
 import { getPool, PropertyRepo } from "@re-sourcing/db";
@@ -20,7 +20,7 @@ export interface RunEnrichmentForPropertyOptions extends EnrichmentRunOptions {
 
 /**
  * Run enrichment for a single property. If moduleName is set, run only that module.
- * Otherwise: resolve BBL → Phase 1 (owner cascade + tax code) → permits → 7 modules.
+ * Otherwise: resolve BBL → Phase 1 (owner cascade + tax code) → permits → 6 modules.
  * Modules are skipped only if BBL/BIN could not be resolved.
  */
 export async function runEnrichmentForProperty(

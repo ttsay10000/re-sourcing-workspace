@@ -69,7 +69,7 @@ async function run(propertyId: string, options: EnrichmentRunOptions): Promise<E
 
   const where = `bin = '${escapeSoQLString(bin)}'`;
   const select =
-    "bin, date_entered, status, unit, disposition_date, complaint_category";
+    "bin, date_entered, status, unit, disposition_date, disposition_code, complaint_category";
   const buildParams = (limit: number, offset: number): SoQLQueryParams => ({
     $select: select,
     $where: where,
@@ -98,6 +98,7 @@ async function run(propertyId: string, options: EnrichmentRunOptions): Promise<E
         status: col(row, "status"),
         unit: col(row, "unit"),
         dispositionDate,
+        dispositionCode: col(row, "disposition_code", "dispositioncode"),
         complaintCategory: col(row, "complaint_category", "complaintcategory"),
       };
       await complaintsRepo.upsert({

@@ -14,10 +14,9 @@ import {
   HpdViolationsRepo,
   DobComplaintsRepo,
   HousingLitigationsRepo,
-  AffordableHousingRepo,
 } from "@re-sourcing/db";
 import { runEnrichmentForProperty } from "../enrichment/runEnrichment.js";
-import { normalizeAddressLineForDisplay } from "../enrichment/resolvePropertyBBL.js";
+import { normalizeAddressLineForDisplay, getBBLForProperty } from "../enrichment/resolvePropertyBBL.js";
 
 const router = Router();
 
@@ -166,10 +165,14 @@ router.post("/properties/from-listings", async (req: Request, res: Response) => 
         failed: 0,
       };
 
-      // Enrichment runs the same pipeline for every property: BBL resolve → Phase 1 (owner cascade + tax code) → permits → 7 modules (zoning, CO, HPD reg, HPD violations, DOB complaints, litigations, affordable housing). Each property is processed independently by propertyId; there is no shared state between iterations.
+      // Enrichment runs the same pipeline for every property: BBL resolve → Phase 1 (owner cascade + tax code) → permits → 7 modules. Pre-pass: resolve and persist BBL for every property first so CO and other BBL-dependent modules run for all.
       if (!skipPermitEnrichment && propertyIds.length > 0) {
         enrichmentSummary.ran = true;
         const appToken = process.env.SOCRATA_APP_TOKEN ?? null;
+        for (let i = 0; i < propertyIds.length; i++) {
+          if (i > 0) await new Promise((r) => setTimeout(r, ENRICHMENT_RATE_LIMIT_DELAY_MS));
+          await getBBLForProperty(propertyIds[i]!, { appToken });
+        }
         const byModule: Record<string, number> = {};
         for (let i = 0; i < propertyIds.length; i++) {
           if (i > 0) await new Promise((r) => setTimeout(r, ENRICHMENT_RATE_LIMIT_DELAY_MS));
@@ -225,6 +228,11 @@ router.post("/properties/run-enrichment", async (req: Request, res: Response) =>
     }
 
     const appToken = process.env.SOCRATA_APP_TOKEN ?? null;
+    // Pre-pass: resolve and persist BBL for every property so CO and other BBL-dependent modules run for all.
+    for (let i = 0; i < propertyIds.length; i++) {
+      if (i > 0) await new Promise((r) => setTimeout(r, ENRICHMENT_RATE_LIMIT_DELAY_MS));
+      await getBBLForProperty(propertyIds[i]!, { appToken });
+    }
     const byModule: Record<string, number> = {};
     let success = 0;
     let failed = 0;
@@ -266,7 +274,6 @@ const ENRICHMENT_MODULES: { key: string; label: string }[] = [
   { key: "dob_complaints", label: "DOB Complaints" },
   { key: "hpd_violations", label: "HPD Violations" },
   { key: "housing_litigations", label: "Housing Litigations" },
-  { key: "affordable_housing", label: "Affordable Housing" },
 ];
 
 /** GET /api/properties/pipeline-stats - counts for raw listings, canonical properties, and per-module completion for pipeline progress. ?includeRemaining=1 adds remainingByModule (property IDs not yet completed per module). */
@@ -306,7 +313,7 @@ router.get("/properties/pipeline-stats", async (req: Request, res: Response) => 
           SELECT property_id, enrichment_name FROM property_enrichment_state WHERE last_success_at IS NOT NULL
         ),
         modules AS (
-          SELECT unnest(ARRAY['permits','hpd_registration','certificate_of_occupancy','zoning_ztl','dob_complaints','hpd_violations','housing_litigations','affordable_housing']) AS enrichment_name
+          SELECT unnest(ARRAY['permits','hpd_registration','certificate_of_occupancy','zoning_ztl','dob_complaints','hpd_violations','housing_litigations']) AS enrichment_name
         )
         SELECT m.enrichment_name, p.id AS property_id
         FROM properties p
@@ -405,7 +412,6 @@ router.get("/properties/:id/enrichment/state", async (req: Request, res: Respons
       "hpd_violations",
       "dob_complaints",
       "housing_litigations",
-      "affordable_housing",
     ];
     const states: Record<string, { lastRefreshedAt: string; lastSuccessAt: string | null; lastError: string | null; statsJson: unknown }> = {};
     for (const name of names) {
@@ -469,21 +475,6 @@ router.get("/properties/:id/enrichment/litigations", async (req: Request, res: R
     const message = err instanceof Error ? err.message : String(err);
     console.error("[properties enrichment litigations]", err);
     res.status(503).json({ error: "Failed to load litigations.", details: message });
-  }
-});
-
-/** GET /api/properties/:id/enrichment/affordable-housing - Affordable housing rows. */
-router.get("/properties/:id/enrichment/affordable-housing", async (req: Request, res: Response) => {
-  try {
-    const { id: propertyId } = req.params;
-    const pool = getPool();
-    const repo = new AffordableHousingRepo({ pool });
-    const rows = await repo.listByPropertyId(propertyId);
-    res.json({ propertyId, affordableHousing: rows, total: rows.length });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error("[properties enrichment affordable-housing]", err);
-    res.status(503).json({ error: "Failed to load affordable housing.", details: message });
   }
 });
 

@@ -25,7 +25,6 @@ const ENRICHMENT_MODULE_LABELS: Record<string, string> = {
   hpd_violations: "HPD Violations",
   dob_complaints: "DOB Complaints",
   housing_litigations: "Housing Litigations",
-  affordable_housing: "Affordable Housing",
 };
 
 interface RunLogEntry {
