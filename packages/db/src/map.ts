@@ -19,6 +19,8 @@ import type {
   ListingPropertyMatch,
   DedupeReasons,
   SystemEvent,
+  PropertyInquiryEmail,
+  PropertyInquiryDocument,
 } from "@re-sourcing/contracts";
 import type { ListingSource, ListingLifecycleState, LocationMode, IngestionRunStatus, IngestionJobStatus, MatchStatus } from "@re-sourcing/contracts";
 
@@ -163,6 +165,31 @@ export function mapEvent(row: Record<string, unknown>): SystemEvent {
     id: row.id as string,
     eventType: row.event_type as string,
     payload: (row.payload as Record<string, unknown>) ?? {},
+    createdAt: toIso(row.created_at),
+  };
+}
+
+export function mapInquiryEmail(row: Record<string, unknown>): PropertyInquiryEmail {
+  return {
+    id: row.id as string,
+    propertyId: row.property_id as string,
+    messageId: row.message_id as string,
+    subject: (row.subject as string) ?? null,
+    fromAddress: (row.from_address as string) ?? null,
+    receivedAt: row.received_at != null ? toIso(row.received_at) : null,
+    bodyText: (row.body_text as string) ?? null,
+    createdAt: toIso(row.created_at),
+  };
+}
+
+export function mapInquiryDocument(row: Record<string, unknown>): PropertyInquiryDocument {
+  return {
+    id: row.id as string,
+    propertyId: row.property_id as string,
+    inquiryEmailId: row.inquiry_email_id as string,
+    filename: row.filename as string,
+    contentType: (row.content_type as string) ?? null,
+    filePath: row.file_path as string,
     createdAt: toIso(row.created_at),
   };
 }

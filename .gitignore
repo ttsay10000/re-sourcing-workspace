@@ -24,3 +24,6 @@ npm-debug.log*
 
 # Vercel (if used later)
 .vercel
+
+# Stray path from URL-as-filename (e.g. fetch saving to https:/data.cityofnewyork.us/...)
+https:/

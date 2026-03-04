@@ -30,6 +30,22 @@ export class PropertyRepo {
     return r.rows[0] ? mapProperty(r.rows[0]) : null;
   }
 
+  /**
+   * Find property by exact canonical_address or by first line of address (before first comma).
+   * NormalizedFirstLine should be trim + collapse spaces, e.g. "416 West 20th Street".
+   */
+  async findByAddressFirstLine(normalizedFirstLine: string): Promise<Property | null> {
+    if (!normalizedFirstLine.trim()) return null;
+    const r = await this.client.query(
+      `SELECT * FROM properties
+       WHERE canonical_address = $1
+          OR LOWER(TRIM(REGEXP_REPLACE(SPLIT_PART(canonical_address, ',', 1), '\\s+', ' ', 'g'))) = LOWER(TRIM($2))
+       LIMIT 1`,
+      [normalizedFirstLine, normalizedFirstLine]
+    );
+    return r.rows[0] ? mapProperty(r.rows[0]) : null;
+  }
+
   async list(options?: { limit?: number; offset?: number }): Promise<Property[]> {
     let sql = "SELECT * FROM properties ORDER BY updated_at DESC";
     const values: unknown[] = [];

@@ -173,6 +173,9 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
   const [unifiedLoading, setUnifiedLoading] = useState(false);
   const [unifiedFetched, setUnifiedFetched] = useState(false);
   const [ownerFromPermits, setOwnerFromPermits] = useState<{ owner_name?: string; owner_business_name?: string } | null>(null);
+  const [inquiryDocuments, setInquiryDocuments] = useState<Array<{ id: string; filename: string; contentType?: string | null; createdAt: string }> | null>(null);
+  const [inquiryEmailModalOpen, setInquiryEmailModalOpen] = useState(false);
+  const [inquiryDraft, setInquiryDraft] = useState<{ to: string; subject: string; body: string }>({ to: "", subject: "", body: "" });
 
   useEffect(() => {
     let cancelled = false;
@@ -207,6 +210,19 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only run when section is open and not yet fetched
   }, [openSections.violationsComplaintsPermits, unifiedFetched, unifiedLoading]);
 
+  useEffect(() => {
+    if (!openSections.rentalOm) return;
+    let cancelled = false;
+    setInquiryDocuments(null);
+    fetch(`${API_BASE}/api/properties/${property.id}/documents`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (!cancelled && data?.documents) setInquiryDocuments(data.documents);
+      })
+      .catch(() => { if (!cancelled) setInquiryDocuments([]); });
+    return () => { cancelled = true; };
+  }, [property.id, openSections.rentalOm]);
+
   const toggle = (key: string) => setOpenSections((p) => ({ ...p, [key]: !p[key] }));
 
   const d = (detailsFromApi != null && typeof detailsFromApi === "object" ? detailsFromApi : property.details) as Record<string, unknown> | null | undefined;
@@ -222,6 +238,14 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
   const ownerModuleName = d?.ownerModuleName ?? d?.owner_module_name ?? null;
   const ownerModuleBusiness = d?.ownerModuleBusiness ?? d?.owner_module_business ?? null;
   const omFurnishedPricing = d?.omFurnishedPricing ?? d?.om_furnished_pricing;
+  const rentalFinancials = d?.rentalFinancials as {
+    rentalUnits?: Array<{ unit?: string | null; rentalPrice?: number | null; status?: string | null; sqft?: number | null; listedDate?: string | null; lastRentedDate?: string | null; beds?: number | null; baths?: number | null; images?: string[] | null; source?: string | null }> | null;
+    fromLlm?: { noi?: number | null; capRate?: number | null; rentalEstimates?: string | null; rentalNumbersPerUnit?: Array<{ unit?: string; rent?: number; note?: string }> | null; otherFinancials?: string | null } | null;
+    source?: string | null;
+    lastUpdatedAt?: string | null;
+  } | null | undefined;
+  const rentalUnits = rentalFinancials?.rentalUnits ?? [];
+  const fromLlm = rentalFinancials?.fromLlm;
 
   const fetchUnifiedTable = () => {
     if (unifiedFetched) return;
@@ -293,6 +317,7 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
   const floorplanUrls = (Array.isArray(extra?.floorplans) ? (extra.floorplans as string[]).filter((u): u is string => typeof u === "string") : []) ?? [];
   const [galleryIndex, setGalleryIndex] = useState(0);
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
+  const [unitGalleryIndices, setUnitGalleryIndices] = useState<Record<number, number>>({});
 
   return (
     <div className="property-detail-collapsible" style={{ paddingLeft: "1.5rem", borderLeft: "3px solid #e5e5e5" }}>
@@ -631,25 +656,207 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
         </div>
       </CollapsibleSection>
 
-      {/* 5. Rental pricing / OM */}
+      {/* 5. Rental pricing / OM + rental financials (per-unit table, NOI, cap rate) */}
       <CollapsibleSection id="rental-om" title="Rental pricing / OM" open={!!openSections.rentalOm} onToggle={() => toggle("rentalOm")}>
-        {omFurnishedPricing != null && String(omFurnishedPricing).trim() ? (
-          <p style={{ margin: 0, fontSize: "0.875rem" }}>{String(omFurnishedPricing)}</p>
-        ) : listingForDisplay?.rentalPriceHistory?.length ? (
-          <div className="initial-info-price-history-list">
-            {listingForDisplay.rentalPriceHistory.slice(0, 10).map((r, i) => (
-              <div key={i} className="initial-info-price-history-row">
-                <span className="initial-info-price-history-date">{formatPriceHistoryDate(r.date)}</span>
-                <span className="initial-info-price-history-sep">·</span>
-                <span className="initial-info-price-history-price">{formatPriceCompact(r.price)}</span>
-                <span className="initial-info-price-history-sep">·</span>
-                <span className="initial-info-price-history-event">{formatPriceEventLabel(r.event)}</span>
+        <div style={{ fontSize: "0.875rem" }}>
+          {(rentalUnits.length === 0 || (rentalUnits.length < 3 && !fromLlm)) && (
+            <div style={{ marginBottom: "0.75rem" }}>
+              <button
+                type="button"
+                onClick={() => {
+                  const addressLine = property.canonicalAddress.split(",")[0]?.trim() || property.canonicalAddress;
+                  const subject = "Inquiry about " + addressLine;
+                  const body = "Hi,\n\nI'm a broker in NYC with a client interested in this property. Could you send over an OM and any rent roll information?\n\nThanks.";
+                  const agents = listingForDisplay?.agentEnrichment ?? [];
+                  const emailsWithNames = agents.map((a) => ({ email: a.email?.trim(), name: a.name })).filter((x) => x.email) as { email: string; name: string }[];
+                  const firstPrimaryEmail = emailsWithNames.length > 0 ? emailsWithNames[0].email : "";
+                  setInquiryDraft({ to: firstPrimaryEmail, subject, body });
+                  setInquiryEmailModalOpen(true);
+                }}
+                style={{ padding: "0.35rem 0.6rem", backgroundColor: "#f0f0f0", border: "1px solid #ccc", borderRadius: "4px", fontSize: "0.8rem", color: "#333", cursor: "pointer" }}
+              >
+                Request info / OM by email &amp; track reply
+              </button>
+              <p style={{ margin: "0.25rem 0 0", color: "#737373", fontSize: "0.75rem" }}>
+                Opens a draft to review. Use the subject line so replies are matched to this property. Process-inbox runs daily to attach replies and documents here.
+              </p>
+            </div>
+          )}
+          {inquiryEmailModalOpen && (
+            <div style={{ position: "fixed", inset: 0, zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", backgroundColor: "rgba(0,0,0,0.4)" }} onClick={() => setInquiryEmailModalOpen(false)}>
+              <div style={{ backgroundColor: "#fff", borderRadius: "8px", padding: "1.25rem", maxWidth: "520px", width: "100%", maxHeight: "90vh", overflow: "auto", boxShadow: "0 4px 20px rgba(0,0,0,0.15)" }} onClick={(e) => e.stopPropagation()}>
+                <p style={{ margin: "0 0 0.75rem", fontWeight: 600 }}>Request OM / rent roll from broker</p>
+                <p style={{ margin: "0 0 1rem", fontSize: "0.875rem", color: "#555" }}>
+                  <strong>This will open your email client to send an email to the listing broker</strong> requesting an OM and rent roll. The email is not sent until you send it from your email app. Review the draft below and edit if needed. Keep the subject line so replies can be matched to this property.
+                </p>
+                <div style={{ marginBottom: "0.75rem" }}>
+                  <label style={{ display: "block", fontSize: "0.75rem", marginBottom: "0.25rem", color: "#555" }}>To (broker)</label>
+                  <input
+                    type="text"
+                    value={inquiryDraft.to}
+                    onChange={(e) => setInquiryDraft((p) => ({ ...p, to: e.target.value }))}
+                    placeholder="Broker email (from listing)"
+                    style={{ width: "100%", padding: "0.4rem", fontSize: "0.875rem", border: "1px solid #ccc", borderRadius: "4px" }}
+                  />
+                  {!inquiryDraft.to && listingForDisplay && (
+                    <p style={{ margin: "0.25rem 0 0", fontSize: "0.75rem", color: "#888" }}>No broker email on file. Add agent enrichment or enter manually.</p>
+                  )}
+                  {listingForDisplay?.agentEnrichment && listingForDisplay.agentEnrichment.length > 1 && (
+                    <p style={{ margin: "0.25rem 0 0", fontSize: "0.75rem", color: "#666" }}>
+                      Other agents: {listingForDisplay.agentEnrichment.slice(1).map((a) => a.email?.trim()).filter(Boolean).join(", ") || "—"}
+                    </p>
+                  )}
+                </div>
+                <div style={{ marginBottom: "0.75rem" }}>
+                  <label style={{ display: "block", fontSize: "0.75rem", marginBottom: "0.25rem", color: "#555" }}>Subject</label>
+                  <input
+                    type="text"
+                    value={inquiryDraft.subject}
+                    onChange={(e) => setInquiryDraft((p) => ({ ...p, subject: e.target.value }))}
+                    style={{ width: "100%", padding: "0.4rem", fontSize: "0.875rem", border: "1px solid #ccc", borderRadius: "4px" }}
+                  />
+                </div>
+                <div style={{ marginBottom: "1rem" }}>
+                  <label style={{ display: "block", fontSize: "0.75rem", marginBottom: "0.25rem", color: "#555" }}>Body (editable)</label>
+                  <textarea
+                    value={inquiryDraft.body}
+                    onChange={(e) => setInquiryDraft((p) => ({ ...p, body: e.target.value }))}
+                    rows={6}
+                    style={{ width: "100%", padding: "0.4rem", fontSize: "0.875rem", border: "1px solid #ccc", borderRadius: "4px", resize: "vertical" }}
+                  />
+                </div>
+                <div style={{ display: "flex", gap: "0.5rem", justifyContent: "flex-end" }}>
+                  <button type="button" onClick={() => setInquiryEmailModalOpen(false)} style={{ padding: "0.4rem 0.75rem", border: "1px solid #ccc", borderRadius: "4px", background: "#fff", cursor: "pointer" }}>Cancel</button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const { to, subject, body } = inquiryDraft;
+                      const toEnc = to.trim().split(/\s*,\s*/).map((e) => encodeURIComponent(e)).join(",");
+                      const mailto = toEnc ? `mailto:${toEnc}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}` : `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+                      window.open(mailto, "_blank", "noopener,noreferrer");
+                      setInquiryEmailModalOpen(false);
+                    }}
+                    style={{ padding: "0.4rem 0.75rem", border: "1px solid #0066cc", borderRadius: "4px", background: "#0066cc", color: "#fff", cursor: "pointer" }}
+                  >
+                    Open in email client
+                  </button>
+                </div>
               </div>
-            ))}
-          </div>
-        ) : (
-          <p style={{ color: "#737373", margin: 0 }}>—</p>
-        )}
+            </div>
+          )}
+          {rentalUnits.length > 0 && (
+            <div style={{ marginBottom: "0.75rem" }}>
+              <strong style={{ display: "block", marginBottom: "0.5rem" }}>Rental units (from API / inquiry)</strong>
+              <div style={{ display: "flex", flexDirection: "column", gap: "1rem", maxHeight: "520px", overflowY: "auto" }}>
+                {rentalUnits.map((row, i) => {
+                  const unitImages = (row.images ?? []).filter((u): u is string => typeof u === "string");
+                  const idx = unitGalleryIndices[i] ?? 0;
+                  const setIdx = (n: number) => setUnitGalleryIndices((prev) => ({ ...prev, [i]: n }));
+                  return (
+                    <div key={i} style={{ border: "1px solid #e5e5e5", borderRadius: "6px", overflow: "hidden", backgroundColor: "#fafafa" }}>
+                      {unitImages.length > 0 && (
+                        <div className="property-card-gallery-wrap" style={{ padding: "0.5rem", borderBottom: "1px solid #eee" }}>
+                          <div className="property-card-gallery" style={{ maxWidth: "100%" }}>
+                            <a href={unitImages[idx]} target="_blank" rel="noopener noreferrer" className="property-card-gallery-main-wrap">
+                              <img key={idx} src={unitImages[idx]} alt="" className="property-card-gallery-main" style={{ maxHeight: "180px", objectFit: "contain" }} />
+                            </a>
+                            <div className="property-card-gallery-thumbs" style={{ flexWrap: "wrap" }}>
+                              {unitImages.map((src, j) => (
+                                <button key={j} type="button" onClick={() => setIdx(j)} className={`property-card-gallery-thumb-wrap ${j === idx ? "property-card-gallery-thumb-wrap--active" : ""}`}>
+                                  <img src={src} alt="" loading="lazy" className="property-card-gallery-thumb" />
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                      <div style={{ overflowX: "auto" }}>
+                        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.8rem" }}>
+                          <thead>
+                            <tr style={{ borderBottom: "1px solid #e5e5e5" }}>
+                              <th style={{ textAlign: "left", padding: "0.35rem 0.5rem 0.35rem 0.75rem" }}>Unit</th>
+                              <th style={{ textAlign: "left", padding: "0.35rem 0.5rem" }}>Rent</th>
+                              <th style={{ textAlign: "left", padding: "0.35rem 0.5rem" }}>Status</th>
+                              <th style={{ textAlign: "left", padding: "0.35rem 0.5rem" }}>Sq ft</th>
+                              <th style={{ textAlign: "left", padding: "0.35rem 0.5rem" }}>Beds</th>
+                              <th style={{ textAlign: "left", padding: "0.35rem 0.5rem" }}>Baths</th>
+                              <th style={{ textAlign: "left", padding: "0.35rem 0.5rem" }}>Listed</th>
+                              <th style={{ textAlign: "left", padding: "0.35rem 0.5rem 0.35rem 0.75rem" }}>Last rented</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            <tr style={{ borderBottom: "none" }}>
+                              <td style={{ padding: "0.35rem 0.5rem 0.35rem 0.75rem", whiteSpace: "nowrap" }}>{row.unit ?? "—"}</td>
+                              <td style={{ padding: "0.35rem 0.5rem" }}>{row.rentalPrice != null ? formatPrice(row.rentalPrice) : "—"}</td>
+                              <td style={{ padding: "0.35rem 0.5rem" }}>{row.status === "sold" ? "Last rent" : row.status === "open" ? "Ask" : row.status ?? "—"}</td>
+                              <td style={{ padding: "0.35rem 0.5rem" }}>{row.sqft != null && row.sqft > 0 ? String(row.sqft) : "—"}</td>
+                              <td style={{ padding: "0.35rem 0.5rem" }}>{row.beds != null ? String(row.beds) : "—"}</td>
+                              <td style={{ padding: "0.35rem 0.5rem" }}>{row.baths != null ? String(row.baths) : "—"}</td>
+                              <td style={{ padding: "0.35rem 0.5rem", whiteSpace: "nowrap" }}>{row.listedDate ? formatDateOnly(row.listedDate) : "—"}</td>
+                              <td style={{ padding: "0.35rem 0.5rem 0.35rem 0.75rem", whiteSpace: "nowrap" }}>{row.lastRentedDate ? formatDateOnly(row.lastRentedDate) : "—"}</td>
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+          {fromLlm && (fromLlm.noi != null || fromLlm.capRate != null || fromLlm.rentalEstimates || fromLlm.otherFinancials || fromLlm.dataGapSuggestions) && (
+            <div style={{ marginBottom: "0.75rem" }}>
+              <strong style={{ display: "block", marginBottom: "0.25rem" }}>Financials (from listing / LLM)</strong>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem 1rem" }}>
+                {fromLlm.noi != null && <span>NOI: {formatPrice(fromLlm.noi)}</span>}
+                {fromLlm.capRate != null && <span>Cap rate: {fromLlm.capRate}%</span>}
+              </div>
+              {fromLlm.rentalEstimates && <p style={{ margin: "0.25rem 0 0", color: "#404040" }}>{fromLlm.rentalEstimates}</p>}
+              {fromLlm.otherFinancials && <p style={{ margin: "0.25rem 0 0", color: "#404040" }}>{fromLlm.otherFinancials}</p>}
+              {fromLlm.dataGapSuggestions && (
+                <p style={{ margin: "0.5rem 0 0", padding: "0.35rem 0.5rem", backgroundColor: "#fef3c7", borderRadius: "4px", fontSize: "0.8rem", color: "#92400e" }}>
+                  <strong>Possible missing data:</strong> {fromLlm.dataGapSuggestions}
+                </p>
+              )}
+            </div>
+          )}
+          {inquiryDocuments && inquiryDocuments.length > 0 && (
+            <div style={{ marginBottom: "0.75rem" }}>
+              <strong style={{ display: "block", marginBottom: "0.25rem" }}>Documents (from inquiry replies)</strong>
+              <ul style={{ margin: 0, paddingLeft: "1.25rem", fontSize: "0.8rem" }}>
+                {inquiryDocuments.map((doc) => (
+                  <li key={doc.id} style={{ marginBottom: "0.2rem" }}>
+                    <a
+                      href={`${API_BASE}/api/properties/${property.id}/documents/${doc.id}/file`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{ color: "#0066cc" }}
+                    >
+                      {doc.filename}
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {omFurnishedPricing != null && String(omFurnishedPricing).trim() ? (
+            <p style={{ margin: 0 }}>{String(omFurnishedPricing)}</p>
+          ) : listingForDisplay?.rentalPriceHistory?.length && rentalUnits.length === 0 && !fromLlm ? (
+            <div className="initial-info-price-history-list">
+              {listingForDisplay.rentalPriceHistory.slice(0, 10).map((r, i) => (
+                <div key={i} className="initial-info-price-history-row">
+                  <span className="initial-info-price-history-date">{formatPriceHistoryDate(r.date)}</span>
+                  <span className="initial-info-price-history-sep">·</span>
+                  <span className="initial-info-price-history-price">{formatPriceCompact(r.price)}</span>
+                  <span className="initial-info-price-history-sep">·</span>
+                  <span className="initial-info-price-history-event">{formatPriceEventLabel(r.event)}</span>
+                </div>
+              ))}
+            </div>
+          ) : rentalUnits.length === 0 && !fromLlm ? (
+            <p style={{ color: "#737373", margin: 0 }}>—</p>
+          ) : null}
+        </div>
       </CollapsibleSection>
 
       {/* 6. Violations, complaints, permits — one table */}

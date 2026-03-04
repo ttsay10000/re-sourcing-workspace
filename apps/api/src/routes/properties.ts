@@ -14,9 +14,16 @@ import {
   HpdViolationsRepo,
   DobComplaintsRepo,
   HousingLitigationsRepo,
+  InquiryEmailRepo,
+  InquiryDocumentRepo,
 } from "@re-sourcing/db";
+import { resolveInquiryFilePath } from "../inquiry/storage.js";
+import type { RentalFinancials, RentalFinancialsFromLlm } from "@re-sourcing/contracts";
 import { runEnrichmentForProperty } from "../enrichment/runEnrichment.js";
 import { normalizeAddressLineForDisplay, getBBLForProperty } from "../enrichment/resolvePropertyBBL.js";
+import { runRentalApiStep } from "../rental/rentalApiClient.js";
+import { extractRentalFinancialsFromListing } from "../rental/extractRentalFinancialsFromListing.js";
+import { suggestRentalDataGaps } from "../rental/suggestRentalDataGaps.js";
 
 const router = Router();
 
@@ -336,6 +343,77 @@ router.get("/properties/pipeline-stats", async (req: Request, res: Response) => 
   }
 });
 
+/** GET /api/properties/:id/documents - list inquiry documents (attachments) for property. */
+router.get("/properties/:id/documents", async (req: Request, res: Response) => {
+  try {
+    const { id: propertyId } = req.params;
+    const pool = getPool();
+    const propertyRepo = new PropertyRepo({ pool });
+    const docRepo = new InquiryDocumentRepo({ pool });
+    const property = await propertyRepo.byId(propertyId);
+    if (!property) {
+      res.status(404).json({ error: "Property not found", propertyId });
+      return;
+    }
+    const documents = await docRepo.listByPropertyId(propertyId);
+    res.json({ propertyId, documents });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[properties documents list]", err);
+    res.status(503).json({ error: "Failed to list documents.", details: message });
+  }
+});
+
+/** GET /api/properties/:id/documents/:docId/file - serve inquiry document file. */
+router.get("/properties/:id/documents/:docId/file", async (req: Request, res: Response) => {
+  try {
+    const { id: propertyId, docId } = req.params;
+    const pool = getPool();
+    const propertyRepo = new PropertyRepo({ pool });
+    const docRepo = new InquiryDocumentRepo({ pool });
+    const property = await propertyRepo.byId(propertyId);
+    if (!property) {
+      res.status(404).json({ error: "Property not found", propertyId });
+      return;
+    }
+    const doc = await docRepo.byId(docId);
+    if (!doc || doc.propertyId !== propertyId) {
+      res.status(404).json({ error: "Document not found", docId });
+      return;
+    }
+    const absolutePath = resolveInquiryFilePath(doc.filePath);
+    res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(doc.filename)}"`);
+    res.sendFile(absolutePath, (err) => {
+      if (err && !res.headersSent) res.status(500).json({ error: "Failed to send file" });
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[properties document file]", err);
+    if (!res.headersSent) res.status(503).json({ error: "Failed to serve file.", details: message });
+  }
+});
+
+/** GET /api/properties/:id/inquiry-emails - list inquiry emails for property. */
+router.get("/properties/:id/inquiry-emails", async (req: Request, res: Response) => {
+  try {
+    const { id: propertyId } = req.params;
+    const pool = getPool();
+    const propertyRepo = new PropertyRepo({ pool });
+    const emailRepo = new InquiryEmailRepo({ pool });
+    const property = await propertyRepo.byId(propertyId);
+    if (!property) {
+      res.status(404).json({ error: "Property not found", propertyId });
+      return;
+    }
+    const emails = await emailRepo.listByPropertyId(propertyId);
+    res.json({ propertyId, emails });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[properties inquiry-emails list]", err);
+    res.status(503).json({ error: "Failed to list inquiry emails.", details: message });
+  }
+});
+
 /** GET /api/properties/:id - single property with full details (for fresh enrichment data in UI). */
 router.get("/properties/:id", async (req: Request, res: Response) => {
   try {
@@ -475,6 +553,106 @@ router.get("/properties/:id/enrichment/litigations", async (req: Request, res: R
     const message = err instanceof Error ? err.message : String(err);
     console.error("[properties enrichment litigations]", err);
     res.status(503).json({ error: "Failed to load litigations.", details: message });
+  }
+});
+
+/** Merge new fromLlm into existing; only set non-null keys so we don't overwrite with null. */
+function mergeFromLlm(
+  existing: RentalFinancialsFromLlm | null | undefined,
+  incoming: RentalFinancialsFromLlm | null | undefined
+): RentalFinancialsFromLlm | null {
+  if (!incoming || typeof incoming !== "object") return existing ?? null;
+  const out = { ...(existing && typeof existing === "object" ? existing : {}) };
+  for (const [k, v] of Object.entries(incoming)) {
+    if (v != null && (typeof v !== "string" || v.trim() !== "")) (out as Record<string, unknown>)[k] = v;
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+/** POST /api/properties/run-rental-flow - Run steps 1 (RapidAPI) + 2 (LLM on listing) for selected or all properties. */
+router.post("/properties/run-rental-flow", async (req: Request, res: Response) => {
+  try {
+    const pool = getPool();
+    const propertyRepo = new PropertyRepo({ pool });
+    const matchRepo = new MatchRepo({ pool });
+    const listingRepo = new ListingRepo({ pool });
+
+    const propertyIds = Array.isArray(req.body?.propertyIds) && req.body.propertyIds.length > 0
+      ? (req.body.propertyIds as string[]).filter((id: unknown) => typeof id === "string" && id.trim().length > 0)
+      : (await propertyRepo.list({ limit: 200 })).map((p) => p.id);
+
+    const results: { propertyId: string; rentalUnitsCount: number; hasLlmFinancials: boolean; error?: string }[] = [];
+    const delayMs = ENRICHMENT_RATE_LIMIT_DELAY_MS;
+
+    for (const propertyId of propertyIds) {
+      try {
+        const property = await propertyRepo.byId(propertyId);
+        if (!property) {
+          results.push({ propertyId, rentalUnitsCount: 0, hasLlmFinancials: false, error: "Property not found" });
+          continue;
+        }
+
+        const existing = (property.details?.rentalFinancials ?? null) as RentalFinancials | null;
+
+        let apiResult: Partial<RentalFinancials> = {};
+        try {
+          apiResult = await runRentalApiStep(property.canonicalAddress);
+        } catch (e) {
+          console.warn(`[run-rental-flow] ${propertyId} RapidAPI step failed:`, e instanceof Error ? e.message : e);
+        }
+
+        const rentalUnits = (apiResult.rentalUnits && apiResult.rentalUnits.length > 0)
+          ? apiResult.rentalUnits
+          : (existing?.rentalUnits ?? null);
+
+        let fromLlm: RentalFinancialsFromLlm | null = null;
+        const { matches } = await matchRepo.list({ propertyId, limit: 1 });
+        const listing = matches[0] ? await listingRepo.byId(matches[0].listingId) : null;
+        if (listing) {
+          const desc = (listing.description ?? "").trim();
+          const fallback = [listing.title, listing.address].filter(Boolean).join(" – ") || "";
+          fromLlm = await extractRentalFinancialsFromListing(
+            desc.length >= 20 ? listing.description : (fallback ? `Listing: ${fallback}. No description.` : null),
+            listing.title ?? listing.address ?? undefined
+          );
+        }
+        const mergedFromLlm = mergeFromLlm(existing?.fromLlm ?? null, fromLlm);
+
+        const dataGap = await suggestRentalDataGaps(
+          listing ? { beds: listing.beds, baths: listing.baths, address: listing.address, title: listing.title, descriptionSnippet: listing.description?.slice(0, 400) } : null,
+          rentalUnits ?? []
+        );
+        let finalFromLlm = mergedFromLlm;
+        if (dataGap) {
+          finalFromLlm = mergeFromLlm(finalFromLlm ?? null, { dataGapSuggestions: dataGap }) ?? { dataGapSuggestions: dataGap };
+        }
+
+        const rentalFinancials: RentalFinancials = {
+          rentalUnits: rentalUnits ?? undefined,
+          fromLlm: finalFromLlm ?? undefined,
+          source: apiResult.rentalUnits?.length ? "rapidapi" : (finalFromLlm ? "llm" : existing?.source ?? undefined),
+          lastUpdatedAt: new Date().toISOString(),
+        };
+
+        await propertyRepo.mergeDetails(propertyId, { rentalFinancials });
+        results.push({
+          propertyId,
+          rentalUnitsCount: rentalUnits?.length ?? 0,
+          hasLlmFinancials: !!finalFromLlm && Object.keys(finalFromLlm).length > 0,
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        results.push({ propertyId, rentalUnitsCount: 0, hasLlmFinancials: false, error: message });
+      }
+
+      if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
+    }
+
+    res.json({ ok: true, results });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[properties run-rental-flow]", err);
+    res.status(503).json({ error: "Run rental flow failed.", details: message });
   }
 });
 

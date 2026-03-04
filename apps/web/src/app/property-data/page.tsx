@@ -119,6 +119,7 @@ function PropertyDataContent() {
   const [loadingCanonical, setLoadingCanonical] = useState(false);
   const [sendingToCanonical, setSendingToCanonical] = useState(false);
   const [rerunningEnrichment, setRerunningEnrichment] = useState(false);
+  const [runningRentalFlow, setRunningRentalFlow] = useState(false);
   const [expandedCanonicalId, setExpandedCanonicalId] = useState<string | null>(null);
   const [selectedListingIds, setSelectedListingIds] = useState<Set<string>>(new Set());
   const [enrichmentTimerSeconds, setEnrichmentTimerSeconds] = useState(0);
@@ -518,6 +519,28 @@ function PropertyDataContent() {
       .finally(() => setRerunningEnrichment(false));
   };
 
+  const handleRunRentalFlow = () => {
+    if (canonicalProperties.length === 0) return;
+    if (!confirm(`Run rental flow (RapidAPI + LLM) for all ${canonicalProperties.length} canonical propert${canonicalProperties.length === 1 ? "y" : "ies"}? This fetches rental data by URL and extracts financials from listing text.`)) return;
+    setRunningRentalFlow(true);
+    setError(null);
+    fetch(`${API_BASE}/api/properties/run-rental-flow`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ propertyIds: canonicalProperties.map((p) => p.id) }),
+    })
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.error) throw new Error(data.error);
+        fetchCanonicalProperties();
+        const withUnits = (data.results ?? []).filter((r: { rentalUnitsCount?: number }) => (r.rentalUnitsCount ?? 0) > 0).length;
+        const withLlm = (data.results ?? []).filter((r: { hasLlmFinancials?: boolean }) => r.hasLlmFinancials).length;
+        alert(`Done. ${withUnits} propert${withUnits === 1 ? "y" : "ies"} with rental units; ${withLlm} with LLM financials.`);
+      })
+      .catch((e) => setError(e.message || "Run rental flow failed"))
+      .finally(() => setRunningRentalFlow(false));
+  };
+
   const allSelected = filteredSortedListings.length > 0 && filteredSortedListings.every((l) => selectedListingIds.has(l.id));
   const someSelected = selectedListingIds.size > 0;
 
@@ -896,15 +919,26 @@ function PropertyDataContent() {
             {sendingToCanonical ? "Sending…" : someSelected ? `Add ${selectedListingIds.size} to canonical` : "Add to canonical properties"}
           </button>
           {activeTab === "canonical" && canonicalProperties.length > 0 && (
-            <button
-              type="button"
-              className="btn-secondary"
-              onClick={handleRerunEnrichment}
-              disabled={rerunningEnrichment}
-              title="Re-run enrichment for all canonical properties (BBL assumed already set). Refreshes data from NYC Open Data."
-            >
-              {rerunningEnrichment ? "Re-running…" : "Re-run enrichment"}
-            </button>
+            <>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={handleRerunEnrichment}
+                disabled={rerunningEnrichment}
+                title="Re-run enrichment for all canonical properties (BBL assumed already set). Refreshes data from NYC Open Data."
+              >
+                {rerunningEnrichment ? "Re-running…" : "Re-run enrichment"}
+              </button>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={handleRunRentalFlow}
+                disabled={runningRentalFlow}
+                title="Run rental flow (steps 1+2): RapidAPI rental-by-URL + LLM on listing description. Fetches rental units and extracts NOI, cap rate, etc."
+              >
+                {runningRentalFlow ? "Running…" : "Run rental flow"}
+              </button>
+            </>
           )}
           <button
             type="button"
@@ -986,7 +1020,7 @@ function PropertyDataContent() {
       )}
 
       <div className="property-data-run-log-section">
-        {(sendingToCanonical || rerunningEnrichment || lastEnrichmentResult) && (
+        {(sendingToCanonical || rerunningEnrichment || runningRentalFlow || lastEnrichmentResult) && (
           <div
             className="card"
             role="status"
@@ -995,18 +1029,20 @@ function PropertyDataContent() {
               marginBottom: "1rem",
               padding: "1rem",
               maxWidth: "720px",
-              background: sendingToCanonical || rerunningEnrichment ? "#fef9c3" : "#f0fdf4",
-              borderColor: sendingToCanonical || rerunningEnrichment ? "#facc15" : "#86efac",
+              background: sendingToCanonical || rerunningEnrichment || runningRentalFlow ? "#fef9c3" : "#f0fdf4",
+              borderColor: sendingToCanonical || rerunningEnrichment || runningRentalFlow ? "#facc15" : "#86efac",
             }}
           >
             <h3 style={{ margin: "0 0 0.5rem 0", fontSize: "1rem", fontWeight: 600 }}>
               Enrichment run
             </h3>
-            {sendingToCanonical || rerunningEnrichment ? (
+            {sendingToCanonical || rerunningEnrichment || runningRentalFlow ? (
               <p style={{ margin: 0, color: "#854d0e" }}>
                 {sendingToCanonical
                   ? "Enrichment in progress… Creating canonical properties and running all modules (Phase 1, Permits, Zoning, CO, HPD, etc.). This may take a minute."
-                  : "Re-running enrichment for existing canonical properties… Refreshing data from NYC Open Data. This may take a minute."}
+                  : runningRentalFlow
+                    ? "Running rental flow… Fetching rental data (RapidAPI) and extracting financials from listing text (LLM). This may take a few minutes."
+                    : "Re-running enrichment for existing canonical properties… Refreshing data from NYC Open Data. This may take a minute."}
               </p>
             ) : lastEnrichmentResult ? (
               <>
