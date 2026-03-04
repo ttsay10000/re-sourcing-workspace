@@ -96,7 +96,16 @@ export async function fetchSocrataQuery<T = Record<string, unknown>>(
     try {
       const res = await fetch(url, { method: "GET", headers, signal: controller.signal });
       clearTimeout(timeoutId);
-      const body = await res.json();
+      const text = await res.text();
+      let body: unknown;
+      try {
+        body = text ? JSON.parse(text) : null;
+      } catch {
+        const snippet = text.trimStart().startsWith("<")
+          ? `HTML response (${text.slice(0, 120).replace(/\s+/g, " ")}...)`
+          : `body: ${text.slice(0, 120).replace(/\s+/g, " ")}...`;
+        throw new Error(`Socrata ${res.status}: expected JSON but got ${snippet}`);
+      }
       if (res.ok) {
         return mapV3ResponseToRows<T>(body);
       }

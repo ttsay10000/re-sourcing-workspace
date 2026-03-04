@@ -72,7 +72,13 @@ export async function resolveBBLFromLatLon(
       headers: { Accept: "application/json" },
     });
     if (!res.ok) return null;
-    const data = (await res.json()) as unknown;
+    const text = await res.text();
+    let data: unknown;
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch {
+      return null;
+    }
     if (!data || typeof data !== "object") return null;
 
     const obj = data as Record<string, unknown>;
@@ -145,7 +151,13 @@ export async function resolveBBLFromAddress(
       headers: { Accept: "application/json", "Ocp-Apim-Subscription-Key": key },
     });
     if (!res.ok) return null;
-    const data = (await res.json()) as unknown;
+    const text = await res.text();
+    let data: unknown;
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch {
+      return null;
+    }
     if (!data || typeof data !== "object") return null;
 
     const obj = data as Record<string, unknown>;

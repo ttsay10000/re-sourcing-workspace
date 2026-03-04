@@ -475,7 +475,21 @@ function PropertyDataContent() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ propertyIds: canonicalProperties.map((p) => p.id) }),
     })
-      .then((r) => r.json())
+      .then(async (r) => {
+        const text = await r.text();
+        let data: { error?: string; permitEnrichment?: { ran?: boolean; success?: number; failed?: number; byModule?: Record<string, unknown> } };
+        try {
+          data = text ? JSON.parse(text) : {};
+        } catch {
+          if (text.trimStart().startsWith("<")) {
+            throw new Error(`Server returned an HTML error page (${r.status}). Check that the API is running and the API URL is correct.`);
+          }
+          throw new Error(`Server returned invalid JSON (${r.status}). Check API logs.`);
+        }
+        if (!r.ok && data?.error) throw new Error(data.error);
+        if (!r.ok) throw new Error(r.statusText || `Request failed (${r.status})`);
+        return data;
+      })
       .then((data) => {
         if (data.error) throw new Error(data.error);
         if (data.permitEnrichment?.ran && data.permitEnrichment.byModule) {

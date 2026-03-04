@@ -217,7 +217,16 @@ export async function fetchPermitsPage(
       const elapsed = Date.now() - start;
 
       if (res.ok) {
-        const data = (await res.json()) as SocrataPermitRow[];
+        const text = await res.text();
+        let data: SocrataPermitRow[];
+        try {
+          data = text ? (JSON.parse(text) as SocrataPermitRow[]) : [];
+        } catch {
+          const snippet = text.trimStart().startsWith("<")
+            ? `HTML response (${text.slice(0, 120).replace(/\s+/g, " ")}...)`
+            : `body: ${text.slice(0, 120).replace(/\s+/g, " ")}...`;
+          throw new Error(`Socrata ${res.status}: expected JSON but got ${snippet}`);
+        }
         console.log(`[socrata] ${url.split("?")[0]} ... ${res.status} ${data.length} rows in ${elapsed}ms`);
         return data;
       }
