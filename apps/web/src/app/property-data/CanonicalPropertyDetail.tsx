@@ -471,7 +471,7 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
                   return (
                     <>
                       <div className="initial-info-dl-row"><dt>Certificate of occupancy</dt><dd>{coStatus != null && String(coStatus).trim() !== "" ? String(coStatus) : "—"}</dd></div>
-                      <div className="initial-info-dl-row"><dt>CO issuance date</dt><dd>{formatDateOnly(coDate) ?? "—"}</dd></div>
+                      <div className="initial-info-dl-row"><dt>CO issuance date</dt><dd>{formatDateOnly(coDate as string | null | undefined) ?? "—"}</dd></div>
                       <div className="initial-info-dl-row"><dt>CO job type</dt><dd>{coJobType != null && String(coJobType).trim() !== "" ? String(coJobType) : "—"}</dd></div>
                       {!hasCo && (
                         <p className="initial-info-empty" style={{ marginTop: "0.25rem", fontSize: "0.8rem" }}>From certificate_of_occupancy enrichment (BBL). Run enrichment to populate.</p>
@@ -503,7 +503,7 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
                   return (
                     <>
                       <div className="initial-info-dl-row"><dt>HPD registration</dt><dd>{hpdId != null && String(hpdId).trim() !== "" ? String(hpdId) : "—"}</dd></div>
-                      <div className="initial-info-dl-row"><dt>HPD last registration</dt><dd>{formatDateOnly(hpdDate) ?? "—"}</dd></div>
+                      <div className="initial-info-dl-row"><dt>HPD last registration</dt><dd>{formatDateOnly(hpdDate as string | null | undefined) ?? "—"}</dd></div>
                       {!hasHpd && (
                         <p className="initial-info-empty" style={{ marginTop: "0.25rem", fontSize: "0.8rem" }}>From hpd_registration enrichment (BBL). Run enrichment to populate.</p>
                       )}
