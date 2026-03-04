@@ -477,7 +477,7 @@ function PropertyDataContent() {
     })
       .then(async (r) => {
         const text = await r.text();
-        let data: { error?: string; permitEnrichment?: { ran?: boolean; success?: number; failed?: number; byModule?: Record<string, unknown> } };
+        let data: { error?: string; permitEnrichment?: { ran?: boolean; success?: number; failed?: number; byModule?: Record<string, number> } };
         try {
           data = text ? JSON.parse(text) : {};
         } catch {

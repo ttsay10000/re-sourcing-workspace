@@ -18,14 +18,8 @@ import {
   getPool,
   PropertyRepo,
   PermitRepo,
-  PropertyEnrichmentStateRepo,
-  ZoningZtlRepo,
-  CertificateOfOccupancyRepo,
-  HpdRegistrationRepo,
   HpdViolationsRepo,
   DobComplaintsRepo,
-  HousingLitigationsRepo,
-  AffordableHousingRepo,
 } from "@re-sourcing/db";
 import { runEnrichmentForProperty } from "../enrichment/runEnrichment.js";
 
