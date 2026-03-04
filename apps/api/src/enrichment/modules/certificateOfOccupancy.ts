@@ -74,12 +74,14 @@ async function run(propertyId: string, options: EnrichmentRunOptions): Promise<E
     return { ok: false, error: "missing_bbl" };
   }
 
+  const bblForQueriesStr: string = bblForQueries;
+
   // CO dataset pkdm-hqz6: job_filing_name / c_of_o_number = job number (CO ID), c_of_o_issuance_date = CO issue date.
   const select =
     "bbl, bin, job_type, job_filing_name, c_of_o_number, c_of_o_status, c_of_o_filing_type, c_of_o_issuance_date, number_of_dwelling_units";
   const buildParamsByBbl = (limit: number, offset: number): SoQLQueryParams => ({
     $select: select,
-    $where: `bbl = '${escapeSoQLString(bblForQueries)}'`,
+    $where: `bbl = '${escapeSoQLString(bblForQueriesStr)}'`,
     $order: "c_of_o_issuance_date DESC",
     $limit: limit,
     $offset: offset,
@@ -101,9 +103,10 @@ async function run(propertyId: string, options: EnrichmentRunOptions): Promise<E
         if (typeof binVal === "string" && binVal.trim()) binForFallback = binVal.trim();
       }
       if (binForFallback) {
+        const binForFallbackStr: string = binForFallback;
         const buildParamsByBin = (limit: number, offset: number): SoQLQueryParams => ({
           $select: select,
-          $where: `bin = '${escapeSoQLString(binForFallback)}'`,
+          $where: `bin = '${escapeSoQLString(binForFallbackStr)}'`,
           $order: "c_of_o_issuance_date DESC",
           $limit: limit,
           $offset: offset,
@@ -120,7 +123,7 @@ async function run(propertyId: string, options: EnrichmentRunOptions): Promise<E
       const histUrl = resourceUrl(HISTORICAL_CO_DATASET_ID);
       const histParams: SoQLQueryParams = {
         $select: "bbl, bin, job_number, job_type, c_o_issue_date",
-        $where: `bbl = '${escapeSoQLString(bblForQueries)}'`,
+        $where: `bbl = '${escapeSoQLString(bblForQueriesStr)}'`,
         $order: "c_o_issue_date DESC",
         $limit: 1,
         $offset: 0,
@@ -141,10 +144,11 @@ async function run(propertyId: string, options: EnrichmentRunOptions): Promise<E
         if (typeof det.bin === "string" && det.bin.trim()) binForHist = det.bin.trim();
       }
       if (binForHist) {
+        const binForHistStr: string = binForHist;
         const histUrl = resourceUrl(HISTORICAL_CO_DATASET_ID);
         const histParamsBin: SoQLQueryParams = {
           $select: "bbl, bin, job_number, job_type, c_o_issue_date",
-          $where: `bin = '${escapeSoQLString(binForHist)}'`,
+          $where: `bin = '${escapeSoQLString(binForHistStr)}'`,
           $order: "c_o_issue_date DESC",
           $limit: 1,
           $offset: 0,
