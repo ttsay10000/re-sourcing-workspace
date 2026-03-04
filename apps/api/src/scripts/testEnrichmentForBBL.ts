@@ -2,8 +2,8 @@
  * Test script: run full enrichment (permits + 7 modules) for a property with given BBL/BIN,
  * then print the combined output from all modules.
  *
- * Creates or reuses a property with canonical_address "428 West 19th Street, Manhattan, NY"
- * and details.bbl/details.bin set, then runs runEnrichmentForProperty and dumps results.
+ * Uses a TEST-ONLY canonical address (prefix [TEST]) so it never matches real properties
+ * created from listings. Creates or reuses only this test property; does not touch real data.
  *
  * Run from repo root or apps/api:
  *   DATABASE_URL=... GEOCLIENT_SUBSCRIPTION_KEY=... [SOCRATA_APP_TOKEN=...] \
@@ -38,7 +38,8 @@ import {
 } from "@re-sourcing/db";
 import { runEnrichmentForProperty } from "../enrichment/runEnrichment.js";
 
-const CANONICAL_ADDRESS = "428 West 19th Street, Manhattan, NY";
+/** Test-only address; [TEST] prefix ensures we never match a real property from listings. */
+const CANONICAL_ADDRESS = "[TEST] Enrichment BBL script – 428 West 19th Street, Manhattan, NY";
 const DEFAULT_BBL = "1007167507";
 const DEFAULT_BIN = "1000000";
 const DEFAULT_LAT = 40.744571;

@@ -4,8 +4,16 @@
 
 export type EnrichmentKey = "bbl" | "bin";
 
+export interface ResolvedContext {
+  bbl: string;
+  bblForQueries: string;
+  bin?: string | null;
+}
+
 export interface EnrichmentRunOptions {
   appToken?: string | null;
+  /** When set (full run), modules use this instead of re-resolving BBL. */
+  resolvedContext?: ResolvedContext | null;
 }
 
 export interface EnrichmentRunResult {

@@ -16,6 +16,18 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
 
 type TabId = "raw" | "canonical";
 
+/** Labels for enrichment module keys (from API byModule). */
+const ENRICHMENT_MODULE_LABELS: Record<string, string> = {
+  permits: "Permits",
+  zoning_ztl: "Zoning",
+  certificate_of_occupancy: "Certificate of Occupancy",
+  hpd_registration: "HPD Registration",
+  hpd_violations: "HPD Violations",
+  dob_complaints: "DOB Complaints",
+  housing_litigations: "Housing Litigations",
+  affordable_housing: "Affordable Housing",
+};
+
 interface RunLogEntry {
   runNumber: number;
   runId: string;
@@ -35,6 +47,14 @@ interface PipelineStats {
   rawListings: number;
   canonicalProperties: number;
   enrichment: PipelineEnrichmentRow[];
+}
+
+/** Result of last enrichment run (from POST from-listings permitEnrichment). */
+interface LastEnrichmentResult {
+  ran: true;
+  success: number;
+  failed: number;
+  byModule: Record<string, number>;
 }
 
 interface AgentEnrichmentEntry {
@@ -97,11 +117,13 @@ function PropertyDataContent() {
   const [canonicalProperties, setCanonicalProperties] = useState<CanonicalProperty[]>([]);
   const [loadingCanonical, setLoadingCanonical] = useState(false);
   const [sendingToCanonical, setSendingToCanonical] = useState(false);
+  const [rerunningEnrichment, setRerunningEnrichment] = useState(false);
   const [expandedCanonicalId, setExpandedCanonicalId] = useState<string | null>(null);
   const [selectedListingIds, setSelectedListingIds] = useState<Set<string>>(new Set());
   const [enrichmentTimerSeconds, setEnrichmentTimerSeconds] = useState(0);
   const enrichmentTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const selectAllCheckboxRef = useRef<HTMLInputElement | null>(null);
+  const [lastEnrichmentResult, setLastEnrichmentResult] = useState<LastEnrichmentResult | null>(null);
 
   // Filter/sort state (shared concept for raw and canonical)
   const [sortBy, setSortBy] = useState<"price" | "listedAt" | "area">("listedAt");
@@ -393,6 +415,8 @@ function PropertyDataContent() {
     if (!confirm(message)) return;
     setSendingToCanonical(true);
     setError(null);
+    setLastEnrichmentResult(null);
+    setPipelineStatsOpen(true);
     const body =
       selectedListingIds.size > 0
         ? { listingIds: Array.from(selectedListingIds) }
@@ -405,6 +429,14 @@ function PropertyDataContent() {
       .then((r) => r.json())
       .then((data) => {
         if (data.error) throw new Error(data.error);
+        if (data.permitEnrichment?.ran && data.permitEnrichment.byModule) {
+          setLastEnrichmentResult({
+            ran: true,
+            success: data.permitEnrichment.success ?? 0,
+            failed: data.permitEnrichment.failed ?? 0,
+            byModule: data.permitEnrichment.byModule ?? {},
+          });
+        }
         setSelectedListingIds(new Set());
         fetchCanonicalProperties();
         fetchPipelineStats();
@@ -429,6 +461,36 @@ function PropertyDataContent() {
 
   const clearListingSelection = () => {
     setSelectedListingIds(new Set());
+  };
+
+  const handleRerunEnrichment = () => {
+    if (canonicalProperties.length === 0) return;
+    if (!confirm(`Re-run enrichment for all ${canonicalProperties.length} canonical propert${canonicalProperties.length === 1 ? "y" : "ies"}? This will refresh data from NYC Open Data (BBL is assumed already set).`)) return;
+    setRerunningEnrichment(true);
+    setError(null);
+    setLastEnrichmentResult(null);
+    setPipelineStatsOpen(true);
+    fetch(`${API_BASE}/api/properties/run-enrichment`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ propertyIds: canonicalProperties.map((p) => p.id) }),
+    })
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.error) throw new Error(data.error);
+        if (data.permitEnrichment?.ran && data.permitEnrichment.byModule) {
+          setLastEnrichmentResult({
+            ran: true,
+            success: data.permitEnrichment.success ?? 0,
+            failed: data.permitEnrichment.failed ?? 0,
+            byModule: data.permitEnrichment.byModule ?? {},
+          });
+        }
+        fetchCanonicalProperties();
+        fetchPipelineStats();
+      })
+      .catch((e) => setError(e.message || "Failed to re-run enrichment"))
+      .finally(() => setRerunningEnrichment(false));
   };
 
   const allSelected = filteredSortedListings.length > 0 && filteredSortedListings.every((l) => selectedListingIds.has(l.id));
@@ -808,6 +870,17 @@ function PropertyDataContent() {
           >
             {sendingToCanonical ? "Sending…" : someSelected ? `Add ${selectedListingIds.size} to canonical` : "Add to canonical properties"}
           </button>
+          {activeTab === "canonical" && canonicalProperties.length > 0 && (
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={handleRerunEnrichment}
+              disabled={rerunningEnrichment}
+              title="Re-run enrichment for all canonical properties (BBL assumed already set). Refreshes data from NYC Open Data."
+            >
+              {rerunningEnrichment ? "Re-running…" : "Re-run enrichment"}
+            </button>
+          )}
           <button
             type="button"
             className="btn-secondary"
@@ -888,6 +961,59 @@ function PropertyDataContent() {
       )}
 
       <div className="property-data-run-log-section">
+        {(sendingToCanonical || rerunningEnrichment || lastEnrichmentResult) && (
+          <div
+            className="card"
+            role="status"
+            aria-live="polite"
+            style={{
+              marginBottom: "1rem",
+              padding: "1rem",
+              maxWidth: "720px",
+              background: sendingToCanonical || rerunningEnrichment ? "#fef9c3" : "#f0fdf4",
+              borderColor: sendingToCanonical || rerunningEnrichment ? "#facc15" : "#86efac",
+            }}
+          >
+            <h3 style={{ margin: "0 0 0.5rem 0", fontSize: "1rem", fontWeight: 600 }}>
+              Enrichment run
+            </h3>
+            {sendingToCanonical || rerunningEnrichment ? (
+              <p style={{ margin: 0, color: "#854d0e" }}>
+                {sendingToCanonical
+                  ? "Enrichment in progress… Creating canonical properties and running all modules (Phase 1, Permits, Zoning, CO, HPD, etc.). This may take a minute."
+                  : "Re-running enrichment for existing canonical properties… Refreshing data from NYC Open Data. This may take a minute."}
+              </p>
+            ) : lastEnrichmentResult ? (
+              <>
+                <p style={{ margin: "0 0 0.75rem 0" }}>
+                  Last enrichment: <strong>{lastEnrichmentResult.success} succeeded</strong>
+                  {lastEnrichmentResult.failed > 0 && (
+                    <>, <strong>{lastEnrichmentResult.failed} failed</strong></>
+                  )}.
+                </p>
+                <table className="property-data-table" style={{ fontSize: "0.875rem" }}>
+                  <thead>
+                    <tr>
+                      <th>Module</th>
+                      <th style={{ textAlign: "right" }}>Completed</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Object.entries(lastEnrichmentResult.byModule)
+                      .sort(([a], [b]) => a.localeCompare(b))
+                      .map(([key, count]) => (
+                        <tr key={key}>
+                          <td>{ENRICHMENT_MODULE_LABELS[key] ?? key}</td>
+                          <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{count}</td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              </>
+            ) : null}
+          </div>
+        )}
+
         <button
           type="button"
           className="property-detail-section-header"

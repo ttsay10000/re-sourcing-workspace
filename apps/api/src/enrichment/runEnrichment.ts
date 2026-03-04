@@ -10,7 +10,7 @@ import { getBblBaseFromDetails } from "./propertyKeys.js";
 import { resolveCondoBblForQuery } from "./resolveCondoBbl.js";
 import { runOwnerAndTaxCodeStep } from "./ownerAndTaxCode.js";
 import { ENRICHMENT_MODULES, getEnrichmentModule } from "./modules/index.js";
-import type { EnrichmentRunOptions } from "./types.js";
+import type { EnrichmentRunOptions, ResolvedContext } from "./types.js";
 
 const DEFAULT_RATE_LIMIT_DELAY_MS = Number(process.env.ENRICHMENT_RATE_LIMIT_DELAY_MS || process.env.PERMITS_RATE_LIMIT_DELAY_MS || 500);
 
@@ -65,17 +65,51 @@ export async function runEnrichmentForProperty(
     });
     results.permits = { ok: permitResult.ok, error: permitResult.error };
     await delay();
-  }
 
-  for (const mod of modules) {
-    if (!mod) continue;
-    if (!runOtherModules) {
-      results[mod.name] = { ok: false, error: "skipped: no BBL/BIN resolved", skipped: true };
-      continue;
+    // Build shared context for the 7 modules (like Phase 1) so they don't re-resolve BBL.
+    let resolvedContext: ResolvedContext | null = null;
+    if (runOtherModules && hasBbl && resolved?.bbl) {
+      const propertyAfterPermits = await propertyRepo.byId(propertyId);
+      const detailsAfter = (propertyAfterPermits?.details as Record<string, unknown>) ?? {};
+      const bblStr =
+        (typeof detailsAfter.bbl === "string" && String(detailsAfter.bbl).trim()) ||
+        resolved.bbl;
+      const bblBase = getBblBaseFromDetails(detailsAfter);
+      const bblForQueries =
+        bblBase ?? (await resolveCondoBblForQuery(bblStr, { appToken: options.appToken })) ?? bblStr;
+      const bin =
+        typeof detailsAfter.bin === "string" && String(detailsAfter.bin).trim().length > 0
+          ? String(detailsAfter.bin).trim()
+          : null;
+      resolvedContext = { bbl: bblStr, bblForQueries, bin };
     }
-    const result = await mod.run(propertyId, { appToken: options.appToken });
-    results[mod.name] = { ok: result.ok, error: result.error };
-    await delay();
+
+    for (const mod of modules) {
+      if (!mod) continue;
+      if (!runOtherModules) {
+        results[mod.name] = { ok: false, error: "skipped: no BBL/BIN resolved", skipped: true };
+        continue;
+      }
+      const runOptions: RunEnrichmentForPropertyOptions = {
+        appToken: options.appToken,
+        rateLimitDelayMs: options.rateLimitDelayMs,
+        ...(resolvedContext ? { resolvedContext } : {}),
+      };
+      const result = await mod.run(propertyId, runOptions);
+      results[mod.name] = { ok: result.ok, error: result.error };
+      await delay();
+    }
+  } else {
+    for (const mod of modules) {
+      if (!mod) continue;
+      if (!runOtherModules) {
+        results[mod.name] = { ok: false, error: "skipped: no BBL/BIN resolved", skipped: true };
+        continue;
+      }
+      const result = await mod.run(propertyId, { appToken: options.appToken });
+      results[mod.name] = { ok: result.ok, error: result.error };
+      await delay();
+    }
   }
 
   const ok = Object.values(results).every((r) => r.skipped || r.ok);

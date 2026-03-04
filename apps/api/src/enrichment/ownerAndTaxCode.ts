@@ -43,6 +43,11 @@ export async function runOwnerAndTaxCodeStep(
     if (pluto?.ownername && pluto.ownername.trim()) {
       owner = pluto.ownername.trim();
     }
+    if (pluto?.censusBlock2010 && pluto.censusBlock2010.trim()) {
+      const pool = getPool();
+      const propertyRepo = new PropertyRepo({ pool });
+      await propertyRepo.mergeDetails(propertyId, { censusBlock2010: pluto.censusBlock2010.trim() });
+    }
   } catch (e) {
     console.warn("[ownerAndTaxCode] PLUTO fetch failed for BBL", bblForQueries, e);
   }

@@ -212,6 +212,51 @@ router.post("/properties/from-listings", async (req: Request, res: Response) => 
   }
 });
 
+/** POST /api/properties/run-enrichment - re-run enrichment for existing canonical properties only. Body: { propertyIds: string[] }. Assumes BBL/details are already set; runs same pipeline (BBL resolve → Phase 1 → permits → 7 modules) and updates data. Returns same permitEnrichment shape as from-listings. */
+router.post("/properties/run-enrichment", async (req: Request, res: Response) => {
+  try {
+    const raw = req.body?.propertyIds;
+    const propertyIds = Array.isArray(raw)
+      ? (raw as unknown[]).filter((id): id is string => typeof id === "string" && id.trim().length > 0).map((id) => id.trim())
+      : [];
+    if (propertyIds.length === 0) {
+      res.status(400).json({ error: "propertyIds required (non-empty array)." });
+      return;
+    }
+
+    const appToken = process.env.SOCRATA_APP_TOKEN ?? null;
+    const byModule: Record<string, number> = {};
+    let success = 0;
+    let failed = 0;
+    for (let i = 0; i < propertyIds.length; i++) {
+      if (i > 0) await new Promise((r) => setTimeout(r, ENRICHMENT_RATE_LIMIT_DELAY_MS));
+      const out = await runEnrichmentForProperty(propertyIds[i]!, undefined, {
+        appToken,
+        rateLimitDelayMs: ENRICHMENT_RATE_LIMIT_DELAY_MS,
+      });
+      if (out.ok) success++;
+      else failed++;
+      for (const [name, r] of Object.entries(out.results)) {
+        byModule[name] = (byModule[name] ?? 0) + (r.ok ? 1 : 0);
+      }
+    }
+
+    res.json({
+      ok: true,
+      permitEnrichment: {
+        ran: true,
+        success,
+        failed,
+        byModule,
+      },
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[properties run-enrichment]", err);
+    res.status(503).json({ error: "Failed to run enrichment.", details: message });
+  }
+});
+
 /** Enrichment module names used in property_enrichment_state (order matches pipeline). */
 const ENRICHMENT_MODULES: { key: string; label: string }[] = [
   { key: "permits", label: "Permits" },

@@ -52,11 +52,33 @@ async function run(propertyId: string, options: EnrichmentRunOptions): Promise<E
   const stateRepo = new PropertyEnrichmentStateRepo({ pool });
   const now = new Date();
 
-  let property = await propertyRepo.byId(propertyId);
-  if (!property) return { ok: false, error: "Property not found" };
-  const resolved = await getBBLForProperty(propertyId, { appToken: options.appToken });
-  const bbl = normalizeBblForQuery(resolved?.bbl) ?? null;
-  if (!bbl) {
+  let bbl: string | null = null;
+  let bblForQueries: string | null = null;
+
+  if (options.resolvedContext?.bbl && options.resolvedContext?.bblForQueries) {
+    bbl = normalizeBblForQuery(options.resolvedContext.bbl) ?? options.resolvedContext.bbl;
+    bblForQueries = options.resolvedContext.bblForQueries;
+  } else {
+    const property = await propertyRepo.byId(propertyId);
+    if (!property) return { ok: false, error: "Property not found" };
+    const resolved = await getBBLForProperty(propertyId, { appToken: options.appToken });
+    bbl = normalizeBblForQuery(resolved?.bbl) ?? null;
+    if (!bbl) {
+      await stateRepo.upsert({
+        propertyId,
+        enrichmentName: "housing_litigations",
+        lastRefreshedAt: now,
+        lastSuccessAt: null,
+        lastError: "missing_bbl",
+        statsJson: { rows_fetched: 0 },
+      });
+      return { ok: false, error: "missing_bbl" };
+    }
+    const bblBase = getBblBaseFromDetails(property.details as Record<string, unknown>);
+    bblForQueries = bblBase ?? (await resolveCondoBblForQuery(bbl, { appToken: options.appToken })) ?? bbl;
+  }
+
+  if (!bbl || !bblForQueries) {
     await stateRepo.upsert({
       propertyId,
       enrichmentName: "housing_litigations",
@@ -67,9 +89,6 @@ async function run(propertyId: string, options: EnrichmentRunOptions): Promise<E
     });
     return { ok: false, error: "missing_bbl" };
   }
-  property = (await propertyRepo.byId(propertyId)) ?? property;
-  const bblBase = getBblBaseFromDetails(property.details as Record<string, unknown>);
-  const bblForQueries = bblBase ?? (await resolveCondoBblForQuery(bbl, { appToken: options.appToken })) ?? bbl;
 
   const where = `bbl = '${escapeSoQLString(bblForQueries)}'`;
   const select =

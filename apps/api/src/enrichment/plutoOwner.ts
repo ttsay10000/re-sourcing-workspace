@@ -10,6 +10,8 @@ const PLUTO_DATASET_ID = "64uk-42ks";
 
 export interface PlutoOwnerResult {
   ownername: string | null;
+  /** 2010 Census Block (cb2010 column from PLUTO). */
+  censusBlock2010: string | null;
 }
 
 /**
@@ -28,17 +30,25 @@ export async function fetchPlutoOwnerByBbl(
 
   const url = resourceUrl(PLUTO_DATASET_ID);
   const params = {
-    $select: "ownername",
+    $select: "ownername,cb2010",
     $where: `bbl = ${bblNum}`,
     $order: "1",
     $limit: 1,
     $offset: 0,
   };
 
-  const rows = await fetchSocrataQuery<{ ownername?: string | null }>(url, params, options);
+  const rows = await fetchSocrataQuery<{ ownername?: string | null; cb2010?: string | number | null }>(url, params, options);
   const row = rows[0];
-  if (!row || row.ownername == null || String(row.ownername).trim() === "") {
-    return null;
+  if (!row) return null;
+
+  let censusBlock2010: string | null = null;
+  const cb = row.cb2010;
+  if (cb != null) {
+    const s = typeof cb === "number" ? String(cb) : String(cb).trim();
+    if (s !== "") censusBlock2010 = s;
   }
-  return { ownername: String(row.ownername).trim() };
+
+  const ownername =
+    row.ownername != null && String(row.ownername).trim() !== "" ? String(row.ownername).trim() : null;
+  return { ownername, censusBlock2010 };
 }

@@ -206,6 +206,7 @@ export async function enrichPropertyWithPermits(
     const existingOwnerName = existingSummary?.owner_name;
     const existingOwnerBusiness = existingSummary?.owner_business_name;
 
+    // Never overwrite existing or cascade with empty DOB owner; summary is only used when both existing and cascade are null/empty.
     const has = (s: unknown) => s != null && String(s).trim() !== "";
     const ownerName = (has(existingOwnerName) ? existingOwnerName : null) ?? cascadeOwner ?? summaryOwnerName ?? null;
     const ownerBusinessName =

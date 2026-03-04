@@ -9,7 +9,7 @@ import {
   ZoningZtlRepo,
   PropertyEnrichmentStateRepo,
 } from "@re-sourcing/db";
-import { resourceUrl, escapeSoQLString, fetchAllPages, normalizeBblForQuery, type SoQLQueryParams } from "../socrata/index.js";
+import { resourceUrl, fetchAllPages, normalizeBblForQuery, type SoQLQueryParams } from "../socrata/index.js";
 import { getBBLForProperty } from "../resolvePropertyBBL.js";
 import { getBblBaseFromDetails } from "../propertyKeys.js";
 import { resolveCondoBblForQuery } from "../resolveCondoBbl.js";
@@ -33,11 +33,33 @@ async function run(propertyId: string, options: EnrichmentRunOptions): Promise<E
   const stateRepo = new PropertyEnrichmentStateRepo({ pool });
   const now = new Date();
 
-  let property = await propertyRepo.byId(propertyId);
-  if (!property) return { ok: false, error: "Property not found" };
-  const resolved = await getBBLForProperty(propertyId, { appToken: options.appToken });
-  const bbl = normalizeBblForQuery(resolved?.bbl) ?? null;
-  if (!bbl) {
+  let bbl: string | null = null;
+  let bblForQueries: string | null = null;
+
+  if (options.resolvedContext?.bbl && options.resolvedContext?.bblForQueries) {
+    bbl = normalizeBblForQuery(options.resolvedContext.bbl) ?? options.resolvedContext.bbl;
+    bblForQueries = options.resolvedContext.bblForQueries;
+  } else {
+    const property = await propertyRepo.byId(propertyId);
+    if (!property) return { ok: false, error: "Property not found" };
+    const resolved = await getBBLForProperty(propertyId, { appToken: options.appToken });
+    bbl = normalizeBblForQuery(resolved?.bbl) ?? null;
+    if (!bbl) {
+      await stateRepo.upsert({
+        propertyId,
+        enrichmentName: "zoning_ztl",
+        lastRefreshedAt: now,
+        lastSuccessAt: null,
+        lastError: "missing_bbl",
+        statsJson: { rows_fetched: 0 },
+      });
+      return { ok: false, error: "missing_bbl" };
+    }
+    const bblBase = getBblBaseFromDetails(property.details as Record<string, unknown>);
+    bblForQueries = bblBase ?? (await resolveCondoBblForQuery(bbl, { appToken: options.appToken })) ?? bbl;
+  }
+
+  if (!bbl || !bblForQueries) {
     await stateRepo.upsert({
       propertyId,
       enrichmentName: "zoning_ztl",
@@ -48,11 +70,21 @@ async function run(propertyId: string, options: EnrichmentRunOptions): Promise<E
     });
     return { ok: false, error: "missing_bbl" };
   }
-  property = (await propertyRepo.byId(propertyId)) ?? property;
-  const bblBase = getBblBaseFromDetails(property.details as Record<string, unknown>);
-  const bblForQueries = bblBase ?? (await resolveCondoBblForQuery(bbl, { appToken: options.appToken })) ?? bbl;
 
-  const where = `bbl = '${escapeSoQLString(bblForQueries)}'`;
+  // ZTL dataset fdkv-4t4z has BBL as Number type; use integer in $where (no quotes).
+  const bblNum = parseInt(bblForQueries, 10);
+  if (Number.isNaN(bblNum)) {
+    await stateRepo.upsert({
+      propertyId,
+      enrichmentName: "zoning_ztl",
+      lastRefreshedAt: now,
+      lastSuccessAt: null,
+      lastError: "invalid_bbl",
+      statsJson: { rows_fetched: 0 },
+    });
+    return { ok: false, error: "invalid_bbl" };
+  }
+  const where = `bbl = ${bblNum}`;
   const select =
     "bbl, borough_code, tax_block, tax_lot, zoning_district_1, zoning_district_2, special_district_1, zoning_map_number, zoning_map_code";
   const buildParams = (limit: number, offset: number): SoQLQueryParams => ({

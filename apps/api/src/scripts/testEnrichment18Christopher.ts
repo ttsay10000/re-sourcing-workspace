@@ -2,6 +2,9 @@
  * Test enrichment for 18 Christopher Street multifamily (Streeteasy building).
  * Uses canonical address only — no BBL set upfront — to verify Geoclient + base BBL flow.
  *
+ * Uses a TEST-ONLY canonical address (prefix [TEST]) so it never matches real properties
+ * created from listings. Does not interfere with actual system data.
+ *
  * Run from repo root or apps/api:
  *   DATABASE_URL=... GEOCLIENT_SUBSCRIPTION_KEY=... [SOCRATA_APP_TOKEN=...] \
  *     npx tsx apps/api/src/scripts/testEnrichment18Christopher.ts
@@ -24,7 +27,8 @@ try {
 import { getPool, PropertyRepo, PermitRepo, PropertyEnrichmentStateRepo, HpdViolationsRepo, DobComplaintsRepo } from "@re-sourcing/db";
 import { runEnrichmentForProperty } from "../enrichment/runEnrichment.js";
 
-const CANONICAL_ADDRESS = "18 Christopher Street, Manhattan, NY 10014";
+/** Test-only address; [TEST] prefix ensures we never match a real property from listings. */
+const CANONICAL_ADDRESS = "[TEST] 18 Christopher Street, Manhattan, NY 10014";
 
 async function main(): Promise<void> {
   if (!process.env.DATABASE_URL) {

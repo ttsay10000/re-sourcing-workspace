@@ -43,10 +43,15 @@ async function run(propertyId: string, options: EnrichmentRunOptions): Promise<E
   const stateRepo = new PropertyEnrichmentStateRepo({ pool });
   const now = new Date();
 
-  const property = await propertyRepo.byId(propertyId);
-  if (!property) return { ok: false, error: "Property not found" };
-  const resolved = await getBBLForProperty(propertyId, { appToken: options.appToken });
-  const bin = resolved?.bin ?? null;
+  let bin: string | null = null;
+  if (options.resolvedContext?.bin != null && String(options.resolvedContext.bin).trim() !== "") {
+    bin = String(options.resolvedContext.bin).trim();
+  } else {
+    const property = await propertyRepo.byId(propertyId);
+    if (!property) return { ok: false, error: "Property not found" };
+    const resolved = await getBBLForProperty(propertyId, { appToken: options.appToken });
+    bin = resolved?.bin ?? null;
+  }
   if (!bin) {
     await stateRepo.upsert({
       propertyId,

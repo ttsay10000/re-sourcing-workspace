@@ -462,6 +462,7 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
             <div className="initial-info-geo">
               <dl className="initial-info-dl">
                 <div className="initial-info-dl-row"><dt>Tax code</dt><dd>{d?.taxCode != null && String(d.taxCode).trim() !== "" ? String(d.taxCode) : "—"}</dd></div>
+                <div className="initial-info-dl-row"><dt>2010 Census Block</dt><dd>{d?.censusBlock2010 != null && String(d.censusBlock2010).trim() !== "" ? String(d.censusBlock2010) : "—"}</dd></div>
                 {(() => {
                   const co = enrichment?.certificateOfOccupancy as Record<string, unknown> | undefined;
                   const coStatus = co?.status ?? co?.c_of_o_status;
@@ -502,8 +503,8 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
                   const hasHpd = hpd != null && (hpdId != null || hpdDate != null);
                   return (
                     <>
-                      <div className="initial-info-dl-row"><dt>HPD registration</dt><dd>{hpdId != null && String(hpdId).trim() !== "" ? String(hpdId) : "—"}</dd></div>
-                      <div className="initial-info-dl-row"><dt>HPD last registration</dt><dd>{formatDateOnly(hpdDate as string | null | undefined) ?? "—"}</dd></div>
+                      <div className="initial-info-dl-row"><dt>HPD Registration ID</dt><dd>{hpdId != null && String(hpdId).trim() !== "" ? String(hpdId) : "—"}</dd></div>
+                      <div className="initial-info-dl-row"><dt>HPD Last Registration Date</dt><dd>{formatDateOnly(hpdDate as string | null | undefined) ?? "—"}</dd></div>
                       {!hasHpd && (
                         <p className="initial-info-empty" style={{ marginTop: "0.25rem", fontSize: "0.8rem" }}>From hpd_registration enrichment (BBL). Run enrichment to populate.</p>
                       )}
