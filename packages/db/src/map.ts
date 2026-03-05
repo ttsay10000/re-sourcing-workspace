@@ -21,6 +21,8 @@ import type {
   SystemEvent,
   PropertyInquiryEmail,
   PropertyInquiryDocument,
+  PropertyUploadedDocument,
+  PropertyDocumentCategory,
 } from "@re-sourcing/contracts";
 import type { ListingSource, ListingLifecycleState, LocationMode, IngestionRunStatus, IngestionJobStatus, MatchStatus } from "@re-sourcing/contracts";
 
@@ -190,6 +192,19 @@ export function mapInquiryDocument(row: Record<string, unknown>): PropertyInquir
     filename: row.filename as string,
     contentType: (row.content_type as string) ?? null,
     filePath: row.file_path as string,
+    createdAt: toIso(row.created_at),
+  };
+}
+
+export function mapPropertyUploadedDocument(row: Record<string, unknown>): PropertyUploadedDocument {
+  return {
+    id: row.id as string,
+    propertyId: row.property_id as string,
+    filename: row.filename as string,
+    contentType: (row.content_type as string) ?? null,
+    filePath: row.file_path as string,
+    category: (row.category as PropertyDocumentCategory) ?? "Other",
+    source: (row.source as string) ?? null,
     createdAt: toIso(row.created_at),
   };
 }

@@ -36,8 +36,10 @@ export type { UpsertAffordableHousingParams, AffordableHousingRow } from "./repo
 export type { ListMatchesFilters } from "./repos/MatchRepo.js";
 export { EventRepo } from "./repos/EventRepo.js";
 export type { ListEventsFilters } from "./repos/EventRepo.js";
-export { mapInquiryEmail, mapInquiryDocument } from "./map.js";
+export { mapInquiryEmail, mapInquiryDocument, mapPropertyUploadedDocument } from "./map.js";
 export { InquiryEmailRepo } from "./repos/InquiryEmailRepo.js";
 export type { InquiryEmailRepoOptions, InsertInquiryEmailParams } from "./repos/InquiryEmailRepo.js";
 export { InquiryDocumentRepo } from "./repos/InquiryDocumentRepo.js";
 export type { InquiryDocumentRepoOptions, InsertInquiryDocumentParams } from "./repos/InquiryDocumentRepo.js";
+export { PropertyUploadedDocumentRepo } from "./repos/PropertyUploadedDocumentRepo.js";
+export type { PropertyUploadedDocumentRepoOptions, InsertPropertyUploadedDocumentParams } from "./repos/PropertyUploadedDocumentRepo.js";

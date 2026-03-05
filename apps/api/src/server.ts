@@ -31,6 +31,15 @@ app.use(
 );
 app.use(express.json());
 
+// Root: avoid "Cannot GET /" when opening API URL in browser
+app.get("/", (_req, res) => {
+  res.json({
+    service: "re-sourcing-api",
+    message: "Use the web app URL for the UI (e.g. re-sourcing-web.onrender.com).",
+    health: "/api/health",
+  });
+});
+
 // Health: no DB required
 app.get("/api/health", (_req, res) => {
   const body: HealthResponse = { ok: true, version, env };

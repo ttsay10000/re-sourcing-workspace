@@ -135,6 +135,28 @@ export interface PropertyInquiryDocument {
   createdAt: string;
 }
 
+/** Category for user-uploaded property documents. */
+export type PropertyDocumentCategory =
+  | "OM"
+  | "Brochure"
+  | "Rent Roll"
+  | "Financial Model"
+  | "T12 / Operating Summary"
+  | "Other";
+
+/** User-uploaded document row (OM, brochure, rent roll, etc.). */
+export interface PropertyUploadedDocument {
+  id: string;
+  propertyId: string;
+  filename: string;
+  contentType?: string | null;
+  filePath: string;
+  category: PropertyDocumentCategory;
+  /** Source of the document (e.g. Broker, Listing agent, Email from X). */
+  source?: string | null;
+  createdAt: string;
+}
+
 /** Placeholder keys for canonical property details (permit, tax, owner, etc.). */
 export interface PropertyDetails {
   permitInfo?: string | null;

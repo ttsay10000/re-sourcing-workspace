@@ -54,6 +54,23 @@ export class InquiryDocumentRepo {
     return r.rows.map((row: Record<string, unknown>) => mapInquiryDocument(row));
   }
 
+  /** List documents with source (from_address from the inquiry email). Returns rows with extra source field. */
+  async listByPropertyIdWithSource(propertyId: string): Promise<Array<PropertyInquiryDocument & { source?: string | null }>> {
+    const r = await this.client.query(
+      `SELECT d.id, d.property_id, d.inquiry_email_id, d.filename, d.content_type, d.file_path, d.created_at,
+              e.from_address AS source
+       FROM property_inquiry_documents d
+       JOIN property_inquiry_emails e ON e.id = d.inquiry_email_id
+       WHERE d.property_id = $1
+       ORDER BY d.created_at DESC`,
+      [propertyId]
+    );
+    return r.rows.map((row: Record<string, unknown>) => {
+      const doc = mapInquiryDocument(row);
+      return { ...doc, source: (row.source as string) ?? null };
+    });
+  }
+
   async listByInquiryEmailId(inquiryEmailId: string): Promise<PropertyInquiryDocument[]> {
     const r = await this.client.query(
       "SELECT * FROM property_inquiry_documents WHERE inquiry_email_id = $1 ORDER BY created_at",

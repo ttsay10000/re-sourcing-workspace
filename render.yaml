@@ -2,12 +2,16 @@
 # https://render.com/docs/blueprint-spec
 #
 # Env vars (set in Render dashboard or here):
-#   API:  DATABASE_URL (from Postgres service), NODE_ENV=production, CORS_ORIGIN=<web URL>
+#   API:  DATABASE_URL (from Postgres), NODE_ENV=production, CORS_ORIGIN=<web URL>
 #   Web:  NEXT_PUBLIC_API_URL=<API service URL>
 #
-# After linking repo, add a Postgres database and attach its DATABASE_URL to the api service.
-#
 # Deploy order: Migrations run in preDeployCommand (after build, before start). If they fail, deploy is cancelled.
+
+databases:
+  - name: re-sourcing-db
+    plan: free
+    databaseName: re_sourcing
+    user: re_sourcing
 
 services:
   - type: web
@@ -41,7 +45,7 @@ services:
   - type: cron
     name: re-sourcing-permits-refresh
     runtime: node
-    schedule: "0 3 * * 0"
+    schedule: '0 3 * * 0'
     buildCommand: npm install --include=dev && npm run build -w @re-sourcing/contracts && npm run build -w @re-sourcing/db && npm run build -w @re-sourcing/api
     startCommand: cd apps/api && node dist/scripts/enrichAll.js --all
     envVars:
@@ -60,7 +64,7 @@ services:
   - type: cron
     name: re-sourcing-process-inbox
     runtime: node
-    schedule: "0 9 * * *"
+    schedule: '0 9 * * *'
     buildCommand: npm install --include=dev && npm run build -w @re-sourcing/contracts && npm run build -w @re-sourcing/db && npm run build -w @re-sourcing/api
     startCommand: cd apps/api && node dist/scripts/triggerProcessInbox.js
     envVars:
@@ -76,11 +80,3 @@ services:
         sync: false
       - key: OPENAI_API_KEY
         sync: false
-      - key: INQUIRY_DOCS_PATH
-        sync: false
-
-databases:
-  - name: re-sourcing-db
-    plan: free
-    databaseName: re_sourcing
-    user: re_sourcing

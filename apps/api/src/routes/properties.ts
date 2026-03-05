@@ -16,8 +16,14 @@ import {
   HousingLitigationsRepo,
   InquiryEmailRepo,
   InquiryDocumentRepo,
+  PropertyUploadedDocumentRepo,
 } from "@re-sourcing/db";
+import type { PropertyDocumentCategory } from "@re-sourcing/contracts";
+import multer from "multer";
+import { randomUUID } from "crypto";
 import { resolveInquiryFilePath } from "../inquiry/storage.js";
+import { saveUploadedDocument, resolveUploadedDocFilePath } from "../upload/uploadedDocStorage.js";
+import { sendMessage as gmailSendMessage } from "../inquiry/gmailClient.js";
 import type { RentalFinancials, RentalFinancialsFromLlm } from "@re-sourcing/contracts";
 import { runEnrichmentForProperty } from "../enrichment/runEnrichment.js";
 import { normalizeAddressLineForDisplay, getBBLForProperty } from "../enrichment/resolvePropertyBBL.js";
@@ -343,7 +349,24 @@ router.get("/properties/pipeline-stats", async (req: Request, res: Response) => 
   }
 });
 
-/** GET /api/properties/:id/documents - list inquiry documents (attachments) for property. */
+const uploadMemory = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } }); // 25 MB
+
+const VALID_UPLOAD_CATEGORIES: PropertyDocumentCategory[] = [
+  "OM",
+  "Brochure",
+  "Rent Roll",
+  "Financial Model",
+  "T12 / Operating Summary",
+  "Other",
+];
+
+function parseUploadCategory(cat: unknown): PropertyDocumentCategory {
+  const s = typeof cat === "string" ? cat.trim() : "";
+  if (VALID_UPLOAD_CATEGORIES.includes(s as PropertyDocumentCategory)) return s as PropertyDocumentCategory;
+  return "Other";
+}
+
+/** GET /api/properties/:id/documents - list inquiry documents (attachments) for property, with source (from_address). */
 router.get("/properties/:id/documents", async (req: Request, res: Response) => {
   try {
     const { id: propertyId } = req.params;
@@ -355,7 +378,7 @@ router.get("/properties/:id/documents", async (req: Request, res: Response) => {
       res.status(404).json({ error: "Property not found", propertyId });
       return;
     }
-    const documents = await docRepo.listByPropertyId(propertyId);
+    const documents = await docRepo.listByPropertyIdWithSource(propertyId);
     res.json({ propertyId, documents });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -393,6 +416,99 @@ router.get("/properties/:id/documents/:docId/file", async (req: Request, res: Re
   }
 });
 
+/** GET /api/properties/:id/uploaded-documents - list user-uploaded documents (OM, Brochure, etc.) for property. */
+router.get("/properties/:id/uploaded-documents", async (req: Request, res: Response) => {
+  try {
+    const { id: propertyId } = req.params;
+    const pool = getPool();
+    const propertyRepo = new PropertyRepo({ pool });
+    const docRepo = new PropertyUploadedDocumentRepo({ pool });
+    const property = await propertyRepo.byId(propertyId);
+    if (!property) {
+      res.status(404).json({ error: "Property not found", propertyId });
+      return;
+    }
+    const documents = await docRepo.listByPropertyId(propertyId);
+    res.json({ propertyId, documents });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[properties uploaded-documents list]", err);
+    res.status(503).json({ error: "Failed to list uploaded documents.", details: message });
+  }
+});
+
+/** GET /api/properties/:id/uploaded-documents/:docId/file - serve uploaded document file. */
+router.get("/properties/:id/uploaded-documents/:docId/file", async (req: Request, res: Response) => {
+  try {
+    const { id: propertyId, docId } = req.params;
+    const pool = getPool();
+    const propertyRepo = new PropertyRepo({ pool });
+    const docRepo = new PropertyUploadedDocumentRepo({ pool });
+    const property = await propertyRepo.byId(propertyId);
+    if (!property) {
+      res.status(404).json({ error: "Property not found", propertyId });
+      return;
+    }
+    const doc = await docRepo.byId(docId);
+    if (!doc || doc.propertyId !== propertyId) {
+      res.status(404).json({ error: "Document not found", docId });
+      return;
+    }
+    const absolutePath = resolveUploadedDocFilePath(doc.filePath);
+    res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(doc.filename)}"`);
+    res.sendFile(absolutePath, (err) => {
+      if (err && !res.headersSent) res.status(500).json({ error: "Failed to send file" });
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[properties uploaded-document file]", err);
+    if (!res.headersSent) res.status(503).json({ error: "Failed to serve file.", details: message });
+  }
+});
+
+/** POST /api/properties/:id/documents/upload - upload a document (multipart: file + category). */
+router.post(
+  "/properties/:id/documents/upload",
+  uploadMemory.single("file"),
+  async (req: Request, res: Response) => {
+    try {
+      const { id: propertyId } = req.params;
+      const pool = getPool();
+      const propertyRepo = new PropertyRepo({ pool });
+      const docRepo = new PropertyUploadedDocumentRepo({ pool });
+      const property = await propertyRepo.byId(propertyId);
+      if (!property) {
+        res.status(404).json({ error: "Property not found", propertyId });
+        return;
+      }
+      const file = (req as Request & { file?: { buffer: Buffer; originalname?: string; mimetype?: string } })?.file;
+      if (!file || !file.buffer) {
+        res.status(400).json({ error: "Missing file. Send multipart/form-data with field 'file'." });
+        return;
+      }
+      const category = parseUploadCategory(req.body?.category);
+      const source = typeof req.body?.source === "string" ? req.body.source.trim() || null : null;
+      const docId = randomUUID();
+      const filename = file.originalname?.trim() || "document";
+      const filePath = await saveUploadedDocument(propertyId, docId, filename, file.buffer);
+      const inserted = await docRepo.insert({
+        id: docId,
+        propertyId,
+        filename,
+        contentType: file.mimetype || null,
+        filePath,
+        category,
+        source,
+      });
+      res.status(201).json({ propertyId, document: inserted });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error("[properties documents upload]", err);
+      res.status(503).json({ error: "Failed to upload document.", details: message });
+    }
+  }
+);
+
 /** GET /api/properties/:id/inquiry-emails - list inquiry emails for property. */
 router.get("/properties/:id/inquiry-emails", async (req: Request, res: Response) => {
   try {
@@ -411,6 +527,33 @@ router.get("/properties/:id/inquiry-emails", async (req: Request, res: Response)
     const message = err instanceof Error ? err.message : String(err);
     console.error("[properties inquiry-emails list]", err);
     res.status(503).json({ error: "Failed to list inquiry emails.", details: message });
+  }
+});
+
+/** POST /api/properties/:id/send-inquiry-email - send inquiry email via Gmail API. Body: { to, subject, body }. */
+router.post("/properties/:id/send-inquiry-email", async (req: Request, res: Response) => {
+  try {
+    const { id: propertyId } = req.params;
+    const pool = getPool();
+    const propertyRepo = new PropertyRepo({ pool });
+    const property = await propertyRepo.byId(propertyId);
+    if (!property) {
+      res.status(404).json({ error: "Property not found", propertyId });
+      return;
+    }
+    const { to, subject, body } = req.body ?? {};
+    if (typeof to !== "string" || !to.trim()) {
+      res.status(400).json({ error: "Missing or invalid 'to' address." });
+      return;
+    }
+    const subj = typeof subject === "string" ? subject.trim() : "";
+    const b = typeof body === "string" ? body : "";
+    const result = await gmailSendMessage(to.trim(), subj || "Inquiry", b);
+    res.json({ ok: true, messageId: result.id });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[properties send-inquiry-email]", err);
+    res.status(503).json({ error: "Failed to send email.", details: message });
   }
 });
 
