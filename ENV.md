@@ -1,6 +1,18 @@
-# Environment variables – API and Web
+# Environment variables – API, Web, and Cron jobs
 
-All variables for both services and what to set for **local** vs **deployed** (e.g. Render).
+All variables for web services and **cron jobs**, and what to set for **local** vs **deployed** (e.g. Render).  
+Set values in **Render Dashboard → [service name] → Environment**. The blueprint (`render.yaml`) declares which vars each service needs; variables marked `sync: false` must be set manually in the dashboard.
+
+---
+
+## Quick reference: env vars by Render service
+
+| Service | Required | Optional | Notes |
+|---------|----------|----------|--------|
+| **re-sourcing-api** | `DATABASE_URL`, `CORS_ORIGIN`, `RAPIDAPI_KEY`, `OPENAI_API_KEY` | `GMAIL_*`, `SOCRATA_APP_TOKEN`, `PROCESS_INBOX_CRON_SECRET`, `INQUIRY_DOCS_PATH`, `GEOCLIENT_*`, `RENTAL_*` | Gmail needed for send-inquiry + process-inbox |
+| **re-sourcing-web** | `NEXT_PUBLIC_API_URL` | — | |
+| **re-sourcing-permits-refresh** (cron) | `DATABASE_URL` | `SOCRATA_APP_TOKEN`, `PERMITS_RATE_LIMIT_DELAY_MS`, `PERMITS_BATCH_SIZE` | Weekly enrichment; token improves rate limits |
+| **re-sourcing-process-inbox** (cron) | `DATABASE_URL`, `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`, `GMAIL_REFRESH_TOKEN`, `OPENAI_API_KEY` | `INQUIRY_DOCS_PATH` | Daily Gmail inbox → properties |
 
 ---
 
@@ -61,6 +73,36 @@ NEXT_PUBLIC_API_URL=https://re-sourcing-api.onrender.com
 ```
 
 After changing `NEXT_PUBLIC_API_URL`, **rebuild and redeploy** the web app.
+
+---
+
+## Cron jobs (Render)
+
+Set these in **Render Dashboard → [cron job name] → Environment**. `DATABASE_URL` is usually auto-set when the cron is linked to the same Postgres as the API.
+
+### re-sourcing-permits-refresh (weekly: Sunday 3:00 UTC)
+
+Refreshes DOB permits and all enrichment modules for canonical properties (`enrichAll.js --all`).
+
+| Variable | Required | Value / notes |
+|----------|----------|----------------|
+| `DATABASE_URL` | Yes | Same as API (often auto from blueprint link). |
+| `SOCRATA_APP_TOKEN` | Recommended | NYC Open Data app token; improves rate limits. [Create token](https://data.cityofnewyork.us). |
+| `PERMITS_RATE_LIMIT_DELAY_MS` | No | In blueprint as `500`. Override if needed. |
+| `PERMITS_BATCH_SIZE` | No | In blueprint as `50`. Override if needed. |
+
+### re-sourcing-process-inbox (daily: 9:00 UTC)
+
+Processes Gmail inbox for broker replies; matches to properties, saves emails and attachments, runs LLM.
+
+| Variable | Required | Value / notes |
+|----------|----------|----------------|
+| `DATABASE_URL` | Yes | Same as API (often auto from blueprint link). |
+| `GMAIL_CLIENT_ID` | Yes | Google Cloud OAuth 2.0 Client ID. |
+| `GMAIL_CLIENT_SECRET` | Yes | Same OAuth client secret. |
+| `GMAIL_REFRESH_TOKEN` | Yes | From [OAuth 2.0 Playground](https://developers.google.com/oauthplayground) with Gmail Read + Send; same account as API send-inquiry. |
+| `OPENAI_API_KEY` | Yes | For extracting financials from email/attachments. |
+| `INQUIRY_DOCS_PATH` | No | Where to store attachments (default `uploads/inquiry-docs`). |
 
 ---
 

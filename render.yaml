@@ -23,7 +23,7 @@ services:
   - type: web
     name: re-sourcing-api
     runtime: node
-    plan: free
+    plan: starter  # free tier does not support preDeployCommand
     buildCommand: npm install --include=dev && npm run build -w @re-sourcing/contracts && npm run build -w @re-sourcing/db && npm run build -w @re-sourcing/api
     preDeployCommand: npm run db:migrate
     startCommand: npm run start -w @re-sourcing/api
@@ -40,7 +40,7 @@ services:
   - type: web
     name: re-sourcing-web
     runtime: node
-    plan: free
+    plan: starter
     buildCommand: npm install && npm run build -w @re-sourcing/web
     startCommand: npm run start -w @re-sourcing/web
     envVars:
