@@ -181,3 +181,25 @@ export function getAttachmentParts(msg: GmailMessage): Array<{ filename: string;
   }
   return out;
 }
+
+/**
+ * Send an email via Gmail API (uses the authenticated account as sender).
+ * Requires OAuth2 scope https://www.googleapis.com/auth/gmail.send
+ */
+export async function sendMessage(to: string, subject: string, body: string): Promise<{ id: string }> {
+  const gmail = getGmail();
+  const lines: string[] = [
+    `To: ${to}`,
+    `Subject: ${subject.replace(/\r?\n/g, " ")}`,
+    "Content-Type: text/plain; charset=utf-8",
+    "",
+    body.replace(/\r\n/g, "\n").replace(/\n/g, "\r\n"),
+  ];
+  const raw = lines.join("\r\n");
+  const encoded = Buffer.from(raw, "utf-8").toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  const res = await gmail.users.messages.send({
+    userId: "me",
+    requestBody: { raw: encoded },
+  });
+  return { id: res.data.id! };
+}

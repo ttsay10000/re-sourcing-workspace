@@ -56,6 +56,29 @@ services:
       - key: PERMITS_BATCH_SIZE
         value: "50"
 
+  # Daily cron: process Gmail inbox for inquiry replies (match to properties, save attachments, run LLM)
+  - type: cron
+    name: re-sourcing-process-inbox
+    runtime: node
+    schedule: "0 9 * * *"
+    buildCommand: npm install --include=dev && npm run build -w @re-sourcing/contracts && npm run build -w @re-sourcing/db && npm run build -w @re-sourcing/api
+    startCommand: cd apps/api && node dist/scripts/triggerProcessInbox.js
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: re-sourcing-db
+          property: connectionString
+      - key: GMAIL_CLIENT_ID
+        sync: false
+      - key: GMAIL_CLIENT_SECRET
+        sync: false
+      - key: GMAIL_REFRESH_TOKEN
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: INQUIRY_DOCS_PATH
+        sync: false
+
 databases:
   - name: re-sourcing-db
     plan: free

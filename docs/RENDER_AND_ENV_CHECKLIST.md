@@ -10,10 +10,10 @@
 | `CORS_ORIGIN` | Yes | Comma-separated origins, e.g. `https://re-sourcing-web.onrender.com`. |
 | `RAPIDAPI_KEY` | Yes (for rental) | NYC Real Estate API key (rentals/url, rentals/search). |
 | `OPENAI_API_KEY` | Yes (for LLM) | Used for listing/inquiry financial extraction and broker enrichment. |
-| **Gmail (process-inbox)** | | |
-| `GMAIL_CLIENT_ID` | For process-inbox | OAuth2 client ID from Google Cloud Console. |
-| `GMAIL_CLIENT_SECRET` | For process-inbox | OAuth2 client secret. |
-| `GMAIL_REFRESH_TOKEN` | For process-inbox | From OAuth 2.0 Playground (Gmail read scope). |
+| **Gmail (inbox + send)** | | |
+| `GMAIL_CLIENT_ID` | For inbox + send | OAuth2 client ID from Google Cloud Console. |
+| `GMAIL_CLIENT_SECRET` | For inbox + send | OAuth2 client secret. |
+| `GMAIL_REFRESH_TOKEN` | For inbox + send | From OAuth 2.0 Playground with **both** `gmail.readonly` and `gmail.send` scopes. |
 | `PROCESS_INBOX_CRON_SECRET` | Optional | If set, `POST /api/cron/process-inbox` requires header `X-Cron-Secret` or `Authorization: Bearer <secret>`. |
 | `INQUIRY_DOCS_PATH` | Optional | Base path for inquiry attachment files (default: `uploads/inquiry-docs`). On Render, use a path that persists or an external store. |
 | **Optional** | | |
@@ -28,15 +28,32 @@
 |----------|----------|--------|
 | `NEXT_PUBLIC_API_URL` | Yes (prod) | API base URL, e.g. `https://re-sourcing-api.onrender.com`. |
 
-### Gmail setup (for process-inbox)
+### Gmail env: where to find each value
 
-1. Google Cloud Console: create OAuth 2.0 credentials (Desktop or Web).
-2. OAuth 2.0 Playground: use Gmail API v1, scope `https://www.googleapis.com/auth/gmail.readonly`, authorize, exchange code for refresh token.
-3. Set `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`, `GMAIL_REFRESH_TOKEN` in Render (and locally if you run process-inbox).
+| Env variable | Where to get it |
+|--------------|------------------|
+| **GMAIL_CLIENT_ID** | [Google Cloud Console](https://console.cloud.google.com/) → your project → **APIs & Services** → **Credentials** → create or open **OAuth 2.0 Client ID** (Desktop or Web). Copy the **Client ID** (long string ending in `.apps.googleusercontent.com`). |
+| **GMAIL_CLIENT_SECRET** | Same Credentials page as above → same OAuth client → click to view details → copy the **Client secret**. |
+| **GMAIL_REFRESH_TOKEN** | [OAuth 2.0 Playground](https://developers.google.com/oauthplayground). Click the gear (⚙️) and check “Use your own OAuth credentials”, enter your **Client ID** and **Client secret**. In the left list, under “Gmail API v1” select **Read, compose, send** (or add both `https://www.googleapis.com/auth/gmail.readonly` and `https://www.googleapis.com/auth/gmail.send`). Click **Authorize APIs** → sign in with the Gmail account you want to use → **Exchange authorization code for tokens** → copy the **Refresh_token** (long string). Use this same account for sending and receiving. |
 
-### What is NOT sent until the user acts
+Set all three on the **API** service and on the **re-sourcing-process-inbox** cron service in Render (Dashboard → each service → Environment).
 
-- **Email client:** The “Request info / OM by email” flow does **not** send any email from the app. It opens a **draft in a modal**; the user reviews and edits To/Subject/Body, then clicks **“Open in email client”**. Only then does the app open `mailto:` in the browser (user’s default email client). The email is sent only when the user sends it from that client.
+### Gmail setup (read inbox + send emails)
+
+1. **Google Cloud Console:** [Enable Gmail API](https://console.cloud.google.com/apis/library/gmail.googleapis.com) for your project. Create OAuth 2.0 credentials (APIs & Services → Credentials → Create credentials → OAuth client ID; use Desktop or Web).
+2. **OAuth 2.0 Playground:** Use the table above to get the refresh token with **both** `gmail.readonly` and `gmail.send` (e.g. “Read, compose, send” in the scope list).
+3. Set `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`, and `GMAIL_REFRESH_TOKEN` on the API service and on the **re-sourcing-process-inbox** cron in Render.
+
+### Inbox monitoring (replies and file storage)
+
+- **What it does:** The **process-inbox** job reads your Gmail inbox, finds messages that look like replies to property inquiries (e.g. subject contains “Re: Inquiry about [address]”), matches them to canonical properties by address, and then:
+  - Saves each reply as a row in `property_inquiry_emails` and stores attachment files under `INQUIRY_DOCS_PATH`.
+  - Runs the LLM on the email body and on extracted text from attachments (e.g. PDFs) to pull out financials and merges them into the property’s rental financials.
+- **Cron (auto deploy):** The blueprint defines **re-sourcing-process-inbox** (in `render.yaml`). It builds and runs like the permits cron; on each deploy it uses the latest code. Schedule: **daily at 9:00 UTC** (`0 9 * * *`). Set the same Gmail env vars (and `OPENAI_API_KEY`, optional `INQUIRY_DOCS_PATH`) on that cron service in the Render dashboard so the job can read Gmail and run the LLM.
+
+### Sending inquiry emails
+
+- **Request info / OM by email:** The button appears for every property. Click it to open a draft (To, Subject, Body). Edit as needed (e.g. add your phone and email in the signature). Click **“Send email”** to send via Gmail API from your connected account. No email client is opened; the app sends the message for you. Replies are then picked up by the process-inbox cron when they arrive.
 
 ---
 
@@ -52,17 +69,13 @@ RAPIDAPI_KEY=your_key OPENAI_API_KEY=your_key npx tsx apps/api/src/scripts/testF
 
 Uses address **485 West 22nd Street**. You should see units with data (e.g. unit 2, 4), Listed/Last rented dates, and Status. To test another address, change `ADDRESS` in that script and run again.
 
-### 2. Email draft and client (test to tyler@stayhaus.co)
+### 2. Send inquiry email (test to tyler@stayhaus.co)
 
-1. Open the **Property data** page and pick a canonical property (with or without rental data).
+1. Open the **Property data** page and pick a canonical property.
 2. Open the **Rental pricing / OM** section.
-3. Click **“Request info / OM by email & track reply”** (this only opens the modal; no email is sent).
-4. A **modal** opens with a warning and an editable draft (To, Subject, Body).
-5. In **To**, enter `tyler@stayhaus.co` to test delivery (or leave the pre-filled first primary broker email).
-6. Review Subject and Body; edit if you like.
-7. Click **“Open in email client”**. Your default email app should open with the draft. Send from the email client to verify the message is received at tyler@stayhaus.co.
-
-This confirms: the email client is not triggered until “Open in email client” is clicked; you can review and edit the draft before opening the client.
+3. Click **“Request info / OM by email & track reply”**. A **modal** opens with an editable draft (To, Subject, Body) using the standard OM request template.
+4. In **To**, enter `tyler@stayhaus.co` to test (or use the pre-filled broker email). Add your phone and email in the signature if desired.
+5. Click **“Send email”**. The app sends the message via Gmail API. You should see success and the modal closes; confirm receipt at the To address.
 
 ### 3. Process-inbox (Gmail)
 
@@ -75,5 +88,5 @@ This confirms: the email client is not triggered until “Open in email client�
 
 - **Broker email empty:** If the listing has no `agentEnrichment` (or no emails), the draft **To** is empty; user can type an address or run broker enrichment first.
 - **Subject line:** Replies are matched by subject. If the user changes the subject, process-inbox may not match the reply; the UI warns to keep the subject.
-- **mailto length:** Very long body can hit URL length limits; keep body under ~1–2k chars if issues appear.
+- **Gmail send:** If “Send email” fails with an auth error, re-create the refresh token in OAuth 2.0 Playground with **gmail.send** included in the scopes.
 - **Process-inbox and attachments:** Attachments are written to `INQUIRY_DOCS_PATH`. On Render, that directory may be ephemeral unless you use a persistent disk or external storage.
