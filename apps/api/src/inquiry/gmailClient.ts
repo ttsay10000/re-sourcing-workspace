@@ -37,6 +37,9 @@ export interface GmailMessage {
   };
 }
 
+/** Redirect URI must match the OAuth client in Google Cloud Console. Use Playground URI when getting the refresh token from OAuth 2.0 Playground. */
+const DEFAULT_REDIRECT_URI = "https://developers.google.com/oauthplayground";
+
 function getOAuth2Client() {
   const clientId = process.env.GMAIL_CLIENT_ID;
   const clientSecret = process.env.GMAIL_CLIENT_SECRET;
@@ -44,7 +47,8 @@ function getOAuth2Client() {
   if (!clientId || !clientSecret || !refreshToken) {
     throw new Error("Gmail OAuth2 requires GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN");
   }
-  const oauth2 = new google.auth.OAuth2(clientId, clientSecret, "https://developers.google.com/oauthplayground");
+  const redirectUri = process.env.GMAIL_REDIRECT_URI || DEFAULT_REDIRECT_URI;
+  const oauth2 = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
   oauth2.setCredentials({ refresh_token: refreshToken });
   return oauth2;
 }

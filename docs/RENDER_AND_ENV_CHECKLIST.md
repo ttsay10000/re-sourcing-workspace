@@ -14,6 +14,7 @@
 | `GMAIL_CLIENT_ID` | For inbox + send | OAuth2 client ID from Google Cloud Console. |
 | `GMAIL_CLIENT_SECRET` | For inbox + send | OAuth2 client secret. |
 | `GMAIL_REFRESH_TOKEN` | For inbox + send | From OAuth 2.0 Playground with **both** `gmail.readonly` and `gmail.send` scopes. |
+| `GMAIL_REDIRECT_URI` | Optional | Must match the OAuth client’s redirect URI. Default: `https://developers.google.com/oauthplayground`. Only set if you use a different OAuth flow. |
 | `PROCESS_INBOX_CRON_SECRET` | Optional | If set, `POST /api/cron/process-inbox` requires header `X-Cron-Secret` or `Authorization: Bearer <secret>`. |
 | `INQUIRY_DOCS_PATH` | Optional | Base path for inquiry attachment files (default: `uploads/inquiry-docs`). On Render, use a path that persists or an external store. |
 | **Optional** | | |
@@ -40,7 +41,7 @@ Set all three on the **API** service and on the **re-sourcing-process-inbox** cr
 
 ### Gmail setup (read inbox + send emails)
 
-1. **Google Cloud Console:** [Enable Gmail API](https://console.cloud.google.com/apis/library/gmail.googleapis.com) for your project. Create OAuth 2.0 credentials (APIs & Services → Credentials → Create credentials → OAuth client ID; use Desktop or Web).
+1. **Google Cloud Console:** [Enable Gmail API](https://console.cloud.google.com/apis/library/gmail.googleapis.com) for your project. Create OAuth 2.0 credentials: **APIs & Services** → **Credentials** → **Create credentials** → **OAuth client ID**. Choose **Web application** (required for Playground). Under **Authorized redirect URIs** add `https://developers.google.com/oauthplayground`. Save.
 2. **OAuth 2.0 Playground:** Use the table above to get the refresh token with **both** `gmail.readonly` and `gmail.send` (e.g. “Read, compose, send” in the scope list).
 3. Set `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`, and `GMAIL_REFRESH_TOKEN` on the API service and on the **re-sourcing-process-inbox** cron in Render.
 
@@ -116,4 +117,5 @@ Uses address **485 West 22nd Street**. You should see units with data (e.g. unit
 - **Broker email empty:** If the listing has no `agentEnrichment` (or no emails), the draft **To** is empty; user can type an address or run broker enrichment first.
 - **Subject line:** Replies are matched by subject. If the user changes the subject, process-inbox may not match the reply; the UI warns to keep the subject.
 - **Gmail send:** If “Send email” fails with an auth error, re-create the refresh token with **gmail.send** and **gmail.readonly** in OAuth 2.0 Playground, then set the new `GMAIL_REFRESH_TOKEN` on the API. The UI now shows the backend error (e.g. invalid_grant, insufficient scopes) so you can confirm the cause.
+- **`unauthorized_client`:** Usually means the OAuth client/redirect URI don't match how the refresh token was obtained. Fix: (1) In Google Cloud Console use a **Web application** OAuth client (not Desktop). (2) Add **Authorized redirect URI** `https://developers.google.com/oauthplayground`. (3) Get a new refresh token from [OAuth 2.0 Playground](https://developers.google.com/oauthplayground) (gear → use your credentials, authorize, exchange for tokens). (4) Set the new `GMAIL_REFRESH_TOKEN` and same client ID/secret on the API and process-inbox cron.
 - **Process-inbox and attachments:** Attachments are written to `INQUIRY_DOCS_PATH`. On Render, that directory may be ephemeral unless you use a persistent disk or external storage.
