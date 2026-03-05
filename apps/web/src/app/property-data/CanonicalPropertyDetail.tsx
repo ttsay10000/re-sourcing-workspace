@@ -904,7 +904,7 @@ tyler@stayhaus.co`;
                   <button type="button" onClick={() => { setInquiryEmailModalOpen(false); setInquirySendError(null); }} style={{ padding: "0.4rem 0.75rem", border: "1px solid #ccc", borderRadius: "4px", background: "#fff", cursor: "pointer" }}>Cancel</button>
                   <button
                     type="button"
-                    disabled={inquirySending || !inquiryDraft.to.trim() || (lastInquirySentAt && !sendAnotherConfirm)}
+                    disabled={Boolean(inquirySending || !inquiryDraft.to?.trim() || (lastInquirySentAt && !sendAnotherConfirm))}
                     onClick={async () => {
                       setInquirySendError(null);
                       setInquirySending(true);
