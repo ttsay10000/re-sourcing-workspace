@@ -673,7 +673,9 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
       {/* 5. Rental pricing / OM + rental financials (per-unit table, NOI, cap rate) */}
       <CollapsibleSection id="rental-om" title="Rental pricing / OM" open={!!openSections.rentalOm} onToggle={() => toggle("rentalOm")}>
         <div style={{ fontSize: "0.875rem" }}>
+          {/* Request info by email — always first */}
           <div style={{ marginBottom: "0.75rem" }}>
+            <strong style={{ display: "block", marginBottom: "0.35rem", fontSize: "0.9rem", color: "#1a1a1a" }}>Request info by email</strong>
             <button
               type="button"
               onClick={() => {
@@ -708,7 +710,7 @@ tyler@stayhaus.co`;
               Request info / OM by email &amp; track reply
             </button>
             <p style={{ margin: "0.25rem 0 0", color: "#737373", fontSize: "0.75rem" }}>
-              Review the draft and click Send to email the broker. Use the subject line so replies are matched to this property. Process-inbox runs on a schedule to attach replies and documents here.
+              Review the draft and click Send to email the broker. Use the subject line so replies are matched to this property. Replies and attachments appear in <strong>Documents (from inquiry replies)</strong> below after the daily process-inbox cron runs.
             </p>
           </div>
           {inquiryEmailModalOpen && (
@@ -787,7 +789,7 @@ tyler@stayhaus.co`;
             </div>
           )}
           {rentalUnits.length > 0 && (
-            <div style={{ marginBottom: "0.5rem" }}>
+            <div style={{ borderTop: "1px solid #e0e0e0", paddingTop: "0.6rem", marginTop: "0.6rem", marginBottom: "0.5rem" }}>
               <strong style={{ display: "block", marginBottom: "0.35rem", fontSize: "0.95rem", color: "#1a1a1a" }}>Rental units (from API / inquiry)</strong>
               <span style={{ display: "block", marginBottom: "0.25rem", fontSize: "0.8rem", color: "#666" }}>Summary — all units</span>
               <div style={{ marginBottom: "0.6rem", overflowX: "auto" }}>
@@ -868,7 +870,8 @@ tyler@stayhaus.co`;
             </div>
           )}
           {rentalUnits.length > 0 && (
-            <div style={{ marginTop: "0.35rem", marginBottom: "0.5rem" }}>
+            <div style={{ borderTop: "1px solid #e0e0e0", paddingTop: "0.6rem", marginTop: "0.6rem", marginBottom: "0.5rem" }}>
+              <strong style={{ display: "block", marginBottom: "0.35rem", fontSize: "0.9rem", color: "#1a1a1a" }}>Request info by email</strong>
               <button
                 type="button"
                 onClick={() => {
@@ -903,19 +906,29 @@ tyler@stayhaus.co`;
                 Request info / OM by email &amp; track reply
               </button>
               <p style={{ margin: "0.25rem 0 0", color: "#737373", fontSize: "0.75rem" }}>
-                Review the draft and click Send to email the broker. Use the subject line so replies are matched to this property.
+                Review the draft and click Send to email the broker. Replies and attachments appear in <strong>Documents (from inquiry replies)</strong> below after the daily process-inbox cron runs.
               </p>
             </div>
           )}
           {fromLlm && (fromLlm.noi != null || fromLlm.capRate != null || fromLlm.rentalEstimates || fromLlm.otherFinancials || fromLlm.dataGapSuggestions) && (
-            <div style={{ marginTop: "0.5rem", marginBottom: "0.5rem" }}>
-              <strong style={{ display: "block", marginBottom: "0.2rem" }}>Financials (from listing / LLM)</strong>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem 1rem" }}>
-                {fromLlm.noi != null && <span>NOI: {formatPrice(fromLlm.noi)}</span>}
-                {fromLlm.capRate != null && <span>Cap rate: {fromLlm.capRate}%</span>}
+            <div style={{ borderTop: "1px solid #e0e0e0", paddingTop: "0.6rem", marginTop: "0.6rem", marginBottom: "0.5rem" }}>
+              <strong style={{ display: "block", marginBottom: "0.35rem", fontSize: "0.9rem", color: "#1a1a1a" }}>Financials (from listing / LLM)</strong>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem 1.25rem", marginBottom: "0.5rem" }}>
+                {fromLlm.noi != null && <span style={{ fontWeight: 500 }}>NOI: {formatPrice(fromLlm.noi)}</span>}
+                {fromLlm.capRate != null && <span style={{ fontWeight: 500 }}>Cap rate: {fromLlm.capRate}%</span>}
               </div>
-              {fromLlm.rentalEstimates && <p style={{ margin: "0.25rem 0 0", color: "#404040" }}>{fromLlm.rentalEstimates}</p>}
-              {fromLlm.otherFinancials && <p style={{ margin: "0.25rem 0 0", color: "#404040" }}>{fromLlm.otherFinancials}</p>}
+              {fromLlm.rentalEstimates && (
+                <div style={{ marginBottom: "0.4rem" }}>
+                  <span style={{ display: "block", fontSize: "0.75rem", color: "#666", marginBottom: "0.15rem" }}>Rental estimates</span>
+                  <p style={{ margin: 0, padding: "0.35rem 0.5rem", backgroundColor: "#f8f9fa", borderRadius: "4px", fontSize: "0.85rem", color: "#404040", lineHeight: 1.4 }}>{fromLlm.rentalEstimates}</p>
+                </div>
+              )}
+              {fromLlm.otherFinancials && (
+                <div style={{ marginBottom: "0.4rem" }}>
+                  <span style={{ display: "block", fontSize: "0.75rem", color: "#666", marginBottom: "0.15rem" }}>Other financials</span>
+                  <p style={{ margin: 0, padding: "0.35rem 0.5rem", backgroundColor: "#f8f9fa", borderRadius: "4px", fontSize: "0.85rem", color: "#404040", lineHeight: 1.4 }}>{fromLlm.otherFinancials}</p>
+                </div>
+              )}
               {fromLlm.dataGapSuggestions && (
                 <p style={{ margin: "0.5rem 0 0", padding: "0.35rem 0.5rem", backgroundColor: "#fef3c7", borderRadius: "4px", fontSize: "0.8rem", color: "#92400e" }}>
                   <strong>Possible missing data:</strong> {fromLlm.dataGapSuggestions}
@@ -923,8 +936,9 @@ tyler@stayhaus.co`;
               )}
             </div>
           )}
-          <div style={{ marginBottom: "0.5rem" }}>
+          <div style={{ borderTop: "1px solid #e0e0e0", paddingTop: "0.6rem", marginTop: "0.6rem", marginBottom: "0.5rem" }}>
             <strong style={{ display: "block", marginBottom: "0.2rem" }}>Documents (from inquiry replies)</strong>
+            <p style={{ margin: "0 0 0.35rem", fontSize: "0.75rem", color: "#666" }}>Replies and attachments from your inquiry emails are saved here by the daily <strong>process-inbox</strong> cron job.</p>
             {inquiryDocuments === null ? (
               <p style={{ margin: 0, fontSize: "0.8rem", color: "#737373" }}>Loading…</p>
             ) : inquiryDocuments.length > 0 ? (
@@ -944,10 +958,10 @@ tyler@stayhaus.co`;
                 ))}
               </ul>
             ) : (
-              <p style={{ margin: 0, fontSize: "0.8rem", color: "#737373" }}>No documents yet. When brokers reply to your inquiry emails, the process-inbox job saves attachments here (run the re-sourcing-process-inbox cron).</p>
+              <p style={{ margin: 0, fontSize: "0.8rem", color: "#737373" }}>No documents yet. Send an inquiry using the button above; once brokers reply, the cron will attach them here.</p>
             )}
           </div>
-          <div style={{ marginBottom: "0.5rem" }}>
+          <div style={{ borderTop: "1px solid #e0e0e0", paddingTop: "0.6rem", marginTop: "0.6rem", marginBottom: "0.5rem" }}>
             <strong style={{ display: "block", marginBottom: "0.2rem" }}>Upload document</strong>
             <form
               onSubmit={async (e) => {

@@ -46,10 +46,37 @@ Set all three on the **API** service and on the **re-sourcing-process-inbox** cr
 
 ### Inbox monitoring (replies and file storage)
 
-- **What it does:** The **process-inbox** job reads your Gmail inbox, finds messages that look like replies to property inquiries (e.g. subject contains “Re: Inquiry about [address]”), matches them to canonical properties by address, and then:
-  - Saves each reply as a row in `property_inquiry_emails` and stores attachment files under `INQUIRY_DOCS_PATH`.
-  - Runs the LLM on the email body and on extracted text from attachments (e.g. PDFs) to pull out financials and merges them into the property’s rental financials.
-- **Cron (auto deploy):** The blueprint defines **re-sourcing-process-inbox** (in `render.yaml`). It builds and runs like the permits cron; on each deploy it uses the latest code. Schedule: **daily at 9:00 UTC** (`0 9 * * *`). Set the same Gmail env vars (and `OPENAI_API_KEY`, optional `INQUIRY_DOCS_PATH`) on that cron service in the Render dashboard so the job can read Gmail and run the LLM.
+- **Where replies go:** When the **process-inbox** cron runs, it reads your Gmail inbox, finds replies to property inquiries (subject like “Re: Inquiry about [address]”), matches them to the correct property by address, and then:
+  - Saves each reply in the database (`property_inquiry_emails`) and stores attachment files on disk (under `INQUIRY_DOCS_PATH`).
+  - Those attachments show up in the **Documents (from inquiry replies)** section on each property’s detail page (Rental pricing / OM). The LLM also runs on email body and attachment text to extract financials and merge them into the property’s rental data.
+- **Cron (auto deploy):** The blueprint defines **re-sourcing-process-inbox** (in `render.yaml`). It builds and runs like the permits cron; on each deploy it uses the latest code. Schedule: **daily at 9:00 UTC** (`0 9 * * *`). Set the env vars below on that cron service in the Render dashboard.
+
+### Process-inbox cron: setup checklist
+
+To get the **re-sourcing-process-inbox** cron job running on Render:
+
+1. **Create the cron from the blueprint**  
+   Deploy from the repo; Render will create the `re-sourcing-process-inbox` cron service from `render.yaml`.
+
+2. **Set environment variables** on the **re-sourcing-process-inbox** service (Dashboard → re-sourcing-process-inbox → Environment):
+
+   | Variable | Required | Where to get it |
+   |----------|----------|------------------|
+   | `DATABASE_URL` | Yes | Usually auto-set from the linked Postgres database in the blueprint. If not, copy from the API service. |
+   | `GMAIL_CLIENT_ID` | Yes | Google Cloud Console → APIs & Services → Credentials → OAuth 2.0 Client ID. |
+   | `GMAIL_CLIENT_SECRET` | Yes | Same OAuth client → Client secret. |
+   | `GMAIL_REFRESH_TOKEN` | Yes | [OAuth 2.0 Playground](https://developers.google.com/oauthplayground): use your OAuth client, select Gmail “Read, compose, send”, authorize, then copy **Refresh token**. Must be the same Gmail account used to send inquiry emails. |
+   | `OPENAI_API_KEY` | Yes (for LLM) | Your OpenAI API key; used to extract financials from email body and attachments. |
+   | `INQUIRY_DOCS_PATH` | Optional | Path where attachment files are saved (default: `uploads/inquiry-docs`). On Render, consider a path that persists if you add a disk. |
+
+3. **Gmail API**  
+   In Google Cloud Console, enable the **Gmail API** for your project. The OAuth client used for the refresh token must have **Gmail read** and **Gmail send** access (so the same token can be used by the API to send and by the cron to read inbox).
+
+4. **Schedule**  
+   The job is scheduled for **daily at 9:00 UTC** (`0 9 * * *`). You can change this in Render (Cron job → Schedule).
+
+5. **Manual run**  
+   In Render, open the cron job and use “Manual Deploy” to run it once, or call `POST /api/cron/process-inbox` on the API with `X-Cron-Secret: <PROCESS_INBOX_CRON_SECRET>` if you use that guard.
 
 ### Sending inquiry emails
 
