@@ -39,4 +39,20 @@ export class InquirySendRepo {
     const sentAt = r.rows[0].sent_at;
     return sentAt instanceof Date ? sentAt.toISOString() : String(sentAt);
   }
+
+  /**
+   * List sends that have a Gmail message ID (for thread-based reply matching).
+   * Only returns rows where sent_at is within the last `withinDays` days (default 90).
+   * Used to attribute replies in the same thread (e.g. from broker's alternate email or teammate) to the property.
+   */
+  async listRecentSendsWithMessageId(withinDays = 90): Promise<Array<{ propertyId: string; gmailMessageId: string }>> {
+    const r = await this.client.query<{ property_id: string; gmail_message_id: string }>(
+      `SELECT property_id, gmail_message_id FROM property_inquiry_sends
+       WHERE gmail_message_id IS NOT NULL AND TRIM(gmail_message_id) <> ''
+         AND sent_at >= now() - ($1::int * interval '1 day')
+       ORDER BY sent_at DESC`,
+      [withinDays]
+    );
+    return r.rows.map((row) => ({ propertyId: row.property_id, gmailMessageId: row.gmail_message_id }));
+  }
 }

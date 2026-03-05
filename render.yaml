@@ -1,5 +1,11 @@
-# Render Blueprint: web UI + API + Postgres
+# Render Blueprint: web UI + API + Postgres + cron jobs
 # https://render.com/docs/blueprint-spec
+#
+# To have Render CREATE all services (including cron jobs):
+#   1. Dashboard → New → Blueprint → connect this repo and branch.
+#   2. Apply the blueprint so Render creates DB, API, Web, and both crons.
+# If you already have API/Web/DB and only need the crons:
+#   Open your Blueprint in the dashboard and Apply/Sync so Render creates the missing cron jobs (re-sourcing-permits-refresh, re-sourcing-process-inbox).
 #
 # Env vars (set in Render dashboard or here):
 #   API:  DATABASE_URL (from Postgres), NODE_ENV=production, CORS_ORIGIN=<web URL>

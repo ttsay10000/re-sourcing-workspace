@@ -191,6 +191,7 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
     photosFloorplans: true,
     detailsBrokerAmenitiesPriceHistory: true,
     owner: true,
+    valuations: true,
     rentalOm: true,
     violationsComplaintsPermits: true,
   });
@@ -299,15 +300,28 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
     setDosEntity(null);
     setDosEntityLoading(true);
     let cancelled = false;
-    fetch(`${API_BASE}/api/properties/ny-dos-entity?name=${encodeURIComponent(businessName)}`)
+    const controller = new AbortController();
+    const timeoutMs = 25_000;
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    fetch(`${API_BASE}/api/properties/ny-dos-entity?name=${encodeURIComponent(businessName)}`, {
+      signal: controller.signal,
+    })
       .then((r) => r.json())
       .then((data) => {
         if (cancelled) return;
         setDosEntity(data?.entity ?? "n/a");
       })
       .catch(() => { if (!cancelled) setDosEntity("n/a"); })
-      .finally(() => { if (!cancelled) setDosEntityLoading(false); });
-    return () => { cancelled = true; };
+      .finally(() => {
+        clearTimeout(timeoutId);
+        if (!cancelled) setDosEntityLoading(false);
+      });
+    return () => {
+      cancelled = true;
+      controller.abort();
+      clearTimeout(timeoutId);
+      setDosEntityLoading(false);
+    };
   }, [detailsFromApi, property.details, property.id, dosEntityQueryName]);
 
   const toggle = (key: string) => setOpenSections((p) => ({ ...p, [key]: !p[key] }));
@@ -333,6 +347,17 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
   } | null | undefined;
   const rentalUnits = rentalFinancials?.rentalUnits ?? [];
   const fromLlm = rentalFinancials?.fromLlm;
+  const ownerValuations = (d?.ownerValuations ?? d?.owner_valuations) as string | null | undefined;
+  const assessedMarketValue = (d?.assessedMarketValue ?? d?.assessed_market_value) as number | null | undefined;
+  const assessedActualValue = (d?.assessedActualValue ?? d?.assessed_actual_value) as number | null | undefined;
+  const assessedTaxBeforeTotal = (d?.assessedTaxBeforeTotal ?? d?.assessed_tax_before_total) as number | null | undefined;
+  const assessedGrossSqft = (d?.assessedGrossSqft ?? d?.assessed_gross_sqft) as number | null | undefined;
+  const assessedLandArea = (d?.assessedLandArea ?? d?.assessed_land_area) as number | null | undefined;
+  const assessedResidentialAreaGross = (d?.assessedResidentialAreaGross ?? d?.assessed_residential_area_gross) as number | null | undefined;
+  const assessedOfficeAreaGross = (d?.assessedOfficeAreaGross ?? d?.assessed_office_area_gross) as number | null | undefined;
+  const assessedRetailAreaGross = (d?.assessedRetailAreaGross ?? d?.assessed_retail_area_gross) as number | null | undefined;
+  const assessedApptDate = (d?.assessedApptDate ?? d?.assessed_appt_date) as string | null | undefined;
+  const assessedExtractDate = (d?.assessedExtractDate ?? d?.assessed_extract_date) as string | null | undefined;
 
   const fetchUnifiedTable = () => {
     if (unifiedFetched) return;
@@ -742,6 +767,12 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
             <div><strong>Name:</strong> {ps?.owner_name != null && String(ps.owner_name).trim() !== "" ? String(ps.owner_name).trim() : "—"}</div>
             <div><strong>Business:</strong> {ps?.owner_business_name != null && String(ps.owner_business_name).trim() !== "" ? String(ps.owner_business_name).trim() : "—"}</div>
           </div>
+          {ownerValuations != null && String(ownerValuations).trim() !== "" && (
+            <div style={{ marginBottom: "0.75rem" }}>
+              <strong style={{ display: "block", marginBottom: "0.25rem" }}>Owner (Valuations module)</strong>
+              <div>{String(ownerValuations).trim()}</div>
+            </div>
+          )}
           {/* NY DOS entity details when owner name looks like LLC, Corp, etc. */}
           <div style={{ marginTop: "0.75rem", paddingTop: "0.75rem", borderTop: "1px solid #e5e5e5" }}>
             <strong style={{ display: "block", marginBottom: "0.35rem" }}>NY DOS entity details</strong>
@@ -784,6 +815,33 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
               </ul>
             )}
           </div>
+        </div>
+      </CollapsibleSection>
+
+      {/* 4. Valuations (assessment): market value, assessed value, tax before total, sqft/area, dates */}
+      <CollapsibleSection id="valuations" title="Valuations (assessment)" open={!!openSections.valuations} onToggle={() => toggle("valuations")}>
+        <div style={{ fontSize: "0.875rem" }}>
+          <ul style={{ margin: "0 0 0.5rem", paddingLeft: "1.25rem" }}>
+            <li><strong>Market value (curmkttot):</strong> {assessedMarketValue != null ? `$${Number(assessedMarketValue).toLocaleString()}` : "—"}</li>
+            <li><strong>Actual assessed (curacttot):</strong> {assessedActualValue != null ? `$${Number(assessedActualValue).toLocaleString()}` : "—"}</li>
+            <li><strong>Tax before total (curtxbtot):</strong> {assessedTaxBeforeTotal != null ? `$${Number(assessedTaxBeforeTotal).toLocaleString()}` : "—"}</li>
+          </ul>
+          <strong style={{ display: "block", marginBottom: "0.25rem" }}>Area (sqft)</strong>
+          <ul style={{ margin: "0 0 0.5rem", paddingLeft: "1.25rem" }}>
+            <li><strong>Gross sqft:</strong> {assessedGrossSqft != null ? Number(assessedGrossSqft).toLocaleString() : "—"}</li>
+            <li><strong>Land area:</strong> {assessedLandArea != null ? Number(assessedLandArea).toLocaleString() : "—"}</li>
+            <li><strong>Residential area gross:</strong> {assessedResidentialAreaGross != null ? Number(assessedResidentialAreaGross).toLocaleString() : "—"}</li>
+            <li><strong>Office area gross:</strong> {assessedOfficeAreaGross != null ? Number(assessedOfficeAreaGross).toLocaleString() : "—"}</li>
+            <li><strong>Retail area gross:</strong> {assessedRetailAreaGross != null ? Number(assessedRetailAreaGross).toLocaleString() : "—"}</li>
+          </ul>
+          <strong style={{ display: "block", marginBottom: "0.25rem" }}>Dates</strong>
+          <ul style={{ margin: 0, paddingLeft: "1.25rem" }}>
+            <li><strong>Appt date:</strong> {assessedApptDate != null && String(assessedApptDate).trim() !== "" ? formatDateOnly(assessedApptDate) ?? String(assessedApptDate) : "—"}</li>
+            <li><strong>Extract date (extracrdt):</strong> {assessedExtractDate != null && String(assessedExtractDate).trim() !== "" ? formatDateOnly(assessedExtractDate) ?? String(assessedExtractDate) : "—"}</li>
+          </ul>
+          {assessedMarketValue == null && assessedActualValue == null && assessedTaxBeforeTotal == null && assessedGrossSqft == null && assessedLandArea == null && assessedResidentialAreaGross == null && assessedOfficeAreaGross == null && assessedRetailAreaGross == null && (assessedApptDate == null || String(assessedApptDate).trim() === "") && (assessedExtractDate == null || String(assessedExtractDate).trim() === "") && (
+            <p className="initial-info-empty" style={{ marginTop: "0.25rem", fontSize: "0.8rem" }}>From valuations enrichment (BBL). Run enrichment to populate.</p>
+          )}
         </div>
       </CollapsibleSection>
 
@@ -948,8 +1006,24 @@ tyler@stayhaus.co`;
                   const bulletStyle = { margin: "0.2rem 0", fontSize: "0.85rem", color: "#404040" };
                   return (
                     <div key={i} style={{ border: "1px solid #e5e5e5", borderRadius: "8px", overflow: "hidden", backgroundColor: "#fafafa", display: "flex", flexDirection: "row", alignItems: "stretch", minHeight: "120px", boxShadow: "0 1px 3px rgba(0,0,0,0.06)" }}>
-                      {/* Photos: main left, thumbnails right */}
-                      <div style={{ flexShrink: 0, display: "flex", flexDirection: "row", borderRight: "1px solid #eee", padding: "0.35rem", gap: "0.35rem" }}>
+                      {/* Unit info: bold unit name + 2 columns of bullets (no Status) */}
+                      <div style={{ flex: 1, display: "flex", flexDirection: "column", padding: "0.5rem 0.75rem", justifyContent: "center", gap: "0.35rem", minWidth: 0, borderRight: "1px solid #eee" }}>
+                        <strong style={{ fontSize: "0.95rem", color: "#1a1a1a", marginBottom: "0.2rem" }}>Unit #{row.unit ?? String(i + 1)}</strong>
+                        <div style={{ display: "flex", flexDirection: "row", flexWrap: "nowrap", gap: "2rem", fontSize: "0.85rem" }}>
+                          <ul style={{ margin: 0, paddingLeft: "1.1rem", listStyle: "disc", flexShrink: 0 }}>
+                            <li style={bulletStyle}>Sq ft: {row.sqft != null && row.sqft > 0 ? String(row.sqft) : "—"}</li>
+                            <li style={bulletStyle}>Beds: {row.beds != null ? String(row.beds) : "—"}</li>
+                            <li style={bulletStyle}>Baths: {row.baths != null ? String(row.baths) : "—"}</li>
+                          </ul>
+                          <ul style={{ margin: 0, paddingLeft: "1.1rem", listStyle: "disc", flexShrink: 0 }}>
+                            <li style={bulletStyle}>Rent (latest): {row.rentalPrice != null ? formatPrice(row.rentalPrice) : "—"}</li>
+                            <li style={bulletStyle}>Last listed: {row.listedDate ? formatDateOnly(row.listedDate) : "—"}</li>
+                            <li style={bulletStyle}>Last rented: {row.lastRentedDate ? formatDateOnly(row.lastRentedDate) : "—"}</li>
+                          </ul>
+                        </div>
+                      </div>
+                      {/* Photos: main left, thumbnails right (contained on right) */}
+                      <div style={{ flexShrink: 0, display: "flex", flexDirection: "row", padding: "0.35rem", gap: "0.35rem" }}>
                         {unitImages.length > 0 ? (
                           <>
                             <a href={unitImages[idx]} target="_blank" rel="noopener noreferrer" style={{ flexShrink: 0, display: "block", maxHeight: "140px", maxWidth: "220px" }}>
@@ -966,22 +1040,6 @@ tyler@stayhaus.co`;
                         ) : (
                           <div style={{ minWidth: "120px", minHeight: "80px", display: "flex", alignItems: "center", justifyContent: "center", color: "#888", fontSize: "0.85rem" }}>No photo</div>
                         )}
-                      </div>
-                      {/* Unit info: bold unit name + 2 columns of bullets (no Status) */}
-                      <div style={{ flex: 1, display: "flex", flexDirection: "column", padding: "0.5rem 0.75rem", justifyContent: "center", gap: "0.35rem", minWidth: 0 }}>
-                        <strong style={{ fontSize: "0.95rem", color: "#1a1a1a", marginBottom: "0.2rem" }}>Unit #{row.unit ?? String(i + 1)}</strong>
-                        <div style={{ display: "flex", flexDirection: "row", flexWrap: "nowrap", gap: "2rem", fontSize: "0.85rem" }}>
-                          <ul style={{ margin: 0, paddingLeft: "1.1rem", listStyle: "disc", flexShrink: 0 }}>
-                            <li style={bulletStyle}>Sq ft: {row.sqft != null && row.sqft > 0 ? String(row.sqft) : "—"}</li>
-                            <li style={bulletStyle}>Beds: {row.beds != null ? String(row.beds) : "—"}</li>
-                            <li style={bulletStyle}>Baths: {row.baths != null ? String(row.baths) : "—"}</li>
-                          </ul>
-                          <ul style={{ margin: 0, paddingLeft: "1.1rem", listStyle: "disc", flexShrink: 0 }}>
-                            <li style={bulletStyle}>Rent (latest): {row.rentalPrice != null ? formatPrice(row.rentalPrice) : "—"}</li>
-                            <li style={bulletStyle}>Last listed: {row.listedDate ? formatDateOnly(row.listedDate) : "—"}</li>
-                            <li style={bulletStyle}>Last rented: {row.lastRentedDate ? formatDateOnly(row.lastRentedDate) : "—"}</li>
-                          </ul>
-                        </div>
                       </div>
                     </div>
                   );
@@ -1088,7 +1146,7 @@ tyler@stayhaus.co`;
                 <option value="T12 / Operating Summary">T12 / Operating Summary</option>
                 <option value="Other">Other</option>
               </select>
-              <button type="submit" disabled={uploading} style={{ padding: "0.35rem 0.6rem", fontSize: "0.8rem", border: "1px solid #0066cc", borderRadius: "4px", background: uploading ? "#94a3b8" : "#0066cc", color: "#fff", cursor: uploading ? "wait" : "pointer" }}>
+              <button type="submit" disabled={Boolean(uploading)} style={{ padding: "0.35rem 0.6rem", fontSize: "0.8rem", border: "1px solid #0066cc", borderRadius: "4px", background: uploading ? "#94a3b8" : "#0066cc", color: "#fff", cursor: uploading ? "wait" : "pointer" }}>
                 {uploading ? "Uploading…" : "Upload"}
               </button>
             </form>
@@ -1120,7 +1178,7 @@ tyler@stayhaus.co`;
                     </span>
                     <button
                       type="button"
-                      disabled={deletingDocId === doc.id}
+                      disabled={Boolean(deletingDocId === doc.id)}
                       onClick={async () => {
                         if (deletingDocId) return;
                         setDeletingDocId(doc.id);

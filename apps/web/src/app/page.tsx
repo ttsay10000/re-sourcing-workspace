@@ -189,7 +189,7 @@ export default function HomePage() {
                             type="checkbox"
                             checked={isSelected}
                             onChange={() => toggleSelect(prop.id)}
-                            disabled={disabled}
+                            disabled={Boolean(disabled)}
                             className="property-card-checkbox"
                           />
                           <span className="property-card-checkbox-label">Select</span>
@@ -277,7 +277,7 @@ export default function HomePage() {
               type="button"
               className="btn-primary"
               onClick={handleGenerateDossiers}
-              disabled={selectedCount === 0}
+              disabled={Boolean(selectedCount === 0)}
             >
               Generate Dossiers
             </button>

@@ -62,16 +62,22 @@ npm run db:migrate
 ## Render deployment
 
 1. **Blueprint**: Use `render.yaml` in the repo (or create two web services + one Postgres manually).
-2. **API service**
+2. **Making sure cron jobs exist**: The blueprint defines two cron jobs (`re-sourcing-permits-refresh`, `re-sourcing-process-inbox`). For Render to **create** them you must apply the blueprint:
+   - **Dashboard → Blueprint** → open the blueprint connected to this repo.
+   - Click **Apply** (or **Sync** / **Update**) so Render creates any services in `render.yaml` that don’t exist yet (including the cron jobs).
+   - If you created the API/Web/DB manually and never used the blueprint, use **New → Blueprint**, connect this repo, then Apply so all resources (including crons) are created.
+3. **API service**
    - Build: `npm install && npm run build -w @re-sourcing/contracts && npm run build -w @re-sourcing/db && npm run build -w @re-sourcing/api`
    - Start: `npm run db:migrate && npm run start -w @re-sourcing/api` (migrations run automatically on each deploy; safe to run every time).
    - Env: `DATABASE_URL` (from Postgres), `CORS_ORIGIN` = your web service URL (e.g. `https://re-sourcing-web.onrender.com`).
-3. **Web service**
+4. **Web service**
    - Build: `npm install && npm run build -w @re-sourcing/web`
    - Start: `npm run start -w @re-sourcing/web`
    - Env: `NEXT_PUBLIC_API_URL` = your API service URL (e.g. `https://re-sourcing-api.onrender.com`).
-4. **Postgres**: Create a database and attach `DATABASE_URL` to the API service. The API starts even if the DB is empty; health does not require DB.
-5. **Permit enrichment (optional)**: A weekly cron job `re-sourcing-permits-refresh` in `render.yaml` runs DOB permit enrichment for canonical properties. Set `SOCRATA_APP_TOKEN` on the cron service for better rate limits. When you click "Add to canonical properties" in Property Data, permit enrichment runs automatically unless you pass `?skipPermitEnrichment=1`.
+5. **Postgres**: Create a database and attach `DATABASE_URL` to the API service. The API starts even if the DB is empty; health does not require DB.
+6. **Cron jobs** (in `render.yaml`; created when you apply the blueprint):
+   - **re-sourcing-permits-refresh** (weekly): DOB permit enrichment. Set `SOCRATA_APP_TOKEN` on the cron for better rate limits.
+   - **re-sourcing-process-inbox** (daily): Process Gmail for broker replies and save to properties. Set `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`, `GMAIL_REFRESH_TOKEN`, `OPENAI_API_KEY` (and optionally `DATABASE_URL` if not auto-linked). See `docs/RENDER_AND_ENV_CHECKLIST.md` for full setup.
 
 ## One source of truth
 

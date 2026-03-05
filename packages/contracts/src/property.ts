@@ -163,6 +163,8 @@ export interface PropertyDetails {
   taxCode?: string | null;
   buildingLotBlock?: string | null;
   ownerInfo?: string | null;
+  /** Owner name from valuations dataset (8y4t-faws); shown in UI as "Owner (Valuations module): XXXX". */
+  ownerValuations?: string | null;
   omFurnishedPricing?: string | null;
   /** Rental data: per-unit table + LLM financials (from RapidAPI, listing LLM, or inquiry). */
   rentalFinancials?: RentalFinancials | null;
@@ -170,6 +172,26 @@ export interface PropertyDetails {
   monthlyHoa?: number | null;
   /** Monthly tax from listing (GET sale details); for financial calculations. */
   monthlyTax?: number | null;
+  /** Current market value total from valuations (curmkttot). */
+  assessedMarketValue?: number | null;
+  /** Current actual/assessed total from valuations (curacttot). */
+  assessedActualValue?: number | null;
+  /** Current tax before total from valuations (curtxbtot). */
+  assessedTaxBeforeTotal?: number | null;
+  /** Gross sqft from valuations (gross_sqft). */
+  assessedGrossSqft?: number | null;
+  /** Land area from valuations (land_area). */
+  assessedLandArea?: number | null;
+  /** Residential gross sqft from valuations (residential_area_gross). */
+  assessedResidentialAreaGross?: number | null;
+  /** Office gross sqft from valuations (office_area_gross). */
+  assessedOfficeAreaGross?: number | null;
+  /** Retail gross sqft from valuations (retail_area_gross). */
+  assessedRetailAreaGross?: number | null;
+  /** Appointment/add-to-roll date from valuations (appt_date). */
+  assessedApptDate?: string | null;
+  /** Extract/roll date from valuations (extracrdt). */
+  assessedExtractDate?: string | null;
   enrichment?: {
     permits_summary?: PermitsSummary | null;
     zoning?: ZoningSummary | null;

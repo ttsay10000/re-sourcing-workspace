@@ -31,6 +31,18 @@ export class PropertyRepo {
   }
 
   /**
+   * All normalized address first lines (trim + collapse spaces), for matching subjects that just contain the address.
+   */
+  async listAddressFirstLines(): Promise<string[]> {
+    const r = await this.client.query<{ first_line: string }>(
+      `SELECT DISTINCT TRIM(REGEXP_REPLACE(SPLIT_PART(canonical_address, ',', 1), '\\s+', ' ', 'g')) AS first_line
+       FROM properties
+       WHERE canonical_address IS NOT NULL AND TRIM(canonical_address) <> ''`
+    );
+    return r.rows.map((row) => row.first_line).filter((s) => s.length > 0);
+  }
+
+  /**
    * Find property by exact canonical_address or by first line of address (before first comma).
    * NormalizedFirstLine should be trim + collapse spaces, e.g. "416 West 20th Street".
    */

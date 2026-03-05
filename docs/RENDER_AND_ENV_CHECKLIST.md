@@ -47,9 +47,15 @@ Set all three on the **API** service and on the **re-sourcing-process-inbox** cr
 
 ### Inbox monitoring (replies and file storage)
 
-- **Where replies go:** When the **process-inbox** cron runs, it reads your Gmail inbox, finds replies to property inquiries (subject like “Re: Inquiry about [address]”), matches them to the correct property by address, and then:
-  - Saves each reply in the database (`property_inquiry_emails`) and stores attachment files on disk (under `INQUIRY_DOCS_PATH`).
-  - Those attachments show up in the **Documents (from inquiry replies)** section on each property’s detail page (Rental pricing / OM). The LLM also runs on email body and attachment text to extract financials and merge them into the property’s rental data.
+- **Where replies go:** When the **process-inbox** cron runs, it reads your Gmail inbox and matches messages to properties in three ways:
+  1. **By subject:** Messages with subject like “Re: Inquiry about [address]” are matched to the property by that address.
+  2. **By broker on record:** For each property that has a matched listing with broker/agent email in `agent_enrichment`, the job searches Gmail for messages **from that broker email** (from yesterday onward). Covers the primary agent and any **other listed team members** whose emails are in `agent_enrichment`.
+  3. **By thread:** For each inquiry we sent (stored in `property_inquiry_sends` with a Gmail message ID), the job loads that message’s **thread** and attributes every reply in the thread to the same property. This covers **(1) broker replying from a different/alternate email** (e.g. personal vs work) and **(2) a teammate or other firm member replying** who isn’t the primary agent on the listing. Only messages from yesterday onward are saved; our own sent messages in the thread are skipped.
+- **Date range:** Only messages **from yesterday onward** (UTC) are considered (`after:YYYY/M/D`). There is no “before” limit, so all future replies are included each run.
+- **What gets saved:** For each matched message the job:
+  - Inserts/updates a row in `property_inquiry_emails` (idempotent by Gmail `message_id`) with subject, from address, **date sent** (`received_at` from the message Date header), and body text.
+  - Saves any **attachments** to disk under `INQUIRY_DOCS_PATH` and records them in `property_inquiry_documents`.
+  - Runs the LLM on body + attachment text to extract financials and merge into the property’s rental data.
 - **Cron (auto deploy):** The blueprint defines **re-sourcing-process-inbox** (in `render.yaml`). It builds and runs like the permits cron; on each deploy it uses the latest code. Schedule: **daily at 9:00 UTC** (`0 9 * * *`). Set the env vars below on that cron service in the Render dashboard.
 
 ### Process-inbox cron: setup checklist
@@ -81,7 +87,11 @@ To get the **re-sourcing-process-inbox** cron job running on Render:
 
 **Cron job spec (from `render.yaml`):** Name `re-sourcing-process-inbox`, runtime Node, schedule `0 9 * * *`, build `npm install --include=dev && npm run build -w @re-sourcing/contracts && npm run build -w @re-sourcing/db && npm run build -w @re-sourcing/api`, start `cd apps/api && node dist/scripts/triggerProcessInbox.js`. Link the same Postgres DB as the API for `DATABASE_URL`.
 
-**Email date filter:** The job only processes inbox messages **from yesterday onward** (Gmail query `in:inbox after:YYYY/M/D`, date = yesterday UTC). Older messages are ignored so you can run it after turning on inquiry emails without reprocessing old mail.
+**Email date filter:** The job only processes inbox messages **from yesterday onward** (Gmail query `in:inbox after:YYYY/M/D`, date = yesterday UTC). There is no upper bound, so replies from brokers in the future are included on each run. Older messages are ignored so you can run it after turning on inquiry emails without reprocessing old mail.
+
+**Broker matching:** Properties whose matched listing(s) have broker/agent emails in `agent_enrichment` are included. For each such email the job runs a Gmail search `from:<email> after:<yesterday>`. Any message from that broker (or another listed team member with an email in the same listing’s `agent_enrichment`) is saved to the property. If the same broker is on multiple properties, the first property found is used.
+
+**Thread matching:** For sends in the last 90 days that have a Gmail message ID, the job fetches the thread and saves any **new** reply in that thread (from yesterday onward) to the property we sent to. So replies from the broker’s alternate address or from a teammate in the same thread are captured even if they’re not in `agent_enrichment`. Up to 50 threads are processed per run.
 
 ### Sending inquiry emails
 
@@ -112,14 +122,14 @@ Uses address **485 West 22nd Street**. You should see units with data (e.g. unit
 ### 3. Process-inbox (Gmail)
 
 - Trigger manually: `POST /api/cron/process-inbox` with header `X-Cron-Secret: <PROCESS_INBOX_CRON_SECRET>` (if set).
-- Requires `GMAIL_*` env vars. Inbox messages with subject like “Re: Inquiry about 416 West 20th Street” are matched to properties and stored with attachments.
+- Requires `GMAIL_*` env vars. Messages are matched (1) by subject “Re: Inquiry about [address]” or (2) by From address = broker on record for a property. Matched emails are stored with send date and attachments.
 
 ---
 
 ## Possible bugs to watch
 
 - **Broker email empty:** If the listing has no `agentEnrichment` (or no emails), the draft **To** is empty; user can type an address or run broker enrichment first.
-- **Subject line:** Replies are matched by subject. If the user changes the subject, process-inbox may not match the reply; the UI warns to keep the subject.
+- **Subject line:** Replies are first matched by subject. If the user changes the subject, that match fails; the reply can still be matched by **broker on record** (From address) if the property’s listing has that broker’s email in agent enrichment. The UI warns to keep the subject for consistency.
 - **Gmail send:** If “Send email” fails with an auth error, re-create the refresh token with **gmail.send** and **gmail.readonly** in OAuth 2.0 Playground, then set the new `GMAIL_REFRESH_TOKEN` on the API. The UI now shows the backend error (e.g. invalid_grant, insufficient scopes) so you can confirm the cause.
 - **`unauthorized_client`:** Usually means the OAuth client/redirect URI don't match how the refresh token was obtained. Fix: (1) In Google Cloud Console use a **Web application** OAuth client (not Desktop). (2) Add **Authorized redirect URI** `https://developers.google.com/oauthplayground`. (3) Get a new refresh token from [OAuth 2.0 Playground](https://developers.google.com/oauthplayground) (gear → use your credentials, authorize, exchange for tokens). (4) Set the new `GMAIL_REFRESH_TOKEN` and same client ID/secret on the API and process-inbox cron.
 - **Process-inbox and attachments:** Attachments are written to `INQUIRY_DOCS_PATH`. On Render, that directory may be ephemeral unless you use a persistent disk or external storage.

@@ -32,6 +32,7 @@ import { runRentalApiStep } from "../rental/rentalApiClient.js";
 import { extractRentalFinancialsFromListing } from "../rental/extractRentalFinancialsFromListing.js";
 import { suggestRentalDataGaps } from "../rental/suggestRentalDataGaps.js";
 import { fetchNyDosEntityByName } from "../enrichment/nyDosEntity.js";
+import { fetchAcrisDocumentsByOwnerName } from "../enrichment/acrisDocuments.js";
 
 const router = Router();
 
@@ -385,6 +386,72 @@ router.get("/properties/ny-dos-entity", async (req: Request, res: Response) => {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[properties ny-dos-entity]", err);
     res.status(503).json({ error: "Failed to fetch NY DOS entity.", details: message });
+  }
+});
+
+/** GET /api/properties/acris-documents?name=... - ACRIS documents from NYC Open Data by owner name. Optional ?bbl= to filter by BBL. */
+router.get("/properties/acris-documents", async (req: Request, res: Response) => {
+  try {
+    const name = typeof req.query.name === "string" ? req.query.name.trim() : "";
+    if (!name) {
+      res.status(400).json({ error: "Query parameter 'name' is required.", documents: [] });
+      return;
+    }
+    const bbl = typeof req.query.bbl === "string" ? req.query.bbl.trim() || null : null;
+    const documents = await fetchAcrisDocumentsByOwnerName(name, {
+      appToken: process.env.SOCRATA_APP_TOKEN ?? null,
+      timeoutMs: 60_000,
+      bbl,
+    });
+    res.json({ documents });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[properties acris-documents]", err);
+    res.status(503).json({ error: "Failed to fetch ACRIS documents.", details: message, documents: [] });
+  }
+});
+
+/** GET /api/properties/:id/acris-documents - ACRIS documents for property, using owner name from details (owner module / permits). Optional BBL filter from property. */
+router.get("/properties/:id/acris-documents", async (req: Request, res: Response) => {
+  try {
+    const { id: propertyId } = req.params;
+    const pool = getPool();
+    const propertyRepo = new PropertyRepo({ pool });
+    const property = await propertyRepo.byId(propertyId);
+    if (!property) {
+      res.status(404).json({ error: "Property not found", propertyId, documents: [] });
+      return;
+    }
+    const details = (property.details as Record<string, unknown>) ?? {};
+    const enrichment = details.enrichment as Record<string, unknown> | undefined;
+    const permitsSummary = enrichment?.permits_summary as Record<string, unknown> | undefined;
+    const ownerModuleName = details.ownerModuleName ?? details.owner_module_name;
+    const ownerModuleBusiness = details.ownerModuleBusiness ?? details.owner_module_business;
+    const permOwnerName = permitsSummary?.owner_name;
+    const permOwnerBusiness = permitsSummary?.owner_business_name;
+    const candidates = [
+      ownerModuleBusiness,
+      permOwnerBusiness,
+      ownerModuleName,
+      permOwnerName,
+    ].filter((c) => c != null && String(c).trim() !== "");
+    const ownerName = typeof candidates[0] === "string" ? candidates[0].trim() : "";
+    if (!ownerName) {
+      res.json({ propertyId, documents: [], reason: "No owner name on property (set owner module or run permit enrichment)." });
+      return;
+    }
+    const bbl = details.bblBase ?? details.bbl ?? null;
+    const bblStr = typeof bbl === "string" ? bbl : typeof bbl === "number" ? String(bbl) : null;
+    const documents = await fetchAcrisDocumentsByOwnerName(ownerName, {
+      appToken: process.env.SOCRATA_APP_TOKEN ?? null,
+      timeoutMs: 60_000,
+      bbl: bblStr,
+    });
+    res.json({ propertyId, documents });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[properties :id acris-documents]", err);
+    res.status(503).json({ error: "Failed to fetch ACRIS documents for property.", details: message, documents: [] });
   }
 });
 

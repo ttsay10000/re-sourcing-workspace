@@ -71,14 +71,40 @@ async function main(): Promise<void> {
   }
 
   try {
-    const valRows = await soql<{ parid?: string; curtaxclass?: string }>("8y4t-faws", {
-      $select: "parid,curtaxclass",
+    type ValRow = {
+      parid?: string;
+      curtaxclass?: string;
+      owner?: string;
+      curmkttot?: number;
+      curacttot?: number;
+      curtxbtot?: number;
+      gross_sqft?: number;
+      land_area?: number;
+      residential_area_gross?: number;
+      office_area_gross?: number;
+      retail_area_gross?: number;
+      appt_date?: string;
+      extracrdt?: string;
+    };
+    const valRows = await soql<ValRow>("8y4t-faws", {
+      $select: "parid,curtaxclass,owner,curmkttot,curacttot,curtxbtot,gross_sqft,land_area,residential_area_gross,office_area_gross,retail_area_gross,appt_date,extracrdt",
       $where: `parid = '${escape(BBL)}'`,
       $limit: 1,
     });
     const v = valRows[0];
-    out.push("--- Valuations (tax code) ---");
+    out.push("--- Valuations (tax code, owner, assessment) ---");
     out.push("Tax code (curtaxclass): " + (v?.curtaxclass ?? "—"));
+    out.push("Owner: " + (v?.owner ?? "—"));
+    out.push("Market value (curmkttot): " + (v?.curmkttot != null ? String(v.curmkttot) : "—"));
+    out.push("Actual assessed (curacttot): " + (v?.curacttot != null ? String(v.curacttot) : "—"));
+    out.push("Tax before total (curtxbtot): " + (v?.curtxbtot != null ? String(v.curtxbtot) : "—"));
+    out.push("Gross sqft: " + (v?.gross_sqft != null ? String(v.gross_sqft) : "—"));
+    out.push("Land area: " + (v?.land_area != null ? String(v.land_area) : "—"));
+    out.push("Residential area gross: " + (v?.residential_area_gross != null ? String(v.residential_area_gross) : "—"));
+    out.push("Office area gross: " + (v?.office_area_gross != null ? String(v.office_area_gross) : "—"));
+    out.push("Retail area gross: " + (v?.retail_area_gross != null ? String(v.retail_area_gross) : "—"));
+    out.push("Appt date: " + (v?.appt_date ?? "—"));
+    out.push("Extract date (extracrdt): " + (v?.extracrdt ?? "—"));
     out.push("");
   } catch (e) {
     out.push("Valuations error: " + (e instanceof Error ? e.message : String(e)));

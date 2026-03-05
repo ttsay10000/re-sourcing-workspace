@@ -181,7 +181,7 @@ export default function RunsPage() {
             <input
               type="checkbox"
               checked={isChecked}
-              disabled={includedByParent}
+              disabled={Boolean(includedByParent)}
               onChange={() => !includedByParent && toggleArea(opt.value)}
             />
             <span style={{ fontWeight: isBold ? 700 : 400 }}>{opt.label}</span>
@@ -563,7 +563,7 @@ export default function RunsPage() {
           </p>
         </div>
 
-        <button type="submit" disabled={sending} className="btn-primary">
+        <button type="submit" disabled={Boolean(sending)} className="btn-primary">
           {sending ? "Starting run…" : "Send (run two-step flow)"}
         </button>
       </form>
@@ -647,7 +647,7 @@ export default function RunsPage() {
                             type="button"
                             className="btn-primary"
                             style={{ padding: "0.25rem 0.5rem", fontSize: "0.8rem" }}
-                            disabled={sendingRunId === run.id}
+                            disabled={Boolean(sendingRunId === run.id)}
                             onClick={() => handleSendToPropertyData(run.id)}
                           >
                             {sendingRunId === run.id ? "Sending…" : "Send to property data"}

@@ -81,6 +81,21 @@ export async function listMessages(options?: {
 }
 
 /**
+ * Get a thread and return the list of message IDs in it.
+ * Used for thread-based reply matching (e.g. broker's alternate email or teammate in same thread).
+ */
+export async function getThreadMessageIds(threadId: string): Promise<string[]> {
+  const gmail = getGmail();
+  const res = await gmail.users.threads.get({
+    userId: "me",
+    id: threadId,
+    format: "minimal",
+  });
+  const messages = res.data.messages ?? [];
+  return messages.map((m) => m.id!).filter(Boolean);
+}
+
+/**
  * Get full message (format: 'full' for payload with parts and body).
  */
 export async function getMessage(messageId: string): Promise<GmailMessage> {
@@ -130,6 +145,26 @@ export function getHeader(msg: GmailMessage, name: string): string | null {
   if (!headers) return null;
   const h = headers.find((x) => x.name.toLowerCase() === name.toLowerCase());
   return h?.value ?? null;
+}
+
+/**
+ * Extract canonical email address from a "From" header (e.g. "Name <broker@firm.com>" or "broker@firm.com").
+ * Returns lowercased email or null if none found.
+ */
+export function parseEmailFromHeader(fromHeader: string | null | undefined): string | null {
+  if (fromHeader == null || typeof fromHeader !== "string") return null;
+  const trimmed = fromHeader.trim();
+  if (!trimmed) return null;
+  const angle = trimmed.indexOf("<");
+  if (angle !== -1) {
+    const end = trimmed.indexOf(">", angle);
+    if (end !== -1) {
+      const email = trimmed.slice(angle + 1, end).trim();
+      return email ? email.toLowerCase() : null;
+    }
+  }
+  if (trimmed.includes("@")) return trimmed.toLowerCase();
+  return null;
 }
 
 /** Decode body from message (plain or from first part). Base64url. */

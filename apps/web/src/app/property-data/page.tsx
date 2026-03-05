@@ -913,7 +913,7 @@ function PropertyDataContent() {
             type="button"
             className="btn-primary"
             onClick={handleSendToCanonical}
-            disabled={activeTab !== "raw" || total === 0 || sendingToCanonical}
+            disabled={Boolean(activeTab !== "raw" || total === 0 || sendingToCanonical)}
             title={someSelected ? "Send selected to canonical and run enrichment" : "Create canonical properties from all raw listings and link them"}
           >
             {sendingToCanonical ? "Sending…" : someSelected ? `Add ${selectedListingIds.size} to canonical` : "Add to canonical properties"}
@@ -924,7 +924,7 @@ function PropertyDataContent() {
                 type="button"
                 className="btn-secondary"
                 onClick={handleRerunEnrichment}
-                disabled={rerunningEnrichment}
+                disabled={Boolean(rerunningEnrichment)}
                 title="Re-run enrichment for all canonical properties (BBL assumed already set). Refreshes data from NYC Open Data."
               >
                 {rerunningEnrichment ? "Re-running…" : "Re-run enrichment"}
@@ -933,7 +933,7 @@ function PropertyDataContent() {
                 type="button"
                 className="btn-secondary"
                 onClick={handleRunRentalFlow}
-                disabled={runningRentalFlow}
+                disabled={Boolean(runningRentalFlow)}
                 title="Run rental flow (steps 1+2): RapidAPI rental-by-URL + LLM on listing description. Fetches rental units and extracts NOI, cap rate, etc."
               >
                 {runningRentalFlow ? "Running…" : "Run rental flow"}
@@ -944,7 +944,7 @@ function PropertyDataContent() {
             type="button"
             className="btn-secondary"
             onClick={openReviewDup}
-            disabled={activeTab !== "raw" || total === 0}
+            disabled={Boolean(activeTab !== "raw" || total === 0)}
             title="Review potential duplicate listings (score ≥ 80)"
           >
             Review duplicates
@@ -953,7 +953,7 @@ function PropertyDataContent() {
             type="button"
             className="btn-secondary"
             onClick={handleClearRawListings}
-            disabled={clearing || total === 0}
+            disabled={Boolean(clearing || total === 0)}
             title="Remove all raw listings and their snapshots. Cannot be undone."
           >
             {clearing ? "Clearing…" : "Clear raw listings"}
@@ -962,7 +962,7 @@ function PropertyDataContent() {
             type="button"
             className="btn-secondary"
             onClick={handleClearCanonicalProperties}
-            disabled={clearingCanonical || canonicalProperties.length === 0}
+            disabled={Boolean(clearingCanonical || canonicalProperties.length === 0)}
             title="Remove all canonical properties and their matches/enrichment data. Cannot be undone."
           >
             {clearingCanonical ? "Clearing…" : "Clear canonical properties"}
@@ -1000,7 +1000,7 @@ function PropertyDataContent() {
                           <button
                             type="button"
                             className="btn-secondary"
-                            disabled={deletingId === row.id}
+                            disabled={Boolean(deletingId === row.id)}
                             onClick={() => handleDeleteListing(row.id)}
                           >
                             {deletingId === row.id ? "Deleting…" : "Delete"}
