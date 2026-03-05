@@ -772,7 +772,10 @@ tyler@stayhaus.co`;
                           body: JSON.stringify({ to: inquiryDraft.to.trim(), subject: inquiryDraft.subject, body: inquiryDraft.body }),
                         });
                         const data = await res.json().catch(() => ({}));
-                        if (!res.ok) throw new Error(typeof data?.error === "string" ? data.error : data?.details ?? "Failed to send");
+                        if (!res.ok) {
+                          const msg = typeof data?.details === "string" ? data.details : typeof data?.error === "string" ? data.error : "Failed to send";
+                          throw new Error(msg);
+                        }
                         setInquiryEmailModalOpen(false);
                       } catch (e) {
                         setInquirySendError(e instanceof Error ? e.message : "Failed to send email");

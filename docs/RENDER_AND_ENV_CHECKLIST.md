@@ -115,5 +115,5 @@ Uses address **485 West 22nd Street**. You should see units with data (e.g. unit
 
 - **Broker email empty:** If the listing has no `agentEnrichment` (or no emails), the draft **To** is empty; user can type an address or run broker enrichment first.
 - **Subject line:** Replies are matched by subject. If the user changes the subject, process-inbox may not match the reply; the UI warns to keep the subject.
-- **Gmail send:** If “Send email” fails with an auth error, re-create the refresh token in OAuth 2.0 Playground with **gmail.send** included in the scopes.
+- **Gmail send:** If “Send email” fails with an auth error, re-create the refresh token with **gmail.send** and **gmail.readonly** in OAuth 2.0 Playground, then set the new `GMAIL_REFRESH_TOKEN` on the API. The UI now shows the backend error (e.g. invalid_grant, insufficient scopes) so you can confirm the cause.
 - **Process-inbox and attachments:** Attachments are written to `INQUIRY_DOCS_PATH`. On Render, that directory may be ephemeral unless you use a persistent disk or external storage.

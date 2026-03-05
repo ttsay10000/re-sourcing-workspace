@@ -551,7 +551,28 @@ router.post("/properties/:id/send-inquiry-email", async (req: Request, res: Resp
     const result = await gmailSendMessage(to.trim(), subj || "Inquiry", b);
     res.json({ ok: true, messageId: result.id });
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = (() => {
+      if (err instanceof Error) {
+        const g = err as Error & {
+          response?: {
+            data?: {
+              error?: string | { message?: string; errors?: Array<{ message?: string }> };
+              message?: string;
+            };
+          };
+        };
+        const d = g.response?.data;
+        if (d) {
+          const e = d.error;
+          if (typeof e === "string") return e;
+          if (e && typeof e === "object" && typeof e.message === "string") return e.message;
+          if (e && typeof e === "object" && Array.isArray(e.errors) && e.errors[0]?.message) return e.errors[0].message;
+          if (typeof d.message === "string") return d.message;
+        }
+        return g.message;
+      }
+      return String(err);
+    })();
     console.error("[properties send-inquiry-email]", err);
     res.status(503).json({ error: "Failed to send email.", details: message });
   }
