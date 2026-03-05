@@ -15,7 +15,7 @@
 
 databases:
   - name: re-sourcing-db
-    plan: free
+    plan: basic-256mb  # match current plan; free tier cannot be set if DB was created on basic-256mb
     databaseName: re_sourcing
     user: re_sourcing
 
