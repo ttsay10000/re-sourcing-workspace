@@ -140,13 +140,14 @@ function PropertyDataContent() {
     setLoading(true);
     setError(null);
     fetch(`${API_BASE}/api/listings`)
-      .then((r) => r.json())
-      .then((data) => {
+      .then(async (r) => {
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error((data.error || data.details || `HTTP ${r.status}`) as string);
         if (data.error) throw new Error(data.error);
         setListings(data.listings ?? []);
         setTotal(data.total ?? 0);
       })
-      .catch((e) => setError(e.message || "Failed to load listings"))
+      .catch((e) => setError(e.message === "Failed to fetch" ? `Cannot reach API at ${API_BASE}. Check CORS and NEXT_PUBLIC_API_URL.` : (e.message || "Failed to load listings")))
       .finally(() => setLoading(false));
   }, []);
 
@@ -176,12 +177,13 @@ function PropertyDataContent() {
   const fetchCanonicalProperties = useCallback(() => {
     setLoadingCanonical(true);
     fetch(`${API_BASE}/api/properties?includeListingSummary=1`)
-      .then((r) => r.json())
-      .then((data) => {
+      .then(async (r) => {
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error((data.error || data.details || `HTTP ${r.status}`) as string);
         if (data.error) throw new Error(data.error);
         setCanonicalProperties(data.properties ?? []);
       })
-      .catch((e) => setError(e.message || "Failed to load canonical properties"))
+      .catch((e) => setError(e.message === "Failed to fetch" ? `Cannot reach API at ${API_BASE}. Check CORS and NEXT_PUBLIC_API_URL.` : (e.message || "Failed to load canonical properties")))
       .finally(() => setLoadingCanonical(false));
   }, []);
 
