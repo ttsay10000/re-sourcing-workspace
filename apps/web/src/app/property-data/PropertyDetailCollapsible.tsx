@@ -373,60 +373,62 @@ export function PropertyDetailCollapsible({ listing }: { listing: PropertyDetail
               )}
             </dl>
           </div>
-          <div className="initial-info-card">
-            <h4 className="initial-info-subtitle">Broker / Agent</h4>
-            {brokerDisplay || hasEnrichment ? (
-              hasEnrichment ? (
-                <ul className="initial-info-broker-list">
-                  {listing.agentEnrichment!.map((entry, idx) => (
-                    <li key={idx}>
-                      <span className="initial-info-broker-name">{entry.name}</span>
-                      <span className="initial-info-broker-meta">
-                        {entry.firm && <span>{entry.firm}</span>}
-                        <span className={!entry.email && !entry.phone ? "initial-info-broker-contact-missing" : ""}>
-                          {entry.firm && " · "}
-                          Email: {entry.email ?? "—"} · Phone: {entry.phone ?? "—"}
+          <div className="initial-info-right-col">
+            <div className="initial-info-card">
+              <h4 className="initial-info-subtitle">Broker / Agent</h4>
+              {brokerDisplay || hasEnrichment ? (
+                hasEnrichment ? (
+                  <ul className="initial-info-broker-list">
+                    {listing.agentEnrichment!.map((entry, idx) => (
+                      <li key={idx}>
+                        <span className="initial-info-broker-name">{entry.name}</span>
+                        <span className="initial-info-broker-meta">
+                          {entry.firm && <span>{entry.firm}</span>}
+                          <span className={!entry.email && !entry.phone ? "initial-info-broker-contact-missing" : ""}>
+                            {entry.firm && " · "}
+                            Email: {entry.email ?? "—"} · Phone: {entry.phone ?? "—"}
+                          </span>
                         </span>
-                      </span>
-                    </li>
-                  ))}
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p style={{ margin: 0, color: "#0f172a", fontSize: "0.875rem" }}>{brokerDisplay}</p>
+                )
+              ) : (
+                <p className="initial-info-empty">—</p>
+              )}
+            </div>
+            <div className="initial-info-card">
+              <h4 className="initial-info-subtitle">Amenities</h4>
+              {amenities.length > 0 ? (
+                <ul className="initial-info-amenities-pills">
+                  {amenities.map((a, i) => {
+                    const capitalized = String(a).replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+                    return <li key={i}>{capitalized}</li>;
+                  })}
                 </ul>
               ) : (
-                <p style={{ margin: 0, color: "#0f172a", fontSize: "0.875rem" }}>{brokerDisplay}</p>
-              )
-            ) : (
-              <p className="initial-info-empty">—</p>
-            )}
-          </div>
-          <div className="initial-info-card">
-            <h4 className="initial-info-subtitle">Amenities</h4>
-            {amenities.length > 0 ? (
-              <ul className="initial-info-amenities-pills">
-                {amenities.map((a, i) => {
-                  const capitalized = String(a).replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-                  return <li key={i}>{capitalized}</li>;
-                })}
-              </ul>
-            ) : (
-              <p className="initial-info-empty">—</p>
-            )}
-          </div>
-          {(listing.priceHistory?.length ?? 0) > 0 && (
-            <div className="initial-info-card initial-info-card--price-history">
-              <h4 className="initial-info-subtitle">Price history</h4>
-              <div className="initial-info-price-history-list">
-                {listing.priceHistory!.map((r, i) => (
-                  <div key={i} className="initial-info-price-history-row">
-                    <span className="initial-info-price-history-date">{formatPriceHistoryDate(r.date)}</span>
-                    <span className="initial-info-price-history-sep">·</span>
-                    <span className="initial-info-price-history-price">{formatPriceCompact(r.price)}</span>
-                    <span className="initial-info-price-history-sep">·</span>
-                    <span className="initial-info-price-history-event">{formatPriceEventLabel(r.event)}</span>
-                  </div>
-                ))}
-              </div>
+                <p className="initial-info-empty">—</p>
+              )}
             </div>
-          )}
+            {(listing.priceHistory?.length ?? 0) > 0 && (
+              <div className="initial-info-card initial-info-card--price-history">
+                <h4 className="initial-info-subtitle">Price history</h4>
+                <div className="initial-info-price-history-list">
+                  {listing.priceHistory!.map((r, i) => (
+                    <div key={i} className="initial-info-price-history-row">
+                      <span className="initial-info-price-history-date">{formatPriceHistoryDate(r.date)}</span>
+                      <span className="initial-info-price-history-sep">·</span>
+                      <span className="initial-info-price-history-price">{formatPriceCompact(r.price)}</span>
+                      <span className="initial-info-price-history-sep">·</span>
+                      <span className="initial-info-price-history-event">{formatPriceEventLabel(r.event)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
           {description && (
             <div className="initial-info-card initial-info-card--description">
               <h4 className="initial-info-subtitle">Description</h4>

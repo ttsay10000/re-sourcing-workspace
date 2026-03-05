@@ -1194,7 +1194,7 @@ textarea {
   display: block;
 }
 
-/* Initial property info — card grid layout; 4 columns on desktop so cards span full width */
+/* Initial property info — details left, broker/amenities/price history stacked right on desktop */
 .initial-info-grid {
   display: grid;
   grid-template-columns: 1fr;
@@ -1205,8 +1205,16 @@ textarea {
 
 @media (min-width: 640px) {
   .initial-info-grid {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: 1fr minmax(260px, 340px);
   }
+}
+
+/* Right column: stack broker, amenities, price history vertically */
+.initial-info-right-col {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  min-width: 0;
 }
 
 .initial-info-card {
@@ -1229,7 +1237,7 @@ textarea {
 
 @media (min-width: 640px) {
   .initial-info-card--details {
-    grid-column: span 1;
+    grid-column: 1;
   }
 }
 

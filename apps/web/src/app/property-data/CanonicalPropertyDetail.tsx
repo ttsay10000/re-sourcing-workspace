@@ -787,24 +787,57 @@ tyler@stayhaus.co`;
             </div>
           )}
           {rentalUnits.length > 0 && (
-            <div style={{ marginBottom: "0.75rem" }}>
-              <strong style={{ display: "block", marginBottom: "0.5rem" }}>Rental units (from API / inquiry)</strong>
-              <div style={{ display: "flex", flexDirection: "column", gap: "1rem", maxHeight: "520px", overflowY: "auto" }}>
+            <div style={{ marginBottom: "0.5rem" }}>
+              <strong style={{ display: "block", marginBottom: "0.35rem", fontSize: "0.95rem", color: "#1a1a1a" }}>Rental units (from API / inquiry)</strong>
+              <span style={{ display: "block", marginBottom: "0.25rem", fontSize: "0.8rem", color: "#666" }}>Summary — all units</span>
+              <div style={{ marginBottom: "0.6rem", overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.8rem" }}>
+                  <thead>
+                    <tr style={{ borderBottom: "1px solid #ddd", backgroundColor: "#f5f5f5" }}>
+                      <th style={{ padding: "0.35rem 0.5rem", textAlign: "left", fontWeight: 600, color: "#555" }}>Unit</th>
+                      <th style={{ padding: "0.35rem 0.5rem", textAlign: "right", fontWeight: 600, color: "#555" }}>Rent</th>
+                      <th style={{ padding: "0.35rem 0.5rem", textAlign: "center", fontWeight: 600, color: "#555" }}>Status</th>
+                      <th style={{ padding: "0.35rem 0.5rem", textAlign: "right", fontWeight: 600, color: "#555" }}>Sq ft</th>
+                      <th style={{ padding: "0.35rem 0.5rem", textAlign: "center", fontWeight: 600, color: "#555" }}>Beds</th>
+                      <th style={{ padding: "0.35rem 0.5rem", textAlign: "center", fontWeight: 600, color: "#555" }}>Baths</th>
+                      <th style={{ padding: "0.35rem 0.5rem", textAlign: "left", fontWeight: 600, color: "#555" }}>Listed</th>
+                      <th style={{ padding: "0.35rem 0.5rem", textAlign: "left", fontWeight: 600, color: "#555" }}>Last rented</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rentalUnits.map((row, i) => (
+                      <tr key={i} style={{ borderBottom: "1px solid #eee" }}>
+                        <td style={{ padding: "0.3rem 0.5rem", color: "#1a1a1a" }}>{row.unit ?? "—"}</td>
+                        <td style={{ padding: "0.3rem 0.5rem", textAlign: "right", color: "#1a1a1a" }}>{row.rentalPrice != null ? formatPrice(row.rentalPrice) : "—"}</td>
+                        <td style={{ padding: "0.3rem 0.5rem", textAlign: "center", color: "#1a1a1a" }}>{row.status === "sold" ? "Last rent" : row.status === "open" ? "Ask" : row.status ?? "—"}</td>
+                        <td style={{ padding: "0.3rem 0.5rem", textAlign: "right", color: "#1a1a1a" }}>{row.sqft != null && row.sqft > 0 ? String(row.sqft) : "—"}</td>
+                        <td style={{ padding: "0.3rem 0.5rem", textAlign: "center", color: "#1a1a1a" }}>{row.beds != null ? String(row.beds) : "—"}</td>
+                        <td style={{ padding: "0.3rem 0.5rem", textAlign: "center", color: "#1a1a1a" }}>{row.baths != null ? String(row.baths) : "—"}</td>
+                        <td style={{ padding: "0.3rem 0.5rem", color: "#1a1a1a" }}>{row.listedDate ? formatDateOnly(row.listedDate) : "—"}</td>
+                        <td style={{ padding: "0.3rem 0.5rem", color: "#1a1a1a" }}>{row.lastRentedDate ? formatDateOnly(row.lastRentedDate) : "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: "0.6rem", maxHeight: "520px", overflowY: "auto" }}>
                 {rentalUnits.map((row, i) => {
                   const unitImages = (row.images ?? []).filter((u): u is string => typeof u === "string");
                   const idx = unitGalleryIndices[i] ?? 0;
                   const setIdx = (n: number) => setUnitGalleryIndices((prev) => ({ ...prev, [i]: n }));
+                  const dataCellStyle = { textAlign: "center" as const, padding: "0.3rem 0.4rem", fontSize: "0.9rem", color: "#1a1a1a" };
+                  const labelStyle = { display: "block" as const, fontSize: "0.7rem", fontWeight: 600, color: "#555", textTransform: "uppercase" as const, letterSpacing: "0.03em", marginBottom: "0.15rem" };
                   return (
-                    <div key={i} style={{ border: "1px solid #e5e5e5", borderRadius: "6px", overflow: "hidden", backgroundColor: "#fafafa", display: "flex", flexDirection: "row", alignItems: "stretch", minHeight: "120px" }}>
-                      {/* Column 1: photos */}
-                      <div style={{ flexShrink: 0, width: "260px", maxWidth: "260px", borderRight: "1px solid #eee", padding: "0.5rem" }}>
+                    <div key={i} style={{ border: "1px solid #e5e5e5", borderRadius: "8px", overflow: "hidden", backgroundColor: "#fafafa", display: "flex", flexDirection: "row", alignItems: "stretch", minHeight: "120px", boxShadow: "0 1px 3px rgba(0,0,0,0.06)" }}>
+                      {/* Column 1: photos — tight spacing */}
+                      <div style={{ flexShrink: 0, width: "260px", maxWidth: "260px", borderRight: "1px solid #eee", padding: "0.35rem" }}>
                         {unitImages.length > 0 ? (
-                          <div className="property-card-gallery-wrap" style={{ padding: 0 }}>
-                            <div className="property-card-gallery" style={{ maxWidth: "100%" }}>
-                              <a href={unitImages[idx]} target="_blank" rel="noopener noreferrer" className="property-card-gallery-main-wrap" style={{ maxHeight: "140px", margin: 0 }}>
-                                <img key={idx} src={unitImages[idx]} alt="" className="property-card-gallery-main" style={{ maxHeight: "140px", objectFit: "contain" }} />
+                          <div className="property-card-gallery-wrap" style={{ padding: 0, margin: 0 }}>
+                            <div className="property-card-gallery" style={{ maxWidth: "100%", gap: "0.25rem" }}>
+                              <a href={unitImages[idx]} target="_blank" rel="noopener noreferrer" className="property-card-gallery-main-wrap" style={{ maxHeight: "120px", margin: 0 }}>
+                                <img key={idx} src={unitImages[idx]} alt="" className="property-card-gallery-main" style={{ maxHeight: "120px", objectFit: "contain" }} />
                               </a>
-                              <div className="property-card-gallery-thumbs" style={{ flexWrap: "wrap" }}>
+                              <div className="property-card-gallery-thumbs" style={{ flexWrap: "wrap", gap: "0.25rem" }}>
                                 {unitImages.map((src, j) => (
                                   <button key={j} type="button" onClick={() => setIdx(j)} className={`property-card-gallery-thumb-wrap ${j === idx ? "property-card-gallery-thumb-wrap--active" : ""}`}>
                                     <img src={src} alt="" loading="lazy" className="property-card-gallery-thumb" />
@@ -814,19 +847,19 @@ tyler@stayhaus.co`;
                             </div>
                           </div>
                         ) : (
-                          <div style={{ height: "100%", minHeight: "80px", display: "flex", alignItems: "center", justifyContent: "center", color: "#888", fontSize: "0.8rem" }}>No photo</div>
+                          <div style={{ height: "100%", minHeight: "80px", display: "flex", alignItems: "center", justifyContent: "center", color: "#888", fontSize: "0.85rem" }}>No photo</div>
                         )}
                       </div>
                       {/* Columns 2 & 3: data */}
-                      <div style={{ flex: 1, display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.5rem 1.5rem", padding: "0.75rem 1rem", alignContent: "start", fontSize: "0.85rem" }}>
-                        <div><strong style={{ color: "#555" }}>Unit</strong><br />{row.unit ?? "—"}</div>
-                        <div><strong style={{ color: "#555" }}>Rent (latest)</strong><br />{row.rentalPrice != null ? formatPrice(row.rentalPrice) : "—"}</div>
-                        <div><strong style={{ color: "#555" }}>Status</strong><br />{row.status === "sold" ? "Last rent" : row.status === "open" ? "Ask" : row.status ?? "—"}</div>
-                        <div><strong style={{ color: "#555" }}>Sq ft</strong><br />{row.sqft != null && row.sqft > 0 ? String(row.sqft) : "—"}</div>
-                        <div><strong style={{ color: "#555" }}>Beds</strong><br />{row.beds != null ? String(row.beds) : "—"}</div>
-                        <div><strong style={{ color: "#555" }}>Baths</strong><br />{row.baths != null ? String(row.baths) : "—"}</div>
-                        <div><strong style={{ color: "#555" }}>Listed</strong><br />{row.listedDate ? formatDateOnly(row.listedDate) : "—"}</div>
-                        <div><strong style={{ color: "#555" }}>Last rented</strong><br />{row.lastRentedDate ? formatDateOnly(row.lastRentedDate) : "—"}</div>
+                      <div style={{ flex: 1, display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.35rem 0.75rem", padding: "0.5rem 0.75rem", alignContent: "center", justifyItems: "center", alignItems: "center" }}>
+                        <div style={dataCellStyle}><span style={labelStyle}>Unit</span>{row.unit ?? "—"}</div>
+                        <div style={dataCellStyle}><span style={labelStyle}>Rent (latest)</span>{row.rentalPrice != null ? formatPrice(row.rentalPrice) : "—"}</div>
+                        <div style={dataCellStyle}><span style={labelStyle}>Status</span>{row.status === "sold" ? "Last rent" : row.status === "open" ? "Ask" : row.status ?? "—"}</div>
+                        <div style={dataCellStyle}><span style={labelStyle}>Sq ft</span>{row.sqft != null && row.sqft > 0 ? String(row.sqft) : "—"}</div>
+                        <div style={dataCellStyle}><span style={labelStyle}>Beds</span>{row.beds != null ? String(row.beds) : "—"}</div>
+                        <div style={dataCellStyle}><span style={labelStyle}>Baths</span>{row.baths != null ? String(row.baths) : "—"}</div>
+                        <div style={dataCellStyle}><span style={labelStyle}>Listed</span>{row.listedDate ? formatDateOnly(row.listedDate) : "—"}</div>
+                        <div style={dataCellStyle}><span style={labelStyle}>Last rented</span>{row.lastRentedDate ? formatDateOnly(row.lastRentedDate) : "—"}</div>
                       </div>
                     </div>
                   );
@@ -834,9 +867,49 @@ tyler@stayhaus.co`;
               </div>
             </div>
           )}
+          {rentalUnits.length > 0 && (
+            <div style={{ marginTop: "0.35rem", marginBottom: "0.5rem" }}>
+              <button
+                type="button"
+                onClick={() => {
+                  const addressLine = property.canonicalAddress.split(",")[0]?.trim() || property.canonicalAddress;
+                  const subject = "Inquiry about " + addressLine;
+                  const agents = listingForDisplay?.agentEnrichment ?? [];
+                  const emailsWithNames = agents.map((a) => ({ email: a.email?.trim(), name: a.name })).filter((x) => x.email) as { email: string; name: string }[];
+                  const firstPrimary = emailsWithNames[0];
+                  const brokerFirstName = firstPrimary?.name?.trim()
+                    ? firstPrimary.name.trim().split(/\s+/)[0] ?? "[Broker Name]"
+                    : "[Broker Name]";
+                  const body = `Hi ${brokerFirstName},
+
+My name is Tyler Tsay and I'm reaching out on behalf of a client regarding the property at ${addressLine} currently on the market. We are evaluating the opportunity and would appreciate the opportunity to review the offering materials.
+
+Would you be able to share the offering memorandum, current rent roll, and any available financials (T12, operating expenses, etc.)? It would also be helpful to confirm the current cap rate guidance, tenancy details, and any notes on recent capital improvements or lease rollover.
+
+Happy to execute an NDA if required.
+
+Thanks in advance — looking forward to taking a look.
+
+Best,
+Tyler Tsay
+617 306 3336
+tyler@stayhaus.co`;
+                  setInquiryDraft({ to: firstPrimary?.email ?? "", subject, body });
+                  setInquirySendError(null);
+                  setInquiryEmailModalOpen(true);
+                }}
+                style={{ padding: "0.35rem 0.6rem", backgroundColor: "#f0f0f0", border: "1px solid #ccc", borderRadius: "4px", fontSize: "0.8rem", color: "#333", cursor: "pointer" }}
+              >
+                Request info / OM by email &amp; track reply
+              </button>
+              <p style={{ margin: "0.25rem 0 0", color: "#737373", fontSize: "0.75rem" }}>
+                Review the draft and click Send to email the broker. Use the subject line so replies are matched to this property.
+              </p>
+            </div>
+          )}
           {fromLlm && (fromLlm.noi != null || fromLlm.capRate != null || fromLlm.rentalEstimates || fromLlm.otherFinancials || fromLlm.dataGapSuggestions) && (
-            <div style={{ marginBottom: "0.75rem" }}>
-              <strong style={{ display: "block", marginBottom: "0.25rem" }}>Financials (from listing / LLM)</strong>
+            <div style={{ marginTop: "0.5rem", marginBottom: "0.5rem" }}>
+              <strong style={{ display: "block", marginBottom: "0.2rem" }}>Financials (from listing / LLM)</strong>
               <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem 1rem" }}>
                 {fromLlm.noi != null && <span>NOI: {formatPrice(fromLlm.noi)}</span>}
                 {fromLlm.capRate != null && <span>Cap rate: {fromLlm.capRate}%</span>}
@@ -850,8 +923,8 @@ tyler@stayhaus.co`;
               )}
             </div>
           )}
-          <div style={{ marginBottom: "0.75rem" }}>
-            <strong style={{ display: "block", marginBottom: "0.25rem" }}>Documents (from inquiry replies)</strong>
+          <div style={{ marginBottom: "0.5rem" }}>
+            <strong style={{ display: "block", marginBottom: "0.2rem" }}>Documents (from inquiry replies)</strong>
             {inquiryDocuments === null ? (
               <p style={{ margin: 0, fontSize: "0.8rem", color: "#737373" }}>Loading…</p>
             ) : inquiryDocuments.length > 0 ? (
@@ -874,8 +947,8 @@ tyler@stayhaus.co`;
               <p style={{ margin: 0, fontSize: "0.8rem", color: "#737373" }}>No documents yet. When brokers reply to your inquiry emails, the process-inbox job saves attachments here (run the re-sourcing-process-inbox cron).</p>
             )}
           </div>
-          <div style={{ marginBottom: "0.75rem" }}>
-            <strong style={{ display: "block", marginBottom: "0.25rem" }}>Upload document</strong>
+          <div style={{ marginBottom: "0.5rem" }}>
+            <strong style={{ display: "block", marginBottom: "0.2rem" }}>Upload document</strong>
             <form
               onSubmit={async (e) => {
                 e.preventDefault();
