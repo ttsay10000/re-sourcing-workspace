@@ -51,9 +51,15 @@ export async function processInbox(options?: { maxMessages?: number }): Promise<
   const emailRepo = new InquiryEmailRepo({ pool });
   const docRepo = new InquiryDocumentRepo({ pool });
 
+  // Only process emails from yesterday onward (project started using inquiry sends recently).
+  const yesterday = new Date();
+  yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+  const afterDate = `${yesterday.getUTCFullYear()}/${yesterday.getUTCMonth() + 1}/${yesterday.getUTCDate()}`;
+  const inboxQuery = `in:inbox after:${afterDate}`;
+
   let list: Awaited<ReturnType<typeof listMessages>>;
   try {
-    list = await listMessages({ maxResults: maxMessages, q: "in:inbox" });
+    list = await listMessages({ maxResults: maxMessages, q: inboxQuery });
   } catch (e) {
     result.errors.push("listMessages: " + (e instanceof Error ? e.message : String(e)));
     return result;

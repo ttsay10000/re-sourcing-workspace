@@ -79,6 +79,10 @@ To get the **re-sourcing-process-inbox** cron job running on Render:
 5. **Manual run**  
    In Render, open the cron job and use “Manual Deploy” to run it once, or call `POST /api/cron/process-inbox` on the API with `X-Cron-Secret: <PROCESS_INBOX_CRON_SECRET>` if you use that guard.
 
+**Cron job spec (from `render.yaml`):** Name `re-sourcing-process-inbox`, runtime Node, schedule `0 9 * * *`, build `npm install --include=dev && npm run build -w @re-sourcing/contracts && npm run build -w @re-sourcing/db && npm run build -w @re-sourcing/api`, start `cd apps/api && node dist/scripts/triggerProcessInbox.js`. Link the same Postgres DB as the API for `DATABASE_URL`.
+
+**Email date filter:** The job only processes inbox messages **from yesterday onward** (Gmail query `in:inbox after:YYYY/M/D`, date = yesterday UTC). Older messages are ignored so you can run it after turning on inquiry emails without reprocessing old mail.
+
 ### Sending inquiry emails
 
 - **Request info / OM by email:** The button appears for every property. Click it to open a draft (To, Subject, Body). Edit as needed (e.g. add your phone and email in the signature). Click **“Send email”** to send via Gmail API from your connected account. No email client is opened; the app sends the message for you. Replies are then picked up by the process-inbox cron when they arrive.

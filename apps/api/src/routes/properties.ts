@@ -16,13 +16,14 @@ import {
   HousingLitigationsRepo,
   InquiryEmailRepo,
   InquiryDocumentRepo,
+  InquirySendRepo,
   PropertyUploadedDocumentRepo,
 } from "@re-sourcing/db";
 import type { PropertyDocumentCategory } from "@re-sourcing/contracts";
 import multer from "multer";
 import { randomUUID } from "crypto";
 import { resolveInquiryFilePath } from "../inquiry/storage.js";
-import { saveUploadedDocument, resolveUploadedDocFilePath } from "../upload/uploadedDocStorage.js";
+import { saveUploadedDocument, resolveUploadedDocFilePath, deleteUploadedDocumentFile } from "../upload/uploadedDocStorage.js";
 import { sendMessage as gmailSendMessage } from "../inquiry/gmailClient.js";
 import type { RentalFinancials, RentalFinancialsFromLlm } from "@re-sourcing/contracts";
 import { runEnrichmentForProperty } from "../enrichment/runEnrichment.js";
@@ -30,6 +31,7 @@ import { normalizeAddressLineForDisplay, getBBLForProperty } from "../enrichment
 import { runRentalApiStep } from "../rental/rentalApiClient.js";
 import { extractRentalFinancialsFromListing } from "../rental/extractRentalFinancialsFromListing.js";
 import { suggestRentalDataGaps } from "../rental/suggestRentalDataGaps.js";
+import { fetchNyDosEntityByName } from "../enrichment/nyDosEntity.js";
 
 const router = Router();
 
@@ -366,6 +368,26 @@ function parseUploadCategory(cat: unknown): PropertyDocumentCategory {
   return "Other";
 }
 
+/** GET /api/properties/ny-dos-entity?name=... - NY DOS entity details for a business name (LLC, Corp, etc.). Returns N/A when name does not look like a business entity. */
+router.get("/properties/ny-dos-entity", async (req: Request, res: Response) => {
+  try {
+    const name = typeof req.query.name === "string" ? req.query.name.trim() : "";
+    if (!name) {
+      res.json({ entity: null, nA: true, reason: "No name provided." });
+      return;
+    }
+    const entity = await fetchNyDosEntityByName(name, {
+      appToken: process.env.SOCRATA_APP_TOKEN ?? process.env.NY_OPEN_DATA_APP_TOKEN ?? null,
+      timeoutMs: 15_000,
+    });
+    res.json({ entity, nA: entity == null });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[properties ny-dos-entity]", err);
+    res.status(503).json({ error: "Failed to fetch NY DOS entity.", details: message });
+  }
+});
+
 /** GET /api/properties/:id/documents - list inquiry documents (attachments) for property, with source (from_address). */
 router.get("/properties/:id/documents", async (req: Request, res: Response) => {
   try {
@@ -466,6 +488,37 @@ router.get("/properties/:id/uploaded-documents/:docId/file", async (req: Request
   }
 });
 
+/** DELETE /api/properties/:id/uploaded-documents/:docId - remove an uploaded document (and its file from disk). */
+router.delete("/properties/:id/uploaded-documents/:docId", async (req: Request, res: Response) => {
+  try {
+    const { id: propertyId, docId } = req.params;
+    const pool = getPool();
+    const propertyRepo = new PropertyRepo({ pool });
+    const docRepo = new PropertyUploadedDocumentRepo({ pool });
+    const property = await propertyRepo.byId(propertyId);
+    if (!property) {
+      res.status(404).json({ error: "Property not found", propertyId });
+      return;
+    }
+    const doc = await docRepo.byId(docId);
+    if (!doc || doc.propertyId !== propertyId) {
+      res.status(404).json({ error: "Document not found", docId });
+      return;
+    }
+    await deleteUploadedDocumentFile(doc.filePath);
+    const deleted = await docRepo.delete(docId);
+    if (!deleted) {
+      res.status(404).json({ error: "Document not found", docId });
+      return;
+    }
+    res.status(204).send();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[properties delete uploaded-document]", err);
+    res.status(503).json({ error: "Failed to delete document.", details: message });
+  }
+});
+
 /** POST /api/properties/:id/documents/upload - upload a document (multipart: file + category). */
 router.post(
   "/properties/:id/documents/upload",
@@ -549,7 +602,9 @@ router.post("/properties/:id/send-inquiry-email", async (req: Request, res: Resp
     const subj = typeof subject === "string" ? subject.trim() : "";
     const b = typeof body === "string" ? body : "";
     const result = await gmailSendMessage(to.trim(), subj || "Inquiry", b);
-    res.json({ ok: true, messageId: result.id });
+    const inquirySendRepo = new InquirySendRepo({ pool });
+    const { sentAt } = await inquirySendRepo.create(propertyId, result.id);
+    res.json({ ok: true, messageId: result.id, sentAt });
   } catch (err) {
     const message = (() => {
       if (err instanceof Error) {
@@ -589,12 +644,15 @@ router.get("/properties/:id", async (req: Request, res: Response) => {
       res.status(404).json({ error: "Property not found", propertyId });
       return;
     }
+    const inquirySendRepo = new InquirySendRepo({ pool });
+    const lastInquirySentAt = await inquirySendRepo.getLastSentAt(propertyId);
     res.json({
       id: property.id,
       canonicalAddress: property.canonicalAddress,
       details: property.details ?? null,
       createdAt: property.createdAt,
       updatedAt: property.updatedAt,
+      lastInquirySentAt: lastInquirySentAt ?? null,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

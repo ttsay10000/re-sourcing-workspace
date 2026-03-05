@@ -41,5 +41,7 @@ export { InquiryEmailRepo } from "./repos/InquiryEmailRepo.js";
 export type { InquiryEmailRepoOptions, InsertInquiryEmailParams } from "./repos/InquiryEmailRepo.js";
 export { InquiryDocumentRepo } from "./repos/InquiryDocumentRepo.js";
 export type { InquiryDocumentRepoOptions, InsertInquiryDocumentParams } from "./repos/InquiryDocumentRepo.js";
+export { InquirySendRepo } from "./repos/InquirySendRepo.js";
+export type { InquirySendRepoOptions } from "./repos/InquirySendRepo.js";
 export { PropertyUploadedDocumentRepo } from "./repos/PropertyUploadedDocumentRepo.js";
 export type { PropertyUploadedDocumentRepoOptions, InsertPropertyUploadedDocumentParams } from "./repos/PropertyUploadedDocumentRepo.js";

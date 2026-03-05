@@ -121,6 +121,31 @@ function fullAddress(row: ListingRow): string {
   return [row.address, row.city, row.state, row.zip].filter(Boolean).join(", ") || "—";
 }
 
+/** Normalize for DOS lookup: trim and collapse runs of whitespace so trailing spaces/weird syntax don't break matching. */
+function normalizeBusinessNameForSearch(name: string | null | undefined): string {
+  if (!name || typeof name !== "string") return "";
+  return name.trim().replace(/\s+/g, " ").trim();
+}
+
+/** True if the name looks like a corporation, LLC, limited partnership, or similar business entity. */
+function isBusinessEntityName(name: string | null | undefined): boolean {
+  const s = normalizeBusinessNameForSearch(name);
+  if (!s) return false;
+  const businessPattern = /\b(LLC|L\.?L\.?C\.?|Inc\.?|Incorporated|Corp\.?|Corporation|L\.?P\.?|Limited\s+Partnership|Ltd\.?|Co\.?|Company|P\.?C\.?|PLLC|P\.?L\.?L\.?C\.?)\s*$/i;
+  return businessPattern.test(s);
+}
+
+/** NY DOS entity result from API (when owner is a business entity). */
+interface NyDosEntityResult {
+  filingDate: string | null;
+  dosProcessName: string | null;
+  dosProcessAddress: string | null;
+  ceoName: string | null;
+  ceoAddress: string | null;
+  registeredAgentName: string | null;
+  registeredAgentAddress: string | null;
+}
+
 function CollapsibleSection({
   id,
   title,
@@ -177,10 +202,17 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
   const [uploadedDocuments, setUploadedDocuments] = useState<Array<{ id: string; filename: string; category: string; source?: string | null; createdAt: string }> | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [deletingDocId, setDeletingDocId] = useState<string | null>(null);
   const [inquiryEmailModalOpen, setInquiryEmailModalOpen] = useState(false);
   const [inquiryDraft, setInquiryDraft] = useState<{ to: string; subject: string; body: string }>({ to: "", subject: "", body: "" });
   const [inquirySending, setInquirySending] = useState(false);
   const [inquirySendError, setInquirySendError] = useState<string | null>(null);
+  const [inquirySendSuccess, setInquirySendSuccess] = useState<string | null>(null);
+  const [lastInquirySentAt, setLastInquirySentAt] = useState<string | null>(null);
+  const [sendAnotherConfirm, setSendAnotherConfirm] = useState(false);
+  const [dosEntityLoading, setDosEntityLoading] = useState(false);
+  const [dosEntity, setDosEntity] = useState<NyDosEntityResult | "n/a" | null>(null);
+  const [dosEntityQueryName, setDosEntityQueryName] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -201,8 +233,13 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
     fetch(`${API_BASE}/api/properties/${property.id}`)
       .then((r) => r.json())
       .then((data) => {
-        if (!cancelled && !data?.error && data?.details != null) setDetailsFromApi(data.details as Record<string, unknown>);
-        else if (!cancelled) setDetailsFromApi(null);
+        if (!cancelled && !data?.error) {
+          if (data?.details != null) setDetailsFromApi(data.details as Record<string, unknown>);
+          else setDetailsFromApi(null);
+          setLastInquirySentAt(data?.lastInquirySentAt ?? null);
+        } else if (!cancelled) {
+          setDetailsFromApi(null);
+        }
       })
       .catch(() => { if (!cancelled) setDetailsFromApi(null); });
     return () => { cancelled = true; };
@@ -234,6 +271,44 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
       .catch(() => { if (!cancelled) setUploadedDocuments([]); });
     return () => { cancelled = true; };
   }, [property.id, openSections.rentalOm]);
+
+  // When owner section has a business-like name (from owner module or permit data), fetch NY DOS entity details
+  useEffect(() => {
+    const d = (detailsFromApi != null && typeof detailsFromApi === "object" ? detailsFromApi : property.details) as Record<string, unknown> | null | undefined;
+    const enrichment = d?.enrichment as Record<string, unknown> | undefined;
+    const ps = enrichment?.permits_summary as Record<string, unknown> | undefined;
+    const modName = d?.ownerModuleName ?? d?.owner_module_name;
+    const modBiz = d?.ownerModuleBusiness ?? d?.owner_module_business;
+    const permName = ps?.owner_name;
+    const permBiz = ps?.owner_business_name;
+    const candidates = [
+      modBiz != null ? normalizeBusinessNameForSearch(String(modBiz)) : "",
+      permBiz != null ? normalizeBusinessNameForSearch(String(permBiz)) : "",
+      modName != null ? normalizeBusinessNameForSearch(String(modName)) : "",
+      permName != null ? normalizeBusinessNameForSearch(String(permName)) : "",
+    ].filter(Boolean);
+    const businessName = candidates.find((c) => isBusinessEntityName(c)) ?? null;
+
+    if (!businessName) {
+      setDosEntityQueryName(null);
+      setDosEntity("n/a");
+      return;
+    }
+    if (businessName === dosEntityQueryName) return; // already fetched or loading for this name
+    setDosEntityQueryName(businessName);
+    setDosEntity(null);
+    setDosEntityLoading(true);
+    let cancelled = false;
+    fetch(`${API_BASE}/api/properties/ny-dos-entity?name=${encodeURIComponent(businessName)}`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (cancelled) return;
+        setDosEntity(data?.entity ?? "n/a");
+      })
+      .catch(() => { if (!cancelled) setDosEntity("n/a"); })
+      .finally(() => { if (!cancelled) setDosEntityLoading(false); });
+    return () => { cancelled = true; };
+  }, [detailsFromApi, property.details, property.id, dosEntityQueryName]);
 
   const toggle = (key: string) => setOpenSections((p) => ({ ...p, [key]: !p[key] }));
 
@@ -654,7 +729,7 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
         </div>
       </CollapsibleSection>
 
-      {/* 3. Owner information: Owner module (Phase 1 / PLUTO) + Permit module (permits_summary) */}
+      {/* 3. Owner information: Owner module (Phase 1 / PLUTO) + Permit module (permits_summary) + NY DOS entity when business-like */}
       <CollapsibleSection id="owner" title="Owner information" open={!!openSections.owner} onToggle={() => toggle("owner")}>
         <div style={{ fontSize: "0.875rem" }}>
           <div style={{ marginBottom: "0.75rem" }}>
@@ -662,10 +737,52 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
             <div><strong>Name:</strong> {ownerModuleName != null && String(ownerModuleName).trim() !== "" ? String(ownerModuleName).trim() : "—"}</div>
             <div><strong>Business:</strong> {ownerModuleBusiness != null && String(ownerModuleBusiness).trim() !== "" ? String(ownerModuleBusiness).trim() : "—"}</div>
           </div>
-          <div>
+          <div style={{ marginBottom: "0.75rem" }}>
             <strong style={{ display: "block", marginBottom: "0.25rem" }}>Permit module: name, business</strong>
             <div><strong>Name:</strong> {ps?.owner_name != null && String(ps.owner_name).trim() !== "" ? String(ps.owner_name).trim() : "—"}</div>
             <div><strong>Business:</strong> {ps?.owner_business_name != null && String(ps.owner_business_name).trim() !== "" ? String(ps.owner_business_name).trim() : "—"}</div>
+          </div>
+          {/* NY DOS entity details when owner name looks like LLC, Corp, etc. */}
+          <div style={{ marginTop: "0.75rem", paddingTop: "0.75rem", borderTop: "1px solid #e5e5e5" }}>
+            <strong style={{ display: "block", marginBottom: "0.35rem" }}>NY DOS entity details</strong>
+            {!dosEntityQueryName && dosEntity === "n/a" && (
+              <p style={{ margin: 0, color: "#737373" }}>N/A — Owner name does not appear to be a corporation, LLC, or similar entity.</p>
+            )}
+            {dosEntityQueryName && dosEntityLoading && (
+              <p style={{ margin: 0, color: "#737373" }}>Loading…</p>
+            )}
+            {dosEntityQueryName && !dosEntityLoading && dosEntity === "n/a" && (
+              <p style={{ margin: 0, color: "#737373" }}>No matching entity found in NY DOS for &quot;{dosEntityQueryName}&quot;.</p>
+            )}
+            {dosEntityQueryName && !dosEntityLoading && dosEntity !== null && dosEntity !== "n/a" && (
+              <ul style={{ margin: "0.25rem 0 0", paddingLeft: "1.25rem" }}>
+                <li><strong>Filing date:</strong> {dosEntity.filingDate ?? "N/A"}</li>
+                <li>
+                  <strong>DOS process:</strong> {dosEntity.dosProcessName ?? "N/A"}
+                  {dosEntity.dosProcessAddress && (
+                    <ul style={{ margin: "0.15rem 0 0", paddingLeft: "1rem" }}>
+                      <li>{dosEntity.dosProcessAddress}</li>
+                    </ul>
+                  )}
+                </li>
+                <li>
+                  <strong>CEO:</strong> {dosEntity.ceoName ?? "N/A"}
+                  {dosEntity.ceoAddress && (
+                    <ul style={{ margin: "0.15rem 0 0", paddingLeft: "1rem" }}>
+                      <li>{dosEntity.ceoAddress}</li>
+                    </ul>
+                  )}
+                </li>
+                <li>
+                  <strong>Registered agent:</strong> {dosEntity.registeredAgentName ?? "N/A"}
+                  {dosEntity.registeredAgentAddress && (
+                    <ul style={{ margin: "0.15rem 0 0", paddingLeft: "1rem" }}>
+                      <li>{dosEntity.registeredAgentAddress}</li>
+                    </ul>
+                  )}
+                </li>
+              </ul>
+            )}
           </div>
         </div>
       </CollapsibleSection>
@@ -676,6 +793,16 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
           {/* Request info by email — always first */}
           <div style={{ marginBottom: "0.75rem" }}>
             <strong style={{ display: "block", marginBottom: "0.35rem", fontSize: "0.9rem", color: "#1a1a1a" }}>Request info by email</strong>
+            {lastInquirySentAt && (
+              <p style={{ margin: "0 0 0.5rem", fontSize: "0.8rem", color: "#166534", fontWeight: 500 }}>
+                Last inquiry sent: {formatDateOnly(lastInquirySentAt) ?? lastInquirySentAt}
+              </p>
+            )}
+            {inquirySendSuccess && (
+              <p style={{ margin: "0 0 0.5rem", padding: "0.4rem 0.6rem", backgroundColor: "#dcfce7", border: "1px solid #22c55e", borderRadius: "6px", fontSize: "0.875rem", color: "#166534" }}>
+                {inquirySendSuccess}
+              </p>
+            )}
             <button
               type="button"
               onClick={() => {
@@ -689,13 +816,11 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
                   : "[Broker Name]";
                 const body = `Hi ${brokerFirstName},
 
-My name is Tyler Tsay and I'm reaching out on behalf of a client regarding the property at ${addressLine} currently on the market. We are evaluating the opportunity and would appreciate the opportunity to review the offering materials.
+My name is Tyler Tsay, and I'm reaching out on behalf of a client regarding the property at ${addressLine} currently on the market. We are evaluating the building and would appreciate the opportunity to review further.
 
-Would you be able to share the offering memorandum, current rent roll, and any available financials (T12, operating expenses, etc.)? It would also be helpful to confirm the current cap rate guidance, tenancy details, and any notes on recent capital improvements or lease rollover.
+Would you be able to share the OM, current rent roll, expenses, and/or any available financials?
 
-Happy to execute an NDA if required.
-
-Thanks in advance — looking forward to taking a look.
+Thanks in advance - looking forward to taking a look.
 
 Best,
 Tyler Tsay
@@ -703,11 +828,12 @@ Tyler Tsay
 tyler@stayhaus.co`;
                 setInquiryDraft({ to: firstPrimary?.email ?? "", subject, body });
                 setInquirySendError(null);
+                setSendAnotherConfirm(false);
                 setInquiryEmailModalOpen(true);
               }}
               style={{ padding: "0.35rem 0.6rem", backgroundColor: "#f0f0f0", border: "1px solid #ccc", borderRadius: "4px", fontSize: "0.8rem", color: "#333", cursor: "pointer" }}
             >
-              Request info / OM by email &amp; track reply
+              {lastInquirySentAt ? "Send another inquiry" : "Request info / OM by email & track reply"}
             </button>
             <p style={{ margin: "0.25rem 0 0", color: "#737373", fontSize: "0.75rem" }}>
               Review the draft and click Send to email the broker. Use the subject line so replies are matched to this property. Replies and attachments appear in <strong>Documents (from inquiry replies)</strong> below after the daily process-inbox cron runs.
@@ -717,6 +843,11 @@ tyler@stayhaus.co`;
             <div style={{ position: "fixed", inset: 0, zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", backgroundColor: "rgba(0,0,0,0.4)" }} onClick={() => setInquiryEmailModalOpen(false)}>
               <div style={{ backgroundColor: "#fff", borderRadius: "8px", padding: "1.25rem", maxWidth: "520px", width: "100%", maxHeight: "90vh", overflow: "auto", boxShadow: "0 4px 20px rgba(0,0,0,0.15)" }} onClick={(e) => e.stopPropagation()}>
                 <p style={{ margin: "0 0 0.75rem", fontWeight: 600 }}>Request OM / rent roll from broker</p>
+                {lastInquirySentAt && (
+                  <p style={{ margin: "0 0 0.75rem", padding: "0.5rem 0.6rem", backgroundColor: "#fef3c7", border: "1px solid #f59e0b", borderRadius: "6px", fontSize: "0.8rem", color: "#92400e" }}>
+                    An inquiry was already sent on {formatDateOnly(lastInquirySentAt) ?? lastInquirySentAt}. Sending again may result in duplicate emails to the broker.
+                  </p>
+                )}
                 <p style={{ margin: "0 0 1rem", fontSize: "0.875rem", color: "#555" }}>
                   Review the draft below and edit if needed (e.g. add your phone and email in the signature). Click <strong>Send email</strong> to send from your connected Gmail. Keep the subject line so replies can be matched to this property.
                 </p>
@@ -757,11 +888,23 @@ tyler@stayhaus.co`;
                     style={{ width: "100%", padding: "0.4rem", fontSize: "0.875rem", border: "1px solid #ccc", borderRadius: "4px", resize: "vertical" }}
                   />
                 </div>
+                {lastInquirySentAt && (
+                  <div style={{ marginBottom: "1rem" }}>
+                    <label style={{ display: "flex", alignItems: "center", gap: "0.35rem", fontSize: "0.875rem", cursor: "pointer" }}>
+                      <input
+                        type="checkbox"
+                        checked={sendAnotherConfirm}
+                        onChange={(e) => setSendAnotherConfirm(e.target.checked)}
+                      />
+                      Send another inquiry anyway (I understand this may duplicate emails)
+                    </label>
+                  </div>
+                )}
                 <div style={{ display: "flex", gap: "0.5rem", justifyContent: "flex-end" }}>
                   <button type="button" onClick={() => { setInquiryEmailModalOpen(false); setInquirySendError(null); }} style={{ padding: "0.4rem 0.75rem", border: "1px solid #ccc", borderRadius: "4px", background: "#fff", cursor: "pointer" }}>Cancel</button>
                   <button
                     type="button"
-                    disabled={inquirySending || !inquiryDraft.to.trim()}
+                    disabled={inquirySending || !inquiryDraft.to.trim() || (lastInquirySentAt && !sendAnotherConfirm)}
                     onClick={async () => {
                       setInquirySendError(null);
                       setInquirySending(true);
@@ -776,7 +919,10 @@ tyler@stayhaus.co`;
                           const msg = typeof data?.details === "string" ? data.details : typeof data?.error === "string" ? data.error : "Failed to send";
                           throw new Error(msg);
                         }
+                        setLastInquirySentAt(data.sentAt ?? null);
+                        setInquirySendSuccess("Email sent successfully.");
                         setInquiryEmailModalOpen(false);
+                        setTimeout(() => setInquirySendSuccess(null), 4000);
                       } catch (e) {
                         setInquirySendError(e instanceof Error ? e.message : "Failed to send email");
                       } finally {
@@ -822,15 +968,15 @@ tyler@stayhaus.co`;
                         )}
                       </div>
                       {/* Unit info: bold unit name + 2 columns of bullets (no Status) */}
-                      <div style={{ flex: 1, display: "flex", flexDirection: "column", padding: "0.5rem 0.75rem", justifyContent: "center", gap: "0.35rem" }}>
-                        <strong style={{ fontSize: "0.95rem", color: "#1a1a1a", marginBottom: "0.2rem" }}>{row.unit ?? "—"}</strong>
-                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 1.5rem", fontSize: "0.85rem" }}>
-                          <ul style={{ margin: 0, paddingLeft: "1.1rem", listStyle: "disc" }}>
+                      <div style={{ flex: 1, display: "flex", flexDirection: "column", padding: "0.5rem 0.75rem", justifyContent: "center", gap: "0.35rem", minWidth: 0 }}>
+                        <strong style={{ fontSize: "0.95rem", color: "#1a1a1a", marginBottom: "0.2rem" }}>Unit #{row.unit ?? String(i + 1)}</strong>
+                        <div style={{ display: "flex", flexDirection: "row", flexWrap: "nowrap", gap: "2rem", fontSize: "0.85rem" }}>
+                          <ul style={{ margin: 0, paddingLeft: "1.1rem", listStyle: "disc", flexShrink: 0 }}>
                             <li style={bulletStyle}>Sq ft: {row.sqft != null && row.sqft > 0 ? String(row.sqft) : "—"}</li>
                             <li style={bulletStyle}>Beds: {row.beds != null ? String(row.beds) : "—"}</li>
                             <li style={bulletStyle}>Baths: {row.baths != null ? String(row.baths) : "—"}</li>
                           </ul>
-                          <ul style={{ margin: 0, paddingLeft: "1.1rem", listStyle: "disc" }}>
+                          <ul style={{ margin: 0, paddingLeft: "1.1rem", listStyle: "disc", flexShrink: 0 }}>
                             <li style={bulletStyle}>Rent (latest): {row.rentalPrice != null ? formatPrice(row.rentalPrice) : "—"}</li>
                             <li style={bulletStyle}>Last listed: {row.listedDate ? formatDateOnly(row.listedDate) : "—"}</li>
                             <li style={bulletStyle}>Last rented: {row.lastRentedDate ? formatDateOnly(row.lastRentedDate) : "—"}</li>
@@ -953,17 +1099,48 @@ tyler@stayhaus.co`;
             ) : uploadedDocuments.length > 0 ? (
               <ul style={{ margin: 0, paddingLeft: "1.25rem", fontSize: "0.8rem" }}>
                 {uploadedDocuments.map((doc) => (
-                  <li key={doc.id} style={{ marginBottom: "0.5rem" }}>
-                    <span style={{ color: "#555", marginRight: "0.35rem" }}>[{doc.category}]</span>
-                    <a
-                      href={`${API_BASE}/api/properties/${property.id}/uploaded-documents/${doc.id}/file`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      style={{ color: "#0066cc" }}
+                  <li key={doc.id} style={{ marginBottom: "0.5rem", display: "flex", alignItems: "flex-start", gap: "0.5rem", flexWrap: "wrap" }}>
+                    <span>
+                      <span style={{ color: "#555", marginRight: "0.35rem" }}>[{doc.category}]</span>
+                      <a
+                        href={`${API_BASE}/api/properties/${property.id}/uploaded-documents/${doc.id}/file`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{ color: "#0066cc" }}
+                      >
+                        {doc.filename}
+                      </a>
+                      {(doc.source || doc.createdAt) && (
+                        <div style={{ fontSize: "0.75rem", color: "#555", marginTop: "0.1rem" }}>
+                          {doc.source && <span>Source: {doc.source}</span>}
+                          {doc.source && doc.createdAt && " · "}
+                          {doc.createdAt && <span>Uploaded: {formatDateOnly(doc.createdAt) ?? doc.createdAt}</span>}
+                        </div>
+                      )}
+                    </span>
+                    <button
+                      type="button"
+                      disabled={deletingDocId === doc.id}
+                      onClick={async () => {
+                        if (deletingDocId) return;
+                        setDeletingDocId(doc.id);
+                        try {
+                          const res = await fetch(`${API_BASE}/api/properties/${property.id}/uploaded-documents/${doc.id}`, { method: "DELETE" });
+                          if (!res.ok) {
+                            const data = await res.json().catch(() => ({}));
+                            throw new Error(typeof data?.details === "string" ? data.details : data?.error ?? "Failed to remove");
+                          }
+                          setUploadedDocuments((prev) => (prev ? prev.filter((d) => d.id !== doc.id) : []));
+                        } catch (e) {
+                          setUploadError(e instanceof Error ? e.message : "Failed to remove document");
+                        } finally {
+                          setDeletingDocId(null);
+                        }
+                      }}
+                      style={{ flexShrink: 0, padding: "0.2rem 0.4rem", fontSize: "0.75rem", border: "1px solid #dc2626", borderRadius: "4px", background: "#fff", color: "#dc2626", cursor: deletingDocId === doc.id ? "wait" : "pointer" }}
                     >
-                      {doc.filename}
-                    </a>
-                    {doc.source && <div style={{ fontSize: "0.75rem", color: "#555", marginTop: "0.1rem" }}>Source: {doc.source}</div>}
+                      {deletingDocId === doc.id ? "Removing…" : "Remove"}
+                    </button>
                   </li>
                 ))}
               </ul>

@@ -3,7 +3,7 @@
  * Path: {base}/{propertyId}/{docId}/{filename}
  */
 
-import { mkdir, writeFile } from "fs/promises";
+import { mkdir, writeFile, unlink } from "fs/promises";
 import { join } from "path";
 
 const DEFAULT_BASE = "uploads/property-docs";
@@ -30,4 +30,10 @@ export async function saveUploadedDocument(
 export function resolveUploadedDocFilePath(filePath: string): string {
   if (filePath.startsWith("/")) return filePath;
   return join(process.cwd(), filePath);
+}
+
+/** Remove the file from disk if it exists. Ignores errors (e.g. file already missing). */
+export async function deleteUploadedDocumentFile(filePath: string): Promise<void> {
+  const absolutePath = resolveUploadedDocFilePath(filePath);
+  await unlink(absolutePath).catch(() => {});
 }
