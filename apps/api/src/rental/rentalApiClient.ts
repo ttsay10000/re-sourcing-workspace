@@ -107,9 +107,9 @@ function parseStr(v: unknown): string | null {
 /**
  * Map API response to RentalUnitRow.
  * Per Get Rental By URL docs (streeteasy.gitbook.io): price = current ask when status "open", last rent when status "sold"/closed.
- * We map status so UI can show "latest rental price it rented for" for closed listings.
+ * streeteasyUrl: the Streeteasy listing URL used to fetch this unit (for linking Unit #N → listing).
  */
-export function mapApiResponseToRentalUnitRow(raw: Record<string, unknown>, unit: string): RentalUnitRow {
+export function mapApiResponseToRentalUnitRow(raw: Record<string, unknown>, unit: string, streeteasyUrl?: string | null): RentalUnitRow {
   const price = raw.price ?? raw.rent ?? raw.list_price ?? raw.rental_price ?? raw.monthly_rent;
   const beds = raw.bedrooms ?? raw.beds ?? raw.bed;
   const baths = raw.bathrooms ?? raw.baths ?? raw.bath;
@@ -150,6 +150,7 @@ export function mapApiResponseToRentalUnitRow(raw: Record<string, unknown>, unit
     baths: parseNum(baths),
     images: images && images.length > 0 ? images : null,
     source: "rapidapi",
+    streeteasyUrl: streeteasyUrl && String(streeteasyUrl).trim() ? String(streeteasyUrl).trim() : null,
   };
 }
 
@@ -202,7 +203,7 @@ export async function fetchRentalsForAddress(canonicalAddress: string): Promise<
       const buildingUrl = buildStreeteasyBuildingUrl(slug, unitSuffix);
       const raw = await fetchRentalByUrl(buildingUrl);
       if (raw && Object.keys(raw).length > 0) {
-        const row = mapApiResponseToRentalUnitRow(raw, unitSuffix);
+        const row = mapApiResponseToRentalUnitRow(raw, unitSuffix, buildingUrl);
         const key = `${row.unit}-${row.rentalPrice ?? 0}`;
         if (!seenKeys.has(key)) {
           seenKeys.add(key);
@@ -221,7 +222,7 @@ export async function fetchRentalsForAddress(canonicalAddress: string): Promise<
       const addrStr = String(raw.address ?? "");
       const sharp = addrStr.match(/#\s*(\S+)/);
       const unitLabel = sharp ? sharp[1] ?? list.id : list.id;
-      const row = mapApiResponseToRentalUnitRow(raw, unitLabel);
+      const row = mapApiResponseToRentalUnitRow(raw, unitLabel, list.url);
       const key = `${row.unit}-${row.rentalPrice ?? 0}`;
       if (!seenKeys.has(key)) {
         seenKeys.add(key);

@@ -340,8 +340,8 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
   const ownerModuleBusiness = d?.ownerModuleBusiness ?? d?.owner_module_business ?? null;
   const omFurnishedPricing = d?.omFurnishedPricing ?? d?.om_furnished_pricing;
   const rentalFinancials = d?.rentalFinancials as {
-    rentalUnits?: Array<{ unit?: string | null; rentalPrice?: number | null; status?: string | null; sqft?: number | null; listedDate?: string | null; lastRentedDate?: string | null; beds?: number | null; baths?: number | null; images?: string[] | null; source?: string | null }> | null;
-    fromLlm?: { noi?: number | null; capRate?: number | null; rentalEstimates?: string | null; rentalNumbersPerUnit?: Array<{ unit?: string; rent?: number; note?: string }> | null; otherFinancials?: string | null; dataGapSuggestions?: string | null } | null;
+    rentalUnits?: Array<{ unit?: string | null; rentalPrice?: number | null; status?: string | null; sqft?: number | null; listedDate?: string | null; lastRentedDate?: string | null; beds?: number | null; baths?: number | null; images?: string[] | null; source?: string | null; streeteasyUrl?: string | null }> | null;
+    fromLlm?: { noi?: number | null; capRate?: number | null; grossRentTotal?: number | null; totalExpenses?: number | null; expensesTable?: Array<{ lineItem: string; amount: number }> | null; rentalEstimates?: string | null; rentalNumbersPerUnit?: Array<{ unit?: string; monthlyRent?: number; annualRent?: number; rent?: number; note?: string }> | null; otherFinancials?: string | null; dataGapSuggestions?: string | null } | null;
     source?: string | null;
     lastUpdatedAt?: string | null;
   } | null | undefined;
@@ -997,7 +997,7 @@ tyler@stayhaus.co`;
           )}
           {rentalUnits.length > 0 && (
             <div style={{ borderTop: "1px solid #e0e0e0", paddingTop: "0.6rem", marginTop: "0.6rem", marginBottom: "0.5rem" }}>
-              <strong style={{ display: "block", marginBottom: "0.35rem", fontSize: "0.95rem", color: "#1a1a1a" }}>Rental units (from API / inquiry)</strong>
+              <strong style={{ display: "block", marginBottom: "0.35rem", fontSize: "0.95rem", color: "#1a1a1a" }}>Rental units (from Streeteasy / inquiry)</strong>
               <div style={{ display: "flex", flexDirection: "column", gap: "0.6rem", maxHeight: "520px", overflowY: "auto" }}>
                 {rentalUnits.map((row, i) => {
                   const unitImages = (row.images ?? []).filter((u): u is string => typeof u === "string");
@@ -1008,7 +1008,12 @@ tyler@stayhaus.co`;
                     <div key={i} style={{ border: "1px solid #e5e5e5", borderRadius: "8px", overflow: "hidden", backgroundColor: "#fafafa", display: "flex", flexDirection: "row", alignItems: "stretch", minHeight: "120px", boxShadow: "0 1px 3px rgba(0,0,0,0.06)" }}>
                       {/* Unit info: bold unit name + 2 columns of bullets (no Status) */}
                       <div style={{ flex: 1, display: "flex", flexDirection: "column", padding: "0.5rem 0.75rem", justifyContent: "center", gap: "0.35rem", minWidth: 0, borderRight: "1px solid #eee" }}>
-                        <strong style={{ fontSize: "0.95rem", color: "#1a1a1a", marginBottom: "0.2rem" }}>Unit #{row.unit ?? String(i + 1)}</strong>
+                        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.2rem", flexWrap: "wrap" }}>
+                          <strong style={{ fontSize: "0.95rem", color: "#1a1a1a" }}>Unit #{row.unit ?? String(i + 1)}</strong>
+                          {row.streeteasyUrl && (
+                            <a href={row.streeteasyUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: "0.8rem", color: "#0066cc" }}>View on Streeteasy</a>
+                          )}
+                        </div>
                         <div style={{ display: "flex", flexDirection: "row", flexWrap: "nowrap", gap: "2rem", fontSize: "0.85rem" }}>
                           <ul style={{ margin: 0, paddingLeft: "1.1rem", listStyle: "disc", flexShrink: 0 }}>
                             <li style={bulletStyle}>Sq ft: {row.sqft != null && row.sqft > 0 ? String(row.sqft) : "—"}</li>
@@ -1047,13 +1052,61 @@ tyler@stayhaus.co`;
               </div>
             </div>
           )}
-          {fromLlm && (fromLlm.noi != null || fromLlm.capRate != null || fromLlm.rentalEstimates || fromLlm.otherFinancials || fromLlm.dataGapSuggestions) && (
+          {fromLlm && (fromLlm.noi != null || fromLlm.capRate != null || fromLlm.grossRentTotal != null || fromLlm.totalExpenses != null || (fromLlm.expensesTable && fromLlm.expensesTable.length > 0) || (fromLlm.rentalNumbersPerUnit && fromLlm.rentalNumbersPerUnit.length > 0) || fromLlm.rentalEstimates || fromLlm.otherFinancials || fromLlm.dataGapSuggestions) && (
             <div style={{ borderTop: "1px solid #e0e0e0", paddingTop: "0.6rem", marginTop: "0.6rem", marginBottom: "0.5rem" }}>
-              <strong style={{ display: "block", marginBottom: "0.35rem", fontSize: "0.9rem", color: "#1a1a1a" }}>Financials (from listing / LLM)</strong>
+              <strong style={{ display: "block", marginBottom: "0.35rem", fontSize: "0.9rem", color: "#1a1a1a" }}>Financials (from OM / listing / LLM)</strong>
               <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem 1.25rem", marginBottom: "0.5rem" }}>
                 {fromLlm.noi != null && <span style={{ fontWeight: 500 }}>NOI: {formatPrice(fromLlm.noi)}</span>}
                 {fromLlm.capRate != null && <span style={{ fontWeight: 500 }}>Cap rate: {fromLlm.capRate}%</span>}
+                {fromLlm.grossRentTotal != null && <span style={{ fontWeight: 500 }}>Gross rent: {formatPrice(fromLlm.grossRentTotal)}/yr</span>}
+                {fromLlm.totalExpenses != null && <span style={{ fontWeight: 500 }}>Total expenses: {formatPrice(fromLlm.totalExpenses)}/yr</span>}
               </div>
+              {fromLlm.expensesTable && fromLlm.expensesTable.length > 0 && (
+                <div style={{ marginBottom: "0.6rem" }}>
+                  <span style={{ display: "block", fontSize: "0.75rem", color: "#666", marginBottom: "0.25rem" }}>Expenses</span>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" }}>
+                    <thead>
+                      <tr style={{ borderBottom: "1px solid #e0e0e0" }}>
+                        <th style={{ textAlign: "left", padding: "0.3rem 0.5rem", fontWeight: 600 }}>Line item</th>
+                        <th style={{ textAlign: "right", padding: "0.3rem 0.5rem", fontWeight: 600 }}>Amount</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {fromLlm.expensesTable.map((row, idx) => (
+                        <tr key={idx} style={{ borderBottom: "1px solid #eee" }}>
+                          <td style={{ padding: "0.3rem 0.5rem" }}>{row.lineItem}</td>
+                          <td style={{ textAlign: "right", padding: "0.3rem 0.5rem" }}>{formatPrice(row.amount)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              {fromLlm.rentalNumbersPerUnit && fromLlm.rentalNumbersPerUnit.length > 0 && (
+                <div style={{ marginBottom: "0.6rem" }}>
+                  <span style={{ display: "block", fontSize: "0.75rem", color: "#666", marginBottom: "0.25rem" }}>Rent roll (from OM / brochure)</span>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" }}>
+                    <thead>
+                      <tr style={{ borderBottom: "1px solid #e0e0e0" }}>
+                        <th style={{ textAlign: "left", padding: "0.3rem 0.5rem", fontWeight: 600 }}>Unit</th>
+                        <th style={{ textAlign: "right", padding: "0.3rem 0.5rem", fontWeight: 600 }}>Monthly</th>
+                        <th style={{ textAlign: "right", padding: "0.3rem 0.5rem", fontWeight: 600 }}>Annual</th>
+                        {fromLlm.rentalNumbersPerUnit.some((u) => u.note) && <th style={{ textAlign: "left", padding: "0.3rem 0.5rem", fontWeight: 600 }}>Note</th>}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {fromLlm.rentalNumbersPerUnit.map((u, idx) => (
+                        <tr key={idx} style={{ borderBottom: "1px solid #eee" }}>
+                          <td style={{ padding: "0.3rem 0.5rem" }}>{u.unit ?? "—"}</td>
+                          <td style={{ textAlign: "right", padding: "0.3rem 0.5rem" }}>{u.monthlyRent != null ? formatPrice(u.monthlyRent) : u.rent != null ? formatPrice(u.rent) : "—"}</td>
+                          <td style={{ textAlign: "right", padding: "0.3rem 0.5rem" }}>{u.annualRent != null ? formatPrice(u.annualRent) : (u.monthlyRent ?? u.rent) != null ? formatPrice((u.monthlyRent ?? u.rent!) * 12) : "—"}</td>
+                          {fromLlm.rentalNumbersPerUnit!.some((x) => x.note) && <td style={{ padding: "0.3rem 0.5rem", fontSize: "0.8rem", color: "#555" }}>{u.note ?? "—"}</td>}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
               {fromLlm.rentalEstimates && (
                 <div style={{ marginBottom: "0.4rem" }}>
                   <span style={{ display: "block", fontSize: "0.75rem", color: "#666", marginBottom: "0.15rem" }}>Rental estimates</span>

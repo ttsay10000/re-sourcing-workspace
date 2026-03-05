@@ -88,15 +88,39 @@ export interface RentalUnitRow {
   /** Photo URLs for this unit (from API images array). */
   images?: string[] | null;
   source?: "rapidapi" | "inquiry" | null;
+  /** Streeteasy listing URL for this unit (from RapidAPI); used to link "Unit #2" → listing. */
+  streeteasyUrl?: string | null;
   [key: string]: unknown;
 }
 
-/** LLM-extracted financials (from listing description or email/attachments); merged without overwriting API data. */
+/** One expense line item from OM/brochure (for table display). */
+export interface ExpenseLineItem {
+  lineItem: string;
+  amount: number;
+}
+
+/** One unit row from OM/brochure rent roll (for table display). */
+export interface RentalNumberPerUnit {
+  unit?: string;
+  /** Monthly rent. */
+  monthlyRent?: number;
+  /** Annual rent. */
+  annualRent?: number;
+  /** Legacy: single rent value (treated as monthly if no annualRent). */
+  rent?: number;
+  note?: string;
+}
+
+/** LLM-extracted financials (from listing description, OM, or email/attachments); merged without overwriting API data. */
 export interface RentalFinancialsFromLlm {
   noi?: number | null;
   capRate?: number | null;
+  grossRentTotal?: number | null;
+  totalExpenses?: number | null;
+  /** Full expense breakdown from OM (taxes, insurance, etc.) for table display. */
+  expensesTable?: ExpenseLineItem[] | null;
   rentalEstimates?: string | null;
-  rentalNumbersPerUnit?: Array<{ unit?: string; rent?: number; note?: string }> | null;
+  rentalNumbersPerUnit?: RentalNumberPerUnit[] | null;
   otherFinancials?: string | null;
   /** LLM suggestion when sale listing vs rental units suggest missing data (e.g. sale has 4 beds, rental data sums to 2). */
   dataGapSuggestions?: string | null;
