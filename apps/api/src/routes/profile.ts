@@ -1,0 +1,198 @@
+/**
+ * User profile API (single global user): GET/PUT profile, assumption defaults, saved deals.
+ */
+
+import { Router, type Request, type Response } from "express";
+import { getPool, UserProfileRepo, SavedDealsRepo, PropertyRepo, MatchRepo, ListingRepo, DealSignalsRepo } from "@re-sourcing/db";
+
+const router = Router();
+
+async function getDefaultUserId(): Promise<string> {
+  const pool = getPool();
+  const profileRepo = new UserProfileRepo({ pool });
+  return profileRepo.ensureDefault();
+}
+
+/** GET /api/profile - get the single user profile (creates default row if none). */
+router.get("/profile", async (_req: Request, res: Response) => {
+  try {
+    const pool = getPool();
+    const repo = new UserProfileRepo({ pool });
+    await repo.ensureDefault();
+    const profile = await repo.getDefault();
+    if (!profile) {
+      res.status(503).json({ error: "Profile not available." });
+      return;
+    }
+    res.json(profile);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[profile get]", err);
+    res.status(503).json({ error: "Failed to load profile.", details: message });
+  }
+});
+
+/** PUT /api/profile - update name, email, organization, and/or assumption defaults. */
+router.put("/profile", async (req: Request, res: Response) => {
+  try {
+    const pool = getPool();
+    const repo = new UserProfileRepo({ pool });
+    const id = await repo.ensureDefault();
+    const body = req.body ?? {};
+    const params: {
+      name?: string | null;
+      email?: string | null;
+      organization?: string | null;
+      defaultLtv?: number | null;
+      defaultInterestRate?: number | null;
+      defaultAmortization?: number | null;
+      defaultExitCap?: number | null;
+      defaultRentUplift?: number | null;
+      defaultExpenseIncrease?: number | null;
+      defaultManagementFee?: number | null;
+    } = {};
+    if (typeof body.name === "string") params.name = body.name.trim() || null;
+    if (typeof body.email === "string") params.email = body.email.trim() || null;
+    if (typeof body.organization === "string") params.organization = body.organization.trim() || null;
+    if (typeof body.defaultLtv === "number" && !Number.isNaN(body.defaultLtv)) params.defaultLtv = body.defaultLtv;
+    if (typeof body.defaultInterestRate === "number" && !Number.isNaN(body.defaultInterestRate)) params.defaultInterestRate = body.defaultInterestRate;
+    if (typeof body.defaultAmortization === "number" && !Number.isNaN(body.defaultAmortization)) params.defaultAmortization = body.defaultAmortization;
+    if (typeof body.defaultExitCap === "number" && !Number.isNaN(body.defaultExitCap)) params.defaultExitCap = body.defaultExitCap;
+    if (typeof body.defaultRentUplift === "number" && !Number.isNaN(body.defaultRentUplift)) params.defaultRentUplift = body.defaultRentUplift;
+    if (typeof body.defaultExpenseIncrease === "number" && !Number.isNaN(body.defaultExpenseIncrease)) params.defaultExpenseIncrease = body.defaultExpenseIncrease;
+    if (typeof body.defaultManagementFee === "number" && !Number.isNaN(body.defaultManagementFee)) params.defaultManagementFee = body.defaultManagementFee;
+    const updated = await repo.update(id, params);
+    res.json(updated);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[profile put]", err);
+    res.status(503).json({ error: "Failed to update profile.", details: message });
+  }
+});
+
+/** POST /api/profile/generate-standard-leverage - set default LTV 65%, interest 6.5%, amortization 30. */
+router.post("/profile/generate-standard-leverage", async (_req: Request, res: Response) => {
+  try {
+    const pool = getPool();
+    const repo = new UserProfileRepo({ pool });
+    const id = await repo.ensureDefault();
+    const updated = await repo.update(id, {
+      defaultLtv: 65,
+      defaultInterestRate: 6.5,
+      defaultAmortization: 30,
+    });
+    res.json(updated);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[profile generate-standard-leverage]", err);
+    res.status(503).json({ error: "Failed to set standard leverage.", details: message });
+  }
+});
+
+/** GET /api/profile/saved-deals - list saved deals for the default user (with property summary, address, price, units, deal_score). */
+router.get("/profile/saved-deals", async (_req: Request, res: Response) => {
+  try {
+    const userId = await getDefaultUserId();
+    const pool = getPool();
+    const savedRepo = new SavedDealsRepo({ pool });
+    const propertyRepo = new PropertyRepo({ pool });
+    const matchRepo = new MatchRepo({ pool });
+    const listingRepo = new ListingRepo({ pool });
+    const signalsRepo = new DealSignalsRepo({ pool });
+    const saved = await savedRepo.listByUserId(userId);
+    const results: Array<{
+      savedDeal: { id: string; propertyId: string; dealStatus: string; createdAt: string };
+      address: string;
+      price: number | null;
+      units: number | null;
+      dealScore: number | null;
+    }> = [];
+    for (const row of saved) {
+      const property = await propertyRepo.byId(row.propertyId);
+      const address = property?.canonicalAddress ?? "";
+      const { matches } = await matchRepo.list({ propertyId: row.propertyId, limit: 1 });
+      const listing = matches[0] ? await listingRepo.byId(matches[0].listingId) : null;
+      const price = listing?.price ?? null;
+      const details = (property?.details ?? {}) as Record<string, unknown>;
+      const rentalUnits = (details.rentalFinancials as Record<string, unknown> | undefined)?.rentalUnits as unknown[] | undefined;
+      const fromLlm = (details.rentalFinancials as Record<string, unknown> | undefined)?.fromLlm as Record<string, unknown> | undefined;
+      const omUnits = fromLlm?.rentalNumbersPerUnit as unknown[] | undefined;
+      const units = (rentalUnits?.length ?? omUnits?.length ?? null) ?? null;
+      const latestSignal = await signalsRepo.getLatestByPropertyId(row.propertyId);
+      results.push({
+        savedDeal: { id: row.id, propertyId: row.propertyId, dealStatus: row.dealStatus, createdAt: row.createdAt },
+        address,
+        price,
+        units,
+        dealScore: latestSignal?.dealScore ?? null,
+      });
+    }
+    res.json({ savedDeals: results });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[profile saved-deals list]", err);
+    res.status(503).json({ error: "Failed to list saved deals.", details: message });
+  }
+});
+
+/** POST /api/profile/saved-deals - save a deal (add to saved_deals for default user). Body: { propertyId }. */
+router.post("/profile/saved-deals", async (req: Request, res: Response) => {
+  try {
+    const userId = await getDefaultUserId();
+    const propertyId = typeof req.body?.propertyId === "string" ? req.body.propertyId.trim() : null;
+    if (!propertyId) {
+      res.status(400).json({ error: "propertyId required." });
+      return;
+    }
+    const pool = getPool();
+    const savedRepo = new SavedDealsRepo({ pool });
+    const saved = await savedRepo.save(userId, propertyId, "saved");
+    res.status(201).json(saved);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[profile saved-deals save]", err);
+    res.status(503).json({ error: "Failed to save deal.", details: message });
+  }
+});
+
+/** DELETE /api/profile/saved-deals/:propertyId - unsave a deal. */
+router.delete("/profile/saved-deals/:propertyId", async (req: Request, res: Response) => {
+  try {
+    const userId = await getDefaultUserId();
+    const { propertyId } = req.params;
+    if (!propertyId) {
+      res.status(400).json({ error: "propertyId required." });
+      return;
+    }
+    const pool = getPool();
+    const savedRepo = new SavedDealsRepo({ pool });
+    const removed = await savedRepo.unsave(userId, propertyId);
+    res.json({ ok: true, removed });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[profile saved-deals unsave]", err);
+    res.status(503).json({ error: "Failed to unsave deal.", details: message });
+  }
+});
+
+/** GET /api/profile/saved-deals/check?propertyIds=id1,id2 - return which property IDs are saved (for star state). */
+router.get("/profile/saved-deals/check", async (req: Request, res: Response) => {
+  try {
+    const userId = await getDefaultUserId();
+    const raw = req.query.propertyIds;
+    const propertyIds = typeof raw === "string" ? raw.split(",").map((s) => s.trim()).filter(Boolean) : [];
+    const pool = getPool();
+    const savedRepo = new SavedDealsRepo({ pool });
+    const saved = await savedRepo.listByUserId(userId);
+    const savedSet = new Set(saved.map((s) => s.propertyId));
+    const result: Record<string, boolean> = {};
+    for (const id of propertyIds) result[id] = savedSet.has(id);
+    res.json({ saved: result });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[profile saved-deals check]", err);
+    res.status(503).json({ error: "Failed to check saved deals.", details: message });
+  }
+});
+
+export default router;

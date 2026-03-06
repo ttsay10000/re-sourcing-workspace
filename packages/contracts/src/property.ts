@@ -108,6 +108,8 @@ export interface RentalNumberPerUnit {
   annualRent?: number;
   /** Legacy: single rent value (treated as monthly if no annualRent). */
   rent?: number;
+  /** Bedrooms (for rent roll comparison: total_bedrooms must match RapidAPI). */
+  beds?: number;
   note?: string;
 }
 
@@ -243,4 +245,67 @@ export interface Property {
  */
 export interface PropertyInput {
   canonicalAddress: string;
+}
+
+/** Source for rows in the unified documents table (generated files only; broker/user stay in existing tables). */
+export type DocumentSource = "generated_dossier" | "generated_excel";
+
+/** Generated document row (dossier, Excel) — appears in same documents folder as OM on property card. */
+export interface Document {
+  id: string;
+  propertyId: string;
+  fileName: string;
+  fileType?: string | null;
+  source: DocumentSource;
+  uploadedBy?: string | null;
+  storagePath: string;
+  createdAt: string;
+}
+
+/** Deal status (per user per property). */
+export type DealStatus = "new" | "interesting" | "saved" | "dossier_generated" | "rejected";
+
+/** User profile (single global user) and assumption defaults. */
+export interface UserProfile {
+  id: string;
+  name?: string | null;
+  email?: string | null;
+  organization?: string | null;
+  defaultLtv?: number | null;
+  defaultInterestRate?: number | null;
+  defaultAmortization?: number | null;
+  defaultExitCap?: number | null;
+  defaultRentUplift?: number | null;
+  defaultExpenseIncrease?: number | null;
+  defaultManagementFee?: number | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Saved deal (user + property + status). */
+export interface SavedDeal {
+  id: string;
+  userId: string;
+  propertyId: string;
+  dealStatus: DealStatus;
+  createdAt: string;
+}
+
+/** Deal signals row (one per property per generation). */
+export interface DealSignalRow {
+  id: string;
+  propertyId: string;
+  pricePerUnit?: number | null;
+  pricePsf?: number | null;
+  assetCapRate?: number | null;
+  adjustedCapRate?: number | null;
+  yieldSpread?: number | null;
+  rentUpside?: number | null;
+  rentPsfRatio?: number | null;
+  expenseRatio?: number | null;
+  liquidityScore?: number | null;
+  riskScore?: number | null;
+  priceMomentum?: number | null;
+  dealScore?: number | null;
+  generatedAt: string;
 }

@@ -79,6 +79,16 @@ npm run db:migrate
    - **re-sourcing-permits-refresh** (weekly): DOB permit enrichment. Set `SOCRATA_APP_TOKEN` on the cron for better rate limits.
    - **re-sourcing-process-inbox** (daily): Process Gmail for broker replies and save to properties. Set `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`, `GMAIL_REFRESH_TOKEN`, `OPENAI_API_KEY` (and optionally `DATABASE_URL` if not auto-linked). See `docs/RENDER_AND_ENV_CHECKLIST.md` for full setup.
 
+## Deal Dossier & Deal Scoring
+
+Profile, saved deals, deal score, and generate-dossier (Excel + dossier + optional email) require:
+
+- **Database**: `DATABASE_URL` set and migrations applied (`npm run db:migrate`).
+- **Profile**: In the app, set Profile (name, email) and Assumptions (or use "Generate standard leverage").
+- **Email (optional)**: Set `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`, `GMAIL_REFRESH_TOKEN` on the API to email the generated dossier to the profile email.
+
+Full checklist (env vars, Gmail OAuth, file storage, data prerequisites): **`docs/SETUP-DEAL-DOSSIER.md`**.
+
 ## One source of truth
 
 - **DB tables/migrations**: `packages/db/migrations/` (placeholder in this skeleton).

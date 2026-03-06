@@ -242,3 +242,74 @@ export async function sendMessage(to: string, subject: string, body: string): Pr
   });
   return { id: res.data.id! };
 }
+
+/** Attachment for sendMessageWithAttachments: filename and buffer. */
+export interface EmailAttachment {
+  filename: string;
+  buffer: Buffer;
+  mimeType?: string;
+}
+
+const CRLF = "\r\n";
+
+/**
+ * Encode a string for use in a MIME header (e.g. filename with special chars).
+ */
+function mimeEncodeFilename(name: string): string {
+  const safe = name.replace(/[\r\n"]/g, "_");
+  if (/[^\x20-\x7E]/.test(safe)) return `UTF-8''${encodeURIComponent(name)}`;
+  return `"${safe}"`;
+}
+
+/**
+ * Send an email with attachments via Gmail API (multipart/mixed MIME).
+ * Body is plain text; each attachment has Content-Disposition: attachment.
+ * Gmail limit: 25 MB total; keep attachments small.
+ */
+export async function sendMessageWithAttachments(
+  to: string,
+  subject: string,
+  body: string,
+  attachments: EmailAttachment[]
+): Promise<{ id: string }> {
+  const gmail = getGmail();
+  const boundary = `boundary_${Date.now()}_${Math.random().toString(36).slice(2, 12)}`;
+  const parts: string[] = [];
+
+  parts.push(`To: ${to}`);
+  parts.push(`Subject: ${subject.replace(/\r?\n/g, " ")}`);
+  parts.push("MIME-Version: 1.0");
+  parts.push(`Content-Type: multipart/mixed; boundary="${boundary}"`);
+  parts.push("");
+
+  parts.push(`--${boundary}`);
+  parts.push("Content-Type: text/plain; charset=utf-8");
+  parts.push("Content-Transfer-Encoding: 7bit");
+  parts.push("");
+  parts.push(body.replace(/\r\n/g, "\n").replace(/\n/g, CRLF));
+  parts.push("");
+
+  for (const att of attachments) {
+    const mimeType = att.mimeType ?? "application/octet-stream";
+    const base64 = att.buffer.toString("base64");
+    const lines = base64.match(/.{1,76}/g) ?? [base64];
+    parts.push(`--${boundary}`);
+    parts.push(`Content-Disposition: attachment; filename=${mimeEncodeFilename(att.filename)}`);
+    parts.push(`Content-Type: ${mimeType}; name=${mimeEncodeFilename(att.filename)}`);
+    parts.push("Content-Transfer-Encoding: base64");
+    parts.push("");
+    parts.push(lines.join(CRLF));
+    parts.push("");
+  }
+
+  parts.push(`--${boundary}--`);
+
+  const raw = parts.join(CRLF);
+  const encoded = Buffer.from(raw, "utf-8").toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+
+  const res = await gmail.users.messages.send({
+    userId: "me",
+    requestBody: { raw: encoded },
+  });
+  return { id: res.data.id! };
+}

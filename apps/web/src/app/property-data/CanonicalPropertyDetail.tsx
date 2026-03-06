@@ -4,6 +4,9 @@ import React, { useEffect, useState } from "react";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
 
+/** OM status shown in canonical properties table. */
+export type OmStatus = "OM received" | "OM pending" | "Not received";
+
 export interface CanonicalProperty {
   id: string;
   canonicalAddress: string;
@@ -16,6 +19,10 @@ export interface CanonicalProperty {
     listedAt: string | null;
     city: string | null;
   } | null;
+  /** OM status: from inquiry/uploaded docs and inquiry sends. */
+  omStatus?: OmStatus | null;
+  /** Deal score 0–100 from latest deal_signals (when listed with includeListingSummary). */
+  dealScore?: number | null;
 }
 
 /** Listing row shape returned by GET /api/properties/:id/listing */
@@ -199,8 +206,8 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
   const [unifiedLoading, setUnifiedLoading] = useState(false);
   const [unifiedFetched, setUnifiedFetched] = useState(false);
   const [ownerFromPermits, setOwnerFromPermits] = useState<{ owner_name?: string; owner_business_name?: string } | null>(null);
-  const [inquiryDocuments, setInquiryDocuments] = useState<Array<{ id: string; filename: string; source?: string | null; createdAt: string }> | null>(null);
-  const [uploadedDocuments, setUploadedDocuments] = useState<Array<{ id: string; filename: string; category: string; source?: string | null; createdAt: string }> | null>(null);
+  type UnifiedDoc = { id: string; fileName: string; fileType?: string | null; source: string; sourceType: "inquiry" | "uploaded" | "generated"; createdAt: string };
+  const [unifiedDocuments, setUnifiedDocuments] = useState<UnifiedDoc[] | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [deletingDocId, setDeletingDocId] = useState<string | null>(null);
@@ -210,10 +217,18 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
   const [inquirySendError, setInquirySendError] = useState<string | null>(null);
   const [inquirySendSuccess, setInquirySendSuccess] = useState<string | null>(null);
   const [lastInquirySentAt, setLastInquirySentAt] = useState<string | null>(null);
+  const [rentRollComparison, setRentRollComparison] = useState<{ comparable: boolean; totalUnitsRapid: number; totalUnitsOm: number; totalBedsRapid: number; totalBedsOm: number } | null>(null);
+  const [dealScore, setDealScore] = useState<number | null>(null);
+  const [dealSignals, setDealSignals] = useState<Record<string, unknown> | null>(null);
+  const [computeScoreLoading, setComputeScoreLoading] = useState(false);
   const [sendAnotherConfirm, setSendAnotherConfirm] = useState(false);
   const [dosEntityLoading, setDosEntityLoading] = useState(false);
   const [dosEntity, setDosEntity] = useState<NyDosEntityResult | "n/a" | null>(null);
   const [dosEntityQueryName, setDosEntityQueryName] = useState<string | null>(null);
+
+  const hasOmDocument = Boolean(
+    unifiedDocuments?.some((d) => d.sourceType === "inquiry" || d.source === "OM")
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -238,11 +253,17 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
           if (data?.details != null) setDetailsFromApi(data.details as Record<string, unknown>);
           else setDetailsFromApi(null);
           setLastInquirySentAt(data?.lastInquirySentAt ?? null);
+          setRentRollComparison(data?.rentRollComparison ?? null);
+          setDealScore(data?.dealScore ?? null);
+          setDealSignals(data?.dealSignals ?? null);
         } else if (!cancelled) {
           setDetailsFromApi(null);
+          setRentRollComparison(null);
+          setDealScore(null);
+          setDealSignals(null);
         }
       })
-      .catch(() => { if (!cancelled) setDetailsFromApi(null); });
+      .catch(() => { if (!cancelled) { setDetailsFromApi(null); setRentRollComparison(null); setDealScore(null); setDealSignals(null); } });
     return () => { cancelled = true; };
   }, [property.id]);
 
@@ -256,20 +277,13 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
   useEffect(() => {
     if (!openSections.rentalOm) return;
     let cancelled = false;
-    setInquiryDocuments(null);
-    setUploadedDocuments(null);
+    setUnifiedDocuments(null);
     fetch(`${API_BASE}/api/properties/${property.id}/documents`)
       .then((r) => r.json())
       .then((data) => {
-        if (!cancelled && data?.documents) setInquiryDocuments(data.documents);
+        if (!cancelled && data?.documents) setUnifiedDocuments(data.documents);
       })
-      .catch(() => { if (!cancelled) setInquiryDocuments([]); });
-    fetch(`${API_BASE}/api/properties/${property.id}/uploaded-documents`)
-      .then((r) => r.json())
-      .then((data) => {
-        if (!cancelled && data?.documents) setUploadedDocuments(data.documents);
-      })
-      .catch(() => { if (!cancelled) setUploadedDocuments([]); });
+      .catch(() => { if (!cancelled) setUnifiedDocuments([]); });
     return () => { cancelled = true; };
   }, [property.id, openSections.rentalOm]);
 
@@ -341,7 +355,7 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
   const omFurnishedPricing = d?.omFurnishedPricing ?? d?.om_furnished_pricing;
   const rentalFinancials = d?.rentalFinancials as {
     rentalUnits?: Array<{ unit?: string | null; rentalPrice?: number | null; status?: string | null; sqft?: number | null; listedDate?: string | null; lastRentedDate?: string | null; beds?: number | null; baths?: number | null; images?: string[] | null; source?: string | null; streeteasyUrl?: string | null }> | null;
-    fromLlm?: { noi?: number | null; capRate?: number | null; grossRentTotal?: number | null; totalExpenses?: number | null; expensesTable?: Array<{ lineItem: string; amount: number }> | null; rentalEstimates?: string | null; rentalNumbersPerUnit?: Array<{ unit?: string; monthlyRent?: number; annualRent?: number; rent?: number; note?: string }> | null; otherFinancials?: string | null; dataGapSuggestions?: string | null } | null;
+    fromLlm?: { noi?: number | null; capRate?: number | null; grossRentTotal?: number | null; totalExpenses?: number | null; expensesTable?: Array<{ lineItem: string; amount: number }> | null; rentalEstimates?: string | null; rentalNumbersPerUnit?: Array<{ unit?: string; monthlyRent?: number; annualRent?: number; rent?: number; beds?: number; note?: string }> | null; otherFinancials?: string | null; dataGapSuggestions?: string | null } | null;
     source?: string | null;
     lastUpdatedAt?: string | null;
   } | null | undefined;
@@ -492,6 +506,53 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
           </div>
         </div>
       )}
+
+      {/* Deal score — from deal_signals; compute on demand */}
+      <div className="linked-listing-bar" style={{ marginTop: "0.5rem", marginBottom: "0.5rem" }}>
+        <div className="linked-listing-bar-inner" style={{ flexWrap: "wrap", gap: "0.5rem" }}>
+          <div className="property-metric">
+            <div className="property-metric-label">Deal score</div>
+            <div className="property-metric-value">{dealScore != null ? `${dealScore}/100` : "—"}</div>
+          </div>
+          <div className="property-metric" style={{ alignItems: "center" }}>
+            <button
+              type="button"
+              disabled={computeScoreLoading}
+              onClick={async () => {
+                setComputeScoreLoading(true);
+                try {
+                  const r = await fetch(`${API_BASE}/api/properties/${property.id}/compute-score`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({}),
+                  });
+                  const data = await r.json().catch(() => ({}));
+                  if (!r.ok) return;
+                  if (data?.dealScore != null) setDealScore(data.dealScore);
+                  if (data?.dealSignals != null) setDealSignals(data.dealSignals);
+                } finally {
+                  setComputeScoreLoading(false);
+                }
+              }}
+              style={{ padding: "0.25rem 0.5rem", cursor: computeScoreLoading ? "wait" : "pointer" }}
+            >
+              {computeScoreLoading ? "Computing…" : "Compute score"}
+            </button>
+          </div>
+          {dealSignals && typeof dealSignals.assetCapRate === "number" && (
+            <div className="property-metric">
+              <div className="property-metric-label">Asset cap</div>
+              <div className="property-metric-value">{Number(dealSignals.assetCapRate).toFixed(2)}%</div>
+            </div>
+          )}
+          {dealSignals && typeof dealSignals.adjustedCapRate === "number" && (
+            <div className="property-metric">
+              <div className="property-metric-label">Adj. cap</div>
+              <div className="property-metric-value">{Number(dealSignals.adjustedCapRate).toFixed(2)}%</div>
+            </div>
+          )}
+        </div>
+      </div>
 
       {/* 1. Photos / floor plans — side by side, same layout as raw listings */}
       <CollapsibleSection
@@ -861,8 +922,14 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
                 {inquirySendSuccess}
               </p>
             )}
+            {hasOmDocument && (
+              <p style={{ margin: "0 0 0.5rem", padding: "0.4rem 0.6rem", backgroundColor: "#f0f9ff", border: "1px solid #0ea5e9", borderRadius: "6px", fontSize: "0.8rem", color: "#0369a1" }}>
+                OM already received or uploaded. See <strong>Documents (from inquiry replies)</strong> and <strong>Uploaded documents</strong> below.
+              </p>
+            )}
             <button
               type="button"
+              disabled={hasOmDocument}
               onClick={() => {
                 const addressLine = property.canonicalAddress.split(",")[0]?.trim() || property.canonicalAddress;
                 const subject = "Inquiry about " + addressLine;
@@ -889,7 +956,15 @@ tyler@stayhaus.co`;
                 setSendAnotherConfirm(false);
                 setInquiryEmailModalOpen(true);
               }}
-              style={{ padding: "0.35rem 0.6rem", backgroundColor: "#f0f0f0", border: "1px solid #ccc", borderRadius: "4px", fontSize: "0.8rem", color: "#333", cursor: "pointer" }}
+              style={{
+                padding: "0.35rem 0.6rem",
+                backgroundColor: hasOmDocument ? "#e5e7eb" : "#f0f0f0",
+                border: "1px solid #ccc",
+                borderRadius: "4px",
+                fontSize: "0.8rem",
+                color: hasOmDocument ? "#9ca3af" : "#333",
+                cursor: hasOmDocument ? "not-allowed" : "pointer",
+              }}
             >
               {lastInquirySentAt ? "Send another inquiry" : "Request info / OM by email & track reply"}
             </button>
@@ -1052,59 +1127,71 @@ tyler@stayhaus.co`;
               </div>
             </div>
           )}
+          {rentRollComparison && !rentRollComparison.comparable && rentalUnits.length > 0 && fromLlm?.rentalNumbersPerUnit && fromLlm.rentalNumbersPerUnit.length > 0 && (
+            <p style={{ margin: "0.5rem 0", padding: "0.35rem 0.5rem", backgroundColor: "#fef3c7", borderRadius: "4px", fontSize: "0.8rem", color: "#92400e" }}>
+              <strong>RapidAPI rent roll likely incomplete — comparison disabled.</strong> Only compare when total units and total bedrooms match (RapidAPI: {rentRollComparison.totalUnitsRapid} units, {rentRollComparison.totalBedsRapid} beds; OM: {rentRollComparison.totalUnitsOm} units, {rentRollComparison.totalBedsOm} beds).
+            </p>
+          )}
           {fromLlm && (fromLlm.noi != null || fromLlm.capRate != null || fromLlm.grossRentTotal != null || fromLlm.totalExpenses != null || (fromLlm.expensesTable && fromLlm.expensesTable.length > 0) || (fromLlm.rentalNumbersPerUnit && fromLlm.rentalNumbersPerUnit.length > 0) || fromLlm.rentalEstimates || fromLlm.otherFinancials || fromLlm.dataGapSuggestions) && (
             <div style={{ borderTop: "1px solid #e0e0e0", paddingTop: "0.6rem", marginTop: "0.6rem", marginBottom: "0.5rem" }}>
-              <strong style={{ display: "block", marginBottom: "0.35rem", fontSize: "0.9rem", color: "#1a1a1a" }}>Financials (from OM / listing / LLM)</strong>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem 1.25rem", marginBottom: "0.5rem" }}>
+              <strong style={{ display: "block", marginBottom: "0.2rem", fontSize: "0.9rem", color: "#1a1a1a" }}>Financials (from OM / listing / LLM)</strong>
+              <p style={{ margin: "0 0 0.5rem", fontSize: "0.75rem", color: "#64748b" }}>From OM or listing text (LLM extraction). Per-unit Streeteasy/RapidAPI numbers are in &quot;Rental units&quot; above.</p>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem 1.25rem", marginBottom: "0.6rem" }}>
                 {fromLlm.noi != null && <span style={{ fontWeight: 500 }}>NOI: {formatPrice(fromLlm.noi)}</span>}
                 {fromLlm.capRate != null && <span style={{ fontWeight: 500 }}>Cap rate: {fromLlm.capRate}%</span>}
                 {fromLlm.grossRentTotal != null && <span style={{ fontWeight: 500 }}>Gross rent: {formatPrice(fromLlm.grossRentTotal)}/yr</span>}
                 {fromLlm.totalExpenses != null && <span style={{ fontWeight: 500 }}>Total expenses: {formatPrice(fromLlm.totalExpenses)}/yr</span>}
               </div>
               {fromLlm.expensesTable && fromLlm.expensesTable.length > 0 && (
-                <div style={{ marginBottom: "0.6rem" }}>
-                  <span style={{ display: "block", fontSize: "0.75rem", color: "#666", marginBottom: "0.25rem" }}>Expenses</span>
-                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" }}>
-                    <thead>
-                      <tr style={{ borderBottom: "1px solid #e0e0e0" }}>
-                        <th style={{ textAlign: "left", padding: "0.3rem 0.5rem", fontWeight: 600 }}>Line item</th>
-                        <th style={{ textAlign: "right", padding: "0.3rem 0.5rem", fontWeight: 600 }}>Amount</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {fromLlm.expensesTable.map((row, idx) => (
-                        <tr key={idx} style={{ borderBottom: "1px solid #eee" }}>
-                          <td style={{ padding: "0.3rem 0.5rem" }}>{row.lineItem}</td>
-                          <td style={{ textAlign: "right", padding: "0.3rem 0.5rem" }}>{formatPrice(row.amount)}</td>
+                <div style={{ marginBottom: "0.75rem" }}>
+                  <span style={{ display: "block", fontSize: "0.75rem", color: "#666", marginBottom: "0.35rem" }}>Expenses</span>
+                  <div style={{ overflowX: "auto", border: "1px solid #e2e8f0", borderRadius: "8px" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem", tableLayout: "fixed" }}>
+                      <thead>
+                        <tr style={{ borderBottom: "2px solid #e2e8f0", backgroundColor: "#f8fafc" }}>
+                          <th style={{ textAlign: "center", padding: "0.5rem 0.75rem", fontWeight: 600 }}>Line item</th>
+                          <th style={{ textAlign: "center", padding: "0.5rem 0.75rem", fontWeight: 600 }}>Amount</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody>
+                        {fromLlm.expensesTable.map((row, idx) => (
+                          <tr key={idx} style={{ borderBottom: "1px solid #eee" }}>
+                            <td style={{ textAlign: "center", padding: "0.5rem 0.75rem" }}>{row.lineItem}</td>
+                            <td style={{ textAlign: "center", padding: "0.5rem 0.75rem" }}>{formatPrice(row.amount)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
               )}
               {fromLlm.rentalNumbersPerUnit && fromLlm.rentalNumbersPerUnit.length > 0 && (
                 <div style={{ marginBottom: "0.6rem" }}>
-                  <span style={{ display: "block", fontSize: "0.75rem", color: "#666", marginBottom: "0.25rem" }}>Rent roll (from OM / brochure)</span>
-                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" }}>
-                    <thead>
-                      <tr style={{ borderBottom: "1px solid #e0e0e0" }}>
-                        <th style={{ textAlign: "left", padding: "0.3rem 0.5rem", fontWeight: 600 }}>Unit</th>
-                        <th style={{ textAlign: "right", padding: "0.3rem 0.5rem", fontWeight: 600 }}>Monthly</th>
-                        <th style={{ textAlign: "right", padding: "0.3rem 0.5rem", fontWeight: 600 }}>Annual</th>
-                        {fromLlm.rentalNumbersPerUnit.some((u) => u.note) && <th style={{ textAlign: "left", padding: "0.3rem 0.5rem", fontWeight: 600 }}>Note</th>}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {fromLlm.rentalNumbersPerUnit.map((u, idx) => (
-                        <tr key={idx} style={{ borderBottom: "1px solid #eee" }}>
-                          <td style={{ padding: "0.3rem 0.5rem" }}>{u.unit ?? "—"}</td>
-                          <td style={{ textAlign: "right", padding: "0.3rem 0.5rem" }}>{u.monthlyRent != null ? formatPrice(u.monthlyRent) : u.rent != null ? formatPrice(u.rent) : "—"}</td>
-                          <td style={{ textAlign: "right", padding: "0.3rem 0.5rem" }}>{u.annualRent != null ? formatPrice(u.annualRent) : (u.monthlyRent ?? u.rent) != null ? formatPrice((u.monthlyRent ?? u.rent!) * 12) : "—"}</td>
-                          {fromLlm.rentalNumbersPerUnit!.some((x) => x.note) && <td style={{ padding: "0.3rem 0.5rem", fontSize: "0.8rem", color: "#555" }}>{u.note ?? "—"}</td>}
+                  <span style={{ display: "block", fontSize: "0.75rem", color: "#666", marginBottom: "0.35rem" }}>Rent roll (from OM / brochure)</span>
+                  <div style={{ overflowX: "auto", border: "1px solid #e2e8f0", borderRadius: "8px" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem", tableLayout: "fixed" }}>
+                      <thead>
+                        <tr style={{ borderBottom: "2px solid #e2e8f0", backgroundColor: "#f8fafc" }}>
+                          <th style={{ textAlign: "center", padding: "0.5rem 0.75rem", fontWeight: 600, width: "20%" }}>Unit</th>
+                          <th style={{ textAlign: "center", padding: "0.5rem 0.75rem", fontWeight: 600, width: "22%" }}>Monthly</th>
+                          <th style={{ textAlign: "center", padding: "0.5rem 0.75rem", fontWeight: 600, width: "22%" }}>Annual</th>
+                          {fromLlm.rentalNumbersPerUnit.some((u) => u.beds != null) && <th style={{ textAlign: "center", padding: "0.5rem 0.75rem", fontWeight: 600, minWidth: "80px" }}>Beds</th>}
+                          {fromLlm.rentalNumbersPerUnit.some((u) => u.note) && <th style={{ textAlign: "center", padding: "0.5rem 0.75rem", fontWeight: 600, minWidth: "120px" }}>Note</th>}
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody>
+                        {fromLlm.rentalNumbersPerUnit.map((u, idx) => (
+                          <tr key={idx} style={{ borderBottom: "1px solid #eee" }}>
+                            <td style={{ textAlign: "center", padding: "0.5rem 0.75rem" }}>{u.unit ?? "—"}</td>
+                            <td style={{ textAlign: "center", padding: "0.5rem 0.75rem" }}>{u.monthlyRent != null ? formatPrice(u.monthlyRent) : u.rent != null ? formatPrice(u.rent) : "—"}</td>
+                            <td style={{ textAlign: "center", padding: "0.5rem 0.75rem" }}>{u.annualRent != null ? formatPrice(u.annualRent) : (u.monthlyRent ?? u.rent) != null ? formatPrice((u.monthlyRent ?? u.rent!) * 12) : "—"}</td>
+                            {fromLlm.rentalNumbersPerUnit!.some((x) => x.beds != null) && <td style={{ textAlign: "center", padding: "0.5rem 0.75rem", minWidth: "80px" }}>{u.beds != null ? String(u.beds) : "—"}</td>}
+                            {fromLlm.rentalNumbersPerUnit!.some((x) => x.note) && <td style={{ textAlign: "center", padding: "0.5rem 0.75rem", fontSize: "0.8rem", color: "#555", minWidth: "120px" }}>{(u.note ?? "").trim() || "—"}</td>}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
               )}
               {fromLlm.rentalEstimates && (
@@ -1127,28 +1214,55 @@ tyler@stayhaus.co`;
             </div>
           )}
           <div style={{ borderTop: "1px solid #e0e0e0", paddingTop: "0.6rem", marginTop: "0.6rem", marginBottom: "0.5rem" }}>
-            <strong style={{ display: "block", marginBottom: "0.2rem" }}>Documents (from inquiry replies)</strong>
-            <p style={{ margin: "0 0 0.35rem", fontSize: "0.75rem", color: "#666" }}>Replies and attachments from your inquiry emails are saved here by the daily <strong>process-inbox</strong> cron job.</p>
-            {inquiryDocuments === null ? (
+            <strong style={{ display: "block", marginBottom: "0.2rem" }}>Downloads</strong>
+            <p style={{ margin: "0 0 0.35rem", fontSize: "0.75rem", color: "#666" }}>Inquiry attachments, uploaded docs, and generated dossier/Excel.</p>
+            {unifiedDocuments === null ? (
               <p style={{ margin: 0, fontSize: "0.8rem", color: "#737373" }}>Loading…</p>
-            ) : inquiryDocuments.length > 0 ? (
+            ) : unifiedDocuments.length > 0 ? (
               <ul style={{ margin: 0, paddingLeft: "1.25rem", fontSize: "0.8rem" }}>
-                {inquiryDocuments.map((doc) => (
-                  <li key={doc.id} style={{ marginBottom: "0.5rem" }}>
-                    <a
-                      href={`${API_BASE}/api/properties/${property.id}/documents/${doc.id}/file`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      style={{ color: "#0066cc" }}
-                    >
-                      {doc.filename}
-                    </a>
-                    {doc.source && <div style={{ fontSize: "0.75rem", color: "#555", marginTop: "0.1rem" }}>Source: {doc.source}</div>}
+                {unifiedDocuments.map((doc) => (
+                  <li key={doc.id} style={{ marginBottom: "0.5rem", display: "flex", alignItems: "flex-start", gap: "0.5rem", flexWrap: "wrap" }}>
+                    <span>
+                      <a
+                        href={`${API_BASE}/api/properties/${property.id}/documents/${doc.id}/file`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{ color: "#0066cc" }}
+                      >
+                        {doc.fileName}
+                      </a>
+                      <div style={{ fontSize: "0.75rem", color: "#555", marginTop: "0.1rem" }}>{doc.source}</div>
+                    </span>
+                    {doc.sourceType === "uploaded" && (
+                      <button
+                        type="button"
+                        disabled={Boolean(deletingDocId === doc.id)}
+                        onClick={async () => {
+                          if (deletingDocId) return;
+                          setDeletingDocId(doc.id);
+                          try {
+                            const res = await fetch(`${API_BASE}/api/properties/${property.id}/uploaded-documents/${doc.id}`, { method: "DELETE" });
+                            if (!res.ok) {
+                              const data = await res.json().catch(() => ({}));
+                              throw new Error(typeof data?.details === "string" ? data.details : data?.error ?? "Failed to remove");
+                            }
+                            setUnifiedDocuments((prev) => (prev ? prev.filter((d) => d.id !== doc.id) : []));
+                          } catch (e) {
+                            setUploadError(e instanceof Error ? e.message : "Failed to remove document");
+                          } finally {
+                            setDeletingDocId(null);
+                          }
+                        }}
+                        style={{ flexShrink: 0, padding: "0.2rem 0.4rem", fontSize: "0.75rem", border: "1px solid #dc2626", borderRadius: "4px", background: "#fff", color: "#dc2626", cursor: deletingDocId === doc.id ? "wait" : "pointer" }}
+                      >
+                        {deletingDocId === doc.id ? "Removing…" : "Remove"}
+                      </button>
+                    )}
                   </li>
                 ))}
               </ul>
             ) : (
-              <p style={{ margin: 0, fontSize: "0.8rem", color: "#737373" }}>No documents yet. Send an inquiry using the button above; once brokers reply, the cron will attach them here.</p>
+              <p style={{ margin: 0, fontSize: "0.8rem", color: "#737373" }}>No documents yet. Send an inquiry, upload a file, or generate a dossier from Dossier assumptions.</p>
             )}
           </div>
           <div style={{ borderTop: "1px solid #e0e0e0", paddingTop: "0.6rem", marginTop: "0.6rem", marginBottom: "0.5rem" }}>
@@ -1178,7 +1292,7 @@ tyler@stayhaus.co`;
                   });
                   const data = await res.json().catch(() => ({}));
                   if (!res.ok) throw new Error(typeof data?.error === "string" ? data.error : data?.details ?? "Upload failed");
-                  setUploadedDocuments((prev) => (prev ? [{ id: data.document.id, filename: data.document.filename, category: data.document.category, source: data.document.source ?? null, createdAt: data.document.createdAt }, ...prev] : [{ id: data.document.id, filename: data.document.filename, category: data.document.category, source: data.document.source ?? null, createdAt: data.document.createdAt }]));
+                  setUnifiedDocuments((prev) => (prev ? [{ id: data.document.id, fileName: data.document.filename, fileType: data.document.contentType ?? null, source: data.document.category ?? "uploaded", sourceType: "uploaded", createdAt: data.document.createdAt }, ...prev] : [{ id: data.document.id, fileName: data.document.filename, fileType: data.document.contentType ?? null, source: data.document.category ?? "uploaded", sourceType: "uploaded", createdAt: data.document.createdAt }]));
                   form.reset();
                   fileInput.value = "";
                 } catch (err) {
@@ -1204,60 +1318,6 @@ tyler@stayhaus.co`;
               </button>
             </form>
             {uploadError && <p style={{ margin: "0.25rem 0 0", fontSize: "0.8rem", color: "#b91c1c" }}>{uploadError}</p>}
-            <strong style={{ display: "block", marginTop: "0.5rem", marginBottom: "0.25rem", fontSize: "0.85rem" }}>Uploaded documents</strong>
-            {uploadedDocuments === null ? (
-              <p style={{ margin: 0, fontSize: "0.8rem", color: "#737373" }}>Loading…</p>
-            ) : uploadedDocuments.length > 0 ? (
-              <ul style={{ margin: 0, paddingLeft: "1.25rem", fontSize: "0.8rem" }}>
-                {uploadedDocuments.map((doc) => (
-                  <li key={doc.id} style={{ marginBottom: "0.5rem", display: "flex", alignItems: "flex-start", gap: "0.5rem", flexWrap: "wrap" }}>
-                    <span>
-                      <span style={{ color: "#555", marginRight: "0.35rem" }}>[{doc.category}]</span>
-                      <a
-                        href={`${API_BASE}/api/properties/${property.id}/uploaded-documents/${doc.id}/file`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        style={{ color: "#0066cc" }}
-                      >
-                        {doc.filename}
-                      </a>
-                      {(doc.source || doc.createdAt) && (
-                        <div style={{ fontSize: "0.75rem", color: "#555", marginTop: "0.1rem" }}>
-                          {doc.source && <span>Source: {doc.source}</span>}
-                          {doc.source && doc.createdAt && " · "}
-                          {doc.createdAt && <span>Uploaded: {formatDateOnly(doc.createdAt) ?? doc.createdAt}</span>}
-                        </div>
-                      )}
-                    </span>
-                    <button
-                      type="button"
-                      disabled={Boolean(deletingDocId === doc.id)}
-                      onClick={async () => {
-                        if (deletingDocId) return;
-                        setDeletingDocId(doc.id);
-                        try {
-                          const res = await fetch(`${API_BASE}/api/properties/${property.id}/uploaded-documents/${doc.id}`, { method: "DELETE" });
-                          if (!res.ok) {
-                            const data = await res.json().catch(() => ({}));
-                            throw new Error(typeof data?.details === "string" ? data.details : data?.error ?? "Failed to remove");
-                          }
-                          setUploadedDocuments((prev) => (prev ? prev.filter((d) => d.id !== doc.id) : []));
-                        } catch (e) {
-                          setUploadError(e instanceof Error ? e.message : "Failed to remove document");
-                        } finally {
-                          setDeletingDocId(null);
-                        }
-                      }}
-                      style={{ flexShrink: 0, padding: "0.2rem 0.4rem", fontSize: "0.75rem", border: "1px solid #dc2626", borderRadius: "4px", background: "#fff", color: "#dc2626", cursor: deletingDocId === doc.id ? "wait" : "pointer" }}
-                    >
-                      {deletingDocId === doc.id ? "Removing…" : "Remove"}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p style={{ margin: 0, fontSize: "0.8rem", color: "#737373" }}>No uploaded documents yet.</p>
-            )}
           </div>
           {omFurnishedPricing != null && String(omFurnishedPricing).trim() ? (
             <p style={{ margin: 0 }}>{String(omFurnishedPricing)}</p>

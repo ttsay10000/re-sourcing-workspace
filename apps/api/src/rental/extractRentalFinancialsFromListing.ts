@@ -56,7 +56,7 @@ Return a JSON object with these keys (use null for missing):
 - grossRentTotal: number (total gross rental income per year if stated)
 - totalExpenses: number (total expenses per year if stated)
 - expensesTable: array of { "lineItem": string, "amount": number } for each expense line (e.g. Real Estate Taxes, Insurance, Utilities, Water, Maintenance, etc.). Use the exact line item names from the document.
-- rentalNumbersPerUnit: array of { "unit": string, "monthlyRent": number, "annualRent": number, "note": string (optional, e.g. "Rent Stabilized") } for each unit in the rent roll. Prefer both monthly and annual when available.
+- rentalNumbersPerUnit: array of { "unit": string, "monthlyRent": number, "annualRent": number, "beds": number (optional, bedrooms for this unit), "note": string (optional, e.g. "Rent Stabilized") } for each unit in the rent roll. Prefer both monthly and annual when available; include beds when the rent roll or document specifies bedroom count per unit.
 - rentalEstimates: string (short summary only if you need to capture something that doesn't fit in the tables)
 - otherFinancials: string (any other financial notes not in the tables)
 
@@ -73,7 +73,7 @@ Return a JSON object with these keys (use null for missing):
 - totalExpenses: number (total expenses if mentioned)
 - expensesTable: array of { "lineItem": string, "amount": number } for each expense line if a breakdown is given
 - rentalEstimates: string (any rental income or rent roll summary in text form)
-- rentalNumbersPerUnit: array of { "unit": string, "monthlyRent": number (optional), "annualRent": number (optional), "rent": number (optional), "note": string (optional) } if per-unit rents are mentioned
+- rentalNumbersPerUnit: array of { "unit": string, "monthlyRent": number (optional), "annualRent": number (optional), "rent": number (optional), "beds": number (optional), "note": string (optional) } if per-unit rents are mentioned
 - otherFinancials: string (taxes, expenses, other numbers that could be relevant)
 
 Only include keys where you found relevant data. Be concise. If nothing financial or rental-related is found, return {"otherFinancials": null}.
@@ -113,11 +113,13 @@ ${trimmed.slice(0, 15000)}`;
         const monthly = typeof u.monthlyRent === "number" ? u.monthlyRent : null;
         const annual = typeof u.annualRent === "number" ? u.annualRent : null;
         const rent = typeof u.rent === "number" ? u.rent : null;
+        const beds = typeof u.beds === "number" && !Number.isNaN(u.beds) ? u.beds : undefined;
         return {
           unit: typeof u.unit === "string" ? u.unit.trim() : undefined,
           monthlyRent: monthly ?? (rent != null ? rent : (annual != null ? annual / 12 : undefined)),
           annualRent: annual ?? (rent != null ? rent * 12 : (monthly != null ? monthly * 12 : undefined)),
           rent: rent ?? monthly ?? (annual != null ? annual / 12 : undefined),
+          beds,
           note: typeof u.note === "string" ? u.note.trim() || undefined : undefined,
         } as RentalNumberPerUnit;
       });

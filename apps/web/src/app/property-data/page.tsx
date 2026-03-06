@@ -121,6 +121,8 @@ function PropertyDataContent() {
   const [rerunningEnrichment, setRerunningEnrichment] = useState(false);
   const [runningRentalFlow, setRunningRentalFlow] = useState(false);
   const [expandedCanonicalId, setExpandedCanonicalId] = useState<string | null>(null);
+  const [savedPropertyIds, setSavedPropertyIds] = useState<Set<string>>(new Set());
+  const [savedDealsLoading, setSavedDealsLoading] = useState<Set<string>>(new Set());
   const [selectedListingIds, setSelectedListingIds] = useState<Set<string>>(new Set());
   const [enrichmentTimerSeconds, setEnrichmentTimerSeconds] = useState(0);
   const enrichmentTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -194,6 +196,22 @@ function PropertyDataContent() {
   useEffect(() => {
     if (activeTab === "canonical") fetchCanonicalProperties();
   }, [activeTab, fetchCanonicalProperties]);
+
+  useEffect(() => {
+    if (canonicalProperties.length === 0) return;
+    const ids = canonicalProperties.map((p) => p.id).join(",");
+    fetch(`${API_BASE}/api/profile/saved-deals/check?propertyIds=${encodeURIComponent(ids)}`)
+      .then((r) => r.json())
+      .then((data) => {
+        // #region agent log
+        const hasSaved = data && typeof data.saved === "object";
+        fetch("http://127.0.0.1:7590/ingest/742bd78a-5157-440b-b6aa-e9509cd8e861",{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":"fd8b77"},body:JSON.stringify({sessionId:"fd8b77",location:"property-data/page.tsx:saved-check",message:"Saved-deals check response",data:{hasSaved,keysCount:hasSaved?Object.keys(data.saved).length:0},timestamp:Date.now(),hypothesisId:"H2"})}).catch(()=>{});
+        // #endregion
+        if (hasSaved)
+          setSavedPropertyIds(new Set(Object.keys(data.saved).filter((id) => Boolean(data.saved[id]))));
+      })
+      .catch(() => {});
+  }, [canonicalProperties]);
 
   // Timer for LLM enrichment / loading: track elapsed time while raw listings are loading so user knows data may still be populating
   useEffect(() => {
@@ -719,16 +737,19 @@ function PropertyDataContent() {
                   <thead>
                     <tr>
                       <th className="property-data-table-expand-col" aria-label="Expand row" />
+                      <th style={{ width: "2rem" }} aria-label="Save deal" title="Save / Unsave deal" />
                       <th>Canonical address</th>
                       <th>Area</th>
                       <th>Price</th>
                       <th>Listed date</th>
+                      <th>OM status</th>
+                      <th>Score</th>
                     </tr>
                   </thead>
                   <tbody>
                     {filteredSortedCanonical.length === 0 ? (
                       <tr>
-                        <td colSpan={5} style={{ padding: "2rem", color: "#737373", textAlign: "center" }}>
+                        <td colSpan={8} style={{ padding: "2rem", color: "#737373", textAlign: "center" }}>
                           {canonicalProperties.length === 0
                             ? "No canonical properties yet. Add raw listings, then use \"Add to canonical properties\" from the Raw Listings tab."
                             : "No properties match the current filters."}
@@ -756,14 +777,52 @@ function PropertyDataContent() {
                                   <span className={`property-data-row-expand-chevron ${expandedCanonicalId === prop.id ? "property-data-row-expand-chevron--open" : ""}`}>▼</span>
                                 </button>
                               </td>
+                              <td style={{ textAlign: "center", verticalAlign: "middle" }}>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    if (savedDealsLoading.has(prop.id)) return;
+                                    const isSaved = savedPropertyIds.has(prop.id);
+                                    setSavedDealsLoading((prev) => new Set(prev).add(prop.id));
+                                    const url = `${API_BASE}/api/profile/saved-deals`;
+                                    (isSaved
+                                      ? fetch(`${url}/${encodeURIComponent(prop.id)}`, { method: "DELETE" })
+                                      : fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ propertyId: prop.id }) })
+                                    )
+                                      .then((r) => r.json().then((data) => ({ ok: r.ok, data })))
+                                      .then(({ ok }) => {
+                                        // #region agent log
+                                        fetch("http://127.0.0.1:7590/ingest/742bd78a-5157-440b-b6aa-e9509cd8e861",{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":"fd8b77"},body:JSON.stringify({sessionId:"fd8b77",location:"property-data/page.tsx:star-response",message:"Star save/unsave response",data:{isSaved,ok},timestamp:Date.now(),hypothesisId:"H1"})}).catch(()=>{});
+                                        // #endregion
+                                        if (!ok) return;
+                                        setSavedPropertyIds((prev) => {
+                                          const next = new Set(prev);
+                                          if (isSaved) next.delete(prop.id);
+                                          else next.add(prop.id);
+                                          return next;
+                                        });
+                                      })
+                                      .catch(() => {})
+                                      .finally(() => setSavedDealsLoading((prev) => { const n = new Set(prev); n.delete(prop.id); return n; }));
+                                  }}
+                                  title={savedPropertyIds.has(prop.id) ? "Unsave deal" : "Save deal"}
+                                  style={{ background: "none", border: "none", cursor: "pointer", fontSize: "1.25rem", lineHeight: 1 }}
+                                  aria-label={savedPropertyIds.has(prop.id) ? "Unsave deal" : "Save deal"}
+                                >
+                                  {savedPropertyIds.has(prop.id) ? "★" : "☆"}
+                                </button>
+                              </td>
                               <td>{prop.canonicalAddress}</td>
                               <td>{area}</td>
                               <td>{prop.primaryListing?.price != null ? formatPrice(prop.primaryListing.price) : "—"}</td>
                               <td>{formatListedDate(prop.primaryListing?.listedAt ?? null)}</td>
+                              <td>{prop.omStatus ?? "—"}</td>
+                              <td>{prop.dealScore != null ? prop.dealScore : "—"}</td>
                             </tr>
                             {expandedCanonicalId === prop.id && (
                               <tr className="property-data-detail-row">
-                                <td colSpan={5} className="property-data-detail-cell" style={{ padding: "1rem 1rem 1rem 2.5rem", backgroundColor: "#fafafa" }}>
+                                <td colSpan={8} className="property-data-detail-cell" style={{ padding: "1rem 1rem 1rem 2.5rem", backgroundColor: "#fafafa" }}>
                                   <CanonicalPropertyDetail property={prop} />
                                 </td>
                               </tr>

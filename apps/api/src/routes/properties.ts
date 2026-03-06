@@ -18,6 +18,8 @@ import {
   InquiryDocumentRepo,
   InquirySendRepo,
   PropertyUploadedDocumentRepo,
+  DealSignalsRepo,
+  DocumentRepo,
 } from "@re-sourcing/db";
 import type { PropertyDocumentCategory } from "@re-sourcing/contracts";
 import multer from "multer";
@@ -31,8 +33,11 @@ import { normalizeAddressLineForDisplay, getBBLForProperty } from "../enrichment
 import { runRentalApiStep } from "../rental/rentalApiClient.js";
 import { extractRentalFinancialsFromListing } from "../rental/extractRentalFinancialsFromListing.js";
 import { suggestRentalDataGaps } from "../rental/suggestRentalDataGaps.js";
+import { getRentRollComparison } from "../rental/rentRollComparison.js";
 import { fetchNyDosEntityByName } from "../enrichment/nyDosEntity.js";
 import { fetchAcrisDocumentsByOwnerName } from "../enrichment/acrisDocuments.js";
+import { computeDealSignals } from "../deal/computeDealSignals.js";
+import { resolveGeneratedDocPath } from "../deal/generatedDocStorage.js";
 
 const router = Router();
 
@@ -52,10 +57,20 @@ router.get("/properties", async (req: Request, res: Response) => {
     const r = await pool.query(
       `SELECT DISTINCT ON (p.id)
          p.id, p.canonical_address, p.details, p.created_at, p.updated_at,
-         l.price AS listing_price, l.listed_at AS listing_listed_at, l.city AS listing_city
+         l.price AS listing_price, l.listed_at AS listing_listed_at, l.city AS listing_city,
+         (CASE
+           WHEN EXISTS (SELECT 1 FROM property_inquiry_documents d WHERE d.property_id = p.id)
+             OR EXISTS (SELECT 1 FROM property_uploaded_documents u WHERE u.property_id = p.id AND u.category = 'OM')
+           THEN 'OM received'
+           WHEN EXISTS (SELECT 1 FROM property_inquiry_sends s WHERE s.property_id = p.id)
+           THEN 'OM pending'
+           ELSE 'Not received'
+         END) AS om_status,
+         ds.deal_score
        FROM properties p
        LEFT JOIN listing_property_matches m ON m.property_id = p.id
        LEFT JOIN listings l ON l.id = m.listing_id
+       LEFT JOIN LATERAL (SELECT deal_score FROM deal_signals WHERE property_id = p.id ORDER BY generated_at DESC LIMIT 1) ds ON true
        ORDER BY p.id, m.confidence DESC NULLS LAST, m.created_at DESC
        LIMIT 500`
     );
@@ -76,6 +91,8 @@ router.get("/properties", async (req: Request, res: Response) => {
           listedAt: listingListedAt,
           city: (row.listing_city as string) ?? null,
         },
+        omStatus: (row.om_status as string) ?? "Not received",
+        dealScore: row.deal_score != null ? Number(row.deal_score) : null,
       };
     });
     res.json({ properties, total: properties.length });
@@ -455,20 +472,52 @@ router.get("/properties/:id/acris-documents", async (req: Request, res: Response
   }
 });
 
-/** GET /api/properties/:id/documents - list inquiry documents (attachments) for property, with source (from_address). */
+/** GET /api/properties/:id/documents - unified list: inquiry docs + uploaded docs + generated (dossier, Excel). */
 router.get("/properties/:id/documents", async (req: Request, res: Response) => {
   try {
     const { id: propertyId } = req.params;
     const pool = getPool();
     const propertyRepo = new PropertyRepo({ pool });
-    const docRepo = new InquiryDocumentRepo({ pool });
+    const inquiryDocRepo = new InquiryDocumentRepo({ pool });
+    const uploadedDocRepo = new PropertyUploadedDocumentRepo({ pool });
+    const generatedDocRepo = new DocumentRepo({ pool });
     const property = await propertyRepo.byId(propertyId);
     if (!property) {
       res.status(404).json({ error: "Property not found", propertyId });
       return;
     }
-    const documents = await docRepo.listByPropertyIdWithSource(propertyId);
-    res.json({ propertyId, documents });
+    const [inquiryDocs, uploadedDocs, generatedDocs] = await Promise.all([
+      inquiryDocRepo.listByPropertyIdWithSource(propertyId),
+      uploadedDocRepo.listByPropertyId(propertyId),
+      generatedDocRepo.listByPropertyId(propertyId),
+    ]);
+    const unified = [
+      ...inquiryDocs.map((d) => ({
+        id: d.id,
+        fileName: d.filename,
+        fileType: d.contentType ?? null,
+        source: d.source ?? "inquiry",
+        sourceType: "inquiry" as const,
+        createdAt: d.createdAt,
+      })),
+      ...uploadedDocs.map((d) => ({
+        id: d.id,
+        fileName: d.filename,
+        fileType: d.contentType ?? null,
+        source: d.category ?? "uploaded",
+        sourceType: "uploaded" as const,
+        createdAt: d.createdAt,
+      })),
+      ...generatedDocs.map((d) => ({
+        id: d.id,
+        fileName: d.fileName,
+        fileType: d.fileType ?? null,
+        source: d.source,
+        sourceType: "generated" as const,
+        createdAt: d.createdAt,
+      })),
+    ].sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""));
+    res.json({ propertyId, documents: unified });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[properties documents list]", err);
@@ -476,28 +525,48 @@ router.get("/properties/:id/documents", async (req: Request, res: Response) => {
   }
 });
 
-/** GET /api/properties/:id/documents/:docId/file - serve inquiry document file. */
+/** GET /api/properties/:id/documents/:docId/file - serve document file (generated, inquiry, or uploaded). */
 router.get("/properties/:id/documents/:docId/file", async (req: Request, res: Response) => {
   try {
     const { id: propertyId, docId } = req.params;
     const pool = getPool();
     const propertyRepo = new PropertyRepo({ pool });
-    const docRepo = new InquiryDocumentRepo({ pool });
     const property = await propertyRepo.byId(propertyId);
     if (!property) {
       res.status(404).json({ error: "Property not found", propertyId });
       return;
     }
-    const doc = await docRepo.byId(docId);
-    if (!doc || doc.propertyId !== propertyId) {
-      res.status(404).json({ error: "Document not found", docId });
+    const generatedDocRepo = new DocumentRepo({ pool });
+    const genDoc = await generatedDocRepo.byId(docId);
+    if (genDoc && genDoc.propertyId === propertyId) {
+      const absolutePath = resolveGeneratedDocPath(genDoc.storagePath);
+      res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent(genDoc.fileName)}"`);
+      res.sendFile(absolutePath, (err) => {
+        if (err && !res.headersSent) res.status(500).json({ error: "Failed to send file" });
+      });
       return;
     }
-    const absolutePath = resolveInquiryFilePath(doc.filePath);
-    res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(doc.filename)}"`);
-    res.sendFile(absolutePath, (err) => {
-      if (err && !res.headersSent) res.status(500).json({ error: "Failed to send file" });
-    });
+    const inquiryDocRepo = new InquiryDocumentRepo({ pool });
+    const inquiryDoc = await inquiryDocRepo.byId(docId);
+    if (inquiryDoc && inquiryDoc.propertyId === propertyId) {
+      const absolutePath = resolveInquiryFilePath(inquiryDoc.filePath);
+      res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(inquiryDoc.filename)}"`);
+      res.sendFile(absolutePath, (err) => {
+        if (err && !res.headersSent) res.status(500).json({ error: "Failed to send file" });
+      });
+      return;
+    }
+    const uploadedDocRepo = new PropertyUploadedDocumentRepo({ pool });
+    const uploadedDoc = await uploadedDocRepo.byId(docId);
+    if (uploadedDoc && uploadedDoc.propertyId === propertyId) {
+      const absolutePath = resolveUploadedDocFilePath(uploadedDoc.filePath);
+      res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(uploadedDoc.filename)}"`);
+      res.sendFile(absolutePath, (err) => {
+        if (err && !res.headersSent) res.status(500).json({ error: "Failed to send file" });
+      });
+      return;
+    }
+    res.status(404).json({ error: "Document not found", docId });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[properties document file]", err);
@@ -712,7 +781,13 @@ router.get("/properties/:id", async (req: Request, res: Response) => {
       return;
     }
     const inquirySendRepo = new InquirySendRepo({ pool });
-    const lastInquirySentAt = await inquirySendRepo.getLastSentAt(propertyId);
+    const signalsRepo = new DealSignalsRepo({ pool });
+    const [lastInquirySentAt, latestSignals] = await Promise.all([
+      inquirySendRepo.getLastSentAt(propertyId),
+      signalsRepo.getLatestByPropertyId(propertyId),
+    ]);
+    const rentalFinancials = (property.details as Record<string, unknown> | null)?.rentalFinancials as RentalFinancials | undefined;
+    const rentRollComparison = getRentRollComparison(rentalFinancials);
     res.json({
       id: property.id,
       canonicalAddress: property.canonicalAddress,
@@ -720,11 +795,68 @@ router.get("/properties/:id", async (req: Request, res: Response) => {
       createdAt: property.createdAt,
       updatedAt: property.updatedAt,
       lastInquirySentAt: lastInquirySentAt ?? null,
+      rentRollComparison: rentRollComparison ?? undefined,
+      dealScore: latestSignals?.dealScore ?? null,
+      dealSignals: latestSignals ?? null,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[properties get by id]", err);
     res.status(503).json({ error: "Failed to load property.", details: message });
+  }
+});
+
+/** POST /api/properties/:id/compute-score - compute deal signals and score, persist to deal_signals, return score and signals. */
+router.post("/properties/:id/compute-score", async (req: Request, res: Response) => {
+  try {
+    const { id: propertyId } = req.params;
+    const pool = getPool();
+    const propertyRepo = new PropertyRepo({ pool });
+    const matchRepo = new MatchRepo({ pool });
+    const listingRepo = new ListingRepo({ pool });
+    const property = await propertyRepo.byId(propertyId);
+    if (!property) {
+      res.status(404).json({ error: "Property not found", propertyId });
+      return;
+    }
+    const { matches } = await matchRepo.list({ propertyId, limit: 1 });
+    const match = matches[0];
+    const listing = match ? await listingRepo.byId(match.listingId) : null;
+    const primaryListing = {
+      price: listing?.price ?? null,
+      city: listing?.city ?? null,
+    };
+    const input = {
+      propertyId,
+      canonicalAddress: property.canonicalAddress,
+      details: property.details ?? null,
+      primaryListing,
+      adjustedNoi: (req.body?.adjustedNoi as number | undefined) ?? undefined,
+      rentUpsidePct: (req.body?.rentUpsidePct as number | undefined) ?? undefined,
+    };
+    const { insertParams, scoringResult } = computeDealSignals(input);
+    const signalsRepo = new DealSignalsRepo({ pool });
+    const row = await signalsRepo.insert(insertParams);
+    res.json({
+      dealScore: scoringResult.dealScore,
+      dealSignals: row,
+      scoringResult: {
+        assetYieldScore: scoringResult.assetYieldScore,
+        adjustedYieldScore: scoringResult.adjustedYieldScore,
+        rentUpsideScore: scoringResult.rentUpsideScore,
+        locationScore: scoringResult.locationScore,
+        riskScore: scoringResult.riskScore,
+        liquidityScore: scoringResult.liquidityScore,
+        positiveSignals: scoringResult.positiveSignals,
+        negativeSignals: scoringResult.negativeSignals,
+        assetCapRate: scoringResult.assetCapRate,
+        adjustedCapRate: scoringResult.adjustedCapRate,
+      },
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[properties compute-score]", err);
+    res.status(503).json({ error: "Failed to compute deal score.", details: message });
   }
 });
 

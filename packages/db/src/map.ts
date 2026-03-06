@@ -23,6 +23,10 @@ import type {
   PropertyInquiryDocument,
   PropertyUploadedDocument,
   PropertyDocumentCategory,
+  Document,
+  UserProfile,
+  SavedDeal,
+  DealSignalRow,
 } from "@re-sourcing/contracts";
 import type { ListingSource, ListingLifecycleState, LocationMode, IngestionRunStatus, IngestionJobStatus, MatchStatus } from "@re-sourcing/contracts";
 
@@ -206,6 +210,67 @@ export function mapPropertyUploadedDocument(row: Record<string, unknown>): Prope
     category: (row.category as PropertyDocumentCategory) ?? "Other",
     source: (row.source as string) ?? null,
     createdAt: toIso(row.created_at),
+  };
+}
+
+export function mapDocument(row: Record<string, unknown>): Document {
+  return {
+    id: row.id as string,
+    propertyId: row.property_id as string,
+    fileName: row.file_name as string,
+    fileType: (row.file_type as string) ?? null,
+    source: row.source as Document["source"],
+    uploadedBy: (row.uploaded_by as string) ?? null,
+    storagePath: row.storage_path as string,
+    createdAt: toIso(row.created_at),
+  };
+}
+
+export function mapUserProfile(row: Record<string, unknown>): UserProfile {
+  return {
+    id: row.id as string,
+    name: (row.name as string) ?? null,
+    email: (row.email as string) ?? null,
+    organization: (row.organization as string) ?? null,
+    defaultLtv: row.default_ltv != null ? Number(row.default_ltv) : null,
+    defaultInterestRate: row.default_interest_rate != null ? Number(row.default_interest_rate) : null,
+    defaultAmortization: row.default_amortization != null ? Number(row.default_amortization) : null,
+    defaultExitCap: row.default_exit_cap != null ? Number(row.default_exit_cap) : null,
+    defaultRentUplift: row.default_rent_uplift != null ? Number(row.default_rent_uplift) : null,
+    defaultExpenseIncrease: row.default_expense_increase != null ? Number(row.default_expense_increase) : null,
+    defaultManagementFee: row.default_management_fee != null ? Number(row.default_management_fee) : null,
+    createdAt: toIso(row.created_at),
+    updatedAt: toIso(row.updated_at),
+  };
+}
+
+export function mapSavedDeal(row: Record<string, unknown>): SavedDeal {
+  return {
+    id: row.id as string,
+    userId: row.user_id as string,
+    propertyId: row.property_id as string,
+    dealStatus: row.deal_status as SavedDeal["dealStatus"],
+    createdAt: toIso(row.created_at),
+  };
+}
+
+export function mapDealSignalRow(row: Record<string, unknown>): DealSignalRow {
+  return {
+    id: row.id as string,
+    propertyId: row.property_id as string,
+    pricePerUnit: row.price_per_unit != null ? Number(row.price_per_unit) : null,
+    pricePsf: row.price_psf != null ? Number(row.price_psf) : null,
+    assetCapRate: row.asset_cap_rate != null ? Number(row.asset_cap_rate) : null,
+    adjustedCapRate: row.adjusted_cap_rate != null ? Number(row.adjusted_cap_rate) : null,
+    yieldSpread: row.yield_spread != null ? Number(row.yield_spread) : null,
+    rentUpside: row.rent_upside != null ? Number(row.rent_upside) : null,
+    rentPsfRatio: row.rent_psf_ratio != null ? Number(row.rent_psf_ratio) : null,
+    expenseRatio: row.expense_ratio != null ? Number(row.expense_ratio) : null,
+    liquidityScore: row.liquidity_score != null ? Number(row.liquidity_score) : null,
+    riskScore: row.risk_score != null ? Number(row.risk_score) : null,
+    priceMomentum: row.price_momentum != null ? Number(row.price_momentum) : null,
+    dealScore: row.deal_score != null ? Number(row.deal_score) : null,
+    generatedAt: toIso(row.generated_at),
   };
 }
 
