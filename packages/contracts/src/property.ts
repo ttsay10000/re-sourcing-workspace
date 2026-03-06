@@ -110,6 +110,11 @@ export interface RentalNumberPerUnit {
   rent?: number;
   /** Bedrooms (for rent roll comparison: total_bedrooms must match RapidAPI). */
   beds?: number;
+  /** Bathrooms for this unit when stated in OM/rent roll. */
+  baths?: number;
+  /** Square footage for this unit when stated. */
+  sqft?: number;
+  /** e.g. "Rent Stabilized", "Recently renovated", "Market rate". */
   note?: string;
 }
 
@@ -119,13 +124,51 @@ export interface RentalFinancialsFromLlm {
   capRate?: number | null;
   grossRentTotal?: number | null;
   totalExpenses?: number | null;
-  /** Full expense breakdown from OM (taxes, insurance, etc.) for table display. */
+  /** Full expense breakdown from OM (taxes, insurance, HOA, etc.) for table display. */
   expensesTable?: ExpenseLineItem[] | null;
+  /** Brief human-readable summary of rent roll / income; keep short and formatted, not a raw dump. */
   rentalEstimates?: string | null;
   rentalNumbersPerUnit?: RentalNumberPerUnit[] | null;
+  /** Other financial notes: clean line or comma-separated "Item: $X" when not in expensesTable. */
   otherFinancials?: string | null;
+  /** 2–5 bullet points or short paragraph: key takeaways from the OM (value, risks, highlights). */
+  keyTakeaways?: string | null;
   /** LLM suggestion when sale listing vs rental units suggest missing data (e.g. sale has 4 beds, rental data sums to 2). */
   dataGapSuggestions?: string | null;
+  [key: string]: unknown;
+}
+
+/** One rent roll row from full OM analysis LLM. */
+export interface OmRentRollRow {
+  unit?: string;
+  monthlyRent?: number;
+  annualRent?: number;
+  beds?: number;
+  baths?: number;
+  sqft?: number;
+  rentType?: string;
+  tenantStatus?: string;
+  notes?: string;
+  [key: string]: unknown;
+}
+
+/** Full OM / investment analysis from senior-analyst LLM (property page + dossier). */
+export interface OmAnalysis {
+  propertyInfo?: Record<string, unknown> | null;
+  rentRoll?: OmRentRollRow[] | null;
+  income?: Record<string, unknown> | null;
+  expenses?: { expensesTable?: ExpenseLineItem[]; totalExpenses?: number; [key: string]: unknown } | null;
+  financialMetrics?: Record<string, unknown> | null;
+  valuationMetrics?: Record<string, unknown> | null;
+  underwritingMetrics?: Record<string, unknown> | null;
+  nycRegulatorySummary?: Record<string, unknown> | null;
+  furnishedModel?: Record<string, unknown> | null;
+  investmentTakeaways?: string[] | null;
+  recommendedOfferAnalysis?: Record<string, unknown> | null;
+  uiFinancialSummary?: Record<string, unknown> | null;
+  dossierMemo?: Record<string, string> | null;
+  /** If OM reported NOI explicitly. */
+  noiReported?: number | null;
   [key: string]: unknown;
 }
 
@@ -133,6 +176,8 @@ export interface RentalFinancialsFromLlm {
 export interface RentalFinancials {
   rentalUnits?: RentalUnitRow[] | null;
   fromLlm?: RentalFinancialsFromLlm | null;
+  /** Full OM analysis from senior-analyst prompt (rent roll, metrics, takeaways, dossier memo). */
+  omAnalysis?: OmAnalysis | null;
   source?: "rapidapi" | "llm" | "inquiry" | null;
   lastUpdatedAt?: string | null;
   [key: string]: unknown;

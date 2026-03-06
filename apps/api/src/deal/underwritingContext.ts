@@ -51,3 +51,22 @@ export interface UnderwritingContext {
   /** Projected property value at exit from appreciation (purchasePrice * (1 + appreciation)^holdYears). */
   projectedValueFromAppreciation: number | null;
 }
+
+/**
+ * Optional neighborhood/market context for the dossier LLM.
+ * When Neighborhood Intelligence is implemented, built from neighborhood_metrics + deal_signals.
+ */
+export interface DossierNeighborhoodContext {
+  neighborhoodKey: string | null;
+  neighborhoodName: string | null;
+  medianPricePsf: number | null;
+  medianRentPsf: number | null;
+  medianAssetCapRate: number | null;
+  subjectPricePsf: number | null;
+  subjectRentPsf: number | null;
+  priceDiscountPct: number | null;
+  yieldSpreadAsset: number | null;
+  yieldSpreadAdjusted: number | null;
+  supplyRiskFlag: boolean | null;
+  momentumFlag: string | null;
+}

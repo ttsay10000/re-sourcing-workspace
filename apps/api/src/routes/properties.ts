@@ -626,7 +626,10 @@ router.get("/properties/:id/documents/:docId/file", async (req: Request, res: Re
       const absolutePath = resolveGeneratedDocPath(genDoc.storagePath);
       res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent(genDoc.fileName)}"`);
       res.sendFile(absolutePath, (err) => {
-        if (err && !res.headersSent) res.status(500).json({ error: "Failed to send file" });
+        if (err && !res.headersSent) {
+          console.error("[documents/file] sendFile failed (generated):", err instanceof Error ? err.message : err);
+          res.status(500).json({ error: "Failed to send file", details: err instanceof Error ? err.message : "File may be missing or inaccessible" });
+        }
       });
       return;
     }
@@ -636,7 +639,10 @@ router.get("/properties/:id/documents/:docId/file", async (req: Request, res: Re
       const absolutePath = resolveInquiryFilePath(inquiryDoc.filePath);
       res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(inquiryDoc.filename)}"`);
       res.sendFile(absolutePath, (err) => {
-        if (err && !res.headersSent) res.status(500).json({ error: "Failed to send file" });
+        if (err && !res.headersSent) {
+          console.error("[documents/file] sendFile failed (inquiry):", err instanceof Error ? err.message : err);
+          res.status(500).json({ error: "Failed to send file", details: err instanceof Error ? err.message : "File may be missing or inaccessible" });
+        }
       });
       return;
     }
@@ -644,13 +650,16 @@ router.get("/properties/:id/documents/:docId/file", async (req: Request, res: Re
     const uploadedDoc = await uploadedDocRepo.byId(docId);
     if (uploadedDoc && uploadedDoc.propertyId === propertyId) {
       if (!uploadedDocFileExists(uploadedDoc.filePath)) {
-        res.status(404).json({ error: "Document file not found on disk", docId });
+        res.status(404).json({ error: "Document file not found on disk", docId, hint: "On hosted deployments (e.g. Render), use a persistent disk or set UPLOADED_DOCS_PATH to a path that persists across restarts." });
         return;
       }
       const absolutePath = resolveUploadedDocFilePath(uploadedDoc.filePath);
       res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(uploadedDoc.filename)}"`);
       res.sendFile(absolutePath, (err) => {
-        if (err && !res.headersSent) res.status(500).json({ error: "Failed to send file" });
+        if (err && !res.headersSent) {
+          console.error("[documents/file] sendFile failed (uploaded):", err instanceof Error ? err.message : err);
+          res.status(500).json({ error: "Failed to send file", details: err instanceof Error ? err.message : "File may be missing or storage may not persist (e.g. ephemeral disk)." });
+        }
       });
       return;
     }
@@ -700,10 +709,17 @@ router.get("/properties/:id/uploaded-documents/:docId/file", async (req: Request
       res.status(404).json({ error: "Document not found", docId });
       return;
     }
+    if (!uploadedDocFileExists(doc.filePath)) {
+      res.status(404).json({ error: "Document file not found on disk", docId, hint: "On hosted deployments, use a persistent disk or set UPLOADED_DOCS_PATH to a path that persists." });
+      return;
+    }
     const absolutePath = resolveUploadedDocFilePath(doc.filePath);
     res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(doc.filename)}"`);
     res.sendFile(absolutePath, (err) => {
-      if (err && !res.headersSent) res.status(500).json({ error: "Failed to send file" });
+      if (err && !res.headersSent) {
+        console.error("[uploaded-document file] sendFile failed:", err instanceof Error ? err.message : err);
+        res.status(500).json({ error: "Failed to send file", details: err instanceof Error ? err.message : "File may be missing or storage may not persist." });
+      }
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -778,28 +794,47 @@ router.post(
         source,
       });
 
-      // When user uploads OM or Brochure, extract text and run rental/financial LLM, then merge into property details.
+      // When user uploads OM or Brochure, extract text and run senior-analyst LLM, then merge into property details.
       if (category === "OM" || category === "Brochure") {
         try {
           const text = await extractTextFromUploadedFile(filePath, filename);
-          if (text.length >= 100) {
-            const fromLlm = await extractRentalFinancialsFromText(text);
-            if (fromLlm && typeof fromLlm === "object" && Object.keys(fromLlm).length > 0) {
+          if (text.length >= 50) {
+            const details = (property.details ?? {}) as Record<string, unknown>;
+            const enrichmentContext =
+              details.enrichment || details.bbl || details.taxCode
+                ? JSON.stringify(
+                    { bbl: details.bbl, taxCode: details.taxCode, enrichment: details.enrichment },
+                    null,
+                    0
+                  ).slice(0, 4000)
+                : undefined;
+            const { fromLlm, omAnalysis } = await extractRentalFinancialsFromText(text, {
+              forceOmStyle: true,
+              enrichmentContext,
+            });
+            const hasFromLlm = fromLlm && typeof fromLlm === "object" && Object.keys(fromLlm).length > 0;
+            const hasOmAnalysis = omAnalysis && typeof omAnalysis === "object";
+            if (hasFromLlm || hasOmAnalysis) {
               const prop = await propertyRepo.byId(propertyId);
               const existing = (prop?.details?.rentalFinancials ?? null) as RentalFinancials | null;
               const existingFromLlm = existing?.fromLlm ?? null;
               const mergedFromLlm =
-                existingFromLlm && typeof existingFromLlm === "object"
+                hasFromLlm && existingFromLlm && typeof existingFromLlm === "object"
                   ? { ...existingFromLlm, ...fromLlm }
-                  : fromLlm;
+                  : (fromLlm ?? existingFromLlm ?? undefined);
               const rentalFinancials: RentalFinancials = {
                 ...(existing ?? {}),
-                fromLlm: mergedFromLlm as RentalFinancialsFromLlm,
+                fromLlm: mergedFromLlm as RentalFinancialsFromLlm | undefined,
+                omAnalysis: hasOmAnalysis ? omAnalysis : (existing?.omAnalysis ?? undefined),
                 source: existing?.source ?? "llm",
                 lastUpdatedAt: new Date().toISOString(),
               };
               await propertyRepo.mergeDetails(propertyId, { rentalFinancials });
             }
+          } else if (text.length > 0) {
+            console.warn("[documents/upload] OM/Brochure text too short for LLM:", text.length, "chars");
+          } else {
+            console.warn("[documents/upload] OM/Brochure: no text extracted (wrong format or path?)");
           }
         } catch (e) {
           console.warn("[documents/upload] OM/Brochure LLM extraction failed:", e instanceof Error ? e.message : e);

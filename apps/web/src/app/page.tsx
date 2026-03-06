@@ -10,6 +10,7 @@ type DealRow = {
   id: string;
   address: string;
   price: number | null;
+  imageUrl: string | null;
   totalUnits: number | null;
   dealScore: number | null;
   assetCapRate: number | null;
@@ -246,12 +247,21 @@ export default function HomePage() {
                     >
                       <div className="property-card-inner">
                         <div className="property-card-image-wrap">
-                          <div
-                            className="property-card-image"
-                            style={{ width: "100%", height: "100%", background: "#e5e5e5", display: "flex", alignItems: "center", justifyContent: "center", color: "#737373", fontSize: "0.85rem" }}
-                          >
-                            No image
-                          </div>
+                          {deal.imageUrl ? (
+                            <img
+                              src={deal.imageUrl}
+                              alt=""
+                              className="property-card-image"
+                              style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+                            />
+                          ) : (
+                            <div
+                              className="property-card-image"
+                              style={{ width: "100%", height: "100%", background: "#e5e5e5", display: "flex", alignItems: "center", justifyContent: "center", color: "#737373", fontSize: "0.85rem" }}
+                            >
+                              No image
+                            </div>
+                          )}
                           <div className={`property-card-score-bubble ${getScoreBubbleClass(score)}`}>
                             {Math.round(score)}
                           </div>

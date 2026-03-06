@@ -13,19 +13,28 @@ function getBaseDir(): string {
   return process.env.UPLOADED_DOCS_PATH ?? DEFAULT_BASE;
 }
 
+/**
+ * Resolve base dir to absolute so write and read always use the same path (avoids cwd differences).
+ */
+function getAbsoluteBaseDir(): string {
+  const base = getBaseDir();
+  if (base.startsWith("/") || /^[A-Za-z]:\\/.test(base)) return normalize(base);
+  return normalize(join(process.cwd(), base));
+}
+
 export async function saveUploadedDocument(
   propertyId: string,
   docId: string,
   filename: string,
   buffer: Buffer
 ): Promise<string> {
-  const base = getBaseDir();
+  const base = getAbsoluteBaseDir();
   const safe = filename.replace(/[^a-zA-Z0-9._-]/g, "_").trim() || "document";
   const dir = join(base, propertyId, docId);
   await mkdir(dir, { recursive: true });
-  const filePath = join(dir, safe);
-  await writeFile(filePath, buffer, { flag: "w" });
-  return filePath;
+  const absolutePath = join(dir, safe);
+  await writeFile(absolutePath, buffer, { flag: "w" });
+  return absolutePath;
 }
 
 export function resolveUploadedDocFilePath(filePath: string): string {

@@ -185,14 +185,15 @@ export async function processInbox(options?: { maxMessages?: number }): Promise<
       const combinedText = [bodyText, ...attachmentTexts].filter(Boolean).join("\n\n");
       if (combinedText.length >= 20) {
         try {
-          const fromLlm = await extractRentalFinancialsFromText(combinedText);
-          if (fromLlm) {
+          const { fromLlm, omAnalysis } = await extractRentalFinancialsFromText(combinedText);
+          if (fromLlm || omAnalysis) {
             const prop = await propertyRepo.byId(property.id);
             const existing = (prop?.details?.rentalFinancials ?? null) as RentalFinancials | null;
-            const mergedFromLlm = mergeFromLlm(existing?.fromLlm ?? null, fromLlm);
+            const mergedFromLlm = fromLlm ? mergeFromLlm(existing?.fromLlm ?? null, fromLlm) : (existing?.fromLlm ?? null);
             const rentalFinancials: RentalFinancials = {
               ...(existing ?? {}),
               fromLlm: mergedFromLlm ?? undefined,
+              omAnalysis: omAnalysis ?? existing?.omAnalysis ?? undefined,
               source: existing?.source ?? "inquiry",
               lastUpdatedAt: new Date().toISOString(),
             };
@@ -309,14 +310,15 @@ export async function processInbox(options?: { maxMessages?: number }): Promise<
         const combinedText = [bodyText, ...attachmentTexts].filter(Boolean).join("\n\n");
         if (combinedText.length >= 20) {
           try {
-            const fromLlm = await extractRentalFinancialsFromText(combinedText);
-            if (fromLlm) {
+            const { fromLlm, omAnalysis } = await extractRentalFinancialsFromText(combinedText);
+            if (fromLlm || omAnalysis) {
               const prop = await propertyRepo.byId(property.id);
               const existingRental = (prop?.details?.rentalFinancials ?? null) as RentalFinancials | null;
-              const mergedFromLlm = mergeFromLlm(existingRental?.fromLlm ?? null, fromLlm);
+              const mergedFromLlm = fromLlm ? mergeFromLlm(existingRental?.fromLlm ?? null, fromLlm) : (existingRental?.fromLlm ?? null);
               const rentalFinancials: RentalFinancials = {
                 ...(existingRental ?? {}),
                 fromLlm: mergedFromLlm ?? undefined,
+                omAnalysis: omAnalysis ?? existingRental?.omAnalysis ?? undefined,
                 source: existingRental?.source ?? "inquiry",
                 lastUpdatedAt: new Date().toISOString(),
               };
@@ -443,14 +445,15 @@ export async function processInbox(options?: { maxMessages?: number }): Promise<
         const combinedText = [bodyText, ...attachmentTexts].filter(Boolean).join("\n\n");
         if (combinedText.length >= 20) {
           try {
-            const fromLlm = await extractRentalFinancialsFromText(combinedText);
-            if (fromLlm) {
+            const { fromLlm, omAnalysis } = await extractRentalFinancialsFromText(combinedText);
+            if (fromLlm || omAnalysis) {
               const prop = await propertyRepo.byId(property.id);
               const existingRental = (prop?.details?.rentalFinancials ?? null) as RentalFinancials | null;
-              const mergedFromLlm = mergeFromLlm(existingRental?.fromLlm ?? null, fromLlm);
+              const mergedFromLlm = fromLlm ? mergeFromLlm(existingRental?.fromLlm ?? null, fromLlm) : (existingRental?.fromLlm ?? null);
               const rentalFinancials: RentalFinancials = {
                 ...(existingRental ?? {}),
                 fromLlm: mergedFromLlm ?? undefined,
+                omAnalysis: omAnalysis ?? existingRental?.omAnalysis ?? undefined,
                 source: existingRental?.source ?? "inquiry",
                 lastUpdatedAt: new Date().toISOString(),
               };

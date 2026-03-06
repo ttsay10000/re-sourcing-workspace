@@ -17,3 +17,10 @@ export function getPriceHistoryModel(): string {
   if (m && typeof m === "string" && m.trim()) return m.trim();
   return getEnrichmentModel();
 }
+
+/** Used by deal dossier LLM; defaults to same as getEnrichmentModel. Override with OPENAI_DOSSIER_MODEL. */
+export function getDossierModel(): string {
+  const m = process.env.OPENAI_DOSSIER_MODEL;
+  if (m && typeof m === "string" && m.trim()) return m.trim();
+  return getEnrichmentModel();
+}

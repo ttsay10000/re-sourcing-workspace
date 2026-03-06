@@ -2,7 +2,7 @@
  * Orchestrate generate-dossier: load property/list/profile, run underwriting, build Excel + dossier, save to disk and DB.
  */
 
-import type { PropertyDetails } from "@re-sourcing/contracts";
+import type { PropertyDetails, OmAnalysis } from "@re-sourcing/contracts";
 import { getPool, PropertyRepo, MatchRepo, ListingRepo, UserProfileRepo, DealSignalsRepo, DocumentRepo } from "@re-sourcing/db";
 import { computeDealSignals } from "./computeDealSignals.js";
 import { computeFurnishedRental } from "./furnishedRentalEstimator.js";
@@ -10,6 +10,8 @@ import { computeMortgage } from "./mortgageAmortization.js";
 import { computeIrr, saleProceedsFromExitCap } from "./irrCalculation.js";
 import { buildExcelProForma } from "./excelProForma.js";
 import { buildDossierBuffer } from "./dossierGenerator.js";
+import { buildDossierWithLlm } from "./dossierLlmGenerator.js";
+import { dossierTextToPdf } from "./dossierToPdf.js";
 import type { UnderwritingContext } from "./underwritingContext.js";
 import { saveGeneratedDocument } from "./generatedDocStorage.js";
 import { randomUUID } from "crypto";
@@ -24,20 +26,38 @@ export interface GenerateDossierResult {
 }
 
 function noiFromDetails(details: PropertyDetails | null): number | null {
-  const noi = details?.rentalFinancials?.fromLlm?.noi;
+  const om = details?.rentalFinancials?.omAnalysis;
+  const ui = om?.uiFinancialSummary as Record<string, unknown> | undefined;
+  const income = om?.income as Record<string, unknown> | undefined;
+  const noi =
+    (ui?.noi as number | undefined) ??
+    om?.noiReported ??
+    (income?.NOI as number | undefined) ??
+    details?.rentalFinancials?.fromLlm?.noi;
   if (noi != null && typeof noi === "number" && !Number.isNaN(noi)) return noi;
   return null;
 }
 
 function grossRentFromDetails(details: PropertyDetails | null): number | null {
-  const gross = details?.rentalFinancials?.fromLlm?.grossRentTotal;
+  const om = details?.rentalFinancials?.omAnalysis;
+  const ui = om?.uiFinancialSummary as Record<string, unknown> | undefined;
+  const income = om?.income as Record<string, unknown> | undefined;
+  const gross =
+    (ui?.grossRent as number | undefined) ??
+    (income?.grossRentActual as number | undefined) ??
+    (income?.grossRentPotential as number | undefined) ??
+    details?.rentalFinancials?.fromLlm?.grossRentTotal;
   if (gross != null && typeof gross === "number" && !Number.isNaN(gross) && gross > 0) return gross;
   return null;
 }
 
 function unitCountFromDetails(details: PropertyDetails | null): number | null {
   if (!details?.rentalFinancials) return null;
-  const rf = details.rentalFinancials;
+  const rf = details.rentalFinancials as { rentalUnits?: unknown[]; fromLlm?: { rentalNumbersPerUnit?: unknown[] }; omAnalysis?: { rentRoll?: unknown[]; propertyInfo?: Record<string, unknown> } };
+  const omRoll = rf.omAnalysis?.rentRoll ?? [];
+  const omTotal = rf.omAnalysis?.propertyInfo?.totalUnits as number | undefined;
+  if (omRoll.length > 0) return omRoll.length;
+  if (omTotal != null && typeof omTotal === "number") return omTotal;
   const rapid = rf.rentalUnits ?? [];
   const om = rf.fromLlm?.rentalNumbersPerUnit ?? [];
   const n = rapid.length > 0 ? rapid.length : om.length;
@@ -194,10 +214,14 @@ export async function runGenerateDossier(propertyId: string): Promise<GenerateDo
 
   const dateStr = new Date().toISOString().slice(0, 10);
   const slug = property.canonicalAddress.replace(/[^a-zA-Z0-9]/g, "-").slice(0, 40) || propertyId.slice(0, 8);
-  const dossierFileName = `Deal-Dossier-${slug}-${dateStr}.txt`;
+  const dossierFileName = `Deal-Dossier-${slug}-${dateStr}.pdf`;
   const excelFileName = `Pro-Forma-${slug}-${dateStr}.xlsx`;
 
-  const dossierBuffer = buildDossierBuffer(ctx);
+  const neighborhoodContext = null;
+  const omAnalysis: OmAnalysis | null = details?.rentalFinancials?.omAnalysis ?? null;
+  const llmDossierText = await buildDossierWithLlm(ctx, neighborhoodContext, omAnalysis);
+  const dossierText = llmDossierText && llmDossierText.length > 0 ? llmDossierText : buildDossierBuffer(ctx).toString("utf-8");
+  const dossierBuffer = await dossierTextToPdf(dossierText);
   const excelBuffer = buildExcelProForma(ctx);
 
   const dossierDocId = randomUUID();
@@ -219,7 +243,7 @@ export async function runGenerateDossier(propertyId: string): Promise<GenerateDo
   const dossierDoc = await documentRepo.insert({
     propertyId,
     fileName: dossierFileName,
-    fileType: "text/plain",
+    fileType: "application/pdf",
     source: "generated_dossier",
     storagePath: dossierStoragePath,
   });
@@ -241,7 +265,7 @@ export async function runGenerateDossier(propertyId: string): Promise<GenerateDo
         `Deal dossier: ${property.canonicalAddress}`,
         `Your deal dossier and Excel pro forma for ${property.canonicalAddress} are attached.`,
         [
-          { filename: dossierFileName, buffer: dossierBuffer, mimeType: "text/plain" },
+          { filename: dossierFileName, buffer: dossierBuffer, mimeType: "application/pdf" },
           { filename: excelFileName, buffer: excelBuffer, mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" },
         ]
       );
