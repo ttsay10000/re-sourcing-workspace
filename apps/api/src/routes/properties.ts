@@ -50,6 +50,70 @@ const router = Router();
 
 const ENRICHMENT_RATE_LIMIT_DELAY_MS = Number(process.env.ENRICHMENT_RATE_LIMIT_DELAY_MS || process.env.PERMITS_RATE_LIMIT_DELAY_MS) || 300;
 
+/**
+ * Re-run OM/Brochure financial extraction for a property when it has uploaded OM/Brochure docs.
+ * Only processes docs whose file exists on disk. Use after enrichment or when user wants to refresh financials from OM.
+ */
+export async function refreshOmFinancialsForProperty(
+  propertyId: string,
+  pool: import("pg").Pool
+): Promise<{ documentsProcessed: number; documentsSkippedNoFile: number; error?: string }> {
+  const propertyRepo = new PropertyRepo({ pool });
+  const uploadedDocRepo = new PropertyUploadedDocumentRepo({ pool });
+  const property = await propertyRepo.byId(propertyId);
+  if (!property) return { documentsProcessed: 0, documentsSkippedNoFile: 0, error: "Property not found" };
+  const docs = await uploadedDocRepo.listByPropertyId(propertyId);
+  const omOrBrochure = docs.filter((d) => d.category === "OM" || d.category === "Brochure");
+  let documentsProcessed = 0;
+  let documentsSkippedNoFile = 0;
+  for (const doc of omOrBrochure) {
+    if (!uploadedDocFileExists(doc.filePath)) {
+      documentsSkippedNoFile++;
+      continue;
+    }
+    try {
+      const text = await extractTextFromUploadedFile(doc.filePath, doc.filename ?? undefined);
+      if (text.length < 50) continue;
+      const details = (property.details ?? {}) as Record<string, unknown>;
+      const enrichmentContext =
+        details.enrichment || details.bbl || details.taxCode
+          ? JSON.stringify(
+              { bbl: details.bbl, taxCode: details.taxCode, enrichment: details.enrichment },
+              null,
+              0
+            ).slice(0, 4000)
+          : undefined;
+      const { fromLlm, omAnalysis } = await extractRentalFinancialsFromText(text, {
+        forceOmStyle: true,
+        enrichmentContext,
+      });
+      const hasFromLlm = fromLlm && typeof fromLlm === "object" && Object.keys(fromLlm).length > 0;
+      const hasOmAnalysis = omAnalysis && typeof omAnalysis === "object";
+      if (hasFromLlm || hasOmAnalysis) {
+        const prop = await propertyRepo.byId(propertyId);
+        const existing = (prop?.details?.rentalFinancials ?? null) as RentalFinancials | null;
+        const existingFromLlm = existing?.fromLlm ?? null;
+        const mergedFromLlm =
+          hasFromLlm && existingFromLlm && typeof existingFromLlm === "object"
+            ? { ...existingFromLlm, ...fromLlm }
+            : (fromLlm ?? existingFromLlm ?? undefined);
+        const rentalFinancials: RentalFinancials = {
+          ...(existing ?? {}),
+          fromLlm: mergedFromLlm as RentalFinancialsFromLlm | undefined,
+          omAnalysis: hasOmAnalysis ? omAnalysis : (existing?.omAnalysis ?? undefined),
+          source: existing?.source ?? "llm",
+          lastUpdatedAt: new Date().toISOString(),
+        };
+        await propertyRepo.mergeDetails(propertyId, { rentalFinancials });
+        documentsProcessed++;
+      }
+    } catch (e) {
+      console.warn("[refreshOmFinancialsForProperty]", propertyId, doc.filename, e instanceof Error ? e.message : e);
+    }
+  }
+  return { documentsProcessed, documentsSkippedNoFile };
+}
+
 /** GET /api/properties - list canonical properties. ?includeListingSummary=1 adds primary listing price, listedAt, city for filter/sort. */
 router.get("/properties", async (req: Request, res: Response) => {
   try {
@@ -289,6 +353,16 @@ router.post("/properties/run-enrichment", async (req: Request, res: Response) =>
       }
     }
 
+    // After enrichment, refresh OM/Brochure financials for each property when the uploaded doc file exists on disk.
+    const pool = getPool();
+    let omFinancialsProcessed = 0;
+    let omFinancialsSkippedNoFile = 0;
+    for (const propertyId of propertyIds) {
+      const result = await refreshOmFinancialsForProperty(propertyId, pool);
+      omFinancialsProcessed += result.documentsProcessed;
+      omFinancialsSkippedNoFile += result.documentsSkippedNoFile;
+    }
+
     res.json({
       ok: true,
       permitEnrichment: {
@@ -297,11 +371,41 @@ router.post("/properties/run-enrichment", async (req: Request, res: Response) =>
         failed,
         byModule,
       },
+      omFinancialsRefresh: {
+        documentsProcessed: omFinancialsProcessed,
+        documentsSkippedNoFile: omFinancialsSkippedNoFile,
+      },
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[properties run-enrichment]", err);
     res.status(503).json({ error: "Failed to run enrichment.", details: message });
+  }
+});
+
+/** POST /api/properties/:id/refresh-om-financials - re-run OM/Brochure LLM extraction for this property using uploaded docs. Only processes docs whose file exists on disk. */
+router.post("/properties/:id/refresh-om-financials", async (req: Request, res: Response) => {
+  try {
+    const propertyId = req.params.id as string;
+    if (!propertyId?.trim()) {
+      res.status(400).json({ error: "Property ID required." });
+      return;
+    }
+    const pool = getPool();
+    const result = await refreshOmFinancialsForProperty(propertyId.trim(), pool);
+    if (result.error) {
+      res.status(404).json({ error: result.error });
+      return;
+    }
+    res.json({
+      ok: true,
+      documentsProcessed: result.documentsProcessed,
+      documentsSkippedNoFile: result.documentsSkippedNoFile,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[properties refresh-om-financials]", err);
+    res.status(503).json({ error: "Failed to refresh OM financials.", details: message });
   }
 });
 

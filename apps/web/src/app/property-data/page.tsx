@@ -50,12 +50,16 @@ interface PipelineStats {
   remainingByModule?: Record<string, { count: number; propertyIds: string[] }>;
 }
 
-/** Result of last enrichment run (from POST from-listings permitEnrichment). */
+/** Result of last enrichment run (from POST from-listings or run-enrichment permitEnrichment + omFinancialsRefresh). */
 interface LastEnrichmentResult {
   ran: true;
   success: number;
   failed: number;
   byModule: Record<string, number>;
+  /** OM/Brochure financials: docs re-processed by LLM (run-enrichment only). */
+  omFinancialsProcessed?: number;
+  /** OM/Brochure docs skipped because file was not on disk (e.g. ephemeral storage). */
+  omFinancialsSkippedNoFile?: number;
 }
 
 interface AgentEnrichmentEntry {
@@ -509,7 +513,11 @@ function PropertyDataContent() {
     })
       .then(async (r) => {
         const text = await r.text();
-        let data: { error?: string; permitEnrichment?: { ran?: boolean; success?: number; failed?: number; byModule?: Record<string, number> } };
+        let data: {
+          error?: string;
+          permitEnrichment?: { ran?: boolean; success?: number; failed?: number; byModule?: Record<string, number> };
+          omFinancialsRefresh?: { documentsProcessed?: number; documentsSkippedNoFile?: number };
+        };
         try {
           data = text ? JSON.parse(text) : {};
         } catch {
@@ -530,6 +538,8 @@ function PropertyDataContent() {
             success: data.permitEnrichment.success ?? 0,
             failed: data.permitEnrichment.failed ?? 0,
             byModule: data.permitEnrichment.byModule ?? {},
+            omFinancialsProcessed: data.omFinancialsRefresh?.documentsProcessed,
+            omFinancialsSkippedNoFile: data.omFinancialsRefresh?.documentsSkippedNoFile,
           });
         }
         fetchCanonicalProperties();
@@ -1107,6 +1117,13 @@ function PropertyDataContent() {
                   {lastEnrichmentResult.failed > 0 && (
                     <>, <strong>{lastEnrichmentResult.failed} failed</strong></>
                   )}.
+                  {(lastEnrichmentResult.omFinancialsProcessed != null || lastEnrichmentResult.omFinancialsSkippedNoFile != null) && (
+                    <> OM financials: <strong>{lastEnrichmentResult.omFinancialsProcessed ?? 0} doc(s) processed</strong>
+                      {(lastEnrichmentResult.omFinancialsSkippedNoFile ?? 0) > 0 && (
+                        <>; <strong>{lastEnrichmentResult.omFinancialsSkippedNoFile} skipped</strong> (file not on disk — use persistent storage on Render)</>
+                      )}
+                    </>
+                  )}
                 </p>
                 <table className="property-data-table" style={{ fontSize: "0.875rem" }}>
                   <thead>
