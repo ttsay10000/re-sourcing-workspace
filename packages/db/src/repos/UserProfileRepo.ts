@@ -18,6 +18,7 @@ export interface UpsertUserProfileParams {
   defaultRentUplift?: number | null;
   defaultExpenseIncrease?: number | null;
   defaultManagementFee?: number | null;
+  expectedAppreciationPct?: number | null;
 }
 
 export class UserProfileRepo {
@@ -68,6 +69,7 @@ export class UserProfileRepo {
         default_rent_uplift = COALESCE($9, default_rent_uplift),
         default_expense_increase = COALESCE($10, default_expense_increase),
         default_management_fee = COALESCE($11, default_management_fee),
+        expected_appreciation_pct = COALESCE($12, expected_appreciation_pct),
         updated_at = now()
        WHERE id = $1`,
       [
@@ -82,6 +84,7 @@ export class UserProfileRepo {
         params.defaultRentUplift ?? null,
         params.defaultExpenseIncrease ?? null,
         params.defaultManagementFee ?? null,
+        params.expectedAppreciationPct ?? null,
       ]
     );
     const updated = await this.byId(id);

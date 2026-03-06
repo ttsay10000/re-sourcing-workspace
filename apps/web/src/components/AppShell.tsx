@@ -38,6 +38,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </div>
       </header>
       <main className="app-main">{children}</main>
+      <footer className="app-footer">
+        <nav className="app-footer-nav" aria-label="Footer navigation">
+          {NAV_LINKS.map(({ href, label }) => (
+            <Link key={href} href={href} className="app-footer-link">
+              {label}
+            </Link>
+          ))}
+        </nav>
+      </footer>
     </div>
   );
 }

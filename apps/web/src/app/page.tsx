@@ -15,6 +15,12 @@ type DealRow = {
   assetCapRate: number | null;
   adjustedCapRate: number | null;
   rentUpside: number | null;
+  irrPct: number | null;
+  equityMultiple: number | null;
+  cocPct: number | null;
+  holdYears: number | null;
+  currentNoi: number | null;
+  adjustedNoi: number | null;
   generatedAt: string | null;
 };
 
@@ -38,9 +44,16 @@ function formatPrice(n: number | null | undefined): string {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(n);
 }
 
-function formatPct(n: number | null | undefined): string {
+/** Values already in percentage points (e.g. 5.5 for 5.5%) — do not multiply by 100. */
+function formatPctPoints(n: number | null | undefined): string {
   if (n == null || Number.isNaN(n)) return "—";
-  return `${(n * 100).toFixed(2)}%`;
+  return `${Number(n).toFixed(2)}%`;
+}
+
+/** IRR and CoC are stored as decimals (e.g. 0.12 for 12%). */
+function formatPctDecimal(n: number | null | undefined): string {
+  if (n == null || Number.isNaN(n)) return "—";
+  return `${(Number(n) * 100).toFixed(2)}%`;
 }
 
 export default function HomePage() {
@@ -292,21 +305,48 @@ export default function HomePage() {
                             <div className="property-card-metrics-col">
                               <div className="property-metric">
                                 <span className="property-metric-label">Asset Cap</span>
-                                <span className="property-metric-value">{formatPct(deal.assetCapRate)}</span>
+                                <span className="property-metric-value">{formatPctPoints(deal.assetCapRate)}</span>
                               </div>
                               <div className="property-metric">
                                 <span className="property-metric-label">Adjusted Cap</span>
-                                <span className="property-metric-value">{formatPct(deal.adjustedCapRate)}</span>
+                                <span className="property-metric-value">{formatPctPoints(deal.adjustedCapRate)}</span>
+                              </div>
+                              <div className="property-metric">
+                                <span className="property-metric-label">Current NOI</span>
+                                <span className="property-metric-value">{deal.currentNoi != null ? formatPrice(deal.currentNoi) : "—"}</span>
                               </div>
                             </div>
                             <div className="property-card-metrics-col">
                               <div className="property-metric">
                                 <span className="property-metric-label">Rent Upside</span>
-                                <span className="property-metric-value">{formatPct(deal.rentUpside)}</span>
+                                <span className="property-metric-value">{formatPctPoints(deal.rentUpside)}</span>
+                              </div>
+                              <div className="property-metric">
+                                <span className="property-metric-label">Adjusted NOI</span>
+                                <span className="property-metric-value">{deal.adjustedNoi != null ? formatPrice(deal.adjustedNoi) : "—"}</span>
                               </div>
                               <div className="property-metric">
                                 <span className="property-metric-label">Deal Score</span>
                                 <span className="property-metric-value">{deal.dealScore != null ? Math.round(deal.dealScore) : "—"}</span>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="property-card-section-title" style={{ marginTop: "0.5rem" }}>Returns</div>
+                          <div className="property-card-metrics">
+                            <div className="property-card-metrics-col">
+                              <div className="property-metric">
+                                <span className="property-metric-label">IRR {deal.holdYears != null ? `(${deal.holdYears} yr)` : ""}</span>
+                                <span className="property-metric-value">{formatPctDecimal(deal.irrPct)}</span>
+                              </div>
+                            </div>
+                            <div className="property-card-metrics-col">
+                              <div className="property-metric">
+                                <span className="property-metric-label">Equity multiple</span>
+                                <span className="property-metric-value">{deal.equityMultiple != null ? `${deal.equityMultiple.toFixed(2)}x` : "—"}</span>
+                              </div>
+                              <div className="property-metric">
+                                <span className="property-metric-label">CoC %</span>
+                                <span className="property-metric-value">{formatPctDecimal(deal.cocPct)}</span>
                               </div>
                             </div>
                           </div>

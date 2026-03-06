@@ -32,7 +32,8 @@ router.get("/deals", async (req: Request, res: Response) => {
 
     const r = await pool.query(
       `WITH latest_signal AS (
-         SELECT DISTINCT ON (property_id) id, property_id, deal_score, asset_cap_rate, adjusted_cap_rate, rent_upside, generated_at
+         SELECT DISTINCT ON (property_id) id, property_id, deal_score, asset_cap_rate, adjusted_cap_rate, rent_upside,
+           irr_pct, equity_multiple, coc_pct, hold_years, current_noi, adjusted_noi, generated_at
          FROM deal_signals
          WHERE deal_score IS NOT NULL
          ORDER BY property_id, generated_at DESC
@@ -47,6 +48,12 @@ router.get("/deals", async (req: Request, res: Response) => {
          ls.asset_cap_rate,
          ls.adjusted_cap_rate,
          ls.rent_upside,
+         ls.irr_pct,
+         ls.equity_multiple,
+         ls.coc_pct,
+         ls.hold_years,
+         ls.current_noi,
+         ls.adjusted_noi,
          ls.generated_at
        FROM properties p
        INNER JOIN latest_signal ls ON ls.property_id = p.id
@@ -72,6 +79,12 @@ router.get("/deals", async (req: Request, res: Response) => {
         assetCapRate: row.asset_cap_rate != null ? Number(row.asset_cap_rate) : null,
         adjustedCapRate: row.adjusted_cap_rate != null ? Number(row.adjusted_cap_rate) : null,
         rentUpside: row.rent_upside != null ? Number(row.rent_upside) : null,
+        irrPct: row.irr_pct != null ? Number(row.irr_pct) : null,
+        equityMultiple: row.equity_multiple != null ? Number(row.equity_multiple) : null,
+        cocPct: row.coc_pct != null ? Number(row.coc_pct) : null,
+        holdYears: row.hold_years != null ? Number(row.hold_years) : null,
+        currentNoi: row.current_noi != null ? Number(row.current_noi) : null,
+        adjustedNoi: row.adjusted_noi != null ? Number(row.adjusted_noi) : null,
         generatedAt: row.generated_at instanceof Date ? row.generated_at.toISOString() : row.generated_at,
       };
     });

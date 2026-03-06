@@ -36,6 +36,9 @@ export function buildExcelProForma(ctx: UnderwritingContext): Buffer {
     ["IRR (%)", ctx.irr?.irrPct != null ? (ctx.irr.irrPct * 100).toFixed(2) : "—"],
     ["Equity multiple", ctx.irr?.equityMultiple != null ? ctx.irr.equityMultiple.toFixed(2) : "—"],
     ["CoC (%)", ctx.irr?.coc != null ? (ctx.irr.coc * 100).toFixed(2) : "—"],
+    ["", ""],
+    ["Expected appreciation (%/yr)", ctx.assumptions.expectedAppreciationPct != null ? ctx.assumptions.expectedAppreciationPct : "—"],
+    ["Projected value (appreciation)", ctx.projectedValueFromAppreciation != null ? fmt(ctx.projectedValueFromAppreciation) : "—"],
   ];
   const summarySheet = XLSX.utils.aoa_to_sheet(summaryData);
   XLSX.utils.book_append_sheet(wb, summarySheet, "Summary");

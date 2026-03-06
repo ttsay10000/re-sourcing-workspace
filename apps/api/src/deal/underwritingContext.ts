@@ -46,5 +46,8 @@ export interface UnderwritingContext {
     rentUpliftPct: number | null;
     expenseIncreasePct: number | null;
     managementFeePct: number | null;
+    expectedAppreciationPct: number | null;
   };
+  /** Projected property value at exit from appreciation (purchasePrice * (1 + appreciation)^holdYears). */
+  projectedValueFromAppreciation: number | null;
 }

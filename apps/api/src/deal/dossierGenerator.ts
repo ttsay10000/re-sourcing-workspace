@@ -80,6 +80,12 @@ export function buildDossierText(ctx: UnderwritingContext): string {
   lines.push(`Interest rate: ${pct(ctx.assumptions.interestRatePct)}`);
   lines.push(`Amortization: ${ctx.assumptions.amortizationYears ?? "—"} years`);
   lines.push(`Exit cap: ${pct(ctx.assumptions.exitCapPct)}`);
+  if (ctx.assumptions.expectedAppreciationPct != null) {
+    lines.push(`Expected appreciation: ${ctx.assumptions.expectedAppreciationPct}%/yr`);
+  }
+  if (ctx.projectedValueFromAppreciation != null) {
+    lines.push(`Projected value (appreciation): $${fmt(ctx.projectedValueFromAppreciation)} at year 5`);
+  }
   lines.push("");
 
   lines.push("7. KEY TAKEAWAYS");

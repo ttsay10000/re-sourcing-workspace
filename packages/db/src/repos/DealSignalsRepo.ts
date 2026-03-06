@@ -21,6 +21,12 @@ export interface InsertDealSignalsParams {
   riskScore?: number | null;
   priceMomentum?: number | null;
   dealScore?: number | null;
+  irrPct?: number | null;
+  equityMultiple?: number | null;
+  cocPct?: number | null;
+  holdYears?: number | null;
+  currentNoi?: number | null;
+  adjustedNoi?: number | null;
 }
 
 export class DealSignalsRepo {
@@ -35,8 +41,9 @@ export class DealSignalsRepo {
       `INSERT INTO deal_signals (
         property_id, price_per_unit, price_psf, asset_cap_rate, adjusted_cap_rate,
         yield_spread, rent_upside, rent_psf_ratio, expense_ratio,
-        liquidity_score, risk_score, price_momentum, deal_score
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        liquidity_score, risk_score, price_momentum, deal_score,
+        irr_pct, equity_multiple, coc_pct, hold_years, current_noi, adjusted_noi
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
       RETURNING *`,
       [
         params.propertyId,
@@ -52,6 +59,12 @@ export class DealSignalsRepo {
         params.riskScore ?? null,
         params.priceMomentum ?? null,
         params.dealScore ?? null,
+        params.irrPct ?? null,
+        params.equityMultiple ?? null,
+        params.cocPct ?? null,
+        params.holdYears ?? null,
+        params.currentNoi ?? null,
+        params.adjustedNoi ?? null,
       ]
     );
     return mapDealSignalRow(r.rows[0]);

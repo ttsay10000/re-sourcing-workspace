@@ -1254,11 +1254,6 @@ tyler@stayhaus.co`;
           <div style={{ borderTop: "1px solid #e0e0e0", paddingTop: "0.6rem", marginTop: "0.6rem", marginBottom: "0.5rem" }}>
             <strong style={{ display: "block", marginBottom: "0.2rem" }}>Downloads</strong>
             <p style={{ margin: "0 0 0.35rem", fontSize: "0.75rem", color: "#666" }}>Inquiry attachments, uploaded docs, and generated dossier/Excel.</p>
-            <p style={{ margin: "0 0 0.5rem", fontSize: "0.8rem" }}>
-              <a href={`/dossier-assumptions?property_id=${encodeURIComponent(property.id)}`} style={{ color: "#0066cc" }}>
-                Generate dossier
-              </a>
-            </p>
             {unifiedDocuments === null ? (
               <p style={{ margin: 0, fontSize: "0.8rem", color: "#737373" }}>Loading…</p>
             ) : unifiedDocuments.length > 0 ? (
@@ -1306,7 +1301,7 @@ tyler@stayhaus.co`;
                 ))}
               </ul>
             ) : (
-              <p style={{ margin: 0, fontSize: "0.8rem", color: "#737373" }}>No documents yet. Send an inquiry, upload a file, or use Generate dossier above.</p>
+              <p style={{ margin: 0, fontSize: "0.8rem", color: "#737373" }}>No documents yet. Send an inquiry, upload a file, or use the Generate dossier button at the bottom of this property.</p>
             )}
           </div>
           <div style={{ borderTop: "1px solid #e0e0e0", paddingTop: "0.6rem", marginTop: "0.6rem", marginBottom: "0.5rem" }}>
@@ -1423,6 +1418,31 @@ tyler@stayhaus.co`;
           </div>
         )}
       </CollapsibleSection>
+
+      {/* Generate dossier — large CTA at end of property sub-sections */}
+      <div style={{ marginTop: "2rem", padding: "2rem 1rem", display: "flex", justifyContent: "center", alignItems: "center" }}>
+        <a
+          href={`/dossier-assumptions?property_id=${encodeURIComponent(property.id)}`}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            minWidth: "280px",
+            padding: "1rem 2rem",
+            fontSize: "1.1rem",
+            fontWeight: 600,
+            color: "#fff",
+            backgroundColor: "#0066cc",
+            border: "none",
+            borderRadius: "8px",
+            textDecoration: "none",
+            boxShadow: "0 2px 8px rgba(0,102,204,0.35)",
+            cursor: "pointer",
+          }}
+        >
+          Generate dossier
+        </a>
+      </div>
     </div>
   );
 }

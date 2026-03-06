@@ -14,8 +14,7 @@ import type { UnderwritingContext } from "./underwritingContext.js";
 import { saveGeneratedDocument } from "./generatedDocStorage.js";
 import { randomUUID } from "crypto";
 import { sendMessageWithAttachments } from "../inquiry/gmailClient.js";
-
-const HOLD_YEARS = 5;
+import { HOLD_YEARS } from "./constants.js";
 
 export interface GenerateDossierResult {
   dossierDoc: { id: string; fileName: string; storagePath: string };
@@ -132,7 +131,15 @@ export async function runGenerateDossier(propertyId: string): Promise<GenerateDo
     adjustedNoi: furnishedRental?.adjustedNoi ?? null,
     rentUpsidePct: rentUplift > 1 ? (rentUplift - 1) : null,
   });
-  await signalsRepo.insert(insertParams);
+  await signalsRepo.insert({
+    ...insertParams,
+    irrPct: irr?.irr ?? null,
+    equityMultiple: irr?.equityMultiple ?? null,
+    cocPct: irr?.coc ?? null,
+    holdYears: HOLD_YEARS,
+    currentNoi: currentNoi ?? null,
+    adjustedNoi: furnishedRental?.adjustedNoi ?? currentNoi ?? null,
+  });
 
   const ctx: UnderwritingContext = {
     propertyId,
@@ -175,7 +182,14 @@ export async function runGenerateDossier(propertyId: string): Promise<GenerateDo
       rentUpliftPct: profile.defaultRentUplift ?? null,
       expenseIncreasePct: profile.defaultExpenseIncrease ?? null,
       managementFeePct: profile.defaultManagementFee ?? null,
+      expectedAppreciationPct: profile.expectedAppreciationPct ?? null,
     },
+    projectedValueFromAppreciation:
+      purchasePrice != null &&
+      profile.expectedAppreciationPct != null &&
+      !Number.isNaN(profile.expectedAppreciationPct)
+        ? purchasePrice * Math.pow(1 + profile.expectedAppreciationPct / 100, HOLD_YEARS)
+        : null,
   };
 
   const dateStr = new Date().toISOString().slice(0, 10);

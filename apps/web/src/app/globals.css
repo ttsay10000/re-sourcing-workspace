@@ -83,6 +83,31 @@ textarea {
   overflow: auto;
 }
 
+.app-footer {
+  flex-shrink: 0;
+  padding: 1rem 1.5rem;
+  background: #fafafa;
+  border-top: 1px solid #e5e5e5;
+}
+
+.app-footer-nav {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.5rem;
+}
+
+.app-footer-link {
+  color: #525252;
+  text-decoration: none;
+  font-size: 0.9rem;
+}
+
+.app-footer-link:hover {
+  color: #111;
+}
+
 /* Legacy main for any remaining pages */
 .main {
   flex: 1;

@@ -242,6 +242,7 @@ export function mapUserProfile(row: Record<string, unknown>): UserProfile {
     defaultRentUplift: row.default_rent_uplift != null ? Number(row.default_rent_uplift) : null,
     defaultExpenseIncrease: row.default_expense_increase != null ? Number(row.default_expense_increase) : null,
     defaultManagementFee: row.default_management_fee != null ? Number(row.default_management_fee) : null,
+    expectedAppreciationPct: row.expected_appreciation_pct != null ? Number(row.expected_appreciation_pct) : null,
     createdAt: toIso(row.created_at),
     updatedAt: toIso(row.updated_at),
   };
@@ -273,6 +274,12 @@ export function mapDealSignalRow(row: Record<string, unknown>): DealSignalRow {
     riskScore: row.risk_score != null ? Number(row.risk_score) : null,
     priceMomentum: row.price_momentum != null ? Number(row.price_momentum) : null,
     dealScore: row.deal_score != null ? Number(row.deal_score) : null,
+    irrPct: row.irr_pct != null ? Number(row.irr_pct) : null,
+    equityMultiple: row.equity_multiple != null ? Number(row.equity_multiple) : null,
+    cocPct: row.coc_pct != null ? Number(row.coc_pct) : null,
+    holdYears: row.hold_years != null ? Number(row.hold_years) : null,
+    currentNoi: row.current_noi != null ? Number(row.current_noi) : null,
+    adjustedNoi: row.adjusted_noi != null ? Number(row.adjusted_noi) : null,
     generatedAt: toIso(row.generated_at),
   };
 }

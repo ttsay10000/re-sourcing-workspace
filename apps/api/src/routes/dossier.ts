@@ -57,6 +57,7 @@ router.get("/dossier-assumptions", async (req: Request, res: Response) => {
         defaultRentUplift: profile.defaultRentUplift,
         defaultExpenseIncrease: profile.defaultExpenseIncrease,
         defaultManagementFee: profile.defaultManagementFee,
+        expectedAppreciationPct: profile.expectedAppreciationPct,
       },
       property,
     });

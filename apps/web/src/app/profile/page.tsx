@@ -16,6 +16,7 @@ interface UserProfile {
   defaultRentUplift?: number | null;
   defaultExpenseIncrease?: number | null;
   defaultManagementFee?: number | null;
+  expectedAppreciationPct?: number | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -51,6 +52,7 @@ export default function ProfilePage() {
         defaultRentUplift: data.defaultRentUplift ?? undefined,
         defaultExpenseIncrease: data.defaultExpenseIncrease ?? undefined,
         defaultManagementFee: data.defaultManagementFee ?? undefined,
+        expectedAppreciationPct: data.expectedAppreciationPct ?? undefined,
       });
     } catch (e) {
       // #region agent log
@@ -106,6 +108,7 @@ export default function ProfilePage() {
           defaultRentUplift: draft.defaultRentUplift ?? profile.defaultRentUplift,
           defaultExpenseIncrease: draft.defaultExpenseIncrease ?? profile.defaultExpenseIncrease,
           defaultManagementFee: draft.defaultManagementFee ?? profile.defaultManagementFee,
+          expectedAppreciationPct: draft.expectedAppreciationPct ?? profile.expectedAppreciationPct,
         }),
       });
       const data = await res.json();
@@ -346,6 +349,17 @@ export default function ProfilePage() {
                 value={draft.defaultManagementFee ?? ""}
                 onChange={(e) => setDraft((p) => ({ ...p, defaultManagementFee: e.target.value ? Number(e.target.value) : undefined }))}
                 style={{ padding: "0.5rem", border: "1px solid #ccc", borderRadius: "4px" }}
+              />
+            </label>
+            <label style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+              <span style={{ fontSize: "0.875rem", fontWeight: 500 }}>Expected appreciation (%/yr)</span>
+              <input
+                type="number"
+                step="0.1"
+                value={draft.expectedAppreciationPct ?? ""}
+                onChange={(e) => setDraft((p) => ({ ...p, expectedAppreciationPct: e.target.value ? Number(e.target.value) : undefined }))}
+                style={{ padding: "0.5rem", border: "1px solid #ccc", borderRadius: "4px" }}
+                placeholder="e.g. 3"
               />
             </label>
           </div>

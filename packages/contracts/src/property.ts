@@ -284,6 +284,8 @@ export interface UserProfile {
   defaultRentUplift?: number | null;
   defaultExpenseIncrease?: number | null;
   defaultManagementFee?: number | null;
+  /** Expected annual appreciation % (e.g. 3 for 3%/yr) for property value projection. */
+  expectedAppreciationPct?: number | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -313,5 +315,13 @@ export interface DealSignalRow {
   riskScore?: number | null;
   priceMomentum?: number | null;
   dealScore?: number | null;
+  /** IRR as decimal (e.g. 0.12 for 12%). */
+  irrPct?: number | null;
+  equityMultiple?: number | null;
+  /** Cash-on-cash as decimal (e.g. 0.062 for 6.2%). */
+  cocPct?: number | null;
+  holdYears?: number | null;
+  currentNoi?: number | null;
+  adjustedNoi?: number | null;
   generatedAt: string;
 }

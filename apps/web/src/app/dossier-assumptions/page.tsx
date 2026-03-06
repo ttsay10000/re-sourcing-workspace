@@ -18,6 +18,7 @@ interface AssumptionsProfile {
   defaultRentUplift?: number | null;
   defaultExpenseIncrease?: number | null;
   defaultManagementFee?: number | null;
+  expectedAppreciationPct?: number | null;
 }
 
 interface PropertySummary {
@@ -59,6 +60,7 @@ function DossierAssumptionsContent() {
         defaultRentUplift: p.defaultRentUplift ?? undefined,
         defaultExpenseIncrease: p.defaultExpenseIncrease ?? undefined,
         defaultManagementFee: p.defaultManagementFee ?? undefined,
+        expectedAppreciationPct: p.expectedAppreciationPct ?? undefined,
       });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load assumptions");
@@ -86,6 +88,7 @@ function DossierAssumptionsContent() {
           defaultRentUplift: draft.defaultRentUplift,
           defaultExpenseIncrease: draft.defaultExpenseIncrease,
           defaultManagementFee: draft.defaultManagementFee,
+          expectedAppreciationPct: draft.expectedAppreciationPct,
         }),
       });
       const data = await res.json();
@@ -216,6 +219,17 @@ function DossierAssumptionsContent() {
               value={draft.defaultManagementFee ?? ""}
               onChange={(e) => setDraft((p) => ({ ...p, defaultManagementFee: e.target.value ? Number(e.target.value) : undefined }))}
               style={{ padding: "0.5rem", border: "1px solid #ccc", borderRadius: "4px" }}
+            />
+          </label>
+          <label style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+            <span style={{ fontSize: "0.875rem", fontWeight: 500 }}>Expected appreciation (%/yr)</span>
+            <input
+              type="number"
+              step="0.1"
+              value={draft.expectedAppreciationPct ?? ""}
+              onChange={(e) => setDraft((p) => ({ ...p, expectedAppreciationPct: e.target.value ? Number(e.target.value) : undefined }))}
+              style={{ padding: "0.5rem", border: "1px solid #ccc", borderRadius: "4px" }}
+              placeholder="e.g. 3"
             />
           </label>
         </div>

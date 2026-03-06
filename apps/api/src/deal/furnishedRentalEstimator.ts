@@ -35,7 +35,13 @@ export interface FurnishedRentalResult {
 
 /**
  * Compute adjusted revenue and expenses for furnished rental scenario.
- * adjustedCapRatePct is left null; caller should set via adjustedNoi / purchasePrice * 100.
+ * Formula: adjusted NOI = gross rent × (1 + rent uplift) − expenses × (1 + expense uplift),
+ * with management fee added to expenses (on adjusted gross). So:
+ *   adjusted gross income = current gross × rentUplift
+ *   current expenses = gross − NOI (implied)
+ *   adjusted expenses = current expenses × expenseIncrease + management fee × adjusted gross
+ *   adjusted NOI = adjusted gross − adjusted expenses
+ * adjustedCapRatePct is set here as adjustedNoi / purchasePrice × 100 when price is provided.
  */
 export function computeFurnishedRental(inputs: FurnishedRentalInputs, purchasePrice: number | null): FurnishedRentalResult {
   const {

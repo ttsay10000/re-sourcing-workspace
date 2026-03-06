@@ -20,6 +20,7 @@ import {
   PropertyUploadedDocumentRepo,
   DealSignalsRepo,
   DocumentRepo,
+  UserProfileRepo,
 } from "@re-sourcing/db";
 import type { PropertyDocumentCategory } from "@re-sourcing/contracts";
 import multer from "multer";
@@ -27,7 +28,7 @@ import { randomUUID } from "crypto";
 import { resolveInquiryFilePath } from "../inquiry/storage.js";
 import { saveUploadedDocument, resolveUploadedDocFilePath, deleteUploadedDocumentFile } from "../upload/uploadedDocStorage.js";
 import { sendMessage as gmailSendMessage } from "../inquiry/gmailClient.js";
-import type { RentalFinancials, RentalFinancialsFromLlm } from "@re-sourcing/contracts";
+import type { PropertyDetails, RentalFinancials, RentalFinancialsFromLlm } from "@re-sourcing/contracts";
 import { runEnrichmentForProperty } from "../enrichment/runEnrichment.js";
 import { normalizeAddressLineForDisplay, getBBLForProperty } from "../enrichment/resolvePropertyBBL.js";
 import { runRentalApiStep } from "../rental/rentalApiClient.js";
@@ -37,6 +38,10 @@ import { getRentRollComparison } from "../rental/rentRollComparison.js";
 import { fetchNyDosEntityByName } from "../enrichment/nyDosEntity.js";
 import { fetchAcrisDocumentsByOwnerName } from "../enrichment/acrisDocuments.js";
 import { computeDealSignals } from "../deal/computeDealSignals.js";
+import { computeFurnishedRental } from "../deal/furnishedRentalEstimator.js";
+import { computeMortgage } from "../deal/mortgageAmortization.js";
+import { computeIrr, saleProceedsFromExitCap } from "../deal/irrCalculation.js";
+import { HOLD_YEARS } from "../deal/constants.js";
 import { resolveGeneratedDocPath, deleteGeneratedDocumentFile } from "../deal/generatedDocStorage.js";
 import { unlink } from "fs/promises";
 
@@ -884,7 +889,19 @@ router.get("/properties/:id", async (req: Request, res: Response) => {
   }
 });
 
-/** POST /api/properties/:id/compute-score - compute deal signals and score, persist to deal_signals, return score and signals. */
+function noiFromDetails(details: PropertyDetails | null): number | null {
+  const noi = details?.rentalFinancials?.fromLlm?.noi;
+  if (noi != null && typeof noi === "number" && !Number.isNaN(noi)) return noi;
+  return null;
+}
+
+function grossRentFromDetails(details: PropertyDetails | null): number | null {
+  const gross = details?.rentalFinancials?.fromLlm?.grossRentTotal;
+  if (gross != null && typeof gross === "number" && !Number.isNaN(gross) && gross > 0) return gross;
+  return null;
+}
+
+/** POST /api/properties/:id/compute-score - compute deal signals and full underwriting, persist to deal_signals, return score and signals. */
 router.post("/properties/:id/compute-score", async (req: Request, res: Response) => {
   try {
     const { id: propertyId } = req.params;
@@ -892,6 +909,7 @@ router.post("/properties/:id/compute-score", async (req: Request, res: Response)
     const propertyRepo = new PropertyRepo({ pool });
     const matchRepo = new MatchRepo({ pool });
     const listingRepo = new ListingRepo({ pool });
+    const profileRepo = new UserProfileRepo({ pool });
     const property = await propertyRepo.byId(propertyId);
     if (!property) {
       res.status(404).json({ error: "Property not found", propertyId });
@@ -900,21 +918,75 @@ router.post("/properties/:id/compute-score", async (req: Request, res: Response)
     const { matches } = await matchRepo.list({ propertyId, limit: 1 });
     const match = matches[0];
     const listing = match ? await listingRepo.byId(match.listingId) : null;
+    const purchasePrice = listing?.price ?? null;
     const primaryListing = {
-      price: listing?.price ?? null,
+      price: purchasePrice,
       city: listing?.city ?? null,
     };
+    const details = property.details as PropertyDetails | null;
+    const currentNoi = noiFromDetails(details);
+    const currentGrossRent = grossRentFromDetails(details) ?? (currentNoi != null ? currentNoi * 1.5 : null);
+    await profileRepo.ensureDefault();
+    const profile = await profileRepo.getDefault();
+    const ltvPct = profile?.defaultLtv ?? 65;
+    const interestRatePct = profile?.defaultInterestRate ?? 6.5;
+    const amortizationYears = profile?.defaultAmortization ?? 30;
+    const exitCapPct = profile?.defaultExitCap ?? 5;
+    const rentUpliftPct = profile?.defaultRentUplift ?? 15;
+    const expenseIncreasePct = profile?.defaultExpenseIncrease ?? 2;
+    const managementFeePct = profile?.defaultManagementFee ?? 5;
+    const rentUplift = 1 + (rentUpliftPct ?? 0) / 100;
+    const expenseIncrease = 1 + (expenseIncreasePct ?? 0) / 100;
+    const managementFee = (managementFeePct ?? 0) / 100;
+    const furnishedRental =
+      currentGrossRent != null && currentNoi != null && purchasePrice != null
+        ? computeFurnishedRental(
+            { currentGrossRent, currentNoi, rentUplift, expenseIncrease, managementFee },
+            purchasePrice
+          )
+        : null;
+    const principal =
+      purchasePrice != null && ltvPct != null && ltvPct > 0 ? (purchasePrice * ltvPct) / 100 : 0;
+    const mortgage =
+      principal > 0 && amortizationYears > 0
+        ? computeMortgage({
+            principal,
+            annualRate: (interestRatePct ?? 0) / 100,
+            amortizationYears,
+          })
+        : null;
+    const adjustedNoi = furnishedRental?.adjustedNoi ?? currentNoi ?? 0;
+    const saleProceeds = saleProceedsFromExitCap(adjustedNoi, exitCapPct ?? 5);
+    const equity = purchasePrice != null ? purchasePrice - principal : 0;
+    const annualCf = adjustedNoi - (mortgage?.annualDebtService ?? 0);
+    const annualCashFlows = Array(HOLD_YEARS).fill(annualCf);
+    const irr =
+      equity > 0
+        ? computeIrr({
+            initialEquity: equity,
+            annualCashFlows,
+            saleProceeds,
+          })
+        : null;
     const input = {
       propertyId,
       canonicalAddress: property.canonicalAddress,
       details: property.details ?? null,
       primaryListing,
-      adjustedNoi: (req.body?.adjustedNoi as number | undefined) ?? undefined,
-      rentUpsidePct: (req.body?.rentUpsidePct as number | undefined) ?? undefined,
+      adjustedNoi: furnishedRental?.adjustedNoi ?? (req.body?.adjustedNoi as number | undefined) ?? undefined,
+      rentUpsidePct: rentUplift > 1 ? rentUplift - 1 : (req.body?.rentUpsidePct as number | undefined) ?? undefined,
     };
     const { insertParams, scoringResult } = computeDealSignals(input);
     const signalsRepo = new DealSignalsRepo({ pool });
-    const row = await signalsRepo.insert(insertParams);
+    const row = await signalsRepo.insert({
+      ...insertParams,
+      irrPct: irr?.irr ?? null,
+      equityMultiple: irr?.equityMultiple ?? null,
+      cocPct: irr?.coc ?? null,
+      holdYears: HOLD_YEARS,
+      currentNoi: currentNoi ?? null,
+      adjustedNoi: furnishedRental?.adjustedNoi ?? currentNoi ?? null,
+    });
     res.json({
       dealScore: scoringResult.dealScore,
       dealSignals: row,
