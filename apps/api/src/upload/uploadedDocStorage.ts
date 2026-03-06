@@ -4,7 +4,8 @@
  */
 
 import { mkdir, writeFile, unlink } from "fs/promises";
-import { join } from "path";
+import { join, normalize } from "path";
+import { existsSync } from "fs";
 
 const DEFAULT_BASE = "uploads/property-docs";
 
@@ -28,8 +29,15 @@ export async function saveUploadedDocument(
 }
 
 export function resolveUploadedDocFilePath(filePath: string): string {
-  if (filePath.startsWith("/")) return filePath;
-  return join(process.cwd(), filePath);
+  if (!filePath || typeof filePath !== "string") return join(process.cwd(), "uploads/property-docs");
+  const trimmed = filePath.trim();
+  if (trimmed.startsWith("/") || /^[A-Za-z]:\\/.test(trimmed)) return normalize(trimmed);
+  return normalize(join(process.cwd(), trimmed));
+}
+
+/** Return true if the resolved file exists (for download 404). */
+export function uploadedDocFileExists(filePath: string): boolean {
+  return existsSync(resolveUploadedDocFilePath(filePath));
 }
 
 /** Remove the file from disk if it exists. Ignores errors (e.g. file already missing). */

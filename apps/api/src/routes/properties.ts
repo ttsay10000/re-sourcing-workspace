@@ -26,13 +26,14 @@ import type { PropertyDocumentCategory } from "@re-sourcing/contracts";
 import multer from "multer";
 import { randomUUID } from "crypto";
 import { resolveInquiryFilePath } from "../inquiry/storage.js";
-import { saveUploadedDocument, resolveUploadedDocFilePath, deleteUploadedDocumentFile } from "../upload/uploadedDocStorage.js";
+import { saveUploadedDocument, resolveUploadedDocFilePath, deleteUploadedDocumentFile, uploadedDocFileExists } from "../upload/uploadedDocStorage.js";
 import { sendMessage as gmailSendMessage } from "../inquiry/gmailClient.js";
 import type { PropertyDetails, RentalFinancials, RentalFinancialsFromLlm } from "@re-sourcing/contracts";
 import { runEnrichmentForProperty } from "../enrichment/runEnrichment.js";
 import { normalizeAddressLineForDisplay, getBBLForProperty } from "../enrichment/resolvePropertyBBL.js";
 import { runRentalApiStep } from "../rental/rentalApiClient.js";
-import { extractRentalFinancialsFromListing } from "../rental/extractRentalFinancialsFromListing.js";
+import { extractRentalFinancialsFromListing, extractRentalFinancialsFromText } from "../rental/extractRentalFinancialsFromListing.js";
+import { extractTextFromUploadedFile } from "../upload/extractTextFromUploadedFile.js";
 import { suggestRentalDataGaps } from "../rental/suggestRentalDataGaps.js";
 import { getRentRollComparison } from "../rental/rentRollComparison.js";
 import { fetchNyDosEntityByName } from "../enrichment/nyDosEntity.js";
@@ -642,6 +643,10 @@ router.get("/properties/:id/documents/:docId/file", async (req: Request, res: Re
     const uploadedDocRepo = new PropertyUploadedDocumentRepo({ pool });
     const uploadedDoc = await uploadedDocRepo.byId(docId);
     if (uploadedDoc && uploadedDoc.propertyId === propertyId) {
+      if (!uploadedDocFileExists(uploadedDoc.filePath)) {
+        res.status(404).json({ error: "Document file not found on disk", docId });
+        return;
+      }
       const absolutePath = resolveUploadedDocFilePath(uploadedDoc.filePath);
       res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(uploadedDoc.filename)}"`);
       res.sendFile(absolutePath, (err) => {
@@ -772,6 +777,35 @@ router.post(
         category,
         source,
       });
+
+      // When user uploads OM or Brochure, extract text and run rental/financial LLM, then merge into property details.
+      if (category === "OM" || category === "Brochure") {
+        try {
+          const text = await extractTextFromUploadedFile(filePath, filename);
+          if (text.length >= 100) {
+            const fromLlm = await extractRentalFinancialsFromText(text);
+            if (fromLlm && typeof fromLlm === "object" && Object.keys(fromLlm).length > 0) {
+              const prop = await propertyRepo.byId(propertyId);
+              const existing = (prop?.details?.rentalFinancials ?? null) as RentalFinancials | null;
+              const existingFromLlm = existing?.fromLlm ?? null;
+              const mergedFromLlm =
+                existingFromLlm && typeof existingFromLlm === "object"
+                  ? { ...existingFromLlm, ...fromLlm }
+                  : fromLlm;
+              const rentalFinancials: RentalFinancials = {
+                ...(existing ?? {}),
+                fromLlm: mergedFromLlm as RentalFinancialsFromLlm,
+                source: existing?.source ?? "llm",
+                lastUpdatedAt: new Date().toISOString(),
+              };
+              await propertyRepo.mergeDetails(propertyId, { rentalFinancials });
+            }
+          }
+        } catch (e) {
+          console.warn("[documents/upload] OM/Brochure LLM extraction failed:", e instanceof Error ? e.message : e);
+        }
+      }
+
       res.status(201).json({ propertyId, document: inserted });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
