@@ -61,4 +61,32 @@ export class InquiryEmailRepo {
     );
     return r.rows.map((row: Record<string, unknown>) => mapInquiryEmail(row));
   }
+
+  async updateLlmFields(
+    id: string,
+    params: { bodySummary?: string | null; receiptDateFromBroker?: string | null; attachmentsList?: string | null }
+  ): Promise<boolean> {
+    const sets: string[] = [];
+    const values: unknown[] = [];
+    let i = 1;
+    if (params.bodySummary !== undefined) {
+      sets.push(`body_summary = $${i++}`);
+      values.push(params.bodySummary);
+    }
+    if (params.receiptDateFromBroker !== undefined) {
+      sets.push(`receipt_date_from_broker = $${i++}`);
+      values.push(params.receiptDateFromBroker);
+    }
+    if (params.attachmentsList !== undefined) {
+      sets.push(`attachments_list = $${i++}`);
+      values.push(params.attachmentsList);
+    }
+    if (sets.length === 0) return false;
+    values.push(id);
+    const r = await this.client.query(
+      `UPDATE property_inquiry_emails SET ${sets.join(", ")} WHERE id = $${i} RETURNING id`,
+      values
+    );
+    return r.rowCount !== null && r.rowCount > 0;
+  }
 }

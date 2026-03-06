@@ -7,10 +7,11 @@
 import type { RentalFinancials, RentalFinancialsFromLlm } from "@re-sourcing/contracts";
 import type { Pool } from "pg";
 import { getPool, PropertyRepo, InquiryEmailRepo, InquiryDocumentRepo, InquirySendRepo } from "@re-sourcing/db";
-import { listMessages, getMessage, getAttachment, getHeader, getBodyText, getAttachmentParts, parseEmailFromHeader, getThreadMessageIds } from "./gmailClient.js";
+import { listMessages, getMessage, getAttachment, getHeader, getBodyText, getPdfAttachmentParts, parseEmailFromHeader, getThreadMessageIds } from "./gmailClient.js";
 import { parseAddressFromInquirySubject, parseAddressFromSubjectFallback } from "./addressFromSubject.js";
 import { saveInquiryAttachment } from "./storage.js";
 import { extractTextFromFile } from "./extractTextFromAttachment.js";
+import { extractEmailSummary } from "./extractEmailSummary.js";
 import { extractRentalFinancialsFromText } from "../rental/extractRentalFinancialsFromListing.js";
 
 /** Build map: broker email (normalized) -> property_id. Uses first listing match per email. */
@@ -144,7 +145,7 @@ export async function processInbox(options?: { maxMessages?: number }): Promise<
       });
       result.saved++;
 
-      const attachmentParts = getAttachmentParts(msg);
+      const attachmentParts = getPdfAttachmentParts(msg);
       const savedPaths: { filePath: string; filename: string }[] = [];
       for (const part of attachmentParts) {
         try {
@@ -161,6 +162,19 @@ export async function processInbox(options?: { maxMessages?: number }): Promise<
         } catch (e) {
           result.errors.push(`attachment ${part.filename}: ${e instanceof Error ? e.message : String(e)}`);
         }
+      }
+
+      try {
+        const emailSummary = await extractEmailSummary(bodyText, savedPaths.map((p) => p.filename));
+        if (emailSummary) {
+          await emailRepo.updateLlmFields(emailRow.id, {
+            bodySummary: emailSummary.summary,
+            receiptDateFromBroker: emailSummary.latestReceiptDateFromBroker,
+            attachmentsList: emailSummary.attachmentsList,
+          });
+        }
+      } catch (e) {
+        result.errors.push(`email summary: ${e instanceof Error ? e.message : String(e)}`);
       }
 
       const attachmentTexts: string[] = [];
@@ -255,7 +269,7 @@ export async function processInbox(options?: { maxMessages?: number }): Promise<
         result.saved++;
         result.brokerSaved = (result.brokerSaved ?? 0) + 1;
 
-        const attachmentParts = getAttachmentParts(msg);
+        const attachmentParts = getPdfAttachmentParts(msg);
         const savedPaths: { filePath: string; filename: string }[] = [];
         for (const part of attachmentParts) {
           try {
@@ -272,6 +286,19 @@ export async function processInbox(options?: { maxMessages?: number }): Promise<
           } catch (e) {
             result.errors.push(`broker attachment ${part.filename}: ${e instanceof Error ? e.message : String(e)}`);
           }
+        }
+
+        try {
+          const emailSummary = await extractEmailSummary(bodyText, savedPaths.map((p) => p.filename));
+          if (emailSummary) {
+            await emailRepo.updateLlmFields(emailRow.id, {
+              bodySummary: emailSummary.summary,
+              receiptDateFromBroker: emailSummary.latestReceiptDateFromBroker,
+              attachmentsList: emailSummary.attachmentsList,
+            });
+          }
+        } catch (e) {
+          result.errors.push(`broker email summary: ${e instanceof Error ? e.message : String(e)}`);
         }
 
         const attachmentTexts: string[] = [];
@@ -376,7 +403,7 @@ export async function processInbox(options?: { maxMessages?: number }): Promise<
         result.saved++;
         result.threadSaved = (result.threadSaved ?? 0) + 1;
 
-        const attachmentParts = getAttachmentParts(msg);
+        const attachmentParts = getPdfAttachmentParts(msg);
         const savedPaths: { filePath: string; filename: string }[] = [];
         for (const part of attachmentParts) {
           try {
@@ -393,6 +420,19 @@ export async function processInbox(options?: { maxMessages?: number }): Promise<
           } catch (e) {
             result.errors.push(`thread attachment ${part.filename}: ${e instanceof Error ? e.message : String(e)}`);
           }
+        }
+
+        try {
+          const emailSummary = await extractEmailSummary(bodyText, savedPaths.map((p) => p.filename));
+          if (emailSummary) {
+            await emailRepo.updateLlmFields(emailRow.id, {
+              bodySummary: emailSummary.summary,
+              receiptDateFromBroker: emailSummary.latestReceiptDateFromBroker,
+              attachmentsList: emailSummary.attachmentsList,
+            });
+          }
+        } catch (e) {
+          result.errors.push(`thread email summary: ${e instanceof Error ? e.message : String(e)}`);
         }
 
         const attachmentTexts: string[] = [];

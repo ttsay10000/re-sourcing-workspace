@@ -1,126 +1,139 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
 const MAX_SELECT = 10;
 
-type DealStatus = "active" | "off market" | "in contract" | "delisted";
-
-type PlaceholderProperty = {
+type DealRow = {
   id: string;
-  score: number;
-  imageUrl: string;
   address: string;
-  price: string;
-  beds: number;
-  baths: number;
-  sqft: string;
-  listedDate: string;
-  daysOnMarket: string;
-  status: DealStatus;
-  projectedIRR: string;
-  currentNOI: string;
-  valueAddNOI: string;
-  currentCapRate: string;
-  projectedCapRate: string;
-  cashOnCashReturn: string;
-  amenities: string;
+  price: number | null;
+  totalUnits: number | null;
+  dealScore: number | null;
+  assetCapRate: number | null;
+  adjustedCapRate: number | null;
+  rentUpside: number | null;
+  generatedAt: string | null;
 };
 
-const PLACEHOLDER_PROPERTIES: PlaceholderProperty[] = [
-  {
-    id: "1",
-    score: 92,
-    imageUrl: "https://picsum.photos/seed/re1/400/260",
-    address: "123 Oak St, Brooklyn",
-    price: "$1.2M",
-    beds: 3,
-    baths: 2,
-    sqft: "1,840",
-    listedDate: "Feb 15, 2025",
-    daysOnMarket: "13",
-    status: "active",
-    projectedIRR: "12.4%",
-    currentNOI: "$84,200",
-    valueAddNOI: "$98,500",
-    currentCapRate: "7.0%",
-    projectedCapRate: "8.2%",
-    cashOnCashReturn: "14.1%",
-    amenities: "Parking, Laundry",
-  },
-  {
-    id: "2",
-    score: 89,
-    imageUrl: "https://picsum.photos/seed/re2/400/260",
-    address: "456 Pine Ave, Queens",
-    price: "$895K",
-    beds: 2,
-    baths: 2,
-    sqft: "1,200",
-    listedDate: "Feb 8, 2025",
-    daysOnMarket: "20",
-    status: "active",
-    projectedIRR: "10.8%",
-    currentNOI: "$62,100",
-    valueAddNOI: "$71,200",
-    currentCapRate: "6.9%",
-    projectedCapRate: "8.0%",
-    cashOnCashReturn: "11.5%",
-    amenities: "Gym, Doorman",
-  },
-  {
-    id: "3",
-    score: 87,
-    imageUrl: "https://picsum.photos/seed/re3/400/260",
-    address: "789 Maple Dr, Manhattan",
-    price: "$2.1M",
-    beds: 4,
-    baths: 3,
-    sqft: "2,400",
-    listedDate: "Feb 20, 2025",
-    daysOnMarket: "8",
-    status: "in contract",
-    projectedIRR: "9.2%",
-    currentNOI: "$118,500",
-    valueAddNOI: "$132,000",
-    currentCapRate: "5.6%",
-    projectedCapRate: "6.3%",
-    cashOnCashReturn: "9.8%",
-    amenities: "Parking, Laundry, Roof deck",
-  },
-];
-
 function getScoreBubbleClass(score: number): string {
-  if (score > 90) return "property-card-score-bubble--green";
-  if (score >= 70) return "property-card-score-bubble--yellow";
+  if (score >= 80) return "property-card-score-bubble--green";
+  if (score >= 65) return "property-card-score-bubble--yellow";
   return "property-card-score-bubble--red";
 }
 
+function getDealStatusTag(score: number): string {
+  if (score >= 80) return "Strong Buy";
+  if (score >= 70) return "Attractive";
+  if (score >= 60) return "Neutral";
+  return "Weak";
+}
+
+function formatPrice(n: number | null | undefined): string {
+  if (n == null || Number.isNaN(n)) return "—";
+  if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `$${(n / 1_000).toFixed(0)}K`;
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(n);
+}
+
+function formatPct(n: number | null | undefined): string {
+  if (n == null || Number.isNaN(n)) return "—";
+  return `${(n * 100).toFixed(2)}%`;
+}
+
 export default function HomePage() {
+  const [deals, setDeals] = useState<DealRow[]>([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [savedIds, setSavedIds] = useState<Set<string>>(new Set());
+  const [savingId, setSavingId] = useState<string | null>(null);
+  const [sort, setSort] = useState<"deal_score" | "adjusted_cap_rate" | "asset_cap_rate" | "rent_upside" | "price">("deal_score");
+  const [order, setOrder] = useState<"asc" | "desc">("desc");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [dossiersGenerated, setDossiersGenerated] = useState(false);
+
+  const fetchDeals = useCallback(() => {
+    setLoading(true);
+    setError(null);
+    const params = new URLSearchParams({ sort, order: order, limit: "50" });
+    fetch(`${API_BASE}/api/deals?${params}`)
+      .then(async (r) => {
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error((data.error || data.details || `HTTP ${r.status}`) as string);
+        setDeals(data.deals ?? []);
+        setTotal(Number(data.total) ?? 0);
+      })
+      .catch((e) => {
+        setError(e instanceof Error ? e.message : "Failed to load deals");
+        setDeals([]);
+        setTotal(0);
+      })
+      .finally(() => setLoading(false));
+  }, [sort, order]);
+
+  useEffect(() => {
+    fetchDeals();
+  }, [fetchDeals]);
+
+  useEffect(() => {
+    if (deals.length === 0) return;
+    const ids = deals.map((d) => d.id).join(",");
+    fetch(`${API_BASE}/api/profile/saved-deals/check?propertyIds=${encodeURIComponent(ids)}`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (data && typeof data.saved === "object")
+          setSavedIds(new Set(Object.keys(data.saved).filter((id: string) => Boolean(data.saved[id]))));
+      })
+      .catch(() => {});
+  }, [deals]);
+
+  const toggleSaved = (propertyId: string) => {
+    const isSaved = savedIds.has(propertyId);
+    setSavingId(propertyId);
+    if (isSaved) {
+      fetch(`${API_BASE}/api/profile/saved-deals/${encodeURIComponent(propertyId)}`, { method: "DELETE" })
+        .then((r) => r.json())
+        .then(() => {
+          setSavedIds((prev) => {
+            const next = new Set(prev);
+            next.delete(propertyId);
+            return next;
+          });
+        })
+        .finally(() => setSavingId(null));
+    } else {
+      fetch(`${API_BASE}/api/profile/saved-deals`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ propertyId }),
+      })
+        .then((r) => r.json())
+        .then(() => {
+          setSavedIds((prev) => new Set(prev).add(propertyId));
+        })
+        .finally(() => setSavingId(null));
+    }
+  };
 
   const toggleSelect = (id: string) => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
-      } else if (next.size < MAX_SELECT) {
-        next.add(id);
-      }
+      if (next.has(id)) next.delete(id);
+      else if (next.size < MAX_SELECT) next.add(id);
       return next;
     });
   };
 
   const selectedCount = selectedIds.size;
-
-  const handleGenerateDossiers = () => {
-    if (selectedCount > 0) setDossiersGenerated(true);
-  };
-
-  const selectedProperties = PLACEHOLDER_PROPERTIES.filter((p) =>
-    selectedIds.has(p.id)
-  );
+  const selectedDeals = deals.filter((d) => selectedIds.has(d.id));
+  const withScore = deals.filter((d) => d.dealScore != null);
+  const avgScore = withScore.length > 0
+    ? withScore.reduce((s, d) => s + (d.dealScore ?? 0), 0) / withScore.length
+    : null;
+  const countAbove90 = deals.filter((d) => (d.dealScore ?? 0) >= 90).length;
 
   return (
     <div className="home-layout">
@@ -140,185 +153,219 @@ export default function HomePage() {
         </div>
         <div className="metric-card">
           <div className="metric-label">Avg Deal Score</div>
-          <div className="metric-value">—</div>
+          <div className="metric-value">{avgScore != null && !Number.isNaN(avgScore) ? avgScore.toFixed(1) : "—"}</div>
         </div>
         <div className="metric-card">
           <div className="metric-label">Number of Deals Above 90</div>
-          <div className="metric-value">—</div>
+          <div className="metric-value">{countAbove90}</div>
         </div>
       </section>
 
-      {/* Main content + sidebar */}
       <div className="home-content">
         <section className="home-main">
-          <h2 className="home-section-title">Top Ranked Deals</h2>
-          <div className="home-cards-container">
-            {PLACEHOLDER_PROPERTIES.map((prop) => {
-              const isSelected = selectedIds.has(prop.id);
-              const disabled = !isSelected && selectedCount >= MAX_SELECT;
-              return (
-                <div
-                  key={prop.id}
-                  className={`property-card ${isSelected ? "property-card--selected" : ""}`}
-                >
-                  <div className="property-card-inner">
-                    <div className="property-card-image-wrap">
-                      <img
-                        src={prop.imageUrl}
-                        alt=""
-                        className="property-card-image"
-                        width={400}
-                        height={260}
-                      />
-                      <div
-                        className={`property-card-score-bubble ${getScoreBubbleClass(prop.score)}`}
-                      >
-                        {prop.score}
-                      </div>
-                    </div>
-                    <div className="property-card-body">
-                      <div className="property-card-header">
-                        <div className="property-card-header-left">
-                          <div className="property-card-address">{prop.address}</div>
-                          <div className="property-card-meta">
-                            {prop.beds} bed · {prop.baths} bath · {prop.sqft} sq ft · {prop.price}
-                          </div>
-                        </div>
-                        <label className="property-card-checkbox-wrap">
-                          <input
-                            type="checkbox"
-                            checked={isSelected}
-                            onChange={() => toggleSelect(prop.id)}
-                            disabled={Boolean(disabled)}
-                            className="property-card-checkbox"
-                          />
-                          <span className="property-card-checkbox-label">Select</span>
-                        </label>
-                      </div>
-                      <div className="property-card-section-title">Property & listing</div>
-                      <div className="property-card-metrics">
-                        <div className="property-card-metrics-col">
-                          <div className="property-metric">
-                            <span className="property-metric-label">Listed date</span>
-                            <span className="property-metric-value">{prop.listedDate}</span>
-                          </div>
-                          <div className="property-metric">
-                            <span className="property-metric-label">Status</span>
-                            <span className="property-metric-value">{prop.status}</span>
-                          </div>
-                          <div className="property-metric">
-                            <span className="property-metric-label">Days on market</span>
-                            <span className="property-metric-value">{prop.daysOnMarket}</span>
-                          </div>
-                        </div>
-                        <div className="property-card-metrics-col">
-                          <div className="property-metric">
-                            <span className="property-metric-label">Price</span>
-                            <span className="property-metric-value">{prop.price}</span>
-                          </div>
-                          <div className="property-metric">
-                            <span className="property-metric-label">Sq ft</span>
-                            <span className="property-metric-value">{prop.sqft}</span>
-                          </div>
-                        </div>
-                      </div>
-                      <div className="property-card-section-title">Financial</div>
-                      <div className="property-card-metrics">
-                        <div className="property-card-metrics-col">
-                          <div className="property-metric">
-                            <span className="property-metric-label">IRR (calc)</span>
-                            <span className="property-metric-value">{prop.projectedIRR}</span>
-                          </div>
-                          <div className="property-metric">
-                            <span className="property-metric-label">Current NOI</span>
-                            <span className="property-metric-value">{prop.currentNOI}</span>
-                          </div>
-                          <div className="property-metric">
-                            <span className="property-metric-label">Projected NOI</span>
-                            <span className="property-metric-value">{prop.valueAddNOI}</span>
-                          </div>
-                        </div>
-                        <div className="property-card-metrics-col">
-                          <div className="property-metric">
-                            <span className="property-metric-label">Market cap rate</span>
-                            <span className="property-metric-value">{prop.currentCapRate}</span>
-                          </div>
-                          <div className="property-metric">
-                            <span className="property-metric-label">Projected cap</span>
-                            <span className="property-metric-value">{prop.projectedCapRate}</span>
-                          </div>
-                          <div className="property-metric">
-                            <span className="property-metric-label">CoC</span>
-                            <span className="property-metric-value">{prop.cashOnCashReturn}</span>
-                          </div>
-                        </div>
-                      </div>
-                      <div className="property-card-actions">
-                        <button type="button" className="btn-card">
-                          Generate Memo
-                        </button>
-                        <button type="button" className="btn-card">
-                          Add to Queue
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
+          <div className="home-section-header" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "1rem", marginBottom: "0.5rem" }}>
+            <h2 className="home-section-title">Top Ranked Deals</h2>
+            <Link href="/property-data" className="btn-card" style={{ fontSize: "0.85rem", padding: "0.4rem 0.75rem" }}>
+              Add new deals
+            </Link>
+            <span style={{ fontSize: "0.85rem", color: "#737373" }}>
+              Add listings in Property Data, then run deal scoring to see them here.
+            </span>
           </div>
-          <div className="home-action-bar">
-            <label className="home-action-checkbox">
-              <span>
-                Select up to 10 {selectedCount > 0 && `(${selectedCount} selected)`}
-              </span>
-            </label>
-            <button
-              type="button"
-              className="btn-primary"
-              onClick={handleGenerateDossiers}
-              disabled={Boolean(selectedCount === 0)}
+
+          <div className="home-cards-sort" style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.75rem" }}>
+            <label style={{ fontSize: "0.85rem", color: "#525252" }}>Sort by</label>
+            <select
+              className="input-text"
+              value={sort}
+              onChange={(e) => setSort(e.target.value as typeof sort)}
+              style={{ width: "auto", padding: "0.35rem 0.5rem", fontSize: "0.85rem" }}
             >
-              Generate Dossiers
-            </button>
-            <input
-              type="search"
-              placeholder="Search"
-              className="input-text home-action-search"
-              disabled
-            />
-            <select className="input-text home-action-select" disabled>
-              <option>Secure confidence</option>
+              <option value="deal_score">Deal Score</option>
+              <option value="adjusted_cap_rate">Adjusted Cap Rate</option>
+              <option value="asset_cap_rate">Asset Cap Rate</option>
+              <option value="rent_upside">Rent Upside</option>
+              <option value="price">Price</option>
+            </select>
+            <select
+              className="input-text"
+              value={order}
+              onChange={(e) => setOrder(e.target.value as "asc" | "desc")}
+              style={{ width: "auto", padding: "0.35rem 0.5rem", fontSize: "0.85rem" }}
+            >
+              <option value="desc">Desc</option>
+              <option value="asc">Asc</option>
             </select>
           </div>
 
-          {dossiersGenerated && selectedProperties.length > 0 && (
-            <section className="home-dossiers">
-              <h3 className="home-dossiers-title">Generated Dossiers</h3>
-              <div className="home-dossiers-list">
-                {selectedProperties.map((prop) => (
-                  <div key={prop.id} className="dossier-card">
-                    <div className="dossier-card-image">
-                      <img
-                        src={prop.imageUrl}
-                        alt=""
-                        width={120}
-                        height={78}
-                      />
-                    </div>
-                    <div className="dossier-card-body">
-                      <div className="dossier-card-address">{prop.address}</div>
-                      <div className="dossier-card-meta">
-                        Score {prop.score} · {prop.price} · {prop.beds} bed, {prop.baths} bath
+          {error && (
+            <div className="card error" style={{ marginBottom: "1rem" }}>
+              {error}
+            </div>
+          )}
+
+          {loading ? (
+            <div style={{ padding: "2rem", textAlign: "center", color: "#737373" }}>
+              Loading deals…
+            </div>
+          ) : deals.length === 0 ? (
+            <div className="card" style={{ padding: "2rem", textAlign: "center", color: "#525252", marginBottom: "1rem" }}>
+              <p style={{ margin: "0 0 0.5rem", fontWeight: 600 }}>No scored deals yet</p>
+              <p style={{ margin: 0, fontSize: "0.9rem" }}>
+                Add properties and run deal scoring from Property Data to see deals here.
+              </p>
+              <Link href="/property-data" className="btn-primary" style={{ marginTop: "1rem", display: "inline-block" }}>
+                Go to Property Data
+              </Link>
+            </div>
+          ) : (
+            <>
+              <div className="home-cards-container">
+                {deals.map((deal) => {
+                  const isSelected = selectedIds.has(deal.id);
+                  const disabled = !isSelected && selectedCount >= MAX_SELECT;
+                  const score = deal.dealScore ?? 0;
+                  const isSaved = savedIds.has(deal.id);
+                  return (
+                    <div
+                      key={deal.id}
+                      className={`property-card ${isSelected ? "property-card--selected" : ""}`}
+                    >
+                      <div className="property-card-inner">
+                        <div className="property-card-image-wrap">
+                          <div
+                            className="property-card-image"
+                            style={{ width: "100%", height: "100%", background: "#e5e5e5", display: "flex", alignItems: "center", justifyContent: "center", color: "#737373", fontSize: "0.85rem" }}
+                          >
+                            No image
+                          </div>
+                          <div className={`property-card-score-bubble ${getScoreBubbleClass(score)}`}>
+                            {Math.round(score)}
+                          </div>
+                          <div style={{ position: "absolute", top: "0.75rem", right: "0.75rem" }}>
+                            <button
+                              type="button"
+                              onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggleSaved(deal.id); }}
+                              disabled={savingId === deal.id}
+                              className="property-card-star"
+                              style={{
+                                background: "rgba(0,0,0,0.3)",
+                                border: "none",
+                                borderRadius: "4px",
+                                padding: "0.35rem",
+                                cursor: savingId === deal.id ? "wait" : "pointer",
+                                color: isSaved ? "#facc15" : "#fff",
+                              }}
+                              title={isSaved ? "Unsave deal" : "Save deal"}
+                              aria-label={isSaved ? "Unsave deal" : "Save deal"}
+                            >
+                              {isSaved ? "★" : "☆"}
+                            </button>
+                          </div>
+                        </div>
+                        <div className="property-card-body">
+                          <div className="property-card-header">
+                            <div className="property-card-header-left">
+                              <div className="property-card-address">{deal.address || "—"}</div>
+                              <div className="property-card-meta">
+                                {deal.totalUnits != null ? `${deal.totalUnits} units` : "—"} · {formatPrice(deal.price)}
+                              </div>
+                              {deal.dealScore != null && (
+                                <div style={{ fontSize: "0.7rem", color: "#737373", marginTop: "0.2rem" }}>
+                                  {getDealStatusTag(deal.dealScore)}
+                                </div>
+                              )}
+                            </div>
+                            <label className="property-card-checkbox-wrap">
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() => toggleSelect(deal.id)}
+                                disabled={Boolean(disabled)}
+                                className="property-card-checkbox"
+                              />
+                              <span className="property-card-checkbox-label">Select</span>
+                            </label>
+                          </div>
+                          <div className="property-card-section-title">Financial</div>
+                          <div className="property-card-metrics">
+                            <div className="property-card-metrics-col">
+                              <div className="property-metric">
+                                <span className="property-metric-label">Asset Cap</span>
+                                <span className="property-metric-value">{formatPct(deal.assetCapRate)}</span>
+                              </div>
+                              <div className="property-metric">
+                                <span className="property-metric-label">Adjusted Cap</span>
+                                <span className="property-metric-value">{formatPct(deal.adjustedCapRate)}</span>
+                              </div>
+                            </div>
+                            <div className="property-card-metrics-col">
+                              <div className="property-metric">
+                                <span className="property-metric-label">Rent Upside</span>
+                                <span className="property-metric-value">{formatPct(deal.rentUpside)}</span>
+                              </div>
+                              <div className="property-metric">
+                                <span className="property-metric-label">Deal Score</span>
+                                <span className="property-metric-value">{deal.dealScore != null ? Math.round(deal.dealScore) : "—"}</span>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="property-card-actions">
+                            <Link href={`/property/${deal.id}`} className="btn-card">
+                              View Deal
+                            </Link>
+                            <Link href={`/dossier-assumptions?property_id=${encodeURIComponent(deal.id)}`} className="btn-card">
+                              Generate Dossier
+                            </Link>
+                          </div>
+                        </div>
                       </div>
-                      <div className="dossier-card-placeholder">
-                        Dossier content placeholder (memo, comps, etc.)
-                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
-            </section>
+              <div className="home-action-bar">
+                <label className="home-action-checkbox">
+                  <span>
+                    Select up to {MAX_SELECT} {selectedCount > 0 && `(${selectedCount} selected)`}
+                  </span>
+                </label>
+                <button
+                  type="button"
+                  className="btn-primary"
+                  onClick={() => selectedCount > 0 && setDossiersGenerated(true)}
+                  disabled={selectedCount === 0}
+                >
+                  Generate Dossiers
+                </button>
+                <input type="search" placeholder="Search" className="input-text home-action-search" disabled />
+                <select className="input-text home-action-select" disabled>
+                  <option>Secure confidence</option>
+                </select>
+              </div>
+
+              {dossiersGenerated && selectedDeals.length > 0 && (
+                <section className="home-dossiers">
+                  <h3 className="home-dossiers-title">Generated Dossiers</h3>
+                  <div className="home-dossiers-list">
+                    {selectedDeals.map((deal) => (
+                      <div key={deal.id} className="dossier-card">
+                        <div className="dossier-card-image" style={{ background: "#e5e5e5", minHeight: "78px" }} />
+                        <div className="dossier-card-body">
+                          <div className="dossier-card-address">{deal.address || "—"}</div>
+                          <div className="dossier-card-meta">
+                            Score {deal.dealScore != null ? Math.round(deal.dealScore) : "—"} · {formatPrice(deal.price)} · {deal.totalUnits != null ? `${deal.totalUnits} units` : "—"}
+                          </div>
+                          <div className="dossier-card-placeholder">
+                            <Link href={`/dossier-assumptions?property_id=${encodeURIComponent(deal.id)}`}>Open assumptions</Link> to generate full dossier.
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              )}
+            </>
           )}
         </section>
 

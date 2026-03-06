@@ -3,7 +3,7 @@
  * Path: {base}/{propertyId}/{docId}/{filename}
  */
 
-import { mkdir, writeFile } from "fs/promises";
+import { mkdir, writeFile, unlink } from "fs/promises";
 import { join } from "path";
 
 const DEFAULT_BASE = "uploads/generated-docs";
@@ -35,4 +35,10 @@ export async function saveGeneratedDocument(
 export function resolveGeneratedDocPath(storagePath: string): string {
   if (storagePath.startsWith("/")) return storagePath;
   return join(process.cwd(), storagePath);
+}
+
+/** Delete a generated document file from disk. No-op if path is missing. */
+export async function deleteGeneratedDocumentFile(storagePath: string): Promise<void> {
+  const absolute = resolveGeneratedDocPath(storagePath);
+  await unlink(absolute).catch(() => {});
 }

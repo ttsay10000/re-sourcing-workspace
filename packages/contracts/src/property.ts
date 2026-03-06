@@ -147,6 +147,12 @@ export interface PropertyInquiryEmail {
   fromAddress?: string | null;
   receivedAt?: string | null;
   bodyText?: string | null;
+  /** LLM summary of email body. */
+  bodySummary?: string | null;
+  /** Latest receipt/send date mentioned from broker (LLM-extracted). */
+  receiptDateFromBroker?: string | null;
+  /** List of attachments (e.g. "offering_memo.pdf" or "none"). */
+  attachmentsList?: string | null;
   createdAt: string;
 }
 

@@ -98,7 +98,7 @@ interface ListingRow {
 }
 
 function PropertyDataContent() {
-  const [activeTab, setActiveTab] = useState<TabId>("raw");
+  const [activeTab, setActiveTab] = useState<TabId>("canonical");
   const [listings, setListings] = useState<ListingRow[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -588,22 +588,6 @@ function PropertyDataContent() {
       </div>
 
       <div className="property-data-tabs-row">
-        <div className="property-data-tabs">
-          <button
-            type="button"
-            className={`property-data-tab ${activeTab === "raw" ? "property-data-tab--active" : ""}`}
-            onClick={() => setActiveTab("raw")}
-          >
-            Raw Listings
-          </button>
-          <button
-            type="button"
-            className={`property-data-tab ${activeTab === "canonical" ? "property-data-tab--active" : ""}`}
-            onClick={() => setActiveTab("canonical")}
-          >
-            Canonical Properties
-          </button>
-        </div>
         <div className="property-data-filters" style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", alignItems: "center" }}>
           <label className="property-data-filter-label" style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}>
             <span style={{ whiteSpace: "nowrap", fontSize: "0.875rem" }}>Sort by</span>
@@ -751,7 +735,7 @@ function PropertyDataContent() {
                       <tr>
                         <td colSpan={8} style={{ padding: "2rem", color: "#737373", textAlign: "center" }}>
                           {canonicalProperties.length === 0
-                            ? "No canonical properties yet. Add raw listings, then use \"Add to canonical properties\" from the Raw Listings tab."
+                            ? "No canonical properties yet. Properties added from Runs are added to canonical automatically."
                             : "No properties match the current filters."}
                         </td>
                       </tr>
@@ -823,7 +807,18 @@ function PropertyDataContent() {
                             {expandedCanonicalId === prop.id && (
                               <tr className="property-data-detail-row">
                                 <td colSpan={8} className="property-data-detail-cell" style={{ padding: "1rem 1rem 1rem 2.5rem", backgroundColor: "#fafafa" }}>
-                                  <CanonicalPropertyDetail property={prop} />
+                                  <CanonicalPropertyDetail
+                                    property={prop}
+                                    isSaved={savedPropertyIds.has(prop.id)}
+                                    onSavedChange={(propertyId, saved) => {
+                                      if (saved) setSavedPropertyIds((prev) => new Set(prev).add(propertyId));
+                                      else setSavedPropertyIds((prev) => {
+                                        const next = new Set(prev);
+                                        next.delete(propertyId);
+                                        return next;
+                                      });
+                                    }}
+                                  />
                                 </td>
                               </tr>
                             )}

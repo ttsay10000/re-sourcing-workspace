@@ -190,7 +190,15 @@ function CollapsibleSection({
   );
 }
 
-export function CanonicalPropertyDetail({ property }: { property: CanonicalProperty }) {
+export function CanonicalPropertyDetail({
+  property,
+  isSaved,
+  onSavedChange,
+}: {
+  property: CanonicalProperty;
+  isSaved?: boolean;
+  onSavedChange?: (propertyId: string, saved: boolean) => void;
+}) {
   const [primaryListing, setPrimaryListing] = useState<ListingRow | null | "loading">("loading");
   /** Fresh details from GET /api/properties/:id so enriched data (CO, zoning, HPD) is current after re-run. */
   const [detailsFromApi, setDetailsFromApi] = useState<Record<string, unknown> | null | undefined>(undefined);
@@ -221,11 +229,14 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
   const [dealScore, setDealScore] = useState<number | null>(null);
   const [dealSignals, setDealSignals] = useState<Record<string, unknown> | null>(null);
   const [computeScoreLoading, setComputeScoreLoading] = useState(false);
+  const hasAutoComputedScoreRef = React.useRef(false);
+  const hasAutoSavedRef = React.useRef(false);
   const [sendAnotherConfirm, setSendAnotherConfirm] = useState(false);
   const [dosEntityLoading, setDosEntityLoading] = useState(false);
   const [dosEntity, setDosEntity] = useState<NyDosEntityResult | "n/a" | null>(null);
   const [dosEntityQueryName, setDosEntityQueryName] = useState<string | null>(null);
 
+  // OM received (inquiry attachment) or OM uploaded (API maps category → source, so category "OM" is source "OM")
   const hasOmDocument = Boolean(
     unifiedDocuments?.some((d) => d.sourceType === "inquiry" || d.source === "OM")
   );
@@ -244,6 +255,8 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
 
   // Refetch full property when expanded so enrichment (CO, zoning, HPD) shows latest after re-run
   useEffect(() => {
+    hasAutoComputedScoreRef.current = false;
+    hasAutoSavedRef.current = false;
     let cancelled = false;
     setDetailsFromApi(undefined);
     fetch(`${API_BASE}/api/properties/${property.id}`)
@@ -274,8 +287,8 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only run when section is open and not yet fetched
   }, [openSections.violationsComplaintsPermits, unifiedFetched, unifiedLoading]);
 
+  // Load documents when detail opens (for Downloads and for OM-based auto-compute of deal score)
   useEffect(() => {
-    if (!openSections.rentalOm) return;
     let cancelled = false;
     setUnifiedDocuments(null);
     fetch(`${API_BASE}/api/properties/${property.id}/documents`)
@@ -285,7 +298,55 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
       })
       .catch(() => { if (!cancelled) setUnifiedDocuments([]); });
     return () => { cancelled = true; };
-  }, [property.id, openSections.rentalOm]);
+  }, [property.id]);
+
+  // When OM is present and no deal score yet, auto-compute score once (no button)
+  useEffect(() => {
+    if (
+      unifiedDocuments == null ||
+      !hasOmDocument ||
+      dealScore != null ||
+      hasAutoComputedScoreRef.current ||
+      computeScoreLoading
+    )
+      return;
+    hasAutoComputedScoreRef.current = true;
+    setComputeScoreLoading(true);
+    fetch(`${API_BASE}/api/properties/${property.id}/compute-score`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    })
+      .then((r) => r.json())
+      .then((data) => {
+        if (data?.dealScore != null) setDealScore(data.dealScore);
+        if (data?.dealSignals != null) setDealSignals(data.dealSignals);
+      })
+      .catch(() => {})
+      .finally(() => setComputeScoreLoading(false));
+  }, [property.id, unifiedDocuments, hasOmDocument, dealScore, computeScoreLoading]);
+
+  // When OM is present and property is not saved, auto-save (star) the deal once
+  useEffect(() => {
+    if (
+      unifiedDocuments == null ||
+      !hasOmDocument ||
+      isSaved === true ||
+      hasAutoSavedRef.current ||
+      !onSavedChange
+    )
+      return;
+    hasAutoSavedRef.current = true;
+    fetch(`${API_BASE}/api/profile/saved-deals`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ propertyId: property.id }),
+    })
+      .then((r) => {
+        if (r.ok) onSavedChange(property.id, true);
+      })
+      .catch(() => {});
+  }, [property.id, unifiedDocuments, hasOmDocument, isSaved, onSavedChange]);
 
   // When owner section has a business-like name (from owner module or permit data), fetch NY DOS entity details
   useEffect(() => {
@@ -507,37 +568,14 @@ export function CanonicalPropertyDetail({ property }: { property: CanonicalPrope
         </div>
       )}
 
-      {/* Deal score — from deal_signals; compute on demand */}
+      {/* Deal score — from deal_signals; auto-computed when OM is present */}
       <div className="linked-listing-bar" style={{ marginTop: "0.5rem", marginBottom: "0.5rem" }}>
         <div className="linked-listing-bar-inner" style={{ flexWrap: "wrap", gap: "0.5rem" }}>
           <div className="property-metric">
             <div className="property-metric-label">Deal score</div>
-            <div className="property-metric-value">{dealScore != null ? `${dealScore}/100` : "—"}</div>
-          </div>
-          <div className="property-metric" style={{ alignItems: "center" }}>
-            <button
-              type="button"
-              disabled={computeScoreLoading}
-              onClick={async () => {
-                setComputeScoreLoading(true);
-                try {
-                  const r = await fetch(`${API_BASE}/api/properties/${property.id}/compute-score`, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({}),
-                  });
-                  const data = await r.json().catch(() => ({}));
-                  if (!r.ok) return;
-                  if (data?.dealScore != null) setDealScore(data.dealScore);
-                  if (data?.dealSignals != null) setDealSignals(data.dealSignals);
-                } finally {
-                  setComputeScoreLoading(false);
-                }
-              }}
-              style={{ padding: "0.25rem 0.5rem", cursor: computeScoreLoading ? "wait" : "pointer" }}
-            >
-              {computeScoreLoading ? "Computing…" : "Compute score"}
-            </button>
+            <div className="property-metric-value">
+              {computeScoreLoading ? "Computing…" : dealScore != null ? `${dealScore}/100` : "—"}
+            </div>
           </div>
           {dealSignals && typeof dealSignals.assetCapRate === "number" && (
             <div className="property-metric">
@@ -1216,6 +1254,11 @@ tyler@stayhaus.co`;
           <div style={{ borderTop: "1px solid #e0e0e0", paddingTop: "0.6rem", marginTop: "0.6rem", marginBottom: "0.5rem" }}>
             <strong style={{ display: "block", marginBottom: "0.2rem" }}>Downloads</strong>
             <p style={{ margin: "0 0 0.35rem", fontSize: "0.75rem", color: "#666" }}>Inquiry attachments, uploaded docs, and generated dossier/Excel.</p>
+            <p style={{ margin: "0 0 0.5rem", fontSize: "0.8rem" }}>
+              <a href={`/dossier-assumptions?property_id=${encodeURIComponent(property.id)}`} style={{ color: "#0066cc" }}>
+                Generate dossier
+              </a>
+            </p>
             {unifiedDocuments === null ? (
               <p style={{ margin: 0, fontSize: "0.8rem", color: "#737373" }}>Loading…</p>
             ) : unifiedDocuments.length > 0 ? (
@@ -1233,36 +1276,37 @@ tyler@stayhaus.co`;
                       </a>
                       <div style={{ fontSize: "0.75rem", color: "#555", marginTop: "0.1rem" }}>{doc.source}</div>
                     </span>
-                    {doc.sourceType === "uploaded" && (
-                      <button
-                        type="button"
-                        disabled={Boolean(deletingDocId === doc.id)}
-                        onClick={async () => {
-                          if (deletingDocId) return;
-                          setDeletingDocId(doc.id);
-                          try {
-                            const res = await fetch(`${API_BASE}/api/properties/${property.id}/uploaded-documents/${doc.id}`, { method: "DELETE" });
-                            if (!res.ok) {
-                              const data = await res.json().catch(() => ({}));
-                              throw new Error(typeof data?.details === "string" ? data.details : data?.error ?? "Failed to remove");
-                            }
-                            setUnifiedDocuments((prev) => (prev ? prev.filter((d) => d.id !== doc.id) : []));
-                          } catch (e) {
-                            setUploadError(e instanceof Error ? e.message : "Failed to remove document");
-                          } finally {
-                            setDeletingDocId(null);
+                    <button
+                      type="button"
+                      disabled={Boolean(deletingDocId === doc.id)}
+                      onClick={async () => {
+                        if (deletingDocId) return;
+                        setDeletingDocId(doc.id);
+                        try {
+                          const res = await fetch(
+                            `${API_BASE}/api/properties/${property.id}/documents/${doc.id}?sourceType=${encodeURIComponent(doc.sourceType)}`,
+                            { method: "DELETE" }
+                          );
+                          if (!res.ok) {
+                            const data = await res.json().catch(() => ({}));
+                            throw new Error(typeof data?.details === "string" ? data.details : data?.error ?? "Failed to remove");
                           }
-                        }}
-                        style={{ flexShrink: 0, padding: "0.2rem 0.4rem", fontSize: "0.75rem", border: "1px solid #dc2626", borderRadius: "4px", background: "#fff", color: "#dc2626", cursor: deletingDocId === doc.id ? "wait" : "pointer" }}
-                      >
-                        {deletingDocId === doc.id ? "Removing…" : "Remove"}
-                      </button>
-                    )}
+                          setUnifiedDocuments((prev) => (prev ? prev.filter((d) => d.id !== doc.id) : []));
+                        } catch (e) {
+                          setUploadError(e instanceof Error ? e.message : "Failed to remove document");
+                        } finally {
+                          setDeletingDocId(null);
+                        }
+                      }}
+                      style={{ flexShrink: 0, padding: "0.2rem 0.4rem", fontSize: "0.75rem", border: "1px solid #dc2626", borderRadius: "4px", background: "#fff", color: "#dc2626", cursor: deletingDocId === doc.id ? "wait" : "pointer" }}
+                    >
+                      {deletingDocId === doc.id ? "Removing…" : "Remove"}
+                    </button>
                   </li>
                 ))}
               </ul>
             ) : (
-              <p style={{ margin: 0, fontSize: "0.8rem", color: "#737373" }}>No documents yet. Send an inquiry, upload a file, or generate a dossier from Dossier assumptions.</p>
+              <p style={{ margin: 0, fontSize: "0.8rem", color: "#737373" }}>No documents yet. Send an inquiry, upload a file, or use Generate dossier above.</p>
             )}
           </div>
           <div style={{ borderTop: "1px solid #e0e0e0", paddingTop: "0.6rem", marginTop: "0.6rem", marginBottom: "0.5rem" }}>

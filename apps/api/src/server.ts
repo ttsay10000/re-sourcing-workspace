@@ -12,6 +12,7 @@ import propertiesRouter from "./routes/properties.js";
 import cronRouter from "./routes/cron.js";
 import profileRouter from "./routes/profile.js";
 import dossierRouter from "./routes/dossier.js";
+import dealsRouter from "./routes/deals.js";
 
 const PORT = Number(process.env.PORT) || 4000;
 const version = process.env.npm_package_version || "1.0.0";
@@ -53,6 +54,7 @@ app.use("/api", listingsRouter);
 app.use("/api", propertiesRouter);
 app.use("/api", profileRouter);
 app.use("/api", dossierRouter);
+app.use("/api", dealsRouter);
 app.use("/api", cronRouter);
 
 // Optional: read DATABASE_URL for future routes; do not connect at startup

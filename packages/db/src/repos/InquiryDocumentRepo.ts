@@ -78,4 +78,9 @@ export class InquiryDocumentRepo {
     );
     return r.rows.map((row: Record<string, unknown>) => mapInquiryDocument(row));
   }
+
+  async delete(id: string): Promise<boolean> {
+    const r = await this.client.query("DELETE FROM property_inquiry_documents WHERE id = $1 RETURNING id", [id]);
+    return r.rowCount !== null && r.rowCount > 0;
+  }
 }

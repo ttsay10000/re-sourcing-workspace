@@ -37,7 +37,8 @@ import { getRentRollComparison } from "../rental/rentRollComparison.js";
 import { fetchNyDosEntityByName } from "../enrichment/nyDosEntity.js";
 import { fetchAcrisDocumentsByOwnerName } from "../enrichment/acrisDocuments.js";
 import { computeDealSignals } from "../deal/computeDealSignals.js";
-import { resolveGeneratedDocPath } from "../deal/generatedDocStorage.js";
+import { resolveGeneratedDocPath, deleteGeneratedDocumentFile } from "../deal/generatedDocStorage.js";
+import { unlink } from "fs/promises";
 
 const router = Router();
 
@@ -522,6 +523,83 @@ router.get("/properties/:id/documents", async (req: Request, res: Response) => {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[properties documents list]", err);
     res.status(503).json({ error: "Failed to list documents.", details: message });
+  }
+});
+
+/** DELETE /api/properties/:id/documents/:docId - delete a document. Query: sourceType=inquiry|uploaded|generated (required). */
+router.delete("/properties/:id/documents/:docId", async (req: Request, res: Response) => {
+  try {
+    const { id: propertyId, docId } = req.params;
+    const sourceType = req.query.sourceType as string | undefined;
+    if (!sourceType || !["inquiry", "uploaded", "generated"].includes(sourceType)) {
+      res.status(400).json({ error: "Query sourceType is required and must be inquiry, uploaded, or generated." });
+      return;
+    }
+    const pool = getPool();
+    const propertyRepo = new PropertyRepo({ pool });
+    const property = await propertyRepo.byId(propertyId);
+    if (!property) {
+      res.status(404).json({ error: "Property not found", propertyId });
+      return;
+    }
+
+    if (sourceType === "generated") {
+      const generatedDocRepo = new DocumentRepo({ pool });
+      const doc = await generatedDocRepo.byId(docId);
+      if (!doc || doc.propertyId !== propertyId) {
+        res.status(404).json({ error: "Document not found", docId });
+        return;
+      }
+      await deleteGeneratedDocumentFile(doc.storagePath);
+      const deleted = await generatedDocRepo.delete(docId);
+      if (!deleted) {
+        res.status(404).json({ error: "Document not found", docId });
+        return;
+      }
+      res.status(200).json({ ok: true, propertyId, docId });
+      return;
+    }
+
+    if (sourceType === "inquiry") {
+      const inquiryDocRepo = new InquiryDocumentRepo({ pool });
+      const doc = await inquiryDocRepo.byId(docId);
+      if (!doc || doc.propertyId !== propertyId) {
+        res.status(404).json({ error: "Document not found", docId });
+        return;
+      }
+      const absolutePath = resolveInquiryFilePath(doc.filePath);
+      await unlink(absolutePath).catch(() => {});
+      const deleted = await inquiryDocRepo.delete(docId);
+      if (!deleted) {
+        res.status(404).json({ error: "Document not found", docId });
+        return;
+      }
+      res.status(200).json({ ok: true, propertyId, docId });
+      return;
+    }
+
+    if (sourceType === "uploaded") {
+      const uploadedDocRepo = new PropertyUploadedDocumentRepo({ pool });
+      const doc = await uploadedDocRepo.byId(docId);
+      if (!doc || doc.propertyId !== propertyId) {
+        res.status(404).json({ error: "Document not found", docId });
+        return;
+      }
+      await deleteUploadedDocumentFile(doc.filePath);
+      const deleted = await uploadedDocRepo.delete(docId);
+      if (!deleted) {
+        res.status(404).json({ error: "Document not found", docId });
+        return;
+      }
+      res.status(200).json({ ok: true, propertyId, docId });
+      return;
+    }
+
+    res.status(400).json({ error: "Invalid sourceType." });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[properties delete document]", err);
+    if (!res.headersSent) res.status(503).json({ error: "Failed to delete document.", details: message });
   }
 });
 

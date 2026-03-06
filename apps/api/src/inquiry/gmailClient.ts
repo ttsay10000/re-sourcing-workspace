@@ -221,6 +221,15 @@ export function getAttachmentParts(msg: GmailMessage): Array<{ filename: string;
   return out;
 }
 
+/** Return only PDF attachments (by mimeType or .pdf extension). Other types (e.g. PNG) are skipped. */
+export function getPdfAttachmentParts(msg: GmailMessage): Array<{ filename: string; mimeType: string; attachmentId: string }> {
+  return getAttachmentParts(msg).filter(
+    (p) =>
+      p.mimeType === "application/pdf" ||
+      (typeof p.filename === "string" && p.filename.toLowerCase().endsWith(".pdf"))
+  );
+}
+
 /**
  * Send an email via Gmail API (uses the authenticated account as sender).
  * Requires OAuth2 scope https://www.googleapis.com/auth/gmail.send

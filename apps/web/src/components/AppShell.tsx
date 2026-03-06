@@ -7,7 +7,6 @@ const NAV_LINKS = [
   { href: "/", label: "Home" },
   { href: "/runs", label: "Runs" },
   { href: "/property-data", label: "Property Data" },
-  { href: "/dossier-assumptions", label: "Dossier" },
   { href: "/rental-analysis", label: "Rental Analysis" },
   { href: "/deal-analysis", label: "Deal Analysis" },
   { href: "/profile", label: "Profile" },

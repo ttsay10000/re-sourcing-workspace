@@ -184,6 +184,9 @@ export function mapInquiryEmail(row: Record<string, unknown>): PropertyInquiryEm
     fromAddress: (row.from_address as string) ?? null,
     receivedAt: row.received_at != null ? toIso(row.received_at) : null,
     bodyText: (row.body_text as string) ?? null,
+    bodySummary: (row.body_summary as string) ?? null,
+    receiptDateFromBroker: (row.receipt_date_from_broker as string) ?? null,
+    attachmentsList: (row.attachments_list as string) ?? null,
     createdAt: toIso(row.created_at),
   };
 }

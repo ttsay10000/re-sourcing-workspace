@@ -53,4 +53,9 @@ export class DocumentRepo {
     );
     return r.rows.map((row: Record<string, unknown>) => mapDocument(row));
   }
+
+  async delete(id: string): Promise<boolean> {
+    const r = await this.client.query("DELETE FROM documents WHERE id = $1 RETURNING id", [id]);
+    return r.rowCount !== null && r.rowCount > 0;
+  }
 }
