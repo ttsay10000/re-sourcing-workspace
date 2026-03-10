@@ -1,18 +1,17 @@
 /**
  * Compute deal signals and deal score from property details + primary listing.
- * Persist result to deal_signals; score is available before dossier generation.
+ * Deal score is produced by the LLM when generating a dossier (dealScoringLlm); this module provides
+ * the deterministic fallback (dealScoringEngine) and builds insert params for deal_signals.
  */
 
 import type { PropertyDetails, RentalFinancials } from "@re-sourcing/contracts";
-import { getRentRollComparison } from "../rental/rentRollComparison.js";
-import { cityToArea, areaFromCanonicalAddress } from "./cityToArea.js";
 import { computeDealScore, type DealScoringResult } from "./dealScoringEngine.js";
 import type { InsertDealSignalsParams } from "@re-sourcing/db";
 
 export interface PropertyListingInput {
   /** Listing price (purchase price for scoring). */
   price: number | null;
-  /** Listing city for location score. */
+  /** Listing city (optional, not used in current scoring). */
   city: string | null;
 }
 
@@ -21,10 +20,10 @@ export interface ComputeDealSignalsInput {
   canonicalAddress: string | null;
   details: PropertyDetails | null;
   primaryListing: PropertyListingInput;
-  /** Optional: adjusted NOI from furnished rental estimator (when run). */
-  adjustedNoi?: number | null;
-  /** Optional: rent upside as decimal (e.g. 0.15). From furnished rental when available. */
-  rentUpsidePct?: number | null;
+  /** Optional: 5-year IRR as decimal (e.g. 0.22). Used when scoring after dossier. */
+  irr5yrPct?: number | null;
+  /** Number of rent-stabilized units (deduct points per unit). Default 0. */
+  rentStabilizedUnitCount?: number;
 }
 
 export interface ComputeDealSignalsOutput {
@@ -49,51 +48,45 @@ function noiFromDetails(details: PropertyDetails | null): number | null {
   return null;
 }
 
-function hasHpdViolations(details: PropertyDetails | null): boolean {
-  const summary = details?.enrichment?.hpd_violations_summary;
-  if (!summary) return false;
-  const open = summary.openCount ?? summary.rentImpairingOpen ?? 0;
-  const total = summary.total ?? 0;
-  return open > 0 || total > 0;
-}
+function scoringInputFromDetails(
+  purchasePrice: number | null,
+  details: PropertyDetails | null,
+  input: ComputeDealSignalsInput
+): Parameters<typeof computeDealScore>[0] {
+  const noi = noiFromDetails(details);
+  const hpd = details?.enrichment?.hpd_violations_summary;
+  const dob = details?.enrichment?.dob_complaints_summary;
+  const lit = details?.enrichment?.housing_litigations_summary;
 
-function hasDobViolations(details: PropertyDetails | null): boolean {
-  const summary = details?.enrichment?.dob_complaints_summary;
-  if (!summary) return false;
-  const open = summary.openCount ?? 0;
-  const count30 = summary.count30 ?? 0;
-  const count365 = summary.count365 ?? 0;
-  return open > 0 || count30 > 0 || count365 > 0;
+  return {
+    purchasePrice,
+    noi,
+    irr5yrPct: input.irr5yrPct ?? null,
+    rentStabilizedUnitCount: input.rentStabilizedUnitCount ?? 0,
+    hpdTotal: hpd?.total,
+    hpdOpenCount: hpd?.openCount,
+    hpdRentImpairingOpen: hpd?.rentImpairingOpen,
+    dobOpenCount: dob?.openCount,
+    dobCount30: dob?.count30,
+    dobCount365: dob?.count365,
+    litigationTotal: lit?.total,
+    litigationOpenCount: lit?.openCount,
+    litigationTotalPenalty: lit?.totalPenalty,
+  };
 }
 
 /**
- * Compute deal signals and score; returns insert params and full scoring result.
+ * Compute deal signals and score (deterministic fallback). Returns insert params and scoring result.
  */
 export function computeDealSignals(input: ComputeDealSignalsInput): ComputeDealSignalsOutput {
-  const { propertyId, canonicalAddress, details, primaryListing, adjustedNoi, rentUpsidePct } = input;
+  const { propertyId, details, primaryListing, rentStabilizedUnitCount } = input;
   const price = primaryListing.price && primaryListing.price > 0 ? primaryListing.price : null;
-  const noi = noiFromDetails(details);
-  const adjNoi = adjustedNoi ?? noi;
   const unitCount = unitCountFromDetails(details);
-  const area =
-    primaryListing.city != null && primaryListing.city.trim() !== ""
-      ? cityToArea(primaryListing.city)
-      : areaFromCanonicalAddress(canonicalAddress);
-  const rentRollComparison = getRentRollComparison(details?.rentalFinancials ?? null);
-  const incompleteRentRoll = rentRollComparison ? !rentRollComparison.comparable : true;
 
-  const scoringInput = {
-    purchasePrice: price,
-    noi,
-    adjustedNoi: adjNoi,
-    rentUpsidePct: rentUpsidePct ?? null,
-    area,
-    unitCount,
-    hasHpdViolations: hasHpdViolations(details),
-    hasDobViolations: hasDobViolations(details),
-    taxIrregularities: false, // TBD if we have tax data to flag
-    incompleteRentRoll,
-  };
+  const scoringInput = scoringInputFromDetails(price, details, {
+    ...input,
+    rentStabilizedUnitCount: rentStabilizedUnitCount ?? 0,
+  });
 
   const scoringResult = computeDealScore(scoringInput);
 
@@ -103,7 +96,6 @@ export function computeDealSignals(input: ComputeDealSignalsInput): ComputeDealS
     scoringResult.adjustedCapRate != null && scoringResult.assetCapRate != null
       ? scoringResult.adjustedCapRate - scoringResult.assetCapRate
       : null;
-  const rentUpsideForDb = rentUpsidePct != null ? rentUpsidePct * 100 : null;
 
   const insertParams: InsertDealSignalsParams = {
     propertyId,
@@ -112,10 +104,10 @@ export function computeDealSignals(input: ComputeDealSignalsInput): ComputeDealS
     assetCapRate: scoringResult.assetCapRate ?? undefined,
     adjustedCapRate: scoringResult.adjustedCapRate ?? undefined,
     yieldSpread: yieldSpread ?? undefined,
-    rentUpside: rentUpsideForDb ?? undefined,
+    rentUpside: undefined,
     rentPsfRatio: undefined,
     expenseRatio: undefined,
-    liquidityScore: scoringResult.liquidityScore ?? undefined,
+    liquidityScore: undefined,
     riskScore: scoringResult.riskScore ?? undefined,
     priceMomentum: undefined,
     dealScore: scoringResult.dealScore ?? undefined,

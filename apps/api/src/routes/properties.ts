@@ -51,6 +51,59 @@ const router = Router();
 const ENRICHMENT_RATE_LIMIT_DELAY_MS = Number(process.env.ENRICHMENT_RATE_LIMIT_DELAY_MS || process.env.PERMITS_RATE_LIMIT_DELAY_MS) || 300;
 
 /**
+ * Run OM/Brochure LLM extraction and merge into property details. Used in background after upload
+ * so the upload response can return immediately (avoids Render request timeout).
+ */
+async function runOmExtractionInBackground(
+  propertyId: string,
+  fileBuffer: Buffer,
+  filename: string,
+  pool: import("pg").Pool
+): Promise<void> {
+  const propertyRepo = new PropertyRepo({ pool });
+  const text = await extractTextFromBuffer(fileBuffer, filename);
+  if (text.length < 50) {
+    if (text.length > 0) console.warn("[documents/upload background] OM/Brochure text too short for LLM:", text.length, "chars");
+    else console.warn("[documents/upload background] No text extracted from PDF");
+    return;
+  }
+  const property = await propertyRepo.byId(propertyId);
+  if (!property) return;
+  const details = (property.details ?? {}) as Record<string, unknown>;
+  const enrichmentContext =
+    details.enrichment || details.bbl || details.taxCode
+      ? JSON.stringify(
+          { bbl: details.bbl, taxCode: details.taxCode, enrichment: details.enrichment },
+          null,
+          0
+        ).slice(0, 4000)
+      : undefined;
+  const { fromLlm, omAnalysis } = await extractRentalFinancialsFromText(text, {
+    forceOmStyle: true,
+    enrichmentContext,
+  });
+  const hasFromLlm = fromLlm && typeof fromLlm === "object" && Object.keys(fromLlm).length > 0;
+  const hasOmAnalysis = omAnalysis && typeof omAnalysis === "object";
+  if (!hasFromLlm && !hasOmAnalysis) return;
+  const prop = await propertyRepo.byId(propertyId);
+  const existing = (prop?.details?.rentalFinancials ?? null) as RentalFinancials | null;
+  const existingFromLlm = existing?.fromLlm ?? null;
+  const mergedFromLlm =
+    hasFromLlm && existingFromLlm && typeof existingFromLlm === "object"
+      ? { ...existingFromLlm, ...fromLlm }
+      : (fromLlm ?? existingFromLlm ?? undefined);
+  const rentalFinancials: RentalFinancials = {
+    ...(existing ?? {}),
+    fromLlm: mergedFromLlm as RentalFinancialsFromLlm | undefined,
+    omAnalysis: hasOmAnalysis ? omAnalysis : (existing?.omAnalysis ?? undefined),
+    source: existing?.source ?? "llm",
+    lastUpdatedAt: new Date().toISOString(),
+  };
+  await propertyRepo.mergeDetails(propertyId, { rentalFinancials });
+  console.log("[documents/upload background] OM LLM merged for property", propertyId);
+}
+
+/**
  * Re-run OM/Brochure financial extraction for a property when it has uploaded OM/Brochure docs.
  * Uses file on disk when present; otherwise uses file_content from DB (for hosted deployments).
  */
@@ -385,19 +438,6 @@ router.post("/properties/run-enrichment", async (req: Request, res: Response) =>
       omFinancialsSkippedNoFile += result.documentsSkippedNoFile;
     }
 
-    // Run rental flow for each property: RapidAPI + LLM on listing to populate rental financials.
-    let rentalSuccess = 0;
-    let rentalFailed = 0;
-    for (let i = 0; i < propertyIds.length; i++) {
-      if (i > 0) await new Promise((r) => setTimeout(r, ENRICHMENT_RATE_LIMIT_DELAY_MS));
-      try {
-        await runRentalFlowForProperty(propertyIds[i]!, pool);
-        rentalSuccess++;
-      } catch {
-        rentalFailed++;
-      }
-    }
-
     res.json({
       ok: true,
       permitEnrichment: {
@@ -410,7 +450,6 @@ router.post("/properties/run-enrichment", async (req: Request, res: Response) =>
         documentsProcessed: omFinancialsProcessed,
         documentsSkippedNoFile: omFinancialsSkippedNoFile,
       },
-      rentalFlow: { ran: true, success: rentalSuccess, failed: rentalFailed },
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -517,6 +556,21 @@ router.get("/properties/pipeline-stats", async (req: Request, res: Response) => 
 });
 
 const uploadMemory = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } }); // 25 MB
+
+/** Multer file-size error: return 413 with hint about Render proxy limits. */
+function handleUploadMulterError(_req: Request, res: Response, next: (err?: unknown) => void) {
+  return (err: unknown) => {
+    if (err && typeof err === "object" && "code" in err && (err as { code: string }).code === "LIMIT_FILE_SIZE") {
+      res.status(413).json({
+        error: "File too large",
+        details: "Max 25 MB per file. On Render, the proxy may reject bodies before that; try a smaller PDF (<10 MB) or compress the file.",
+        maxBytes: 25 * 1024 * 1024,
+      });
+      return;
+    }
+    next(err);
+  };
+}
 
 const VALID_UPLOAD_CATEGORIES: PropertyDocumentCategory[] = [
   "OM",
@@ -916,7 +970,9 @@ router.delete("/properties/:id/uploaded-documents/:docId", async (req: Request, 
 /** POST /api/properties/:id/documents/upload - upload a document (multipart: file + category). */
 router.post(
   "/properties/:id/documents/upload",
-  uploadMemory.single("file"),
+  (req, res, next) => {
+    uploadMemory.single("file")(req, res, handleUploadMulterError(req, res, next));
+  },
   async (req: Request, res: Response) => {
     try {
       const { id: propertyId } = req.params;
@@ -949,56 +1005,15 @@ router.post(
         fileContent: file.buffer,
       });
 
-      // When user uploads OM or Brochure, extract text and run senior-analyst LLM, then merge into property details.
-      if (category === "OM" || category === "Brochure") {
-        try {
-          const text = await extractTextFromUploadedFile(filePath, filename);
-          console.log("[documents/upload] OM/Brochure extracted text length:", text.length, "chars");
-          if (text.length >= 50) {
-            const details = (property.details ?? {}) as Record<string, unknown>;
-            const enrichmentContext =
-              details.enrichment || details.bbl || details.taxCode
-                ? JSON.stringify(
-                    { bbl: details.bbl, taxCode: details.taxCode, enrichment: details.enrichment },
-                    null,
-                    0
-                  ).slice(0, 4000)
-                : undefined;
-            const { fromLlm, omAnalysis } = await extractRentalFinancialsFromText(text, {
-              forceOmStyle: true,
-              enrichmentContext,
-            });
-            console.log("[documents/upload] OM LLM result: fromLlm keys=" + (fromLlm && typeof fromLlm === "object" ? Object.keys(fromLlm).length : 0) + " omAnalysis=" + (omAnalysis ? "yes" : "no"));
-            const hasFromLlm = fromLlm && typeof fromLlm === "object" && Object.keys(fromLlm).length > 0;
-            const hasOmAnalysis = omAnalysis && typeof omAnalysis === "object";
-            if (hasFromLlm || hasOmAnalysis) {
-              const prop = await propertyRepo.byId(propertyId);
-              const existing = (prop?.details?.rentalFinancials ?? null) as RentalFinancials | null;
-              const existingFromLlm = existing?.fromLlm ?? null;
-              const mergedFromLlm =
-                hasFromLlm && existingFromLlm && typeof existingFromLlm === "object"
-                  ? { ...existingFromLlm, ...fromLlm }
-                  : (fromLlm ?? existingFromLlm ?? undefined);
-              const rentalFinancials: RentalFinancials = {
-                ...(existing ?? {}),
-                fromLlm: mergedFromLlm as RentalFinancialsFromLlm | undefined,
-                omAnalysis: hasOmAnalysis ? omAnalysis : (existing?.omAnalysis ?? undefined),
-                source: existing?.source ?? "llm",
-                lastUpdatedAt: new Date().toISOString(),
-              };
-              await propertyRepo.mergeDetails(propertyId, { rentalFinancials });
-            }
-          } else if (text.length > 0) {
-            console.warn("[documents/upload] OM/Brochure text too short for LLM:", text.length, "chars");
-          } else {
-            console.warn("[documents/upload] OM/Brochure: no text extracted (wrong format or path?)");
-          }
-        } catch (e) {
-          console.warn("[documents/upload] OM/Brochure LLM extraction failed:", e instanceof Error ? e.message : e);
-        }
-      }
-
+      // Return immediately so Render/timeouts don't kill the request. OM/Brochure LLM runs in background.
       res.status(201).json({ propertyId, document: inserted });
+
+      // When user uploads OM or Brochure, run senior-analyst LLM in background and merge when done.
+      if (category === "OM" || category === "Brochure") {
+        void runOmExtractionInBackground(propertyId, file.buffer, filename, pool).catch((e) => {
+          console.error("[documents/upload background] OM/Brochure LLM failed:", e instanceof Error ? e.message : e);
+        });
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error("[properties documents upload]", err);
@@ -1199,13 +1214,14 @@ router.post("/properties/:id/compute-score", async (req: Request, res: Response)
       canonicalAddress: property.canonicalAddress,
       details: property.details ?? null,
       primaryListing,
-      adjustedNoi: furnishedRental?.adjustedNoi ?? (req.body?.adjustedNoi as number | undefined) ?? undefined,
-      rentUpsidePct: rentUplift > 1 ? rentUplift - 1 : (req.body?.rentUpsidePct as number | undefined) ?? undefined,
+      irr5yrPct: irr?.irr ?? null,
+      rentStabilizedUnitCount: 0,
     };
     const { insertParams, scoringResult } = computeDealSignals(input);
     const signalsRepo = new DealSignalsRepo({ pool });
     const row = await signalsRepo.insert({
       ...insertParams,
+      dealScore: null,
       irrPct: irr?.irr ?? null,
       equityMultiple: irr?.equityMultiple ?? null,
       cocPct: irr?.coc ?? null,
@@ -1218,15 +1234,10 @@ router.post("/properties/:id/compute-score", async (req: Request, res: Response)
       dealSignals: row,
       scoringResult: {
         assetYieldScore: scoringResult.assetYieldScore,
-        adjustedYieldScore: scoringResult.adjustedYieldScore,
-        rentUpsideScore: scoringResult.rentUpsideScore,
-        locationScore: scoringResult.locationScore,
         riskScore: scoringResult.riskScore,
-        liquidityScore: scoringResult.liquidityScore,
         positiveSignals: scoringResult.positiveSignals,
         negativeSignals: scoringResult.negativeSignals,
         assetCapRate: scoringResult.assetCapRate,
-        adjustedCapRate: scoringResult.adjustedCapRate,
       },
     });
   } catch (err) {

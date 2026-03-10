@@ -1,6 +1,8 @@
 /**
- * Deal scoring engine: component scores (asset yield, adjusted yield, rent upside, location, risk, liquidity)
- * summed and clamped 0–100. Weights: Adjusted 30, Asset 20, Rent upside 20, Location 15, Risk 10, Liquidity 5.
+ * Deal scoring engine (deterministic fallback): asset cap 50 pts, IRR tiers, risk deductions.
+ * Primary deal score is produced by the LLM (dealScoringLlm) using the same rubric plus qualitative judgment.
+ * This engine: asset cap 5%+ = 50 pts, 4–5% = 30–50, under 4% = low; IRR 25%+ = top tier; risk = deduct
+ * per rent-stabilized unit and for complaints/violations/litigation by severity.
  */
 
 export interface DealScoringInputs {
@@ -8,22 +10,22 @@ export interface DealScoringInputs {
   purchasePrice: number | null;
   /** Current NOI for asset cap rate. */
   noi: number | null;
-  /** Adjusted NOI (e.g. from furnished rental estimator) for adjusted cap rate. */
-  adjustedNoi: number | null;
-  /** Rent upside as decimal (e.g. 0.15 = 15%). Not computed yet; use 0 until furnished rental module. */
-  rentUpsidePct: number | null;
-  /** Borough/area for location score: Manhattan, Brooklyn, Queens, Bronx, Staten Island, Other. */
-  area: string | null;
-  /** Unit count for liquidity score. */
-  unitCount: number | null;
-  /** Risk deductions: HPD violations present. */
-  hasHpdViolations?: boolean;
-  /** Risk deductions: DOB violations/complaints present. */
-  hasDobViolations?: boolean;
-  /** Risk deductions: tax irregularities. */
-  taxIrregularities?: boolean;
-  /** Risk deductions: incomplete rent roll (e.g. comparison disabled). */
-  incompleteRentRoll?: boolean;
+  /** 5-year IRR as decimal (e.g. 0.22 = 22%). Target 25%+ = top deal. */
+  irr5yrPct?: number | null;
+  /** Number of rent-stabilized units; each deducts from score. */
+  rentStabilizedUnitCount?: number;
+  /** HPD violations: open and rent-impairing drive severity deduction. */
+  hpdOpenCount?: number;
+  hpdRentImpairingOpen?: number;
+  hpdTotal?: number;
+  /** DOB complaints: open and recent (30/365 day) drive severity deduction. */
+  dobOpenCount?: number;
+  dobCount30?: number;
+  dobCount365?: number;
+  /** Housing litigations: open and total penalty drive severity deduction. */
+  litigationOpenCount?: number;
+  litigationTotal?: number;
+  litigationTotalPenalty?: number;
 }
 
 export interface DealScoringResult {
@@ -36,67 +38,59 @@ export interface DealScoringResult {
   liquidityScore: number;
   positiveSignals: string[];
   negativeSignals: string[];
-  /** Asset cap rate used (NOI / purchase price). */
   assetCapRate: number | null;
-  /** Adjusted cap rate used (adjusted NOI / purchase price). */
   adjustedCapRate: number | null;
 }
 
-const LOCATION_SCORES: Record<string, number> = {
-  Manhattan: 15,
-  Brooklyn: 13,
-  Queens: 11,
-  Bronx: 8,
-  "Staten Island": 6,
-  Other: 5,
-};
-
-function assetYieldScore(assetCapRate: number | null): number {
+/** Asset cap rate: 50 points max. 5%+ = 50, 4–5% = 30–50, under 4% = low (0–30). */
+function assetCapScore(assetCapRate: number | null): number {
   if (assetCapRate == null || Number.isNaN(assetCapRate)) return 0;
   const pct = assetCapRate;
-  if (pct < 3) return 5;
-  if (pct < 4) return 10;
-  if (pct < 5) return 15;
-  if (pct < 6) return 18;
-  return 20;
+  if (pct >= 5) return 50;
+  if (pct >= 4) return 30 + (pct - 4) * 20;
+  if (pct >= 3) return 15 + (pct - 3) * 15;
+  return Math.max(0, pct * 5);
 }
 
-function adjustedYieldScore(adjustedCapRate: number | null): number {
-  if (adjustedCapRate == null || Number.isNaN(adjustedCapRate)) return 0;
-  const pct = adjustedCapRate;
-  if (pct < 4) return 10;
-  if (pct < 5) return 18;
-  if (pct < 6) return 25;
-  return 30;
+/** IRR 5-year: 25%+ = top (30 pts), 20–25% = 20, 15–20% = 10, below 15% = 0. */
+function irrScore(irr5yrPct: number | null | undefined): number {
+  if (irr5yrPct == null || Number.isNaN(irr5yrPct)) return 0;
+  const pct = irr5yrPct * 100;
+  if (pct >= 25) return 30;
+  if (pct >= 20) return 20;
+  if (pct >= 15) return 10;
+  return 0;
 }
 
-function rentUpsideScore(pct: number | null): number {
-  if (pct == null || Number.isNaN(pct) || pct < 0) return 0;
-  const x = pct * 100;
-  if (x < 1) return 0;
-  if (x < 5) return 5;
-  if (x < 10) return 10;
-  if (x < 20) return 15;
-  return 20;
-}
+/** Risk deduction: rent-stabilized units (e.g. 6 pts per unit), then violations/complaints/litigation by severity. */
+function riskDeduction(inputs: DealScoringInputs): number {
+  let deduct = 0;
+  const rentStab = inputs.rentStabilizedUnitCount ?? 0;
+  deduct += rentStab * 6;
 
-function locationScore(area: string | null): number {
-  if (!area || typeof area !== "string") return LOCATION_SCORES.Other ?? 5;
-  const key = area.trim();
-  return LOCATION_SCORES[key] ?? LOCATION_SCORES.Other ?? 5;
-}
+  const hpdOpen = inputs.hpdOpenCount ?? 0;
+  const hpdRentImp = inputs.hpdRentImpairingOpen ?? 0;
+  if (hpdRentImp > 0) deduct += 15 + Math.min(15, hpdRentImp * 2);
+  else if (hpdOpen > 0) deduct += 5 + Math.min(10, hpdOpen);
 
-function liquidityScore(unitCount: number | null): number {
-  if (unitCount == null || unitCount < 0) return 2;
-  if (unitCount <= 10) return 5;
-  if (unitCount <= 50) return 4;
-  if (unitCount <= 100) return 3;
-  return 2;
+  const dobOpen = inputs.dobOpenCount ?? 0;
+  const dob30 = inputs.dobCount30 ?? 0;
+  const dob365 = inputs.dobCount365 ?? 0;
+  if (dobOpen > 0 || dob30 > 0) deduct += 8 + Math.min(7, dob30 + dobOpen);
+  else if (dob365 > 0) deduct += Math.min(5, dob365);
+
+  const litOpen = inputs.litigationOpenCount ?? 0;
+  const litTotal = inputs.litigationTotal ?? 0;
+  const litPenalty = inputs.litigationTotalPenalty ?? 0;
+  if (litOpen > 0 || litTotal > 0) deduct += 10 + Math.min(10, litOpen + Math.min(5, litTotal));
+  if (litPenalty > 0) deduct += Math.min(5, Math.floor(litPenalty / 1000));
+
+  return deduct;
 }
 
 /**
- * Compute deal score and component scores from inputs.
- * Risk starts at 10; subtract for HPD (-3), DOB (-2), tax (-2), incomplete rent roll (-3).
+ * Compute deal score (fallback when LLM scoring is unavailable).
+ * Score = asset cap (50 max) + IRR (30 max) − risk deductions, clamped 0–100.
  */
 export function computeDealScore(inputs: DealScoringInputs): DealScoringResult {
   const positiveSignals: string[] = [];
@@ -104,60 +98,41 @@ export function computeDealScore(inputs: DealScoringInputs): DealScoringResult {
 
   const purchasePrice = inputs.purchasePrice && inputs.purchasePrice > 0 ? inputs.purchasePrice : null;
   const noi = inputs.noi;
-  const adjustedNoi = inputs.adjustedNoi ?? noi;
-
   const assetCapRate =
     purchasePrice != null && noi != null && noi >= 0 ? (noi / purchasePrice) * 100 : null;
-  const adjustedCapRate =
-    purchasePrice != null && adjustedNoi != null && adjustedNoi >= 0
-      ? (adjustedNoi / purchasePrice) * 100
-      : null;
 
-  const ays = assetYieldScore(assetCapRate);
-  const adys = adjustedYieldScore(adjustedCapRate);
-  const rus = rentUpsideScore(inputs.rentUpsidePct);
-  const loc = locationScore(inputs.area);
-  let risk = 10;
-  if (inputs.hasHpdViolations) {
-    risk -= 3;
+  const capSc = assetCapScore(assetCapRate);
+  const irrSc = irrScore(inputs.irr5yrPct);
+  const deduct = riskDeduction(inputs);
+
+  if (assetCapRate != null && assetCapRate >= 5) positiveSignals.push("Asset cap ≥5%");
+  if (inputs.irr5yrPct != null && inputs.irr5yrPct >= 0.25) positiveSignals.push("IRR ≥25% (5yr)");
+  else if (inputs.irr5yrPct != null && inputs.irr5yrPct >= 0.2) positiveSignals.push("IRR ≥20% (5yr)");
+
+  const rentStab = inputs.rentStabilizedUnitCount ?? 0;
+  if (rentStab > 0) negativeSignals.push(`${rentStab} rent-stabilized unit(s)`);
+  if ((inputs.hpdOpenCount ?? 0) > 0 || (inputs.hpdRentImpairingOpen ?? 0) > 0)
     negativeSignals.push("HPD violations");
-  }
-  if (inputs.hasDobViolations) {
-    risk -= 2;
-    negativeSignals.push("DOB violations");
-  }
-  if (inputs.taxIrregularities) {
-    risk -= 2;
-    negativeSignals.push("Tax irregularities");
-  }
-  if (inputs.incompleteRentRoll) {
-    risk -= 3;
-    negativeSignals.push("Incomplete rent roll");
-  }
-  risk = Math.max(0, risk);
-  const liq = liquidityScore(inputs.unitCount);
+  if ((inputs.dobOpenCount ?? 0) > 0 || (inputs.dobCount30 ?? 0) > 0)
+    negativeSignals.push("DOB complaints");
+  if ((inputs.litigationOpenCount ?? 0) > 0 || (inputs.litigationTotal ?? 0) > 0)
+    negativeSignals.push("Housing litigations");
+  if (inputs.irr5yrPct != null && inputs.irr5yrPct < 0.2) negativeSignals.push("IRR below 20% (5yr)");
 
-  if (assetCapRate != null && assetCapRate >= 5) positiveSignals.push("Strong asset yield");
-  if (adjustedCapRate != null && adjustedCapRate >= 5) positiveSignals.push("Strong adjusted yield");
-  if (inputs.area === "Manhattan") positiveSignals.push("Manhattan location");
-  if (inputs.unitCount != null && inputs.unitCount >= 4 && inputs.unitCount <= 50)
-    positiveSignals.push("Mid-size liquidity");
-
-  const total =
-    ays + adys + rus + loc + risk + liq;
+  const total = Math.max(0, capSc + irrSc - deduct);
   const dealScore = Math.max(0, Math.min(100, Math.round(total)));
 
   return {
     dealScore,
-    assetYieldScore: ays,
-    adjustedYieldScore: adys,
-    rentUpsideScore: rus,
-    locationScore: loc,
-    riskScore: risk,
-    liquidityScore: liq,
+    assetYieldScore: capSc,
+    adjustedYieldScore: 0,
+    rentUpsideScore: 0,
+    locationScore: 0,
+    riskScore: Math.max(0, 80 - deduct),
+    liquidityScore: 0,
     positiveSignals,
     negativeSignals,
     assetCapRate,
-    adjustedCapRate,
+    adjustedCapRate: null,
   };
 }
