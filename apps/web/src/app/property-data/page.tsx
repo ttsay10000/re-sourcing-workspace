@@ -50,16 +50,18 @@ interface PipelineStats {
   remainingByModule?: Record<string, { count: number; propertyIds: string[] }>;
 }
 
-/** Result of last enrichment run (from POST from-listings or run-enrichment permitEnrichment + omFinancialsRefresh). */
+/** Result of last enrichment run (from POST from-listings or run-enrichment permitEnrichment + omFinancialsRefresh + rentalFlow). */
 interface LastEnrichmentResult {
   ran: true;
   success: number;
   failed: number;
   byModule: Record<string, number>;
-  /** OM/Brochure financials: docs re-processed by LLM (run-enrichment only). */
+  /** OM/Brochure financials: docs re-processed by senior-analyst LLM (run-enrichment; also on OM upload). */
   omFinancialsProcessed?: number;
   /** OM/Brochure docs skipped because file was not on disk (e.g. ephemeral storage). */
   omFinancialsSkippedNoFile?: number;
+  /** Rental flow (RapidAPI + LLM on listing) runs automatically; summary when present. */
+  rentalFlow?: { ran: boolean; success: number; failed: number };
 }
 
 interface AgentEnrichmentEntry {
@@ -471,6 +473,15 @@ function PropertyDataContent() {
             success: data.permitEnrichment.success ?? 0,
             failed: data.permitEnrichment.failed ?? 0,
             byModule: data.permitEnrichment.byModule ?? {},
+            rentalFlow: data.rentalFlow,
+          });
+        } else if (data.rentalFlow?.ran) {
+          setLastEnrichmentResult({
+            ran: true,
+            success: 0,
+            failed: 0,
+            byModule: {},
+            rentalFlow: data.rentalFlow,
           });
         }
         setSelectedListingIds(new Set());
@@ -517,6 +528,7 @@ function PropertyDataContent() {
           error?: string;
           permitEnrichment?: { ran?: boolean; success?: number; failed?: number; byModule?: Record<string, number> };
           omFinancialsRefresh?: { documentsProcessed?: number; documentsSkippedNoFile?: number };
+          rentalFlow?: { ran: boolean; success: number; failed: number };
         };
         try {
           data = text ? JSON.parse(text) : {};
@@ -540,6 +552,7 @@ function PropertyDataContent() {
             byModule: data.permitEnrichment.byModule ?? {},
             omFinancialsProcessed: data.omFinancialsRefresh?.documentsProcessed,
             omFinancialsSkippedNoFile: data.omFinancialsRefresh?.documentsSkippedNoFile,
+            rentalFlow: data.rentalFlow,
           });
         }
         fetchCanonicalProperties();
@@ -1000,9 +1013,9 @@ function PropertyDataContent() {
                 className="btn-secondary"
                 onClick={handleRunRentalFlow}
                 disabled={Boolean(runningRentalFlow)}
-                title="Run rental flow (steps 1+2): RapidAPI rental-by-URL + LLM on listing description. Fetches rental units and extracts NOI, cap rate, etc."
+                title="Re-run rental flow only (RapidAPI + LLM on listing). Runs automatically when adding to canonical or re-running enrichment."
               >
-                {runningRentalFlow ? "Running…" : "Run rental flow"}
+                {runningRentalFlow ? "Running…" : "Re-run rental flow"}
               </button>
             </>
           )}
@@ -1105,10 +1118,10 @@ function PropertyDataContent() {
             {sendingToCanonical || rerunningEnrichment || runningRentalFlow ? (
               <p style={{ margin: 0, color: "#854d0e" }}>
                 {sendingToCanonical
-                  ? "Enrichment in progress… Creating canonical properties and running all modules (Phase 1, Permits, Zoning, CO, HPD, etc.). This may take a minute."
+                  ? "Enrichment in progress… Creating canonical properties, running all modules (Phase 1, Permits, Zoning, CO, HPD, etc.), and rental flow (RapidAPI + LLM) per property. This may take a few minutes."
                   : runningRentalFlow
-                    ? "Running rental flow… Fetching rental data (RapidAPI) and extracting financials from listing text (LLM). This may take a few minutes."
-                    : "Re-running enrichment for existing canonical properties… Refreshing data from NYC Open Data. This may take a minute."}
+                    ? "Re-running rental flow… Fetching rental data (RapidAPI) and extracting financials from listing text (LLM). This may take a few minutes."
+                    : "Re-running enrichment… Refreshing NYC Open Data, OM financials (when OM/Brochure uploaded), and rental flow per property. This may take a few minutes."}
               </p>
             ) : lastEnrichmentResult ? (
               <>
@@ -1122,6 +1135,13 @@ function PropertyDataContent() {
                       {(lastEnrichmentResult.omFinancialsSkippedNoFile ?? 0) > 0 && (
                         <>; <strong>{lastEnrichmentResult.omFinancialsSkippedNoFile} skipped</strong> (file not on disk — use persistent storage on Render)</>
                       )}
+                    </>
+                  )}
+                  {lastEnrichmentResult.rentalFlow?.ran && (
+                    <> Rental flow: <strong>{lastEnrichmentResult.rentalFlow.success} succeeded</strong>
+                      {lastEnrichmentResult.rentalFlow.failed > 0 && (
+                        <>, <strong>{lastEnrichmentResult.rentalFlow.failed} failed</strong></>
+                      )}.
                     </>
                   )}
                 </p>

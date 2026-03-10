@@ -294,6 +294,22 @@ router.post("/properties/from-listings", async (req: Request, res: Response) => 
         enrichmentSummary.byModule = byModule;
       }
 
+      // Run rental flow for each new property: RapidAPI + LLM on listing to populate financials.
+      let rentalFlowSummary: { ran: boolean; success: number; failed: number } = { ran: false, success: 0, failed: 0 };
+      if (propertyIds.length > 0) {
+        rentalFlowSummary.ran = true;
+        const pool = getPool();
+        for (let i = 0; i < propertyIds.length; i++) {
+          if (i > 0) await new Promise((r) => setTimeout(r, ENRICHMENT_RATE_LIMIT_DELAY_MS));
+          try {
+            await runRentalFlowForProperty(propertyIds[i]!, pool);
+            rentalFlowSummary.success++;
+          } catch {
+            rentalFlowSummary.failed++;
+          }
+        }
+      }
+
       res.json({
         ok: true,
         created: results.length,
@@ -301,6 +317,7 @@ router.post("/properties/from-listings", async (req: Request, res: Response) => 
         permitEnrichment: enrichmentSummary.ran
           ? { ran: true, success: enrichmentSummary.success, failed: enrichmentSummary.failed, byModule: enrichmentSummary.byModule }
           : { ran: false },
+        rentalFlow: rentalFlowSummary.ran ? rentalFlowSummary : undefined,
       });
     } catch (err) {
       await client.query("ROLLBACK").catch(() => {});
@@ -353,7 +370,7 @@ router.post("/properties/run-enrichment", async (req: Request, res: Response) =>
       }
     }
 
-    // After enrichment, refresh OM/Brochure financials for each property when the uploaded doc file exists on disk.
+    // After enrichment, refresh OM/Brochure financials for each property when the uploaded doc file exists on disk (senior-analyst LLM populates property card financial section).
     const pool = getPool();
     let omFinancialsProcessed = 0;
     let omFinancialsSkippedNoFile = 0;
@@ -361,6 +378,19 @@ router.post("/properties/run-enrichment", async (req: Request, res: Response) =>
       const result = await refreshOmFinancialsForProperty(propertyId, pool);
       omFinancialsProcessed += result.documentsProcessed;
       omFinancialsSkippedNoFile += result.documentsSkippedNoFile;
+    }
+
+    // Run rental flow for each property: RapidAPI + LLM on listing to populate rental financials.
+    let rentalSuccess = 0;
+    let rentalFailed = 0;
+    for (let i = 0; i < propertyIds.length; i++) {
+      if (i > 0) await new Promise((r) => setTimeout(r, ENRICHMENT_RATE_LIMIT_DELAY_MS));
+      try {
+        await runRentalFlowForProperty(propertyIds[i]!, pool);
+        rentalSuccess++;
+      } catch {
+        rentalFailed++;
+      }
     }
 
     res.json({
@@ -375,6 +405,7 @@ router.post("/properties/run-enrichment", async (req: Request, res: Response) =>
         documentsProcessed: omFinancialsProcessed,
         documentsSkippedNoFile: omFinancialsSkippedNoFile,
       },
+      rentalFlow: { ran: true, success: rentalSuccess, failed: rentalFailed },
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -1313,14 +1344,66 @@ function mergeFromLlm(
   return Object.keys(out).length > 0 ? out : null;
 }
 
-/** POST /api/properties/run-rental-flow - Run steps 1 (RapidAPI) + 2 (LLM on listing) for selected or all properties. */
+/** Run rental flow for a single property: RapidAPI rental-by-address + LLM extraction from linked listing. Used by from-listings, run-enrichment, and run-rental-flow. */
+export async function runRentalFlowForProperty(
+  propertyId: string,
+  pool: import("pg").Pool
+): Promise<{ rentalUnitsCount: number; hasLlmFinancials: boolean; error?: string }> {
+  const propertyRepo = new PropertyRepo({ pool });
+  const matchRepo = new MatchRepo({ pool });
+  const listingRepo = new ListingRepo({ pool });
+  const property = await propertyRepo.byId(propertyId);
+  if (!property) {
+    return { rentalUnitsCount: 0, hasLlmFinancials: false, error: "Property not found" };
+  }
+  const existing = (property.details?.rentalFinancials ?? null) as RentalFinancials | null;
+  let apiResult: Partial<RentalFinancials> = {};
+  try {
+    apiResult = await runRentalApiStep(property.canonicalAddress);
+  } catch (e) {
+    console.warn(`[runRentalFlowForProperty] ${propertyId} RapidAPI step failed:`, e instanceof Error ? e.message : e);
+  }
+  const rentalUnits = (apiResult.rentalUnits && apiResult.rentalUnits.length > 0)
+    ? apiResult.rentalUnits
+    : (existing?.rentalUnits ?? null);
+  let fromLlm: RentalFinancialsFromLlm | null = null;
+  const { matches } = await matchRepo.list({ propertyId, limit: 1 });
+  const listing = matches[0] ? await listingRepo.byId(matches[0].listingId) : null;
+  if (listing) {
+    const desc = (listing.description ?? "").trim();
+    const fallback = [listing.title, listing.address].filter(Boolean).join(" – ") || "";
+    fromLlm = await extractRentalFinancialsFromListing(
+      desc.length >= 20 ? listing.description : (fallback ? `Listing: ${fallback}. No description.` : null),
+      listing.title ?? listing.address ?? undefined
+    );
+  }
+  const mergedFromLlm = mergeFromLlm(existing?.fromLlm ?? null, fromLlm);
+  const dataGap = await suggestRentalDataGaps(
+    listing ? { beds: listing.beds, baths: listing.baths, address: listing.address, title: listing.title, descriptionSnippet: listing.description?.slice(0, 400) } : null,
+    rentalUnits ?? []
+  );
+  let finalFromLlm = mergedFromLlm;
+  if (dataGap) {
+    finalFromLlm = mergeFromLlm(finalFromLlm ?? null, { dataGapSuggestions: dataGap }) ?? { dataGapSuggestions: dataGap };
+  }
+  const rentalFinancials: RentalFinancials = {
+    rentalUnits: rentalUnits ?? undefined,
+    fromLlm: finalFromLlm ?? undefined,
+    source: apiResult.rentalUnits?.length ? "rapidapi" : (finalFromLlm ? "llm" : existing?.source ?? undefined),
+    lastUpdatedAt: new Date().toISOString(),
+  };
+  await propertyRepo.mergeDetails(propertyId, { rentalFinancials });
+  return {
+    rentalUnitsCount: rentalUnits?.length ?? 0,
+    hasLlmFinancials: !!finalFromLlm && Object.keys(finalFromLlm).length > 0,
+  };
+}
+
+/** POST /api/properties/run-rental-flow - Run rental flow for selected or all properties (on-demand re-run). Normally runs automatically after from-listings and run-enrichment. */
 router.post("/properties/run-rental-flow", async (req: Request, res: Response) => {
   try {
     const pool = getPool();
     const propertyRepo = new PropertyRepo({ pool });
-    const matchRepo = new MatchRepo({ pool });
-    const listingRepo = new ListingRepo({ pool });
-
     const propertyIds = Array.isArray(req.body?.propertyIds) && req.body.propertyIds.length > 0
       ? (req.body.propertyIds as string[]).filter((id: unknown) => typeof id === "string" && id.trim().length > 0)
       : (await propertyRepo.list({ limit: 200 })).map((p) => p.id);
@@ -1330,65 +1413,12 @@ router.post("/properties/run-rental-flow", async (req: Request, res: Response) =
 
     for (const propertyId of propertyIds) {
       try {
-        const property = await propertyRepo.byId(propertyId);
-        if (!property) {
-          results.push({ propertyId, rentalUnitsCount: 0, hasLlmFinancials: false, error: "Property not found" });
-          continue;
-        }
-
-        const existing = (property.details?.rentalFinancials ?? null) as RentalFinancials | null;
-
-        let apiResult: Partial<RentalFinancials> = {};
-        try {
-          apiResult = await runRentalApiStep(property.canonicalAddress);
-        } catch (e) {
-          console.warn(`[run-rental-flow] ${propertyId} RapidAPI step failed:`, e instanceof Error ? e.message : e);
-        }
-
-        const rentalUnits = (apiResult.rentalUnits && apiResult.rentalUnits.length > 0)
-          ? apiResult.rentalUnits
-          : (existing?.rentalUnits ?? null);
-
-        let fromLlm: RentalFinancialsFromLlm | null = null;
-        const { matches } = await matchRepo.list({ propertyId, limit: 1 });
-        const listing = matches[0] ? await listingRepo.byId(matches[0].listingId) : null;
-        if (listing) {
-          const desc = (listing.description ?? "").trim();
-          const fallback = [listing.title, listing.address].filter(Boolean).join(" – ") || "";
-          fromLlm = await extractRentalFinancialsFromListing(
-            desc.length >= 20 ? listing.description : (fallback ? `Listing: ${fallback}. No description.` : null),
-            listing.title ?? listing.address ?? undefined
-          );
-        }
-        const mergedFromLlm = mergeFromLlm(existing?.fromLlm ?? null, fromLlm);
-
-        const dataGap = await suggestRentalDataGaps(
-          listing ? { beds: listing.beds, baths: listing.baths, address: listing.address, title: listing.title, descriptionSnippet: listing.description?.slice(0, 400) } : null,
-          rentalUnits ?? []
-        );
-        let finalFromLlm = mergedFromLlm;
-        if (dataGap) {
-          finalFromLlm = mergeFromLlm(finalFromLlm ?? null, { dataGapSuggestions: dataGap }) ?? { dataGapSuggestions: dataGap };
-        }
-
-        const rentalFinancials: RentalFinancials = {
-          rentalUnits: rentalUnits ?? undefined,
-          fromLlm: finalFromLlm ?? undefined,
-          source: apiResult.rentalUnits?.length ? "rapidapi" : (finalFromLlm ? "llm" : existing?.source ?? undefined),
-          lastUpdatedAt: new Date().toISOString(),
-        };
-
-        await propertyRepo.mergeDetails(propertyId, { rentalFinancials });
-        results.push({
-          propertyId,
-          rentalUnitsCount: rentalUnits?.length ?? 0,
-          hasLlmFinancials: !!finalFromLlm && Object.keys(finalFromLlm).length > 0,
-        });
+        const result = await runRentalFlowForProperty(propertyId, pool);
+        results.push({ propertyId, ...result });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         results.push({ propertyId, rentalUnitsCount: 0, hasLlmFinancials: false, error: message });
       }
-
       if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
     }
 
