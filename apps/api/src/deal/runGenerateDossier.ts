@@ -23,6 +23,8 @@ import { HOLD_YEARS } from "./constants.js";
 export interface GenerateDossierResult {
   dossierDoc: { id: string; fileName: string; storagePath: string };
   excelDoc: { id: string; fileName: string; storagePath: string };
+  /** Deal score 0–100 (from LLM or fallback engine); included so UI can confirm it flowed through. */
+  dealScore: number;
   /** True if email was sent to profile email with attachments. */
   emailSent?: boolean;
 }
@@ -395,7 +397,7 @@ export async function runGenerateDossier(propertyId: string): Promise<GenerateDo
   else if (scoringResult.positiveSignals.length > 0) financialFlags.push(scoringResult.positiveSignals[0]);
 
   dossierText = llmDossierText && llmDossierText.length > 0
-    ? dossierText.replace(/Deal score: —/i, `Deal score: ${ctx.dealScore}/100`)
+    ? dossierText.replace(/^Deal score: .*$/im, `Deal score: ${ctx.dealScore}/100`)
     : buildDossierStructuredText(ctx);
   const dossierBuffer = await dossierTextToPdf(dossierText);
   const excelBuffer = buildExcelProForma(ctx);
@@ -472,6 +474,7 @@ export async function runGenerateDossier(propertyId: string): Promise<GenerateDo
       fileName: excelDoc.fileName,
       storagePath: excelDoc.storagePath,
     },
+    dealScore: finalScore,
     emailSent,
   };
 }

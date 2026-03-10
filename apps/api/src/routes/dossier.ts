@@ -82,6 +82,7 @@ router.post("/dossier/generate", async (req: Request, res: Response) => {
       propertyId,
       dossierDoc: result.dossierDoc,
       excelDoc: result.excelDoc,
+      dealScore: result.dealScore,
       emailSent: result.emailSent ?? false,
     });
   } catch (err) {

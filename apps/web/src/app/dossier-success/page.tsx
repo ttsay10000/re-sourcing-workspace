@@ -12,6 +12,8 @@ function DossierSuccessContent() {
   const dossierId = searchParams.get("dossier_id") ?? "";
   const excelId = searchParams.get("excel_id") ?? "";
   const emailSent = searchParams.get("email_sent") === "1";
+  const dealScoreParam = searchParams.get("deal_score");
+  const dealScore = dealScoreParam != null && /^\d+$/.test(dealScoreParam) ? Number(dealScoreParam) : null;
 
   const dossierUrl =
     propertyId && dossierId
@@ -27,6 +29,9 @@ function DossierSuccessContent() {
       <h1 className="page-title">Deal dossier generated</h1>
       <p style={{ marginBottom: "1.5rem", color: "#666" }}>
         Your deal dossier and Excel pro forma have been saved to the property documents.
+        {dealScore != null && (
+          <> Deal score: <strong>{dealScore}/100</strong> (included in dossier PDF).</>
+        )}
         {emailSent && " A copy was sent to your profile email address."}
       </p>
       <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>

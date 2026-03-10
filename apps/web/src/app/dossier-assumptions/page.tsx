@@ -122,6 +122,7 @@ function DossierAssumptionsContent() {
         excel_id: data.excelDoc?.id ?? "",
       });
       if (data.emailSent) params.set("email_sent", "1");
+      if (data.dealScore != null && !Number.isNaN(data.dealScore)) params.set("deal_score", String(Math.round(data.dealScore)));
       window.location.href = `/dossier-success?${params.toString()}`;
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to generate dossier");
