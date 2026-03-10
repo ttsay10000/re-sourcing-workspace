@@ -22,42 +22,87 @@ function pct(n: number | null | undefined): string {
 
 function serializeUnderwritingContext(ctx: UnderwritingContext): string {
   const a = ctx.assumptions;
+  const generatedDate = new Date().toISOString().slice(0, 10);
   const lines: string[] = [
+    `Generated date (use in header): ${generatedDate}`,
     `Address: ${ctx.canonicalAddress}`,
-    `Purchase price: ${ctx.purchasePrice != null ? `$${fmt(ctx.purchasePrice)}` : "—"}`,
     `Area: ${ctx.listingCity ?? "—"}`,
     `Units: ${ctx.unitCount ?? "—"}`,
     `Deal score: ${ctx.dealScore != null ? `${ctx.dealScore}/100` : "—"}`,
     `Current NOI: ${ctx.currentNoi != null ? `$${fmt(ctx.currentNoi)}` : "—"}`,
     `Current gross rent (annual): ${ctx.currentGrossRent != null ? `$${fmt(ctx.currentGrossRent)}` : "—"}`,
+    `Current expenses total: ${ctx.currentExpensesTotal != null ? `$${fmt(ctx.currentExpensesTotal)}` : "—"}`,
     `Asset cap rate: ${ctx.assetCapRate != null ? pct(ctx.assetCapRate) : "—"}`,
-    `Adjusted cap rate: ${ctx.adjustedCapRate != null ? pct(ctx.adjustedCapRate) : "—"}`,
   ];
+  if (ctx.propertyOverview) {
+    if (ctx.propertyOverview.taxCode) lines.push(`Tax code: ${ctx.propertyOverview.taxCode}`);
+    if (ctx.propertyOverview.hpdRegistrationId) lines.push(`HPD registration ID: ${ctx.propertyOverview.hpdRegistrationId}`);
+    if (ctx.propertyOverview.hpdRegistrationDate) lines.push(`HPD last registration date: ${ctx.propertyOverview.hpdRegistrationDate}`);
+    if (ctx.propertyOverview.bbl) lines.push(`BBL: ${ctx.propertyOverview.bbl}`);
+  }
+  if (ctx.financialFlags && ctx.financialFlags.length > 0) {
+    lines.push(`Financial flags (use as 1–2 bullets in Current State): ${ctx.financialFlags.join("; ")}`);
+  }
+  if (ctx.rentRollRows && ctx.rentRollRows.length > 0) {
+    lines.push("Rent roll (use each row in Gross rent table):");
+    ctx.rentRollRows.forEach((r) => lines.push(`  - ${r.label}: $${fmt(r.annualRent)} annual`));
+  }
+  if (ctx.expenseRows && ctx.expenseRows.length > 0) {
+    lines.push("Expenses (use each row in Expenses table):");
+    ctx.expenseRows.forEach((e) => lines.push(`  - ${e.lineItem}: $${fmt(e.amount)}`));
+  }
   if (ctx.furnishedRental) {
+    const fr = ctx.furnishedRental;
+    const mgmtFee = fr.managementFeeAmount ?? 0;
+    const adjExpExMgmt = fr.adjustedExpenses - mgmtFee;
     lines.push(
-      `Furnished scenario — rent uplift: ${a.rentUpliftPct != null ? `${a.rentUpliftPct}%` : "—"}`,
-      `  Adjusted gross income: $${fmt(ctx.furnishedRental.adjustedGrossIncome)}`,
-      `  Adjusted expenses: $${fmt(ctx.furnishedRental.adjustedExpenses)}`,
-      `  Adjusted NOI: $${fmt(ctx.furnishedRental.adjustedNoi)}`,
-      `  Adjusted cap rate: ${ctx.furnishedRental.adjustedCapRatePct != null ? pct(ctx.furnishedRental.adjustedCapRatePct) : "—"}`
+      "Furnished rental scenario:",
+      `  Adjusted gross income: $${fmt(fr.adjustedGrossIncome)}`,
+      `  Adjusted expenses (ex. mgmt): $${fmt(adjExpExMgmt)}`,
+      `  Management fee amount: $${fmt(mgmtFee)} (${a.managementFeePct ?? 8}% of gross)`,
+      `  Adjusted NOI: $${fmt(fr.adjustedNoi)}`,
+      `  Adjusted cap rate: ${fr.adjustedCapRatePct != null ? pct(fr.adjustedCapRatePct) : "—"}`,
+      `  Expected sale price at exit cap: ${fr.expectedSalePriceAtExitCap != null ? `$${fmt(fr.expectedSalePriceAtExitCap)}` : "—"} (exit cap ${pct(a.exitCapPct)})`
     );
   }
   if (ctx.mortgage) {
     const cf = (ctx.furnishedRental?.adjustedNoi ?? 0) - ctx.mortgage.annualDebtService;
     lines.push(
-      `Mortgage — principal: $${fmt(ctx.mortgage.principal)}, annual debt service: $${fmt(ctx.mortgage.annualDebtService)}, annual cash flow: $${fmt(cf)}`
+      "Financing:",
+      `  Loan principal: $${fmt(ctx.mortgage.principal)}`,
+      `  Annual debt service: $${fmt(ctx.mortgage.annualDebtService)}`,
+      `  Annual cash flow: $${fmt(cf)}`
     );
   }
+  if (ctx.amortizationSchedule && ctx.amortizationSchedule.length > 0) {
+    lines.push("Amortization by year (use for Financing table):");
+    ctx.amortizationSchedule.forEach((row) => {
+      lines.push(`  Y${row.year}: principal $${fmt(row.principalPayment)}, interest $${fmt(row.interestPayment)}, debt service $${fmt(row.debtService)}`);
+    });
+  }
   if (ctx.irr) {
+    const irr3 = ctx.irr.irr3yrPct != null ? (ctx.irr.irr3yrPct * 100).toFixed(2) + "%" : "—";
+    const irr5 = ctx.irr.irr5yrPct != null ? (ctx.irr.irr5yrPct * 100).toFixed(2) + "%" : (ctx.irr.irrPct != null ? (ctx.irr.irrPct * 100).toFixed(2) + "%" : "—");
+    const em = ctx.irr.equityMultiple != null ? `${ctx.irr.equityMultiple.toFixed(2)}x` : "—";
+    const coc = ctx.irr.coc != null ? (ctx.irr.coc * 100).toFixed(2) + "%" : "—";
     lines.push(
-      `Returns — IRR: ${ctx.irr.irrPct != null ? `${(ctx.irr.irrPct * 100).toFixed(2)}%` : "—"}, equity multiple: ${ctx.irr.equityMultiple ?? "—"}, cash-on-cash: ${ctx.irr.coc != null ? `${(ctx.irr.coc * 100).toFixed(2)}%` : "—"}`
+      "Returns:",
+      `  3-year IRR: ${irr3}`,
+      `  5-year IRR: ${irr5}`,
+      `  Equity multiple: ${em}`,
+      `  Cash-on-cash (year 1): ${coc}`
     );
   }
   lines.push(
-    `Assumptions — LTV: ${pct(a.ltvPct)}, rate: ${pct(a.interestRatePct)}, amort: ${a.amortizationYears ?? "—"} yr, exit cap: ${pct(a.exitCapPct)}, rent uplift: ${a.rentUpliftPct != null ? `${a.rentUpliftPct}%` : "—"}, expense increase: ${a.expenseIncreasePct != null ? `${a.expenseIncreasePct}%` : "—"}, mgmt fee: ${a.managementFeePct != null ? `${a.managementFeePct}%` : "—"}, expected appreciation: ${a.expectedAppreciationPct != null ? `${a.expectedAppreciationPct}%/yr` : "—"}`
+    "Assumptions:",
+    `  LTV: ${pct(a.ltvPct)}, Interest rate: ${pct(a.interestRatePct)}, Amortization: ${a.amortizationYears ?? "—"} years`,
+    `  Exit cap: ${pct(a.exitCapPct)}, Rent uplift: ${a.rentUpliftPct != null ? `${a.rentUpliftPct}%` : "—"}, Expense increase: ${a.expenseIncreasePct != null ? `${a.expenseIncreasePct}%` : "—"}, Management fee: ${a.managementFeePct != null ? `${a.managementFeePct}%` : "—"}`
   );
+  if (a.expectedAppreciationPct != null) {
+    lines.push(`  Expected appreciation: ${a.expectedAppreciationPct}%/yr`);
+  }
   if (ctx.projectedValueFromAppreciation != null) {
-    lines.push(`Projected value (appreciation) at exit: $${fmt(ctx.projectedValueFromAppreciation)}`);
+    lines.push(`  Projected value (appreciation) at year 5: $${fmt(ctx.projectedValueFromAppreciation)}`);
   }
   return lines.join("\n");
 }

@@ -13,6 +13,7 @@ import type { GrossRentRow, ExpenseRow, DossierPropertyOverview } from "./underw
 import { buildExcelProForma } from "./excelProForma.js";
 import { buildDossierStructuredText } from "./dossierGenerator.js";
 import { buildDossierWithLlm } from "./dossierLlmGenerator.js";
+import { formatDossierForPresentation } from "./dossierPresentationLlm.js";
 import { dossierTextToPdf } from "./dossierToPdf.js";
 import type { UnderwritingContext } from "./underwritingContext.js";
 import { saveGeneratedDocument } from "./generatedDocStorage.js";
@@ -346,6 +347,7 @@ export async function runGenerateDossier(propertyId: string): Promise<GenerateDo
   const excelFileName = `Pro-Forma-${slug}-${dateStr}.xlsx`;
 
   const neighborhoodContext = null;
+  // Content: dossier LLM is the single source; all calculations are in the prompt and must appear in output. Fallback to template only when LLM returns empty.
   const llmDossierText = await buildDossierWithLlm(ctx, neighborhoodContext, omAnalysis);
   let dossierText = llmDossierText && llmDossierText.length > 0 ? llmDossierText : buildDossierStructuredText(ctx);
 
@@ -388,6 +390,7 @@ export async function runGenerateDossier(propertyId: string): Promise<GenerateDo
     rentStabilizedUnitCount: rentStabCount,
   });
 
+  // Canonical deal score: from LLM (when available) or fallback engine. Persisted to deal_signals and shown on dossier, property cards, and property data.
   const finalScore = llmScore != null ? llmScore.dealScore : scoringResult.dealScore;
   ctx.dealScore = finalScore;
   insertParams.dealScore = finalScore;
@@ -396,10 +399,11 @@ export async function runGenerateDossier(propertyId: string): Promise<GenerateDo
   else if (scoringResult.negativeSignals.length > 0) financialFlags.push(scoringResult.negativeSignals[0]);
   else if (scoringResult.positiveSignals.length > 0) financialFlags.push(scoringResult.positiveSignals[0]);
 
-  dossierText = llmDossierText && llmDossierText.length > 0
-    ? dossierText.replace(/^Deal score: .*$/im, `Deal score: ${ctx.dealScore}/100`)
-    : buildDossierStructuredText(ctx);
-  const dossierBuffer = await dossierTextToPdf(dossierText);
+  if (!llmDossierText || llmDossierText.length === 0) dossierText = buildDossierStructuredText(ctx);
+  dossierText = dossierText.replace(/^Deal score: .*$/im, `Deal score: ${ctx.dealScore}/100`);
+  // Presentation LLM: ensure tables, bullets, and spacing are correct for strong PDF UI
+  const formattedForPdf = await formatDossierForPresentation(dossierText);
+  const dossierBuffer = await dossierTextToPdf(formattedForPdf);
   const excelBuffer = buildExcelProForma(ctx);
 
   await signalsRepo.insert({

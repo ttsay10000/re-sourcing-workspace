@@ -111,7 +111,9 @@ function tableRow(cells: string[]): string {
 
 /**
  * Build dossier text with structured sections and pipe-separated tables for PDF rendering.
- * Units come from OM (ctx.unitCount). Property overview includes tax code, HPD. Current State = financials table.
+ * Used only as fallback when the dossier content LLM returns empty. All calculations and
+ * data are passed to the LLM so it can generate this same structure; this template
+ * ensures a valid PDF when the API is unavailable or fails.
  */
 export function buildDossierStructuredText(ctx: UnderwritingContext): string {
   const lines: string[] = [];

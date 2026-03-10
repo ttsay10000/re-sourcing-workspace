@@ -1221,7 +1221,7 @@ router.post("/properties/:id/compute-score", async (req: Request, res: Response)
     const signalsRepo = new DealSignalsRepo({ pool });
     const row = await signalsRepo.insert({
       ...insertParams,
-      dealScore: null,
+      dealScore: scoringResult.dealScore ?? null,
       irrPct: irr?.irr ?? null,
       equityMultiple: irr?.equityMultiple ?? null,
       cocPct: irr?.coc ?? null,
@@ -1230,7 +1230,7 @@ router.post("/properties/:id/compute-score", async (req: Request, res: Response)
       adjustedNoi: furnishedRental?.adjustedNoi ?? currentNoi ?? null,
     });
     res.json({
-      dealScore: scoringResult.dealScore,
+      dealScore: row.dealScore ?? scoringResult.dealScore,
       dealSignals: row,
       scoringResult: {
         assetYieldScore: scoringResult.assetYieldScore,

@@ -35,13 +35,15 @@ export interface FurnishedRentalResult {
 
 /**
  * Compute adjusted revenue and expenses for furnished rental scenario.
- * Formula: adjusted NOI = gross rent × (1 + rent uplift) − expenses × (1 + expense uplift),
- * with management fee added to expenses (on adjusted gross). So:
+ *
+ * Adjusted NOI formula (from assumptions: rental uplift, expense uplift, management fee %):
+ *   adjusted NOI = (gross rents × rental uplift) − (expenses × expense uplift) − (management fee % × gross rents × rental uplift)
+ *
+ * So:
  *   adjusted gross income = current gross × rentUplift
  *   current expenses = gross − NOI (implied)
- *   adjusted expenses = current expenses × expenseIncrease + management fee × adjusted gross
- *   adjusted NOI = adjusted gross − adjusted expenses
- * adjustedCapRatePct is set here as adjustedNoi / purchasePrice × 100 when price is provided.
+ *   adjusted NOI = adjusted gross − (expenses × expenseIncrease) − (managementFee × adjusted gross)
+ * adjustedCapRatePct = adjustedNoi / purchasePrice × 100 when price is provided.
  */
 export function computeFurnishedRental(inputs: FurnishedRentalInputs, purchasePrice: number | null): FurnishedRentalResult {
   const {
@@ -55,10 +57,10 @@ export function computeFurnishedRental(inputs: FurnishedRentalInputs, purchasePr
   const uplift = Math.max(0, rentUplift);
   const adjustedGrossIncome = currentGrossRent * uplift;
   const currentExpenses = Math.max(0, currentGrossRent - currentNoi);
-  const adjustedBaseExpenses = currentExpenses * expenseIncrease;
-  const managementFeeAmount = adjustedGrossIncome * managementFee;
-  const adjustedExpenses = adjustedBaseExpenses + managementFeeAmount;
-  const adjustedNoi = adjustedGrossIncome - adjustedExpenses;
+  const adjustedExpensesOnly = currentExpenses * expenseIncrease;
+  const managementFeeAmount = managementFee * adjustedGrossIncome;
+  const adjustedNoi = adjustedGrossIncome - adjustedExpensesOnly - managementFeeAmount;
+  const adjustedExpenses = adjustedExpensesOnly + managementFeeAmount;
 
   const adjustedCapRatePct =
     purchasePrice != null && purchasePrice > 0 ? (adjustedNoi / purchasePrice) * 100 : null;
