@@ -170,15 +170,15 @@ async function run(propertyId: string, options: EnrichmentRunOptions): Promise<E
       console.log(`[enrichment:co] BBL=${bblForQueries} source=${source} rows=${rows.length} first_row.bbl=${firstBbl ?? "—"} first_row.bin=${firstBin ?? "—"}`);
     }
 
-    const row = rows[0];
+    const row = rows[0] as Record<string, unknown> | undefined;
     const isHistorical = source === "historical";
     const issuanceDate = row
       ? parseDateToYyyyMmDd(
           col(row, "c_of_o_issuance_date", "co_issuance_date", "c_o_issue_date")
         )
       : null;
-    // jobNumber = CO ID: DOB NOW has c_of_o_number, job_filing_name; historical has job_number.
-    const jobNumber = col(row, "c_of_o_number", "job_filing_name", "job_number");
+    // jobNumber = CO ID: DOB NOW has c_of_o_number, job_filing_name; historical has job_number. Guard when 0 rows.
+    const jobNumber = row ? col(row, "c_of_o_number", "job_filing_name", "job_number") : null;
     const normalized = row
       ? {
           jobNumber: jobNumber ?? null,

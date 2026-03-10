@@ -66,7 +66,8 @@ async function main(): Promise<number> {
       rateLimitDelayMs: RATE_LIMIT_MS,
     });
     console.log(JSON.stringify(out, null, 2));
-    return out.failed > 0 ? 1 : 0;
+    // Exit 1 only when every property failed; partial success (e.g. 1 success, 8 failed) keeps cron green
+    return out.success === 0 && out.failed > 0 ? 1 : 0;
   }
 
   console.error(

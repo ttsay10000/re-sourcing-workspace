@@ -139,7 +139,15 @@ export async function runEnrichmentBatch(
   for (const prop of properties) {
     const { ok, results: runResults } = await runEnrichmentForProperty(prop.id, options.moduleName, options);
     if (ok) success++;
-    else failed++;
+    else {
+      failed++;
+      const errors = Object.entries(runResults)
+        .filter(([, r]) => !r.ok && !r.skipped && r.error)
+        .map(([name, r]) => `${name}: ${r.error}`);
+      if (errors.length > 0) {
+        console.error(`[enrichAll] property ${prop.id} failed: ${errors.join("; ")}`);
+      }
+    }
     for (const [name, r] of Object.entries(runResults)) {
       results[name] = (results[name] ?? 0) + (r.ok ? 1 : 0);
     }

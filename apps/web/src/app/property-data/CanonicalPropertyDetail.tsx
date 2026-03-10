@@ -937,11 +937,11 @@ export function CanonicalPropertyDetail({
       <CollapsibleSection id="valuations" title="Valuations (assessment)" open={!!openSections.valuations} onToggle={() => toggle("valuations")}>
         <div style={{ fontSize: "0.875rem" }}>
           <ul style={{ margin: "0 0 0.5rem", paddingLeft: "1.25rem" }}>
-            <li><strong>Market value (curmkttot):</strong> {assessedMarketValue != null ? `$${Number(assessedMarketValue).toLocaleString()}` : "—"}</li>
-            <li><strong>Actual assessed (curacttot):</strong> {assessedActualValue != null ? `$${Number(assessedActualValue).toLocaleString()}` : "—"}</li>
-            <li><strong>Tax before total (curtxbtot):</strong> {assessedTaxBeforeTotal != null ? `$${Number(assessedTaxBeforeTotal).toLocaleString()}` : "—"}</li>
+            <li><strong>Market value:</strong> {assessedMarketValue != null ? `$${Number(assessedMarketValue).toLocaleString()}` : "—"}</li>
+            <li><strong>Actual assessed:</strong> {assessedActualValue != null ? `$${Number(assessedActualValue).toLocaleString()}` : "—"}</li>
+            <li><strong>Tax before total:</strong> {assessedTaxBeforeTotal != null ? `$${Number(assessedTaxBeforeTotal).toLocaleString()}` : "—"}</li>
           </ul>
-          <strong style={{ display: "block", marginBottom: "0.25rem" }}>Area (sqft)</strong>
+          <strong style={{ display: "block", marginBottom: "0.25rem" }}>Area</strong>
           <ul style={{ margin: "0 0 0.5rem", paddingLeft: "1.25rem" }}>
             <li><strong>Gross sqft:</strong> {assessedGrossSqft != null ? Number(assessedGrossSqft).toLocaleString() : "—"}</li>
             <li><strong>Land area:</strong> {assessedLandArea != null ? Number(assessedLandArea).toLocaleString() : "—"}</li>
@@ -952,7 +952,7 @@ export function CanonicalPropertyDetail({
           <strong style={{ display: "block", marginBottom: "0.25rem" }}>Dates</strong>
           <ul style={{ margin: 0, paddingLeft: "1.25rem" }}>
             <li><strong>Appt date:</strong> {assessedApptDate != null && String(assessedApptDate).trim() !== "" ? formatDateOnly(assessedApptDate) ?? String(assessedApptDate) : "—"}</li>
-            <li><strong>Extract date (extracrdt):</strong> {assessedExtractDate != null && String(assessedExtractDate).trim() !== "" ? formatDateOnly(assessedExtractDate) ?? String(assessedExtractDate) : "—"}</li>
+            <li><strong>Extract date:</strong> {assessedExtractDate != null && String(assessedExtractDate).trim() !== "" ? formatDateOnly(assessedExtractDate) ?? String(assessedExtractDate) : "—"}</li>
           </ul>
           {assessedMarketValue == null && assessedActualValue == null && assessedTaxBeforeTotal == null && assessedGrossSqft == null && assessedLandArea == null && assessedResidentialAreaGross == null && assessedOfficeAreaGross == null && assessedRetailAreaGross == null && (assessedApptDate == null || String(assessedApptDate).trim() === "") && (assessedExtractDate == null || String(assessedExtractDate).trim() === "") && (
             <p className="initial-info-empty" style={{ marginTop: "0.25rem", fontSize: "0.8rem" }}>From valuations enrichment (BBL). Run enrichment to populate.</p>

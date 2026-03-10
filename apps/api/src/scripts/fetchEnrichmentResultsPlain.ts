@@ -93,18 +93,18 @@ async function main(): Promise<void> {
     });
     const v = valRows[0];
     out.push("--- Valuations (tax code, owner, assessment) ---");
-    out.push("Tax code (curtaxclass): " + (v?.curtaxclass ?? "—"));
+    out.push("Tax code: " + (v?.curtaxclass ?? "—"));
     out.push("Owner: " + (v?.owner ?? "—"));
-    out.push("Market value (curmkttot): " + (v?.curmkttot != null ? String(v.curmkttot) : "—"));
-    out.push("Actual assessed (curacttot): " + (v?.curacttot != null ? String(v.curacttot) : "—"));
-    out.push("Tax before total (curtxbtot): " + (v?.curtxbtot != null ? String(v.curtxbtot) : "—"));
+    out.push("Market value: " + (v?.curmkttot != null ? String(v.curmkttot) : "—"));
+    out.push("Actual assessed: " + (v?.curacttot != null ? String(v.curacttot) : "—"));
+    out.push("Tax before total: " + (v?.curtxbtot != null ? String(v.curtxbtot) : "—"));
     out.push("Gross sqft: " + (v?.gross_sqft != null ? String(v.gross_sqft) : "—"));
     out.push("Land area: " + (v?.land_area != null ? String(v.land_area) : "—"));
     out.push("Residential area gross: " + (v?.residential_area_gross != null ? String(v.residential_area_gross) : "—"));
     out.push("Office area gross: " + (v?.office_area_gross != null ? String(v.office_area_gross) : "—"));
     out.push("Retail area gross: " + (v?.retail_area_gross != null ? String(v.retail_area_gross) : "—"));
     out.push("Appt date: " + (v?.appt_date ?? "—"));
-    out.push("Extract date (extracrdt): " + (v?.extracrdt ?? "—"));
+    out.push("Extract date: " + (v?.extracrdt ?? "—"));
     out.push("");
   } catch (e) {
     out.push("Valuations error: " + (e instanceof Error ? e.message : String(e)));
