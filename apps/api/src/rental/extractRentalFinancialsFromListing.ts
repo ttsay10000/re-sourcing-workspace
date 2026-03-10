@@ -47,6 +47,56 @@ export async function extractRentalFinancialsFromListing(
 
 const OM_STYLE_MIN_LENGTH = 2500;
 
+/** Cap rate and furnished cap rate: store as percentage number (5.47 for 5.47%). */
+const UI_PERCENT_KEYS = ["capRate", "adjustedCapRate", "furnishedCapRate", "rentUpsidePercent"];
+/** Ratio/occupancy: store as decimal 0–1 (0.24 for 24%). */
+const UI_RATIO_KEYS = ["expenseRatio", "breakEvenOccupancy"];
+/** Dollar amounts: keep as number, no % scaling. */
+const UI_DOLLAR_KEYS = ["price", "pricePerUnit", "pricePerSqft", "grossRent", "noi", "furnishedNOI"];
+
+function toNum(v: unknown): number | null {
+  if (v == null) return null;
+  if (typeof v === "number" && !Number.isNaN(v)) return v;
+  if (typeof v === "string") {
+    const cleaned = v.replace(/[$,%\s]/g, "");
+    const n = Number(cleaned);
+    return Number.isNaN(n) ? null : n;
+  }
+  return null;
+}
+
+/**
+ * Normalize LLM uiFinancialSummary so cap rates are percentage numbers (5.47), ratios are decimals (0.24),
+ * and string/dollar values are coerced to numbers for consistent UI display.
+ */
+function normalizeUiFinancialSummary(
+  raw: Record<string, unknown> | undefined
+): Record<string, unknown> | undefined {
+  if (!raw || typeof raw !== "object") return raw;
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    const num = toNum(value);
+    if (num === null) {
+      out[key] = value;
+      continue;
+    }
+    if (UI_PERCENT_KEYS.includes(key)) {
+      // LLM may return 0.0547 (decimal) or 5.47 (percentage). Store as percentage.
+      out[key] = num > 0 && num <= 1 ? num * 100 : num;
+    } else if (UI_RATIO_KEYS.includes(key)) {
+      // Store as decimal 0–1 (0.24 = 24%). LLM may return 0.0024 (wrong); scale to 0.24.
+      if (num > 0 && num <= 0.02) out[key] = num * 100; // e.g. 0.0024 -> 0.24
+      else if (num > 1 && num <= 100) out[key] = num / 100; // e.g. 24 -> 0.24
+      else out[key] = num;
+    } else if (UI_DOLLAR_KEYS.includes(key) || key.includes("price") || key.includes("Rent") || key.includes("noi") || key.includes("NOI")) {
+      out[key] = num;
+    } else {
+      out[key] = typeof value === "number" ? value : num;
+    }
+  }
+  return out;
+}
+
 export interface ExtractRentalFinancialsOptions {
   /** When true, use the full senior-analyst OM prompt regardless of text length. Use for uploaded OM/Brochure. */
   forceOmStyle?: boolean;
@@ -69,8 +119,10 @@ function fromLlmFromOmAnalysis(om: OmAnalysis): RentalFinancialsFromLlm {
     (valuation?.NOI as number | undefined) ??
     (financial?.noi as number | undefined) ??
     (ui?.noi as number | undefined);
-  const capRate =
+  let capRate =
     (valuation?.capRate as number | undefined) ?? (ui?.capRate as number | undefined);
+  // LLM may return cap rate as decimal (0.0356); we store and display as percentage (3.56)
+  if (capRate != null && typeof capRate === "number" && capRate > 0 && capRate <= 1) capRate = capRate * 100;
   const grossRentTotal =
     (income?.grossRentActual as number | undefined) ??
     (income?.grossRentPotential as number | undefined) ??
@@ -88,6 +140,9 @@ function fromLlmFromOmAnalysis(om: OmAnalysis): RentalFinancialsFromLlm {
     beds: r.beds,
     baths: r.baths,
     sqft: r.sqft,
+    occupied: r.occupied,
+    lastRentedDate: r.lastRentedDate,
+    dateVacant: r.dateVacant,
     note: [r.rentType, r.tenantStatus, r.notes].filter(Boolean).join("; ") || undefined,
   }));
 
@@ -124,12 +179,16 @@ export async function extractRentalFinancialsFromText(
   }
 
   const isOmStyle = options?.forceOmStyle === true || trimmed.length >= OM_STYLE_MIN_LENGTH;
-  console.log("[extractRentalFinancialsFromText] Calling OpenAI model=" + getEnrichmentModel() + " isOmStyle=" + isOmStyle + " promptChars=" + (isOmStyle ? (OM_ANALYSIS_PROMPT_PREFIX.length + Math.min(trimmed.length, 16000)) : Math.min(trimmed.length, 15000)));
+  /** For OM-style, use more context so long/complex OMs (e.g. full Executive Summary + appendices) are not truncated; rent roll often appears later in the doc. */
+  const omDocLimit = 48000;
+  const docLimit = isOmStyle ? omDocLimit : 15000;
+  const docSnippet = trimmed.slice(0, docLimit);
+  console.log("[extractRentalFinancialsFromText] Calling OpenAI model=" + getEnrichmentModel() + " isOmStyle=" + isOmStyle + " promptChars=" + (OM_ANALYSIS_PROMPT_PREFIX.length + docSnippet.length) + (trimmed.length > docLimit ? " (doc truncated)" : ""));
   const openai = new OpenAI({ apiKey: key });
 
   const documentSection =
     (options?.enrichmentContext ? `Additional enrichment data:\n${options.enrichmentContext}\n\n` : "") +
-    `Document text (OM/listing):\n${trimmed.slice(0, 16000)}`;
+    `Document text (OM/listing):\n${docSnippet}`;
 
   const prompt = isOmStyle
     ? OM_ANALYSIS_PROMPT_PREFIX + documentSection
@@ -169,6 +228,7 @@ ${trimmed.slice(0, 15000)}`;
     const parsed = JSON.parse(jsonStr) as Record<string, unknown>;
 
     if (isOmStyle) {
+      const rawUi = (parsed.uiFinancialSummary as Record<string, unknown>) ?? undefined;
       const omAnalysis: OmAnalysis = {
         propertyInfo: (parsed.propertyInfo as Record<string, unknown>) ?? undefined,
         rentRoll: Array.isArray(parsed.rentRoll)
@@ -185,7 +245,7 @@ ${trimmed.slice(0, 15000)}`;
           ? (parsed.investmentTakeaways as string[])
           : undefined,
         recommendedOfferAnalysis: (parsed.recommendedOfferAnalysis as Record<string, unknown>) ?? undefined,
-        uiFinancialSummary: (parsed.uiFinancialSummary as Record<string, unknown>) ?? undefined,
+        uiFinancialSummary: normalizeUiFinancialSummary(rawUi),
         dossierMemo: (parsed.dossierMemo as Record<string, string>) ?? undefined,
         noiReported:
           typeof parsed.noiReported === "number" && !Number.isNaN(parsed.noiReported)
@@ -240,7 +300,19 @@ ${trimmed.slice(0, 15000)}`;
       omAnalysis: null,
     };
   } catch (err) {
-    console.warn("[extractRentalFinancialsFromText]", err instanceof Error ? err.message : err);
+    const msg = err instanceof Error ? err.message : String(err);
+    const code = err && typeof err === "object" && "code" in err ? (err as { code?: string }).code : undefined;
+    const status = err && typeof err === "object" && "status" in err ? (err as { status?: number }).status : undefined;
+    console.error(
+      "[extractRentalFinancialsFromText] OpenAI call failed:",
+      msg,
+      code ? `(code: ${code})` : "",
+      status ? `(status: ${status})` : ""
+    );
+    if (err && typeof err === "object" && "error" in err) {
+      const apiErr = (err as { error?: { message?: string; code?: string } }).error;
+      if (apiErr?.message) console.error("[extractRentalFinancialsFromText] API error:", apiErr.message, apiErr.code ?? "");
+    }
     return { fromLlm: null, omAnalysis: null };
   }
 }

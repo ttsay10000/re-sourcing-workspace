@@ -50,7 +50,7 @@ interface PipelineStats {
   remainingByModule?: Record<string, { count: number; propertyIds: string[] }>;
 }
 
-/** Result of last enrichment run (from POST from-listings or run-enrichment permitEnrichment + omFinancialsRefresh + rentalFlow). */
+/** Result of last enrichment run (from POST from-listings or run-enrichment: permitEnrichment + omFinancialsRefresh). rentalFlow only from from-listings. */
 interface LastEnrichmentResult {
   ran: true;
   success: number;
@@ -528,7 +528,6 @@ function PropertyDataContent() {
           error?: string;
           permitEnrichment?: { ran?: boolean; success?: number; failed?: number; byModule?: Record<string, number> };
           omFinancialsRefresh?: { documentsProcessed?: number; documentsSkippedNoFile?: number };
-          rentalFlow?: { ran: boolean; success: number; failed: number };
         };
         try {
           data = text ? JSON.parse(text) : {};
@@ -552,7 +551,6 @@ function PropertyDataContent() {
             byModule: data.permitEnrichment.byModule ?? {},
             omFinancialsProcessed: data.omFinancialsRefresh?.documentsProcessed,
             omFinancialsSkippedNoFile: data.omFinancialsRefresh?.documentsSkippedNoFile,
-            rentalFlow: data.rentalFlow,
           });
         }
         fetchCanonicalProperties();
@@ -1121,7 +1119,7 @@ function PropertyDataContent() {
                   ? "Enrichment in progress… Creating canonical properties, running all modules (Phase 1, Permits, Zoning, CO, HPD, etc.), and rental flow (RapidAPI + LLM) per property. This may take a few minutes."
                   : runningRentalFlow
                     ? "Re-running rental flow… Fetching rental data (RapidAPI) and extracting financials from listing text (LLM). This may take a few minutes."
-                    : "Re-running enrichment… Refreshing NYC Open Data, OM financials (when OM/Brochure uploaded), and rental flow per property. This may take a few minutes."}
+                    : "Re-running enrichment… Refreshing NYC Open Data and OM financials (when OM/Brochure uploaded). Use Re-run rental flow for RapidAPI + LLM."}
               </p>
             ) : lastEnrichmentResult ? (
               <>

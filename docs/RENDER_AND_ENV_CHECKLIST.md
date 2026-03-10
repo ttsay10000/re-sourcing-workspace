@@ -18,6 +18,7 @@
 | `PROCESS_INBOX_CRON_SECRET` | Optional | If set, `POST /api/cron/process-inbox` requires header `X-Cron-Secret` or `Authorization: Bearer <secret>`. |
 | `INQUIRY_DOCS_PATH` | Optional | Base path for inquiry attachment files (default: `uploads/inquiry-docs`). On Render, use a path that persists or an external store. |
 | `UPLOADED_DOCS_PATH` | Optional | Base path for property-uploaded docs (OM, Brochure, etc.). Default: `uploads/property-docs`. **New uploads also store file bytes in the DB** so downloads work on ephemeral disks (e.g. Render); no persistent disk required for new uploads. |
+| **Document upload size** | | The API allows uploads up to 25 MB. **Render’s proxy may reject large request bodies** (e.g. 413) before they reach the app; if OM/brochure upload fails, try a smaller PDF (&lt;10 MB) or compress the file. Upload responds immediately; OM LLM analysis runs in the background so request timeout is not an issue. |
 | **Optional** | | |
 | `RENTAL_DEBUG` | No | Set to `1` to log 404/errors from rental API. |
 | `RENTAL_SEARCH_FALLBACK` | No | Set to `1` to run rentals/search when building probe returns &lt;3 units. |

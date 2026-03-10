@@ -44,6 +44,45 @@ function mergeFromLlm(
   return Object.keys(out).length > 0 ? out : null;
 }
 
+/** Min combined text length to run OM-style extraction (same as manual upload). Skip when nothing readable from OM. */
+const OM_STYLE_MIN_READABLE_CHARS = 50;
+
+/**
+ * Run the same OM-style financial extraction as manual upload: forceOmStyle + enrichmentContext,
+ * then merge into property.details.rentalFinancials so the user can recall on the property and re-run enrichment if needed.
+ */
+async function runOmStyleExtractionAndMerge(
+  propertyRepo: PropertyRepo,
+  property: { id: string; details?: unknown },
+  combinedText: string
+): Promise<void> {
+  const details = (property.details ?? {}) as Record<string, unknown>;
+  const enrichmentContext =
+    details.enrichment || details.bbl || details.taxCode
+      ? JSON.stringify(
+          { bbl: details.bbl, taxCode: details.taxCode, enrichment: details.enrichment },
+          null,
+          0
+        ).slice(0, 4000)
+      : undefined;
+  const { fromLlm, omAnalysis } = await extractRentalFinancialsFromText(combinedText, {
+    forceOmStyle: true,
+    enrichmentContext,
+  });
+  if (!fromLlm && !omAnalysis) return;
+  const prop = await propertyRepo.byId(property.id);
+  const existingRental = (prop?.details?.rentalFinancials ?? null) as RentalFinancials | null;
+  const mergedFromLlm = fromLlm ? mergeFromLlm(existingRental?.fromLlm ?? null, fromLlm) : (existingRental?.fromLlm ?? null);
+  const rentalFinancials: RentalFinancials = {
+    ...(existingRental ?? {}),
+    fromLlm: mergedFromLlm ?? undefined,
+    omAnalysis: omAnalysis ?? existingRental?.omAnalysis ?? undefined,
+    source: existingRental?.source ?? "inquiry",
+    lastUpdatedAt: new Date().toISOString(),
+  };
+  await propertyRepo.mergeDetails(property.id, { rentalFinancials });
+}
+
 export interface ProcessInboxResult {
   processed: number;
   matched: number;
@@ -183,22 +222,9 @@ export async function processInbox(options?: { maxMessages?: number }): Promise<
         if (t) attachmentTexts.push(t);
       }
       const combinedText = [bodyText, ...attachmentTexts].filter(Boolean).join("\n\n");
-      if (combinedText.length >= 20) {
+      if (combinedText.length >= OM_STYLE_MIN_READABLE_CHARS) {
         try {
-          const { fromLlm, omAnalysis } = await extractRentalFinancialsFromText(combinedText);
-          if (fromLlm || omAnalysis) {
-            const prop = await propertyRepo.byId(property.id);
-            const existing = (prop?.details?.rentalFinancials ?? null) as RentalFinancials | null;
-            const mergedFromLlm = fromLlm ? mergeFromLlm(existing?.fromLlm ?? null, fromLlm) : (existing?.fromLlm ?? null);
-            const rentalFinancials: RentalFinancials = {
-              ...(existing ?? {}),
-              fromLlm: mergedFromLlm ?? undefined,
-              omAnalysis: omAnalysis ?? existing?.omAnalysis ?? undefined,
-              source: existing?.source ?? "inquiry",
-              lastUpdatedAt: new Date().toISOString(),
-            };
-            await propertyRepo.mergeDetails(property.id, { rentalFinancials });
-          }
+          await runOmStyleExtractionAndMerge(propertyRepo, property, combinedText);
         } catch (e) {
           result.errors.push(`llm merge: ${e instanceof Error ? e.message : String(e)}`);
         }
@@ -308,22 +334,9 @@ export async function processInbox(options?: { maxMessages?: number }): Promise<
           if (t) attachmentTexts.push(t);
         }
         const combinedText = [bodyText, ...attachmentTexts].filter(Boolean).join("\n\n");
-        if (combinedText.length >= 20) {
+        if (combinedText.length >= OM_STYLE_MIN_READABLE_CHARS) {
           try {
-            const { fromLlm, omAnalysis } = await extractRentalFinancialsFromText(combinedText);
-            if (fromLlm || omAnalysis) {
-              const prop = await propertyRepo.byId(property.id);
-              const existingRental = (prop?.details?.rentalFinancials ?? null) as RentalFinancials | null;
-              const mergedFromLlm = fromLlm ? mergeFromLlm(existingRental?.fromLlm ?? null, fromLlm) : (existingRental?.fromLlm ?? null);
-              const rentalFinancials: RentalFinancials = {
-                ...(existingRental ?? {}),
-                fromLlm: mergedFromLlm ?? undefined,
-                omAnalysis: omAnalysis ?? existingRental?.omAnalysis ?? undefined,
-                source: existingRental?.source ?? "inquiry",
-                lastUpdatedAt: new Date().toISOString(),
-              };
-              await propertyRepo.mergeDetails(property.id, { rentalFinancials });
-            }
+            await runOmStyleExtractionAndMerge(propertyRepo, property, combinedText);
           } catch (e) {
             result.errors.push(`broker llm merge: ${e instanceof Error ? e.message : String(e)}`);
           }
@@ -443,22 +456,9 @@ export async function processInbox(options?: { maxMessages?: number }): Promise<
           if (t) attachmentTexts.push(t);
         }
         const combinedText = [bodyText, ...attachmentTexts].filter(Boolean).join("\n\n");
-        if (combinedText.length >= 20) {
+        if (combinedText.length >= OM_STYLE_MIN_READABLE_CHARS) {
           try {
-            const { fromLlm, omAnalysis } = await extractRentalFinancialsFromText(combinedText);
-            if (fromLlm || omAnalysis) {
-              const prop = await propertyRepo.byId(property.id);
-              const existingRental = (prop?.details?.rentalFinancials ?? null) as RentalFinancials | null;
-              const mergedFromLlm = fromLlm ? mergeFromLlm(existingRental?.fromLlm ?? null, fromLlm) : (existingRental?.fromLlm ?? null);
-              const rentalFinancials: RentalFinancials = {
-                ...(existingRental ?? {}),
-                fromLlm: mergedFromLlm ?? undefined,
-                omAnalysis: omAnalysis ?? existingRental?.omAnalysis ?? undefined,
-                source: existingRental?.source ?? "inquiry",
-                lastUpdatedAt: new Date().toISOString(),
-              };
-              await propertyRepo.mergeDetails(property.id, { rentalFinancials });
-            }
+            await runOmStyleExtractionAndMerge(propertyRepo, property, combinedText);
           } catch (e) {
             result.errors.push(`thread llm merge: ${e instanceof Error ? e.message : String(e)}`);
           }

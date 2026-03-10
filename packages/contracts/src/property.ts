@@ -114,6 +114,12 @@ export interface RentalNumberPerUnit {
   baths?: number;
   /** Square footage for this unit when stated. */
   sqft?: number;
+  /** Occupancy: true/false or "Occupied" / "Vacant" etc. */
+  occupied?: boolean | string;
+  /** Last rented date (e.g. lease start or when unit was last rented). */
+  lastRentedDate?: string;
+  /** Date unit became or will become vacant (if vacant or known). */
+  dateVacant?: string;
   /** e.g. "Rent Stabilized", "Recently renovated", "Market rate". */
   note?: string;
 }
@@ -148,6 +154,12 @@ export interface OmRentRollRow {
   sqft?: number;
   rentType?: string;
   tenantStatus?: string;
+  /** Occupancy: true/false or "Occupied" / "Vacant". */
+  occupied?: boolean | string;
+  /** Last rented date (e.g. lease start or when unit was last rented). */
+  lastRentedDate?: string;
+  /** Date unit became or will become vacant (if vacant or known). */
+  dateVacant?: string;
   notes?: string;
   [key: string]: unknown;
 }
