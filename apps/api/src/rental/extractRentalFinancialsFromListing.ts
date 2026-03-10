@@ -113,13 +113,18 @@ export async function extractRentalFinancialsFromText(
   options?: ExtractRentalFinancialsOptions
 ): Promise<ExtractRentalFinancialsResult> {
   const key = getApiKey();
-  if (!key)
+  if (!key) {
+    console.warn("[extractRentalFinancialsFromText] OPENAI_API_KEY missing or invalid; skipping OpenAI call.");
     return { fromLlm: null, omAnalysis: null };
+  }
   const trimmed = (text ?? "").trim();
-  if (!trimmed || trimmed.length < 20)
+  if (!trimmed || trimmed.length < 20) {
+    console.warn("[extractRentalFinancialsFromText] Text too short for LLM (length:", trimmed.length, "); skipping OpenAI call.");
     return { fromLlm: null, omAnalysis: null };
+  }
 
   const isOmStyle = options?.forceOmStyle === true || trimmed.length >= OM_STYLE_MIN_LENGTH;
+  console.log("[extractRentalFinancialsFromText] Calling OpenAI model=" + getEnrichmentModel() + " isOmStyle=" + isOmStyle + " promptChars=" + (isOmStyle ? (OM_ANALYSIS_PROMPT_PREFIX.length + Math.min(trimmed.length, 16000)) : Math.min(trimmed.length, 15000)));
   const openai = new OpenAI({ apiKey: key });
 
   const documentSection =

@@ -33,7 +33,7 @@ import { runEnrichmentForProperty } from "../enrichment/runEnrichment.js";
 import { normalizeAddressLineForDisplay, getBBLForProperty } from "../enrichment/resolvePropertyBBL.js";
 import { runRentalApiStep } from "../rental/rentalApiClient.js";
 import { extractRentalFinancialsFromListing, extractRentalFinancialsFromText } from "../rental/extractRentalFinancialsFromListing.js";
-import { extractTextFromUploadedFile } from "../upload/extractTextFromUploadedFile.js";
+import { extractTextFromUploadedFile, extractTextFromBuffer } from "../upload/extractTextFromUploadedFile.js";
 import { suggestRentalDataGaps } from "../rental/suggestRentalDataGaps.js";
 import { getRentRollComparison } from "../rental/rentRollComparison.js";
 import { fetchNyDosEntityByName } from "../enrichment/nyDosEntity.js";
@@ -52,7 +52,7 @@ const ENRICHMENT_RATE_LIMIT_DELAY_MS = Number(process.env.ENRICHMENT_RATE_LIMIT_
 
 /**
  * Re-run OM/Brochure financial extraction for a property when it has uploaded OM/Brochure docs.
- * Only processes docs whose file exists on disk. Use after enrichment or when user wants to refresh financials from OM.
+ * Uses file on disk when present; otherwise uses file_content from DB (for hosted deployments).
  */
 export async function refreshOmFinancialsForProperty(
   propertyId: string,
@@ -67,12 +67,17 @@ export async function refreshOmFinancialsForProperty(
   let documentsProcessed = 0;
   let documentsSkippedNoFile = 0;
   for (const doc of omOrBrochure) {
-    if (!uploadedDocFileExists(doc.filePath)) {
+    let text: string;
+    const fileContent = await uploadedDocRepo.getFileContent(doc.id);
+    if (fileContent && fileContent.length > 0) {
+      text = await extractTextFromBuffer(fileContent, doc.filename ?? "document");
+    } else if (uploadedDocFileExists(doc.filePath)) {
+      text = await extractTextFromUploadedFile(doc.filePath, doc.filename ?? undefined);
+    } else {
       documentsSkippedNoFile++;
       continue;
     }
     try {
-      const text = await extractTextFromUploadedFile(doc.filePath, doc.filename ?? undefined);
       if (text.length < 50) continue;
       const details = (property.details ?? {}) as Record<string, unknown>;
       const enrichmentContext =
@@ -784,6 +789,13 @@ router.get("/properties/:id/documents/:docId/file", async (req: Request, res: Re
     const uploadedDocRepo = new PropertyUploadedDocumentRepo({ pool });
     const uploadedDoc = await uploadedDocRepo.byId(docId);
     if (uploadedDoc && uploadedDoc.propertyId === propertyId) {
+      const fileContent = await uploadedDocRepo.getFileContent(docId);
+      if (fileContent && fileContent.length > 0) {
+        res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(uploadedDoc.filename)}"`);
+        if (uploadedDoc.contentType) res.setHeader("Content-Type", uploadedDoc.contentType);
+        res.send(fileContent);
+        return;
+      }
       if (!uploadedDocFileExists(uploadedDoc.filePath)) {
         res.status(404).json({ error: "Document file not found on disk", docId, hint: "On hosted deployments (e.g. Render), use a persistent disk or set UPLOADED_DOCS_PATH to a path that persists across restarts." });
         return;
@@ -842,6 +854,13 @@ router.get("/properties/:id/uploaded-documents/:docId/file", async (req: Request
     const doc = await docRepo.byId(docId);
     if (!doc || doc.propertyId !== propertyId) {
       res.status(404).json({ error: "Document not found", docId });
+      return;
+    }
+    const fileContent = await docRepo.getFileContent(docId);
+    if (fileContent && fileContent.length > 0) {
+      res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(doc.filename)}"`);
+      if (doc.contentType) res.setHeader("Content-Type", doc.contentType);
+      res.send(fileContent);
       return;
     }
     if (!uploadedDocFileExists(doc.filePath)) {
@@ -927,12 +946,14 @@ router.post(
         filePath,
         category,
         source,
+        fileContent: file.buffer,
       });
 
       // When user uploads OM or Brochure, extract text and run senior-analyst LLM, then merge into property details.
       if (category === "OM" || category === "Brochure") {
         try {
           const text = await extractTextFromUploadedFile(filePath, filename);
+          console.log("[documents/upload] OM/Brochure extracted text length:", text.length, "chars");
           if (text.length >= 50) {
             const details = (property.details ?? {}) as Record<string, unknown>;
             const enrichmentContext =
@@ -947,6 +968,7 @@ router.post(
               forceOmStyle: true,
               enrichmentContext,
             });
+            console.log("[documents/upload] OM LLM result: fromLlm keys=" + (fromLlm && typeof fromLlm === "object" ? Object.keys(fromLlm).length : 0) + " omAnalysis=" + (omAnalysis ? "yes" : "no"));
             const hasFromLlm = fromLlm && typeof fromLlm === "object" && Object.keys(fromLlm).length > 0;
             const hasOmAnalysis = omAnalysis && typeof omAnalysis === "object";
             if (hasFromLlm || hasOmAnalysis) {

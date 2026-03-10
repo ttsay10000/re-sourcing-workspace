@@ -15,6 +15,8 @@ export interface InsertPropertyUploadedDocumentParams {
   filePath: string;
   category: PropertyDocumentCategory;
   source?: string | null;
+  /** When set, stored in DB so downloads work on ephemeral disks (e.g. Render). */
+  fileContent?: Buffer | null;
 }
 
 const VALID_CATEGORIES: PropertyDocumentCategory[] = [
@@ -42,11 +44,12 @@ export class PropertyUploadedDocumentRepo {
   async insert(params: InsertPropertyUploadedDocumentParams): Promise<PropertyUploadedDocument> {
     const category = normalizeCategory(params.category);
     const source = params.source?.trim() || null;
+    const fileContent = params.fileContent ?? null;
     if (params.id) {
       const r = await this.client.query(
-        `INSERT INTO property_uploaded_documents (id, property_id, filename, content_type, file_path, category, source)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
-         RETURNING *`,
+        `INSERT INTO property_uploaded_documents (id, property_id, filename, content_type, file_path, category, source, file_content)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         RETURNING id, property_id, filename, content_type, file_path, category, source, created_at`,
         [
           params.id,
           params.propertyId,
@@ -55,14 +58,15 @@ export class PropertyUploadedDocumentRepo {
           params.filePath,
           category,
           source,
+          fileContent,
         ]
       );
       return mapPropertyUploadedDocument(r.rows[0]);
     }
     const r = await this.client.query(
-      `INSERT INTO property_uploaded_documents (property_id, filename, content_type, file_path, category, source)
-       VALUES ($1, $2, $3, $4, $5, $6)
-       RETURNING *`,
+      `INSERT INTO property_uploaded_documents (property_id, filename, content_type, file_path, category, source, file_content)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING id, property_id, filename, content_type, file_path, category, source, created_at`,
       [
         params.propertyId,
         params.filename,
@@ -70,6 +74,7 @@ export class PropertyUploadedDocumentRepo {
         params.filePath,
         category,
         source,
+        fileContent,
       ]
     );
     return mapPropertyUploadedDocument(r.rows[0]);
@@ -77,15 +82,26 @@ export class PropertyUploadedDocumentRepo {
 
   async byId(id: string): Promise<PropertyUploadedDocument | null> {
     const r = await this.client.query(
-      "SELECT * FROM property_uploaded_documents WHERE id = $1",
+      "SELECT id, property_id, filename, content_type, file_path, category, source, created_at FROM property_uploaded_documents WHERE id = $1",
       [id]
     );
     return r.rows[0] ? mapPropertyUploadedDocument(r.rows[0]) : null;
   }
 
+  /** Returns file bytes when stored in DB (for download on ephemeral disk). */
+  async getFileContent(id: string): Promise<Buffer | null> {
+    const r = await this.client.query(
+      "SELECT file_content FROM property_uploaded_documents WHERE id = $1",
+      [id]
+    );
+    const row = r.rows[0];
+    if (!row?.file_content) return null;
+    return row.file_content instanceof Buffer ? row.file_content : Buffer.from(row.file_content);
+  }
+
   async listByPropertyId(propertyId: string): Promise<PropertyUploadedDocument[]> {
     const r = await this.client.query(
-      "SELECT * FROM property_uploaded_documents WHERE property_id = $1 ORDER BY created_at DESC",
+      "SELECT id, property_id, filename, content_type, file_path, category, source, created_at FROM property_uploaded_documents WHERE property_id = $1 ORDER BY created_at DESC",
       [propertyId]
     );
     return r.rows.map((row: Record<string, unknown>) => mapPropertyUploadedDocument(row));
