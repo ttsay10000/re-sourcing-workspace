@@ -1,5 +1,4 @@
 import type { PropertyDetails, UserProfile } from "@re-sourcing/contracts";
-import { computeFurnishedRental } from "./furnishedRentalEstimator.js";
 import {
   computeMortgage,
   computeAmortizationSchedule,
@@ -14,18 +13,29 @@ import {
 
 export { computeBlendedRentUpliftPct };
 
-export const DEFAULT_HOLD_PERIOD_YEARS = 5;
+export const DEFAULT_HOLD_PERIOD_YEARS = 2;
 export const MAX_UNDERWRITING_HOLD_PERIOD_YEARS = 10;
 export const DEFAULT_PURCHASE_CLOSING_COST_PCT = 3;
-export const DEFAULT_LTV_PCT = 75;
+export const DEFAULT_LTV_PCT = 64;
 export const DEFAULT_INTEREST_RATE_PCT = 6;
 export const DEFAULT_AMORTIZATION_YEARS = 30;
-export const DEFAULT_RENT_UPLIFT_PCT = 70;
-export const DEFAULT_EXPENSE_INCREASE_PCT = 20;
+export const DEFAULT_RENT_UPLIFT_PCT = 76.3;
+export const DEFAULT_EXPENSE_INCREASE_PCT = 0;
 export const DEFAULT_MANAGEMENT_FEE_PCT = 8;
 export const DEFAULT_EXIT_CAP_PCT = 5;
-export const DEFAULT_EXIT_CLOSING_COST_PCT = 2;
+export const DEFAULT_EXIT_CLOSING_COST_PCT = 6;
 export const DEFAULT_TARGET_IRR_PCT = 25;
+export const DEFAULT_VACANCY_PCT = 15;
+export const DEFAULT_LEAD_TIME_MONTHS = 2;
+export const DEFAULT_ANNUAL_RENT_GROWTH_PCT = 1;
+export const DEFAULT_ANNUAL_OTHER_INCOME_GROWTH_PCT = 0;
+export const DEFAULT_ANNUAL_EXPENSE_GROWTH_PCT = 0;
+export const DEFAULT_ANNUAL_PROPERTY_TAX_GROWTH_PCT = 6;
+export const DEFAULT_RECURRING_CAPEX_ANNUAL = 1_200;
+export const DEFAULT_LOAN_FEE_PCT = 0.63;
+const NYC_CLASS_ONE_ASSESSMENT_CAP_PCT = 6;
+const NYC_SMALL_CLASS_TWO_ASSESSMENT_CAP_PCT = 8;
+const NYC_TRANSITIONAL_PHASE_IN_TOP_RANGE_PCT = 20;
 
 export interface DossierAssumptionOverrides {
   purchasePrice?: number | null;
@@ -35,9 +45,17 @@ export interface DossierAssumptionOverrides {
   ltvPct?: number | null;
   interestRatePct?: number | null;
   amortizationYears?: number | null;
+  loanFeePct?: number | null;
   rentUpliftPct?: number | null;
   expenseIncreasePct?: number | null;
   managementFeePct?: number | null;
+  vacancyPct?: number | null;
+  leadTimeMonths?: number | null;
+  annualRentGrowthPct?: number | null;
+  annualOtherIncomeGrowthPct?: number | null;
+  annualExpenseGrowthPct?: number | null;
+  annualPropertyTaxGrowthPct?: number | null;
+  recurringCapexAnnual?: number | null;
   holdPeriodYears?: number | null;
   exitCapPct?: number | null;
   exitClosingCostPct?: number | null;
@@ -46,6 +64,11 @@ export interface DossierAssumptionOverrides {
 
 export interface DossierPropertyContext {
   details?: PropertyDetails | null;
+}
+
+export interface ProjectedExpenseInputRow {
+  lineItem: string;
+  amount: number;
 }
 
 export interface ResolvedDossierAssumptions {
@@ -59,12 +82,20 @@ export interface ResolvedDossierAssumptions {
     ltvPct: number;
     interestRatePct: number;
     amortizationYears: number;
+    loanFeePct: number;
   };
   operating: {
     rentUpliftPct: number;
     blendedRentUpliftPct: number;
     expenseIncreasePct: number;
     managementFeePct: number;
+    vacancyPct: number;
+    leadTimeMonths: number;
+    annualRentGrowthPct: number;
+    annualOtherIncomeGrowthPct: number;
+    annualExpenseGrowthPct: number;
+    annualPropertyTaxGrowthPct: number;
+    recurringCapexAnnual: number;
   };
   holdPeriodYears: number;
   exit: {
@@ -75,10 +106,51 @@ export interface ResolvedDossierAssumptions {
   propertyMix: UnderwritingPropertyMixSummary;
 }
 
+export interface UnderwritingProjectionExpenseLine {
+  lineItem: string;
+  annualGrowthPct: number;
+  baseAmount: number;
+  yearlyAmounts: number[];
+}
+
+export interface UnderwritingProjectionYearly {
+  years: number[];
+  endingLabels: string[];
+  propertyValue: number[];
+  grossRentalIncome: number[];
+  otherIncome: number[];
+  vacancyLoss: number[];
+  leadTimeLoss: number[];
+  netRentalIncome: number[];
+  managementFee: number[];
+  expenseLineItems: UnderwritingProjectionExpenseLine[];
+  totalOperatingExpenses: number[];
+  noi: number[];
+  recurringCapex: number[];
+  cashFlowFromOperations: number[];
+  capRateOnPurchase: Array<number | null>;
+  debtService: number[];
+  principalPaid: number[];
+  interestPaid: number[];
+  cashFlowAfterFinancing: number[];
+  totalInvestmentCost: number[];
+  financingFunding: number[];
+  financingFees: number[];
+  saleValue: number[];
+  saleClosingCosts: number[];
+  remainingLoanBalance: number[];
+  financingPayoff: number[];
+  netSaleProceedsBeforeDebtPayoff: number[];
+  netSaleProceedsToEquity: number[];
+  unleveredCashFlow: number[];
+  leveredCashFlow: number[];
+}
+
 export interface UnderwritingProjection {
   assumptions: ResolvedDossierAssumptions;
   acquisition: {
     purchaseClosingCosts: number;
+    financingFees: number;
     totalProjectCost: number;
     loanAmount: number;
     equityRequiredForPurchase: number;
@@ -87,14 +159,17 @@ export interface UnderwritingProjection {
   };
   financing: {
     loanAmount: number;
+    financingFees: number;
     equityRequiredForPurchase: number;
     monthlyPayment: number;
     annualDebtService: number;
     remainingLoanBalanceAtExit: number;
+    principalPaydownAtExit: number;
     amortizationSchedule: AmortizationYearRow[];
   };
   operating: {
     currentExpenses: number;
+    currentOtherIncome: number;
     adjustedGrossRent: number;
     adjustedOperatingExpenses: number;
     managementFeeAmount: number;
@@ -105,12 +180,16 @@ export interface UnderwritingProjection {
     saleClosingCosts: number;
     netSaleProceedsBeforeDebtPayoff: number;
     remainingLoanBalance: number;
+    principalPaydownToDate: number;
     netProceedsToEquity: number;
   };
+  yearly: UnderwritingProjectionYearly;
   cashFlows: {
     annualOperatingCashFlow: number;
     annualOperatingCashFlows: number[];
+    annualUnleveredCashFlows: number[];
     finalYearCashFlow: number;
+    unleveredCashFlowSeries: number[];
     equityCashFlowSeries: number[];
   };
   returns: IrrResult;
@@ -124,6 +203,15 @@ export interface RecommendedOfferAnalysis {
   recommendedOfferHigh: number | null;
   discountToAskingPct: number | null;
   targetMetAtAsking: boolean;
+}
+
+export interface UnderwritingProjectionInput {
+  assumptions: ResolvedDossierAssumptions;
+  currentGrossRent: number | null;
+  currentNoi: number | null;
+  currentOtherIncome?: number | null;
+  currentExpensesTotal?: number | null;
+  expenseRows?: ProjectedExpenseInputRow[] | null;
 }
 
 function safeNumber(value: number | null | undefined, fallback = 0): number {
@@ -142,11 +230,122 @@ function safePositiveInteger(
   return rounded;
 }
 
+function safeNonNegativeInteger(
+  value: number | null | undefined,
+  fallback: number,
+  max?: number
+): number {
+  if (value == null || !Number.isFinite(value)) return fallback;
+  const rounded = Math.round(value);
+  if (rounded < 0) return fallback;
+  if (max != null && Number.isFinite(max)) return Math.min(rounded, max);
+  return rounded;
+}
+
+function safeBoundedNumber(
+  value: number | null | undefined,
+  fallback: number,
+  min: number,
+  max: number
+): number {
+  const resolved = safeNumber(value, fallback);
+  return Math.min(max, Math.max(min, resolved));
+}
+
 function pickNumber(...values: Array<number | null | undefined>): number | null {
   for (const value of values) {
     if (value != null && Number.isFinite(value)) return value;
   }
   return null;
+}
+
+function roundCurrency(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+function normalizeTaxCode(taxCode: string | null | undefined): string | null {
+  if (taxCode == null) return null;
+  const normalized = String(taxCode).trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+  return normalized.length > 0 ? normalized : null;
+}
+
+export function conservativeAnnualPropertyTaxGrowthPctFromNycTaxCode(
+  taxCode: string | null | undefined
+): number | null {
+  const normalized = normalizeTaxCode(taxCode);
+  if (!normalized) return null;
+  if (normalized.startsWith("1")) return NYC_CLASS_ONE_ASSESSMENT_CAP_PCT;
+  if (normalized.startsWith("2A") || normalized.startsWith("2B") || normalized.startsWith("2C")) {
+    return NYC_SMALL_CLASS_TWO_ASSESSMENT_CAP_PCT;
+  }
+  // NYC does not use the same statutory annual cap for larger Class 2 and Class 4 assets.
+  // Instead, assessed-value changes are phased in 20% per year over five years. We use
+  // that 20% phase-in as the conservative top-of-range annual tax-growth default.
+  if (normalized.startsWith("2") || normalized.startsWith("4")) {
+    return NYC_TRANSITIONAL_PHASE_IN_TOP_RANGE_PCT;
+  }
+  return null;
+}
+
+function compoundAnnual(base: number, growthPct: number, yearsElapsed: number): number {
+  if (!Number.isFinite(base) || base === 0) return 0;
+  if (!Number.isFinite(growthPct) || yearsElapsed <= 0) return base;
+  return base * Math.pow(1 + growthPct / 100, yearsElapsed);
+}
+
+function expenseGrowthPctForLine(
+  lineItem: string,
+  assumptions: ResolvedDossierAssumptions
+): number {
+  return /tax/i.test(lineItem)
+    ? assumptions.operating.annualPropertyTaxGrowthPct
+    : assumptions.operating.annualExpenseGrowthPct;
+}
+
+function projectExpenseLines(input: {
+  assumptions: ResolvedDossierAssumptions;
+  currentExpensesTotal: number;
+  expenseRows?: ProjectedExpenseInputRow[] | null;
+}): UnderwritingProjectionExpenseLine[] {
+  const { assumptions, currentExpensesTotal, expenseRows } = input;
+  const normalizedRows =
+    Array.isArray(expenseRows) && expenseRows.length > 0
+      ? expenseRows
+          .filter(
+            (row): row is ProjectedExpenseInputRow =>
+              !!row &&
+              typeof row.lineItem === "string" &&
+              row.lineItem.trim().length > 0 &&
+              typeof row.amount === "number" &&
+              Number.isFinite(row.amount) &&
+              row.amount >= 0
+          )
+          .map((row) => ({
+            lineItem: row.lineItem.trim(),
+            amount: row.amount,
+          }))
+      : [{ lineItem: "Operating expenses", amount: currentExpensesTotal }];
+
+  const totalFromRows = normalizedRows.reduce((sum, row) => sum + row.amount, 0);
+  const scale =
+    totalFromRows > 0 && currentExpensesTotal > 0
+      ? currentExpensesTotal / totalFromRows
+      : 1;
+  const increaseFactor = 1 + assumptions.operating.expenseIncreasePct / 100;
+
+  return normalizedRows.map((row) => {
+    const annualGrowthPct = expenseGrowthPctForLine(row.lineItem, assumptions);
+    const baseAmount = row.amount * scale * increaseFactor;
+    const yearlyAmounts = Array.from({ length: assumptions.holdPeriodYears }, (_, index) =>
+      roundCurrency(compoundAnnual(baseAmount, annualGrowthPct, index))
+    );
+    return {
+      lineItem: row.lineItem,
+      annualGrowthPct,
+      baseAmount: roundCurrency(baseAmount),
+      yearlyAmounts,
+    };
+  });
 }
 
 export function resolveDossierAssumptions(
@@ -160,6 +359,9 @@ export function resolveDossierAssumptions(
     DEFAULT_RENT_UPLIFT_PCT
   );
   const propertyMix = analyzePropertyForUnderwriting(propertyContext?.details ?? null);
+  const autoAnnualPropertyTaxGrowthPct = conservativeAnnualPropertyTaxGrowthPctFromNycTaxCode(
+    propertyContext?.details?.taxCode
+  );
 
   return {
     acquisition: {
@@ -184,6 +386,12 @@ export function resolveDossierAssumptions(
         pickNumber(overrides?.amortizationYears, profile?.defaultAmortization),
         DEFAULT_AMORTIZATION_YEARS
       ),
+      loanFeePct: safeBoundedNumber(
+        pickNumber(overrides?.loanFeePct, profile?.defaultLoanFeePct),
+        DEFAULT_LOAN_FEE_PCT,
+        0,
+        100
+      ),
     },
     operating: {
       rentUpliftPct,
@@ -195,6 +403,50 @@ export function resolveDossierAssumptions(
       managementFeePct: safeNumber(
         pickNumber(overrides?.managementFeePct, profile?.defaultManagementFee),
         DEFAULT_MANAGEMENT_FEE_PCT
+      ),
+      vacancyPct: safeBoundedNumber(
+        pickNumber(overrides?.vacancyPct, profile?.defaultVacancyPct),
+        DEFAULT_VACANCY_PCT,
+        0,
+        100
+      ),
+      leadTimeMonths: Math.min(
+        12,
+        Math.max(
+          0,
+          safeNonNegativeInteger(
+            pickNumber(overrides?.leadTimeMonths, profile?.defaultLeadTimeMonths),
+            DEFAULT_LEAD_TIME_MONTHS,
+            12
+          )
+        )
+      ),
+      annualRentGrowthPct: safeNumber(
+        pickNumber(overrides?.annualRentGrowthPct, profile?.defaultAnnualRentGrowthPct),
+        DEFAULT_ANNUAL_RENT_GROWTH_PCT
+      ),
+      annualOtherIncomeGrowthPct: safeNumber(
+        pickNumber(
+          overrides?.annualOtherIncomeGrowthPct,
+          profile?.defaultAnnualOtherIncomeGrowthPct
+        ),
+        DEFAULT_ANNUAL_OTHER_INCOME_GROWTH_PCT
+      ),
+      annualExpenseGrowthPct: safeNumber(
+        pickNumber(overrides?.annualExpenseGrowthPct, profile?.defaultAnnualExpenseGrowthPct),
+        DEFAULT_ANNUAL_EXPENSE_GROWTH_PCT
+      ),
+      annualPropertyTaxGrowthPct: safeNumber(
+        pickNumber(
+          overrides?.annualPropertyTaxGrowthPct,
+          autoAnnualPropertyTaxGrowthPct,
+          profile?.defaultAnnualPropertyTaxGrowthPct
+        ),
+        DEFAULT_ANNUAL_PROPERTY_TAX_GROWTH_PCT
+      ),
+      recurringCapexAnnual: safeNumber(
+        pickNumber(overrides?.recurringCapexAnnual, profile?.defaultRecurringCapexAnnual),
+        DEFAULT_RECURRING_CAPEX_ANNUAL
       ),
     },
     holdPeriodYears: safePositiveInteger(
@@ -220,12 +472,17 @@ export function resolveDossierAssumptions(
   };
 }
 
-export function computeUnderwritingProjection(input: {
-  assumptions: ResolvedDossierAssumptions;
-  currentGrossRent: number | null;
-  currentNoi: number | null;
-}): UnderwritingProjection {
-  const { assumptions, currentGrossRent, currentNoi } = input;
+export function computeUnderwritingProjection(
+  input: UnderwritingProjectionInput
+): UnderwritingProjection {
+  const {
+    assumptions,
+    currentGrossRent,
+    currentNoi,
+    currentOtherIncome,
+    currentExpensesTotal,
+    expenseRows,
+  } = input;
   const purchasePrice = assumptions.acquisition.purchasePrice ?? 0;
   const purchaseClosingCosts =
     purchasePrice * (Math.max(0, assumptions.acquisition.purchaseClosingCostPct) / 100);
@@ -238,25 +495,36 @@ export function computeUnderwritingProjection(input: {
     purchasePrice > 0
       ? purchasePrice * (Math.max(0, assumptions.financing.ltvPct) / 100)
       : 0;
+  const financingFees = loanAmount * (Math.max(0, assumptions.financing.loanFeePct) / 100);
   const equityRequiredForPurchase = Math.max(0, purchasePrice - loanAmount);
-  const initialEquityInvested = Math.max(0, totalProjectCost - loanAmount);
+  const initialEquityInvested = Math.max(0, totalProjectCost + financingFees - loanAmount);
   const year0CashFlow = -initialEquityInvested;
 
-  const furnishedRental = computeFurnishedRental(
-    {
-      currentGrossRent: safeNumber(currentGrossRent),
-      currentNoi: safeNumber(currentNoi),
-      rentUplift: 1 + assumptions.operating.blendedRentUpliftPct / 100,
-      expenseIncrease: 1 + assumptions.operating.expenseIncreasePct / 100,
-      managementFee: assumptions.operating.managementFeePct / 100,
-    },
-    assumptions.acquisition.purchasePrice
-  );
+  const currentRent = safeNumber(currentGrossRent);
+  const otherIncome = Math.max(0, safeNumber(currentOtherIncome));
+  const impliedExpenses = Math.max(0, currentRent + otherIncome - safeNumber(currentNoi));
+  const resolvedCurrentExpenses =
+    currentExpensesTotal != null && Number.isFinite(currentExpensesTotal) && currentExpensesTotal >= 0
+      ? currentExpensesTotal
+      : impliedExpenses;
 
-  const managementFeeAmount =
-    furnishedRental.adjustedGrossIncome * (Math.max(0, assumptions.operating.managementFeePct) / 100);
-  const adjustedOperatingExpenses = Math.max(0, furnishedRental.adjustedExpenses - managementFeeAmount);
-  const stabilizedNoi = furnishedRental.adjustedNoi;
+  const grossRentalIncomeBase =
+    currentRent * (1 + Math.max(0, assumptions.operating.blendedRentUpliftPct) / 100);
+  const expenseLineItems = projectExpenseLines({
+    assumptions,
+    currentExpensesTotal: resolvedCurrentExpenses,
+    expenseRows,
+  });
+  const projectedNonManagementExpenses = Array.from(
+    { length: assumptions.holdPeriodYears },
+    (_, yearIndex) =>
+      roundCurrency(
+        expenseLineItems.reduce(
+          (sum, row) => sum + (row.yearlyAmounts[yearIndex] ?? 0),
+          0
+        )
+      )
+  );
 
   const mortgage =
     loanAmount > 0 && assumptions.financing.amortizationYears > 0
@@ -282,67 +550,268 @@ export function computeUnderwritingProjection(input: {
     amortizationSchedule[assumptions.holdPeriodYears - 1]?.endingBalance ??
     amortizationSchedule[amortizationSchedule.length - 1]?.endingBalance ??
     0;
+  const principalPaydownAtExit = Math.max(0, loanAmount - remainingLoanBalanceAtExit);
 
-  const annualOperatingCashFlows = Array.from({ length: assumptions.holdPeriodYears }, (_, index) => {
-    const debtServiceForYear = amortizationSchedule[index]?.debtService ?? 0;
-    return stabilizedNoi - debtServiceForYear;
-  });
-  const annualOperatingCashFlow = annualOperatingCashFlows[0] ?? stabilizedNoi;
+  const years = Array.from({ length: assumptions.holdPeriodYears + 1 }, (_, index) => index);
+  const endingLabels = years.map((year) => `Y${year}`);
+  const yearlyPropertyValue = years.map((year) =>
+    year === 0
+      ? roundCurrency(purchasePrice)
+      : roundCurrency(compoundAnnual(purchasePrice, assumptions.operating.annualRentGrowthPct, year))
+  );
+  const yearlyGrossRentalIncome = years.map((year) =>
+    year === 0
+      ? 0
+      : roundCurrency(
+          compoundAnnual(
+            grossRentalIncomeBase,
+            assumptions.operating.annualRentGrowthPct,
+            year - 1
+          )
+        )
+  );
+  const yearlyOtherIncome = years.map((year) =>
+    year === 0
+      ? 0
+      : roundCurrency(
+          compoundAnnual(
+            otherIncome,
+            assumptions.operating.annualOtherIncomeGrowthPct,
+            year - 1
+          )
+        )
+  );
+  const yearlyVacancyLoss = years.map((year) =>
+    year === 0
+      ? 0
+      : roundCurrency(
+          (yearlyGrossRentalIncome[year] ?? 0) * (assumptions.operating.vacancyPct / 100)
+        )
+  );
+  const yearlyLeadTimeLoss = years.map((year) =>
+    year === 1
+      ? roundCurrency(
+          (yearlyGrossRentalIncome[year] ?? 0) *
+            (Math.max(0, assumptions.operating.leadTimeMonths) / 12)
+        )
+      : 0
+  );
+  const yearlyNetRentalIncome = years.map((year) =>
+    year === 0
+      ? 0
+      : roundCurrency(
+          (yearlyGrossRentalIncome[year] ?? 0) +
+            (yearlyOtherIncome[year] ?? 0) -
+            (yearlyVacancyLoss[year] ?? 0) -
+            (yearlyLeadTimeLoss[year] ?? 0)
+        )
+  );
+  const yearlyManagementFee = years.map((year) =>
+    year === 0
+      ? 0
+      : roundCurrency(
+          (yearlyGrossRentalIncome[year] ?? 0) *
+            (Math.max(0, assumptions.operating.managementFeePct) / 100)
+        )
+  );
+  const yearlyTotalOperatingExpenses = years.map((year) =>
+    year === 0
+      ? 0
+      : roundCurrency(
+          (projectedNonManagementExpenses[year - 1] ?? 0) + (yearlyManagementFee[year] ?? 0)
+        )
+  );
+  const yearlyNoi = years.map((year) =>
+    year === 0
+      ? 0
+      : roundCurrency((yearlyNetRentalIncome[year] ?? 0) - (yearlyTotalOperatingExpenses[year] ?? 0))
+  );
+  const yearlyRecurringCapex = years.map((year) =>
+    year === 0 ? 0 : roundCurrency(Math.max(0, assumptions.operating.recurringCapexAnnual))
+  );
+  const yearlyCashFlowFromOperations = years.map((year) =>
+    year === 0 ? 0 : roundCurrency((yearlyNoi[year] ?? 0) - (yearlyRecurringCapex[year] ?? 0))
+  );
+  const yearlyCapRateOnPurchase = years.map((year) =>
+    year === 0 || purchasePrice <= 0
+      ? null
+      : (yearlyNoi[year] ?? 0) / purchasePrice
+  );
+  const yearlyDebtService = years.map((year) =>
+    year === 0 ? 0 : roundCurrency(amortizationSchedule[year - 1]?.debtService ?? 0)
+  );
+  const yearlyPrincipalPaid = years.map((year) =>
+    year === 0 ? 0 : roundCurrency(amortizationSchedule[year - 1]?.principalPayment ?? 0)
+  );
+  const yearlyInterestPaid = years.map((year) =>
+    year === 0 ? 0 : roundCurrency(amortizationSchedule[year - 1]?.interestPayment ?? 0)
+  );
+  const yearlyCashFlowAfterFinancing = years.map((year) =>
+    year === 0
+      ? 0
+      : roundCurrency(
+          (yearlyCashFlowFromOperations[year] ?? 0) - (yearlyDebtService[year] ?? 0)
+        )
+  );
+  const yearlyTotalInvestmentCost = years.map((year) =>
+    year === 0 ? roundCurrency(-totalProjectCost) : 0
+  );
+  const yearlyFinancingFunding = years.map((year) =>
+    year === 0 ? roundCurrency(loanAmount) : 0
+  );
+  const yearlyFinancingFees = years.map((year) =>
+    year === 0 ? roundCurrency(financingFees) : 0
+  );
+  const yearlyRemainingLoanBalance = years.map((year) =>
+    year === 0
+      ? roundCurrency(loanAmount)
+      : roundCurrency(amortizationSchedule[year - 1]?.endingBalance ?? 0)
+  );
+  const yearlySaleValue = years.map((year) =>
+    year === assumptions.holdPeriodYears && assumptions.exit.exitCapPct > 0
+      ? roundCurrency((yearlyNoi[year] ?? 0) / (assumptions.exit.exitCapPct / 100))
+      : 0
+  );
+  const yearlySaleClosingCosts = years.map((year) =>
+    year === assumptions.holdPeriodYears
+      ? roundCurrency(
+          (yearlySaleValue[year] ?? 0) * (Math.max(0, assumptions.exit.exitClosingCostPct) / 100)
+        )
+      : 0
+  );
+  const yearlyNetSaleBeforeDebt = years.map((year) =>
+    year === assumptions.holdPeriodYears
+      ? roundCurrency((yearlySaleValue[year] ?? 0) - (yearlySaleClosingCosts[year] ?? 0))
+      : 0
+  );
+  const yearlyFinancingPayoff = years.map((year) =>
+    year === assumptions.holdPeriodYears ? roundCurrency(yearlyRemainingLoanBalance[year] ?? 0) : 0
+  );
+  const yearlyNetSaleToEquity = years.map((year) =>
+    year === assumptions.holdPeriodYears
+      ? roundCurrency((yearlyNetSaleBeforeDebt[year] ?? 0) - (yearlyFinancingPayoff[year] ?? 0))
+      : 0
+  );
+  const yearlyUnleveredCashFlow = years.map((year) =>
+    roundCurrency(
+      (yearlyCashFlowFromOperations[year] ?? 0) +
+        (yearlyNetSaleBeforeDebt[year] ?? 0) +
+        (yearlyTotalInvestmentCost[year] ?? 0)
+    )
+  );
+  const yearlyLeveredCashFlow = years.map((year) =>
+    year === 0
+      ? roundCurrency(-initialEquityInvested)
+      : roundCurrency(
+          (yearlyCashFlowAfterFinancing[year] ?? 0) + (yearlyNetSaleToEquity[year] ?? 0)
+        )
+  );
 
-  const exitPropertyValue =
-    assumptions.exit.exitCapPct > 0 ? stabilizedNoi / (assumptions.exit.exitCapPct / 100) : 0;
-  const saleClosingCosts =
-    exitPropertyValue * (Math.max(0, assumptions.exit.exitClosingCostPct) / 100);
-  const netSaleProceedsBeforeDebtPayoff = exitPropertyValue - saleClosingCosts;
-  const netProceedsToEquity = netSaleProceedsBeforeDebtPayoff - remainingLoanBalanceAtExit;
+  const annualOperatingCashFlows = yearlyCashFlowAfterFinancing.slice(1);
+  const annualUnleveredCashFlows = yearlyCashFlowFromOperations.slice(1);
+  const annualOperatingCashFlow = annualOperatingCashFlows[0] ?? 0;
   const finalYearCashFlow =
-    (annualOperatingCashFlows[annualOperatingCashFlows.length - 1] ?? 0) + netProceedsToEquity;
-  const equityCashFlowSeries =
-    annualOperatingCashFlows.length > 0
-      ? [
-          year0CashFlow,
-          ...annualOperatingCashFlows.slice(0, -1),
-          finalYearCashFlow,
-        ]
-      : [year0CashFlow, netProceedsToEquity];
+    yearlyLeveredCashFlow[assumptions.holdPeriodYears] ??
+    yearlyLeveredCashFlow[yearlyLeveredCashFlow.length - 1] ??
+    0;
+  const equityCashFlowSeries = yearlyLeveredCashFlow.slice();
+  const unleveredCashFlowSeries = yearlyUnleveredCashFlow.slice();
+  const exitPropertyValue =
+    yearlySaleValue[assumptions.holdPeriodYears] ?? yearlySaleValue[yearlySaleValue.length - 1] ?? 0;
+  const saleClosingCosts =
+    yearlySaleClosingCosts[assumptions.holdPeriodYears] ??
+    yearlySaleClosingCosts[yearlySaleClosingCosts.length - 1] ??
+    0;
+  const netSaleProceedsBeforeDebtPayoff =
+    yearlyNetSaleBeforeDebt[assumptions.holdPeriodYears] ??
+    yearlyNetSaleBeforeDebt[yearlyNetSaleBeforeDebt.length - 1] ??
+    0;
+  const netProceedsToEquity =
+    yearlyNetSaleToEquity[assumptions.holdPeriodYears] ??
+    yearlyNetSaleToEquity[yearlyNetSaleToEquity.length - 1] ??
+    0;
+  const stabilizedYearIndex =
+    assumptions.operating.leadTimeMonths > 0 && assumptions.holdPeriodYears > 1 ? 2 : 1;
+  const stabilizedIndex = Math.min(assumptions.holdPeriodYears, stabilizedYearIndex);
 
   return {
     assumptions,
     acquisition: {
-      purchaseClosingCosts,
-      totalProjectCost,
-      loanAmount,
-      equityRequiredForPurchase,
-      initialEquityInvested,
-      year0CashFlow,
+      purchaseClosingCosts: roundCurrency(purchaseClosingCosts),
+      financingFees: roundCurrency(financingFees),
+      totalProjectCost: roundCurrency(totalProjectCost),
+      loanAmount: roundCurrency(loanAmount),
+      equityRequiredForPurchase: roundCurrency(equityRequiredForPurchase),
+      initialEquityInvested: roundCurrency(initialEquityInvested),
+      year0CashFlow: roundCurrency(year0CashFlow),
     },
     financing: {
-      loanAmount,
-      equityRequiredForPurchase,
+      loanAmount: roundCurrency(loanAmount),
+      financingFees: roundCurrency(financingFees),
+      equityRequiredForPurchase: roundCurrency(equityRequiredForPurchase),
       monthlyPayment: mortgage?.monthlyPayment ?? 0,
-      annualDebtService,
-      remainingLoanBalanceAtExit,
+      annualDebtService: roundCurrency(annualDebtService),
+      remainingLoanBalanceAtExit: roundCurrency(remainingLoanBalanceAtExit),
+      principalPaydownAtExit: roundCurrency(principalPaydownAtExit),
       amortizationSchedule,
     },
     operating: {
-      currentExpenses: furnishedRental.currentExpenses,
-      adjustedGrossRent: furnishedRental.adjustedGrossIncome,
-      adjustedOperatingExpenses,
-      managementFeeAmount,
-      stabilizedNoi,
+      currentExpenses: roundCurrency(resolvedCurrentExpenses),
+      currentOtherIncome: roundCurrency(otherIncome),
+      adjustedGrossRent: roundCurrency(yearlyGrossRentalIncome[stabilizedIndex] ?? grossRentalIncomeBase),
+      adjustedOperatingExpenses: roundCurrency(
+        projectedNonManagementExpenses[stabilizedIndex - 1] ?? projectedNonManagementExpenses[0] ?? 0
+      ),
+      managementFeeAmount: roundCurrency(yearlyManagementFee[stabilizedIndex] ?? 0),
+      stabilizedNoi: roundCurrency(yearlyNoi[stabilizedIndex] ?? 0),
     },
     exit: {
-      exitPropertyValue,
-      saleClosingCosts,
-      netSaleProceedsBeforeDebtPayoff,
-      remainingLoanBalance: remainingLoanBalanceAtExit,
-      netProceedsToEquity,
+      exitPropertyValue: roundCurrency(exitPropertyValue),
+      saleClosingCosts: roundCurrency(saleClosingCosts),
+      netSaleProceedsBeforeDebtPayoff: roundCurrency(netSaleProceedsBeforeDebtPayoff),
+      remainingLoanBalance: roundCurrency(remainingLoanBalanceAtExit),
+      principalPaydownToDate: roundCurrency(principalPaydownAtExit),
+      netProceedsToEquity: roundCurrency(netProceedsToEquity),
+    },
+    yearly: {
+      years,
+      endingLabels,
+      propertyValue: yearlyPropertyValue,
+      grossRentalIncome: yearlyGrossRentalIncome,
+      otherIncome: yearlyOtherIncome,
+      vacancyLoss: yearlyVacancyLoss,
+      leadTimeLoss: yearlyLeadTimeLoss,
+      netRentalIncome: yearlyNetRentalIncome,
+      managementFee: yearlyManagementFee,
+      expenseLineItems,
+      totalOperatingExpenses: yearlyTotalOperatingExpenses,
+      noi: yearlyNoi,
+      recurringCapex: yearlyRecurringCapex,
+      cashFlowFromOperations: yearlyCashFlowFromOperations,
+      capRateOnPurchase: yearlyCapRateOnPurchase,
+      debtService: yearlyDebtService,
+      principalPaid: yearlyPrincipalPaid,
+      interestPaid: yearlyInterestPaid,
+      cashFlowAfterFinancing: yearlyCashFlowAfterFinancing,
+      totalInvestmentCost: yearlyTotalInvestmentCost,
+      financingFunding: yearlyFinancingFunding,
+      financingFees: yearlyFinancingFees,
+      saleValue: yearlySaleValue,
+      saleClosingCosts: yearlySaleClosingCosts,
+      remainingLoanBalance: yearlyRemainingLoanBalance,
+      financingPayoff: yearlyFinancingPayoff,
+      netSaleProceedsBeforeDebtPayoff: yearlyNetSaleBeforeDebt,
+      netSaleProceedsToEquity: yearlyNetSaleToEquity,
+      unleveredCashFlow: yearlyUnleveredCashFlow,
+      leveredCashFlow: yearlyLeveredCashFlow,
     },
     cashFlows: {
-      annualOperatingCashFlow,
-      annualOperatingCashFlows,
-      finalYearCashFlow,
-      equityCashFlowSeries,
+      annualOperatingCashFlow: roundCurrency(annualOperatingCashFlow),
+      annualOperatingCashFlows: annualOperatingCashFlows.map(roundCurrency),
+      annualUnleveredCashFlows: annualUnleveredCashFlows.map(roundCurrency),
+      finalYearCashFlow: roundCurrency(finalYearCashFlow),
+      unleveredCashFlowSeries: unleveredCashFlowSeries.map(roundCurrency),
+      equityCashFlowSeries: equityCashFlowSeries.map(roundCurrency),
     },
     returns: computeIrr({
       equityCashFlows: equityCashFlowSeries,
@@ -355,12 +824,15 @@ function roundOffer(value: number): number {
   return Math.max(0, Math.round(value / 1_000) * 1_000);
 }
 
-export function computeRecommendedOffer(input: {
-  assumptions: ResolvedDossierAssumptions;
-  currentGrossRent: number | null;
-  currentNoi: number | null;
-}): RecommendedOfferAnalysis {
-  const { assumptions, currentGrossRent, currentNoi } = input;
+export function computeRecommendedOffer(input: UnderwritingProjectionInput): RecommendedOfferAnalysis {
+  const {
+    assumptions,
+    currentGrossRent,
+    currentNoi,
+    currentOtherIncome,
+    currentExpensesTotal,
+    expenseRows,
+  } = input;
   const askingPrice = assumptions.acquisition.purchasePrice;
   const targetIrrPct = assumptions.targetIrrPct;
   const targetIrr = targetIrrPct / 100;
@@ -381,6 +853,9 @@ export function computeRecommendedOffer(input: {
     assumptions,
     currentGrossRent,
     currentNoi,
+    currentOtherIncome,
+    currentExpensesTotal,
+    expenseRows,
   });
   const irrAtAskingPct = baseProjection.returns.irr ?? null;
   const targetMetAtAsking = irrAtAskingPct != null && irrAtAskingPct >= targetIrr;
@@ -408,6 +883,9 @@ export function computeRecommendedOffer(input: {
     },
     currentGrossRent,
     currentNoi,
+    currentOtherIncome,
+    currentExpensesTotal,
+    expenseRows,
   });
   if (projectionAtLowPrice.returns.irr == null || projectionAtLowPrice.returns.irr < targetIrr) {
     return {
@@ -435,6 +913,9 @@ export function computeRecommendedOffer(input: {
       },
       currentGrossRent,
       currentNoi,
+      currentOtherIncome,
+      currentExpensesTotal,
+      expenseRows,
     });
     const irr = trialProjection.returns.irr;
     if (irr != null && irr >= targetIrr) low = mid;

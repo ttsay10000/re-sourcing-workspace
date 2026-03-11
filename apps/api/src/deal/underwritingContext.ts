@@ -32,6 +32,46 @@ export interface DossierAmortizationRow {
   endingBalance: number;
 }
 
+export interface YearlyExpenseProjectionRow {
+  lineItem: string;
+  annualGrowthPct: number;
+  baseAmount: number;
+  yearlyAmounts: number[];
+}
+
+export interface YearlyCashFlowProjectionContext {
+  years: number[];
+  endingLabels: string[];
+  propertyValue: number[];
+  grossRentalIncome: number[];
+  otherIncome: number[];
+  vacancyLoss: number[];
+  leadTimeLoss: number[];
+  netRentalIncome: number[];
+  managementFee: number[];
+  expenseLineItems: YearlyExpenseProjectionRow[];
+  totalOperatingExpenses: number[];
+  noi: number[];
+  recurringCapex: number[];
+  cashFlowFromOperations: number[];
+  capRateOnPurchase: Array<number | null>;
+  debtService: number[];
+  principalPaid: number[];
+  interestPaid: number[];
+  cashFlowAfterFinancing: number[];
+  totalInvestmentCost: number[];
+  financingFunding: number[];
+  financingFees: number[];
+  saleValue: number[];
+  saleClosingCosts: number[];
+  remainingLoanBalance: number[];
+  financingPayoff: number[];
+  netSaleProceedsBeforeDebtPayoff: number[];
+  netSaleProceedsToEquity: number[];
+  unleveredCashFlow: number[];
+  leveredCashFlow: number[];
+}
+
 export interface SensitivityScenarioRow {
   valuePct: number;
   irrPct: number | null;
@@ -82,6 +122,20 @@ export interface DossierRecommendedOfferContext {
   targetMetAtAsking: boolean;
 }
 
+export interface DossierConditionReviewContext {
+  source: "images_and_text" | "text_only";
+  overallCondition?: string | null;
+  renovationScope?: string | null;
+  imageQuality?: string | null;
+  confidence?: number | null;
+  imageCountAnalyzed: number;
+  coverageSeen?: string[] | null;
+  coverageMissing?: string[] | null;
+  observedSignals?: string[] | null;
+  textSignals?: string[] | null;
+  summaryBullets?: string[] | null;
+}
+
 export interface UnderwritingContext {
   propertyId: string;
   canonicalAddress: string;
@@ -92,6 +146,8 @@ export interface UnderwritingContext {
   currentNoi: number | null;
   /** Current gross rent (annual) from property details. */
   currentGrossRent: number | null;
+  /** Current other income (annual) from property details / OM when available. */
+  currentOtherIncome?: number | null;
   /** Unit count from OM when available (rent roll length or propertyInfo.totalUnits). */
   unitCount: number | null;
   /** Deal score 0–100. */
@@ -110,12 +166,20 @@ export interface UnderwritingContext {
       ltvPct: number | null;
       interestRatePct: number | null;
       amortizationYears: number | null;
+      loanFeePct?: number | null;
     };
     operating: {
       rentUpliftPct: number | null;
       blendedRentUpliftPct?: number | null;
       expenseIncreasePct: number | null;
       managementFeePct: number | null;
+      vacancyPct?: number | null;
+      leadTimeMonths?: number | null;
+      annualRentGrowthPct?: number | null;
+      annualOtherIncomeGrowthPct?: number | null;
+      annualExpenseGrowthPct?: number | null;
+      annualPropertyTaxGrowthPct?: number | null;
+      recurringCapexAnnual?: number | null;
     };
     holdPeriodYears: number | null;
     targetIrrPct?: number | null;
@@ -126,6 +190,7 @@ export interface UnderwritingContext {
   };
   acquisition: {
     purchaseClosingCosts: number;
+    financingFees?: number;
     totalProjectCost: number;
     loanAmount: number;
     equityRequiredForPurchase: number;
@@ -134,12 +199,15 @@ export interface UnderwritingContext {
   };
   financing: {
     loanAmount: number;
+    financingFees?: number;
     monthlyPayment: number;
     annualDebtService: number;
     remainingLoanBalanceAtExit: number;
+    principalPaydownAtExit?: number;
   };
   operating: {
     currentExpenses: number;
+    currentOtherIncome?: number;
     adjustedGrossRent: number;
     adjustedOperatingExpenses: number;
     managementFeeAmount: number;
@@ -150,12 +218,15 @@ export interface UnderwritingContext {
     saleClosingCosts: number;
     netSaleProceedsBeforeDebtPayoff: number;
     remainingLoanBalance: number;
+    principalPaydownToDate?: number;
     netProceedsToEquity: number;
   };
   cashFlows: {
     annualOperatingCashFlow: number;
     annualOperatingCashFlows: number[];
+    annualUnleveredCashFlows?: number[];
     finalYearCashFlow: number;
+    unleveredCashFlowSeries?: number[];
     equityCashFlowSeries: number[];
   };
   returns: {
@@ -178,10 +249,14 @@ export interface UnderwritingContext {
   amortizationSchedule?: DossierAmortizationRow[];
   /** Optional: one-way underwriting sensitivities for dossier and Excel. */
   sensitivities?: SensitivityAnalysisContext[];
+  /** Optional: detailed yearly cash flow rows shared by the dossier and Excel model. */
+  yearlyCashFlow?: YearlyCashFlowProjectionContext | null;
   /** Optional: protected-unit / convertible-unit mix used for uplift logic. */
   propertyMix?: DossierPropertyMixContext | null;
   /** Optional: target-IRR-based recommended offer analysis. */
   recommendedOffer?: DossierRecommendedOfferContext | null;
+  /** Optional: listing-photo + OM/listing-text condition review for dossier narrative. */
+  conditionReview?: DossierConditionReviewContext | null;
 }
 
 /**

@@ -57,6 +57,18 @@ export function getEnrichmentModel(): string {
   return DEFAULT_MODEL;
 }
 
+/** Vision/multimodal property condition review; defaults to gpt-4o for broad image support. */
+export function getPropertyConditionModel(): string {
+  const model = getModelFromEnv("OPENAI_PROPERTY_CONDITION_MODEL");
+  if (model) return model;
+  return DEFAULT_MODEL;
+}
+
+/** Reasoning effort for property-condition review when using reasoning-capable models. */
+export function getPropertyConditionReasoningEffort(): "low" | "medium" | "high" {
+  return getReasoningEffortFromEnv("OPENAI_PROPERTY_CONDITION_REASONING_EFFORT", "OPENAI_REASONING_EFFORT");
+}
+
 /** Used by price history enrichment; defaults to same as getEnrichmentModel. */
 export function getPriceHistoryModel(): string {
   const model = getModelFromEnv("OPENAI_PRICE_HISTORY_MODEL");

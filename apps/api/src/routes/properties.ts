@@ -46,6 +46,16 @@ import {
 } from "../deal/underwritingModel.js";
 import { resolveGeneratedDocPath, deleteGeneratedDocumentFile } from "../deal/generatedDocStorage.js";
 import { readFile, unlink } from "fs/promises";
+import {
+  createWorkflowRun,
+  deriveWorkflowStatusFromCounts,
+  listWorkflowRuns,
+  mergeWorkflowRunMetadata,
+  updateWorkflowRun,
+  upsertWorkflowStep,
+  WORKFLOW_BOARD_COLUMNS,
+} from "../workflow/workflowTracker.js";
+import type { WorkflowRunStepSeed } from "../workflow/workflowTracker.js";
 
 const router = Router();
 
@@ -265,6 +275,9 @@ router.delete("/properties", async (req: Request, res: Response) => {
 
 /** POST /api/properties/from-listings - create canonical properties from raw listings, link via matches. Runs permit enrichment unless ?skipPermitEnrichment=1. Body may include listingIds: string[] to send only those listings (must be active); otherwise all active listings are used. */
 router.post("/properties/from-listings", async (req: Request, res: Response) => {
+  let workflowRunId: string | null = null;
+  let workflowStartedAt = new Date().toISOString();
+  let trackedListingCount = 0;
   try {
     const pool = getPool();
     const client = await pool.connect();
@@ -280,6 +293,33 @@ router.post("/properties/from-listings", async (req: Request, res: Response) => 
       const listFilters: { lifecycleState: "active"; limit: number; ids?: string[] } = { lifecycleState: "active", limit: 1000 };
       if (listingIds != null && listingIds.length > 0) listFilters.ids = listingIds;
       const { listings } = await listingRepo.list(listFilters);
+      trackedListingCount = listings.length;
+      workflowStartedAt = new Date().toISOString();
+      workflowRunId = await createWorkflowRun({
+        runType: "add_to_canonical",
+        displayName: "Add to canonical",
+        scopeLabel: `${listings.length} listing${listings.length === 1 ? "" : "s"}`,
+        triggerSource: "manual",
+        totalItems: listings.length,
+        metadata: {
+          listingIds: listings.map((listing) => listing.id),
+        },
+        steps: [
+          {
+            stepKey: "canonical",
+            totalItems: listings.length,
+            completedItems: 0,
+            failedItems: 0,
+            status: listings.length === 0 ? "completed" : "running",
+            startedAt: workflowStartedAt,
+            finishedAt: listings.length === 0 ? workflowStartedAt : null,
+            lastMessage:
+              listings.length === 0
+                ? "No active listings selected"
+                : `Starting canonicalization for ${listings.length} listing${listings.length === 1 ? "" : "s"}`,
+          },
+        ],
+      });
       const results: { listingId: string; propertyId: string; canonicalAddress: string }[] = [];
 
       for (const listing of listings) {
@@ -326,22 +366,56 @@ router.post("/properties/from-listings", async (req: Request, res: Response) => 
         }
         if (Object.keys(merge).length > 0) await propertyRepo.mergeDetails(property.id, merge);
         results.push({ listingId: listing.id, propertyId: property.id, canonicalAddress });
+        await upsertWorkflowStep(workflowRunId, {
+          stepKey: "canonical",
+          totalItems: listings.length,
+          completedItems: results.length,
+          failedItems: 0,
+          status: deriveWorkflowStatusFromCounts({
+            totalItems: listings.length,
+            completedItems: results.length,
+          }),
+          startedAt: workflowStartedAt,
+          finishedAt: results.length >= listings.length ? new Date().toISOString() : null,
+          lastMessage: `${results.length}/${listings.length} listing${listings.length === 1 ? "" : "s"} canonicalized`,
+        });
       }
 
       await client.query("COMMIT");
 
       const skipPermitEnrichment = req.query.skipPermitEnrichment === "1" || req.query.skipPermitEnrichment === "true";
       const propertyIds = [...new Set(results.map((r) => r.propertyId))];
+      await mergeWorkflowRunMetadata(workflowRunId, {
+        listingIds: listings.map((listing) => listing.id),
+        propertyIds,
+      });
       let enrichmentSummary: { ran: boolean; success: number; failed: number; byModule?: Record<string, number> } = {
         ran: false,
         success: 0,
         failed: 0,
       };
+      const enrichmentStepKeys = ["permits", ...ENRICHMENT_MODULES.map((module) => module.key)];
+      const enrichmentProgress = Object.fromEntries(
+        enrichmentStepKeys.map((stepKey) => [stepKey, { completed: 0, failed: 0, skipped: 0 }])
+      ) as Record<string, { completed: number; failed: number; skipped: number }>;
 
       // Enrichment runs the same pipeline for every property: BBL resolve → Phase 1 (owner cascade + tax code) → permits → 7 modules. Pre-pass: resolve and persist BBL for every property first so CO and other BBL-dependent modules run for all.
       if (!skipPermitEnrichment && propertyIds.length > 0) {
         enrichmentSummary.ran = true;
         const appToken = process.env.SOCRATA_APP_TOKEN ?? null;
+        const enrichmentStartedAt = new Date().toISOString();
+        for (const stepKey of enrichmentStepKeys) {
+          await upsertWorkflowStep(workflowRunId, {
+            stepKey,
+            totalItems: propertyIds.length,
+            completedItems: 0,
+            failedItems: 0,
+            skippedItems: 0,
+            status: stepKey === "permits" ? "running" : "pending",
+            startedAt: stepKey === "permits" ? enrichmentStartedAt : null,
+            lastMessage: stepKey === "permits" ? `Starting ${propertyIds.length} property enrichment run` : null,
+          });
+        }
         for (let i = 0; i < propertyIds.length; i++) {
           if (i > 0) await new Promise((r) => setTimeout(r, ENRICHMENT_RATE_LIMIT_DELAY_MS));
           await getBBLForProperty(propertyIds[i]!, { appToken });
@@ -358,6 +432,30 @@ router.post("/properties/from-listings", async (req: Request, res: Response) => 
           else enrichmentSummary.failed++;
           for (const [name, r] of Object.entries(out.results)) {
             byModule[name] = (byModule[name] ?? 0) + (r.ok ? 1 : 0);
+            if (!(name in enrichmentProgress)) continue;
+            if (r.ok) enrichmentProgress[name].completed++;
+            else if (r.skipped) enrichmentProgress[name].skipped++;
+            else enrichmentProgress[name].failed++;
+            await upsertWorkflowStep(workflowRunId, {
+              stepKey: name,
+              totalItems: propertyIds.length,
+              completedItems: enrichmentProgress[name].completed,
+              failedItems: enrichmentProgress[name].failed,
+              skippedItems: enrichmentProgress[name].skipped,
+              status: deriveWorkflowStatusFromCounts({
+                totalItems: propertyIds.length,
+                completedItems: enrichmentProgress[name].completed,
+                failedItems: enrichmentProgress[name].failed,
+                skippedItems: enrichmentProgress[name].skipped,
+              }),
+              startedAt: enrichmentStartedAt,
+              finishedAt:
+                enrichmentProgress[name].completed + enrichmentProgress[name].failed + enrichmentProgress[name].skipped >= propertyIds.length
+                  ? new Date().toISOString()
+                  : null,
+              lastMessage: `${enrichmentProgress[name].completed}/${propertyIds.length} completed`,
+              lastError: r.ok || r.skipped ? null : r.error ?? null,
+            });
           }
         }
         enrichmentSummary.byModule = byModule;
@@ -368,6 +466,16 @@ router.post("/properties/from-listings", async (req: Request, res: Response) => 
       if (propertyIds.length > 0) {
         rentalFlowSummary.ran = true;
         const pool = getPool();
+        const rentalStartedAt = new Date().toISOString();
+        await upsertWorkflowStep(workflowRunId, {
+          stepKey: "rental_flow",
+          totalItems: propertyIds.length,
+          completedItems: 0,
+          failedItems: 0,
+          status: "running",
+          startedAt: rentalStartedAt,
+          lastMessage: `Starting rental flow for ${propertyIds.length} propert${propertyIds.length === 1 ? "y" : "ies"}`,
+        });
         for (let i = 0; i < propertyIds.length; i++) {
           if (i > 0) await new Promise((r) => setTimeout(r, ENRICHMENT_RATE_LIMIT_DELAY_MS));
           try {
@@ -376,8 +484,39 @@ router.post("/properties/from-listings", async (req: Request, res: Response) => 
           } catch {
             rentalFlowSummary.failed++;
           }
+          await upsertWorkflowStep(workflowRunId, {
+            stepKey: "rental_flow",
+            totalItems: propertyIds.length,
+            completedItems: rentalFlowSummary.success,
+            failedItems: rentalFlowSummary.failed,
+            status: deriveWorkflowStatusFromCounts({
+              totalItems: propertyIds.length,
+              completedItems: rentalFlowSummary.success,
+              failedItems: rentalFlowSummary.failed,
+            }),
+            startedAt: rentalStartedAt,
+            finishedAt:
+              rentalFlowSummary.success + rentalFlowSummary.failed >= propertyIds.length
+                ? new Date().toISOString()
+                : null,
+            lastMessage: `${rentalFlowSummary.success}/${propertyIds.length} properties completed`,
+          });
         }
       }
+
+      await mergeWorkflowRunMetadata(workflowRunId, {
+        propertyIds,
+        created: results.length,
+        enrichmentSummary,
+        rentalFlowSummary,
+      });
+      await updateWorkflowRun(workflowRunId, {
+        status:
+          enrichmentSummary.failed > 0 || rentalFlowSummary.failed > 0
+            ? "partial"
+            : "completed",
+        finishedAt: new Date().toISOString(),
+      });
 
       res.json({
         ok: true,
@@ -397,6 +536,22 @@ router.post("/properties/from-listings", async (req: Request, res: Response) => 
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[properties from-listings]", err);
+    await upsertWorkflowStep(workflowRunId, {
+      stepKey: "canonical",
+      totalItems: trackedListingCount,
+      completedItems: 0,
+      failedItems: trackedListingCount,
+      status: "failed",
+      startedAt: workflowStartedAt,
+      finishedAt: new Date().toISOString(),
+      lastError: message,
+      lastMessage: "Canonicalization failed",
+    });
+    await mergeWorkflowRunMetadata(workflowRunId, { error: message });
+    await updateWorkflowRun(workflowRunId, {
+      status: "failed",
+      finishedAt: new Date().toISOString(),
+    });
     if (/DATABASE_URL|connection|ECONNREFUSED|getPool/i.test(message)) {
       res.status(503).json({ error: "Database unavailable.", details: message });
     } else {
@@ -407,6 +562,8 @@ router.post("/properties/from-listings", async (req: Request, res: Response) => 
 
 /** POST /api/properties/run-enrichment - re-run enrichment for existing canonical properties only. Body: { propertyIds: string[] }. Assumes BBL/details are already set; runs same pipeline (BBL resolve → Phase 1 → permits → 7 modules) and updates data. Returns same permitEnrichment shape as from-listings. */
 router.post("/properties/run-enrichment", async (req: Request, res: Response) => {
+  let workflowRunId: string | null = null;
+  const workflowStartedAt = new Date().toISOString();
   try {
     const raw = req.body?.propertyIds;
     const propertyIds = Array.isArray(raw)
@@ -416,6 +573,38 @@ router.post("/properties/run-enrichment", async (req: Request, res: Response) =>
       res.status(400).json({ error: "propertyIds required (non-empty array)." });
       return;
     }
+
+    const enrichmentStepKeys = ["permits", ...ENRICHMENT_MODULES.map((module) => module.key)];
+    const enrichmentProgress = Object.fromEntries(
+      enrichmentStepKeys.map((stepKey) => [stepKey, { completed: 0, failed: 0, skipped: 0 }])
+    ) as Record<string, { completed: number; failed: number; skipped: number }>;
+    const workflowSteps: WorkflowRunStepSeed[] = [
+      ...enrichmentStepKeys.map((stepKey, index): WorkflowRunStepSeed => ({
+        stepKey,
+        totalItems: propertyIds.length,
+        status: index === 0 ? "running" : "pending",
+        startedAt: index === 0 ? workflowStartedAt : null,
+        lastMessage:
+          index === 0
+            ? `Starting enrichment for ${propertyIds.length} propert${propertyIds.length === 1 ? "y" : "ies"}`
+            : null,
+      })),
+      {
+        stepKey: "om_financials",
+        totalItems: propertyIds.length,
+        status: "pending",
+      },
+    ];
+
+    workflowRunId = await createWorkflowRun({
+      runType: "rerun_enrichment",
+      displayName: "Re-run enrichment",
+      scopeLabel: `${propertyIds.length} propert${propertyIds.length === 1 ? "y" : "ies"}`,
+      triggerSource: "manual",
+      totalItems: propertyIds.length,
+      metadata: { propertyIds },
+      steps: workflowSteps,
+    });
 
     const appToken = process.env.SOCRATA_APP_TOKEN ?? null;
     // Pre-pass: resolve and persist BBL for every property so CO and other BBL-dependent modules run for all.
@@ -436,6 +625,30 @@ router.post("/properties/run-enrichment", async (req: Request, res: Response) =>
       else failed++;
       for (const [name, r] of Object.entries(out.results)) {
         byModule[name] = (byModule[name] ?? 0) + (r.ok ? 1 : 0);
+        if (!(name in enrichmentProgress)) continue;
+        if (r.ok) enrichmentProgress[name].completed++;
+        else if (r.skipped) enrichmentProgress[name].skipped++;
+        else enrichmentProgress[name].failed++;
+        await upsertWorkflowStep(workflowRunId, {
+          stepKey: name,
+          totalItems: propertyIds.length,
+          completedItems: enrichmentProgress[name].completed,
+          failedItems: enrichmentProgress[name].failed,
+          skippedItems: enrichmentProgress[name].skipped,
+          status: deriveWorkflowStatusFromCounts({
+            totalItems: propertyIds.length,
+            completedItems: enrichmentProgress[name].completed,
+            failedItems: enrichmentProgress[name].failed,
+            skippedItems: enrichmentProgress[name].skipped,
+          }),
+          startedAt: workflowStartedAt,
+          finishedAt:
+            enrichmentProgress[name].completed + enrichmentProgress[name].failed + enrichmentProgress[name].skipped >= propertyIds.length
+              ? new Date().toISOString()
+              : null,
+          lastMessage: `${enrichmentProgress[name].completed}/${propertyIds.length} completed`,
+          lastError: r.ok || r.skipped ? null : r.error ?? null,
+        });
       }
     }
 
@@ -443,11 +656,61 @@ router.post("/properties/run-enrichment", async (req: Request, res: Response) =>
     const pool = getPool();
     let omFinancialsProcessed = 0;
     let omFinancialsSkippedNoFile = 0;
+    let omCompleted = 0;
+    let omFailed = 0;
+    const omStartedAt = new Date().toISOString();
+    await upsertWorkflowStep(workflowRunId, {
+      stepKey: "om_financials",
+      totalItems: propertyIds.length,
+      completedItems: 0,
+      failedItems: 0,
+      status: "running",
+      startedAt: omStartedAt,
+      lastMessage: `Refreshing OM financials for ${propertyIds.length} propert${propertyIds.length === 1 ? "y" : "ies"}`,
+    });
     for (const propertyId of propertyIds) {
-      const result = await refreshOmFinancialsForProperty(propertyId, pool);
-      omFinancialsProcessed += result.documentsProcessed;
-      omFinancialsSkippedNoFile += result.documentsSkippedNoFile;
+      try {
+        const result = await refreshOmFinancialsForProperty(propertyId, pool);
+        if (result.error) omFailed++;
+        else omCompleted++;
+        omFinancialsProcessed += result.documentsProcessed;
+        omFinancialsSkippedNoFile += result.documentsSkippedNoFile;
+      } catch {
+        omFailed++;
+      }
+      await upsertWorkflowStep(workflowRunId, {
+        stepKey: "om_financials",
+        totalItems: propertyIds.length,
+        completedItems: omCompleted,
+        failedItems: omFailed,
+        status: deriveWorkflowStatusFromCounts({
+          totalItems: propertyIds.length,
+          completedItems: omCompleted,
+          failedItems: omFailed,
+        }),
+        startedAt: omStartedAt,
+        finishedAt: omCompleted + omFailed >= propertyIds.length ? new Date().toISOString() : null,
+        lastMessage: `${omCompleted}/${propertyIds.length} properties refreshed`,
+      });
     }
+
+    await mergeWorkflowRunMetadata(workflowRunId, {
+      propertyIds,
+      permitEnrichment: {
+        ran: true,
+        success,
+        failed,
+        byModule,
+      },
+      omFinancialsRefresh: {
+        documentsProcessed: omFinancialsProcessed,
+        documentsSkippedNoFile: omFinancialsSkippedNoFile,
+      },
+    });
+    await updateWorkflowRun(workflowRunId, {
+      status: failed > 0 || omFailed > 0 ? "partial" : "completed",
+      finishedAt: new Date().toISOString(),
+    });
 
     res.json({
       ok: true,
@@ -465,24 +728,82 @@ router.post("/properties/run-enrichment", async (req: Request, res: Response) =>
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[properties run-enrichment]", err);
+    await mergeWorkflowRunMetadata(workflowRunId, { error: message });
+    await updateWorkflowRun(workflowRunId, {
+      status: "failed",
+      finishedAt: new Date().toISOString(),
+    });
     res.status(503).json({ error: "Failed to run enrichment.", details: message });
   }
 });
 
 /** POST /api/properties/:id/refresh-om-financials - re-run OM/Brochure LLM extraction for this property using uploaded docs. Only processes docs whose file exists on disk. */
 router.post("/properties/:id/refresh-om-financials", async (req: Request, res: Response) => {
+  let workflowRunId: string | null = null;
+  const workflowStartedAt = new Date().toISOString();
   try {
     const propertyId = req.params.id as string;
     if (!propertyId?.trim()) {
       res.status(400).json({ error: "Property ID required." });
       return;
     }
+    workflowRunId = await createWorkflowRun({
+      runType: "refresh_om_financials",
+      displayName: "Refresh OM financials",
+      scopeLabel: "1 property",
+      triggerSource: "manual",
+      totalItems: 1,
+      metadata: { propertyIds: [propertyId.trim()] },
+      steps: [
+        {
+          stepKey: "om_financials",
+          totalItems: 1,
+          status: "running",
+          startedAt: workflowStartedAt,
+          lastMessage: "Refreshing OM financials",
+        },
+      ],
+    });
     const pool = getPool();
     const result = await refreshOmFinancialsForProperty(propertyId.trim(), pool);
     if (result.error) {
+      await upsertWorkflowStep(workflowRunId, {
+        stepKey: "om_financials",
+        totalItems: 1,
+        completedItems: 0,
+        failedItems: 1,
+        status: "failed",
+        startedAt: workflowStartedAt,
+        finishedAt: new Date().toISOString(),
+        lastError: result.error,
+        lastMessage: "OM refresh failed",
+      });
+      await mergeWorkflowRunMetadata(workflowRunId, { error: result.error });
+      await updateWorkflowRun(workflowRunId, {
+        status: "failed",
+        finishedAt: new Date().toISOString(),
+      });
       res.status(404).json({ error: result.error });
       return;
     }
+    await upsertWorkflowStep(workflowRunId, {
+      stepKey: "om_financials",
+      totalItems: 1,
+      completedItems: 1,
+      failedItems: 0,
+      status: "completed",
+      startedAt: workflowStartedAt,
+      finishedAt: new Date().toISOString(),
+      lastMessage: "OM financials refreshed",
+    });
+    await mergeWorkflowRunMetadata(workflowRunId, {
+      documentsProcessed: result.documentsProcessed,
+      documentsSkippedNoFile: result.documentsSkippedNoFile,
+    });
+    await updateWorkflowRun(workflowRunId, {
+      status: "completed",
+      finishedAt: new Date().toISOString(),
+    });
     res.json({
       ok: true,
       documentsProcessed: result.documentsProcessed,
@@ -491,6 +812,22 @@ router.post("/properties/:id/refresh-om-financials", async (req: Request, res: R
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[properties refresh-om-financials]", err);
+    await upsertWorkflowStep(workflowRunId, {
+      stepKey: "om_financials",
+      totalItems: 1,
+      completedItems: 0,
+      failedItems: 1,
+      status: "failed",
+      startedAt: workflowStartedAt,
+      finishedAt: new Date().toISOString(),
+      lastError: message,
+      lastMessage: "OM refresh failed",
+    });
+    await mergeWorkflowRunMetadata(workflowRunId, { error: message });
+    await updateWorkflowRun(workflowRunId, {
+      status: "failed",
+      finishedAt: new Date().toISOString(),
+    });
     res.status(503).json({ error: "Failed to refresh OM financials.", details: message });
   }
 });
@@ -564,6 +901,15 @@ router.get("/properties/pipeline-stats", async (req: Request, res: Response) => 
     console.error("[properties pipeline-stats]", err);
     res.status(503).json({ error: "Failed to load pipeline stats.", details: message });
   }
+});
+
+/** GET /api/properties/workflow-board - recent workflow runs with per-step progress for the operations board. */
+router.get("/properties/workflow-board", async (_req: Request, res: Response) => {
+  const runs = await listWorkflowRuns(60);
+  res.json({
+    columns: WORKFLOW_BOARD_COLUMNS,
+    runs,
+  });
 });
 
 const uploadMemory = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } }); // 25 MB
@@ -1045,6 +1391,8 @@ router.get("/properties/:id/inquiry-guard", async (req: Request, res: Response) 
 
 /** POST /api/properties/:id/mark-inquiry-sent - log a prior/manual inquiry so duplicate-send guardrails persist across refreshes. */
 router.post("/properties/:id/mark-inquiry-sent", async (req: Request, res: Response) => {
+  let workflowRunId: string | null = null;
+  const workflowStartedAt = new Date().toISOString();
   try {
     const { id: propertyId } = req.params;
     const pool = getPool();
@@ -1056,6 +1404,23 @@ router.post("/properties/:id/mark-inquiry-sent", async (req: Request, res: Respo
     }
     const toAddress = normalizeRecipientEmail(req.body?.to);
     const sentAt = typeof req.body?.sentAt === "string" ? req.body.sentAt : null;
+    workflowRunId = await createWorkflowRun({
+      runType: "mark_inquiry_sent",
+      displayName: "Mark inquiry sent",
+      scopeLabel: property.canonicalAddress,
+      triggerSource: "manual",
+      totalItems: 1,
+      metadata: { propertyIds: [propertyId], toAddress, sentAt },
+      steps: [
+        {
+          stepKey: "inquiry",
+          totalItems: 1,
+          status: "running",
+          startedAt: workflowStartedAt,
+          lastMessage: "Recording inquiry history",
+        },
+      ],
+    });
     const inquirySendRepo = new InquirySendRepo({ pool });
     const created = await inquirySendRepo.create(propertyId, null, {
       toAddress,
@@ -1074,15 +1439,47 @@ router.post("/properties/:id/mark-inquiry-sent", async (req: Request, res: Respo
       },
       guard,
     });
+    await upsertWorkflowStep(workflowRunId, {
+      stepKey: "inquiry",
+      totalItems: 1,
+      completedItems: 1,
+      failedItems: 0,
+      status: "completed",
+      startedAt: workflowStartedAt,
+      finishedAt: new Date().toISOString(),
+      lastMessage: "Inquiry history recorded",
+    });
+    await updateWorkflowRun(workflowRunId, {
+      status: "completed",
+      finishedAt: new Date().toISOString(),
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[properties mark-inquiry-sent]", err);
+    await upsertWorkflowStep(workflowRunId, {
+      stepKey: "inquiry",
+      totalItems: 1,
+      completedItems: 0,
+      failedItems: 1,
+      status: "failed",
+      startedAt: workflowStartedAt,
+      finishedAt: new Date().toISOString(),
+      lastError: message,
+      lastMessage: "Failed to record inquiry history",
+    });
+    await mergeWorkflowRunMetadata(workflowRunId, { error: message });
+    await updateWorkflowRun(workflowRunId, {
+      status: "failed",
+      finishedAt: new Date().toISOString(),
+    });
     res.status(503).json({ error: "Failed to record inquiry send.", details: message });
   }
 });
 
 /** POST /api/properties/:id/send-inquiry-email - send inquiry email via Gmail API. Body: { to, subject, body }. */
 router.post("/properties/:id/send-inquiry-email", async (req: Request, res: Response) => {
+  let workflowRunId: string | null = null;
+  const workflowStartedAt = new Date().toISOString();
   try {
     const { id: propertyId } = req.params;
     const pool = getPool();
@@ -1126,11 +1523,46 @@ router.post("/properties/:id/send-inquiry-email", async (req: Request, res: Resp
     }
     const subj = typeof subject === "string" ? subject.trim() : "";
     const b = typeof body === "string" ? body : "";
+    workflowRunId = await createWorkflowRun({
+      runType: "send_inquiry_email",
+      displayName: "Send inquiry email",
+      scopeLabel: property.canonicalAddress,
+      triggerSource: "manual",
+      totalItems: 1,
+      metadata: { propertyIds: [propertyId], toAddress: normalizedTo },
+      steps: [
+        {
+          stepKey: "inquiry",
+          totalItems: 1,
+          status: "running",
+          startedAt: workflowStartedAt,
+          lastMessage: `Sending inquiry to ${normalizedTo}`,
+        },
+      ],
+    });
     const result = await gmailSendMessage(to.trim(), subj || "Inquiry", b);
     const inquirySendRepo = new InquirySendRepo({ pool });
     const { sentAt } = await inquirySendRepo.create(propertyId, result.id, {
       toAddress: normalizedTo,
       source: "gmail_api",
+    });
+    await upsertWorkflowStep(workflowRunId, {
+      stepKey: "inquiry",
+      totalItems: 1,
+      completedItems: 1,
+      failedItems: 0,
+      status: "completed",
+      startedAt: workflowStartedAt,
+      finishedAt: new Date().toISOString(),
+      lastMessage: "Inquiry email sent",
+    });
+    await mergeWorkflowRunMetadata(workflowRunId, {
+      messageId: result.id,
+      sentAt,
+    });
+    await updateWorkflowRun(workflowRunId, {
+      status: "completed",
+      finishedAt: new Date().toISOString(),
     });
     res.json({ ok: true, messageId: result.id, sentAt, guard: await getInquiryGuardState(pool, propertyId, normalizedTo) });
   } catch (err) {
@@ -1157,6 +1589,22 @@ router.post("/properties/:id/send-inquiry-email", async (req: Request, res: Resp
       return String(err);
     })();
     console.error("[properties send-inquiry-email]", err);
+    await upsertWorkflowStep(workflowRunId, {
+      stepKey: "inquiry",
+      totalItems: 1,
+      completedItems: 0,
+      failedItems: 1,
+      status: "failed",
+      startedAt: workflowStartedAt,
+      finishedAt: new Date().toISOString(),
+      lastError: message,
+      lastMessage: "Inquiry send failed",
+    });
+    await mergeWorkflowRunMetadata(workflowRunId, { error: message });
+    await updateWorkflowRun(workflowRunId, {
+      status: "failed",
+      finishedAt: new Date().toISOString(),
+    });
     res.status(503).json({ error: "Failed to send email.", details: message });
   }
 });
@@ -1223,6 +1671,49 @@ function grossRentFromDetails(details: PropertyDetails | null): number | null {
   if (gross != null && typeof gross === "number" && !Number.isNaN(gross) && gross > 0) return gross;
   return null;
 }
+
+function optionalNonNegativeNumber(value: unknown): number | null | "invalid" {
+  if (value == null || value === "") return null;
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return "invalid";
+  return value;
+}
+
+/** PUT /api/properties/:id/dossier-settings - save per-property renovation and furnishing overrides. */
+router.put("/properties/:id/dossier-settings", async (req: Request, res: Response) => {
+  try {
+    const { id: propertyId } = req.params;
+    const renovationCosts = optionalNonNegativeNumber(req.body?.renovationCosts);
+    const furnishingSetupCosts = optionalNonNegativeNumber(req.body?.furnishingSetupCosts);
+    if (renovationCosts === "invalid" || furnishingSetupCosts === "invalid") {
+      res.status(400).json({
+        error: "renovationCosts and furnishingSetupCosts must be non-negative numbers or null.",
+      });
+      return;
+    }
+    const pool = getPool();
+    const repo = new PropertyRepo({ pool });
+    const property = await repo.byId(propertyId);
+    if (!property) {
+      res.status(404).json({ error: "Property not found", propertyId });
+      return;
+    }
+    const assumptionsPatch = {
+      renovationCosts,
+      furnishingSetupCosts,
+      updatedAt: new Date().toISOString(),
+    };
+    await repo.updateDetails(propertyId, "dealDossier.assumptions", assumptionsPatch);
+    res.json({
+      ok: true,
+      propertyId,
+      assumptions: assumptionsPatch,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[properties dossier settings]", err);
+    res.status(503).json({ error: "Failed to save dossier settings.", details: message });
+  }
+});
 
 /** POST /api/properties/:id/compute-score - compute deal signals and full underwriting, persist to deal_signals, return score and signals. */
 router.post("/properties/:id/compute-score", async (req: Request, res: Response) => {
@@ -1499,31 +1990,84 @@ export async function runRentalFlowForProperty(
 
 /** POST /api/properties/run-rental-flow - Run rental flow for selected or all properties (on-demand re-run). Normally runs automatically after from-listings and run-enrichment. */
 router.post("/properties/run-rental-flow", async (req: Request, res: Response) => {
+  let workflowRunId: string | null = null;
+  const workflowStartedAt = new Date().toISOString();
   try {
     const pool = getPool();
     const propertyRepo = new PropertyRepo({ pool });
     const propertyIds = Array.isArray(req.body?.propertyIds) && req.body.propertyIds.length > 0
       ? (req.body.propertyIds as string[]).filter((id: unknown) => typeof id === "string" && id.trim().length > 0)
       : (await propertyRepo.list({ limit: 200 })).map((p) => p.id);
+    workflowRunId = await createWorkflowRun({
+      runType: "rerun_rental_flow",
+      displayName: "Re-run rental flow",
+      scopeLabel: `${propertyIds.length} propert${propertyIds.length === 1 ? "y" : "ies"}`,
+      triggerSource: "manual",
+      totalItems: propertyIds.length,
+      metadata: { propertyIds },
+      steps: [
+        {
+          stepKey: "rental_flow",
+          totalItems: propertyIds.length,
+          status: propertyIds.length === 0 ? "completed" : "running",
+          startedAt: workflowStartedAt,
+          finishedAt: propertyIds.length === 0 ? workflowStartedAt : null,
+          lastMessage:
+            propertyIds.length === 0
+              ? "No properties selected"
+              : `Starting rental flow for ${propertyIds.length} propert${propertyIds.length === 1 ? "y" : "ies"}`,
+        },
+      ],
+    });
 
     const results: { propertyId: string; rentalUnitsCount: number; hasLlmFinancials: boolean; error?: string }[] = [];
     const delayMs = ENRICHMENT_RATE_LIMIT_DELAY_MS;
+    let completed = 0;
+    let failed = 0;
 
     for (const propertyId of propertyIds) {
       try {
         const result = await runRentalFlowForProperty(propertyId, pool);
         results.push({ propertyId, ...result });
+        if (result.error) failed++;
+        else completed++;
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         results.push({ propertyId, rentalUnitsCount: 0, hasLlmFinancials: false, error: message });
+        failed++;
       }
+      await upsertWorkflowStep(workflowRunId, {
+        stepKey: "rental_flow",
+        totalItems: propertyIds.length,
+        completedItems: completed,
+        failedItems: failed,
+        status: deriveWorkflowStatusFromCounts({
+          totalItems: propertyIds.length,
+          completedItems: completed,
+          failedItems: failed,
+        }),
+        startedAt: workflowStartedAt,
+        finishedAt: completed + failed >= propertyIds.length ? new Date().toISOString() : null,
+        lastMessage: `${completed}/${propertyIds.length} properties completed`,
+      });
       if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
     }
+
+    await mergeWorkflowRunMetadata(workflowRunId, { propertyIds, results });
+    await updateWorkflowRun(workflowRunId, {
+      status: failed > 0 ? "partial" : "completed",
+      finishedAt: new Date().toISOString(),
+    });
 
     res.json({ ok: true, results });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[properties run-rental-flow]", err);
+    await mergeWorkflowRunMetadata(workflowRunId, { error: message });
+    await updateWorkflowRun(workflowRunId, {
+      status: "failed",
+      finishedAt: new Date().toISOString(),
+    });
     res.status(503).json({ error: "Run rental flow failed.", details: message });
   }
 });

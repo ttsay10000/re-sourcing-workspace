@@ -217,9 +217,9 @@ export function analyzePropertyForUnderwriting(
     totalUnits != null && totalUnits > 0 ? eligibleResidentialUnits / totalUnits : null;
 
   const furnishingEligibleUnits = Math.max(rowEligibleUnits.length, eligibleResidentialUnits);
-  const additionalBedrooms = rowEligibleUnits.reduce((sum, row) => {
+  const totalEligibleBedrooms = rowEligibleUnits.reduce((sum, row) => {
     const beds = row.beds != null ? Math.max(0, Math.round(row.beds)) : 0;
-    return sum + Math.max(0, beds - 1);
+    return sum + beds;
   }, 0);
   const sqftPremium = rowEligibleUnits.reduce((sum, row) => {
     if (row.sqft == null || !Number.isFinite(row.sqft)) return sum;
@@ -227,7 +227,7 @@ export function analyzePropertyForUnderwriting(
   }, 0);
   const furnishingSetupCostEstimate =
     furnishingEligibleUnits > 0
-      ? roundCurrency(10_000 + furnishingEligibleUnits * 3_000 + additionalBedrooms * 2_500 + sqftPremium)
+      ? roundCurrency(10_000 + furnishingEligibleUnits * 3_000 + totalEligibleBedrooms * 2_500 + sqftPremium)
       : 0;
 
   return {

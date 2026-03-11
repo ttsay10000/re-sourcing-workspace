@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   MAX_UNDERWRITING_HOLD_PERIOD_YEARS,
+  conservativeAnnualPropertyTaxGrowthPctFromNycTaxCode,
   computeRecommendedOffer,
   computeUnderwritingProjection,
   resolveDossierAssumptions,
@@ -23,6 +24,14 @@ describe("underwritingModel", () => {
         defaultRentUplift: 10,
         defaultExpenseIncrease: 5,
         defaultManagementFee: 4,
+        defaultVacancyPct: 0,
+        defaultLeadTimeMonths: 0,
+        defaultAnnualRentGrowthPct: 0,
+        defaultAnnualOtherIncomeGrowthPct: 0,
+        defaultAnnualExpenseGrowthPct: 0,
+        defaultAnnualPropertyTaxGrowthPct: 0,
+        defaultRecurringCapexAnnual: 0,
+        defaultLoanFeePct: 0,
       },
       1_000_000,
       {
@@ -48,6 +57,8 @@ describe("underwritingModel", () => {
     expect(projection.operating.managementFeeAmount).toBeCloseTo(5_280, 2);
     expect(projection.operating.stabilizedNoi).toBeCloseTo(84_720, 2);
 
+    expect(projection.yearly.cashFlowFromOperations[0]).toBe(0);
+    expect(projection.yearly.totalInvestmentCost[0]).toBeCloseTo(-1_150_000, 2);
     expect(projection.cashFlows.annualOperatingCashFlows).toHaveLength(5);
     expect(projection.cashFlows.equityCashFlowSeries).toHaveLength(6);
     expect(projection.cashFlows.equityCashFlowSeries[0]).toBeCloseTo(-450_000, 2);
@@ -65,6 +76,66 @@ describe("underwritingModel", () => {
     expect(projection.returns.equityMultiple).toBeGreaterThan(1);
     expect(projection.returns.year1CashOnCashReturn).not.toBeNull();
     expect(projection.returns.averageCashOnCashReturn).not.toBeNull();
+  });
+
+  it("applies vacancy and lead-time deductions while recovering principal paydown through the exit payoff", () => {
+    const assumptions = resolveDossierAssumptions(
+      {
+        id: "profile-3",
+        createdAt: "2026-03-10T00:00:00.000Z",
+        updatedAt: "2026-03-10T00:00:00.000Z",
+        defaultPurchaseClosingCostPct: 3,
+        defaultLtv: 70,
+        defaultInterestRate: 6,
+        defaultAmortization: 30,
+        defaultHoldPeriodYears: 5,
+        defaultExitCap: 6,
+        defaultExitClosingCostPct: 2,
+        defaultRentUplift: 10,
+        defaultExpenseIncrease: 5,
+        defaultManagementFee: 4,
+        defaultVacancyPct: 15,
+        defaultLeadTimeMonths: 2,
+        defaultAnnualRentGrowthPct: 1,
+        defaultAnnualOtherIncomeGrowthPct: 0,
+        defaultAnnualExpenseGrowthPct: 0,
+        defaultAnnualPropertyTaxGrowthPct: 0,
+        defaultRecurringCapexAnnual: 1_200,
+        defaultLoanFeePct: 0,
+      },
+      1_000_000,
+      {
+        renovationCosts: 100_000,
+        furnishingSetupCosts: 20_000,
+      }
+    );
+
+    const projection = computeUnderwritingProjection({
+      assumptions,
+      currentGrossRent: 120_000,
+      currentNoi: 80_000,
+    });
+
+    expect(projection.yearly.grossRentalIncome[1]).toBeCloseTo(132_000, 2);
+    expect(projection.yearly.vacancyLoss[1]).toBeCloseTo(19_800, 2);
+    expect(projection.yearly.leadTimeLoss[1]).toBeCloseTo(22_000, 2);
+    expect(projection.yearly.managementFee[1]).toBeCloseTo(5_280, 2);
+    expect(projection.yearly.noi[1]).toBeCloseTo(42_920, 2);
+    expect(projection.yearly.cashFlowFromOperations[1]).toBeCloseTo(41_720, 2);
+
+    expect(projection.exit.principalPaydownToDate).toBeCloseTo(
+      projection.financing.loanAmount - projection.exit.remainingLoanBalance,
+      2
+    );
+    expect(projection.exit.netProceedsToEquity).toBeCloseTo(
+      projection.exit.netSaleProceedsBeforeDebtPayoff - projection.exit.remainingLoanBalance,
+      2
+    );
+    expect(projection.exit.netProceedsToEquity).toBeCloseTo(
+      projection.exit.netSaleProceedsBeforeDebtPayoff -
+        (projection.financing.loanAmount - projection.exit.principalPaydownToDate),
+      2
+    );
   });
 
   it("caps hold periods to the supported Excel model horizon", () => {
@@ -104,9 +175,63 @@ describe("underwritingModel", () => {
     expect(assumptions.propertyMix.commercialUnits).toBe(1);
     expect(assumptions.propertyMix.rentStabilizedUnits).toBe(1);
     expect(assumptions.propertyMix.eligibleResidentialUnits).toBe(2);
-    expect(assumptions.operating.rentUpliftPct).toBe(70);
-    expect(assumptions.operating.blendedRentUpliftPct).toBeCloseTo(35, 2);
-    expect(assumptions.acquisition.furnishingSetupCosts).toBe(22_000);
+    expect(assumptions.operating.rentUpliftPct).toBe(76.3);
+    expect(assumptions.operating.blendedRentUpliftPct).toBeCloseTo(38.15, 2);
+    expect(assumptions.acquisition.furnishingSetupCosts).toBe(27_000);
+  });
+
+  it("maps NYC tax classes to conservative property-tax growth defaults", () => {
+    expect(conservativeAnnualPropertyTaxGrowthPctFromNycTaxCode("1")).toBe(6);
+    expect(conservativeAnnualPropertyTaxGrowthPctFromNycTaxCode(" 2b ")).toBe(8);
+    expect(conservativeAnnualPropertyTaxGrowthPctFromNycTaxCode("2")).toBe(20);
+    expect(conservativeAnnualPropertyTaxGrowthPctFromNycTaxCode("4")).toBe(20);
+    expect(conservativeAnnualPropertyTaxGrowthPctFromNycTaxCode("3")).toBeNull();
+    expect(conservativeAnnualPropertyTaxGrowthPctFromNycTaxCode(null)).toBeNull();
+  });
+
+  it("uses NYC tax-class auto defaults before profile fallback while preserving explicit overrides", () => {
+    const profile = {
+      id: "profile-4",
+      createdAt: "2026-03-10T00:00:00.000Z",
+      updatedAt: "2026-03-10T00:00:00.000Z",
+      defaultPurchaseClosingCostPct: 3,
+      defaultLtv: 64,
+      defaultInterestRate: 6,
+      defaultAmortization: 30,
+      defaultHoldPeriodYears: 2,
+      defaultExitCap: 5,
+      defaultExitClosingCostPct: 6,
+      defaultRentUplift: 76.3,
+      defaultExpenseIncrease: 0,
+      defaultManagementFee: 8,
+      defaultTargetIrrPct: 25,
+      defaultVacancyPct: 15,
+      defaultLeadTimeMonths: 2,
+      defaultAnnualRentGrowthPct: 1,
+      defaultAnnualOtherIncomeGrowthPct: 0,
+      defaultAnnualExpenseGrowthPct: 0,
+      defaultAnnualPropertyTaxGrowthPct: 6,
+      defaultRecurringCapexAnnual: 1_200,
+      defaultLoanFeePct: 0.63,
+    };
+
+    const autoAssumptions = resolveDossierAssumptions(profile, 5_000_000, null, {
+      details: { taxCode: "2A" },
+    });
+    expect(autoAssumptions.operating.annualPropertyTaxGrowthPct).toBe(8);
+
+    const fallbackAssumptions = resolveDossierAssumptions(profile, 5_000_000, null, {
+      details: { taxCode: "3" },
+    });
+    expect(fallbackAssumptions.operating.annualPropertyTaxGrowthPct).toBe(6);
+
+    const explicitOverrideAssumptions = resolveDossierAssumptions(
+      profile,
+      5_000_000,
+      { annualPropertyTaxGrowthPct: 11 },
+      { details: { taxCode: "4" } }
+    );
+    expect(explicitOverrideAssumptions.operating.annualPropertyTaxGrowthPct).toBe(11);
   });
 
   it("solves for a lower recommended offer when the ask misses the target IRR", () => {
@@ -126,6 +251,14 @@ describe("underwritingModel", () => {
         defaultExpenseIncrease: 5,
         defaultManagementFee: 4,
         defaultTargetIrrPct: 25,
+        defaultVacancyPct: 0,
+        defaultLeadTimeMonths: 0,
+        defaultAnnualRentGrowthPct: 0,
+        defaultAnnualOtherIncomeGrowthPct: 0,
+        defaultAnnualExpenseGrowthPct: 0,
+        defaultAnnualPropertyTaxGrowthPct: 0,
+        defaultRecurringCapexAnnual: 0,
+        defaultLoanFeePct: 0,
       },
       1_400_000
     );

@@ -20,6 +20,13 @@ function pct(n: number | null | undefined): string {
   return `${n.toFixed(2)}%`;
 }
 
+function confidenceLabel(value: number | null | undefined): string {
+  if (value == null || Number.isNaN(value)) return "—";
+  if (value >= 0.75) return "high";
+  if (value >= 0.5) return "moderate";
+  return "low";
+}
+
 function serializeUnderwritingContext(ctx: UnderwritingContext): string {
   const a = ctx.assumptions;
   const generatedDate = new Date().toISOString().slice(0, 10);
@@ -39,6 +46,26 @@ function serializeUnderwritingContext(ctx: UnderwritingContext): string {
     if (ctx.propertyOverview.hpdRegistrationId) lines.push(`HPD registration ID: ${ctx.propertyOverview.hpdRegistrationId}`);
     if (ctx.propertyOverview.hpdRegistrationDate) lines.push(`HPD last registration date: ${ctx.propertyOverview.hpdRegistrationDate}`);
     if (ctx.propertyOverview.bbl) lines.push(`BBL: ${ctx.propertyOverview.bbl}`);
+  }
+  if (ctx.conditionReview) {
+    lines.push("Condition / media review:");
+    if (ctx.conditionReview.overallCondition) lines.push(`  Overall condition: ${ctx.conditionReview.overallCondition}`);
+    if (ctx.conditionReview.renovationScope) lines.push(`  Renovation scope: ${ctx.conditionReview.renovationScope}`);
+    lines.push(
+      `  Photo review: ${ctx.conditionReview.imageCountAnalyzed} image(s); image quality ${ctx.conditionReview.imageQuality ?? "—"}; confidence ${confidenceLabel(ctx.conditionReview.confidence)}`
+    );
+    if (ctx.conditionReview.coverageSeen && ctx.conditionReview.coverageSeen.length > 0) {
+      lines.push(`  Photos cover: ${ctx.conditionReview.coverageSeen.join(", ")}`);
+    }
+    if (ctx.conditionReview.coverageMissing && ctx.conditionReview.coverageMissing.length > 0) {
+      lines.push(`  Not visible in photos: ${ctx.conditionReview.coverageMissing.join(", ")}`);
+    }
+    if (ctx.conditionReview.observedSignals && ctx.conditionReview.observedSignals.length > 0) {
+      lines.push(`  Condition signals: ${ctx.conditionReview.observedSignals.join("; ")}`);
+    }
+    if (ctx.conditionReview.summaryBullets && ctx.conditionReview.summaryBullets.length > 0) {
+      lines.push(`  Summary bullets: ${ctx.conditionReview.summaryBullets.join("; ")}`);
+    }
   }
   if (ctx.financialFlags && ctx.financialFlags.length > 0) {
     lines.push(`Financial flags (use as 1–2 bullets in Current State): ${ctx.financialFlags.join("; ")}`);

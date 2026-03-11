@@ -11,6 +11,12 @@ import type { NycsSearchCriteria } from "../nycRealEstateApi.js";
 import { fetchActiveSalesWithCriteria, fetchSaleDetailsByUrl } from "../nycRealEstateApi.js";
 import { enrichBrokers } from "../enrichment/brokerEnrichment.js";
 import { computeDuplicateScores } from "../dedup/addressDedup.js";
+import {
+  createWorkflowRun,
+  mergeWorkflowRunMetadata,
+  updateWorkflowRun,
+  upsertWorkflowStep,
+} from "../workflow/workflowTracker.js";
 
 const router = Router();
 
@@ -603,6 +609,27 @@ router.post("/test-agent/runs/:id/send-to-property-data", async (req: Request, r
     res.status(400).json({ error: "Run has no properties to send." });
     return;
   }
+  const workflowStartedAt = new Date().toISOString();
+  const workflowRunId = await createWorkflowRun({
+    runType: "send_to_property_data",
+    displayName: "Send to property data",
+    scopeLabel: `${run.properties.length} listing${run.properties.length === 1 ? "" : "s"}`,
+    triggerSource: "manual",
+    totalItems: run.properties.length,
+    metadata: {
+      testRunId: run.id,
+      criteria: run.criteria,
+    },
+    steps: [
+      {
+        stepKey: "raw_ingest",
+        totalItems: run.properties.length,
+        status: "running",
+        startedAt: workflowStartedAt,
+        lastMessage: `Starting raw ingest for ${run.properties.length} listing${run.properties.length === 1 ? "" : "s"}`,
+      },
+    ],
+  });
   try {
     const db = await import("@re-sourcing/db");
     const pool = db.getPool();
@@ -615,6 +642,7 @@ router.post("/test-agent/runs/:id/send-to-property-data", async (req: Request, r
       const results: { listingId: string; externalId: string; created: boolean }[] = [];
       let listingsCreated = 0;
       let listingsUpdated = 0;
+      let listingsProcessed = 0;
       for (let i = 0; i < run.properties.length; i++) {
         const normalized = runPropertyToNormalized(run.properties[i] as Record<string, unknown>, i);
         const existing = await listingRepo.bySourceAndExternalId(normalized.source, normalized.externalId);
@@ -674,6 +702,17 @@ router.post("/test-agent/runs/:id/send-to-property-data", async (req: Request, r
           metadata,
         });
         results.push({ listingId: listing.id, externalId: normalized.externalId, created });
+        listingsProcessed++;
+        await upsertWorkflowStep(workflowRunId, {
+          stepKey: "raw_ingest",
+          totalItems: run.properties.length,
+          completedItems: listingsProcessed,
+          failedItems: 0,
+          status: listingsProcessed >= run.properties.length ? "completed" : "running",
+          startedAt: workflowStartedAt,
+          finishedAt: listingsProcessed >= run.properties.length ? new Date().toISOString() : null,
+          lastMessage: `${listingsProcessed}/${run.properties.length} listings ingested`,
+        });
       }
       // Dedup: always scan all active listings so duplicate_score is correct for every row (new and existing)
       const { listings: allActive } = await listingRepo.list({ lifecycleState: "active", limit: 1000 });
@@ -698,6 +737,16 @@ router.post("/test-agent/runs/:id/send-to-property-data", async (req: Request, r
         if (!/relation "property_data_run_log" does not exist/i.test(String(logErr))) throw logErr;
       }
       await client.query("COMMIT");
+      await mergeWorkflowRunMetadata(workflowRunId, {
+        runNumber,
+        listingsCreated,
+        listingsUpdated,
+        listingsProcessed,
+      });
+      await updateWorkflowRun(workflowRunId, {
+        status: "completed",
+        finishedAt: new Date().toISOString(),
+      });
       res.json({
         ok: true,
         sent: results.length,
@@ -715,6 +764,22 @@ router.post("/test-agent/runs/:id/send-to-property-data", async (req: Request, r
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[send-to-property-data]", err);
+    await upsertWorkflowStep(workflowRunId, {
+      stepKey: "raw_ingest",
+      totalItems: run.properties.length,
+      completedItems: 0,
+      failedItems: run.properties.length,
+      status: "failed",
+      startedAt: workflowStartedAt,
+      finishedAt: new Date().toISOString(),
+      lastError: message,
+      lastMessage: "Raw ingest failed",
+    });
+    await mergeWorkflowRunMetadata(workflowRunId, { error: message });
+    await updateWorkflowRun(workflowRunId, {
+      status: "failed",
+      finishedAt: new Date().toISOString(),
+    });
     let errorMessage: string;
     if (/DATABASE_URL is required|connection|ECONNREFUSED|getPool|config/i.test(message)) {
       errorMessage =

@@ -54,6 +54,14 @@ router.put("/profile", async (req: Request, res: Response) => {
       defaultExpenseIncrease?: number | null;
       defaultManagementFee?: number | null;
       defaultTargetIrrPct?: number | null;
+      defaultVacancyPct?: number | null;
+      defaultLeadTimeMonths?: number | null;
+      defaultAnnualRentGrowthPct?: number | null;
+      defaultAnnualOtherIncomeGrowthPct?: number | null;
+      defaultAnnualExpenseGrowthPct?: number | null;
+      defaultAnnualPropertyTaxGrowthPct?: number | null;
+      defaultRecurringCapexAnnual?: number | null;
+      defaultLoanFeePct?: number | null;
     } = {};
     if (typeof body.name === "string") params.name = body.name.trim() || null;
     if (typeof body.email === "string") params.email = body.email.trim() || null;
@@ -76,6 +84,42 @@ router.put("/profile", async (req: Request, res: Response) => {
     if (typeof body.defaultManagementFee === "number" && !Number.isNaN(body.defaultManagementFee)) params.defaultManagementFee = body.defaultManagementFee;
     if (typeof body.defaultTargetIrrPct === "number" && !Number.isNaN(body.defaultTargetIrrPct)) {
       params.defaultTargetIrrPct = body.defaultTargetIrrPct;
+    }
+    if (typeof body.defaultVacancyPct === "number" && !Number.isNaN(body.defaultVacancyPct)) {
+      params.defaultVacancyPct = body.defaultVacancyPct;
+    }
+    if (typeof body.defaultLeadTimeMonths === "number" && !Number.isNaN(body.defaultLeadTimeMonths)) {
+      params.defaultLeadTimeMonths = body.defaultLeadTimeMonths;
+    }
+    if (typeof body.defaultAnnualRentGrowthPct === "number" && !Number.isNaN(body.defaultAnnualRentGrowthPct)) {
+      params.defaultAnnualRentGrowthPct = body.defaultAnnualRentGrowthPct;
+    }
+    if (
+      typeof body.defaultAnnualOtherIncomeGrowthPct === "number" &&
+      !Number.isNaN(body.defaultAnnualOtherIncomeGrowthPct)
+    ) {
+      params.defaultAnnualOtherIncomeGrowthPct = body.defaultAnnualOtherIncomeGrowthPct;
+    }
+    if (
+      typeof body.defaultAnnualExpenseGrowthPct === "number" &&
+      !Number.isNaN(body.defaultAnnualExpenseGrowthPct)
+    ) {
+      params.defaultAnnualExpenseGrowthPct = body.defaultAnnualExpenseGrowthPct;
+    }
+    if (
+      typeof body.defaultAnnualPropertyTaxGrowthPct === "number" &&
+      !Number.isNaN(body.defaultAnnualPropertyTaxGrowthPct)
+    ) {
+      params.defaultAnnualPropertyTaxGrowthPct = body.defaultAnnualPropertyTaxGrowthPct;
+    }
+    if (
+      typeof body.defaultRecurringCapexAnnual === "number" &&
+      !Number.isNaN(body.defaultRecurringCapexAnnual)
+    ) {
+      params.defaultRecurringCapexAnnual = body.defaultRecurringCapexAnnual;
+    }
+    if (typeof body.defaultLoanFeePct === "number" && !Number.isNaN(body.defaultLoanFeePct)) {
+      params.defaultLoanFeePct = body.defaultLoanFeePct;
     }
     const updated = await repo.update(id, params);
     res.json(updated);

@@ -28,6 +28,13 @@ REQUIRED DOCUMENT STRUCTURE (output in this order)
    - HPD registration: [if provided]
    - HPD last registration: [if provided]
    - BBL: [if provided]
+   - If condition review data is provided, also include:
+     - Condition: [overall condition]
+     - Renovation scope: [scope]
+     - Photo review: [N images analyzed; image quality X; confidence high/moderate/low]
+     - Photos cover: [coverage seen] when provided
+     - Not visible in photos: [coverage missing] when provided
+     - 2–4 short bullets combining visible condition clues and OM/listing condition cues
    [blank line]
 
 3. Section "2. RECOMMENDED OFFER" with heading line "--------------------"

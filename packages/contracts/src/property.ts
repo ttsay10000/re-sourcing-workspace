@@ -214,6 +214,34 @@ export interface RentalFinancials {
   [key: string]: unknown;
 }
 
+export interface PropertyDealDossierAssumptions {
+  renovationCosts?: number | null;
+  furnishingSetupCosts?: number | null;
+  updatedAt?: string | null;
+}
+
+export type PropertyDealDossierGenerationStatus =
+  | "not_started"
+  | "running"
+  | "completed"
+  | "failed";
+
+export interface PropertyDealDossierGeneration {
+  status?: PropertyDealDossierGenerationStatus | null;
+  stageLabel?: string | null;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  lastError?: string | null;
+  dealScore?: number | null;
+  dossierDocumentId?: string | null;
+  excelDocumentId?: string | null;
+}
+
+export interface PropertyDealDossier {
+  assumptions?: PropertyDealDossierAssumptions | null;
+  generation?: PropertyDealDossierGeneration | null;
+}
+
 /** Inquiry email row (reply matched to property by subject address). */
 export interface PropertyInquiryEmail {
   id: string;
@@ -310,6 +338,7 @@ export interface PropertyDetails {
     housing_litigations_summary?: HousingLitigationsSummary | null;
     affordable_housing_summary?: AffordableHousingSummary | null;
   } | null;
+  dealDossier?: PropertyDealDossier | null;
   [key: string]: unknown;
 }
 
@@ -364,6 +393,14 @@ export interface UserProfile {
   defaultExpenseIncrease?: number | null;
   defaultManagementFee?: number | null;
   defaultTargetIrrPct?: number | null;
+  defaultVacancyPct?: number | null;
+  defaultLeadTimeMonths?: number | null;
+  defaultAnnualRentGrowthPct?: number | null;
+  defaultAnnualOtherIncomeGrowthPct?: number | null;
+  defaultAnnualExpenseGrowthPct?: number | null;
+  defaultAnnualPropertyTaxGrowthPct?: number | null;
+  defaultRecurringCapexAnnual?: number | null;
+  defaultLoanFeePct?: number | null;
   createdAt: string;
   updatedAt: string;
 }

@@ -7,6 +7,17 @@ import type { PropertyDetails } from "@re-sourcing/contracts";
 import { getPool, UserProfileRepo, PropertyRepo, MatchRepo, ListingRepo } from "@re-sourcing/db";
 import { runGenerateDossier } from "../deal/runGenerateDossier.js";
 import { resolveDossierAssumptions, type DossierAssumptionOverrides } from "../deal/underwritingModel.js";
+import {
+  getPropertyDossierAssumptions,
+  mergeDossierAssumptionOverrides,
+  propertyAssumptionsToOverrides,
+} from "../deal/propertyDossierState.js";
+import {
+  createWorkflowRun,
+  mergeWorkflowRunMetadata,
+  updateWorkflowRun,
+  upsertWorkflowStep,
+} from "../workflow/workflowTracker.js";
 
 const router = Router();
 
@@ -62,6 +73,7 @@ router.get("/dossier-assumptions", async (req: Request, res: Response) => {
         }
       | null = null;
     let defaults: Record<string, number | null> | null = null;
+    let formulaDefaults: Record<string, number | null> | null = null;
     let mixSummary: Record<string, number | null> | null = null;
     if (propertyId) {
       const propertyRepo = new PropertyRepo({ pool });
@@ -80,27 +92,48 @@ router.get("/dossier-assumptions", async (req: Request, res: Response) => {
         };
         const details = (prop.details ?? null) as PropertyDetails | null;
         const currentGrossRent = grossRentFromDetails(details) ?? (noiFromDetails(details) != null ? noiFromDetails(details)! * 1.5 : null);
-        const assumptions = resolveDossierAssumptions(profile, listing?.price ?? null, null, {
+        const propertyAssumptions = getPropertyDossierAssumptions(details);
+        const formulaAssumptions = resolveDossierAssumptions(profile, listing?.price ?? null, null, {
           details,
         });
+        const assumptions = resolveDossierAssumptions(
+          profile,
+          listing?.price ?? null,
+          propertyAssumptionsToOverrides(propertyAssumptions),
+          {
+            details,
+          }
+        );
         defaults = {
           purchasePrice: assumptions.acquisition.purchasePrice,
           purchaseClosingCostPct: assumptions.acquisition.purchaseClosingCostPct,
-          renovationCosts: 0,
+          renovationCosts: assumptions.acquisition.renovationCosts,
           furnishingSetupCosts: assumptions.acquisition.furnishingSetupCosts,
           ltvPct: assumptions.financing.ltvPct,
           interestRatePct: assumptions.financing.interestRatePct,
           amortizationYears: assumptions.financing.amortizationYears,
+          loanFeePct: assumptions.financing.loanFeePct,
           rentUpliftPct: assumptions.operating.rentUpliftPct,
           blendedRentUpliftPct: assumptions.operating.blendedRentUpliftPct,
           expenseIncreasePct: assumptions.operating.expenseIncreasePct,
           managementFeePct: assumptions.operating.managementFeePct,
+          vacancyPct: assumptions.operating.vacancyPct,
+          leadTimeMonths: assumptions.operating.leadTimeMonths,
+          annualRentGrowthPct: assumptions.operating.annualRentGrowthPct,
+          annualOtherIncomeGrowthPct: assumptions.operating.annualOtherIncomeGrowthPct,
+          annualExpenseGrowthPct: assumptions.operating.annualExpenseGrowthPct,
+          annualPropertyTaxGrowthPct: assumptions.operating.annualPropertyTaxGrowthPct,
+          recurringCapexAnnual: assumptions.operating.recurringCapexAnnual,
           holdPeriodYears: assumptions.holdPeriodYears,
           exitCapPct: assumptions.exit.exitCapPct,
           exitClosingCostPct: assumptions.exit.exitClosingCostPct,
           targetIrrPct: assumptions.targetIrrPct,
           currentGrossRent,
           currentNoi: noiFromDetails(details),
+        };
+        formulaDefaults = {
+          renovationCosts: 0,
+          furnishingSetupCosts: formulaAssumptions.acquisition.furnishingSetupCosts,
         };
         mixSummary = {
           totalUnits: assumptions.propertyMix.totalUnits,
@@ -112,6 +145,36 @@ router.get("/dossier-assumptions", async (req: Request, res: Response) => {
           eligibleUnitSharePct: assumptions.propertyMix.eligibleUnitSharePct,
         };
       }
+    }
+    if (!defaults) {
+      const assumptions = resolveDossierAssumptions(profile, null);
+      defaults = {
+        purchasePrice: assumptions.acquisition.purchasePrice,
+        purchaseClosingCostPct: assumptions.acquisition.purchaseClosingCostPct,
+        renovationCosts: assumptions.acquisition.renovationCosts,
+        furnishingSetupCosts: assumptions.acquisition.furnishingSetupCosts,
+        ltvPct: assumptions.financing.ltvPct,
+        interestRatePct: assumptions.financing.interestRatePct,
+        amortizationYears: assumptions.financing.amortizationYears,
+        loanFeePct: assumptions.financing.loanFeePct,
+        rentUpliftPct: assumptions.operating.rentUpliftPct,
+        blendedRentUpliftPct: assumptions.operating.blendedRentUpliftPct,
+        expenseIncreasePct: assumptions.operating.expenseIncreasePct,
+        managementFeePct: assumptions.operating.managementFeePct,
+        vacancyPct: assumptions.operating.vacancyPct,
+        leadTimeMonths: assumptions.operating.leadTimeMonths,
+        annualRentGrowthPct: assumptions.operating.annualRentGrowthPct,
+        annualOtherIncomeGrowthPct: assumptions.operating.annualOtherIncomeGrowthPct,
+        annualExpenseGrowthPct: assumptions.operating.annualExpenseGrowthPct,
+        annualPropertyTaxGrowthPct: assumptions.operating.annualPropertyTaxGrowthPct,
+        recurringCapexAnnual: assumptions.operating.recurringCapexAnnual,
+        holdPeriodYears: assumptions.holdPeriodYears,
+        exitCapPct: assumptions.exit.exitCapPct,
+        exitClosingCostPct: assumptions.exit.exitClosingCostPct,
+        targetIrrPct: assumptions.targetIrrPct,
+        currentGrossRent: null,
+        currentNoi: null,
+      };
     }
     res.json({
       profile: {
@@ -130,9 +193,18 @@ router.get("/dossier-assumptions", async (req: Request, res: Response) => {
         defaultExpenseIncrease: profile.defaultExpenseIncrease,
         defaultManagementFee: profile.defaultManagementFee,
         defaultTargetIrrPct: profile.defaultTargetIrrPct,
+        defaultVacancyPct: profile.defaultVacancyPct,
+        defaultLeadTimeMonths: profile.defaultLeadTimeMonths,
+        defaultAnnualRentGrowthPct: profile.defaultAnnualRentGrowthPct,
+        defaultAnnualOtherIncomeGrowthPct: profile.defaultAnnualOtherIncomeGrowthPct,
+        defaultAnnualExpenseGrowthPct: profile.defaultAnnualExpenseGrowthPct,
+        defaultAnnualPropertyTaxGrowthPct: profile.defaultAnnualPropertyTaxGrowthPct,
+        defaultRecurringCapexAnnual: profile.defaultRecurringCapexAnnual,
+        defaultLoanFeePct: profile.defaultLoanFeePct,
       },
       property,
       defaults,
+      formulaDefaults,
       mixSummary,
     });
   } catch (err) {
@@ -142,45 +214,106 @@ router.get("/dossier-assumptions", async (req: Request, res: Response) => {
   }
 });
 
+function parseAssumptionOverrides(rawAssumptions: unknown): DossierAssumptionOverrides | null {
+  if (!rawAssumptions || typeof rawAssumptions !== "object") return null;
+  const record = rawAssumptions as Record<string, unknown>;
+  const assumptions: DossierAssumptionOverrides = {
+    purchasePrice: typeof record.purchasePrice === "number" ? record.purchasePrice : null,
+    purchaseClosingCostPct:
+      typeof record.purchaseClosingCostPct === "number" ? record.purchaseClosingCostPct : null,
+    renovationCosts: typeof record.renovationCosts === "number" ? record.renovationCosts : null,
+    furnishingSetupCosts:
+      typeof record.furnishingSetupCosts === "number" ? record.furnishingSetupCosts : null,
+    ltvPct: typeof record.ltvPct === "number" ? record.ltvPct : null,
+    interestRatePct: typeof record.interestRatePct === "number" ? record.interestRatePct : null,
+    amortizationYears: typeof record.amortizationYears === "number" ? record.amortizationYears : null,
+    loanFeePct: typeof record.loanFeePct === "number" ? record.loanFeePct : null,
+    rentUpliftPct: typeof record.rentUpliftPct === "number" ? record.rentUpliftPct : null,
+    expenseIncreasePct: typeof record.expenseIncreasePct === "number" ? record.expenseIncreasePct : null,
+    managementFeePct: typeof record.managementFeePct === "number" ? record.managementFeePct : null,
+    vacancyPct: typeof record.vacancyPct === "number" ? record.vacancyPct : null,
+    leadTimeMonths: typeof record.leadTimeMonths === "number" ? record.leadTimeMonths : null,
+    annualRentGrowthPct:
+      typeof record.annualRentGrowthPct === "number" ? record.annualRentGrowthPct : null,
+    annualOtherIncomeGrowthPct:
+      typeof record.annualOtherIncomeGrowthPct === "number"
+        ? record.annualOtherIncomeGrowthPct
+        : null,
+    annualExpenseGrowthPct:
+      typeof record.annualExpenseGrowthPct === "number"
+        ? record.annualExpenseGrowthPct
+        : null,
+    annualPropertyTaxGrowthPct:
+      typeof record.annualPropertyTaxGrowthPct === "number"
+        ? record.annualPropertyTaxGrowthPct
+        : null,
+    recurringCapexAnnual:
+      typeof record.recurringCapexAnnual === "number" ? record.recurringCapexAnnual : null,
+    holdPeriodYears: typeof record.holdPeriodYears === "number" ? record.holdPeriodYears : null,
+    exitCapPct: typeof record.exitCapPct === "number" ? record.exitCapPct : null,
+    exitClosingCostPct:
+      typeof record.exitClosingCostPct === "number" ? record.exitClosingCostPct : null,
+    targetIrrPct: typeof record.targetIrrPct === "number" ? record.targetIrrPct : null,
+  };
+  return mergeDossierAssumptionOverrides(null, assumptions);
+}
+
 /** POST /api/dossier/generate - run underwriting, build Excel + dossier, save to documents. Body: { propertyId }. */
 router.post("/dossier/generate", async (req: Request, res: Response) => {
+  let workflowRunId: string | null = null;
+  const workflowStartedAt = new Date().toISOString();
   try {
     const propertyId = typeof req.body?.propertyId === "string" ? req.body.propertyId.trim() : null;
     if (!propertyId) {
       res.status(400).json({ error: "propertyId required." });
       return;
     }
-    const rawAssumptions = req.body?.assumptions;
-    const assumptions: DossierAssumptionOverrides | null =
-      rawAssumptions && typeof rawAssumptions === "object"
-        ? {
-            purchasePrice: typeof rawAssumptions.purchasePrice === "number" ? rawAssumptions.purchasePrice : null,
-            purchaseClosingCostPct:
-              typeof rawAssumptions.purchaseClosingCostPct === "number" ? rawAssumptions.purchaseClosingCostPct : null,
-            renovationCosts: typeof rawAssumptions.renovationCosts === "number" ? rawAssumptions.renovationCosts : null,
-            furnishingSetupCosts:
-              typeof rawAssumptions.furnishingSetupCosts === "number" ? rawAssumptions.furnishingSetupCosts : null,
-            ltvPct: typeof rawAssumptions.ltvPct === "number" ? rawAssumptions.ltvPct : null,
-            interestRatePct:
-              typeof rawAssumptions.interestRatePct === "number" ? rawAssumptions.interestRatePct : null,
-            amortizationYears:
-              typeof rawAssumptions.amortizationYears === "number" ? rawAssumptions.amortizationYears : null,
-            rentUpliftPct:
-              typeof rawAssumptions.rentUpliftPct === "number" ? rawAssumptions.rentUpliftPct : null,
-            expenseIncreasePct:
-              typeof rawAssumptions.expenseIncreasePct === "number" ? rawAssumptions.expenseIncreasePct : null,
-            managementFeePct:
-              typeof rawAssumptions.managementFeePct === "number" ? rawAssumptions.managementFeePct : null,
-            holdPeriodYears:
-              typeof rawAssumptions.holdPeriodYears === "number" ? rawAssumptions.holdPeriodYears : null,
-            exitCapPct: typeof rawAssumptions.exitCapPct === "number" ? rawAssumptions.exitCapPct : null,
-            exitClosingCostPct:
-              typeof rawAssumptions.exitClosingCostPct === "number" ? rawAssumptions.exitClosingCostPct : null,
-            targetIrrPct:
-              typeof rawAssumptions.targetIrrPct === "number" ? rawAssumptions.targetIrrPct : null,
-          }
-        : null;
+    const pool = getPool();
+    const propertyRepo = new PropertyRepo({ pool });
+    const property = await propertyRepo.byId(propertyId);
+    if (!property) {
+      res.status(404).json({ error: "Property not found" });
+      return;
+    }
+    const assumptions = parseAssumptionOverrides(req.body?.assumptions);
+    workflowRunId = await createWorkflowRun({
+      runType: "generate_dossier",
+      displayName: "Generate dossier",
+      scopeLabel: property.canonicalAddress,
+      triggerSource: "manual",
+      totalItems: 1,
+      metadata: { propertyIds: [propertyId] },
+      steps: [
+        {
+          stepKey: "dossier",
+          totalItems: 1,
+          status: "running",
+          startedAt: workflowStartedAt,
+          lastMessage: "Generating dossier",
+        },
+      ],
+    });
     const result = await runGenerateDossier(propertyId, assumptions);
+    await upsertWorkflowStep(workflowRunId, {
+      stepKey: "dossier",
+      totalItems: 1,
+      completedItems: 1,
+      failedItems: 0,
+      status: "completed",
+      startedAt: workflowStartedAt,
+      finishedAt: new Date().toISOString(),
+      lastMessage: "Dossier ready",
+    });
+    await mergeWorkflowRunMetadata(workflowRunId, {
+      dealScore: result.dealScore,
+      emailSent: result.emailSent ?? false,
+      dossierDocumentId: result.dossierDoc?.id ?? null,
+      excelDocumentId: result.excelDoc?.id ?? null,
+    });
+    await updateWorkflowRun(workflowRunId, {
+      status: "completed",
+      finishedAt: new Date().toISOString(),
+    });
     res.status(201).json({
       ok: true,
       propertyId,
@@ -192,6 +325,22 @@ router.post("/dossier/generate", async (req: Request, res: Response) => {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[dossier generate]", err);
+    await upsertWorkflowStep(workflowRunId, {
+      stepKey: "dossier",
+      totalItems: 1,
+      completedItems: 0,
+      failedItems: 1,
+      status: "failed",
+      startedAt: workflowStartedAt,
+      finishedAt: new Date().toISOString(),
+      lastError: message,
+      lastMessage: "Dossier generation failed",
+    });
+    await mergeWorkflowRunMetadata(workflowRunId, { error: message });
+    await updateWorkflowRun(workflowRunId, {
+      status: "failed",
+      finishedAt: new Date().toISOString(),
+    });
     if (message === "Property not found") {
       res.status(404).json({ error: message });
       return;

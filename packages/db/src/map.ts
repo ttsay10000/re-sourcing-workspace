@@ -248,6 +248,30 @@ export function mapUserProfile(row: Record<string, unknown>): UserProfile {
     defaultExpenseIncrease: row.default_expense_increase != null ? Number(row.default_expense_increase) : null,
     defaultManagementFee: row.default_management_fee != null ? Number(row.default_management_fee) : null,
     defaultTargetIrrPct: row.default_target_irr_pct != null ? Number(row.default_target_irr_pct) : null,
+    defaultVacancyPct: row.default_vacancy_pct != null ? Number(row.default_vacancy_pct) : null,
+    defaultLeadTimeMonths:
+      row.default_lead_time_months != null ? Number(row.default_lead_time_months) : null,
+    defaultAnnualRentGrowthPct:
+      row.default_annual_rent_growth_pct != null
+        ? Number(row.default_annual_rent_growth_pct)
+        : null,
+    defaultAnnualOtherIncomeGrowthPct:
+      row.default_annual_other_income_growth_pct != null
+        ? Number(row.default_annual_other_income_growth_pct)
+        : null,
+    defaultAnnualExpenseGrowthPct:
+      row.default_annual_expense_growth_pct != null
+        ? Number(row.default_annual_expense_growth_pct)
+        : null,
+    defaultAnnualPropertyTaxGrowthPct:
+      row.default_annual_property_tax_growth_pct != null
+        ? Number(row.default_annual_property_tax_growth_pct)
+        : null,
+    defaultRecurringCapexAnnual:
+      row.default_recurring_capex_annual != null
+        ? Number(row.default_recurring_capex_annual)
+        : null,
+    defaultLoanFeePct: row.default_loan_fee_pct != null ? Number(row.default_loan_fee_pct) : null,
     createdAt: toIso(row.created_at),
     updatedAt: toIso(row.updated_at),
   };

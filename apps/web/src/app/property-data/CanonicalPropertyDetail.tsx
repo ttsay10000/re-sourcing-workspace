@@ -1,6 +1,12 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
+import {
+  estimateGenerationProgress,
+  getPropertyDossierAssumptions,
+  getPropertyDossierGeneration,
+  type LocalDossierJobState,
+} from "./dossierState";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
 
@@ -55,6 +61,27 @@ interface UnifiedEnrichmentRow {
   date: string;
   category: string;
   info: string;
+}
+
+interface DossierSettingsDraft {
+  renovationCosts: number | null;
+  furnishingSetupCosts: number | null;
+}
+
+interface DossierAssumptionsResponse {
+  defaults?: {
+    renovationCosts?: number | null;
+    furnishingSetupCosts?: number | null;
+  } | null;
+  formulaDefaults?: {
+    renovationCosts?: number | null;
+    furnishingSetupCosts?: number | null;
+  } | null;
+  mixSummary?: {
+    eligibleResidentialUnits?: number | null;
+    commercialUnits?: number | null;
+    rentStabilizedUnits?: number | null;
+  } | null;
 }
 
 function formatPrice(n: number | null | undefined): string {
@@ -209,15 +236,26 @@ export function CanonicalPropertyDetail({
   property,
   isSaved,
   onSavedChange,
+  dossierJob,
+  onDossierJobChange,
+  onDossierNotice,
+  onRefreshPropertyData,
+  onWorkflowActivity,
 }: {
   property: CanonicalProperty;
   isSaved?: boolean;
   onSavedChange?: (propertyId: string, saved: boolean) => void;
+  dossierJob?: LocalDossierJobState;
+  onDossierJobChange?: (propertyId: string, job: LocalDossierJobState | null) => void;
+  onDossierNotice?: (propertyId: string, notice: { type: "success" | "error"; message: string }) => void;
+  onRefreshPropertyData?: () => void;
+  onWorkflowActivity?: () => void;
 }) {
   const [primaryListing, setPrimaryListing] = useState<ListingRow | null | "loading">("loading");
   /** Fresh details from GET /api/properties/:id so enriched data (CO, zoning, HPD) is current after re-run. */
   const [detailsFromApi, setDetailsFromApi] = useState<Record<string, unknown> | null | undefined>(undefined);
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({
+    dealDossier: true,
     photosFloorplans: true,
     detailsBrokerAmenitiesPriceHistory: true,
     owner: true,
@@ -258,6 +296,25 @@ export function CanonicalPropertyDetail({
   const [rentRollComparison, setRentRollComparison] = useState<{ comparable: boolean; totalUnitsRapid: number; totalUnitsOm: number; totalBedsRapid: number; totalBedsOm: number } | null>(null);
   const [dealScore, setDealScore] = useState<number | null>(null);
   const [dealSignals, setDealSignals] = useState<Record<string, unknown> | null>(null);
+  const [dossierDraft, setDossierDraft] = useState<DossierSettingsDraft>({
+    renovationCosts: 0,
+    furnishingSetupCosts: null,
+  });
+  const [savedDossierDraft, setSavedDossierDraft] = useState<DossierSettingsDraft>({
+    renovationCosts: 0,
+    furnishingSetupCosts: null,
+  });
+  const [formulaDossierDefaults, setFormulaDossierDefaults] = useState<DossierSettingsDraft>({
+    renovationCosts: 0,
+    furnishingSetupCosts: null,
+  });
+  const [dossierMixSummary, setDossierMixSummary] = useState<
+    DossierAssumptionsResponse["mixSummary"]
+  >(null);
+  const [dossierSettingsLoading, setDossierSettingsLoading] = useState(true);
+  const [dossierSettingsSaving, setDossierSettingsSaving] = useState(false);
+  const [dossierError, setDossierError] = useState<string | null>(null);
+  const [dossierGenerating, setDossierGenerating] = useState(false);
   const hasAutoSavedRef = React.useRef(false);
   const [sendAnotherConfirm, setSendAnotherConfirm] = useState(false);
   const [dosEntityLoading, setDosEntityLoading] = useState(false);
@@ -268,6 +325,37 @@ export function CanonicalPropertyDetail({
   const hasOmDocument = Boolean(
     unifiedDocuments?.some((d) => d.sourceType === "inquiry" || d.source === "OM")
   );
+
+  const applyPropertySnapshot = (data: Record<string, unknown> | null | undefined) => {
+    if (data?.details != null) setDetailsFromApi(data.details as Record<string, unknown>);
+    else setDetailsFromApi(null);
+    setLastInquirySentAt((data?.lastInquirySentAt as string | null | undefined) ?? null);
+    setRentRollComparison(
+      (data?.rentRollComparison as {
+        comparable: boolean;
+        totalUnitsRapid: number;
+        totalUnitsOm: number;
+        totalBedsRapid: number;
+        totalBedsOm: number;
+      } | null | undefined) ?? null
+    );
+    setDealScore((data?.dealScore as number | null | undefined) ?? null);
+    setDealSignals((data?.dealSignals as Record<string, unknown> | null | undefined) ?? null);
+  };
+
+  const resetPropertySnapshot = () => {
+    setDetailsFromApi(null);
+    setRentRollComparison(null);
+    setDealScore(null);
+    setDealSignals(null);
+  };
+
+  const refreshPropertySnapshot = async () => {
+    const res = await fetch(`${API_BASE}/api/properties/${property.id}`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data?.error) throw new Error((data?.error || data?.details || "Failed to refresh property") as string);
+    applyPropertySnapshot(data as Record<string, unknown>);
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -290,21 +378,46 @@ export function CanonicalPropertyDetail({
       .then((r) => r.json())
       .then((data) => {
         if (!cancelled && !data?.error) {
-          if (data?.details != null) setDetailsFromApi(data.details as Record<string, unknown>);
-          else setDetailsFromApi(null);
-          setLastInquirySentAt(data?.lastInquirySentAt ?? null);
-          setRentRollComparison(data?.rentRollComparison ?? null);
-          setDealScore(data?.dealScore ?? null);
-          setDealSignals(data?.dealSignals ?? null);
+          applyPropertySnapshot(data as Record<string, unknown>);
         } else if (!cancelled) {
-          setDetailsFromApi(null);
-          setRentRollComparison(null);
-          setDealScore(null);
-          setDealSignals(null);
+          resetPropertySnapshot();
         }
       })
-      .catch(() => { if (!cancelled) { setDetailsFromApi(null); setRentRollComparison(null); setDealScore(null); setDealSignals(null); } });
+      .catch(() => {
+        if (!cancelled) resetPropertySnapshot();
+      });
     return () => { cancelled = true; };
+  }, [property.id]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setDossierSettingsLoading(true);
+    setDossierError(null);
+    fetch(`${API_BASE}/api/dossier-assumptions?property_id=${encodeURIComponent(property.id)}`)
+      .then((r) => r.json())
+      .then((data: DossierAssumptionsResponse & { error?: string }) => {
+        if (cancelled || data?.error) return;
+        const nextDraft: DossierSettingsDraft = {
+          renovationCosts: data.defaults?.renovationCosts ?? 0,
+          furnishingSetupCosts: data.defaults?.furnishingSetupCosts ?? null,
+        };
+        setDossierDraft(nextDraft);
+        setSavedDossierDraft(nextDraft);
+        setFormulaDossierDefaults({
+          renovationCosts: data.formulaDefaults?.renovationCosts ?? 0,
+          furnishingSetupCosts: data.formulaDefaults?.furnishingSetupCosts ?? null,
+        });
+        setDossierMixSummary(data.mixSummary ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) setDossierError("Failed to load dossier defaults");
+      })
+      .finally(() => {
+        if (!cancelled) setDossierSettingsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [property.id]);
 
   useEffect(() => {
@@ -436,6 +549,8 @@ export function CanonicalPropertyDetail({
   const toggle = (key: string) => setOpenSections((p) => ({ ...p, [key]: !p[key] }));
 
   const d = (detailsFromApi != null && typeof detailsFromApi === "object" ? detailsFromApi : property.details) as Record<string, unknown> | null | undefined;
+  const persistedDossierAssumptions = getPropertyDossierAssumptions(d);
+  const persistedDossierGeneration = getPropertyDossierGeneration(d);
   const enrichment = d?.enrichment as Record<string, unknown> | undefined;
   const ps = enrichment?.permits_summary as Record<string, unknown> | undefined;
   const bbl = d?.bbl ?? d?.BBL ?? d?.buildingLotBlock;
@@ -482,6 +597,28 @@ export function CanonicalPropertyDetail({
   const assessedRetailAreaGross = (d?.assessedRetailAreaGross ?? d?.assessed_retail_area_gross) as number | null | undefined;
   const assessedApptDate = (d?.assessedApptDate ?? d?.assessed_appt_date) as string | null | undefined;
   const assessedExtractDate = (d?.assessedExtractDate ?? d?.assessed_extract_date) as string | null | undefined;
+  const isDossierDirty =
+    (dossierDraft.renovationCosts ?? 0) !== (savedDossierDraft.renovationCosts ?? 0) ||
+    (dossierDraft.furnishingSetupCosts ?? null) !== (savedDossierDraft.furnishingSetupCosts ?? null);
+  const isDossierBusy =
+    dossierGenerating ||
+    dossierSettingsSaving ||
+    dossierJob?.status === "running" ||
+    persistedDossierGeneration?.status === "running";
+  const showDossierProgress =
+    dossierGenerating ||
+    dossierJob?.status === "running" ||
+    persistedDossierGeneration?.status === "running";
+  const activeDossierProgressPct =
+    dossierJob?.status === "running"
+      ? dossierJob.progressPct
+      : persistedDossierGeneration?.status === "running"
+        ? Math.max(8, estimateGenerationProgress(Date.now() - new Date(persistedDossierGeneration.startedAt ?? Date.now()).getTime()))
+        : 0;
+  const activeDossierStageLabel =
+    dossierJob?.status === "running"
+      ? dossierJob.stageLabel
+      : persistedDossierGeneration?.stageLabel ?? "Not started";
 
   const fetchUnifiedTable = () => {
     if (unifiedFetched) return;
@@ -544,6 +681,116 @@ export function CanonicalPropertyDetail({
         setUnifiedFetched(true);
       })
       .finally(() => setUnifiedLoading(false));
+  };
+
+  const persistDossierSettings = async (
+    nextDraft: DossierSettingsDraft = dossierDraft
+  ): Promise<DossierSettingsDraft> => {
+    const payload: DossierSettingsDraft = {
+      renovationCosts: nextDraft.renovationCosts ?? 0,
+      furnishingSetupCosts: nextDraft.furnishingSetupCosts ?? null,
+    };
+    setDossierSettingsSaving(true);
+    setDossierError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/properties/${property.id}/dossier-settings`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(typeof data?.error === "string" ? data.error : data?.details ?? "Failed to save dossier settings");
+      }
+      setSavedDossierDraft(payload);
+      setDossierDraft(payload);
+      setDetailsFromApi((prev) => {
+        const base = ((prev ?? d ?? {}) as Record<string, unknown>) ?? {};
+        const dealDossier = ((base.dealDossier as Record<string, unknown> | undefined) ?? {});
+        return {
+          ...base,
+          dealDossier: {
+            ...dealDossier,
+            assumptions: {
+              renovationCosts: payload.renovationCosts,
+              furnishingSetupCosts: payload.furnishingSetupCosts,
+              updatedAt: new Date().toISOString(),
+            },
+          },
+        };
+      });
+      return payload;
+    } finally {
+      setDossierSettingsSaving(false);
+    }
+  };
+
+  const handleGenerateDossier = async () => {
+    if (dossierGenerating) return;
+    try {
+      const savedDraft = await persistDossierSettings();
+      const startedAt = Date.now();
+      setDossierGenerating(true);
+      onDossierJobChange?.(property.id, {
+        status: "running",
+        startedAt,
+        progressPct: 3,
+        stageLabel: "Preparing property inputs",
+        notice: null,
+      });
+      onWorkflowActivity?.();
+      setDossierError(null);
+
+      const res = await fetch(`${API_BASE}/api/dossier/generate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ propertyId: property.id }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(typeof data?.error === "string" ? data.error : data?.details ?? "Failed to generate dossier");
+      }
+
+      await Promise.all([
+        refreshPropertySnapshot().catch(() => {}),
+        fetch(`${API_BASE}/api/properties/${property.id}/documents`)
+          .then((r) => r.json())
+          .then((docs) => setUnifiedDocuments(docs?.documents ?? []))
+          .catch(() => {}),
+      ]);
+
+      setSavedDossierDraft(savedDraft);
+      setDossierGenerating(false);
+      onDossierJobChange?.(property.id, {
+        status: "completed",
+        startedAt,
+        progressPct: 100,
+        stageLabel: "Dossier ready",
+        notice: "PDF + Excel saved",
+      });
+      onRefreshPropertyData?.();
+      onWorkflowActivity?.();
+      onDossierNotice?.(property.id, {
+        type: "success",
+        message: `Dossier complete for ${property.canonicalAddress}. PDF and Excel are now in Documents.`,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to generate dossier";
+      setDossierGenerating(false);
+      setDossierError(message);
+      onDossierJobChange?.(property.id, {
+        status: "failed",
+        startedAt: dossierJob?.startedAt ?? Date.now(),
+        progressPct: activeDossierProgressPct || 0,
+        stageLabel: "Generation failed",
+        notice: message,
+      });
+      onDossierNotice?.(property.id, {
+        type: "error",
+        message: `Dossier failed for ${property.canonicalAddress}: ${message}`,
+      });
+      onWorkflowActivity?.();
+    }
   };
 
   const hasListing = primaryListing && primaryListing !== "loading";
@@ -653,6 +900,184 @@ export function CanonicalPropertyDetail({
           )}
         </div>
       </div>
+
+      <CollapsibleSection
+        id="deal-dossier"
+        title="Deal dossier"
+        open={!!openSections.dealDossier}
+        onToggle={() => toggle("dealDossier")}
+      >
+        <div
+          style={{
+            padding: "1rem",
+            border: "1px solid #dbeafe",
+            borderRadius: "12px",
+            background: "#f8fbff",
+          }}
+        >
+          <p style={{ margin: "0 0 0.85rem", fontSize: "0.85rem", color: "#475569", lineHeight: 1.5 }}>
+            Save renovation and furnishing costs on this property, then generate the dossier here using those property-level costs plus your profile defaults for leverage, exit, and operating assumptions.
+          </p>
+          {dossierSettingsLoading ? (
+            <p style={{ margin: 0, fontSize: "0.85rem", color: "#64748b" }}>Loading dossier defaults…</p>
+          ) : (
+            <>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.85rem" }}>
+                <label style={{ display: "flex", flexDirection: "column", gap: "0.3rem" }}>
+                  <span style={{ fontSize: "0.82rem", fontWeight: 600, color: "#0f172a" }}>Renovation costs</span>
+                  <input
+                    type="number"
+                    min={0}
+                    value={dossierDraft.renovationCosts ?? ""}
+                    onChange={(e) =>
+                      setDossierDraft((prev) => ({
+                        ...prev,
+                        renovationCosts: e.target.value === "" ? null : Number(e.target.value),
+                      }))
+                    }
+                    style={{ padding: "0.55rem 0.65rem", border: "1px solid #cbd5e1", borderRadius: "8px" }}
+                  />
+                </label>
+                <label style={{ display: "flex", flexDirection: "column", gap: "0.3rem" }}>
+                  <span style={{ fontSize: "0.82rem", fontWeight: 600, color: "#0f172a" }}>Furnishing / setup costs</span>
+                  <input
+                    type="number"
+                    min={0}
+                    value={dossierDraft.furnishingSetupCosts ?? ""}
+                    onChange={(e) =>
+                      setDossierDraft((prev) => ({
+                        ...prev,
+                        furnishingSetupCosts: e.target.value === "" ? null : Number(e.target.value),
+                      }))
+                    }
+                    style={{ padding: "0.55rem 0.65rem", border: "1px solid #cbd5e1", borderRadius: "8px" }}
+                  />
+                </label>
+              </div>
+              <div style={{ marginTop: "0.75rem", fontSize: "0.78rem", color: "#64748b", lineHeight: 1.5 }}>
+                <div>
+                  Formula default: {formatPrice(formulaDossierDefaults.furnishingSetupCosts ?? 0)} using $10k base + $3k per eligible residential unit + $2.5k per bedroom per unit + $2 per sq ft above 650.
+                </div>
+                <div>
+                  Larger 2-3BR units often land around $20k-$25k. Override this with your actual furnishing quote whenever you have one.
+                </div>
+                {dossierMixSummary && (
+                  <div>
+                    Mix context: {dossierMixSummary.eligibleResidentialUnits ?? 0} eligible residential unit(s), {dossierMixSummary.commercialUnits ?? 0} commercial, {dossierMixSummary.rentStabilizedUnits ?? 0} rent-stabilized.
+                  </div>
+                )}
+                {persistedDossierAssumptions?.updatedAt && (
+                  <div>Last saved: {formatListedDate(persistedDossierAssumptions.updatedAt)}</div>
+                )}
+              </div>
+              {dossierError && (
+                <p style={{ margin: "0.75rem 0 0", fontSize: "0.82rem", color: "#b91c1c" }}>{dossierError}</p>
+              )}
+              {persistedDossierGeneration?.status === "failed" && !dossierError && persistedDossierGeneration.lastError && (
+                <p style={{ margin: "0.75rem 0 0", fontSize: "0.82rem", color: "#b91c1c" }}>
+                  Last generation failed: {persistedDossierGeneration.lastError}
+                </p>
+              )}
+              {showDossierProgress && (
+                <div className="dossier-progress-shell" style={{ marginTop: "0.9rem" }} aria-live="polite">
+                  <div className="dossier-progress-header">
+                    <div>
+                      <div className="dossier-progress-title">{Math.min(activeDossierProgressPct, 100)}% complete</div>
+                      <div className="dossier-progress-subtitle">{activeDossierStageLabel}</div>
+                    </div>
+                    <div className="dossier-progress-step">Property-level dossier run</div>
+                  </div>
+                  <div
+                    className="dossier-progress-track"
+                    role="progressbar"
+                    aria-label="Property dossier generation progress"
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={Math.min(activeDossierProgressPct, 100)}
+                  >
+                    <div className="dossier-progress-fill" style={{ width: `${Math.min(activeDossierProgressPct, 100)}%` }} />
+                  </div>
+                </div>
+              )}
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "0.65rem", marginTop: "1rem" }}>
+                <button
+                  type="button"
+                  disabled={isDossierBusy || !isDossierDirty}
+                  onClick={async () => {
+                    try {
+                      await persistDossierSettings();
+                      onRefreshPropertyData?.();
+                    } catch (err) {
+                      setDossierError(err instanceof Error ? err.message : "Failed to save dossier settings");
+                    }
+                  }}
+                  style={{
+                    padding: "0.55rem 0.9rem",
+                    borderRadius: "8px",
+                    border: "1px solid #cbd5e1",
+                    background: "#fff",
+                    color: "#0f172a",
+                    cursor: isDossierBusy || !isDossierDirty ? "not-allowed" : "pointer",
+                  }}
+                >
+                  {dossierSettingsSaving ? "Saving…" : "Save property costs"}
+                </button>
+                <button
+                  type="button"
+                  disabled={isDossierBusy}
+                  onClick={() =>
+                    setDossierDraft((prev) => ({
+                      ...prev,
+                      furnishingSetupCosts: formulaDossierDefaults.furnishingSetupCosts ?? null,
+                    }))
+                  }
+                  style={{
+                    padding: "0.55rem 0.9rem",
+                    borderRadius: "8px",
+                    border: "1px solid #cbd5e1",
+                    background: "#eff6ff",
+                    color: "#1d4ed8",
+                    cursor: isDossierBusy ? "not-allowed" : "pointer",
+                  }}
+                >
+                  Use formula default
+                </button>
+                <button
+                  type="button"
+                  disabled={isDossierBusy}
+                  onClick={handleGenerateDossier}
+                  style={{
+                    padding: "0.55rem 1rem",
+                    borderRadius: "8px",
+                    border: "none",
+                    background: "#0066cc",
+                    color: "#fff",
+                    fontWeight: 600,
+                    cursor: isDossierBusy ? "not-allowed" : "pointer",
+                  }}
+                >
+                  {isDossierBusy ? "Generating…" : "Generate dossier"}
+                </button>
+                <a
+                  href={`/dossier-assumptions?property_id=${encodeURIComponent(property.id)}`}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    padding: "0.55rem 0.9rem",
+                    borderRadius: "8px",
+                    border: "1px solid #cbd5e1",
+                    color: "#334155",
+                    textDecoration: "none",
+                    background: "#fff",
+                  }}
+                >
+                  Advanced assumptions
+                </a>
+              </div>
+            </>
+          )}
+        </div>
+      </CollapsibleSection>
 
       {/* 1. Photos / floor plans — side by side, same layout as raw listings */}
       <CollapsibleSection
@@ -1175,6 +1600,7 @@ tyler@stayhaus.co`;
                     onClick={async () => {
                       setInquirySendError(null);
                       setInquirySending(true);
+                      onWorkflowActivity?.();
                       try {
                         const res = await fetch(`${API_BASE}/api/properties/${property.id}/send-inquiry-email`, {
                           method: "POST",
@@ -1211,8 +1637,10 @@ tyler@stayhaus.co`;
                         setInquirySendSuccess("Email sent successfully.");
                         setInquiryEmailModalOpen(false);
                         setTimeout(() => setInquirySendSuccess(null), 4000);
+                        onWorkflowActivity?.();
                       } catch (e) {
                         setInquirySendError(e instanceof Error ? e.message : "Failed to send email");
+                        onWorkflowActivity?.();
                       } finally {
                         setInquirySending(false);
                       }
@@ -1270,6 +1698,7 @@ tyler@stayhaus.co`;
                     onClick={async () => {
                       setManualInquiryError(null);
                       setManualInquirySaving(true);
+                      onWorkflowActivity?.();
                       try {
                         const res = await fetch(`${API_BASE}/api/properties/${property.id}/mark-inquiry-sent`, {
                           method: "POST",
@@ -1294,8 +1723,10 @@ tyler@stayhaus.co`;
                         setInquirySendSuccess("Prior inquiry recorded.");
                         setManualInquiryModalOpen(false);
                         setTimeout(() => setInquirySendSuccess(null), 4000);
+                        onWorkflowActivity?.();
                       } catch (e) {
                         setManualInquiryError(e instanceof Error ? e.message : "Failed to record inquiry");
+                        onWorkflowActivity?.();
                       } finally {
                         setManualInquirySaving(false);
                       }
@@ -1667,7 +2098,7 @@ tyler@stayhaus.co`;
                 ))}
               </ul>
             ) : (
-              <p style={{ margin: 0, fontSize: "0.8rem", color: "#737373" }}>No documents yet. Send an inquiry, upload a file, or use the Generate dossier button at the bottom of this property.</p>
+              <p style={{ margin: 0, fontSize: "0.8rem", color: "#737373" }}>No documents yet. Send an inquiry, upload a file, or use the Deal dossier section above to generate the PDF and Excel.</p>
             )}
           </div>
           <div style={{ borderTop: "1px solid #e0e0e0", paddingTop: "0.6rem", marginTop: "0.6rem", marginBottom: "0.5rem" }}>
@@ -1783,29 +2214,8 @@ tyler@stayhaus.co`;
         )}
       </CollapsibleSection>
 
-      {/* Generate dossier — large CTA at end of property sub-sections */}
-      <div style={{ marginTop: "2rem", padding: "2rem 1rem", display: "flex", justifyContent: "center", alignItems: "center" }}>
-        <a
-          href={`/dossier-assumptions?property_id=${encodeURIComponent(property.id)}`}
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
-            minWidth: "280px",
-            padding: "1rem 2rem",
-            fontSize: "1.1rem",
-            fontWeight: 600,
-            color: "#fff",
-            backgroundColor: "#0066cc",
-            border: "none",
-            borderRadius: "8px",
-            textDecoration: "none",
-            boxShadow: "0 2px 8px rgba(0,102,204,0.35)",
-            cursor: "pointer",
-          }}
-        >
-          Generate dossier
-        </a>
+      <div style={{ marginTop: "1.5rem", fontSize: "0.8rem", color: "#64748b" }}>
+        Deal dossier generation now runs from the dedicated section above using these property-level costs plus your saved profile defaults.
       </div>
     </div>
   );

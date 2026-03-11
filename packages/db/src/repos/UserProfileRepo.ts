@@ -22,6 +22,14 @@ export interface UpsertUserProfileParams {
   defaultExpenseIncrease?: number | null;
   defaultManagementFee?: number | null;
   defaultTargetIrrPct?: number | null;
+  defaultVacancyPct?: number | null;
+  defaultLeadTimeMonths?: number | null;
+  defaultAnnualRentGrowthPct?: number | null;
+  defaultAnnualOtherIncomeGrowthPct?: number | null;
+  defaultAnnualExpenseGrowthPct?: number | null;
+  defaultAnnualPropertyTaxGrowthPct?: number | null;
+  defaultRecurringCapexAnnual?: number | null;
+  defaultLoanFeePct?: number | null;
 }
 
 export class UserProfileRepo {
@@ -40,16 +48,53 @@ export class UserProfileRepo {
   /** Create a default profile row if none exists. Returns the profile id. */
   async ensureDefault(): Promise<string> {
     const existing = await this.getDefault();
-    // #region agent log
-    try {
-      const countResult = await this.client.query("SELECT count(*)::int AS c FROM user_profile");
-      const count = (countResult.rows[0] as { c: number })?.c ?? 0;
-      await fetch("http://127.0.0.1:7590/ingest/742bd78a-5157-440b-b6aa-e9509cd8e861",{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":"fd8b77"},body:JSON.stringify({sessionId:"fd8b77",location:"UserProfileRepo.ts:ensureDefault",message:"ensureDefault",data:{existingId:existing?.id??null,rowCount:count},timestamp:Date.now(),hypothesisId:"H4"})});
-    } catch { /* ignore */ }
-    // #endregion
     if (existing) return existing.id;
     const r = await this.client.query(
-      `INSERT INTO user_profile (name, email, organization) VALUES ('', '', '') RETURNING id`
+      `INSERT INTO user_profile (
+         name,
+         email,
+         organization,
+         default_purchase_closing_cost_pct,
+         default_ltv,
+         default_interest_rate,
+         default_amortization,
+         default_hold_period_years,
+         default_exit_cap,
+         default_exit_closing_cost_pct,
+         default_rent_uplift,
+         default_expense_increase,
+         default_management_fee,
+         default_target_irr_pct,
+         default_vacancy_pct,
+         default_lead_time_months,
+         default_annual_rent_growth_pct,
+         default_annual_other_income_growth_pct,
+         default_annual_expense_growth_pct,
+         default_annual_property_tax_growth_pct,
+         default_recurring_capex_annual,
+         default_loan_fee_pct
+       ) VALUES (
+         '', '', '',
+         3,
+         64,
+         6,
+         30,
+         2,
+         5,
+         6,
+         76.3,
+         0,
+         8,
+         25,
+         15,
+         2,
+         1,
+         0,
+         0,
+         6,
+         1200,
+         0.63
+       ) RETURNING id`
     );
     return r.rows[0].id as string;
   }
@@ -76,6 +121,14 @@ export class UserProfileRepo {
         default_expense_increase = COALESCE($13, default_expense_increase),
         default_management_fee = COALESCE($14, default_management_fee),
         default_target_irr_pct = COALESCE($15, default_target_irr_pct),
+        default_vacancy_pct = COALESCE($16, default_vacancy_pct),
+        default_lead_time_months = COALESCE($17, default_lead_time_months),
+        default_annual_rent_growth_pct = COALESCE($18, default_annual_rent_growth_pct),
+        default_annual_other_income_growth_pct = COALESCE($19, default_annual_other_income_growth_pct),
+        default_annual_expense_growth_pct = COALESCE($20, default_annual_expense_growth_pct),
+        default_annual_property_tax_growth_pct = COALESCE($21, default_annual_property_tax_growth_pct),
+        default_recurring_capex_annual = COALESCE($22, default_recurring_capex_annual),
+        default_loan_fee_pct = COALESCE($23, default_loan_fee_pct),
         updated_at = now()
        WHERE id = $1`,
       [
@@ -94,6 +147,14 @@ export class UserProfileRepo {
         params.defaultExpenseIncrease ?? null,
         params.defaultManagementFee ?? null,
         params.defaultTargetIrrPct ?? null,
+        params.defaultVacancyPct ?? null,
+        params.defaultLeadTimeMonths ?? null,
+        params.defaultAnnualRentGrowthPct ?? null,
+        params.defaultAnnualOtherIncomeGrowthPct ?? null,
+        params.defaultAnnualExpenseGrowthPct ?? null,
+        params.defaultAnnualPropertyTaxGrowthPct ?? null,
+        params.defaultRecurringCapexAnnual ?? null,
+        params.defaultLoanFeePct ?? null,
       ]
     );
     const updated = await this.byId(id);

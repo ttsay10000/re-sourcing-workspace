@@ -1,8 +1,10 @@
 "use client";
 
+import Link from "next/link";
 import React, { useCallback, useEffect, useState } from "react";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
+const currencyFormatter = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
 
 interface UserProfile {
   id: string;
@@ -20,6 +22,14 @@ interface UserProfile {
   defaultExpenseIncrease?: number | null;
   defaultManagementFee?: number | null;
   defaultTargetIrrPct?: number | null;
+  defaultVacancyPct?: number | null;
+  defaultLeadTimeMonths?: number | null;
+  defaultAnnualRentGrowthPct?: number | null;
+  defaultAnnualOtherIncomeGrowthPct?: number | null;
+  defaultAnnualExpenseGrowthPct?: number | null;
+  defaultAnnualPropertyTaxGrowthPct?: number | null;
+  defaultRecurringCapexAnnual?: number | null;
+  defaultLoanFeePct?: number | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -49,21 +59,26 @@ export default function ProfilePage() {
         email: data.email ?? "",
         organization: data.organization ?? "",
         defaultPurchaseClosingCostPct: data.defaultPurchaseClosingCostPct ?? 3,
-        defaultLtv: data.defaultLtv ?? 75,
+        defaultLtv: data.defaultLtv ?? 64,
         defaultInterestRate: data.defaultInterestRate ?? 6,
         defaultAmortization: data.defaultAmortization ?? 30,
-        defaultHoldPeriodYears: data.defaultHoldPeriodYears ?? 5,
+        defaultHoldPeriodYears: data.defaultHoldPeriodYears ?? 2,
         defaultExitCap: data.defaultExitCap ?? 5,
-        defaultExitClosingCostPct: data.defaultExitClosingCostPct ?? 2,
-        defaultRentUplift: data.defaultRentUplift ?? 70,
-        defaultExpenseIncrease: data.defaultExpenseIncrease ?? 20,
+        defaultExitClosingCostPct: data.defaultExitClosingCostPct ?? 6,
+        defaultRentUplift: data.defaultRentUplift ?? 76.3,
+        defaultExpenseIncrease: data.defaultExpenseIncrease ?? 0,
         defaultManagementFee: data.defaultManagementFee ?? 8,
         defaultTargetIrrPct: data.defaultTargetIrrPct ?? 25,
+        defaultVacancyPct: data.defaultVacancyPct ?? 15,
+        defaultLeadTimeMonths: data.defaultLeadTimeMonths ?? 2,
+        defaultAnnualRentGrowthPct: data.defaultAnnualRentGrowthPct ?? 1,
+        defaultAnnualOtherIncomeGrowthPct: data.defaultAnnualOtherIncomeGrowthPct ?? 0,
+        defaultAnnualExpenseGrowthPct: data.defaultAnnualExpenseGrowthPct ?? 0,
+        defaultAnnualPropertyTaxGrowthPct: data.defaultAnnualPropertyTaxGrowthPct ?? 6,
+        defaultRecurringCapexAnnual: data.defaultRecurringCapexAnnual ?? 1200,
+        defaultLoanFeePct: data.defaultLoanFeePct ?? 0.63,
       });
     } catch (e) {
-      // #region agent log
-      fetch("http://127.0.0.1:7590/ingest/742bd78a-5157-440b-b6aa-e9509cd8e861",{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":"fd8b77"},body:JSON.stringify({sessionId:"fd8b77",location:"profile/page.tsx:fetchProfile-catch",message:"Profile fetch failed",data:{message:e instanceof Error?e.message:String(e)},timestamp:Date.now(),hypothesisId:"H3"})}).catch(()=>{});
-      // #endregion
       setError(e instanceof Error ? e.message : "Failed to load profile");
     } finally {
       setLoading(false);
@@ -118,6 +133,19 @@ export default function ProfilePage() {
           defaultExpenseIncrease: draft.defaultExpenseIncrease ?? profile.defaultExpenseIncrease,
           defaultManagementFee: draft.defaultManagementFee ?? profile.defaultManagementFee,
           defaultTargetIrrPct: draft.defaultTargetIrrPct ?? profile.defaultTargetIrrPct,
+          defaultVacancyPct: draft.defaultVacancyPct ?? profile.defaultVacancyPct,
+          defaultLeadTimeMonths: draft.defaultLeadTimeMonths ?? profile.defaultLeadTimeMonths,
+          defaultAnnualRentGrowthPct:
+            draft.defaultAnnualRentGrowthPct ?? profile.defaultAnnualRentGrowthPct,
+          defaultAnnualOtherIncomeGrowthPct:
+            draft.defaultAnnualOtherIncomeGrowthPct ?? profile.defaultAnnualOtherIncomeGrowthPct,
+          defaultAnnualExpenseGrowthPct:
+            draft.defaultAnnualExpenseGrowthPct ?? profile.defaultAnnualExpenseGrowthPct,
+          defaultAnnualPropertyTaxGrowthPct:
+            draft.defaultAnnualPropertyTaxGrowthPct ?? profile.defaultAnnualPropertyTaxGrowthPct,
+          defaultRecurringCapexAnnual:
+            draft.defaultRecurringCapexAnnual ?? profile.defaultRecurringCapexAnnual,
+          defaultLoanFeePct: draft.defaultLoanFeePct ?? profile.defaultLoanFeePct,
         }),
       });
       const data = await res.json();
@@ -188,7 +216,7 @@ export default function ProfilePage() {
   }
 
   return (
-    <div className="profile-page" style={{ padding: "1.5rem", maxWidth: "640px" }}>
+    <div className="profile-page" style={{ padding: "1.5rem", maxWidth: "960px" }}>
       <h1 className="page-title">Profile</h1>
       {error && (
         <p style={{ color: "#b91c1c", marginBottom: "1rem" }}>{error}</p>
@@ -239,7 +267,7 @@ export default function ProfilePage() {
       </div>
 
       {activeTab === "profile" && (
-        <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: "1rem", maxWidth: "640px" }}>
           <label style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
             <span style={{ fontSize: "0.875rem", fontWeight: 500 }}>Name</span>
             <input
@@ -287,9 +315,12 @@ export default function ProfilePage() {
       )}
 
       {activeTab === "assumptions" && (
-        <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: "1rem", maxWidth: "640px" }}>
           <p style={{ fontSize: "0.875rem", color: "#666", marginBottom: "0.5rem" }}>
             Default reusable assumptions for dossier underwriting. Deal-specific purchase price, renovation, and furnishing costs are set on the dossier page.
+          </p>
+          <p style={{ fontSize: "0.875rem", color: "#666", marginTop: "-0.5rem" }}>
+            Property-tax growth is auto-derived from NYC tax class when the property has a tax code. The profile value below is the fallback for missing or unrecognized tax classes.
           </p>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
             <label style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
@@ -327,6 +358,16 @@ export default function ProfilePage() {
                 type="number"
                 value={draft.defaultAmortization ?? ""}
                 onChange={(e) => setDraft((p) => ({ ...p, defaultAmortization: e.target.value ? Number(e.target.value) : undefined }))}
+                style={{ padding: "0.5rem", border: "1px solid #ccc", borderRadius: "4px" }}
+              />
+            </label>
+            <label style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+              <span style={{ fontSize: "0.875rem", fontWeight: 500 }}>Default loan fee (%)</span>
+              <input
+                type="number"
+                step="0.1"
+                value={draft.defaultLoanFeePct ?? ""}
+                onChange={(e) => setDraft((p) => ({ ...p, defaultLoanFeePct: e.target.value ? Number(e.target.value) : undefined }))}
                 style={{ padding: "0.5rem", border: "1px solid #ccc", borderRadius: "4px" }}
               />
             </label>
@@ -392,6 +433,75 @@ export default function ProfilePage() {
               />
             </label>
             <label style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+              <span style={{ fontSize: "0.875rem", fontWeight: 500 }}>Default vacancy (%)</span>
+              <input
+                type="number"
+                step="0.1"
+                value={draft.defaultVacancyPct ?? ""}
+                onChange={(e) => setDraft((p) => ({ ...p, defaultVacancyPct: e.target.value ? Number(e.target.value) : undefined }))}
+                style={{ padding: "0.5rem", border: "1px solid #ccc", borderRadius: "4px" }}
+              />
+            </label>
+            <label style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+              <span style={{ fontSize: "0.875rem", fontWeight: 500 }}>Default lead time (months)</span>
+              <input
+                type="number"
+                value={draft.defaultLeadTimeMonths ?? ""}
+                onChange={(e) => setDraft((p) => ({ ...p, defaultLeadTimeMonths: e.target.value ? Number(e.target.value) : undefined }))}
+                style={{ padding: "0.5rem", border: "1px solid #ccc", borderRadius: "4px" }}
+              />
+            </label>
+            <label style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+              <span style={{ fontSize: "0.875rem", fontWeight: 500 }}>Annual rent growth (%)</span>
+              <input
+                type="number"
+                step="0.1"
+                value={draft.defaultAnnualRentGrowthPct ?? ""}
+                onChange={(e) => setDraft((p) => ({ ...p, defaultAnnualRentGrowthPct: e.target.value ? Number(e.target.value) : undefined }))}
+                style={{ padding: "0.5rem", border: "1px solid #ccc", borderRadius: "4px" }}
+              />
+            </label>
+            <label style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+              <span style={{ fontSize: "0.875rem", fontWeight: 500 }}>Annual other income growth (%)</span>
+              <input
+                type="number"
+                step="0.1"
+                value={draft.defaultAnnualOtherIncomeGrowthPct ?? ""}
+                onChange={(e) => setDraft((p) => ({ ...p, defaultAnnualOtherIncomeGrowthPct: e.target.value ? Number(e.target.value) : undefined }))}
+                style={{ padding: "0.5rem", border: "1px solid #ccc", borderRadius: "4px" }}
+              />
+            </label>
+            <label style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+              <span style={{ fontSize: "0.875rem", fontWeight: 500 }}>Annual expense growth (%)</span>
+              <input
+                type="number"
+                step="0.1"
+                value={draft.defaultAnnualExpenseGrowthPct ?? ""}
+                onChange={(e) => setDraft((p) => ({ ...p, defaultAnnualExpenseGrowthPct: e.target.value ? Number(e.target.value) : undefined }))}
+                style={{ padding: "0.5rem", border: "1px solid #ccc", borderRadius: "4px" }}
+              />
+            </label>
+            <label style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+              <span style={{ fontSize: "0.875rem", fontWeight: 500 }}>Fallback annual property tax growth (%)</span>
+              <input
+                type="number"
+                step="0.1"
+                value={draft.defaultAnnualPropertyTaxGrowthPct ?? ""}
+                onChange={(e) => setDraft((p) => ({ ...p, defaultAnnualPropertyTaxGrowthPct: e.target.value ? Number(e.target.value) : undefined }))}
+                style={{ padding: "0.5rem", border: "1px solid #ccc", borderRadius: "4px" }}
+              />
+            </label>
+            <label style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+              <span style={{ fontSize: "0.875rem", fontWeight: 500 }}>Recurring CapEx reserve</span>
+              <input
+                type="number"
+                step="100"
+                value={draft.defaultRecurringCapexAnnual ?? ""}
+                onChange={(e) => setDraft((p) => ({ ...p, defaultRecurringCapexAnnual: e.target.value ? Number(e.target.value) : undefined }))}
+                style={{ padding: "0.5rem", border: "1px solid #ccc", borderRadius: "4px" }}
+              />
+            </label>
+            <label style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
               <span style={{ fontSize: "0.875rem", fontWeight: 500 }}>Default target IRR (%)</span>
               <input
                 type="number"
@@ -440,8 +550,8 @@ export default function ProfilePage() {
       )}
 
       {activeTab === "saved-deals" && (
-        <div>
-          <p style={{ fontSize: "0.875rem", color: "#666", marginBottom: "1rem" }}>
+        <div className="profile-saved-deals-section">
+          <p className="profile-saved-deals-intro">
             Deals you saved from the Property Data table. Download dossier after generating from the property page.
           </p>
           {savedDealsLoading ? (
@@ -449,30 +559,42 @@ export default function ProfilePage() {
           ) : savedDeals.length === 0 ? (
             <p style={{ color: "#737373" }}>No saved deals. Use the star on a property in Property Data to save.</p>
           ) : (
-            <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.875rem" }}>
+            <div className="profile-saved-deals-table-wrap">
+              <table className="profile-saved-deals-table">
                 <thead>
-                  <tr style={{ borderBottom: "2px solid #e5e5e5", textAlign: "left" }}>
-                    <th style={{ padding: "0.5rem 0.75rem" }}>Address</th>
-                    <th style={{ padding: "0.5rem 0.75rem" }}>Price</th>
-                    <th style={{ padding: "0.5rem 0.75rem" }}>Units</th>
-                    <th style={{ padding: "0.5rem 0.75rem" }}>Deal score</th>
-                    <th style={{ padding: "0.5rem 0.75rem" }}>Actions</th>
+                  <tr>
+                    <th>Address</th>
+                    <th className="profile-saved-deals-table__numeric">Price</th>
+                    <th className="profile-saved-deals-table__numeric">Units</th>
+                    <th className="profile-saved-deals-table__numeric">Deal score</th>
+                    <th className="profile-saved-deals-table__actions-cell">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {savedDeals.map((row) => (
-                    <tr key={row.savedDeal.id} style={{ borderBottom: "1px solid #eee" }}>
-                      <td style={{ padding: "0.5rem 0.75rem" }}>{row.address || "—"}</td>
-                      <td style={{ padding: "0.5rem 0.75rem" }}>{row.price != null ? new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(row.price) : "—"}</td>
-                      <td style={{ padding: "0.5rem 0.75rem" }}>{row.units != null ? String(row.units) : "—"}</td>
-                      <td style={{ padding: "0.5rem 0.75rem" }}>{row.dealScore != null ? String(Math.round(row.dealScore)) : "—"}</td>
-                      <td style={{ padding: "0.5rem 0.75rem", display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-                        <a href={`/property-data?expand=${row.savedDeal.propertyId}`} style={{ color: "#0066cc" }}>View property</a>
-                        <span style={{ color: "#999" }}>|</span>
-                        <a href={`/property-data?expand=${row.savedDeal.propertyId}#documents`} style={{ color: "#0066cc" }}>Download dossier</a>
-                        <span style={{ color: "#999" }}>|</span>
-                        <button type="button" onClick={() => handleUnsave(row.savedDeal.propertyId)} style={{ background: "none", border: "none", color: "#0066cc", cursor: "pointer", padding: 0, textDecoration: "underline" }}>Unsave</button>
+                    <tr key={row.savedDeal.id}>
+                      <td className="profile-saved-deals-table__address">{row.address || "—"}</td>
+                      <td className="profile-saved-deals-table__numeric">{row.price != null ? currencyFormatter.format(row.price) : "—"}</td>
+                      <td className="profile-saved-deals-table__numeric">{row.units != null ? String(row.units) : "—"}</td>
+                      <td className="profile-saved-deals-table__numeric">
+                        {row.dealScore != null ? <span className="profile-saved-deals-score">{Math.round(row.dealScore)}</span> : "—"}
+                      </td>
+                      <td className="profile-saved-deals-table__actions-cell">
+                        <div className="profile-saved-deals-actions">
+                          <Link href={`/property-data?expand=${row.savedDeal.propertyId}`} className="profile-saved-deals-action">
+                            View property
+                          </Link>
+                          <Link href={`/property-data?expand=${row.savedDeal.propertyId}#documents`} className="profile-saved-deals-action">
+                            Download dossier
+                          </Link>
+                          <button
+                            type="button"
+                            onClick={() => handleUnsave(row.savedDeal.propertyId)}
+                            className="profile-saved-deals-action profile-saved-deals-action--danger"
+                          >
+                            Unsave
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}

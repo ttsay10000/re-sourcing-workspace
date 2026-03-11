@@ -4,7 +4,6 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
-const MAX_SELECT = 10;
 
 type DealRow = {
   id: string;
@@ -12,6 +11,23 @@ type DealRow = {
   price: number | null;
   imageUrl: string | null;
   totalUnits: number | null;
+  beds: number | null;
+  baths: number | null;
+  listedAt: string | null;
+  residentialUnits: number | null;
+  commercialUnits: number | null;
+  rentStabilizedUnits: number | null;
+  eligibleResidentialUnits: number | null;
+  recommendedOfferLow: number | null;
+  recommendedOfferHigh: number | null;
+  targetIrrPct: number | null;
+  discountToAskingPct: number | null;
+  irrAtAskingPct: number | null;
+  targetMetAtAsking: boolean;
+  currentNoi: number | null;
+  adjustedNoi: number | null;
+  stabilizedNoi: number | null;
+  annualDebtService: number | null;
   dealScore: number | null;
   assetCapRate: number | null;
   adjustedCapRate: number | null;
@@ -20,9 +36,15 @@ type DealRow = {
   equityMultiple: number | null;
   cocPct: number | null;
   holdYears: number | null;
-  currentNoi: number | null;
-  adjustedNoi: number | null;
   generatedAt: string | null;
+  dossierDocumentId: string | null;
+  dossierFileName: string | null;
+  dossierCreatedAt: string | null;
+};
+
+type ActionMessage = {
+  type: "success" | "error";
+  text: string;
 };
 
 function getScoreBubbleClass(score: number): string {
@@ -40,21 +62,51 @@ function getDealStatusTag(score: number): string {
 
 function formatPrice(n: number | null | undefined): string {
   if (n == null || Number.isNaN(n)) return "—";
-  if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `$${(n / 1_000).toFixed(0)}K`;
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(n);
+  if (Math.abs(n) >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`;
+  if (Math.abs(n) >= 1_000) return `$${(n / 1_000).toFixed(0)}K`;
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 0,
+  }).format(n);
 }
 
-/** Values already in percentage points (e.g. 5.5 for 5.5%) — do not multiply by 100. */
+function formatCount(n: number | null | undefined, suffix = ""): string {
+  if (n == null || Number.isNaN(n)) return "—";
+  const whole = Math.abs(n % 1) < 0.001;
+  return `${whole ? n.toFixed(0) : n.toFixed(1)}${suffix}`;
+}
+
 function formatPctPoints(n: number | null | undefined): string {
   if (n == null || Number.isNaN(n)) return "—";
-  return `${Number(n).toFixed(2)}%`;
+  return `${Number(n).toFixed(1)}%`;
 }
 
-/** IRR and CoC are stored as decimals (e.g. 0.12 for 12%). */
 function formatPctDecimal(n: number | null | undefined): string {
   if (n == null || Number.isNaN(n)) return "—";
-  return `${(Number(n) * 100).toFixed(2)}%`;
+  return `${(Number(n) * 100).toFixed(1)}%`;
+}
+
+function formatDateLabel(value: string | null | undefined): string {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+  return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+}
+
+function daysOnMarket(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const listedAt = new Date(value);
+  if (Number.isNaN(listedAt.getTime())) return null;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  listedAt.setHours(0, 0, 0, 0);
+  return Math.max(0, Math.floor((today.getTime() - listedAt.getTime()) / (1000 * 60 * 60 * 24)));
+}
+
+function buildDossierFileUrl(deal: DealRow): string | null {
+  if (!deal.dossierDocumentId) return null;
+  return `${API_BASE}/api/properties/${encodeURIComponent(deal.id)}/documents/${encodeURIComponent(deal.dossierDocumentId)}/file`;
 }
 
 export default function HomePage() {
@@ -67,12 +119,15 @@ export default function HomePage() {
   const [sort, setSort] = useState<"deal_score" | "adjusted_cap_rate" | "asset_cap_rate" | "rent_upside" | "price">("deal_score");
   const [order, setOrder] = useState<"asc" | "desc">("desc");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [dossiersGenerated, setDossiersGenerated] = useState(false);
+  const [search, setSearch] = useState("");
+  const [dossierFilter, setDossierFilter] = useState<"all" | "ready" | "missing">("all");
+  const [runningAction, setRunningAction] = useState<"enrichment" | "rental" | null>(null);
+  const [actionMessage, setActionMessage] = useState<ActionMessage | null>(null);
 
   const fetchDeals = useCallback(() => {
     setLoading(true);
     setError(null);
-    const params = new URLSearchParams({ sort, order: order, limit: "50" });
+    const params = new URLSearchParams({ sort, order, limit: "60" });
     fetch(`${API_BASE}/api/deals?${params}`)
       .then(async (r) => {
         const data = await r.json().catch(() => ({}));
@@ -86,20 +141,33 @@ export default function HomePage() {
         setTotal(0);
       })
       .finally(() => setLoading(false));
-  }, [sort, order]);
+  }, [order, sort]);
 
   useEffect(() => {
     fetchDeals();
   }, [fetchDeals]);
 
   useEffect(() => {
-    if (deals.length === 0) return;
-    const ids = deals.map((d) => d.id).join(",");
+    setSelectedIds((prev) => {
+      if (prev.size === 0) return prev;
+      const available = new Set(deals.map((deal) => deal.id));
+      const next = new Set(Array.from(prev).filter((id) => available.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [deals]);
+
+  useEffect(() => {
+    if (deals.length === 0) {
+      setSavedIds(new Set());
+      return;
+    }
+    const ids = deals.map((deal) => deal.id).join(",");
     fetch(`${API_BASE}/api/profile/saved-deals/check?propertyIds=${encodeURIComponent(ids)}`)
       .then((r) => r.json())
       .then((data) => {
-        if (data && typeof data.saved === "object")
+        if (data && typeof data.saved === "object") {
           setSavedIds(new Set(Object.keys(data.saved).filter((id: string) => Boolean(data.saved[id]))));
+        }
       })
       .catch(() => {});
   }, [deals]);
@@ -118,330 +186,484 @@ export default function HomePage() {
           });
         })
         .finally(() => setSavingId(null));
-    } else {
-      fetch(`${API_BASE}/api/profile/saved-deals`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ propertyId }),
-      })
-        .then((r) => r.json())
-        .then(() => {
-          setSavedIds((prev) => new Set(prev).add(propertyId));
-        })
-        .finally(() => setSavingId(null));
+      return;
     }
+
+    fetch(`${API_BASE}/api/profile/saved-deals`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ propertyId }),
+    })
+      .then((r) => r.json())
+      .then(() => {
+        setSavedIds((prev) => new Set(prev).add(propertyId));
+      })
+      .finally(() => setSavingId(null));
   };
 
   const toggleSelect = (id: string) => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
-      else if (next.size < MAX_SELECT) next.add(id);
+      else next.add(id);
       return next;
     });
   };
 
+  const normalizedSearch = search.trim().toLowerCase();
+  const filteredDeals = deals.filter((deal) => {
+    if (normalizedSearch && !deal.address.toLowerCase().includes(normalizedSearch)) return false;
+    if (dossierFilter === "ready" && !deal.dossierDocumentId) return false;
+    if (dossierFilter === "missing" && deal.dossierDocumentId) return false;
+    return true;
+  });
+
   const selectedCount = selectedIds.size;
-  const selectedDeals = deals.filter((d) => selectedIds.has(d.id));
-  const withScore = deals.filter((d) => d.dealScore != null);
+  const selectedVisibleCount = filteredDeals.filter((deal) => selectedIds.has(deal.id)).length;
+  const allVisibleSelected = filteredDeals.length > 0 && selectedVisibleCount === filteredDeals.length;
+  const visibleIds = filteredDeals.map((deal) => deal.id);
+  const dossiersReadyCount = deals.filter((deal) => Boolean(deal.dossierDocumentId)).length;
+  const withScore = deals.filter((deal) => deal.dealScore != null);
   const avgScore = withScore.length > 0
-    ? withScore.reduce((s, d) => s + (d.dealScore ?? 0), 0) / withScore.length
+    ? withScore.reduce((sum, deal) => sum + (deal.dealScore ?? 0), 0) / withScore.length
     : null;
-  const countAbove90 = deals.filter((d) => (d.dealScore ?? 0) >= 90).length;
+  const above90Count = deals.filter((deal) => (deal.dealScore ?? 0) >= 90).length;
+  const withDiscount = deals.filter((deal) => deal.discountToAskingPct != null);
+  const avgDiscount = withDiscount.length > 0
+    ? withDiscount.reduce((sum, deal) => sum + (deal.discountToAskingPct ?? 0), 0) / withDiscount.length
+    : null;
+  const withDom = deals
+    .map((deal) => daysOnMarket(deal.listedAt))
+    .filter((value): value is number => value != null);
+  const avgDaysOnMarket = withDom.length > 0
+    ? withDom.reduce((sum, value) => sum + value, 0) / withDom.length
+    : null;
+
+  const handleToggleSelectAllVisible = () => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (allVisibleSelected) {
+        visibleIds.forEach((id) => next.delete(id));
+      } else {
+        visibleIds.forEach((id) => next.add(id));
+      }
+      return next;
+    });
+  };
+
+  const clearSelection = () => setSelectedIds(new Set());
+
+  const handleRunSelected = async (mode: "enrichment" | "rental") => {
+    const propertyIds = Array.from(selectedIds);
+    if (propertyIds.length === 0) return;
+    const label = mode === "enrichment" ? "enrichment" : "rental flow";
+    const confirmed = window.confirm(
+      `Run ${label} for ${propertyIds.length} selected propert${propertyIds.length === 1 ? "y" : "ies"}?`
+    );
+    if (!confirmed) return;
+
+    setRunningAction(mode);
+    setActionMessage(null);
+    setError(null);
+    try {
+      const response = await fetch(
+        `${API_BASE}/api/properties/${mode === "enrichment" ? "run-enrichment" : "run-rental-flow"}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ propertyIds }),
+        }
+      );
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error((data.error || data.details || `HTTP ${response.status}`) as string);
+      }
+
+      if (mode === "enrichment") {
+        const success = Number(data.permitEnrichment?.success ?? 0);
+        const failed = Number(data.permitEnrichment?.failed ?? 0);
+        const processed = Number(data.omFinancialsRefresh?.documentsProcessed ?? 0);
+        setActionMessage({
+          type: "success",
+          text: `Re-ran enrichment for ${propertyIds.length} selected properties. ${success} succeeded, ${failed} failed, ${processed} OM document${processed === 1 ? "" : "s"} refreshed.`,
+        });
+      } else {
+        const results = Array.isArray(data.results) ? data.results : [];
+        const withUnits = results.filter((row: { rentalUnitsCount?: number }) => (row.rentalUnitsCount ?? 0) > 0).length;
+        const withLlm = results.filter((row: { hasLlmFinancials?: boolean }) => Boolean(row.hasLlmFinancials)).length;
+        setActionMessage({
+          type: "success",
+          text: `Re-ran rental flow for ${propertyIds.length} selected properties. ${withUnits} returned rental units and ${withLlm} refreshed listing-derived financials.`,
+        });
+      }
+      fetchDeals();
+    } catch (e) {
+      const message = e instanceof Error ? e.message : `Failed to run ${label}`;
+      setActionMessage({ type: "error", text: message });
+    } finally {
+      setRunningAction(null);
+    }
+  };
 
   return (
     <div className="home-layout">
-      {/* Metrics row */}
+      <section className="home-hero">
+        <div>
+          <div className="home-hero-eyebrow">Deal triage board</div>
+          <h1 className="home-hero-title">Homepage for scoring, dossier downloads, and quick refresh actions.</h1>
+          <p className="home-hero-copy">
+            Scan property mix, listed days, offer guidance, and dossier status in one place. Use selection to refresh only the properties you care about.
+          </p>
+        </div>
+        <div className="home-hero-actions">
+          <Link href="/property-data" className="btn-primary">
+            Add new deals
+          </Link>
+          <button type="button" className="btn-secondary" onClick={fetchDeals}>
+            Refresh feed
+          </button>
+        </div>
+      </section>
+
       <section className="home-metrics">
         <div className="metric-card">
-          <div className="metric-label">New Listings Today</div>
-          <div className="metric-value">—</div>
+          <div className="metric-label">Scored deals</div>
+          <div className="metric-value">{total}</div>
         </div>
         <div className="metric-card">
-          <div className="metric-label">Successfully Deduped %</div>
-          <div className="metric-value">—</div>
+          <div className="metric-label">Avg deal score</div>
+          <div className="metric-value">{avgScore != null ? avgScore.toFixed(1) : "—"}</div>
         </div>
         <div className="metric-card">
-          <div className="metric-label">Enrichment Coverage %</div>
-          <div className="metric-value">—</div>
+          <div className="metric-label">Deals 90+</div>
+          <div className="metric-value">{above90Count}</div>
         </div>
         <div className="metric-card">
-          <div className="metric-label">Avg Deal Score</div>
-          <div className="metric-value">{avgScore != null && !Number.isNaN(avgScore) ? avgScore.toFixed(1) : "—"}</div>
+          <div className="metric-label">Dossiers ready</div>
+          <div className="metric-value">{dossiersReadyCount}</div>
         </div>
         <div className="metric-card">
-          <div className="metric-label">Number of Deals Above 90</div>
-          <div className="metric-value">{countAbove90}</div>
+          <div className="metric-label">Avg required discount</div>
+          <div className="metric-value">{avgDiscount != null ? `${avgDiscount.toFixed(1)}%` : "—"}</div>
+        </div>
+        <div className="metric-card">
+          <div className="metric-label">Avg days on market</div>
+          <div className="metric-value">{avgDaysOnMarket != null ? Math.round(avgDaysOnMarket) : "—"}</div>
         </div>
       </section>
 
       <div className="home-content">
         <section className="home-main">
-          <div className="home-section-header" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "1rem", marginBottom: "0.5rem" }}>
-            <h2 className="home-section-title">Top Ranked Deals</h2>
-            <Link href="/property-data" className="btn-card" style={{ fontSize: "0.85rem", padding: "0.4rem 0.75rem" }}>
-              Add new deals
-            </Link>
-            <span style={{ fontSize: "0.85rem", color: "#737373" }}>
-              Add listings in Property Data, then generate a dossier to see scored deals here.
-            </span>
-          </div>
-
-          <div className="home-cards-sort" style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.75rem" }}>
-            <label style={{ fontSize: "0.85rem", color: "#525252" }}>Sort by</label>
-            <select
-              className="input-text"
-              value={sort}
-              onChange={(e) => setSort(e.target.value as typeof sort)}
-              style={{ width: "auto", padding: "0.35rem 0.5rem", fontSize: "0.85rem" }}
-            >
-              <option value="deal_score">Deal Score</option>
-              <option value="adjusted_cap_rate">Adjusted Cap Rate</option>
-              <option value="asset_cap_rate">Asset Cap Rate</option>
-              <option value="rent_upside">Rent Upside</option>
-              <option value="price">Price</option>
-            </select>
-            <select
-              className="input-text"
-              value={order}
-              onChange={(e) => setOrder(e.target.value as "asc" | "desc")}
-              style={{ width: "auto", padding: "0.35rem 0.5rem", fontSize: "0.85rem" }}
-            >
-              <option value="desc">Desc</option>
-              <option value="asc">Asc</option>
-            </select>
+          <div className="home-toolbar">
+            <div className="home-toolbar-controls">
+              <input
+                type="search"
+                placeholder="Search address"
+                className="input-text home-toolbar-search"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                aria-label="Search deals by address"
+              />
+              <select
+                className="input-text home-toolbar-select"
+                value={dossierFilter}
+                onChange={(e) => setDossierFilter(e.target.value as typeof dossierFilter)}
+                aria-label="Filter by dossier status"
+              >
+                <option value="all">All dossier states</option>
+                <option value="ready">Dossier ready</option>
+                <option value="missing">Needs dossier</option>
+              </select>
+              <select
+                className="input-text home-toolbar-select"
+                value={sort}
+                onChange={(e) => setSort(e.target.value as typeof sort)}
+                aria-label="Sort deals"
+              >
+                <option value="deal_score">Deal Score</option>
+                <option value="adjusted_cap_rate">Adjusted Cap Rate</option>
+                <option value="asset_cap_rate">Asset Cap Rate</option>
+                <option value="rent_upside">Rent Upside</option>
+                <option value="price">Price</option>
+              </select>
+              <select
+                className="input-text home-toolbar-select"
+                value={order}
+                onChange={(e) => setOrder(e.target.value as "asc" | "desc")}
+                aria-label="Sort direction"
+              >
+                <option value="desc">Desc</option>
+                <option value="asc">Asc</option>
+              </select>
+            </div>
+            <div className="home-toolbar-meta">
+              {filteredDeals.length} visible
+              {selectedCount > 0 ? ` • ${selectedCount} selected` : ""}
+            </div>
           </div>
 
           {error && (
-            <div className="card error" style={{ marginBottom: "1rem" }}>
+            <div className="card error" style={{ maxWidth: "none" }}>
               {error}
             </div>
           )}
 
-          {loading ? (
-            <div style={{ padding: "2rem", textAlign: "center", color: "#737373" }}>
-              Loading deals…
+          {actionMessage && (
+            <div
+              className="card"
+              style={{
+                maxWidth: "none",
+                borderColor: actionMessage.type === "success" ? "#86efac" : "#fca5a5",
+                background: actionMessage.type === "success" ? "#f0fdf4" : "#fef2f2",
+                color: actionMessage.type === "success" ? "#166534" : "#b91c1c",
+              }}
+            >
+              {actionMessage.text}
             </div>
-          ) : deals.length === 0 ? (
-            <div className="card" style={{ padding: "2rem", textAlign: "center", color: "#525252", marginBottom: "1rem" }}>
-              <p style={{ margin: "0 0 0.5rem", fontWeight: 600 }}>No scored deals yet</p>
-              <p style={{ margin: 0, fontSize: "0.9rem" }}>
-                Add properties and generate a dossier from Property Data to see deals here.
-              </p>
-              <Link href="/property-data" className="btn-primary" style={{ marginTop: "1rem", display: "inline-block" }}>
-                Go to Property Data
-              </Link>
+          )}
+
+          {loading ? (
+            <div className="home-empty-state">Loading deals…</div>
+          ) : filteredDeals.length === 0 ? (
+            <div className="home-empty-state">
+              {deals.length === 0 ? (
+                <>
+                  <strong>No scored deals yet.</strong>
+                  <span>Add listings in Property Data, generate a dossier, and they will show up here.</span>
+                </>
+              ) : (
+                <>
+                  <strong>No deals match the current filters.</strong>
+                  <span>Adjust search, sort, or dossier status to widen the feed.</span>
+                </>
+              )}
             </div>
           ) : (
-            <>
-              <div className="home-cards-container">
-                {deals.map((deal) => {
-                  const isSelected = selectedIds.has(deal.id);
-                  const disabled = !isSelected && selectedCount >= MAX_SELECT;
-                  const score = deal.dealScore ?? 0;
-                  const isSaved = savedIds.has(deal.id);
-                  return (
-                    <div
-                      key={deal.id}
-                      className={`property-card ${isSelected ? "property-card--selected" : ""}`}
-                    >
-                      <div className="property-card-inner">
-                        <div className="property-card-image-wrap">
-                          {deal.imageUrl ? (
-                            <img
-                              src={deal.imageUrl}
-                              alt=""
-                              className="property-card-image"
-                              style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
-                            />
-                          ) : (
-                            <div
-                              className="property-card-image"
-                              style={{ width: "100%", height: "100%", background: "#e5e5e5", display: "flex", alignItems: "center", justifyContent: "center", color: "#737373", fontSize: "0.85rem" }}
-                            >
-                              No image
-                            </div>
-                          )}
-                          <div className={`property-card-score-bubble ${getScoreBubbleClass(score)}`}>
-                            {Math.round(score)}
-                          </div>
-                          <div style={{ position: "absolute", top: "0.75rem", right: "0.75rem" }}>
-                            <button
-                              type="button"
-                              onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggleSaved(deal.id); }}
-                              disabled={savingId === deal.id}
-                              className="property-card-star"
-                              style={{
-                                background: "rgba(0,0,0,0.3)",
-                                border: "none",
-                                borderRadius: "4px",
-                                padding: "0.35rem",
-                                cursor: savingId === deal.id ? "wait" : "pointer",
-                                color: isSaved ? "#facc15" : "#fff",
-                              }}
-                              title={isSaved ? "Unsave deal" : "Save deal"}
-                              aria-label={isSaved ? "Unsave deal" : "Save deal"}
-                            >
-                              {isSaved ? "★" : "☆"}
-                            </button>
+            <div className="home-deal-grid">
+              {filteredDeals.map((deal) => {
+                const isSelected = selectedIds.has(deal.id);
+                const isSaved = savedIds.has(deal.id);
+                const dom = daysOnMarket(deal.listedAt);
+                const score = deal.dealScore ?? 0;
+                const dossierUrl = buildDossierFileUrl(deal);
+
+                return (
+                  <article
+                    key={deal.id}
+                    className={`home-deal-card ${isSelected ? "home-deal-card--selected" : ""}`}
+                  >
+                    <div className="home-deal-card-media">
+                      {deal.imageUrl ? (
+                        <img src={deal.imageUrl} alt="" className="home-deal-card-image" />
+                      ) : (
+                        <div className="home-deal-card-image home-deal-card-image--placeholder">No image</div>
+                      )}
+                      <div className={`property-card-score-bubble ${getScoreBubbleClass(score)}`}>
+                        {Math.round(score)}
+                      </div>
+                      <div className="home-deal-card-media-actions">
+                        <button
+                          type="button"
+                          onClick={() => toggleSaved(deal.id)}
+                          disabled={savingId === deal.id}
+                          className="property-card-star"
+                          title={isSaved ? "Unsave deal" : "Save deal"}
+                          aria-label={isSaved ? "Unsave deal" : "Save deal"}
+                        >
+                          {isSaved ? "★" : "☆"}
+                        </button>
+                        <span className={`home-deal-status-pill ${deal.dossierDocumentId ? "home-deal-status-pill--ready" : "home-deal-status-pill--pending"}`}>
+                          {deal.dossierDocumentId ? "Dossier ready" : "Needs dossier"}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="home-deal-card-body">
+                      <div className="home-deal-card-header">
+                        <div>
+                          <div className="property-card-address">{deal.address || "—"}</div>
+                          <div className="property-card-meta">
+                            {formatPrice(deal.price)} ask
+                            {dom != null ? ` • ${dom}d on market` : ""}
+                            {deal.dealScore != null ? ` • ${getDealStatusTag(deal.dealScore)}` : ""}
                           </div>
                         </div>
-                        <div className="property-card-body">
-                          <div className="property-card-header">
-                            <div className="property-card-header-left">
-                              <div className="property-card-address">{deal.address || "—"}</div>
-                              <div className="property-card-meta">
-                                {deal.totalUnits != null ? `${deal.totalUnits} units` : "—"} · {formatPrice(deal.price)}
-                              </div>
-                              {deal.dealScore != null && (
-                                <div style={{ fontSize: "0.7rem", color: "#737373", marginTop: "0.2rem" }}>
-                                  {getDealStatusTag(deal.dealScore)}
-                                </div>
-                              )}
-                            </div>
-                            <label className="property-card-checkbox-wrap">
-                              <input
-                                type="checkbox"
-                                checked={isSelected}
-                                onChange={() => toggleSelect(deal.id)}
-                                disabled={Boolean(disabled)}
-                                className="property-card-checkbox"
-                              />
-                              <span className="property-card-checkbox-label">Select</span>
-                            </label>
+                        <label className="property-card-checkbox-wrap">
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={() => toggleSelect(deal.id)}
+                            className="property-card-checkbox"
+                          />
+                          <span className="property-card-checkbox-label">Select</span>
+                        </label>
+                      </div>
+
+                      <div className="home-deal-facts">
+                        <span className="home-fact-pill">{formatCount(deal.totalUnits)} units</span>
+                        <span className="home-fact-pill">{formatCount(deal.beds)} beds</span>
+                        <span className="home-fact-pill">{formatCount(deal.baths)} baths</span>
+                        <span className="home-fact-pill">{formatCount(deal.residentialUnits)} res</span>
+                        <span className="home-fact-pill">{formatCount(deal.commercialUnits)} comm</span>
+                        <span className="home-fact-pill">{formatCount(deal.rentStabilizedUnits)} RS</span>
+                      </div>
+
+                      <div className="home-offer-strip">
+                        <div className="home-offer-strip-item">
+                          <span className="home-offer-strip-label">Recommended offer</span>
+                          <strong>
+                            {deal.recommendedOfferLow != null && deal.recommendedOfferHigh != null
+                              ? `${formatPrice(deal.recommendedOfferLow)} - ${formatPrice(deal.recommendedOfferHigh)}`
+                              : "—"}
+                          </strong>
+                        </div>
+                        <div className="home-offer-strip-item">
+                          <span className="home-offer-strip-label">Discount to ask</span>
+                          <strong>{deal.targetMetAtAsking ? "Target met at ask" : formatPctPoints(deal.discountToAskingPct)}</strong>
+                        </div>
+                        <div className="home-offer-strip-item">
+                          <span className="home-offer-strip-label">Target IRR</span>
+                          <strong>{deal.targetIrrPct != null ? `${deal.targetIrrPct.toFixed(0)}%` : "—"}</strong>
+                        </div>
+                      </div>
+
+                      <div className="property-card-section-title">Quick underwriting</div>
+                      <div className="property-card-metrics">
+                        <div className="property-card-metrics-col">
+                          <div className="property-metric">
+                            <span className="property-metric-label">Asset cap</span>
+                            <span className="property-metric-value">{formatPctPoints(deal.assetCapRate)}</span>
                           </div>
-                          <div className="property-card-section-title">Financial</div>
-                          <div className="property-card-metrics">
-                            <div className="property-card-metrics-col">
-                              <div className="property-metric">
-                                <span className="property-metric-label">Asset Cap</span>
-                                <span className="property-metric-value">{formatPctPoints(deal.assetCapRate)}</span>
-                              </div>
-                              <div className="property-metric">
-                                <span className="property-metric-label">Adjusted Cap</span>
-                                <span className="property-metric-value">{formatPctPoints(deal.adjustedCapRate)}</span>
-                              </div>
-                              <div className="property-metric">
-                                <span className="property-metric-label">Current NOI</span>
-                                <span className="property-metric-value">{deal.currentNoi != null ? formatPrice(deal.currentNoi) : "—"}</span>
-                              </div>
-                            </div>
-                            <div className="property-card-metrics-col">
-                              <div className="property-metric">
-                                <span className="property-metric-label">Rent Upside</span>
-                                <span className="property-metric-value">{formatPctPoints(deal.rentUpside)}</span>
-                              </div>
-                              <div className="property-metric">
-                                <span className="property-metric-label">Adjusted NOI</span>
-                                <span className="property-metric-value">{deal.adjustedNoi != null ? formatPrice(deal.adjustedNoi) : "—"}</span>
-                              </div>
-                              <div className="property-metric">
-                                <span className="property-metric-label">Deal Score</span>
-                                <span className="property-metric-value">{deal.dealScore != null ? Math.round(deal.dealScore) : "—"}</span>
-                              </div>
-                            </div>
+                          <div className="property-metric">
+                            <span className="property-metric-label">Current NOI</span>
+                            <span className="property-metric-value">{formatPrice(deal.currentNoi)}</span>
                           </div>
-                          <div className="property-card-section-title" style={{ marginTop: "0.5rem" }}>Returns</div>
-                          <div className="property-card-metrics">
-                            <div className="property-card-metrics-col">
-                              <div className="property-metric">
-                                <span className="property-metric-label">IRR {deal.holdYears != null ? `(${deal.holdYears} yr)` : ""}</span>
-                                <span className="property-metric-value">{formatPctDecimal(deal.irrPct)}</span>
-                              </div>
-                            </div>
-                            <div className="property-card-metrics-col">
-                              <div className="property-metric">
-                                <span className="property-metric-label">Equity multiple</span>
-                                <span className="property-metric-value">{deal.equityMultiple != null ? `${deal.equityMultiple.toFixed(2)}x` : "—"}</span>
-                              </div>
-                              <div className="property-metric">
-                                <span className="property-metric-label">CoC %</span>
-                                <span className="property-metric-value">{formatPctDecimal(deal.cocPct)}</span>
-                              </div>
-                            </div>
+                          <div className="property-metric">
+                            <span className="property-metric-label">IRR at asking</span>
+                            <span className="property-metric-value">{formatPctDecimal(deal.irrAtAskingPct)}</span>
                           </div>
-                          <div className="property-card-actions">
-                            <Link href={`/property/${deal.id}`} className="btn-card">
-                              View Deal
-                            </Link>
+                        </div>
+                        <div className="property-card-metrics-col">
+                          <div className="property-metric">
+                            <span className="property-metric-label">Adjusted cap</span>
+                            <span className="property-metric-value">{formatPctPoints(deal.adjustedCapRate)}</span>
+                          </div>
+                          <div className="property-metric">
+                            <span className="property-metric-label">Stabilized NOI</span>
+                            <span className="property-metric-value">{formatPrice(deal.stabilizedNoi ?? deal.adjustedNoi)}</span>
+                          </div>
+                          <div className="property-metric">
+                            <span className="property-metric-label">Rent upside</span>
+                            <span className="property-metric-value">{formatPctPoints(deal.rentUpside)}</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="property-card-section-title">Returns</div>
+                      <div className="property-card-metrics">
+                        <div className="property-card-metrics-col">
+                          <div className="property-metric">
+                            <span className="property-metric-label">IRR {deal.holdYears != null ? `(${deal.holdYears} yr)` : ""}</span>
+                            <span className="property-metric-value">{formatPctDecimal(deal.irrPct)}</span>
+                          </div>
+                          <div className="property-metric">
+                            <span className="property-metric-label">CoC</span>
+                            <span className="property-metric-value">{formatPctDecimal(deal.cocPct)}</span>
+                          </div>
+                        </div>
+                        <div className="property-card-metrics-col">
+                          <div className="property-metric">
+                            <span className="property-metric-label">Equity multiple</span>
+                            <span className="property-metric-value">{deal.equityMultiple != null ? `${deal.equityMultiple.toFixed(2)}x` : "—"}</span>
+                          </div>
+                          <div className="property-metric">
+                            <span className="property-metric-label">Debt service</span>
+                            <span className="property-metric-value">{formatPrice(deal.annualDebtService)}</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="home-deal-card-footer">
+                        <div className="home-deal-card-meta-footer">
+                          Listed {formatDateLabel(deal.listedAt)} • Scored {formatDateLabel(deal.generatedAt)}
+                          {deal.dossierCreatedAt ? ` • Dossier ${formatDateLabel(deal.dossierCreatedAt)}` : ""}
+                        </div>
+                        <div className="property-card-actions">
+                          <Link href={`/property/${deal.id}`} className="btn-card">
+                            View Deal
+                          </Link>
+                          {dossierUrl ? (
+                            <a href={dossierUrl} className="btn-card" target="_blank" rel="noreferrer">
+                              Download dossier
+                            </a>
+                          ) : (
                             <Link href={`/dossier-assumptions?property_id=${encodeURIComponent(deal.id)}`} className="btn-card">
-                              Generate Dossier
+                              Generate dossier
                             </Link>
-                          </div>
+                          )}
                         </div>
                       </div>
                     </div>
-                  );
-                })}
-              </div>
-              <div className="home-action-bar">
-                <label className="home-action-checkbox">
-                  <span>
-                    Select up to {MAX_SELECT} {selectedCount > 0 && `(${selectedCount} selected)`}
-                  </span>
-                </label>
-                <button
-                  type="button"
-                  className="btn-primary"
-                  onClick={() => selectedCount > 0 && setDossiersGenerated(true)}
-                  disabled={selectedCount === 0}
-                >
-                  Generate Dossiers
-                </button>
-                <input type="search" placeholder="Search" className="input-text home-action-search" disabled />
-                <select className="input-text home-action-select" disabled>
-                  <option>Secure confidence</option>
-                </select>
-              </div>
-
-              {dossiersGenerated && selectedDeals.length > 0 && (
-                <section className="home-dossiers">
-                  <h3 className="home-dossiers-title">Generated Dossiers</h3>
-                  <div className="home-dossiers-list">
-                    {selectedDeals.map((deal) => (
-                      <div key={deal.id} className="dossier-card">
-                        <div className="dossier-card-image" style={{ background: "#e5e5e5", minHeight: "78px" }} />
-                        <div className="dossier-card-body">
-                          <div className="dossier-card-address">{deal.address || "—"}</div>
-                          <div className="dossier-card-meta">
-                            Score {deal.dealScore != null ? Math.round(deal.dealScore) : "—"} · {formatPrice(deal.price)} · {deal.totalUnits != null ? `${deal.totalUnits} units` : "—"}
-                          </div>
-                          <div className="dossier-card-placeholder">
-                            <Link href={`/dossier-assumptions?property_id=${encodeURIComponent(deal.id)}`}>Open assumptions</Link> to generate full dossier.
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </section>
-              )}
-            </>
+                  </article>
+                );
+              })}
+            </div>
           )}
         </section>
 
-        <aside className="home-sidebar">
-          <h3 className="sidebar-title">Alerts & Actions</h3>
-          <div className="sidebar-section">
-            <label className="sidebar-checkbox">
-              <input type="checkbox" disabled />
-              Low confidence dedupes
-            </label>
-            <label className="sidebar-checkbox">
-              <input type="checkbox" disabled />
-              Flag incorrect merge
-            </label>
+        <aside className="home-sidebar home-sidebar--sticky">
+          <h2 className="sidebar-title">Selection & Actions</h2>
+          <p className="home-sidebar-copy">
+            Rerun enrichment or rental flow only for the properties you select. Use filters plus “select all visible” to refresh a subset fast.
+          </p>
+
+          <div className="home-sidebar-selection-card">
+            <div className="home-sidebar-selection-count">{selectedCount}</div>
+            <div>
+              <div className="home-sidebar-selection-label">Selected properties</div>
+              <div className="home-sidebar-selection-subtext">
+                {selectedVisibleCount} visible in the current filter set
+              </div>
+            </div>
           </div>
+
           <div className="sidebar-section">
-            <span className="sidebar-section-label">Qu Features</span>
-            <button type="button" className="btn-sidebar" disabled>Retrigger</button>
-            <button type="button" className="btn-sidebar" disabled>Recompute features</button>
-            <button type="button" className="btn-sidebar" disabled>Compute features</button>
+            <button type="button" className="btn-secondary" onClick={handleToggleSelectAllVisible} disabled={filteredDeals.length === 0}>
+              {allVisibleSelected ? "Clear visible selection" : `Select all visible (${filteredDeals.length})`}
+            </button>
+            <button type="button" className="btn-secondary" onClick={clearSelection} disabled={selectedCount === 0}>
+              Clear all selection
+            </button>
           </div>
+
           <div className="sidebar-section">
-            <label className="sidebar-checkbox">
-              <input type="checkbox" disabled />
-              Scoring tax
-            </label>
+            <span className="sidebar-section-label">Refresh selected properties</span>
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={() => handleRunSelected("enrichment")}
+              disabled={selectedCount === 0 || runningAction != null}
+            >
+              {runningAction === "enrichment" ? "Re-running enrichment…" : "Re-run enrichment"}
+            </button>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => handleRunSelected("rental")}
+              disabled={selectedCount === 0 || runningAction != null}
+            >
+              {runningAction === "rental" ? "Running rental flow…" : "Re-run rental flow"}
+            </button>
+          </div>
+
+          <div className="sidebar-section">
+            <span className="sidebar-section-label">What is new on this homepage</span>
+            <div className="home-sidebar-note">
+              Quick facts now surface units, beds, baths, residential vs commercial mix, rent-stabilized count, listed days, and recommended offer range directly on each card.
+            </div>
+            <div className="home-sidebar-note">
+              Dossiers can be downloaded directly when already generated; otherwise the card takes you straight to assumptions for generation.
+            </div>
           </div>
         </aside>
       </div>

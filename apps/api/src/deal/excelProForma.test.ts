@@ -107,25 +107,34 @@ describe("buildExcelProForma", () => {
   it("creates a workbook with linked formulas across the model sheets", () => {
     const workbook = XLSX.read(buildExcelProForma(sampleContext()), { type: "buffer" });
 
-    expect(workbook.SheetNames).toEqual([
-      "Assumptions",
-      "CurrentFinancials",
-      "Acquisition",
-      "Operations",
-      "Financing",
-      "Exit",
-      "CashFlow",
-      "Returns",
-      "Sensitivities",
-      "Summary",
-    ]);
+    expect(workbook.SheetNames).toEqual(["Assumptions", "Financing", "Cash Flow", "Summary"]);
 
-    expect(workbook.Sheets.Acquisition?.B5?.f).toBe("B3*(B4/100)");
-    expect(workbook.Sheets.Operations?.B14?.f).toBe("B11-B12-B13");
-    expect(workbook.Sheets.Exit?.B10?.f).toBe("B8-B9");
-    expect(workbook.Sheets.CashFlow?.B5?.f).toBe('IF(A5<=Exit!$B$3,C5+E5,"")');
-    expect(workbook.Sheets.Returns?.B5?.f).toBe('IFERROR(IRR(CashFlow!B4:INDEX(CashFlow!B:B,4+Exit!B3)),"")');
-    expect(workbook.Sheets.Sensitivities?.E8?.f).toBe('IFERROR(IRR(H8:INDEX(8:8,18)),"")');
-    expect(workbook.Sheets.Summary?.B17?.f).toBe("Returns!B5");
+    expect(workbook.Sheets.Financing?.B2?.f).toBe("Assumptions!B7*(Assumptions!B15/100)");
+    expect(workbook.Sheets.Financing?.B3?.f).toBe("B2*(Assumptions!B18/100)");
+    expect(workbook.Sheets.Financing?.F13?.f).toBe(
+      "IF(B13=0,0,IF(A13*12>=$B$8,0,IF($B$7=0,MAX(0,$B$2-($B$9*12*A13)),MAX(0,$B$2*(1+$B$7)^(MIN(A13*12,$B$8))-$B$9*(((1+$B$7)^(MIN(A13*12,$B$8))-1)/$B$7)))))"
+    );
+
+    expect(workbook.Sheets["Cash Flow"]?.D7?.f).toBe(
+      "IF(OR(D$5=0,D$5>Assumptions!B32),0,Assumptions!B11*(1+Assumptions!B21/100)*(1+Assumptions!B26/100)^(D$5-1))"
+    );
+    expect(workbook.Sheets["Cash Flow"]?.I7?.f).toBe(
+      "IF(OR(I$5=0,I$5>Assumptions!B32),0,Assumptions!B11*(1+Assumptions!B21/100)*(1+Assumptions!B26/100)^(I$5-1))"
+    );
+    expect(workbook.Sheets["Cash Flow"]?.A21?.v).toBe("CF from operations");
+    expect(workbook.Sheets["Cash Flow"]?.C21?.f).toBe("IF(OR(C$5=0,C$5>Assumptions!B32),0,C19+C20)");
+    expect(workbook.Sheets["Cash Flow"]?.A36?.v).toBe("Levered CF");
+    expect(workbook.Sheets["Cash Flow"]?.C36?.f).toBe("C26+C29+C30+C33+C34+C35");
+
+    expect(workbook.Sheets.Summary?.E10?.f).toBe(
+      `IFERROR(IRR('Cash Flow'!C31:INDEX(31:31,3+Assumptions!B32)),"")`
+    );
+    expect(workbook.Sheets.Summary?.E13?.f).toBe(
+      `IF(ABS('Cash Flow'!C36)=0,0,SUMPRODUCT(('Cash Flow'!D36:INDEX(36:36,3+Assumptions!B32))*--('Cash Flow'!D36:INDEX(36:36,3+Assumptions!B32)>0))/ABS('Cash Flow'!C36))`
+    );
+    expect(workbook.Sheets.Summary?.E6?.f).toBe(
+      `INDEX('Cash Flow'!C19:M19,1,IF(Assumptions!B25>0,MIN(Assumptions!B32,2),MIN(Assumptions!B32,1))+1)`
+    );
+    expect(workbook.Sheets.Summary?.B11?.f).toBe("Financing!B3");
   });
 });

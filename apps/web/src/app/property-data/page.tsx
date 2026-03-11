@@ -5,6 +5,12 @@ import { useSearchParams } from "next/navigation";
 import { PropertyDetailCollapsible } from "./PropertyDetailCollapsible";
 import { CanonicalPropertyDetail, type CanonicalProperty } from "./CanonicalPropertyDetail";
 import { AREA_OPTIONS, cityToArea, cityFromCanonicalAddress } from "./areas";
+import {
+  estimateGenerationProgress,
+  generationStageLabel,
+  getPropertyDossierGeneration,
+  type LocalDossierJobState,
+} from "./dossierState";
 
 function formatElapsed(seconds: number): string {
   const m = Math.floor(seconds / 60);
@@ -27,14 +33,63 @@ const ENRICHMENT_MODULE_LABELS: Record<string, string> = {
   housing_litigations: "Housing Litigations",
 };
 
-interface RunLogEntry {
-  runNumber: number;
-  runId: string;
-  sentAt: string;
-  criteria?: Record<string, unknown>;
-  listingsCreated: number;
-  listingsUpdated: number;
+interface WorkflowBoardColumn {
+  key: string;
+  label: string;
+  shortLabel: string;
 }
+
+interface WorkflowBoardStep {
+  key: string;
+  label: string;
+  status: "pending" | "running" | "completed" | "failed" | "partial";
+  totalItems: number;
+  completedItems: number;
+  failedItems: number;
+  skippedItems: number;
+  lastMessage: string | null;
+  lastError: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+  metadata?: Record<string, unknown> | null;
+}
+
+interface WorkflowBoardRun {
+  id: string;
+  runNumber: number;
+  runType: string;
+  displayName: string;
+  scopeLabel: string | null;
+  triggerSource: string;
+  totalItems: number;
+  status: "pending" | "running" | "completed" | "failed" | "partial";
+  startedAt: string;
+  finishedAt: string | null;
+  metadata?: Record<string, unknown> | null;
+  steps: WorkflowBoardStep[];
+}
+
+interface WorkflowBoardPayload {
+  columns: WorkflowBoardColumn[];
+  runs: WorkflowBoardRun[];
+}
+
+const DEFAULT_WORKFLOW_COLUMNS: WorkflowBoardColumn[] = [
+  { key: "raw_ingest", label: "Raw Ingest", shortLabel: "Raw" },
+  { key: "canonical", label: "Canonical", shortLabel: "Canonical" },
+  { key: "permits", label: "Permits", shortLabel: "Permits" },
+  { key: "hpd_registration", label: "HPD Registration", shortLabel: "HPD Reg" },
+  { key: "certificate_of_occupancy", label: "Certificate of Occupancy", shortLabel: "CO" },
+  { key: "zoning_ztl", label: "Zoning", shortLabel: "Zoning" },
+  { key: "dob_complaints", label: "DOB Complaints", shortLabel: "DOB" },
+  { key: "hpd_violations", label: "HPD Violations", shortLabel: "HPD Viol." },
+  { key: "housing_litigations", label: "Housing Litigations", shortLabel: "Litig." },
+  { key: "rental_flow", label: "Rental Flow", shortLabel: "Rental" },
+  { key: "om_financials", label: "OM Financials", shortLabel: "OM" },
+  { key: "inquiry", label: "Inquiry", shortLabel: "Inquiry" },
+  { key: "inbox", label: "Inbox", shortLabel: "Inbox" },
+  { key: "dossier", label: "Dossier", shortLabel: "Dossier" },
+];
 
 interface PipelineEnrichmentRow {
   key: string;
@@ -62,6 +117,11 @@ interface LastEnrichmentResult {
   omFinancialsSkippedNoFile?: number;
   /** Rental flow (RapidAPI + LLM on listing) runs automatically; summary when present. */
   rentalFlow?: { ran: boolean; success: number; failed: number };
+}
+
+interface DossierNotice {
+  type: "success" | "error";
+  message: string;
 }
 
 interface AgentEnrichmentEntry {
@@ -103,6 +163,36 @@ interface ListingRow {
   duplicateScore?: number | null;
 }
 
+function workflowStatusStyle(status: WorkflowBoardRun["status"] | WorkflowBoardStep["status"]) {
+  switch (status) {
+    case "running":
+      return { color: "#1d4ed8", backgroundColor: "#dbeafe", borderColor: "#93c5fd" };
+    case "completed":
+      return { color: "#166534", backgroundColor: "#dcfce7", borderColor: "#86efac" };
+    case "failed":
+      return { color: "#b91c1c", backgroundColor: "#fee2e2", borderColor: "#fca5a5" };
+    case "partial":
+      return { color: "#9a3412", backgroundColor: "#ffedd5", borderColor: "#fdba74" };
+    default:
+      return { color: "#475569", backgroundColor: "#f8fafc", borderColor: "#cbd5e1" };
+  }
+}
+
+function workflowStatusLabel(status: WorkflowBoardRun["status"] | WorkflowBoardStep["status"]) {
+  switch (status) {
+    case "running":
+      return "In progress";
+    case "completed":
+      return "Done";
+    case "failed":
+      return "Failed";
+    case "partial":
+      return "Partial";
+    default:
+      return "Pending";
+  }
+}
+
 function PropertyDataContent() {
   const [activeTab, setActiveTab] = useState<TabId>("canonical");
   const [listings, setListings] = useState<ListingRow[]>([]);
@@ -113,10 +203,13 @@ function PropertyDataContent() {
   const [expandedRowId, setExpandedRowId] = useState<string | null>(null);
   const [clearing, setClearing] = useState(false);
   const [clearingCanonical, setClearingCanonical] = useState(false);
-  const [runLog, setRunLog] = useState<RunLogEntry[]>([]);
-  const [runLogOpen, setRunLogOpen] = useState(false);
   const [pipelineStats, setPipelineStats] = useState<PipelineStats | null>(null);
   const [pipelineStatsOpen, setPipelineStatsOpen] = useState(false);
+  const [workflowBoard, setWorkflowBoard] = useState<WorkflowBoardPayload>({
+    columns: DEFAULT_WORKFLOW_COLUMNS,
+    runs: [],
+  });
+  const [workflowBoardOpen, setWorkflowBoardOpen] = useState(true);
   const [reviewDupOpen, setReviewDupOpen] = useState(false);
   const [duplicateCandidates, setDuplicateCandidates] = useState<ListingRow[]>([]);
   const [loadingDup, setLoadingDup] = useState(false);
@@ -130,10 +223,14 @@ function PropertyDataContent() {
   const [savedPropertyIds, setSavedPropertyIds] = useState<Set<string>>(new Set());
   const [savedDealsLoading, setSavedDealsLoading] = useState<Set<string>>(new Set());
   const [selectedListingIds, setSelectedListingIds] = useState<Set<string>>(new Set());
+  const [selectedCanonicalIds, setSelectedCanonicalIds] = useState<Set<string>>(new Set());
   const [enrichmentTimerSeconds, setEnrichmentTimerSeconds] = useState(0);
   const enrichmentTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const selectAllCheckboxRef = useRef<HTMLInputElement | null>(null);
+  const selectAllRawCheckboxRef = useRef<HTMLInputElement | null>(null);
+  const selectAllCanonicalCheckboxRef = useRef<HTMLInputElement | null>(null);
   const [lastEnrichmentResult, setLastEnrichmentResult] = useState<LastEnrichmentResult | null>(null);
+  const [localDossierJobs, setLocalDossierJobs] = useState<Record<string, LocalDossierJobState>>({});
+  const [dossierNotice, setDossierNotice] = useState<DossierNotice | null>(null);
 
   // Filter/sort state (shared concept for raw and canonical)
   const [sortBy, setSortBy] = useState<"price" | "listedAt" | "area">("listedAt");
@@ -159,11 +256,16 @@ function PropertyDataContent() {
       .finally(() => setLoading(false));
   }, []);
 
-  const fetchRunLog = useCallback(() => {
-    fetch(`${API_BASE}/api/test-agent/property-data/runs`)
+  const fetchWorkflowBoard = useCallback(() => {
+    fetch(`${API_BASE}/api/properties/workflow-board`)
       .then((r) => r.json())
-      .then((data) => setRunLog(data.runs ?? []))
-      .catch(() => setRunLog([]));
+      .then((data) =>
+        setWorkflowBoard({
+          columns: Array.isArray(data.columns) && data.columns.length > 0 ? data.columns : DEFAULT_WORKFLOW_COLUMNS,
+          runs: Array.isArray(data.runs) ? data.runs : [],
+        })
+      )
+      .catch(() => setWorkflowBoard({ columns: DEFAULT_WORKFLOW_COLUMNS, runs: [] }));
   }, []);
 
   const fetchPipelineStats = useCallback((includeRemaining = false) => {
@@ -182,8 +284,8 @@ function PropertyDataContent() {
       .catch(() => setPipelineStats(null));
   }, []);
 
-  const fetchCanonicalProperties = useCallback(() => {
-    setLoadingCanonical(true);
+  const fetchCanonicalProperties = useCallback((quiet = false) => {
+    if (!quiet) setLoadingCanonical(true);
     fetch(`${API_BASE}/api/properties?includeListingSummary=1`)
       .then(async (r) => {
         const data = await r.json().catch(() => ({}));
@@ -192,7 +294,9 @@ function PropertyDataContent() {
         setCanonicalProperties(data.properties ?? []);
       })
       .catch((e) => setError(e.message === "Failed to fetch" ? `Cannot reach API at ${API_BASE}. Check CORS and NEXT_PUBLIC_API_URL.` : (e.message || "Failed to load canonical properties")))
-      .finally(() => setLoadingCanonical(false));
+      .finally(() => {
+        if (!quiet) setLoadingCanonical(false);
+      });
   }, []);
 
   useEffect(() => {
@@ -204,19 +308,54 @@ function PropertyDataContent() {
   }, [activeTab, fetchCanonicalProperties]);
 
   useEffect(() => {
+    if (!dossierNotice) return;
+    const timeoutId = window.setTimeout(() => setDossierNotice(null), 7000);
+    return () => window.clearTimeout(timeoutId);
+  }, [dossierNotice]);
+
+  const anyRunningDossierJobs = Object.values(localDossierJobs).some((job) => job.status === "running");
+
+  useEffect(() => {
+    if (!anyRunningDossierJobs) return;
+    const intervalId = window.setInterval(() => {
+      setLocalDossierJobs((prev) => {
+        let changed = false;
+        const next: Record<string, LocalDossierJobState> = {};
+        for (const [propertyId, job] of Object.entries(prev)) {
+          if (job.status !== "running") {
+            next[propertyId] = job;
+            continue;
+          }
+          const progressPct = estimateGenerationProgress(Date.now() - job.startedAt);
+          if (progressPct !== job.progressPct) changed = true;
+          next[propertyId] = { ...job, progressPct, stageLabel: generationStageLabel(progressPct) };
+        }
+        return changed ? next : prev;
+      });
+    }, 500);
+    return () => window.clearInterval(intervalId);
+  }, [anyRunningDossierJobs]);
+
+  useEffect(() => {
     if (canonicalProperties.length === 0) return;
     const ids = canonicalProperties.map((p) => p.id).join(",");
     fetch(`${API_BASE}/api/profile/saved-deals/check?propertyIds=${encodeURIComponent(ids)}`)
       .then((r) => r.json())
       .then((data) => {
-        // #region agent log
         const hasSaved = data && typeof data.saved === "object";
-        fetch("http://127.0.0.1:7590/ingest/742bd78a-5157-440b-b6aa-e9509cd8e861",{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":"fd8b77"},body:JSON.stringify({sessionId:"fd8b77",location:"property-data/page.tsx:saved-check",message:"Saved-deals check response",data:{hasSaved,keysCount:hasSaved?Object.keys(data.saved).length:0},timestamp:Date.now(),hypothesisId:"H2"})}).catch(()=>{});
-        // #endregion
         if (hasSaved)
           setSavedPropertyIds(new Set(Object.keys(data.saved).filter((id) => Boolean(data.saved[id]))));
       })
       .catch(() => {});
+  }, [canonicalProperties]);
+
+  useEffect(() => {
+    setSelectedCanonicalIds((prev) => {
+      if (prev.size === 0) return prev;
+      const available = new Set(canonicalProperties.map((property) => property.id));
+      const next = new Set(Array.from(prev).filter((id) => available.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
   }, [canonicalProperties]);
 
   // Timer for LLM enrichment / loading: track elapsed time while raw listings are loading so user knows data may still be populating
@@ -243,10 +382,6 @@ function PropertyDataContent() {
   }, [activeTab, loading]);
 
   useEffect(() => {
-    fetchRunLog();
-  }, [fetchRunLog]);
-
-  useEffect(() => {
     fetchPipelineStats(true);
   }, [fetchPipelineStats]);
 
@@ -257,6 +392,28 @@ function PropertyDataContent() {
     const interval = setInterval(() => fetchPipelineStats(true), 2500);
     return () => clearInterval(interval);
   }, [rerunningEnrichment, fetchPipelineStats]);
+
+  const hasActiveWorkflowRuns = workflowBoard.runs.some((run) => run.status === "running" || run.status === "pending");
+
+  useEffect(() => {
+    fetchWorkflowBoard();
+  }, [fetchWorkflowBoard]);
+
+  useEffect(() => {
+    const intervalMs =
+      hasActiveWorkflowRuns || sendingToCanonical || rerunningEnrichment || runningRentalFlow || anyRunningDossierJobs
+        ? 2500
+        : 15000;
+    const intervalId = window.setInterval(fetchWorkflowBoard, intervalMs);
+    return () => window.clearInterval(intervalId);
+  }, [
+    anyRunningDossierJobs,
+    fetchWorkflowBoard,
+    hasActiveWorkflowRuns,
+    rerunningEnrichment,
+    runningRentalFlow,
+    sendingToCanonical,
+  ]);
 
   const selectedListing = selectedId ? listings.find((l) => l.id === selectedId) ?? null : null;
 
@@ -374,6 +531,263 @@ function PropertyDataContent() {
     };
   };
 
+  const dossierCellMeta = (prop: CanonicalProperty) => {
+    const localJob = localDossierJobs[prop.id];
+    const persisted = getPropertyDossierGeneration((prop.details ?? null) as Record<string, unknown> | null);
+
+    if (localJob?.status === "running") {
+      return {
+        label: `Generating ${localJob.progressPct}%`,
+        detail: localJob.stageLabel,
+        style: { color: "#1d4ed8", backgroundColor: "#dbeafe", borderColor: "#93c5fd" },
+      };
+    }
+    if (localJob?.status === "failed") {
+      return {
+        label: "Failed",
+        detail: localJob.notice ?? persisted?.lastError ?? "Generation failed",
+        style: { color: "#b91c1c", backgroundColor: "#fee2e2", borderColor: "#fca5a5" },
+      };
+    }
+    if (localJob?.status === "completed") {
+      return {
+        label: "Complete",
+        detail: "PDF + Excel saved",
+        style: { color: "#166534", backgroundColor: "#dcfce7", borderColor: "#86efac" },
+      };
+    }
+    if (persisted?.status === "running") {
+      return {
+        label: "Generating",
+        detail: persisted.stageLabel ?? "In progress",
+        style: { color: "#1d4ed8", backgroundColor: "#dbeafe", borderColor: "#93c5fd" },
+      };
+    }
+    if (persisted?.status === "failed") {
+      return {
+        label: "Failed",
+        detail: persisted.lastError ?? "Last run failed",
+        style: { color: "#b91c1c", backgroundColor: "#fee2e2", borderColor: "#fca5a5" },
+      };
+    }
+    if (persisted?.status === "completed" || prop.dealScore != null) {
+      return {
+        label: "Complete",
+        detail: persisted?.completedAt ? formatListedDate(persisted.completedAt) : "Ready",
+        style: { color: "#166534", backgroundColor: "#dcfce7", borderColor: "#86efac" },
+      };
+    }
+    return {
+      label: "Not started",
+      detail: "Uses profile + property defaults",
+      style: { color: "#475569", backgroundColor: "#f8fafc", borderColor: "#cbd5e1" },
+    };
+  };
+
+  const handleDossierJobChange = (propertyId: string, job: LocalDossierJobState | null) => {
+    setLocalDossierJobs((prev) => {
+      if (!job) {
+        if (!(propertyId in prev)) return prev;
+        const next = { ...prev };
+        delete next[propertyId];
+        return next;
+      }
+      return { ...prev, [propertyId]: job };
+    });
+  };
+
+  const handleDossierNotice = (
+    propertyId: string,
+    notice: { type: "success" | "error"; message: string }
+  ) => {
+    setDossierNotice(notice);
+    fetchCanonicalProperties(true);
+    if (notice.type !== "success") return;
+    setLocalDossierJobs((prev) => {
+      const job = prev[propertyId];
+      if (!job) return prev;
+      return {
+        ...prev,
+        [propertyId]: {
+          ...job,
+          status: "completed",
+          progressPct: 100,
+          stageLabel: "Dossier ready",
+          notice: notice.message,
+        },
+      };
+    });
+  };
+
+  const propertyIdsFromWorkflowRun = (run: WorkflowBoardRun): string[] => {
+    const rawIds = run.metadata?.propertyIds;
+    return Array.isArray(rawIds) ? rawIds.filter((id): id is string => typeof id === "string" && id.trim().length > 0) : [];
+  };
+
+  const workflowByPropertyId = useMemo(() => {
+    const map = new Map<string, WorkflowBoardRun>();
+    for (const run of workflowBoard.runs) {
+      if (run.status === "completed") continue;
+      for (const propertyId of propertyIdsFromWorkflowRun(run)) {
+        if (!map.has(propertyId)) map.set(propertyId, run);
+      }
+    }
+    return map;
+  }, [workflowBoard.runs]);
+
+  const refreshingPropertyIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const run of workflowBoard.runs) {
+      if (run.status !== "running" && run.status !== "pending") continue;
+      if (!["add_to_canonical", "rerun_enrichment", "refresh_om_financials", "rerun_rental_flow"].includes(run.runType)) continue;
+      for (const propertyId of propertyIdsFromWorkflowRun(run)) ids.add(propertyId);
+    }
+    return ids;
+  }, [workflowBoard.runs]);
+
+  const failedWorkflowPropertyIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const run of workflowBoard.runs) {
+      if (run.status !== "failed" && run.status !== "partial") continue;
+      for (const propertyId of propertyIdsFromWorkflowRun(run)) ids.add(propertyId);
+    }
+    return ids;
+  }, [workflowBoard.runs]);
+
+  const stageSummary = useMemo(() => {
+    let newCount = 0;
+    let inquiryOut = 0;
+    let omReceived = 0;
+    let underwritingReady = 0;
+    let dossierRunningCount = 0;
+    let dossierReadyCount = 0;
+    for (const prop of canonicalProperties) {
+      const details = (prop.details ?? null) as Record<string, unknown> | null;
+      const rentalFinancials = details?.rentalFinancials as Record<string, unknown> | undefined;
+      const hasOmAnalysis = Boolean(
+        rentalFinancials &&
+        typeof rentalFinancials === "object" &&
+        rentalFinancials.omAnalysis &&
+        typeof rentalFinancials.omAnalysis === "object"
+      );
+      const persistedDossier = getPropertyDossierGeneration(details);
+      const localJob = localDossierJobs[prop.id];
+      const dossierRunning = localJob?.status === "running" || persistedDossier?.status === "running";
+      const dossierReady = localJob?.status === "completed" || persistedDossier?.status === "completed";
+      if (prop.omStatus === "Not received") newCount++;
+      if (prop.omStatus === "OM pending") inquiryOut++;
+      if (prop.omStatus === "OM received" && !hasOmAnalysis) omReceived++;
+      if (hasOmAnalysis || prop.dealScore != null) underwritingReady++;
+      if (dossierRunning) dossierRunningCount++;
+      if (dossierReady) dossierReadyCount++;
+    }
+    return [
+      { label: "New", count: newCount, tone: "#475569", bg: "#f8fafc", border: "#cbd5e1" },
+      { label: "Inquiry out", count: inquiryOut, tone: "#9a3412", bg: "#ffedd5", border: "#fdba74" },
+      { label: "OM received", count: omReceived, tone: "#854d0e", bg: "#fef3c7", border: "#fcd34d" },
+      { label: "Underwriting ready", count: underwritingReady, tone: "#166534", bg: "#dcfce7", border: "#86efac" },
+      { label: "Dossier running", count: dossierRunningCount, tone: "#1d4ed8", bg: "#dbeafe", border: "#93c5fd" },
+      { label: "Dossier ready", count: dossierReadyCount, tone: "#166534", bg: "#dcfce7", border: "#86efac" },
+      { label: "Refreshing", count: refreshingPropertyIds.size, tone: "#1d4ed8", bg: "#dbeafe", border: "#93c5fd" },
+      { label: "Workflow issues", count: failedWorkflowPropertyIds.size, tone: "#b91c1c", bg: "#fee2e2", border: "#fca5a5" },
+    ];
+  }, [canonicalProperties, failedWorkflowPropertyIds, localDossierJobs, refreshingPropertyIds]);
+
+  const underwritingCellMeta = (prop: CanonicalProperty) => {
+    const details = (prop.details ?? null) as Record<string, unknown> | null;
+    const rentalFinancials = details?.rentalFinancials as Record<string, unknown> | undefined;
+    const hasOmAnalysis = Boolean(
+      rentalFinancials &&
+      typeof rentalFinancials === "object" &&
+      rentalFinancials.omAnalysis &&
+      typeof rentalFinancials.omAnalysis === "object"
+    );
+    if (refreshingPropertyIds.has(prop.id)) {
+      return {
+        label: "Refreshing",
+        detail: "Updating inputs",
+        style: workflowStatusStyle("running"),
+      };
+    }
+    if (hasOmAnalysis || prop.dealScore != null) {
+      return {
+        label: "Ready",
+        detail: prop.dealScore != null ? `Score ${prop.dealScore}` : "OM parsed",
+        style: workflowStatusStyle("completed"),
+      };
+    }
+    if (prop.omStatus === "OM received") {
+      return {
+        label: "OM received",
+        detail: "Ready to parse",
+        style: workflowStatusStyle("partial"),
+      };
+    }
+    if (prop.omStatus === "OM pending") {
+      return {
+        label: "Waiting on OM",
+        detail: "Inquiry sent",
+        style: workflowStatusStyle("pending"),
+      };
+    }
+    return {
+      label: "Not started",
+      detail: "Needs OM",
+      style: workflowStatusStyle("pending"),
+    };
+  };
+
+  const omCellMeta = (prop: CanonicalProperty) => {
+    if (prop.omStatus === "OM received") {
+      return {
+        label: "OM received",
+        detail: "Document on file",
+        style: workflowStatusStyle("completed"),
+      };
+    }
+    if (prop.omStatus === "OM pending") {
+      return {
+        label: "Pending",
+        detail: "Waiting on broker",
+        style: workflowStatusStyle("partial"),
+      };
+    }
+    return {
+      label: "Not received",
+      detail: "No OM yet",
+      style: workflowStatusStyle("pending"),
+    };
+  };
+
+  const activeRunCellMeta = (prop: CanonicalProperty) => {
+    const run = workflowByPropertyId.get(prop.id);
+    if (!run) {
+      return {
+        label: "Idle",
+        detail: "No active job",
+        style: workflowStatusStyle("pending"),
+      };
+    }
+    const activeStep = run.steps.find((step) => step.status === "running" || step.status === "partial" || step.status === "failed");
+    return {
+      label: run.displayName,
+      detail: activeStep?.label ?? workflowStatusLabel(run.status),
+      style: workflowStatusStyle(run.status),
+    };
+  };
+
+  const workflowColumns = workflowBoard.columns.length > 0 ? workflowBoard.columns : DEFAULT_WORKFLOW_COLUMNS;
+
+  const workflowStepForColumn = (run: WorkflowBoardRun, columnKey: string) =>
+    run.steps.find((step) => step.key === columnKey) ?? null;
+
+  const formatDateTime = (iso: string | null | undefined) => {
+    if (!iso) return "—";
+    const date = new Date(iso);
+    if (Number.isNaN(date.getTime())) return "—";
+    return date.toLocaleString("en-US", { month: "numeric", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
+  };
+
   const handleClearRawListings = () => {
     if (!confirm("Clear all raw listings and their snapshots? This cannot be undone.")) return;
     setClearing(true);
@@ -388,6 +802,7 @@ function PropertyDataContent() {
         if (data?.error) throw new Error(data.error);
         fetchListings();
         fetchPipelineStats(true);
+        fetchWorkflowBoard();
       })
       .catch((e) => setError(e instanceof Error ? e.message : "Failed to clear raw listings"))
       .finally(() => setClearing(false));
@@ -407,6 +822,7 @@ function PropertyDataContent() {
         if (data?.error) throw new Error(data.error);
         fetchCanonicalProperties();
         fetchPipelineStats(true);
+        fetchWorkflowBoard();
       })
       .catch((e) => setError(e instanceof Error ? e.message : "Failed to clear canonical properties"))
       .finally(() => setClearingCanonical(false));
@@ -455,6 +871,7 @@ function PropertyDataContent() {
     setError(null);
     setLastEnrichmentResult(null);
     setPipelineStatsOpen(true);
+    fetchWorkflowBoard();
     const body =
       selectedListingIds.size > 0
         ? { listingIds: Array.from(selectedListingIds) }
@@ -487,6 +904,7 @@ function PropertyDataContent() {
         setSelectedListingIds(new Set());
         fetchCanonicalProperties();
         fetchPipelineStats(true);
+        fetchWorkflowBoard();
         setActiveTab("canonical");
       })
       .catch((e) => setError(e.message || "Failed to send to canonical"))
@@ -502,6 +920,15 @@ function PropertyDataContent() {
     });
   };
 
+  const toggleCanonicalSelection = (id: string) => {
+    setSelectedCanonicalIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
   const selectAllListings = () => {
     setSelectedListingIds(new Set(filteredSortedListings.map((r) => r.id)));
   };
@@ -510,17 +937,27 @@ function PropertyDataContent() {
     setSelectedListingIds(new Set());
   };
 
+  const selectAllCanonical = () => {
+    setSelectedCanonicalIds(new Set(filteredSortedCanonical.map((property) => property.id)));
+  };
+
+  const clearCanonicalSelection = () => {
+    setSelectedCanonicalIds(new Set());
+  };
+
   const handleRerunEnrichment = () => {
-    if (canonicalProperties.length === 0) return;
-    if (!confirm(`Re-run enrichment for all ${canonicalProperties.length} canonical propert${canonicalProperties.length === 1 ? "y" : "ies"}? This will refresh data from NYC Open Data (BBL is assumed already set).`)) return;
+    if (selectedCanonicalIds.size === 0) return;
+    const propertyIds = Array.from(selectedCanonicalIds);
+    if (!confirm(`Re-run enrichment for ${propertyIds.length} selected canonical propert${propertyIds.length === 1 ? "y" : "ies"}? This will refresh data from NYC Open Data (BBL is assumed already set).`)) return;
     setRerunningEnrichment(true);
     setError(null);
     setLastEnrichmentResult(null);
     setPipelineStatsOpen(true);
+    fetchWorkflowBoard();
     fetch(`${API_BASE}/api/properties/run-enrichment`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ propertyIds: canonicalProperties.map((p) => p.id) }),
+      body: JSON.stringify({ propertyIds }),
     })
       .then(async (r) => {
         const text = await r.text();
@@ -555,25 +992,29 @@ function PropertyDataContent() {
         }
         fetchCanonicalProperties();
         fetchPipelineStats(true);
+        fetchWorkflowBoard();
       })
       .catch((e) => setError(e.message || "Failed to re-run enrichment"))
       .finally(() => setRerunningEnrichment(false));
   };
 
   const handleRunRentalFlow = () => {
-    if (canonicalProperties.length === 0) return;
-    if (!confirm(`Run rental flow (RapidAPI + LLM) for all ${canonicalProperties.length} canonical propert${canonicalProperties.length === 1 ? "y" : "ies"}? This fetches rental data by URL and extracts financials from listing text.`)) return;
+    if (selectedCanonicalIds.size === 0) return;
+    const propertyIds = Array.from(selectedCanonicalIds);
+    if (!confirm(`Run rental flow (RapidAPI + LLM) for ${propertyIds.length} selected canonical propert${propertyIds.length === 1 ? "y" : "ies"}? This fetches rental data by URL and extracts financials from listing text.`)) return;
     setRunningRentalFlow(true);
     setError(null);
+    fetchWorkflowBoard();
     fetch(`${API_BASE}/api/properties/run-rental-flow`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ propertyIds: canonicalProperties.map((p) => p.id) }),
+      body: JSON.stringify({ propertyIds }),
     })
       .then((r) => r.json())
       .then((data) => {
         if (data.error) throw new Error(data.error);
         fetchCanonicalProperties();
+        fetchWorkflowBoard();
         const withUnits = (data.results ?? []).filter((r: { rentalUnitsCount?: number }) => (r.rentalUnitsCount ?? 0) > 0).length;
         const withLlm = (data.results ?? []).filter((r: { hasLlmFinancials?: boolean }) => r.hasLlmFinancials).length;
         alert(`Done. ${withUnits} propert${withUnits === 1 ? "y" : "ies"} with rental units; ${withLlm} with LLM financials.`);
@@ -584,11 +1025,20 @@ function PropertyDataContent() {
 
   const allSelected = filteredSortedListings.length > 0 && filteredSortedListings.every((l) => selectedListingIds.has(l.id));
   const someSelected = selectedListingIds.size > 0;
+  const allCanonicalSelected =
+    filteredSortedCanonical.length > 0 &&
+    filteredSortedCanonical.every((property) => selectedCanonicalIds.has(property.id));
+  const someCanonicalSelected = selectedCanonicalIds.size > 0;
 
   useEffect(() => {
-    const el = selectAllCheckboxRef.current;
+    const el = selectAllRawCheckboxRef.current;
     if (el) el.indeterminate = someSelected && !allSelected;
   }, [someSelected, allSelected]);
+
+  useEffect(() => {
+    const el = selectAllCanonicalCheckboxRef.current;
+    if (el) el.indeterminate = someCanonicalSelected && !allCanonicalSelected;
+  }, [someCanonicalSelected, allCanonicalSelected]);
 
   return (
     <div className="property-data-layout">
@@ -726,6 +1176,21 @@ function PropertyDataContent() {
               {error}
             </div>
           )}
+          {dossierNotice && (
+            <div
+              style={{
+                margin: "1rem",
+                padding: "0.85rem 1rem",
+                borderRadius: "10px",
+                border: dossierNotice.type === "success" ? "1px solid #86efac" : "1px solid #fca5a5",
+                background: dossierNotice.type === "success" ? "#f0fdf4" : "#fef2f2",
+                color: dossierNotice.type === "success" ? "#166534" : "#b91c1c",
+                fontSize: "0.9rem",
+              }}
+            >
+              {dossierNotice.message}
+            </div>
+          )}
           {loading && activeTab === "raw" && (
             <div style={{ padding: "2rem", textAlign: "center", color: "#525252" }}>
               Loading raw listings…
@@ -742,19 +1207,33 @@ function PropertyDataContent() {
                   <thead>
                     <tr>
                       <th className="property-data-table-expand-col" aria-label="Expand row" />
+                      <th className="property-data-table-checkbox-col" aria-label="Select property">
+                        {filteredSortedCanonical.length > 0 && (
+                          <input
+                            type="checkbox"
+                            ref={selectAllCanonicalCheckboxRef}
+                            checked={allCanonicalSelected}
+                            onChange={() => (allCanonicalSelected ? clearCanonicalSelection() : selectAllCanonical())}
+                            aria-label={allCanonicalSelected ? "Clear property selection" : "Select all visible properties"}
+                            title={allCanonicalSelected ? "Clear property selection" : "Select all visible properties"}
+                          />
+                        )}
+                      </th>
                       <th style={{ width: "2rem" }} aria-label="Save deal" title="Save / Unsave deal" />
                       <th>Canonical address</th>
                       <th>Area</th>
                       <th>Price</th>
                       <th>Listed date</th>
-                      <th>OM status</th>
-                      <th>Score</th>
+                      <th>OM</th>
+                      <th>Underwriting</th>
+                      <th>Active run</th>
+                      <th>Dossier</th>
                     </tr>
                   </thead>
                   <tbody>
                     {filteredSortedCanonical.length === 0 ? (
                       <tr>
-                        <td colSpan={8} style={{ padding: "2rem", color: "#737373", textAlign: "center" }}>
+                        <td colSpan={11} style={{ padding: "2rem", color: "#737373", textAlign: "center" }}>
                           {canonicalProperties.length === 0
                             ? "No canonical properties yet. Send raw listings to canonical properties from the raw listings tab."
                             : "No properties match the current filters."}
@@ -763,6 +1242,10 @@ function PropertyDataContent() {
                     ) : (
                       filteredSortedCanonical.map((prop) => {
                         const area = prop.primaryListing?.city != null ? cityToArea(prop.primaryListing.city) : cityFromCanonicalAddress(prop.canonicalAddress);
+                        const omMeta = omCellMeta(prop);
+                        const underwritingMeta = underwritingCellMeta(prop);
+                        const activeRunMeta = activeRunCellMeta(prop);
+                        const dossierMeta = dossierCellMeta(prop);
                         return (
                           <React.Fragment key={prop.id}>
                             <tr
@@ -782,6 +1265,14 @@ function PropertyDataContent() {
                                   <span className={`property-data-row-expand-chevron ${expandedCanonicalId === prop.id ? "property-data-row-expand-chevron--open" : ""}`}>▼</span>
                                 </button>
                               </td>
+                              <td className="property-data-table-checkbox-col" onClick={(e) => e.stopPropagation()}>
+                                <input
+                                  type="checkbox"
+                                  checked={selectedCanonicalIds.has(prop.id)}
+                                  onChange={() => toggleCanonicalSelection(prop.id)}
+                                  aria-label={`Select ${prop.canonicalAddress}`}
+                                />
+                              </td>
                               <td style={{ textAlign: "center", verticalAlign: "middle" }}>
                                 <button
                                   type="button"
@@ -797,9 +1288,6 @@ function PropertyDataContent() {
                                     )
                                       .then((r) => r.json().then((data) => ({ ok: r.ok, data })))
                                       .then(({ ok }) => {
-                                        // #region agent log
-                                        fetch("http://127.0.0.1:7590/ingest/742bd78a-5157-440b-b6aa-e9509cd8e861",{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":"fd8b77"},body:JSON.stringify({sessionId:"fd8b77",location:"property-data/page.tsx:star-response",message:"Star save/unsave response",data:{isSaved,ok},timestamp:Date.now(),hypothesisId:"H1"})}).catch(()=>{});
-                                        // #endregion
                                         if (!ok) return;
                                         setSavedPropertyIds((prev) => {
                                           const next = new Set(prev);
@@ -822,15 +1310,87 @@ function PropertyDataContent() {
                               <td>{area}</td>
                               <td>{prop.primaryListing?.price != null ? formatPrice(prop.primaryListing.price) : "—"}</td>
                               <td>{formatListedDate(prop.primaryListing?.listedAt ?? null)}</td>
-                              <td>{prop.omStatus ?? "—"}</td>
-                              <td>{prop.dealScore != null ? prop.dealScore : "—"}</td>
+                              <td>
+                                <div
+                                  style={{
+                                    display: "inline-flex",
+                                    flexDirection: "column",
+                                    gap: "0.15rem",
+                                    padding: "0.35rem 0.55rem",
+                                    borderRadius: "999px",
+                                    border: "1px solid",
+                                    whiteSpace: "nowrap",
+                                    ...omMeta.style,
+                                  }}
+                                >
+                                  <span style={{ fontSize: "0.78rem", fontWeight: 600 }}>{omMeta.label}</span>
+                                  <span style={{ fontSize: "0.7rem", opacity: 0.85 }}>{omMeta.detail}</span>
+                                </div>
+                              </td>
+                              <td>
+                                <div
+                                  style={{
+                                    display: "inline-flex",
+                                    flexDirection: "column",
+                                    gap: "0.15rem",
+                                    padding: "0.35rem 0.55rem",
+                                    borderRadius: "999px",
+                                    border: "1px solid",
+                                    whiteSpace: "nowrap",
+                                    ...underwritingMeta.style,
+                                  }}
+                                >
+                                  <span style={{ fontSize: "0.78rem", fontWeight: 600 }}>{underwritingMeta.label}</span>
+                                  <span style={{ fontSize: "0.7rem", opacity: 0.85 }}>{underwritingMeta.detail}</span>
+                                </div>
+                              </td>
+                              <td>
+                                <div
+                                  style={{
+                                    display: "inline-flex",
+                                    flexDirection: "column",
+                                    gap: "0.15rem",
+                                    padding: "0.35rem 0.55rem",
+                                    borderRadius: "999px",
+                                    border: "1px solid",
+                                    whiteSpace: "nowrap",
+                                    maxWidth: "12rem",
+                                    ...activeRunMeta.style,
+                                  }}
+                                >
+                                  <span style={{ fontSize: "0.78rem", fontWeight: 600 }}>{activeRunMeta.label}</span>
+                                  <span style={{ fontSize: "0.7rem", opacity: 0.85, overflow: "hidden", textOverflow: "ellipsis" }}>{activeRunMeta.detail}</span>
+                                </div>
+                              </td>
+                              <td>
+                                <div
+                                  style={{
+                                    display: "inline-flex",
+                                    flexDirection: "column",
+                                    gap: "0.15rem",
+                                    padding: "0.35rem 0.55rem",
+                                    borderRadius: "999px",
+                                    border: "1px solid",
+                                    whiteSpace: "nowrap",
+                                    ...dossierMeta.style,
+                                  }}
+                                >
+                                  <span style={{ fontSize: "0.78rem", fontWeight: 600 }}>{dossierMeta.label}</span>
+                                  <span style={{ fontSize: "0.7rem", opacity: 0.85 }}>{dossierMeta.detail}</span>
+                                </div>
+                              </td>
                             </tr>
                             {expandedCanonicalId === prop.id && (
                               <tr className="property-data-detail-row">
-                                <td colSpan={8} className="property-data-detail-cell" style={{ padding: "1rem 1rem 1rem 2.5rem", backgroundColor: "#fafafa" }}>
+                                <td colSpan={11} className="property-data-detail-cell" style={{ padding: "1rem 1rem 1rem 2.5rem", backgroundColor: "#fafafa" }}>
                                   <CanonicalPropertyDetail
                                     property={prop}
                                     isSaved={savedPropertyIds.has(prop.id)}
+                                    dossierJob={localDossierJobs[prop.id]}
+                                    onDossierJobChange={handleDossierJobChange}
+                                    onDossierNotice={handleDossierNotice}
+                                    onRefreshPropertyData={() => fetchCanonicalProperties(true)}
+                                    onWorkflowActivity={fetchWorkflowBoard}
                                     onSavedChange={(propertyId, saved) => {
                                       if (saved) setSavedPropertyIds((prev) => new Set(prev).add(propertyId));
                                       else setSavedPropertyIds((prev) => {
@@ -861,7 +1421,7 @@ function PropertyDataContent() {
                     {filteredSortedListings.length > 0 && (
                       <input
                         type="checkbox"
-                        ref={selectAllCheckboxRef}
+                        ref={selectAllRawCheckboxRef}
                         checked={allSelected}
                         onChange={() => (allSelected ? clearListingSelection() : selectAllListings())}
                         aria-label={allSelected ? "Clear selection" : "Select all"}
@@ -967,9 +1527,11 @@ function PropertyDataContent() {
                   : `${total} raw listing(s)`
               : "No raw listings"
             : canonicalProperties.length > 0
-              ? filteredSortedCanonical.length < canonicalProperties.length
-                ? `${filteredSortedCanonical.length} of ${canonicalProperties.length} canonical propert${canonicalProperties.length === 1 ? "y" : "ies"}`
-                : `${canonicalProperties.length} canonical propert${canonicalProperties.length === 1 ? "y" : "ies"}`
+              ? someCanonicalSelected
+                ? `${selectedCanonicalIds.size} of ${filteredSortedCanonical.length} canonical selected`
+                : filteredSortedCanonical.length < canonicalProperties.length
+                  ? `${filteredSortedCanonical.length} of ${canonicalProperties.length} canonical propert${canonicalProperties.length === 1 ? "y" : "ies"}`
+                  : `${canonicalProperties.length} canonical propert${canonicalProperties.length === 1 ? "y" : "ies"}`
               : "No canonical properties"}
         </span>
         <div className="property-data-bottom-actions">
@@ -981,6 +1543,19 @@ function PropertyDataContent() {
                 </button>
               ) : (
                 <button type="button" className="btn-secondary" onClick={selectAllListings} title="Select all listings">
+                  Select all
+                </button>
+              )}
+            </>
+          )}
+          {activeTab === "canonical" && canonicalProperties.length > 0 && (
+            <>
+              {someCanonicalSelected ? (
+                <button type="button" className="btn-secondary" onClick={clearCanonicalSelection} title="Clear property selection">
+                  Clear selection
+                </button>
+              ) : (
+                <button type="button" className="btn-secondary" onClick={selectAllCanonical} title="Select all visible canonical properties">
                   Select all
                 </button>
               )}
@@ -1001,19 +1576,19 @@ function PropertyDataContent() {
                 type="button"
                 className="btn-secondary"
                 onClick={handleRerunEnrichment}
-                disabled={Boolean(rerunningEnrichment)}
-                title="Re-run enrichment for all canonical properties (BBL assumed already set). Refreshes data from NYC Open Data."
+                disabled={Boolean(rerunningEnrichment || selectedCanonicalIds.size === 0)}
+                title="Re-run enrichment for selected canonical properties (BBL assumed already set). Refreshes data from NYC Open Data."
               >
-                {rerunningEnrichment ? "Re-running…" : "Re-run enrichment"}
+                {rerunningEnrichment ? "Re-running…" : someCanonicalSelected ? `Re-run enrichment (${selectedCanonicalIds.size})` : "Re-run enrichment"}
               </button>
               <button
                 type="button"
                 className="btn-secondary"
                 onClick={handleRunRentalFlow}
-                disabled={Boolean(runningRentalFlow)}
-                title="Re-run rental flow only (RapidAPI + LLM on listing). Runs automatically when adding to canonical properties."
+                disabled={Boolean(runningRentalFlow || selectedCanonicalIds.size === 0)}
+                title="Re-run rental flow only for selected canonical properties (RapidAPI + LLM on listing). Runs automatically when adding to canonical properties."
               >
-                {runningRentalFlow ? "Running…" : "Re-run rental flow"}
+                {runningRentalFlow ? "Running…" : someCanonicalSelected ? `Re-run rental flow (${selectedCanonicalIds.size})` : "Re-run rental flow"}
               </button>
             </>
           )}
@@ -1166,6 +1741,38 @@ function PropertyDataContent() {
           </div>
         )}
 
+        {canonicalProperties.length > 0 && (
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+              gap: "0.75rem",
+              maxWidth: "1200px",
+              marginBottom: "1rem",
+            }}
+          >
+            {stageSummary.map((item) => (
+              <div
+                key={item.label}
+                className="card"
+                style={{
+                  padding: "0.85rem 0.95rem",
+                  borderColor: item.border,
+                  background: item.bg,
+                  color: item.tone,
+                }}
+              >
+                <div style={{ fontSize: "0.75rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                  {item.label}
+                </div>
+                <div style={{ marginTop: "0.35rem", fontSize: "1.5rem", fontWeight: 700, lineHeight: 1.1 }}>
+                  {item.count}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
         <button
           type="button"
           className="property-detail-section-header"
@@ -1173,7 +1780,7 @@ function PropertyDataContent() {
           aria-expanded={pipelineStatsOpen}
           style={{ width: "100%", maxWidth: "720px" }}
         >
-          <span className="property-detail-section-title">Pipeline progress (raw → canonical → enrichment)</span>
+          <span className="property-detail-section-title">Coverage by module</span>
           <span className={`property-detail-section-chevron ${pipelineStatsOpen ? "property-detail-section-chevron--open" : ""}`} aria-hidden>▼</span>
         </button>
         {pipelineStatsOpen && (
@@ -1235,40 +1842,123 @@ function PropertyDataContent() {
         <button
           type="button"
           className="property-detail-section-header"
-          onClick={() => setRunLogOpen((o) => !o)}
-          aria-expanded={runLogOpen}
-          style={{ width: "100%", maxWidth: "640px", marginTop: "1rem" }}
+          onClick={() => setWorkflowBoardOpen((o) => !o)}
+          aria-expanded={workflowBoardOpen}
+          style={{ width: "100%", maxWidth: "1200px", marginTop: "1rem" }}
         >
-          <span className="property-detail-section-title">Run log (data integrity)</span>
-          <span className={`property-detail-section-chevron ${runLogOpen ? "property-detail-section-chevron--open" : ""}`} aria-hidden>▼</span>
+          <span className="property-detail-section-title">Workflow runs</span>
+          <span className={`property-detail-section-chevron ${workflowBoardOpen ? "property-detail-section-chevron--open" : ""}`} aria-hidden>▼</span>
         </button>
-        {runLogOpen && (
+        {workflowBoardOpen && (
           <div className="property-data-run-log-table-wrap">
-            {runLog.length === 0 ? (
-              <p style={{ color: "#737373", fontSize: "0.875rem" }}>No runs sent to property data yet.</p>
+            {workflowBoard.runs.length === 0 ? (
+              <p style={{ color: "#737373", fontSize: "0.875rem" }}>No workflow runs recorded yet.</p>
             ) : (
-              <table className="property-data-table" style={{ maxWidth: "640px" }}>
-                <thead>
-                  <tr>
-                    <th>Run #</th>
-                    <th>Run ID</th>
-                    <th>Sent</th>
-                    <th>Created</th>
-                    <th>Updated</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {runLog.map((entry) => (
-                    <tr key={entry.runNumber}>
-                      <td>{entry.runNumber}</td>
-                      <td style={{ fontFamily: "ui-monospace, monospace", fontSize: "0.8rem" }}>{entry.runId.slice(0, 8)}…</td>
-                      <td>{new Date(entry.sentAt).toLocaleString()}</td>
-                      <td>{entry.listingsCreated}</td>
-                      <td>{entry.listingsUpdated}</td>
+              <div style={{ overflowX: "auto", maxWidth: "100%" }}>
+                <table className="property-data-table" style={{ minWidth: `${420 + workflowColumns.length * 145}px`, fontSize: "0.84rem" }}>
+                  <thead>
+                    <tr>
+                      <th>Triggered</th>
+                      <th>Run</th>
+                      <th>Scope</th>
+                      {workflowColumns.map((column) => (
+                        <th key={column.key}>{column.shortLabel}</th>
+                      ))}
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {workflowBoard.runs.map((run) => (
+                      <tr key={run.id}>
+                        <td style={{ minWidth: "9rem", verticalAlign: "top" }}>
+                          <div style={{ fontWeight: 600 }}>{formatDateTime(run.startedAt)}</div>
+                          <div style={{ fontSize: "0.72rem", color: "#64748b", marginTop: "0.25rem" }}>
+                            {run.finishedAt ? `Updated ${formatDateTime(run.finishedAt)}` : "Live"}
+                          </div>
+                        </td>
+                        <td style={{ minWidth: "13rem", verticalAlign: "top" }}>
+                          <div style={{ fontWeight: 600 }}>{run.displayName}</div>
+                          <div
+                            style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: "0.35rem",
+                              marginTop: "0.35rem",
+                              padding: "0.2rem 0.45rem",
+                              borderRadius: "999px",
+                              border: "1px solid",
+                              fontSize: "0.72rem",
+                              fontWeight: 700,
+                              ...workflowStatusStyle(run.status),
+                            }}
+                          >
+                            <span>{workflowStatusLabel(run.status)}</span>
+                            <span>#{run.runNumber}</span>
+                          </div>
+                        </td>
+                        <td style={{ minWidth: "10rem", verticalAlign: "top" }}>
+                          {run.scopeLabel ?? (run.totalItems > 0 ? `${run.totalItems} item${run.totalItems === 1 ? "" : "s"}` : "—")}
+                        </td>
+                        {workflowColumns.map((column) => {
+                          const step = workflowStepForColumn(run, column.key);
+                          if (!step) {
+                            return (
+                              <td key={`${run.id}-${column.key}`} style={{ color: "#94a3b8", textAlign: "center" }}>
+                                —
+                              </td>
+                            );
+                          }
+                          const note = step.lastError ?? step.lastMessage ?? null;
+                          const processed = step.completedItems + step.failedItems + step.skippedItems;
+                          const progressText =
+                            step.totalItems > 0
+                              ? `${step.completedItems}/${step.totalItems}`
+                              : processed > 0
+                                ? `${processed}`
+                                : "0";
+                          return (
+                            <td key={`${run.id}-${column.key}`} style={{ minWidth: "9rem", verticalAlign: "top" }}>
+                              <div
+                                style={{
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  padding: "0.2rem 0.45rem",
+                                  borderRadius: "999px",
+                                  border: "1px solid",
+                                  fontSize: "0.7rem",
+                                  fontWeight: 700,
+                                  ...workflowStatusStyle(step.status),
+                                }}
+                              >
+                                {workflowStatusLabel(step.status)}
+                              </div>
+                              <div style={{ marginTop: "0.35rem", fontVariantNumeric: "tabular-nums", fontWeight: 600 }}>
+                                {progressText}
+                                {step.failedItems > 0 ? ` · ${step.failedItems} failed` : ""}
+                              </div>
+                              {note ? (
+                                <div
+                                  title={note}
+                                  style={{
+                                    marginTop: "0.25rem",
+                                    fontSize: "0.7rem",
+                                    color: step.lastError ? "#b91c1c" : "#64748b",
+                                    lineHeight: 1.35,
+                                    maxWidth: "9rem",
+                                    overflow: "hidden",
+                                    textOverflow: "ellipsis",
+                                  }}
+                                >
+                                  {note}
+                                </div>
+                              ) : null}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             )}
           </div>
         )}

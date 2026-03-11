@@ -59,9 +59,20 @@ export function buildSensitivityAnalyses(input: {
   assumptions: ResolvedDossierAssumptions;
   currentGrossRent: number | null;
   currentNoi: number | null;
+  currentOtherIncome?: number | null;
+  currentExpensesTotal?: number | null;
+  expenseRows?: Array<{ lineItem: string; amount: number }> | null;
   baseProjection: ReturnType<typeof computeUnderwritingProjection>;
 }): SensitivityAnalysis[] {
-  const { assumptions, currentGrossRent, currentNoi, baseProjection } = input;
+  const {
+    assumptions,
+    currentGrossRent,
+    currentNoi,
+    currentOtherIncome,
+    currentExpensesTotal,
+    expenseRows,
+    baseProjection,
+  } = input;
 
   const rentalUpliftScenarios = RENTAL_UPLIFT_SENSITIVITY_VALUES.map((valuePct) =>
     scenarioFromProjection(
@@ -77,6 +88,9 @@ export function buildSensitivityAnalyses(input: {
         },
         currentGrossRent,
         currentNoi,
+        currentOtherIncome,
+        currentExpensesTotal,
+        expenseRows,
       })
     )
   );
@@ -94,6 +108,9 @@ export function buildSensitivityAnalyses(input: {
         },
         currentGrossRent,
         currentNoi,
+        currentOtherIncome,
+        currentExpensesTotal,
+        expenseRows,
       })
     )
   );
@@ -111,6 +128,9 @@ export function buildSensitivityAnalyses(input: {
         },
         currentGrossRent,
         currentNoi,
+        currentOtherIncome,
+        currentExpensesTotal,
+        expenseRows,
       })
     )
   );
