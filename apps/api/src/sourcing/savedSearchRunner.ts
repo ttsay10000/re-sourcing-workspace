@@ -1,4 +1,4 @@
-import type { SearchProfile } from "@re-sourcing/contracts";
+import type { SearchProfile, PropertySourcingState } from "@re-sourcing/contracts";
 import {
   getPool,
   ProfileRepo,
@@ -8,6 +8,7 @@ import {
   SnapshotRepo,
   PropertyRepo,
   MatchRepo,
+  PropertySourcingStateRepo,
 } from "@re-sourcing/db";
 import { fetchActiveSalesWithCriteria, fetchSaleDetailsByUrl, type NycsSearchCriteria } from "../nycRealEstateApi.js";
 import { normalizeStreetEasySaleDetails } from "./normalizeStreetEasyListing.js";
@@ -18,9 +19,53 @@ import { runEnrichmentForProperty } from "../enrichment/runEnrichment.js";
 import { runRentalFlowForProperty } from "../routes/properties.js";
 import { syncPropertySourcingWorkflow } from "./workflow.js";
 import { buildListingChangeSummary } from "./listingChangeSummary.js";
+import { runDailyOutreach } from "./outreachAutomation.js";
+import {
+  createWorkflowRun,
+  deriveWorkflowStatusFromCounts,
+  mergeWorkflowRunMetadata,
+  updateWorkflowRun,
+  upsertWorkflowStep,
+} from "../workflow/workflowTracker.js";
 
 const ENRICHMENT_RATE_LIMIT_DELAY_MS =
   Number(process.env.ENRICHMENT_RATE_LIMIT_DELAY_MS || process.env.PERMITS_RATE_LIMIT_DELAY_MS) || 300;
+
+const ENRICHMENT_STEP_KEYS = [
+  "permits",
+  "hpd_registration",
+  "certificate_of_occupancy",
+  "zoning_ztl",
+  "dob_complaints",
+  "hpd_violations",
+  "housing_litigations",
+] as const;
+
+type EnrichmentStepKey = (typeof ENRICHMENT_STEP_KEYS)[number];
+
+interface PersistedListingResult {
+  listingId: string;
+  propertyId: string;
+  created: boolean;
+  errors: string[];
+}
+
+interface InquiryProgressSummary {
+  sentCount: number;
+  reviewRequiredCount: number;
+  eligibleCount: number;
+  otherCount: number;
+}
+
+interface CanonicalFollowUpSummary {
+  errors: string[];
+  rentalSuccess: number;
+  rentalFailed: number;
+  inquiry: InquiryProgressSummary & {
+    batchIds: string[];
+    outreachFailures: number;
+  };
+}
 
 function zonedDateTimeParts(
   now: Date,
@@ -132,10 +177,29 @@ function buildCriteria(search: SearchProfile): NycsSearchCriteria {
   };
 }
 
-async function persistListingsForRun(
-  runId: string,
-  rawProperties: Record<string, unknown>[]
-): Promise<{ listingIds: string[]; created: number; updated: number; propertyIds: string[]; errors: string[] }> {
+function summarizeInquiryStates(totalItems: number, states: PropertySourcingState[]): InquiryProgressSummary {
+  const sentStates = new Set<PropertySourcingState["workflowState"]>([
+    "sent_waiting_reply",
+    "reply_received",
+    "om_received_manual_review",
+  ]);
+  let sentCount = 0;
+  let reviewRequiredCount = 0;
+  let eligibleCount = 0;
+  for (const state of states) {
+    if (sentStates.has(state.workflowState)) sentCount++;
+    else if (state.workflowState === "review_required") reviewRequiredCount++;
+    else if (state.workflowState === "eligible_for_outreach") eligibleCount++;
+  }
+  return {
+    sentCount,
+    reviewRequiredCount,
+    eligibleCount,
+    otherCount: Math.max(0, totalItems - sentCount - reviewRequiredCount - eligibleCount),
+  };
+}
+
+async function persistListingForRun(runId: string, raw: Record<string, unknown>): Promise<PersistedListingResult> {
   const pool = getPool();
   const client = await pool.connect();
   const errors: string[] = [];
@@ -146,113 +210,90 @@ async function persistListingsForRun(
     const propertyRepo = new PropertyRepo({ pool, client });
     const matchRepo = new MatchRepo({ pool, client });
 
-    const listingIds: string[] = [];
-    const propertyIds: string[] = [];
-    let created = 0;
-    let updated = 0;
-
-    for (let index = 0; index < rawProperties.length; index++) {
-      const raw = rawProperties[index]!;
-      const normalized = normalizeStreetEasySaleDetails(raw, index);
-      const existing = await listingRepo.bySourceAndExternalId(normalized.source, normalized.externalId);
-      const previousSnapshot = existing
-        ? (await snapshotRepo.list({ listingId: existing.id, limit: 1 })).snapshots[0] ?? null
-        : null;
-      if (existing) {
-        normalized.priceHistory = normalized.priceHistory ?? existing.priceHistory ?? null;
-        normalized.rentalPriceHistory = normalized.rentalPriceHistory ?? existing.rentalPriceHistory ?? null;
-      }
-      const agentNames = normalized.agentNames ?? [];
-      const shouldEnrichBrokers = agentNames.length > 0;
-      if (shouldEnrichBrokers) {
-        try {
-          const context = [normalized.address, normalized.city, normalized.zip].filter(Boolean).join(", ");
-          normalized.agentEnrichment = await enrichBrokers(agentNames, context || undefined);
-        } catch (err) {
-          if (existing?.agentEnrichment?.length) normalized.agentEnrichment = existing.agentEnrichment;
-          errors.push(`broker-enrichment:${normalized.externalId}:${err instanceof Error ? err.message : String(err)}`);
-        }
-      } else if (existing?.agentEnrichment) {
-        normalized.agentEnrichment = existing.agentEnrichment;
-      }
-      const sourcingUpdate = buildListingChangeSummary({
-        runId,
-        normalized,
-        existing,
-        previousSnapshot,
-      });
-
-      const upserted = await listingRepo.upsert(normalized, { uploadedRunId: runId });
-      listingIds.push(upserted.listing.id);
-      if (upserted.created) created++;
-      else updated++;
-
-      await snapshotRepo.create({
-        listingId: upserted.listing.id,
-        runId,
-        rawPayloadPath: "inline",
-        metadata: {
-          capturedAt: new Date().toISOString(),
-          rawPayload: raw,
-          agentEnrichment: normalized.agentEnrichment ?? null,
-          priceHistory: normalized.priceHistory ?? null,
-          rentalPriceHistory: normalized.rentalPriceHistory ?? null,
-          normalizedListing: normalized as unknown as Record<string, unknown>,
-          sourcingUpdate,
-        },
-      });
-
-      const canonicalAddress = [
-        normalizeAddressLineForDisplay(upserted.listing.address?.trim() ?? ""),
-        upserted.listing.city,
-        upserted.listing.state,
-        upserted.listing.zip,
-      ].filter(Boolean).join(", ") || upserted.listing.address || "Unknown";
-      const property = await propertyRepo.create(canonicalAddress);
-      propertyIds.push(property.id);
-      await matchRepo.create({
-        listingId: upserted.listing.id,
-        propertyId: property.id,
-        confidence: 1,
-        reasons: { addressMatch: true, normalizedAddressDistance: 0 },
-      });
-
-      const extra = upserted.listing.extra as Record<string, unknown> | null | undefined;
-      const merge: Record<string, unknown> = { sourcingUpdate };
-      if (upserted.listing.lat != null && upserted.listing.lon != null) {
-        merge.lat = upserted.listing.lat;
-        merge.lon = upserted.listing.lon;
-      }
-      if (extra) {
-        const bbl = extra.bbl ?? extra.BBL ?? extra.borough_block_lot;
-        const bin = extra.bin ?? extra.BIN ?? extra.building_identification_number;
-        const hoa = extra.monthlyHoa ?? extra.monthly_hoa ?? extra.hoa;
-        const tax = extra.monthlyTax ?? extra.monthly_tax ?? extra.tax;
-        if (typeof bbl === "string" && /^\d{10}$/.test(bbl.trim())) merge.bbl = bbl.trim();
-        if (typeof bin === "string" && bin.trim()) merge.bin = bin.trim();
-        if (typeof hoa === "number" && !Number.isNaN(hoa)) merge.monthlyHoa = hoa;
-        if (typeof tax === "number" && !Number.isNaN(tax)) merge.monthlyTax = tax;
-      }
-      if (Object.keys(merge).length > 0) await propertyRepo.mergeDetails(property.id, merge);
+    const normalized = normalizeStreetEasySaleDetails(raw, 0);
+    const existing = await listingRepo.bySourceAndExternalId(normalized.source, normalized.externalId);
+    const previousSnapshot = existing
+      ? (await snapshotRepo.list({ listingId: existing.id, limit: 1 })).snapshots[0] ?? null
+      : null;
+    if (existing) {
+      normalized.priceHistory = normalized.priceHistory ?? existing.priceHistory ?? null;
+      normalized.rentalPriceHistory = normalized.rentalPriceHistory ?? existing.rentalPriceHistory ?? null;
     }
 
-    const { listings: allActive } = await listingRepo.list({ lifecycleState: "active", limit: 2000 });
-    const dedupeUpdates = computeDuplicateScores(
-      allActive.map((listing) => ({
-        id: listing.id,
-        address: listing.address,
-        city: listing.city,
-        state: listing.state,
-        zip: listing.zip,
-      }))
-    );
-    await listingRepo.updateDuplicateScores(dedupeUpdates);
+    const agentNames = normalized.agentNames ?? [];
+    if (agentNames.length > 0) {
+      try {
+        const context = [normalized.address, normalized.city, normalized.zip].filter(Boolean).join(", ");
+        normalized.agentEnrichment = await enrichBrokers(agentNames, context || undefined);
+      } catch (err) {
+        if (existing?.agentEnrichment?.length) normalized.agentEnrichment = existing.agentEnrichment;
+        errors.push(`broker-enrichment:${normalized.externalId}:${err instanceof Error ? err.message : String(err)}`);
+      }
+    } else if (existing?.agentEnrichment) {
+      normalized.agentEnrichment = existing.agentEnrichment;
+    }
+
+    const sourcingUpdate = buildListingChangeSummary({
+      runId,
+      normalized,
+      existing,
+      previousSnapshot,
+    });
+
+    const upserted = await listingRepo.upsert(normalized, { uploadedRunId: runId });
+
+    await snapshotRepo.create({
+      listingId: upserted.listing.id,
+      runId,
+      rawPayloadPath: "inline",
+      metadata: {
+        capturedAt: new Date().toISOString(),
+        rawPayload: raw,
+        agentEnrichment: normalized.agentEnrichment ?? null,
+        priceHistory: normalized.priceHistory ?? null,
+        rentalPriceHistory: normalized.rentalPriceHistory ?? null,
+        normalizedListing: normalized as unknown as Record<string, unknown>,
+        sourcingUpdate,
+      },
+    });
+
+    const canonicalAddress = [
+      normalizeAddressLineForDisplay(upserted.listing.address?.trim() ?? ""),
+      upserted.listing.city,
+      upserted.listing.state,
+      upserted.listing.zip,
+    ].filter(Boolean).join(", ") || upserted.listing.address || "Unknown";
+    const property = await propertyRepo.create(canonicalAddress);
+    await matchRepo.create({
+      listingId: upserted.listing.id,
+      propertyId: property.id,
+      confidence: 1,
+      reasons: { addressMatch: true, normalizedAddressDistance: 0 },
+    });
+
+    const extra = upserted.listing.extra as Record<string, unknown> | null | undefined;
+    const merge: Record<string, unknown> = { sourcingUpdate };
+    if (upserted.listing.lat != null && upserted.listing.lon != null) {
+      merge.lat = upserted.listing.lat;
+      merge.lon = upserted.listing.lon;
+    }
+    if (extra) {
+      const bbl = extra.bbl ?? extra.BBL ?? extra.borough_block_lot;
+      const bin = extra.bin ?? extra.BIN ?? extra.building_identification_number;
+      const hoa = extra.monthlyHoa ?? extra.monthly_hoa ?? extra.hoa;
+      const tax = extra.monthlyTax ?? extra.monthly_tax ?? extra.tax;
+      if (typeof bbl === "string" && /^\d{10}$/.test(bbl.trim())) merge.bbl = bbl.trim();
+      if (typeof bin === "string" && bin.trim()) merge.bin = bin.trim();
+      if (typeof hoa === "number" && !Number.isNaN(hoa)) merge.monthlyHoa = hoa;
+      if (typeof tax === "number" && !Number.isNaN(tax)) merge.monthlyTax = tax;
+    }
+    if (Object.keys(merge).length > 0) await propertyRepo.mergeDetails(property.id, merge);
+
     await client.query("COMMIT");
     return {
-      listingIds,
-      created,
-      updated,
-      propertyIds: [...new Set(propertyIds)],
+      listingId: upserted.listing.id,
+      propertyId: property.id,
+      created: upserted.created,
       errors,
     };
   } catch (err) {
@@ -263,25 +304,169 @@ async function persistListingsForRun(
   }
 }
 
+async function recomputeDuplicateScores(): Promise<void> {
+  const pool = getPool();
+  const listingRepo = new ListingRepo({ pool });
+  const { listings: allActive } = await listingRepo.list({ lifecycleState: "active", limit: 2000 });
+  const dedupeUpdates = computeDuplicateScores(
+    allActive.map((listing) => ({
+      id: listing.id,
+      address: listing.address,
+      city: listing.city,
+      state: listing.state,
+      zip: listing.zip,
+    }))
+  );
+  await listingRepo.updateDuplicateScores(dedupeUpdates);
+}
+
 async function runCanonicalFollowUp(
   propertyIds: string[],
   search: SearchProfile,
-  runId: string
-): Promise<string[]> {
-  if (propertyIds.length === 0) return [];
+  runId: string,
+  workflowRunId: string | null
+): Promise<CanonicalFollowUpSummary> {
+  const nowIso = new Date().toISOString();
+  if (propertyIds.length === 0) {
+    for (const stepKey of [...ENRICHMENT_STEP_KEYS, "rental_flow", "inquiry"] as const) {
+      await upsertWorkflowStep(workflowRunId, {
+        stepKey,
+        totalItems: 0,
+        completedItems: 0,
+        failedItems: 0,
+        skippedItems: 0,
+        status: "completed",
+        startedAt: nowIso,
+        finishedAt: nowIso,
+        lastMessage: "No canonical properties to process",
+      });
+    }
+    return {
+      errors: [],
+      rentalSuccess: 0,
+      rentalFailed: 0,
+      inquiry: {
+        sentCount: 0,
+        reviewRequiredCount: 0,
+        eligibleCount: 0,
+        otherCount: 0,
+        batchIds: [],
+        outreachFailures: 0,
+      },
+    };
+  }
+
   const pool = getPool();
+  const stateRepo = new PropertySourcingStateRepo({ pool });
   const appToken = process.env.SOCRATA_APP_TOKEN ?? null;
   const errors: string[] = [];
+  let rentalSuccess = 0;
+  let rentalFailed = 0;
+
+  const enrichmentProgress = Object.fromEntries(
+    ENRICHMENT_STEP_KEYS.map((stepKey) => [stepKey, { completed: 0, failed: 0, skipped: 0 }])
+  ) as Record<EnrichmentStepKey, { completed: number; failed: number; skipped: number }>;
+
+  const enrichmentStartedAt = new Date().toISOString();
+  for (const stepKey of ENRICHMENT_STEP_KEYS) {
+    await upsertWorkflowStep(workflowRunId, {
+      stepKey,
+      totalItems: propertyIds.length,
+      completedItems: 0,
+      failedItems: 0,
+      skippedItems: 0,
+      status: "running",
+      startedAt: enrichmentStartedAt,
+      lastMessage: `Starting ${stepKey.replace(/_/g, " ")} for ${propertyIds.length} propert${propertyIds.length === 1 ? "y" : "ies"}`,
+    });
+  }
+
+  const rentalStartedAt = new Date().toISOString();
+  await upsertWorkflowStep(workflowRunId, {
+    stepKey: "rental_flow",
+    totalItems: propertyIds.length,
+    completedItems: 0,
+    failedItems: 0,
+    status: "running",
+    startedAt: rentalStartedAt,
+    lastMessage: `Starting rental flow for ${propertyIds.length} propert${propertyIds.length === 1 ? "y" : "ies"}`,
+  });
+
   for (let index = 0; index < propertyIds.length; index++) {
     const propertyId = propertyIds[index]!;
     if (index > 0) await new Promise((resolve) => setTimeout(resolve, ENRICHMENT_RATE_LIMIT_DELAY_MS));
+
     try {
       await getBBLForProperty(propertyId, { appToken });
-      await runEnrichmentForProperty(propertyId, undefined, {
+      const enrichment = await runEnrichmentForProperty(propertyId, undefined, {
         appToken,
         rateLimitDelayMs: ENRICHMENT_RATE_LIMIT_DELAY_MS,
       });
+      for (const stepKey of ENRICHMENT_STEP_KEYS) {
+        const result = enrichment.results[stepKey];
+        if (result?.ok) enrichmentProgress[stepKey].completed++;
+        else if (result?.skipped) enrichmentProgress[stepKey].skipped++;
+        else enrichmentProgress[stepKey].failed++;
+        const progress = enrichmentProgress[stepKey];
+        await upsertWorkflowStep(workflowRunId, {
+          stepKey,
+          totalItems: propertyIds.length,
+          completedItems: progress.completed,
+          failedItems: progress.failed,
+          skippedItems: progress.skipped,
+          status: deriveWorkflowStatusFromCounts({
+            totalItems: propertyIds.length,
+            completedItems: progress.completed,
+            failedItems: progress.failed,
+            skippedItems: progress.skipped,
+          }),
+          startedAt: enrichmentStartedAt,
+          finishedAt:
+            progress.completed + progress.failed + progress.skipped >= propertyIds.length
+              ? new Date().toISOString()
+              : null,
+          lastMessage: `${progress.completed}/${propertyIds.length} completed`,
+          lastError: result?.ok || result?.skipped ? null : result?.error ?? null,
+        });
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      errors.push(`${propertyId}: enrichment:${message}`);
+      for (const stepKey of ENRICHMENT_STEP_KEYS) {
+        const progress = enrichmentProgress[stepKey];
+        progress.failed++;
+        await upsertWorkflowStep(workflowRunId, {
+          stepKey,
+          totalItems: propertyIds.length,
+          completedItems: progress.completed,
+          failedItems: progress.failed,
+          skippedItems: progress.skipped,
+          status: deriveWorkflowStatusFromCounts({
+            totalItems: propertyIds.length,
+            completedItems: progress.completed,
+            failedItems: progress.failed,
+            skippedItems: progress.skipped,
+          }),
+          startedAt: enrichmentStartedAt,
+          finishedAt:
+            progress.completed + progress.failed + progress.skipped >= propertyIds.length
+              ? new Date().toISOString()
+              : null,
+          lastMessage: `${progress.completed}/${propertyIds.length} completed`,
+          lastError: message,
+        });
+      }
+    }
+
+    try {
       await runRentalFlowForProperty(propertyId, pool);
+      rentalSuccess++;
+    } catch (err) {
+      rentalFailed++;
+      errors.push(`${propertyId}: rental-flow:${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    try {
       await syncPropertySourcingWorkflow(propertyId, {
         pool,
         originatingProfileId: search.id,
@@ -291,10 +476,100 @@ async function runCanonicalFollowUp(
         outreachRules: search.outreachRules,
       });
     } catch (err) {
-      errors.push(`${propertyId}: ${err instanceof Error ? err.message : String(err)}`);
+      errors.push(`${propertyId}: sourcing-workflow:${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    await upsertWorkflowStep(workflowRunId, {
+      stepKey: "rental_flow",
+      totalItems: propertyIds.length,
+      completedItems: rentalSuccess,
+      failedItems: rentalFailed,
+      status: deriveWorkflowStatusFromCounts({
+        totalItems: propertyIds.length,
+        completedItems: rentalSuccess,
+        failedItems: rentalFailed,
+      }),
+      startedAt: rentalStartedAt,
+      finishedAt:
+        rentalSuccess + rentalFailed >= propertyIds.length
+          ? new Date().toISOString()
+          : null,
+      lastMessage: `${rentalSuccess}/${propertyIds.length} properties completed`,
+    });
+  }
+
+  const statesBeforeOutreach = await stateRepo.listByPropertyIds(propertyIds);
+  const eligiblePropertyIds = statesBeforeOutreach
+    .filter((state) => state.workflowState === "eligible_for_outreach")
+    .map((state) => state.propertyId);
+  const inquiryStartedAt = new Date().toISOString();
+  await upsertWorkflowStep(workflowRunId, {
+    stepKey: "inquiry",
+    totalItems: propertyIds.length,
+    completedItems: 0,
+    failedItems: 0,
+    skippedItems: 0,
+    status: eligiblePropertyIds.length > 0 ? "running" : "completed",
+    startedAt: inquiryStartedAt,
+    finishedAt: eligiblePropertyIds.length === 0 ? inquiryStartedAt : null,
+    lastMessage:
+      eligiblePropertyIds.length > 0
+        ? `Attempting automated outreach for ${eligiblePropertyIds.length} propert${eligiblePropertyIds.length === 1 ? "y" : "ies"}`
+        : "No properties eligible for immediate automated outreach",
+  });
+
+  let batchIds: string[] = [];
+  let outreachFailures = 0;
+  if (eligiblePropertyIds.length > 0) {
+    try {
+      const outreachResult = await runDailyOutreach({ propertyIds: eligiblePropertyIds });
+      batchIds = outreachResult.batchIds;
+    } catch (err) {
+      outreachFailures = eligiblePropertyIds.length;
+      errors.push(`outreach:${err instanceof Error ? err.message : String(err)}`);
     }
   }
-  return errors;
+
+  const statesAfterOutreach = await stateRepo.listByPropertyIds(propertyIds);
+  const inquirySummary = summarizeInquiryStates(propertyIds.length, statesAfterOutreach);
+  const inquirySkipped = Math.max(0, propertyIds.length - inquirySummary.sentCount - outreachFailures);
+  await upsertWorkflowStep(workflowRunId, {
+    stepKey: "inquiry",
+    totalItems: propertyIds.length,
+    completedItems: inquirySummary.sentCount,
+    failedItems: outreachFailures,
+    skippedItems: inquirySkipped,
+    status: deriveWorkflowStatusFromCounts({
+      totalItems: propertyIds.length,
+      completedItems: inquirySummary.sentCount,
+      failedItems: outreachFailures,
+      skippedItems: inquirySkipped,
+    }),
+    startedAt: inquiryStartedAt,
+    finishedAt: new Date().toISOString(),
+    lastMessage: [
+      inquirySummary.sentCount > 0 ? `${inquirySummary.sentCount} sent` : null,
+      inquirySummary.reviewRequiredCount > 0 ? `${inquirySummary.reviewRequiredCount} need review` : null,
+      inquirySummary.eligibleCount > 0 ? `${inquirySummary.eligibleCount} still eligible` : null,
+      inquirySummary.otherCount > 0 ? `${inquirySummary.otherCount} not ready` : null,
+    ].filter(Boolean).join(", ") || "No automated outreach was sent",
+    lastError: outreachFailures > 0 ? "Automated outreach failed for eligible properties" : null,
+    metadata: {
+      batchIds,
+      eligiblePropertyIds,
+    },
+  });
+
+  return {
+    errors,
+    rentalSuccess,
+    rentalFailed,
+    inquiry: {
+      ...inquirySummary,
+      batchIds,
+      outreachFailures,
+    },
+  };
 }
 
 export async function executeSavedSearchRun(
@@ -309,76 +584,275 @@ export async function executeSavedSearchRun(
   if (!search) throw new Error("Saved search not found.");
   if (await runRepo.hasRunningForProfile(search.id)) return;
 
+  const criteria = buildCriteria(search);
+  const workflowStartedAt = new Date().toISOString();
+  const workflowRunId = await createWorkflowRun({
+    runType: "saved_search_ingestion",
+    displayName: `Saved search: ${search.name}`,
+    scopeLabel: search.name,
+    triggerSource: options?.triggerSource ?? "manual",
+    totalItems: 0,
+    metadata: {
+      profileId: search.id,
+      searchName: search.name,
+      scheduleCadence: search.scheduleCadence,
+      criteria,
+    },
+    steps: [
+      {
+        stepKey: "raw_ingest",
+        totalItems: 0,
+        completedItems: 0,
+        failedItems: 0,
+        status: "running",
+        startedAt: workflowStartedAt,
+        lastMessage: "Fetching StreetEasy sale URLs",
+      },
+      {
+        stepKey: "canonical",
+        totalItems: 0,
+        completedItems: 0,
+        failedItems: 0,
+        status: "pending",
+      },
+      ...ENRICHMENT_STEP_KEYS.map((stepKey) => ({
+        stepKey,
+        totalItems: 0,
+        completedItems: 0,
+        failedItems: 0,
+        skippedItems: 0,
+        status: "pending" as const,
+      })),
+      {
+        stepKey: "rental_flow",
+        totalItems: 0,
+        completedItems: 0,
+        failedItems: 0,
+        status: "pending",
+      },
+      {
+        stepKey: "inquiry",
+        totalItems: 0,
+        completedItems: 0,
+        failedItems: 0,
+        skippedItems: 0,
+        status: "pending",
+      },
+    ],
+  });
+
   const run = await runRepo.create(search.id, {
     triggerSource: options?.triggerSource ?? "manual",
     metadata: {
       searchName: search.name,
       scheduleCadence: search.scheduleCadence,
-      criteria: buildCriteria(search),
+      criteria,
+      workflowRunId,
     },
   });
   const job = await jobRepo.create(run.id, "streeteasy");
   await jobRepo.start(job.id);
 
-  const rawProperties: Record<string, unknown>[] = [];
   const errors: string[] = [];
+  const listingIds: string[] = [];
+  const propertyIds: string[] = [];
+  let created = 0;
+  let updated = 0;
+  let rawIngestCompleted = 0;
+  let rawIngestFailed = 0;
+  let canonicalCompleted = 0;
+  let canonicalFailed = 0;
+
   try {
-    const { urls } = await fetchActiveSalesWithCriteria(buildCriteria(search));
+    const { urls } = await fetchActiveSalesWithCriteria(criteria);
+    await updateWorkflowRun(workflowRunId, {
+      totalItems: urls.length,
+      scopeLabel: `${urls.length} listing${urls.length === 1 ? "" : "s"}`,
+    });
+    await upsertWorkflowStep(workflowRunId, {
+      stepKey: "raw_ingest",
+      totalItems: urls.length,
+      completedItems: 0,
+      failedItems: 0,
+      status: urls.length === 0 ? "completed" : "running",
+      startedAt: workflowStartedAt,
+      finishedAt: urls.length === 0 ? new Date().toISOString() : null,
+      lastMessage:
+        urls.length === 0
+          ? "No listings matched this saved search"
+          : `Fetching details for ${urls.length} listing${urls.length === 1 ? "" : "s"}`,
+    });
+    await upsertWorkflowStep(workflowRunId, {
+      stepKey: "canonical",
+      totalItems: urls.length,
+      completedItems: 0,
+      failedItems: 0,
+      status: urls.length === 0 ? "completed" : "running",
+      startedAt: urls.length === 0 ? workflowStartedAt : null,
+      finishedAt: urls.length === 0 ? new Date().toISOString() : null,
+      lastMessage:
+        urls.length === 0
+          ? "No canonical properties created"
+          : `Creating canonical properties as listing details arrive`,
+    });
+
     for (let index = 0; index < urls.length; index++) {
       const url = urls[index]!;
       try {
         const details = await fetchSaleDetailsByUrl(url);
-        rawProperties.push({ ...details, _fetchUrl: url });
+        rawIngestCompleted++;
+        await upsertWorkflowStep(workflowRunId, {
+          stepKey: "raw_ingest",
+          totalItems: urls.length,
+          completedItems: rawIngestCompleted,
+          failedItems: rawIngestFailed,
+          status: deriveWorkflowStatusFromCounts({
+            totalItems: urls.length,
+            completedItems: rawIngestCompleted,
+            failedItems: rawIngestFailed,
+          }),
+          startedAt: workflowStartedAt,
+          finishedAt:
+            rawIngestCompleted + rawIngestFailed >= urls.length
+              ? new Date().toISOString()
+              : null,
+          lastMessage: `${rawIngestCompleted}/${urls.length} listing details fetched`,
+        });
+
+        try {
+          const persisted = await persistListingForRun(run.id, { ...details, _fetchUrl: url });
+          listingIds.push(persisted.listingId);
+          propertyIds.push(persisted.propertyId);
+          errors.push(...persisted.errors);
+          if (persisted.created) created++;
+          else updated++;
+          canonicalCompleted++;
+          await mergeWorkflowRunMetadata(workflowRunId, {
+            propertyIds: [...new Set(propertyIds)],
+            listingIds: [...new Set(listingIds)],
+          });
+        } catch (err) {
+          canonicalFailed++;
+          errors.push(`persist:${url}:${err instanceof Error ? err.message : String(err)}`);
+        }
       } catch (err) {
+        rawIngestFailed++;
+        canonicalFailed++;
         errors.push(`${url}: ${err instanceof Error ? err.message : String(err)}`);
+        await upsertWorkflowStep(workflowRunId, {
+          stepKey: "raw_ingest",
+          totalItems: urls.length,
+          completedItems: rawIngestCompleted,
+          failedItems: rawIngestFailed,
+          status: deriveWorkflowStatusFromCounts({
+            totalItems: urls.length,
+            completedItems: rawIngestCompleted,
+            failedItems: rawIngestFailed,
+          }),
+          startedAt: workflowStartedAt,
+          finishedAt:
+            rawIngestCompleted + rawIngestFailed >= urls.length
+              ? new Date().toISOString()
+              : null,
+          lastMessage: `${rawIngestCompleted}/${urls.length} listing details fetched`,
+          lastError: err instanceof Error ? err.message : String(err),
+        });
       }
+
+      await upsertWorkflowStep(workflowRunId, {
+        stepKey: "canonical",
+        totalItems: urls.length,
+        completedItems: canonicalCompleted,
+        failedItems: canonicalFailed,
+        status: deriveWorkflowStatusFromCounts({
+          totalItems: urls.length,
+          completedItems: canonicalCompleted,
+          failedItems: canonicalFailed,
+        }),
+        startedAt: workflowStartedAt,
+        finishedAt:
+          canonicalCompleted + canonicalFailed >= urls.length
+            ? new Date().toISOString()
+            : null,
+        lastMessage: `${canonicalCompleted}/${urls.length} canonical properties created or refreshed`,
+      });
     }
 
-    const persisted = await persistListingsForRun(run.id, rawProperties);
-    errors.push(...await runCanonicalFollowUp(persisted.propertyIds, search, run.id));
+    await recomputeDuplicateScores();
 
-    const nextRunAt = buildNextRunAt(
-      {
-        ...search,
-        lastRunAt: new Date().toISOString(),
-      },
-      new Date()
-    );
+    const uniquePropertyIds = [...new Set(propertyIds)];
+    const followUp = await runCanonicalFollowUp(uniquePropertyIds, search, run.id, workflowRunId);
+    errors.push(...followUp.errors);
+
+    const finishedAt = new Date().toISOString();
+    const nextRunAt = buildNextRunAt({ ...search, lastRunAt: finishedAt }, new Date(finishedAt));
+    const completedWithoutErrors = errors.length === 0;
     await profileRepo.update(search.id, {
-      lastRunAt: new Date().toISOString(),
-      lastSuccessAt: new Date().toISOString(),
+      lastRunAt: finishedAt,
       nextRunAt,
+      ...(completedWithoutErrors ? { lastSuccessAt: finishedAt } : {}),
     });
-    await jobRepo.finish(job.id, errors.length > 0 ? "failed" : "completed", errors[0] ?? null);
+    await mergeWorkflowRunMetadata(workflowRunId, {
+      propertyIds: uniquePropertyIds,
+      listingIds: [...new Set(listingIds)],
+      inquiry: followUp.inquiry,
+    });
+    await updateWorkflowRun(workflowRunId, {
+      status: completedWithoutErrors ? "completed" : "partial",
+      finishedAt,
+    });
+    await jobRepo.finish(job.id, completedWithoutErrors ? "completed" : "failed", errors[0] ?? null);
     await runRepo.finish(
       run.id,
-      errors.length > 0 ? "failed" : "completed",
+      completedWithoutErrors ? "completed" : "failed",
       {
-        listingsSeen: rawProperties.length,
-        listingsNew: persisted.created,
-        listingsUpdated: persisted.updated,
-        jobsCompleted: errors.length > 0 ? 0 : 1,
-        jobsFailed: errors.length > 0 ? 1 : 0,
+        listingsSeen: rawIngestCompleted,
+        listingsNew: created,
+        listingsUpdated: updated,
+        jobsCompleted: completedWithoutErrors ? 1 : 0,
+        jobsFailed: completedWithoutErrors ? 0 : 1,
         errors,
       },
       {
-        listingIds: persisted.listingIds,
-        propertyIds: persisted.propertyIds,
+        listingIds: [...new Set(listingIds)],
+        propertyIds: uniquePropertyIds,
+        workflowRunId,
+        inquiry: followUp.inquiry,
       }
     );
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    const finishedAt = new Date().toISOString();
+    const nextRunAt = buildNextRunAt({ ...search, lastRunAt: finishedAt }, new Date(finishedAt));
+    await profileRepo.update(search.id, {
+      lastRunAt: finishedAt,
+      nextRunAt,
+    });
     await jobRepo.finish(job.id, "failed", message);
+    await mergeWorkflowRunMetadata(workflowRunId, {
+      listingIds: [...new Set(listingIds)],
+      propertyIds: [...new Set(propertyIds)],
+      error: message,
+    });
+    await updateWorkflowRun(workflowRunId, {
+      status: "failed",
+      finishedAt,
+    });
     await runRepo.finish(
       run.id,
       "failed",
       {
-        listingsSeen: rawProperties.length,
+        listingsSeen: rawIngestCompleted,
+        listingsNew: created,
+        listingsUpdated: updated,
         jobsCompleted: 0,
         jobsFailed: 1,
         errors: [...errors, message],
       },
       {
+        listingIds: [...new Set(listingIds)],
+        propertyIds: [...new Set(propertyIds)],
+        workflowRunId,
         searchName: search.name,
       }
     );

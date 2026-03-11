@@ -575,7 +575,7 @@ export default function ProfilePage() {
       const res = await fetch(`${API_BASE}/api/saved-searches/${encodeURIComponent(savedSearchId)}/run-now`, { method: "POST" });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || data?.details || "Failed to start saved search");
-      setSavedSearchNotice("Saved search started.");
+      setSavedSearchNotice("Saved search started. Open Property Data for live workflow tracking.");
       await fetchSavedSearches();
     } catch (e) {
       setSavedSearchError(e instanceof Error ? e.message : "Failed to start saved search");

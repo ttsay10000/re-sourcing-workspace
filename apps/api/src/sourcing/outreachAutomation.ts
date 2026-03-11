@@ -192,8 +192,14 @@ Tyler Tsay
 tyler@stayhaus.co`;
 }
 
-export async function runDailyOutreach(): Promise<{ sent: number; reviewRequired: number; batchIds: string[] }> {
+export async function runDailyOutreach(
+  options?: { propertyIds?: string[] }
+): Promise<{ sent: number; reviewRequired: number; batchIds: string[] }> {
   const pool = getPool();
+  const scopedPropertyIds =
+    Array.isArray(options?.propertyIds) && options.propertyIds.length > 0
+      ? options.propertyIds.filter((propertyId): propertyId is string => typeof propertyId === "string" && propertyId.trim().length > 0)
+      : null;
   const rows = await pool.query<EligiblePropertyRow>(
     `SELECT
        p.id AS property_id,
@@ -209,6 +215,7 @@ export async function runDailyOutreach(): Promise<{ sent: number; reviewRequired
      INNER JOIN property_recipient_resolution r ON r.property_id = p.id
      LEFT JOIN broker_contacts bc ON bc.id = r.contact_id
      WHERE s.workflow_state = 'eligible_for_outreach'
+       AND ($1::uuid[] IS NULL OR p.id = ANY($1::uuid[]))
        AND s.disposition = 'active'
        AND COALESCE(p.details->'omData'->'authoritative', 'null'::jsonb) = 'null'::jsonb
        AND r.status IN ('resolved', 'manual_override')
@@ -241,6 +248,8 @@ export async function runDailyOutreach(): Promise<{ sent: number; reviewRequired
          WHERE ai.property_id = p.id AND ai.status = 'open'
        )
      ORDER BY r.contact_email, p.created_at DESC`
+    ,
+    [scopedPropertyIds]
   );
 
   const grouped = new Map<string, EligiblePropertyRow[]>();

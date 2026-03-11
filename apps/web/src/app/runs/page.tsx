@@ -599,7 +599,7 @@ export default function RunsPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || data?.details || "Failed to start saved search run");
       setExpandedSavedSearchId(savedSearchId);
-      setNotice("Saved search run started. It will auto-ingest into Property Data and the sourcing workflow.");
+      setNotice("Saved search run started. Open Property Data for the live workflow tracker while it ingests, enriches, and evaluates outreach.");
       window.setTimeout(() => {
         void fetchSavedSearches();
         void fetchSavedSearchRuns(savedSearchId);

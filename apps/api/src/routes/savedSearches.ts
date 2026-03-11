@@ -155,7 +155,6 @@ router.post("/saved-searches/:id/run-now", async (req: Request, res: Response) =
       res.status(404).json({ error: "Saved search not found." });
       return;
     }
-    await repo.update(savedSearch.id, { lastRunAt: new Date().toISOString() });
     await startSavedSearchRun(savedSearch.id, { triggerSource: "manual" });
     res.status(202).json({ ok: true, savedSearchId: savedSearch.id });
   } catch (err) {

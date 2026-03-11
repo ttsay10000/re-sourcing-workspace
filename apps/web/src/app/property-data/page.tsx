@@ -259,6 +259,7 @@ function PropertyDataContent() {
   const enrichmentTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const selectAllRawCheckboxRef = useRef<HTMLInputElement | null>(null);
   const selectAllCanonicalCheckboxRef = useRef<HTMLInputElement | null>(null);
+  const hadActiveWorkflowRunsRef = useRef(false);
   const [lastEnrichmentResult, setLastEnrichmentResult] = useState<LastEnrichmentResult | null>(null);
   const [localDossierJobs, setLocalDossierJobs] = useState<Record<string, LocalDossierJobState>>({});
   const [dossierNotice, setDossierNotice] = useState<DossierNotice | null>(null);
@@ -324,7 +325,10 @@ function PropertyDataContent() {
         if (data.error) throw new Error(data.error);
         setCanonicalProperties(data.properties ?? []);
       })
-      .catch((e) => setError(e.message === "Failed to fetch" ? `Cannot reach API at ${API_BASE}. Check CORS and NEXT_PUBLIC_API_URL.` : (e.message || "Failed to load canonical properties")))
+      .catch((e) => {
+        if (quiet) return;
+        setError(e.message === "Failed to fetch" ? `Cannot reach API at ${API_BASE}. Check CORS and NEXT_PUBLIC_API_URL.` : (e.message || "Failed to load canonical properties"));
+      })
       .finally(() => {
         if (!quiet) setLoadingCanonical(false);
       });
@@ -445,6 +449,39 @@ function PropertyDataContent() {
     runningRentalFlow,
     sendingToCanonical,
   ]);
+
+  useEffect(() => {
+    if (activeTab !== "canonical") return;
+    if (!(hasActiveWorkflowRuns || sendingToCanonical || rerunningEnrichment || runningRentalFlow || anyRunningDossierJobs)) return;
+    fetchCanonicalProperties(true);
+    fetchPipelineStats(true);
+    const intervalId = window.setInterval(() => {
+      fetchCanonicalProperties(true);
+      fetchPipelineStats(true);
+    }, 2500);
+    return () => window.clearInterval(intervalId);
+  }, [
+    activeTab,
+    anyRunningDossierJobs,
+    fetchCanonicalProperties,
+    fetchPipelineStats,
+    hasActiveWorkflowRuns,
+    rerunningEnrichment,
+    runningRentalFlow,
+    sendingToCanonical,
+  ]);
+
+  useEffect(() => {
+    if (activeTab !== "canonical") {
+      hadActiveWorkflowRunsRef.current = hasActiveWorkflowRuns;
+      return;
+    }
+    if (hadActiveWorkflowRunsRef.current && !hasActiveWorkflowRuns) {
+      fetchCanonicalProperties(true);
+      fetchPipelineStats(true);
+    }
+    hadActiveWorkflowRunsRef.current = hasActiveWorkflowRuns;
+  }, [activeTab, fetchCanonicalProperties, fetchPipelineStats, hasActiveWorkflowRuns]);
 
   const selectedListing = selectedId ? listings.find((l) => l.id === selectedId) ?? null : null;
 
@@ -681,7 +718,7 @@ function PropertyDataContent() {
     const ids = new Set<string>();
     for (const run of workflowBoard.runs) {
       if (run.status !== "running" && run.status !== "pending") continue;
-      if (!["add_to_canonical", "rerun_enrichment", "refresh_om_financials", "rerun_rental_flow"].includes(run.runType)) continue;
+      if (!["add_to_canonical", "rerun_enrichment", "refresh_om_financials", "rerun_rental_flow", "saved_search_ingestion"].includes(run.runType)) continue;
       for (const propertyId of propertyIdsFromWorkflowRun(run)) ids.add(propertyId);
     }
     return ids;
