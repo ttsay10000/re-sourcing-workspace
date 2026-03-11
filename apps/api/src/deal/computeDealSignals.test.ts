@@ -81,6 +81,35 @@ describe("computeDealSignals", () => {
     expect(result.insertParams.pricePerUnit).toBe(1_100_000);
   });
 
+  it("prefers the authoritative reconciled unit count over extra ancillary rent-roll rows", () => {
+    const result = computeDealSignals({
+      propertyId: "property-3b",
+      canonicalAddress: "18 Christopher Street, Manhattan, NY, 10014",
+      primaryListing: {
+        price: 8_135_000,
+        city: "Manhattan",
+      },
+      details: {
+        omData: {
+          authoritative: {
+            propertyInfo: {
+              totalUnits: 10,
+            },
+            reportedDiscrepancies: [
+              {
+                field: "totalUnits, unitsCommercial",
+                selectedValue: "10 (8 Res + 2 Comm)",
+              },
+            ],
+            rentRoll: Array.from({ length: 11 }, (_, index) => ({ unit: String(index + 1) })),
+          },
+        },
+      },
+    });
+
+    expect(result.insertParams.pricePerUnit).toBe(813_500);
+  });
+
   it("does not fall back to legacy unit counts once authoritative OM exists", () => {
     const result = computeDealSignals({
       propertyId: "property-4",
@@ -164,6 +193,72 @@ describe("computeDealSignals", () => {
     expect(result.insertParams.riskProfile).toBeTruthy();
     expect(result.insertParams.confidenceScore).toBeLessThan(1);
     expect(result.insertParams.scoreVersion).toBe("v2");
+  });
+
+  it("prefers authoritative OM annual taxes over stale legacy tax fields", () => {
+    const result = computeDealSignals({
+      propertyId: "property-5b",
+      canonicalAddress: "18 Christopher Street, Manhattan, NY 10014",
+      primaryListing: {
+        price: 8_135_000,
+        city: "Manhattan",
+      },
+      irrPct: 0.128,
+      cocPct: -0.004,
+      equityMultiple: 1.81,
+      adjustedCapRatePct: 6.37,
+      adjustedNoi: 518_532,
+      recommendedOfferHigh: 6_690_000,
+      blendedRentUpliftPct: 36.1,
+      annualExpenseGrowthPct: 0,
+      vacancyPct: 15,
+      exitCapRatePct: 5,
+      rentStabilizedUnitCount: 2,
+      commercialUnitCount: 2,
+      details: {
+        assessedTaxBeforeTotal: 341_457,
+        omData: {
+          authoritative: {
+            propertyInfo: {
+              totalUnits: 10,
+              annualTaxes: 103_270,
+            },
+            currentFinancials: {
+              noi: 446_272,
+              grossRentalIncome: 617_208,
+              otherIncome: 1_931,
+              vacancyLoss: 8_787,
+              effectiveGrossIncome: 610_352,
+              operatingExpenses: 164_081,
+            },
+            expenses: {
+              expensesTable: [{ lineItem: "Property Taxes", amount: 103_270 }],
+              totalExpenses: 164_081,
+            },
+            rentRoll: [
+              { unit: "18 Chris Ret", unitCategory: "Commercial", annualRent: 123_600, leaseEndDate: "2030-01-31", occupied: true },
+              { unit: "20 Chris Ret", unitCategory: "Commercial", annualRent: 142_140, leaseEndDate: "2035-02-28", occupied: true },
+              { unit: "18 Chris Basement", unitCategory: "Commercial", annualRent: 18_000, leaseEndDate: "2027-12-31", occupied: true, notes: "Basement usage" },
+              { unit: "18-1", annualRent: 65_400, leaseEndDate: "2028-01-31", occupied: true },
+              { unit: "18-2", annualRent: 46_740, leaseEndDate: "2026-06-30", occupied: true },
+              { unit: "18-3", annualRent: 12_468, leaseEndDate: "2026-01-31", occupied: true, notes: "Rent Stabilized" },
+              { unit: "18-4", annualRent: 11_580, leaseEndDate: "2026-01-31", occupied: true, notes: "Rent Stabilized" },
+              { unit: "20-1", annualRent: 64_200, leaseEndDate: "2026-05-31", occupied: true },
+              { unit: "20-2", annualRent: 47_940, leaseEndDate: "2027-01-31", occupied: true },
+              { unit: "20-3", annualRent: 59_940, leaseEndDate: "2027-02-28", occupied: true },
+              { unit: "20-4", annualRent: 43_200, leaseEndDate: "2026-07-31", occupied: true },
+            ],
+            revenueComposition: {
+              commercialAnnualRent: 283_740,
+              rentStabilizedAnnualRent: 24_048,
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.scoringResult.riskProfile.taxBurdenPct).toBe(0.17);
+    expect(result.scoringResult.riskFlags).not.toContain("Tax burden 55.9% of EGI");
   });
 
   it("does not derive unit count from legacy OM data without an authoritative snapshot", () => {

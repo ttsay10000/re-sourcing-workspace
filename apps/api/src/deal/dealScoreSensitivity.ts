@@ -71,7 +71,7 @@ function scoreForScenario(
     details: input.details,
     primaryListing: input.primaryListing,
     irrPct: projection.returns.irr ?? null,
-    cocPct: projection.returns.year1CashOnCashReturn ?? null,
+    cocPct: projection.returns.averageCashOnCashReturn ?? null,
     equityMultiple: projection.returns.equityMultiple ?? null,
     adjustedCapRatePct,
     adjustedNoi: projection.operating.stabilizedNoi ?? null,

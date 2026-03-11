@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildOmStyleMessages,
   mergeExtractionResultWithFallback,
+  resolveOmPrimaryPassMode,
   sanitizeOmAnalysisByCoverage,
   type ExtractRentalFinancialsResult,
 } from "./extractRentalFinancialsFromListing.js";
@@ -22,6 +23,13 @@ describe("extractRentalFinancialsFromListing", () => {
     const file = filePart.file as Record<string, unknown>;
     expect(filePart.type).toBe("file");
     expect(file.file_data).toBe(`data:application/pdf;base64,${Buffer.from("%PDF-1.7").toString("base64")}`);
+  });
+
+  it("maps OM extraction methods to the expected primary pass mode", () => {
+    expect(resolveOmPrimaryPassMode("text_tables", true)).toBe("text");
+    expect(resolveOmPrimaryPassMode("ocr_tables", true)).toBe("file");
+    expect(resolveOmPrimaryPassMode("hybrid", true)).toBe("hybrid");
+    expect(resolveOmPrimaryPassMode("ocr_tables", false)).toBe("text");
   });
 
   it("backfills missing OM structure from deterministic text tables", () => {

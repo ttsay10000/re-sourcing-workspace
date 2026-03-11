@@ -494,7 +494,7 @@ function buildPositiveSignals(inputs: DealScoringInputs, assetCapRate: number | 
   const irrPct = asPct(inputs.irrPct);
   const cocPct = asPct(inputs.cocPct);
   if (irrPct != null && irrPct >= 20) signals.push(`IRR ${irrPct.toFixed(1)}%`);
-  if (cocPct != null && cocPct >= 8) signals.push(`Year-1 CoC ${cocPct.toFixed(1)}%`);
+  if (cocPct != null && cocPct >= 8) signals.push(`Average CoC ${cocPct.toFixed(1)}%`);
   if (assetCapRate != null && assetCapRate >= 5.5) signals.push(`Ask cap ${assetCapRate.toFixed(2)}%`);
   if (discountPct != null && discountPct <= 5) {
     signals.push(

@@ -24,6 +24,24 @@ function toFiniteNumber(value: unknown): number | null {
   return null;
 }
 
+function resolveUnitCountFromDiscrepancies(authoritative: OmAuthoritativeSnapshot | null): number | null {
+  const discrepancies = authoritative?.reportedDiscrepancies;
+  if (!Array.isArray(discrepancies)) return null;
+
+  for (const discrepancy of discrepancies) {
+    const field = typeof discrepancy?.field === "string" ? discrepancy.field.toLowerCase() : "";
+    if (!/totalunits|unitcount|unitscommercial|unit_count/.test(field)) continue;
+
+    const selectedValue = discrepancy?.selectedValue;
+    const numeric =
+      toFiniteNumber(selectedValue) ??
+      (typeof selectedValue === "string" ? toFiniteNumber(selectedValue.match(/\d[\d,.]*/) ? selectedValue.match(/\d[\d,.]*/)?.[0] ?? null : null) : null);
+    if (numeric != null && numeric > 0) return numeric;
+  }
+
+  return null;
+}
+
 export function getAuthoritativeOmSnapshot(
   details: PropertyDetails | null | undefined
 ): OmAuthoritativeSnapshot | null {
@@ -83,12 +101,13 @@ export function resolvePreferredOmUnitCount(
 ): number | null {
   const authoritative = getAuthoritativeOmSnapshot(details);
   if (authoritative == null) return null;
-  const authoritativeRentRoll = sanitizeOmRentRollRows(authoritative?.rentRoll ?? []);
   const authoritativeInfo = asRecord(authoritative?.propertyInfo);
-  const candidates = [
-    authoritativeRentRoll.length > 0 ? authoritativeRentRoll.length : null,
-    toFiniteNumber(authoritativeInfo?.totalUnits),
-    toFiniteNumber(authoritativeInfo?.unitsTotal),
-  ].filter((value): value is number => value != null && value > 0);
-  return candidates.length > 0 ? Math.max(...candidates) : null;
+  const declaredUnitCount =
+    toFiniteNumber(authoritativeInfo?.totalUnits) ??
+    toFiniteNumber(authoritativeInfo?.unitsTotal) ??
+    resolveUnitCountFromDiscrepancies(authoritative);
+  if (declaredUnitCount != null && declaredUnitCount > 0) return declaredUnitCount;
+
+  const authoritativeRentRoll = sanitizeOmRentRollRows(authoritative?.rentRoll ?? []);
+  return authoritativeRentRoll.length > 0 ? authoritativeRentRoll.length : null;
 }

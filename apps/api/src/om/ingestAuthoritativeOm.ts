@@ -30,6 +30,7 @@ import {
   sanitizeExpenseTableRows,
   sanitizeOmRentRollRows,
 } from "../rental/omAnalysisUtils.js";
+import { decideOmExtractionRouting } from "./omExtractionRouting.js";
 import { resolveUploadedDocFilePath } from "../upload/uploadedDocStorage.js";
 import { syncPropertySourcingWorkflow } from "../sourcing/workflow.js";
 
@@ -52,6 +53,19 @@ export interface OmAutomationDocument {
   category?: string | null;
   source?: string | null;
   createdAt?: string | null;
+}
+
+interface PreparedOmAutomationDocument extends OmAutomationDocument {
+  buffer: Buffer;
+  extractedText: string;
+  pageCount: number | null;
+  fileBytes: number;
+  pageStats: Array<{
+    pageNumber: number;
+    textChars: number;
+    textItems: number;
+    textSample: string;
+  }>;
 }
 
 export interface IngestAuthoritativeOmParams {
@@ -226,16 +240,14 @@ async function buildDocumentPayloads(
   documents: OmAutomationDocument[],
   pool: Pool
 ): Promise<{
-  preparedDocuments: OmAutomationDocument[];
+  preparedDocuments: PreparedOmAutomationDocument[];
   readableTextSections: string[];
-  omInputDocuments: OmInputDocument[];
   skippedNoFile: number;
 }> {
-  const { extractTextFromBuffer } = await import("../upload/extractTextFromUploadedFile.js");
+  const { extractTextMetadataFromBuffer } = await import("../upload/extractTextFromUploadedFile.js");
 
-  const preparedDocuments: OmAutomationDocument[] = [];
+  const preparedDocuments: PreparedOmAutomationDocument[] = [];
   const readableTextSections: string[] = [];
-  const omInputDocuments: OmInputDocument[] = [];
   let skippedNoFile = 0;
 
   for (const doc of documents) {
@@ -244,23 +256,24 @@ async function buildDocumentPayloads(
       skippedNoFile++;
       continue;
     }
-    const prepared: OmAutomationDocument = { ...doc, buffer };
-    preparedDocuments.push(prepared);
-    const text = await extractTextFromBuffer(buffer, doc.filename);
-    if (text.trim()) {
-      readableTextSections.push(`Document: ${doc.filename}\n${text.trim()}`);
-    }
-    omInputDocuments.push({
-      filename: doc.filename,
-      mimeType: doc.mimeType ?? "application/pdf",
+    const extracted = await extractTextMetadataFromBuffer(buffer, doc.filename);
+    const prepared: PreparedOmAutomationDocument = {
+      ...doc,
       buffer,
-    });
+      extractedText: extracted.text,
+      pageCount: extracted.pageCount,
+      fileBytes: buffer.length,
+      pageStats: extracted.pages ?? [],
+    };
+    preparedDocuments.push(prepared);
+    if (prepared.extractedText.trim()) {
+      readableTextSections.push(`Document: ${doc.filename}\n${prepared.extractedText.trim()}`);
+    }
   }
 
   return {
     preparedDocuments,
     readableTextSections,
-    omInputDocuments,
     skippedNoFile,
   };
 }
@@ -406,59 +419,97 @@ export async function ingestAuthoritativeOm(
     };
   }
 
-  const run = await ingestionRunRepo.create({
-    propertyId: params.propertyId,
-    sourceDocumentId: candidateDocuments[0]?.id ?? null,
-    sourceType: params.sourceType,
-    status: "processing",
-    extractionMethod: "hybrid",
-    sourceMeta: {
-      documents: candidateDocuments.map((doc) => ({
-        id: doc.id,
-        origin: doc.origin,
-        filename: doc.filename,
-        category: doc.category ?? null,
-        source: doc.source ?? null,
-      })),
-    },
-  });
+  const candidateDocumentSourceMeta = candidateDocuments.map((doc) => ({
+    id: doc.id,
+    origin: doc.origin,
+    filename: doc.filename,
+    category: doc.category ?? null,
+    source: doc.source ?? null,
+  }));
+  let runId: string | null = null;
 
   try {
-    const { preparedDocuments, readableTextSections, omInputDocuments, skippedNoFile } = await buildDocumentPayloads(candidateDocuments, pool);
+    const { preparedDocuments, readableTextSections, skippedNoFile } = await buildDocumentPayloads(candidateDocuments, pool);
+    const routingDecision = decideOmExtractionRouting(
+      preparedDocuments.map((doc) => ({
+        id: doc.id,
+        filename: doc.filename,
+        mimeType: doc.mimeType ?? null,
+        fileBytes: doc.fileBytes,
+        pageCount: doc.pageCount,
+        extractedText: doc.extractedText,
+        pageStats: doc.pageStats,
+      }))
+    );
+    const sourceMeta = {
+      documents: candidateDocumentSourceMeta,
+      routing: {
+        extractionMethod: routingDecision.extractionMethod,
+        attachFileDocumentIds: routingDecision.attachFileDocumentIds,
+        rationale: routingDecision.rationale,
+        documents: routingDecision.documents,
+      },
+    };
+    const unreadableFileError =
+      preparedDocuments.length === 0
+        ? "OM ingestion could not read any document bytes from the available files."
+        : null;
+    const run = await ingestionRunRepo.create({
+      propertyId: params.propertyId,
+      sourceDocumentId: candidateDocuments[0]?.id ?? null,
+      sourceType: params.sourceType,
+      status: unreadableFileError ? "failed" : "processing",
+      extractionMethod: routingDecision.extractionMethod,
+      pageCount: routingDecision.pageCount,
+      financialPageCount: routingDecision.financialPageCount,
+      ocrPageCount: routingDecision.ocrPageCount,
+      sourceMeta,
+      coverage: routingDecision.coverage,
+      lastError: unreadableFileError,
+      completedAt: unreadableFileError ? new Date().toISOString() : null,
+    });
+    runId = run.id;
+
     if (preparedDocuments.length === 0) {
-      const error = "OM ingestion could not read any document bytes from the available files.";
-      await ingestionRunRepo.update(run.id, {
-        status: "failed",
-        extractionMethod: "hybrid",
-        lastError: error,
-        completedAt: new Date().toISOString(),
-      });
       return {
         documentsProcessed: 0,
         documentsSkippedNoFile: skippedNoFile,
-        runId: run.id,
+        runId,
         snapshotId: null,
         dossierGenerated: false,
-        error,
+        error: unreadableFileError ?? "OM ingestion could not read any document bytes from the available files.",
       };
     }
 
+    const primaryDocumentFiles: OmInputDocument[] = preparedDocuments
+      .filter((doc) => routingDecision.attachFileDocumentIds.includes(doc.id))
+      .map((doc) => ({
+        filename: doc.filename,
+        mimeType: doc.mimeType ?? "application/pdf",
+        buffer: doc.buffer,
+      }));
+
     const extracted = await extractRentalFinancialsFromText(readableTextSections.join("\n\n"), {
       forceOmStyle: true,
-      documentFiles: omInputDocuments,
+      documentFiles: primaryDocumentFiles,
+      omExtractionMethod: routingDecision.extractionMethod,
     });
     if (!extracted.omAnalysis) {
       const error = "Authoritative OM extraction returned no structured OM analysis.";
       await ingestionRunRepo.update(run.id, {
         status: "failed",
-        extractionMethod: "hybrid",
+        extractionMethod: routingDecision.extractionMethod,
+        pageCount: routingDecision.pageCount,
+        financialPageCount: routingDecision.financialPageCount,
+        ocrPageCount: routingDecision.ocrPageCount,
+        coverage: routingDecision.coverage,
         lastError: error,
         completedAt: new Date().toISOString(),
       });
       return {
         documentsProcessed: preparedDocuments.length,
         documentsSkippedNoFile: skippedNoFile,
-        runId: run.id,
+        runId,
         snapshotId: null,
         dossierGenerated: false,
         error,
@@ -489,37 +540,41 @@ export async function ingestAuthoritativeOm(
       resolveCurrentFinancialsFromOmAnalysis(sanitizedOmAnalysis, extracted.fromLlm ?? null)
     );
     const completedAt = new Date().toISOString();
-    const snapshotBase: OmAuthoritativeSnapshot = {
-      runId: run.id,
-      sourceDocumentId: candidateDocuments[0]?.id ?? null,
-      extractionMethod: "hybrid",
+    const snapshotCoverage = buildCoverage({
       propertyInfo: sanitizedOmAnalysis.propertyInfo ?? null,
       rentRoll: sanitizedOmAnalysis.rentRoll ?? null,
       incomeStatement: sanitizedOmAnalysis.income ?? null,
       expenses: sanitizedOmAnalysis.expenses ?? null,
       revenueComposition: sanitizedOmAnalysis.revenueComposition ?? null,
       currentFinancials,
-      coverage: buildCoverage({
-        propertyInfo: sanitizedOmAnalysis.propertyInfo ?? null,
-        rentRoll: sanitizedOmAnalysis.rentRoll ?? null,
-        incomeStatement: sanitizedOmAnalysis.income ?? null,
-        expenses: sanitizedOmAnalysis.expenses ?? null,
-        revenueComposition: sanitizedOmAnalysis.revenueComposition ?? null,
-        currentFinancials,
-        coverage: (sanitizedOmAnalysis.sourceCoverage as OmCoverage | null | undefined) ?? null,
-      }),
+      coverage: {
+        ...(routingDecision.coverage ?? {}),
+        ...(((sanitizedOmAnalysis.sourceCoverage as OmCoverage | null | undefined) ?? {})),
+      },
+    });
+    const snapshotBase: OmAuthoritativeSnapshot = {
+      runId: run.id,
+      sourceDocumentId: candidateDocuments[0]?.id ?? null,
+      extractionMethod: routingDecision.extractionMethod,
+      propertyInfo: sanitizedOmAnalysis.propertyInfo ?? null,
+      rentRoll: sanitizedOmAnalysis.rentRoll ?? null,
+      incomeStatement: sanitizedOmAnalysis.income ?? null,
+      expenses: sanitizedOmAnalysis.expenses ?? null,
+      revenueComposition: sanitizedOmAnalysis.revenueComposition ?? null,
+      currentFinancials,
+      coverage: snapshotCoverage,
       validationFlags: [],
       investmentTakeaways: sanitizedOmAnalysis.investmentTakeaways ?? null,
       reportedDiscrepancies: sanitizedOmAnalysis.reportedDiscrepancies ?? null,
       sourceMeta: {
         sourceType: params.sourceType,
-        documents: preparedDocuments.map((doc) => ({
-          id: doc.id,
-          origin: doc.origin,
-          filename: doc.filename,
-          category: doc.category ?? null,
-          source: doc.source ?? null,
-        })),
+        documents: candidateDocumentSourceMeta,
+        routing: {
+          extractionMethod: routingDecision.extractionMethod,
+          attachFileDocumentIds: routingDecision.attachFileDocumentIds,
+          rationale: routingDecision.rationale,
+          documents: routingDecision.documents,
+        },
       },
       promotedAt: completedAt,
     };
@@ -531,7 +586,7 @@ export async function ingestAuthoritativeOm(
     await insertExtractedSnapshot(pool, {
       runId: run.id,
       propertyId: params.propertyId,
-      extractionMethod: "hybrid",
+      extractionMethod: routingDecision.extractionMethod,
       snapshot,
     });
     const promoted = await authoritativeRepo.promote({
@@ -554,7 +609,10 @@ export async function ingestAuthoritativeOm(
     await propertyRepo.mergeDetails(params.propertyId, mergedDetails);
     await ingestionRunRepo.update(run.id, {
       status: "promoted",
-      extractionMethod: "hybrid",
+      extractionMethod: routingDecision.extractionMethod,
+      pageCount: routingDecision.pageCount,
+      financialPageCount: routingDecision.financialPageCount,
+      ocrPageCount: routingDecision.ocrPageCount,
       coverage: snapshot.coverage ?? null,
       completedAt,
       promotedAt: completedAt,
@@ -578,22 +636,37 @@ export async function ingestAuthoritativeOm(
     return {
       documentsProcessed: preparedDocuments.length,
       documentsSkippedNoFile: skippedNoFile,
-      runId: run.id,
+      runId,
       snapshotId: promoted.id,
       dossierGenerated,
     };
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
-    await ingestionRunRepo.update(run.id, {
-      status: "failed",
-      extractionMethod: "hybrid",
-      lastError: error,
-      completedAt: new Date().toISOString(),
-    });
+    const completedAt = new Date().toISOString();
+    if (runId) {
+      await ingestionRunRepo.update(runId, {
+        status: "failed",
+        lastError: error,
+        completedAt,
+      });
+    } else {
+      const failedRun = await ingestionRunRepo.create({
+        propertyId: params.propertyId,
+        sourceDocumentId: candidateDocuments[0]?.id ?? null,
+        sourceType: params.sourceType,
+        status: "failed",
+        sourceMeta: {
+          documents: candidateDocumentSourceMeta,
+        },
+        lastError: error,
+        completedAt,
+      });
+      runId = failedRun.id;
+    }
     return {
       documentsProcessed: 0,
       documentsSkippedNoFile: 0,
-      runId: run.id,
+      runId,
       snapshotId: null,
       dossierGenerated: false,
       error,

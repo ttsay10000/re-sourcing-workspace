@@ -1872,7 +1872,7 @@ router.post("/properties/:id/compute-score", async (req: Request, res: Response)
       details: property.details ?? null,
       primaryListing,
       irrPct: projection.returns.irr ?? null,
-      cocPct: projection.returns.year1CashOnCashReturn ?? null,
+      cocPct: projection.returns.averageCashOnCashReturn ?? null,
       equityMultiple: projection.returns.equityMultiple ?? null,
       adjustedCapRatePct:
         assumptions.acquisition.purchasePrice != null && hasCurrentFinancials && projection.operating.stabilizedNoi >= 0
@@ -1907,7 +1907,7 @@ router.post("/properties/:id/compute-score", async (req: Request, res: Response)
       dealScore: scoringResult.isScoreable ? scoringResult.dealScore : null,
       irrPct: projection.returns.irr ?? null,
       equityMultiple: projection.returns.equityMultiple ?? null,
-      cocPct: projection.returns.year1CashOnCashReturn ?? null,
+      cocPct: projection.returns.averageCashOnCashReturn ?? null,
       holdYears: assumptions.holdPeriodYears,
       currentNoi: currentNoi ?? null,
       adjustedNoi: projection.operating.stabilizedNoi ?? currentNoi ?? null,

@@ -126,6 +126,14 @@ function serializeUnderwritingContext(ctx: UnderwritingContext): string {
   }
   const irr = ctx.returns.irrPct != null ? (ctx.returns.irrPct * 100).toFixed(2) + "%" : "—";
   const em = ctx.returns.equityMultiple != null ? `${ctx.returns.equityMultiple.toFixed(2)}x` : "—";
+  const avgCoc =
+    ctx.returns.averageCashOnCashReturn != null
+      ? (ctx.returns.averageCashOnCashReturn * 100).toFixed(2) + "%"
+      : "—";
+  const year1Coc =
+    ctx.returns.year1CashOnCashReturn != null
+      ? (ctx.returns.year1CashOnCashReturn * 100).toFixed(2) + "%"
+      : "—";
   const equityYield =
     ctx.returns.year1EquityYield != null
       ? (ctx.returns.year1EquityYield * 100).toFixed(2) + "%"
@@ -146,6 +154,8 @@ function serializeUnderwritingContext(ctx: UnderwritingContext): string {
     "Returns:",
     `  IRR: ${irr}`,
     `  Equity multiple: ${em}`,
+    `  Average annual cash-on-cash: ${avgCoc}`,
+    `  Cash-on-cash (year 1): ${year1Coc}`,
     `  Equity yield (year 1): ${equityYield}`,
     `  Average annual equity yield: ${avgEquityYield}`
   );

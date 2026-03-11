@@ -128,6 +128,14 @@ You MUST extract every residential and commercial space listed anywhere in the O
 
 If the OM states a total unit count (e.g. "11 units", "totalUnits: 11", or property overview), your rentRoll array MUST contain that many entries. If a unit appears with no rent stated, include it with unit identifier (e.g. "Unit 3", "3B") and use null or 0 for rent and add a note (e.g. "Rent TBD" or "Vacant"). Do not omit units because rent is missing.
 
+RECONCILIATION PRIORITY RULES FOR UNIT COUNTS:
+
+• Prefer the most detailed lease status analysis, rent roll schedule, or unit-count summary table over narrative marketing copy, floorplan captions, or brochure text when they conflict.
+• Do NOT create a synthetic rent-roll row from a "Total Income", "Total Rent", subtotal, or any other summary line.
+• Do NOT create a synthetic unit row solely because a narrative description implies an extra apartment if that apartment does not appear as a separate rent-bearing line or explicit unit row in the detailed schedule. Record that conflict in reportedDiscrepancies instead.
+• If one tenant leases multiple spaces (for example storefront plus basement/storage), that may produce multiple rent-bearing rows, but it does NOT automatically increase totalUnits. Reconcile totalUnits to the detailed unit-count / lease-status table, and explain the multi-space lease in reportedDiscrepancies and notes.
+• For mixed-use properties, distinguish carefully between "commercial spaces / rent rows" and "commercial units" used for total unit count. A basement or storage area leased with an existing storefront is usually ancillary space, not a separate commercial unit, unless the OM explicitly counts it as its own unit.
+
 Fields per unit:
 
 unit (required — e.g. "1", "2A", "Unit 3")

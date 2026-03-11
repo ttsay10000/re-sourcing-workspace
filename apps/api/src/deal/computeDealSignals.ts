@@ -9,7 +9,12 @@ import {
   type PriceHistoryEntry,
   type PropertyDetails,
 } from "@re-sourcing/contracts";
-import { getAuthoritativeOmSnapshot, resolvePreferredOmPropertyInfo, resolvePreferredOmUnitCount } from "../om/authoritativeOm.js";
+import {
+  getAuthoritativeOmSnapshot,
+  resolvePreferredOmExpenseTable,
+  resolvePreferredOmPropertyInfo,
+  resolvePreferredOmUnitCount,
+} from "../om/authoritativeOm.js";
 import {
   resolveCurrentFinancialsFromDetails,
   resolveExpenseRowsFromDetails,
@@ -107,10 +112,15 @@ function hasExplicitValidationMismatch(details: PropertyDetails | null): boolean
 }
 
 function annualTaxFromDetails(details: PropertyDetails | null): number | null {
-  const assessedTax = toFiniteNumber(details?.assessedTaxBeforeTotal);
-  if (assessedTax != null && assessedTax > 0) return assessedTax;
-  const monthlyTax = toFiniteNumber(details?.monthlyTax);
-  if (monthlyTax != null && monthlyTax > 0) return monthlyTax * 12;
+  const propertyInfo = resolvePreferredOmPropertyInfo(details);
+  const omAnnualTaxes =
+    toFiniteNumber(propertyInfo?.annualTaxes) ??
+    toFiniteNumber(propertyInfo?.propertyTaxes) ??
+    null;
+  if (omAnnualTaxes != null && omAnnualTaxes > 0) return omAnnualTaxes;
+
+  const omTaxRow = resolvePreferredOmExpenseTable(details).find((row) => /tax/i.test(row.lineItem));
+  if (omTaxRow && omTaxRow.amount > 0) return omTaxRow.amount;
   return null;
 }
 
@@ -176,7 +186,7 @@ function riskProfileFromDetails(
     largestUnitRevenueSharePct,
     rollover12moRevenueSharePct:
       totalAnnualRent != null && totalAnnualRent > 0 ? rolloverAnnualRent / totalAnnualRent : null,
-    rentRollCoveragePct,
+    rentRollCoveragePct: coverage,
     omDiscrepancyCount: countOmDiscrepancies(details),
     rapidOmMismatch: rentRollComparison != null ? !rentRollComparison.comparable : false,
     taxBurdenPct,

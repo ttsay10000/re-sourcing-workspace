@@ -6,6 +6,7 @@ import { Router, type Request, type Response } from "express";
 import type { PropertyDetails } from "@re-sourcing/contracts";
 import { getPool, UserProfileRepo, PropertyRepo, MatchRepo, ListingRepo } from "@re-sourcing/db";
 import { runGenerateDossier } from "../deal/runGenerateDossier.js";
+import { refreshAuthoritativeOmForProperty } from "../om/ingestAuthoritativeOm.js";
 import { resolveCurrentFinancialsFromDetails } from "../rental/currentFinancials.js";
 import { resolveDossierAssumptions, type DossierAssumptionOverrides } from "../deal/underwritingModel.js";
 import {
@@ -21,6 +22,7 @@ import {
 } from "../workflow/workflowTracker.js";
 
 const router = Router();
+const MISSING_AUTHORITATIVE_OM_ERROR = "Authoritative OM snapshot required before dossier generation and deal scoring.";
 
 async function getDefaultUserId(): Promise<string> {
   const pool = getPool();
@@ -268,7 +270,44 @@ router.post("/dossier/generate", async (req: Request, res: Response) => {
         },
       ],
     });
-    const result = await runGenerateDossier(propertyId, assumptions);
+    let result;
+    try {
+      result = await runGenerateDossier(propertyId, assumptions);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message !== MISSING_AUTHORITATIVE_OM_ERROR) throw err;
+
+      await upsertWorkflowStep(workflowRunId, {
+        stepKey: "dossier",
+        totalItems: 1,
+        completedItems: 0,
+        failedItems: 0,
+        status: "running",
+        startedAt: workflowStartedAt,
+        lastMessage: "Refreshing authoritative OM before dossier generation",
+      });
+
+      const refresh = await refreshAuthoritativeOmForProperty(propertyId, pool);
+      if (refresh.error) {
+        throw new Error(refresh.error);
+      }
+
+      await mergeWorkflowRunMetadata(workflowRunId, {
+        authoritativeOmRunId: refresh.runId,
+        authoritativeOmSnapshotId: refresh.snapshotId,
+      });
+      await upsertWorkflowStep(workflowRunId, {
+        stepKey: "dossier",
+        totalItems: 1,
+        completedItems: 0,
+        failedItems: 0,
+        status: "running",
+        startedAt: workflowStartedAt,
+        lastMessage: "Authoritative OM refreshed; generating dossier",
+      });
+
+      result = await runGenerateDossier(propertyId, assumptions);
+    }
     await upsertWorkflowStep(workflowRunId, {
       stepKey: "dossier",
       totalItems: 1,

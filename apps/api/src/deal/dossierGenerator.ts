@@ -579,6 +579,22 @@ export function buildDossierStructuredText(ctx: UnderwritingContext): string {
   );
   lines.push(
     tableRow([
+      "Average annual cash-on-cash",
+      ctx.returns.averageCashOnCashReturn != null
+        ? `${(ctx.returns.averageCashOnCashReturn * 100).toFixed(2)}%`
+        : "—",
+    ])
+  );
+  lines.push(
+    tableRow([
+      "Cash-on-cash (year 1)",
+      ctx.returns.year1CashOnCashReturn != null
+        ? `${(ctx.returns.year1CashOnCashReturn * 100).toFixed(2)}%`
+        : "—",
+    ])
+  );
+  lines.push(
+    tableRow([
       "Equity yield (year 1)",
       ctx.returns.year1EquityYield != null
         ? `${(ctx.returns.year1EquityYield * 100).toFixed(2)}%`

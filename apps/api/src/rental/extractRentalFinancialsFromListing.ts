@@ -10,6 +10,7 @@ import type {
   RentalNumberPerUnit,
   OmAnalysis,
   OmRentRollRow,
+  OmExtractionMethod,
 } from "@re-sourcing/contracts";
 import OpenAI from "openai";
 import type { ChatCompletionContentPart, ChatCompletionMessageParam } from "openai/resources/chat/completions";
@@ -482,6 +483,8 @@ export interface ExtractRentalFinancialsOptions {
    * Use for PDFs with image-based tables or page graphics that plain-text extraction can miss.
    */
   documentFiles?: OmInputDocument[];
+  /** Explicit OM extraction route chosen upstream from PDF text coverage heuristics. */
+  omExtractionMethod?: OmExtractionMethod;
 }
 
 export interface OmInputDocument {
@@ -560,19 +563,28 @@ async function createOmStyleCompletion(
   openai: OpenAI,
   prompt: string,
   documentFiles: OmInputDocument[],
+  mode: "text" | "file" | "hybrid",
   timeoutMs = OM_FILE_PARSE_TIMEOUT_MS
 ) {
   const model = getOmAnalysisModel();
   const reasoningEffort = getOmAnalysisReasoningEffort();
+  if (mode === "text" || documentFiles.length === 0) {
+    return await openai.chat.completions.create({
+      model,
+      messages: [{ role: "user", content: prompt }],
+      response_format: { type: "json_object" },
+      ...(supportsReasoningEffort(model) ? { reasoning_effort: reasoningEffort } : {}),
+    }, { timeout: timeoutMs, maxRetries: 0 });
+  }
   try {
     return await openai.chat.completions.create({
       model,
       messages: buildOmStyleMessages(prompt, documentFiles),
       response_format: { type: "json_object" },
       ...(supportsReasoningEffort(model) ? { reasoning_effort: reasoningEffort } : {}),
-    }, documentFiles.length > 0 ? { timeout: timeoutMs, maxRetries: 0 } : undefined);
+    }, { timeout: timeoutMs, maxRetries: 0 });
   } catch (err) {
-    if (documentFiles.length === 0) throw err;
+    if (mode !== "hybrid") throw err;
     console.warn(
       "[extractRentalFinancialsFromText] File-assisted OM parsing failed; retrying text-only:",
       err instanceof Error ? err.message : err
@@ -582,11 +594,21 @@ async function createOmStyleCompletion(
       messages: [{ role: "user", content: prompt }],
       response_format: { type: "json_object" },
       ...(supportsReasoningEffort(model) ? { reasoning_effort: reasoningEffort } : {}),
-    });
+    }, { timeout: Math.max(timeoutMs, OM_FILE_DEEP_RETRY_TIMEOUT_MS), maxRetries: 0 });
   }
 }
 
-function parseCompletionJsonContent(content: string | null | undefined): Record<string, unknown> | null {
+export function resolveOmPrimaryPassMode(
+  extractionMethod: OmExtractionMethod | null | undefined,
+  hasDocumentFiles: boolean
+): "text" | "file" | "hybrid" {
+  if (!hasDocumentFiles) return "text";
+  if (extractionMethod === "text_tables") return "text";
+  if (extractionMethod === "ocr_tables") return "file";
+  return "hybrid";
+}
+
+export function parseCompletionJsonContent(content: string | null | undefined): Record<string, unknown> | null {
   if (!content || typeof content !== "string") return null;
   let jsonStr = content.trim();
   const codeBlock = jsonStr.match(/^```(?:json)?\s*([\s\S]*?)```$/);
@@ -594,7 +616,7 @@ function parseCompletionJsonContent(content: string | null | undefined): Record<
   return JSON.parse(jsonStr) as Record<string, unknown>;
 }
 
-function omAnalysisFromParsedJson(
+export function omAnalysisFromParsedJson(
   parsed: Record<string, unknown>
 ): OmAnalysis {
   const rawUi = (parsed.uiFinancialSummary as Record<string, unknown>) ?? undefined;
@@ -675,7 +697,7 @@ function extractionResultQualityScore(result: ExtractRentalFinancialsResult): nu
 /**
  * Derive legacy fromLlm from OmAnalysis for backward compatibility and property page fallback.
  */
-function fromLlmFromOmAnalysis(om: OmAnalysis): RentalFinancialsFromLlm {
+export function fromLlmFromOmAnalysis(om: OmAnalysis): RentalFinancialsFromLlm {
   const expenses = om.expenses as { totalExpenses?: number; expensesTable?: ExpenseLineItem[] } | undefined;
   const valuation = om.valuationMetrics as Record<string, unknown> | undefined;
   const ui = om.uiFinancialSummary as Record<string, unknown> | undefined;
@@ -777,6 +799,9 @@ export async function extractRentalFinancialsFromText(
   const trimmed = (text ?? "").trim();
   const omDocumentFiles = selectOmDocumentFiles(options?.documentFiles);
   const hasDocumentFiles = omDocumentFiles.length > 0;
+  const requestedOmExtractionMethod = options?.omExtractionMethod ?? (hasDocumentFiles ? "hybrid" : "text_tables");
+  const primaryPassMode = resolveOmPrimaryPassMode(requestedOmExtractionMethod, hasDocumentFiles);
+  const primaryDocumentFiles = primaryPassMode === "text" ? [] : omDocumentFiles;
   const key = getApiKey();
   if (!key) {
     console.warn("[extractRentalFinancialsFromText] OPENAI_API_KEY missing or invalid; skipping OpenAI call.");
@@ -804,18 +829,22 @@ export async function extractRentalFinancialsFromText(
       omModel +
       " isOmStyle=" +
       isOmStyle +
+      " extractionMethod=" +
+      requestedOmExtractionMethod +
+      " primaryMode=" +
+      primaryPassMode +
       " promptChars=" +
       (OM_ANALYSIS_PROMPT_PREFIX.length + docSnippet.length) +
       " fileInputs=" +
-      omDocumentFiles.length +
+      primaryDocumentFiles.length +
       (trimmed.length > docLimit ? " (doc truncated)" : "")
   );
   const openai = new OpenAI({ apiKey: key });
 
   const documentSection =
     (options?.enrichmentContext ? `Additional enrichment data:\n${options.enrichmentContext}\n\n` : "") +
-    (isOmStyle && hasDocumentFiles
-      ? `Attached original PDF file(s): ${omDocumentFiles.map((doc) => doc.filename).join(", ")}.
+    (isOmStyle && primaryDocumentFiles.length > 0
+      ? `Attached original PDF file(s): ${primaryDocumentFiles.map((doc) => doc.filename).join(", ")}.
 Use the attached file(s) together with the extracted text below. The extracted text may miss image-based rent rolls, financial tables, or lease schedules.\n\n`
       : "") +
     `Document text (OM/listing${hasDocumentFiles ? "; may be incomplete on graphic pages" : ""}):\n${
@@ -845,7 +874,7 @@ ${trimmed.slice(0, 15000)}`;
   try {
     const completion =
       isOmStyle
-        ? await createOmStyleCompletion(openai, prompt, omDocumentFiles)
+        ? await createOmStyleCompletion(openai, prompt, primaryDocumentFiles, primaryPassMode)
         : await openai.chat.completions.create({
             model: omModel,
             messages: [{ role: "user", content: prompt }],
@@ -867,10 +896,12 @@ ${trimmed.slice(0, 15000)}`;
       );
       if (hasDocumentFiles && weakOmSignalCount(mergedResult) >= 2) {
         try {
+          const retryMode = primaryPassMode === "text" ? "file" : primaryPassMode;
           const retryCompletion = await createOmStyleCompletion(
             openai,
             buildOmDeepRetryPrompt(prompt),
             omDocumentFiles,
+            retryMode,
             Math.max(OM_FILE_PARSE_TIMEOUT_MS, OM_FILE_DEEP_RETRY_TIMEOUT_MS)
           );
           const retryParsed = parseCompletionJsonContent(retryCompletion.choices[0]?.message?.content);

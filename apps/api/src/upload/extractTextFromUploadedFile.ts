@@ -7,6 +7,19 @@
 import { readFile } from "fs/promises";
 import { resolveUploadedDocFilePath } from "./uploadedDocStorage.js";
 
+export interface ExtractedTextMetadata {
+  text: string;
+  pageCount: number | null;
+  pages?: ExtractedTextPageMetadata[];
+}
+
+export interface ExtractedTextPageMetadata {
+  pageNumber: number;
+  textChars: number;
+  textItems: number;
+  textSample: string;
+}
+
 async function extractWorkbookText(buffer: Buffer): Promise<string> {
   const XLSX = await import("xlsx");
   const workbook = XLSX.read(buffer, { type: "buffer" });
@@ -23,25 +36,77 @@ async function extractWorkbookText(buffer: Buffer): Promise<string> {
   return sections.join("\n\n").trim();
 }
 
-/** Extract text from a buffer (e.g. from DB file_content). Use when file is not on disk. */
-export async function extractTextFromBuffer(buffer: Buffer, filename: string): Promise<string> {
+async function extractPdfTextMetadata(buffer: Buffer): Promise<ExtractedTextMetadata> {
+  const pdfParse = (await import("pdf-parse")).default as unknown as (
+    dataBuffer: Buffer,
+    options?: {
+      pagerender?: (pageData: {
+        getTextContent: (options: { normalizeWhitespace: boolean; disableCombineTextItems: boolean }) => Promise<{
+          items: Array<{ str?: string; transform: number[] }>;
+        }>;
+      }) => Promise<string>;
+    }
+  ) => Promise<{ text: string; numpages?: number; info?: unknown }>;
+  const pages: ExtractedTextPageMetadata[] = [];
+  const data = await pdfParse(buffer, {
+    pagerender: async (pageData: {
+      getTextContent: (options: { normalizeWhitespace: boolean; disableCombineTextItems: boolean }) => Promise<{
+        items: Array<{ str?: string; transform: number[] }>;
+      }>;
+    }) => {
+      const textContent = await pageData.getTextContent({
+        normalizeWhitespace: false,
+        disableCombineTextItems: false,
+      });
+      let lastY: number | undefined;
+      let pageText = "";
+      for (const item of textContent.items) {
+        const itemY = Array.isArray(item.transform) ? item.transform[5] : undefined;
+        const itemText = typeof item.str === "string" ? item.str : "";
+        if ((lastY == null || lastY === itemY) && pageText.length > 0) pageText += itemText;
+        else if (pageText.length > 0) pageText += `\n${itemText}`;
+        else pageText += itemText;
+        lastY = itemY;
+      }
+      const normalized = pageText.replace(/\s+/g, " ").trim();
+      pages.push({
+        pageNumber: pages.length + 1,
+        textChars: normalized.length,
+        textItems: textContent.items.length,
+        textSample: normalized.slice(0, 500),
+      });
+      return pageText;
+    },
+  });
+  return {
+    text: typeof data?.text === "string" ? data.text.trim() : "",
+    pageCount: typeof data?.numpages === "number" && Number.isFinite(data.numpages) ? data.numpages : null,
+    pages,
+  };
+}
+
+export async function extractTextMetadataFromBuffer(buffer: Buffer, filename: string): Promise<ExtractedTextMetadata> {
   const ext = filename.toLowerCase().split(".").pop() ?? "";
   try {
     if (ext === "pdf") {
-      const pdfParse = (await import("pdf-parse")).default;
-      const data = await pdfParse(buffer);
-      return typeof data?.text === "string" ? data.text.trim() : "";
+      return await extractPdfTextMetadata(buffer);
     }
     if (ext === "txt" || ext === "text") {
-      return buffer.toString("utf-8").trim();
+      return { text: buffer.toString("utf-8").trim(), pageCount: null, pages: [] };
     }
     if (ext === "xls" || ext === "xlsx") {
-      return await extractWorkbookText(buffer);
+      return { text: await extractWorkbookText(buffer), pageCount: null, pages: [] };
     }
   } catch (e) {
-    console.warn("[extractTextFromBuffer]", filename, e instanceof Error ? e.message : e);
+    console.warn("[extractTextMetadataFromBuffer]", filename, e instanceof Error ? e.message : e);
   }
-  return "";
+  return { text: "", pageCount: null, pages: [] };
+}
+
+/** Extract text from a buffer (e.g. from DB file_content). Use when file is not on disk. */
+export async function extractTextFromBuffer(buffer: Buffer, filename: string): Promise<string> {
+  const metadata = await extractTextMetadataFromBuffer(buffer, filename);
+  return metadata.text;
 }
 
 export async function extractTextFromUploadedFile(filePath: string, filename?: string): Promise<string> {
