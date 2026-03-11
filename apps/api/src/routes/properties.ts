@@ -161,19 +161,21 @@ async function listPropertiesWithListingSummary(pool: import("pg").Pool) {
       p.id, p.canonical_address, p.details, p.created_at, p.updated_at,
       l.price AS listing_price, l.listed_at AS listing_listed_at, l.city AS listing_city, l.price_history AS listing_price_history,
       (CASE
-        WHEN EXISTS (
-          SELECT 1
-          FROM property_inquiry_documents d
-          WHERE d.property_id = p.id
-            AND LOWER(COALESCE(d.filename, '')) ~ '(offering|memorandum|(^|[^a-z])om([^a-z]|$)|brochure|rent[ _-]?roll)'
-        )
-          OR EXISTS (
+        WHEN (
+          EXISTS (
             SELECT 1
-            FROM property_uploaded_documents u
-            WHERE u.property_id = p.id
-              AND u.category IN ('OM', 'Brochure', 'Rent Roll')
+            FROM property_inquiry_documents d
+            WHERE d.property_id = p.id
+              AND LOWER(COALESCE(d.filename, '')) ~ '(offering|memorandum|(^|[^a-z])om([^a-z]|$)|brochure|rent[ _-]?roll)'
           )
-        ) OR COALESCE(p.details->'omData'->'authoritative', 'null'::jsonb) <> 'null'::jsonb
+            OR EXISTS (
+              SELECT 1
+              FROM property_uploaded_documents u
+              WHERE u.property_id = p.id
+                AND u.category IN ('OM', 'Brochure', 'Rent Roll')
+            )
+            OR COALESCE(p.details->'omData'->'authoritative', 'null'::jsonb) <> 'null'::jsonb
+        )
         THEN 'OM received'
         WHEN EXISTS (SELECT 1 FROM property_inquiry_sends s WHERE s.property_id = p.id)
         THEN 'OM pending'
@@ -209,19 +211,21 @@ async function listPropertiesWithListingSummary(pool: import("pg").Pool) {
       p.id, p.canonical_address, p.details, p.created_at, p.updated_at,
       l.price AS listing_price, l.listed_at AS listing_listed_at, l.city AS listing_city, l.price_history AS listing_price_history,
       (CASE
-        WHEN EXISTS (
-          SELECT 1
-          FROM property_inquiry_documents d
-          WHERE d.property_id = p.id
-            AND LOWER(COALESCE(d.filename, '')) ~ '(offering|memorandum|(^|[^a-z])om([^a-z]|$)|brochure|rent[ _-]?roll)'
-        )
-          OR EXISTS (
+        WHEN (
+          EXISTS (
             SELECT 1
-            FROM property_uploaded_documents u
-            WHERE u.property_id = p.id
-              AND u.category IN ('OM', 'Brochure', 'Rent Roll')
+            FROM property_inquiry_documents d
+            WHERE d.property_id = p.id
+              AND LOWER(COALESCE(d.filename, '')) ~ '(offering|memorandum|(^|[^a-z])om([^a-z]|$)|brochure|rent[ _-]?roll)'
           )
-        ) OR COALESCE(p.details->'omData'->'authoritative', 'null'::jsonb) <> 'null'::jsonb
+            OR EXISTS (
+              SELECT 1
+              FROM property_uploaded_documents u
+              WHERE u.property_id = p.id
+                AND u.category IN ('OM', 'Brochure', 'Rent Roll')
+            )
+            OR COALESCE(p.details->'omData'->'authoritative', 'null'::jsonb) <> 'null'::jsonb
+        )
         THEN 'OM received'
         WHEN EXISTS (SELECT 1 FROM property_inquiry_sends s WHERE s.property_id = p.id)
         THEN 'OM pending'
