@@ -344,6 +344,14 @@ export interface ProcessInboxResult {
   errors: string[];
 }
 
+export function shouldBlockAutomatedOutreachAfterInboxCheck(result: ProcessInboxResult): boolean {
+  if (result.processed > 0 || result.matched > 0 || result.saved > 0) return false;
+  return result.errors.some((error) =>
+    error.startsWith("Gmail not configured or auth failed:")
+    || error.startsWith("listMessages:")
+  );
+}
+
 /**
  * Run process-inbox: fetch recent inbox messages, match by subject address, save emails and attachments.
  */

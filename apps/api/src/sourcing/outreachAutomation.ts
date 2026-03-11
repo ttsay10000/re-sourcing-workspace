@@ -1,6 +1,7 @@
 import { EventRepo, InquirySendRepo, OutreachBatchRepo, PropertyActionItemRepo, PropertySourcingStateRepo, getPool } from "@re-sourcing/db";
 import { getBodyText, getHeader, getMessage, sendMessage } from "../inquiry/gmailClient.js";
 import { findBrokerPropertyConversationHistory } from "../inquiry/gmailConversationHistory.js";
+import { processInbox, shouldBlockAutomatedOutreachAfterInboxCheck, type ProcessInboxResult } from "../inquiry/processInbox.js";
 import { syncPropertySourcingWorkflow } from "./workflow.js";
 
 interface EligiblePropertyRow {
@@ -19,6 +20,28 @@ interface HistoricalOutreachBatchRow {
   gmail_message_id: string | null;
   metadata: Record<string, unknown> | null;
   sent_at: Date | string | null;
+}
+
+export interface DailyOutreachInboxSummary {
+  processed: number;
+  matched: number;
+  saved: number;
+  skipped: number;
+  errorCount: number;
+  blockedOutreach: boolean;
+  lastError: string | null;
+}
+
+function toInboxSummary(result: ProcessInboxResult): DailyOutreachInboxSummary {
+  return {
+    processed: result.processed,
+    matched: result.matched,
+    saved: result.saved,
+    skipped: result.skipped,
+    errorCount: result.errors.length,
+    blockedOutreach: shouldBlockAutomatedOutreachAfterInboxCheck(result),
+    lastError: result.errors[0] ?? null,
+  };
 }
 
 export function normalizeOutreachAddressKey(address: string | null | undefined): string | null {
@@ -194,8 +217,17 @@ tyler@stayhaus.co`;
 
 export async function runDailyOutreach(
   options?: { propertyIds?: string[] }
-): Promise<{ sent: number; reviewRequired: number; batchIds: string[] }> {
+): Promise<{ sent: number; reviewRequired: number; batchIds: string[]; inboxCheck: DailyOutreachInboxSummary }> {
   const pool = getPool();
+  const inboxCheck = toInboxSummary(await processInbox({ maxMessages: 50 }));
+  if (inboxCheck.blockedOutreach) {
+    return {
+      sent: 0,
+      reviewRequired: 0,
+      batchIds: [],
+      inboxCheck,
+    };
+  }
   const scopedPropertyIds =
     Array.isArray(options?.propertyIds) && options.propertyIds.length > 0
       ? options.propertyIds.filter((propertyId): propertyId is string => typeof propertyId === "string" && propertyId.trim().length > 0)
@@ -441,5 +473,5 @@ export async function runDailyOutreach(
     });
   }
 
-  return { sent, reviewRequired, batchIds };
+  return { sent, reviewRequired, batchIds, inboxCheck };
 }

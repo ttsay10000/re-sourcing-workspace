@@ -19,7 +19,7 @@ import { runEnrichmentForProperty } from "../enrichment/runEnrichment.js";
 import { runRentalFlowForProperty } from "../routes/properties.js";
 import { syncPropertySourcingWorkflow } from "./workflow.js";
 import { buildListingChangeSummary } from "./listingChangeSummary.js";
-import { runDailyOutreach } from "./outreachAutomation.js";
+import { runDailyOutreach, type DailyOutreachInboxSummary } from "./outreachAutomation.js";
 import {
   createWorkflowRun,
   deriveWorkflowStatusFromCounts,
@@ -61,10 +61,37 @@ interface CanonicalFollowUpSummary {
   errors: string[];
   rentalSuccess: number;
   rentalFailed: number;
+  inbox: DailyOutreachInboxSummary;
   inquiry: InquiryProgressSummary & {
     batchIds: string[];
     outreachFailures: number;
   };
+}
+
+function emptyInboxSummary(): DailyOutreachInboxSummary {
+  return {
+    processed: 0,
+    matched: 0,
+    saved: 0,
+    skipped: 0,
+    errorCount: 0,
+    blockedOutreach: false,
+    lastError: null,
+  };
+}
+
+function summarizeInboxCheck(inbox: DailyOutreachInboxSummary): string {
+  const parts = [
+    inbox.processed > 0 ? `${inbox.processed} checked` : null,
+    inbox.saved > 0 ? `${inbox.saved} saved` : null,
+    inbox.errorCount > 0 ? `${inbox.errorCount} issue${inbox.errorCount === 1 ? "" : "s"}` : null,
+  ].filter(Boolean);
+  if (parts.length === 0) {
+    return inbox.blockedOutreach
+      ? "Inbox check failed before automated outreach"
+      : "Inbox checked before automated outreach";
+  }
+  return `Inbox: ${parts.join(", ")}`;
 }
 
 function zonedDateTimeParts(
@@ -328,7 +355,7 @@ async function runCanonicalFollowUp(
 ): Promise<CanonicalFollowUpSummary> {
   const nowIso = new Date().toISOString();
   if (propertyIds.length === 0) {
-    for (const stepKey of [...ENRICHMENT_STEP_KEYS, "rental_flow", "inquiry"] as const) {
+    for (const stepKey of [...ENRICHMENT_STEP_KEYS, "rental_flow", "inbox", "inquiry"] as const) {
       await upsertWorkflowStep(workflowRunId, {
         stepKey,
         totalItems: 0,
@@ -345,6 +372,7 @@ async function runCanonicalFollowUp(
       errors: [],
       rentalSuccess: 0,
       rentalFailed: 0,
+      inbox: emptyInboxSummary(),
       inquiry: {
         sentCount: 0,
         reviewRequiredCount: 0,
@@ -502,6 +530,32 @@ async function runCanonicalFollowUp(
   const eligiblePropertyIds = statesBeforeOutreach
     .filter((state) => state.workflowState === "eligible_for_outreach")
     .map((state) => state.propertyId);
+  let inboxSummary = emptyInboxSummary();
+  const inboxStartedAt = new Date().toISOString();
+  if (eligiblePropertyIds.length > 0) {
+    await upsertWorkflowStep(workflowRunId, {
+      stepKey: "inbox",
+      totalItems: 1,
+      completedItems: 0,
+      failedItems: 0,
+      skippedItems: 0,
+      status: "running",
+      startedAt: inboxStartedAt,
+      lastMessage: "Checking inbox for broker replies and OMs before automated outreach",
+    });
+  } else {
+    await upsertWorkflowStep(workflowRunId, {
+      stepKey: "inbox",
+      totalItems: 1,
+      completedItems: 1,
+      failedItems: 0,
+      skippedItems: 0,
+      status: "completed",
+      startedAt: inboxStartedAt,
+      finishedAt: inboxStartedAt,
+      lastMessage: "No properties eligible for outreach; skipped inbox check",
+    });
+  }
   const inquiryStartedAt = new Date().toISOString();
   await upsertWorkflowStep(workflowRunId, {
     stepKey: "inquiry",
@@ -523,10 +577,40 @@ async function runCanonicalFollowUp(
   if (eligiblePropertyIds.length > 0) {
     try {
       const outreachResult = await runDailyOutreach({ propertyIds: eligiblePropertyIds });
+      inboxSummary = outreachResult.inboxCheck;
       batchIds = outreachResult.batchIds;
+      if (inboxSummary.blockedOutreach) {
+        outreachFailures = eligiblePropertyIds.length;
+        errors.push(`inbox-check:${inboxSummary.lastError ?? "Inbox verification failed before automated outreach"}`);
+      }
+      await upsertWorkflowStep(workflowRunId, {
+        stepKey: "inbox",
+        totalItems: 1,
+        completedItems: inboxSummary.blockedOutreach ? 0 : 1,
+        failedItems: inboxSummary.blockedOutreach ? 1 : 0,
+        skippedItems: 0,
+        status: inboxSummary.blockedOutreach ? "failed" : inboxSummary.errorCount > 0 ? "partial" : "completed",
+        startedAt: inboxStartedAt,
+        finishedAt: new Date().toISOString(),
+        lastMessage: summarizeInboxCheck(inboxSummary),
+        lastError: inboxSummary.blockedOutreach ? (inboxSummary.lastError ?? "Inbox verification failed") : null,
+        metadata: { ...inboxSummary },
+      });
     } catch (err) {
       outreachFailures = eligiblePropertyIds.length;
       errors.push(`outreach:${err instanceof Error ? err.message : String(err)}`);
+      await upsertWorkflowStep(workflowRunId, {
+        stepKey: "inbox",
+        totalItems: 1,
+        completedItems: 0,
+        failedItems: 1,
+        skippedItems: 0,
+        status: "failed",
+        startedAt: inboxStartedAt,
+        finishedAt: new Date().toISOString(),
+        lastMessage: "Pre-outreach automation failed",
+        lastError: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 
@@ -553,10 +637,16 @@ async function runCanonicalFollowUp(
       inquirySummary.eligibleCount > 0 ? `${inquirySummary.eligibleCount} still eligible` : null,
       inquirySummary.otherCount > 0 ? `${inquirySummary.otherCount} not ready` : null,
     ].filter(Boolean).join(", ") || "No automated outreach was sent",
-    lastError: outreachFailures > 0 ? "Automated outreach failed for eligible properties" : null,
+    lastError:
+      inboxSummary.blockedOutreach
+        ? (inboxSummary.lastError ?? "Inbox verification failed before automated outreach")
+        : outreachFailures > 0
+          ? "Automated outreach failed for eligible properties"
+          : null,
     metadata: {
       batchIds,
       eligiblePropertyIds,
+      inbox: inboxSummary,
     },
   });
 
@@ -564,6 +654,7 @@ async function runCanonicalFollowUp(
     errors,
     rentalSuccess,
     rentalFailed,
+    inbox: inboxSummary,
     inquiry: {
       ...inquirySummary,
       batchIds,
@@ -628,6 +719,14 @@ export async function executeSavedSearchRun(
         totalItems: 0,
         completedItems: 0,
         failedItems: 0,
+        status: "pending",
+      },
+      {
+        stepKey: "inbox",
+        totalItems: 0,
+        completedItems: 0,
+        failedItems: 0,
+        skippedItems: 0,
         status: "pending",
       },
       {
@@ -795,6 +894,7 @@ export async function executeSavedSearchRun(
     await mergeWorkflowRunMetadata(workflowRunId, {
       propertyIds: uniquePropertyIds,
       listingIds: [...new Set(listingIds)],
+      inbox: followUp.inbox,
       inquiry: followUp.inquiry,
     });
     await updateWorkflowRun(workflowRunId, {
@@ -817,6 +917,7 @@ export async function executeSavedSearchRun(
         listingIds: [...new Set(listingIds)],
         propertyIds: uniquePropertyIds,
         workflowRunId,
+        inbox: followUp.inbox,
         inquiry: followUp.inquiry,
       }
     );
