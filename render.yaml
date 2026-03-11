@@ -44,10 +44,6 @@ services:
         sync: false
       - key: GEOCLIENT_SUBSCRIPTION_KEY
         sync: false
-      - key: GEOCLIENT_APP_ID
-        sync: false
-      - key: GEOCLIENT_APP_KEY
-        sync: false
       - key: GMAIL_CLIENT_ID
         sync: false
       - key: GMAIL_CLIENT_SECRET
@@ -132,13 +128,3 @@ services:
           type: web
           name: re-sourcing-api
           envVarKey: GEOCLIENT_SUBSCRIPTION_KEY
-      - key: GEOCLIENT_APP_ID
-        fromService:
-          type: web
-          name: re-sourcing-api
-          envVarKey: GEOCLIENT_APP_ID
-      - key: GEOCLIENT_APP_KEY
-        fromService:
-          type: web
-          name: re-sourcing-api
-          envVarKey: GEOCLIENT_APP_KEY

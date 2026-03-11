@@ -26,8 +26,6 @@ Optional env:
 
 - `SOCRATA_APP_TOKEN`
 - `GEOCLIENT_SUBSCRIPTION_KEY`
-- `GEOCLIENT_APP_ID`
-- `GEOCLIENT_APP_KEY`
 - `PROCESS_INBOX_CRON_SECRET`
 - `INQUIRY_DOCS_PATH`
 - `UPLOADED_DOCS_PATH`
@@ -93,8 +91,6 @@ Optional env:
 
 - `SOCRATA_APP_TOKEN`
 - `GEOCLIENT_SUBSCRIPTION_KEY`
-- `GEOCLIENT_APP_ID`
-- `GEOCLIENT_APP_KEY`
 
 All shared runtime credentials are inherited from `re-sourcing-api` via `fromService`.
 
