@@ -1,5 +1,6 @@
 import { EventRepo, InquirySendRepo, OutreachBatchRepo, PropertyActionItemRepo, PropertySourcingStateRepo, getPool } from "@re-sourcing/db";
 import { getBodyText, getHeader, getMessage, sendMessage } from "../inquiry/gmailClient.js";
+import { findBrokerPropertyConversationHistory } from "../inquiry/gmailConversationHistory.js";
 import { syncPropertySourcingWorkflow } from "./workflow.js";
 
 interface EligiblePropertyRow {
@@ -69,6 +70,25 @@ function metadataCanonicalAddresses(metadata: Record<string, unknown> | null | u
   const value = metadata?.canonicalAddresses;
   if (!Array.isArray(value)) return [];
   return value.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0);
+}
+
+async function markHistoryReviewRequired(
+  actionRepo: PropertyActionItemRepo,
+  stateRepo: PropertySourcingStateRepo,
+  propertyId: string,
+  summary: string,
+  details: Record<string, unknown>
+): Promise<void> {
+  await actionRepo.upsertOpen(propertyId, "review_thread_conflict", {
+    priority: "high",
+    summary,
+    details,
+  });
+  await stateRepo.upsert({
+    propertyId,
+    workflowState: "review_required",
+    latestRunId: null,
+  });
 }
 
 async function resolveHistoricalBatchAddresses(
@@ -245,27 +265,71 @@ export async function runDailyOutreach(): Promise<{ sent: number; reviewRequired
       const key = normalizeOutreachAddressKey(property.canonical_address);
       return key != null && historicalAddressState.addressKeys.has(key);
     });
-    const sendableProperties = properties.filter((property) => {
+    const propertiesWithoutHistoricalBlock = properties.filter((property) => {
       const key = normalizeOutreachAddressKey(property.canonical_address);
       return key == null || !historicalAddressState.addressKeys.has(key);
     });
 
     for (const property of blockedByHistoricalOutreach) {
-      await actionRepo.upsertOpen(property.property_id, "confirm_follow_up", {
-        priority: "high",
-        summary: "Historical outreach already exists for this address; auto-send blocked",
-        details: { toAddress, source: "historical_outreach_recovery" },
-      });
-      await stateRepo.upsert({
-        propertyId: property.property_id,
-        workflowState: "review_required",
-        latestRunId: null,
-      });
+      await markHistoryReviewRequired(
+        actionRepo,
+        stateRepo,
+        property.property_id,
+        "Historical outreach already exists for this address; auto-send blocked",
+        { toAddress, source: "historical_outreach_recovery" }
+      );
+    }
+
+    const sendableProperties: EligiblePropertyRow[] = [];
+    for (const property of propertiesWithoutHistoricalBlock) {
+      try {
+        const gmailHistory = await findBrokerPropertyConversationHistory({
+          toAddress,
+          canonicalAddress: property.canonical_address,
+        });
+        if (gmailHistory.matches.length > 0) {
+          await markHistoryReviewRequired(
+            actionRepo,
+            stateRepo,
+            property.property_id,
+            "Existing Gmail conversation found for this broker and property; auto-send blocked",
+            {
+              toAddress,
+              source: "gmail_conversation_history",
+              query: gmailHistory.query,
+              canonicalAddress: property.canonical_address,
+              addressLine: gmailHistory.addressLine,
+              matches: gmailHistory.matches,
+            }
+          );
+          continue;
+        }
+      } catch (err) {
+        await markHistoryReviewRequired(
+          actionRepo,
+          stateRepo,
+          property.property_id,
+          "Mailbox history could not be verified for this broker and property; auto-send blocked",
+          {
+            toAddress,
+            source: "gmail_conversation_history_lookup_failed",
+            canonicalAddress: property.canonical_address,
+            error: err instanceof Error ? err.message : String(err),
+          }
+        );
+        continue;
+      }
+
+      sendableProperties.push(property);
     }
 
     if (sendableProperties.length === 0) {
-      if (blockedByHistoricalOutreach.length > 0) reviewRequired += blockedByHistoricalOutreach.length;
+      if (properties.length > 0) reviewRequired += properties.length;
       continue;
+    }
+
+    if (sendableProperties.length < properties.length) {
+      reviewRequired += properties.length - sendableProperties.length;
     }
 
     const recentSends = await pool.query<{ gmail_thread_id: string | null; sent_at: Date | string }>(

@@ -29,6 +29,7 @@ import { randomUUID } from "crypto";
 import { resolveInquiryFilePath } from "../inquiry/storage.js";
 import { saveUploadedDocument, resolveUploadedDocFilePath, deleteUploadedDocumentFile, uploadedDocFileExists } from "../upload/uploadedDocStorage.js";
 import { sendMessage as gmailSendMessage } from "../inquiry/gmailClient.js";
+import { findBrokerPropertyConversationHistory } from "../inquiry/gmailConversationHistory.js";
 import type { PropertyDetails, RentalFinancials, RentalFinancialsFromLlm } from "@re-sourcing/contracts";
 import { runEnrichmentForProperty } from "../enrichment/runEnrichment.js";
 import { normalizeAddressLineForDisplay, getBBLForProperty } from "../enrichment/resolvePropertyBBL.js";
@@ -1523,6 +1524,10 @@ router.post("/properties/:id/send-inquiry-email", async (req: Request, res: Resp
       return;
     }
     const normalizedTo = normalizeRecipientEmail(to);
+    if (!normalizedTo) {
+      res.status(400).json({ error: "Missing or invalid 'to' address." });
+      return;
+    }
     const guard = await getInquiryGuardState(pool, propertyId, normalizedTo);
     if (guard.hasOmDocument && !force) {
       res.status(409).json({
@@ -1547,6 +1552,21 @@ router.post("/properties/:id/send-inquiry-email", async (req: Request, res: Resp
         guard,
       });
       return;
+    }
+    if (!force) {
+      const gmailHistory = await findBrokerPropertyConversationHistory({
+        toAddress: normalizedTo,
+        canonicalAddress: property.canonicalAddress,
+      });
+      if (gmailHistory.matches.length > 0) {
+        res.status(409).json({
+          error: "A Gmail conversation already exists for this broker and property. Inquiry email blocked until you confirm a resend.",
+          code: "gmail_history_exists",
+          guard,
+          gmailHistory,
+        });
+        return;
+      }
     }
     const subj = typeof subject === "string" ? subject.trim() : "";
     const b = typeof body === "string" ? body : "";
