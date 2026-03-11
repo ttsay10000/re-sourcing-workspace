@@ -72,6 +72,8 @@ export function mapProfile(row: Record<string, unknown>): SearchProfile {
     maxBeds: (row.max_beds as number) ?? null,
     minBaths: (row.min_baths as number) ?? null,
     maxBaths: (row.max_baths as number) ?? null,
+    maxHoa: (row.max_hoa as number) ?? null,
+    maxTax: (row.max_tax as number) ?? null,
     minSqft: (row.min_sqft as number) ?? null,
     maxSqft: (row.max_sqft as number) ?? null,
     requiredAmenities: (row.required_amenities as string[]) ?? [],
@@ -88,6 +90,7 @@ export function mapProfile(row: Record<string, unknown>): SearchProfile {
     outreachRules: toJsonObject(row.outreach_rules) as SearchProfile["outreachRules"],
     scheduleCron: (row.schedule_cron as string) ?? null,
     runIntervalMinutes: (row.run_interval_minutes as number) ?? null,
+    resultLimit: (row.result_limit as number) ?? null,
     createdAt: (row.created_at as Date)?.toISOString?.() ?? String(row.created_at),
     updatedAt: (row.updated_at as Date)?.toISOString?.() ?? String(row.updated_at),
   };

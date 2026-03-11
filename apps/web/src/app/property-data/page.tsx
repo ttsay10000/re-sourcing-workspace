@@ -11,6 +11,7 @@ import {
 import { PropertyDetailCollapsible } from "./PropertyDetailCollapsible";
 import { CanonicalPropertyDetail, type CanonicalProperty } from "./CanonicalPropertyDetail";
 import { AREA_OPTIONS, cityToArea, cityFromCanonicalAddress } from "./areas";
+import { getSourcingUpdateMeta } from "./sourcingUpdate";
 import {
   estimateGenerationProgress,
   generationStageLabel,
@@ -1265,6 +1266,7 @@ function PropertyDataContent() {
                       <th>Price</th>
                       <th>Last activity</th>
                       <th>Listed date</th>
+                      <th>Saved search</th>
                       <th>OM</th>
                       <th>Underwriting</th>
                       <th>Active run</th>
@@ -1274,7 +1276,7 @@ function PropertyDataContent() {
                   <tbody>
                     {filteredSortedCanonical.length === 0 ? (
                       <tr>
-                        <td colSpan={12} style={{ padding: "2rem", color: "#737373", textAlign: "center" }}>
+                        <td colSpan={13} style={{ padding: "2rem", color: "#737373", textAlign: "center" }}>
                           {canonicalProperties.length === 0
                             ? "No canonical properties yet. Send raw listings to canonical properties from the raw listings tab."
                             : "No properties match the current filters."}
@@ -1287,6 +1289,7 @@ function PropertyDataContent() {
                         const underwritingMeta = underwritingCellMeta(prop);
                         const activeRunMeta = activeRunCellMeta(prop);
                         const dossierMeta = dossierCellMeta(prop);
+                        const sourcingUpdateMeta = getSourcingUpdateMeta(prop.details ?? null);
                         return (
                           <React.Fragment key={prop.id}>
                             <tr
@@ -1364,6 +1367,23 @@ function PropertyDataContent() {
                                     borderRadius: "999px",
                                     border: "1px solid",
                                     whiteSpace: "nowrap",
+                                    ...sourcingUpdateMeta.style,
+                                  }}
+                                >
+                                  <span style={{ fontSize: "0.78rem", fontWeight: 600 }}>{sourcingUpdateMeta.label}</span>
+                                  <span style={{ fontSize: "0.7rem", opacity: 0.85 }}>{sourcingUpdateMeta.detail}</span>
+                                </div>
+                              </td>
+                              <td>
+                                <div
+                                  style={{
+                                    display: "inline-flex",
+                                    flexDirection: "column",
+                                    gap: "0.15rem",
+                                    padding: "0.35rem 0.55rem",
+                                    borderRadius: "999px",
+                                    border: "1px solid",
+                                    whiteSpace: "nowrap",
                                     ...omMeta.style,
                                   }}
                                 >
@@ -1426,7 +1446,7 @@ function PropertyDataContent() {
                             </tr>
                             {expandedCanonicalId === prop.id && (
                               <tr className="property-data-detail-row">
-                                <td colSpan={12} className="property-data-detail-cell" style={{ padding: "1rem 1rem 1rem 2.5rem", backgroundColor: "#fafafa" }}>
+                                <td colSpan={13} className="property-data-detail-cell" style={{ padding: "1rem 1rem 1rem 2.5rem", backgroundColor: "#fafafa" }}>
                                   <CanonicalPropertyDetail
                                     property={prop}
                                     isSaved={savedPropertyIds.has(prop.id)}

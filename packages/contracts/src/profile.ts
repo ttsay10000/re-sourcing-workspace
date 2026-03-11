@@ -36,6 +36,10 @@ export interface SearchProfile {
   minBaths: number | null;
   /** Max bathrooms. */
   maxBaths: number | null;
+  /** Max monthly HOA. */
+  maxHoa: number | null;
+  /** Max monthly taxes. */
+  maxTax: number | null;
   /** Min square footage. */
   minSqft: number | null;
   /** Max square footage. */
@@ -64,6 +68,8 @@ export interface SearchProfile {
   scheduleCron: string | null;
   /** Alternative: run interval in minutes (if no cron). */
   runIntervalMinutes: number | null;
+  /** Max number of listings to request from the source query. */
+  resultLimit: number | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -93,6 +99,8 @@ export interface SearchProfileInput {
   maxBeds?: number | null;
   minBaths?: number | null;
   maxBaths?: number | null;
+  maxHoa?: number | null;
+  maxTax?: number | null;
   minSqft?: number | null;
   maxSqft?: number | null;
   requiredAmenities?: string[];
@@ -109,6 +117,7 @@ export interface SearchProfileInput {
   outreachRules?: SearchOutreachRules;
   scheduleCron?: string | null;
   runIntervalMinutes?: number | null;
+  resultLimit?: number | null;
 }
 
 export type SavedSearch = SearchProfile;

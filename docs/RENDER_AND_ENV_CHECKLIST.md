@@ -5,6 +5,7 @@
 - `re-sourcing-api`
 - `re-sourcing-web`
 - `re-sourcing-process-inbox`
+- `re-sourcing-run-saved-searches`
 - `re-sourcing-db`
 
 The weekly enrich-all cron has been removed.
@@ -17,11 +18,16 @@ Required env:
 - `CORS_ORIGIN`
 - `RAPIDAPI_KEY`
 - `OPENAI_API_KEY`
+- `GMAIL_CLIENT_ID`
+- `GMAIL_CLIENT_SECRET`
+- `GMAIL_REFRESH_TOKEN`
 
 Optional env:
 
 - `SOCRATA_APP_TOKEN`
 - `GEOCLIENT_SUBSCRIPTION_KEY`
+- `GEOCLIENT_APP_ID`
+- `GEOCLIENT_APP_KEY`
 - `PROCESS_INBOX_CRON_SECRET`
 - `INQUIRY_DOCS_PATH`
 - `UPLOADED_DOCS_PATH`
@@ -42,6 +48,7 @@ Required env:
 - `NEXT_PUBLIC_API_URL`
 
 This value is build-time for Next.js. Rebuild the web app after changing it.
+Render Blueprint references do not expose another service's public URL directly, so `NEXT_PUBLIC_API_URL` still needs to be set on the web service explicitly.
 
 ## Inbox Cron
 
@@ -52,15 +59,13 @@ Service:
 Required env:
 
 - `DATABASE_URL`
-- `GMAIL_CLIENT_ID`
-- `GMAIL_CLIENT_SECRET`
-- `GMAIL_REFRESH_TOKEN`
-- `OPENAI_API_KEY`
 
 Optional env:
 
 - `PROCESS_INBOX_CRON_SECRET`
 - `INQUIRY_DOCS_PATH`
+
+All Gmail/OpenAI credentials are inherited from `re-sourcing-api` via `fromService`.
 
 Schedule in blueprint:
 
@@ -72,6 +77,38 @@ Behavior:
 - matches replies by subject, broker email, or thread
 - stores inquiry emails and attachments on the property
 - runs OM-style extraction when readable content is present
+- inherits Gmail/OpenAI credentials from `re-sourcing-api` via `fromService`
+
+## Saved Search Cron
+
+Service:
+
+- `re-sourcing-run-saved-searches`
+
+Required env:
+
+- `DATABASE_URL`
+
+Optional env:
+
+- `SOCRATA_APP_TOKEN`
+- `GEOCLIENT_SUBSCRIPTION_KEY`
+- `GEOCLIENT_APP_ID`
+- `GEOCLIENT_APP_KEY`
+
+All shared runtime credentials are inherited from `re-sourcing-api` via `fromService`.
+
+Schedule in blueprint:
+
+- `0 13 * * *`
+
+Behavior:
+
+- runs once daily from Render
+- evaluates saved searches against their stored cadence/timezone schedule
+- starts any enabled searches due on the current local calendar day
+- advances `nextRunAt` before launching each search so the daily tick does not double-trigger later that day
+- inherits RapidAPI/OpenAI/Socrata/Geoclient credentials from `re-sourcing-api` via `fromService`
 
 ## Gmail Setup
 
@@ -81,9 +118,7 @@ Behavior:
 4. Use OAuth 2.0 Playground to generate a refresh token with:
    - `gmail.readonly`
    - `gmail.send`
-5. Set the same Gmail credentials on:
-   - API service
-   - inbox cron service
+5. Set the Gmail credentials on the API service. The inbox cron inherits them from `re-sourcing-api`.
 
 ## Manual Trigger For Inbox Processing
 
@@ -100,12 +135,12 @@ If `PROCESS_INBOX_CRON_SECRET` is set, include either:
 
 1. Create Render Postgres.
 2. Apply the repo blueprint.
-3. Set API env vars.
+3. Set shared API env vars once.
 4. Set web env vars.
-5. Set inbox cron Gmail env vars.
-6. Deploy.
-7. Verify:
+5. Deploy.
+6. Verify:
    - `GET /api/health`
    - StreetEasy Agent run works
    - send inquiry email works
    - inbox cron can run successfully
+   - saved-search cron can start due searches successfully

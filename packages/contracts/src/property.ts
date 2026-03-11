@@ -402,6 +402,28 @@ export interface PropertyDealDossier {
   generation?: PropertyDealDossierGeneration | null;
 }
 
+export type PropertySourcingUpdateStatus = "new" | "updated" | "unchanged";
+
+export type PropertySourcingUpdateChangeType = "added" | "updated" | "removed";
+
+export interface PropertySourcingUpdateChange {
+  field: string;
+  label: string;
+  changeType?: PropertySourcingUpdateChangeType | null;
+  previousValue?: string | number | boolean | null;
+  currentValue?: string | number | boolean | null;
+}
+
+export interface PropertySourcingUpdate {
+  status?: PropertySourcingUpdateStatus | null;
+  lastRunId?: string | null;
+  lastEvaluatedAt?: string | null;
+  previousSnapshotId?: string | null;
+  changedFields?: string[] | null;
+  changes?: PropertySourcingUpdateChange[] | null;
+  summary?: string | null;
+}
+
 /** Inquiry email row (reply matched to property by subject address). */
 export interface PropertyInquiryEmail {
   id: string;
@@ -468,6 +490,8 @@ export interface PropertyDetails {
   omFurnishedPricing?: string | null;
   /** OM ingestion V2 state. When authoritative is present, downstream calculations must prefer it. */
   omData?: OmData | null;
+  /** Last saved-search diff result for this property's active listing. */
+  sourcingUpdate?: PropertySourcingUpdate | null;
   /** Rental data: per-unit table + LLM financials (from RapidAPI, listing LLM, or inquiry). */
   rentalFinancials?: RentalFinancials | null;
   /** Monthly HOA from listing (GET sale details); for financial calculations. */

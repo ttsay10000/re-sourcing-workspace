@@ -51,6 +51,8 @@ router.post("/saved-searches", async (req: Request, res: Response) => {
       maxBeds: typeof payload.maxBeds === "number" ? payload.maxBeds : null,
       minBaths: typeof payload.minBaths === "number" ? payload.minBaths : null,
       maxBaths: typeof payload.maxBaths === "number" ? payload.maxBaths : null,
+      maxHoa: typeof payload.maxHoa === "number" ? payload.maxHoa : null,
+      maxTax: typeof payload.maxTax === "number" ? payload.maxTax : null,
       minSqft: typeof payload.minSqft === "number" ? payload.minSqft : null,
       maxSqft: typeof payload.maxSqft === "number" ? payload.maxSqft : null,
       requiredAmenities: Array.isArray(payload.requiredAmenities)
@@ -69,6 +71,7 @@ router.post("/saved-searches", async (req: Request, res: Response) => {
       nextRunAt: null,
       lastRunAt: null,
       lastSuccessAt: null,
+      resultLimit: typeof payload.resultLimit === "number" ? payload.resultLimit : null,
     });
     const nextRunAt = buildNextRunAt(savedSearch);
     const updated = await repo.update(savedSearch.id, { nextRunAt });
@@ -109,6 +112,8 @@ router.put("/saved-searches/:id", async (req: Request, res: Response) => {
       maxBeds: typeof payload.maxBeds === "number" ? payload.maxBeds : existing.maxBeds,
       minBaths: typeof payload.minBaths === "number" ? payload.minBaths : existing.minBaths,
       maxBaths: typeof payload.maxBaths === "number" ? payload.maxBaths : existing.maxBaths,
+      maxHoa: typeof payload.maxHoa === "number" ? payload.maxHoa : payload.maxHoa === null ? null : existing.maxHoa,
+      maxTax: typeof payload.maxTax === "number" ? payload.maxTax : payload.maxTax === null ? null : existing.maxTax,
       minSqft: typeof payload.minSqft === "number" ? payload.minSqft : existing.minSqft,
       maxSqft: typeof payload.maxSqft === "number" ? payload.maxSqft : existing.maxSqft,
       requiredAmenities: Array.isArray(payload.requiredAmenities)
@@ -124,6 +129,12 @@ router.put("/saved-searches/:id", async (req: Request, res: Response) => {
       weeklyRunDay: typeof payload.weeklyRunDay === "number" ? payload.weeklyRunDay : payload.weeklyRunDay === null ? null : existing.weeklyRunDay,
       monthlyRunDay: typeof payload.monthlyRunDay === "number" ? payload.monthlyRunDay : payload.monthlyRunDay === null ? null : existing.monthlyRunDay,
       outreachRules: payload.outreachRules ?? existing.outreachRules,
+      resultLimit:
+        typeof payload.resultLimit === "number"
+          ? payload.resultLimit
+          : payload.resultLimit === null
+            ? null
+            : existing.resultLimit,
     };
     const nextRunAt = buildNextRunAt({ ...existing, ...patch });
     const savedSearch = await repo.update(existing.id, { ...patch, nextRunAt });

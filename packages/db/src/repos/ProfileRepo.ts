@@ -34,11 +34,11 @@ export class ProfileRepo {
       `INSERT INTO profiles (
         name, location_mode, single_location_slug, area_codes,
         min_price, max_price, min_beds, max_beds, min_baths, max_baths,
-        min_sqft, max_sqft, required_amenities, property_types, source_toggles,
+        max_hoa, max_tax, min_sqft, max_sqft, required_amenities, property_types, source_toggles,
         enabled, schedule_cadence, timezone, run_time_local, weekly_run_day, monthly_run_day,
         next_run_at, last_run_at, last_success_at, outreach_rules,
-        schedule_cron, run_interval_minutes
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)
+        schedule_cron, run_interval_minutes, result_limit
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30)
       RETURNING *`,
       [
         input.name,
@@ -51,6 +51,8 @@ export class ProfileRepo {
         input.maxBeds ?? null,
         input.minBaths ?? null,
         input.maxBaths ?? null,
+        input.maxHoa ?? null,
+        input.maxTax ?? null,
         input.minSqft ?? null,
         input.maxSqft ?? null,
         input.requiredAmenities ?? [],
@@ -68,6 +70,7 @@ export class ProfileRepo {
         JSON.stringify(input.outreachRules ?? {}),
         input.scheduleCron ?? null,
         input.runIntervalMinutes ?? null,
+        input.resultLimit ?? null,
       ]
     );
     return mapProfile(r.rows[0]);
@@ -87,6 +90,8 @@ export class ProfileRepo {
     if (input.maxBeds !== undefined) { sets.push(`max_beds = $${i++}`); values.push(input.maxBeds); }
     if (input.minBaths !== undefined) { sets.push(`min_baths = $${i++}`); values.push(input.minBaths); }
     if (input.maxBaths !== undefined) { sets.push(`max_baths = $${i++}`); values.push(input.maxBaths); }
+    if (input.maxHoa !== undefined) { sets.push(`max_hoa = $${i++}`); values.push(input.maxHoa); }
+    if (input.maxTax !== undefined) { sets.push(`max_tax = $${i++}`); values.push(input.maxTax); }
     if (input.minSqft !== undefined) { sets.push(`min_sqft = $${i++}`); values.push(input.minSqft); }
     if (input.maxSqft !== undefined) { sets.push(`max_sqft = $${i++}`); values.push(input.maxSqft); }
     if (input.requiredAmenities !== undefined) { sets.push(`required_amenities = $${i++}`); values.push(input.requiredAmenities); }
@@ -104,6 +109,7 @@ export class ProfileRepo {
     if (input.outreachRules !== undefined) { sets.push(`outreach_rules = $${i++}`); values.push(JSON.stringify(input.outreachRules)); }
     if (input.scheduleCron !== undefined) { sets.push(`schedule_cron = $${i++}`); values.push(input.scheduleCron); }
     if (input.runIntervalMinutes !== undefined) { sets.push(`run_interval_minutes = $${i++}`); values.push(input.runIntervalMinutes); }
+    if (input.resultLimit !== undefined) { sets.push(`result_limit = $${i++}`); values.push(input.resultLimit); }
     if (sets.length === 1) return this.byId(id);
     values.push(id);
     const r = await this.client.query(

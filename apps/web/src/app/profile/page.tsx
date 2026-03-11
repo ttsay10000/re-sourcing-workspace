@@ -5,6 +5,26 @@ import React, { useCallback, useEffect, useState } from "react";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
 const currencyFormatter = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
+const DEFAULT_SAVED_SEARCH_AREAS = ["all-downtown", "all-midtown"] as const;
+const DEFAULT_SAVED_SEARCH_TIMEZONE = "America/New_York";
+const DEFAULT_SAVED_SEARCH_LIMIT = "100";
+const SAVED_SEARCH_WEEKDAY_OPTIONS = [
+  { value: "0", label: "Sunday" },
+  { value: "1", label: "Monday" },
+  { value: "2", label: "Tuesday" },
+  { value: "3", label: "Wednesday" },
+  { value: "4", label: "Thursday" },
+  { value: "5", label: "Friday" },
+  { value: "6", label: "Saturday" },
+] as const;
+const SAVED_SEARCH_TYPE_OPTIONS = [
+  { value: "condo", label: "Condo" },
+  { value: "coop", label: "Co-op" },
+  { value: "house", label: "House" },
+  { value: "multi_family", label: "Multi-family" },
+] as const;
+
+type SearchCadence = "manual" | "daily" | "weekly" | "monthly";
 type ProfileFieldKey = "name" | "email" | "organization";
 type AssumptionFieldKey =
   | "defaultPurchaseClosingCostPct"
@@ -118,6 +138,193 @@ interface UserProfile {
   updatedAt: string;
 }
 
+interface SavedSearch {
+  id: string;
+  name: string;
+  enabled: boolean;
+  locationMode: "single" | "multi";
+  singleLocationSlug: string | null;
+  areaCodes: string[];
+  minPrice: number | null;
+  maxPrice: number | null;
+  minBeds: number | null;
+  maxBeds: number | null;
+  minBaths: number | null;
+  maxBaths: number | null;
+  maxHoa: number | null;
+  maxTax: number | null;
+  requiredAmenities: string[];
+  propertyTypes: string[];
+  scheduleCadence: SearchCadence;
+  timezone: string;
+  runTimeLocal: string | null;
+  weeklyRunDay: number | null;
+  monthlyRunDay: number | null;
+  nextRunAt: string | null;
+  lastRunAt: string | null;
+  lastSuccessAt: string | null;
+  resultLimit: number | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface SavedSearchDraft {
+  name: string;
+  enabled: boolean;
+  areaInput: string;
+  minPrice: string;
+  maxPrice: string;
+  minBeds: string;
+  maxBeds: string;
+  minBaths: string;
+  maxHoa: string;
+  maxTax: string;
+  amenities: string;
+  propertyTypes: string[];
+  resultLimit: string;
+  scheduleCadence: SearchCadence;
+  timezone: string;
+  runTimeLocal: string;
+  weeklyRunDay: string;
+  monthlyRunDay: string;
+}
+
+const DEFAULT_SAVED_SEARCH_DRAFT: SavedSearchDraft = {
+  name: "",
+  enabled: true,
+  areaInput: "",
+  minPrice: "",
+  maxPrice: "",
+  minBeds: "",
+  maxBeds: "",
+  minBaths: "",
+  maxHoa: "",
+  maxTax: "",
+  amenities: "",
+  propertyTypes: [],
+  resultLimit: DEFAULT_SAVED_SEARCH_LIMIT,
+  scheduleCadence: "daily",
+  timezone: DEFAULT_SAVED_SEARCH_TIMEZONE,
+  runTimeLocal: "08:00",
+  weeklyRunDay: "1",
+  monthlyRunDay: "1",
+};
+
+function parseOptionalNumber(value: string): number | null {
+  if (!value.trim()) return null;
+  const parsed = Number(value);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+function parseCsvList(value: string): string[] {
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function toTimeInputValue(value: string | null | undefined): string {
+  if (!value) return "08:00";
+  const [hours = "08", minutes = "00"] = value.split(":");
+  return `${hours.padStart(2, "0")}:${minutes.padStart(2, "0")}`;
+}
+
+function formatDateTime(value: string | null | undefined): string {
+  if (!value) return "Never";
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? "Never" : parsed.toLocaleString();
+}
+
+function formatSavedSearchAreas(search: SavedSearch): string {
+  if (search.locationMode === "single" && search.singleLocationSlug) return search.singleLocationSlug;
+  if (search.areaCodes.length > 0) return search.areaCodes.join(", ");
+  return DEFAULT_SAVED_SEARCH_AREAS.join(", ");
+}
+
+function formatSavedSearchSchedule(search: SavedSearch): string {
+  if (search.scheduleCadence === "manual") return "Manual only";
+  const time = toTimeInputValue(search.runTimeLocal);
+  if (search.scheduleCadence === "daily") return `Daily at ${time} (${search.timezone})`;
+  if (search.scheduleCadence === "weekly") {
+    const weekday = SAVED_SEARCH_WEEKDAY_OPTIONS.find((option) => Number(option.value) === search.weeklyRunDay)?.label ?? "Monday";
+    return `Weekly on ${weekday} at ${time} (${search.timezone})`;
+  }
+  return `Monthly on day ${search.monthlyRunDay ?? 1} at ${time} (${search.timezone})`;
+}
+
+function formatSavedSearchFilters(search: SavedSearch): string {
+  const filters: string[] = [`Areas: ${formatSavedSearchAreas(search)}`];
+  if (search.minPrice != null || search.maxPrice != null) {
+    filters.push(
+      `Price: ${search.minPrice != null ? currencyFormatter.format(search.minPrice) : "any"}-${search.maxPrice != null ? currencyFormatter.format(search.maxPrice) : "any"}`
+    );
+  }
+  if (search.minBeds != null || search.maxBeds != null) {
+    filters.push(`Beds: ${search.minBeds ?? "any"}-${search.maxBeds ?? "any"}`);
+  }
+  if (search.minBaths != null) filters.push(`Min baths: ${search.minBaths}`);
+  if (search.maxHoa != null) filters.push(`Max HOA: ${currencyFormatter.format(search.maxHoa)}`);
+  if (search.maxTax != null) filters.push(`Max tax: ${currencyFormatter.format(search.maxTax)}`);
+  if (search.propertyTypes.length > 0) filters.push(`Types: ${search.propertyTypes.join(", ")}`);
+  if (search.requiredAmenities.length > 0) filters.push(`Amenities: ${search.requiredAmenities.join(", ")}`);
+  if (search.resultLimit != null) filters.push(`Limit: ${search.resultLimit}`);
+  return filters.join(" | ");
+}
+
+function buildSavedSearchDraft(search?: SavedSearch | null): SavedSearchDraft {
+  if (!search) return { ...DEFAULT_SAVED_SEARCH_DRAFT };
+  return {
+    name: search.name,
+    enabled: search.enabled,
+    areaInput: search.locationMode === "single"
+      ? (search.singleLocationSlug ?? "")
+      : (search.areaCodes.length > 0 ? search.areaCodes.join(", ") : DEFAULT_SAVED_SEARCH_AREAS.join(", ")),
+    minPrice: search.minPrice != null ? String(search.minPrice) : "",
+    maxPrice: search.maxPrice != null ? String(search.maxPrice) : "",
+    minBeds: search.minBeds != null ? String(search.minBeds) : "",
+    maxBeds: search.maxBeds != null ? String(search.maxBeds) : "",
+    minBaths: search.minBaths != null ? String(search.minBaths) : "",
+    maxHoa: search.maxHoa != null ? String(search.maxHoa) : "",
+    maxTax: search.maxTax != null ? String(search.maxTax) : "",
+    amenities: search.requiredAmenities.join(", "),
+    propertyTypes: search.propertyTypes,
+    resultLimit: search.resultLimit != null ? String(search.resultLimit) : DEFAULT_SAVED_SEARCH_LIMIT,
+    scheduleCadence: search.scheduleCadence,
+    timezone: search.timezone || DEFAULT_SAVED_SEARCH_TIMEZONE,
+    runTimeLocal: toTimeInputValue(search.runTimeLocal),
+    weeklyRunDay: String(search.weeklyRunDay ?? 1),
+    monthlyRunDay: String(search.monthlyRunDay ?? 1),
+  };
+}
+
+function buildSavedSearchPayload(draft: SavedSearchDraft) {
+  const areas = parseCsvList(draft.areaInput);
+  const selectedAreas = areas.length > 0 ? areas : [...DEFAULT_SAVED_SEARCH_AREAS];
+  return {
+    name: draft.name.trim() || "Saved search",
+    enabled: draft.enabled,
+    locationMode: selectedAreas.length === 1 ? "single" : "multi",
+    singleLocationSlug: selectedAreas.length === 1 ? selectedAreas[0] : null,
+    areaCodes: selectedAreas.length === 1 ? [] : selectedAreas,
+    minPrice: parseOptionalNumber(draft.minPrice),
+    maxPrice: parseOptionalNumber(draft.maxPrice),
+    minBeds: parseOptionalNumber(draft.minBeds),
+    maxBeds: parseOptionalNumber(draft.maxBeds),
+    minBaths: parseOptionalNumber(draft.minBaths),
+    maxHoa: parseOptionalNumber(draft.maxHoa),
+    maxTax: parseOptionalNumber(draft.maxTax),
+    requiredAmenities: parseCsvList(draft.amenities),
+    propertyTypes: draft.propertyTypes,
+    sourceToggles: { streeteasy: true, manual: false },
+    scheduleCadence: draft.scheduleCadence,
+    timezone: draft.timezone.trim() || DEFAULT_SAVED_SEARCH_TIMEZONE,
+    runTimeLocal: draft.scheduleCadence === "manual" ? null : (draft.runTimeLocal || "08:00"),
+    weeklyRunDay: draft.scheduleCadence === "weekly" ? Number(draft.weeklyRunDay || "1") : null,
+    monthlyRunDay: draft.scheduleCadence === "monthly" ? Number(draft.monthlyRunDay || "1") : null,
+    resultLimit: parseOptionalNumber(draft.resultLimit),
+  };
+}
+
 export default function ProfilePage() {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
@@ -126,6 +333,15 @@ export default function ProfilePage() {
   const [draft, setDraft] = useState<Partial<UserProfile>>({});
   const [savedDeals, setSavedDeals] = useState<Array<{ savedDeal: { id: string; propertyId: string; dealStatus: string; createdAt: string }; address: string; price: number | null; units: number | null; dealScore: number | null }>>([]);
   const [savedDealsLoading, setSavedDealsLoading] = useState(false);
+  const [savedSearches, setSavedSearches] = useState<SavedSearch[]>([]);
+  const [savedSearchesLoading, setSavedSearchesLoading] = useState(true);
+  const [savedSearchDraft, setSavedSearchDraft] = useState<SavedSearchDraft>(DEFAULT_SAVED_SEARCH_DRAFT);
+  const [editingSavedSearchId, setEditingSavedSearchId] = useState<string | null>(null);
+  const [savingSavedSearch, setSavingSavedSearch] = useState(false);
+  const [runningSavedSearchId, setRunningSavedSearchId] = useState<string | null>(null);
+  const [deletingSavedSearchId, setDeletingSavedSearchId] = useState<string | null>(null);
+  const [savedSearchError, setSavedSearchError] = useState<string | null>(null);
+  const [savedSearchNotice, setSavedSearchNotice] = useState<string | null>(null);
 
   const fetchProfile = useCallback(async () => {
     setLoading(true);
@@ -257,6 +473,26 @@ export default function ProfilePage() {
     fetchSavedDeals();
   }, [fetchSavedDeals]);
 
+  const fetchSavedSearches = useCallback(async () => {
+    setSavedSearchesLoading(true);
+    setSavedSearchError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/saved-searches`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || data?.details || "Failed to load saved searches");
+      setSavedSearches(data.savedSearches ?? []);
+    } catch (e) {
+      setSavedSearchError(e instanceof Error ? e.message : "Failed to load saved searches");
+      setSavedSearches([]);
+    } finally {
+      setSavedSearchesLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void fetchSavedSearches();
+  }, [fetchSavedSearches]);
+
   const handleUnsave = async (propertyId: string) => {
     try {
       await fetch(`${API_BASE}/api/profile/saved-deals/${encodeURIComponent(propertyId)}`, { method: "DELETE" });
@@ -287,6 +523,85 @@ export default function ProfilePage() {
     }
   };
 
+  const handleEditSavedSearch = (search: SavedSearch) => {
+    setEditingSavedSearchId(search.id);
+    setSavedSearchDraft(buildSavedSearchDraft(search));
+    setSavedSearchNotice(null);
+    setSavedSearchError(null);
+  };
+
+  const handleResetSavedSearchDraft = (options?: { preserveMessages?: boolean }) => {
+    setEditingSavedSearchId(null);
+    setSavedSearchDraft({ ...DEFAULT_SAVED_SEARCH_DRAFT });
+    if (!options?.preserveMessages) {
+      setSavedSearchNotice(null);
+      setSavedSearchError(null);
+    }
+  };
+
+  const handleSaveSavedSearch = async () => {
+    setSavingSavedSearch(true);
+    setSavedSearchError(null);
+    setSavedSearchNotice(null);
+    try {
+      const isEditing = Boolean(editingSavedSearchId);
+      const res = await fetch(
+        isEditing
+          ? `${API_BASE}/api/saved-searches/${encodeURIComponent(editingSavedSearchId!)}`
+          : `${API_BASE}/api/saved-searches`,
+        {
+          method: isEditing ? "PUT" : "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(buildSavedSearchPayload(savedSearchDraft)),
+        }
+      );
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || data?.details || "Failed to save saved search");
+      handleResetSavedSearchDraft({ preserveMessages: true });
+      setSavedSearchNotice(isEditing ? "Saved search updated." : "Saved search created.");
+      await fetchSavedSearches();
+    } catch (e) {
+      setSavedSearchError(e instanceof Error ? e.message : "Failed to save saved search");
+    } finally {
+      setSavingSavedSearch(false);
+    }
+  };
+
+  const handleRunSavedSearchNow = async (savedSearchId: string) => {
+    setRunningSavedSearchId(savedSearchId);
+    setSavedSearchError(null);
+    setSavedSearchNotice(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/saved-searches/${encodeURIComponent(savedSearchId)}/run-now`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || data?.details || "Failed to start saved search");
+      setSavedSearchNotice("Saved search started.");
+      await fetchSavedSearches();
+    } catch (e) {
+      setSavedSearchError(e instanceof Error ? e.message : "Failed to start saved search");
+    } finally {
+      setRunningSavedSearchId(null);
+    }
+  };
+
+  const handleDeleteSavedSearch = async (savedSearchId: string) => {
+    setDeletingSavedSearchId(savedSearchId);
+    setSavedSearchError(null);
+    setSavedSearchNotice(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/saved-searches/${encodeURIComponent(savedSearchId)}`, { method: "DELETE" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || data?.details || "Failed to delete saved search");
+      if (editingSavedSearchId === savedSearchId) handleResetSavedSearchDraft();
+      setSavedSearchNotice("Saved search deleted.");
+      await fetchSavedSearches();
+    } catch (e) {
+      setSavedSearchError(e instanceof Error ? e.message : "Failed to delete saved search");
+    } finally {
+      setDeletingSavedSearchId(null);
+    }
+  };
+
   if (loading) {
     return (
       <div className="profile-page" style={{ padding: "1.5rem" }}>
@@ -314,6 +629,10 @@ export default function ProfilePage() {
           <div className="profile-page-summary-item">
             <span>Assumptions</span>
             <strong>{assumptionSections.reduce((total, section) => total + section.fields.length, 0)}</strong>
+          </div>
+          <div className="profile-page-summary-item">
+            <span>Saved searches</span>
+            <strong>{savedSearches.length}</strong>
           </div>
         </div>
       </header>
@@ -399,6 +718,289 @@ export default function ProfilePage() {
           </button>
           <span>LTV 65%, interest 6.5%, amortization 30 years.</span>
         </div>
+      </section>
+
+      <section className="profile-section">
+        <div className="profile-section-heading">
+          <div>
+            <h2>Saved searches</h2>
+            <p>Manage the automated sourcing searches that feed daily ingestion. Cron reads this list fresh on each scheduled run, so edits here apply to the next due execution.</p>
+          </div>
+          <Link href="/runs" className="profile-secondary-button">
+            View run history
+          </Link>
+        </div>
+        {savedSearchError && <p className="profile-page-error" style={{ marginTop: 0 }}>{savedSearchError}</p>}
+        {savedSearchNotice && <p style={{ marginTop: 0, color: "#166534" }}>{savedSearchNotice}</p>}
+        <div style={{ padding: "1rem", border: "1px solid #e5e7eb", borderRadius: "1rem", background: "#fafaf9", marginBottom: "1rem" }}>
+          <div className="profile-section-heading" style={{ marginBottom: "1rem" }}>
+            <div>
+              <h3 style={{ margin: 0 }}>{editingSavedSearchId ? "Edit saved search" : "Add saved search"}</h3>
+              <p style={{ margin: "0.35rem 0 0", color: "#57534e" }}>
+                Use area slugs separated by commas, for example `all-downtown, all-midtown` or a single slug like `upper-east-side`.
+              </p>
+            </div>
+            <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
+              <button type="button" onClick={handleSaveSavedSearch} disabled={savingSavedSearch} className="profile-primary-button">
+                {savingSavedSearch ? "Saving…" : editingSavedSearchId ? "Update search" : "Create search"}
+              </button>
+              <button type="button" onClick={() => handleResetSavedSearchDraft()} disabled={savingSavedSearch} className="profile-secondary-button">
+                {editingSavedSearchId ? "Cancel edit" : "Reset"}
+              </button>
+            </div>
+          </div>
+          <div className="profile-form-grid">
+            <label className="profile-field">
+              <span>Name</span>
+              <input
+                type="text"
+                value={savedSearchDraft.name}
+                onChange={(e) => setSavedSearchDraft((prev) => ({ ...prev, name: e.target.value }))}
+                className="profile-input"
+              />
+            </label>
+            <label className="profile-field">
+              <span>Areas / slugs</span>
+              <input
+                type="text"
+                value={savedSearchDraft.areaInput}
+                onChange={(e) => setSavedSearchDraft((prev) => ({ ...prev, areaInput: e.target.value }))}
+                className="profile-input"
+                placeholder={DEFAULT_SAVED_SEARCH_AREAS.join(", ")}
+              />
+            </label>
+            <label className="profile-field">
+              <span>Min price</span>
+              <input
+                type="number"
+                value={savedSearchDraft.minPrice}
+                onChange={(e) => setSavedSearchDraft((prev) => ({ ...prev, minPrice: e.target.value }))}
+                className="profile-input"
+              />
+            </label>
+            <label className="profile-field">
+              <span>Max price</span>
+              <input
+                type="number"
+                value={savedSearchDraft.maxPrice}
+                onChange={(e) => setSavedSearchDraft((prev) => ({ ...prev, maxPrice: e.target.value }))}
+                className="profile-input"
+              />
+            </label>
+            <label className="profile-field">
+              <span>Min beds</span>
+              <input
+                type="number"
+                value={savedSearchDraft.minBeds}
+                onChange={(e) => setSavedSearchDraft((prev) => ({ ...prev, minBeds: e.target.value }))}
+                className="profile-input"
+              />
+            </label>
+            <label className="profile-field">
+              <span>Max beds</span>
+              <input
+                type="number"
+                value={savedSearchDraft.maxBeds}
+                onChange={(e) => setSavedSearchDraft((prev) => ({ ...prev, maxBeds: e.target.value }))}
+                className="profile-input"
+              />
+            </label>
+            <label className="profile-field">
+              <span>Min baths</span>
+              <input
+                type="number"
+                step="0.5"
+                value={savedSearchDraft.minBaths}
+                onChange={(e) => setSavedSearchDraft((prev) => ({ ...prev, minBaths: e.target.value }))}
+                className="profile-input"
+              />
+            </label>
+            <label className="profile-field">
+              <span>Max HOA</span>
+              <input
+                type="number"
+                value={savedSearchDraft.maxHoa}
+                onChange={(e) => setSavedSearchDraft((prev) => ({ ...prev, maxHoa: e.target.value }))}
+                className="profile-input"
+              />
+            </label>
+            <label className="profile-field">
+              <span>Max tax</span>
+              <input
+                type="number"
+                value={savedSearchDraft.maxTax}
+                onChange={(e) => setSavedSearchDraft((prev) => ({ ...prev, maxTax: e.target.value }))}
+                className="profile-input"
+              />
+            </label>
+            <label className="profile-field">
+              <span>Result limit</span>
+              <input
+                type="number"
+                value={savedSearchDraft.resultLimit}
+                onChange={(e) => setSavedSearchDraft((prev) => ({ ...prev, resultLimit: e.target.value }))}
+                className="profile-input"
+              />
+            </label>
+            <label className="profile-field">
+              <span>Cadence</span>
+              <select
+                value={savedSearchDraft.scheduleCadence}
+                onChange={(e) => setSavedSearchDraft((prev) => ({ ...prev, scheduleCadence: e.target.value as SearchCadence }))}
+                className="profile-input"
+              >
+                <option value="manual">Manual</option>
+                <option value="daily">Daily</option>
+                <option value="weekly">Weekly</option>
+                <option value="monthly">Monthly</option>
+              </select>
+            </label>
+            <label className="profile-field">
+              <span>Timezone</span>
+              <input
+                type="text"
+                value={savedSearchDraft.timezone}
+                onChange={(e) => setSavedSearchDraft((prev) => ({ ...prev, timezone: e.target.value }))}
+                className="profile-input"
+              />
+            </label>
+            {savedSearchDraft.scheduleCadence !== "manual" && (
+              <label className="profile-field">
+                <span>Run time</span>
+                <input
+                  type="time"
+                  value={savedSearchDraft.runTimeLocal}
+                  onChange={(e) => setSavedSearchDraft((prev) => ({ ...prev, runTimeLocal: e.target.value }))}
+                  className="profile-input"
+                />
+              </label>
+            )}
+            {savedSearchDraft.scheduleCadence === "weekly" && (
+              <label className="profile-field">
+                <span>Weekly day</span>
+                <select
+                  value={savedSearchDraft.weeklyRunDay}
+                  onChange={(e) => setSavedSearchDraft((prev) => ({ ...prev, weeklyRunDay: e.target.value }))}
+                  className="profile-input"
+                >
+                  {SAVED_SEARCH_WEEKDAY_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </label>
+            )}
+            {savedSearchDraft.scheduleCadence === "monthly" && (
+              <label className="profile-field">
+                <span>Monthly day</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={28}
+                  value={savedSearchDraft.monthlyRunDay}
+                  onChange={(e) => setSavedSearchDraft((prev) => ({ ...prev, monthlyRunDay: e.target.value }))}
+                  className="profile-input"
+                />
+              </label>
+            )}
+            <label className="profile-field" style={{ justifyContent: "center" }}>
+              <span>Enabled</span>
+              <input
+                type="checkbox"
+                checked={savedSearchDraft.enabled}
+                onChange={(e) => setSavedSearchDraft((prev) => ({ ...prev, enabled: e.target.checked }))}
+                style={{ width: "1rem", height: "1rem", marginTop: "0.5rem" }}
+              />
+            </label>
+            <label className="profile-field" style={{ gridColumn: "1 / -1" }}>
+              <span>Amenities (comma-separated)</span>
+              <input
+                type="text"
+                value={savedSearchDraft.amenities}
+                onChange={(e) => setSavedSearchDraft((prev) => ({ ...prev, amenities: e.target.value }))}
+                className="profile-input"
+                placeholder="doorman, laundry_in_unit"
+              />
+            </label>
+            <div className="profile-field" style={{ gridColumn: "1 / -1" }}>
+              <span>Property types</span>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "0.75rem", marginTop: "0.45rem" }}>
+                {SAVED_SEARCH_TYPE_OPTIONS.map((option) => {
+                  const checked = savedSearchDraft.propertyTypes.includes(option.value);
+                  return (
+                    <label key={option.value} style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem" }}>
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() =>
+                          setSavedSearchDraft((prev) => ({
+                            ...prev,
+                            propertyTypes: checked
+                              ? prev.propertyTypes.filter((value) => value !== option.value)
+                              : [...prev.propertyTypes, option.value],
+                          }))
+                        }
+                      />
+                      <span>{option.label}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        </div>
+        {savedSearchesLoading ? (
+          <p>Loading saved searches…</p>
+        ) : savedSearches.length === 0 ? (
+          <p style={{ color: "#737373" }}>No saved searches yet. Add one above to start daily automated ingestion.</p>
+        ) : (
+          <div style={{ display: "grid", gap: "1rem" }}>
+            {savedSearches.map((search) => (
+              <article key={search.id} className="profile-saved-deal-card">
+                <div className="profile-saved-deal-main">
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap", alignItems: "flex-start" }}>
+                    <div>
+                      <h3 className="profile-saved-deal-address" style={{ marginBottom: "0.35rem" }}>{search.name}</h3>
+                      <p style={{ margin: 0, color: search.enabled ? "#166534" : "#a16207", fontWeight: 600 }}>
+                        {search.enabled ? "Enabled" : "Paused"} · {formatSavedSearchSchedule(search)}
+                      </p>
+                    </div>
+                    <div style={{ display: "grid", gap: "0.2rem", fontSize: "0.9rem", color: "#57534e", textAlign: "right" }}>
+                      <span>Next run: {formatDateTime(search.nextRunAt)}</span>
+                      <span>Last run: {formatDateTime(search.lastRunAt)}</span>
+                      <span>Last success: {formatDateTime(search.lastSuccessAt)}</span>
+                    </div>
+                  </div>
+                  <p style={{ margin: "0.85rem 0 0", color: "#44403c", lineHeight: 1.5 }}>{formatSavedSearchFilters(search)}</p>
+                </div>
+                <div className="profile-saved-deals-actions profile-saved-deals-actions--row">
+                  <button
+                    type="button"
+                    onClick={() => handleEditSavedSearch(search)}
+                    className="profile-saved-deals-action"
+                  >
+                    Edit
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleRunSavedSearchNow(search.id)}
+                    disabled={runningSavedSearchId === search.id}
+                    className="profile-saved-deals-action"
+                  >
+                    {runningSavedSearchId === search.id ? "Starting…" : "Run now"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleDeleteSavedSearch(search.id)}
+                    disabled={deletingSavedSearchId === search.id}
+                    className="profile-saved-deals-action profile-saved-deals-action--danger"
+                  >
+                    {deletingSavedSearchId === search.id ? "Deleting…" : "Delete"}
+                  </button>
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
       </section>
 
       <section className="profile-section profile-saved-deals-section">

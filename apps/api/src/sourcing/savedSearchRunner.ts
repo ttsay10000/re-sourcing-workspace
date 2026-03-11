@@ -17,6 +17,7 @@ import { normalizeAddressLineForDisplay, getBBLForProperty } from "../enrichment
 import { runEnrichmentForProperty } from "../enrichment/runEnrichment.js";
 import { runRentalFlowForProperty } from "../routes/properties.js";
 import { syncPropertySourcingWorkflow } from "./workflow.js";
+import { buildListingChangeSummary } from "./listingChangeSummary.js";
 
 const ENRICHMENT_RATE_LIMIT_DELAY_MS =
   Number(process.env.ENRICHMENT_RATE_LIMIT_DELAY_MS || process.env.PERMITS_RATE_LIMIT_DELAY_MS) || 300;
@@ -97,6 +98,21 @@ function zonedLocalToUtc(year: number, month: number, day: number, hour: number,
   return new Date(utcGuess.getTime() - offsetMs);
 }
 
+function localDateKey(date: Date, timezone: string): string {
+  const parts = zonedDateTimeParts(date, timezone);
+  const month = String(parts.month).padStart(2, "0");
+  const day = String(parts.day).padStart(2, "0");
+  return `${parts.year}-${month}-${day}`;
+}
+
+function isDueByLocalDay(search: SearchProfile, now: Date): boolean {
+  if (!search.nextRunAt) return false;
+  const nextRunAt = new Date(search.nextRunAt);
+  if (Number.isNaN(nextRunAt.getTime())) return false;
+  const timezone = search.timezone || "America/New_York";
+  return localDateKey(nextRunAt, timezone) <= localDateKey(now, timezone);
+}
+
 function buildCriteria(search: SearchProfile): NycsSearchCriteria {
   const areas = search.locationMode === "single"
     ? (search.singleLocationSlug?.trim() || "all-downtown")
@@ -108,9 +124,11 @@ function buildCriteria(search: SearchProfile): NycsSearchCriteria {
     minBeds: search.minBeds ?? undefined,
     maxBeds: search.maxBeds ?? undefined,
     minBaths: search.minBaths ?? undefined,
+    maxHoa: search.maxHoa ?? undefined,
+    maxTax: search.maxTax ?? undefined,
     amenities: search.requiredAmenities.length > 0 ? search.requiredAmenities.join(",") : undefined,
     types: search.propertyTypes.length > 0 ? search.propertyTypes.join(",") : undefined,
-    limit: 100,
+    limit: search.resultLimit ?? 100,
   };
 }
 
@@ -137,6 +155,9 @@ async function persistListingsForRun(
       const raw = rawProperties[index]!;
       const normalized = normalizeStreetEasySaleDetails(raw, index);
       const existing = await listingRepo.bySourceAndExternalId(normalized.source, normalized.externalId);
+      const previousSnapshot = existing
+        ? (await snapshotRepo.list({ listingId: existing.id, limit: 1 })).snapshots[0] ?? null
+        : null;
       if (existing) {
         normalized.priceHistory = normalized.priceHistory ?? existing.priceHistory ?? null;
         normalized.rentalPriceHistory = normalized.rentalPriceHistory ?? existing.rentalPriceHistory ?? null;
@@ -154,6 +175,12 @@ async function persistListingsForRun(
       } else if (existing?.agentEnrichment) {
         normalized.agentEnrichment = existing.agentEnrichment;
       }
+      const sourcingUpdate = buildListingChangeSummary({
+        runId,
+        normalized,
+        existing,
+        previousSnapshot,
+      });
 
       const upserted = await listingRepo.upsert(normalized, { uploadedRunId: runId });
       listingIds.push(upserted.listing.id);
@@ -170,6 +197,8 @@ async function persistListingsForRun(
           agentEnrichment: normalized.agentEnrichment ?? null,
           priceHistory: normalized.priceHistory ?? null,
           rentalPriceHistory: normalized.rentalPriceHistory ?? null,
+          normalizedListing: normalized as unknown as Record<string, unknown>,
+          sourcingUpdate,
         },
       });
 
@@ -189,7 +218,7 @@ async function persistListingsForRun(
       });
 
       const extra = upserted.listing.extra as Record<string, unknown> | null | undefined;
-      const merge: Record<string, unknown> = {};
+      const merge: Record<string, unknown> = { sourcingUpdate };
       if (upserted.listing.lat != null && upserted.listing.lon != null) {
         merge.lat = upserted.listing.lat;
         merge.lon = upserted.listing.lon;
@@ -366,23 +395,37 @@ export async function startSavedSearchRun(
   });
 }
 
-export async function runDueSavedSearches(now = new Date()): Promise<{ started: number; searchIds: string[] }> {
+export async function runDueSavedSearches(
+  now = new Date(),
+  options?: { dueMode?: "timestamp" | "local-day" }
+): Promise<{ started: number; searchIds: string[] }> {
   const pool = getPool();
   const profileRepo = new ProfileRepo({ pool });
   const runRepo = new RunRepo({ pool });
+  const dueMode = options?.dueMode ?? "timestamp";
   const searches = await profileRepo.list();
   const due = searches.filter(
     (search) =>
       search.enabled &&
       search.scheduleCadence !== "manual" &&
       search.nextRunAt != null &&
-      new Date(search.nextRunAt).getTime() <= now.getTime()
+      (dueMode === "local-day"
+        ? isDueByLocalDay(search, now)
+        : new Date(search.nextRunAt).getTime() <= now.getTime())
   );
   const startedIds: string[] = [];
   for (const search of due) {
     if (await runRepo.hasRunningForProfile(search.id)) continue;
+    const nextRunAnchor =
+      dueMode === "local-day" && search.nextRunAt != null
+        ? (() => {
+            const scheduledAt = new Date(search.nextRunAt);
+            if (Number.isNaN(scheduledAt.getTime())) return now;
+            return scheduledAt.getTime() > now.getTime() ? scheduledAt : now;
+          })()
+        : now;
     await profileRepo.update(search.id, {
-      nextRunAt: buildNextRunAt(search, now),
+      nextRunAt: buildNextRunAt(search, nextRunAnchor),
     });
     await startSavedSearchRun(search.id, { triggerSource: "scheduled" });
     startedIds.push(search.id);

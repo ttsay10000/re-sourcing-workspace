@@ -107,9 +107,11 @@ Services defined:
 - `re-sourcing-api`
 - `re-sourcing-web`
 - `re-sourcing-process-inbox`
+- `re-sourcing-run-saved-searches`
 - `re-sourcing-db`
 
 The weekly enrich-all cron has been removed. Canonical property enrichment happens during `from-listings`, and operators can manually re-run enrichment from the app.
+Saved searches now have a dedicated daily Render cron tick. The app decides which searches are due based on each search's cadence and timezone.
 
 See [docs/RENDER_AND_ENV_CHECKLIST.md](/Users/tylertsay/Desktop/Coding%20projects/Real%20Estate%20Sourcing%20Flow/RE%20Sourcing%20Workspace/docs/RENDER_AND_ENV_CHECKLIST.md) for deployment setup.
 

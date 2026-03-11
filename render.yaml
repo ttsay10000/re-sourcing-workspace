@@ -1,15 +1,15 @@
-# Render Blueprint: web UI + API + Postgres + inbox cron job
+# Render Blueprint: web UI + API + Postgres + automation cron jobs
 # https://render.com/docs/blueprint-spec
 #
 # To have Render CREATE all services (including cron jobs):
 #   1. Dashboard → New → Blueprint → connect this repo and branch.
-#   2. Apply the blueprint so Render creates DB, API, Web, and the inbox cron.
+#   2. Apply the blueprint so Render creates DB, API, Web, and the cron jobs.
 # If you already have API/Web/DB and only need the cron:
-#   Open your Blueprint in the dashboard and Apply/Sync so Render creates the missing cron job (re-sourcing-process-inbox).
+#   Open your Blueprint in the dashboard and Apply/Sync so Render creates any missing cron jobs.
 #
 # Env vars (set in Render dashboard or here):
-#   API:  DATABASE_URL (from Postgres), NODE_ENV=production, CORS_ORIGIN=<web URL>
-#   Web:  NEXT_PUBLIC_API_URL=<API service URL>
+#   API:  DATABASE_URL (from Postgres), NODE_ENV=production, CORS_ORIGIN=<web URL>, plus shared runtime secrets
+#   Web:  NEXT_PUBLIC_API_URL=<public API URL> (must still be set explicitly)
 #
 # Deploy order: Migrations run in preDeployCommand (after build, before start). If they fail, deploy is cancelled.
 
@@ -36,6 +36,26 @@ services:
           property: connectionString
       - key: CORS_ORIGIN
         sync: false  # set to your web service URL, e.g. https://re-sourcing-web.onrender.com
+      - key: RAPIDAPI_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: SOCRATA_APP_TOKEN
+        sync: false
+      - key: GEOCLIENT_SUBSCRIPTION_KEY
+        sync: false
+      - key: GEOCLIENT_APP_ID
+        sync: false
+      - key: GEOCLIENT_APP_KEY
+        sync: false
+      - key: GMAIL_CLIENT_ID
+        sync: false
+      - key: GMAIL_CLIENT_SECRET
+        sync: false
+      - key: GMAIL_REFRESH_TOKEN
+        sync: false
+      - key: PROCESS_INBOX_CRON_SECRET
+        sync: false
 
   - type: web
     name: re-sourcing-web
@@ -60,10 +80,65 @@ services:
           name: re-sourcing-db
           property: connectionString
       - key: GMAIL_CLIENT_ID
-        sync: false
+        fromService:
+          type: web
+          name: re-sourcing-api
+          envVarKey: GMAIL_CLIENT_ID
       - key: GMAIL_CLIENT_SECRET
-        sync: false
+        fromService:
+          type: web
+          name: re-sourcing-api
+          envVarKey: GMAIL_CLIENT_SECRET
       - key: GMAIL_REFRESH_TOKEN
-        sync: false
+        fromService:
+          type: web
+          name: re-sourcing-api
+          envVarKey: GMAIL_REFRESH_TOKEN
       - key: OPENAI_API_KEY
-        sync: false
+        fromService:
+          type: web
+          name: re-sourcing-api
+          envVarKey: OPENAI_API_KEY
+
+  # Daily cron: start enabled saved searches that are due for the current local calendar day.
+  - type: cron
+    name: re-sourcing-run-saved-searches
+    runtime: node
+    schedule: '0 13 * * *'
+    buildCommand: npm install --include=dev && npm run build -w @re-sourcing/contracts && npm run build -w @re-sourcing/db && npm run build -w @re-sourcing/api
+    startCommand: cd apps/api && node dist/scripts/triggerSavedSearches.js
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: re-sourcing-db
+          property: connectionString
+      - key: RAPIDAPI_KEY
+        fromService:
+          type: web
+          name: re-sourcing-api
+          envVarKey: RAPIDAPI_KEY
+      - key: OPENAI_API_KEY
+        fromService:
+          type: web
+          name: re-sourcing-api
+          envVarKey: OPENAI_API_KEY
+      - key: SOCRATA_APP_TOKEN
+        fromService:
+          type: web
+          name: re-sourcing-api
+          envVarKey: SOCRATA_APP_TOKEN
+      - key: GEOCLIENT_SUBSCRIPTION_KEY
+        fromService:
+          type: web
+          name: re-sourcing-api
+          envVarKey: GEOCLIENT_SUBSCRIPTION_KEY
+      - key: GEOCLIENT_APP_ID
+        fromService:
+          type: web
+          name: re-sourcing-api
+          envVarKey: GEOCLIENT_APP_ID
+      - key: GEOCLIENT_APP_KEY
+        fromService:
+          type: web
+          name: re-sourcing-api
+          envVarKey: GEOCLIENT_APP_KEY

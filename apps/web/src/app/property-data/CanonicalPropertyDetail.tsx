@@ -8,6 +8,7 @@ import {
   getPropertyDossierGeneration,
   type LocalDossierJobState,
 } from "./dossierState";
+import { formatSourcingUpdateChange, getSourcingUpdate, getSourcingUpdateMeta } from "./sourcingUpdate";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
 
@@ -1152,7 +1153,10 @@ export function CanonicalPropertyDetail({
     { id: "rental-om", label: "Rental / OM", open: !!openSections.rentalOm },
     { id: "violations-complaints-permits", label: "Issues", open: !!openSections.violationsComplaintsPermits },
   ];
+  const sourcingUpdate = getSourcingUpdate(d);
+  const sourcingUpdateMeta = getSourcingUpdateMeta(d);
   const overviewItems = [
+    { label: "Saved search", value: sourcingUpdateMeta.label },
     { label: "OM status", value: property.omStatus ?? "—" },
     { label: "Deal score", value: dealScore != null ? `${dealScore}/100` : "Pending" },
     { label: "Documents", value: unifiedDocuments == null ? "…" : String(unifiedDocuments.length) },
@@ -1333,6 +1337,41 @@ export function CanonicalPropertyDetail({
           </div>
         ))}
       </div>
+
+      {sourcingUpdate && (
+        <div
+          style={{
+            marginBottom: "1rem",
+            padding: "0.85rem 1rem",
+            borderRadius: "0.9rem",
+            border: `1px solid ${sourcingUpdateMeta.style.borderColor}`,
+            background: sourcingUpdateMeta.style.backgroundColor,
+            color: sourcingUpdateMeta.style.color,
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.75rem", flexWrap: "wrap" }}>
+            <div>
+              <div style={{ fontSize: "0.78rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                Saved-search sync
+              </div>
+              <div style={{ fontSize: "1rem", fontWeight: 600 }}>{sourcingUpdateMeta.label}</div>
+            </div>
+            <div style={{ fontSize: "0.82rem", opacity: 0.9 }}>
+              {sourcingUpdate.lastEvaluatedAt ? `Last checked ${formatDateOnly(sourcingUpdate.lastEvaluatedAt)}` : sourcingUpdateMeta.detail}
+            </div>
+          </div>
+          {typeof sourcingUpdate.summary === "string" && sourcingUpdate.summary.trim().length > 0 && (
+            <p style={{ margin: "0.6rem 0 0", fontSize: "0.9rem", lineHeight: 1.5 }}>{sourcingUpdate.summary}</p>
+          )}
+          {Array.isArray(sourcingUpdate.changes) && sourcingUpdate.changes.length > 0 && (
+            <ul style={{ margin: "0.65rem 0 0", paddingLeft: "1.1rem", fontSize: "0.88rem", lineHeight: 1.5 }}>
+              {sourcingUpdate.changes.slice(0, 6).map((change, index) => (
+                <li key={`${change.field}-${index}`}>{formatSourcingUpdateChange(change)}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
 
       <div className="property-detail-jump-row">
         {sectionLinks.map((section) => (
