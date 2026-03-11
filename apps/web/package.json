@@ -3,12 +3,14 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
+    "prebuild": "npm --prefix ../.. run build -w @re-sourcing/contracts",
     "build": "next build",
     "dev": "next dev",
     "start": "next start",
     "lint": "next lint"
   },
   "dependencies": {
+    "@re-sourcing/contracts": "*",
     "next": "^15.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
