@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { deriveListingActivitySummary, describeListingActivity, type ListingActivitySummary } from "@re-sourcing/contracts";
 
 /** Sale details shape from GET sale details (stored in listing.extra). */
 interface SaleDetails {
@@ -97,6 +98,7 @@ export interface PropertyDetailListing {
   uploadedAt?: string | null;
   uploadedRunId?: string | null;
   duplicateScore?: number | null;
+  lastActivity?: ListingActivitySummary | null;
 }
 
 function formatPrice(n: number | null | undefined): string {
@@ -219,6 +221,13 @@ export function PropertyDetailCollapsible({ listing }: { listing: PropertyDetail
   const monthlyTax = details.monthlyTax;
   const builtIn = details.builtIn;
   const daysOnMarket = details.daysOnMarket;
+  const listingActivity =
+    listing.lastActivity ?? deriveListingActivitySummary({
+      listedAt: listedAt ?? null,
+      currentPrice: listing.price ?? null,
+      priceHistory: listing.priceHistory ?? null,
+    });
+  const listingActivitySummary = describeListingActivity(listingActivity);
   const brokerDisplay = (() => {
     if (listing.agentNames && listing.agentNames.length > 0) {
       return listing.agentNames.join(", ");
@@ -340,6 +349,16 @@ export function PropertyDetailCollapsible({ listing }: { listing: PropertyDetail
                 {listedAt !== "—" && <span>Listed {formatDate(listedAt)}</span>}
                 {closedAt && <span> · Closed {formatDate(closedAt)}</span>}
                 {daysOnMarket != null && !Number.isNaN(daysOnMarket) && <span> · {daysOnMarket} days on market</span>}
+              </div>
+            )}
+            {listingActivity?.lastActivityDate && (
+              <div className="initial-info-listing-meta" title={listingActivitySummary ?? undefined}>
+                <span>
+                  Last activity {formatDate(listingActivity.lastActivityDate)} · {formatPriceEventLabel(listingActivity.lastActivityEvent)}
+                </span>
+                {listingActivity.lastActivityPrice != null && (
+                  <span> · {formatPrice(listingActivity.lastActivityPrice)}</span>
+                )}
               </div>
             )}
             {details.priceChangeSinceListed && (() => {

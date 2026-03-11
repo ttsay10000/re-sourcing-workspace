@@ -7,6 +7,7 @@ import type {
   PropertyDealDossierGeneration,
   PropertyDetails,
 } from "@re-sourcing/contracts";
+import { deriveListingActivitySummary, describeListingActivity } from "@re-sourcing/contracts";
 import {
   getPool,
   PropertyRepo,
@@ -23,9 +24,13 @@ import { scoreDealWithLlm } from "./dealScoringLlm.js";
 import { buildDossierStructuredText } from "./dossierGenerator.js";
 import { dossierTextToPdf } from "./dossierToPdf.js";
 import { buildExcelProForma } from "./excelProForma.js";
-import { saveGeneratedDocument } from "./generatedDocStorage.js";
+import { deleteGeneratedDocumentFile, saveGeneratedDocument } from "./generatedDocStorage.js";
 import { analyzePropertyConditionReview } from "./propertyConditionReview.js";
 import { buildSensitivityAnalyses } from "./sensitivityAnalysis.js";
+import {
+  propertyOverviewFromDetails,
+  resolveDossierPackageContext,
+} from "./dossierPropertyContext.js";
 import {
   getPropertyDossierAssumptions,
   mergeDossierAssumptionOverrides,
@@ -38,7 +43,6 @@ import {
   type DossierAssumptionOverrides,
 } from "./underwritingModel.js";
 import type {
-  DossierPropertyOverview,
   ExpenseRow,
   GrossRentRow,
   UnderwritingContext,
@@ -197,33 +201,6 @@ function expenseRowsFromOm(om: OmAnalysis | null): { rows: ExpenseRow[]; total: 
   return { rows, total };
 }
 
-function propertyOverviewFromDetails(details: PropertyDetails | null): DossierPropertyOverview | null {
-  if (!details) return null;
-  const taxCode =
-    details.taxCode != null && String(details.taxCode).trim() !== ""
-      ? String(details.taxCode).trim()
-      : null;
-  const bblRaw = details.bbl ?? details.buildingLotBlock ?? null;
-  const bbl = bblRaw != null && typeof bblRaw === "string" ? bblRaw : undefined;
-  const hpd = details.enrichment?.hpdRegistration as
-    | {
-        registrationId?: string;
-        lastRegistrationDate?: string;
-        registration_id?: string;
-        last_registration_date?: string;
-      }
-    | undefined;
-  const hpdRegistrationId = hpd?.registrationId ?? hpd?.registration_id ?? null;
-  const hpdRegistrationDate = hpd?.lastRegistrationDate ?? hpd?.last_registration_date ?? null;
-  if (!taxCode && !hpdRegistrationId && !hpdRegistrationDate && !bbl) return null;
-  return {
-    taxCode: taxCode ?? undefined,
-    hpdRegistrationId: hpdRegistrationId ?? undefined,
-    hpdRegistrationDate: hpdRegistrationDate ?? undefined,
-    bbl,
-  };
-}
-
 function omRevenueMixFlag(om: OmAnalysis | null): string | null {
   const propertyInfo = om?.propertyInfo as Record<string, unknown> | undefined;
   const revenue = om?.revenueComposition as Record<string, unknown> | undefined;
@@ -341,6 +318,16 @@ export async function runGenerateDossier(
       state as Record<string, unknown>
     );
   };
+  const deleteSupersededGeneratedDocuments = async (retainIds: string[]): Promise<void> => {
+    const generatedDocs = (await documentRepo.listByPropertyId(propertyId)).filter(
+      (doc) => doc.source === "generated_dossier" || doc.source === "generated_excel"
+    );
+    for (const doc of generatedDocs) {
+      if (retainIds.includes(doc.id)) continue;
+      await documentRepo.delete(doc.id);
+      await deleteGeneratedDocumentFile(doc.storagePath);
+    }
+  };
 
   await setGenerationState(runningGenerationState(startedAt, "Preparing property inputs"));
 
@@ -416,9 +403,15 @@ export async function runGenerateDossier(
       details,
       omAnalysis,
     });
-    const propertyOverview = propertyOverviewFromDetails(details);
+    const packageContext = resolveDossierPackageContext(property.canonicalAddress, details);
+    const propertyOverview = propertyOverviewFromDetails(details, packageContext);
     const financialFlags: string[] = [];
     const hasCurrentFinancials = currentGrossRent != null && currentNoi != null;
+    const listingActivity = deriveListingActivitySummary({
+      listedAt: listing?.listedAt ?? null,
+      currentPrice: listing?.price ?? null,
+      priceHistory: listing?.priceHistory ?? null,
+    });
 
     if (assumptions.acquisition.purchasePrice != null) {
       financialFlags.push(
@@ -427,6 +420,10 @@ export async function runGenerateDossier(
           minimumFractionDigits: 0,
         })}`
       );
+    }
+    const listingActivitySummary = describeListingActivity(listingActivity);
+    if (listingActivitySummary) {
+      financialFlags.push(`Last market activity: ${listingActivitySummary}`);
     }
     if (!hasCurrentFinancials) {
       financialFlags.push(
@@ -485,7 +482,7 @@ export async function runGenerateDossier(
 
     const ctx: UnderwritingContext = {
       propertyId,
-      canonicalAddress: property.canonicalAddress,
+      canonicalAddress: packageContext.dossierAddress,
       purchasePrice: assumptions.acquisition.purchasePrice,
       listingCity,
       currentNoi,
@@ -571,7 +568,7 @@ export async function runGenerateDossier(
 
     const dateStr = new Date().toISOString().slice(0, 10);
     const slug =
-      property.canonicalAddress.replace(/[^a-zA-Z0-9]/g, "-").slice(0, 40) ||
+      packageContext.dossierAddress.replace(/[^a-zA-Z0-9]/g, "-").slice(0, 40) ||
       propertyId.slice(0, 8);
     const dossierFileName = `Deal-Dossier-${slug}-${dateStr}.pdf`;
     const excelFileName = `Pro-Forma-${slug}-${dateStr}.xlsx`;
@@ -612,7 +609,7 @@ export async function runGenerateDossier(
       litigationTotal: lit?.total,
       litigationOpenCount: lit?.openCount,
       litigationTotalPenalty: lit?.totalPenalty,
-      address: property.canonicalAddress,
+      address: packageContext.dossierAddress,
       riskBullets: [
         ...(omAnalysis?.investmentTakeaways ?? [])
           .slice(0, 5)
@@ -626,7 +623,12 @@ export async function runGenerateDossier(
       propertyId,
       canonicalAddress: property.canonicalAddress,
       details,
-      primaryListing: { price: assumptions.acquisition.purchasePrice, city: listingCity },
+      primaryListing: {
+        price: assumptions.acquisition.purchasePrice,
+        city: listingCity,
+        listedAt: listing?.listedAt ?? null,
+        priceHistory: listing?.priceHistory ?? null,
+      },
       irrPct: projection.returns.irr ?? null,
       cocPct: projection.returns.year1CashOnCashReturn ?? null,
       adjustedCapRatePct: adjustedCapRateForCtx,
@@ -703,14 +705,16 @@ export async function runGenerateDossier(
       fileContent: excelBuffer,
     });
 
+    await deleteSupersededGeneratedDocuments([dossierDoc.id, excelDoc.id]);
+
     let emailSent = false;
     const toEmail = profile.email?.trim();
     if (toEmail && dossierBuffer.length > 0 && excelBuffer.length > 0) {
       try {
         await sendMessageWithAttachments(
           toEmail,
-          `Deal dossier: ${property.canonicalAddress}`,
-          `Your deal dossier and Excel pro forma for ${property.canonicalAddress} are attached.`,
+          `Deal dossier: ${packageContext.dossierAddress}`,
+          `Your deal dossier and Excel pro forma for ${packageContext.dossierAddress} are attached.`,
           [
             {
               filename: dossierFileName,

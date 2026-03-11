@@ -6,6 +6,7 @@
 
 export * from "./enums.js";
 export * from "./listing.js";
+export * from "./listingActivity.js";
 export * from "./profile.js";
 export * from "./ingestion.js";
 export * from "./snapshot.js";

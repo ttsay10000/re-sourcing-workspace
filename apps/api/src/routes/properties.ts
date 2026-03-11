@@ -22,7 +22,7 @@ import {
   DocumentRepo,
   UserProfileRepo,
 } from "@re-sourcing/db";
-import type { PropertyDocumentCategory } from "@re-sourcing/contracts";
+import { deriveListingActivitySummary, type PriceHistoryEntry, type PropertyDocumentCategory } from "@re-sourcing/contracts";
 import multer from "multer";
 import { randomUUID } from "crypto";
 import { resolveInquiryFilePath } from "../inquiry/storage.js";
@@ -60,6 +60,21 @@ import type { WorkflowRunStepSeed } from "../workflow/workflowTracker.js";
 const router = Router();
 
 const ENRICHMENT_RATE_LIMIT_DELAY_MS = Number(process.env.ENRICHMENT_RATE_LIMIT_DELAY_MS || process.env.PERMITS_RATE_LIMIT_DELAY_MS) || 300;
+
+function mergeOmDerivedFromLlm(
+  existingFromLlm: RentalFinancialsFromLlm | null,
+  nextFromLlm: RentalFinancialsFromLlm | null | undefined
+): RentalFinancialsFromLlm | undefined {
+  const merged = {
+    ...(existingFromLlm && typeof existingFromLlm === "object" ? existingFromLlm : {}),
+    ...(nextFromLlm && typeof nextFromLlm === "object" ? nextFromLlm : {}),
+  } as RentalFinancialsFromLlm;
+  const nextRentalRows = Array.isArray(nextFromLlm?.rentalNumbersPerUnit) ? nextFromLlm.rentalNumbersPerUnit : null;
+  if (!nextRentalRows || nextRentalRows.length === 0) {
+    delete merged.rentalNumbersPerUnit;
+  }
+  return Object.keys(merged).length > 0 ? merged : undefined;
+}
 
 /**
  * Run OM/Brochure LLM extraction and merge into property details. Used in background after upload
@@ -102,7 +117,9 @@ async function runOmExtractionInBackground(
   const existing = (prop?.details?.rentalFinancials ?? null) as RentalFinancials | null;
   const existingFromLlm = existing?.fromLlm ?? null;
   const mergedFromLlm =
-    hasFromLlm && existingFromLlm && typeof existingFromLlm === "object"
+    hasOmAnalysis
+      ? mergeOmDerivedFromLlm(existingFromLlm, fromLlm)
+      : hasFromLlm && existingFromLlm && typeof existingFromLlm === "object"
       ? { ...existingFromLlm, ...fromLlm }
       : (fromLlm ?? existingFromLlm ?? undefined);
   const rentalFinancials: RentalFinancials = {
@@ -173,7 +190,9 @@ export async function refreshOmFinancialsForProperty(
         const existing = (prop?.details?.rentalFinancials ?? null) as RentalFinancials | null;
         const existingFromLlm = existing?.fromLlm ?? null;
         const mergedFromLlm =
-          hasFromLlm && existingFromLlm && typeof existingFromLlm === "object"
+          hasOmAnalysis
+            ? mergeOmDerivedFromLlm(existingFromLlm, fromLlm)
+            : hasFromLlm && existingFromLlm && typeof existingFromLlm === "object"
             ? { ...existingFromLlm, ...fromLlm }
             : (fromLlm ?? existingFromLlm ?? undefined);
         const rentalFinancials: RentalFinancials = {
@@ -207,10 +226,20 @@ router.get("/properties", async (req: Request, res: Response) => {
     const r = await pool.query(
       `SELECT DISTINCT ON (p.id)
          p.id, p.canonical_address, p.details, p.created_at, p.updated_at,
-         l.price AS listing_price, l.listed_at AS listing_listed_at, l.city AS listing_city,
+         l.price AS listing_price, l.listed_at AS listing_listed_at, l.city AS listing_city, l.price_history AS listing_price_history,
          (CASE
-           WHEN EXISTS (SELECT 1 FROM property_inquiry_documents d WHERE d.property_id = p.id)
-             OR EXISTS (SELECT 1 FROM property_uploaded_documents u WHERE u.property_id = p.id AND u.category = 'OM')
+           WHEN EXISTS (
+             SELECT 1
+             FROM property_inquiry_documents d
+             WHERE d.property_id = p.id
+               AND LOWER(COALESCE(d.filename, '')) ~ '(offering|memorandum|(^|[^a-z])om([^a-z]|$)|brochure|rent[ _-]?roll)'
+           )
+             OR EXISTS (
+               SELECT 1
+               FROM property_uploaded_documents u
+               WHERE u.property_id = p.id
+                 AND u.category IN ('OM', 'Brochure', 'Rent Roll')
+             )
            THEN 'OM received'
            WHEN EXISTS (SELECT 1 FROM property_inquiry_sends s WHERE s.property_id = p.id)
            THEN 'OM pending'
@@ -230,6 +259,11 @@ router.get("/properties", async (req: Request, res: Response) => {
       const listingListedAt = row.listing_listed_at != null
         ? (row.listing_listed_at instanceof Date ? row.listing_listed_at.toISOString() : String(row.listing_listed_at))
         : null;
+      const listingActivity = deriveListingActivitySummary({
+        listedAt: listingListedAt,
+        currentPrice: row.listing_price != null ? Number(row.listing_price) : null,
+        priceHistory: (row.listing_price_history as PriceHistoryEntry[] | null) ?? null,
+      });
       return {
         id: row.id,
         canonicalAddress: row.canonical_address,
@@ -240,6 +274,7 @@ router.get("/properties", async (req: Request, res: Response) => {
           price: row.listing_price != null ? Number(row.listing_price) : null,
           listedAt: listingListedAt,
           city: (row.listing_city as string) ?? null,
+          lastActivity: listingActivity,
         },
         omStatus: (row.om_status as string) ?? "Not received",
         dealScore: row.deal_score != null ? Number(row.deal_score) : null,
@@ -1736,6 +1771,8 @@ router.post("/properties/:id/compute-score", async (req: Request, res: Response)
     const primaryListing = {
       price: purchasePrice,
       city: listing?.city ?? null,
+      listedAt: listing?.listedAt ?? null,
+      priceHistory: listing?.priceHistory ?? null,
     };
     const details = property.details as PropertyDetails | null;
     const currentNoi = noiFromDetails(details);
@@ -1933,6 +1970,21 @@ function mergeFromLlm(
   return Object.keys(out).length > 0 ? out : null;
 }
 
+function stripStructuredListingOnlyFields(
+  value: RentalFinancialsFromLlm | null | undefined
+): RentalFinancialsFromLlm | null {
+  if (!value || typeof value !== "object") return value ?? null;
+  const next = { ...value };
+  delete next.expensesTable;
+  delete next.rentalNumbersPerUnit;
+  return Object.keys(next).length > 0 ? next : null;
+}
+
+function looksLikeOmStyleFilename(filename: string | null | undefined): boolean {
+  if (!filename || typeof filename !== "string") return false;
+  return /(offering|memorandum|(^|[^a-z])om([^a-z]|$)|brochure|rent[ _-]?roll)/i.test(filename);
+}
+
 /** Run rental flow for a single property: RapidAPI rental-by-address + LLM extraction from linked listing. Used by from-listings, run-enrichment, and run-rental-flow. */
 export async function runRentalFlowForProperty(
   propertyId: string,
@@ -1941,6 +1993,8 @@ export async function runRentalFlowForProperty(
   const propertyRepo = new PropertyRepo({ pool });
   const matchRepo = new MatchRepo({ pool });
   const listingRepo = new ListingRepo({ pool });
+  const uploadedDocRepo = new PropertyUploadedDocumentRepo({ pool });
+  const inquiryDocRepo = new InquiryDocumentRepo({ pool });
   const property = await propertyRepo.byId(propertyId);
   if (!property) {
     return { rentalUnitsCount: 0, hasLlmFinancials: false, error: "Property not found" };
@@ -1966,7 +2020,17 @@ export async function runRentalFlowForProperty(
       listing.title ?? listing.address ?? undefined
     );
   }
-  const mergedFromLlm = mergeFromLlm(existing?.fromLlm ?? null, fromLlm);
+  const [uploadedDocs, inquiryDocs] = await Promise.all([
+    uploadedDocRepo.listByPropertyId(propertyId),
+    inquiryDocRepo.listByPropertyId(propertyId),
+  ]);
+  const hasOmStyleDocument =
+    uploadedDocs.some((doc) => doc.category === "OM" || doc.category === "Brochure" || doc.category === "Rent Roll") ||
+    inquiryDocs.some((doc) => looksLikeOmStyleFilename(doc.filename));
+  let mergedFromLlm = mergeFromLlm(existing?.fromLlm ?? null, fromLlm);
+  if (!hasOmStyleDocument) {
+    mergedFromLlm = stripStructuredListingOnlyFields(mergedFromLlm);
+  }
   const dataGap = await suggestRentalDataGaps(
     listing ? { beds: listing.beds, baths: listing.baths, address: listing.address, title: listing.title, descriptionSnippet: listing.description?.slice(0, 400) } : null,
     rentalUnits ?? []

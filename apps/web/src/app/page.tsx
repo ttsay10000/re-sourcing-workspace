@@ -310,7 +310,7 @@ export default function HomePage() {
       <section className="home-hero">
         <div>
           <div className="home-hero-eyebrow">Deal triage board</div>
-          <h1 className="home-hero-title">Homepage for scoring, dossier downloads, and quick refresh actions.</h1>
+          <h1 className="home-hero-title">Score deals, pull dossiers, and refresh the feed from one board.</h1>
           <p className="home-hero-copy">
             Scan property mix, listed days, offer guidance, and dossier status in one place. Use selection to refresh only the properties you care about.
           </p>
@@ -480,10 +480,10 @@ export default function HomePage() {
 
                     <div className="home-deal-card-body">
                       <div className="home-deal-card-header">
-                        <div>
+                        <div className="property-card-header-left">
                           <div className="property-card-address">{deal.address || "—"}</div>
                           <div className="property-card-meta">
-                            {formatPrice(deal.price)} ask
+                            {formatPrice(deal.price)} Ask
                             {dom != null ? ` • ${dom}d on market` : ""}
                             {deal.dealScore != null ? ` • ${getDealStatusTag(deal.dealScore)}` : ""}
                           </div>
@@ -590,7 +590,7 @@ export default function HomePage() {
                         </div>
                         <div className="property-card-actions">
                           <Link href={`/property/${deal.id}`} className="btn-card">
-                            View Deal
+                            View deal
                           </Link>
                           {dossierUrl ? (
                             <a href={dossierUrl} className="btn-card" target="_blank" rel="noreferrer">

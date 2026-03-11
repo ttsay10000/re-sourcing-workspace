@@ -4,6 +4,7 @@
  * the deterministic fallback (dealScoringEngine) and builds insert params for deal_signals.
  */
 
+import { deriveListingActivitySummary, type PriceHistoryEntry } from "@re-sourcing/contracts";
 import type { PropertyDetails, RentalFinancials } from "@re-sourcing/contracts";
 import { computeDealScore, type DealScoringResult } from "./dealScoringEngine.js";
 import type { InsertDealSignalsParams } from "@re-sourcing/db";
@@ -13,6 +14,10 @@ export interface PropertyListingInput {
   price: number | null;
   /** Listing city (optional, not used in current scoring). */
   city: string | null;
+  /** Original listed date for activity fallback/sorting. */
+  listedAt?: string | null;
+  /** Price history used to derive last activity and recent price cuts. */
+  priceHistory?: PriceHistoryEntry[] | null;
 }
 
 export interface ComputeDealSignalsInput {
@@ -75,7 +80,8 @@ function noiFromDetails(details: PropertyDetails | null): number | null {
 function scoringInputFromDetails(
   purchasePrice: number | null,
   details: PropertyDetails | null,
-  input: ComputeDealSignalsInput
+  input: ComputeDealSignalsInput,
+  listingActivity: ReturnType<typeof deriveListingActivitySummary>
 ): Parameters<typeof computeDealScore>[0] {
   const noi = noiFromDetails(details);
   const hpd = details?.enrichment?.hpd_violations_summary;
@@ -101,7 +107,19 @@ function scoringInputFromDetails(
     litigationTotal: lit?.total,
     litigationOpenCount: lit?.openCount,
     litigationTotalPenalty: lit?.totalPenalty,
+    latestPriceDecreasePct: listingActivity?.latestPriceDecreasePercent ?? null,
+    daysSinceLatestPriceDecrease: daysSinceIsoDate(listingActivity?.latestPriceDecreaseDate ?? null),
+    currentDiscountFromOriginalAskPct: listingActivity?.currentDiscountFromOriginalAskPct ?? null,
   };
+}
+
+function daysSinceIsoDate(value: string | null): number | null {
+  if (!value) return null;
+  const date = new Date(`${value}T12:00:00Z`);
+  if (Number.isNaN(date.getTime())) return null;
+  const now = new Date();
+  now.setHours(0, 0, 0, 0);
+  return Math.max(0, Math.floor((now.getTime() - date.getTime()) / (1000 * 60 * 60 * 24)));
 }
 
 /**
@@ -111,11 +129,16 @@ export function computeDealSignals(input: ComputeDealSignalsInput): ComputeDealS
   const { propertyId, details, primaryListing, rentStabilizedUnitCount, blendedRentUpliftPct } = input;
   const price = primaryListing.price && primaryListing.price > 0 ? primaryListing.price : null;
   const unitCount = unitCountFromDetails(details);
+  const listingActivity = deriveListingActivitySummary({
+    listedAt: primaryListing.listedAt ?? null,
+    currentPrice: price,
+    priceHistory: primaryListing.priceHistory ?? null,
+  });
 
   const scoringInput = scoringInputFromDetails(price, details, {
     ...input,
     rentStabilizedUnitCount: rentStabilizedUnitCount ?? 0,
-  });
+  }, listingActivity);
 
   const scoringResult = computeDealScore(scoringInput);
 
@@ -138,7 +161,7 @@ export function computeDealSignals(input: ComputeDealSignalsInput): ComputeDealS
     expenseRatio: undefined,
     liquidityScore: undefined,
     riskScore: scoringResult.riskScore ?? undefined,
-    priceMomentum: undefined,
+    priceMomentum: listingActivity?.latestPriceChangePercent ?? undefined,
     dealScore: scoringResult.isScoreable ? scoringResult.dealScore : undefined,
   };
 

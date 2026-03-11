@@ -26,10 +26,6 @@ function pctValue(value: number | null | undefined): string {
   return value != null && Number.isFinite(value) ? `${value.toFixed(2)}%` : "—";
 }
 
-function pctRatio(value: number | null | undefined): string {
-  return value != null && Number.isFinite(value) ? `${(value * 100).toFixed(2)}%` : "—";
-}
-
 function sensitivityRangeLabel(
   min: number | null | undefined,
   max: number | null | undefined
@@ -114,122 +110,91 @@ function currencySeriesCells(values: number[], options?: { blankYearZero?: boole
   });
 }
 
-function ratioSeriesCells(values: Array<number | null>, options?: { blankYearZero?: boolean }): string[] {
+function negativeSeriesCells(values: number[], options?: { blankYearZero?: boolean }): string[] {
   const { blankYearZero = false } = options ?? {};
   return values.map((value, index) => {
     if (blankYearZero && index === 0) return "";
-    return pctRatio(value);
+    if (Math.abs(value) <= 0.005) return "$0";
+    return value < 0 ? `(${moneyLabel(Math.abs(value))})` : moneyLabel(value);
   });
 }
 
 function pushYearlyCashFlowTable(lines: string[], yearly: YearlyCashFlowProjectionContext): void {
   const headers = ["Line item", ...yearly.years.map((year) => `Y${year}`)];
   lines.push(tableRow(headers));
-  lines.push(tableRow(["Property value", ...currencySeriesCells(yearly.propertyValue)]));
-  lines.push(tableRow(["Gross rental income", ...currencySeriesCells(yearly.grossRentalIncome, { blankYearZero: true })]));
-  if (yearly.otherIncome.some((value, index) => index > 0 && Math.abs(value) > 0.005)) {
-    lines.push(tableRow(["Other income", ...currencySeriesCells(yearly.otherIncome, { blankYearZero: true })]));
-  }
-  lines.push(tableRow(["Vacancy assumption", ...currencySeriesCells(yearly.vacancyLoss, { blankYearZero: true }).map((cell) => (cell ? `(${cell})` : ""))]));
-  if (yearly.leadTimeLoss.some((value, index) => index > 0 && Math.abs(value) > 0.005)) {
-    lines.push(tableRow(["Lead time assumption", ...currencySeriesCells(yearly.leadTimeLoss, { blankYearZero: true }).map((cell) => (cell ? `(${cell})` : ""))]));
-  }
-  lines.push(tableRow(["Net rental income", ...currencySeriesCells(yearly.netRentalIncome, { blankYearZero: true })]));
-  yearly.expenseLineItems.forEach((row) => {
-    const cells = ["", ...row.yearlyAmounts.map((value) => moneyLabel(value))];
-    lines.push(
-      tableRow([
-        row.lineItem,
-        ...cells.map((cell, index) => {
-          if (index === 0) return "";
-          return cell ? `(${cell})` : "";
-        }),
-      ])
-    );
-  });
   lines.push(
     tableRow([
-      "Management fee",
-      ...currencySeriesCells(yearly.managementFee, { blankYearZero: true }).map((cell) =>
-        cell ? `(${cell})` : ""
-      ),
+      "Gross rental income",
+      ...currencySeriesCells(yearly.grossRentalIncome, { blankYearZero: true }),
     ])
+  );
+  if (yearly.otherIncome.some((value, index) => index > 0 && Math.abs(value) > 0.005)) {
+    lines.push(
+      tableRow(["Other income", ...currencySeriesCells(yearly.otherIncome, { blankYearZero: true })])
+    );
+  }
+  lines.push(
+    tableRow([
+      "Vacancy loss",
+      ...negativeSeriesCells(yearly.vacancyLoss, { blankYearZero: true }),
+    ])
+  );
+  if (yearly.leadTimeLoss.some((value, index) => index > 0 && Math.abs(value) > 0.005)) {
+    lines.push(
+      tableRow([
+        "Lead time loss",
+        ...negativeSeriesCells(yearly.leadTimeLoss, { blankYearZero: true }),
+      ])
+    );
+  }
+  lines.push(
+    tableRow(["Net rental income", ...currencySeriesCells(yearly.netRentalIncome, { blankYearZero: true })])
   );
   lines.push(
     tableRow([
       "Total operating expenses",
-      ...currencySeriesCells(yearly.totalOperatingExpenses, { blankYearZero: true }).map((cell) =>
-        cell ? `(${cell})` : ""
+      ...negativeSeriesCells(
+        yearly.totalOperatingExpenses.map((value) => -Math.abs(value)),
+        { blankYearZero: true }
       ),
     ])
   );
-  lines.push(tableRow(["Net operating income (NOI)", ...currencySeriesCells(yearly.noi, { blankYearZero: true })]));
+  lines.push(
+    tableRow([
+      "Net operating income (NOI)",
+      ...currencySeriesCells(yearly.noi, { blankYearZero: true }),
+    ])
+  );
   lines.push(
     tableRow([
       "Recurring CapEx / reserve",
-      ...currencySeriesCells(yearly.recurringCapex, { blankYearZero: true }).map((cell) =>
-        cell ? `(${cell})` : ""
+      ...negativeSeriesCells(
+        yearly.recurringCapex.map((value) => -Math.abs(value)),
+        { blankYearZero: true }
       ),
     ])
   );
   lines.push(
-    tableRow(["CF from operations", ...currencySeriesCells(yearly.cashFlowFromOperations, { blankYearZero: true })])
+    tableRow([
+      "CF from operations",
+      ...currencySeriesCells(yearly.cashFlowFromOperations, { blankYearZero: true }),
+    ])
   );
-  lines.push(tableRow(["Cap rate (starting purchase price)", ...ratioSeriesCells(yearly.capRateOnPurchase)]));
   lines.push(
     tableRow([
       "Debt service payments",
-      ...currencySeriesCells(yearly.debtService, { blankYearZero: true }).map((cell) =>
-        cell ? `(${cell})` : ""
-      ),
+      ...negativeSeriesCells(yearly.debtService.map((value) => -Math.abs(value)), {
+        blankYearZero: true,
+      }),
     ])
   );
   lines.push(
-    tableRow([
-      "Principal paid",
-      ...currencySeriesCells(yearly.principalPaid, { blankYearZero: true }).map((cell) =>
-        cell ? `(${cell})` : ""
-      ),
-    ])
+    tableRow(["CF after financing", ...currencySeriesCells(yearly.cashFlowAfterFinancing)])
   );
   lines.push(
     tableRow([
-      "Interest paid",
-      ...currencySeriesCells(yearly.interestPaid, { blankYearZero: true }).map((cell) =>
-        cell ? `(${cell})` : ""
-      ),
-    ])
-  );
-  lines.push(tableRow(["CF after financing", ...currencySeriesCells(yearly.cashFlowAfterFinancing)]));
-  lines.push(
-    tableRow([
-      "Total investment cost",
-      ...yearly.totalInvestmentCost.map((value, index) =>
-        index === 0 && Math.abs(value) > 0.005 ? `(${moneyLabel(Math.abs(value))})` : ""
-      ),
-    ])
-  );
-  lines.push(tableRow(["Sale value", ...currencySeriesCells(yearly.saleValue)]));
-  lines.push(
-    tableRow([
-      "Closing costs @ sale",
-      ...currencySeriesCells(yearly.saleClosingCosts).map((cell, index) =>
-        index === 0 || !cell ? "" : `(${cell})`
-      ),
-    ])
-  );
-  lines.push(tableRow(["Unlevered CF", ...currencySeriesCells(yearly.unleveredCashFlow)]));
-  lines.push(tableRow(["Financing funding", ...currencySeriesCells(yearly.financingFunding)]));
-  lines.push(
-    tableRow([
-      "Financing fees",
-      ...currencySeriesCells(yearly.financingFees).map((cell) => (cell ? `(${cell})` : "")),
-    ])
-  );
-  lines.push(
-    tableRow([
-      "Financing payoff",
-      ...currencySeriesCells(yearly.financingPayoff).map((cell) => (cell ? `(${cell})` : "")),
+      "Net sale proceeds to equity",
+      ...currencySeriesCells(yearly.netSaleProceedsToEquity, { blankYearZero: true }),
     ])
   );
   lines.push(tableRow(["Levered CF", ...currencySeriesCells(yearly.leveredCashFlow)]));
@@ -272,6 +237,7 @@ export function buildDossierStructuredText(ctx: UnderwritingContext): string {
     if (ctx.propertyOverview.hpdRegistrationId) lines.push(`HPD registration: ${ctx.propertyOverview.hpdRegistrationId}`);
     if (ctx.propertyOverview.hpdRegistrationDate) lines.push(`HPD last registration: ${ctx.propertyOverview.hpdRegistrationDate}`);
     if (ctx.propertyOverview.bbl) lines.push(`BBL: ${ctx.propertyOverview.bbl}`);
+    if (ctx.propertyOverview.packageNote) lines.push(`Package note: ${ctx.propertyOverview.packageNote}`);
   }
   lines.push(propertyTaxGrowthSourceLine(ctx));
   pushConditionReview(lines, ctx);
@@ -280,14 +246,6 @@ export function buildDossierStructuredText(ctx: UnderwritingContext): string {
   lines.push("2. RECOMMENDED OFFER");
   lines.push("--------------------");
   lines.push(tableRow(["Target IRR", pctValue(ctx.assumptions.targetIrrPct)]));
-  lines.push(
-    tableRow([
-      "IRR at asking",
-      ctx.recommendedOffer?.irrAtAskingPct != null
-        ? `${(ctx.recommendedOffer.irrAtAskingPct * 100).toFixed(2)}%`
-        : "—",
-    ])
-  );
   lines.push(
     tableRow([
       "Recommended offer range",
@@ -330,7 +288,6 @@ export function buildDossierStructuredText(ctx: UnderwritingContext): string {
     lines.push(tableRow(["Current expenses not extracted from OM text", "—"]));
   }
   lines.push("");
-  lines.push(tableRow(["—— Gross rent minus expenses ——", ""]));
   lines.push(tableRow(["**NOI**", moneyLabel(noi)]));
   lines.push(tableRow(["Cap rate", pctValue(ctx.assetCapRate)]));
   lines.push("");
@@ -352,8 +309,8 @@ export function buildDossierStructuredText(ctx: UnderwritingContext): string {
   lines.push(tableRow(["Stabilized cap rate", pctValue(ctx.adjustedCapRate)]));
   lines.push("");
 
-  lines.push("5. FINANCING & CASH FLOW");
-  lines.push("-------------------------");
+  lines.push("5. FINANCING & EQUITY CASH FLOW");
+  lines.push("-------------------------------");
   lines.push(tableRow(["Purchase price", moneyLabel(ctx.purchasePrice)]));
   lines.push(
     tableRow([
@@ -368,8 +325,14 @@ export function buildDossierStructuredText(ctx: UnderwritingContext): string {
   lines.push(tableRow(["Loan amount", moneyLabel(ctx.financing.loanAmount)]));
   lines.push(tableRow(["Initial equity invested", moneyLabel(ctx.acquisition.initialEquityInvested)]));
   lines.push(tableRow(["Annual debt service", moneyLabel(ctx.financing.annualDebtService)]));
-  lines.push(tableRow(["Annual operating cash flow", moneyLabel(ctx.cashFlows.annualOperatingCashFlow)]));
-  lines.push(tableRow(["Final year cash flow", moneyLabel(ctx.cashFlows.finalYearCashFlow)]));
+  lines.push(
+    tableRow([
+      "Year 1 cash flow after debt service",
+      moneyLabel(ctx.cashFlows.annualOperatingCashFlow),
+    ])
+  );
+  lines.push(tableRow(["Net sale proceeds to equity", moneyLabel(ctx.exit.netProceedsToEquity)]));
+  lines.push(tableRow(["Exit-year levered cash flow", moneyLabel(ctx.cashFlows.finalYearCashFlow)]));
   if (ctx.amortizationSchedule && ctx.amortizationSchedule.length > 0) {
     lines.push("");
     lines.push(tableRow(["Year", ...ctx.amortizationSchedule.map((row) => `Y${row.year}`)]));
@@ -382,20 +345,14 @@ export function buildDossierStructuredText(ctx: UnderwritingContext): string {
     lines.push("");
     pushYearlyCashFlowTable(lines, ctx.yearlyCashFlow);
   }
-  lines.push("");
-
-  lines.push("6. EXIT");
-  lines.push("-------");
   lines.push(tableRow(["Hold period", `${ctx.assumptions.holdPeriodYears ?? "—"} years`]));
-  lines.push(tableRow(["Exit property value", moneyLabel(ctx.exit.exitPropertyValue)]));
-  lines.push(tableRow(["Sale closing costs", moneyLabel(ctx.exit.saleClosingCosts)]));
   lines.push(tableRow(["Net sale proceeds before debt payoff", moneyLabel(ctx.exit.netSaleProceedsBeforeDebtPayoff)]));
   lines.push(tableRow(["Remaining loan balance", moneyLabel(ctx.exit.remainingLoanBalance)]));
   lines.push(tableRow(["Principal paydown to date", moneyLabel(ctx.exit.principalPaydownToDate)]));
   lines.push(tableRow(["**Net proceeds to equity**", moneyLabel(ctx.exit.netProceedsToEquity)]));
   lines.push("");
 
-  lines.push("7. RETURNS");
+  lines.push("6. RETURNS");
   lines.push("----------");
   lines.push(
     tableRow([
@@ -427,7 +384,7 @@ export function buildDossierStructuredText(ctx: UnderwritingContext): string {
   );
   lines.push("");
 
-  lines.push("8. ASSUMPTIONS USED");
+  lines.push("7. ASSUMPTIONS USED");
   lines.push("--------------------");
   lines.push(`Purchase closing costs: ${pctValue(ctx.assumptions.acquisition.purchaseClosingCostPct)}`);
   lines.push(`Renovation: ${moneyLabel(ctx.assumptions.acquisition.renovationCosts)}`);
@@ -455,7 +412,7 @@ export function buildDossierStructuredText(ctx: UnderwritingContext): string {
   lines.push("");
 
   if (ctx.sensitivities && ctx.sensitivities.length > 0) {
-    lines.push("9. SENSITIVITY ANALYSIS");
+    lines.push("8. SENSITIVITY ANALYSIS");
     lines.push("------------------------");
     ctx.sensitivities.forEach((sensitivity) => {
       lines.push(
@@ -496,8 +453,8 @@ export function buildDossierStructuredText(ctx: UnderwritingContext): string {
     });
   }
 
-  lines.push("10. KEY TAKEAWAYS");
-  lines.push("-----------------");
+  lines.push("9. KEY TAKEAWAYS");
+  lines.push("----------------");
   if (ctx.dealScore != null) lines.push(`• Deal score: ${ctx.dealScore}/100`);
   if (ctx.adjustedCapRate != null) lines.push(`• Stabilized cap rate: ${ctx.adjustedCapRate.toFixed(2)}%`);
   if (ctx.returns.irrPct != null) lines.push(`• Projected IRR: ${(ctx.returns.irrPct * 100).toFixed(2)}%`);

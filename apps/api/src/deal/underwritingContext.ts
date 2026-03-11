@@ -9,6 +9,7 @@ export interface DossierPropertyOverview {
   hpdRegistrationId?: string | null;
   hpdRegistrationDate?: string | null;
   bbl?: string | null;
+  packageNote?: string | null;
 }
 
 /** One row for gross rent breakdown (e.g. per unit from OM). */

@@ -35,6 +35,276 @@ export interface ExtractRentalFinancialsResult {
   omAnalysis?: OmAnalysis | null;
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return value != null && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasMeaningfulValue(value: unknown): boolean {
+  if (value == null) return false;
+  if (typeof value === "string") return value.trim().length > 0;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (typeof value === "boolean") return true;
+  if (Array.isArray(value)) return value.length > 0;
+  if (isPlainObject(value)) {
+    return Object.values(value).some((entry) => hasMeaningfulValue(entry));
+  }
+  return true;
+}
+
+function mergeArrayValues(primary: unknown[], fallback: unknown[]): unknown[] {
+  if (primary.length === 0) return fallback;
+  if (fallback.length === 0) return primary;
+  if (primary.every((value) => typeof value === "string") && fallback.every((value) => typeof value === "string")) {
+    return Array.from(new Set([...(primary as string[]), ...(fallback as string[])]));
+  }
+  return primary;
+}
+
+function mergeMissingValues<T>(primary: T, fallback: T): T {
+  if (!hasMeaningfulValue(primary)) return fallback;
+  if (!hasMeaningfulValue(fallback)) return primary;
+  if (Array.isArray(primary) && Array.isArray(fallback)) {
+    return mergeArrayValues(primary, fallback) as T;
+  }
+  if (isPlainObject(primary) && isPlainObject(fallback)) {
+    const merged: Record<string, unknown> = {};
+    const keys = new Set([...Object.keys(fallback), ...Object.keys(primary)]);
+    for (const key of keys) {
+      merged[key] = mergeMissingValues(primary[key], fallback[key]);
+    }
+    return merged as T;
+  }
+  return primary;
+}
+
+function overrideWithFallbackFields(
+  target: Record<string, unknown>,
+  fallback: Record<string, unknown>,
+  keys: string[]
+): Record<string, unknown> {
+  const next = { ...target };
+  for (const key of keys) {
+    if (hasMeaningfulValue(fallback[key])) next[key] = fallback[key];
+  }
+  return next;
+}
+
+function rowHasStructuredDetails(value: unknown): boolean {
+  if (!isPlainObject(value)) return false;
+  return [
+    "monthlyRent",
+    "annualRent",
+    "monthlyBaseRent",
+    "annualBaseRent",
+    "monthlyTotalRent",
+    "annualTotalRent",
+    "beds",
+    "baths",
+    "sqft",
+    "tenantName",
+    "leaseStartDate",
+    "leaseEndDate",
+    "lastRentedDate",
+    "dateVacant",
+    "reimbursementAmount",
+  ].some((key) => hasMeaningfulValue(value[key]));
+}
+
+function shouldPreferFallbackRows(primaryRows: unknown[], fallbackRows: unknown[]): boolean {
+  if (fallbackRows.length === 0) return false;
+  if (primaryRows.length === 0) return true;
+  const primaryHasStructuredDetails = primaryRows.some((row) => rowHasStructuredDetails(row));
+  const fallbackHasStructuredDetails = fallbackRows.some((row) => rowHasStructuredDetails(row));
+  if (fallbackHasStructuredDetails && !primaryHasStructuredDetails) return true;
+  return !primaryHasStructuredDetails && fallbackRows.length > primaryRows.length;
+}
+
+function getReportedTotalUnits(omAnalysis: OmAnalysis | null | undefined): number | null {
+  const propertyInfo = isPlainObject(omAnalysis?.propertyInfo) ? omAnalysis.propertyInfo : null;
+  const totalUnits = propertyInfo?.totalUnits;
+  return typeof totalUnits === "number" && Number.isFinite(totalUnits) ? totalUnits : null;
+}
+
+function shouldDropIncompleteRows(rows: unknown[], totalUnits: number | null): boolean {
+  if (rows.length === 0 || totalUnits == null || totalUnits <= 0) return false;
+  if (rows.length >= totalUnits) return false;
+  return !rows.some((row) => rowHasStructuredDetails(row));
+}
+
+function shouldDropPartialRows(rows: unknown[], totalUnits: number | null): boolean {
+  if (rows.length === 0 || totalUnits == null || totalUnits <= 0) return false;
+  return rows.length < totalUnits;
+}
+
+function removeRecordKeys(value: unknown, keys: string[]): Record<string, unknown> | undefined {
+  if (!isPlainObject(value)) return undefined;
+  const next = { ...value };
+  for (const key of keys) delete next[key];
+  return Object.keys(next).length > 0 ? next : undefined;
+}
+
+export function sanitizeOmAnalysisByCoverage(
+  omAnalysis: OmAnalysis,
+  fallbackOmAnalysis: OmAnalysis | null | undefined
+): OmAnalysis {
+  const next: OmAnalysis = { ...omAnalysis };
+  const coverage = isPlainObject(next.sourceCoverage) ? next.sourceCoverage : null;
+  const currentFinancialsExtracted = coverage?.currentFinancialsExtracted === true;
+  const expensesExtracted = coverage?.expensesExtracted === true;
+  const rentRollExtracted = coverage?.rentRollExtracted === true;
+  const totalUnits = getReportedTotalUnits(next);
+
+  if (!currentFinancialsExtracted) {
+    next.income = isPlainObject(fallbackOmAnalysis?.income) ? fallbackOmAnalysis?.income ?? undefined : undefined;
+    next.revenueComposition = removeRecordKeys(next.revenueComposition, [
+      "commercialAnnualRent",
+      "commercialMonthlyRent",
+      "residentialAnnualRent",
+      "residentialMonthlyRent",
+      "commercialRevenueShare",
+      "residentialRevenueShare",
+    ]);
+    next.uiFinancialSummary = removeRecordKeys(next.uiFinancialSummary, [
+      "grossRent",
+      "noi",
+      "capRate",
+      "expenseRatio",
+      "furnishedNOI",
+      "furnishedCapRate",
+      "adjustedCapRate",
+      "breakEvenOccupancy",
+      "rentUpsidePercent",
+    ]);
+    next.valuationMetrics = removeRecordKeys(next.valuationMetrics, ["capRate", "NOI", "grossRentMultiplier"]);
+    next.financialMetrics = undefined;
+    next.underwritingMetrics = undefined;
+    next.furnishedModel = undefined;
+    next.recommendedOfferAnalysis = undefined;
+    next.noiReported = undefined;
+    if (Array.isArray(next.investmentTakeaways)) {
+      next.investmentTakeaways = next.investmentTakeaways.filter(
+        (line) => !/\b(NOI|gross rent|cap rate|expense ratio|furnished|break-even occupancy)\b/i.test(line)
+      );
+      if (next.investmentTakeaways.length === 0) next.investmentTakeaways = undefined;
+    }
+  }
+
+  if (!expensesExtracted) {
+    next.expenses = fallbackOmAnalysis?.expenses ?? undefined;
+    next.uiFinancialSummary = removeRecordKeys(next.uiFinancialSummary, ["expenseRatio"]);
+  }
+
+  if (!rentRollExtracted && shouldDropPartialRows(Array.isArray(next.rentRoll) ? next.rentRoll : [], totalUnits)) {
+    delete next.rentRoll;
+  }
+
+  return next;
+}
+
+function applyDeterministicFallbackOverrides(
+  merged: ExtractRentalFinancialsResult,
+  fallback: ExtractRentalFinancialsResult
+): ExtractRentalFinancialsResult {
+  const next: ExtractRentalFinancialsResult = {
+    fromLlm: merged.fromLlm ?? null,
+    omAnalysis: merged.omAnalysis ?? null,
+  };
+
+  const fallbackOm = isPlainObject(fallback.omAnalysis) ? fallback.omAnalysis : null;
+  const mergedOm = isPlainObject(next.omAnalysis) ? ({ ...next.omAnalysis } as OmAnalysis) : null;
+  if (mergedOm) {
+    if (fallbackOm) {
+      const fallbackPropertyInfo = isPlainObject(fallbackOm.propertyInfo) ? fallbackOm.propertyInfo : null;
+      const mergedPropertyInfo = isPlainObject(mergedOm.propertyInfo) ? mergedOm.propertyInfo : null;
+      if (fallbackPropertyInfo) {
+        mergedOm.propertyInfo = overrideWithFallbackFields(
+          mergedPropertyInfo ?? {},
+          fallbackPropertyInfo,
+          [
+            "address",
+            "packageAddress",
+            "block",
+            "lotNumbers",
+            "unitsResidential",
+            "unitsCommercial",
+            "totalUnits",
+            "unitCountSource",
+            "borough",
+            "propertyType",
+            "portfolioType",
+            "commercialSummary",
+          ]
+        );
+      }
+
+      const fallbackRevenueComposition = isPlainObject(fallbackOm.revenueComposition) ? fallbackOm.revenueComposition : null;
+      const mergedRevenueComposition = isPlainObject(mergedOm.revenueComposition) ? mergedOm.revenueComposition : null;
+      if (fallbackRevenueComposition) {
+        mergedOm.revenueComposition = overrideWithFallbackFields(
+          mergedRevenueComposition ?? {},
+          fallbackRevenueComposition,
+          ["commercialUnits", "freeMarketUnits", "rentStabilizedUnits", "notes"]
+        );
+      }
+    }
+
+    const mergedRentRoll = Array.isArray(mergedOm.rentRoll) ? mergedOm.rentRoll : [];
+    const fallbackRentRoll = Array.isArray(fallbackOm?.rentRoll) ? fallbackOm.rentRoll : [];
+    if (shouldPreferFallbackRows(mergedRentRoll, fallbackRentRoll)) {
+      mergedOm.rentRoll = fallbackRentRoll;
+    } else if (shouldDropIncompleteRows(mergedRentRoll, getReportedTotalUnits(mergedOm))) {
+      delete mergedOm.rentRoll;
+    }
+
+    next.omAnalysis = mergedOm;
+  }
+
+  const mergedFromLlm = isPlainObject(next.fromLlm) ? ({ ...next.fromLlm } as RentalFinancialsFromLlm) : null;
+  const fallbackFromLlm = isPlainObject(fallback.fromLlm) ? fallback.fromLlm : null;
+  if (mergedFromLlm) {
+    const mergedRows = Array.isArray(mergedFromLlm.rentalNumbersPerUnit) ? mergedFromLlm.rentalNumbersPerUnit : [];
+    const fallbackRows = Array.isArray(fallbackFromLlm?.rentalNumbersPerUnit) ? fallbackFromLlm.rentalNumbersPerUnit : [];
+    if (shouldPreferFallbackRows(mergedRows, fallbackRows)) {
+      mergedFromLlm.rentalNumbersPerUnit = fallbackRows as RentalNumberPerUnit[];
+    } else if (shouldDropIncompleteRows(mergedRows, getReportedTotalUnits(next.omAnalysis ?? null))) {
+      delete mergedFromLlm.rentalNumbersPerUnit;
+    }
+    next.fromLlm = mergedFromLlm;
+  }
+
+  return next;
+}
+
+function nonEmptyObject<T extends Record<string, unknown> | null | undefined>(value: T): T | null {
+  return isPlainObject(value) && Object.keys(value).length > 0 ? value : null;
+}
+
+/**
+ * Keep the richer LLM parse, but backfill missing structure from deterministic parsing.
+ * This preserves package/unit mix facts when the model returns only financial summaries.
+ */
+export function mergeExtractionResultWithFallback(
+  primary: ExtractRentalFinancialsResult,
+  fallback: ExtractRentalFinancialsResult
+): ExtractRentalFinancialsResult {
+  const mergedFromLlm = nonEmptyObject(
+    mergeMissingValues(
+      (primary.fromLlm ?? null) as RentalFinancialsFromLlm | null,
+      (fallback.fromLlm ?? null) as RentalFinancialsFromLlm | null
+    )
+  ) as RentalFinancialsFromLlm | null;
+  const mergedOmAnalysis = nonEmptyObject(
+    mergeMissingValues(
+      (primary.omAnalysis ?? null) as OmAnalysis | null,
+      (fallback.omAnalysis ?? null) as OmAnalysis | null
+    )
+  ) as OmAnalysis | null;
+  return applyDeterministicFallbackOverrides({
+    fromLlm: mergedFromLlm,
+    omAnalysis: mergedOmAnalysis,
+  }, fallback);
+}
+
 /**
  * Call LLM to extract NOI, cap rate, rental estimates, etc. from listing text (short).
  * Returns legacy fromLlm only; for full OM analysis use extractRentalFinancialsFromText with forceOmStyle or long text.
@@ -48,14 +318,15 @@ export async function extractRentalFinancialsFromListing(
   const desc = (description ?? "").trim();
   const building = (buildingName ?? "").trim();
   const text = [building ? `Building name: ${building}` : "", desc].filter(Boolean).join("\n\n");
-  const result = await extractRentalFinancialsFromText(text);
-  return result.fromLlm;
+  const result = await extractRentalFinancialsFromText(text, { allowImplicitOmStyle: false });
+  return stripStructuredOmFields(result.fromLlm);
 }
 
 const OM_STYLE_MIN_LENGTH = 2500;
 const MIN_TEXT_LENGTH_FOR_LLM = 20;
 const MAX_MULTIMODAL_DOCS = 1;
 const MAX_MULTIMODAL_DOC_BYTES = 10 * 1024 * 1024;
+const OM_FILE_PARSE_TIMEOUT_MS = Number(process.env.OPENAI_OM_FILE_TIMEOUT_MS) || 30_000;
 
 /** Cap rate and furnished cap rate: store as percentage number (5.47 for 5.47%). */
 const UI_PERCENT_KEYS = ["capRate", "adjustedCapRate", "furnishedCapRate", "rentUpsidePercent"];
@@ -110,6 +381,8 @@ function normalizeUiFinancialSummary(
 export interface ExtractRentalFinancialsOptions {
   /** When true, use the full senior-analyst OM prompt regardless of text length. Use for uploaded OM/Brochure. */
   forceOmStyle?: boolean;
+  /** When false, do not infer OM-style mode from long plain text alone. Use for listing-only extraction. */
+  allowImplicitOmStyle?: boolean;
   /** Optional enrichment context (HPD, violations, permits, etc.) to append for the LLM. */
   enrichmentContext?: string;
   /**
@@ -152,15 +425,27 @@ function selectOmDocumentFiles(documentFiles?: OmInputDocument[]): OmInputDocume
     .slice(0, MAX_MULTIMODAL_DOCS);
 }
 
-function buildOmStyleMessages(prompt: string, documentFiles: OmInputDocument[]): ChatCompletionMessageParam[] {
+function stripStructuredOmFields(
+  value: RentalFinancialsFromLlm | null | undefined
+): RentalFinancialsFromLlm | null {
+  if (!value || typeof value !== "object") return null;
+  const next: RentalFinancialsFromLlm = { ...value };
+  delete next.expensesTable;
+  delete next.rentalNumbersPerUnit;
+  const hasAny = Object.values(next).some((fieldValue) => hasMeaningfulValue(fieldValue));
+  return hasAny ? next : null;
+}
+
+export function buildOmStyleMessages(prompt: string, documentFiles: OmInputDocument[]): ChatCompletionMessageParam[] {
   if (documentFiles.length === 0) return [{ role: "user", content: prompt }];
 
   const content: ChatCompletionContentPart[] = [{ type: "text", text: prompt }];
   for (const doc of documentFiles) {
+    const mimeType = (doc.mimeType ?? "").trim() || "application/pdf";
     content.push({
       type: "file",
       file: {
-        file_data: doc.buffer.toString("base64"),
+        file_data: `data:${mimeType};base64,${doc.buffer.toString("base64")}`,
         filename: doc.filename,
       },
     });
@@ -181,7 +466,7 @@ async function createOmStyleCompletion(
       messages: buildOmStyleMessages(prompt, documentFiles),
       response_format: { type: "json_object" },
       ...(supportsReasoningEffort(model) ? { reasoning_effort: reasoningEffort } : {}),
-    });
+    }, documentFiles.length > 0 ? { timeout: OM_FILE_PARSE_TIMEOUT_MS, maxRetries: 0 } : undefined);
   } catch (err) {
     if (documentFiles.length === 0) throw err;
     console.warn(
@@ -232,6 +517,8 @@ function fromLlmFromOmAnalysis(om: OmAnalysis): RentalFinancialsFromLlm {
   const totalExpenses = expenses?.totalExpenses;
   const expensesTable = expenses?.expensesTable;
   const rentRoll = om.rentRoll ?? [];
+  const sourceCoverage = isPlainObject(om.sourceCoverage) ? om.sourceCoverage : null;
+  const rentRollExtracted = sourceCoverage?.rentRollExtracted === true;
   const investmentTakeaways = om.investmentTakeaways ?? [];
 
   const rentalNumbersPerUnit: RentalNumberPerUnit[] = rentRoll.map((r: OmRentRollRow) => {
@@ -294,7 +581,12 @@ function fromLlmFromOmAnalysis(om: OmAnalysis): RentalFinancialsFromLlm {
   if (grossRentTotal != null && typeof grossRentTotal === "number") out.grossRentTotal = grossRentTotal;
   if (totalExpenses != null && typeof totalExpenses === "number") out.totalExpenses = totalExpenses;
   if (Array.isArray(expensesTable) && expensesTable.length > 0) out.expensesTable = expensesTable;
-  if (rentalNumbersPerUnit.length > 0) out.rentalNumbersPerUnit = rentalNumbersPerUnit;
+  const shouldOmitRentalRows =
+    (!rentRollExtracted && shouldDropPartialRows(rentalNumbersPerUnit, getReportedTotalUnits(om))) ||
+    shouldDropIncompleteRows(rentalNumbersPerUnit, getReportedTotalUnits(om));
+  if (!shouldOmitRentalRows && rentalNumbersPerUnit.length > 0) {
+    out.rentalNumbersPerUnit = rentalNumbersPerUnit;
+  }
   if (investmentTakeaways.length > 0)
     out.keyTakeaways = (investmentTakeaways as string[]).map((t: string) => (t.startsWith("•") ? t : `• ${t}`)).join("\n");
   return out;
@@ -324,7 +616,9 @@ export async function extractRentalFinancialsFromText(
   }
 
   const isOmStyle =
-    options?.forceOmStyle === true || trimmed.length >= OM_STYLE_MIN_LENGTH || hasDocumentFiles;
+    options?.forceOmStyle === true ||
+    hasDocumentFiles ||
+    (options?.allowImplicitOmStyle !== false && trimmed.length >= OM_STYLE_MIN_LENGTH);
   /** For OM-style, use more context so long/complex OMs (e.g. full Executive Summary + appendices) are not truncated; rent roll often appears later in the doc. */
   const omDocLimit = 48000;
   const docLimit = isOmStyle ? omDocLimit : 15000;
@@ -395,7 +689,7 @@ ${trimmed.slice(0, 15000)}`;
 
     if (isOmStyle) {
       const rawUi = (parsed.uiFinancialSummary as Record<string, unknown>) ?? undefined;
-      const omAnalysis: OmAnalysis = {
+      const omAnalysis = sanitizeOmAnalysisByCoverage({
         propertyInfo: (parsed.propertyInfo as Record<string, unknown>) ?? undefined,
         rentRoll: Array.isArray(parsed.rentRoll)
           ? (parsed.rentRoll as OmRentRollRow[])
@@ -422,9 +716,11 @@ ${trimmed.slice(0, 15000)}`;
           typeof parsed.noiReported === "number" && !Number.isNaN(parsed.noiReported)
             ? parsed.noiReported
             : undefined,
-      };
-      const fromLlm = fromLlmFromOmAnalysis(omAnalysis);
-      return { fromLlm, omAnalysis };
+      }, fallbackResult.omAnalysis ?? null);
+      return mergeExtractionResultWithFallback(
+        { fromLlm: fromLlmFromOmAnalysis(omAnalysis), omAnalysis },
+        fallbackResult
+      );
     }
 
     const result: RentalFinancialsFromLlm = {};
@@ -466,8 +762,16 @@ ${trimmed.slice(0, 15000)}`;
     if (typeof parsed.keyTakeaways === "string" && parsed.keyTakeaways.trim())
       result.keyTakeaways = parsed.keyTakeaways.trim();
 
+    const mergedShortResult = mergeExtractionResultWithFallback(
+      {
+        fromLlm: Object.keys(result).length > 0 ? result : null,
+        omAnalysis: null,
+      },
+      { fromLlm: fallbackResult.fromLlm, omAnalysis: null }
+    );
+
     return {
-      fromLlm: Object.keys(result).length > 0 ? result : null,
+      fromLlm: mergedShortResult.fromLlm,
       omAnalysis: null,
     };
   } catch (err) {

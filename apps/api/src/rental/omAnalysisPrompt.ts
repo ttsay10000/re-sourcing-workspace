@@ -80,6 +80,7 @@ PROPERTY INFO
 Extract or infer:
 
 address
+packageAddress
 neighborhood
 borough
 propertyType
@@ -94,6 +95,8 @@ yearBuilt
 yearRenovated
 zoning
 taxClass
+block
+lotNumbers
 annualTaxes
 price
 unitCountSource

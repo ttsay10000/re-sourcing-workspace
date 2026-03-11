@@ -111,9 +111,14 @@ function isTaxExpense(lineItem: string): boolean {
   return /tax/i.test(lineItem);
 }
 
+function usesAggregateExpenseFallback(ctx: UnderwritingContext): boolean {
+  return !ctx.expenseRows || ctx.expenseRows.length === 0;
+}
+
 export function buildExcelProForma(ctx: UnderwritingContext): Buffer {
   const wb = XLSX.utils.book_new();
   const expenses = expenseLineItems(ctx);
+  const aggregateExpenseFallback = usesAggregateExpenseFallback(ctx);
   const assumptionRows = {
     purchasePrice: 7,
     purchaseClosingPct: 8,
@@ -271,7 +276,13 @@ export function buildExcelProForma(ctx: UnderwritingContext): Buffer {
   expenses.forEach((expense) => {
     cashFlowRows.push([
       s(expense.lineItem, labelStyle),
-      isTaxExpense(expense.lineItem)
+      aggregateExpenseFallback
+        ? f(
+            `MAX(Assumptions!B${assumptionRows.annualExpenseGrowthPct}/100,Assumptions!B${assumptionRows.annualPropertyTaxGrowthPct}/100)`,
+            PERCENT_FMT,
+            formulaValueStyle
+          )
+        : isTaxExpense(expense.lineItem)
         ? f(`Assumptions!B${assumptionRows.annualPropertyTaxGrowthPct}/100`, PERCENT_FMT, formulaValueStyle)
         : f(`Assumptions!B${assumptionRows.annualExpenseGrowthPct}/100`, PERCENT_FMT, formulaValueStyle),
     ]);

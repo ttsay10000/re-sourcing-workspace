@@ -413,7 +413,7 @@ function DossierAssumptionsContent() {
               style={inputStyle}
             />
             <span style={{ fontSize: "0.75rem", color: "#666" }}>
-              Rough default uses $10k base + $3k per eligible residential unit + $2.5k per bedroom per unit + $2 per sq ft above 650. Larger 2-3BR units often land around $20k-$25k, but this should usually be overwritten with your actual furnishing quote.
+              Rough default uses eligible-unit count, bed/bath mix, and average eligible unit sqft from the rent roll or building square footage. It targets roughly $10k per unit around 500-1,500 sqft, $15k-$20k per unit above that, and $25k-$30k per unit above 2,500 sqft, but it should usually be overwritten with your actual furnishing quote.
             </span>
           </label>
         </div>

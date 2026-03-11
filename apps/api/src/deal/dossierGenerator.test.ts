@@ -137,5 +137,22 @@ describe("buildDossierStructuredText", () => {
     expect(text).toContain("Photo review: 5 image(s) analyzed; image quality Medium; confidence moderate");
     expect(text).toContain("Photos cover: exterior, kitchen, bathroom");
     expect(text).toContain("Not visible in photos: mechanicals, roof");
+    expect(text).not.toContain("IRR at asking");
+    expect(text).toContain("Year 1 cash flow after debt service");
+  });
+
+  it("renders package notes in the property overview", () => {
+    const ctx = sampleContext();
+    ctx.canonicalAddress = "18-20 Christopher Street, Manhattan, NY 10014";
+    ctx.propertyOverview = {
+      taxCode: "2A",
+      packageNote:
+        "Package OM covers multiple buildings or lots (Block 593, Lots 42 and 43); property-level BBL and HPD registration data may reflect only the canonical listing address.",
+    };
+
+    const text = buildDossierStructuredText(ctx);
+
+    expect(text).toContain("Address: 18-20 Christopher Street, Manhattan, NY 10014");
+    expect(text).toContain("Package note: Package OM covers multiple buildings or lots (Block 593, Lots 42 and 43); property-level BBL and HPD registration data may reflect only the canonical listing address.");
   });
 });

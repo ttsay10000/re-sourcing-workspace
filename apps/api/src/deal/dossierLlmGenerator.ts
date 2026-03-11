@@ -46,6 +46,7 @@ function serializeUnderwritingContext(ctx: UnderwritingContext): string {
     if (ctx.propertyOverview.hpdRegistrationId) lines.push(`HPD registration ID: ${ctx.propertyOverview.hpdRegistrationId}`);
     if (ctx.propertyOverview.hpdRegistrationDate) lines.push(`HPD last registration date: ${ctx.propertyOverview.hpdRegistrationDate}`);
     if (ctx.propertyOverview.bbl) lines.push(`BBL: ${ctx.propertyOverview.bbl}`);
+    if (ctx.propertyOverview.packageNote) lines.push(`Package note: ${ctx.propertyOverview.packageNote}`);
   }
   if (ctx.conditionReview) {
     lines.push("Condition / media review:");

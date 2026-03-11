@@ -7,6 +7,7 @@ const RENT_STABILIZED_PATTERN = /(rent[\s-]*(?:stabilized|stabilised|controlled?
 interface NormalizedRentRow {
   annualRent: number | null;
   beds: number | null;
+  baths: number | null;
   sqft: number | null;
   isCommercial: boolean;
   isRentStabilized: boolean;
@@ -25,6 +26,20 @@ export interface UnderwritingPropertyMixSummary {
   eligibleUnitSharePct: number | null;
   furnishingSetupCostEstimate: number;
 }
+
+interface MetricStats {
+  total: number;
+  count: number;
+  average: number | null;
+}
+
+const DEFAULT_FURNISHING_BASE_PER_UNIT = 8_000;
+const DEFAULT_FURNISHING_BEDROOM_COST = 1_000;
+const DEFAULT_FURNISHING_BATHROOM_COST = 750;
+const DEFAULT_FURNISHING_BEDROOMS_PER_UNIT = 1;
+const DEFAULT_FURNISHING_BATHS_PER_UNIT = 1;
+const DEFAULT_FURNISHING_UNIT_SQFT = 900;
+const MAX_FURNISHING_COST_PER_UNIT = 30_000;
 
 function toFiniteNumber(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -76,6 +91,7 @@ function normalizeRows(details: PropertyDetails | null): NormalizedRentRow[] {
       return {
         annualRent: annualRentFromRecord(record),
         beds: toFiniteNumber(record.beds),
+        baths: toFiniteNumber(record.baths),
         sqft: toFiniteNumber(record.sqft),
         isCommercial: COMMERCIAL_PATTERN.test(labels),
         isRentStabilized: RENT_STABILIZED_PATTERN.test(labels),
@@ -91,6 +107,7 @@ function normalizeRows(details: PropertyDetails | null): NormalizedRentRow[] {
       return {
         annualRent: annualRentFromRecord(record),
         beds: toFiniteNumber(record.beds),
+        baths: toFiniteNumber(record.baths),
         sqft: toFiniteNumber(record.sqft),
         isCommercial: COMMERCIAL_PATTERN.test(labels),
         isRentStabilized: RENT_STABILIZED_PATTERN.test(labels),
@@ -103,6 +120,54 @@ function normalizeRows(details: PropertyDetails | null): NormalizedRentRow[] {
 
 function roundCurrency(value: number): number {
   return Math.max(0, Math.round(value / 500) * 500);
+}
+
+function collectMetricStats(
+  rows: NormalizedRentRow[],
+  pickValue: (row: NormalizedRentRow) => number | null
+): MetricStats {
+  let total = 0;
+  let count = 0;
+  for (const row of rows) {
+    const value = pickValue(row);
+    if (value == null || !Number.isFinite(value) || value < 0) continue;
+    total += value;
+    count += 1;
+  }
+  return {
+    total,
+    count,
+    average: count > 0 ? total / count : null,
+  };
+}
+
+function estimateMetricTotal(
+  known: MetricStats,
+  unitCount: number,
+  fallbackAveragePerUnit: number
+): number {
+  if (unitCount <= 0) return 0;
+  const knownUnits = Math.min(unitCount, known.count);
+  const fillAverage =
+    known.average != null && Number.isFinite(known.average) ? known.average : fallbackAveragePerUnit;
+  return known.total + Math.max(0, unitCount - knownUnits) * Math.max(0, fillAverage);
+}
+
+function firstFiniteNumber(...values: unknown[]): number | null {
+  for (const value of values) {
+    const parsed = toFiniteNumber(value);
+    if (parsed != null && parsed > 0) return parsed;
+  }
+  return null;
+}
+
+function furnishingSqftPremiumPerUnit(avgUnitSqft: number | null): number {
+  if (avgUnitSqft == null || !Number.isFinite(avgUnitSqft)) return 0;
+  const sqft = Math.max(0, avgUnitSqft);
+  if (sqft <= 500) return 0;
+  if (sqft <= 1_500) return sqft - 500;
+  if (sqft <= 2_500) return 1_000 + (sqft - 1_500) * 11;
+  return 12_000 + Math.min(8_000, (sqft - 2_500) * 8);
 }
 
 export function computeBlendedRentUpliftPct(
@@ -124,10 +189,11 @@ export function analyzePropertyForUnderwriting(
   details: PropertyDetails | null
 ): UnderwritingPropertyMixSummary {
   const rows = normalizeRows(details);
+  const residentialRows = rows.filter((row) => !row.isCommercial);
   const rowCommercialUnits = rows.filter((row) => row.isCommercial).length;
-  const rowResidentialUnits = rows.filter((row) => !row.isCommercial).length;
-  const rowRentStabilizedUnits = rows.filter((row) => !row.isCommercial && row.isRentStabilized).length;
-  const rowEligibleUnits = rows.filter((row) => !row.isCommercial && !row.isRentStabilized);
+  const rowResidentialUnits = residentialRows.length;
+  const rowRentStabilizedUnits = residentialRows.filter((row) => row.isRentStabilized).length;
+  const rowEligibleUnits = residentialRows.filter((row) => !row.isRentStabilized);
 
   const propertyInfo =
     (details?.rentalFinancials?.omAnalysis?.propertyInfo as Record<string, unknown> | null | undefined) ??
@@ -217,17 +283,77 @@ export function analyzePropertyForUnderwriting(
     totalUnits != null && totalUnits > 0 ? eligibleResidentialUnits / totalUnits : null;
 
   const furnishingEligibleUnits = Math.max(rowEligibleUnits.length, eligibleResidentialUnits);
-  const totalEligibleBedrooms = rowEligibleUnits.reduce((sum, row) => {
-    const beds = row.beds != null ? Math.max(0, Math.round(row.beds)) : 0;
-    return sum + beds;
-  }, 0);
-  const sqftPremium = rowEligibleUnits.reduce((sum, row) => {
-    if (row.sqft == null || !Number.isFinite(row.sqft)) return sum;
-    return sum + Math.max(0, row.sqft - 650) * 2;
-  }, 0);
+  const eligibleBedroomStats = collectMetricStats(rowEligibleUnits, (row) =>
+    row.beds != null ? Math.max(0, Math.round(row.beds)) : null
+  );
+  const residentialBedroomStats = collectMetricStats(residentialRows, (row) =>
+    row.beds != null ? Math.max(0, Math.round(row.beds)) : null
+  );
+  const totalEligibleBedrooms = Math.round(
+    estimateMetricTotal(
+      eligibleBedroomStats,
+      furnishingEligibleUnits,
+      residentialBedroomStats.average ?? DEFAULT_FURNISHING_BEDROOMS_PER_UNIT
+    )
+  );
+
+  const eligibleBathroomStats = collectMetricStats(rowEligibleUnits, (row) =>
+    row.baths != null ? Math.max(0, row.baths) : null
+  );
+  const residentialBathroomStats = collectMetricStats(residentialRows, (row) =>
+    row.baths != null ? Math.max(0, row.baths) : null
+  );
+  const totalEligibleBathrooms = estimateMetricTotal(
+    eligibleBathroomStats,
+    furnishingEligibleUnits,
+    residentialBathroomStats.average ?? DEFAULT_FURNISHING_BATHS_PER_UNIT
+  );
+
+  const eligibleSqftStats = collectMetricStats(rowEligibleUnits, (row) =>
+    row.sqft != null ? Math.max(0, row.sqft) : null
+  );
+  const residentialSqftStats = collectMetricStats(residentialRows, (row) =>
+    row.sqft != null ? Math.max(0, row.sqft) : null
+  );
+  const residentialAreaSqft = firstFiniteNumber(
+    propertyInfo?.residentialSqft,
+    propertyInfo?.residentialSquareFeet,
+    details?.assessedResidentialAreaGross
+  );
+  const grossBuildingSqft = firstFiniteNumber(
+    propertyInfo?.buildingSqft,
+    propertyInfo?.buildingSquareFeet,
+    propertyInfo?.grossSqft,
+    propertyInfo?.grossSquareFeet,
+    propertyInfo?.squareFeet,
+    details?.assessedGrossSqft
+  );
+  const fallbackAvgEligibleUnitSqft =
+    residentialSqftStats.average ??
+    (residentialAreaSqft != null && residentialUnits > 0 ? residentialAreaSqft / residentialUnits : null) ??
+    (grossBuildingSqft != null
+      ? grossBuildingSqft /
+        (totalUnits != null && totalUnits > 0 ? totalUnits : residentialUnits > 0 ? residentialUnits : 1)
+      : null) ??
+    eligibleSqftStats.average ??
+    DEFAULT_FURNISHING_UNIT_SQFT;
+  const knownEligibleSqftUnits = Math.min(furnishingEligibleUnits, eligibleSqftStats.count);
+  const estimatedEligibleSqft =
+    eligibleSqftStats.total + Math.max(0, furnishingEligibleUnits - knownEligibleSqftUnits) * fallbackAvgEligibleUnitSqft;
+  const avgEligibleUnitSqft =
+    furnishingEligibleUnits > 0 ? estimatedEligibleSqft / furnishingEligibleUnits : null;
+  const sqftPremium = furnishingEligibleUnits * furnishingSqftPremiumPerUnit(avgEligibleUnitSqft);
   const furnishingSetupCostEstimate =
     furnishingEligibleUnits > 0
-      ? roundCurrency(10_000 + furnishingEligibleUnits * 3_000 + totalEligibleBedrooms * 2_500 + sqftPremium)
+      ? roundCurrency(
+          Math.min(
+            furnishingEligibleUnits * MAX_FURNISHING_COST_PER_UNIT,
+            furnishingEligibleUnits * DEFAULT_FURNISHING_BASE_PER_UNIT +
+              totalEligibleBedrooms * DEFAULT_FURNISHING_BEDROOM_COST +
+              totalEligibleBathrooms * DEFAULT_FURNISHING_BATHROOM_COST +
+              sqftPremium
+          )
+        )
       : 0;
 
   return {

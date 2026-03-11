@@ -2,6 +2,12 @@
 
 import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import {
+  deriveListingActivitySummary,
+  describeListingActivity,
+  formatListingEventLabel,
+  type ListingActivitySummary,
+} from "@re-sourcing/contracts";
 import { PropertyDetailCollapsible } from "./PropertyDetailCollapsible";
 import { CanonicalPropertyDetail, type CanonicalProperty } from "./CanonicalPropertyDetail";
 import { AREA_OPTIONS, cityToArea, cityFromCanonicalAddress } from "./areas";
@@ -161,6 +167,30 @@ interface ListingRow {
   uploadedAt?: string | null;
   uploadedRunId?: string | null;
   duplicateScore?: number | null;
+  lastActivity?: ListingActivitySummary | null;
+}
+
+function formatListedDate(listedAt: string | null | undefined): string {
+  if (!listedAt) return "—";
+  const d = new Date(listedAt);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
+}
+
+function listingActivityTimestamp(activity: ListingActivitySummary | null | undefined): number {
+  if (!activity?.sortDate) return 0;
+  const d = new Date(activity.sortDate);
+  return Number.isNaN(d.getTime()) ? 0 : d.getTime();
+}
+
+function formatActivitySummary(
+  activity: ListingActivitySummary | null | undefined,
+  listedAt?: string | null
+): string {
+  if (!activity?.lastActivityDate) {
+    return listedAt ? `${formatListedDate(listedAt)} · Listed` : "—";
+  }
+  return `${formatListedDate(activity.lastActivityDate)} · ${formatListingEventLabel(activity.lastActivityEvent)}`;
 }
 
 function workflowStatusStyle(status: WorkflowBoardRun["status"] | WorkflowBoardStep["status"]) {
@@ -233,7 +263,7 @@ function PropertyDataContent() {
   const [dossierNotice, setDossierNotice] = useState<DossierNotice | null>(null);
 
   // Filter/sort state (shared concept for raw and canonical)
-  const [sortBy, setSortBy] = useState<"price" | "listedAt" | "area">("listedAt");
+  const [sortBy, setSortBy] = useState<"price" | "listedAt" | "lastActivity" | "area">("lastActivity");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [areaFilter, setAreaFilter] = useState<string>("");
   const [minPrice, setMinPrice] = useState<string>("");
@@ -448,6 +478,19 @@ function PropertyDataContent() {
         const pb = b.price ?? 0;
         return mult * (pa - pb);
       }
+      if (sortBy === "lastActivity") {
+        const ta = listingActivityTimestamp(a.lastActivity ?? deriveListingActivitySummary({
+          listedAt: a.listedAt ?? null,
+          currentPrice: a.price ?? null,
+          priceHistory: a.priceHistory ?? null,
+        }));
+        const tb = listingActivityTimestamp(b.lastActivity ?? deriveListingActivitySummary({
+          listedAt: b.listedAt ?? null,
+          currentPrice: b.price ?? null,
+          priceHistory: b.priceHistory ?? null,
+        }));
+        return mult * (ta - tb);
+      }
       if (sortBy === "listedAt") {
         const ta = a.listedAt ? new Date(a.listedAt).getTime() : 0;
         const tb = b.listedAt ? new Date(b.listedAt).getTime() : 0;
@@ -484,6 +527,11 @@ function PropertyDataContent() {
         const pb = b.primaryListing?.price ?? 0;
         return mult * (pa - pb);
       }
+      if (sortBy === "lastActivity") {
+        const ta = listingActivityTimestamp(a.primaryListing?.lastActivity ?? null);
+        const tb = listingActivityTimestamp(b.primaryListing?.lastActivity ?? null);
+        return mult * (ta - tb);
+      }
       if (sortBy === "listedAt") {
         const ta = a.primaryListing?.listedAt ? new Date(a.primaryListing.listedAt).getTime() : 0;
         const tb = b.primaryListing?.listedAt ? new Date(b.primaryListing.listedAt).getTime() : 0;
@@ -500,13 +548,6 @@ function PropertyDataContent() {
     n != null && !Number.isNaN(n)
       ? new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(n)
       : "—";
-
-  const formatListedDate = (listedAt: string | null | undefined) => {
-    if (!listedAt) return "—";
-    const d = new Date(listedAt);
-    if (Number.isNaN(d.getTime())) return "—";
-    return d.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
-  };
 
   const daysOnMarket = (listedAt: string | null | undefined) => {
     if (!listedAt) return null;
@@ -1065,10 +1106,11 @@ function PropertyDataContent() {
             <select
               className="input-text property-data-filter-select"
               value={sortBy}
-              onChange={(e) => setSortBy(e.target.value as "price" | "listedAt" | "area")}
+              onChange={(e) => setSortBy(e.target.value as "price" | "listedAt" | "lastActivity" | "area")}
               aria-label="Sort by"
             >
               <option value="price">Price</option>
+              <option value="lastActivity">Last activity</option>
               <option value="listedAt">Listed date</option>
               <option value="area">Area</option>
             </select>
@@ -1223,6 +1265,7 @@ function PropertyDataContent() {
                       <th>Canonical address</th>
                       <th>Area</th>
                       <th>Price</th>
+                      <th>Last activity</th>
                       <th>Listed date</th>
                       <th>OM</th>
                       <th>Underwriting</th>
@@ -1233,7 +1276,7 @@ function PropertyDataContent() {
                   <tbody>
                     {filteredSortedCanonical.length === 0 ? (
                       <tr>
-                        <td colSpan={11} style={{ padding: "2rem", color: "#737373", textAlign: "center" }}>
+                        <td colSpan={12} style={{ padding: "2rem", color: "#737373", textAlign: "center" }}>
                           {canonicalProperties.length === 0
                             ? "No canonical properties yet. Send raw listings to canonical properties from the raw listings tab."
                             : "No properties match the current filters."}
@@ -1309,6 +1352,9 @@ function PropertyDataContent() {
                               <td>{prop.canonicalAddress}</td>
                               <td>{area}</td>
                               <td>{prop.primaryListing?.price != null ? formatPrice(prop.primaryListing.price) : "—"}</td>
+                              <td title={describeListingActivity(prop.primaryListing?.lastActivity ?? null) ?? undefined}>
+                                {formatActivitySummary(prop.primaryListing?.lastActivity ?? null, prop.primaryListing?.listedAt ?? null)}
+                              </td>
                               <td>{formatListedDate(prop.primaryListing?.listedAt ?? null)}</td>
                               <td>
                                 <div
@@ -1382,7 +1428,7 @@ function PropertyDataContent() {
                             </tr>
                             {expandedCanonicalId === prop.id && (
                               <tr className="property-data-detail-row">
-                                <td colSpan={11} className="property-data-detail-cell" style={{ padding: "1rem 1rem 1rem 2.5rem", backgroundColor: "#fafafa" }}>
+                                <td colSpan={12} className="property-data-detail-cell" style={{ padding: "1rem 1rem 1rem 2.5rem", backgroundColor: "#fafafa" }}>
                                   <CanonicalPropertyDetail
                                     property={prop}
                                     isSaved={savedPropertyIds.has(prop.id)}
@@ -1434,6 +1480,7 @@ function PropertyDataContent() {
                   <th>Raw Address</th>
                   <th>Price</th>
                   <th>Area</th>
+                  <th>Last activity</th>
                   <th>Listed date</th>
                   <th>Days on market</th>
                   <th>Dup. Conf.</th>
@@ -1443,7 +1490,7 @@ function PropertyDataContent() {
               <tbody>
                 {filteredSortedListings.length === 0 ? (
                   <tr>
-                    <td colSpan={11} style={{ padding: "2rem", color: "#737373", textAlign: "center" }}>
+                    <td colSpan={12} style={{ padding: "2rem", color: "#737373", textAlign: "center" }}>
                       {listings.length === 0
                         ? "No raw listings yet. Run a flow from StreetEasy Agent, then use \"Send to property data\" for a completed run."
                         : "No listings match the current filters."}
@@ -1485,6 +1532,17 @@ function PropertyDataContent() {
                         <td>{fullAddress(row)}</td>
                         <td>{formatPrice(row.price)}</td>
                         <td>{cityToArea(row.city)}</td>
+                        <td title={describeListingActivity(row.lastActivity ?? deriveListingActivitySummary({
+                          listedAt: row.listedAt ?? null,
+                          currentPrice: row.price ?? null,
+                          priceHistory: row.priceHistory ?? null,
+                        })) ?? undefined}>
+                          {formatActivitySummary(row.lastActivity ?? deriveListingActivitySummary({
+                            listedAt: row.listedAt ?? null,
+                            currentPrice: row.price ?? null,
+                            priceHistory: row.priceHistory ?? null,
+                          }), row.listedAt ?? null)}
+                        </td>
                         <td>{formatListedDate(row.listedAt)}</td>
                         <td>{daysOnMarket(row.listedAt) != null ? `${daysOnMarket(row.listedAt)} days` : "—"}</td>
                         <td style={dupConfStyle(row.duplicateScore)} title="Duplicate likelihood (100 = likely duplicate)">
@@ -1502,7 +1560,7 @@ function PropertyDataContent() {
                       </tr>
                       {expandedRowId === row.id && (
                         <tr key={`${row.id}-detail`} className="property-data-detail-row">
-                          <td colSpan={11} className="property-data-detail-cell" style={{ paddingLeft: "2.5rem", backgroundColor: "#fafafa" }}>
+                          <td colSpan={12} className="property-data-detail-cell" style={{ paddingLeft: "2.5rem", backgroundColor: "#fafafa" }}>
                             <PropertyDetailCollapsible listing={row} />
                           </td>
                         </tr>
@@ -1743,10 +1801,11 @@ function PropertyDataContent() {
 
         {canonicalProperties.length > 0 && (
           <div
+            className="workflow-stage-summary"
             style={{
               display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
-              gap: "0.75rem",
+              gridTemplateColumns: "repeat(8, minmax(0, 1fr))",
+              gap: "0.55rem",
               maxWidth: "1200px",
               marginBottom: "1rem",
             }}
@@ -1754,18 +1813,18 @@ function PropertyDataContent() {
             {stageSummary.map((item) => (
               <div
                 key={item.label}
-                className="card"
+                className="card workflow-stage-card"
                 style={{
-                  padding: "0.85rem 0.95rem",
+                  padding: "0.7rem 0.8rem",
                   borderColor: item.border,
                   background: item.bg,
                   color: item.tone,
                 }}
               >
-                <div style={{ fontSize: "0.75rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                <div style={{ fontSize: "0.7rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em" }}>
                   {item.label}
                 </div>
-                <div style={{ marginTop: "0.35rem", fontSize: "1.5rem", fontWeight: 700, lineHeight: 1.1 }}>
+                <div style={{ marginTop: "0.2rem", fontSize: "1.35rem", fontWeight: 700, lineHeight: 1.1 }}>
                   {item.count}
                 </div>
               </div>
@@ -1778,7 +1837,7 @@ function PropertyDataContent() {
           className="property-detail-section-header"
           onClick={() => setPipelineStatsOpen((o) => !o)}
           aria-expanded={pipelineStatsOpen}
-          style={{ width: "100%", maxWidth: "720px" }}
+          style={{ width: "100%", maxWidth: "520px", minHeight: "44px" }}
         >
           <span className="property-detail-section-title">Coverage by module</span>
           <span className={`property-detail-section-chevron ${pipelineStatsOpen ? "property-detail-section-chevron--open" : ""}`} aria-hidden>▼</span>

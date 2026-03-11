@@ -137,4 +137,13 @@ describe("buildExcelProForma", () => {
     );
     expect(workbook.Sheets.Summary?.B11?.f).toBe("Financing!B3");
   });
+
+  it("uses the conservative blended opex-growth fallback when no expense rows are available", () => {
+    const ctx = sampleContext();
+    delete ctx.expenseRows;
+
+    const workbook = XLSX.read(buildExcelProForma(ctx), { type: "buffer" });
+
+    expect(workbook.Sheets["Cash Flow"]?.B14?.f).toBe("MAX(Assumptions!B28/100,Assumptions!B29/100)");
+  });
 });

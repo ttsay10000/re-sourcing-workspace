@@ -31,7 +31,7 @@ Net Operating Income $227,856
 
 const CHRISTOPHER_TEXT = `
 THE OFFERING
-18-20 Christopher Street has 8 Total Residential units and 3 Commercial Units. Spanning approximately a gross square footage of 4,016 square feet, these properties are zoned R6 and Tax Class 2A Protected.
+18-20 Christopher Street has 8 Total Residential units and 3 Commercial Units. Spanning approximately a gross square footage of 4,016 square feet, these properties are zoned R6 and Tax Class 2A Protected (Block 593, Lots 42 and 43).
 104,016
 TOTAL UNITS
 TOTAL SQUARE FEET
@@ -71,6 +71,9 @@ describe("extractRentalFinancialsFallback", () => {
     expect(result.omAnalysis?.propertyInfo?.buildingSqft).toBe(4_016);
     expect(result.omAnalysis?.propertyInfo?.annualTaxes).toBe(103_270);
     expect(result.omAnalysis?.propertyInfo?.taxClass).toBe("2A");
+    expect(result.omAnalysis?.propertyInfo?.address).toBe("18-20 Christopher Street");
+    expect(result.omAnalysis?.propertyInfo?.block).toBe(593);
+    expect(result.omAnalysis?.propertyInfo?.lotNumbers).toEqual([42, 43]);
     expect(result.omAnalysis?.revenueComposition?.freeMarketUnits).toBe(6);
     expect(result.omAnalysis?.investmentTakeaways?.some((line) => line.includes("commercial"))).toBe(true);
     expect(result.omAnalysis?.investmentTakeaways?.some((line) => line.includes("NOI"))).toBe(true);

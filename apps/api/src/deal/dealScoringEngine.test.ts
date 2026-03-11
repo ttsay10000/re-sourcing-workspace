@@ -37,4 +37,24 @@ describe("dealScoringEngine", () => {
     expect(result.dealScore).toBeLessThan(50);
     expect(result.negativeSignals.some((signal) => signal.includes("discount"))).toBe(true);
   });
+
+  it("rewards a recent price cut that may create near-term buying opportunity", () => {
+    const today = new Date().toISOString().slice(0, 10);
+    const result = computeDealScore({
+      purchasePrice: 6_999_000,
+      noi: 380_000,
+      adjustedCapRatePct: 5.8,
+      irrPct: 0.22,
+      cocPct: 0.07,
+      recommendedOfferHigh: 6_900_000,
+      blendedRentUpliftPct: 24,
+      latestPriceDecreasePct: 5.4,
+      daysSinceLatestPriceDecrease: 0,
+      currentDiscountFromOriginalAskPct: 30,
+    });
+
+    expect(result.dealScore).toBeGreaterThan(60);
+    expect(result.positiveSignals.some((signal) => signal.includes("Recent 5.4% price cut"))).toBe(true);
+    expect(today).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
 });

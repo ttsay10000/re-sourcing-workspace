@@ -138,6 +138,46 @@ describe("underwritingModel", () => {
     );
   });
 
+  it("applies a conservative blended opex growth fallback when taxes cannot be isolated", () => {
+    const assumptions = resolveDossierAssumptions(
+      {
+        id: "profile-4b",
+        createdAt: "2026-03-10T00:00:00.000Z",
+        updatedAt: "2026-03-10T00:00:00.000Z",
+        defaultPurchaseClosingCostPct: 3,
+        defaultLtv: 70,
+        defaultInterestRate: 6,
+        defaultAmortization: 30,
+        defaultHoldPeriodYears: 3,
+        defaultExitCap: 6,
+        defaultExitClosingCostPct: 2,
+        defaultRentUplift: 10,
+        defaultExpenseIncrease: 0,
+        defaultManagementFee: 4,
+        defaultVacancyPct: 0,
+        defaultLeadTimeMonths: 0,
+        defaultAnnualRentGrowthPct: 0,
+        defaultAnnualOtherIncomeGrowthPct: 0,
+        defaultAnnualExpenseGrowthPct: 0,
+        defaultAnnualPropertyTaxGrowthPct: 8,
+        defaultRecurringCapexAnnual: 0,
+        defaultLoanFeePct: 0,
+      },
+      1_000_000
+    );
+
+    const projection = computeUnderwritingProjection({
+      assumptions,
+      currentGrossRent: 120_000,
+      currentNoi: 80_000,
+      currentExpensesTotal: 40_000,
+    });
+
+    expect(projection.yearly.expenseLineItems).toHaveLength(1);
+    expect(projection.yearly.expenseLineItems[0]?.annualGrowthPct).toBe(8);
+    expect(projection.yearly.expenseLineItems[0]?.yearlyAmounts).toEqual([40_000, 43_200, 46_656]);
+  });
+
   it("caps hold periods to the supported Excel model horizon", () => {
     const assumptions = resolveDossierAssumptions(
       null,
@@ -177,7 +217,7 @@ describe("underwritingModel", () => {
     expect(assumptions.propertyMix.eligibleResidentialUnits).toBe(2);
     expect(assumptions.operating.rentUpliftPct).toBe(76.3);
     expect(assumptions.operating.blendedRentUpliftPct).toBeCloseTo(38.15, 2);
-    expect(assumptions.acquisition.furnishingSetupCosts).toBe(27_000);
+    expect(assumptions.acquisition.furnishingSetupCosts).toBe(22_500);
   });
 
   it("maps NYC tax classes to conservative property-tax growth defaults", () => {

@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
+import { deriveListingActivitySummary, describeListingActivity, type ListingActivitySummary } from "@re-sourcing/contracts";
 import {
   estimateGenerationProgress,
   getPropertyDossierAssumptions,
@@ -24,6 +25,7 @@ export interface CanonicalProperty {
     price: number | null;
     listedAt: string | null;
     city: string | null;
+    lastActivity?: ListingActivitySummary | null;
   } | null;
   /** OM status: from inquiry/uploaded docs and inquiry sends. */
   omStatus?: OmStatus | null;
@@ -54,6 +56,7 @@ interface ListingRow {
   rentalPriceHistory?: { date: string; price: string | number; event: string }[] | null;
   duplicateScore?: number | null;
   extra?: Record<string, unknown> | null;
+  lastActivity?: ListingActivitySummary | null;
 }
 
 /** Unified row for violations/complaints/permits table */
@@ -144,6 +147,55 @@ function formatListedDate(listedAt: string | null | undefined): string {
   return d.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
 }
 
+function normalizeUnitKey(value: unknown): string {
+  if (typeof value !== "string") return "";
+  return value
+    .toLowerCase()
+    .replace(/\b(unit|apt|apartment|suite|ste)\b/g, "")
+    .replace(/[^a-z0-9]/g, "");
+}
+
+function findMatchingOmRentRollRow(
+  unit: Record<string, unknown> | null | undefined,
+  rentRoll: Array<Record<string, unknown>>
+): Record<string, unknown> | null {
+  const directKey = normalizeUnitKey(unit?.unit);
+  if (!directKey) return null;
+  const directMatch = rentRoll.find((row) => normalizeUnitKey(row.unit) === directKey);
+  if (directMatch) return directMatch;
+
+  const directDigits = directKey.replace(/[a-z]/g, "");
+  if (!directDigits) return null;
+  return (
+    rentRoll.find((row) => {
+      const rowKey = normalizeUnitKey(row.unit);
+      return rowKey.replace(/[a-z]/g, "") === directDigits;
+    }) ?? null
+  );
+}
+
+function numericValue(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function valuesClose(a: number | null, b: number | null, tolerance = 0.12): boolean {
+  if (a == null || b == null || a <= 0 || b <= 0) return false;
+  const high = Math.max(a, b);
+  const low = Math.min(a, b);
+  return (high - low) / high <= tolerance;
+}
+
+function isSpecialOmUnitLabel(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  return /(duplex|triplex|garden|parlor|penthouse|floor[- ]?through)/i.test(value);
+}
+
+function documentLooksLikeOm(doc: { fileName?: string | null; source?: string | null; sourceType?: string | null }): boolean {
+  const haystack = [doc.fileName, doc.source].filter(Boolean).join(" ").toLowerCase();
+  if (!haystack) return false;
+  return /(offering|memorandum|\bom\b|brochure|rent[\s_-]?roll)/i.test(haystack);
+}
+
 /** Normalize date strings to YYYY-MM-DD (strip time/timezone). */
 function formatDateOnly(value: string | null | undefined): string {
   if (!value || typeof value !== "string") return "—";
@@ -210,9 +262,8 @@ function CollapsibleSection({
   children: React.ReactNode;
   count?: number;
 }) {
-  const label = count != null ? `${title} (${count})` : title;
   return (
-    <div className="property-detail-section">
+    <div id={`canonical-section-${id}`} className="property-detail-section" data-open={open ? "true" : "false"}>
       <button
         type="button"
         className="property-detail-section-header"
@@ -220,7 +271,11 @@ function CollapsibleSection({
         aria-expanded={open}
         aria-controls={`canonical-detail-${id}`}
       >
-        <span className="property-detail-section-title">{label}</span>
+        <span className="property-detail-section-title-wrap">
+          <span className="property-detail-section-title">{title}</span>
+          {count != null && <span className="property-detail-section-count">{count}</span>}
+        </span>
+        <span className="property-detail-section-status">{open ? "Open" : "Closed"}</span>
         <span className={`property-detail-section-chevron ${open ? "property-detail-section-chevron--open" : ""}`} aria-hidden>▼</span>
       </button>
       {open && (
@@ -321,9 +376,9 @@ export function CanonicalPropertyDetail({
   const [dosEntity, setDosEntity] = useState<NyDosEntityResult | "n/a" | null>(null);
   const [dosEntityQueryName, setDosEntityQueryName] = useState<string | null>(null);
 
-  // OM received (inquiry attachment) or OM uploaded (API maps category → source, so category "OM" is source "OM")
+  // Treat a document as OM-style only when the filename/source actually looks like OM, brochure, or rent roll content.
   const hasOmDocument = Boolean(
-    unifiedDocuments?.some((d) => d.sourceType === "inquiry" || d.source === "OM")
+    unifiedDocuments?.some((d) => d.source === "OM" || d.source === "Brochure" || documentLooksLikeOm(d))
   );
 
   const applyPropertySnapshot = (data: Record<string, unknown> | null | undefined) => {
@@ -586,6 +641,78 @@ export function CanonicalPropertyDetail({
   const rentalUnits = rentalFinancials?.rentalUnits ?? [];
   const fromLlm = rentalFinancials?.fromLlm;
   const omAnalysis = rentalFinancials?.omAnalysis;
+  const omRentRoll = Array.isArray(omAnalysis?.rentRoll) ? omAnalysis.rentRoll : [];
+  const inferredPlaceholderRentRoll = Boolean(
+    !hasOmDocument &&
+    Array.isArray(fromLlm?.rentalNumbersPerUnit) &&
+    fromLlm.rentalNumbersPerUnit.length > 0 &&
+    fromLlm.rentalNumbersPerUnit.every(
+      (row) =>
+        row &&
+        typeof row === "object" &&
+        row.monthlyRent == null &&
+        row.annualRent == null &&
+        row.rent == null &&
+        typeof row.note === "string" &&
+        row.note.trim().length > 0
+    )
+  );
+  const matchedOmIndexes = new Set<number>();
+  const directCards = rentalUnits.map((row) => {
+    const financialRow = findMatchingOmRentRollRow(
+      row as Record<string, unknown>,
+      omRentRoll as Array<Record<string, unknown>>
+    );
+    if (financialRow) {
+      const matchedIndex = omRentRoll.findIndex((candidate) => candidate === financialRow);
+      if (matchedIndex >= 0) matchedOmIndexes.add(matchedIndex);
+    }
+    return { mediaRow: row, financialRow };
+  });
+  const unmatchedMediaIndexes = directCards
+    .map((card, index) => ({ card, index }))
+    .filter(({ card }) => !card.financialRow)
+    .map(({ index }) => index);
+  const unmatchedOmIndexes = omRentRoll
+    .map((row, index) => ({ row, index }))
+    .filter(({ index }) => !matchedOmIndexes.has(index))
+    .map(({ index }) => index);
+  if (unmatchedMediaIndexes.length === 1 && unmatchedOmIndexes.length === 1) {
+    const mediaIndex = unmatchedMediaIndexes[0];
+    const omIndex = unmatchedOmIndexes[0];
+    const mediaRow = rentalUnits[mediaIndex] as Record<string, unknown> | undefined;
+    const omRow = omRentRoll[omIndex] as Record<string, unknown> | undefined;
+    const mediaRent = numericValue(mediaRow?.rentalPrice);
+    const omRent = numericValue(omRow?.monthlyRent);
+    const shouldPair =
+      valuesClose(mediaRent, omRent) ||
+      (isSpecialOmUnitLabel(omRow?.unit) && mediaIndex === rentalUnits.length - 1);
+    if (shouldPair) {
+      directCards[mediaIndex] = { mediaRow: rentalUnits[mediaIndex], financialRow: omRentRoll[omIndex] };
+      matchedOmIndexes.add(omIndex);
+    }
+  }
+  const displayRentalCards =
+    omRentRoll.length > 0
+      ? [
+          ...directCards,
+          ...omRentRoll
+            .filter((_, index) => !matchedOmIndexes.has(index))
+            .map((row) => ({ mediaRow: null, financialRow: row })),
+        ]
+      : rentalUnits.map((row) => ({ mediaRow: row, financialRow: null }));
+  const rentalUnitsHeading =
+    omRentRoll.length > 0 ? "Rental units and listing media" : "Rental units (from Streeteasy / inquiry)";
+  const rentalUnitsCopy =
+    omRentRoll.length > 0
+      ? "OM rent-roll values are shown when a unit can be matched. StreetEasy links and photos stay attached when available."
+      : "Per-unit listing and inquiry data pulled from Streeteasy / RapidAPI.";
+  const financialsHeading =
+    hasOmDocument || omRentRoll.length > 0 ? "Financials (current extracted view)" : "Financial hints (from listing / inquiry text)";
+  const financialsCopy =
+    hasOmDocument || omRentRoll.length > 0
+      ? "Showing the best current extracted financial view. OM-derived metrics take precedence when available."
+      : "No uploaded OM is on file. These values are inferred from listing or inquiry text and may include placeholder unit rows when exact rents were not stated.";
   const ownerValuations = (d?.ownerValuations ?? d?.owner_valuations) as string | null | undefined;
   const assessedMarketValue = (d?.assessedMarketValue ?? d?.assessed_market_value) as number | null | undefined;
   const assessedActualValue = (d?.assessedActualValue ?? d?.assessed_actual_value) as number | null | undefined;
@@ -809,14 +936,44 @@ export function CanonicalPropertyDetail({
     (inquiryGuard?.sameRecipientOtherProperties.length ?? 0) > 0
   );
   const extra = listingForDisplay?.extra as Record<string, unknown> | undefined;
+  const listingActivity = listingForDisplay
+    ? (listingForDisplay.lastActivity ?? deriveListingActivitySummary({
+        listedAt: listingForDisplay.listedAt ?? null,
+        currentPrice: listingForDisplay.price ?? null,
+        priceHistory: listingForDisplay.priceHistory ?? null,
+      }))
+    : null;
+  const listingActivitySummary = describeListingActivity(listingActivity);
   const photoUrls = (listingForDisplay?.imageUrls?.length ? listingForDisplay.imageUrls : Array.isArray(extra?.images) ? (extra!.images as string[]).filter((u): u is string => typeof u === "string") : []) ?? [];
   const floorplanUrls = (Array.isArray(extra?.floorplans) ? (extra.floorplans as string[]).filter((u): u is string => typeof u === "string") : []) ?? [];
   const [galleryIndex, setGalleryIndex] = useState(0);
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
   const [unitGalleryIndices, setUnitGalleryIndices] = useState<Record<number, number>>({});
+  const sectionLinks = [
+    { id: "deal-dossier", label: "Dossier", open: !!openSections.dealDossier },
+    { id: "photos-floorplans", label: "Media", open: !!openSections.photosFloorplans },
+    { id: "details-broker-amenities-price-history", label: "Listing", open: !!openSections.detailsBrokerAmenitiesPriceHistory },
+    { id: "owner", label: "Owner", open: !!openSections.owner },
+    { id: "valuations", label: "Valuations", open: !!openSections.valuations },
+    { id: "rental-om", label: "Rental / OM", open: !!openSections.rentalOm },
+    { id: "violations-complaints-permits", label: "Issues", open: !!openSections.violationsComplaintsPermits },
+  ];
+  const overviewItems = [
+    { label: "OM status", value: property.omStatus ?? "—" },
+    { label: "Deal score", value: dealScore != null ? `${dealScore}/100` : "Pending" },
+    { label: "Documents", value: unifiedDocuments == null ? "…" : String(unifiedDocuments.length) },
+    { label: "Media", value: String(photoUrls.length + floorplanUrls.length) },
+    { label: "Inquiry", value: lastInquirySentAt ? formatDateOnly(lastInquirySentAt) : "Not sent" },
+  ];
+
+  const jumpToSection = (sectionId: string) => {
+    const node = document.getElementById(`canonical-section-${sectionId}`);
+    if (!node) return;
+    node.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
 
   return (
-    <div className="property-detail-collapsible" style={{ paddingLeft: "1.5rem", borderLeft: "3px solid #e5e5e5" }}>
+    <div className="property-detail-collapsible">
       {/* Linked listing — single header row, since there should only be one per canonical property */}
       {primaryListing !== "loading" && listingForDisplay && (
         <div className="linked-listing-bar">
@@ -838,6 +995,14 @@ export function CanonicalPropertyDetail({
             <div className="property-metric">
               <div className="property-metric-label">Listed date</div>
               <div className="property-metric-value">{formatListedDate(listingForDisplay.listedAt)}</div>
+            </div>
+            <div className="property-metric">
+              <div className="property-metric-label">Last activity</div>
+              <div className="property-metric-value" title={listingActivitySummary ?? undefined}>
+                {listingActivity?.lastActivityDate
+                  ? `${formatListedDate(listingActivity.lastActivityDate)} · ${formatPriceEventLabel(listingActivity.lastActivityEvent)}`
+                  : "—"}
+              </div>
             </div>
             <div className="property-metric">
               <div className="property-metric-label">Days on market</div>
@@ -901,6 +1066,28 @@ export function CanonicalPropertyDetail({
         </div>
       </div>
 
+      <div className="property-detail-overview-strip">
+        {overviewItems.map((item) => (
+          <div key={item.label} className="property-detail-overview-item">
+            <span>{item.label}</span>
+            <strong>{item.value}</strong>
+          </div>
+        ))}
+      </div>
+
+      <div className="property-detail-jump-row">
+        {sectionLinks.map((section) => (
+          <button
+            key={section.id}
+            type="button"
+            className={`property-detail-jump-pill ${section.open ? "property-detail-jump-pill--open" : ""}`}
+            onClick={() => jumpToSection(section.id)}
+          >
+            {section.label}
+          </button>
+        ))}
+      </div>
+
       <CollapsibleSection
         id="deal-dossier"
         title="Deal dossier"
@@ -956,10 +1143,10 @@ export function CanonicalPropertyDetail({
               </div>
               <div style={{ marginTop: "0.75rem", fontSize: "0.78rem", color: "#64748b", lineHeight: 1.5 }}>
                 <div>
-                  Formula default: {formatPrice(formulaDossierDefaults.furnishingSetupCosts ?? 0)} using $10k base + $3k per eligible residential unit + $2.5k per bedroom per unit + $2 per sq ft above 650.
+                  Formula default: {formatPrice(formulaDossierDefaults.furnishingSetupCosts ?? 0)} using eligible-unit count, bed/bath mix, and average eligible unit sqft from the rent roll or building square footage.
                 </div>
                 <div>
-                  Larger 2-3BR units often land around $20k-$25k. Override this with your actual furnishing quote whenever you have one.
+                  Target sizing is roughly $10k per unit around 500-1,500 sqft, $15k-$20k per unit above that, and $25k-$30k per unit once average unit size is above 2,500 sqft. Override this with your actual furnishing quote whenever you have one.
                 </div>
                 {dossierMixSummary && (
                   <div>
@@ -1149,6 +1336,16 @@ export function CanonicalPropertyDetail({
                     <span> · {daysOnMarket(listingForDisplay.listedAt)} days on market</span>
                   )}
                 </div>
+                {listingActivity?.lastActivityDate && (
+                  <div className="initial-info-listing-meta" title={listingActivitySummary ?? undefined}>
+                    <span>
+                      Last activity {formatListedDate(listingActivity.lastActivityDate)} · {formatPriceEventLabel(listingActivity.lastActivityEvent)}
+                    </span>
+                    {listingActivity.lastActivityPrice != null && (
+                      <span> · {formatPrice(listingActivity.lastActivityPrice)}</span>
+                    )}
+                  </div>
+                )}
                 {(extra?.priceChangeSinceListed as { listedPrice: number; currentPrice: number; changeAmount: number; changePercent: number } | undefined) && (() => {
                   const p = extra!.priceChangeSinceListed as { listedPrice: number; currentPrice: number; changeAmount: number; changePercent: number };
                   const isDecrease = p.changeAmount < 0;
@@ -1166,6 +1363,32 @@ export function CanonicalPropertyDetail({
                     </div>
                   );
                 })()}
+                <div className="initial-info-stat-grid">
+                  <div className="initial-info-stat-card">
+                    <span>Beds</span>
+                    <strong>{listingForDisplay.beds ?? "—"}</strong>
+                  </div>
+                  <div className="initial-info-stat-card">
+                    <span>Baths</span>
+                    <strong>{listingForDisplay.baths ?? "—"}</strong>
+                  </div>
+                  <div className="initial-info-stat-card">
+                    <span>Sqft</span>
+                    <strong>{listingForDisplay.sqft != null ? Number(listingForDisplay.sqft).toLocaleString() : "—"}</strong>
+                  </div>
+                  <div className="initial-info-stat-card">
+                    <span>Type</span>
+                    <strong>{formatPropertyType(extra?.propertyType ?? extra?.property_type ?? extra?.type ?? "")}</strong>
+                  </div>
+                  <div className="initial-info-stat-card">
+                    <span>HOA</span>
+                    <strong>{(monthlyHoa == null || monthlyHoa === 0) ? "NA" : formatPrice(typeof monthlyHoa === "number" ? monthlyHoa : null)}</strong>
+                  </div>
+                  <div className="initial-info-stat-card">
+                    <span>Tax</span>
+                    <strong>{(monthlyTax == null || monthlyTax === 0) ? "NA" : formatPrice(typeof monthlyTax === "number" ? monthlyTax : null)}</strong>
+                  </div>
+                </div>
                 <dl className="initial-info-dl">
                   <div className="initial-info-dl-row"><dt>Beds / Baths</dt><dd>{listingForDisplay.beds ?? "—"} / {listingForDisplay.baths ?? "—"}</dd></div>
                   <div className="initial-info-dl-row"><dt>Sqft</dt><dd>{listingForDisplay.sqft ?? "—"}</dd></div>
@@ -1185,7 +1408,7 @@ export function CanonicalPropertyDetail({
             {!listingForDisplay && primaryListing === "loading" && <p className="initial-info-empty">Loading listing…</p>}
             {!listingForDisplay && primaryListing !== "loading" && <p className="initial-info-empty">No linked listing.</p>}
             <h4 className="initial-info-subtitle">Geospatial data</h4>
-            <div className="initial-info-geo">
+            <div className="initial-info-geo initial-info-data-grid">
               {bbl != null && <dl className="initial-info-dl"><div className="initial-info-dl-row"><dt>BBL (tax)</dt><dd>{String(bbl)}</dd></div></dl>}
               {bblBase != null && <dl className="initial-info-dl"><div className="initial-info-dl-row"><dt>BBL (base)</dt><dd>{String(bblBase)}</dd></div></dl>}
               {(lat != null && lon != null) && (
@@ -1201,7 +1424,7 @@ export function CanonicalPropertyDetail({
               {bbl == null && bblBase == null && lat == null && lon == null && <p className="initial-info-empty">—</p>}
             </div>
             <h4 className="initial-info-subtitle">Enriched data</h4>
-            <div className="initial-info-geo">
+            <div className="initial-info-geo initial-info-data-grid">
               <dl className="initial-info-dl">
                 <div className="initial-info-dl-row"><dt>Tax code</dt><dd>{d?.taxCode != null && String(d.taxCode).trim() !== "" ? String(d.taxCode) : "—"}</dd></div>
                 <div className="initial-info-dl-row"><dt>2010 Census Block</dt><dd>{d?.censusBlock2010 != null && String(d.censusBlock2010).trim() !== "" ? String(d.censusBlock2010) : "—"}</dd></div>
@@ -1433,9 +1656,9 @@ export function CanonicalPropertyDetail({
 
       {/* 5. Rental pricing / OM + rental financials (per-unit table, NOI, cap rate) */}
       <CollapsibleSection id="rental-om" title="Rental pricing / OM" open={!!openSections.rentalOm} onToggle={() => toggle("rentalOm")}>
-        <div style={{ fontSize: "0.875rem" }}>
+        <div className="rental-om-shell" style={{ fontSize: "0.875rem" }}>
           {/* Request info by email — always first */}
-          <div style={{ marginBottom: "0.75rem" }}>
+          <div className="rental-om-panel rental-om-panel--inquiry" style={{ marginBottom: "0.75rem" }}>
             <strong style={{ display: "block", marginBottom: "0.35rem", fontSize: "0.9rem", color: "#1a1a1a" }}>Request info by email</strong>
             {lastInquirySentAt && (
               <p style={{ margin: "0 0 0.5rem", fontSize: "0.8rem", color: "#166534", fontWeight: 500 }}>
@@ -1739,39 +1962,95 @@ tyler@stayhaus.co`;
               </div>
             </div>
           )}
-          {rentalUnits.length > 0 && (
-            <div style={{ borderTop: "1px solid #e0e0e0", paddingTop: "0.6rem", marginTop: "0.6rem", marginBottom: "0.5rem" }}>
-              <strong style={{ display: "block", marginBottom: "0.35rem", fontSize: "0.95rem", color: "#1a1a1a" }}>Rental units (from Streeteasy / inquiry)</strong>
+          {displayRentalCards.length > 0 && (
+            <div className="rental-om-panel">
+              <strong style={{ display: "block", marginBottom: "0.2rem", fontSize: "0.95rem", color: "#1a1a1a" }}>{rentalUnitsHeading}</strong>
+              <p style={{ margin: "0 0 0.45rem", fontSize: "0.75rem", color: "#64748b" }}>{rentalUnitsCopy}</p>
               <div style={{ display: "flex", flexDirection: "column", gap: "0.6rem", maxHeight: "520px", overflowY: "auto" }}>
-                {rentalUnits.map((row, i) => {
-                  const unitImages = (row.images ?? []).filter((u): u is string => typeof u === "string");
+                {displayRentalCards.map((card, i) => {
+                  const mediaRow = card.mediaRow;
+                  const financialRow = card.financialRow as Record<string, unknown> | null;
+                  const unitImages = (mediaRow?.images ?? []).filter((u): u is string => typeof u === "string");
                   const idx = unitGalleryIndices[i] ?? 0;
                   const setIdx = (n: number) => setUnitGalleryIndices((prev) => ({ ...prev, [i]: n }));
                   const bulletStyle = { margin: "0.2rem 0", fontSize: "0.85rem", color: "#404040" };
+                  const referenceStyle = { display: "block", marginTop: "0.1rem", fontSize: "0.74rem", color: "#7a7a7a", fontStyle: "italic" } as const;
+                  const unitLabel =
+                    (typeof financialRow?.unit === "string" && financialRow.unit.trim()) ||
+                    (typeof mediaRow?.unit === "string" && mediaRow.unit.trim()) ||
+                    String(i + 1);
+                  const omSqft = typeof financialRow?.sqft === "number" ? financialRow.sqft : null;
+                  const omBeds = typeof financialRow?.beds === "number" ? financialRow.beds : null;
+                  const omBaths = typeof financialRow?.baths === "number" ? financialRow.baths : null;
+                  const displaySqft = omSqft ?? mediaRow?.sqft;
+                  const displayBeds = omBeds ?? mediaRow?.beds;
+                  const displayBaths = omBaths ?? mediaRow?.baths;
+                  const displayMonthlyRent =
+                    typeof financialRow?.monthlyRent === "number" ? financialRow.monthlyRent : mediaRow?.rentalPrice;
+                  const displayAnnualRent =
+                    typeof financialRow?.annualRent === "number"
+                      ? financialRow.annualRent
+                      : typeof financialRow?.monthlyRent === "number"
+                        ? Number(financialRow.monthlyRent) * 12
+                        : null;
+                  const displayLastRented =
+                    typeof financialRow?.lastRentedDate === "string" ? financialRow.lastRentedDate : mediaRow?.lastRentedDate;
+                  const cardNote = [
+                    typeof financialRow?.unitCategory === "string" ? financialRow.unitCategory : null,
+                    typeof financialRow?.tenantName === "string" ? financialRow.tenantName : null,
+                    typeof financialRow?.rentType === "string" ? financialRow.rentType : null,
+                    typeof financialRow?.tenantStatus === "string" ? financialRow.tenantStatus : null,
+                    typeof financialRow?.notes === "string" ? financialRow.notes : null,
+                  ].filter(Boolean).join("; ");
                   return (
-                    <div key={i} style={{ border: "1px solid #e5e5e5", borderRadius: "8px", overflow: "hidden", backgroundColor: "#fafafa", display: "flex", flexDirection: "row", alignItems: "stretch", minHeight: "120px", boxShadow: "0 1px 3px rgba(0,0,0,0.06)" }}>
-                      {/* Unit info: bold unit name + 2 columns of bullets (no Status) */}
+                    <div key={`${unitLabel}-${i}`} style={{ border: "1px solid #e5e5e5", borderRadius: "8px", overflow: "hidden", backgroundColor: "#fafafa", display: "flex", flexDirection: "row", alignItems: "stretch", minHeight: "120px", boxShadow: "0 1px 3px rgba(0,0,0,0.06)", flexWrap: "wrap" }}>
                       <div style={{ flex: 1, display: "flex", flexDirection: "column", padding: "0.5rem 0.75rem", justifyContent: "center", gap: "0.35rem", minWidth: 0, borderRight: "1px solid #eee" }}>
                         <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.2rem", flexWrap: "wrap" }}>
-                          <strong style={{ fontSize: "0.95rem", color: "#1a1a1a" }}>Unit #{row.unit ?? String(i + 1)}</strong>
-                          {row.streeteasyUrl && (
-                            <a href={row.streeteasyUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: "0.8rem", color: "#0066cc" }}>View on Streeteasy</a>
+                          <strong style={{ fontSize: "0.95rem", color: "#1a1a1a" }}>Unit {unitLabel}</strong>
+                          {mediaRow?.streeteasyUrl && (
+                            <a href={mediaRow.streeteasyUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: "0.8rem", color: "#0066cc" }}>View on Streeteasy</a>
+                          )}
+                          {financialRow && (
+                            <span style={{ padding: "0.1rem 0.45rem", borderRadius: "999px", background: "#ecfdf5", color: "#166534", fontSize: "0.72rem", fontWeight: 600 }}>
+                              OM values
+                            </span>
                           )}
                         </div>
-                        <div style={{ display: "flex", flexDirection: "row", flexWrap: "nowrap", gap: "2rem", fontSize: "0.85rem" }}>
+                        <div style={{ display: "flex", flexDirection: "row", flexWrap: "wrap", gap: "0.75rem 2rem", fontSize: "0.85rem" }}>
                           <ul style={{ margin: 0, paddingLeft: "1.1rem", listStyle: "disc", flexShrink: 0 }}>
-                            <li style={bulletStyle}>Sq ft: {row.sqft != null && row.sqft > 0 ? String(row.sqft) : "—"}</li>
-                            <li style={bulletStyle}>Beds: {row.beds != null ? String(row.beds) : "—"}</li>
-                            <li style={bulletStyle}>Baths: {row.baths != null ? String(row.baths) : "—"}</li>
+                            <li style={bulletStyle}>
+                              Sq ft: {displaySqft != null && displaySqft > 0 ? String(displaySqft) : "—"}
+                              {financialRow && mediaRow?.sqft != null && mediaRow.sqft !== displaySqft ? <span style={referenceStyle}>StreetEasy: {String(mediaRow.sqft)}</span> : null}
+                            </li>
+                            <li style={bulletStyle}>
+                              Beds: {displayBeds != null ? String(displayBeds) : "—"}
+                              {financialRow && mediaRow?.beds != null && mediaRow.beds !== displayBeds ? <span style={referenceStyle}>StreetEasy: {String(mediaRow.beds)}</span> : null}
+                            </li>
+                            <li style={bulletStyle}>
+                              Baths: {displayBaths != null ? String(displayBaths) : "—"}
+                              {financialRow && mediaRow?.baths != null && mediaRow.baths !== displayBaths ? <span style={referenceStyle}>StreetEasy: {String(mediaRow.baths)}</span> : null}
+                            </li>
                           </ul>
                           <ul style={{ margin: 0, paddingLeft: "1.1rem", listStyle: "disc", flexShrink: 0 }}>
-                            <li style={bulletStyle}>Rent (latest): {row.rentalPrice != null ? formatPrice(row.rentalPrice) : "—"}</li>
-                            <li style={bulletStyle}>Last listed: {row.listedDate ? formatDateOnly(row.listedDate) : "—"}</li>
-                            <li style={bulletStyle}>Last rented: {row.lastRentedDate ? formatDateOnly(row.lastRentedDate) : "—"}</li>
+                            <li style={bulletStyle}>
+                              Monthly rent: {displayMonthlyRent != null ? formatPrice(displayMonthlyRent) : "—"}
+                              {financialRow && mediaRow?.rentalPrice != null && mediaRow.rentalPrice !== displayMonthlyRent ? <span style={referenceStyle}>StreetEasy latest: {formatPrice(mediaRow.rentalPrice)}</span> : null}
+                            </li>
+                            <li style={bulletStyle}>
+                              Annual rent: {displayAnnualRent != null ? formatPrice(displayAnnualRent) : "—"}
+                            </li>
+                            <li style={bulletStyle}>
+                              Last rented: {displayLastRented ? formatDateOnly(displayLastRented) : "—"}
+                              {financialRow && mediaRow?.lastRentedDate && mediaRow.lastRentedDate !== displayLastRented ? <span style={referenceStyle}>StreetEasy: {formatDateOnly(mediaRow.lastRentedDate)}</span> : null}
+                            </li>
                           </ul>
                         </div>
+                        {(cardNote || mediaRow?.listedDate) && (
+                          <div style={{ fontSize: "0.78rem", color: "#5b5b5b", lineHeight: 1.45, overflowWrap: "anywhere" }}>
+                            {cardNote ? cardNote : `Last listed: ${formatDateOnly(mediaRow?.listedDate ?? null)}`}
+                          </div>
+                        )}
                       </div>
-                      {/* Photos: main left, thumbnails right (contained on right) */}
                       <div style={{ flexShrink: 0, display: "flex", flexDirection: "row", padding: "0.35rem", gap: "0.35rem" }}>
                         {unitImages.length > 0 ? (
                           <>
@@ -1802,7 +2081,7 @@ tyler@stayhaus.co`;
             </p>
           )}
           {omAnalysis && (omAnalysis.uiFinancialSummary || omAnalysis.rentRoll?.length || omAnalysis.expenses?.expensesTable?.length || omAnalysis.investmentTakeaways?.length) ? (
-            <div style={{ borderTop: "1px solid #e0e0e0", paddingTop: "0.6rem", marginTop: "0.6rem", marginBottom: "0.5rem" }}>
+            <div className="rental-om-panel">
               <strong style={{ display: "block", marginBottom: "0.35rem", fontSize: "0.95rem", color: "#1a1a1a" }}>Investment analysis (from OM)</strong>
               <p style={{ margin: "0 0 0.5rem", fontSize: "0.75rem", color: "#64748b" }}>Financials from OM (current state). Senior-analyst LLM extraction. Top-line financials, rent roll, expenses, and takeaways.</p>
               {omAnalysis.uiFinancialSummary && typeof omAnalysis.uiFinancialSummary === "object" && (
@@ -1848,7 +2127,7 @@ tyler@stayhaus.co`;
                 <div style={{ marginBottom: "0.6rem" }}>
                   <span style={{ display: "block", fontSize: "0.75rem", color: "#666", marginBottom: "0.25rem" }}>Rent roll</span>
                   <div style={{ overflowX: "auto", border: "1px solid #e2e8f0", borderRadius: "8px" }}>
-                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.8rem", tableLayout: "fixed" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.8rem", tableLayout: "auto" }}>
                       <thead>
                         <tr style={{ borderBottom: "2px solid #e2e8f0", backgroundColor: "#f8fafc" }}>
                           <th style={{ textAlign: "center", padding: "0.4rem 0.5rem", fontWeight: 600 }}>Unit</th>
@@ -1860,7 +2139,7 @@ tyler@stayhaus.co`;
                           {omAnalysis.rentRoll.some((u) => (u as { occupied?: boolean | string }).occupied != null) && <th style={{ textAlign: "center", padding: "0.4rem 0.5rem", fontWeight: 600 }}>Occupied</th>}
                           {omAnalysis.rentRoll.some((u) => (u as { lastRentedDate?: string }).lastRentedDate != null) && <th style={{ textAlign: "center", padding: "0.4rem 0.5rem", fontWeight: 600 }}>Last rented</th>}
                           {omAnalysis.rentRoll.some((u) => (u as { dateVacant?: string }).dateVacant != null) && <th style={{ textAlign: "center", padding: "0.4rem 0.5rem", fontWeight: 600 }}>Date vacant</th>}
-                          {(omAnalysis.rentRoll.some((u) => u.notes) || omAnalysis.rentRoll.some((u) => u.rentType)) && <th style={{ textAlign: "center", padding: "0.4rem 0.5rem", fontWeight: 600 }}>Note</th>}
+                          {(omAnalysis.rentRoll.some((u) => u.notes) || omAnalysis.rentRoll.some((u) => u.rentType)) && <th style={{ textAlign: "left", padding: "0.4rem 0.5rem", fontWeight: 600, minWidth: "220px" }}>Note</th>}
                         </tr>
                       </thead>
                       <tbody>
@@ -1876,7 +2155,7 @@ tyler@stayhaus.co`;
                             {omAnalysis.rentRoll!.some((x) => (x as { lastRentedDate?: string }).lastRentedDate != null) && <td style={{ textAlign: "center", padding: "0.4rem 0.5rem", fontSize: "0.75rem" }}>{(u as { lastRentedDate?: string }).lastRentedDate ?? "—"}</td>}
                             {omAnalysis.rentRoll!.some((x) => (x as { dateVacant?: string }).dateVacant != null) && <td style={{ textAlign: "center", padding: "0.4rem 0.5rem", fontSize: "0.75rem" }}>{(u as { dateVacant?: string }).dateVacant ?? "—"}</td>}
                             {omAnalysis.rentRoll!.some((x) => x.notes || x.rentType) && (
-                              <td style={{ textAlign: "center", padding: "0.4rem 0.5rem", fontSize: "0.75rem", color: "#555" }}>{[u.rentType, u.tenantStatus, u.notes].filter(Boolean).join("; ") || "—"}</td>
+                              <td style={{ textAlign: "left", padding: "0.4rem 0.5rem", fontSize: "0.75rem", color: "#555", minWidth: "220px", whiteSpace: "normal", overflowWrap: "anywhere" }}>{[u.rentType, u.tenantStatus, u.notes].filter(Boolean).join("; ") || "—"}</td>
                             )}
                           </tr>
                         ))}
@@ -1940,20 +2219,27 @@ tyler@stayhaus.co`;
               )}
             </div>
           ) : fromLlm && (fromLlm.noi != null || fromLlm.capRate != null || fromLlm.grossRentTotal != null || fromLlm.totalExpenses != null || (fromLlm.expensesTable && fromLlm.expensesTable.length > 0) || (fromLlm.rentalNumbersPerUnit && fromLlm.rentalNumbersPerUnit.length > 0) || fromLlm.rentalEstimates || fromLlm.otherFinancials || fromLlm.keyTakeaways || fromLlm.dataGapSuggestions) && (
-            <div style={{ borderTop: "1px solid #e0e0e0", paddingTop: "0.6rem", marginTop: "0.6rem", marginBottom: "0.5rem" }}>
-              <strong style={{ display: "block", marginBottom: "0.2rem", fontSize: "0.9rem", color: "#1a1a1a" }}>Financials (from OM / listing / LLM)</strong>
-              <p style={{ margin: "0 0 0.5rem", fontSize: "0.75rem", color: "#64748b" }}>Financials from OM (current state). From OM or listing text (LLM extraction). Per-unit Streeteasy/RapidAPI numbers are in &quot;Rental units&quot; above.</p>
+            <div className="rental-om-panel">
+              <strong style={{ display: "block", marginBottom: "0.2rem", fontSize: "0.9rem", color: "#1a1a1a" }}>{financialsHeading}</strong>
+              <p style={{ margin: "0 0 0.5rem", fontSize: "0.75rem", color: "#64748b" }}>{financialsCopy}</p>
+              {inferredPlaceholderRentRoll && (
+                <p style={{ margin: "0 0 0.5rem", padding: "0.35rem 0.5rem", backgroundColor: "#fef3c7", borderRadius: "4px", fontSize: "0.8rem", color: "#92400e" }}>
+                  <strong>No parsed OM on file.</strong> The unit rows below are inferred from narrative text, so they may read like placeholders until a brochure, OM, or rent roll is uploaded.
+                </p>
+              )}
               <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem 1.25rem", marginBottom: "0.6rem" }}>
                 {fromLlm.noi != null && <span style={{ fontWeight: 500 }}>NOI: {formatPrice(fromLlm.noi)}</span>}
                 {fromLlm.capRate != null && <span style={{ fontWeight: 500 }}>Cap rate: {typeof fromLlm.capRate === "number" && fromLlm.capRate > 0 && fromLlm.capRate <= 1 ? (fromLlm.capRate * 100).toFixed(2) : fromLlm.capRate}%</span>}
                 {fromLlm.grossRentTotal != null && <span style={{ fontWeight: 500 }}>Gross rent: {formatPrice(fromLlm.grossRentTotal)}/yr</span>}
                 {fromLlm.totalExpenses != null && <span style={{ fontWeight: 500 }}>Total expenses: {formatPrice(fromLlm.totalExpenses)}/yr</span>}
               </div>
-              {fromLlm.rentalNumbersPerUnit && fromLlm.rentalNumbersPerUnit.length > 0 && (
+              {hasOmDocument && fromLlm.rentalNumbersPerUnit && fromLlm.rentalNumbersPerUnit.length > 0 && (
                 <div style={{ marginBottom: "0.75rem" }}>
-                  <span style={{ display: "block", fontSize: "0.75rem", color: "#666", marginBottom: "0.35rem" }}>Rent roll (from OM / brochure)</span>
+                  <span style={{ display: "block", fontSize: "0.75rem", color: "#666", marginBottom: "0.35rem" }}>
+                    {hasOmDocument ? "Rent roll (from current extracted documents)" : "Rent roll (inferred from text)"}
+                  </span>
                   <div style={{ overflowX: "auto", border: "1px solid #e2e8f0", borderRadius: "8px" }}>
-                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem", tableLayout: "fixed" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem", tableLayout: "auto" }}>
                       <thead>
                         <tr style={{ borderBottom: "2px solid #e2e8f0", backgroundColor: "#f8fafc" }}>
                           <th style={{ textAlign: "center", padding: "0.5rem 0.75rem", fontWeight: 600, width: "20%" }}>Unit</th>
@@ -1965,7 +2251,7 @@ tyler@stayhaus.co`;
                           {fromLlm.rentalNumbersPerUnit.some((u) => u.occupied != null) && <th style={{ textAlign: "center", padding: "0.5rem 0.75rem", fontWeight: 600, minWidth: "80px" }}>Occupied</th>}
                           {fromLlm.rentalNumbersPerUnit.some((u) => u.lastRentedDate != null) && <th style={{ textAlign: "center", padding: "0.5rem 0.75rem", fontWeight: 600, minWidth: "90px" }}>Last rented</th>}
                           {fromLlm.rentalNumbersPerUnit.some((u) => u.dateVacant != null) && <th style={{ textAlign: "center", padding: "0.5rem 0.75rem", fontWeight: 600, minWidth: "90px" }}>Date vacant</th>}
-                          {fromLlm.rentalNumbersPerUnit.some((u) => u.note) && <th style={{ textAlign: "center", padding: "0.5rem 0.75rem", fontWeight: 600, minWidth: "120px" }}>Note</th>}
+                          {fromLlm.rentalNumbersPerUnit.some((u) => u.note) && <th style={{ textAlign: "left", padding: "0.5rem 0.75rem", fontWeight: 600, minWidth: "220px" }}>Note</th>}
                         </tr>
                       </thead>
                       <tbody>
@@ -1980,7 +2266,7 @@ tyler@stayhaus.co`;
                             {fromLlm.rentalNumbersPerUnit!.some((x) => x.occupied != null) && <td style={{ textAlign: "center", padding: "0.5rem 0.75rem", fontSize: "0.8rem", minWidth: "80px" }}>{u.occupied === true ? "Yes" : u.occupied === false ? "No" : (u.occupied != null ? String(u.occupied) : "—")}</td>}
                             {fromLlm.rentalNumbersPerUnit!.some((x) => x.lastRentedDate != null) && <td style={{ textAlign: "center", padding: "0.5rem 0.75rem", fontSize: "0.8rem", minWidth: "90px" }}>{u.lastRentedDate ?? "—"}</td>}
                             {fromLlm.rentalNumbersPerUnit!.some((x) => x.dateVacant != null) && <td style={{ textAlign: "center", padding: "0.5rem 0.75rem", fontSize: "0.8rem", minWidth: "90px" }}>{u.dateVacant ?? "—"}</td>}
-                            {fromLlm.rentalNumbersPerUnit!.some((x) => x.note) && <td style={{ textAlign: "center", padding: "0.5rem 0.75rem", fontSize: "0.8rem", color: "#555", minWidth: "120px" }}>{(u.note ?? "").trim() || "—"}</td>}
+                            {fromLlm.rentalNumbersPerUnit!.some((x) => x.note) && <td style={{ textAlign: "left", padding: "0.5rem 0.75rem", fontSize: "0.8rem", color: "#555", minWidth: "220px", whiteSpace: "normal", overflowWrap: "anywhere" }}>{(u.note ?? "").trim() || "—"}</td>}
                           </tr>
                         ))}
                         <tr style={{ borderTop: "2px solid #e2e8f0", backgroundColor: "#f8fafc", fontWeight: 600 }}>
@@ -1996,7 +2282,7 @@ tyler@stayhaus.co`;
                   </div>
                 </div>
               )}
-              {fromLlm.expensesTable && fromLlm.expensesTable.length > 0 && (
+              {hasOmDocument && fromLlm.expensesTable && fromLlm.expensesTable.length > 0 && (
                 <div style={{ marginBottom: "0.75rem" }}>
                   <span style={{ display: "block", fontSize: "0.75rem", color: "#666", marginBottom: "0.35rem" }}>Expenses</span>
                   <div style={{ overflowX: "auto", border: "1px solid #e2e8f0", borderRadius: "8px" }}>
@@ -2048,62 +2334,63 @@ tyler@stayhaus.co`;
               )}
             </div>
           )}
-          <div style={{ borderTop: "1px solid #e0e0e0", paddingTop: "0.6rem", marginTop: "0.6rem", marginBottom: "0.5rem" }}>
-            <strong style={{ display: "block", marginBottom: "0.2rem" }}>Downloads</strong>
-            <p style={{ margin: "0 0 0.35rem", fontSize: "0.75rem", color: "#666" }}>Inquiry attachments, uploaded docs, and generated dossier/Excel.</p>
-            {unifiedDocuments === null ? (
-              <p style={{ margin: 0, fontSize: "0.8rem", color: "#737373" }}>Loading…</p>
-            ) : unifiedDocuments.length > 0 ? (
-              <ul style={{ margin: 0, paddingLeft: "1.25rem", fontSize: "0.8rem" }}>
-                {unifiedDocuments.map((doc) => (
-                  <li key={doc.id} style={{ marginBottom: "0.5rem", display: "flex", alignItems: "flex-start", gap: "0.5rem", flexWrap: "wrap" }}>
-                    <span>
-                      <a
-                        href={`${API_BASE}/api/properties/${property.id}/documents/${doc.id}/file`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        style={{ color: "#0066cc" }}
-                      >
-                        {doc.fileName}
-                      </a>
-                      <div style={{ fontSize: "0.75rem", color: "#555", marginTop: "0.1rem" }}>{doc.source}</div>
-                    </span>
-                    <button
-                      type="button"
-                      disabled={Boolean(deletingDocId === doc.id)}
-                      onClick={async () => {
-                        if (deletingDocId) return;
-                        setDeletingDocId(doc.id);
-                        try {
-                          const res = await fetch(
-                            `${API_BASE}/api/properties/${property.id}/documents/${doc.id}?sourceType=${encodeURIComponent(doc.sourceType)}`,
-                            { method: "DELETE" }
-                          );
-                          if (!res.ok) {
-                            const data = await res.json().catch(() => ({}));
-                            throw new Error(typeof data?.details === "string" ? data.details : data?.error ?? "Failed to remove");
+          <div className="rental-om-doc-grid">
+            <div className="rental-om-panel rental-om-panel--documents">
+              <strong style={{ display: "block", marginBottom: "0.2rem" }}>Documents</strong>
+              <p style={{ margin: "0 0 0.35rem", fontSize: "0.75rem", color: "#666" }}>Inquiry attachments, uploaded docs, and generated dossier/Excel.</p>
+              {unifiedDocuments === null ? (
+                <p style={{ margin: 0, fontSize: "0.8rem", color: "#737373" }}>Loading…</p>
+              ) : unifiedDocuments.length > 0 ? (
+                <div className="rental-om-doc-list">
+                  {unifiedDocuments.map((doc) => (
+                    <div key={doc.id} className="rental-om-doc-card">
+                      <div style={{ minWidth: 0 }}>
+                        <a
+                          href={`${API_BASE}/api/properties/${property.id}/documents/${doc.id}/file`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          style={{ color: "#0066cc", fontWeight: 600, overflowWrap: "anywhere" }}
+                        >
+                          {doc.fileName}
+                        </a>
+                        <div style={{ fontSize: "0.75rem", color: "#555", marginTop: "0.15rem" }}>{doc.source}</div>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={Boolean(deletingDocId === doc.id)}
+                        onClick={async () => {
+                          if (deletingDocId) return;
+                          setDeletingDocId(doc.id);
+                          try {
+                            const res = await fetch(
+                              `${API_BASE}/api/properties/${property.id}/documents/${doc.id}?sourceType=${encodeURIComponent(doc.sourceType)}`,
+                              { method: "DELETE" }
+                            );
+                            if (!res.ok) {
+                              const data = await res.json().catch(() => ({}));
+                              throw new Error(typeof data?.details === "string" ? data.details : data?.error ?? "Failed to remove");
+                            }
+                            setUnifiedDocuments((prev) => (prev ? prev.filter((d) => d.id !== doc.id) : []));
+                          } catch (e) {
+                            setUploadError(e instanceof Error ? e.message : "Failed to remove document");
+                          } finally {
+                            setDeletingDocId(null);
                           }
-                          setUnifiedDocuments((prev) => (prev ? prev.filter((d) => d.id !== doc.id) : []));
-                        } catch (e) {
-                          setUploadError(e instanceof Error ? e.message : "Failed to remove document");
-                        } finally {
-                          setDeletingDocId(null);
-                        }
-                      }}
-                      style={{ flexShrink: 0, padding: "0.2rem 0.4rem", fontSize: "0.75rem", border: "1px solid #dc2626", borderRadius: "4px", background: "#fff", color: "#dc2626", cursor: deletingDocId === doc.id ? "wait" : "pointer" }}
-                    >
-                      {deletingDocId === doc.id ? "Removing…" : "Remove"}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p style={{ margin: 0, fontSize: "0.8rem", color: "#737373" }}>No documents yet. Send an inquiry, upload a file, or use the Deal dossier section above to generate the PDF and Excel.</p>
-            )}
-          </div>
-          <div style={{ borderTop: "1px solid #e0e0e0", paddingTop: "0.6rem", marginTop: "0.6rem", marginBottom: "0.5rem" }}>
-            <strong style={{ display: "block", marginBottom: "0.2rem" }}>Upload document</strong>
-            <form
+                        }}
+                        style={{ flexShrink: 0, padding: "0.28rem 0.55rem", fontSize: "0.75rem", border: "1px solid #dc2626", borderRadius: "999px", background: "#fff", color: "#dc2626", cursor: deletingDocId === doc.id ? "wait" : "pointer" }}
+                      >
+                        {deletingDocId === doc.id ? "Removing…" : "Remove"}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p style={{ margin: 0, fontSize: "0.8rem", color: "#737373" }}>No documents yet. Send an inquiry, upload a file, or use the Deal dossier section above to generate the PDF and Excel.</p>
+              )}
+            </div>
+            <div className="rental-om-panel rental-om-panel--upload">
+              <strong style={{ display: "block", marginBottom: "0.2rem" }}>Upload document</strong>
+              <form
               onSubmit={async (e) => {
                 e.preventDefault();
                 const form = e.currentTarget;
@@ -2152,8 +2439,9 @@ tyler@stayhaus.co`;
               <button type="submit" disabled={Boolean(uploading)} style={{ padding: "0.35rem 0.6rem", fontSize: "0.8rem", border: "1px solid #0066cc", borderRadius: "4px", background: uploading ? "#94a3b8" : "#0066cc", color: "#fff", cursor: uploading ? "wait" : "pointer" }}>
                 {uploading ? "Uploading…" : "Upload"}
               </button>
-            </form>
-            {uploadError && <p style={{ margin: "0.25rem 0 0", fontSize: "0.8rem", color: "#b91c1c" }}>{uploadError}</p>}
+              </form>
+              {uploadError && <p style={{ margin: "0.25rem 0 0", fontSize: "0.8rem", color: "#b91c1c" }}>{uploadError}</p>}
+            </div>
           </div>
           {listingForDisplay?.rentalPriceHistory?.length && rentalUnits.length === 0 && !fromLlm ? (
             <div className="initial-info-price-history-list">

@@ -34,6 +34,12 @@ export interface DealScoringInputs {
   litigationOpenCount?: number;
   litigationTotal?: number;
   litigationTotalPenalty?: number;
+  /** Most recent price cut magnitude as a positive percent (e.g. 5.2). */
+  latestPriceDecreasePct?: number | null;
+  /** Days since the latest price cut. */
+  daysSinceLatestPriceDecrease?: number | null;
+  /** Current ask discount versus the original list price. */
+  currentDiscountFromOriginalAskPct?: number | null;
 }
 
 export interface DealScoringResult {
@@ -83,6 +89,23 @@ function pricingGapScore(discountPct: number | null): number {
   if (discountPct <= 10) return 12;
   if (discountPct <= 15) return 6;
   if (discountPct <= 20) return 2;
+  return 0;
+}
+
+function marketActivityScore(inputs: DealScoringInputs): number {
+  const cutPct = inputs.latestPriceDecreasePct;
+  const daysSinceCut = inputs.daysSinceLatestPriceDecrease;
+  if (cutPct == null || daysSinceCut == null || Number.isNaN(cutPct) || Number.isNaN(daysSinceCut)) return 0;
+  if (daysSinceCut <= 30 && cutPct >= 5) return 8;
+  if (daysSinceCut <= 45 && cutPct >= 3) return 6;
+  if (daysSinceCut <= 90 && cutPct >= 1.5) return 4;
+  if (
+    daysSinceCut <= 120 &&
+    (inputs.currentDiscountFromOriginalAskPct ?? 0) >= 10 &&
+    cutPct >= 1
+  ) {
+    return 2;
+  }
   return 0;
 }
 
@@ -147,9 +170,10 @@ export function computeDealScore(inputs: DealScoringInputs): DealScoringResult {
   const assetCapRate =
     purchasePrice != null && noi != null && noi >= 0 ? (noi / purchasePrice) * 100 : null;
   const discountPct = requiredDiscountPct(inputs);
+  const activityScore = marketActivityScore(inputs);
 
   const capScore = assetCapScore(assetCapRate);
-  const negotiationScore = pricingGapScore(discountPct);
+  const negotiationScore = pricingGapScore(discountPct) + activityScore;
   const returnsScore = executionScore(inputs);
   const deduct = riskDeduction(inputs);
   const isScoreable =
@@ -165,6 +189,15 @@ export function computeDealScore(inputs: DealScoringInputs): DealScoringResult {
   }
   if (inputs.adjustedCapRatePct != null && inputs.adjustedCapRatePct >= 6) {
     positiveSignals.push("Stabilized cap rate at or above 6%");
+  }
+  if (
+    inputs.latestPriceDecreasePct != null &&
+    inputs.daysSinceLatestPriceDecrease != null &&
+    activityScore > 0
+  ) {
+    positiveSignals.push(
+      `Recent ${inputs.latestPriceDecreasePct.toFixed(1)}% price cut ${Math.round(inputs.daysSinceLatestPriceDecrease)} day(s) ago`
+    );
   }
 
   const rentStab = inputs.rentStabilizedUnitCount ?? 0;

@@ -1,128 +1,341 @@
 /**
- * Convert dossier plain text (from LLM or template) to a PDF buffer.
- * Uses PDFKit with strong presentation: section colors, table borders and header styling, bullets, spacing.
+ * Convert dossier plain text into a presentation-focused PDF.
+ * The renderer adds a cover block, cleaner section styling, and table rules that keep
+ * wide financial tables legible.
  */
 
 import PDFDocument from "pdfkit";
 
 const MARGIN = 50;
-const PAGE_WIDTH = 612;
-const BODY_WIDTH = PAGE_WIDTH - 2 * MARGIN;
-const TITLE_FONT_SIZE = 20;
+const HERO_HEIGHT = 104;
+const TITLE_FONT_SIZE = 11;
+const HERO_ADDRESS_FONT_SIZE = 18;
 const HEADING_FONT_SIZE = 12;
-const BODY_FONT_SIZE = 10;
-const TABLE_FONT_SIZE = 9;
-const LINE_HEIGHT_BODY = 1.25;
-const LINE_HEIGHT_HEADING = 1.3;
-const LINE_HEIGHT_TABLE = 1.2;
-const SPACING_AFTER_HEADING = 8;
-const TABLE_CELL_PADDING = 6;
-const BULLET_INDENT = 18;
-
-/** Section heading color (dark blue) */
+const BODY_FONT_SIZE = 9.5;
+const BODY_LINE_GAP = 2;
+const HEADING_SPACING = 12;
+const PARAGRAPH_SPACING = 8;
 const SECTION_HEADING_COLOR = "#1e3a5f";
-/** Table header row background */
-const TABLE_HEADER_BG = "#f0f4f8";
-/** Table border and rule color */
-const TABLE_BORDER_COLOR = "#cbd5e1";
+const BODY_TEXT_COLOR = "#233041";
+const MUTED_TEXT_COLOR = "#64748b";
+const NEGATIVE_TEXT_COLOR = "#9f1239";
+const RULE_COLOR = "#cbd5e1";
+const TABLE_HEADER_BG = "#e9f0f7";
+const TABLE_ALT_BG = "#f8fafc";
+const LABEL_BG = "#f3f6fa";
+const HERO_BG = "#1e3a5f";
+const HERO_ACCENT = "#8fb9d8";
+const CHIP_BG = "#f8fafc";
+const CHIP_TEXT = "#1e3a5f";
 
-/**
- * Detect section headings: lines that look like "1. Title", "## Title", or "TITLE" (all caps, short).
- */
+type TableCell = { text: string; bold: boolean };
+type LayoutState = { y: number; pageNumber: number };
+
+function pageWidth(doc: PDFKit.PDFDocument): number {
+  return doc.page.width;
+}
+
+function pageHeight(doc: PDFKit.PDFDocument): number {
+  return doc.page.height;
+}
+
+function bodyWidth(doc: PDFKit.PDFDocument): number {
+  return pageWidth(doc) - 2 * MARGIN;
+}
+
+function maxY(doc: PDFKit.PDFDocument): number {
+  return pageHeight(doc) - MARGIN;
+}
+
 function isHeading(line: string): boolean {
   const t = line.trim();
   if (!t) return false;
   if (/^#{1,3}\s+.+/.test(t)) return true;
   if (/^\d+[.)]\s+.+/.test(t)) return true;
-  if (t.length < 60 && /^[A-Z][A-Z0-9\s&'-]+$/.test(t) && t.split(/\s+/).length <= 6) return true;
+  if (t.length < 60 && /^[A-Z][A-Z0-9\s&'/-]+$/.test(t) && t.split(/\s+/).length <= 8) {
+    return true;
+  }
   return false;
 }
 
-/** True if line looks like a pipe-separated table row. */
+function isDivider(line: string): boolean {
+  return /^[-=]{3,}$/.test(line.trim());
+}
+
 function isTableRow(line: string): boolean {
   const t = line.trim();
   return t.length > 0 && t.startsWith("|") && t.endsWith("|");
 }
 
-/** Parse a table row into cells (strip ** for bold). */
-function parseTableRow(line: string): { text: string; bold: boolean }[] {
-  const t = line.trim();
-  const inner = t.slice(1, -1);
+function parseTableRow(line: string): TableCell[] {
+  const inner = line.trim().slice(1, -1);
   return inner.split("|").map((cell) => {
     const trimmed = cell.trim();
     const bold = trimmed.startsWith("**") && trimmed.endsWith("**");
-    const text = bold ? trimmed.slice(2, -2).trim() : trimmed;
-    return { text, bold };
+    return {
+      text: bold ? trimmed.slice(2, -2).trim() : trimmed,
+      bold,
+    };
   });
 }
 
-/**
- * Draw a table with borders and optional header row background. First row is styled as header.
- */
-function drawTable(
-  doc: PDFKit.PDFDocument,
-  rows: { text: string; bold: boolean }[][],
-  x: number,
-  y: number,
-  tableWidth: number
-): number {
-  if (rows.length === 0) return y;
-  const colCount = Math.max(...rows.map((r) => r.length));
-  const colWidths: number[] = [];
-  const minCol = tableWidth / colCount;
-  doc.fontSize(TABLE_FONT_SIZE).font("Helvetica");
-  for (let c = 0; c < colCount; c++) {
-    let maxW = 0;
-    for (const row of rows) {
-      const cell = row[c];
-      if (cell) {
-        const w = doc.widthOfString(cell.text) + TABLE_CELL_PADDING * 2;
-        if (w > maxW) maxW = w;
-      }
-    }
-    colWidths.push(Math.max(minCol, Math.min(maxW, tableWidth * 0.45)));
-  }
-  const totalW = colWidths.reduce((a, b) => a + b, 0);
-  if (totalW > tableWidth) {
-    const scale = tableWidth / totalW;
-    for (let c = 0; c < colWidths.length; c++) colWidths[c] = colWidths[c]! * scale;
-  }
-  const rowHeight = TABLE_FONT_SIZE * LINE_HEIGHT_TABLE + 6;
-  let currentY = y;
-  doc.strokeColor(TABLE_BORDER_COLOR).lineWidth(0.5);
-  for (let r = 0; r < rows.length; r++) {
-    const row = rows[r]!;
-    const isHeader = r === 0 && row.every((c) => !c.bold);
-    let cellX = x;
-    for (let c = 0; c < colCount; c++) {
-      const cell = row[c];
-      const w = colWidths[c] ?? minCol;
-      if (isHeader) {
-        doc.rect(cellX, currentY, w, rowHeight).fill(TABLE_HEADER_BG);
-        doc.strokeColor(TABLE_BORDER_COLOR).rect(cellX, currentY, w, rowHeight).stroke();
-      } else {
-        doc.strokeColor(TABLE_BORDER_COLOR).rect(cellX, currentY, w, rowHeight).stroke();
-      }
-      if (cell) {
-        doc.fontSize(TABLE_FONT_SIZE).font(cell.bold ? "Helvetica-Bold" : "Helvetica");
-        if (isHeader) doc.fillColor(SECTION_HEADING_COLOR);
-        doc.text(cell.text, cellX + TABLE_CELL_PADDING, currentY + 4, {
-          width: w - TABLE_CELL_PADDING * 2,
-          ellipsis: true,
-        });
-        doc.fillColor("black");
-      }
-      cellX += w;
-    }
-    currentY += rowHeight;
-  }
-  return currentY;
+function isBullet(line: string): boolean {
+  return /^([•*-])\s+/.test(line.trimStart());
 }
 
-/**
- * Convert dossier text to PDF. Returns a buffer suitable for saving or email attachment.
- * Supports pipe-separated table rows (e.g. "| Col1 | Col2 |"); cells with **text** are rendered bold.
- */
+function cleanBullet(line: string): string {
+  return line.trimStart().replace(/^([•*-])\s+/, "");
+}
+
+function isNumericLike(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+  if (/^Y\d+$/.test(trimmed)) return true;
+  if (/%$/.test(trimmed) || /x$/.test(trimmed)) return true;
+  if (/^(?:\(|-)?\$?[\d,]+(?:\.\d+)?\)?$/.test(trimmed)) return true;
+  return /^\d+\s+years?$/.test(trimmed);
+}
+
+function addPage(doc: PDFKit.PDFDocument, state: LayoutState): void {
+  doc.addPage({ margin: MARGIN, size: "letter" });
+  state.pageNumber += 1;
+  drawPageChrome(doc, state.pageNumber);
+  state.y = MARGIN + 8;
+}
+
+function ensureSpace(doc: PDFKit.PDFDocument, state: LayoutState, needed: number): void {
+  if (state.y + needed > maxY(doc)) addPage(doc, state);
+}
+
+function drawPageChrome(doc: PDFKit.PDFDocument, pageNumber: number): void {
+  const width = pageWidth(doc);
+  const height = pageHeight(doc);
+  const footerRuleY = height - 68;
+  const footerTextY = height - 62;
+  doc.save();
+  doc.strokeColor(HERO_ACCENT).lineWidth(2);
+  doc.moveTo(MARGIN, MARGIN - 18).lineTo(width - MARGIN, MARGIN - 18).stroke();
+  doc.strokeColor(RULE_COLOR).lineWidth(0.75);
+  doc.moveTo(MARGIN, footerRuleY).lineTo(width - MARGIN, footerRuleY).stroke();
+  doc.fillColor(MUTED_TEXT_COLOR).font("Helvetica").fontSize(8);
+  doc.text(`Page ${pageNumber}`, width - MARGIN - 48, footerTextY, {
+    width: 48,
+    align: "right",
+    lineBreak: false,
+  });
+  doc.restore();
+}
+
+function extractMeta(lines: string[]): {
+  title: string;
+  address: string | null;
+  score: string | null;
+  generated: string | null;
+} {
+  const title = lines.find((line) => line.trim().length > 0) ?? "DEAL DOSSIER";
+  const addressLine = lines.find((line) => line.startsWith("Address:"));
+  const scoreLine = lines.find((line) => line.startsWith("Deal score:"));
+  const generatedLine = lines.find((line) => line.startsWith("Generated:"));
+  return {
+    title: title.trim(),
+    address: addressLine ? addressLine.replace(/^Address:\s*/, "").trim() : null,
+    score: scoreLine ? scoreLine.replace(/^Deal score:\s*/, "").trim() : null,
+    generated: generatedLine ? generatedLine.replace(/^Generated:\s*/, "").trim() : null,
+  };
+}
+
+function drawChip(
+  doc: PDFKit.PDFDocument,
+  x: number,
+  y: number,
+  width: number,
+  label: string,
+  value: string
+): void {
+  doc.save();
+  doc.roundedRect(x, y, width, 28, 8).fill(CHIP_BG);
+  doc.fillColor(CHIP_TEXT).font("Helvetica-Bold").fontSize(7.5);
+  doc.text(label.toUpperCase(), x + 10, y + 6, { width: width - 20 });
+  doc.font("Helvetica").fontSize(9.5);
+  doc.text(value, x + 10, y + 14, { width: width - 20 });
+  doc.restore();
+}
+
+function drawHero(
+  doc: PDFKit.PDFDocument,
+  state: LayoutState,
+  meta: ReturnType<typeof extractMeta>
+): void {
+  const x = MARGIN;
+  const y = MARGIN + 2;
+  const width = bodyWidth(doc);
+  doc.save();
+  doc.roundedRect(x, y, width, HERO_HEIGHT, 14).fill(HERO_BG);
+  doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(TITLE_FONT_SIZE);
+  doc.text(meta.title, x + 18, y + 16, { width: width - 180 });
+  doc.fontSize(HERO_ADDRESS_FONT_SIZE);
+  doc.text(meta.address ?? "Investment Memorandum", x + 18, y + 34, {
+    width: width - 180,
+  });
+  doc.strokeColor(HERO_ACCENT).lineWidth(2);
+  doc.moveTo(x + 18, y + HERO_HEIGHT - 18).lineTo(x + 96, y + HERO_HEIGHT - 18).stroke();
+  if (meta.score) drawChip(doc, x + width - 132, y + 18, 114, "Deal Score", meta.score);
+  if (meta.generated) {
+    drawChip(doc, x + width - 132, y + 54, 114, "Generated", meta.generated);
+  }
+  doc.restore();
+  state.y = y + HERO_HEIGHT + 18;
+}
+
+function drawSectionHeading(doc: PDFKit.PDFDocument, state: LayoutState, heading: string): void {
+  ensureSpace(doc, state, 28);
+  const clean = heading.replace(/^#+\s*/, "").replace(/^\d+[.)]\s*/, "").trim();
+  doc.save();
+  doc.fillColor(SECTION_HEADING_COLOR).font("Helvetica-Bold").fontSize(HEADING_FONT_SIZE);
+  doc.text(clean, MARGIN, state.y, { width: bodyWidth(doc) });
+  state.y += HEADING_FONT_SIZE + 4;
+  doc.strokeColor(HERO_ACCENT).lineWidth(1.2);
+  doc.moveTo(MARGIN, state.y).lineTo(MARGIN + 84, state.y).stroke();
+  doc.restore();
+  state.y += HEADING_SPACING;
+}
+
+function drawParagraph(doc: PDFKit.PDFDocument, state: LayoutState, line: string): void {
+  const bullet = isBullet(line);
+  const text = bullet ? cleanBullet(line) : line.trim();
+  const bulletOffset = bullet ? 16 : 0;
+  doc.font("Helvetica").fontSize(BODY_FONT_SIZE);
+  const height = doc.heightOfString(text, {
+    width: bodyWidth(doc) - bulletOffset,
+    lineGap: BODY_LINE_GAP,
+  });
+  ensureSpace(doc, state, height + PARAGRAPH_SPACING);
+  if (bullet) {
+    doc.save();
+    doc.fillColor(HERO_ACCENT).circle(MARGIN + 5, state.y + 6, 2.25).fill();
+    doc.restore();
+  }
+  doc.fillColor(BODY_TEXT_COLOR).text(text, MARGIN + bulletOffset, state.y, {
+    width: bodyWidth(doc) - bulletOffset,
+    lineGap: BODY_LINE_GAP,
+  });
+  state.y += height + PARAGRAPH_SPACING;
+}
+
+function tableColumnWidths(tableWidth: number, colCount: number, keyValue: boolean): number[] {
+  if (keyValue) return [tableWidth * 0.56, tableWidth * 0.44];
+  if (colCount >= 6) {
+    const first = tableWidth * 0.23;
+    const remaining = (tableWidth - first) / (colCount - 1);
+    return [first, ...Array.from({ length: colCount - 1 }, () => remaining)];
+  }
+  if (colCount === 5) {
+    const first = tableWidth * 0.28;
+    const remaining = (tableWidth - first) / 4;
+    return [first, remaining, remaining, remaining, remaining];
+  }
+  if (colCount === 4) {
+    const first = tableWidth * 0.30;
+    const remaining = (tableWidth - first) / 3;
+    return [first, remaining, remaining, remaining];
+  }
+  if (colCount === 3) {
+    const first = tableWidth * 0.42;
+    const remaining = (tableWidth - first) / 2;
+    return [first, remaining, remaining];
+  }
+  return Array.from({ length: colCount }, () => tableWidth / colCount);
+}
+
+function measureTableHeight(
+  doc: PDFKit.PDFDocument,
+  rows: TableCell[][],
+  widths: number[],
+  fontSize: number,
+  cellPadding: number,
+  keyValue: boolean
+): number {
+  let total = 0;
+  rows.forEach((row, rowIndex) => {
+    const isHeader = !keyValue && rowIndex === 0;
+    let rowHeight = fontSize + cellPadding * 2;
+    row.forEach((cell, colIndex) => {
+      doc.font(cell.bold || isHeader ? "Helvetica-Bold" : "Helvetica").fontSize(fontSize);
+      const height = doc.heightOfString(cell.text, {
+        width: (widths[colIndex] ?? widths[0] ?? 0) - cellPadding * 2,
+        align: colIndex > 0 && isNumericLike(cell.text) ? "right" : "left",
+        lineGap: 1,
+      });
+      rowHeight = Math.max(rowHeight, height + cellPadding * 2);
+    });
+    total += rowHeight;
+  });
+  return total;
+}
+
+function drawTable(
+  doc: PDFKit.PDFDocument,
+  state: LayoutState,
+  rows: TableCell[][]
+): void {
+  if (rows.length === 0) return;
+  const colCount = Math.max(...rows.map((row) => row.length));
+  const keyValue = colCount === 2 && rows.length <= 8;
+  const compact = colCount >= 6;
+  const fontSize = compact ? 7.25 : keyValue ? 9.5 : 8.5;
+  const cellPadding = compact ? 3.5 : keyValue ? 6 : 5;
+  const widths = tableColumnWidths(bodyWidth(doc), colCount, keyValue);
+  const estimatedHeight = measureTableHeight(doc, rows, widths, fontSize, cellPadding, keyValue);
+  ensureSpace(doc, state, estimatedHeight + 8);
+
+  let currentY = state.y;
+  rows.forEach((row, rowIndex) => {
+    const isHeader = !keyValue && rowIndex === 0;
+    let rowHeight = fontSize + cellPadding * 2;
+    row.forEach((cell, colIndex) => {
+      doc.font(cell.bold || isHeader ? "Helvetica-Bold" : "Helvetica").fontSize(fontSize);
+      const height = doc.heightOfString(cell.text, {
+        width: (widths[colIndex] ?? widths[0] ?? 0) - cellPadding * 2,
+        align: colIndex > 0 && isNumericLike(cell.text) ? "right" : "left",
+        lineGap: 1,
+      });
+      rowHeight = Math.max(rowHeight, height + cellPadding * 2);
+    });
+
+    let currentX = MARGIN;
+    row.forEach((cell, colIndex) => {
+      const width = widths[colIndex] ?? widths[0] ?? 0;
+      const fillColor = isHeader
+        ? TABLE_HEADER_BG
+        : keyValue && colIndex === 0
+          ? LABEL_BG
+          : rowIndex % 2 === 0
+            ? "#ffffff"
+            : TABLE_ALT_BG;
+      doc.save();
+      doc.roundedRect(currentX, currentY, width, rowHeight, 0).fill(fillColor);
+      doc.restore();
+      doc.strokeColor(RULE_COLOR).lineWidth(0.6).rect(currentX, currentY, width, rowHeight).stroke();
+      const align = colIndex > 0 && isNumericLike(cell.text) ? "right" : "left";
+      const color = isHeader
+        ? SECTION_HEADING_COLOR
+        : /^\(/.test(cell.text.trim()) || /^-/.test(cell.text.trim())
+          ? NEGATIVE_TEXT_COLOR
+          : BODY_TEXT_COLOR;
+      doc.fillColor(color).font(cell.bold || isHeader ? "Helvetica-Bold" : "Helvetica").fontSize(fontSize);
+      doc.text(cell.text, currentX + cellPadding, currentY + cellPadding - 0.5, {
+        width: width - cellPadding * 2,
+        align,
+        lineGap: 1,
+      });
+      currentX += width;
+    });
+    currentY += rowHeight;
+  });
+
+  state.y = currentY + 10;
+}
+
 export function dossierTextToPdf(dossierText: string): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
@@ -132,75 +345,46 @@ export function dossierTextToPdf(dossierText: string): Promise<Buffer> {
     doc.on("error", reject);
 
     const lines = dossierText.split(/\r?\n/);
-    let y = MARGIN;
-    const maxY = 762 - MARGIN;
-    let tableBuffer: { text: string; bold: boolean }[][] = [];
+    const meta = extractMeta(lines);
+    const state: LayoutState = { y: MARGIN + 8, pageNumber: 1 };
+    let tableBuffer: TableCell[][] = [];
 
-    function checkNewPage(needed: number): void {
-      if (y + needed > maxY) {
-        doc.addPage();
-        y = MARGIN;
-      }
-    }
+    drawPageChrome(doc, state.pageNumber);
+    drawHero(doc, state, meta);
 
-    function flushTable(): void {
-      if (tableBuffer.length > 0) {
-        const rowHeight = TABLE_FONT_SIZE * LINE_HEIGHT_TABLE + 2;
-        const tableHeight = tableBuffer.length * rowHeight;
-        checkNewPage(tableHeight);
-        y = drawTable(doc, tableBuffer, MARGIN, y, BODY_WIDTH);
-        y += 4;
-        tableBuffer = [];
-      }
-    }
+    const skipLine = (line: string, index: number): boolean => {
+      if (index === 0 && line.trim() === meta.title) return true;
+      if (isDivider(line)) return true;
+      if (line.startsWith("Deal score:") || line.startsWith("Generated:")) return true;
+      return false;
+    };
 
-    for (let i = 0; i < lines.length; i++) {
-      const raw = lines[i];
+    const flushTable = (): void => {
+      if (tableBuffer.length === 0) return;
+      drawTable(doc, state, tableBuffer);
+      tableBuffer = [];
+    };
+
+    lines.forEach((raw, index) => {
       const line = raw.trimEnd();
-      const isFirstLine = i === 0 && line.length > 0;
-
-      if (!line) {
+      if (skipLine(line, index)) return;
+      if (!line.trim()) {
         flushTable();
-        y += BODY_FONT_SIZE * LINE_HEIGHT_BODY * 0.5;
-        continue;
+        state.y += 4;
+        return;
       }
-
-      if (isFirstLine && line.toUpperCase().includes("DEAL") && line.length < 80) {
-        flushTable();
-        doc.fontSize(TITLE_FONT_SIZE).font("Helvetica-Bold").fillColor(SECTION_HEADING_COLOR);
-        checkNewPage(TITLE_FONT_SIZE * LINE_HEIGHT_HEADING + SPACING_AFTER_HEADING);
-        doc.text(line, MARGIN, y, { width: BODY_WIDTH });
-        y += TITLE_FONT_SIZE * LINE_HEIGHT_HEADING + SPACING_AFTER_HEADING;
-        doc.font("Helvetica").fontSize(BODY_FONT_SIZE).fillColor("black");
-        continue;
-      }
-
       if (isHeading(line)) {
         flushTable();
-        const clean = line.replace(/^#+\s*/, "").replace(/^\d+[.)]\s*/, "").trim();
-        checkNewPage(HEADING_FONT_SIZE * LINE_HEIGHT_HEADING + SPACING_AFTER_HEADING);
-        doc.fontSize(HEADING_FONT_SIZE).font("Helvetica-Bold").fillColor(SECTION_HEADING_COLOR);
-        doc.text(clean, MARGIN, y, { width: BODY_WIDTH });
-        y += HEADING_FONT_SIZE * LINE_HEIGHT_HEADING + SPACING_AFTER_HEADING;
-        doc.font("Helvetica").fontSize(BODY_FONT_SIZE).fillColor("black");
-        continue;
+        drawSectionHeading(doc, state, line);
+        return;
       }
-
       if (isTableRow(line)) {
         tableBuffer.push(parseTableRow(line));
-        continue;
+        return;
       }
-
       flushTable();
-      doc.fontSize(BODY_FONT_SIZE).font("Helvetica").fillColor("black");
-      const isBullet = line.trimStart().startsWith("•");
-      const textX = isBullet ? MARGIN + BULLET_INDENT : MARGIN;
-      const textWidth = BODY_WIDTH - (isBullet ? BULLET_INDENT : 0);
-      const height = doc.heightOfString(line, { width: textWidth });
-      checkNewPage(height);
-      doc.text(line.trimStart(), textX, y, { width: textWidth, lineBreak: true });
-      y += height;
-    }
+      drawParagraph(doc, state, line);
+    });
 
     flushTable();
     doc.end();

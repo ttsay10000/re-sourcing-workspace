@@ -9,6 +9,8 @@ import type {
 const COMMERCIAL_PATTERN =
   /\b(commercial|retail|office|storefront|store front|restaurant|cafe|gallery|medical|community facility|store)\b/i;
 const RENT_STABILIZED_PATTERN = /(rent[\s-]*(?:stabilized|stabilised|controlled?)|\bRS\b)/i;
+const STREET_TYPE_PATTERN =
+  "(?:street|st|avenue|ave|road|rd|boulevard|blvd|place|pl|lane|ln|drive|dr|court|ct|way|terrace|ter|parkway|pkwy|broadway)";
 
 function toNumber(value: string | null | undefined): number | null {
   if (!value) return null;
@@ -24,6 +26,10 @@ function linesFromText(text: string): string[] {
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line.length > 0);
+}
+
+function collapseSpaces(value: string): string {
+  return value.trim().replace(/\s+/g, " ");
 }
 
 function nextLineAfter(lines: string[], pattern: RegExp): string | null {
@@ -58,6 +64,37 @@ function inferNeighborhood(lines: string[], text: string): string | null {
   if (/west village/i.test(text)) return "West Village";
   if (/east village/i.test(text)) return "East Village";
   return null;
+}
+
+function inferAddress(text: string): string | null {
+  const narrativeMatch = text.match(
+    new RegExp(
+      `\\b(\\d+(?:\\s*[-–—]\\s*\\d+)?\\s+[A-Za-z0-9.'-]+(?:\\s+[A-Za-z0-9.'-]+){0,5}\\s+${STREET_TYPE_PATTERN})\\b(?=\\s+(?:has|is|are|consists|contains|sits|lies)\\b)`,
+      "i"
+    )
+  );
+  if (narrativeMatch?.[1]) return collapseSpaces(narrativeMatch[1]);
+
+  const genericMatch = text.match(
+    new RegExp(
+      `\\b(\\d+(?:\\s*[-–—]\\s*\\d+)?\\s+[A-Za-z0-9.'-]+(?:\\s+[A-Za-z0-9.'-]+){0,5}\\s+${STREET_TYPE_PATTERN})\\b`,
+      "i"
+    )
+  );
+  return genericMatch?.[1] ? collapseSpaces(genericMatch[1]) : null;
+}
+
+function inferBlockAndLots(text: string): { block: number | null; lotNumbers: number[] } {
+  const match = text.match(/Block\s+(\d+),\s*Lots?\s+([0-9,\sand]+)/i);
+  if (!match) return { block: null, lotNumbers: [] };
+  const block = toNumber(match[1]);
+  const lotNumbers = Array.from((match[2] ?? "").matchAll(/\d+/g))
+    .map((entry) => Number(entry[0]))
+    .filter((value) => Number.isFinite(value));
+  return {
+    block,
+    lotNumbers,
+  };
 }
 
 function inferPropertyType(text: string, commercialUnits: number): string | null {
@@ -403,6 +440,8 @@ export function extractRentalFinancialsFallback(text: string): {
   const freeMarketPct = inferFreeMarketPct(trimmed);
   const currentGrossRent = inferCurrentGrossRent(rentRoll, totalIncome);
   const neighborhood = inferNeighborhood(lines, trimmed);
+  const address = inferAddress(trimmed);
+  const { block, lotNumbers } = inferBlockAndLots(trimmed);
   const totalUnits =
     totalUnitsNarrative ??
     (rentRoll.length > 0 ? rentRoll.length : null) ??
@@ -441,6 +480,7 @@ export function extractRentalFinancialsFallback(text: string): {
 
   const propertyInfo: Record<string, unknown> = {};
   if (price != null) propertyInfo.price = price;
+  if (address) propertyInfo.address = address;
   if (neighborhood) propertyInfo.neighborhood = neighborhood;
   if (taxClass) propertyInfo.taxClass = taxClass;
   if (annualTaxes != null) propertyInfo.annualTaxes = annualTaxes;
@@ -448,6 +488,8 @@ export function extractRentalFinancialsFallback(text: string): {
   if (residentialUnits != null) propertyInfo.unitsResidential = residentialUnits;
   if (commercialUnits != null) propertyInfo.unitsCommercial = commercialUnits;
   if (totalUnits != null) propertyInfo.totalUnits = totalUnits;
+  if (block != null) propertyInfo.block = block;
+  if (lotNumbers.length > 0) propertyInfo.lotNumbers = lotNumbers;
   const propertyType = inferPropertyType(trimmed, commercialUnits ?? 0);
   if (propertyType) propertyInfo.propertyType = propertyType;
   if (/manhattan/i.test(trimmed)) propertyInfo.borough = "Manhattan";

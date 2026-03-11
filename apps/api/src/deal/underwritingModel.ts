@@ -295,8 +295,15 @@ function compoundAnnual(base: number, growthPct: number, yearsElapsed: number): 
 
 function expenseGrowthPctForLine(
   lineItem: string,
-  assumptions: ResolvedDossierAssumptions
+  assumptions: ResolvedDossierAssumptions,
+  options?: { aggregateFallback?: boolean }
 ): number {
+  if (options?.aggregateFallback) {
+    return Math.max(
+      assumptions.operating.annualExpenseGrowthPct,
+      assumptions.operating.annualPropertyTaxGrowthPct
+    );
+  }
   return /tax/i.test(lineItem)
     ? assumptions.operating.annualPropertyTaxGrowthPct
     : assumptions.operating.annualExpenseGrowthPct;
@@ -308,7 +315,7 @@ function projectExpenseLines(input: {
   expenseRows?: ProjectedExpenseInputRow[] | null;
 }): UnderwritingProjectionExpenseLine[] {
   const { assumptions, currentExpensesTotal, expenseRows } = input;
-  const normalizedRows =
+  const detailedRows =
     Array.isArray(expenseRows) && expenseRows.length > 0
       ? expenseRows
           .filter(
@@ -324,7 +331,11 @@ function projectExpenseLines(input: {
             lineItem: row.lineItem.trim(),
             amount: row.amount,
           }))
-      : [{ lineItem: "Operating expenses", amount: currentExpensesTotal }];
+      : [];
+  const aggregateFallback = detailedRows.length === 0;
+  const normalizedRows = aggregateFallback
+    ? [{ lineItem: "Operating expenses", amount: currentExpensesTotal }]
+    : detailedRows;
 
   const totalFromRows = normalizedRows.reduce((sum, row) => sum + row.amount, 0);
   const scale =
@@ -334,7 +345,9 @@ function projectExpenseLines(input: {
   const increaseFactor = 1 + assumptions.operating.expenseIncreasePct / 100;
 
   return normalizedRows.map((row) => {
-    const annualGrowthPct = expenseGrowthPctForLine(row.lineItem, assumptions);
+    const annualGrowthPct = expenseGrowthPctForLine(row.lineItem, assumptions, {
+      aggregateFallback,
+    });
     const baseAmount = row.amount * scale * increaseFactor;
     const yearlyAmounts = Array.from({ length: assumptions.holdPeriodYears }, (_, index) =>
       roundCurrency(compoundAnnual(baseAmount, annualGrowthPct, index))

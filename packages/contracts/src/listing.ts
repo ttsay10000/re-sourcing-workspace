@@ -66,6 +66,37 @@ export interface PriceHistoryEntry {
   event: string;
 }
 
+/** Derived listing activity summary from price history; not persisted directly. */
+export interface ListingActivitySummary {
+  /** Date to sort on: latest market activity date, else listed date. */
+  sortDate: string | null;
+  /** Latest dated price-history event, normalized to YYYY-MM-DD when parseable. */
+  lastActivityDate: string | null;
+  /** Raw latest event type from price history, e.g. LISTED or Price Decrease. */
+  lastActivityEvent: string | null;
+  /** Latest event price when parseable. */
+  lastActivityPrice: number | null;
+  /** True when price history provides an activity signal beyond a stale updated_at timestamp. */
+  hasMeaningfulActivity: boolean;
+  /** Most recent event where the price changed versus the prior event. */
+  latestPriceChangeDate: string | null;
+  latestPriceChangeEvent: string | null;
+  latestPriceChangePrice: number | null;
+  /** Signed change vs. the prior event. Negative = price cut. */
+  latestPriceChangeAmount: number | null;
+  /** Signed percent change vs. the prior event. Negative = price cut. */
+  latestPriceChangePercent: number | null;
+  /** Convenience fields for the latest price decrease, if any. */
+  latestPriceDecreaseDate: string | null;
+  latestPriceDecreasePrice: number | null;
+  latestPriceDecreaseAmount: number | null;
+  latestPriceDecreasePercent: number | null;
+  totalPriceDrops: number;
+  /** Current ask discount versus the original listed price for the active history chain. */
+  currentDiscountFromOriginalAskAmount: number | null;
+  currentDiscountFromOriginalAskPct: number | null;
+}
+
 /**
  * Listing row as stored in DB (includes lifecycle and timestamps).
  */
@@ -82,6 +113,8 @@ export interface ListingRow extends ListingNormalized {
   uploadedRunId?: string | null;
   /** Duplicate likelihood score 0–100 (100 = likely duplicate). */
   duplicateScore?: number | null;
+  /** Derived from listedAt + priceHistory on read; not guaranteed to be persisted. */
+  lastActivity?: ListingActivitySummary | null;
   createdAt: string;
   updatedAt: string;
 }

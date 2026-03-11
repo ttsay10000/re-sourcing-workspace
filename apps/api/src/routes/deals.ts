@@ -3,7 +3,7 @@
  */
 
 import { Router, type Request, type Response } from "express";
-import type { PropertyDetails } from "@re-sourcing/contracts";
+import { deriveListingActivitySummary, type PriceHistoryEntry, type PropertyDetails } from "@re-sourcing/contracts";
 import { getPool, UserProfileRepo } from "@re-sourcing/db";
 import { analyzePropertyForUnderwriting } from "../deal/propertyAssumptions.js";
 import {
@@ -118,6 +118,7 @@ router.get("/deals", async (req: Request, res: Response) => {
          l.beds,
          l.baths,
          l.listed_at,
+         l.price_history,
          COALESCE((l.image_urls)[1], (l.extra->'images'->0)::text) AS first_image_url,
          jsonb_array_length(COALESCE(p.details->'rentalFinancials'->'rentalUnits', '[]'::jsonb)) AS units_from_rental,
          (p.details->'rentalFinancials'->'fromLlm'->'rentalNumbersPerUnit')::jsonb AS om_units,
@@ -165,6 +166,12 @@ router.get("/deals", async (req: Request, res: Response) => {
       const currentNoi = noiFromDetails(details);
       const currentGrossRent = grossRentFromDetails(details) ?? (currentNoi != null ? currentNoi * 1.5 : null);
       const askingPrice = row.price != null ? Number(row.price) : null;
+      const listedAt = row.listed_at instanceof Date ? row.listed_at.toISOString() : (row.listed_at as string | null) ?? null;
+      const listingActivity = deriveListingActivitySummary({
+        listedAt,
+        currentPrice: askingPrice,
+        priceHistory: (row.price_history as PriceHistoryEntry[] | null) ?? null,
+      });
       const assumptions = resolveDossierAssumptions(profile, askingPrice, null, { details });
       const recommendedOffer = computeRecommendedOffer({
         assumptions,
@@ -188,7 +195,8 @@ router.get("/deals", async (req: Request, res: Response) => {
         totalUnits: units,
         beds: inferAggregateBeds(details, toFiniteNumber(row.beds)),
         baths: inferAggregateBaths(details, toFiniteNumber(row.baths)),
-        listedAt: row.listed_at instanceof Date ? row.listed_at.toISOString() : (row.listed_at as string | null) ?? null,
+        listedAt,
+        lastActivity: listingActivity,
         residentialUnits: mix.residentialUnits,
         commercialUnits: mix.commercialUnits,
         rentStabilizedUnits: mix.rentStabilizedUnits,
