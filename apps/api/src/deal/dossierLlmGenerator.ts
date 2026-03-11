@@ -51,58 +51,82 @@ function serializeUnderwritingContext(ctx: UnderwritingContext): string {
     lines.push("Expenses (use each row in Expenses table):");
     ctx.expenseRows.forEach((e) => lines.push(`  - ${e.lineItem}: $${fmt(e.amount)}`));
   }
-  if (ctx.furnishedRental) {
-    const fr = ctx.furnishedRental;
-    const mgmtFee = fr.managementFeeAmount ?? 0;
-    const adjExpExMgmt = fr.adjustedExpenses - mgmtFee;
-    lines.push(
-      "Furnished rental scenario:",
-      `  Adjusted gross income: $${fmt(fr.adjustedGrossIncome)}`,
-      `  Adjusted expenses (ex. mgmt): $${fmt(adjExpExMgmt)}`,
-      `  Management fee amount: $${fmt(mgmtFee)} (${a.managementFeePct ?? 8}% of gross)`,
-      `  Adjusted NOI: $${fmt(fr.adjustedNoi)}`,
-      `  Adjusted cap rate: ${fr.adjustedCapRatePct != null ? pct(fr.adjustedCapRatePct) : "—"}`,
-      `  Expected sale price at exit cap: ${fr.expectedSalePriceAtExitCap != null ? `$${fmt(fr.expectedSalePriceAtExitCap)}` : "—"} (exit cap ${pct(a.exitCapPct)})`
-    );
-  }
-  if (ctx.mortgage) {
-    const cf = (ctx.furnishedRental?.adjustedNoi ?? 0) - ctx.mortgage.annualDebtService;
-    lines.push(
-      "Financing:",
-      `  Loan principal: $${fmt(ctx.mortgage.principal)}`,
-      `  Annual debt service: $${fmt(ctx.mortgage.annualDebtService)}`,
-      `  Annual cash flow: $${fmt(cf)}`
-    );
-  }
+  lines.push(
+    "Acquisition:",
+    `  Purchase price: ${a.acquisition.purchasePrice != null ? `$${fmt(a.acquisition.purchasePrice)}` : "—"}`,
+    `  Purchase closing costs: $${fmt(ctx.acquisition.purchaseClosingCosts)} (${a.acquisition.purchaseClosingCostPct != null ? pct(a.acquisition.purchaseClosingCostPct) : "—"})`,
+    `  Renovation costs: $${fmt(a.acquisition.renovationCosts)}`,
+    `  Furnishing/setup costs: $${fmt(a.acquisition.furnishingSetupCosts)}`,
+    `  Total project cost: $${fmt(ctx.acquisition.totalProjectCost)}`,
+    `  Initial equity invested: $${fmt(ctx.acquisition.initialEquityInvested)}`
+  );
+  lines.push(
+    "Stabilized operations:",
+    `  Adjusted gross rent: $${fmt(ctx.operating.adjustedGrossRent)}`,
+    `  Adjusted operating expenses: $${fmt(ctx.operating.adjustedOperatingExpenses)}`,
+    `  Management fee amount: $${fmt(ctx.operating.managementFeeAmount)} (${a.operating.managementFeePct != null ? pct(a.operating.managementFeePct) : "—"})`,
+    `  Stabilized NOI: $${fmt(ctx.operating.stabilizedNoi)}`,
+    `  Stabilized cap rate: ${ctx.adjustedCapRate != null ? pct(ctx.adjustedCapRate) : "—"}`
+  );
+  lines.push(
+    "Financing:",
+    `  Loan amount: $${fmt(ctx.financing.loanAmount)}`,
+    `  Annual debt service: $${fmt(ctx.financing.annualDebtService)}`,
+    `  Remaining balance at exit: $${fmt(ctx.financing.remainingLoanBalanceAtExit)}`,
+    `  Annual operating cash flow: $${fmt(ctx.cashFlows.annualOperatingCashFlow)}`
+  );
   if (ctx.amortizationSchedule && ctx.amortizationSchedule.length > 0) {
     lines.push("Amortization by year (use for Financing table):");
     ctx.amortizationSchedule.forEach((row) => {
       lines.push(`  Y${row.year}: principal $${fmt(row.principalPayment)}, interest $${fmt(row.interestPayment)}, debt service $${fmt(row.debtService)}`);
     });
   }
-  if (ctx.irr) {
-    const irr3 = ctx.irr.irr3yrPct != null ? (ctx.irr.irr3yrPct * 100).toFixed(2) + "%" : "—";
-    const irr5 = ctx.irr.irr5yrPct != null ? (ctx.irr.irr5yrPct * 100).toFixed(2) + "%" : (ctx.irr.irrPct != null ? (ctx.irr.irrPct * 100).toFixed(2) + "%" : "—");
-    const em = ctx.irr.equityMultiple != null ? `${ctx.irr.equityMultiple.toFixed(2)}x` : "—";
-    const coc = ctx.irr.coc != null ? (ctx.irr.coc * 100).toFixed(2) + "%" : "—";
-    lines.push(
-      "Returns:",
-      `  3-year IRR: ${irr3}`,
-      `  5-year IRR: ${irr5}`,
-      `  Equity multiple: ${em}`,
-      `  Cash-on-cash (year 1): ${coc}`
-    );
-  }
+  const irr = ctx.returns.irrPct != null ? (ctx.returns.irrPct * 100).toFixed(2) + "%" : "—";
+  const em = ctx.returns.equityMultiple != null ? `${ctx.returns.equityMultiple.toFixed(2)}x` : "—";
+  const coc = ctx.returns.year1CashOnCashReturn != null ? (ctx.returns.year1CashOnCashReturn * 100).toFixed(2) + "%" : "—";
+  const avgCoc = ctx.returns.averageCashOnCashReturn != null ? (ctx.returns.averageCashOnCashReturn * 100).toFixed(2) + "%" : "—";
+  lines.push(
+    "Exit:",
+    `  Hold period: ${a.holdPeriodYears ?? "—"} years`,
+    `  Exit cap rate: ${a.exit.exitCapPct != null ? pct(a.exit.exitCapPct) : "—"}`,
+    `  Exit closing costs: ${a.exit.exitClosingCostPct != null ? pct(a.exit.exitClosingCostPct) : "—"}`,
+    `  Exit property value: $${fmt(ctx.exit.exitPropertyValue)}`,
+    `  Net proceeds to equity: $${fmt(ctx.exit.netProceedsToEquity)}`
+  );
+  lines.push(
+    "Returns:",
+    `  IRR: ${irr}`,
+    `  Equity multiple: ${em}`,
+    `  Cash-on-cash (year 1): ${coc}`,
+    `  Average cash-on-cash: ${avgCoc}`
+  );
   lines.push(
     "Assumptions:",
-    `  LTV: ${pct(a.ltvPct)}, Interest rate: ${pct(a.interestRatePct)}, Amortization: ${a.amortizationYears ?? "—"} years`,
-    `  Exit cap: ${pct(a.exitCapPct)}, Rent uplift: ${a.rentUpliftPct != null ? `${a.rentUpliftPct}%` : "—"}, Expense increase: ${a.expenseIncreasePct != null ? `${a.expenseIncreasePct}%` : "—"}, Management fee: ${a.managementFeePct != null ? `${a.managementFeePct}%` : "—"}`
+    `  Purchase closing costs: ${a.acquisition.purchaseClosingCostPct != null ? pct(a.acquisition.purchaseClosingCostPct) : "—"}, Renovation: $${fmt(a.acquisition.renovationCosts)}, Furnishing/setup: $${fmt(a.acquisition.furnishingSetupCosts)}`,
+    `  LTV: ${a.financing.ltvPct != null ? pct(a.financing.ltvPct) : "—"}, Interest rate: ${a.financing.interestRatePct != null ? pct(a.financing.interestRatePct) : "—"}, Amortization: ${a.financing.amortizationYears ?? "—"} years`,
+    `  Exit cap: ${a.exit.exitCapPct != null ? pct(a.exit.exitCapPct) : "—"}, Exit closing costs: ${a.exit.exitClosingCostPct != null ? pct(a.exit.exitClosingCostPct) : "—"}, Rent uplift: ${a.operating.rentUpliftPct != null ? `${a.operating.rentUpliftPct}%` : "—"}, Expense increase: ${a.operating.expenseIncreasePct != null ? `${a.operating.expenseIncreasePct}%` : "—"}, Management fee: ${a.operating.managementFeePct != null ? `${a.operating.managementFeePct}%` : "—"}`
   );
-  if (a.expectedAppreciationPct != null) {
-    lines.push(`  Expected appreciation: ${a.expectedAppreciationPct}%/yr`);
-  }
-  if (ctx.projectedValueFromAppreciation != null) {
-    lines.push(`  Projected value (appreciation) at year 5: $${fmt(ctx.projectedValueFromAppreciation)}`);
+  if (ctx.sensitivities && ctx.sensitivities.length > 0) {
+    lines.push("Sensitivity analysis:");
+    ctx.sensitivities.forEach((sensitivity) => {
+      const irrRange =
+        sensitivity.ranges.irrPct.min != null && sensitivity.ranges.irrPct.max != null
+          ? `${(sensitivity.ranges.irrPct.min * 100).toFixed(2)}% to ${(sensitivity.ranges.irrPct.max * 100).toFixed(2)}%`
+          : "—";
+      const cocRange =
+        sensitivity.ranges.year1CashOnCashReturn.min != null &&
+        sensitivity.ranges.year1CashOnCashReturn.max != null
+          ? `${(sensitivity.ranges.year1CashOnCashReturn.min * 100).toFixed(2)}% to ${(sensitivity.ranges.year1CashOnCashReturn.max * 100).toFixed(2)}%`
+          : "—";
+      lines.push(
+        `  ${sensitivity.title}: base ${sensitivity.inputLabel.toLowerCase()} ${sensitivity.baseCase.valuePct != null ? pct(sensitivity.baseCase.valuePct) : "—"}, IRR range ${irrRange}, CoC range ${cocRange}`
+      );
+      sensitivity.scenarios.forEach((scenario) => {
+        lines.push(
+          `    ${pct(scenario.valuePct)} => NOI $${fmt(scenario.stabilizedNoi)}, IRR ${scenario.irrPct != null ? `${(scenario.irrPct * 100).toFixed(2)}%` : "—"}, CoC ${scenario.year1CashOnCashReturn != null ? `${(scenario.year1CashOnCashReturn * 100).toFixed(2)}%` : "—"}`
+        );
+      });
+    });
   }
   return lines.join("\n");
 }

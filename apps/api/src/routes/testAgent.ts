@@ -1,5 +1,5 @@
 /**
- * Test agent route: two-step NYC Real Estate API flow.
+ * StreetEasy Agent route: two-step NYC Real Estate API flow.
  * POST starts a run (returns runId immediately); backend runs GET Active Sales then GET Sale details per URL.
  * Runs are stored in memory with step progress, timer, and properties (raw data lake).
  * Data is NOT auto-populated to property data; user must click "Send to property data" per run.

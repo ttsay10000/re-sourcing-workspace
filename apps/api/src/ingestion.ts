@@ -1,6 +1,6 @@
 /**
  * Ingestion scaffolding: source agents for search/listings.
- * NYC Real Estate API is used via test agent and dedicated client; no URL-based search.
+ * NYC Real Estate API is used via the StreetEasy Agent flow and dedicated client; no URL-based search.
  */
 
 import type { SearchProfile } from "@re-sourcing/contracts";

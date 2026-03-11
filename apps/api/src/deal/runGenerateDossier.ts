@@ -6,9 +6,6 @@ import type { PropertyDetails, OmAnalysis } from "@re-sourcing/contracts";
 import { getPool, PropertyRepo, MatchRepo, ListingRepo, UserProfileRepo, DealSignalsRepo, DocumentRepo } from "@re-sourcing/db";
 import { computeDealSignals } from "./computeDealSignals.js";
 import { scoreDealWithLlm } from "./dealScoringLlm.js";
-import { computeFurnishedRental } from "./furnishedRentalEstimator.js";
-import { computeMortgage, computeAmortizationSchedule } from "./mortgageAmortization.js";
-import { computeIrr, saleProceedsFromExitCap } from "./irrCalculation.js";
 import type { GrossRentRow, ExpenseRow, DossierPropertyOverview } from "./underwritingContext.js";
 import { buildExcelProForma } from "./excelProForma.js";
 import { buildDossierStructuredText } from "./dossierGenerator.js";
@@ -19,7 +16,12 @@ import type { UnderwritingContext } from "./underwritingContext.js";
 import { saveGeneratedDocument } from "./generatedDocStorage.js";
 import { randomUUID } from "crypto";
 import { sendMessageWithAttachments } from "../inquiry/gmailClient.js";
-import { HOLD_YEARS } from "./constants.js";
+import {
+  computeUnderwritingProjection,
+  resolveDossierAssumptions,
+  type DossierAssumptionOverrides,
+} from "./underwritingModel.js";
+import { buildSensitivityAnalyses } from "./sensitivityAnalysis.js";
 
 export interface GenerateDossierResult {
   dossierDoc: { id: string; fileName: string; storagePath: string };
@@ -146,7 +148,10 @@ function rentStabilizedUnitCount(
   return anyRentStab ? 1 : 0;
 }
 
-export async function runGenerateDossier(propertyId: string): Promise<GenerateDossierResult> {
+export async function runGenerateDossier(
+  propertyId: string,
+  assumptionOverrides?: DossierAssumptionOverrides | null
+): Promise<GenerateDossierResult> {
   const pool = getPool();
   const propertyRepo = new PropertyRepo({ pool });
   const matchRepo = new MatchRepo({ pool });
@@ -171,94 +176,46 @@ export async function runGenerateDossier(propertyId: string): Promise<GenerateDo
   const currentNoi = noiFromDetails(details);
   const currentGrossRent = grossRentFromDetails(details) ?? (currentNoi != null ? currentNoi * 1.5 : null);
   const unitCount = unitCountFromDetails(details);
-
-  const ltvPct = profile.defaultLtv ?? 65;
-  const interestRatePct = profile.defaultInterestRate ?? 6.5;
-  const amortizationYears = profile.defaultAmortization ?? 30;
-  const exitCapPct = profile.defaultExitCap ?? 5;
-  const rentUpliftPct = profile.defaultRentUplift ?? 15;
-  const expenseIncreasePct = profile.defaultExpenseIncrease ?? 2;
-  const managementFeePct = profile.defaultManagementFee ?? 5;
-
-  const rentUplift = 1 + (rentUpliftPct ?? 0) / 100;
-  const expenseIncrease = 1 + (expenseIncreasePct ?? 0) / 100;
-  const managementFee = (managementFeePct ?? 0) / 100;
-
-  const furnishedRental =
-    currentGrossRent != null && currentNoi != null && purchasePrice != null
-      ? computeFurnishedRental(
-          {
-            currentGrossRent,
-            currentNoi,
-            rentUplift,
-            expenseIncrease,
-            managementFee,
-          },
-          purchasePrice
-        )
-      : null;
-
-  const principal =
-    purchasePrice != null && ltvPct != null && ltvPct > 0
-      ? (purchasePrice * ltvPct) / 100
-      : 0;
-  const mortgage =
-    principal > 0 && amortizationYears > 0
-      ? computeMortgage({
-          principal,
-          annualRate: (interestRatePct ?? 0) / 100,
-          amortizationYears,
-        })
-      : null;
-
-  const adjustedNoi = furnishedRental?.adjustedNoi ?? currentNoi ?? 0;
-  const annualCf = adjustedNoi - (mortgage?.annualDebtService ?? 0);
-  const saleProceeds5 = saleProceedsFromExitCap(adjustedNoi, exitCapPct ?? 5);
-  const saleProceeds3 = saleProceeds5;
-  const equity = purchasePrice != null ? purchasePrice - principal : 0;
-  const annualCashFlows5 = Array(HOLD_YEARS).fill(annualCf);
-  const annualCashFlows3 = annualCashFlows5.slice(0, 3);
-  const irr5 =
-    equity > 0
-      ? computeIrr({
-          initialEquity: equity,
-          annualCashFlows: annualCashFlows5,
-          saleProceeds: saleProceeds5,
-        })
-      : null;
-  const irr3 =
-    equity > 0
-      ? computeIrr({
-          initialEquity: equity,
-          annualCashFlows: annualCashFlows3,
-          saleProceeds: saleProceeds3,
-        })
-      : null;
-  const irr = irr5;
+  const assumptions = resolveDossierAssumptions(profile, purchasePrice, assumptionOverrides);
+  const projection = computeUnderwritingProjection({
+    assumptions,
+    currentGrossRent,
+    currentNoi,
+  });
+  const sensitivities = buildSensitivityAnalyses({
+    assumptions,
+    currentGrossRent,
+    currentNoi,
+    baseProjection: projection,
+  });
 
   const omAnalysis: OmAnalysis | null = details?.rentalFinancials?.omAnalysis ?? null;
   const rentRollRows = rentRollRowsFromOm(omAnalysis, currentGrossRent);
   const { rows: expenseRows, total: currentExpensesTotal } = expenseRowsFromOm(omAnalysis);
   const propertyOverview = propertyOverviewFromDetails(details);
   const financialFlags: string[] = [];
-  if (purchasePrice != null) financialFlags.push(`Listed price: $${purchasePrice.toLocaleString("en-US", { maximumFractionDigits: 0, minimumFractionDigits: 0 })}`);
+  if (assumptions.acquisition.purchasePrice != null) {
+    financialFlags.push(
+      `Purchase price: $${assumptions.acquisition.purchasePrice.toLocaleString("en-US", {
+        maximumFractionDigits: 0,
+        minimumFractionDigits: 0,
+      })}`
+    );
+  }
 
   const assetCapRateForCtx =
-    purchasePrice != null && currentNoi != null && currentNoi >= 0
-      ? (currentNoi / purchasePrice) * 100
+    assumptions.acquisition.purchasePrice != null && currentNoi != null && currentNoi >= 0
+      ? (currentNoi / assumptions.acquisition.purchasePrice) * 100
       : null;
-  const adjustedNoiForCtx = furnishedRental?.adjustedNoi ?? currentNoi ?? null;
+  const adjustedNoiForCtx = projection.operating.stabilizedNoi;
   const adjustedCapRateForCtx =
-    purchasePrice != null && adjustedNoiForCtx != null && adjustedNoiForCtx >= 0
-      ? (adjustedNoiForCtx / purchasePrice) * 100
+    assumptions.acquisition.purchasePrice != null && adjustedNoiForCtx >= 0
+      ? (adjustedNoiForCtx / assumptions.acquisition.purchasePrice) * 100
       : null;
 
   const amortizationSchedule =
-    mortgage && principal > 0 && amortizationYears > 0
-      ? computeAmortizationSchedule(
-          { principal, annualRate: (interestRatePct ?? 0) / 100, amortizationYears },
-          HOLD_YEARS
-        ).map((row) => ({
+    projection.financing.amortizationSchedule.length > 0
+      ? projection.financing.amortizationSchedule.map((row) => ({
           year: row.year,
           principalPayment: row.principalPayment,
           interestPayment: row.interestPayment,
@@ -267,18 +224,10 @@ export async function runGenerateDossier(propertyId: string): Promise<GenerateDo
         }))
       : undefined;
 
-  const expectedSalePriceAtExitCap =
-    furnishedRental && (exitCapPct ?? 0) > 0
-      ? furnishedRental.adjustedNoi / ((exitCapPct ?? 0) / 100)
-      : null;
-  const managementFeeAmount = furnishedRental
-    ? (furnishedRental.adjustedGrossIncome * (managementFeePct ?? 0)) / 100
-    : undefined;
-
   const ctx: UnderwritingContext = {
     propertyId,
     canonicalAddress: property.canonicalAddress,
-    purchasePrice,
+    purchasePrice: assumptions.acquisition.purchasePrice,
     listingCity,
     currentNoi,
     currentGrossRent,
@@ -286,48 +235,45 @@ export async function runGenerateDossier(propertyId: string): Promise<GenerateDo
     dealScore: null,
     assetCapRate: assetCapRateForCtx,
     adjustedCapRate: adjustedCapRateForCtx,
-    furnishedRental: furnishedRental
-      ? {
-          adjustedGrossIncome: furnishedRental.adjustedGrossIncome,
-          adjustedExpenses: furnishedRental.adjustedExpenses,
-          adjustedNoi: furnishedRental.adjustedNoi,
-          adjustedCapRatePct: furnishedRental.adjustedCapRatePct,
-          managementFeeAmount,
-          expectedSalePriceAtExitCap: expectedSalePriceAtExitCap ?? undefined,
-        }
-      : null,
-    mortgage: mortgage
-      ? {
-          principal,
-          monthlyPayment: mortgage.monthlyPayment,
-          annualDebtService: mortgage.annualDebtService,
-        }
-      : null,
-    irr: irr
-      ? {
-          irrPct: irr.irr,
-          equityMultiple: irr.equityMultiple,
-          coc: irr.coc,
-          irr3yrPct: irr3?.irr ?? undefined,
-          irr5yrPct: irr5?.irr ?? undefined,
-        }
-      : null,
     assumptions: {
-      ltvPct: profile.defaultLtv ?? null,
-      interestRatePct: profile.defaultInterestRate ?? null,
-      amortizationYears: profile.defaultAmortization ?? null,
-      exitCapPct: profile.defaultExitCap ?? null,
-      rentUpliftPct: profile.defaultRentUplift ?? null,
-      expenseIncreasePct: profile.defaultExpenseIncrease ?? null,
-      managementFeePct: profile.defaultManagementFee ?? null,
-      expectedAppreciationPct: profile.expectedAppreciationPct ?? null,
+      acquisition: {
+        purchasePrice: assumptions.acquisition.purchasePrice,
+        purchaseClosingCostPct: assumptions.acquisition.purchaseClosingCostPct,
+        renovationCosts: assumptions.acquisition.renovationCosts,
+        furnishingSetupCosts: assumptions.acquisition.furnishingSetupCosts,
+      },
+      financing: {
+        ltvPct: assumptions.financing.ltvPct,
+        interestRatePct: assumptions.financing.interestRatePct,
+        amortizationYears: assumptions.financing.amortizationYears,
+      },
+      operating: {
+        rentUpliftPct: assumptions.operating.rentUpliftPct,
+        expenseIncreasePct: assumptions.operating.expenseIncreasePct,
+        managementFeePct: assumptions.operating.managementFeePct,
+      },
+      holdPeriodYears: assumptions.holdPeriodYears,
+      exit: {
+        exitCapPct: assumptions.exit.exitCapPct,
+        exitClosingCostPct: assumptions.exit.exitClosingCostPct,
+      },
     },
-    projectedValueFromAppreciation:
-      purchasePrice != null &&
-      profile.expectedAppreciationPct != null &&
-      !Number.isNaN(profile.expectedAppreciationPct)
-        ? purchasePrice * Math.pow(1 + profile.expectedAppreciationPct / 100, HOLD_YEARS)
-        : null,
+    acquisition: projection.acquisition,
+    financing: {
+      loanAmount: projection.financing.loanAmount,
+      monthlyPayment: projection.financing.monthlyPayment,
+      annualDebtService: projection.financing.annualDebtService,
+      remainingLoanBalanceAtExit: projection.financing.remainingLoanBalanceAtExit,
+    },
+    operating: projection.operating,
+    exit: projection.exit,
+    cashFlows: projection.cashFlows,
+    returns: {
+      irrPct: projection.returns.irr,
+      equityMultiple: projection.returns.equityMultiple,
+      year1CashOnCashReturn: projection.returns.year1CashOnCashReturn,
+      averageCashOnCashReturn: projection.returns.averageCashOnCashReturn,
+    },
     propertyOverview: propertyOverview ?? undefined,
     rentRollRows: rentRollRows.length > 0 ? rentRollRows : undefined,
     expenseRows: expenseRows.length > 0 ? expenseRows : undefined,
@@ -339,6 +285,7 @@ export async function runGenerateDossier(propertyId: string): Promise<GenerateDo
           : undefined,
     financialFlags: financialFlags.length > 0 ? financialFlags : undefined,
     amortizationSchedule,
+    sensitivities,
   };
 
   const dateStr = new Date().toISOString().slice(0, 10);
@@ -360,8 +307,9 @@ export async function runGenerateDossier(propertyId: string): Promise<GenerateDo
 
   const llmInputs = {
     assetCapRatePct: assetCapRateForCtx,
-    irr5yrPct: irr?.irr ?? null,
-    cocPct: irr?.coc ?? null,
+    irr5yrPct: projection.returns.irr ?? null,
+    cocPct: projection.returns.year1CashOnCashReturn ?? null,
+    holdPeriodYears: assumptions.holdPeriodYears,
     rentStabilizedUnitCount: rentStabCount,
     hpdTotal: hpd?.total,
     hpdOpenCount: hpd?.openCount,
@@ -385,8 +333,8 @@ export async function runGenerateDossier(propertyId: string): Promise<GenerateDo
     propertyId,
     canonicalAddress: property.canonicalAddress,
     details,
-    primaryListing: { price: purchasePrice, city: listingCity },
-    irr5yrPct: irr?.irr ?? null,
+    primaryListing: { price: assumptions.acquisition.purchasePrice, city: listingCity },
+    irr5yrPct: projection.returns.irr ?? null,
     rentStabilizedUnitCount: rentStabCount,
   });
 
@@ -408,12 +356,12 @@ export async function runGenerateDossier(propertyId: string): Promise<GenerateDo
 
   await signalsRepo.insert({
     ...insertParams,
-    irrPct: irr?.irr ?? null,
-    equityMultiple: irr?.equityMultiple ?? null,
-    cocPct: irr?.coc ?? null,
-    holdYears: HOLD_YEARS,
+    irrPct: projection.returns.irr ?? null,
+    equityMultiple: projection.returns.equityMultiple ?? null,
+    cocPct: projection.returns.year1CashOnCashReturn ?? null,
+    holdYears: assumptions.holdPeriodYears,
     currentNoi: currentNoi ?? null,
-    adjustedNoi: furnishedRental?.adjustedNoi ?? currentNoi ?? null,
+    adjustedNoi: projection.operating.stabilizedNoi ?? currentNoi ?? null,
   });
 
   const dossierDocId = randomUUID();
@@ -438,6 +386,7 @@ export async function runGenerateDossier(propertyId: string): Promise<GenerateDo
     fileType: "application/pdf",
     source: "generated_dossier",
     storagePath: dossierStoragePath,
+    fileContent: dossierBuffer,
   });
 
   const excelDoc = await documentRepo.insert({
@@ -446,6 +395,7 @@ export async function runGenerateDossier(propertyId: string): Promise<GenerateDo
     fileType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     source: "generated_excel",
     storagePath: excelStoragePath,
+    fileContent: excelBuffer,
   });
 
   let emailSent = false;

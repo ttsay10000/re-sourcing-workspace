@@ -183,7 +183,7 @@ export default function HomePage() {
               Add new deals
             </Link>
             <span style={{ fontSize: "0.85rem", color: "#737373" }}>
-              Add listings in Property Data, then run deal scoring to see them here.
+              Add listings in Property Data, then generate a dossier to see scored deals here.
             </span>
           </div>
 
@@ -226,7 +226,7 @@ export default function HomePage() {
             <div className="card" style={{ padding: "2rem", textAlign: "center", color: "#525252", marginBottom: "1rem" }}>
               <p style={{ margin: "0 0 0.5rem", fontWeight: 600 }}>No scored deals yet</p>
               <p style={{ margin: 0, fontSize: "0.9rem" }}>
-                Add properties and run deal scoring from Property Data to see deals here.
+                Add properties and generate a dossier from Property Data to see deals here.
               </p>
               <Link href="/property-data" className="btn-primary" style={{ marginTop: "1rem", display: "inline-block" }}>
                 Go to Property Data

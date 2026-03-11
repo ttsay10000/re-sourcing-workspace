@@ -258,7 +258,7 @@ export default function RunsPage() {
 
   return (
     <div className="runs-page">
-      <h1 className="page-title">Runs</h1>
+      <h1 className="page-title">StreetEasy Agent</h1>
 
       {sendingRunId && (
         <div
@@ -290,7 +290,7 @@ export default function RunsPage() {
           How it works
         </h2>
         <p style={{ marginBottom: "0.75rem", lineHeight: 1.5 }}>
-          Runs use a two-step flow to pull NYC real estate data into your raw data lake:
+          StreetEasy Agent uses a two-step flow to pull NYC real estate data into your raw data lake:
         </p>
         <ol style={{ marginBottom: "0.75rem", paddingLeft: "1.5rem", lineHeight: 1.6 }}>
           <li>
@@ -316,8 +316,7 @@ export default function RunsPage() {
           Only matching listings are fetched; Step 2 then loads full details per listing. Leave types unchecked for all.
         </p>
         <p style={{ fontSize: "0.875rem", color: "#525252", marginTop: "0.75rem" }}>
-          Ensure <code>RAPIDAPI_KEY</code> is set in the API server environment (see{" "}
-          <code>ENV.md</code>).
+          Ensure <code>RAPIDAPI_KEY</code> is set in the API server environment.
         </p>
       </div>
 
@@ -578,7 +577,7 @@ export default function RunsPage() {
 
       {!loading && (
         <div className="card" style={{ maxWidth: "none" }}>
-          <h2 style={{ fontSize: "1rem", marginBottom: "0.75rem" }}>Runs log</h2>
+          <h2 style={{ fontSize: "1rem", marginBottom: "0.75rem" }}>StreetEasy Agent log</h2>
           {runs.length === 0 ? (
             <p style={{ color: "#525252" }}>No runs yet. Use filters above and click Send.</p>
           ) : (

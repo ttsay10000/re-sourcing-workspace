@@ -11,14 +11,16 @@ export interface UpsertUserProfileParams {
   name?: string | null;
   email?: string | null;
   organization?: string | null;
+  defaultPurchaseClosingCostPct?: number | null;
   defaultLtv?: number | null;
   defaultInterestRate?: number | null;
   defaultAmortization?: number | null;
+  defaultHoldPeriodYears?: number | null;
   defaultExitCap?: number | null;
+  defaultExitClosingCostPct?: number | null;
   defaultRentUplift?: number | null;
   defaultExpenseIncrease?: number | null;
   defaultManagementFee?: number | null;
-  expectedAppreciationPct?: number | null;
 }
 
 export class UserProfileRepo {
@@ -62,14 +64,16 @@ export class UserProfileRepo {
         name = COALESCE($2, name),
         email = COALESCE($3, email),
         organization = COALESCE($4, organization),
-        default_ltv = COALESCE($5, default_ltv),
-        default_interest_rate = COALESCE($6, default_interest_rate),
-        default_amortization = COALESCE($7, default_amortization),
-        default_exit_cap = COALESCE($8, default_exit_cap),
-        default_rent_uplift = COALESCE($9, default_rent_uplift),
-        default_expense_increase = COALESCE($10, default_expense_increase),
-        default_management_fee = COALESCE($11, default_management_fee),
-        expected_appreciation_pct = COALESCE($12, expected_appreciation_pct),
+        default_purchase_closing_cost_pct = COALESCE($5, default_purchase_closing_cost_pct),
+        default_ltv = COALESCE($6, default_ltv),
+        default_interest_rate = COALESCE($7, default_interest_rate),
+        default_amortization = COALESCE($8, default_amortization),
+        default_hold_period_years = COALESCE($9, default_hold_period_years),
+        default_exit_cap = COALESCE($10, default_exit_cap),
+        default_exit_closing_cost_pct = COALESCE($11, default_exit_closing_cost_pct),
+        default_rent_uplift = COALESCE($12, default_rent_uplift),
+        default_expense_increase = COALESCE($13, default_expense_increase),
+        default_management_fee = COALESCE($14, default_management_fee),
         updated_at = now()
        WHERE id = $1`,
       [
@@ -77,14 +81,16 @@ export class UserProfileRepo {
         params.name ?? null,
         params.email ?? null,
         params.organization ?? null,
+        params.defaultPurchaseClosingCostPct ?? null,
         params.defaultLtv ?? null,
         params.defaultInterestRate ?? null,
         params.defaultAmortization ?? null,
+        params.defaultHoldPeriodYears ?? null,
         params.defaultExitCap ?? null,
+        params.defaultExitClosingCostPct ?? null,
         params.defaultRentUplift ?? null,
         params.defaultExpenseIncrease ?? null,
         params.defaultManagementFee ?? null,
-        params.expectedAppreciationPct ?? null,
       ]
     );
     const updated = await this.byId(id);

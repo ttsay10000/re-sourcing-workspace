@@ -46,7 +46,7 @@ export default function RunDetailPage() {
   if (error || !run) {
     return (
       <div className="card error">
-        {error || "Run not found."} <Link href="/runs">Back to Runs</Link>
+        {error || "Run not found."} <Link href="/runs">Back to StreetEasy Agent</Link>
       </div>
     );
   }
@@ -60,9 +60,9 @@ export default function RunDetailPage() {
 
   return (
     <div className="run-detail-page">
-      <h1 className="page-title">Run at {formatTime(run.startedAt)}</h1>
+      <h1 className="page-title">StreetEasy Agent Run at {formatTime(run.startedAt)}</h1>
       <p className="card" style={{ marginBottom: "1rem" }}>
-        <Link href="/runs">← Back to Runs</Link>
+        <Link href="/runs">← Back to StreetEasy Agent</Link>
       </p>
       <p style={{ marginBottom: "1rem" }}>
         Step 1: {run.step1Status} ({run.step1Count} URLs) — Step 2: {run.step2Status} (

@@ -756,7 +756,7 @@ function PropertyDataContent() {
                       <tr>
                         <td colSpan={8} style={{ padding: "2rem", color: "#737373", textAlign: "center" }}>
                           {canonicalProperties.length === 0
-                            ? "No canonical properties yet. Properties added from Runs are added to canonical automatically."
+                            ? "No canonical properties yet. Send raw listings to canonical properties from the raw listings tab."
                             : "No properties match the current filters."}
                         </td>
                       </tr>
@@ -885,7 +885,7 @@ function PropertyDataContent() {
                   <tr>
                     <td colSpan={11} style={{ padding: "2rem", color: "#737373", textAlign: "center" }}>
                       {listings.length === 0
-                        ? "No raw listings yet. Run a flow from Runs, then use \"Send to property data\" for a completed run."
+                        ? "No raw listings yet. Run a flow from StreetEasy Agent, then use \"Send to property data\" for a completed run."
                         : "No listings match the current filters."}
                     </td>
                   </tr>
@@ -1011,7 +1011,7 @@ function PropertyDataContent() {
                 className="btn-secondary"
                 onClick={handleRunRentalFlow}
                 disabled={Boolean(runningRentalFlow)}
-                title="Re-run rental flow only (RapidAPI + LLM on listing). Runs automatically when adding to canonical or re-running enrichment."
+                title="Re-run rental flow only (RapidAPI + LLM on listing). Runs automatically when adding to canonical properties."
               >
                 {runningRentalFlow ? "Running…" : "Re-run rental flow"}
               </button>

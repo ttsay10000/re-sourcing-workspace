@@ -1,101 +1,121 @@
 # RE Sourcing Workspace
 
-Monorepo: web UI (Next.js) + API (Express) + shared packages. Deployable to Render.
+Monorepo for the StreetEasy Agent workflow, canonical property pipeline, rental/OM analysis, and deal dossier generation.
 
-## Repo structure
+## Repo Structure
 
 | Path | Description |
 |------|-------------|
-| `apps/api` | Express API (health, CORS; uses `DATABASE_URL`) |
-| `apps/web` | Next.js admin UI (left nav: Profiles, Runs, Listings, Dedupe, Manual Entry) |
+| `apps/api` | Express API for StreetEasy Agent ingestion, canonical properties, documents, inbox processing, and dossier/deal endpoints |
+| `apps/web` | Next.js operator UI |
 | `packages/contracts` | Shared TS types and API contracts |
-| `packages/db` | DB client, repos, migrations placeholder |
+| `packages/db` | DB config, migrations, and repositories |
 
-## Local development
+## Core Flows
+
+### 1. StreetEasy Agent
+
+- UI path: `/runs`
+- API path: `/api/test-agent/*`
+- Purpose: run NYC Real Estate API search + sale-detail fetch, review results, then manually send them into raw listings
+
+This flow is intentionally manual at the persistence boundary:
+
+1. Run search
+2. Review results
+3. Click **Send to property data**
+
+### 2. Property Data
+
+- Raw listings live in `listings`
+- Canonical properties are created from raw listings through `POST /api/properties/from-listings`
+- `from-listings` still runs enrichment and rental flow automatically for newly created canonical properties
+- Operators can also re-run:
+  - enrichment
+  - rental flow
+  - OM financial refresh
+
+### 3. Documents
+
+There is one document surface for each property:
+
+- inquiry reply attachments
+- manual uploads
+- generated outputs such as dossier / Excel
+
+Use the unified routes under `/api/properties/:id/documents*`.
+All new document types also store file bytes in Postgres, so they remain downloadable after Render restarts.
+For older existing files created before this change, run `npm run backfill:documents -w @re-sourcing/api` before the next restart/deploy.
+
+### 4. OM Extraction Priority
+
+OM extraction can run from three places:
+
+1. manual OM/Brochure upload
+2. inbox reply processing
+3. re-run enrichment
+
+Manual upload is the preferred source of truth when there is a conflict or the inbox source is noisy/incomplete.
+
+## Local Development
 
 ```bash
 npm install
 npm run dev
 ```
 
-- **API** runs at `http://localhost:4000` (GET `/api/health` → `{ ok, version, env }`).
-- **Web** runs at `http://localhost:3000` and calls the API for health on the home page.
+- API: `http://localhost:4000`
+- Web: `http://localhost:3000`
 
 Optional local Postgres:
 
 ```bash
 docker compose up -d
-# Then set DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres
 ```
 
-**First-time DB setup (Runs → Send to property data):** If you see "relation \"listings\" does not exist", create the schema by setting `DATABASE_URL` (e.g. in `.env` or your shell) and running from the repo root:
+Then set:
+
+```bash
+DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres
+```
+
+Run migrations:
 
 ```bash
 npm run db:migrate
 ```
 
-## Scripts
+## Main Commands
 
-| Script | Description |
-|--------|-------------|
-| `npm run dev` | Run API + web concurrently (dev mode) |
+| Command | Description |
+|---------|-------------|
+| `npm run dev` | Run API + web locally |
 | `npm run build` | Build all workspaces |
-| `npm run start` | Build then run API + web (production style) |
-| `npm run db:migrate` | Apply migrations (requires `DATABASE_URL`) |
-| `npm run db:seed` | Seed DB (run after migrate) |
-| `npm run enrich:permits -w @re-sourcing/api -- --property-id <uuid>` | Enrich one property with DOB permits |
-| `npm run enrich:permits -w @re-sourcing/api -- --all` | Batch enrich properties (optional `--batch-size N`) |
+| `npm run start` | Production-style local start |
+| `npm run db:migrate` | Apply DB migrations |
+| `npm run db:seed` | Seed the DB |
+| `npm run enrich:permits -w @re-sourcing/api -- --property-id <uuid>` | Re-run permit enrichment for one property |
+| `npm run enrich:permits -w @re-sourcing/api -- --all` | Batch permit enrichment |
+| `npm run enrich:all -w @re-sourcing/api -- --property-id <uuid>` | Full enrichment CLI for one property |
 
-## Environment variables
+## Render Deployment
 
-| Where | Variable | Description |
-|-------|----------|-------------|
-| API | `PORT` | Server port (default `4000`) |
-| API | `DATABASE_URL` | Postgres connection string (optional for health; required for DB routes) |
-| API | `CORS_ORIGIN` | Allowed origins, comma-separated (default includes `http://localhost:3000`) |
-| API | `NODE_ENV` | `development` / `production` |
-| API | `SOCRATA_APP_TOKEN` | Optional; NYC Open Data app token (improves rate limits for permit enrichment) |
-| API | `PERMITS_RATE_LIMIT_DELAY_MS` | Delay (ms) between property requests when batching (default 300 in API, 500 in cron) |
-| API | `PERMITS_BATCH_SIZE` | Batch size for `enrich:permits --all` (default 50) |
-| Web | `NEXT_PUBLIC_API_URL` | API base URL (e.g. `http://localhost:4000` locally, Render URL in prod) |
+Use `render.yaml`.
 
-## Render deployment
+Services defined:
 
-1. **Blueprint**: Use `render.yaml` in the repo (or create two web services + one Postgres manually).
-2. **Making sure cron jobs exist**: The blueprint defines two cron jobs (`re-sourcing-permits-refresh`, `re-sourcing-process-inbox`). For Render to **create** them you must apply the blueprint:
-   - **Dashboard → Blueprint** → open the blueprint connected to this repo.
-   - Click **Apply** (or **Sync** / **Update**) so Render creates any services in `render.yaml` that don’t exist yet (including the cron jobs).
-   - If you created the API/Web/DB manually and never used the blueprint, use **New → Blueprint**, connect this repo, then Apply so all resources (including crons) are created.
-3. **API service**
-   - Build: `npm install && npm run build -w @re-sourcing/contracts && npm run build -w @re-sourcing/db && npm run build -w @re-sourcing/api`
-   - Start: `npm run db:migrate && npm run start -w @re-sourcing/api` (migrations run automatically on each deploy; safe to run every time).
-   - Env: `DATABASE_URL` (from Postgres), `CORS_ORIGIN` = your web service URL (e.g. `https://re-sourcing-web.onrender.com`).
-4. **Web service**
-   - Build: `npm install && npm run build -w @re-sourcing/web`
-   - Start: `npm run start -w @re-sourcing/web`
-   - Env: `NEXT_PUBLIC_API_URL` = your API service URL (e.g. `https://re-sourcing-api.onrender.com`).
-5. **Postgres**: Create a database and attach `DATABASE_URL` to the API service. The API starts even if the DB is empty; health does not require DB.
-6. **Cron jobs** (in `render.yaml`; created when you apply the blueprint):
-   - **re-sourcing-permits-refresh** (weekly): DOB permit enrichment. Set `SOCRATA_APP_TOKEN` on the cron for better rate limits.
-   - **re-sourcing-process-inbox** (daily): Process Gmail for broker replies and save to properties. Set `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`, `GMAIL_REFRESH_TOKEN`, `OPENAI_API_KEY` (and optionally `DATABASE_URL` if not auto-linked). See `docs/RENDER_AND_ENV_CHECKLIST.md` for full setup.
+- `re-sourcing-api`
+- `re-sourcing-web`
+- `re-sourcing-process-inbox`
+- `re-sourcing-db`
 
-## Deal Dossier & Deal Scoring
+The weekly enrich-all cron has been removed. Canonical property enrichment happens during `from-listings`, and operators can manually re-run enrichment from the app.
 
-Profile, saved deals, deal score, and generate-dossier (Excel + dossier + optional email) require:
+See [docs/RENDER_AND_ENV_CHECKLIST.md](/Users/tylertsay/Desktop/Coding%20projects/Real%20Estate%20Sourcing%20Flow/RE%20Sourcing%20Workspace/docs/RENDER_AND_ENV_CHECKLIST.md) for deployment setup.
 
-- **Database**: `DATABASE_URL` set and migrations applied (`npm run db:migrate`).
-- **Profile**: In the app, set Profile (name, email) and Assumptions (or use "Generate standard leverage").
-- **Email (optional)**: Set `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`, `GMAIL_REFRESH_TOKEN` on the API to email the generated dossier to the profile email.
+## Reference Docs
 
-Full checklist (env vars, Gmail OAuth, file storage, data prerequisites): **`docs/SETUP-DEAL-DOSSIER.md`**.
-
-## One source of truth
-
-- **DB tables/migrations**: `packages/db/migrations/` (placeholder in this skeleton).
-- **Shared types**: `packages/contracts`
-- **API contracts**: `packages/contracts` (TS interfaces only)
-
-## Packages
-
-- **@re-sourcing/contracts** – Types, enums, API request/response interfaces (including `HealthResponse`).
-- **@re-sourcing/db** – Pool, config, repos, migrations placeholder.
+- [docs/API_AND_DATA_FLOW.md](/Users/tylertsay/Desktop/Coding%20projects/Real%20Estate%20Sourcing%20Flow/RE%20Sourcing%20Workspace/docs/API_AND_DATA_FLOW.md)
+- [docs/RENDER_AND_ENV_CHECKLIST.md](/Users/tylertsay/Desktop/Coding%20projects/Real%20Estate%20Sourcing%20Flow/RE%20Sourcing%20Workspace/docs/RENDER_AND_ENV_CHECKLIST.md)
+- [docs/SETUP-DEAL-DOSSIER.md](/Users/tylertsay/Desktop/Coding%20projects/Real%20Estate%20Sourcing%20Flow/RE%20Sourcing%20Workspace/docs/SETUP-DEAL-DOSSIER.md)
+- [apps/api/src/rental/FINANCIAL_FLOWS.md](/Users/tylertsay/Desktop/Coding%20projects/Real%20Estate%20Sourcing%20Flow/RE%20Sourcing%20Workspace/apps/api/src/rental/FINANCIAL_FLOWS.md)

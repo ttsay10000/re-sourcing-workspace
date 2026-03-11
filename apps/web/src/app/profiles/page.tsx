@@ -1,3 +1,5 @@
+import { redirect } from "next/navigation";
+
 export default function ProfilesPage() {
-  return <h1 className="page-title">Profiles</h1>;
+  redirect("/profile");
 }

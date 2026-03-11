@@ -40,40 +40,43 @@ REQUIRED DOCUMENT STRUCTURE (output in this order)
    - Then | Cap rate | X.XX% |
    [blank line]
 
-4. Section "3. FURNISHED RENTAL SCENARIO" with heading line "------------------------------" (if furnished data provided)
-   - All as pipe table rows using the exact numbers provided:
-   | Adjusted gross income | $amount |
-   | Adjusted expenses (ex. mgmt) | $amount |
-   | Management fee (X% of gross rents) | $amount |
-   | **NOI (gross income − expenses − mgmt fee)** | $amount |
-   | Adjusted cap rate | X.XX% |
-   | Expected sale price at X% cap rate | $amount | (if provided)
+4. Section "3. STABILIZED OPERATIONS" with heading line "------------------------"
+   - Pipe table rows:
+   | Adjusted gross rent | $amount |
+   | Adjusted operating expenses | $amount |
+   | Management fee (X% of gross rent) | $amount |
+   | **Stabilized NOI** | $amount |
+   | Stabilized cap rate | X.XX% |
    [blank line]
 
 5. Section "4. FINANCING & CASH FLOW" with heading line "-------------------------"
-   - Line: Loan principal: $X
-   - Line: Annual debt service: $X
-   - Line: Annual cash flow: $X
-   - If amortization schedule provided, a table with columns Year, Y1, Y2, Y3, Y4, Y5 (as many years as provided):
-     | Year | Y1 | Y2 | ... |
-     | Principal | $ | $ | ... |
-     | Interest | $ | $ | ... |
-     | **Total debt service** | $ | $ | ... |
+   - Pipe table rows for purchase closing costs, total project cost, loan amount, initial equity invested, annual debt service, annual operating cash flow, final year cash flow
+   - If amortization schedule provided, a table with columns Year, Y1, Y2... and rows Principal, Interest, Debt service, Ending balance
    [blank line]
 
-6. Section "5. RETURNS" with heading line "----------"
+6. Section "5. EXIT" with heading line "-------"
+   - Pipe table rows for hold period, exit property value, sale closing costs, net sale proceeds before debt payoff, remaining loan balance, and **Net proceeds to equity**
+   [blank line]
+
+7. Section "6. RETURNS" with heading line "----------"
    - Pipe table:
-   | 3-year IRR | X.XX% |
-   | 5-year IRR | X.XX% |
-   | Equity multiple | X.XXx |   (e.g. 2.50x not 2.5)
+   | IRR (N-year) | X.XX% |
+   | Equity multiple | X.XXx |
    | Cash-on-cash (year 1) | X.XX% |
+   | Average cash-on-cash | X.XX% |
    [blank line]
 
-7. Section "6. ASSUMPTIONS USED" with heading line "--------------------"
-   - One line per assumption: LTV, Interest rate, Amortization, Exit cap, Rent uplift, Expense increase, Management fee, Expected appreciation, Projected value (if provided)
+8. Section "7. ASSUMPTIONS USED" with heading line "--------------------"
+   - One line per assumption bucket input: purchase closing costs, renovation, furnishing/setup, LTV, interest rate, amortization, rent uplift, expense increase, management fee, hold period, exit cap, exit closing costs
    [blank line]
 
-8. Optional short narrative (only if you have OM/highlights or want 1–2 sentences): "OM / Investment Highlights", "Risks & Considerations", "Key Takeaways". Keep to 2–4 short bullets or 1–2 sentences each. Do not duplicate numbers that are already in the tables.
+9. Section "8. SENSITIVITY ANALYSIS" with heading line "------------------------" if sensitivity data is provided
+   - For each sensitivity, give one short pullout line with base case input, IRR range, and CoC range
+   - Then a clean pipe table with columns [input label, Stabilized NOI, IRR, Cash-on-cash]
+   - Include the base case row and every provided scenario row
+   [blank line]
+
+10. Optional short narrative (only if you have OM/highlights or want 1–2 sentences): "OM / Investment Highlights", "Risks & Considerations", "Key Takeaways". Keep to 2–4 short bullets or 1–2 sentences each. Do not duplicate numbers that are already in the tables.
 
 -----------------------------------------------------
 TABLE FORMAT RULES (critical for PDF)

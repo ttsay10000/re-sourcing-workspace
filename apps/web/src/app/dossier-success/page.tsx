@@ -49,7 +49,7 @@ function DossierSuccessContent() {
               fontWeight: 500,
             }}
           >
-            Download dossier (TXT)
+            Download dossier (PDF)
           </a>
         )}
         {excelUrl && (
@@ -78,7 +78,7 @@ function DossierSuccessContent() {
       <p style={{ marginTop: "1.5rem", fontSize: "0.875rem" }}>
         {propertyId && (
           <>
-            <Link href={`/property-data?expand=${propertyId}`}>View property &amp; documents</Link>
+            <Link href={`/property/${propertyId}`}>View property &amp; documents</Link>
             {" · "}
           </>
         )}

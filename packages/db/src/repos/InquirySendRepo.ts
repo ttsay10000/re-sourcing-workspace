@@ -6,6 +6,34 @@ export interface InquirySendRepoOptions {
   pool: Pool;
 }
 
+export interface CreateInquirySendOptions {
+  toAddress?: string | null;
+  source?: string | null;
+  sentAt?: string | Date | null;
+}
+
+export interface InquiryRecipientHistoryRow {
+  propertyId: string;
+  canonicalAddress: string;
+  sentAt: string;
+}
+
+function normalizeToAddress(toAddress: string | null | undefined): string | null {
+  const normalized = typeof toAddress === "string" ? toAddress.trim().toLowerCase() : "";
+  return normalized || null;
+}
+
+function normalizeSentAt(sentAt: string | Date | null | undefined): Date | null {
+  if (sentAt == null) return null;
+  if (sentAt instanceof Date) return Number.isNaN(sentAt.getTime()) ? null : sentAt;
+  const trimmed = sentAt.trim();
+  if (!trimmed) return null;
+  const parsed = /^\d{4}-\d{2}-\d{2}$/.test(trimmed)
+    ? new Date(`${trimmed}T12:00:00Z`)
+    : new Date(trimmed);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
 /** Log outbound inquiry emails sent per property; used for last-sent date and to prevent duplicate sends. */
 export class InquirySendRepo {
   constructor(private options: InquirySendRepoOptions) {}
@@ -14,16 +42,23 @@ export class InquirySendRepo {
     return this.options.client ?? this.options.pool;
   }
 
-  async create(propertyId: string, gmailMessageId?: string | null): Promise<{ id: string; sentAt: string }> {
+  async create(
+    propertyId: string,
+    gmailMessageId?: string | null,
+    createOptions?: CreateInquirySendOptions
+  ): Promise<{ id: string; sentAt: string }> {
+    const requestedSentAt = normalizeSentAt(createOptions?.sentAt);
+    const toAddress = normalizeToAddress(createOptions?.toAddress);
+    const source = createOptions?.source?.trim() || null;
     const r = await this.client.query(
-      `INSERT INTO property_inquiry_sends (property_id, gmail_message_id)
-       VALUES ($1, $2)
+      `INSERT INTO property_inquiry_sends (property_id, sent_at, gmail_message_id, to_address, source)
+       VALUES ($1, COALESCE($2, now()), $3, $4, $5)
        RETURNING id, sent_at`,
-      [propertyId, gmailMessageId ?? null]
+      [propertyId, requestedSentAt, gmailMessageId ?? null, toAddress, source]
     );
     const row = r.rows[0];
-    const sentAt = row.sent_at instanceof Date ? row.sent_at.toISOString() : String(row.sent_at);
-    return { id: row.id, sentAt };
+    const storedSentAt = row.sent_at instanceof Date ? row.sent_at.toISOString() : String(row.sent_at);
+    return { id: row.id, sentAt: storedSentAt };
   }
 
   /** Latest sent_at for this property, or null if none. */
@@ -54,5 +89,23 @@ export class InquirySendRepo {
       [withinDays]
     );
     return r.rows.map((row) => ({ propertyId: row.property_id, gmailMessageId: row.gmail_message_id }));
+  }
+
+  async listByRecipient(toAddress: string): Promise<InquiryRecipientHistoryRow[]> {
+    const normalized = normalizeToAddress(toAddress);
+    if (!normalized) return [];
+    const r = await this.client.query<{ property_id: string; canonical_address: string; sent_at: Date | string }>(
+      `SELECT s.property_id, p.canonical_address, s.sent_at
+       FROM property_inquiry_sends s
+       INNER JOIN properties p ON p.id = s.property_id
+       WHERE s.to_address = $1
+       ORDER BY s.sent_at DESC`,
+      [normalized]
+    );
+    return r.rows.map((row) => ({
+      propertyId: row.property_id,
+      canonicalAddress: row.canonical_address,
+      sentAt: row.sent_at instanceof Date ? row.sent_at.toISOString() : String(row.sent_at),
+    }));
   }
 }

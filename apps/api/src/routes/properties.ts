@@ -39,10 +39,7 @@ import { getRentRollComparison } from "../rental/rentRollComparison.js";
 import { fetchNyDosEntityByName } from "../enrichment/nyDosEntity.js";
 import { fetchAcrisDocumentsByOwnerName } from "../enrichment/acrisDocuments.js";
 import { computeDealSignals } from "../deal/computeDealSignals.js";
-import { computeFurnishedRental } from "../deal/furnishedRentalEstimator.js";
-import { computeMortgage } from "../deal/mortgageAmortization.js";
-import { computeIrr, saleProceedsFromExitCap } from "../deal/irrCalculation.js";
-import { HOLD_YEARS } from "../deal/constants.js";
+import { computeUnderwritingProjection, resolveDossierAssumptions } from "../deal/underwritingModel.js";
 import { resolveGeneratedDocPath, deleteGeneratedDocumentFile } from "../deal/generatedDocStorage.js";
 import { unlink } from "fs/promises";
 
@@ -817,6 +814,13 @@ router.get("/properties/:id/documents/:docId/file", async (req: Request, res: Re
     const generatedDocRepo = new DocumentRepo({ pool });
     const genDoc = await generatedDocRepo.byId(docId);
     if (genDoc && genDoc.propertyId === propertyId) {
+      const fileContent = await generatedDocRepo.getFileContent(docId);
+      if (fileContent && fileContent.length > 0) {
+        res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent(genDoc.fileName)}"`);
+        if (genDoc.fileType) res.setHeader("Content-Type", genDoc.fileType);
+        res.send(fileContent);
+        return;
+      }
       const absolutePath = resolveGeneratedDocPath(genDoc.storagePath);
       res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent(genDoc.fileName)}"`);
       res.sendFile(absolutePath, (err) => {
@@ -830,6 +834,13 @@ router.get("/properties/:id/documents/:docId/file", async (req: Request, res: Re
     const inquiryDocRepo = new InquiryDocumentRepo({ pool });
     const inquiryDoc = await inquiryDocRepo.byId(docId);
     if (inquiryDoc && inquiryDoc.propertyId === propertyId) {
+      const fileContent = await inquiryDocRepo.getFileContent(docId);
+      if (fileContent && fileContent.length > 0) {
+        res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(inquiryDoc.filename)}"`);
+        if (inquiryDoc.contentType) res.setHeader("Content-Type", inquiryDoc.contentType);
+        res.send(fileContent);
+        return;
+      }
       const absolutePath = resolveInquiryFilePath(inquiryDoc.filePath);
       res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(inquiryDoc.filename)}"`);
       res.sendFile(absolutePath, (err) => {
@@ -869,101 +880,6 @@ router.get("/properties/:id/documents/:docId/file", async (req: Request, res: Re
     const message = err instanceof Error ? err.message : String(err);
     console.error("[properties document file]", err);
     if (!res.headersSent) res.status(503).json({ error: "Failed to serve file.", details: message });
-  }
-});
-
-/** GET /api/properties/:id/uploaded-documents - list user-uploaded documents (OM, Brochure, etc.) for property. */
-router.get("/properties/:id/uploaded-documents", async (req: Request, res: Response) => {
-  try {
-    const { id: propertyId } = req.params;
-    const pool = getPool();
-    const propertyRepo = new PropertyRepo({ pool });
-    const docRepo = new PropertyUploadedDocumentRepo({ pool });
-    const property = await propertyRepo.byId(propertyId);
-    if (!property) {
-      res.status(404).json({ error: "Property not found", propertyId });
-      return;
-    }
-    const documents = await docRepo.listByPropertyId(propertyId);
-    res.json({ propertyId, documents });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error("[properties uploaded-documents list]", err);
-    res.status(503).json({ error: "Failed to list uploaded documents.", details: message });
-  }
-});
-
-/** GET /api/properties/:id/uploaded-documents/:docId/file - serve uploaded document file. */
-router.get("/properties/:id/uploaded-documents/:docId/file", async (req: Request, res: Response) => {
-  try {
-    const { id: propertyId, docId } = req.params;
-    const pool = getPool();
-    const propertyRepo = new PropertyRepo({ pool });
-    const docRepo = new PropertyUploadedDocumentRepo({ pool });
-    const property = await propertyRepo.byId(propertyId);
-    if (!property) {
-      res.status(404).json({ error: "Property not found", propertyId });
-      return;
-    }
-    const doc = await docRepo.byId(docId);
-    if (!doc || doc.propertyId !== propertyId) {
-      res.status(404).json({ error: "Document not found", docId });
-      return;
-    }
-    const fileContent = await docRepo.getFileContent(docId);
-    if (fileContent && fileContent.length > 0) {
-      res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(doc.filename)}"`);
-      if (doc.contentType) res.setHeader("Content-Type", doc.contentType);
-      res.send(fileContent);
-      return;
-    }
-    if (!uploadedDocFileExists(doc.filePath)) {
-      res.status(404).json({ error: "Document file not found on disk", docId, hint: "On hosted deployments, use a persistent disk or set UPLOADED_DOCS_PATH to a path that persists." });
-      return;
-    }
-    const absolutePath = resolveUploadedDocFilePath(doc.filePath);
-    res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(doc.filename)}"`);
-    res.sendFile(absolutePath, (err) => {
-      if (err && !res.headersSent) {
-        console.error("[uploaded-document file] sendFile failed:", err instanceof Error ? err.message : err);
-        res.status(500).json({ error: "Failed to send file", details: err instanceof Error ? err.message : "File may be missing or storage may not persist." });
-      }
-    });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error("[properties uploaded-document file]", err);
-    if (!res.headersSent) res.status(503).json({ error: "Failed to serve file.", details: message });
-  }
-});
-
-/** DELETE /api/properties/:id/uploaded-documents/:docId - remove an uploaded document (and its file from disk). */
-router.delete("/properties/:id/uploaded-documents/:docId", async (req: Request, res: Response) => {
-  try {
-    const { id: propertyId, docId } = req.params;
-    const pool = getPool();
-    const propertyRepo = new PropertyRepo({ pool });
-    const docRepo = new PropertyUploadedDocumentRepo({ pool });
-    const property = await propertyRepo.byId(propertyId);
-    if (!property) {
-      res.status(404).json({ error: "Property not found", propertyId });
-      return;
-    }
-    const doc = await docRepo.byId(docId);
-    if (!doc || doc.propertyId !== propertyId) {
-      res.status(404).json({ error: "Document not found", docId });
-      return;
-    }
-    await deleteUploadedDocumentFile(doc.filePath);
-    const deleted = await docRepo.delete(docId);
-    if (!deleted) {
-      res.status(404).json({ error: "Document not found", docId });
-      return;
-    }
-    res.status(204).send();
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error("[properties delete uploaded-document]", err);
-    res.status(503).json({ error: "Failed to delete document.", details: message });
   }
 });
 
@@ -1043,6 +959,114 @@ router.get("/properties/:id/inquiry-emails", async (req: Request, res: Response)
   }
 });
 
+interface InquiryGuardState {
+  propertyId: string;
+  toAddress: string | null;
+  lastInquirySentAt: string | null;
+  hasOmDocument: boolean;
+  sameRecipientSamePropertyAt: string | null;
+  sameRecipientOtherProperties: Array<{ propertyId: string; canonicalAddress: string; sentAt: string }>;
+}
+
+function normalizeRecipientEmail(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase();
+  return normalized || null;
+}
+
+async function getInquiryGuardState(
+  pool: import("pg").Pool,
+  propertyId: string,
+  toAddress?: string | null
+): Promise<InquiryGuardState> {
+  const inquirySendRepo = new InquirySendRepo({ pool });
+  const normalizedTo = normalizeRecipientEmail(toAddress);
+  const [lastInquirySentAt, omResult, recipientHistory] = await Promise.all([
+    inquirySendRepo.getLastSentAt(propertyId),
+    pool.query<{ has_om_document: boolean }>(
+      `SELECT EXISTS (
+         SELECT 1 FROM property_inquiry_documents d WHERE d.property_id = $1
+       ) OR EXISTS (
+         SELECT 1 FROM property_uploaded_documents u WHERE u.property_id = $1 AND u.category = 'OM'
+       ) AS has_om_document`,
+      [propertyId]
+    ),
+    normalizedTo ? inquirySendRepo.listByRecipient(normalizedTo) : Promise.resolve([]),
+  ]);
+
+  const sameRecipientSamePropertyAt =
+    recipientHistory.find((row) => row.propertyId === propertyId)?.sentAt ?? null;
+  const sameRecipientOtherProperties = recipientHistory.filter((row) => row.propertyId !== propertyId);
+
+  return {
+    propertyId,
+    toAddress: normalizedTo,
+    lastInquirySentAt,
+    hasOmDocument: Boolean(omResult.rows[0]?.has_om_document),
+    sameRecipientSamePropertyAt,
+    sameRecipientOtherProperties,
+  };
+}
+
+/** GET /api/properties/:id/inquiry-guard - persisted inquiry history for this property and optional broker email. */
+router.get("/properties/:id/inquiry-guard", async (req: Request, res: Response) => {
+  try {
+    const { id: propertyId } = req.params;
+    const pool = getPool();
+    const propertyRepo = new PropertyRepo({ pool });
+    const property = await propertyRepo.byId(propertyId);
+    if (!property) {
+      res.status(404).json({ error: "Property not found", propertyId });
+      return;
+    }
+    const toAddress = typeof req.query.to === "string" ? req.query.to : null;
+    const guard = await getInquiryGuardState(pool, propertyId, toAddress);
+    res.json(guard);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[properties inquiry-guard]", err);
+    res.status(503).json({ error: "Failed to load inquiry guard.", details: message });
+  }
+});
+
+/** POST /api/properties/:id/mark-inquiry-sent - log a prior/manual inquiry so duplicate-send guardrails persist across refreshes. */
+router.post("/properties/:id/mark-inquiry-sent", async (req: Request, res: Response) => {
+  try {
+    const { id: propertyId } = req.params;
+    const pool = getPool();
+    const propertyRepo = new PropertyRepo({ pool });
+    const property = await propertyRepo.byId(propertyId);
+    if (!property) {
+      res.status(404).json({ error: "Property not found", propertyId });
+      return;
+    }
+    const toAddress = normalizeRecipientEmail(req.body?.to);
+    const sentAt = typeof req.body?.sentAt === "string" ? req.body.sentAt : null;
+    const inquirySendRepo = new InquirySendRepo({ pool });
+    const created = await inquirySendRepo.create(propertyId, null, {
+      toAddress,
+      source: "manual",
+      sentAt,
+    });
+    const guard = await getInquiryGuardState(pool, propertyId, toAddress);
+    res.status(201).json({
+      ok: true,
+      propertyId,
+      inquirySend: {
+        id: created.id,
+        sentAt: created.sentAt,
+        toAddress,
+        source: "manual",
+      },
+      guard,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[properties mark-inquiry-sent]", err);
+    res.status(503).json({ error: "Failed to record inquiry send.", details: message });
+  }
+});
+
 /** POST /api/properties/:id/send-inquiry-email - send inquiry email via Gmail API. Body: { to, subject, body }. */
 router.post("/properties/:id/send-inquiry-email", async (req: Request, res: Response) => {
   try {
@@ -1055,16 +1079,46 @@ router.post("/properties/:id/send-inquiry-email", async (req: Request, res: Resp
       return;
     }
     const { to, subject, body } = req.body ?? {};
+    const force = req.body?.force === true;
     if (typeof to !== "string" || !to.trim()) {
       res.status(400).json({ error: "Missing or invalid 'to' address." });
+      return;
+    }
+    const normalizedTo = normalizeRecipientEmail(to);
+    const guard = await getInquiryGuardState(pool, propertyId, normalizedTo);
+    if (guard.hasOmDocument && !force) {
+      res.status(409).json({
+        error: "OM already received for this property. Inquiry email blocked.",
+        code: "om_already_received",
+        guard,
+      });
+      return;
+    }
+    if (guard.lastInquirySentAt && !force) {
+      res.status(409).json({
+        error: "An inquiry has already been logged for this property. Inquiry email blocked until you confirm a resend.",
+        code: "inquiry_already_sent",
+        guard,
+      });
+      return;
+    }
+    if (guard.sameRecipientOtherProperties.length > 0 && !force) {
+      res.status(409).json({
+        error: "This broker email has already been contacted for another property. Inquiry email blocked until you confirm.",
+        code: "recipient_contacted_elsewhere",
+        guard,
+      });
       return;
     }
     const subj = typeof subject === "string" ? subject.trim() : "";
     const b = typeof body === "string" ? body : "";
     const result = await gmailSendMessage(to.trim(), subj || "Inquiry", b);
     const inquirySendRepo = new InquirySendRepo({ pool });
-    const { sentAt } = await inquirySendRepo.create(propertyId, result.id);
-    res.json({ ok: true, messageId: result.id, sentAt });
+    const { sentAt } = await inquirySendRepo.create(propertyId, result.id, {
+      toAddress: normalizedTo,
+      source: "gmail_api",
+    });
+    res.json({ ok: true, messageId: result.id, sentAt, guard: await getInquiryGuardState(pool, propertyId, normalizedTo) });
   } catch (err) {
     const message = (() => {
       if (err instanceof Error) {
@@ -1169,52 +1223,18 @@ router.post("/properties/:id/compute-score", async (req: Request, res: Response)
     const currentGrossRent = grossRentFromDetails(details) ?? (currentNoi != null ? currentNoi * 1.5 : null);
     await profileRepo.ensureDefault();
     const profile = await profileRepo.getDefault();
-    const ltvPct = profile?.defaultLtv ?? 65;
-    const interestRatePct = profile?.defaultInterestRate ?? 6.5;
-    const amortizationYears = profile?.defaultAmortization ?? 30;
-    const exitCapPct = profile?.defaultExitCap ?? 5;
-    const rentUpliftPct = profile?.defaultRentUplift ?? 15;
-    const expenseIncreasePct = profile?.defaultExpenseIncrease ?? 2;
-    const managementFeePct = profile?.defaultManagementFee ?? 5;
-    const rentUplift = 1 + (rentUpliftPct ?? 0) / 100;
-    const expenseIncrease = 1 + (expenseIncreasePct ?? 0) / 100;
-    const managementFee = (managementFeePct ?? 0) / 100;
-    const furnishedRental =
-      currentGrossRent != null && currentNoi != null && purchasePrice != null
-        ? computeFurnishedRental(
-            { currentGrossRent, currentNoi, rentUplift, expenseIncrease, managementFee },
-            purchasePrice
-          )
-        : null;
-    const principal =
-      purchasePrice != null && ltvPct != null && ltvPct > 0 ? (purchasePrice * ltvPct) / 100 : 0;
-    const mortgage =
-      principal > 0 && amortizationYears > 0
-        ? computeMortgage({
-            principal,
-            annualRate: (interestRatePct ?? 0) / 100,
-            amortizationYears,
-          })
-        : null;
-    const adjustedNoi = furnishedRental?.adjustedNoi ?? currentNoi ?? 0;
-    const saleProceeds = saleProceedsFromExitCap(adjustedNoi, exitCapPct ?? 5);
-    const equity = purchasePrice != null ? purchasePrice - principal : 0;
-    const annualCf = adjustedNoi - (mortgage?.annualDebtService ?? 0);
-    const annualCashFlows = Array(HOLD_YEARS).fill(annualCf);
-    const irr =
-      equity > 0
-        ? computeIrr({
-            initialEquity: equity,
-            annualCashFlows,
-            saleProceeds,
-          })
-        : null;
+    const assumptions = resolveDossierAssumptions(profile, purchasePrice);
+    const projection = computeUnderwritingProjection({
+      assumptions,
+      currentGrossRent,
+      currentNoi,
+    });
     const input = {
       propertyId,
       canonicalAddress: property.canonicalAddress,
       details: property.details ?? null,
       primaryListing,
-      irr5yrPct: irr?.irr ?? null,
+      irr5yrPct: projection.returns.irr ?? null,
       rentStabilizedUnitCount: 0,
     };
     const { insertParams, scoringResult } = computeDealSignals(input);
@@ -1222,12 +1242,12 @@ router.post("/properties/:id/compute-score", async (req: Request, res: Response)
     const row = await signalsRepo.insert({
       ...insertParams,
       dealScore: scoringResult.dealScore ?? null,
-      irrPct: irr?.irr ?? null,
-      equityMultiple: irr?.equityMultiple ?? null,
-      cocPct: irr?.coc ?? null,
-      holdYears: HOLD_YEARS,
+      irrPct: projection.returns.irr ?? null,
+      equityMultiple: projection.returns.equityMultiple ?? null,
+      cocPct: projection.returns.year1CashOnCashReturn ?? null,
+      holdYears: assumptions.holdPeriodYears,
       currentNoi: currentNoi ?? null,
-      adjustedNoi: furnishedRental?.adjustedNoi ?? currentNoi ?? null,
+      adjustedNoi: projection.operating.stabilizedNoi ?? currentNoi ?? null,
     });
     res.json({
       dealScore: row.dealScore ?? scoringResult.dealScore,

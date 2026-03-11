@@ -239,12 +239,25 @@ export function CanonicalPropertyDetail({
   const [inquirySending, setInquirySending] = useState(false);
   const [inquirySendError, setInquirySendError] = useState<string | null>(null);
   const [inquirySendSuccess, setInquirySendSuccess] = useState<string | null>(null);
+  const [inquiryGuardLoading, setInquiryGuardLoading] = useState(false);
+  const [inquiryGuard, setInquiryGuard] = useState<{
+    toAddress: string | null;
+    lastInquirySentAt: string | null;
+    hasOmDocument: boolean;
+    sameRecipientSamePropertyAt: string | null;
+    sameRecipientOtherProperties: Array<{ propertyId: string; canonicalAddress: string; sentAt: string }>;
+  } | null>(null);
   const [lastInquirySentAt, setLastInquirySentAt] = useState<string | null>(null);
+  const [manualInquiryModalOpen, setManualInquiryModalOpen] = useState(false);
+  const [manualInquiryDraft, setManualInquiryDraft] = useState<{ to: string; sentAt: string }>({
+    to: "",
+    sentAt: new Date().toISOString().slice(0, 10),
+  });
+  const [manualInquirySaving, setManualInquirySaving] = useState(false);
+  const [manualInquiryError, setManualInquiryError] = useState<string | null>(null);
   const [rentRollComparison, setRentRollComparison] = useState<{ comparable: boolean; totalUnitsRapid: number; totalUnitsOm: number; totalBedsRapid: number; totalBedsOm: number } | null>(null);
   const [dealScore, setDealScore] = useState<number | null>(null);
   const [dealSignals, setDealSignals] = useState<Record<string, unknown> | null>(null);
-  const [computeScoreLoading, setComputeScoreLoading] = useState(false);
-  const hasAutoComputedScoreRef = React.useRef(false);
   const hasAutoSavedRef = React.useRef(false);
   const [sendAnotherConfirm, setSendAnotherConfirm] = useState(false);
   const [dosEntityLoading, setDosEntityLoading] = useState(false);
@@ -270,7 +283,6 @@ export function CanonicalPropertyDetail({
 
   // Refetch full property when expanded so enrichment (CO, zoning, HPD) shows latest after re-run
   useEffect(() => {
-    hasAutoComputedScoreRef.current = false;
     hasAutoSavedRef.current = false;
     let cancelled = false;
     setDetailsFromApi(undefined);
@@ -315,31 +327,38 @@ export function CanonicalPropertyDetail({
     return () => { cancelled = true; };
   }, [property.id]);
 
-  // When OM is present and no deal score yet, auto-compute score once (no button)
   useEffect(() => {
-    if (
-      unifiedDocuments == null ||
-      !hasOmDocument ||
-      dealScore != null ||
-      hasAutoComputedScoreRef.current ||
-      computeScoreLoading
-    )
+    if (!inquiryEmailModalOpen && !manualInquiryModalOpen) {
+      setInquiryGuard(null);
+      setInquiryGuardLoading(false);
       return;
-    hasAutoComputedScoreRef.current = true;
-    setComputeScoreLoading(true);
-    fetch(`${API_BASE}/api/properties/${property.id}/compute-score`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
-    })
+    }
+    const rawTo = inquiryEmailModalOpen ? inquiryDraft.to : manualInquiryDraft.to;
+    const to = rawTo.trim();
+    let cancelled = false;
+    setInquiryGuardLoading(true);
+    const query = to ? `?to=${encodeURIComponent(to)}` : "";
+    fetch(`${API_BASE}/api/properties/${property.id}/inquiry-guard${query}`)
       .then((r) => r.json())
       .then((data) => {
-        if (data?.dealScore != null) setDealScore(data.dealScore);
-        if (data?.dealSignals != null) setDealSignals(data.dealSignals);
+        if (cancelled || data?.error) return;
+        setInquiryGuard({
+          toAddress: data.toAddress ?? null,
+          lastInquirySentAt: data.lastInquirySentAt ?? null,
+          hasOmDocument: Boolean(data.hasOmDocument),
+          sameRecipientSamePropertyAt: data.sameRecipientSamePropertyAt ?? null,
+          sameRecipientOtherProperties: Array.isArray(data.sameRecipientOtherProperties) ? data.sameRecipientOtherProperties : [],
+        });
+        if (data.lastInquirySentAt != null) setLastInquirySentAt(data.lastInquirySentAt);
       })
-      .catch(() => {})
-      .finally(() => setComputeScoreLoading(false));
-  }, [property.id, unifiedDocuments, hasOmDocument, dealScore, computeScoreLoading]);
+      .catch(() => {
+        if (!cancelled) setInquiryGuard(null);
+      })
+      .finally(() => {
+        if (!cancelled) setInquiryGuardLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [property.id, inquiryEmailModalOpen, manualInquiryModalOpen, inquiryDraft.to, manualInquiryDraft.to]);
 
   // When OM is present and property is not saved, auto-save (star) the deal once
   useEffect(() => {
@@ -529,6 +548,19 @@ export function CanonicalPropertyDetail({
 
   const hasListing = primaryListing && primaryListing !== "loading";
   const listingForDisplay = hasListing ? primaryListing : null;
+  const listingAgents = listingForDisplay?.agentEnrichment ?? [];
+  const brokerEmailOptions = listingAgents
+    .map((agent) => ({ email: agent.email?.trim() ?? "", name: agent.name }))
+    .filter((entry) => entry.email);
+  const primaryBroker = brokerEmailOptions[0] ?? null;
+  const brokerFirstName = primaryBroker?.name?.trim()
+    ? primaryBroker.name.trim().split(/\s+/)[0] ?? "[Broker Name]"
+    : "[Broker Name]";
+  const inquiryNeedsOverride = Boolean(
+    lastInquirySentAt ||
+    inquiryGuard?.sameRecipientSamePropertyAt ||
+    (inquiryGuard?.sameRecipientOtherProperties.length ?? 0) > 0
+  );
   const extra = listingForDisplay?.extra as Record<string, unknown> | undefined;
   const photoUrls = (listingForDisplay?.imageUrls?.length ? listingForDisplay.imageUrls : Array.isArray(extra?.images) ? (extra!.images as string[]).filter((u): u is string => typeof u === "string") : []) ?? [];
   const floorplanUrls = (Array.isArray(extra?.floorplans) ? (extra.floorplans as string[]).filter((u): u is string => typeof u === "string") : []) ?? [];
@@ -598,13 +630,13 @@ export function CanonicalPropertyDetail({
         </div>
       )}
 
-      {/* Deal score — from deal_signals; auto-computed when OM is present */}
+      {/* Deal score — generated after dossier flow persists deal_signals */}
       <div className="linked-listing-bar" style={{ marginTop: "0.5rem", marginBottom: "0.5rem" }}>
         <div className="linked-listing-bar-inner" style={{ flexWrap: "wrap", gap: "0.5rem" }}>
           <div className="property-metric">
             <div className="property-metric-label">Deal score</div>
             <div className="property-metric-value">
-              {computeScoreLoading ? "Computing…" : dealScore != null ? `${dealScore}/100` : "—"}
+              {dealScore != null ? `${dealScore}/100` : "Pending dossier"}
             </div>
           </div>
           {dealSignals && typeof dealSignals.assetCapRate === "number" && (
@@ -995,19 +1027,14 @@ export function CanonicalPropertyDetail({
                 OM already received or uploaded. See <strong>Documents (from inquiry replies)</strong> and <strong>Uploaded documents</strong> below.
               </p>
             )}
-            <button
-              type="button"
-              disabled={hasOmDocument}
-              onClick={() => {
-                const addressLine = property.canonicalAddress.split(",")[0]?.trim() || property.canonicalAddress;
-                const subject = "Inquiry about " + addressLine;
-                const agents = listingForDisplay?.agentEnrichment ?? [];
-                const emailsWithNames = agents.map((a) => ({ email: a.email?.trim(), name: a.name })).filter((x) => x.email) as { email: string; name: string }[];
-                const firstPrimary = emailsWithNames[0];
-                const brokerFirstName = firstPrimary?.name?.trim()
-                  ? firstPrimary.name.trim().split(/\s+/)[0] ?? "[Broker Name]"
-                  : "[Broker Name]";
-                const body = `Hi ${brokerFirstName},
+            <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+              <button
+                type="button"
+                disabled={hasOmDocument}
+                onClick={() => {
+                  const addressLine = property.canonicalAddress.split(",")[0]?.trim() || property.canonicalAddress;
+                  const subject = "Inquiry about " + addressLine;
+                  const body = `Hi ${brokerFirstName},
 
 My name is Tyler Tsay, and I'm reaching out on behalf of a client regarding the property at ${addressLine} currently on the market. We are evaluating the building and would appreciate the opportunity to review further.
 
@@ -1019,25 +1046,51 @@ Best,
 Tyler Tsay
 617 306 3336
 tyler@stayhaus.co`;
-                setInquiryDraft({ to: firstPrimary?.email ?? "", subject, body });
-                setInquirySendError(null);
-                setSendAnotherConfirm(false);
-                setInquiryEmailModalOpen(true);
-              }}
-              style={{
-                padding: "0.35rem 0.6rem",
-                backgroundColor: hasOmDocument ? "#e5e7eb" : "#f0f0f0",
-                border: "1px solid #ccc",
-                borderRadius: "4px",
-                fontSize: "0.8rem",
-                color: hasOmDocument ? "#9ca3af" : "#333",
-                cursor: hasOmDocument ? "not-allowed" : "pointer",
-              }}
-            >
-              {lastInquirySentAt ? "Send another inquiry" : "Request info / OM by email & track reply"}
-            </button>
+                  setInquiryDraft({ to: primaryBroker?.email ?? "", subject, body });
+                  setInquirySendError(null);
+                  setInquiryGuard(null);
+                  setSendAnotherConfirm(false);
+                  setInquiryEmailModalOpen(true);
+                }}
+                style={{
+                  padding: "0.35rem 0.6rem",
+                  backgroundColor: hasOmDocument ? "#e5e7eb" : "#f0f0f0",
+                  border: "1px solid #ccc",
+                  borderRadius: "4px",
+                  fontSize: "0.8rem",
+                  color: hasOmDocument ? "#9ca3af" : "#333",
+                  cursor: hasOmDocument ? "not-allowed" : "pointer",
+                }}
+              >
+                {lastInquirySentAt ? "Send another inquiry" : "Request info / OM by email & track reply"}
+              </button>
+              <button
+                type="button"
+                disabled={hasOmDocument}
+                onClick={() => {
+                  setManualInquiryDraft({
+                    to: primaryBroker?.email ?? "",
+                    sentAt: new Date().toISOString().slice(0, 10),
+                  });
+                  setManualInquiryError(null);
+                  setInquiryGuard(null);
+                  setManualInquiryModalOpen(true);
+                }}
+                style={{
+                  padding: "0.35rem 0.6rem",
+                  backgroundColor: hasOmDocument ? "#e5e7eb" : "#fff",
+                  border: "1px solid #ccc",
+                  borderRadius: "4px",
+                  fontSize: "0.8rem",
+                  color: hasOmDocument ? "#9ca3af" : "#333",
+                  cursor: hasOmDocument ? "not-allowed" : "pointer",
+                }}
+              >
+                Mark prior inquiry as sent
+              </button>
+            </div>
             <p style={{ margin: "0.25rem 0 0", color: "#737373", fontSize: "0.75rem" }}>
-              Review the draft and click Send to email the broker. Use the subject line so replies are matched to this property. Replies and attachments appear in <strong>Documents (from inquiry replies)</strong> below after the daily process-inbox cron runs.
+              Review the draft and click Send to email the broker. Use the subject line so replies are matched to this property. If you already reached out outside the app, use <strong>Mark prior inquiry as sent</strong> so the guardrail persists across refreshes. Replies and attachments appear in <strong>Documents (from inquiry replies)</strong> below after the daily process-inbox cron runs.
             </p>
           </div>
           {inquiryEmailModalOpen && (
@@ -1053,6 +1106,19 @@ tyler@stayhaus.co`;
                   Review the draft below and edit if needed (e.g. add your phone and email in the signature). Click <strong>Send email</strong> to send from your connected Gmail. Keep the subject line so replies can be matched to this property.
                 </p>
                 {inquirySendError && <p style={{ margin: "0 0 0.75rem", fontSize: "0.875rem", color: "#b91c1c" }}>{inquirySendError}</p>}
+                {inquiryGuardLoading && (
+                  <p style={{ margin: "0 0 0.75rem", fontSize: "0.8rem", color: "#64748b" }}>Checking inquiry guardrails…</p>
+                )}
+                {inquiryGuard?.sameRecipientOtherProperties.length ? (
+                  <div style={{ margin: "0 0 0.75rem", padding: "0.5rem 0.6rem", backgroundColor: "#fff7ed", border: "1px solid #fb923c", borderRadius: "6px", fontSize: "0.8rem", color: "#9a3412" }}>
+                    <strong style={{ display: "block", marginBottom: "0.25rem" }}>This broker email was already contacted for another property.</strong>
+                    {inquiryGuard.sameRecipientOtherProperties.map((row) => (
+                      <div key={`${row.propertyId}-${row.sentAt}`}>
+                        {row.canonicalAddress} — {formatDateOnly(row.sentAt)}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
                 <div style={{ marginBottom: "0.75rem" }}>
                   <label style={{ display: "block", fontSize: "0.75rem", marginBottom: "0.25rem", color: "#555" }}>To (broker)</label>
                   <input
@@ -1065,9 +1131,9 @@ tyler@stayhaus.co`;
                   {!inquiryDraft.to && listingForDisplay && (
                     <p style={{ margin: "0.25rem 0 0", fontSize: "0.75rem", color: "#888" }}>No broker email on file. Add agent enrichment or enter manually.</p>
                   )}
-                  {listingForDisplay?.agentEnrichment && listingForDisplay.agentEnrichment.length > 1 && (
+                  {listingAgents.length > 1 && (
                     <p style={{ margin: "0.25rem 0 0", fontSize: "0.75rem", color: "#666" }}>
-                      Other agents: {listingForDisplay.agentEnrichment.slice(1).map((a) => a.email?.trim()).filter(Boolean).join(", ") || "—"}
+                      Other agents: {listingAgents.slice(1).map((a) => a.email?.trim()).filter(Boolean).join(", ") || "—"}
                     </p>
                   )}
                 </div>
@@ -1089,7 +1155,7 @@ tyler@stayhaus.co`;
                     style={{ width: "100%", padding: "0.4rem", fontSize: "0.875rem", border: "1px solid #ccc", borderRadius: "4px", resize: "vertical" }}
                   />
                 </div>
-                {lastInquirySentAt && (
+                {inquiryNeedsOverride && (
                   <div style={{ marginBottom: "1rem" }}>
                     <label style={{ display: "flex", alignItems: "center", gap: "0.35rem", fontSize: "0.875rem", cursor: "pointer" }}>
                       <input
@@ -1097,7 +1163,7 @@ tyler@stayhaus.co`;
                         checked={sendAnotherConfirm}
                         onChange={(e) => setSendAnotherConfirm(e.target.checked)}
                       />
-                      Send another inquiry anyway (I understand this may duplicate emails)
+                      Proceed anyway (I understand this may duplicate outreach)
                     </label>
                   </div>
                 )}
@@ -1105,7 +1171,7 @@ tyler@stayhaus.co`;
                   <button type="button" onClick={() => { setInquiryEmailModalOpen(false); setInquirySendError(null); }} style={{ padding: "0.4rem 0.75rem", border: "1px solid #ccc", borderRadius: "4px", background: "#fff", cursor: "pointer" }}>Cancel</button>
                   <button
                     type="button"
-                    disabled={Boolean(inquirySending || !inquiryDraft.to?.trim() || (lastInquirySentAt && !sendAnotherConfirm))}
+                    disabled={Boolean(inquirySending || !inquiryDraft.to?.trim() || (inquiryNeedsOverride && !sendAnotherConfirm))}
                     onClick={async () => {
                       setInquirySendError(null);
                       setInquirySending(true);
@@ -1113,14 +1179,35 @@ tyler@stayhaus.co`;
                         const res = await fetch(`${API_BASE}/api/properties/${property.id}/send-inquiry-email`, {
                           method: "POST",
                           headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify({ to: inquiryDraft.to.trim(), subject: inquiryDraft.subject, body: inquiryDraft.body }),
+                          body: JSON.stringify({ to: inquiryDraft.to.trim(), subject: inquiryDraft.subject, body: inquiryDraft.body, force: sendAnotherConfirm }),
                         });
                         const data = await res.json().catch(() => ({}));
                         if (!res.ok) {
+                          if (data?.guard && data.guard.lastInquirySentAt != null) {
+                            setLastInquirySentAt(data.guard.lastInquirySentAt);
+                          }
+                          if (data?.guard) {
+                            setInquiryGuard({
+                              toAddress: data.guard.toAddress ?? null,
+                              lastInquirySentAt: data.guard.lastInquirySentAt ?? null,
+                              hasOmDocument: Boolean(data.guard.hasOmDocument),
+                              sameRecipientSamePropertyAt: data.guard.sameRecipientSamePropertyAt ?? null,
+                              sameRecipientOtherProperties: Array.isArray(data.guard.sameRecipientOtherProperties) ? data.guard.sameRecipientOtherProperties : [],
+                            });
+                          }
                           const msg = typeof data?.details === "string" ? data.details : typeof data?.error === "string" ? data.error : "Failed to send";
                           throw new Error(msg);
                         }
                         setLastInquirySentAt(data.sentAt ?? null);
+                        if (data.guard) {
+                          setInquiryGuard({
+                            toAddress: data.guard.toAddress ?? null,
+                            lastInquirySentAt: data.guard.lastInquirySentAt ?? null,
+                            hasOmDocument: Boolean(data.guard.hasOmDocument),
+                            sameRecipientSamePropertyAt: data.guard.sameRecipientSamePropertyAt ?? null,
+                            sameRecipientOtherProperties: Array.isArray(data.guard.sameRecipientOtherProperties) ? data.guard.sameRecipientOtherProperties : [],
+                          });
+                        }
                         setInquirySendSuccess("Email sent successfully.");
                         setInquiryEmailModalOpen(false);
                         setTimeout(() => setInquirySendSuccess(null), 4000);
@@ -1133,6 +1220,89 @@ tyler@stayhaus.co`;
                     style={{ padding: "0.4rem 0.75rem", border: "1px solid #0066cc", borderRadius: "4px", background: inquirySending ? "#94a3b8" : "#0066cc", color: "#fff", cursor: inquirySending ? "wait" : "pointer" }}
                   >
                     {inquirySending ? "Sending…" : "Send email"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+          {manualInquiryModalOpen && (
+            <div style={{ position: "fixed", inset: 0, zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", backgroundColor: "rgba(0,0,0,0.4)" }} onClick={() => setManualInquiryModalOpen(false)}>
+              <div style={{ backgroundColor: "#fff", borderRadius: "8px", padding: "1.25rem", maxWidth: "460px", width: "100%", maxHeight: "90vh", overflow: "auto", boxShadow: "0 4px 20px rgba(0,0,0,0.15)" }} onClick={(e) => e.stopPropagation()}>
+                <p style={{ margin: "0 0 0.75rem", fontWeight: 600 }}>Mark prior inquiry as sent</p>
+                <p style={{ margin: "0 0 1rem", fontSize: "0.875rem", color: "#555" }}>
+                  This does <strong>not</strong> send an email. It records prior outreach on the server so duplicate-send guardrails continue to work after refresh.
+                </p>
+                {manualInquiryError && <p style={{ margin: "0 0 0.75rem", fontSize: "0.875rem", color: "#b91c1c" }}>{manualInquiryError}</p>}
+                {inquiryGuard?.sameRecipientOtherProperties.length ? (
+                  <div style={{ margin: "0 0 0.75rem", padding: "0.5rem 0.6rem", backgroundColor: "#fff7ed", border: "1px solid #fb923c", borderRadius: "6px", fontSize: "0.8rem", color: "#9a3412" }}>
+                    <strong style={{ display: "block", marginBottom: "0.25rem" }}>This broker email already has inquiry history on other properties.</strong>
+                    {inquiryGuard.sameRecipientOtherProperties.map((row) => (
+                      <div key={`${row.propertyId}-${row.sentAt}`}>
+                        {row.canonicalAddress} — {formatDateOnly(row.sentAt)}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+                <div style={{ marginBottom: "0.75rem" }}>
+                  <label style={{ display: "block", fontSize: "0.75rem", marginBottom: "0.25rem", color: "#555" }}>Broker email</label>
+                  <input
+                    type="text"
+                    value={manualInquiryDraft.to}
+                    onChange={(e) => setManualInquiryDraft((prev) => ({ ...prev, to: e.target.value }))}
+                    placeholder="Broker email (optional but recommended)"
+                    style={{ width: "100%", padding: "0.4rem", fontSize: "0.875rem", border: "1px solid #ccc", borderRadius: "4px" }}
+                  />
+                </div>
+                <div style={{ marginBottom: "1rem" }}>
+                  <label style={{ display: "block", fontSize: "0.75rem", marginBottom: "0.25rem", color: "#555" }}>Sent date</label>
+                  <input
+                    type="date"
+                    value={manualInquiryDraft.sentAt}
+                    onChange={(e) => setManualInquiryDraft((prev) => ({ ...prev, sentAt: e.target.value }))}
+                    style={{ width: "100%", padding: "0.4rem", fontSize: "0.875rem", border: "1px solid #ccc", borderRadius: "4px" }}
+                  />
+                </div>
+                <div style={{ display: "flex", gap: "0.5rem", justifyContent: "flex-end" }}>
+                  <button type="button" onClick={() => { setManualInquiryModalOpen(false); setManualInquiryError(null); }} style={{ padding: "0.4rem 0.75rem", border: "1px solid #ccc", borderRadius: "4px", background: "#fff", cursor: "pointer" }}>Cancel</button>
+                  <button
+                    type="button"
+                    disabled={Boolean(manualInquirySaving)}
+                    onClick={async () => {
+                      setManualInquiryError(null);
+                      setManualInquirySaving(true);
+                      try {
+                        const res = await fetch(`${API_BASE}/api/properties/${property.id}/mark-inquiry-sent`, {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ to: manualInquiryDraft.to.trim(), sentAt: manualInquiryDraft.sentAt }),
+                        });
+                        const data = await res.json().catch(() => ({}));
+                        if (!res.ok) {
+                          const msg = typeof data?.details === "string" ? data.details : typeof data?.error === "string" ? data.error : "Failed to record inquiry";
+                          throw new Error(msg);
+                        }
+                        setLastInquirySentAt(data.inquirySend?.sentAt ?? data.guard?.lastInquirySentAt ?? null);
+                        if (data.guard) {
+                          setInquiryGuard({
+                            toAddress: data.guard.toAddress ?? null,
+                            lastInquirySentAt: data.guard.lastInquirySentAt ?? null,
+                            hasOmDocument: Boolean(data.guard.hasOmDocument),
+                            sameRecipientSamePropertyAt: data.guard.sameRecipientSamePropertyAt ?? null,
+                            sameRecipientOtherProperties: Array.isArray(data.guard.sameRecipientOtherProperties) ? data.guard.sameRecipientOtherProperties : [],
+                          });
+                        }
+                        setInquirySendSuccess("Prior inquiry recorded.");
+                        setManualInquiryModalOpen(false);
+                        setTimeout(() => setInquirySendSuccess(null), 4000);
+                      } catch (e) {
+                        setManualInquiryError(e instanceof Error ? e.message : "Failed to record inquiry");
+                      } finally {
+                        setManualInquirySaving(false);
+                      }
+                    }}
+                    style={{ padding: "0.4rem 0.75rem", border: "1px solid #0066cc", borderRadius: "4px", background: manualInquirySaving ? "#94a3b8" : "#0066cc", color: "#fff", cursor: manualInquirySaving ? "wait" : "pointer" }}
+                  >
+                    {manualInquirySaving ? "Saving…" : "Save inquiry history"}
                   </button>
                 </div>
               </div>

@@ -108,6 +108,7 @@ const MAX_THREADS_PER_RUN = 50;
 export async function processInbox(options?: { maxMessages?: number }): Promise<ProcessInboxResult> {
   const result: ProcessInboxResult = { processed: 0, matched: 0, saved: 0, skipped: 0, brokerMatched: 0, brokerSaved: 0, threadMatched: 0, threadSaved: 0, errors: [] };
   const maxMessages = options?.maxMessages ?? 50;
+  const processedMessageIds = new Set<string>();
 
   try {
     await listMessages({ maxResults: 1 });
@@ -138,6 +139,8 @@ export async function processInbox(options?: { maxMessages?: number }): Promise<
   const addressFirstLines = await propertyRepo.listAddressFirstLines();
 
   for (const item of list.messages) {
+    if (processedMessageIds.has(item.id)) continue;
+    processedMessageIds.add(item.id);
     result.processed++;
     try {
       // Skip already-saved messages so we never re-process or duplicate attachments
@@ -196,6 +199,7 @@ export async function processInbox(options?: { maxMessages?: number }): Promise<
             filename: part.filename,
             contentType: part.mimeType,
             filePath,
+            fileContent: buffer,
           });
           savedPaths.push({ filePath, filename: part.filename });
         } catch (e) {
@@ -237,8 +241,6 @@ export async function processInbox(options?: { maxMessages?: number }): Promise<
   // Phase 2: fetch emails from brokers on record (from yesterday onward), match by From address, save to property
   const brokerMap = await getBrokerEmailToPropertyIdMap(pool);
   const brokerEmails = [...brokerMap.keys()];
-  const seenMessageIds = new Set<string>();
-
   for (const brokerEmail of brokerEmails) {
     const brokerQuery = `in:inbox from:${brokerEmail} after:${afterDate}`;
     let brokerList: Awaited<ReturnType<typeof listMessages>>;
@@ -249,8 +251,8 @@ export async function processInbox(options?: { maxMessages?: number }): Promise<
       continue;
     }
     for (const item of brokerList.messages) {
-      if (seenMessageIds.has(item.id)) continue;
-      seenMessageIds.add(item.id);
+      if (processedMessageIds.has(item.id)) continue;
+      processedMessageIds.add(item.id);
       // Skip already-saved (e.g. from subject match or prior run) so we only process new emails
       const existing = await emailRepo.byMessageId(item.id);
       if (existing) continue;
@@ -308,6 +310,7 @@ export async function processInbox(options?: { maxMessages?: number }): Promise<
               filename: part.filename,
               contentType: part.mimeType,
               filePath,
+              fileContent: buffer,
             });
             savedPaths.push({ filePath, filename: part.filename });
           } catch (e) {
@@ -377,6 +380,8 @@ export async function processInbox(options?: { maxMessages?: number }): Promise<
       continue;
     }
     for (const messageId of threadMessageIds) {
+      if (processedMessageIds.has(messageId)) continue;
+      processedMessageIds.add(messageId);
       if (ourSentIds.has(messageId)) continue;
       const alreadySaved = await emailRepo.byMessageId(messageId);
       if (alreadySaved) continue;
@@ -430,6 +435,7 @@ export async function processInbox(options?: { maxMessages?: number }): Promise<
               filename: part.filename,
               contentType: part.mimeType,
               filePath,
+              fileContent: buffer,
             });
             savedPaths.push({ filePath, filename: part.filename });
           } catch (e) {

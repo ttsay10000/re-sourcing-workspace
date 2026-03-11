@@ -11,10 +11,12 @@ import { getDealScoringModel } from "../enrichment/openaiModels.js";
 export interface DealScoringLlmInputs {
   /** Asset cap rate (current NOI / purchase price), e.g. 5.2. */
   assetCapRatePct: number | null;
-  /** 5-year IRR as decimal (e.g. 0.22 = 22%). */
+  /** Hold-period IRR as decimal (e.g. 0.22 = 22%). */
   irr5yrPct: number | null;
   /** Cash-on-cash as decimal (e.g. 0.10 = 10%). */
   cocPct: number | null;
+  /** Hold period used for the IRR calculation. */
+  holdPeriodYears?: number | null;
   /** Number of rent-stabilized units (deduct points per unit). */
   rentStabilizedUnitCount: number;
   /** HPD violations summary. */
@@ -50,7 +52,7 @@ SCORING RUBRIC (use as the backbone; you may adjust for context):
 - 4% to 5%: 30–50 points (scale up as cap approaches 5%).
 - Under 4%: low (0–30 points; 3–4% in the teens to mid-20s, below 3% minimal).
 
-2) IRR — 5-YEAR (adds to score; target 25%+ = top deal)
+2) IRR — HOLD PERIOD (adds to score; target 25%+ = top deal)
 - 25% or higher: top tier — strong positive (add up to ~30 points).
 - 20–25%: good — add meaningful points (~15–20).
 - 15–20%: moderate (~5–10 points).
@@ -75,7 +77,7 @@ function buildScoringPrompt(inputs: DealScoringLlmInputs): string {
     "",
     "QUANTITATIVE",
     `Asset cap rate: ${inputs.assetCapRatePct != null ? `${inputs.assetCapRatePct.toFixed(2)}%` : "—"}`,
-    `5-year IRR: ${inputs.irr5yrPct != null ? `${(inputs.irr5yrPct * 100).toFixed(2)}%` : "—"}`,
+    `${inputs.holdPeriodYears ?? 5}-year IRR: ${inputs.irr5yrPct != null ? `${(inputs.irr5yrPct * 100).toFixed(2)}%` : "—"}`,
     `Cash-on-cash: ${inputs.cocPct != null ? `${(inputs.cocPct * 100).toFixed(2)}%` : "—"}`,
     `Rent-stabilized units: ${inputs.rentStabilizedUnitCount}`,
     "",

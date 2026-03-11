@@ -334,15 +334,16 @@ export interface UserProfile {
   name?: string | null;
   email?: string | null;
   organization?: string | null;
+  defaultPurchaseClosingCostPct?: number | null;
   defaultLtv?: number | null;
   defaultInterestRate?: number | null;
   defaultAmortization?: number | null;
+  defaultHoldPeriodYears?: number | null;
   defaultExitCap?: number | null;
+  defaultExitClosingCostPct?: number | null;
   defaultRentUplift?: number | null;
   defaultExpenseIncrease?: number | null;
   defaultManagementFee?: number | null;
-  /** Expected annual appreciation % (e.g. 3 for 3%/yr) for property value projection. */
-  expectedAppreciationPct?: number | null;
   createdAt: string;
   updatedAt: string;
 }

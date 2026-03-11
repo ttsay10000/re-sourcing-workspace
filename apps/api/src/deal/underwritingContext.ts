@@ -32,6 +32,36 @@ export interface DossierAmortizationRow {
   endingBalance: number;
 }
 
+export interface SensitivityScenarioRow {
+  valuePct: number;
+  irrPct: number | null;
+  year1CashOnCashReturn: number | null;
+  stabilizedNoi: number;
+  annualOperatingCashFlow: number;
+}
+
+export interface SensitivityAnalysisContext {
+  key: "rental_uplift" | "expense_increase" | "management_fee";
+  title: string;
+  inputLabel: string;
+  scenarios: SensitivityScenarioRow[];
+  baseCase: {
+    valuePct: number | null;
+    irrPct: number | null;
+    year1CashOnCashReturn: number | null;
+  };
+  ranges: {
+    irrPct: {
+      min: number | null;
+      max: number | null;
+    };
+    year1CashOnCashReturn: {
+      min: number | null;
+      max: number | null;
+    };
+  };
+}
+
 export interface UnderwritingContext {
   propertyId: string;
   canonicalAddress: string;
@@ -48,46 +78,70 @@ export interface UnderwritingContext {
   dealScore: number | null;
   assetCapRate: number | null;
   adjustedCapRate: number | null;
-  /** Furnished rental result (adjusted NOI, etc.). */
-  furnishedRental: {
-    adjustedGrossIncome: number;
-    adjustedExpenses: number;
-    adjustedNoi: number;
-    adjustedCapRatePct: number | null;
-    /** Management fee amount (e.g. 8% of gross rents) shown as separate line. */
-    managementFeeAmount?: number;
-    /** Expected sale price at exit cap rate (adjusted NOI / exitCap). */
-    expectedSalePriceAtExitCap?: number | null;
-  } | null;
-  /** Mortgage result (annual debt service, etc.). */
-  mortgage: {
-    principal: number;
+  /** Assumptions used, grouped by underwriting bucket. */
+  assumptions: {
+    acquisition: {
+      purchasePrice: number | null;
+      purchaseClosingCostPct: number | null;
+      renovationCosts: number | null;
+      furnishingSetupCosts: number | null;
+    };
+    financing: {
+      ltvPct: number | null;
+      interestRatePct: number | null;
+      amortizationYears: number | null;
+    };
+    operating: {
+      rentUpliftPct: number | null;
+      expenseIncreasePct: number | null;
+      managementFeePct: number | null;
+    };
+    holdPeriodYears: number | null;
+    exit: {
+      exitCapPct: number | null;
+      exitClosingCostPct: number | null;
+    };
+  };
+  acquisition: {
+    purchaseClosingCosts: number;
+    totalProjectCost: number;
+    loanAmount: number;
+    equityRequiredForPurchase: number;
+    initialEquityInvested: number;
+    year0CashFlow: number;
+  };
+  financing: {
+    loanAmount: number;
     monthlyPayment: number;
     annualDebtService: number;
-  } | null;
-  /** IRR result (5-year by default). */
-  irr: {
+    remainingLoanBalanceAtExit: number;
+  };
+  operating: {
+    currentExpenses: number;
+    adjustedGrossRent: number;
+    adjustedOperatingExpenses: number;
+    managementFeeAmount: number;
+    stabilizedNoi: number;
+  };
+  exit: {
+    exitPropertyValue: number;
+    saleClosingCosts: number;
+    netSaleProceedsBeforeDebtPayoff: number;
+    remainingLoanBalance: number;
+    netProceedsToEquity: number;
+  };
+  cashFlows: {
+    annualOperatingCashFlow: number;
+    annualOperatingCashFlows: number[];
+    finalYearCashFlow: number;
+    equityCashFlowSeries: number[];
+  };
+  returns: {
     irrPct: number | null;
     equityMultiple: number | null;
-    coc: number | null;
-    /** 3-year IRR as decimal when computed. */
-    irr3yrPct?: number | null;
-    /** 5-year IRR as decimal when computed. */
-    irr5yrPct?: number | null;
-  } | null;
-  /** Assumptions used (for display). */
-  assumptions: {
-    ltvPct: number | null;
-    interestRatePct: number | null;
-    amortizationYears: number | null;
-    exitCapPct: number | null;
-    rentUpliftPct: number | null;
-    expenseIncreasePct: number | null;
-    managementFeePct: number | null;
-    expectedAppreciationPct: number | null;
+    year1CashOnCashReturn: number | null;
+    averageCashOnCashReturn: number | null;
   };
-  /** Projected property value at exit from appreciation (purchasePrice * (1 + appreciation)^holdYears). */
-  projectedValueFromAppreciation: number | null;
   /** Optional: property overview for dossier (tax code, HPD registration). */
   propertyOverview?: DossierPropertyOverview | null;
   /** Optional: gross rent breakdown from OM (per-unit rows). */
@@ -100,6 +154,8 @@ export interface UnderwritingContext {
   financialFlags?: string[];
   /** Optional: per-year amortization for financing table. */
   amortizationSchedule?: DossierAmortizationRow[];
+  /** Optional: one-way underwriting sensitivities for dossier and Excel. */
+  sensitivities?: SensitivityAnalysisContext[];
 }
 
 /**

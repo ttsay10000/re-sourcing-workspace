@@ -17,6 +17,11 @@ function pct(n: number | null | undefined): string {
   return n != null && !Number.isNaN(n) ? `${n.toFixed(2)}%` : "—";
 }
 
+function sensitivityRangeLabel(min: number | null | undefined, max: number | null | undefined): string {
+  if (min == null || max == null || Number.isNaN(min) || Number.isNaN(max)) return "—";
+  return `${(min * 100).toFixed(2)}% to ${(max * 100).toFixed(2)}%`;
+}
+
 export function buildDossierText(ctx: UnderwritingContext): string {
   const lines: string[] = [];
 
@@ -39,65 +44,85 @@ export function buildDossierText(ctx: UnderwritingContext): string {
   lines.push("--------------");
   lines.push(`Current NOI: ${ctx.currentNoi != null ? `$${fmt(ctx.currentNoi)}` : "—"}`);
   lines.push(`Asset cap rate: ${pct(ctx.assetCapRate)}`);
-  lines.push(`Adjusted cap rate: ${pct(ctx.adjustedCapRate)}`);
+  lines.push(`Stabilized NOI: $${fmt(ctx.operating.stabilizedNoi)}`);
+  lines.push(`Stabilized cap rate: ${pct(ctx.adjustedCapRate)}`);
   lines.push("");
 
-  if (ctx.furnishedRental) {
-    lines.push("3. FURNISHED RENTAL SCENARIO");
-    lines.push("------------------------------");
-    lines.push(`Rent uplift: ${ctx.assumptions.rentUpliftPct != null ? `${ctx.assumptions.rentUpliftPct}%` : "—"}`);
-    lines.push(`Adjusted gross income: $${fmt(ctx.furnishedRental.adjustedGrossIncome)}`);
-    lines.push(`Adjusted expenses: $${fmt(ctx.furnishedRental.adjustedExpenses)}`);
-    lines.push(`Adjusted NOI: $${fmt(ctx.furnishedRental.adjustedNoi)}`);
-    lines.push(`Adjusted cap rate: ${pct(ctx.furnishedRental.adjustedCapRatePct)}`);
+  lines.push("3. ACQUISITION & FINANCING");
+  lines.push("--------------------------");
+  lines.push(`Purchase closing costs: $${fmt(ctx.acquisition.purchaseClosingCosts)}`);
+  lines.push(`Total project cost: $${fmt(ctx.acquisition.totalProjectCost)}`);
+  lines.push(`Loan amount: $${fmt(ctx.financing.loanAmount)}`);
+  lines.push(`Initial equity invested: $${fmt(ctx.acquisition.initialEquityInvested)}`);
+  lines.push(`Annual debt service: $${fmt(ctx.financing.annualDebtService)}`);
+  lines.push("");
+
+  lines.push("4. OPERATIONS & EXIT");
+  lines.push("--------------------");
+  lines.push(`Adjusted gross rent: $${fmt(ctx.operating.adjustedGrossRent)}`);
+  lines.push(`Adjusted operating expenses: $${fmt(ctx.operating.adjustedOperatingExpenses)}`);
+  lines.push(`Management fee: $${fmt(ctx.operating.managementFeeAmount)}`);
+  lines.push(`Annual operating cash flow: $${fmt(ctx.cashFlows.annualOperatingCashFlow)}`);
+  lines.push(`Exit property value: $${fmt(ctx.exit.exitPropertyValue)}`);
+  lines.push(`Net proceeds to equity: $${fmt(ctx.exit.netProceedsToEquity)}`);
+  lines.push("");
+
+  lines.push("6. RETURNS");
+  lines.push("----------");
+  lines.push(`IRR: ${ctx.returns.irrPct != null ? `${(ctx.returns.irrPct * 100).toFixed(2)}%` : "—"}`);
+  lines.push(`Equity multiple: ${ctx.returns.equityMultiple != null ? ctx.returns.equityMultiple.toFixed(2) : "—"}`);
+  lines.push(`Year 1 cash-on-cash: ${ctx.returns.year1CashOnCashReturn != null ? `${(ctx.returns.year1CashOnCashReturn * 100).toFixed(2)}%` : "—"}`);
+  lines.push(`Average cash-on-cash: ${ctx.returns.averageCashOnCashReturn != null ? `${(ctx.returns.averageCashOnCashReturn * 100).toFixed(2)}%` : "—"}`);
+  lines.push("");
+
+  lines.push("7. ASSUMPTIONS USED");
+  lines.push("--------------------");
+  lines.push(`Purchase closing costs: ${pct(ctx.assumptions.acquisition.purchaseClosingCostPct)}`);
+  lines.push(`Renovation costs: $${fmt(num(ctx.assumptions.acquisition.renovationCosts))}`);
+  lines.push(`Furnishing/setup costs: $${fmt(num(ctx.assumptions.acquisition.furnishingSetupCosts))}`);
+  lines.push(`LTV: ${pct(ctx.assumptions.financing.ltvPct)}`);
+  lines.push(`Interest rate: ${pct(ctx.assumptions.financing.interestRatePct)}`);
+  lines.push(`Amortization: ${ctx.assumptions.financing.amortizationYears ?? "—"} years`);
+  lines.push(`Rent uplift: ${pct(ctx.assumptions.operating.rentUpliftPct)}`);
+  lines.push(`Expense increase: ${pct(ctx.assumptions.operating.expenseIncreasePct)}`);
+  lines.push(`Management fee: ${pct(ctx.assumptions.operating.managementFeePct)}`);
+  lines.push(`Hold period: ${ctx.assumptions.holdPeriodYears ?? "—"} years`);
+  lines.push(`Exit cap: ${pct(ctx.assumptions.exit.exitCapPct)}`);
+  lines.push(`Exit closing costs: ${pct(ctx.assumptions.exit.exitClosingCostPct)}`);
+  lines.push("");
+
+  if (ctx.sensitivities && ctx.sensitivities.length > 0) {
+    lines.push("8. SENSITIVITY ANALYSIS");
+    lines.push("------------------------");
+    ctx.sensitivities.forEach((sensitivity) => {
+      lines.push(`${sensitivity.title}:`);
+      lines.push(`Base case ${sensitivity.inputLabel.toLowerCase()}: ${pct(sensitivity.baseCase.valuePct)}`);
+      lines.push(
+        `IRR range: ${sensitivityRangeLabel(
+          sensitivity.ranges.irrPct.min,
+          sensitivity.ranges.irrPct.max
+        )}`
+      );
+      lines.push(
+        `Year 1 CoC range: ${sensitivityRangeLabel(
+          sensitivity.ranges.year1CashOnCashReturn.min,
+          sensitivity.ranges.year1CashOnCashReturn.max
+        )}`
+      );
+    });
     lines.push("");
   }
 
-  lines.push("4. FINANCIAL SUMMARY");
-  lines.push("--------------------");
-  if (ctx.mortgage) {
-    lines.push(`Loan principal: $${fmt(ctx.mortgage.principal)}`);
-    lines.push(`Annual debt service: $${fmt(ctx.mortgage.annualDebtService)}`);
-    const cf = (ctx.furnishedRental?.adjustedNoi ?? 0) - ctx.mortgage.annualDebtService;
-    lines.push(`Annual cash flow: $${fmt(cf)}`);
-  } else {
-    lines.push("No mortgage assumptions applied.");
-  }
-  lines.push("");
-
-  if (ctx.irr) {
-    lines.push("5. RETURNS");
-    lines.push("----------");
-    lines.push(`IRR: ${ctx.irr.irrPct != null ? `${(ctx.irr.irrPct * 100).toFixed(2)}%` : "—"}`);
-    lines.push(`Equity multiple: ${ctx.irr.equityMultiple != null ? ctx.irr.equityMultiple.toFixed(2) : "—"}`);
-    lines.push(`Cash-on-cash: ${ctx.irr.coc != null ? `${(ctx.irr.coc * 100).toFixed(2)}%` : "—"}`);
-    lines.push("");
-  }
-
-  lines.push("6. ASSUMPTIONS USED");
-  lines.push("--------------------");
-  lines.push(`LTV: ${pct(ctx.assumptions.ltvPct)}`);
-  lines.push(`Interest rate: ${pct(ctx.assumptions.interestRatePct)}`);
-  lines.push(`Amortization: ${ctx.assumptions.amortizationYears ?? "—"} years`);
-  lines.push(`Exit cap: ${pct(ctx.assumptions.exitCapPct)}`);
-  if (ctx.assumptions.expectedAppreciationPct != null) {
-    lines.push(`Expected appreciation: ${ctx.assumptions.expectedAppreciationPct}%/yr`);
-  }
-  if (ctx.projectedValueFromAppreciation != null) {
-    lines.push(`Projected value (appreciation): $${fmt(ctx.projectedValueFromAppreciation)} at year 5`);
-  }
-  lines.push("");
-
-  lines.push("7. KEY TAKEAWAYS");
+  lines.push("9. KEY TAKEAWAYS");
   lines.push("-----------------");
   if (ctx.dealScore != null) {
     lines.push(`• Deal score: ${ctx.dealScore}/100`);
   }
-  if (ctx.furnishedRental?.adjustedCapRatePct != null) {
-    lines.push(`• Adjusted cap: ${ctx.furnishedRental.adjustedCapRatePct.toFixed(2)}%`);
+  if (ctx.adjustedCapRate != null) {
+    lines.push(`• Stabilized cap: ${ctx.adjustedCapRate.toFixed(2)}%`);
   }
-  if (ctx.irr?.irrPct != null) {
-    lines.push(`• Projected IRR: ${(ctx.irr.irrPct * 100).toFixed(2)}%`);
+  if (ctx.returns.irrPct != null) {
+    lines.push(`• Projected IRR: ${(ctx.returns.irrPct * 100).toFixed(2)}%`);
   }
   lines.push("");
 
@@ -165,74 +190,110 @@ export function buildDossierStructuredText(ctx: UnderwritingContext): string {
   lines.push(tableRow(["Cap rate", capRate != null ? pct(capRate) : "—"]));
   lines.push("");
 
-  if (ctx.furnishedRental) {
-    lines.push("3. FURNISHED RENTAL SCENARIO");
-    lines.push("------------------------------");
-    const fr = ctx.furnishedRental;
-    const mgmtFee = fr.managementFeeAmount ?? 0;
-    const adjExpensesWithoutMgmt = fr.adjustedExpenses - mgmtFee;
-    lines.push(tableRow(["Adjusted gross income", `$${fmt(fr.adjustedGrossIncome)}`]));
-    lines.push(tableRow(["Adjusted expenses (ex. mgmt)", `$${fmt(adjExpensesWithoutMgmt)}`]));
-    const mgmtPct = ctx.assumptions.managementFeePct ?? 8;
-    lines.push(tableRow([`Management fee (${mgmtPct}% of gross rents)`, `$${fmt(mgmtFee)}`]));
-    lines.push(tableRow(["**NOI (gross income − expenses − mgmt fee)**", `$${fmt(fr.adjustedNoi)}`]));
-    lines.push(tableRow(["Adjusted cap rate", fr.adjustedCapRatePct != null ? pct(fr.adjustedCapRatePct) : "—"]));
-    if (fr.expectedSalePriceAtExitCap != null && ctx.assumptions.exitCapPct != null) {
-      lines.push(tableRow([`Expected sale price at ${ctx.assumptions.exitCapPct}% cap rate`, `$${fmt(fr.expectedSalePriceAtExitCap)}`]));
-    }
-    lines.push("");
-  }
+  lines.push("3. STABILIZED OPERATIONS");
+  lines.push("------------------------");
+  lines.push(tableRow(["Adjusted gross rent", `$${fmt(ctx.operating.adjustedGrossRent)}`]));
+  lines.push(tableRow(["Adjusted operating expenses", `$${fmt(ctx.operating.adjustedOperatingExpenses)}`]));
+  lines.push(tableRow([`Management fee (${ctx.assumptions.operating.managementFeePct ?? 0}% of gross rent)`, `$${fmt(ctx.operating.managementFeeAmount)}`]));
+  lines.push(tableRow(["**Stabilized NOI**", `$${fmt(ctx.operating.stabilizedNoi)}`]));
+  lines.push(tableRow(["Stabilized cap rate", ctx.adjustedCapRate != null ? pct(ctx.adjustedCapRate) : "—"]));
+  lines.push("");
 
   lines.push("4. FINANCING & CASH FLOW");
   lines.push("-------------------------");
-  if (ctx.mortgage) {
-    lines.push(`Loan principal: $${fmt(ctx.mortgage.principal)}`);
-    lines.push(`Annual debt service: $${fmt(ctx.mortgage.annualDebtService)}`);
-    const cf = (ctx.furnishedRental?.adjustedNoi ?? 0) - ctx.mortgage.annualDebtService;
-    lines.push(`Annual cash flow: $${fmt(cf)}`);
-    if (ctx.amortizationSchedule && ctx.amortizationSchedule.length > 0) {
-      lines.push("");
-      const schedule = ctx.amortizationSchedule;
-      const headers = ["Year", ...schedule.map((r) => `Y${r.year}`)];
-      lines.push(tableRow(headers));
-      lines.push(tableRow(["Principal", ...schedule.map((r) => `$${fmt(r.principalPayment)}`)]));
-      lines.push(tableRow(["Interest", ...schedule.map((r) => `$${fmt(r.interestPayment)}`)]));
-      lines.push(tableRow(["**Total debt service**", ...schedule.map((r) => `$${fmt(r.debtService)}`)]));
-    }
-  } else {
-    lines.push("No mortgage assumptions applied.");
+  lines.push(tableRow(["Purchase closing costs", `$${fmt(ctx.acquisition.purchaseClosingCosts)}`]));
+  lines.push(tableRow(["Total project cost", `$${fmt(ctx.acquisition.totalProjectCost)}`]));
+  lines.push(tableRow(["Loan amount", `$${fmt(ctx.financing.loanAmount)}`]));
+  lines.push(tableRow(["Initial equity invested", `$${fmt(ctx.acquisition.initialEquityInvested)}`]));
+  lines.push(tableRow(["Annual debt service", `$${fmt(ctx.financing.annualDebtService)}`]));
+  lines.push(tableRow(["Annual operating cash flow", `$${fmt(ctx.cashFlows.annualOperatingCashFlow)}`]));
+  lines.push(tableRow(["Final year cash flow", `$${fmt(ctx.cashFlows.finalYearCashFlow)}`]));
+  if (ctx.amortizationSchedule && ctx.amortizationSchedule.length > 0) {
+    lines.push("");
+    const schedule = ctx.amortizationSchedule;
+    const headers = ["Year", ...schedule.map((r) => `Y${r.year}`)];
+    lines.push(tableRow(headers));
+    lines.push(tableRow(["Principal", ...schedule.map((r) => `$${fmt(r.principalPayment)}`)]));
+    lines.push(tableRow(["Interest", ...schedule.map((r) => `$${fmt(r.interestPayment)}`)]));
+    lines.push(tableRow(["Debt service", ...schedule.map((r) => `$${fmt(r.debtService)}`)]));
+    lines.push(tableRow(["Ending balance", ...schedule.map((r) => `$${fmt(r.endingBalance)}`)]));
   }
   lines.push("");
 
-  lines.push("5. RETURNS");
+  lines.push("5. EXIT");
+  lines.push("-------");
+  lines.push(tableRow(["Hold period", `${ctx.assumptions.holdPeriodYears ?? "—"} years`]));
+  lines.push(tableRow(["Exit property value", `$${fmt(ctx.exit.exitPropertyValue)}`]));
+  lines.push(tableRow(["Sale closing costs", `$${fmt(ctx.exit.saleClosingCosts)}`]));
+  lines.push(tableRow(["Net sale proceeds before debt payoff", `$${fmt(ctx.exit.netSaleProceedsBeforeDebtPayoff)}`]));
+  lines.push(tableRow(["Remaining loan balance", `$${fmt(ctx.exit.remainingLoanBalance)}`]));
+  lines.push(tableRow(["**Net proceeds to equity**", `$${fmt(ctx.exit.netProceedsToEquity)}`]));
+  lines.push("");
+
+  lines.push("6. RETURNS");
   lines.push("----------");
-  if (ctx.irr) {
-    const irr3 = ctx.irr.irr3yrPct != null ? (ctx.irr.irr3yrPct * 100).toFixed(2) + "%" : "—";
-    const irr5 = ctx.irr.irr5yrPct != null ? (ctx.irr.irr5yrPct * 100).toFixed(2) + "%" : (ctx.irr.irrPct != null ? (ctx.irr.irrPct * 100).toFixed(2) + "%" : "—");
-    lines.push(tableRow(["3-year IRR", irr3]));
-    lines.push(tableRow(["5-year IRR", irr5]));
-    const em = ctx.irr.equityMultiple != null ? `${ctx.irr.equityMultiple.toFixed(2)}x` : "—";
-    lines.push(tableRow(["Equity multiple", em]));
-    lines.push(tableRow(["Cash-on-cash (year 1)", ctx.irr.coc != null ? `${(ctx.irr.coc * 100).toFixed(2)}%` : "—"]));
-  }
+  lines.push(tableRow([`IRR (${ctx.assumptions.holdPeriodYears ?? "—"}-year)`, ctx.returns.irrPct != null ? `${(ctx.returns.irrPct * 100).toFixed(2)}%` : "—"]));
+  lines.push(tableRow(["Equity multiple", ctx.returns.equityMultiple != null ? `${ctx.returns.equityMultiple.toFixed(2)}x` : "—"]));
+  lines.push(tableRow(["Cash-on-cash (year 1)", ctx.returns.year1CashOnCashReturn != null ? `${(ctx.returns.year1CashOnCashReturn * 100).toFixed(2)}%` : "—"]));
+  lines.push(tableRow(["Average cash-on-cash", ctx.returns.averageCashOnCashReturn != null ? `${(ctx.returns.averageCashOnCashReturn * 100).toFixed(2)}%` : "—"]));
   lines.push("");
 
   lines.push("6. ASSUMPTIONS USED");
   lines.push("--------------------");
-  lines.push(`LTV: ${pct(ctx.assumptions.ltvPct)}`);
-  lines.push(`Interest rate: ${pct(ctx.assumptions.interestRatePct)}`);
-  lines.push(`Amortization: ${ctx.assumptions.amortizationYears ?? "—"} years`);
-  lines.push(`Exit cap: ${pct(ctx.assumptions.exitCapPct)}`);
-  lines.push(`Rent uplift: ${ctx.assumptions.rentUpliftPct != null ? `${ctx.assumptions.rentUpliftPct}%` : "—"}`);
-  lines.push(`Expense increase: ${ctx.assumptions.expenseIncreasePct != null ? `${ctx.assumptions.expenseIncreasePct}%` : "—"}`);
-  lines.push(`Management fee: ${ctx.assumptions.managementFeePct != null ? `${ctx.assumptions.managementFeePct}%` : "—"}`);
-  if (ctx.assumptions.expectedAppreciationPct != null) {
-    lines.push(`Expected appreciation: ${ctx.assumptions.expectedAppreciationPct}%/yr`);
-  }
-  if (ctx.projectedValueFromAppreciation != null) {
-    lines.push(`Projected value (appreciation): $${fmt(ctx.projectedValueFromAppreciation)} at year 5`);
-  }
+  lines.push(`Purchase closing costs: ${pct(ctx.assumptions.acquisition.purchaseClosingCostPct)}`);
+  lines.push(`Renovation costs: $${fmt(num(ctx.assumptions.acquisition.renovationCosts))}`);
+  lines.push(`Furnishing/setup costs: $${fmt(num(ctx.assumptions.acquisition.furnishingSetupCosts))}`);
+  lines.push(`LTV: ${pct(ctx.assumptions.financing.ltvPct)}`);
+  lines.push(`Interest rate: ${pct(ctx.assumptions.financing.interestRatePct)}`);
+  lines.push(`Amortization: ${ctx.assumptions.financing.amortizationYears ?? "—"} years`);
+  lines.push(`Rent uplift: ${pct(ctx.assumptions.operating.rentUpliftPct)}`);
+  lines.push(`Expense increase: ${pct(ctx.assumptions.operating.expenseIncreasePct)}`);
+  lines.push(`Management fee: ${pct(ctx.assumptions.operating.managementFeePct)}`);
+  lines.push(`Hold period: ${ctx.assumptions.holdPeriodYears ?? "—"} years`);
+  lines.push(`Exit cap: ${pct(ctx.assumptions.exit.exitCapPct)}`);
+  lines.push(`Exit closing costs: ${pct(ctx.assumptions.exit.exitClosingCostPct)}`);
   lines.push("");
+
+  if (ctx.sensitivities && ctx.sensitivities.length > 0) {
+    lines.push("7. SENSITIVITY ANALYSIS");
+    lines.push("------------------------");
+    ctx.sensitivities.forEach((sensitivity) => {
+      lines.push(`• ${sensitivity.title}`);
+      lines.push(
+        `• Base case ${sensitivity.inputLabel.toLowerCase()}: ${pct(sensitivity.baseCase.valuePct)}; IRR range ${sensitivityRangeLabel(
+          sensitivity.ranges.irrPct.min,
+          sensitivity.ranges.irrPct.max
+        )}; CoC range ${sensitivityRangeLabel(
+          sensitivity.ranges.year1CashOnCashReturn.min,
+          sensitivity.ranges.year1CashOnCashReturn.max
+        )}`
+      );
+      lines.push(tableRow([sensitivity.inputLabel, "Stabilized NOI", "IRR", "Cash-on-cash"]));
+      lines.push(
+        tableRow([
+          `Base (${pct(sensitivity.baseCase.valuePct)})`,
+          `$${fmt(ctx.operating.stabilizedNoi)}`,
+          ctx.returns.irrPct != null ? `${(ctx.returns.irrPct * 100).toFixed(2)}%` : "—",
+          ctx.returns.year1CashOnCashReturn != null
+            ? `${(ctx.returns.year1CashOnCashReturn * 100).toFixed(2)}%`
+            : "—",
+        ])
+      );
+      sensitivity.scenarios.forEach((scenario) => {
+        lines.push(
+          tableRow([
+            pct(scenario.valuePct),
+            `$${fmt(scenario.stabilizedNoi)}`,
+            scenario.irrPct != null ? `${(scenario.irrPct * 100).toFixed(2)}%` : "—",
+            scenario.year1CashOnCashReturn != null
+              ? `${(scenario.year1CashOnCashReturn * 100).toFixed(2)}%`
+              : "—",
+          ])
+        );
+      });
+      lines.push("");
+    });
+  }
 
   return lines.join("\n");
 }

@@ -9,14 +9,16 @@ interface UserProfile {
   name?: string | null;
   email?: string | null;
   organization?: string | null;
+  defaultPurchaseClosingCostPct?: number | null;
   defaultLtv?: number | null;
   defaultInterestRate?: number | null;
   defaultAmortization?: number | null;
+  defaultHoldPeriodYears?: number | null;
   defaultExitCap?: number | null;
+  defaultExitClosingCostPct?: number | null;
   defaultRentUplift?: number | null;
   defaultExpenseIncrease?: number | null;
   defaultManagementFee?: number | null;
-  expectedAppreciationPct?: number | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -45,14 +47,16 @@ export default function ProfilePage() {
         name: data.name ?? "",
         email: data.email ?? "",
         organization: data.organization ?? "",
+        defaultPurchaseClosingCostPct: data.defaultPurchaseClosingCostPct ?? undefined,
         defaultLtv: data.defaultLtv ?? undefined,
         defaultInterestRate: data.defaultInterestRate ?? undefined,
         defaultAmortization: data.defaultAmortization ?? undefined,
+        defaultHoldPeriodYears: data.defaultHoldPeriodYears ?? undefined,
         defaultExitCap: data.defaultExitCap ?? undefined,
+        defaultExitClosingCostPct: data.defaultExitClosingCostPct ?? undefined,
         defaultRentUplift: data.defaultRentUplift ?? undefined,
         defaultExpenseIncrease: data.defaultExpenseIncrease ?? undefined,
         defaultManagementFee: data.defaultManagementFee ?? undefined,
-        expectedAppreciationPct: data.expectedAppreciationPct ?? undefined,
       });
     } catch (e) {
       // #region agent log
@@ -101,14 +105,16 @@ export default function ProfilePage() {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          defaultPurchaseClosingCostPct: draft.defaultPurchaseClosingCostPct ?? profile.defaultPurchaseClosingCostPct,
           defaultLtv: draft.defaultLtv ?? profile.defaultLtv,
           defaultInterestRate: draft.defaultInterestRate ?? profile.defaultInterestRate,
           defaultAmortization: draft.defaultAmortization ?? profile.defaultAmortization,
+          defaultHoldPeriodYears: draft.defaultHoldPeriodYears ?? profile.defaultHoldPeriodYears,
           defaultExitCap: draft.defaultExitCap ?? profile.defaultExitCap,
+          defaultExitClosingCostPct: draft.defaultExitClosingCostPct ?? profile.defaultExitClosingCostPct,
           defaultRentUplift: draft.defaultRentUplift ?? profile.defaultRentUplift,
           defaultExpenseIncrease: draft.defaultExpenseIncrease ?? profile.defaultExpenseIncrease,
           defaultManagementFee: draft.defaultManagementFee ?? profile.defaultManagementFee,
-          expectedAppreciationPct: draft.expectedAppreciationPct ?? profile.expectedAppreciationPct,
         }),
       });
       const data = await res.json();
@@ -280,9 +286,19 @@ export default function ProfilePage() {
       {activeTab === "assumptions" && (
         <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
           <p style={{ fontSize: "0.875rem", color: "#666", marginBottom: "0.5rem" }}>
-            Default assumptions for dossier and underwriting. Used when generating deal dossiers.
+            Default reusable assumptions for dossier underwriting. Deal-specific purchase price, renovation, and furnishing costs are set on the dossier page.
           </p>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
+            <label style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+              <span style={{ fontSize: "0.875rem", fontWeight: 500 }}>Default purchase closing costs (%)</span>
+              <input
+                type="number"
+                step="0.1"
+                value={draft.defaultPurchaseClosingCostPct ?? ""}
+                onChange={(e) => setDraft((p) => ({ ...p, defaultPurchaseClosingCostPct: e.target.value ? Number(e.target.value) : undefined }))}
+                style={{ padding: "0.5rem", border: "1px solid #ccc", borderRadius: "4px" }}
+              />
+            </label>
             <label style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
               <span style={{ fontSize: "0.875rem", fontWeight: 500 }}>Default LTV (%)</span>
               <input
@@ -312,12 +328,33 @@ export default function ProfilePage() {
               />
             </label>
             <label style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+              <span style={{ fontSize: "0.875rem", fontWeight: 500 }}>Default hold period (years)</span>
+              <input
+                type="number"
+                min={1}
+                max={50}
+                value={draft.defaultHoldPeriodYears ?? ""}
+                onChange={(e) => setDraft((p) => ({ ...p, defaultHoldPeriodYears: e.target.value ? Number(e.target.value) : undefined }))}
+                style={{ padding: "0.5rem", border: "1px solid #ccc", borderRadius: "4px" }}
+              />
+            </label>
+            <label style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
               <span style={{ fontSize: "0.875rem", fontWeight: 500 }}>Default exit cap (%)</span>
               <input
                 type="number"
                 step="0.1"
                 value={draft.defaultExitCap ?? ""}
                 onChange={(e) => setDraft((p) => ({ ...p, defaultExitCap: e.target.value ? Number(e.target.value) : undefined }))}
+                style={{ padding: "0.5rem", border: "1px solid #ccc", borderRadius: "4px" }}
+              />
+            </label>
+            <label style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+              <span style={{ fontSize: "0.875rem", fontWeight: 500 }}>Default exit closing costs (%)</span>
+              <input
+                type="number"
+                step="0.1"
+                value={draft.defaultExitClosingCostPct ?? ""}
+                onChange={(e) => setDraft((p) => ({ ...p, defaultExitClosingCostPct: e.target.value ? Number(e.target.value) : undefined }))}
                 style={{ padding: "0.5rem", border: "1px solid #ccc", borderRadius: "4px" }}
               />
             </label>
@@ -349,17 +386,6 @@ export default function ProfilePage() {
                 value={draft.defaultManagementFee ?? ""}
                 onChange={(e) => setDraft((p) => ({ ...p, defaultManagementFee: e.target.value ? Number(e.target.value) : undefined }))}
                 style={{ padding: "0.5rem", border: "1px solid #ccc", borderRadius: "4px" }}
-              />
-            </label>
-            <label style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
-              <span style={{ fontSize: "0.875rem", fontWeight: 500 }}>Expected appreciation (%/yr)</span>
-              <input
-                type="number"
-                step="0.1"
-                value={draft.expectedAppreciationPct ?? ""}
-                onChange={(e) => setDraft((p) => ({ ...p, expectedAppreciationPct: e.target.value ? Number(e.target.value) : undefined }))}
-                style={{ padding: "0.5rem", border: "1px solid #ccc", borderRadius: "4px" }}
-                placeholder="e.g. 3"
               />
             </label>
           </div>

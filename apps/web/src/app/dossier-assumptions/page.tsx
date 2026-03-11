@@ -11,14 +11,16 @@ interface AssumptionsProfile {
   name?: string | null;
   email?: string | null;
   organization?: string | null;
+  defaultPurchaseClosingCostPct?: number | null;
   defaultLtv?: number | null;
   defaultInterestRate?: number | null;
   defaultAmortization?: number | null;
+  defaultHoldPeriodYears?: number | null;
   defaultExitCap?: number | null;
+  defaultExitClosingCostPct?: number | null;
   defaultRentUplift?: number | null;
   defaultExpenseIncrease?: number | null;
   defaultManagementFee?: number | null;
-  expectedAppreciationPct?: number | null;
 }
 
 interface PropertySummary {
@@ -26,6 +28,36 @@ interface PropertySummary {
   canonicalAddress: string;
   primaryListing: { price: number | null; city: string | null } | null;
 }
+
+interface DossierAssumptionsDraft {
+  purchasePrice?: number;
+  purchaseClosingCostPct?: number;
+  renovationCosts?: number;
+  furnishingSetupCosts?: number;
+  ltvPct?: number;
+  interestRatePct?: number;
+  amortizationYears?: number;
+  rentUpliftPct?: number;
+  expenseIncreasePct?: number;
+  managementFeePct?: number;
+  holdPeriodYears?: number;
+  exitCapPct?: number;
+  exitClosingCostPct?: number;
+}
+
+const inputStyle: React.CSSProperties = {
+  padding: "0.5rem",
+  border: "1px solid #ccc",
+  borderRadius: "4px",
+};
+
+const sectionStyle: React.CSSProperties = {
+  marginBottom: "1.5rem",
+  padding: "1rem",
+  border: "1px solid #e5e5e5",
+  borderRadius: "8px",
+  background: "#fafafa",
+};
 
 function DossierAssumptionsContent() {
   const searchParams = useSearchParams();
@@ -37,7 +69,7 @@ function DossierAssumptionsContent() {
   const [saving, setSaving] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [draft, setDraft] = useState<Partial<AssumptionsProfile>>({});
+  const [draft, setDraft] = useState<DossierAssumptionsDraft>({});
 
   const fetchAssumptions = useCallback(async () => {
     setLoading(true);
@@ -53,14 +85,19 @@ function DossierAssumptionsContent() {
       setProperty(data.property ?? null);
       const p = data.profile ?? {};
       setDraft({
-        defaultLtv: p.defaultLtv ?? undefined,
-        defaultInterestRate: p.defaultInterestRate ?? undefined,
-        defaultAmortization: p.defaultAmortization ?? undefined,
-        defaultExitCap: p.defaultExitCap ?? undefined,
-        defaultRentUplift: p.defaultRentUplift ?? undefined,
-        defaultExpenseIncrease: p.defaultExpenseIncrease ?? undefined,
-        defaultManagementFee: p.defaultManagementFee ?? undefined,
-        expectedAppreciationPct: p.expectedAppreciationPct ?? undefined,
+        purchasePrice: data.property?.primaryListing?.price ?? undefined,
+        purchaseClosingCostPct: p.defaultPurchaseClosingCostPct ?? undefined,
+        renovationCosts: 0,
+        furnishingSetupCosts: 0,
+        ltvPct: p.defaultLtv ?? undefined,
+        interestRatePct: p.defaultInterestRate ?? undefined,
+        amortizationYears: p.defaultAmortization ?? undefined,
+        rentUpliftPct: p.defaultRentUplift ?? undefined,
+        expenseIncreasePct: p.defaultExpenseIncrease ?? undefined,
+        managementFeePct: p.defaultManagementFee ?? undefined,
+        holdPeriodYears: p.defaultHoldPeriodYears ?? undefined,
+        exitCapPct: p.defaultExitCap ?? undefined,
+        exitClosingCostPct: p.defaultExitClosingCostPct ?? undefined,
       });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load assumptions");
@@ -81,14 +118,16 @@ function DossierAssumptionsContent() {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          defaultLtv: draft.defaultLtv,
-          defaultInterestRate: draft.defaultInterestRate,
-          defaultAmortization: draft.defaultAmortization,
-          defaultExitCap: draft.defaultExitCap,
-          defaultRentUplift: draft.defaultRentUplift,
-          defaultExpenseIncrease: draft.defaultExpenseIncrease,
-          defaultManagementFee: draft.defaultManagementFee,
-          expectedAppreciationPct: draft.expectedAppreciationPct,
+          defaultPurchaseClosingCostPct: draft.purchaseClosingCostPct,
+          defaultLtv: draft.ltvPct,
+          defaultInterestRate: draft.interestRatePct,
+          defaultAmortization: draft.amortizationYears,
+          defaultHoldPeriodYears: draft.holdPeriodYears,
+          defaultExitCap: draft.exitCapPct,
+          defaultExitClosingCostPct: draft.exitClosingCostPct,
+          defaultRentUplift: draft.rentUpliftPct,
+          defaultExpenseIncrease: draft.expenseIncreasePct,
+          defaultManagementFee: draft.managementFeePct,
         }),
       });
       const data = await res.json();
@@ -112,7 +151,24 @@ function DossierAssumptionsContent() {
       const res = await fetch(`${API_BASE}/api/dossier/generate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ propertyId }),
+        body: JSON.stringify({
+          propertyId,
+          assumptions: {
+            purchasePrice: draft.purchasePrice,
+            purchaseClosingCostPct: draft.purchaseClosingCostPct,
+            renovationCosts: draft.renovationCosts,
+            furnishingSetupCosts: draft.furnishingSetupCosts,
+            ltvPct: draft.ltvPct,
+            interestRatePct: draft.interestRatePct,
+            amortizationYears: draft.amortizationYears,
+            rentUpliftPct: draft.rentUpliftPct,
+            expenseIncreasePct: draft.expenseIncreasePct,
+            managementFeePct: draft.managementFeePct,
+            holdPeriodYears: draft.holdPeriodYears,
+            exitCapPct: draft.exitCapPct,
+            exitClosingCostPct: draft.exitClosingCostPct,
+          },
+        }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || data?.details || "Failed to generate");
@@ -141,9 +197,9 @@ function DossierAssumptionsContent() {
       setProfile(data);
       setDraft((prev) => ({
         ...prev,
-        defaultLtv: 65,
-        defaultInterestRate: 6.5,
-        defaultAmortization: 30,
+        ltvPct: 65,
+        interestRatePct: 6.5,
+        amortizationYears: 30,
       }));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to set standard leverage");
@@ -189,63 +245,65 @@ function DossierAssumptionsContent() {
         <p style={{ color: "#b91c1c", marginBottom: "1rem" }}>{error}</p>
       )}
 
-      <section style={{ marginBottom: "1.5rem" }}>
-        <h2 style={{ fontSize: "1rem", fontWeight: 600, marginBottom: "0.75rem" }}>Rent &amp; expenses</h2>
+      <section style={sectionStyle}>
+        <h2 style={{ fontSize: "1rem", fontWeight: 600, marginBottom: "0.25rem" }}>Acquisition assumptions</h2>
+        <p style={{ fontSize: "0.875rem", color: "#666", marginBottom: "0.75rem" }}>
+          These drive Year 0 capital required to buy and prepare the asset.
+        </p>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
           <label style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
-            <span style={{ fontSize: "0.875rem", fontWeight: 500 }}>Rent uplift (%)</span>
+            <span style={{ fontSize: "0.875rem", fontWeight: 500 }}>Purchase price</span>
             <input
               type="number"
-              step="0.1"
-              value={draft.defaultRentUplift ?? ""}
-              onChange={(e) => setDraft((p) => ({ ...p, defaultRentUplift: e.target.value ? Number(e.target.value) : undefined }))}
-              style={{ padding: "0.5rem", border: "1px solid #ccc", borderRadius: "4px" }}
+              value={draft.purchasePrice ?? ""}
+              onChange={(e) => setDraft((p) => ({ ...p, purchasePrice: e.target.value ? Number(e.target.value) : undefined }))}
+              style={inputStyle}
             />
           </label>
           <label style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
-            <span style={{ fontSize: "0.875rem", fontWeight: 500 }}>Expense increase (%)</span>
+            <span style={{ fontSize: "0.875rem", fontWeight: 500 }}>Purchase closing costs (%)</span>
             <input
               type="number"
               step="0.1"
-              value={draft.defaultExpenseIncrease ?? ""}
-              onChange={(e) => setDraft((p) => ({ ...p, defaultExpenseIncrease: e.target.value ? Number(e.target.value) : undefined }))}
-              style={{ padding: "0.5rem", border: "1px solid #ccc", borderRadius: "4px" }}
+              value={draft.purchaseClosingCostPct ?? ""}
+              onChange={(e) => setDraft((p) => ({ ...p, purchaseClosingCostPct: e.target.value ? Number(e.target.value) : undefined }))}
+              style={inputStyle}
             />
           </label>
           <label style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
-            <span style={{ fontSize: "0.875rem", fontWeight: 500 }}>Management fee (%)</span>
+            <span style={{ fontSize: "0.875rem", fontWeight: 500 }}>Renovation costs</span>
             <input
               type="number"
-              step="0.1"
-              value={draft.defaultManagementFee ?? ""}
-              onChange={(e) => setDraft((p) => ({ ...p, defaultManagementFee: e.target.value ? Number(e.target.value) : undefined }))}
-              style={{ padding: "0.5rem", border: "1px solid #ccc", borderRadius: "4px" }}
+              value={draft.renovationCosts ?? ""}
+              onChange={(e) => setDraft((p) => ({ ...p, renovationCosts: e.target.value ? Number(e.target.value) : undefined }))}
+              style={inputStyle}
             />
           </label>
           <label style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
-            <span style={{ fontSize: "0.875rem", fontWeight: 500 }}>Expected appreciation (%/yr)</span>
+            <span style={{ fontSize: "0.875rem", fontWeight: 500 }}>Furnishing / setup costs</span>
             <input
               type="number"
-              step="0.1"
-              value={draft.expectedAppreciationPct ?? ""}
-              onChange={(e) => setDraft((p) => ({ ...p, expectedAppreciationPct: e.target.value ? Number(e.target.value) : undefined }))}
-              style={{ padding: "0.5rem", border: "1px solid #ccc", borderRadius: "4px" }}
-              placeholder="e.g. 3"
+              value={draft.furnishingSetupCosts ?? ""}
+              onChange={(e) => setDraft((p) => ({ ...p, furnishingSetupCosts: e.target.value ? Number(e.target.value) : undefined }))}
+              style={inputStyle}
             />
           </label>
         </div>
       </section>
 
-      <section style={{ marginBottom: "1.5rem" }}>
-        <h2 style={{ fontSize: "1rem", fontWeight: 600, marginBottom: "0.75rem" }}>Mortgage</h2>
+      <section style={sectionStyle}>
+        <h2 style={{ fontSize: "1rem", fontWeight: 600, marginBottom: "0.25rem" }}>Financing assumptions</h2>
+        <p style={{ fontSize: "0.875rem", color: "#666", marginBottom: "0.75rem" }}>
+          These determine loan size, debt service, and remaining balance at exit.
+        </p>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
           <label style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
             <span style={{ fontSize: "0.875rem", fontWeight: 500 }}>LTV (%)</span>
             <input
               type="number"
-              value={draft.defaultLtv ?? ""}
-              onChange={(e) => setDraft((p) => ({ ...p, defaultLtv: e.target.value ? Number(e.target.value) : undefined }))}
-              style={{ padding: "0.5rem", border: "1px solid #ccc", borderRadius: "4px" }}
+              value={draft.ltvPct ?? ""}
+              onChange={(e) => setDraft((p) => ({ ...p, ltvPct: e.target.value ? Number(e.target.value) : undefined }))}
+              style={inputStyle}
             />
           </label>
           <label style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
@@ -253,28 +311,106 @@ function DossierAssumptionsContent() {
             <input
               type="number"
               step="0.1"
-              value={draft.defaultInterestRate ?? ""}
-              onChange={(e) => setDraft((p) => ({ ...p, defaultInterestRate: e.target.value ? Number(e.target.value) : undefined }))}
-              style={{ padding: "0.5rem", border: "1px solid #ccc", borderRadius: "4px" }}
+              value={draft.interestRatePct ?? ""}
+              onChange={(e) => setDraft((p) => ({ ...p, interestRatePct: e.target.value ? Number(e.target.value) : undefined }))}
+              style={inputStyle}
             />
           </label>
           <label style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
             <span style={{ fontSize: "0.875rem", fontWeight: 500 }}>Amortization (years)</span>
             <input
               type="number"
-              value={draft.defaultAmortization ?? ""}
-              onChange={(e) => setDraft((p) => ({ ...p, defaultAmortization: e.target.value ? Number(e.target.value) : undefined }))}
-              style={{ padding: "0.5rem", border: "1px solid #ccc", borderRadius: "4px" }}
+              value={draft.amortizationYears ?? ""}
+              onChange={(e) => setDraft((p) => ({ ...p, amortizationYears: e.target.value ? Number(e.target.value) : undefined }))}
+              style={inputStyle}
             />
           </label>
+        </div>
+      </section>
+
+      <section style={sectionStyle}>
+        <h2 style={{ fontSize: "1rem", fontWeight: 600, marginBottom: "0.25rem" }}>Operating assumptions</h2>
+        <p style={{ fontSize: "0.875rem", color: "#666", marginBottom: "0.75rem" }}>
+          These drive stabilized gross rent, stabilized expenses, and NOI.
+        </p>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
           <label style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
-            <span style={{ fontSize: "0.875rem", fontWeight: 500 }}>Exit cap (%)</span>
+            <span style={{ fontSize: "0.875rem", fontWeight: 500 }}>Rent uplift (%)</span>
             <input
               type="number"
               step="0.1"
-              value={draft.defaultExitCap ?? ""}
-              onChange={(e) => setDraft((p) => ({ ...p, defaultExitCap: e.target.value ? Number(e.target.value) : undefined }))}
-              style={{ padding: "0.5rem", border: "1px solid #ccc", borderRadius: "4px" }}
+              value={draft.rentUpliftPct ?? ""}
+              onChange={(e) => setDraft((p) => ({ ...p, rentUpliftPct: e.target.value ? Number(e.target.value) : undefined }))}
+              style={inputStyle}
+            />
+          </label>
+          <label style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+            <span style={{ fontSize: "0.875rem", fontWeight: 500 }}>Expense increase (%)</span>
+            <input
+              type="number"
+              step="0.1"
+              value={draft.expenseIncreasePct ?? ""}
+              onChange={(e) => setDraft((p) => ({ ...p, expenseIncreasePct: e.target.value ? Number(e.target.value) : undefined }))}
+              style={inputStyle}
+            />
+          </label>
+          <label style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+            <span style={{ fontSize: "0.875rem", fontWeight: 500 }}>Management fee (%)</span>
+            <input
+              type="number"
+              step="0.1"
+              value={draft.managementFeePct ?? ""}
+              onChange={(e) => setDraft((p) => ({ ...p, managementFeePct: e.target.value ? Number(e.target.value) : undefined }))}
+              style={inputStyle}
+            />
+          </label>
+        </div>
+      </section>
+
+      <section style={sectionStyle}>
+        <h2 style={{ fontSize: "1rem", fontWeight: 600, marginBottom: "0.25rem" }}>Hold period assumptions</h2>
+        <p style={{ fontSize: "0.875rem", color: "#666", marginBottom: "0.75rem" }}>
+          The model will generate Years 1 through N operating cash flows and sell in the final year. Maximum supported hold period: 50 years.
+        </p>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
+          <label style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+            <span style={{ fontSize: "0.875rem", fontWeight: 500 }}>Hold period (years)</span>
+            <input
+              type="number"
+              min={1}
+              max={50}
+              value={draft.holdPeriodYears ?? ""}
+              onChange={(e) => setDraft((p) => ({ ...p, holdPeriodYears: e.target.value ? Number(e.target.value) : undefined }))}
+              style={inputStyle}
+            />
+          </label>
+        </div>
+      </section>
+
+      <section style={sectionStyle}>
+        <h2 style={{ fontSize: "1rem", fontWeight: 600, marginBottom: "0.25rem" }}>Exit / sale assumptions</h2>
+        <p style={{ fontSize: "0.875rem", color: "#666", marginBottom: "0.75rem" }}>
+          These determine terminal value, sale friction, and net proceeds to equity.
+        </p>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
+          <label style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+            <span style={{ fontSize: "0.875rem", fontWeight: 500 }}>Exit cap rate (%)</span>
+            <input
+              type="number"
+              step="0.1"
+              value={draft.exitCapPct ?? ""}
+              onChange={(e) => setDraft((p) => ({ ...p, exitCapPct: e.target.value ? Number(e.target.value) : undefined }))}
+              style={inputStyle}
+            />
+          </label>
+          <label style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+            <span style={{ fontSize: "0.875rem", fontWeight: 500 }}>Exit closing costs (%)</span>
+            <input
+              type="number"
+              step="0.1"
+              value={draft.exitClosingCostPct ?? ""}
+              onChange={(e) => setDraft((p) => ({ ...p, exitClosingCostPct: e.target.value ? Number(e.target.value) : undefined }))}
+              style={inputStyle}
             />
           </label>
         </div>
@@ -312,7 +448,7 @@ function DossierAssumptionsContent() {
           Generate standard leverage
         </button>
         <span style={{ alignSelf: "center", color: "#666", fontSize: "0.875rem" }}>
-          (65% LTV, 6.5% rate, 30-year amortization)
+          Saves reusable defaults only. Renovation and furnishing costs remain deal-specific.
         </span>
       </div>
 

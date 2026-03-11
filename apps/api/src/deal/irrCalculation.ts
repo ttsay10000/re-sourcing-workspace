@@ -1,24 +1,21 @@
-/**
- * IRR calculation: cash flows and exit → IRR, equity multiple, CoC.
- * Uses Newton-Raphson to find rate where NPV = 0.
- */
+/** Return metric helpers for the equity cash flow series. */
 
-export interface IrrInputs {
-  /** Initial equity (negative: outflow at t=0). */
-  initialEquity: number;
-  /** Annual cash flows (e.g. [cf1, cf2, ...] for years 1..n). */
-  annualCashFlows: number[];
-  /** Sale proceeds at exit (e.g. year n). */
-  saleProceeds: number;
+export interface EquityReturnInputs {
+  /** Full equity cash flow series, including year 0 negative equity and final-year sale proceeds. */
+  equityCashFlows: number[];
+  /** Operating cash flows only, excluding sale proceeds, for cash-on-cash calculations. */
+  operatingCashFlows?: number[];
 }
 
 export interface IrrResult {
   /** Internal rate of return as decimal (e.g. 0.12 = 12%). */
   irr: number | null;
-  /** Equity multiple = (sum of cash flows + sale proceeds) / |initialEquity|. */
+  /** Equity multiple = total positive cash received / |year 0 equity|. */
   equityMultiple: number;
-  /** Cash-on-cash (average annual cash flow / equity). Only for first year if single period. */
-  coc: number | null;
+  /** Year 1 cash-on-cash return. */
+  year1CashOnCashReturn: number | null;
+  /** Average annual cash-on-cash return across operating years. */
+  averageCashOnCashReturn: number | null;
 }
 
 function npv(rate: number, flows: number[]): number {
@@ -30,18 +27,22 @@ function npv(rate: number, flows: number[]): number {
 }
 
 /**
- * Compute IRR using Newton-Raphson.
- * Cash flows: t=0 = -equity; t=1..n = annual operating CF; sale is at end of year n (same period as last CF).
+ * Compute IRR using Newton-Raphson over the supplied equity cash flow series.
  */
-export function computeIrr(inputs: IrrInputs): IrrResult {
-  const { initialEquity, annualCashFlows, saleProceeds } = inputs;
-  const equityOutflow = -Math.abs(initialEquity);
-  const n = annualCashFlows.length;
-  const lastCf = n > 0 ? (annualCashFlows[n - 1] ?? 0) + saleProceeds : saleProceeds;
-  const flows =
-    n <= 1 ? [equityOutflow, lastCf] : [equityOutflow, ...annualCashFlows.slice(0, n - 1), lastCf];
-  const totalInflows = annualCashFlows.reduce((a, b) => a + b, 0) + saleProceeds;
-  const equityMultiple = initialEquity !== 0 ? totalInflows / Math.abs(initialEquity) : 0;
+export function computeIrr(inputs: EquityReturnInputs): IrrResult {
+  const { equityCashFlows, operatingCashFlows } = inputs;
+  const flows = equityCashFlows.map((value) => (Number.isFinite(value) ? value : 0));
+  const initialEquity = Math.abs(flows[0] ?? 0);
+  const operatingFlows = (operatingCashFlows ?? flows.slice(1)).map((value) => (Number.isFinite(value) ? value : 0));
+  const annualCashFlows = flows.slice(1);
+  const totalInflows = annualCashFlows.filter((value) => value > 0).reduce((sum, value) => sum + value, 0);
+  const equityMultiple = initialEquity !== 0 ? totalInflows / initialEquity : 0;
+  const year1CashOnCashReturn =
+    operatingFlows.length > 0 && initialEquity !== 0 ? operatingFlows[0]! / initialEquity : null;
+  const averageCashOnCashReturn =
+    operatingFlows.length > 0 && initialEquity !== 0
+      ? operatingFlows.reduce((sum, value) => sum + value, 0) / operatingFlows.length / initialEquity
+      : null;
 
   let rate = 0.1;
   const maxIter = 100;
@@ -49,11 +50,12 @@ export function computeIrr(inputs: IrrInputs): IrrResult {
   for (let i = 0; i < maxIter; i++) {
     const v = npv(rate, flows);
     if (Math.abs(v) < tol) {
-      const coc =
-        annualCashFlows.length > 0 && initialEquity !== 0
-          ? annualCashFlows[0]! / Math.abs(initialEquity)
-          : null;
-      return { irr: rate, equityMultiple, coc };
+      return {
+        irr: rate,
+        equityMultiple,
+        year1CashOnCashReturn,
+        averageCashOnCashReturn,
+      };
     }
     const eps = 1e-8;
     const dv = (npv(rate + eps, flows) - v) / eps;
@@ -61,17 +63,10 @@ export function computeIrr(inputs: IrrInputs): IrrResult {
     rate = rate - v / dv;
     if (rate <= -1 || rate > 10) break;
   }
-  const coc =
-    annualCashFlows.length > 0 && initialEquity !== 0
-      ? annualCashFlows[0]! / Math.abs(initialEquity)
-      : null;
-  return { irr: null, equityMultiple, coc };
-}
-
-/**
- * Build sale proceeds from exit NOI and exit cap rate: sale = noiExit / (exitCap/100).
- */
-export function saleProceedsFromExitCap(noiExit: number, exitCapPct: number): number {
-  if (exitCapPct <= 0 || noiExit < 0) return 0;
-  return noiExit / (exitCapPct / 100);
+  return {
+    irr: null,
+    equityMultiple,
+    year1CashOnCashReturn,
+    averageCashOnCashReturn,
+  };
 }

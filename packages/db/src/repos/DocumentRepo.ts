@@ -15,6 +15,7 @@ export interface InsertDocumentParams {
   source: DocumentSource;
   uploadedBy?: string | null;
   storagePath: string;
+  fileContent?: Buffer | null;
 }
 
 export class DocumentRepo {
@@ -26,8 +27,8 @@ export class DocumentRepo {
 
   async insert(params: InsertDocumentParams): Promise<Document> {
     const r = await this.client.query(
-      `INSERT INTO documents (property_id, file_name, file_type, source, uploaded_by, storage_path)
-       VALUES ($1, $2, $3, $4, $5, $6)
+      `INSERT INTO documents (property_id, file_name, file_type, source, uploaded_by, storage_path, file_content)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING *`,
       [
         params.propertyId,
@@ -36,6 +37,7 @@ export class DocumentRepo {
         params.source,
         params.uploadedBy ?? null,
         params.storagePath,
+        params.fileContent ?? null,
       ]
     );
     return mapDocument(r.rows[0]);
@@ -52,6 +54,13 @@ export class DocumentRepo {
       [propertyId]
     );
     return r.rows.map((row: Record<string, unknown>) => mapDocument(row));
+  }
+
+  async getFileContent(id: string): Promise<Buffer | null> {
+    const r = await this.client.query("SELECT file_content FROM documents WHERE id = $1", [id]);
+    const row = r.rows[0] as { file_content?: Buffer | Uint8Array | null } | undefined;
+    if (!row?.file_content) return null;
+    return row.file_content instanceof Buffer ? row.file_content : Buffer.from(row.file_content);
   }
 
   async delete(id: string): Promise<boolean> {

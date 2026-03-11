@@ -1,11 +1,11 @@
-# Render Blueprint: web UI + API + Postgres + cron jobs
+# Render Blueprint: web UI + API + Postgres + inbox cron job
 # https://render.com/docs/blueprint-spec
 #
 # To have Render CREATE all services (including cron jobs):
 #   1. Dashboard → New → Blueprint → connect this repo and branch.
-#   2. Apply the blueprint so Render creates DB, API, Web, and both crons.
-# If you already have API/Web/DB and only need the crons:
-#   Open your Blueprint in the dashboard and Apply/Sync so Render creates the missing cron jobs (re-sourcing-permits-refresh, re-sourcing-process-inbox).
+#   2. Apply the blueprint so Render creates DB, API, Web, and the inbox cron.
+# If you already have API/Web/DB and only need the cron:
+#   Open your Blueprint in the dashboard and Apply/Sync so Render creates the missing cron job (re-sourcing-process-inbox).
 #
 # Env vars (set in Render dashboard or here):
 #   API:  DATABASE_URL (from Postgres), NODE_ENV=production, CORS_ORIGIN=<web URL>
@@ -46,25 +46,6 @@ services:
     envVars:
       - key: NEXT_PUBLIC_API_URL
         sync: false  # set to your API service URL, e.g. https://re-sourcing-api.onrender.com
-
-  # Weekly cron: refresh permit + all enrichment modules for canonical properties
-  - type: cron
-    name: re-sourcing-permits-refresh
-    runtime: node
-    schedule: '0 3 * * 0'
-    buildCommand: npm install --include=dev && npm run build -w @re-sourcing/contracts && npm run build -w @re-sourcing/db && npm run build -w @re-sourcing/api
-    startCommand: cd apps/api && node dist/scripts/enrichAll.js --all
-    envVars:
-      - key: DATABASE_URL
-        fromDatabase:
-          name: re-sourcing-db
-          property: connectionString
-      - key: SOCRATA_APP_TOKEN
-        sync: false
-      - key: PERMITS_RATE_LIMIT_DELAY_MS
-        value: "500"
-      - key: PERMITS_BATCH_SIZE
-        value: "50"
 
   # Daily cron: process Gmail inbox for inquiry replies (match to properties, save attachments, run LLM)
   - type: cron

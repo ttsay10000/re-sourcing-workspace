@@ -78,7 +78,7 @@ export default function ListingsPage() {
     <>
       <h1 className="page-title">Listings</h1>
       <p className="card" style={{ marginBottom: "1rem" }}>
-        Listings from NYC Real Estate API test runs (for review only; not saved to
+        Listings from StreetEasy Agent runs (for review only; not saved to
         the main database). Each row shows when the run was conducted; click
         &quot;View&quot; to open the listing.
       </p>
@@ -92,7 +92,7 @@ export default function ListingsPage() {
 
       {!loading && !error && listings.length === 0 && (
         <div className="card">
-          No properties yet. Start a run from <Link href="/runs">Runs</Link> (filters + Send).
+          No properties yet. Start a run from <Link href="/runs">StreetEasy Agent</Link> (filters + Send).
         </div>
       )}
 

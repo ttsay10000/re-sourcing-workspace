@@ -13,6 +13,7 @@ export interface InsertInquiryDocumentParams {
   filename: string;
   contentType?: string | null;
   filePath: string;
+  fileContent?: Buffer | null;
 }
 
 export class InquiryDocumentRepo {
@@ -24,8 +25,8 @@ export class InquiryDocumentRepo {
 
   async insert(params: InsertInquiryDocumentParams): Promise<PropertyInquiryDocument> {
     const r = await this.client.query(
-      `INSERT INTO property_inquiry_documents (property_id, inquiry_email_id, filename, content_type, file_path)
-       VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO property_inquiry_documents (property_id, inquiry_email_id, filename, content_type, file_path, file_content)
+       VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING *`,
       [
         params.propertyId,
@@ -33,6 +34,7 @@ export class InquiryDocumentRepo {
         params.filename,
         params.contentType ?? null,
         params.filePath,
+        params.fileContent ?? null,
       ]
     );
     return mapInquiryDocument(r.rows[0]);
@@ -52,6 +54,16 @@ export class InquiryDocumentRepo {
       [propertyId]
     );
     return r.rows.map((row: Record<string, unknown>) => mapInquiryDocument(row));
+  }
+
+  async getFileContent(id: string): Promise<Buffer | null> {
+    const r = await this.client.query(
+      "SELECT file_content FROM property_inquiry_documents WHERE id = $1",
+      [id]
+    );
+    const row = r.rows[0] as { file_content?: Buffer | Uint8Array | null } | undefined;
+    if (!row?.file_content) return null;
+    return row.file_content instanceof Buffer ? row.file_content : Buffer.from(row.file_content);
   }
 
   /** List documents with source (from_address from the inquiry email). Returns rows with extra source field. */

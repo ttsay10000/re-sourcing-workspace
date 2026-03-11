@@ -1,0 +1,169 @@
+import {
+  computeUnderwritingProjection,
+  type ResolvedDossierAssumptions,
+} from "./underwritingModel.js";
+
+export type SensitivityKey = "rental_uplift" | "expense_increase" | "management_fee";
+
+export interface SensitivityScenario {
+  valuePct: number;
+  irrPct: number | null;
+  year1CashOnCashReturn: number | null;
+  stabilizedNoi: number;
+  annualOperatingCashFlow: number;
+}
+
+export interface SensitivityMetricRange {
+  min: number | null;
+  max: number | null;
+}
+
+export interface SensitivityAnalysis {
+  key: SensitivityKey;
+  title: string;
+  inputLabel: string;
+  scenarios: SensitivityScenario[];
+  baseCase: {
+    valuePct: number | null;
+    irrPct: number | null;
+    year1CashOnCashReturn: number | null;
+  };
+  ranges: {
+    irrPct: SensitivityMetricRange;
+    year1CashOnCashReturn: SensitivityMetricRange;
+  };
+}
+
+export const RENTAL_UPLIFT_SENSITIVITY_VALUES = [50, 60, 70, 80, 90];
+export const EXPENSE_INCREASE_SENSITIVITY_VALUES = [10, 17.5, 25, 30];
+export const MANAGEMENT_FEE_SENSITIVITY_VALUES = [6, 8, 10, 12];
+
+function range(values: Array<number | null | undefined>): SensitivityMetricRange {
+  const numeric = values.filter((value): value is number => value != null && Number.isFinite(value));
+  if (numeric.length === 0) return { min: null, max: null };
+  return { min: Math.min(...numeric), max: Math.max(...numeric) };
+}
+
+function scenarioFromProjection(valuePct: number, projection: ReturnType<typeof computeUnderwritingProjection>): SensitivityScenario {
+  return {
+    valuePct,
+    irrPct: projection.returns.irr,
+    year1CashOnCashReturn: projection.returns.year1CashOnCashReturn,
+    stabilizedNoi: projection.operating.stabilizedNoi,
+    annualOperatingCashFlow: projection.cashFlows.annualOperatingCashFlow,
+  };
+}
+
+export function buildSensitivityAnalyses(input: {
+  assumptions: ResolvedDossierAssumptions;
+  currentGrossRent: number | null;
+  currentNoi: number | null;
+  baseProjection: ReturnType<typeof computeUnderwritingProjection>;
+}): SensitivityAnalysis[] {
+  const { assumptions, currentGrossRent, currentNoi, baseProjection } = input;
+
+  const rentalUpliftScenarios = RENTAL_UPLIFT_SENSITIVITY_VALUES.map((valuePct) =>
+    scenarioFromProjection(
+      valuePct,
+      computeUnderwritingProjection({
+        assumptions: {
+          ...assumptions,
+          operating: {
+            ...assumptions.operating,
+            rentUpliftPct: valuePct,
+          },
+        },
+        currentGrossRent,
+        currentNoi,
+      })
+    )
+  );
+
+  const expenseIncreaseScenarios = EXPENSE_INCREASE_SENSITIVITY_VALUES.map((valuePct) =>
+    scenarioFromProjection(
+      valuePct,
+      computeUnderwritingProjection({
+        assumptions: {
+          ...assumptions,
+          operating: {
+            ...assumptions.operating,
+            expenseIncreasePct: valuePct,
+          },
+        },
+        currentGrossRent,
+        currentNoi,
+      })
+    )
+  );
+
+  const managementFeeScenarios = MANAGEMENT_FEE_SENSITIVITY_VALUES.map((valuePct) =>
+    scenarioFromProjection(
+      valuePct,
+      computeUnderwritingProjection({
+        assumptions: {
+          ...assumptions,
+          operating: {
+            ...assumptions.operating,
+            managementFeePct: valuePct,
+          },
+        },
+        currentGrossRent,
+        currentNoi,
+      })
+    )
+  );
+
+  return [
+    {
+      key: "rental_uplift",
+      title: "Rental Uplift Sensitivity",
+      inputLabel: "Rental uplift (%)",
+      scenarios: rentalUpliftScenarios,
+      baseCase: {
+        valuePct: assumptions.operating.rentUpliftPct,
+        irrPct: baseProjection.returns.irr,
+        year1CashOnCashReturn: baseProjection.returns.year1CashOnCashReturn,
+      },
+      ranges: {
+        irrPct: range(rentalUpliftScenarios.map((scenario) => scenario.irrPct)),
+        year1CashOnCashReturn: range(
+          rentalUpliftScenarios.map((scenario) => scenario.year1CashOnCashReturn)
+        ),
+      },
+    },
+    {
+      key: "expense_increase",
+      title: "Expense Increase Sensitivity",
+      inputLabel: "Expense increase (%)",
+      scenarios: expenseIncreaseScenarios,
+      baseCase: {
+        valuePct: assumptions.operating.expenseIncreasePct,
+        irrPct: baseProjection.returns.irr,
+        year1CashOnCashReturn: baseProjection.returns.year1CashOnCashReturn,
+      },
+      ranges: {
+        irrPct: range(expenseIncreaseScenarios.map((scenario) => scenario.irrPct)),
+        year1CashOnCashReturn: range(
+          expenseIncreaseScenarios.map((scenario) => scenario.year1CashOnCashReturn)
+        ),
+      },
+    },
+    {
+      key: "management_fee",
+      title: "Management Fee Sensitivity",
+      inputLabel: "Management fee (%)",
+      scenarios: managementFeeScenarios,
+      baseCase: {
+        valuePct: assumptions.operating.managementFeePct,
+        irrPct: baseProjection.returns.irr,
+        year1CashOnCashReturn: baseProjection.returns.year1CashOnCashReturn,
+      },
+      ranges: {
+        irrPct: range(managementFeeScenarios.map((scenario) => scenario.irrPct)),
+        year1CashOnCashReturn: range(
+          managementFeeScenarios.map((scenario) => scenario.year1CashOnCashReturn)
+        ),
+      },
+    },
+  ];
+}

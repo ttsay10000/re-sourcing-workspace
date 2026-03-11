@@ -43,26 +43,36 @@ router.put("/profile", async (req: Request, res: Response) => {
       name?: string | null;
       email?: string | null;
       organization?: string | null;
+      defaultPurchaseClosingCostPct?: number | null;
       defaultLtv?: number | null;
       defaultInterestRate?: number | null;
       defaultAmortization?: number | null;
+      defaultHoldPeriodYears?: number | null;
       defaultExitCap?: number | null;
+      defaultExitClosingCostPct?: number | null;
       defaultRentUplift?: number | null;
       defaultExpenseIncrease?: number | null;
       defaultManagementFee?: number | null;
-      expectedAppreciationPct?: number | null;
     } = {};
     if (typeof body.name === "string") params.name = body.name.trim() || null;
     if (typeof body.email === "string") params.email = body.email.trim() || null;
     if (typeof body.organization === "string") params.organization = body.organization.trim() || null;
+    if (typeof body.defaultPurchaseClosingCostPct === "number" && !Number.isNaN(body.defaultPurchaseClosingCostPct)) {
+      params.defaultPurchaseClosingCostPct = body.defaultPurchaseClosingCostPct;
+    }
     if (typeof body.defaultLtv === "number" && !Number.isNaN(body.defaultLtv)) params.defaultLtv = body.defaultLtv;
     if (typeof body.defaultInterestRate === "number" && !Number.isNaN(body.defaultInterestRate)) params.defaultInterestRate = body.defaultInterestRate;
     if (typeof body.defaultAmortization === "number" && !Number.isNaN(body.defaultAmortization)) params.defaultAmortization = body.defaultAmortization;
+    if (typeof body.defaultHoldPeriodYears === "number" && !Number.isNaN(body.defaultHoldPeriodYears)) {
+      params.defaultHoldPeriodYears = body.defaultHoldPeriodYears;
+    }
     if (typeof body.defaultExitCap === "number" && !Number.isNaN(body.defaultExitCap)) params.defaultExitCap = body.defaultExitCap;
+    if (typeof body.defaultExitClosingCostPct === "number" && !Number.isNaN(body.defaultExitClosingCostPct)) {
+      params.defaultExitClosingCostPct = body.defaultExitClosingCostPct;
+    }
     if (typeof body.defaultRentUplift === "number" && !Number.isNaN(body.defaultRentUplift)) params.defaultRentUplift = body.defaultRentUplift;
     if (typeof body.defaultExpenseIncrease === "number" && !Number.isNaN(body.defaultExpenseIncrease)) params.defaultExpenseIncrease = body.defaultExpenseIncrease;
     if (typeof body.defaultManagementFee === "number" && !Number.isNaN(body.defaultManagementFee)) params.defaultManagementFee = body.defaultManagementFee;
-    if (typeof body.expectedAppreciationPct === "number" && !Number.isNaN(body.expectedAppreciationPct)) params.expectedAppreciationPct = body.expectedAppreciationPct;
     const updated = await repo.update(id, params);
     res.json(updated);
   } catch (err) {

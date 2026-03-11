@@ -235,14 +235,18 @@ export function mapUserProfile(row: Record<string, unknown>): UserProfile {
     name: (row.name as string) ?? null,
     email: (row.email as string) ?? null,
     organization: (row.organization as string) ?? null,
+    defaultPurchaseClosingCostPct:
+      row.default_purchase_closing_cost_pct != null ? Number(row.default_purchase_closing_cost_pct) : null,
     defaultLtv: row.default_ltv != null ? Number(row.default_ltv) : null,
     defaultInterestRate: row.default_interest_rate != null ? Number(row.default_interest_rate) : null,
     defaultAmortization: row.default_amortization != null ? Number(row.default_amortization) : null,
+    defaultHoldPeriodYears: row.default_hold_period_years != null ? Number(row.default_hold_period_years) : null,
     defaultExitCap: row.default_exit_cap != null ? Number(row.default_exit_cap) : null,
+    defaultExitClosingCostPct:
+      row.default_exit_closing_cost_pct != null ? Number(row.default_exit_closing_cost_pct) : null,
     defaultRentUplift: row.default_rent_uplift != null ? Number(row.default_rent_uplift) : null,
     defaultExpenseIncrease: row.default_expense_increase != null ? Number(row.default_expense_increase) : null,
     defaultManagementFee: row.default_management_fee != null ? Number(row.default_management_fee) : null,
-    expectedAppreciationPct: row.expected_appreciation_pct != null ? Number(row.expected_appreciation_pct) : null,
     createdAt: toIso(row.created_at),
     updatedAt: toIso(row.updated_at),
   };
