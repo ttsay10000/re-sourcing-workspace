@@ -22,6 +22,15 @@ function sensitivityRangeLabel(min: number | null | undefined, max: number | nul
   return `${(min * 100).toFixed(2)}% to ${(max * 100).toFixed(2)}%`;
 }
 
+function offerRangeLabel(low: number | null | undefined, high: number | null | undefined): string {
+  if (low == null || high == null || Number.isNaN(low) || Number.isNaN(high)) return "—";
+  return `$${fmt(low)} to $${fmt(high)}`;
+}
+
+function moneyLabel(value: number | null | undefined): string {
+  return value != null && !Number.isNaN(value) ? `$${fmt(value)}` : "—";
+}
+
 export function buildDossierText(ctx: UnderwritingContext): string {
   const lines: string[] = [];
 
@@ -40,7 +49,15 @@ export function buildDossierText(ctx: UnderwritingContext): string {
   lines.push(`Units: ${ctx.unitCount ?? "—"}`);
   lines.push("");
 
-  lines.push("2. KEY METRICS");
+  lines.push("2. RECOMMENDED OFFER");
+  lines.push("--------------------");
+  lines.push(`Target IRR: ${pct(ctx.assumptions.targetIrrPct)}`);
+  lines.push(`IRR at asking: ${ctx.recommendedOffer?.irrAtAskingPct != null ? `${(ctx.recommendedOffer.irrAtAskingPct * 100).toFixed(2)}%` : "—"}`);
+  lines.push(`Recommended offer range: ${offerRangeLabel(ctx.recommendedOffer?.recommendedOfferLow, ctx.recommendedOffer?.recommendedOfferHigh)}`);
+  lines.push(`Discount to asking: ${pct(ctx.recommendedOffer?.discountToAskingPct)}`);
+  lines.push("");
+
+  lines.push("3. KEY METRICS");
   lines.push("--------------");
   lines.push(`Current NOI: ${ctx.currentNoi != null ? `$${fmt(ctx.currentNoi)}` : "—"}`);
   lines.push(`Asset cap rate: ${pct(ctx.assetCapRate)}`);
@@ -48,7 +65,7 @@ export function buildDossierText(ctx: UnderwritingContext): string {
   lines.push(`Stabilized cap rate: ${pct(ctx.adjustedCapRate)}`);
   lines.push("");
 
-  lines.push("3. ACQUISITION & FINANCING");
+  lines.push("4. ACQUISITION & FINANCING");
   lines.push("--------------------------");
   lines.push(`Purchase closing costs: $${fmt(ctx.acquisition.purchaseClosingCosts)}`);
   lines.push(`Total project cost: $${fmt(ctx.acquisition.totalProjectCost)}`);
@@ -57,7 +74,7 @@ export function buildDossierText(ctx: UnderwritingContext): string {
   lines.push(`Annual debt service: $${fmt(ctx.financing.annualDebtService)}`);
   lines.push("");
 
-  lines.push("4. OPERATIONS & EXIT");
+  lines.push("5. OPERATIONS & EXIT");
   lines.push("--------------------");
   lines.push(`Adjusted gross rent: $${fmt(ctx.operating.adjustedGrossRent)}`);
   lines.push(`Adjusted operating expenses: $${fmt(ctx.operating.adjustedOperatingExpenses)}`);
@@ -83,12 +100,14 @@ export function buildDossierText(ctx: UnderwritingContext): string {
   lines.push(`LTV: ${pct(ctx.assumptions.financing.ltvPct)}`);
   lines.push(`Interest rate: ${pct(ctx.assumptions.financing.interestRatePct)}`);
   lines.push(`Amortization: ${ctx.assumptions.financing.amortizationYears ?? "—"} years`);
-  lines.push(`Rent uplift: ${pct(ctx.assumptions.operating.rentUpliftPct)}`);
+  lines.push(`Rent uplift (base): ${pct(ctx.assumptions.operating.rentUpliftPct)}`);
+  lines.push(`Rent uplift (blended): ${pct(ctx.assumptions.operating.blendedRentUpliftPct)}`);
   lines.push(`Expense increase: ${pct(ctx.assumptions.operating.expenseIncreasePct)}`);
   lines.push(`Management fee: ${pct(ctx.assumptions.operating.managementFeePct)}`);
   lines.push(`Hold period: ${ctx.assumptions.holdPeriodYears ?? "—"} years`);
   lines.push(`Exit cap: ${pct(ctx.assumptions.exit.exitCapPct)}`);
   lines.push(`Exit closing costs: ${pct(ctx.assumptions.exit.exitClosingCostPct)}`);
+  lines.push(`Target IRR: ${pct(ctx.assumptions.targetIrrPct)}`);
   lines.push("");
 
   if (ctx.sensitivities && ctx.sensitivities.length > 0) {
@@ -123,6 +142,9 @@ export function buildDossierText(ctx: UnderwritingContext): string {
   }
   if (ctx.returns.irrPct != null) {
     lines.push(`• Projected IRR: ${(ctx.returns.irrPct * 100).toFixed(2)}%`);
+  }
+  if (ctx.recommendedOffer?.discountToAskingPct != null && ctx.recommendedOffer.discountToAskingPct > 0) {
+    lines.push(`• Needs ${ctx.recommendedOffer.discountToAskingPct.toFixed(1)}% discount to clear target IRR`);
   }
   lines.push("");
 
@@ -163,51 +185,79 @@ export function buildDossierStructuredText(ctx: UnderwritingContext): string {
   }
   lines.push("");
 
-  lines.push("2. CURRENT STATE: FINANCIALS");
+  lines.push("2. RECOMMENDED OFFER");
+  lines.push("--------------------");
+  lines.push(tableRow(["Target IRR", pct(ctx.assumptions.targetIrrPct)]));
+  lines.push(tableRow(["IRR at asking", ctx.recommendedOffer?.irrAtAskingPct != null ? `${(ctx.recommendedOffer.irrAtAskingPct * 100).toFixed(2)}%` : "—"]));
+  lines.push(tableRow(["Recommended offer range", offerRangeLabel(ctx.recommendedOffer?.recommendedOfferLow, ctx.recommendedOffer?.recommendedOfferHigh)]));
+  lines.push(tableRow(["Discount to asking", pct(ctx.recommendedOffer?.discountToAskingPct)]));
+  lines.push("");
+
+  lines.push("3. CURRENT STATE: FINANCIALS");
   lines.push("-----------------------------");
   if (ctx.financialFlags && ctx.financialFlags.length > 0) {
-    ctx.financialFlags.slice(0, 2).forEach((f) => lines.push(`• ${f}`));
+    ctx.financialFlags.slice(0, 3).forEach((f) => lines.push(`• ${f}`));
     lines.push("");
   }
-  const grossRentTotal = ctx.currentGrossRent ?? 0;
-  const expensesTotal = ctx.currentExpensesTotal ?? (grossRentTotal - (ctx.currentNoi ?? 0));
-  const noi = ctx.currentNoi ?? grossRentTotal - expensesTotal;
+  const hasCurrentFinancials = ctx.currentGrossRent != null || ctx.currentNoi != null;
+  const grossRentTotal = ctx.currentGrossRent;
+  const expensesTotal =
+    ctx.currentExpensesTotal ??
+    (ctx.currentGrossRent != null && ctx.currentNoi != null ? ctx.currentGrossRent - ctx.currentNoi : null);
+  const noi =
+    ctx.currentNoi ??
+    (ctx.currentGrossRent != null && expensesTotal != null ? ctx.currentGrossRent - expensesTotal : null);
   const capRate = ctx.assetCapRate;
 
-  const rentRows = ctx.rentRollRows && ctx.rentRollRows.length > 0 ? ctx.rentRollRows : [{ label: "Gross rent", annualRent: grossRentTotal }];
   lines.push(tableRow(["Gross rent", "Annual"]));
-  rentRows.forEach((r) => lines.push(tableRow([r.label, `$${fmt(r.annualRent)}`])));
-  lines.push(tableRow(["**Total gross rent**", `$${fmt(grossRentTotal)}`]));
+  if (ctx.rentRollRows && ctx.rentRollRows.length > 0) {
+    ctx.rentRollRows.forEach((r) => lines.push(tableRow([r.label, `$${fmt(r.annualRent)}`])));
+    lines.push(tableRow(["**Total gross rent**", moneyLabel(grossRentTotal)]));
+  } else if (grossRentTotal != null) {
+    lines.push(tableRow(["Gross rent", moneyLabel(grossRentTotal)]));
+    lines.push(tableRow(["**Total gross rent**", moneyLabel(grossRentTotal)]));
+  } else {
+    lines.push(tableRow(["Current gross rent not extracted from OM text", "—"]));
+  }
   lines.push("");
 
-  const expRows = ctx.expenseRows && ctx.expenseRows.length > 0 ? ctx.expenseRows : [{ lineItem: "Expenses", amount: expensesTotal }];
   lines.push(tableRow(["Expenses", "Annual"]));
-  expRows.forEach((e) => lines.push(tableRow([e.lineItem, `$${fmt(e.amount)}`])));
-  lines.push(tableRow(["**Total expenses**", `$${fmt(expensesTotal)}`]));
+  if (ctx.expenseRows && ctx.expenseRows.length > 0) {
+    ctx.expenseRows.forEach((e) => lines.push(tableRow([e.lineItem, `$${fmt(e.amount)}`])));
+    lines.push(tableRow(["**Total expenses**", moneyLabel(expensesTotal)]));
+  } else if (expensesTotal != null) {
+    lines.push(tableRow(["Expenses", moneyLabel(expensesTotal)]));
+    lines.push(tableRow(["**Total expenses**", moneyLabel(expensesTotal)]));
+  } else {
+    lines.push(tableRow(["Current expenses not extracted from OM text", "—"]));
+  }
   lines.push("");
   lines.push(tableRow(["—— Gross rent minus expenses ——", ""]));
-  lines.push(tableRow(["**NOI**", `$${fmt(noi)}`]));
+  lines.push(tableRow(["**NOI**", moneyLabel(noi)]));
   lines.push(tableRow(["Cap rate", capRate != null ? pct(capRate) : "—"]));
   lines.push("");
 
-  lines.push("3. STABILIZED OPERATIONS");
+  lines.push("4. STABILIZED OPERATIONS");
   lines.push("------------------------");
-  lines.push(tableRow(["Adjusted gross rent", `$${fmt(ctx.operating.adjustedGrossRent)}`]));
-  lines.push(tableRow(["Adjusted operating expenses", `$${fmt(ctx.operating.adjustedOperatingExpenses)}`]));
-  lines.push(tableRow([`Management fee (${ctx.assumptions.operating.managementFeePct ?? 0}% of gross rent)`, `$${fmt(ctx.operating.managementFeeAmount)}`]));
-  lines.push(tableRow(["**Stabilized NOI**", `$${fmt(ctx.operating.stabilizedNoi)}`]));
-  lines.push(tableRow(["Stabilized cap rate", ctx.adjustedCapRate != null ? pct(ctx.adjustedCapRate) : "—"]));
+  if (!hasCurrentFinancials) {
+    lines.push("• Stabilized operations are not reliable yet because the OM text did not yield enough current rent / NOI data.");
+  }
+  lines.push(tableRow(["Adjusted gross rent", moneyLabel(hasCurrentFinancials ? ctx.operating.adjustedGrossRent : null)]));
+  lines.push(tableRow(["Adjusted operating expenses", moneyLabel(hasCurrentFinancials ? ctx.operating.adjustedOperatingExpenses : null)]));
+  lines.push(tableRow([`Management fee (${ctx.assumptions.operating.managementFeePct ?? 0}% of gross rent)`, moneyLabel(hasCurrentFinancials ? ctx.operating.managementFeeAmount : null)]));
+  lines.push(tableRow(["**Stabilized NOI**", moneyLabel(hasCurrentFinancials ? ctx.operating.stabilizedNoi : null)]));
+  lines.push(tableRow(["Stabilized cap rate", hasCurrentFinancials && ctx.adjustedCapRate != null ? pct(ctx.adjustedCapRate) : "—"]));
   lines.push("");
 
-  lines.push("4. FINANCING & CASH FLOW");
+  lines.push("5. FINANCING & CASH FLOW");
   lines.push("-------------------------");
   lines.push(tableRow(["Purchase closing costs", `$${fmt(ctx.acquisition.purchaseClosingCosts)}`]));
   lines.push(tableRow(["Total project cost", `$${fmt(ctx.acquisition.totalProjectCost)}`]));
   lines.push(tableRow(["Loan amount", `$${fmt(ctx.financing.loanAmount)}`]));
   lines.push(tableRow(["Initial equity invested", `$${fmt(ctx.acquisition.initialEquityInvested)}`]));
   lines.push(tableRow(["Annual debt service", `$${fmt(ctx.financing.annualDebtService)}`]));
-  lines.push(tableRow(["Annual operating cash flow", `$${fmt(ctx.cashFlows.annualOperatingCashFlow)}`]));
-  lines.push(tableRow(["Final year cash flow", `$${fmt(ctx.cashFlows.finalYearCashFlow)}`]));
+  lines.push(tableRow(["Annual operating cash flow", moneyLabel(hasCurrentFinancials ? ctx.cashFlows.annualOperatingCashFlow : null)]));
+  lines.push(tableRow(["Final year cash flow", moneyLabel(hasCurrentFinancials ? ctx.cashFlows.finalYearCashFlow : null)]));
   if (ctx.amortizationSchedule && ctx.amortizationSchedule.length > 0) {
     lines.push("");
     const schedule = ctx.amortizationSchedule;
@@ -220,25 +270,25 @@ export function buildDossierStructuredText(ctx: UnderwritingContext): string {
   }
   lines.push("");
 
-  lines.push("5. EXIT");
+  lines.push("6. EXIT");
   lines.push("-------");
   lines.push(tableRow(["Hold period", `${ctx.assumptions.holdPeriodYears ?? "—"} years`]));
-  lines.push(tableRow(["Exit property value", `$${fmt(ctx.exit.exitPropertyValue)}`]));
-  lines.push(tableRow(["Sale closing costs", `$${fmt(ctx.exit.saleClosingCosts)}`]));
-  lines.push(tableRow(["Net sale proceeds before debt payoff", `$${fmt(ctx.exit.netSaleProceedsBeforeDebtPayoff)}`]));
+  lines.push(tableRow(["Exit property value", moneyLabel(hasCurrentFinancials ? ctx.exit.exitPropertyValue : null)]));
+  lines.push(tableRow(["Sale closing costs", moneyLabel(hasCurrentFinancials ? ctx.exit.saleClosingCosts : null)]));
+  lines.push(tableRow(["Net sale proceeds before debt payoff", moneyLabel(hasCurrentFinancials ? ctx.exit.netSaleProceedsBeforeDebtPayoff : null)]));
   lines.push(tableRow(["Remaining loan balance", `$${fmt(ctx.exit.remainingLoanBalance)}`]));
-  lines.push(tableRow(["**Net proceeds to equity**", `$${fmt(ctx.exit.netProceedsToEquity)}`]));
+  lines.push(tableRow(["**Net proceeds to equity**", moneyLabel(hasCurrentFinancials ? ctx.exit.netProceedsToEquity : null)]));
   lines.push("");
 
-  lines.push("6. RETURNS");
+  lines.push("7. RETURNS");
   lines.push("----------");
-  lines.push(tableRow([`IRR (${ctx.assumptions.holdPeriodYears ?? "—"}-year)`, ctx.returns.irrPct != null ? `${(ctx.returns.irrPct * 100).toFixed(2)}%` : "—"]));
-  lines.push(tableRow(["Equity multiple", ctx.returns.equityMultiple != null ? `${ctx.returns.equityMultiple.toFixed(2)}x` : "—"]));
-  lines.push(tableRow(["Cash-on-cash (year 1)", ctx.returns.year1CashOnCashReturn != null ? `${(ctx.returns.year1CashOnCashReturn * 100).toFixed(2)}%` : "—"]));
-  lines.push(tableRow(["Average cash-on-cash", ctx.returns.averageCashOnCashReturn != null ? `${(ctx.returns.averageCashOnCashReturn * 100).toFixed(2)}%` : "—"]));
+  lines.push(tableRow([`IRR (${ctx.assumptions.holdPeriodYears ?? "—"}-year)`, hasCurrentFinancials && ctx.returns.irrPct != null ? `${(ctx.returns.irrPct * 100).toFixed(2)}%` : "—"]));
+  lines.push(tableRow(["Equity multiple", hasCurrentFinancials && ctx.returns.equityMultiple != null ? `${ctx.returns.equityMultiple.toFixed(2)}x` : "—"]));
+  lines.push(tableRow(["Cash-on-cash (year 1)", hasCurrentFinancials && ctx.returns.year1CashOnCashReturn != null ? `${(ctx.returns.year1CashOnCashReturn * 100).toFixed(2)}%` : "—"]));
+  lines.push(tableRow(["Average cash-on-cash", hasCurrentFinancials && ctx.returns.averageCashOnCashReturn != null ? `${(ctx.returns.averageCashOnCashReturn * 100).toFixed(2)}%` : "—"]));
   lines.push("");
 
-  lines.push("6. ASSUMPTIONS USED");
+  lines.push("8. ASSUMPTIONS USED");
   lines.push("--------------------");
   lines.push(`Purchase closing costs: ${pct(ctx.assumptions.acquisition.purchaseClosingCostPct)}`);
   lines.push(`Renovation costs: $${fmt(num(ctx.assumptions.acquisition.renovationCosts))}`);
@@ -246,16 +296,18 @@ export function buildDossierStructuredText(ctx: UnderwritingContext): string {
   lines.push(`LTV: ${pct(ctx.assumptions.financing.ltvPct)}`);
   lines.push(`Interest rate: ${pct(ctx.assumptions.financing.interestRatePct)}`);
   lines.push(`Amortization: ${ctx.assumptions.financing.amortizationYears ?? "—"} years`);
-  lines.push(`Rent uplift: ${pct(ctx.assumptions.operating.rentUpliftPct)}`);
+  lines.push(`Rent uplift (base): ${pct(ctx.assumptions.operating.rentUpliftPct)}`);
+  lines.push(`Rent uplift (blended): ${pct(ctx.assumptions.operating.blendedRentUpliftPct)}`);
   lines.push(`Expense increase: ${pct(ctx.assumptions.operating.expenseIncreasePct)}`);
   lines.push(`Management fee: ${pct(ctx.assumptions.operating.managementFeePct)}`);
   lines.push(`Hold period: ${ctx.assumptions.holdPeriodYears ?? "—"} years`);
   lines.push(`Exit cap: ${pct(ctx.assumptions.exit.exitCapPct)}`);
   lines.push(`Exit closing costs: ${pct(ctx.assumptions.exit.exitClosingCostPct)}`);
+  lines.push(`Target IRR: ${pct(ctx.assumptions.targetIrrPct)}`);
   lines.push("");
 
-  if (ctx.sensitivities && ctx.sensitivities.length > 0) {
-    lines.push("7. SENSITIVITY ANALYSIS");
+  if (hasCurrentFinancials && ctx.sensitivities && ctx.sensitivities.length > 0) {
+    lines.push("9. SENSITIVITY ANALYSIS");
     lines.push("------------------------");
     ctx.sensitivities.forEach((sensitivity) => {
       lines.push(`• ${sensitivity.title}`);

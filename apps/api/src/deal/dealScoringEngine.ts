@@ -1,8 +1,6 @@
 /**
- * Deal scoring engine (deterministic fallback): asset cap 50 pts, IRR tiers, risk deductions.
- * Primary deal score is produced by the LLM (dealScoringLlm) using the same rubric plus qualitative judgment.
- * This engine: asset cap 5%+ = 50 pts, 4–5% = 30–50, under 4% = low; IRR 25%+ = top tier; risk = deduct
- * per rent-stabilized unit and for complaints/violations/litigation by severity.
+ * Deal scoring engine (deterministic fallback): pricing quality at ask, discount needed to clear
+ * target IRR, return profile, and risk deductions.
  */
 
 export interface DealScoringInputs {
@@ -10,10 +8,20 @@ export interface DealScoringInputs {
   purchasePrice: number | null;
   /** Current NOI for asset cap rate. */
   noi: number | null;
-  /** 5-year IRR as decimal (e.g. 0.22 = 22%). Target 25%+ = top deal. */
-  irr5yrPct?: number | null;
+  /** Hold-period IRR as decimal (e.g. 0.22 = 22%). */
+  irrPct?: number | null;
+  /** Year 1 cash-on-cash as decimal (e.g. 0.08 = 8%). */
+  cocPct?: number | null;
+  /** Stabilized cap rate at the current ask. */
+  adjustedCapRatePct?: number | null;
+  /** Maximum price that still clears the target IRR. */
+  recommendedOfferHigh?: number | null;
+  /** Effective blended rent uplift after excluding protected units. */
+  blendedRentUpliftPct?: number | null;
   /** Number of rent-stabilized units; each deducts from score. */
   rentStabilizedUnitCount?: number;
+  /** Number of commercial units in the asset. */
+  commercialUnitCount?: number;
   /** HPD violations: open and rent-impairing drive severity deduction. */
   hpdOpenCount?: number;
   hpdRentImpairingOpen?: number;
@@ -30,6 +38,7 @@ export interface DealScoringInputs {
 
 export interface DealScoringResult {
   dealScore: number;
+  isScoreable: boolean;
   assetYieldScore: number;
   adjustedYieldScore: number;
   rentUpsideScore: number;
@@ -42,31 +51,72 @@ export interface DealScoringResult {
   adjustedCapRate: number | null;
 }
 
-/** Asset cap rate: 50 points max. 5%+ = 50, 4–5% = 30–50, under 4% = low (0–30). */
 function assetCapScore(assetCapRate: number | null): number {
   if (assetCapRate == null || Number.isNaN(assetCapRate)) return 0;
   const pct = assetCapRate;
-  if (pct >= 5) return 50;
-  if (pct >= 4) return 30 + (pct - 4) * 20;
-  if (pct >= 3) return 15 + (pct - 3) * 15;
-  return Math.max(0, pct * 5);
+  if (pct >= 6) return 45;
+  if (pct >= 5) return 35 + (pct - 5) * 10;
+  if (pct >= 4) return 20 + (pct - 4) * 15;
+  if (pct >= 3) return 8 + (pct - 3) * 12;
+  return Math.max(0, pct * 2.5);
 }
 
-/** IRR 5-year: 25%+ = top (30 pts), 20–25% = 20, 15–20% = 10, below 15% = 0. */
-function irrScore(irr5yrPct: number | null | undefined): number {
-  if (irr5yrPct == null || Number.isNaN(irr5yrPct)) return 0;
-  const pct = irr5yrPct * 100;
-  if (pct >= 25) return 30;
-  if (pct >= 20) return 20;
-  if (pct >= 15) return 10;
+function requiredDiscountPct(inputs: DealScoringInputs): number | null {
+  const ask = inputs.purchasePrice;
+  const recommendedOfferHigh = inputs.recommendedOfferHigh;
+  if (
+    ask == null ||
+    !Number.isFinite(ask) ||
+    ask <= 0 ||
+    recommendedOfferHigh == null ||
+    !Number.isFinite(recommendedOfferHigh)
+  ) {
+    return null;
+  }
+  return Math.max(0, ((ask - recommendedOfferHigh) / ask) * 100);
+}
+
+function pricingGapScore(discountPct: number | null): number {
+  if (discountPct == null || Number.isNaN(discountPct)) return 0;
+  if (discountPct <= 0) return 25;
+  if (discountPct <= 5) return 20;
+  if (discountPct <= 10) return 12;
+  if (discountPct <= 15) return 6;
+  if (discountPct <= 20) return 2;
   return 0;
 }
 
-/** Risk deduction: rent-stabilized units (e.g. 6 pts per unit), then violations/complaints/litigation by severity. */
+function executionScore(inputs: DealScoringInputs): number {
+  let score = 0;
+
+  const irrPct = inputs.irrPct != null && Number.isFinite(inputs.irrPct) ? inputs.irrPct * 100 : null;
+  if (irrPct != null) {
+    if (irrPct >= 25) score += 10;
+    else if (irrPct >= 20) score += 7;
+    else if (irrPct >= 15) score += 4;
+  }
+
+  const cocPct = inputs.cocPct != null && Number.isFinite(inputs.cocPct) ? inputs.cocPct * 100 : null;
+  if (cocPct != null) {
+    if (cocPct >= 8) score += 5;
+    else if (cocPct >= 5) score += 3;
+    else if (cocPct >= 2) score += 1;
+  }
+
+  const adjustedCap = inputs.adjustedCapRatePct;
+  if (adjustedCap != null && Number.isFinite(adjustedCap)) {
+    if (adjustedCap >= 6) score += 5;
+    else if (adjustedCap >= 5) score += 3;
+    else if (adjustedCap >= 4) score += 1;
+  }
+
+  return score;
+}
+
 function riskDeduction(inputs: DealScoringInputs): number {
   let deduct = 0;
   const rentStab = inputs.rentStabilizedUnitCount ?? 0;
-  deduct += rentStab * 6;
+  deduct += rentStab * 4;
 
   const hpdOpen = inputs.hpdOpenCount ?? 0;
   const hpdRentImp = inputs.hpdRentImpairingOpen ?? 0;
@@ -88,10 +138,6 @@ function riskDeduction(inputs: DealScoringInputs): number {
   return deduct;
 }
 
-/**
- * Compute deal score (fallback when LLM scoring is unavailable).
- * Score = asset cap (50 max) + IRR (30 max) − risk deductions, clamped 0–100.
- */
 export function computeDealScore(inputs: DealScoringInputs): DealScoringResult {
   const positiveSignals: string[] = [];
   const negativeSignals: string[] = [];
@@ -100,39 +146,69 @@ export function computeDealScore(inputs: DealScoringInputs): DealScoringResult {
   const noi = inputs.noi;
   const assetCapRate =
     purchasePrice != null && noi != null && noi >= 0 ? (noi / purchasePrice) * 100 : null;
+  const discountPct = requiredDiscountPct(inputs);
 
-  const capSc = assetCapScore(assetCapRate);
-  const irrSc = irrScore(inputs.irr5yrPct);
+  const capScore = assetCapScore(assetCapRate);
+  const negotiationScore = pricingGapScore(discountPct);
+  const returnsScore = executionScore(inputs);
   const deduct = riskDeduction(inputs);
+  const isScoreable =
+    assetCapRate != null ||
+    (inputs.adjustedCapRatePct != null && Number.isFinite(inputs.adjustedCapRatePct)) ||
+    (inputs.irrPct != null && Number.isFinite(inputs.irrPct)) ||
+    discountPct != null;
 
-  if (assetCapRate != null && assetCapRate >= 5) positiveSignals.push("Asset cap ≥5%");
-  if (inputs.irr5yrPct != null && inputs.irr5yrPct >= 0.25) positiveSignals.push("IRR ≥25% (5yr)");
-  else if (inputs.irr5yrPct != null && inputs.irr5yrPct >= 0.2) positiveSignals.push("IRR ≥20% (5yr)");
+  if (assetCapRate != null && assetCapRate >= 5) positiveSignals.push("Ask cap rate at or above 5%");
+  if (discountPct != null && discountPct <= 0) positiveSignals.push("Asking price already clears target IRR");
+  else if (discountPct != null && discountPct <= 5) {
+    positiveSignals.push(`Needs no more than ${discountPct.toFixed(1)}% discount to hit target IRR`);
+  }
+  if (inputs.adjustedCapRatePct != null && inputs.adjustedCapRatePct >= 6) {
+    positiveSignals.push("Stabilized cap rate at or above 6%");
+  }
 
   const rentStab = inputs.rentStabilizedUnitCount ?? 0;
   if (rentStab > 0) negativeSignals.push(`${rentStab} rent-stabilized unit(s)`);
-  if ((inputs.hpdOpenCount ?? 0) > 0 || (inputs.hpdRentImpairingOpen ?? 0) > 0)
+  if ((inputs.commercialUnitCount ?? 0) > 0) {
+    negativeSignals.push(`${inputs.commercialUnitCount} commercial unit(s) not eligible for residential uplift`);
+  }
+  if (discountPct != null && discountPct > 5) {
+    negativeSignals.push(`Needs ${discountPct.toFixed(1)}% discount to hit target IRR`);
+  }
+  if ((inputs.blendedRentUpliftPct ?? 0) > 0 && rentStab + (inputs.commercialUnitCount ?? 0) > 0) {
+    negativeSignals.push(
+      `Protected units cut blended rent uplift to ${(inputs.blendedRentUpliftPct ?? 0).toFixed(1)}%`
+    );
+  }
+  if ((inputs.hpdOpenCount ?? 0) > 0 || (inputs.hpdRentImpairingOpen ?? 0) > 0) {
     negativeSignals.push("HPD violations");
-  if ((inputs.dobOpenCount ?? 0) > 0 || (inputs.dobCount30 ?? 0) > 0)
+  }
+  if ((inputs.dobOpenCount ?? 0) > 0 || (inputs.dobCount30 ?? 0) > 0) {
     negativeSignals.push("DOB complaints");
-  if ((inputs.litigationOpenCount ?? 0) > 0 || (inputs.litigationTotal ?? 0) > 0)
+  }
+  if ((inputs.litigationOpenCount ?? 0) > 0 || (inputs.litigationTotal ?? 0) > 0) {
     negativeSignals.push("Housing litigations");
-  if (inputs.irr5yrPct != null && inputs.irr5yrPct < 0.2) negativeSignals.push("IRR below 20% (5yr)");
+  }
+  if (inputs.irrPct != null && inputs.irrPct < 0.2) negativeSignals.push("IRR below 20%");
+  if (!isScoreable) {
+    negativeSignals.push("Current NOI or underwritten returns missing; pricing cannot be scored reliably yet");
+  }
 
-  const total = Math.max(0, capSc + irrSc - deduct);
+  const total = Math.max(0, capScore + negotiationScore + returnsScore - deduct);
   const dealScore = Math.max(0, Math.min(100, Math.round(total)));
 
   return {
     dealScore,
-    assetYieldScore: capSc,
-    adjustedYieldScore: 0,
-    rentUpsideScore: 0,
+    isScoreable,
+    assetYieldScore: capScore + negotiationScore,
+    adjustedYieldScore: returnsScore,
+    rentUpsideScore: inputs.blendedRentUpliftPct ?? 0,
     locationScore: 0,
-    riskScore: Math.max(0, 80 - deduct),
+    riskScore: Math.max(0, 100 - deduct),
     liquidityScore: 0,
     positiveSignals,
     negativeSignals,
     assetCapRate,
-    adjustedCapRate: null,
+    adjustedCapRate: inputs.adjustedCapRatePct ?? null,
   };
 }

@@ -125,7 +125,7 @@ describe("buildExcelProForma", () => {
     expect(workbook.Sheets.Exit?.B10?.f).toBe("B8-B9");
     expect(workbook.Sheets.CashFlow?.B5?.f).toBe('IF(A5<=Exit!$B$3,C5+E5,"")');
     expect(workbook.Sheets.Returns?.B5?.f).toBe('IFERROR(IRR(CashFlow!B4:INDEX(CashFlow!B:B,4+Exit!B3)),"")');
-    expect(workbook.Sheets.Sensitivities?.E8?.f).toBe('IFERROR(IRR(H8:INDEX(8:8,58)),"")');
+    expect(workbook.Sheets.Sensitivities?.E8?.f).toBe('IFERROR(IRR(H8:INDEX(8:8,18)),"")');
     expect(workbook.Sheets.Summary?.B17?.f).toBe("Returns!B5");
   });
 });

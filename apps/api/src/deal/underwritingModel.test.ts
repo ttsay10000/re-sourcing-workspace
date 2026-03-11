@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   MAX_UNDERWRITING_HOLD_PERIOD_YEARS,
+  computeRecommendedOffer,
   computeUnderwritingProjection,
   resolveDossierAssumptions,
 } from "./underwritingModel.js";
@@ -76,5 +77,68 @@ describe("underwritingModel", () => {
     );
 
     expect(assumptions.holdPeriodYears).toBe(MAX_UNDERWRITING_HOLD_PERIOD_YEARS);
+  });
+
+  it("blends rent uplift and furnishing defaults around protected units", () => {
+    const assumptions = resolveDossierAssumptions(
+      null,
+      5_000_000,
+      null,
+      {
+        details: {
+          rentalFinancials: {
+            omAnalysis: {
+              propertyInfo: { totalUnits: 4, unitsResidential: 3, unitsCommercial: 1 },
+              rentRoll: [
+                { unit: "1", annualRent: 100_000, beds: 2, sqft: 900, unitCategory: "Residential" },
+                { unit: "2", annualRent: 100_000, beds: 2, sqft: 850, unitCategory: "Residential" },
+                { unit: "Store", annualRent: 100_000, unitCategory: "Retail" },
+                { unit: "4", annualRent: 100_000, beds: 1, sqft: 700, rentType: "Rent Stabilized" },
+              ],
+            },
+          },
+        },
+      }
+    );
+
+    expect(assumptions.propertyMix.commercialUnits).toBe(1);
+    expect(assumptions.propertyMix.rentStabilizedUnits).toBe(1);
+    expect(assumptions.propertyMix.eligibleResidentialUnits).toBe(2);
+    expect(assumptions.operating.rentUpliftPct).toBe(70);
+    expect(assumptions.operating.blendedRentUpliftPct).toBeCloseTo(35, 2);
+    expect(assumptions.acquisition.furnishingSetupCosts).toBe(22_000);
+  });
+
+  it("solves for a lower recommended offer when the ask misses the target IRR", () => {
+    const assumptions = resolveDossierAssumptions(
+      {
+        id: "profile-2",
+        createdAt: "2026-03-10T00:00:00.000Z",
+        updatedAt: "2026-03-10T00:00:00.000Z",
+        defaultPurchaseClosingCostPct: 3,
+        defaultLtv: 70,
+        defaultInterestRate: 6,
+        defaultAmortization: 30,
+        defaultHoldPeriodYears: 5,
+        defaultExitCap: 6,
+        defaultExitClosingCostPct: 2,
+        defaultRentUplift: 10,
+        defaultExpenseIncrease: 5,
+        defaultManagementFee: 4,
+        defaultTargetIrrPct: 25,
+      },
+      1_400_000
+    );
+
+    const recommendedOffer = computeRecommendedOffer({
+      assumptions,
+      currentGrossRent: 120_000,
+      currentNoi: 80_000,
+    });
+
+    expect(recommendedOffer.recommendedOfferHigh).not.toBeNull();
+    expect(recommendedOffer.recommendedOfferHigh ?? 0).toBeLessThan(1_400_000);
+    expect(recommendedOffer.discountToAskingPct ?? 0).toBeGreaterThan(0);
+    expect(recommendedOffer.targetMetAtAsking).toBe(false);
   });
 });

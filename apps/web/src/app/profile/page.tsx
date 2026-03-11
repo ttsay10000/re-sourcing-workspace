@@ -19,6 +19,7 @@ interface UserProfile {
   defaultRentUplift?: number | null;
   defaultExpenseIncrease?: number | null;
   defaultManagementFee?: number | null;
+  defaultTargetIrrPct?: number | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -47,16 +48,17 @@ export default function ProfilePage() {
         name: data.name ?? "",
         email: data.email ?? "",
         organization: data.organization ?? "",
-        defaultPurchaseClosingCostPct: data.defaultPurchaseClosingCostPct ?? undefined,
-        defaultLtv: data.defaultLtv ?? undefined,
-        defaultInterestRate: data.defaultInterestRate ?? undefined,
-        defaultAmortization: data.defaultAmortization ?? undefined,
-        defaultHoldPeriodYears: data.defaultHoldPeriodYears ?? undefined,
-        defaultExitCap: data.defaultExitCap ?? undefined,
-        defaultExitClosingCostPct: data.defaultExitClosingCostPct ?? undefined,
-        defaultRentUplift: data.defaultRentUplift ?? undefined,
-        defaultExpenseIncrease: data.defaultExpenseIncrease ?? undefined,
-        defaultManagementFee: data.defaultManagementFee ?? undefined,
+        defaultPurchaseClosingCostPct: data.defaultPurchaseClosingCostPct ?? 3,
+        defaultLtv: data.defaultLtv ?? 75,
+        defaultInterestRate: data.defaultInterestRate ?? 6,
+        defaultAmortization: data.defaultAmortization ?? 30,
+        defaultHoldPeriodYears: data.defaultHoldPeriodYears ?? 5,
+        defaultExitCap: data.defaultExitCap ?? 5,
+        defaultExitClosingCostPct: data.defaultExitClosingCostPct ?? 2,
+        defaultRentUplift: data.defaultRentUplift ?? 70,
+        defaultExpenseIncrease: data.defaultExpenseIncrease ?? 20,
+        defaultManagementFee: data.defaultManagementFee ?? 8,
+        defaultTargetIrrPct: data.defaultTargetIrrPct ?? 25,
       });
     } catch (e) {
       // #region agent log
@@ -115,6 +117,7 @@ export default function ProfilePage() {
           defaultRentUplift: draft.defaultRentUplift ?? profile.defaultRentUplift,
           defaultExpenseIncrease: draft.defaultExpenseIncrease ?? profile.defaultExpenseIncrease,
           defaultManagementFee: draft.defaultManagementFee ?? profile.defaultManagementFee,
+          defaultTargetIrrPct: draft.defaultTargetIrrPct ?? profile.defaultTargetIrrPct,
         }),
       });
       const data = await res.json();
@@ -332,7 +335,7 @@ export default function ProfilePage() {
               <input
                 type="number"
                 min={1}
-                max={50}
+                max={10}
                 value={draft.defaultHoldPeriodYears ?? ""}
                 onChange={(e) => setDraft((p) => ({ ...p, defaultHoldPeriodYears: e.target.value ? Number(e.target.value) : undefined }))}
                 style={{ padding: "0.5rem", border: "1px solid #ccc", borderRadius: "4px" }}
@@ -385,6 +388,16 @@ export default function ProfilePage() {
                 step="0.1"
                 value={draft.defaultManagementFee ?? ""}
                 onChange={(e) => setDraft((p) => ({ ...p, defaultManagementFee: e.target.value ? Number(e.target.value) : undefined }))}
+                style={{ padding: "0.5rem", border: "1px solid #ccc", borderRadius: "4px" }}
+              />
+            </label>
+            <label style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+              <span style={{ fontSize: "0.875rem", fontWeight: 500 }}>Default target IRR (%)</span>
+              <input
+                type="number"
+                step="0.1"
+                value={draft.defaultTargetIrrPct ?? ""}
+                onChange={(e) => setDraft((p) => ({ ...p, defaultTargetIrrPct: e.target.value ? Number(e.target.value) : undefined }))}
                 style={{ padding: "0.5rem", border: "1px solid #ccc", borderRadius: "4px" }}
               />
             </label>

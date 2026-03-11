@@ -1,8 +1,6 @@
 /**
- * Deal score via LLM: qualitative + quantitative. Uses underwriting metrics and risk data (violations,
- * complaints, litigation, rent-stabilized units) to output a 0–100 deal score and short rationale.
- * Rubric: asset cap 50 pts (5%+ max, 4–5% = 30–50, &lt;4% low); IRR tiers (25%+ = top); risk = deduct
- * per rent-stab unit and for complaints/violations/litigation by severity.
+ * Deal score via LLM: qualitative + quantitative. Uses underwriting metrics and risk data
+ * to output a 0–100 deal score and short rationale.
  */
 
 import OpenAI from "openai";
@@ -11,14 +9,28 @@ import { getDealScoringModel } from "../enrichment/openaiModels.js";
 export interface DealScoringLlmInputs {
   /** Asset cap rate (current NOI / purchase price), e.g. 5.2. */
   assetCapRatePct: number | null;
+  /** Stabilized cap rate at the current ask. */
+  adjustedCapRatePct?: number | null;
   /** Hold-period IRR as decimal (e.g. 0.22 = 22%). */
-  irr5yrPct: number | null;
+  irrPct: number | null;
   /** Cash-on-cash as decimal (e.g. 0.10 = 10%). */
   cocPct: number | null;
   /** Hold period used for the IRR calculation. */
   holdPeriodYears?: number | null;
+  /** Target IRR percentage used for the recommended offer solve. */
+  targetIrrPct?: number | null;
+  /** Suggested anchor offer below the max. */
+  recommendedOfferLow?: number | null;
+  /** Maximum offer that still clears target IRR. */
+  recommendedOfferHigh?: number | null;
+  /** Discount required from ask to clear target IRR. */
+  requiredDiscountPct?: number | null;
   /** Number of rent-stabilized units (deduct points per unit). */
   rentStabilizedUnitCount: number;
+  /** Number of commercial units. */
+  commercialUnitCount?: number;
+  /** Effective blended rent uplift after protected-unit exclusions. */
+  blendedRentUpliftPct?: number | null;
   /** HPD violations summary. */
   hpdTotal?: number;
   hpdOpenCount?: number;
@@ -47,19 +59,22 @@ const DEAL_SCORING_SYSTEM = `You are a senior real estate investment analyst sco
 
 SCORING RUBRIC (use as the backbone; you may adjust for context):
 
-1) ASSET CAP RATE (max 50 points)
-- 5% or higher: maxed out (50 points).
-- 4% to 5%: 30–50 points (scale up as cap approaches 5%).
-- Under 4%: low (0–30 points; 3–4% in the teens to mid-20s, below 3% minimal).
+1) PRICE QUALITY AT ASK (largest driver)
+- The ask cap rate is the clearest pricing signal. Higher cap rate at ask means better pricing.
+- A low ask cap rate with a large required discount to hit the target IRR should score poorly.
 
-2) IRR — HOLD PERIOD (adds to score; target 25%+ = top deal)
-- 25% or higher: top tier — strong positive (add up to ~30 points).
-- 20–25%: good — add meaningful points (~15–20).
-- 15–20%: moderate (~5–10 points).
-- Below 15%: weak or no IRR contribution.
+2) NEGOTIATION ROOM / RECOMMENDED OFFER
+- If the current ask already clears the target IRR, that is strongly positive.
+- If only a small discount is needed, still workable.
+- If the required discount is large enough that an offer is likely unrealistic, score should fall sharply.
 
-3) RISK — DEDUCT POINTS (do not add; only subtract)
-- Rent-stabilized units: deduct points for EACH rent-stabilized unit (they limit rent growth and exit). E.g. 5–10 points per unit depending on share of building.
+3) RETURNS AT ASK
+- IRR, cash-on-cash, and stabilized cap rate still matter, but less than pricing.
+- 25%+ IRR is top tier; sub-20% IRR is a drag.
+
+4) RISK — DEDUCT POINTS (do not add; only subtract)
+- Rent-stabilized units: deduct points for EACH rent-stabilized unit (they limit rent growth and exit).
+- Commercial units are not automatically bad, but they do reduce residential conversion upside when the thesis depends on uplift.
 - Complaints / violations / litigation:
   - None or all closed: no deduction (clean is good).
   - Open or recent: remove points based on severity (open HPD rent-impairing = severe; open DOB complaints; open housing litigations; penalties).
@@ -71,15 +86,27 @@ Output a single JSON object with exactly two keys:
 
 Output only the JSON object, no markdown or extra text.`;
 
+function fmtMoney(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return "—";
+  return `$${value.toLocaleString("en-US", { maximumFractionDigits: 0 })}`;
+}
+
 function buildScoringPrompt(inputs: DealScoringLlmInputs): string {
   const lines: string[] = [
     "Score this deal using the rubric. Output only JSON: { \"dealScore\": number, \"rationale\": \"...\" }",
     "",
     "QUANTITATIVE",
     `Asset cap rate: ${inputs.assetCapRatePct != null ? `${inputs.assetCapRatePct.toFixed(2)}%` : "—"}`,
-    `${inputs.holdPeriodYears ?? 5}-year IRR: ${inputs.irr5yrPct != null ? `${(inputs.irr5yrPct * 100).toFixed(2)}%` : "—"}`,
+    `Stabilized cap rate: ${inputs.adjustedCapRatePct != null ? `${inputs.adjustedCapRatePct.toFixed(2)}%` : "—"}`,
+    `${inputs.holdPeriodYears ?? 5}-year IRR: ${inputs.irrPct != null ? `${(inputs.irrPct * 100).toFixed(2)}%` : "—"}`,
     `Cash-on-cash: ${inputs.cocPct != null ? `${(inputs.cocPct * 100).toFixed(2)}%` : "—"}`,
     `Rent-stabilized units: ${inputs.rentStabilizedUnitCount}`,
+    `Commercial units: ${inputs.commercialUnitCount ?? 0}`,
+    `Blended rent uplift: ${inputs.blendedRentUpliftPct != null ? `${inputs.blendedRentUpliftPct.toFixed(2)}%` : "—"}`,
+    `Target IRR: ${inputs.targetIrrPct != null ? `${inputs.targetIrrPct.toFixed(2)}%` : "—"}`,
+    `Recommended offer low: ${fmtMoney(inputs.recommendedOfferLow)}`,
+    `Recommended offer high: ${fmtMoney(inputs.recommendedOfferHigh)}`,
+    `Required discount to clear target IRR: ${inputs.requiredDiscountPct != null ? `${inputs.requiredDiscountPct.toFixed(2)}%` : "—"}`,
     "",
     "RISK DATA",
     `HPD violations — total: ${inputs.hpdTotal ?? 0}, open: ${inputs.hpdOpenCount ?? 0}, rent-impairing open: ${inputs.hpdRentImpairingOpen ?? 0}`,
@@ -89,7 +116,7 @@ function buildScoringPrompt(inputs: DealScoringLlmInputs): string {
   if (inputs.address) lines.push("", `Address: ${inputs.address}`);
   if (inputs.riskBullets && inputs.riskBullets.length > 0) {
     lines.push("", "QUALITATIVE / CONTEXT (from dossier or OM)");
-    inputs.riskBullets.forEach((b) => lines.push(`- ${b}`));
+    inputs.riskBullets.forEach((bullet) => lines.push(`- ${bullet}`));
   }
   lines.push("", "Output only the JSON object.");
   return lines.join("\n");
@@ -117,9 +144,6 @@ function parseScoreResponse(content: string): DealScoringLlmResult | null {
   }
 }
 
-/**
- * Call LLM to produce deal score (0–100) and rationale. Returns null if API key missing or parse fails.
- */
 export async function scoreDealWithLlm(inputs: DealScoringLlmInputs): Promise<DealScoringLlmResult | null> {
   const key = getApiKey();
   if (!key) return null;

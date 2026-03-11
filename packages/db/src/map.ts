@@ -247,6 +247,7 @@ export function mapUserProfile(row: Record<string, unknown>): UserProfile {
     defaultRentUplift: row.default_rent_uplift != null ? Number(row.default_rent_uplift) : null,
     defaultExpenseIncrease: row.default_expense_increase != null ? Number(row.default_expense_increase) : null,
     defaultManagementFee: row.default_management_fee != null ? Number(row.default_management_fee) : null,
+    defaultTargetIrrPct: row.default_target_irr_pct != null ? Number(row.default_target_irr_pct) : null,
     createdAt: toIso(row.created_at),
     updatedAt: toIso(row.updated_at),
   };

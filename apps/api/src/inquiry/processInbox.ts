@@ -12,7 +12,7 @@ import { parseAddressFromInquirySubject, parseAddressFromSubjectFallback } from 
 import { saveInquiryAttachment } from "./storage.js";
 import { extractTextFromFile } from "./extractTextFromAttachment.js";
 import { extractEmailSummary } from "./extractEmailSummary.js";
-import { extractRentalFinancialsFromText } from "../rental/extractRentalFinancialsFromListing.js";
+import { extractRentalFinancialsFromText, type OmInputDocument } from "../rental/extractRentalFinancialsFromListing.js";
 
 /** Build map: broker email (normalized) -> property_id. Uses first listing match per email. */
 async function getBrokerEmailToPropertyIdMap(pool: Pool): Promise<Map<string, string>> {
@@ -47,6 +47,24 @@ function mergeFromLlm(
 /** Min combined text length to run OM-style extraction (same as manual upload). Skip when nothing readable from OM. */
 const OM_STYLE_MIN_READABLE_CHARS = 50;
 
+interface SavedAttachment {
+  filePath: string;
+  filename: string;
+  mimeType?: string | null;
+  buffer?: Buffer;
+}
+
+function attachmentDocs(savedAttachments: SavedAttachment[]): OmInputDocument[] | undefined {
+  const docs = savedAttachments
+    .filter((attachment) => attachment.buffer instanceof Buffer && attachment.buffer.length > 0)
+    .map((attachment) => ({
+      filename: attachment.filename,
+      mimeType: attachment.mimeType ?? "application/pdf",
+      buffer: attachment.buffer as Buffer,
+    }));
+  return docs.length > 0 ? docs : undefined;
+}
+
 /**
  * Run the same OM-style financial extraction as manual upload: forceOmStyle + enrichmentContext,
  * then merge into property.details.rentalFinancials so the user can recall on the property and re-run enrichment if needed.
@@ -54,7 +72,8 @@ const OM_STYLE_MIN_READABLE_CHARS = 50;
 async function runOmStyleExtractionAndMerge(
   propertyRepo: PropertyRepo,
   property: { id: string; details?: unknown },
-  combinedText: string
+  combinedText: string,
+  documentFiles?: OmInputDocument[]
 ): Promise<void> {
   const details = (property.details ?? {}) as Record<string, unknown>;
   const enrichmentContext =
@@ -68,6 +87,7 @@ async function runOmStyleExtractionAndMerge(
   const { fromLlm, omAnalysis } = await extractRentalFinancialsFromText(combinedText, {
     forceOmStyle: true,
     enrichmentContext,
+    documentFiles,
   });
   if (!fromLlm && !omAnalysis) return;
   const prop = await propertyRepo.byId(property.id);
@@ -188,7 +208,7 @@ export async function processInbox(options?: { maxMessages?: number }): Promise<
       result.saved++;
 
       const attachmentParts = getPdfAttachmentParts(msg);
-      const savedPaths: { filePath: string; filename: string }[] = [];
+      const savedPaths: SavedAttachment[] = [];
       for (const part of attachmentParts) {
         try {
           const buffer = await getAttachment(msg.id, part.attachmentId);
@@ -201,7 +221,7 @@ export async function processInbox(options?: { maxMessages?: number }): Promise<
             filePath,
             fileContent: buffer,
           });
-          savedPaths.push({ filePath, filename: part.filename });
+          savedPaths.push({ filePath, filename: part.filename, mimeType: part.mimeType, buffer });
         } catch (e) {
           result.errors.push(`attachment ${part.filename}: ${e instanceof Error ? e.message : String(e)}`);
         }
@@ -226,9 +246,10 @@ export async function processInbox(options?: { maxMessages?: number }): Promise<
         if (t) attachmentTexts.push(t);
       }
       const combinedText = [bodyText, ...attachmentTexts].filter(Boolean).join("\n\n");
-      if (combinedText.length >= OM_STYLE_MIN_READABLE_CHARS) {
+      const omDocs = attachmentDocs(savedPaths);
+      if (combinedText.length >= OM_STYLE_MIN_READABLE_CHARS || omDocs?.length) {
         try {
-          await runOmStyleExtractionAndMerge(propertyRepo, property, combinedText);
+          await runOmStyleExtractionAndMerge(propertyRepo, property, combinedText, omDocs);
         } catch (e) {
           result.errors.push(`llm merge: ${e instanceof Error ? e.message : String(e)}`);
         }
@@ -299,7 +320,7 @@ export async function processInbox(options?: { maxMessages?: number }): Promise<
         result.brokerSaved = (result.brokerSaved ?? 0) + 1;
 
         const attachmentParts = getPdfAttachmentParts(msg);
-        const savedPaths: { filePath: string; filename: string }[] = [];
+        const savedPaths: SavedAttachment[] = [];
         for (const part of attachmentParts) {
           try {
             const buffer = await getAttachment(msg.id, part.attachmentId);
@@ -312,7 +333,7 @@ export async function processInbox(options?: { maxMessages?: number }): Promise<
               filePath,
               fileContent: buffer,
             });
-            savedPaths.push({ filePath, filename: part.filename });
+            savedPaths.push({ filePath, filename: part.filename, mimeType: part.mimeType, buffer });
           } catch (e) {
             result.errors.push(`broker attachment ${part.filename}: ${e instanceof Error ? e.message : String(e)}`);
           }
@@ -337,9 +358,10 @@ export async function processInbox(options?: { maxMessages?: number }): Promise<
           if (t) attachmentTexts.push(t);
         }
         const combinedText = [bodyText, ...attachmentTexts].filter(Boolean).join("\n\n");
-        if (combinedText.length >= OM_STYLE_MIN_READABLE_CHARS) {
+        const omDocs = attachmentDocs(savedPaths);
+        if (combinedText.length >= OM_STYLE_MIN_READABLE_CHARS || omDocs?.length) {
           try {
-            await runOmStyleExtractionAndMerge(propertyRepo, property, combinedText);
+            await runOmStyleExtractionAndMerge(propertyRepo, property, combinedText, omDocs);
           } catch (e) {
             result.errors.push(`broker llm merge: ${e instanceof Error ? e.message : String(e)}`);
           }
@@ -424,7 +446,7 @@ export async function processInbox(options?: { maxMessages?: number }): Promise<
         result.threadSaved = (result.threadSaved ?? 0) + 1;
 
         const attachmentParts = getPdfAttachmentParts(msg);
-        const savedPaths: { filePath: string; filename: string }[] = [];
+        const savedPaths: SavedAttachment[] = [];
         for (const part of attachmentParts) {
           try {
             const buffer = await getAttachment(msg.id, part.attachmentId);
@@ -437,7 +459,7 @@ export async function processInbox(options?: { maxMessages?: number }): Promise<
               filePath,
               fileContent: buffer,
             });
-            savedPaths.push({ filePath, filename: part.filename });
+            savedPaths.push({ filePath, filename: part.filename, mimeType: part.mimeType, buffer });
           } catch (e) {
             result.errors.push(`thread attachment ${part.filename}: ${e instanceof Error ? e.message : String(e)}`);
           }
@@ -462,9 +484,10 @@ export async function processInbox(options?: { maxMessages?: number }): Promise<
           if (t) attachmentTexts.push(t);
         }
         const combinedText = [bodyText, ...attachmentTexts].filter(Boolean).join("\n\n");
-        if (combinedText.length >= OM_STYLE_MIN_READABLE_CHARS) {
+        const omDocs = attachmentDocs(savedPaths);
+        if (combinedText.length >= OM_STYLE_MIN_READABLE_CHARS || omDocs?.length) {
           try {
-            await runOmStyleExtractionAndMerge(propertyRepo, property, combinedText);
+            await runOmStyleExtractionAndMerge(propertyRepo, property, combinedText, omDocs);
           } catch (e) {
             result.errors.push(`thread llm merge: ${e instanceof Error ? e.message : String(e)}`);
           }

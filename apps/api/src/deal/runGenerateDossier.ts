@@ -17,6 +17,7 @@ import { saveGeneratedDocument } from "./generatedDocStorage.js";
 import { randomUUID } from "crypto";
 import { sendMessageWithAttachments } from "../inquiry/gmailClient.js";
 import {
+  computeRecommendedOffer,
   computeUnderwritingProjection,
   resolveDossierAssumptions,
   type DossierAssumptionOverrides,
@@ -27,7 +28,7 @@ export interface GenerateDossierResult {
   dossierDoc: { id: string; fileName: string; storagePath: string };
   excelDoc: { id: string; fileName: string; storagePath: string };
   /** Deal score 0–100 (from LLM or fallback engine); included so UI can confirm it flowed through. */
-  dealScore: number;
+  dealScore: number | null;
   /** True if email was sent to profile email with attachments. */
   emailSent?: boolean;
 }
@@ -63,22 +64,46 @@ function unitCountFromDetails(details: PropertyDetails | null): number | null {
   const rf = details.rentalFinancials as { rentalUnits?: unknown[]; fromLlm?: { rentalNumbersPerUnit?: unknown[] }; omAnalysis?: { rentRoll?: unknown[]; propertyInfo?: Record<string, unknown> } };
   const omRoll = rf.omAnalysis?.rentRoll ?? [];
   const omTotal = rf.omAnalysis?.propertyInfo?.totalUnits as number | undefined;
-  if (omRoll.length > 0) return omRoll.length;
-  if (omTotal != null && typeof omTotal === "number") return omTotal;
   const rapid = rf.rentalUnits ?? [];
   const om = rf.fromLlm?.rentalNumbersPerUnit ?? [];
-  const n = rapid.length > 0 ? rapid.length : om.length;
-  return n > 0 ? n : null;
+  const candidates = [
+    omRoll.length > 0 ? omRoll.length : null,
+    omTotal != null && Number.isFinite(omTotal) ? omTotal : null,
+    rapid.length > 0 ? rapid.length : null,
+    om.length > 0 ? om.length : null,
+  ].filter((value): value is number => value != null && value > 0);
+  return candidates.length > 0 ? Math.max(...candidates) : null;
 }
 
 function rentRollRowsFromOm(om: OmAnalysis | null, _currentGrossRent: number | null): GrossRentRow[] {
   if (!om?.rentRoll || !Array.isArray(om.rentRoll)) return [];
   const rows: GrossRentRow[] = [];
   for (const r of om.rentRoll) {
-    const annual = (r as { annualRent?: number; monthlyRent?: number; rent?: number }).annualRent ??
+    const annual =
+      (r as { annualTotalRent?: number; annualBaseRent?: number; annualRent?: number; monthlyTotalRent?: number; monthlyBaseRent?: number; monthlyRent?: number; rent?: number }).annualTotalRent ??
+      (r as { annualBaseRent?: number }).annualBaseRent ??
+      (r as { annualRent?: number }).annualRent ??
+      ((r as { monthlyTotalRent?: number }).monthlyTotalRent != null
+        ? (r as { monthlyTotalRent: number }).monthlyTotalRent * 12
+        : null) ??
+      ((r as { monthlyBaseRent?: number }).monthlyBaseRent != null
+        ? (r as { monthlyBaseRent: number }).monthlyBaseRent * 12
+        : null) ??
       ((r as { monthlyRent?: number }).monthlyRent != null ? (r as { monthlyRent: number }).monthlyRent * 12 : null) ??
       ((r as { rent?: number }).rent != null ? (r as { rent: number }).rent * 12 : null);
-    const label = (r as { unit?: string }).unit ?? `Unit ${rows.length + 1}`;
+    const parts: string[] = [];
+    const building = (r as { building?: string }).building;
+    if (building) parts.push(building);
+    const unit = (r as { unit?: string }).unit;
+    const tenantName = (r as { tenantName?: string }).tenantName;
+    parts.push(unit ?? tenantName ?? `Unit ${rows.length + 1}`);
+    const qualifiers = [
+      (r as { unitCategory?: string }).unitCategory,
+      (r as { leaseType?: string }).leaseType,
+      (r as { leaseEndDate?: string }).leaseEndDate ? `Lease ends ${(r as { leaseEndDate: string }).leaseEndDate}` : null,
+      (r as { notes?: string }).notes,
+    ].filter((value): value is string => typeof value === "string" && value.trim() !== "");
+    const label = qualifiers.length > 0 ? `${parts.join(" - ")} (${qualifiers.join("; ")})` : parts.join(" - ");
     if (annual != null && !Number.isNaN(annual)) rows.push({ label, annualRent: annual });
   }
   return rows;
@@ -103,6 +128,51 @@ function propertyOverviewFromDetails(details: PropertyDetails | null): DossierPr
   const hpdRegistrationDate = hpd?.lastRegistrationDate ?? hpd?.last_registration_date ?? null;
   if (!taxCode && !hpdRegistrationId && !hpdRegistrationDate && !bbl) return null;
   return { taxCode: taxCode ?? undefined, hpdRegistrationId: hpdRegistrationId ?? undefined, hpdRegistrationDate: hpdRegistrationDate ?? undefined, bbl };
+}
+
+function omRevenueMixFlag(om: OmAnalysis | null): string | null {
+  const propertyInfo = om?.propertyInfo as Record<string, unknown> | undefined;
+  const revenue = om?.revenueComposition as Record<string, unknown> | undefined;
+  const unitsResidential = typeof propertyInfo?.unitsResidential === "number" ? propertyInfo.unitsResidential : null;
+  const unitsCommercial = typeof propertyInfo?.unitsCommercial === "number" ? propertyInfo.unitsCommercial : null;
+  const commercialMonthly = typeof revenue?.commercialMonthlyRent === "number" ? revenue.commercialMonthlyRent : null;
+  const totalMonthly =
+    typeof revenue?.residentialMonthlyRent === "number" || commercialMonthly != null
+      ? ((revenue?.residentialMonthlyRent as number | undefined) ?? 0) + (commercialMonthly ?? 0)
+      : null;
+  const commercialShare =
+    typeof revenue?.commercialRevenueShare === "number"
+      ? revenue.commercialRevenueShare
+      : totalMonthly && commercialMonthly != null && totalMonthly > 0
+        ? commercialMonthly / totalMonthly
+        : null;
+  const parts: string[] = [];
+  if (unitsResidential != null || unitsCommercial != null) {
+    parts.push(
+      `Mixed-use: ${unitsResidential ?? "—"} residential / ${unitsCommercial ?? "—"} commercial`
+    );
+  }
+  if (commercialMonthly != null) {
+    const shareLabel =
+      commercialShare != null
+        ? ` (${(commercialShare > 1 ? commercialShare : commercialShare * 100).toFixed(1)}% of monthly rent)`
+        : "";
+    parts.push(`Commercial rent: $${commercialMonthly.toLocaleString("en-US", { maximumFractionDigits: 0 })}/mo${shareLabel}`);
+  }
+  return parts.length > 0 ? parts.join("; ") : null;
+}
+
+function omDiscrepancyFlag(om: OmAnalysis | null): string | null {
+  const discrepancies = om?.reportedDiscrepancies;
+  if (!Array.isArray(discrepancies) || discrepancies.length === 0) return null;
+  const first = discrepancies[0] as { field?: unknown; reportedValues?: unknown; selectedValue?: unknown };
+  const field = typeof first.field === "string" ? first.field : "OM data";
+  const values = Array.isArray(first.reportedValues)
+    ? first.reportedValues.filter((v): v is string => typeof v === "string" && v.trim() !== "").slice(0, 2)
+    : [];
+  const selected = typeof first.selectedValue === "string" ? first.selectedValue : null;
+  const reported = values.length > 0 ? values.join(" vs ") : "conflicting values";
+  return `Verify ${field}: ${reported}${selected ? `; underwriting uses ${selected}` : ""}`;
 }
 
 const RENT_STAB_PATTERN = /rent\s+stabiliz/i;
@@ -176,8 +246,15 @@ export async function runGenerateDossier(
   const currentNoi = noiFromDetails(details);
   const currentGrossRent = grossRentFromDetails(details) ?? (currentNoi != null ? currentNoi * 1.5 : null);
   const unitCount = unitCountFromDetails(details);
-  const assumptions = resolveDossierAssumptions(profile, purchasePrice, assumptionOverrides);
+  const assumptions = resolveDossierAssumptions(profile, purchasePrice, assumptionOverrides, {
+    details,
+  });
   const projection = computeUnderwritingProjection({
+    assumptions,
+    currentGrossRent,
+    currentNoi,
+  });
+  const recommendedOffer = computeRecommendedOffer({
     assumptions,
     currentGrossRent,
     currentNoi,
@@ -194,6 +271,7 @@ export async function runGenerateDossier(
   const { rows: expenseRows, total: currentExpensesTotal } = expenseRowsFromOm(omAnalysis);
   const propertyOverview = propertyOverviewFromDetails(details);
   const financialFlags: string[] = [];
+  const hasCurrentFinancials = currentGrossRent != null && currentNoi != null;
   if (assumptions.acquisition.purchasePrice != null) {
     financialFlags.push(
       `Purchase price: $${assumptions.acquisition.purchasePrice.toLocaleString("en-US", {
@@ -202,6 +280,37 @@ export async function runGenerateDossier(
       })}`
     );
   }
+  if (!hasCurrentFinancials) {
+    financialFlags.push(
+      "Current rent and/or NOI could not be extracted from the OM text alone; pricing and underwriting are incomplete until a fuller rent roll or operating statement is parsed."
+    );
+  }
+  if (
+    assumptions.propertyMix.commercialUnits > 0 ||
+    assumptions.propertyMix.rentStabilizedUnits > 0
+  ) {
+    const protectedParts: string[] = [];
+    if (assumptions.propertyMix.commercialUnits > 0) {
+      protectedParts.push(`${assumptions.propertyMix.commercialUnits} commercial`);
+    }
+    if (assumptions.propertyMix.rentStabilizedUnits > 0) {
+      protectedParts.push(`${assumptions.propertyMix.rentStabilizedUnits} rent-stabilized`);
+    }
+    financialFlags.push(
+      `${protectedParts.join(" + ")} unit(s) excluded from residential uplift; blended rent uplift underwritten at ${assumptions.operating.blendedRentUpliftPct.toFixed(2)}%`
+    );
+  }
+  if (recommendedOffer.recommendedOfferHigh != null) {
+    financialFlags.push(
+      recommendedOffer.discountToAskingPct != null && recommendedOffer.discountToAskingPct > 0
+        ? `Max recommended offer to hit ${recommendedOffer.targetIrrPct.toFixed(0)}% target IRR: $${recommendedOffer.recommendedOfferHigh.toLocaleString("en-US", { maximumFractionDigits: 0 })} (${recommendedOffer.discountToAskingPct.toFixed(1)}% below ask)`
+        : `Asking price already clears the ${recommendedOffer.targetIrrPct.toFixed(0)}% target IRR`
+    );
+  }
+  const revenueMixFlag = omRevenueMixFlag(omAnalysis);
+  if (revenueMixFlag) financialFlags.push(revenueMixFlag);
+  const discrepancyFlag = omDiscrepancyFlag(omAnalysis);
+  if (discrepancyFlag) financialFlags.push(discrepancyFlag);
 
   const assetCapRateForCtx =
     assumptions.acquisition.purchasePrice != null && currentNoi != null && currentNoi >= 0
@@ -209,7 +318,7 @@ export async function runGenerateDossier(
       : null;
   const adjustedNoiForCtx = projection.operating.stabilizedNoi;
   const adjustedCapRateForCtx =
-    assumptions.acquisition.purchasePrice != null && adjustedNoiForCtx >= 0
+    assumptions.acquisition.purchasePrice != null && hasCurrentFinancials && adjustedNoiForCtx >= 0
       ? (adjustedNoiForCtx / assumptions.acquisition.purchasePrice) * 100
       : null;
 
@@ -249,10 +358,12 @@ export async function runGenerateDossier(
       },
       operating: {
         rentUpliftPct: assumptions.operating.rentUpliftPct,
+        blendedRentUpliftPct: assumptions.operating.blendedRentUpliftPct,
         expenseIncreasePct: assumptions.operating.expenseIncreasePct,
         managementFeePct: assumptions.operating.managementFeePct,
       },
       holdPeriodYears: assumptions.holdPeriodYears,
+      targetIrrPct: assumptions.targetIrrPct,
       exit: {
         exitCapPct: assumptions.exit.exitCapPct,
         exitClosingCostPct: assumptions.exit.exitClosingCostPct,
@@ -286,6 +397,8 @@ export async function runGenerateDossier(
     financialFlags: financialFlags.length > 0 ? financialFlags : undefined,
     amortizationSchedule,
     sensitivities,
+    propertyMix: assumptions.propertyMix,
+    recommendedOffer,
   };
 
   const dateStr = new Date().toISOString().slice(0, 10);
@@ -299,7 +412,10 @@ export async function runGenerateDossier(
   let dossierText = llmDossierText && llmDossierText.length > 0 ? llmDossierText : buildDossierStructuredText(ctx);
 
   const anyRentStab = detectRentStabilization(details, dossierText);
-  const rentStabCount = rentStabilizedUnitCount(details, dossierText, anyRentStab);
+  const rentStabCount = Math.max(
+    assumptions.propertyMix.rentStabilizedUnits,
+    rentStabilizedUnitCount(details, dossierText, anyRentStab)
+  );
 
   const hpd = details?.enrichment?.hpd_violations_summary;
   const dob = details?.enrichment?.dob_complaints_summary;
@@ -307,10 +423,17 @@ export async function runGenerateDossier(
 
   const llmInputs = {
     assetCapRatePct: assetCapRateForCtx,
-    irr5yrPct: projection.returns.irr ?? null,
+    adjustedCapRatePct: adjustedCapRateForCtx,
+    irrPct: projection.returns.irr ?? null,
     cocPct: projection.returns.year1CashOnCashReturn ?? null,
     holdPeriodYears: assumptions.holdPeriodYears,
+    targetIrrPct: assumptions.targetIrrPct,
+    recommendedOfferLow: recommendedOffer.recommendedOfferLow,
+    recommendedOfferHigh: recommendedOffer.recommendedOfferHigh,
+    requiredDiscountPct: recommendedOffer.discountToAskingPct,
     rentStabilizedUnitCount: rentStabCount,
+    commercialUnitCount: assumptions.propertyMix.commercialUnits,
+    blendedRentUpliftPct: assumptions.operating.blendedRentUpliftPct,
     hpdTotal: hpd?.total,
     hpdOpenCount: hpd?.openCount,
     hpdRentImpairingOpen: hpd?.rentImpairingOpen,
@@ -334,12 +457,17 @@ export async function runGenerateDossier(
     canonicalAddress: property.canonicalAddress,
     details,
     primaryListing: { price: assumptions.acquisition.purchasePrice, city: listingCity },
-    irr5yrPct: projection.returns.irr ?? null,
+    irrPct: projection.returns.irr ?? null,
+    cocPct: projection.returns.year1CashOnCashReturn ?? null,
+    adjustedCapRatePct: adjustedCapRateForCtx,
+    recommendedOfferHigh: recommendedOffer.recommendedOfferHigh,
+    blendedRentUpliftPct: assumptions.operating.blendedRentUpliftPct,
     rentStabilizedUnitCount: rentStabCount,
+    commercialUnitCount: assumptions.propertyMix.commercialUnits,
   });
 
   // Canonical deal score: from LLM (when available) or fallback engine. Persisted to deal_signals and shown on dossier, property cards, and property data.
-  const finalScore = llmScore != null ? llmScore.dealScore : scoringResult.dealScore;
+  const finalScore = llmScore != null ? llmScore.dealScore : (scoringResult.isScoreable ? scoringResult.dealScore : null);
   ctx.dealScore = finalScore;
   insertParams.dealScore = finalScore;
 
@@ -348,7 +476,10 @@ export async function runGenerateDossier(
   else if (scoringResult.positiveSignals.length > 0) financialFlags.push(scoringResult.positiveSignals[0]);
 
   if (!llmDossierText || llmDossierText.length === 0) dossierText = buildDossierStructuredText(ctx);
-  dossierText = dossierText.replace(/^Deal score: .*$/im, `Deal score: ${ctx.dealScore}/100`);
+  dossierText = dossierText.replace(
+    /^Deal score: .*$/im,
+    ctx.dealScore != null ? `Deal score: ${ctx.dealScore}/100` : "Deal score: —"
+  );
   // Presentation LLM: ensure tables, bullets, and spacing are correct for strong PDF UI
   const formattedForPdf = await formatDossierForPresentation(dossierText);
   const dossierBuffer = await dossierTextToPdf(formattedForPdf);

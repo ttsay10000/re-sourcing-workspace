@@ -1,4 +1,5 @@
 import {
+  computeBlendedRentUpliftPct,
   computeUnderwritingProjection,
   type ResolvedDossierAssumptions,
 } from "./underwritingModel.js";
@@ -71,6 +72,7 @@ export function buildSensitivityAnalyses(input: {
           operating: {
             ...assumptions.operating,
             rentUpliftPct: valuePct,
+            blendedRentUpliftPct: computeBlendedRentUpliftPct(valuePct, assumptions.propertyMix),
           },
         },
         currentGrossRent,

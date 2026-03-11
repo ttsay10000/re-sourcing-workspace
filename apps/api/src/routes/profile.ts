@@ -53,6 +53,7 @@ router.put("/profile", async (req: Request, res: Response) => {
       defaultRentUplift?: number | null;
       defaultExpenseIncrease?: number | null;
       defaultManagementFee?: number | null;
+      defaultTargetIrrPct?: number | null;
     } = {};
     if (typeof body.name === "string") params.name = body.name.trim() || null;
     if (typeof body.email === "string") params.email = body.email.trim() || null;
@@ -73,6 +74,9 @@ router.put("/profile", async (req: Request, res: Response) => {
     if (typeof body.defaultRentUplift === "number" && !Number.isNaN(body.defaultRentUplift)) params.defaultRentUplift = body.defaultRentUplift;
     if (typeof body.defaultExpenseIncrease === "number" && !Number.isNaN(body.defaultExpenseIncrease)) params.defaultExpenseIncrease = body.defaultExpenseIncrease;
     if (typeof body.defaultManagementFee === "number" && !Number.isNaN(body.defaultManagementFee)) params.defaultManagementFee = body.defaultManagementFee;
+    if (typeof body.defaultTargetIrrPct === "number" && !Number.isNaN(body.defaultTargetIrrPct)) {
+      params.defaultTargetIrrPct = body.defaultTargetIrrPct;
+    }
     const updated = await repo.update(id, params);
     res.json(updated);
   } catch (err) {

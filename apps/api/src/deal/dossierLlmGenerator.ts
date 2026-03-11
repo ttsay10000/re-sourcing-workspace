@@ -5,7 +5,7 @@
  */
 
 import OpenAI from "openai";
-import { getDossierModel } from "../enrichment/openaiModels.js";
+import { getDossierModel, getDossierReasoningEffort, supportsReasoningEffort } from "../enrichment/openaiModels.js";
 import type { UnderwritingContext, DossierNeighborhoodContext } from "./underwritingContext.js";
 import type { OmAnalysis } from "@re-sourcing/contracts";
 import { DOSSIER_SYSTEM_INSTRUCTION, DOSSIER_USER_PROMPT_PREFIX } from "./dossierPrompt.js";
@@ -42,6 +42,21 @@ function serializeUnderwritingContext(ctx: UnderwritingContext): string {
   }
   if (ctx.financialFlags && ctx.financialFlags.length > 0) {
     lines.push(`Financial flags (use as 1–2 bullets in Current State): ${ctx.financialFlags.join("; ")}`);
+  }
+  if (ctx.propertyMix) {
+    lines.push(
+      `Property mix: residential ${ctx.propertyMix.residentialUnits}, eligible residential ${ctx.propertyMix.eligibleResidentialUnits}, rent-stabilized ${ctx.propertyMix.rentStabilizedUnits}, commercial ${ctx.propertyMix.commercialUnits}`
+    );
+  }
+  if (ctx.recommendedOffer) {
+    lines.push(
+      "Recommended offer:",
+      `  Target IRR: ${ctx.recommendedOffer.targetIrrPct != null ? pct(ctx.recommendedOffer.targetIrrPct) : "—"}`,
+      `  IRR at asking: ${ctx.recommendedOffer.irrAtAskingPct != null ? `${(ctx.recommendedOffer.irrAtAskingPct * 100).toFixed(2)}%` : "—"}`,
+      `  Recommended offer low: ${ctx.recommendedOffer.recommendedOfferLow != null ? `$${fmt(ctx.recommendedOffer.recommendedOfferLow)}` : "—"}`,
+      `  Recommended offer high: ${ctx.recommendedOffer.recommendedOfferHigh != null ? `$${fmt(ctx.recommendedOffer.recommendedOfferHigh)}` : "—"}`,
+      `  Discount to asking: ${ctx.recommendedOffer.discountToAskingPct != null ? pct(ctx.recommendedOffer.discountToAskingPct) : "—"}`
+    );
   }
   if (ctx.rentRollRows && ctx.rentRollRows.length > 0) {
     lines.push("Rent roll (use each row in Gross rent table):");
@@ -104,7 +119,7 @@ function serializeUnderwritingContext(ctx: UnderwritingContext): string {
     "Assumptions:",
     `  Purchase closing costs: ${a.acquisition.purchaseClosingCostPct != null ? pct(a.acquisition.purchaseClosingCostPct) : "—"}, Renovation: $${fmt(a.acquisition.renovationCosts)}, Furnishing/setup: $${fmt(a.acquisition.furnishingSetupCosts)}`,
     `  LTV: ${a.financing.ltvPct != null ? pct(a.financing.ltvPct) : "—"}, Interest rate: ${a.financing.interestRatePct != null ? pct(a.financing.interestRatePct) : "—"}, Amortization: ${a.financing.amortizationYears ?? "—"} years`,
-    `  Exit cap: ${a.exit.exitCapPct != null ? pct(a.exit.exitCapPct) : "—"}, Exit closing costs: ${a.exit.exitClosingCostPct != null ? pct(a.exit.exitClosingCostPct) : "—"}, Rent uplift: ${a.operating.rentUpliftPct != null ? `${a.operating.rentUpliftPct}%` : "—"}, Expense increase: ${a.operating.expenseIncreasePct != null ? `${a.operating.expenseIncreasePct}%` : "—"}, Management fee: ${a.operating.managementFeePct != null ? `${a.operating.managementFeePct}%` : "—"}`
+    `  Exit cap: ${a.exit.exitCapPct != null ? pct(a.exit.exitCapPct) : "—"}, Exit closing costs: ${a.exit.exitClosingCostPct != null ? pct(a.exit.exitClosingCostPct) : "—"}, Rent uplift base: ${a.operating.rentUpliftPct != null ? `${a.operating.rentUpliftPct}%` : "—"}, Rent uplift blended: ${a.operating.blendedRentUpliftPct != null ? `${a.operating.blendedRentUpliftPct}%` : "—"}, Expense increase: ${a.operating.expenseIncreasePct != null ? `${a.operating.expenseIncreasePct}%` : "—"}, Management fee: ${a.operating.managementFeePct != null ? `${a.operating.managementFeePct}%` : "—"}, Target IRR: ${a.targetIrrPct != null ? pct(a.targetIrrPct) : "—"}`
   );
   if (ctx.sensitivities && ctx.sensitivities.length > 0) {
     lines.push("Sensitivity analysis:");
@@ -150,8 +165,23 @@ function serializeNeighborhoodContext(n: DossierNeighborhoodContext): string {
 
 function serializeOmAnalysis(om: OmAnalysis): string {
   const parts: string[] = [];
+  if (om.propertyInfo && typeof om.propertyInfo === "object") {
+    parts.push("OM property info: " + JSON.stringify(om.propertyInfo));
+  }
+  if (om.income && typeof om.income === "object") {
+    parts.push("OM income summary: " + JSON.stringify(om.income));
+  }
+  if (om.revenueComposition && typeof om.revenueComposition === "object") {
+    parts.push("OM revenue composition: " + JSON.stringify(om.revenueComposition));
+  }
   if (om.uiFinancialSummary && typeof om.uiFinancialSummary === "object") {
     parts.push("UI Financial Summary: " + JSON.stringify(om.uiFinancialSummary));
+  }
+  if (Array.isArray(om.reportedDiscrepancies) && om.reportedDiscrepancies.length > 0) {
+    parts.push("OM reported discrepancies: " + JSON.stringify(om.reportedDiscrepancies));
+  }
+  if (om.sourceCoverage && typeof om.sourceCoverage === "object") {
+    parts.push("OM source coverage: " + JSON.stringify(om.sourceCoverage));
   }
   if (Array.isArray(om.investmentTakeaways) && om.investmentTakeaways.length > 0) {
     parts.push("Investment takeaways:\n" + om.investmentTakeaways.map((t) => `• ${t}`).join("\n"));
@@ -200,7 +230,7 @@ function buildPrompt(
     prompt += `\n--- NEIGHBORHOOD SNAPSHOT ---\n${neighborhoodBlock}\n`;
   }
 
-  prompt += `\nProduce the full dossier now. Use the section list from the system instruction. Include every number from the underwriting data. Output plain text only.\n`;
+  prompt += `\nProduce the full dossier now. Use the section list from the system instruction. Include every number from the underwriting data. For OM / Investment Highlights and Key Takeaways, avoid generic broker language: every bullet should use hard numbers and, when possible, an explicit delta, percentage, or underwriting implication. Output plain text only.\n`;
   return prompt;
 }
 
@@ -217,14 +247,17 @@ export async function buildDossierWithLlm(
 
   const openai = new OpenAI({ apiKey: key });
   const prompt = buildPrompt(ctx, neighborhoodContext, omAnalysis ?? null);
+  const model = getDossierModel();
+  const reasoningEffort = getDossierReasoningEffort();
 
   try {
     const completion = await openai.chat.completions.create({
-      model: getDossierModel(),
+      model,
       messages: [
         { role: "system", content: DOSSIER_SYSTEM_INSTRUCTION },
         { role: "user", content: prompt },
       ],
+      ...(supportsReasoningEffort(model) ? { reasoning_effort: reasoningEffort } : {}),
     });
 
     const content = completion.choices[0]?.message?.content;

@@ -39,9 +39,13 @@ import { getRentRollComparison } from "../rental/rentRollComparison.js";
 import { fetchNyDosEntityByName } from "../enrichment/nyDosEntity.js";
 import { fetchAcrisDocumentsByOwnerName } from "../enrichment/acrisDocuments.js";
 import { computeDealSignals } from "../deal/computeDealSignals.js";
-import { computeUnderwritingProjection, resolveDossierAssumptions } from "../deal/underwritingModel.js";
+import {
+  computeRecommendedOffer,
+  computeUnderwritingProjection,
+  resolveDossierAssumptions,
+} from "../deal/underwritingModel.js";
 import { resolveGeneratedDocPath, deleteGeneratedDocumentFile } from "../deal/generatedDocStorage.js";
-import { unlink } from "fs/promises";
+import { readFile, unlink } from "fs/promises";
 
 const router = Router();
 
@@ -59,7 +63,8 @@ async function runOmExtractionInBackground(
 ): Promise<void> {
   const propertyRepo = new PropertyRepo({ pool });
   const text = await extractTextFromBuffer(fileBuffer, filename);
-  if (text.length < 50) {
+  const hasPdfSource = filename.toLowerCase().endsWith(".pdf");
+  if (text.length < 50 && !hasPdfSource) {
     if (text.length > 0) console.warn("[documents/upload background] OM/Brochure text too short for LLM:", text.length, "chars");
     else console.warn("[documents/upload background] No text extracted from PDF");
     return;
@@ -78,6 +83,7 @@ async function runOmExtractionInBackground(
   const { fromLlm, omAnalysis } = await extractRentalFinancialsFromText(text, {
     forceOmStyle: true,
     enrichmentContext,
+    documentFiles: hasPdfSource ? [{ filename, mimeType: "application/pdf", buffer: fileBuffer }] : undefined,
   });
   const hasFromLlm = fromLlm && typeof fromLlm === "object" && Object.keys(fromLlm).length > 0;
   const hasOmAnalysis = omAnalysis && typeof omAnalysis === "object";
@@ -118,17 +124,21 @@ export async function refreshOmFinancialsForProperty(
   let documentsSkippedNoFile = 0;
   for (const doc of omOrBrochure) {
     let text: string;
+    let fileBuffer: Buffer | null = null;
     const fileContent = await uploadedDocRepo.getFileContent(doc.id);
     if (fileContent && fileContent.length > 0) {
+      fileBuffer = fileContent;
       text = await extractTextFromBuffer(fileContent, doc.filename ?? "document");
     } else if (uploadedDocFileExists(doc.filePath)) {
+      fileBuffer = await readFile(resolveUploadedDocFilePath(doc.filePath));
       text = await extractTextFromUploadedFile(doc.filePath, doc.filename ?? undefined);
     } else {
       documentsSkippedNoFile++;
       continue;
     }
     try {
-      if (text.length < 50) continue;
+      const hasPdfSource = !!fileBuffer && (doc.filename ?? "").toLowerCase().endsWith(".pdf");
+      if (text.length < 50 && !hasPdfSource) continue;
       const details = (property.details ?? {}) as Record<string, unknown>;
       const enrichmentContext =
         details.enrichment || details.bbl || details.taxCode
@@ -141,6 +151,10 @@ export async function refreshOmFinancialsForProperty(
       const { fromLlm, omAnalysis } = await extractRentalFinancialsFromText(text, {
         forceOmStyle: true,
         enrichmentContext,
+        documentFiles:
+          hasPdfSource && fileBuffer
+            ? [{ filename: doc.filename ?? "document.pdf", mimeType: "application/pdf", buffer: fileBuffer }]
+            : undefined,
       });
       const hasFromLlm = fromLlm && typeof fromLlm === "object" && Object.keys(fromLlm).length > 0;
       const hasOmAnalysis = omAnalysis && typeof omAnalysis === "object";
@@ -1185,13 +1199,27 @@ router.get("/properties/:id", async (req: Request, res: Response) => {
 });
 
 function noiFromDetails(details: PropertyDetails | null): number | null {
-  const noi = details?.rentalFinancials?.fromLlm?.noi;
+  const om = details?.rentalFinancials?.omAnalysis;
+  const ui = om?.uiFinancialSummary as Record<string, unknown> | undefined;
+  const income = om?.income as Record<string, unknown> | undefined;
+  const noi =
+    (ui?.noi as number | undefined) ??
+    om?.noiReported ??
+    (income?.NOI as number | undefined) ??
+    details?.rentalFinancials?.fromLlm?.noi;
   if (noi != null && typeof noi === "number" && !Number.isNaN(noi)) return noi;
   return null;
 }
 
 function grossRentFromDetails(details: PropertyDetails | null): number | null {
-  const gross = details?.rentalFinancials?.fromLlm?.grossRentTotal;
+  const om = details?.rentalFinancials?.omAnalysis;
+  const ui = om?.uiFinancialSummary as Record<string, unknown> | undefined;
+  const income = om?.income as Record<string, unknown> | undefined;
+  const gross =
+    (ui?.grossRent as number | undefined) ??
+    (income?.grossRentActual as number | undefined) ??
+    (income?.grossRentPotential as number | undefined) ??
+    details?.rentalFinancials?.fromLlm?.grossRentTotal;
   if (gross != null && typeof gross === "number" && !Number.isNaN(gross) && gross > 0) return gross;
   return null;
 }
@@ -1223,8 +1251,16 @@ router.post("/properties/:id/compute-score", async (req: Request, res: Response)
     const currentGrossRent = grossRentFromDetails(details) ?? (currentNoi != null ? currentNoi * 1.5 : null);
     await profileRepo.ensureDefault();
     const profile = await profileRepo.getDefault();
-    const assumptions = resolveDossierAssumptions(profile, purchasePrice);
+    const assumptions = resolveDossierAssumptions(profile, purchasePrice, null, {
+      details,
+    });
     const projection = computeUnderwritingProjection({
+      assumptions,
+      currentGrossRent,
+      currentNoi,
+    });
+    const hasCurrentFinancials = currentGrossRent != null && currentNoi != null;
+    const recommendedOffer = computeRecommendedOffer({
       assumptions,
       currentGrossRent,
       currentNoi,
@@ -1234,14 +1270,22 @@ router.post("/properties/:id/compute-score", async (req: Request, res: Response)
       canonicalAddress: property.canonicalAddress,
       details: property.details ?? null,
       primaryListing,
-      irr5yrPct: projection.returns.irr ?? null,
-      rentStabilizedUnitCount: 0,
+      irrPct: projection.returns.irr ?? null,
+      cocPct: projection.returns.year1CashOnCashReturn ?? null,
+      adjustedCapRatePct:
+        assumptions.acquisition.purchasePrice != null && hasCurrentFinancials && projection.operating.stabilizedNoi >= 0
+          ? (projection.operating.stabilizedNoi / assumptions.acquisition.purchasePrice) * 100
+          : null,
+      recommendedOfferHigh: recommendedOffer.recommendedOfferHigh,
+      blendedRentUpliftPct: assumptions.operating.blendedRentUpliftPct,
+      rentStabilizedUnitCount: assumptions.propertyMix.rentStabilizedUnits,
+      commercialUnitCount: assumptions.propertyMix.commercialUnits,
     };
     const { insertParams, scoringResult } = computeDealSignals(input);
     const signalsRepo = new DealSignalsRepo({ pool });
     const row = await signalsRepo.insert({
       ...insertParams,
-      dealScore: scoringResult.dealScore ?? null,
+      dealScore: scoringResult.isScoreable ? scoringResult.dealScore : null,
       irrPct: projection.returns.irr ?? null,
       equityMultiple: projection.returns.equityMultiple ?? null,
       cocPct: projection.returns.year1CashOnCashReturn ?? null,
@@ -1250,9 +1294,10 @@ router.post("/properties/:id/compute-score", async (req: Request, res: Response)
       adjustedNoi: projection.operating.stabilizedNoi ?? currentNoi ?? null,
     });
     res.json({
-      dealScore: row.dealScore ?? scoringResult.dealScore,
+      dealScore: row.dealScore ?? (scoringResult.isScoreable ? scoringResult.dealScore : null),
       dealSignals: row,
       scoringResult: {
+        isScoreable: scoringResult.isScoreable,
         assetYieldScore: scoringResult.assetYieldScore,
         riskScore: scoringResult.riskScore,
         positiveSignals: scoringResult.positiveSignals,

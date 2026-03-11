@@ -1,4 +1,4 @@
-import type { UserProfile } from "@re-sourcing/contracts";
+import type { PropertyDetails, UserProfile } from "@re-sourcing/contracts";
 import { computeFurnishedRental } from "./furnishedRentalEstimator.js";
 import {
   computeMortgage,
@@ -6,9 +6,26 @@ import {
   type AmortizationYearRow,
 } from "./mortgageAmortization.js";
 import { computeIrr, type IrrResult } from "./irrCalculation.js";
+import {
+  analyzePropertyForUnderwriting,
+  computeBlendedRentUpliftPct,
+  type UnderwritingPropertyMixSummary,
+} from "./propertyAssumptions.js";
+
+export { computeBlendedRentUpliftPct };
 
 export const DEFAULT_HOLD_PERIOD_YEARS = 5;
-export const MAX_UNDERWRITING_HOLD_PERIOD_YEARS = 50;
+export const MAX_UNDERWRITING_HOLD_PERIOD_YEARS = 10;
+export const DEFAULT_PURCHASE_CLOSING_COST_PCT = 3;
+export const DEFAULT_LTV_PCT = 75;
+export const DEFAULT_INTEREST_RATE_PCT = 6;
+export const DEFAULT_AMORTIZATION_YEARS = 30;
+export const DEFAULT_RENT_UPLIFT_PCT = 70;
+export const DEFAULT_EXPENSE_INCREASE_PCT = 20;
+export const DEFAULT_MANAGEMENT_FEE_PCT = 8;
+export const DEFAULT_EXIT_CAP_PCT = 5;
+export const DEFAULT_EXIT_CLOSING_COST_PCT = 2;
+export const DEFAULT_TARGET_IRR_PCT = 25;
 
 export interface DossierAssumptionOverrides {
   purchasePrice?: number | null;
@@ -24,6 +41,11 @@ export interface DossierAssumptionOverrides {
   holdPeriodYears?: number | null;
   exitCapPct?: number | null;
   exitClosingCostPct?: number | null;
+  targetIrrPct?: number | null;
+}
+
+export interface DossierPropertyContext {
+  details?: PropertyDetails | null;
 }
 
 export interface ResolvedDossierAssumptions {
@@ -40,6 +62,7 @@ export interface ResolvedDossierAssumptions {
   };
   operating: {
     rentUpliftPct: number;
+    blendedRentUpliftPct: number;
     expenseIncreasePct: number;
     managementFeePct: number;
   };
@@ -48,6 +71,8 @@ export interface ResolvedDossierAssumptions {
     exitCapPct: number;
     exitClosingCostPct: number;
   };
+  targetIrrPct: number;
+  propertyMix: UnderwritingPropertyMixSummary;
 }
 
 export interface UnderwritingProjection {
@@ -91,6 +116,16 @@ export interface UnderwritingProjection {
   returns: IrrResult;
 }
 
+export interface RecommendedOfferAnalysis {
+  askingPrice: number | null;
+  targetIrrPct: number;
+  irrAtAskingPct: number | null;
+  recommendedOfferLow: number | null;
+  recommendedOfferHigh: number | null;
+  discountToAskingPct: number | null;
+  targetMetAtAsking: boolean;
+}
+
 function safeNumber(value: number | null | undefined, fallback = 0): number {
   return value != null && Number.isFinite(value) ? value : fallback;
 }
@@ -117,35 +152,49 @@ function pickNumber(...values: Array<number | null | undefined>): number | null 
 export function resolveDossierAssumptions(
   profile: UserProfile | null,
   purchasePrice: number | null,
-  overrides?: DossierAssumptionOverrides | null
+  overrides?: DossierAssumptionOverrides | null,
+  propertyContext?: DossierPropertyContext | null
 ): ResolvedDossierAssumptions {
+  const rentUpliftPct = safeNumber(
+    pickNumber(overrides?.rentUpliftPct, profile?.defaultRentUplift),
+    DEFAULT_RENT_UPLIFT_PCT
+  );
+  const propertyMix = analyzePropertyForUnderwriting(propertyContext?.details ?? null);
+
   return {
     acquisition: {
       purchasePrice: pickNumber(overrides?.purchasePrice, purchasePrice),
       purchaseClosingCostPct: safeNumber(
         pickNumber(overrides?.purchaseClosingCostPct, profile?.defaultPurchaseClosingCostPct),
-        0
+        DEFAULT_PURCHASE_CLOSING_COST_PCT
       ),
       renovationCosts: safeNumber(overrides?.renovationCosts, 0),
-      furnishingSetupCosts: safeNumber(overrides?.furnishingSetupCosts, 0),
+      furnishingSetupCosts: safeNumber(
+        overrides?.furnishingSetupCosts,
+        propertyMix.furnishingSetupCostEstimate
+      ),
     },
     financing: {
-      ltvPct: safeNumber(pickNumber(overrides?.ltvPct, profile?.defaultLtv), 65),
-      interestRatePct: safeNumber(pickNumber(overrides?.interestRatePct, profile?.defaultInterestRate), 6.5),
+      ltvPct: safeNumber(pickNumber(overrides?.ltvPct, profile?.defaultLtv), DEFAULT_LTV_PCT),
+      interestRatePct: safeNumber(
+        pickNumber(overrides?.interestRatePct, profile?.defaultInterestRate),
+        DEFAULT_INTEREST_RATE_PCT
+      ),
       amortizationYears: safePositiveInteger(
         pickNumber(overrides?.amortizationYears, profile?.defaultAmortization),
-        30
+        DEFAULT_AMORTIZATION_YEARS
       ),
     },
     operating: {
-      rentUpliftPct: safeNumber(pickNumber(overrides?.rentUpliftPct, profile?.defaultRentUplift), 15),
+      rentUpliftPct,
+      blendedRentUpliftPct: computeBlendedRentUpliftPct(rentUpliftPct, propertyMix),
       expenseIncreasePct: safeNumber(
         pickNumber(overrides?.expenseIncreasePct, profile?.defaultExpenseIncrease),
-        2
+        DEFAULT_EXPENSE_INCREASE_PCT
       ),
       managementFeePct: safeNumber(
         pickNumber(overrides?.managementFeePct, profile?.defaultManagementFee),
-        5
+        DEFAULT_MANAGEMENT_FEE_PCT
       ),
     },
     holdPeriodYears: safePositiveInteger(
@@ -154,12 +203,20 @@ export function resolveDossierAssumptions(
       MAX_UNDERWRITING_HOLD_PERIOD_YEARS
     ),
     exit: {
-      exitCapPct: safeNumber(pickNumber(overrides?.exitCapPct, profile?.defaultExitCap), 5),
+      exitCapPct: safeNumber(
+        pickNumber(overrides?.exitCapPct, profile?.defaultExitCap),
+        DEFAULT_EXIT_CAP_PCT
+      ),
       exitClosingCostPct: safeNumber(
         pickNumber(overrides?.exitClosingCostPct, profile?.defaultExitClosingCostPct),
-        0
+        DEFAULT_EXIT_CLOSING_COST_PCT
       ),
     },
+    targetIrrPct: safeNumber(
+      pickNumber(overrides?.targetIrrPct, profile?.defaultTargetIrrPct),
+      DEFAULT_TARGET_IRR_PCT
+    ),
+    propertyMix,
   };
 }
 
@@ -189,7 +246,7 @@ export function computeUnderwritingProjection(input: {
     {
       currentGrossRent: safeNumber(currentGrossRent),
       currentNoi: safeNumber(currentNoi),
-      rentUplift: 1 + assumptions.operating.rentUpliftPct / 100,
+      rentUplift: 1 + assumptions.operating.blendedRentUpliftPct / 100,
       expenseIncrease: 1 + assumptions.operating.expenseIncreasePct / 100,
       managementFee: assumptions.operating.managementFeePct / 100,
     },
@@ -291,5 +348,111 @@ export function computeUnderwritingProjection(input: {
       equityCashFlows: equityCashFlowSeries,
       operatingCashFlows: annualOperatingCashFlows,
     }),
+  };
+}
+
+function roundOffer(value: number): number {
+  return Math.max(0, Math.round(value / 1_000) * 1_000);
+}
+
+export function computeRecommendedOffer(input: {
+  assumptions: ResolvedDossierAssumptions;
+  currentGrossRent: number | null;
+  currentNoi: number | null;
+}): RecommendedOfferAnalysis {
+  const { assumptions, currentGrossRent, currentNoi } = input;
+  const askingPrice = assumptions.acquisition.purchasePrice;
+  const targetIrrPct = assumptions.targetIrrPct;
+  const targetIrr = targetIrrPct / 100;
+
+  if (askingPrice == null || !Number.isFinite(askingPrice) || askingPrice <= 0) {
+    return {
+      askingPrice: null,
+      targetIrrPct,
+      irrAtAskingPct: null,
+      recommendedOfferLow: null,
+      recommendedOfferHigh: null,
+      discountToAskingPct: null,
+      targetMetAtAsking: false,
+    };
+  }
+
+  const baseProjection = computeUnderwritingProjection({
+    assumptions,
+    currentGrossRent,
+    currentNoi,
+  });
+  const irrAtAskingPct = baseProjection.returns.irr ?? null;
+  const targetMetAtAsking = irrAtAskingPct != null && irrAtAskingPct >= targetIrr;
+
+  if (targetMetAtAsking) {
+    return {
+      askingPrice,
+      targetIrrPct,
+      irrAtAskingPct,
+      recommendedOfferLow: roundOffer(askingPrice * 0.95),
+      recommendedOfferHigh: roundOffer(askingPrice),
+      discountToAskingPct: 0,
+      targetMetAtAsking: true,
+    };
+  }
+
+  const realisticLowPrice = Math.max(1_000, askingPrice * 0.1);
+  const projectionAtLowPrice = computeUnderwritingProjection({
+    assumptions: {
+      ...assumptions,
+      acquisition: {
+        ...assumptions.acquisition,
+        purchasePrice: realisticLowPrice,
+      },
+    },
+    currentGrossRent,
+    currentNoi,
+  });
+  if (projectionAtLowPrice.returns.irr == null || projectionAtLowPrice.returns.irr < targetIrr) {
+    return {
+      askingPrice,
+      targetIrrPct,
+      irrAtAskingPct,
+      recommendedOfferLow: null,
+      recommendedOfferHigh: null,
+      discountToAskingPct: null,
+      targetMetAtAsking: false,
+    };
+  }
+
+  let low = realisticLowPrice;
+  let high = askingPrice;
+  for (let index = 0; index < 50; index += 1) {
+    const mid = (low + high) / 2;
+    const trialProjection = computeUnderwritingProjection({
+      assumptions: {
+        ...assumptions,
+        acquisition: {
+          ...assumptions.acquisition,
+          purchasePrice: mid,
+        },
+      },
+      currentGrossRent,
+      currentNoi,
+    });
+    const irr = trialProjection.returns.irr;
+    if (irr != null && irr >= targetIrr) low = mid;
+    else high = mid;
+  }
+
+  const recommendedOfferHigh = roundOffer(low);
+  const recommendedOfferLow = roundOffer(recommendedOfferHigh * 0.95);
+  const discountToAskingPct =
+    askingPrice > 0 ? Math.max(0, ((askingPrice - recommendedOfferHigh) / askingPrice) * 100) : null;
+
+  return {
+    askingPrice,
+    targetIrrPct,
+    irrAtAskingPct,
+    recommendedOfferLow,
+    recommendedOfferHigh,
+    discountToAskingPct,
+    targetMetAtAsking: false,
   };
 }

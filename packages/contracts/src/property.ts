@@ -147,13 +147,29 @@ export interface RentalFinancialsFromLlm {
 /** One rent roll row from full OM analysis LLM. */
 export interface OmRentRollRow {
   unit?: string;
+  /** Optional building/address label when an OM covers multiple adjacent buildings. */
+  building?: string;
+  /** Residential, commercial, retail, office, etc. */
+  unitCategory?: string;
+  /** Commercial tenant name or occupant label when provided. */
+  tenantName?: string;
   monthlyRent?: number;
+  monthlyBaseRent?: number;
+  monthlyTotalRent?: number;
   annualRent?: number;
+  annualBaseRent?: number;
+  annualTotalRent?: number;
   beds?: number;
   baths?: number;
   sqft?: number;
   rentType?: string;
   tenantStatus?: string;
+  leaseType?: string;
+  leaseStartDate?: string;
+  leaseEndDate?: string;
+  reimbursementType?: string;
+  reimbursementAmount?: number;
+  rentEscalations?: string;
   /** Occupancy: true/false or "Occupied" / "Vacant". */
   occupied?: boolean | string;
   /** Last rented date (e.g. lease start or when unit was last rented). */
@@ -170,11 +186,14 @@ export interface OmAnalysis {
   rentRoll?: OmRentRollRow[] | null;
   income?: Record<string, unknown> | null;
   expenses?: { expensesTable?: ExpenseLineItem[]; totalExpenses?: number; [key: string]: unknown } | null;
+  revenueComposition?: Record<string, unknown> | null;
   financialMetrics?: Record<string, unknown> | null;
   valuationMetrics?: Record<string, unknown> | null;
   underwritingMetrics?: Record<string, unknown> | null;
   nycRegulatorySummary?: Record<string, unknown> | null;
   furnishedModel?: Record<string, unknown> | null;
+  reportedDiscrepancies?: Array<Record<string, unknown>> | null;
+  sourceCoverage?: Record<string, unknown> | null;
   investmentTakeaways?: string[] | null;
   recommendedOfferAnalysis?: Record<string, unknown> | null;
   uiFinancialSummary?: Record<string, unknown> | null;
@@ -344,6 +363,7 @@ export interface UserProfile {
   defaultRentUplift?: number | null;
   defaultExpenseIncrease?: number | null;
   defaultManagementFee?: number | null;
+  defaultTargetIrrPct?: number | null;
   createdAt: string;
   updatedAt: string;
 }

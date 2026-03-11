@@ -12,8 +12,15 @@ import type {
   OmRentRollRow,
 } from "@re-sourcing/contracts";
 import OpenAI from "openai";
-import { getEnrichmentModel } from "../enrichment/openaiModels.js";
+import type { ChatCompletionContentPart, ChatCompletionMessageParam } from "openai/resources/chat/completions";
+import {
+  getEnrichmentModel,
+  getOmAnalysisModel,
+  getOmAnalysisReasoningEffort,
+  supportsReasoningEffort,
+} from "../enrichment/openaiModels.js";
 import { OM_ANALYSIS_PROMPT_PREFIX } from "./omAnalysisPrompt.js";
+import { extractRentalFinancialsFallback } from "./extractRentalFinancialsFallback.js";
 
 function getApiKey(): string | null {
   const raw = process.env.OPENAI_API_KEY;
@@ -46,6 +53,9 @@ export async function extractRentalFinancialsFromListing(
 }
 
 const OM_STYLE_MIN_LENGTH = 2500;
+const MIN_TEXT_LENGTH_FOR_LLM = 20;
+const MAX_MULTIMODAL_DOCS = 1;
+const MAX_MULTIMODAL_DOC_BYTES = 10 * 1024 * 1024;
 
 /** Cap rate and furnished cap rate: store as percentage number (5.47 for 5.47%). */
 const UI_PERCENT_KEYS = ["capRate", "adjustedCapRate", "furnishedCapRate", "rentUpsidePercent"];
@@ -102,6 +112,89 @@ export interface ExtractRentalFinancialsOptions {
   forceOmStyle?: boolean;
   /** Optional enrichment context (HPD, violations, permits, etc.) to append for the LLM. */
   enrichmentContext?: string;
+  /**
+   * Optional original document inputs to send to the model alongside extracted text.
+   * Use for PDFs with image-based tables or page graphics that plain-text extraction can miss.
+   */
+  documentFiles?: OmInputDocument[];
+}
+
+export interface OmInputDocument {
+  filename: string;
+  mimeType?: string;
+  buffer: Buffer;
+}
+
+function isPdfLikeDocument(doc: OmInputDocument): boolean {
+  const filename = doc.filename.toLowerCase();
+  const mime = (doc.mimeType ?? "").toLowerCase();
+  return filename.endsWith(".pdf") || mime === "application/pdf";
+}
+
+function scoreOmDocument(doc: OmInputDocument): number {
+  const name = doc.filename.toLowerCase();
+  let score = 0;
+  if (name.includes("offering")) score += 6;
+  if (name.includes("memorandum")) score += 6;
+  if (name.includes("executive")) score += 4;
+  if (name.includes("brochure")) score += 3;
+  if (name.includes("rent roll")) score += 2;
+  if (name.endsWith(".pdf")) score += 1;
+  return score;
+}
+
+function selectOmDocumentFiles(documentFiles?: OmInputDocument[]): OmInputDocument[] {
+  if (!Array.isArray(documentFiles) || documentFiles.length === 0) return [];
+  return documentFiles
+    .filter((doc) => doc?.buffer instanceof Buffer && doc.buffer.length > 0 && isPdfLikeDocument(doc))
+    .filter((doc) => doc.buffer.length <= MAX_MULTIMODAL_DOC_BYTES)
+    .sort((a, b) => scoreOmDocument(b) - scoreOmDocument(a))
+    .slice(0, MAX_MULTIMODAL_DOCS);
+}
+
+function buildOmStyleMessages(prompt: string, documentFiles: OmInputDocument[]): ChatCompletionMessageParam[] {
+  if (documentFiles.length === 0) return [{ role: "user", content: prompt }];
+
+  const content: ChatCompletionContentPart[] = [{ type: "text", text: prompt }];
+  for (const doc of documentFiles) {
+    content.push({
+      type: "file",
+      file: {
+        file_data: doc.buffer.toString("base64"),
+        filename: doc.filename,
+      },
+    });
+  }
+  return [{ role: "user", content }];
+}
+
+async function createOmStyleCompletion(
+  openai: OpenAI,
+  prompt: string,
+  documentFiles: OmInputDocument[]
+) {
+  const model = getOmAnalysisModel();
+  const reasoningEffort = getOmAnalysisReasoningEffort();
+  try {
+    return await openai.chat.completions.create({
+      model,
+      messages: buildOmStyleMessages(prompt, documentFiles),
+      response_format: { type: "json_object" },
+      ...(supportsReasoningEffort(model) ? { reasoning_effort: reasoningEffort } : {}),
+    });
+  } catch (err) {
+    if (documentFiles.length === 0) throw err;
+    console.warn(
+      "[extractRentalFinancialsFromText] File-assisted OM parsing failed; retrying text-only:",
+      err instanceof Error ? err.message : err
+    );
+    return await openai.chat.completions.create({
+      model,
+      messages: [{ role: "user", content: prompt }],
+      response_format: { type: "json_object" },
+      ...(supportsReasoningEffort(model) ? { reasoning_effort: reasoningEffort } : {}),
+    });
+  }
 }
 
 /**
@@ -109,6 +202,7 @@ export interface ExtractRentalFinancialsOptions {
  */
 function fromLlmFromOmAnalysis(om: OmAnalysis): RentalFinancialsFromLlm {
   const income = om.income as Record<string, unknown> | undefined;
+  const revenueComposition = om.revenueComposition as Record<string, unknown> | undefined;
   const expenses = om.expenses as { totalExpenses?: number; expensesTable?: ExpenseLineItem[] } | undefined;
   const valuation = om.valuationMetrics as Record<string, unknown> | undefined;
   const financial = om.financialMetrics as Record<string, unknown> | undefined;
@@ -123,28 +217,76 @@ function fromLlmFromOmAnalysis(om: OmAnalysis): RentalFinancialsFromLlm {
     (valuation?.capRate as number | undefined) ?? (ui?.capRate as number | undefined);
   // LLM may return cap rate as decimal (0.0356); we store and display as percentage (3.56)
   if (capRate != null && typeof capRate === "number" && capRate > 0 && capRate <= 1) capRate = capRate * 100;
+  const revenueSplitTotal =
+    typeof revenueComposition?.residentialAnnualRent === "number" ||
+    typeof revenueComposition?.commercialAnnualRent === "number"
+      ? ((revenueComposition?.residentialAnnualRent as number | undefined) ?? 0) +
+        ((revenueComposition?.commercialAnnualRent as number | undefined) ?? 0)
+      : undefined;
   const grossRentTotal =
     (income?.grossRentActual as number | undefined) ??
     (income?.grossRentPotential as number | undefined) ??
     (income?.effectiveGrossIncome as number | undefined) ??
+    revenueSplitTotal ??
     (ui?.grossRent as number | undefined);
   const totalExpenses = expenses?.totalExpenses;
   const expensesTable = expenses?.expensesTable;
   const rentRoll = om.rentRoll ?? [];
   const investmentTakeaways = om.investmentTakeaways ?? [];
 
-  const rentalNumbersPerUnit: RentalNumberPerUnit[] = rentRoll.map((r: OmRentRollRow) => ({
-    unit: r.unit,
-    monthlyRent: r.monthlyRent,
-    annualRent: r.annualRent ?? (r.monthlyRent != null ? r.monthlyRent * 12 : undefined),
-    beds: r.beds,
-    baths: r.baths,
-    sqft: r.sqft,
-    occupied: r.occupied,
-    lastRentedDate: r.lastRentedDate,
-    dateVacant: r.dateVacant,
-    note: [r.rentType, r.tenantStatus, r.notes].filter(Boolean).join("; ") || undefined,
-  }));
+  const rentalNumbersPerUnit: RentalNumberPerUnit[] = rentRoll.map((r: OmRentRollRow) => {
+    const unitLabel =
+      typeof r.building === "string" && r.building.trim() !== ""
+        ? `${r.building} ${typeof r.unit === "string" ? r.unit : typeof r.tenantName === "string" ? r.tenantName : ""}`.trim()
+        : typeof r.unit === "string"
+          ? r.unit
+          : typeof r.tenantName === "string"
+            ? r.tenantName
+            : undefined;
+    const monthlyRent =
+      typeof r.monthlyTotalRent === "number"
+        ? r.monthlyTotalRent
+        : typeof r.monthlyBaseRent === "number"
+          ? r.monthlyBaseRent
+          : typeof r.monthlyRent === "number"
+            ? r.monthlyRent
+            : undefined;
+    const annualRent =
+      typeof r.annualTotalRent === "number"
+        ? r.annualTotalRent
+        : typeof r.annualBaseRent === "number"
+          ? r.annualBaseRent
+          : typeof r.annualRent === "number"
+            ? r.annualRent
+            : monthlyRent != null
+              ? monthlyRent * 12
+              : undefined;
+    const note = [
+      r.unitCategory,
+      r.rentType,
+      r.tenantStatus,
+      r.tenantName,
+      r.leaseType,
+      r.leaseEndDate ? `Lease ends ${r.leaseEndDate}` : null,
+      r.reimbursementType,
+      r.rentEscalations,
+      r.notes,
+    ]
+      .filter((value): value is string => typeof value === "string" && value.trim() !== "")
+      .join("; ");
+    return {
+      unit: unitLabel,
+      monthlyRent,
+      annualRent,
+      beds: r.beds,
+      baths: r.baths,
+      sqft: r.sqft,
+      occupied: r.occupied,
+      lastRentedDate: r.lastRentedDate,
+      dateVacant: r.dateVacant,
+      note: note || undefined,
+    };
+  });
 
   const out: RentalFinancialsFromLlm = {};
   if (noi != null && typeof noi === "number") out.noi = noi;
@@ -167,28 +309,49 @@ export async function extractRentalFinancialsFromText(
   text: string,
   options?: ExtractRentalFinancialsOptions
 ): Promise<ExtractRentalFinancialsResult> {
+  const trimmed = (text ?? "").trim();
+  const omDocumentFiles = selectOmDocumentFiles(options?.documentFiles);
+  const hasDocumentFiles = omDocumentFiles.length > 0;
+  const fallbackResult = extractRentalFinancialsFallback(trimmed);
   const key = getApiKey();
   if (!key) {
     console.warn("[extractRentalFinancialsFromText] OPENAI_API_KEY missing or invalid; skipping OpenAI call.");
-    return { fromLlm: null, omAnalysis: null };
+    return fallbackResult;
   }
-  const trimmed = (text ?? "").trim();
-  if (!trimmed || trimmed.length < 20) {
+  if ((!trimmed || trimmed.length < MIN_TEXT_LENGTH_FOR_LLM) && !hasDocumentFiles) {
     console.warn("[extractRentalFinancialsFromText] Text too short for LLM (length:", trimmed.length, "); skipping OpenAI call.");
-    return { fromLlm: null, omAnalysis: null };
+    return fallbackResult;
   }
 
-  const isOmStyle = options?.forceOmStyle === true || trimmed.length >= OM_STYLE_MIN_LENGTH;
+  const isOmStyle =
+    options?.forceOmStyle === true || trimmed.length >= OM_STYLE_MIN_LENGTH || hasDocumentFiles;
   /** For OM-style, use more context so long/complex OMs (e.g. full Executive Summary + appendices) are not truncated; rent roll often appears later in the doc. */
   const omDocLimit = 48000;
   const docLimit = isOmStyle ? omDocLimit : 15000;
   const docSnippet = trimmed.slice(0, docLimit);
-  console.log("[extractRentalFinancialsFromText] Calling OpenAI model=" + getEnrichmentModel() + " isOmStyle=" + isOmStyle + " promptChars=" + (OM_ANALYSIS_PROMPT_PREFIX.length + docSnippet.length) + (trimmed.length > docLimit ? " (doc truncated)" : ""));
+  const omModel = isOmStyle ? getOmAnalysisModel() : getEnrichmentModel();
+  console.log(
+    "[extractRentalFinancialsFromText] Calling OpenAI model=" +
+      omModel +
+      " isOmStyle=" +
+      isOmStyle +
+      " promptChars=" +
+      (OM_ANALYSIS_PROMPT_PREFIX.length + docSnippet.length) +
+      " fileInputs=" +
+      omDocumentFiles.length +
+      (trimmed.length > docLimit ? " (doc truncated)" : "")
+  );
   const openai = new OpenAI({ apiKey: key });
 
   const documentSection =
     (options?.enrichmentContext ? `Additional enrichment data:\n${options.enrichmentContext}\n\n` : "") +
-    `Document text (OM/listing):\n${docSnippet}`;
+    (isOmStyle && hasDocumentFiles
+      ? `Attached original PDF file(s): ${omDocumentFiles.map((doc) => doc.filename).join(", ")}.
+Use the attached file(s) together with the extracted text below. The extracted text may miss image-based rent rolls, financial tables, or lease schedules.\n\n`
+      : "") +
+    `Document text (OM/listing${hasDocumentFiles ? "; may be incomplete on graphic pages" : ""}):\n${
+      docSnippet || "[No reliable plain text extracted; rely on the attached PDF file if provided.]"
+    }`;
 
   const prompt = isOmStyle
     ? OM_ANALYSIS_PROMPT_PREFIX + documentSection
@@ -211,15 +374,18 @@ Text:
 ${trimmed.slice(0, 15000)}`;
 
   try {
-    const completion = await openai.chat.completions.create({
-      model: getEnrichmentModel(),
-      messages: [{ role: "user", content: prompt }],
-      response_format: { type: "json_object" },
-    });
+    const completion =
+      isOmStyle
+        ? await createOmStyleCompletion(openai, prompt, omDocumentFiles)
+        : await openai.chat.completions.create({
+            model: omModel,
+            messages: [{ role: "user", content: prompt }],
+            response_format: { type: "json_object" },
+          });
 
     const content = completion.choices[0]?.message?.content;
     if (!content || typeof content !== "string")
-      return { fromLlm: null, omAnalysis: null };
+      return fallbackResult;
 
     let jsonStr = content.trim();
     const codeBlock = jsonStr.match(/^```(?:json)?\s*([\s\S]*?)```$/);
@@ -236,11 +402,16 @@ ${trimmed.slice(0, 15000)}`;
           : undefined,
         income: (parsed.income as Record<string, unknown>) ?? undefined,
         expenses: (parsed.expenses as OmAnalysis["expenses"]) ?? undefined,
+        revenueComposition: (parsed.revenueComposition as Record<string, unknown>) ?? undefined,
         financialMetrics: (parsed.financialMetrics as Record<string, unknown>) ?? undefined,
         valuationMetrics: (parsed.valuationMetrics as Record<string, unknown>) ?? undefined,
         underwritingMetrics: (parsed.underwritingMetrics as Record<string, unknown>) ?? undefined,
         nycRegulatorySummary: (parsed.nycRegulatorySummary as Record<string, unknown>) ?? undefined,
         furnishedModel: (parsed.furnishedModel as Record<string, unknown>) ?? undefined,
+        reportedDiscrepancies: Array.isArray(parsed.reportedDiscrepancies)
+          ? (parsed.reportedDiscrepancies as Array<Record<string, unknown>>)
+          : undefined,
+        sourceCoverage: (parsed.sourceCoverage as Record<string, unknown>) ?? undefined,
         investmentTakeaways: Array.isArray(parsed.investmentTakeaways)
           ? (parsed.investmentTakeaways as string[])
           : undefined,
@@ -313,6 +484,6 @@ ${trimmed.slice(0, 15000)}`;
       const apiErr = (err as { error?: { message?: string; code?: string } }).error;
       if (apiErr?.message) console.error("[extractRentalFinancialsFromText] API error:", apiErr.message, apiErr.code ?? "");
     }
-    return { fromLlm: null, omAnalysis: null };
+    return fallbackResult;
   }
 }

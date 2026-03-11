@@ -62,6 +62,26 @@ export interface SensitivityAnalysisContext {
   };
 }
 
+export interface DossierPropertyMixContext {
+  totalUnits: number | null;
+  residentialUnits: number;
+  eligibleResidentialUnits: number;
+  commercialUnits: number;
+  rentStabilizedUnits: number;
+  eligibleRevenueSharePct: number | null;
+  eligibleUnitSharePct: number | null;
+}
+
+export interface DossierRecommendedOfferContext {
+  askingPrice: number | null;
+  targetIrrPct: number | null;
+  irrAtAskingPct: number | null;
+  recommendedOfferLow: number | null;
+  recommendedOfferHigh: number | null;
+  discountToAskingPct: number | null;
+  targetMetAtAsking: boolean;
+}
+
 export interface UnderwritingContext {
   propertyId: string;
   canonicalAddress: string;
@@ -93,10 +113,12 @@ export interface UnderwritingContext {
     };
     operating: {
       rentUpliftPct: number | null;
+      blendedRentUpliftPct?: number | null;
       expenseIncreasePct: number | null;
       managementFeePct: number | null;
     };
     holdPeriodYears: number | null;
+    targetIrrPct?: number | null;
     exit: {
       exitCapPct: number | null;
       exitClosingCostPct: number | null;
@@ -156,6 +178,10 @@ export interface UnderwritingContext {
   amortizationSchedule?: DossierAmortizationRow[];
   /** Optional: one-way underwriting sensitivities for dossier and Excel. */
   sensitivities?: SensitivityAnalysisContext[];
+  /** Optional: protected-unit / convertible-unit mix used for uplift logic. */
+  propertyMix?: DossierPropertyMixContext | null;
+  /** Optional: target-IRR-based recommended offer analysis. */
+  recommendedOffer?: DossierRecommendedOfferContext | null;
 }
 
 /**

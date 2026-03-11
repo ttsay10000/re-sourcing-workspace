@@ -21,6 +21,7 @@ interface AssumptionsProfile {
   defaultRentUplift?: number | null;
   defaultExpenseIncrease?: number | null;
   defaultManagementFee?: number | null;
+  defaultTargetIrrPct?: number | null;
 }
 
 interface PropertySummary {
@@ -43,6 +44,17 @@ interface DossierAssumptionsDraft {
   holdPeriodYears?: number;
   exitCapPct?: number;
   exitClosingCostPct?: number;
+  targetIrrPct?: number;
+}
+
+interface PropertyMixSummary {
+  totalUnits?: number | null;
+  residentialUnits?: number | null;
+  eligibleResidentialUnits?: number | null;
+  commercialUnits?: number | null;
+  rentStabilizedUnits?: number | null;
+  eligibleRevenueSharePct?: number | null;
+  eligibleUnitSharePct?: number | null;
 }
 
 const inputStyle: React.CSSProperties = {
@@ -70,6 +82,7 @@ function DossierAssumptionsContent() {
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState<DossierAssumptionsDraft>({});
+  const [mixSummary, setMixSummary] = useState<PropertyMixSummary | null>(null);
 
   const fetchAssumptions = useCallback(async () => {
     setLoading(true);
@@ -83,21 +96,23 @@ function DossierAssumptionsContent() {
       if (!res.ok) throw new Error(data?.error || data?.details || "Failed to load");
       setProfile(data.profile ?? null);
       setProperty(data.property ?? null);
-      const p = data.profile ?? {};
+      setMixSummary(data.mixSummary ?? null);
+      const defaults = (data.defaults ?? {}) as DossierAssumptionsDraft;
       setDraft({
-        purchasePrice: data.property?.primaryListing?.price ?? undefined,
-        purchaseClosingCostPct: p.defaultPurchaseClosingCostPct ?? undefined,
-        renovationCosts: 0,
-        furnishingSetupCosts: 0,
-        ltvPct: p.defaultLtv ?? undefined,
-        interestRatePct: p.defaultInterestRate ?? undefined,
-        amortizationYears: p.defaultAmortization ?? undefined,
-        rentUpliftPct: p.defaultRentUplift ?? undefined,
-        expenseIncreasePct: p.defaultExpenseIncrease ?? undefined,
-        managementFeePct: p.defaultManagementFee ?? undefined,
-        holdPeriodYears: p.defaultHoldPeriodYears ?? undefined,
-        exitCapPct: p.defaultExitCap ?? undefined,
-        exitClosingCostPct: p.defaultExitClosingCostPct ?? undefined,
+        purchasePrice: defaults.purchasePrice ?? data.property?.primaryListing?.price ?? undefined,
+        purchaseClosingCostPct: defaults.purchaseClosingCostPct ?? undefined,
+        renovationCosts: defaults.renovationCosts ?? 0,
+        furnishingSetupCosts: defaults.furnishingSetupCosts ?? 0,
+        ltvPct: defaults.ltvPct ?? undefined,
+        interestRatePct: defaults.interestRatePct ?? undefined,
+        amortizationYears: defaults.amortizationYears ?? undefined,
+        rentUpliftPct: defaults.rentUpliftPct ?? undefined,
+        expenseIncreasePct: defaults.expenseIncreasePct ?? undefined,
+        managementFeePct: defaults.managementFeePct ?? undefined,
+        holdPeriodYears: defaults.holdPeriodYears ?? undefined,
+        exitCapPct: defaults.exitCapPct ?? undefined,
+        exitClosingCostPct: defaults.exitClosingCostPct ?? undefined,
+        targetIrrPct: defaults.targetIrrPct ?? undefined,
       });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load assumptions");
@@ -128,6 +143,7 @@ function DossierAssumptionsContent() {
           defaultRentUplift: draft.rentUpliftPct,
           defaultExpenseIncrease: draft.expenseIncreasePct,
           defaultManagementFee: draft.managementFeePct,
+          defaultTargetIrrPct: draft.targetIrrPct,
         }),
       });
       const data = await res.json();
@@ -167,6 +183,7 @@ function DossierAssumptionsContent() {
             holdPeriodYears: draft.holdPeriodYears,
             exitCapPct: draft.exitCapPct,
             exitClosingCostPct: draft.exitClosingCostPct,
+            targetIrrPct: draft.targetIrrPct,
           },
         }),
       });
@@ -207,6 +224,13 @@ function DossierAssumptionsContent() {
       setSaving(false);
     }
   };
+
+  const eligibleShare =
+    mixSummary?.eligibleRevenueSharePct ??
+    mixSummary?.eligibleUnitSharePct ??
+    1;
+  const blendedRentUpliftPct =
+    draft.rentUpliftPct != null ? draft.rentUpliftPct * eligibleShare : null;
 
   if (loading) {
     return (
@@ -287,6 +311,28 @@ function DossierAssumptionsContent() {
               onChange={(e) => setDraft((p) => ({ ...p, furnishingSetupCosts: e.target.value ? Number(e.target.value) : undefined }))}
               style={inputStyle}
             />
+            <span style={{ fontSize: "0.75rem", color: "#666" }}>
+              Default uses $10k base + $3k per eligible residential unit + $2.5k per bedroom above one + $2 per sq ft above 650.
+            </span>
+          </label>
+        </div>
+      </section>
+
+      <section style={sectionStyle}>
+        <h2 style={{ fontSize: "1rem", fontWeight: 600, marginBottom: "0.25rem" }}>Offer / return target</h2>
+        <p style={{ fontSize: "0.875rem", color: "#666", marginBottom: "0.75rem" }}>
+          The dossier will solve for the highest offer that still clears this target IRR.
+        </p>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
+          <label style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+            <span style={{ fontSize: "0.875rem", fontWeight: 500 }}>Target IRR (%)</span>
+            <input
+              type="number"
+              step="0.1"
+              value={draft.targetIrrPct ?? ""}
+              onChange={(e) => setDraft((p) => ({ ...p, targetIrrPct: e.target.value ? Number(e.target.value) : undefined }))}
+              style={inputStyle}
+            />
           </label>
         </div>
       </section>
@@ -343,6 +389,14 @@ function DossierAssumptionsContent() {
               onChange={(e) => setDraft((p) => ({ ...p, rentUpliftPct: e.target.value ? Number(e.target.value) : undefined }))}
               style={inputStyle}
             />
+            <span style={{ fontSize: "0.75rem", color: "#666" }}>
+              Applied only to eligible residential units. Blended uplift for this deal: {blendedRentUpliftPct != null ? `${blendedRentUpliftPct.toFixed(2)}%` : "—"}.
+            </span>
+            {mixSummary && ((mixSummary.commercialUnits ?? 0) > 0 || (mixSummary.rentStabilizedUnits ?? 0) > 0) && (
+              <span style={{ fontSize: "0.75rem", color: "#666" }}>
+                {mixSummary.commercialUnits ?? 0} commercial and {mixSummary.rentStabilizedUnits ?? 0} rent-stabilized unit(s) are excluded from the uplift.
+              </span>
+            )}
           </label>
           <label style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
             <span style={{ fontSize: "0.875rem", fontWeight: 500 }}>Expense increase (%)</span>
@@ -370,7 +424,7 @@ function DossierAssumptionsContent() {
       <section style={sectionStyle}>
         <h2 style={{ fontSize: "1rem", fontWeight: 600, marginBottom: "0.25rem" }}>Hold period assumptions</h2>
         <p style={{ fontSize: "0.875rem", color: "#666", marginBottom: "0.75rem" }}>
-          The model will generate Years 1 through N operating cash flows and sell in the final year. Maximum supported hold period: 50 years.
+          The model will generate Years 1 through N operating cash flows and sell in the final year. Maximum supported hold period: 10 years.
         </p>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
           <label style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
@@ -378,7 +432,7 @@ function DossierAssumptionsContent() {
             <input
               type="number"
               min={1}
-              max={50}
+              max={10}
               value={draft.holdPeriodYears ?? ""}
               onChange={(e) => setDraft((p) => ({ ...p, holdPeriodYears: e.target.value ? Number(e.target.value) : undefined }))}
               style={inputStyle}

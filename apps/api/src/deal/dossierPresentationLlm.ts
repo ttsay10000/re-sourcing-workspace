@@ -4,7 +4,7 @@
  */
 
 import OpenAI from "openai";
-import { getDossierModel } from "../enrichment/openaiModels.js";
+import { getDossierPresentationModel } from "../enrichment/openaiModels.js";
 
 const PRESENTATION_SYSTEM = `You are a document formatting specialist. You receive a real estate deal dossier as plain text. Your job is to output the EXACT same content with only formatting corrections so it renders correctly in a PDF.
 
@@ -39,7 +39,7 @@ export async function formatDossierForPresentation(dossierText: string): Promise
 
   try {
     const completion = await openai.chat.completions.create({
-      model: getDossierModel(),
+      model: getDossierPresentationModel(),
       messages: [
         { role: "system", content: PRESENTATION_SYSTEM },
         { role: "user", content: userContent },

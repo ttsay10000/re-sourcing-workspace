@@ -30,8 +30,12 @@ REQUIRED DOCUMENT STRUCTURE (output in this order)
    - BBL: [if provided]
    [blank line]
 
-3. Section "2. CURRENT STATE: FINANCIALS" with heading line "-----------------------------"
-   - If financial flags are provided, list 1–2 bullets (e.g. "Listed price: $X", risk/positive signal)
+3. Section "2. RECOMMENDED OFFER" with heading line "--------------------"
+   - Pipe table rows for target IRR, IRR at asking, recommended offer range, and discount to asking
+   [blank line]
+
+4. Section "3. CURRENT STATE: FINANCIALS" with heading line "-----------------------------"
+   - If financial flags are provided, list 1–3 bullets (e.g. "Listed price: $X", mixed-use revenue mix, discrepancy/verification item)
    - Then output TABLES using pipe format. Each table row MUST be exactly: | cell1 | cell2 |
    - Gross rent table: header row | Gross rent | Annual | then one row per rent roll item (label | $amount), then | **Total gross rent** | $total |
    - Expenses table: header row | Expenses | Annual | then one row per expense (lineItem | $amount), then | **Total expenses** | $total |
@@ -40,7 +44,7 @@ REQUIRED DOCUMENT STRUCTURE (output in this order)
    - Then | Cap rate | X.XX% |
    [blank line]
 
-4. Section "3. STABILIZED OPERATIONS" with heading line "------------------------"
+5. Section "4. STABILIZED OPERATIONS" with heading line "------------------------"
    - Pipe table rows:
    | Adjusted gross rent | $amount |
    | Adjusted operating expenses | $amount |
@@ -49,16 +53,16 @@ REQUIRED DOCUMENT STRUCTURE (output in this order)
    | Stabilized cap rate | X.XX% |
    [blank line]
 
-5. Section "4. FINANCING & CASH FLOW" with heading line "-------------------------"
+6. Section "5. FINANCING & CASH FLOW" with heading line "-------------------------"
    - Pipe table rows for purchase closing costs, total project cost, loan amount, initial equity invested, annual debt service, annual operating cash flow, final year cash flow
    - If amortization schedule provided, a table with columns Year, Y1, Y2... and rows Principal, Interest, Debt service, Ending balance
    [blank line]
 
-6. Section "5. EXIT" with heading line "-------"
+7. Section "6. EXIT" with heading line "-------"
    - Pipe table rows for hold period, exit property value, sale closing costs, net sale proceeds before debt payoff, remaining loan balance, and **Net proceeds to equity**
    [blank line]
 
-7. Section "6. RETURNS" with heading line "----------"
+8. Section "7. RETURNS" with heading line "----------"
    - Pipe table:
    | IRR (N-year) | X.XX% |
    | Equity multiple | X.XXx |
@@ -66,17 +70,21 @@ REQUIRED DOCUMENT STRUCTURE (output in this order)
    | Average cash-on-cash | X.XX% |
    [blank line]
 
-8. Section "7. ASSUMPTIONS USED" with heading line "--------------------"
-   - One line per assumption bucket input: purchase closing costs, renovation, furnishing/setup, LTV, interest rate, amortization, rent uplift, expense increase, management fee, hold period, exit cap, exit closing costs
+9. Section "8. ASSUMPTIONS USED" with heading line "--------------------"
+   - One line per assumption bucket input: purchase closing costs, renovation, furnishing/setup, LTV, interest rate, amortization, base rent uplift, blended rent uplift, expense increase, management fee, hold period, exit cap, exit closing costs, target IRR
    [blank line]
 
-9. Section "8. SENSITIVITY ANALYSIS" with heading line "------------------------" if sensitivity data is provided
+10. Section "9. SENSITIVITY ANALYSIS" with heading line "------------------------" if sensitivity data is provided
    - For each sensitivity, give one short pullout line with base case input, IRR range, and CoC range
    - Then a clean pipe table with columns [input label, Stabilized NOI, IRR, Cash-on-cash]
    - Include the base case row and every provided scenario row
    [blank line]
 
-10. Optional short narrative (only if you have OM/highlights or want 1–2 sentences): "OM / Investment Highlights", "Risks & Considerations", "Key Takeaways". Keep to 2–4 short bullets or 1–2 sentences each. Do not duplicate numbers that are already in the tables.
+10. Optional short narrative (only if you have OM/highlights or want 1–2 sentences): "OM / Investment Highlights", "Risks & Considerations", "Key Takeaways". Keep to 2–4 short bullets or 1–2 sentences each.
+   - These bullets must be analytical, not generic marketing copy.
+   - Each bullet must include at least one hard number from the OM/underwriting data and, when possible, a derived implication or delta.
+   - For mixed-use assets, explicitly mention residential/commercial composition, commercial rent share, lease rollover/escalation details if available, and any OM data discrepancies that should be verified before underwriting is finalized.
+   - Prefer bullets like: current vs stabilized NOI delta, cap-rate delta, commercial share of rent, RS/FM unit split, debt-service cushion, missing lease data, or a discrepancy between OM sections.
 
 -----------------------------------------------------
 TABLE FORMAT RULES (critical for PDF)

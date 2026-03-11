@@ -20,10 +20,20 @@ export interface ComputeDealSignalsInput {
   canonicalAddress: string | null;
   details: PropertyDetails | null;
   primaryListing: PropertyListingInput;
-  /** Optional: 5-year IRR as decimal (e.g. 0.22). Used when scoring after dossier. */
-  irr5yrPct?: number | null;
+  /** Optional: hold-period IRR as decimal (e.g. 0.22). */
+  irrPct?: number | null;
+  /** Optional: Year 1 cash-on-cash as decimal. */
+  cocPct?: number | null;
+  /** Optional: stabilized cap rate at the current ask. */
+  adjustedCapRatePct?: number | null;
+  /** Optional: max offer that still clears the target IRR. */
+  recommendedOfferHigh?: number | null;
+  /** Optional: effective blended rent uplift after protected-unit exclusions. */
+  blendedRentUpliftPct?: number | null;
   /** Number of rent-stabilized units (deduct points per unit). Default 0. */
   rentStabilizedUnitCount?: number;
+  /** Number of commercial units. */
+  commercialUnitCount?: number;
 }
 
 export interface ComputeDealSignalsOutput {
@@ -36,14 +46,28 @@ export interface ComputeDealSignalsOutput {
 function unitCountFromDetails(details: PropertyDetails | null): number | null {
   if (!details?.rentalFinancials) return null;
   const rf = details.rentalFinancials as RentalFinancials;
+  const omRoll = rf.omAnalysis?.rentRoll ?? [];
+  const omTotal = rf.omAnalysis?.propertyInfo?.totalUnits as number | undefined;
   const rapid = rf.rentalUnits ?? [];
   const om = rf.fromLlm?.rentalNumbersPerUnit ?? [];
-  const n = rapid.length > 0 ? rapid.length : om.length;
-  return n > 0 ? n : null;
+  const candidates = [
+    omRoll.length > 0 ? omRoll.length : null,
+    omTotal != null && Number.isFinite(omTotal) ? omTotal : null,
+    rapid.length > 0 ? rapid.length : null,
+    om.length > 0 ? om.length : null,
+  ].filter((value): value is number => value != null && value > 0);
+  return candidates.length > 0 ? Math.max(...candidates) : null;
 }
 
 function noiFromDetails(details: PropertyDetails | null): number | null {
-  const noi = details?.rentalFinancials?.fromLlm?.noi;
+  const om = details?.rentalFinancials?.omAnalysis;
+  const ui = om?.uiFinancialSummary as Record<string, unknown> | undefined;
+  const income = om?.income as Record<string, unknown> | undefined;
+  const noi =
+    (ui?.noi as number | undefined) ??
+    om?.noiReported ??
+    (income?.NOI as number | undefined) ??
+    details?.rentalFinancials?.fromLlm?.noi;
   if (noi != null && typeof noi === "number" && !Number.isNaN(noi)) return noi;
   return null;
 }
@@ -61,8 +85,13 @@ function scoringInputFromDetails(
   return {
     purchasePrice,
     noi,
-    irr5yrPct: input.irr5yrPct ?? null,
+    irrPct: input.irrPct ?? null,
+    cocPct: input.cocPct ?? null,
+    adjustedCapRatePct: input.adjustedCapRatePct ?? null,
+    recommendedOfferHigh: input.recommendedOfferHigh ?? null,
+    blendedRentUpliftPct: input.blendedRentUpliftPct ?? null,
     rentStabilizedUnitCount: input.rentStabilizedUnitCount ?? 0,
+    commercialUnitCount: input.commercialUnitCount ?? 0,
     hpdTotal: hpd?.total,
     hpdOpenCount: hpd?.openCount,
     hpdRentImpairingOpen: hpd?.rentImpairingOpen,
@@ -79,7 +108,7 @@ function scoringInputFromDetails(
  * Compute deal signals and score (deterministic fallback). Returns insert params and scoring result.
  */
 export function computeDealSignals(input: ComputeDealSignalsInput): ComputeDealSignalsOutput {
-  const { propertyId, details, primaryListing, rentStabilizedUnitCount } = input;
+  const { propertyId, details, primaryListing, rentStabilizedUnitCount, blendedRentUpliftPct } = input;
   const price = primaryListing.price && primaryListing.price > 0 ? primaryListing.price : null;
   const unitCount = unitCountFromDetails(details);
 
@@ -104,13 +133,13 @@ export function computeDealSignals(input: ComputeDealSignalsInput): ComputeDealS
     assetCapRate: scoringResult.assetCapRate ?? undefined,
     adjustedCapRate: scoringResult.adjustedCapRate ?? undefined,
     yieldSpread: yieldSpread ?? undefined,
-    rentUpside: undefined,
+    rentUpside: blendedRentUpliftPct ?? undefined,
     rentPsfRatio: undefined,
     expenseRatio: undefined,
     liquidityScore: undefined,
     riskScore: scoringResult.riskScore ?? undefined,
     priceMomentum: undefined,
-    dealScore: scoringResult.dealScore ?? undefined,
+    dealScore: scoringResult.isScoreable ? scoringResult.dealScore : undefined,
   };
 
   return { insertParams, scoringResult };

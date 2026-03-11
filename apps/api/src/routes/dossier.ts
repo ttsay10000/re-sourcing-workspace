@@ -3,9 +3,10 @@
  */
 
 import { Router, type Request, type Response } from "express";
+import type { PropertyDetails } from "@re-sourcing/contracts";
 import { getPool, UserProfileRepo, PropertyRepo, MatchRepo, ListingRepo } from "@re-sourcing/db";
 import { runGenerateDossier } from "../deal/runGenerateDossier.js";
-import type { DossierAssumptionOverrides } from "../deal/underwritingModel.js";
+import { resolveDossierAssumptions, type DossierAssumptionOverrides } from "../deal/underwritingModel.js";
 
 const router = Router();
 
@@ -13,6 +14,32 @@ async function getDefaultUserId(): Promise<string> {
   const pool = getPool();
   const profileRepo = new UserProfileRepo({ pool });
   return profileRepo.ensureDefault();
+}
+
+function noiFromDetails(details: PropertyDetails | null): number | null {
+  const om = details?.rentalFinancials?.omAnalysis;
+  const ui = om?.uiFinancialSummary as Record<string, unknown> | undefined;
+  const income = om?.income as Record<string, unknown> | undefined;
+  const noi =
+    (ui?.noi as number | undefined) ??
+    om?.noiReported ??
+    (income?.NOI as number | undefined) ??
+    details?.rentalFinancials?.fromLlm?.noi;
+  if (noi != null && typeof noi === "number" && !Number.isNaN(noi)) return noi;
+  return null;
+}
+
+function grossRentFromDetails(details: PropertyDetails | null): number | null {
+  const om = details?.rentalFinancials?.omAnalysis;
+  const ui = om?.uiFinancialSummary as Record<string, unknown> | undefined;
+  const income = om?.income as Record<string, unknown> | undefined;
+  const gross =
+    (ui?.grossRent as number | undefined) ??
+    (income?.grossRentActual as number | undefined) ??
+    (income?.grossRentPotential as number | undefined) ??
+    details?.rentalFinancials?.fromLlm?.grossRentTotal;
+  if (gross != null && typeof gross === "number" && !Number.isNaN(gross) && gross > 0) return gross;
+  return null;
 }
 
 /** GET /api/dossier-assumptions?property_id=X - profile defaults and optional property summary for the assumptions form. */
@@ -27,7 +54,15 @@ router.get("/dossier-assumptions", async (req: Request, res: Response) => {
       return;
     }
     const propertyId = typeof req.query.property_id === "string" ? req.query.property_id.trim() : null;
-    let property: { id: string; canonicalAddress: string; primaryListing: { price: number | null; city: string | null } | null } | null = null;
+    let property:
+      | {
+          id: string;
+          canonicalAddress: string;
+          primaryListing: { price: number | null; city: string | null } | null;
+        }
+      | null = null;
+    let defaults: Record<string, number | null> | null = null;
+    let mixSummary: Record<string, number | null> | null = null;
     if (propertyId) {
       const propertyRepo = new PropertyRepo({ pool });
       const matchRepo = new MatchRepo({ pool });
@@ -42,6 +77,39 @@ router.get("/dossier-assumptions", async (req: Request, res: Response) => {
           primaryListing: listing
             ? { price: listing.price ?? null, city: listing.city ?? null }
             : null,
+        };
+        const details = (prop.details ?? null) as PropertyDetails | null;
+        const currentGrossRent = grossRentFromDetails(details) ?? (noiFromDetails(details) != null ? noiFromDetails(details)! * 1.5 : null);
+        const assumptions = resolveDossierAssumptions(profile, listing?.price ?? null, null, {
+          details,
+        });
+        defaults = {
+          purchasePrice: assumptions.acquisition.purchasePrice,
+          purchaseClosingCostPct: assumptions.acquisition.purchaseClosingCostPct,
+          renovationCosts: 0,
+          furnishingSetupCosts: assumptions.acquisition.furnishingSetupCosts,
+          ltvPct: assumptions.financing.ltvPct,
+          interestRatePct: assumptions.financing.interestRatePct,
+          amortizationYears: assumptions.financing.amortizationYears,
+          rentUpliftPct: assumptions.operating.rentUpliftPct,
+          blendedRentUpliftPct: assumptions.operating.blendedRentUpliftPct,
+          expenseIncreasePct: assumptions.operating.expenseIncreasePct,
+          managementFeePct: assumptions.operating.managementFeePct,
+          holdPeriodYears: assumptions.holdPeriodYears,
+          exitCapPct: assumptions.exit.exitCapPct,
+          exitClosingCostPct: assumptions.exit.exitClosingCostPct,
+          targetIrrPct: assumptions.targetIrrPct,
+          currentGrossRent,
+          currentNoi: noiFromDetails(details),
+        };
+        mixSummary = {
+          totalUnits: assumptions.propertyMix.totalUnits,
+          residentialUnits: assumptions.propertyMix.residentialUnits,
+          eligibleResidentialUnits: assumptions.propertyMix.eligibleResidentialUnits,
+          commercialUnits: assumptions.propertyMix.commercialUnits,
+          rentStabilizedUnits: assumptions.propertyMix.rentStabilizedUnits,
+          eligibleRevenueSharePct: assumptions.propertyMix.eligibleRevenueSharePct,
+          eligibleUnitSharePct: assumptions.propertyMix.eligibleUnitSharePct,
         };
       }
     }
@@ -61,8 +129,11 @@ router.get("/dossier-assumptions", async (req: Request, res: Response) => {
         defaultRentUplift: profile.defaultRentUplift,
         defaultExpenseIncrease: profile.defaultExpenseIncrease,
         defaultManagementFee: profile.defaultManagementFee,
+        defaultTargetIrrPct: profile.defaultTargetIrrPct,
       },
       property,
+      defaults,
+      mixSummary,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -105,6 +176,8 @@ router.post("/dossier/generate", async (req: Request, res: Response) => {
             exitCapPct: typeof rawAssumptions.exitCapPct === "number" ? rawAssumptions.exitCapPct : null,
             exitClosingCostPct:
               typeof rawAssumptions.exitClosingCostPct === "number" ? rawAssumptions.exitClosingCostPct : null,
+            targetIrrPct:
+              typeof rawAssumptions.targetIrrPct === "number" ? rawAssumptions.targetIrrPct : null,
           }
         : null;
     const result = await runGenerateDossier(propertyId, assumptions);
