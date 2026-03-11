@@ -1,5 +1,5 @@
 import type { PoolClient } from "pg";
-import type { DealSignalRow } from "@re-sourcing/contracts";
+import type { DealScoreBreakdown, DealRiskProfile, DealScoreSensitivity, DealSignalRow } from "@re-sourcing/contracts";
 import { mapDealSignalRow } from "../map.js";
 
 export interface DealSignalsRepoOptions {
@@ -27,6 +27,13 @@ export interface InsertDealSignalsParams {
   holdYears?: number | null;
   currentNoi?: number | null;
   adjustedNoi?: number | null;
+  scoreBreakdown?: DealScoreBreakdown | null;
+  riskProfile?: DealRiskProfile | null;
+  riskFlags?: string[] | null;
+  capReasons?: string[] | null;
+  confidenceScore?: number | null;
+  scoreSensitivity?: DealScoreSensitivity | null;
+  scoreVersion?: string | null;
 }
 
 export class DealSignalsRepo {
@@ -42,8 +49,9 @@ export class DealSignalsRepo {
         property_id, price_per_unit, price_psf, asset_cap_rate, adjusted_cap_rate,
         yield_spread, rent_upside, rent_psf_ratio, expense_ratio,
         liquidity_score, risk_score, price_momentum, deal_score,
-        irr_pct, equity_multiple, coc_pct, hold_years, current_noi, adjusted_noi
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+        irr_pct, equity_multiple, coc_pct, hold_years, current_noi, adjusted_noi,
+        score_breakdown, risk_profile, risk_flags, cap_reasons, confidence_score, score_sensitivity, score_version
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
       RETURNING *`,
       [
         params.propertyId,
@@ -65,6 +73,13 @@ export class DealSignalsRepo {
         params.holdYears ?? null,
         params.currentNoi ?? null,
         params.adjustedNoi ?? null,
+        params.scoreBreakdown != null ? JSON.stringify(params.scoreBreakdown) : null,
+        params.riskProfile != null ? JSON.stringify(params.riskProfile) : null,
+        params.riskFlags ?? null,
+        params.capReasons ?? null,
+        params.confidenceScore ?? null,
+        params.scoreSensitivity != null ? JSON.stringify(params.scoreSensitivity) : null,
+        params.scoreVersion ?? null,
       ]
     );
     return mapDealSignalRow(r.rows[0]);

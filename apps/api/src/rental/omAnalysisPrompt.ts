@@ -32,6 +32,8 @@ The extracted text may be incomplete on pages where tables are embedded as page 
 
 Extract every unit, every revenue component, and every expense line you find; do not stop after the first table.
 
+If the first read is ambiguous, slow down and inspect each page of the attached PDF one by one before answering.
+
 When the OM shows exact financial figures in a current/pro forma table, preserve the exact current figures as shown. Do not round specific numbers into placeholders or neat approximations. For example, if the OM shows $619,139 or $610,352, do not replace it with $600,000.
 
 Your output must extract the financials, compute underwriting metrics, highlight risks and opportunities, and generate buyer-oriented insights.
@@ -160,6 +162,7 @@ Rules:
 • annualRent = monthlyRent * 12 if annualRent missing
 • For commercial rows, capture lease timing, reimbursements, and rent escalations whenever provided.
 • rentRoll should include both residential and commercial entries. Set unitCategory clearly so downstream calculations can separate the rent streams when needed.
+• Do NOT include total, subtotal, summary, or "Total Income" rows as units in rentRoll.
 • Before returning, verify: count of rentRoll entries should equal the OM's stated total unit count. If you found fewer units than stated, add an investment takeaway: "Rent roll may be incomplete; only N units extracted from OM."
 • Identify: rent stabilized (flag in notes — major risk), free market, commercial, vacant.
 
@@ -200,6 +203,8 @@ Important:
 - effectiveGrossIncome should represent post-vacancy income.
 - Do not put effective gross income into grossRentPotential, grossRentActual, or uiFinancialSummary.grossRent.
 - If the OM only gives effective gross income and not true gross rent before vacancy, leave gross-rent fields null and populate only effectiveGrossIncome.
+- If the OM shows both CURRENT and PRO FORMA columns, the fields in income, uiFinancialSummary, noiReported, valuationMetrics, and current-state takeaways must use CURRENT figures only.
+- Do not round exact current figures into approximate placeholders; preserve the exact numbers shown in the current column.
 
 -----------------------------------------------------
 
@@ -249,6 +254,8 @@ expensesTable = [
 ]
 
 totalExpenses = sum(expensesTable)
+
+Do NOT include total, subtotal, NOI, or net-operating-income lines inside expensesTable; store those only in totalExpenses / noiReported / computed metrics.
 
 -----------------------------------------------------
 

@@ -17,6 +17,17 @@ import type { ListingSnapshot } from "./snapshot.js";
 import type { Property, PropertyInput } from "./property.js";
 import type { ListingPropertyMatch } from "./dedupe.js";
 import type { SystemEvent } from "./events.js";
+import type {
+  SavedSearchRun,
+  BrokerContact,
+  RecipientResolution,
+  PropertyOutreachSummary,
+  PropertyOutreachFlag,
+  PropertyActionItem,
+  OutreachBatch,
+  HomeOperationsSummary,
+  HomeActivityItem,
+} from "./sourcing.js";
 import type { ListingLifecycleState } from "./enums.js";
 
 // ---- Profiles ----
@@ -181,4 +192,60 @@ export interface EventsListRequest {
 export interface EventsListResponse {
   events: SystemEvent[];
   total?: number;
+}
+
+// ---- Saved searches / sourcing automation ----
+export interface SavedSearchesListResponse {
+  savedSearches: SearchProfile[];
+}
+
+export interface SavedSearchGetResponse {
+  savedSearch: SearchProfile | null;
+}
+
+export interface SavedSearchCreateRequest {
+  body: SearchProfileInput;
+}
+
+export interface SavedSearchCreateResponse {
+  savedSearch: SearchProfile;
+}
+
+export interface SavedSearchUpdateRequest {
+  id: string;
+  body: Partial<SearchProfileInput>;
+}
+
+export interface SavedSearchUpdateResponse {
+  savedSearch: SearchProfile;
+}
+
+export interface SavedSearchRunsResponse {
+  runs: SavedSearchRun[];
+}
+
+export interface HomeOperationsSummaryResponse {
+  summary: HomeOperationsSummary;
+  recentActivity: HomeActivityItem[];
+}
+
+export interface ActionItemsListResponse {
+  actionItems: PropertyActionItem[];
+}
+
+export interface OutreachReviewQueueResponse {
+  batches: OutreachBatch[];
+}
+
+export interface BrokerContactsListResponse {
+  contacts: BrokerContact[];
+}
+
+export interface PropertyRecipientResolutionResponse {
+  resolution: RecipientResolution | null;
+}
+
+export interface PropertyOutreachSummaryResponse {
+  outreach: PropertyOutreachSummary | null;
+  flags?: PropertyOutreachFlag[];
 }

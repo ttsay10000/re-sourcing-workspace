@@ -10,12 +10,23 @@ export interface CreateInquirySendOptions {
   toAddress?: string | null;
   source?: string | null;
   sentAt?: string | Date | null;
+  gmailThreadId?: string | null;
+  batchId?: string | null;
+  sendMode?: string | null;
 }
 
 export interface InquiryRecipientHistoryRow {
   propertyId: string;
   canonicalAddress: string;
   sentAt: string;
+}
+
+export interface InquiryReplyMatchingSendRow {
+  propertyId: string;
+  gmailMessageId: string;
+  gmailThreadId?: string | null;
+  batchId?: string | null;
+  batchThreadId?: string | null;
 }
 
 function normalizeToAddress(toAddress: string | null | undefined): string | null {
@@ -50,11 +61,16 @@ export class InquirySendRepo {
     const requestedSentAt = normalizeSentAt(createOptions?.sentAt);
     const toAddress = normalizeToAddress(createOptions?.toAddress);
     const source = createOptions?.source?.trim() || null;
+    const gmailThreadId = createOptions?.gmailThreadId?.trim() || null;
+    const batchId = createOptions?.batchId?.trim() || null;
+    const sendMode = createOptions?.sendMode?.trim() || null;
     const r = await this.client.query(
-      `INSERT INTO property_inquiry_sends (property_id, sent_at, gmail_message_id, to_address, source)
-       VALUES ($1, COALESCE($2, now()), $3, $4, $5)
+      `INSERT INTO property_inquiry_sends (
+         property_id, sent_at, gmail_message_id, to_address, source, gmail_thread_id, batch_id, send_mode
+       )
+       VALUES ($1, COALESCE($2, now()), $3, $4, $5, $6, $7, $8)
        RETURNING id, sent_at`,
-      [propertyId, requestedSentAt, gmailMessageId ?? null, toAddress, source]
+      [propertyId, requestedSentAt, gmailMessageId ?? null, toAddress, source, gmailThreadId, batchId, sendMode]
     );
     const row = r.rows[0];
     const storedSentAt = row.sent_at instanceof Date ? row.sent_at.toISOString() : String(row.sent_at);
@@ -89,6 +105,37 @@ export class InquirySendRepo {
       [withinDays]
     );
     return r.rows.map((row) => ({ propertyId: row.property_id, gmailMessageId: row.gmail_message_id }));
+  }
+
+  async listRecentSendsForReplyMatching(withinDays = 90): Promise<InquiryReplyMatchingSendRow[]> {
+    const r = await this.client.query<{
+      property_id: string;
+      gmail_message_id: string;
+      gmail_thread_id: string | null;
+      batch_id: string | null;
+      batch_thread_id: string | null;
+    }>(
+      `SELECT
+         s.property_id,
+         s.gmail_message_id,
+         s.gmail_thread_id,
+         s.batch_id,
+         b.gmail_thread_id AS batch_thread_id
+       FROM property_inquiry_sends s
+       LEFT JOIN outreach_batches b ON b.id = s.batch_id
+       WHERE s.gmail_message_id IS NOT NULL
+         AND TRIM(s.gmail_message_id) <> ''
+         AND s.sent_at >= now() - ($1::int * interval '1 day')
+       ORDER BY s.sent_at DESC`,
+      [withinDays]
+    );
+    return r.rows.map((row) => ({
+      propertyId: row.property_id,
+      gmailMessageId: row.gmail_message_id,
+      gmailThreadId: row.gmail_thread_id,
+      batchId: row.batch_id,
+      batchThreadId: row.batch_thread_id,
+    }));
   }
 
   async listByRecipient(toAddress: string): Promise<InquiryRecipientHistoryRow[]> {

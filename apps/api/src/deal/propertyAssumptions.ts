@@ -1,16 +1,23 @@
 import type { PropertyDetails } from "@re-sourcing/contracts";
+import {
+  resolvePreferredOmPropertyInfo,
+  resolvePreferredOmRentRoll,
+  resolvePreferredOmRevenueComposition,
+} from "../om/authoritativeOm.js";
 
 const COMMERCIAL_PATTERN =
   /\b(commercial|retail|office|storefront|store front|restaurant|cafe|gallery|medical|community facility)\b/i;
 const RENT_STABILIZED_PATTERN = /(rent[\s-]*(?:stabilized|stabilised|controlled?)|\bRS\b)/i;
 
-interface NormalizedRentRow {
+export interface NormalizedUnderwritingRentRow {
   annualRent: number | null;
   beds: number | null;
   baths: number | null;
   sqft: number | null;
   isCommercial: boolean;
   isRentStabilized: boolean;
+  leaseEndDate: string | null;
+  hasOccupancyData: boolean;
 }
 
 export interface UnderwritingPropertyMixSummary {
@@ -20,6 +27,9 @@ export interface UnderwritingPropertyMixSummary {
   commercialUnits: number;
   rentStabilizedUnits: number;
   totalAnnualRent: number | null;
+  commercialAnnualRent: number | null;
+  rentStabilizedAnnualRent: number | null;
+  freeMarketAnnualRent: number | null;
   eligibleAnnualRent: number | null;
   protectedAnnualRent: number | null;
   eligibleRevenueSharePct: number | null;
@@ -82,8 +92,10 @@ function classificationText(record: Record<string, unknown>): string {
     .join(" ");
 }
 
-function normalizeRows(details: PropertyDetails | null): NormalizedRentRow[] {
-  const omRoll = details?.rentalFinancials?.omAnalysis?.rentRoll;
+export function resolveNormalizedUnderwritingRentRows(
+  details: PropertyDetails | null
+): NormalizedUnderwritingRentRow[] {
+  const omRoll = resolvePreferredOmRentRoll(details);
   if (Array.isArray(omRoll) && omRoll.length > 0) {
     return omRoll.map((row) => {
       const record = row as Record<string, unknown>;
@@ -95,22 +107,11 @@ function normalizeRows(details: PropertyDetails | null): NormalizedRentRow[] {
         sqft: toFiniteNumber(record.sqft),
         isCommercial: COMMERCIAL_PATTERN.test(labels),
         isRentStabilized: RENT_STABILIZED_PATTERN.test(labels),
-      };
-    });
-  }
-
-  const llmRoll = details?.rentalFinancials?.fromLlm?.rentalNumbersPerUnit;
-  if (Array.isArray(llmRoll) && llmRoll.length > 0) {
-    return llmRoll.map((row) => {
-      const record = row as Record<string, unknown>;
-      const labels = classificationText(record);
-      return {
-        annualRent: annualRentFromRecord(record),
-        beds: toFiniteNumber(record.beds),
-        baths: toFiniteNumber(record.baths),
-        sqft: toFiniteNumber(record.sqft),
-        isCommercial: COMMERCIAL_PATTERN.test(labels),
-        isRentStabilized: RENT_STABILIZED_PATTERN.test(labels),
+        leaseEndDate:
+          typeof record.leaseEndDate === "string" && record.leaseEndDate.trim().length > 0
+            ? record.leaseEndDate.trim()
+            : null,
+        hasOccupancyData: record.occupied != null || typeof record.tenantStatus === "string",
       };
     });
   }
@@ -123,8 +124,8 @@ function roundCurrency(value: number): number {
 }
 
 function collectMetricStats(
-  rows: NormalizedRentRow[],
-  pickValue: (row: NormalizedRentRow) => number | null
+  rows: NormalizedUnderwritingRentRow[],
+  pickValue: (row: NormalizedUnderwritingRentRow) => number | null
 ): MetricStats {
   let total = 0;
   let count = 0;
@@ -188,19 +189,21 @@ export function computeBlendedRentUpliftPct(
 export function analyzePropertyForUnderwriting(
   details: PropertyDetails | null
 ): UnderwritingPropertyMixSummary {
-  const rows = normalizeRows(details);
+  const rows = resolveNormalizedUnderwritingRentRows(details);
   const residentialRows = rows.filter((row) => !row.isCommercial);
   const rowCommercialUnits = rows.filter((row) => row.isCommercial).length;
   const rowResidentialUnits = residentialRows.length;
   const rowRentStabilizedUnits = residentialRows.filter((row) => row.isRentStabilized).length;
   const rowEligibleUnits = residentialRows.filter((row) => !row.isRentStabilized);
+  const rowCommercialAnnualRent = rows
+    .filter((row) => row.isCommercial)
+    .reduce((sum, row) => sum + (row.annualRent ?? 0), 0);
+  const rowRentStabilizedAnnualRent = residentialRows
+    .filter((row) => row.isRentStabilized)
+    .reduce((sum, row) => sum + (row.annualRent ?? 0), 0);
 
-  const propertyInfo =
-    (details?.rentalFinancials?.omAnalysis?.propertyInfo as Record<string, unknown> | null | undefined) ??
-    null;
-  const revenueComposition =
-    (details?.rentalFinancials?.omAnalysis?.revenueComposition as Record<string, unknown> | null | undefined) ??
-    null;
+  const propertyInfo = resolvePreferredOmPropertyInfo(details);
+  const revenueComposition = resolvePreferredOmRevenueComposition(details);
 
   const infoTotalUnits = toFiniteNumber(propertyInfo?.totalUnits);
   const infoResidentialUnits = toFiniteNumber(propertyInfo?.unitsResidential);
@@ -275,6 +278,22 @@ export function analyzePropertyForUnderwriting(
     totalAnnualRent != null && eligibleAnnualRent != null
       ? Math.max(0, totalAnnualRent - eligibleAnnualRent)
       : null;
+  const commercialAnnualRent =
+    rowCommercialAnnualRent > 0
+      ? rowCommercialAnnualRent
+      : revenueCommercialAnnualRent != null
+        ? revenueCommercialAnnualRent
+        : null;
+  const rentStabilizedAnnualRent =
+    rowRentStabilizedAnnualRent > 0
+      ? rowRentStabilizedAnnualRent
+      : protectedAnnualRent != null && commercialAnnualRent != null
+        ? Math.max(0, protectedAnnualRent - commercialAnnualRent)
+        : protectedAnnualRent;
+  const freeMarketAnnualRent =
+    totalAnnualRent != null && commercialAnnualRent != null && rentStabilizedAnnualRent != null
+      ? Math.max(0, totalAnnualRent - commercialAnnualRent - rentStabilizedAnnualRent)
+      : eligibleAnnualRent;
   const eligibleRevenueSharePct =
     totalAnnualRent != null && totalAnnualRent > 0 && eligibleAnnualRent != null
       ? eligibleAnnualRent / totalAnnualRent
@@ -363,6 +382,9 @@ export function analyzePropertyForUnderwriting(
     commercialUnits,
     rentStabilizedUnits,
     totalAnnualRent,
+    commercialAnnualRent,
+    rentStabilizedAnnualRent,
+    freeMarketAnnualRent,
     eligibleAnnualRent,
     protectedAnnualRent,
     eligibleRevenueSharePct,

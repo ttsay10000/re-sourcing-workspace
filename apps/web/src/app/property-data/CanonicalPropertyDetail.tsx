@@ -155,6 +155,62 @@ function normalizeUnitKey(value: unknown): string {
     .replace(/[^a-z0-9]/g, "");
 }
 
+function isAggregateOmUnitLabel(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  const normalized = value
+    .toLowerCase()
+    .replace(/[$#]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+  return [
+    "total",
+    "unit total",
+    "total income",
+    "income total",
+    "rent roll total",
+    "total rent roll",
+    "summary",
+    "subtotal",
+  ].includes(normalized);
+}
+
+function isPlaceholderOmRentRollRow(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const row = value as Record<string, unknown>;
+  if (isAggregateOmUnitLabel(row.unit)) return false;
+  const unitLabel =
+    typeof row.unit === "string"
+      ? row.unit
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, " ")
+          .trim()
+      : "";
+  const note = [row.notes, row.note]
+    .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+    .join(" ");
+  const hasStructuredDetails = [
+    row.monthlyRent,
+    row.annualRent,
+    row.monthlyBaseRent,
+    row.annualBaseRent,
+    row.monthlyTotalRent,
+    row.annualTotalRent,
+    row.beds,
+    row.baths,
+    row.sqft,
+    row.tenantName,
+    row.leaseStartDate,
+    row.leaseEndDate,
+    row.lastRentedDate,
+    row.dateVacant,
+  ].some((entry) => entry != null && entry !== "");
+  const genericUnit = /^unit \d+[a-z]?$/.test(unitLabel);
+  return !hasStructuredDetails && (
+    /placeholder|match stated unit count|does not provide a unit-level rent roll|rent tbd/i.test(note) ||
+    genericUnit
+  );
+}
+
 function findMatchingOmRentRollRow(
   unit: Record<string, unknown> | null | undefined,
   rentRoll: Array<Record<string, unknown>>
@@ -350,7 +406,21 @@ export function CanonicalPropertyDetail({
   const [manualInquiryError, setManualInquiryError] = useState<string | null>(null);
   const [rentRollComparison, setRentRollComparison] = useState<{ comparable: boolean; totalUnitsRapid: number; totalUnitsOm: number; totalBedsRapid: number; totalBedsOm: number } | null>(null);
   const [dealScore, setDealScore] = useState<number | null>(null);
+  const [calculatedDealScore, setCalculatedDealScore] = useState<number | null>(null);
   const [dealSignals, setDealSignals] = useState<Record<string, unknown> | null>(null);
+  const [scoreOverride, setScoreOverride] = useState<{
+    id: string;
+    score: number;
+    reason: string;
+    createdAt: string;
+    createdBy?: string | null;
+  } | null>(null);
+  const [scoreOverrideDraft, setScoreOverrideDraft] = useState<{ score: string; reason: string }>({
+    score: "",
+    reason: "",
+  });
+  const [scoreOverrideSaving, setScoreOverrideSaving] = useState(false);
+  const [scoreOverrideError, setScoreOverrideError] = useState<string | null>(null);
   const [dossierDraft, setDossierDraft] = useState<DossierSettingsDraft>({
     renovationCosts: 0,
     furnishingSetupCosts: null,
@@ -395,14 +465,26 @@ export function CanonicalPropertyDetail({
       } | null | undefined) ?? null
     );
     setDealScore((data?.dealScore as number | null | undefined) ?? null);
+    setCalculatedDealScore((data?.calculatedDealScore as number | null | undefined) ?? null);
     setDealSignals((data?.dealSignals as Record<string, unknown> | null | undefined) ?? null);
+    setScoreOverride(
+      (data?.scoreOverride as {
+        id: string;
+        score: number;
+        reason: string;
+        createdAt: string;
+        createdBy?: string | null;
+      } | null | undefined) ?? null
+    );
   };
 
   const resetPropertySnapshot = () => {
     setDetailsFromApi(null);
     setRentRollComparison(null);
     setDealScore(null);
+    setCalculatedDealScore(null);
     setDealSignals(null);
+    setScoreOverride(null);
   };
 
   const refreshPropertySnapshot = async () => {
@@ -528,6 +610,55 @@ export function CanonicalPropertyDetail({
     return () => { cancelled = true; };
   }, [property.id, inquiryEmailModalOpen, manualInquiryModalOpen, inquiryDraft.to, manualInquiryDraft.to]);
 
+  const saveScoreOverride = async () => {
+    setScoreOverrideError(null);
+    const score = Number(scoreOverrideDraft.score);
+    if (!Number.isFinite(score) || score < 0 || score > 100) {
+      setScoreOverrideError("Override score must be between 0 and 100.");
+      return;
+    }
+    if (!scoreOverrideDraft.reason.trim()) {
+      setScoreOverrideError("Override reason is required.");
+      return;
+    }
+    setScoreOverrideSaving(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/properties/${property.id}/score-override`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          score: Math.round(score),
+          reason: scoreOverrideDraft.reason.trim(),
+          createdBy: "web",
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data?.error) throw new Error((data?.error || data?.details || "Failed to save score override") as string);
+      await refreshPropertySnapshot();
+    } catch (err) {
+      setScoreOverrideError(err instanceof Error ? err.message : "Failed to save score override");
+    } finally {
+      setScoreOverrideSaving(false);
+    }
+  };
+
+  const clearScoreOverride = async () => {
+    setScoreOverrideError(null);
+    setScoreOverrideSaving(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/properties/${property.id}/score-override`, {
+        method: "DELETE",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data?.error) throw new Error((data?.error || data?.details || "Failed to clear score override") as string);
+      await refreshPropertySnapshot();
+    } catch (err) {
+      setScoreOverrideError(err instanceof Error ? err.message : "Failed to clear score override");
+    } finally {
+      setScoreOverrideSaving(false);
+    }
+  };
+
   // When OM is present and property is not saved, auto-save (star) the deal once
   useEffect(() => {
     if (
@@ -617,6 +748,29 @@ export function CanonicalPropertyDetail({
   const ownerInfo = d?.ownerInfo ?? d?.owner_info;
   const ownerModuleName = d?.ownerModuleName ?? d?.owner_module_name ?? null;
   const ownerModuleBusiness = d?.ownerModuleBusiness ?? d?.owner_module_business ?? null;
+  const omData = d?.omData as {
+    authoritative?: {
+      currentFinancials?: {
+        noi?: number | null;
+        grossRentalIncome?: number | null;
+        otherIncome?: number | null;
+        effectiveGrossIncome?: number | null;
+        operatingExpenses?: number | null;
+      } | null;
+      rentRoll?: Array<{ unit?: string; monthlyRent?: number; annualRent?: number; beds?: number; baths?: number; sqft?: number; rentType?: string; tenantStatus?: string; notes?: string }> | null;
+      expenses?: {
+        expensesTable?: Array<{ lineItem?: string | null; amount?: number | null }> | null;
+        totalExpenses?: number | null;
+      } | null;
+      validationFlags?: Array<{
+        severity?: string | null;
+        message?: string | null;
+        field?: string | null;
+        brokerValue?: unknown;
+        externalValue?: unknown;
+      }> | null;
+    } | null;
+  } | null | undefined;
   const rentalFinancials = d?.rentalFinancials as {
     rentalUnits?: Array<{ unit?: string | null; rentalPrice?: number | null; status?: string | null; sqft?: number | null; listedDate?: string | null; lastRentedDate?: string | null; beds?: number | null; baths?: number | null; images?: string[] | null; source?: string | null; streeteasyUrl?: string | null }> | null;
     fromLlm?: { noi?: number | null; capRate?: number | null; grossRentTotal?: number | null; totalExpenses?: number | null; expensesTable?: Array<{ lineItem: string; amount: number }> | null; rentalEstimates?: string | null; rentalNumbersPerUnit?: Array<{ unit?: string; monthlyRent?: number; annualRent?: number; rent?: number; beds?: number; baths?: number; sqft?: number; occupied?: boolean | string; lastRentedDate?: string; dateVacant?: string; note?: string }> | null; otherFinancials?: string | null; keyTakeaways?: string | null; dataGapSuggestions?: string | null } | null;
@@ -639,40 +793,76 @@ export function CanonicalPropertyDetail({
     lastUpdatedAt?: string | null;
   } | null | undefined;
   const rentalUnits = rentalFinancials?.rentalUnits ?? [];
-  const fromLlm = rentalFinancials?.fromLlm;
-  const omAnalysis = rentalFinancials?.omAnalysis;
-  const omRentRoll = Array.isArray(omAnalysis?.rentRoll) ? omAnalysis.rentRoll : [];
-  const inferredPlaceholderRentRoll = Boolean(
-    !hasOmDocument &&
-    Array.isArray(fromLlm?.rentalNumbersPerUnit) &&
-    fromLlm.rentalNumbersPerUnit.length > 0 &&
-    fromLlm.rentalNumbersPerUnit.every(
-      (row) =>
-        row &&
-        typeof row === "object" &&
-        row.monthlyRent == null &&
-        row.annualRent == null &&
-        row.rent == null &&
-        typeof row.note === "string" &&
-        row.note.trim().length > 0
-    )
-  );
+  const authoritativeOm = omData?.authoritative ?? null;
+  const authoritativeCurrentFinancials = authoritativeOm?.currentFinancials ?? null;
+  const authoritativeExpenses = authoritativeOm?.expenses ?? null;
+  const authoritativeExpensesTable = Array.isArray(authoritativeExpenses?.expensesTable)
+    ? authoritativeExpenses.expensesTable
+    : [];
+  const authoritativeExpensesTotal =
+    authoritativeExpenses?.totalExpenses ??
+    (authoritativeExpensesTable.length > 0
+      ? authoritativeExpensesTable.reduce((sum, row) => sum + (typeof row?.amount === "number" ? row.amount : 0), 0)
+      : null);
+  const authoritativeSummary =
+    authoritativeOm != null
+      ? {
+          grossRent: authoritativeCurrentFinancials?.grossRentalIncome ?? null,
+          otherIncome: authoritativeCurrentFinancials?.otherIncome ?? null,
+          effectiveGrossIncome: authoritativeCurrentFinancials?.effectiveGrossIncome ?? null,
+          _expenses: authoritativeExpensesTotal,
+          noi: authoritativeCurrentFinancials?.noi ?? null,
+        }
+      : null;
+  const authoritativeValidationMessages = Array.isArray(authoritativeOm?.validationFlags)
+    ? authoritativeOm.validationFlags
+        .map((flag) => {
+          if (typeof flag?.message === "string" && flag.message.trim().length > 0) return flag.message.trim();
+          const field = typeof flag?.field === "string" ? flag.field.trim() : "";
+          const brokerValue = flag?.brokerValue == null ? "" : String(flag.brokerValue);
+          const externalValue = flag?.externalValue == null ? "" : String(flag.externalValue);
+          const compared = [brokerValue, externalValue].filter((value) => value.trim().length > 0).join(" vs ");
+          if (field && compared) return `Verify ${field}: ${compared}`;
+          if (field) return `Verify ${field}`;
+          return "";
+        })
+        .filter((value): value is string => value.trim().length > 0)
+    : [];
+  const hasAuthoritativeOm = authoritativeOm != null;
+  const omRentRollSource = authoritativeOm?.rentRoll;
+  const omRentRoll = Array.isArray(omRentRollSource)
+    ? omRentRollSource.filter(
+        (row) => !isAggregateOmUnitLabel(row?.unit) && !isPlaceholderOmRentRollRow(row)
+      )
+    : [];
+  const displayedExpenseTable = authoritativeExpensesTable;
+  const displayedExpenseTotal = authoritativeExpensesTotal;
+  const hasDisplayedOmPanel =
+    hasAuthoritativeOm &&
+    ((authoritativeSummary != null && Object.values(authoritativeSummary).some((value) => value != null)) ||
+      omRentRoll.length > 0 ||
+      displayedExpenseTable.length > 0 ||
+      authoritativeValidationMessages.length > 0);
   const matchedOmIndexes = new Set<number>();
-  const directCards = rentalUnits.map((row) => {
+  const matchedMediaIndexes = new Set<number>();
+  const matchedMediaByOmIndex = new Map<number, typeof rentalUnits[number]>();
+  rentalUnits.forEach((row, mediaIndex) => {
     const financialRow = findMatchingOmRentRollRow(
       row as Record<string, unknown>,
       omRentRoll as Array<Record<string, unknown>>
     );
     if (financialRow) {
       const matchedIndex = omRentRoll.findIndex((candidate) => candidate === financialRow);
-      if (matchedIndex >= 0) matchedOmIndexes.add(matchedIndex);
+      if (matchedIndex >= 0 && !matchedMediaByOmIndex.has(matchedIndex)) {
+        matchedOmIndexes.add(matchedIndex);
+        matchedMediaIndexes.add(mediaIndex);
+        matchedMediaByOmIndex.set(matchedIndex, row);
+      }
     }
-    return { mediaRow: row, financialRow };
   });
-  const unmatchedMediaIndexes = directCards
-    .map((card, index) => ({ card, index }))
-    .filter(({ card }) => !card.financialRow)
-    .map(({ index }) => index);
+  const unmatchedMediaIndexes = rentalUnits
+    .map((_, index) => index)
+    .filter((index) => !matchedMediaIndexes.has(index));
   const unmatchedOmIndexes = omRentRoll
     .map((row, index) => ({ row, index }))
     .filter(({ index }) => !matchedOmIndexes.has(index))
@@ -688,31 +878,35 @@ export function CanonicalPropertyDetail({
       valuesClose(mediaRent, omRent) ||
       (isSpecialOmUnitLabel(omRow?.unit) && mediaIndex === rentalUnits.length - 1);
     if (shouldPair) {
-      directCards[mediaIndex] = { mediaRow: rentalUnits[mediaIndex], financialRow: omRentRoll[omIndex] };
       matchedOmIndexes.add(omIndex);
+      matchedMediaIndexes.add(mediaIndex);
+      matchedMediaByOmIndex.set(omIndex, rentalUnits[mediaIndex]!);
     }
   }
+  const unmatchedMediaCount = Math.max(0, rentalUnits.length - matchedMediaIndexes.size);
   const displayRentalCards =
     omRentRoll.length > 0
-      ? [
-          ...directCards,
-          ...omRentRoll
-            .filter((_, index) => !matchedOmIndexes.has(index))
-            .map((row) => ({ mediaRow: null, financialRow: row })),
-        ]
+      ? omRentRoll.map((row, index) => ({
+          mediaRow: matchedMediaByOmIndex.get(index) ?? null,
+          financialRow: row,
+        }))
       : rentalUnits.map((row) => ({ mediaRow: row, financialRow: null }));
   const rentalUnitsHeading =
     omRentRoll.length > 0 ? "Rental units and listing media" : "Rental units (from Streeteasy / inquiry)";
   const rentalUnitsCopy =
     omRentRoll.length > 0
-      ? "OM rent-roll values are shown when a unit can be matched. StreetEasy links and photos stay attached when available."
+      ? unmatchedMediaCount > 0
+        ? `OM rent-roll rows are primary. StreetEasy links and photos are attached only when a listing can be matched; ${unmatchedMediaCount} external listing${unmatchedMediaCount === 1 ? "" : "s"} could not be reconciled to the OM and were omitted from the merged unit view.`
+        : "OM rent-roll rows are primary. StreetEasy links and photos stay attached when a listing can be matched."
       : "Per-unit listing and inquiry data pulled from Streeteasy / RapidAPI.";
   const financialsHeading =
-    hasOmDocument || omRentRoll.length > 0 ? "Financials (current extracted view)" : "Financial hints (from listing / inquiry text)";
+    hasAuthoritativeOm
+      ? "Authoritative OM snapshot"
+      : "Authoritative OM snapshot unavailable";
   const financialsCopy =
-    hasOmDocument || omRentRoll.length > 0
-      ? "Showing the best current extracted financial view. OM-derived metrics take precedence when available."
-      : "No uploaded OM is on file. These values are inferred from listing or inquiry text and may include placeholder unit rows when exact rents were not stated.";
+    hasAuthoritativeOm
+      ? "Promoted broker-reported OM data currently feeding dossier calculations. Placeholder rows and fallback values are excluded from totals."
+      : "No promoted OM snapshot is available. Legacy OM extraction is intentionally excluded from this view and from calculations.";
   const ownerValuations = (d?.ownerValuations ?? d?.owner_valuations) as string | null | undefined;
   const assessedMarketValue = (d?.assessedMarketValue ?? d?.assessed_market_value) as number | null | undefined;
   const assessedActualValue = (d?.assessedActualValue ?? d?.assessed_actual_value) as number | null | undefined;
@@ -1051,6 +1245,26 @@ export function CanonicalPropertyDetail({
               {dealScore != null ? `${dealScore}/100` : "Pending dossier"}
             </div>
           </div>
+          {calculatedDealScore != null && calculatedDealScore !== dealScore && (
+            <div className="property-metric">
+              <div className="property-metric-label">Calculated</div>
+              <div className="property-metric-value">{calculatedDealScore}/100</div>
+            </div>
+          )}
+          {dealSignals && typeof dealSignals.confidenceScore === "number" && (
+            <div className="property-metric">
+              <div className="property-metric-label">Confidence</div>
+              <div className="property-metric-value">{Number(dealSignals.confidenceScore).toFixed(2)}</div>
+            </div>
+          )}
+          {scoreOverride && (
+            <div className="property-metric">
+              <div className="property-metric-label">Override</div>
+              <div className="property-metric-value" title={scoreOverride.reason}>
+                {scoreOverride.score}/100
+              </div>
+            </div>
+          )}
           {dealSignals && typeof dealSignals.assetCapRate === "number" && (
             <div className="property-metric">
               <div className="property-metric-label">Asset cap</div>
@@ -1062,6 +1276,51 @@ export function CanonicalPropertyDetail({
               <div className="property-metric-label">Adj. cap</div>
               <div className="property-metric-value">{Number(dealSignals.adjustedCapRate).toFixed(2)}%</div>
             </div>
+          )}
+        </div>
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: "0.5rem",
+            alignItems: "center",
+            padding: "0.75rem 1rem 0",
+            borderTop: "1px solid rgba(0,0,0,0.08)",
+            marginTop: "0.75rem",
+          }}
+        >
+          <input
+            type="number"
+            min={0}
+            max={100}
+            step={1}
+            value={scoreOverrideDraft.score}
+            onChange={(e) => setScoreOverrideDraft((prev) => ({ ...prev, score: e.target.value }))}
+            placeholder={dealScore != null ? String(dealScore) : "Score"}
+            style={{ width: "6rem" }}
+          />
+          <input
+            type="text"
+            value={scoreOverrideDraft.reason}
+            onChange={(e) => setScoreOverrideDraft((prev) => ({ ...prev, reason: e.target.value }))}
+            placeholder="Override reason"
+            style={{ minWidth: "16rem", flex: "1 1 18rem" }}
+          />
+          <button type="button" onClick={saveScoreOverride} disabled={scoreOverrideSaving}>
+            {scoreOverrideSaving ? "Saving…" : scoreOverride ? "Replace override" : "Set override"}
+          </button>
+          {scoreOverride && (
+            <button type="button" onClick={clearScoreOverride} disabled={scoreOverrideSaving}>
+              Clear override
+            </button>
+          )}
+          {scoreOverride && (
+            <span style={{ fontSize: "0.85rem", color: "#555" }} title={scoreOverride.reason}>
+              Active override: {scoreOverride.reason}
+            </span>
+          )}
+          {scoreOverrideError && (
+            <span style={{ fontSize: "0.85rem", color: "#b91c1c" }}>{scoreOverrideError}</span>
           )}
         </div>
       </div>
@@ -2075,44 +2334,42 @@ tyler@stayhaus.co`;
               </div>
             </div>
           )}
-          {rentRollComparison && !rentRollComparison.comparable && rentalUnits.length > 0 && (fromLlm?.rentalNumbersPerUnit?.length ?? omAnalysis?.rentRoll?.length ?? 0) > 0 && (
+          {rentRollComparison && !rentRollComparison.comparable && rentalUnits.length > 0 && omRentRoll.length > 0 && (
             <p style={{ margin: "0.5rem 0", padding: "0.35rem 0.5rem", backgroundColor: "#fef3c7", borderRadius: "4px", fontSize: "0.8rem", color: "#92400e" }}>
               <strong>RapidAPI rent roll likely incomplete — comparison disabled.</strong> Only compare when total units and total bedrooms match (RapidAPI: {rentRollComparison.totalUnitsRapid} units, {rentRollComparison.totalBedsRapid} beds; OM: {rentRollComparison.totalUnitsOm} units, {rentRollComparison.totalBedsOm} beds).
             </p>
           )}
-          {omAnalysis && (omAnalysis.uiFinancialSummary || omAnalysis.rentRoll?.length || omAnalysis.expenses?.expensesTable?.length || omAnalysis.investmentTakeaways?.length) ? (
+          {hasDisplayedOmPanel ? (
             <div className="rental-om-panel">
-              <strong style={{ display: "block", marginBottom: "0.35rem", fontSize: "0.95rem", color: "#1a1a1a" }}>Investment analysis (from OM)</strong>
-              <p style={{ margin: "0 0 0.5rem", fontSize: "0.75rem", color: "#64748b" }}>Financials from OM (current state). Senior-analyst LLM extraction. Top-line financials, rent roll, expenses, and takeaways.</p>
-              {omAnalysis.uiFinancialSummary && typeof omAnalysis.uiFinancialSummary === "object" && (
+              <strong style={{ display: "block", marginBottom: "0.35rem", fontSize: "0.95rem", color: "#1a1a1a" }}>{financialsHeading}</strong>
+              <p style={{ margin: "0 0 0.5rem", fontSize: "0.75rem", color: "#64748b" }}>{financialsCopy}</p>
+              {hasAuthoritativeOm && authoritativeValidationMessages.length > 0 && (
+                <div style={{ marginBottom: "0.6rem", padding: "0.45rem 0.55rem", backgroundColor: "#fefce8", borderRadius: "6px", fontSize: "0.8rem" }}>
+                  <strong style={{ display: "block", marginBottom: "0.2rem" }}>Validation flags</strong>
+                  <ul style={{ margin: 0, paddingLeft: "1.1rem", lineHeight: 1.45 }}>
+                    {authoritativeValidationMessages.slice(0, 4).map((message, index) => (
+                      <li key={index}>{message}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {hasAuthoritativeOm && authoritativeSummary && Object.values(authoritativeSummary).some((value) => value != null) && (
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))", gap: "0.5rem 1rem", marginBottom: "0.75rem", fontSize: "0.8rem" }}>
                   {(() => {
-                    const summary = omAnalysis.uiFinancialSummary as Record<string, unknown>;
-                    const totalExpenses = omAnalysis.expenses?.totalExpenses ?? (Array.isArray(omAnalysis.expenses?.expensesTable) ? omAnalysis.expenses.expensesTable.reduce((s: number, r: { amount: number }) => s + r.amount, 0) : null);
-                    const order: string[] = ["grossRent", "noi", "capRate", "adjustedCapRate", "expenseRatio", "breakEvenOccupancy", "price", "pricePerUnit", "pricePerSqft"];
-                    if (totalExpenses != null) order.splice(1, 0, "_expenses");
+                    const summary = authoritativeSummary as Record<string, unknown>;
+                    const order: string[] = ["grossRent", "otherIncome", "effectiveGrossIncome", "_expenses", "noi"];
                     const labels: Record<string, string> = {
                       grossRent: "Gross rent",
+                      otherIncome: "Other income",
+                      effectiveGrossIncome: "EGI",
                       _expenses: "Expenses",
                       noi: "NOI",
-                      capRate: "Cap rate",
-                      adjustedCapRate: "Adjusted cap rate",
-                      expenseRatio: "Expense ratio",
-                      breakEvenOccupancy: "Break-even occupancy",
-                      price: "Price",
-                      pricePerUnit: "Price per unit",
-                      pricePerSqft: "Price per sq ft",
                     };
                     return order.map((key) => {
-                      const raw = key === "_expenses" ? totalExpenses : summary[key];
+                      const raw = summary[key];
                       if (raw == null) return null;
-                      const isPercentKey = key.includes("Ratio") || key.includes("Occupancy") || key.includes("Cap");
                       const num = typeof raw === "number" ? raw : (typeof raw === "string" ? Number(raw.replace(/[$,%\s]/g, "")) : NaN);
-                      const display = !Number.isNaN(num)
-                        ? isPercentKey
-                          ? `${(num > 0 && num <= 1 ? num * 100 : num).toFixed(2)}%`
-                          : formatPrice(num)
-                        : String(raw);
+                      const display = !Number.isNaN(num) ? formatPrice(num) : String(raw);
                       return (
                         <div key={key} style={{ padding: "0.25rem 0.5rem", backgroundColor: "#f8fafc", borderRadius: "4px" }}>
                           <span style={{ color: "#64748b", display: "block", fontSize: "0.7rem" }}>{labels[key] ?? key}</span>
@@ -2123,7 +2380,7 @@ tyler@stayhaus.co`;
                   })()}
                 </div>
               )}
-              {omAnalysis.rentRoll && omAnalysis.rentRoll.length > 0 && (
+              {omRentRoll.length > 0 && displayRentalCards.length === 0 && (
                 <div style={{ marginBottom: "0.6rem" }}>
                   <span style={{ display: "block", fontSize: "0.75rem", color: "#666", marginBottom: "0.25rem" }}>Rent roll</span>
                   <div style={{ overflowX: "auto", border: "1px solid #e2e8f0", borderRadius: "8px" }}>
@@ -2133,38 +2390,38 @@ tyler@stayhaus.co`;
                           <th style={{ textAlign: "center", padding: "0.4rem 0.5rem", fontWeight: 600 }}>Unit</th>
                           <th style={{ textAlign: "center", padding: "0.4rem 0.5rem", fontWeight: 600 }}>Monthly</th>
                           <th style={{ textAlign: "center", padding: "0.4rem 0.5rem", fontWeight: 600 }}>Annual</th>
-                          {omAnalysis.rentRoll.some((u) => u.beds != null) && <th style={{ textAlign: "center", padding: "0.4rem 0.5rem", fontWeight: 600 }}>Beds</th>}
-                          {omAnalysis.rentRoll.some((u) => u.baths != null) && <th style={{ textAlign: "center", padding: "0.4rem 0.5rem", fontWeight: 600 }}>Baths</th>}
-                          {omAnalysis.rentRoll.some((u) => u.sqft != null) && <th style={{ textAlign: "center", padding: "0.4rem 0.5rem", fontWeight: 600 }}>Sq ft</th>}
-                          {omAnalysis.rentRoll.some((u) => (u as { occupied?: boolean | string }).occupied != null) && <th style={{ textAlign: "center", padding: "0.4rem 0.5rem", fontWeight: 600 }}>Occupied</th>}
-                          {omAnalysis.rentRoll.some((u) => (u as { lastRentedDate?: string }).lastRentedDate != null) && <th style={{ textAlign: "center", padding: "0.4rem 0.5rem", fontWeight: 600 }}>Last rented</th>}
-                          {omAnalysis.rentRoll.some((u) => (u as { dateVacant?: string }).dateVacant != null) && <th style={{ textAlign: "center", padding: "0.4rem 0.5rem", fontWeight: 600 }}>Date vacant</th>}
-                          {(omAnalysis.rentRoll.some((u) => u.notes) || omAnalysis.rentRoll.some((u) => u.rentType)) && <th style={{ textAlign: "left", padding: "0.4rem 0.5rem", fontWeight: 600, minWidth: "220px" }}>Note</th>}
+                          {omRentRoll.some((u) => u.beds != null) && <th style={{ textAlign: "center", padding: "0.4rem 0.5rem", fontWeight: 600 }}>Beds</th>}
+                          {omRentRoll.some((u) => u.baths != null) && <th style={{ textAlign: "center", padding: "0.4rem 0.5rem", fontWeight: 600 }}>Baths</th>}
+                          {omRentRoll.some((u) => u.sqft != null) && <th style={{ textAlign: "center", padding: "0.4rem 0.5rem", fontWeight: 600 }}>Sq ft</th>}
+                          {omRentRoll.some((u) => (u as { occupied?: boolean | string }).occupied != null) && <th style={{ textAlign: "center", padding: "0.4rem 0.5rem", fontWeight: 600 }}>Occupied</th>}
+                          {omRentRoll.some((u) => (u as { lastRentedDate?: string }).lastRentedDate != null) && <th style={{ textAlign: "center", padding: "0.4rem 0.5rem", fontWeight: 600 }}>Last rented</th>}
+                          {omRentRoll.some((u) => (u as { dateVacant?: string }).dateVacant != null) && <th style={{ textAlign: "center", padding: "0.4rem 0.5rem", fontWeight: 600 }}>Date vacant</th>}
+                          {(omRentRoll.some((u) => u.notes) || omRentRoll.some((u) => u.rentType)) && <th style={{ textAlign: "left", padding: "0.4rem 0.5rem", fontWeight: 600, minWidth: "220px" }}>Note</th>}
                         </tr>
                       </thead>
                       <tbody>
-                        {omAnalysis.rentRoll.map((u, idx) => (
+                        {omRentRoll.map((u, idx) => (
                           <tr key={idx} style={{ borderBottom: "1px solid #eee" }}>
                             <td style={{ textAlign: "center", padding: "0.4rem 0.5rem" }}>{u.unit ?? "—"}</td>
                             <td style={{ textAlign: "center", padding: "0.4rem 0.5rem" }}>{u.monthlyRent != null ? formatPrice(u.monthlyRent) : "—"}</td>
                             <td style={{ textAlign: "center", padding: "0.4rem 0.5rem" }}>{u.annualRent != null ? formatPrice(u.annualRent) : u.monthlyRent != null ? formatPrice(u.monthlyRent * 12) : "—"}</td>
-                            {omAnalysis.rentRoll!.some((x) => x.beds != null) && <td style={{ textAlign: "center", padding: "0.4rem 0.5rem" }}>{u.beds != null ? String(u.beds) : "—"}</td>}
-                            {omAnalysis.rentRoll!.some((x) => x.baths != null) && <td style={{ textAlign: "center", padding: "0.4rem 0.5rem" }}>{u.baths != null ? String(u.baths) : "—"}</td>}
-                            {omAnalysis.rentRoll!.some((x) => x.sqft != null) && <td style={{ textAlign: "center", padding: "0.4rem 0.5rem" }}>{u.sqft != null ? u.sqft.toLocaleString() : "—"}</td>}
-                            {omAnalysis.rentRoll!.some((x) => (x as { occupied?: boolean | string }).occupied != null) && <td style={{ textAlign: "center", padding: "0.4rem 0.5rem", fontSize: "0.75rem" }}>{(u as { occupied?: boolean | string }).occupied === true ? "Yes" : (u as { occupied?: boolean | string }).occupied === false ? "No" : String((u as { occupied?: boolean | string }).occupied ?? "—")}</td>}
-                            {omAnalysis.rentRoll!.some((x) => (x as { lastRentedDate?: string }).lastRentedDate != null) && <td style={{ textAlign: "center", padding: "0.4rem 0.5rem", fontSize: "0.75rem" }}>{(u as { lastRentedDate?: string }).lastRentedDate ?? "—"}</td>}
-                            {omAnalysis.rentRoll!.some((x) => (x as { dateVacant?: string }).dateVacant != null) && <td style={{ textAlign: "center", padding: "0.4rem 0.5rem", fontSize: "0.75rem" }}>{(u as { dateVacant?: string }).dateVacant ?? "—"}</td>}
-                            {omAnalysis.rentRoll!.some((x) => x.notes || x.rentType) && (
+                            {omRentRoll.some((x) => x.beds != null) && <td style={{ textAlign: "center", padding: "0.4rem 0.5rem" }}>{u.beds != null ? String(u.beds) : "—"}</td>}
+                            {omRentRoll.some((x) => x.baths != null) && <td style={{ textAlign: "center", padding: "0.4rem 0.5rem" }}>{u.baths != null ? String(u.baths) : "—"}</td>}
+                            {omRentRoll.some((x) => x.sqft != null) && <td style={{ textAlign: "center", padding: "0.4rem 0.5rem" }}>{u.sqft != null ? u.sqft.toLocaleString() : "—"}</td>}
+                            {omRentRoll.some((x) => (x as { occupied?: boolean | string }).occupied != null) && <td style={{ textAlign: "center", padding: "0.4rem 0.5rem", fontSize: "0.75rem" }}>{(u as { occupied?: boolean | string }).occupied === true ? "Yes" : (u as { occupied?: boolean | string }).occupied === false ? "No" : String((u as { occupied?: boolean | string }).occupied ?? "—")}</td>}
+                            {omRentRoll.some((x) => (x as { lastRentedDate?: string }).lastRentedDate != null) && <td style={{ textAlign: "center", padding: "0.4rem 0.5rem", fontSize: "0.75rem" }}>{(u as { lastRentedDate?: string }).lastRentedDate ?? "—"}</td>}
+                            {omRentRoll.some((x) => (x as { dateVacant?: string }).dateVacant != null) && <td style={{ textAlign: "center", padding: "0.4rem 0.5rem", fontSize: "0.75rem" }}>{(u as { dateVacant?: string }).dateVacant ?? "—"}</td>}
+                            {omRentRoll.some((x) => x.notes || x.rentType) && (
                               <td style={{ textAlign: "left", padding: "0.4rem 0.5rem", fontSize: "0.75rem", color: "#555", minWidth: "220px", whiteSpace: "normal", overflowWrap: "anywhere" }}>{[u.rentType, u.tenantStatus, u.notes].filter(Boolean).join("; ") || "—"}</td>
                             )}
                           </tr>
                         ))}
                         <tr style={{ borderTop: "2px solid #e2e8f0", backgroundColor: "#f8fafc", fontWeight: 600 }}>
                           <td style={{ textAlign: "center", padding: "0.4rem 0.5rem" }}>Total rent roll</td>
-                          <td style={{ textAlign: "center", padding: "0.4rem 0.5rem" }}>{formatPrice(omAnalysis.rentRoll.reduce((s, u) => s + (u.monthlyRent ?? 0), 0))}</td>
-                          <td style={{ textAlign: "center", padding: "0.4rem 0.5rem" }}>{formatPrice(omAnalysis.rentRoll.reduce((s, u) => s + (u.annualRent ?? (u.monthlyRent ?? 0) * 12), 0))}</td>
-                          {(omAnalysis.rentRoll!.some((x) => x.beds != null) || omAnalysis.rentRoll!.some((x) => x.baths != null) || omAnalysis.rentRoll!.some((x) => x.sqft != null) || omAnalysis.rentRoll!.some((x) => (x as { occupied?: unknown }).occupied != null) || omAnalysis.rentRoll!.some((x) => (x as { lastRentedDate?: unknown }).lastRentedDate != null) || omAnalysis.rentRoll!.some((x) => (x as { dateVacant?: unknown }).dateVacant != null) || omAnalysis.rentRoll!.some((x) => x.notes || x.rentType)) && (
-                            <td colSpan={[omAnalysis.rentRoll!.some((x) => x.beds != null), omAnalysis.rentRoll!.some((x) => x.baths != null), omAnalysis.rentRoll!.some((x) => x.sqft != null), omAnalysis.rentRoll!.some((x) => (x as { occupied?: unknown }).occupied != null), omAnalysis.rentRoll!.some((x) => (x as { lastRentedDate?: unknown }).lastRentedDate != null), omAnalysis.rentRoll!.some((x) => (x as { dateVacant?: unknown }).dateVacant != null), omAnalysis.rentRoll!.some((x) => x.notes || x.rentType)].filter(Boolean).length} style={{ textAlign: "center", padding: "0.4rem 0.5rem" }} />
+                          <td style={{ textAlign: "center", padding: "0.4rem 0.5rem" }}>{formatPrice(omRentRoll.reduce((s, u) => s + (u.monthlyRent ?? 0), 0))}</td>
+                          <td style={{ textAlign: "center", padding: "0.4rem 0.5rem" }}>{formatPrice(omRentRoll.reduce((s, u) => s + (u.annualRent ?? (u.monthlyRent ?? 0) * 12), 0))}</td>
+                          {(omRentRoll.some((x) => x.beds != null) || omRentRoll.some((x) => x.baths != null) || omRentRoll.some((x) => x.sqft != null) || omRentRoll.some((x) => (x as { occupied?: unknown }).occupied != null) || omRentRoll.some((x) => (x as { lastRentedDate?: unknown }).lastRentedDate != null) || omRentRoll.some((x) => (x as { dateVacant?: unknown }).dateVacant != null) || omRentRoll.some((x) => x.notes || x.rentType)) && (
+                            <td colSpan={[omRentRoll.some((x) => x.beds != null), omRentRoll.some((x) => x.baths != null), omRentRoll.some((x) => x.sqft != null), omRentRoll.some((x) => (x as { occupied?: unknown }).occupied != null), omRentRoll.some((x) => (x as { lastRentedDate?: unknown }).lastRentedDate != null), omRentRoll.some((x) => (x as { dateVacant?: unknown }).dateVacant != null), omRentRoll.some((x) => x.notes || x.rentType)].filter(Boolean).length} style={{ textAlign: "center", padding: "0.4rem 0.5rem" }} />
                           )}
                         </tr>
                       </tbody>
@@ -2172,7 +2429,7 @@ tyler@stayhaus.co`;
                   </div>
                 </div>
               )}
-              {omAnalysis.expenses?.expensesTable && omAnalysis.expenses.expensesTable.length > 0 && (
+              {displayedExpenseTable.length > 0 && (
                 <div style={{ marginBottom: "0.6rem" }}>
                   <span style={{ display: "block", fontSize: "0.75rem", color: "#666", marginBottom: "0.25rem" }}>Expenses</span>
                   <div style={{ overflowX: "auto", border: "1px solid #e2e8f0", borderRadius: "8px" }}>
@@ -2184,154 +2441,26 @@ tyler@stayhaus.co`;
                         </tr>
                       </thead>
                       <tbody>
-                        {omAnalysis.expenses.expensesTable.map((row, idx) => (
+                        {displayedExpenseTable.map((row, idx) => (
                           <tr key={idx} style={{ borderBottom: "1px solid #eee" }}>
-                            <td style={{ padding: "0.4rem 0.5rem" }}>{row.lineItem}</td>
-                            <td style={{ textAlign: "right", padding: "0.4rem 0.5rem" }}>{formatPrice(row.amount)}</td>
+                            <td style={{ padding: "0.4rem 0.5rem" }}>{row.lineItem ?? "—"}</td>
+                            <td style={{ textAlign: "right", padding: "0.4rem 0.5rem" }}>{formatPrice(row.amount ?? null)}</td>
                           </tr>
                         ))}
                         <tr style={{ borderTop: "2px solid #e2e8f0", backgroundColor: "#f8fafc", fontWeight: 600 }}>
                           <td style={{ padding: "0.4rem 0.5rem" }}>Total expenses</td>
-                          <td style={{ textAlign: "right", padding: "0.4rem 0.5rem" }}>{formatPrice(omAnalysis.expenses.totalExpenses ?? omAnalysis.expenses.expensesTable.reduce((s, r) => s + r.amount, 0))}</td>
+                          <td style={{ textAlign: "right", padding: "0.4rem 0.5rem" }}>{formatPrice(displayedExpenseTotal)}</td>
                         </tr>
                       </tbody>
                     </table>
                   </div>
-                </div>
-              )}
-              {omAnalysis.investmentTakeaways && omAnalysis.investmentTakeaways.length > 0 && (
-                <div style={{ marginBottom: "0.5rem" }}>
-                  <span style={{ display: "block", fontSize: "0.75rem", color: "#666", marginBottom: "0.2rem" }}>Investment takeaways</span>
-                  <ul style={{ margin: 0, paddingLeft: "1.25rem", fontSize: "0.85rem", lineHeight: 1.5, color: "#166534" }}>
-                    {omAnalysis.investmentTakeaways.map((t, i) => (
-                      <li key={i}>{t.startsWith("•") ? t.slice(1).trim() : t}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-              {omAnalysis.nycRegulatorySummary && typeof omAnalysis.nycRegulatorySummary === "object" && Object.keys(omAnalysis.nycRegulatorySummary).length > 0 && (
-                <div style={{ marginBottom: "0.5rem", padding: "0.35rem 0.5rem", backgroundColor: "#fefce8", borderRadius: "4px", fontSize: "0.8rem" }}>
-                  <strong style={{ display: "block", marginBottom: "0.2rem" }}>NYC regulatory</strong>
-                  <p style={{ margin: 0, lineHeight: 1.5 }}>
-                    {formatNycRegulatorySummary(omAnalysis.nycRegulatorySummary as Record<string, unknown>)}
-                  </p>
                 </div>
               )}
             </div>
-          ) : fromLlm && (fromLlm.noi != null || fromLlm.capRate != null || fromLlm.grossRentTotal != null || fromLlm.totalExpenses != null || (fromLlm.expensesTable && fromLlm.expensesTable.length > 0) || (fromLlm.rentalNumbersPerUnit && fromLlm.rentalNumbersPerUnit.length > 0) || fromLlm.rentalEstimates || fromLlm.otherFinancials || fromLlm.keyTakeaways || fromLlm.dataGapSuggestions) && (
+          ) : (
             <div className="rental-om-panel">
               <strong style={{ display: "block", marginBottom: "0.2rem", fontSize: "0.9rem", color: "#1a1a1a" }}>{financialsHeading}</strong>
-              <p style={{ margin: "0 0 0.5rem", fontSize: "0.75rem", color: "#64748b" }}>{financialsCopy}</p>
-              {inferredPlaceholderRentRoll && (
-                <p style={{ margin: "0 0 0.5rem", padding: "0.35rem 0.5rem", backgroundColor: "#fef3c7", borderRadius: "4px", fontSize: "0.8rem", color: "#92400e" }}>
-                  <strong>No parsed OM on file.</strong> The unit rows below are inferred from narrative text, so they may read like placeholders until a brochure, OM, or rent roll is uploaded.
-                </p>
-              )}
-              <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem 1.25rem", marginBottom: "0.6rem" }}>
-                {fromLlm.noi != null && <span style={{ fontWeight: 500 }}>NOI: {formatPrice(fromLlm.noi)}</span>}
-                {fromLlm.capRate != null && <span style={{ fontWeight: 500 }}>Cap rate: {typeof fromLlm.capRate === "number" && fromLlm.capRate > 0 && fromLlm.capRate <= 1 ? (fromLlm.capRate * 100).toFixed(2) : fromLlm.capRate}%</span>}
-                {fromLlm.grossRentTotal != null && <span style={{ fontWeight: 500 }}>Gross rent: {formatPrice(fromLlm.grossRentTotal)}/yr</span>}
-                {fromLlm.totalExpenses != null && <span style={{ fontWeight: 500 }}>Total expenses: {formatPrice(fromLlm.totalExpenses)}/yr</span>}
-              </div>
-              {hasOmDocument && fromLlm.rentalNumbersPerUnit && fromLlm.rentalNumbersPerUnit.length > 0 && (
-                <div style={{ marginBottom: "0.75rem" }}>
-                  <span style={{ display: "block", fontSize: "0.75rem", color: "#666", marginBottom: "0.35rem" }}>
-                    {hasOmDocument ? "Rent roll (from current extracted documents)" : "Rent roll (inferred from text)"}
-                  </span>
-                  <div style={{ overflowX: "auto", border: "1px solid #e2e8f0", borderRadius: "8px" }}>
-                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem", tableLayout: "auto" }}>
-                      <thead>
-                        <tr style={{ borderBottom: "2px solid #e2e8f0", backgroundColor: "#f8fafc" }}>
-                          <th style={{ textAlign: "center", padding: "0.5rem 0.75rem", fontWeight: 600, width: "20%" }}>Unit</th>
-                          <th style={{ textAlign: "center", padding: "0.5rem 0.75rem", fontWeight: 600, width: "22%" }}>Monthly</th>
-                          <th style={{ textAlign: "center", padding: "0.5rem 0.75rem", fontWeight: 600, width: "22%" }}>Annual</th>
-                          {fromLlm.rentalNumbersPerUnit.some((u) => u.beds != null) && <th style={{ textAlign: "center", padding: "0.5rem 0.75rem", fontWeight: 600, minWidth: "80px" }}>Beds</th>}
-                          {fromLlm.rentalNumbersPerUnit.some((u) => u.baths != null) && <th style={{ textAlign: "center", padding: "0.5rem 0.75rem", fontWeight: 600, minWidth: "80px" }}>Baths</th>}
-                          {fromLlm.rentalNumbersPerUnit.some((u) => u.sqft != null) && <th style={{ textAlign: "center", padding: "0.5rem 0.75rem", fontWeight: 600, minWidth: "80px" }}>Sq ft</th>}
-                          {fromLlm.rentalNumbersPerUnit.some((u) => u.occupied != null) && <th style={{ textAlign: "center", padding: "0.5rem 0.75rem", fontWeight: 600, minWidth: "80px" }}>Occupied</th>}
-                          {fromLlm.rentalNumbersPerUnit.some((u) => u.lastRentedDate != null) && <th style={{ textAlign: "center", padding: "0.5rem 0.75rem", fontWeight: 600, minWidth: "90px" }}>Last rented</th>}
-                          {fromLlm.rentalNumbersPerUnit.some((u) => u.dateVacant != null) && <th style={{ textAlign: "center", padding: "0.5rem 0.75rem", fontWeight: 600, minWidth: "90px" }}>Date vacant</th>}
-                          {fromLlm.rentalNumbersPerUnit.some((u) => u.note) && <th style={{ textAlign: "left", padding: "0.5rem 0.75rem", fontWeight: 600, minWidth: "220px" }}>Note</th>}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {fromLlm.rentalNumbersPerUnit.map((u, idx) => (
-                          <tr key={idx} style={{ borderBottom: "1px solid #eee" }}>
-                            <td style={{ textAlign: "center", padding: "0.5rem 0.75rem" }}>{u.unit ?? "—"}</td>
-                            <td style={{ textAlign: "center", padding: "0.5rem 0.75rem" }}>{u.monthlyRent != null ? formatPrice(u.monthlyRent) : u.rent != null ? formatPrice(u.rent) : "—"}</td>
-                            <td style={{ textAlign: "center", padding: "0.5rem 0.75rem" }}>{u.annualRent != null ? formatPrice(u.annualRent) : (u.monthlyRent ?? u.rent) != null ? formatPrice((u.monthlyRent ?? u.rent!) * 12) : "—"}</td>
-                            {fromLlm.rentalNumbersPerUnit!.some((x) => x.beds != null) && <td style={{ textAlign: "center", padding: "0.5rem 0.75rem", minWidth: "80px" }}>{u.beds != null ? String(u.beds) : "—"}</td>}
-                            {fromLlm.rentalNumbersPerUnit!.some((x) => x.baths != null) && <td style={{ textAlign: "center", padding: "0.5rem 0.75rem", minWidth: "80px" }}>{u.baths != null ? String(u.baths) : "—"}</td>}
-                            {fromLlm.rentalNumbersPerUnit!.some((x) => x.sqft != null) && <td style={{ textAlign: "center", padding: "0.5rem 0.75rem", minWidth: "80px" }}>{u.sqft != null ? u.sqft.toLocaleString() : "—"}</td>}
-                            {fromLlm.rentalNumbersPerUnit!.some((x) => x.occupied != null) && <td style={{ textAlign: "center", padding: "0.5rem 0.75rem", fontSize: "0.8rem", minWidth: "80px" }}>{u.occupied === true ? "Yes" : u.occupied === false ? "No" : (u.occupied != null ? String(u.occupied) : "—")}</td>}
-                            {fromLlm.rentalNumbersPerUnit!.some((x) => x.lastRentedDate != null) && <td style={{ textAlign: "center", padding: "0.5rem 0.75rem", fontSize: "0.8rem", minWidth: "90px" }}>{u.lastRentedDate ?? "—"}</td>}
-                            {fromLlm.rentalNumbersPerUnit!.some((x) => x.dateVacant != null) && <td style={{ textAlign: "center", padding: "0.5rem 0.75rem", fontSize: "0.8rem", minWidth: "90px" }}>{u.dateVacant ?? "—"}</td>}
-                            {fromLlm.rentalNumbersPerUnit!.some((x) => x.note) && <td style={{ textAlign: "left", padding: "0.5rem 0.75rem", fontSize: "0.8rem", color: "#555", minWidth: "220px", whiteSpace: "normal", overflowWrap: "anywhere" }}>{(u.note ?? "").trim() || "—"}</td>}
-                          </tr>
-                        ))}
-                        <tr style={{ borderTop: "2px solid #e2e8f0", backgroundColor: "#f8fafc", fontWeight: 600 }}>
-                          <td style={{ textAlign: "center", padding: "0.5rem 0.75rem" }}>Total rent roll</td>
-                          <td style={{ textAlign: "center", padding: "0.5rem 0.75rem" }}>{formatPrice(fromLlm.rentalNumbersPerUnit.reduce((sum, u) => sum + ((u.monthlyRent ?? u.rent) ?? 0), 0))}</td>
-                          <td style={{ textAlign: "center", padding: "0.5rem 0.75rem" }}>{formatPrice(fromLlm.rentalNumbersPerUnit.reduce((sum, u) => sum + (u.annualRent ?? (u.monthlyRent ?? u.rent ?? 0) * 12), 0))}</td>
-                          {(fromLlm.rentalNumbersPerUnit!.some((x) => x.beds != null) || fromLlm.rentalNumbersPerUnit!.some((x) => x.baths != null) || fromLlm.rentalNumbersPerUnit!.some((x) => x.sqft != null) || fromLlm.rentalNumbersPerUnit!.some((x) => x.occupied != null) || fromLlm.rentalNumbersPerUnit!.some((x) => x.lastRentedDate != null) || fromLlm.rentalNumbersPerUnit!.some((x) => x.dateVacant != null) || fromLlm.rentalNumbersPerUnit!.some((x) => x.note)) && (
-                            <td colSpan={[fromLlm.rentalNumbersPerUnit!.some((x) => x.beds != null), fromLlm.rentalNumbersPerUnit!.some((x) => x.baths != null), fromLlm.rentalNumbersPerUnit!.some((x) => x.sqft != null), fromLlm.rentalNumbersPerUnit!.some((x) => x.occupied != null), fromLlm.rentalNumbersPerUnit!.some((x) => x.lastRentedDate != null), fromLlm.rentalNumbersPerUnit!.some((x) => x.dateVacant != null), fromLlm.rentalNumbersPerUnit!.some((x) => x.note)].filter(Boolean).length} style={{ textAlign: "center", padding: "0.5rem 0.75rem" }} />
-                          )}
-                        </tr>
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              )}
-              {hasOmDocument && fromLlm.expensesTable && fromLlm.expensesTable.length > 0 && (
-                <div style={{ marginBottom: "0.75rem" }}>
-                  <span style={{ display: "block", fontSize: "0.75rem", color: "#666", marginBottom: "0.35rem" }}>Expenses</span>
-                  <div style={{ overflowX: "auto", border: "1px solid #e2e8f0", borderRadius: "8px" }}>
-                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem", tableLayout: "fixed" }}>
-                      <thead>
-                        <tr style={{ borderBottom: "2px solid #e2e8f0", backgroundColor: "#f8fafc" }}>
-                          <th style={{ textAlign: "center", padding: "0.5rem 0.75rem", fontWeight: 600 }}>Line item</th>
-                          <th style={{ textAlign: "center", padding: "0.5rem 0.75rem", fontWeight: 600 }}>Amount</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {fromLlm.expensesTable.map((row, idx) => (
-                          <tr key={idx} style={{ borderBottom: "1px solid #eee" }}>
-                            <td style={{ textAlign: "center", padding: "0.5rem 0.75rem" }}>{row.lineItem}</td>
-                            <td style={{ textAlign: "center", padding: "0.5rem 0.75rem" }}>{formatPrice(row.amount)}</td>
-                          </tr>
-                        ))}
-                        <tr style={{ borderTop: "2px solid #e2e8f0", backgroundColor: "#f8fafc", fontWeight: 600 }}>
-                          <td style={{ textAlign: "center", padding: "0.5rem 0.75rem" }}>Total expenses</td>
-                          <td style={{ textAlign: "center", padding: "0.5rem 0.75rem" }}>{formatPrice(fromLlm.totalExpenses ?? fromLlm.expensesTable.reduce((s, r) => s + r.amount, 0))}</td>
-                        </tr>
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              )}
-              {fromLlm.rentalEstimates && !(fromLlm.rentalNumbersPerUnit?.length && fromLlm.expensesTable?.length) && (
-                <div style={{ marginBottom: "0.4rem" }}>
-                  <span style={{ display: "block", fontSize: "0.75rem", color: "#666", marginBottom: "0.15rem" }}>Rental estimates</span>
-                  <p style={{ margin: 0, padding: "0.35rem 0.5rem", backgroundColor: "#f8f9fa", borderRadius: "4px", fontSize: "0.85rem", color: "#404040", lineHeight: 1.4 }}>{fromLlm.rentalEstimates}</p>
-                </div>
-              )}
-              {fromLlm.otherFinancials && !(fromLlm.rentalNumbersPerUnit?.length && fromLlm.expensesTable?.length) && (
-                <div style={{ marginBottom: "0.4rem" }}>
-                  <span style={{ display: "block", fontSize: "0.75rem", color: "#666", marginBottom: "0.15rem" }}>Other financials</span>
-                  <p style={{ margin: 0, padding: "0.35rem 0.5rem", backgroundColor: "#f8f9fa", borderRadius: "4px", fontSize: "0.85rem", color: "#404040", lineHeight: 1.4 }}>{fromLlm.otherFinancials}</p>
-                </div>
-              )}
-              {fromLlm.keyTakeaways && (
-                <div style={{ marginBottom: "0.4rem" }}>
-                  <span style={{ display: "block", fontSize: "0.75rem", color: "#666", marginBottom: "0.15rem" }}>Key takeaways</span>
-                  <p style={{ margin: 0, padding: "0.35rem 0.5rem", backgroundColor: "#f0fdf4", borderRadius: "4px", fontSize: "0.85rem", color: "#166534", lineHeight: 1.5, whiteSpace: "pre-line" }}>{fromLlm.keyTakeaways}</p>
-                </div>
-              )}
-              {fromLlm.dataGapSuggestions && (
-                <p style={{ margin: "0.5rem 0 0", padding: "0.35rem 0.5rem", backgroundColor: "#fef3c7", borderRadius: "4px", fontSize: "0.8rem", color: "#92400e" }}>
-                  <strong>Possible missing data:</strong> {fromLlm.dataGapSuggestions}
-                </p>
-              )}
+              <p style={{ margin: 0, fontSize: "0.8rem", color: "#64748b", lineHeight: 1.45 }}>{financialsCopy}</p>
             </div>
           )}
           <div className="rental-om-doc-grid">
@@ -2443,7 +2572,7 @@ tyler@stayhaus.co`;
               {uploadError && <p style={{ margin: "0.25rem 0 0", fontSize: "0.8rem", color: "#b91c1c" }}>{uploadError}</p>}
             </div>
           </div>
-          {listingForDisplay?.rentalPriceHistory?.length && rentalUnits.length === 0 && !fromLlm ? (
+          {listingForDisplay?.rentalPriceHistory?.length && rentalUnits.length === 0 && !hasAuthoritativeOm ? (
             <div className="initial-info-price-history-list">
               {listingForDisplay.rentalPriceHistory.slice(0, 10).map((r, i) => (
                 <div key={i} className="initial-info-price-history-row">
@@ -2455,7 +2584,7 @@ tyler@stayhaus.co`;
                 </div>
               ))}
             </div>
-          ) : rentalUnits.length === 0 && !fromLlm ? (
+          ) : rentalUnits.length === 0 && !hasAuthoritativeOm ? (
             <p style={{ color: "#737373", margin: 0 }}>—</p>
           ) : null}
         </div>

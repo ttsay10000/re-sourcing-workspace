@@ -13,4 +13,5 @@ export * from "./snapshot.js";
 export * from "./property.js";
 export * from "./dedupe.js";
 export * from "./events.js";
+export * from "./sourcing.js";
 export * from "./api.js";

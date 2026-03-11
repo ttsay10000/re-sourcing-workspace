@@ -19,6 +19,7 @@ import {
   InquirySendRepo,
   PropertyUploadedDocumentRepo,
   DealSignalsRepo,
+  DealScoreOverridesRepo,
   DocumentRepo,
   UserProfileRepo,
 } from "@re-sourcing/db";
@@ -32,24 +33,25 @@ import type { PropertyDetails, RentalFinancials, RentalFinancialsFromLlm } from 
 import { runEnrichmentForProperty } from "../enrichment/runEnrichment.js";
 import { normalizeAddressLineForDisplay, getBBLForProperty } from "../enrichment/resolvePropertyBBL.js";
 import { runRentalApiStep } from "../rental/rentalApiClient.js";
-import { extractRentalFinancialsFromListing, extractRentalFinancialsFromText } from "../rental/extractRentalFinancialsFromListing.js";
+import { extractRentalFinancialsFromListing } from "../rental/extractRentalFinancialsFromListing.js";
 import {
   resolveCurrentFinancialsFromDetails,
   resolveExpenseRowsFromDetails,
 } from "../rental/currentFinancials.js";
-import { extractTextFromUploadedFile, extractTextFromBuffer } from "../upload/extractTextFromUploadedFile.js";
 import { suggestRentalDataGaps } from "../rental/suggestRentalDataGaps.js";
 import { getRentRollComparison } from "../rental/rentRollComparison.js";
 import { fetchNyDosEntityByName } from "../enrichment/nyDosEntity.js";
 import { fetchAcrisDocumentsByOwnerName } from "../enrichment/acrisDocuments.js";
 import { computeDealSignals } from "../deal/computeDealSignals.js";
+import { buildDealScoreSensitivity } from "../deal/dealScoreSensitivity.js";
+import { resolveEffectiveDealScore } from "../deal/effectiveDealScore.js";
 import {
   computeRecommendedOffer,
   computeUnderwritingProjection,
   resolveDossierAssumptions,
 } from "../deal/underwritingModel.js";
 import { resolveGeneratedDocPath, deleteGeneratedDocumentFile } from "../deal/generatedDocStorage.js";
-import { readFile, unlink } from "fs/promises";
+import { unlink } from "fs/promises";
 import {
   createWorkflowRun,
   deriveWorkflowStatusFromCounts,
@@ -60,81 +62,56 @@ import {
   WORKFLOW_BOARD_COLUMNS,
 } from "../workflow/workflowTracker.js";
 import type { WorkflowRunStepSeed } from "../workflow/workflowTracker.js";
+import { syncPropertySourcingWorkflow } from "../sourcing/workflow.js";
+import {
+  ingestAuthoritativeOm,
+  refreshAuthoritativeOmForProperty,
+} from "../om/ingestAuthoritativeOm.js";
 
 const router = Router();
 
 const ENRICHMENT_RATE_LIMIT_DELAY_MS = Number(process.env.ENRICHMENT_RATE_LIMIT_DELAY_MS || process.env.PERMITS_RATE_LIMIT_DELAY_MS) || 300;
+const ENABLE_OM_AUTOMATION_V2 = process.env.ENABLE_OM_AUTOMATION_V2 === "1";
 
-function mergeOmDerivedFromLlm(
-  existingFromLlm: RentalFinancialsFromLlm | null,
-  nextFromLlm: RentalFinancialsFromLlm | null | undefined
-): RentalFinancialsFromLlm | undefined {
-  const merged = {
-    ...(existingFromLlm && typeof existingFromLlm === "object" ? existingFromLlm : {}),
-    ...(nextFromLlm && typeof nextFromLlm === "object" ? nextFromLlm : {}),
-  } as RentalFinancialsFromLlm;
-  const nextRentalRows = Array.isArray(nextFromLlm?.rentalNumbersPerUnit) ? nextFromLlm.rentalNumbersPerUnit : null;
-  if (!nextRentalRows || nextRentalRows.length === 0) {
-    delete merged.rentalNumbersPerUnit;
-  }
-  return Object.keys(merged).length > 0 ? merged : undefined;
+function hasAuthoritativeOm(details: unknown): boolean {
+  return !!(
+    details &&
+    typeof details === "object" &&
+    (details as { omData?: { authoritative?: unknown } }).omData?.authoritative &&
+    typeof (details as { omData?: { authoritative?: unknown } }).omData?.authoritative === "object"
+  );
 }
 
 /**
- * Run OM/Brochure LLM extraction and merge into property details. Used in background after upload
+ * Run authoritative OM ingestion in background after upload
  * so the upload response can return immediately (avoids Render request timeout).
  */
 async function runOmExtractionInBackground(
   propertyId: string,
   fileBuffer: Buffer,
   filename: string,
+  mimeType: string | null,
+  category: PropertyDocumentCategory,
   pool: import("pg").Pool
 ): Promise<void> {
-  const propertyRepo = new PropertyRepo({ pool });
-  const text = await extractTextFromBuffer(fileBuffer, filename);
-  const hasPdfSource = filename.toLowerCase().endsWith(".pdf");
-  if (text.length < 50 && !hasPdfSource) {
-    if (text.length > 0) console.warn("[documents/upload background] OM/Brochure text too short for LLM:", text.length, "chars");
-    else console.warn("[documents/upload background] No text extracted from PDF");
-    return;
-  }
-  const property = await propertyRepo.byId(propertyId);
-  if (!property) return;
-  const details = (property.details ?? {}) as Record<string, unknown>;
-  const enrichmentContext =
-    details.enrichment || details.bbl || details.taxCode
-      ? JSON.stringify(
-          { bbl: details.bbl, taxCode: details.taxCode, enrichment: details.enrichment },
-          null,
-          0
-        ).slice(0, 4000)
-      : undefined;
-  const { fromLlm, omAnalysis } = await extractRentalFinancialsFromText(text, {
-    forceOmStyle: true,
-    enrichmentContext,
-    documentFiles: hasPdfSource ? [{ filename, mimeType: "application/pdf", buffer: fileBuffer }] : undefined,
+  const result = await ingestAuthoritativeOm({
+    propertyId,
+    sourceType: "uploaded_document",
+    pool,
+    documents: [
+      {
+        id: `upload:${propertyId}:${filename}`,
+        origin: "uploaded_document",
+        filename,
+        mimeType: mimeType ?? null,
+        buffer: fileBuffer,
+        category,
+      },
+    ],
   });
-  const hasFromLlm = fromLlm && typeof fromLlm === "object" && Object.keys(fromLlm).length > 0;
-  const hasOmAnalysis = omAnalysis && typeof omAnalysis === "object";
-  if (!hasFromLlm && !hasOmAnalysis) return;
-  const prop = await propertyRepo.byId(propertyId);
-  const existing = (prop?.details?.rentalFinancials ?? null) as RentalFinancials | null;
-  const existingFromLlm = existing?.fromLlm ?? null;
-  const mergedFromLlm =
-    hasOmAnalysis
-      ? mergeOmDerivedFromLlm(existingFromLlm, fromLlm)
-      : hasFromLlm && existingFromLlm && typeof existingFromLlm === "object"
-      ? { ...existingFromLlm, ...fromLlm }
-      : (fromLlm ?? existingFromLlm ?? undefined);
-  const rentalFinancials: RentalFinancials = {
-    ...(existing ?? {}),
-    fromLlm: mergedFromLlm as RentalFinancialsFromLlm | undefined,
-    omAnalysis: hasOmAnalysis ? omAnalysis : (existing?.omAnalysis ?? undefined),
-    source: existing?.source ?? "llm",
-    lastUpdatedAt: new Date().toISOString(),
-  };
-  await propertyRepo.mergeDetails(propertyId, { rentalFinancials });
-  console.log("[documents/upload background] OM LLM merged for property", propertyId);
+  if (result.error) {
+    throw new Error(result.error);
+  }
 }
 
 /**
@@ -145,75 +122,12 @@ export async function refreshOmFinancialsForProperty(
   propertyId: string,
   pool: import("pg").Pool
 ): Promise<{ documentsProcessed: number; documentsSkippedNoFile: number; error?: string }> {
-  const propertyRepo = new PropertyRepo({ pool });
-  const uploadedDocRepo = new PropertyUploadedDocumentRepo({ pool });
-  const property = await propertyRepo.byId(propertyId);
-  if (!property) return { documentsProcessed: 0, documentsSkippedNoFile: 0, error: "Property not found" };
-  const docs = await uploadedDocRepo.listByPropertyId(propertyId);
-  const omOrBrochure = docs.filter((d) => d.category === "OM" || d.category === "Brochure");
-  let documentsProcessed = 0;
-  let documentsSkippedNoFile = 0;
-  for (const doc of omOrBrochure) {
-    let text: string;
-    let fileBuffer: Buffer | null = null;
-    const fileContent = await uploadedDocRepo.getFileContent(doc.id);
-    if (fileContent && fileContent.length > 0) {
-      fileBuffer = fileContent;
-      text = await extractTextFromBuffer(fileContent, doc.filename ?? "document");
-    } else if (uploadedDocFileExists(doc.filePath)) {
-      fileBuffer = await readFile(resolveUploadedDocFilePath(doc.filePath));
-      text = await extractTextFromUploadedFile(doc.filePath, doc.filename ?? undefined);
-    } else {
-      documentsSkippedNoFile++;
-      continue;
-    }
-    try {
-      const hasPdfSource = !!fileBuffer && (doc.filename ?? "").toLowerCase().endsWith(".pdf");
-      if (text.length < 50 && !hasPdfSource) continue;
-      const details = (property.details ?? {}) as Record<string, unknown>;
-      const enrichmentContext =
-        details.enrichment || details.bbl || details.taxCode
-          ? JSON.stringify(
-              { bbl: details.bbl, taxCode: details.taxCode, enrichment: details.enrichment },
-              null,
-              0
-            ).slice(0, 4000)
-          : undefined;
-      const { fromLlm, omAnalysis } = await extractRentalFinancialsFromText(text, {
-        forceOmStyle: true,
-        enrichmentContext,
-        documentFiles:
-          hasPdfSource && fileBuffer
-            ? [{ filename: doc.filename ?? "document.pdf", mimeType: "application/pdf", buffer: fileBuffer }]
-            : undefined,
-      });
-      const hasFromLlm = fromLlm && typeof fromLlm === "object" && Object.keys(fromLlm).length > 0;
-      const hasOmAnalysis = omAnalysis && typeof omAnalysis === "object";
-      if (hasFromLlm || hasOmAnalysis) {
-        const prop = await propertyRepo.byId(propertyId);
-        const existing = (prop?.details?.rentalFinancials ?? null) as RentalFinancials | null;
-        const existingFromLlm = existing?.fromLlm ?? null;
-        const mergedFromLlm =
-          hasOmAnalysis
-            ? mergeOmDerivedFromLlm(existingFromLlm, fromLlm)
-            : hasFromLlm && existingFromLlm && typeof existingFromLlm === "object"
-            ? { ...existingFromLlm, ...fromLlm }
-            : (fromLlm ?? existingFromLlm ?? undefined);
-        const rentalFinancials: RentalFinancials = {
-          ...(existing ?? {}),
-          fromLlm: mergedFromLlm as RentalFinancialsFromLlm | undefined,
-          omAnalysis: hasOmAnalysis ? omAnalysis : (existing?.omAnalysis ?? undefined),
-          source: existing?.source ?? "llm",
-          lastUpdatedAt: new Date().toISOString(),
-        };
-        await propertyRepo.mergeDetails(propertyId, { rentalFinancials });
-        documentsProcessed++;
-      }
-    } catch (e) {
-      console.warn("[refreshOmFinancialsForProperty]", propertyId, doc.filename, e instanceof Error ? e.message : e);
-    }
-  }
-  return { documentsProcessed, documentsSkippedNoFile };
+  const result = await refreshAuthoritativeOmForProperty(propertyId, pool);
+  return {
+    documentsProcessed: result.documentsProcessed,
+    documentsSkippedNoFile: result.documentsSkippedNoFile,
+    error: result.error,
+  };
 }
 
 /** GET /api/properties - list canonical properties. ?includeListingSummary=1 adds primary listing price, listedAt, city for filter/sort. */
@@ -244,22 +158,43 @@ router.get("/properties", async (req: Request, res: Response) => {
                WHERE u.property_id = p.id
                  AND u.category IN ('OM', 'Brochure', 'Rent Roll')
              )
+           ) OR COALESCE(p.details->'omData'->'authoritative', 'null'::jsonb) <> 'null'::jsonb
            THEN 'OM received'
            WHEN EXISTS (SELECT 1 FROM property_inquiry_sends s WHERE s.property_id = p.id)
            THEN 'OM pending'
            ELSE 'Not received'
          END) AS om_status,
-         ds.deal_score
+         ds.deal_score AS calculated_deal_score,
+         ov.id AS score_override_id,
+         ov.score AS score_override_score,
+         ov.reason AS score_override_reason,
+         ov.created_by AS score_override_created_by,
+         ov.created_at AS score_override_created_at
        FROM properties p
        LEFT JOIN listing_property_matches m ON m.property_id = p.id
        LEFT JOIN listings l ON l.id = m.listing_id
-       LEFT JOIN LATERAL (SELECT deal_score FROM deal_signals WHERE property_id = p.id ORDER BY generated_at DESC LIMIT 1) ds ON true
+       LEFT JOIN LATERAL (
+         SELECT deal_score
+         FROM deal_signals
+         WHERE property_id = p.id
+         ORDER BY generated_at DESC
+         LIMIT 1
+       ) ds ON true
+       LEFT JOIN LATERAL (
+         SELECT id, score, reason, created_by, created_at
+         FROM deal_score_overrides
+         WHERE property_id = p.id AND cleared_at IS NULL
+         ORDER BY created_at DESC
+         LIMIT 1
+       ) ov ON true
        ORDER BY p.id, m.confidence DESC NULLS LAST, m.created_at DESC
        LIMIT 500`
     );
-    const properties = r.rows.map((row: Record<string, unknown>) => {
-      const createdAt = row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at ?? "");
-      const updatedAt = row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at ?? "");
+	    const properties = r.rows.map((row: Record<string, unknown>) => {
+	      const details = row.details ?? null;
+	      const authoritativeReady = hasAuthoritativeOm(details);
+	      const createdAt = row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at ?? "");
+	      const updatedAt = row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at ?? "");
       const listingListedAt = row.listing_listed_at != null
         ? (row.listing_listed_at instanceof Date ? row.listing_listed_at.toISOString() : String(row.listing_listed_at))
         : null;
@@ -269,19 +204,41 @@ router.get("/properties", async (req: Request, res: Response) => {
         priceHistory: (row.listing_price_history as PriceHistoryEntry[] | null) ?? null,
       });
       return {
-        id: row.id,
-        canonicalAddress: row.canonical_address,
-        details: row.details ?? null,
-        createdAt,
-        updatedAt,
+	        id: row.id,
+	        canonicalAddress: row.canonical_address,
+	        details,
+	        createdAt,
+	        updatedAt,
         primaryListing: {
           price: row.listing_price != null ? Number(row.listing_price) : null,
           listedAt: listingListedAt,
           city: (row.listing_city as string) ?? null,
           lastActivity: listingActivity,
         },
-        omStatus: (row.om_status as string) ?? "Not received",
-        dealScore: row.deal_score != null ? Number(row.deal_score) : null,
+	        omStatus: (row.om_status as string) ?? "Not received",
+	        dealScore:
+	          authoritativeReady && row.score_override_score != null
+	            ? Number(row.score_override_score)
+	            : authoritativeReady && row.calculated_deal_score != null
+	              ? Number(row.calculated_deal_score)
+	              : null,
+	        calculatedDealScore:
+	          authoritativeReady && row.calculated_deal_score != null ? Number(row.calculated_deal_score) : null,
+        scoreOverride:
+          row.score_override_id != null
+            ? {
+                id: String(row.score_override_id),
+                propertyId: String(row.id),
+                score: Number(row.score_override_score),
+                reason: String(row.score_override_reason ?? ""),
+                createdBy: (row.score_override_created_by as string) ?? null,
+                createdAt:
+                  row.score_override_created_at instanceof Date
+                    ? row.score_override_created_at.toISOString()
+                    : String(row.score_override_created_at ?? ""),
+                clearedAt: null,
+              }
+            : null,
       };
     });
     res.json({ properties, total: properties.length });
@@ -519,6 +476,7 @@ router.post("/properties/from-listings", async (req: Request, res: Response) => 
           if (i > 0) await new Promise((r) => setTimeout(r, ENRICHMENT_RATE_LIMIT_DELAY_MS));
           try {
             await runRentalFlowForProperty(propertyIds[i]!, pool);
+            await syncPropertySourcingWorkflow(propertyIds[i]!, { pool });
             rentalFlowSummary.success++;
           } catch {
             rentalFlowSummary.failed++;
@@ -646,6 +604,7 @@ router.post("/properties/run-enrichment", async (req: Request, res: Response) =>
     });
 
     const appToken = process.env.SOCRATA_APP_TOKEN ?? null;
+    const sourcingPool = getPool();
     // Pre-pass: resolve and persist BBL for every property so CO and other BBL-dependent modules run for all.
     for (let i = 0; i < propertyIds.length; i++) {
       if (i > 0) await new Promise((r) => setTimeout(r, ENRICHMENT_RATE_LIMIT_DELAY_MS));
@@ -660,6 +619,7 @@ router.post("/properties/run-enrichment", async (req: Request, res: Response) =>
         appToken,
         rateLimitDelayMs: ENRICHMENT_RATE_LIMIT_DELAY_MS,
       });
+      await syncPropertySourcingWorkflow(propertyIds[i]!, { pool: sourcingPool });
       if (out.ok) success++;
       else failed++;
       for (const [name, r] of Object.entries(out.results)) {
@@ -691,45 +651,58 @@ router.post("/properties/run-enrichment", async (req: Request, res: Response) =>
       }
     }
 
-    // After enrichment, refresh OM/Brochure financials for each property when the uploaded doc file exists on disk (senior-analyst LLM populates property card financial section).
     const pool = getPool();
     let omFinancialsProcessed = 0;
     let omFinancialsSkippedNoFile = 0;
     let omCompleted = 0;
     let omFailed = 0;
     const omStartedAt = new Date().toISOString();
-    await upsertWorkflowStep(workflowRunId, {
-      stepKey: "om_financials",
-      totalItems: propertyIds.length,
-      completedItems: 0,
-      failedItems: 0,
-      status: "running",
-      startedAt: omStartedAt,
-      lastMessage: `Refreshing OM financials for ${propertyIds.length} propert${propertyIds.length === 1 ? "y" : "ies"}`,
-    });
-    for (const propertyId of propertyIds) {
-      try {
-        const result = await refreshOmFinancialsForProperty(propertyId, pool);
-        if (result.error) omFailed++;
-        else omCompleted++;
-        omFinancialsProcessed += result.documentsProcessed;
-        omFinancialsSkippedNoFile += result.documentsSkippedNoFile;
-      } catch {
-        omFailed++;
-      }
+    if (ENABLE_OM_AUTOMATION_V2) {
       await upsertWorkflowStep(workflowRunId, {
         stepKey: "om_financials",
         totalItems: propertyIds.length,
-        completedItems: omCompleted,
-        failedItems: omFailed,
-        status: deriveWorkflowStatusFromCounts({
+        completedItems: 0,
+        failedItems: 0,
+        status: "running",
+        startedAt: omStartedAt,
+        lastMessage: `Refreshing OM financials for ${propertyIds.length} propert${propertyIds.length === 1 ? "y" : "ies"}`,
+      });
+      for (const propertyId of propertyIds) {
+        try {
+          const result = await refreshOmFinancialsForProperty(propertyId, pool);
+          if (result.error) omFailed++;
+          else omCompleted++;
+          omFinancialsProcessed += result.documentsProcessed;
+          omFinancialsSkippedNoFile += result.documentsSkippedNoFile;
+        } catch {
+          omFailed++;
+        }
+        await upsertWorkflowStep(workflowRunId, {
+          stepKey: "om_financials",
           totalItems: propertyIds.length,
           completedItems: omCompleted,
           failedItems: omFailed,
-        }),
+          status: deriveWorkflowStatusFromCounts({
+            totalItems: propertyIds.length,
+            completedItems: omCompleted,
+            failedItems: omFailed,
+          }),
+          startedAt: omStartedAt,
+          finishedAt: omCompleted + omFailed >= propertyIds.length ? new Date().toISOString() : null,
+          lastMessage: `${omCompleted}/${propertyIds.length} properties refreshed`,
+        });
+      }
+    } else {
+      await upsertWorkflowStep(workflowRunId, {
+        stepKey: "om_financials",
+        totalItems: propertyIds.length,
+        completedItems: 0,
+        failedItems: 0,
+        skippedItems: propertyIds.length,
+        status: "completed",
         startedAt: omStartedAt,
-        finishedAt: omCompleted + omFailed >= propertyIds.length ? new Date().toISOString() : null,
-        lastMessage: `${omCompleted}/${propertyIds.length} properties refreshed`,
+        finishedAt: omStartedAt,
+        lastMessage: "Skipped automatic OM financial refresh in v1",
       });
     }
 
@@ -1320,13 +1293,15 @@ router.post(
         fileContent: file.buffer,
       });
 
-      // Return immediately so Render/timeouts don't kill the request. OM/Brochure LLM runs in background.
+      await syncPropertySourcingWorkflow(propertyId, { pool });
+
+      // Return immediately so Render/timeouts don't kill the request. Authoritative OM ingestion runs in background.
       res.status(201).json({ propertyId, document: inserted });
 
-      // When user uploads OM or Brochure, run senior-analyst LLM in background and merge when done.
-      if (category === "OM" || category === "Brochure") {
-        void runOmExtractionInBackground(propertyId, file.buffer, filename, pool).catch((e) => {
-          console.error("[documents/upload background] OM/Brochure LLM failed:", e instanceof Error ? e.message : e);
+      // When user uploads OM-like source material, ingest authoritative OM and generate the dossier automatically.
+      if (ENABLE_OM_AUTOMATION_V2 && (category === "OM" || category === "Brochure" || category === "Rent Roll")) {
+        void runOmExtractionInBackground(propertyId, file.buffer, filename, file.mimetype || null, category, pool).catch((e) => {
+          console.error("[documents/upload background] authoritative OM ingestion failed:", e instanceof Error ? e.message : e);
         });
       }
     } catch (err) {
@@ -1384,9 +1359,20 @@ async function getInquiryGuardState(
     inquirySendRepo.getLastSentAt(propertyId),
     pool.query<{ has_om_document: boolean }>(
       `SELECT EXISTS (
-         SELECT 1 FROM property_inquiry_documents d WHERE d.property_id = $1
+         SELECT 1
+         FROM property_inquiry_documents d
+         WHERE d.property_id = $1
+           AND LOWER(COALESCE(d.filename, '')) ~ '(offering|memorandum|(^|[^a-z])om([^a-z]|$)|brochure|rent[ _-]?roll)'
        ) OR EXISTS (
-         SELECT 1 FROM property_uploaded_documents u WHERE u.property_id = $1 AND u.category = 'OM'
+         SELECT 1
+         FROM property_uploaded_documents u
+         WHERE u.property_id = $1
+           AND u.category IN ('OM', 'Brochure', 'Rent Roll')
+       ) OR EXISTS (
+         SELECT 1
+         FROM properties p
+         WHERE p.id = $1
+           AND COALESCE(p.details->'omData'->'authoritative', 'null'::jsonb) <> 'null'::jsonb
        ) AS has_om_document`,
       [propertyId]
     ),
@@ -1465,7 +1451,9 @@ router.post("/properties/:id/mark-inquiry-sent", async (req: Request, res: Respo
       toAddress,
       source: "manual",
       sentAt,
+      gmailThreadId: typeof req.body?.gmailThreadId === "string" ? req.body.gmailThreadId : null,
     });
+    await syncPropertySourcingWorkflow(propertyId, { pool });
     const guard = await getInquiryGuardState(pool, propertyId, toAddress);
     res.status(201).json({
       ok: true,
@@ -1584,7 +1572,9 @@ router.post("/properties/:id/send-inquiry-email", async (req: Request, res: Resp
     const { sentAt } = await inquirySendRepo.create(propertyId, result.id, {
       toAddress: normalizedTo,
       source: "gmail_api",
+      gmailThreadId: result.threadId,
     });
+    await syncPropertySourcingWorkflow(propertyId, { pool });
     await upsertWorkflowStep(workflowRunId, {
       stepKey: "inquiry",
       totalItems: 1,
@@ -1661,23 +1651,27 @@ router.get("/properties/:id", async (req: Request, res: Response) => {
     }
     const inquirySendRepo = new InquirySendRepo({ pool });
     const signalsRepo = new DealSignalsRepo({ pool });
-    const [lastInquirySentAt, latestSignals] = await Promise.all([
-      inquirySendRepo.getLastSentAt(propertyId),
-      signalsRepo.getLatestByPropertyId(propertyId),
-    ]);
-    const rentalFinancials = (property.details as Record<string, unknown> | null)?.rentalFinancials as RentalFinancials | undefined;
-    const rentRollComparison = getRentRollComparison(rentalFinancials);
-    res.json({
+    const overridesRepo = new DealScoreOverridesRepo({ pool });
+	    const [lastInquirySentAt, latestSignals, scoreOverride] = await Promise.all([
+	      inquirySendRepo.getLastSentAt(propertyId),
+	      signalsRepo.getLatestByPropertyId(propertyId),
+	      overridesRepo.getActiveByPropertyId(propertyId),
+	    ]);
+	    const authoritativeReady = hasAuthoritativeOm(property.details);
+	    const rentRollComparison = getRentRollComparison(property.details as PropertyDetails | null);
+	    res.json({
       id: property.id,
       canonicalAddress: property.canonicalAddress,
       details: property.details ?? null,
       createdAt: property.createdAt,
-      updatedAt: property.updatedAt,
-      lastInquirySentAt: lastInquirySentAt ?? null,
-      rentRollComparison: rentRollComparison ?? undefined,
-      dealScore: latestSignals?.dealScore ?? null,
-      dealSignals: latestSignals ?? null,
-    });
+	      updatedAt: property.updatedAt,
+	      lastInquirySentAt: lastInquirySentAt ?? null,
+	      rentRollComparison: rentRollComparison ?? undefined,
+	      dealScore: authoritativeReady ? resolveEffectiveDealScore(latestSignals?.dealScore ?? null, scoreOverride) : null,
+	      calculatedDealScore: authoritativeReady ? latestSignals?.dealScore ?? null : null,
+	      scoreOverride: authoritativeReady ? scoreOverride ?? null : null,
+	      dealSignals: authoritativeReady ? latestSignals ?? null : null,
+	    });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[properties get by id]", err);
@@ -1737,6 +1731,7 @@ router.post("/properties/:id/compute-score", async (req: Request, res: Response)
     const matchRepo = new MatchRepo({ pool });
     const listingRepo = new ListingRepo({ pool });
     const profileRepo = new UserProfileRepo({ pool });
+    const overridesRepo = new DealScoreOverridesRepo({ pool });
     const property = await propertyRepo.byId(propertyId);
     if (!property) {
       res.status(404).json({ error: "Property not found", propertyId });
@@ -1786,16 +1781,34 @@ router.post("/properties/:id/compute-score", async (req: Request, res: Response)
       primaryListing,
       irrPct: projection.returns.irr ?? null,
       cocPct: projection.returns.year1CashOnCashReturn ?? null,
+      equityMultiple: projection.returns.equityMultiple ?? null,
       adjustedCapRatePct:
         assumptions.acquisition.purchasePrice != null && hasCurrentFinancials && projection.operating.stabilizedNoi >= 0
           ? (projection.operating.stabilizedNoi / assumptions.acquisition.purchasePrice) * 100
           : null,
+      adjustedNoi: projection.operating.stabilizedNoi ?? null,
       recommendedOfferHigh: recommendedOffer.recommendedOfferHigh,
       blendedRentUpliftPct: assumptions.operating.blendedRentUpliftPct,
+      annualExpenseGrowthPct: assumptions.operating.annualExpenseGrowthPct,
+      vacancyPct: assumptions.operating.vacancyPct,
+      exitCapRatePct: assumptions.exit.exitCapPct,
       rentStabilizedUnitCount: assumptions.propertyMix.rentStabilizedUnits,
       commercialUnitCount: assumptions.propertyMix.commercialUnits,
     };
     const { insertParams, scoringResult } = computeDealSignals(input);
+    insertParams.scoreSensitivity = buildDealScoreSensitivity({
+      propertyId,
+      canonicalAddress: property.canonicalAddress,
+      details: property.details ?? null,
+      primaryListing,
+      assumptions,
+      currentGrossRent,
+      currentNoi,
+      currentOtherIncome: currentFinancials.otherIncome,
+      currentExpensesTotal: currentFinancials.operatingExpenses,
+      expenseRows,
+      baseCalculatedScore: scoringResult.isScoreable ? scoringResult.dealScore : null,
+    });
     const signalsRepo = new DealSignalsRepo({ pool });
     const row = await signalsRepo.insert({
       ...insertParams,
@@ -1807,22 +1820,115 @@ router.post("/properties/:id/compute-score", async (req: Request, res: Response)
       currentNoi: currentNoi ?? null,
       adjustedNoi: projection.operating.stabilizedNoi ?? currentNoi ?? null,
     });
+    const scoreOverride = await overridesRepo.getActiveByPropertyId(propertyId);
     res.json({
-      dealScore: row.dealScore ?? (scoringResult.isScoreable ? scoringResult.dealScore : null),
+      dealScore: resolveEffectiveDealScore(row.dealScore ?? null, scoreOverride),
+      calculatedDealScore: row.dealScore ?? (scoringResult.isScoreable ? scoringResult.dealScore : null),
+      scoreOverride: scoreOverride ?? null,
       dealSignals: row,
       scoringResult: {
         isScoreable: scoringResult.isScoreable,
         assetYieldScore: scoringResult.assetYieldScore,
+        scoreBreakdown: scoringResult.scoreBreakdown,
+        confidenceScore: scoringResult.confidenceScore,
         riskScore: scoringResult.riskScore,
         positiveSignals: scoringResult.positiveSignals,
         negativeSignals: scoringResult.negativeSignals,
         assetCapRate: scoringResult.assetCapRate,
+        adjustedCapRate: scoringResult.adjustedCapRate,
+        riskFlags: scoringResult.riskFlags,
+        capReasons: scoringResult.capReasons,
+        riskProfile: scoringResult.riskProfile,
+        scoreSensitivity: insertParams.scoreSensitivity ?? null,
+        scoreVersion: scoringResult.scoreVersion,
       },
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[properties compute-score]", err);
     res.status(503).json({ error: "Failed to compute deal score.", details: message });
+  }
+});
+
+/** POST /api/properties/:id/score-override - set an active manual score override. */
+router.post("/properties/:id/score-override", async (req: Request, res: Response) => {
+  try {
+    const { id: propertyId } = req.params;
+    const rawScore = req.body?.score;
+    const score =
+      typeof rawScore === "number"
+        ? rawScore
+        : typeof rawScore === "string"
+          ? Number(rawScore)
+          : Number.NaN;
+    const reason = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
+    const createdBy = typeof req.body?.createdBy === "string" ? req.body.createdBy.trim() : "web";
+    if (!Number.isFinite(score) || score < 0 || score > 100) {
+      res.status(400).json({ error: "score must be a number between 0 and 100." });
+      return;
+    }
+    if (!reason) {
+      res.status(400).json({ error: "reason is required." });
+      return;
+    }
+    const pool = getPool();
+    const propertyRepo = new PropertyRepo({ pool });
+    const property = await propertyRepo.byId(propertyId);
+    if (!property) {
+      res.status(404).json({ error: "Property not found", propertyId });
+      return;
+    }
+    const overridesRepo = new DealScoreOverridesRepo({ pool });
+    const override = await overridesRepo.setActive({
+      propertyId,
+      score: Math.round(score),
+      reason,
+      createdBy,
+    });
+    const signalsRepo = new DealSignalsRepo({ pool });
+    const latestSignals = await signalsRepo.getLatestByPropertyId(propertyId);
+    res.json({
+      ok: true,
+      dealScore: resolveEffectiveDealScore(latestSignals?.dealScore ?? null, override),
+      calculatedDealScore: latestSignals?.dealScore ?? null,
+      scoreOverride: override,
+      dealSignals: latestSignals ?? null,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[properties score-override create]", err);
+    res.status(503).json({ error: "Failed to save score override.", details: message });
+  }
+});
+
+/** DELETE /api/properties/:id/score-override - clear an active manual score override. */
+router.delete("/properties/:id/score-override", async (req: Request, res: Response) => {
+  try {
+    const { id: propertyId } = req.params;
+    const pool = getPool();
+    const propertyRepo = new PropertyRepo({ pool });
+    const property = await propertyRepo.byId(propertyId);
+    if (!property) {
+      res.status(404).json({ error: "Property not found", propertyId });
+      return;
+    }
+    const overridesRepo = new DealScoreOverridesRepo({ pool });
+    const cleared = await overridesRepo.clearActive(propertyId);
+	    const signalsRepo = new DealSignalsRepo({ pool });
+	    const latestSignals = await signalsRepo.getLatestByPropertyId(propertyId);
+	    const authoritativeReady = hasAuthoritativeOm(property.details);
+	    res.json({
+	      ok: true,
+	      cleared,
+	      dealScore: authoritativeReady ? latestSignals?.dealScore ?? null : null,
+	      calculatedDealScore: authoritativeReady ? latestSignals?.dealScore ?? null : null,
+	      scoreOverride: null,
+	      dealSignals: authoritativeReady ? latestSignals ?? null : null,
+	    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[properties score-override delete]", err);
+    res.status(503).json({ error: "Failed to clear score override.", details: message });
   }
 });
 
@@ -2026,8 +2132,10 @@ export async function runRentalFlowForProperty(
     finalFromLlm = mergeFromLlm(finalFromLlm ?? null, { dataGapSuggestions: dataGap }) ?? { dataGapSuggestions: dataGap };
   }
   const rentalFinancials: RentalFinancials = {
+    ...(existing ?? {}),
     rentalUnits: rentalUnits ?? undefined,
     fromLlm: finalFromLlm ?? undefined,
+    omAnalysis: existing?.omAnalysis ?? undefined,
     source: apiResult.rentalUnits?.length ? "rapidapi" : (finalFromLlm ? "llm" : existing?.source ?? undefined),
     lastUpdatedAt: new Date().toISOString(),
   };
@@ -2078,6 +2186,7 @@ router.post("/properties/run-rental-flow", async (req: Request, res: Response) =
     for (const propertyId of propertyIds) {
       try {
         const result = await runRentalFlowForProperty(propertyId, pool);
+        await syncPropertySourcingWorkflow(propertyId, { pool });
         results.push({ propertyId, ...result });
         if (result.error) failed++;
         else completed++;

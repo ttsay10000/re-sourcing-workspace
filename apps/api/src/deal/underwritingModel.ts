@@ -271,6 +271,11 @@ function roundCurrency(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
+function clampUnitShare(value: number | null | undefined, fallback = 1): number {
+  const resolved = value != null && Number.isFinite(value) ? value : fallback;
+  return Math.max(0, Math.min(1, resolved));
+}
+
 function normalizeTaxCode(taxCode: string | null | undefined): string | null {
   if (taxCode == null) return null;
   const normalized = String(taxCode).trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
@@ -566,8 +571,19 @@ export function computeUnderwritingProjection(
     expenseRows,
   });
 
-  const grossRentalIncomeBase =
-    currentRent * (1 + Math.max(0, assumptions.operating.blendedRentUpliftPct) / 100);
+  const eligibleRevenueShare = clampUnitShare(
+    assumptions.propertyMix.eligibleRevenueSharePct,
+    assumptions.propertyMix.eligibleUnitSharePct ?? 1
+  );
+  const eligibleCurrentRent = roundCurrency(currentRent * eligibleRevenueShare);
+  const protectedCurrentRent = roundCurrency(Math.max(0, currentRent - eligibleCurrentRent));
+  const eligibleGrossRentalIncomeBase = roundCurrency(
+    eligibleCurrentRent * (1 + Math.max(0, assumptions.operating.rentUpliftPct) / 100)
+  );
+  const protectedGrossRentalIncomeBase = protectedCurrentRent;
+  const grossRentalIncomeBase = roundCurrency(
+    eligibleGrossRentalIncomeBase + protectedGrossRentalIncomeBase
+  );
   const expenseLineItems = projectExpenseLines({
     assumptions,
     currentExpensesTotal: normalizedExpenseInputs.currentExpensesTotalExManagement,
@@ -617,15 +633,26 @@ export function computeUnderwritingProjection(
       ? roundCurrency(purchasePrice)
       : roundCurrency(compoundAnnual(purchasePrice, assumptions.operating.annualRentGrowthPct, year))
   );
-  const yearlyGrossRentalIncome = years.map((year) =>
+  const yearlyEligibleGrossRentalIncome = years.map((year) =>
     year === 0
       ? 0
       : roundCurrency(
           compoundAnnual(
-            grossRentalIncomeBase,
+            eligibleGrossRentalIncomeBase,
             assumptions.operating.annualRentGrowthPct,
             year - 1
           )
+        )
+  );
+  const yearlyProtectedGrossRentalIncome = years.map((year) =>
+    year === 0 ? 0 : roundCurrency(protectedGrossRentalIncomeBase)
+  );
+  const yearlyGrossRentalIncome = years.map((year) =>
+    year === 0
+      ? 0
+      : roundCurrency(
+          (yearlyEligibleGrossRentalIncome[year] ?? 0) +
+            (yearlyProtectedGrossRentalIncome[year] ?? 0)
         )
   );
   const yearlyOtherIncome = years.map((year) =>
@@ -643,13 +670,13 @@ export function computeUnderwritingProjection(
     year === 0
       ? 0
       : roundCurrency(
-          (yearlyGrossRentalIncome[year] ?? 0) * (assumptions.operating.vacancyPct / 100)
+          (yearlyEligibleGrossRentalIncome[year] ?? 0) * (assumptions.operating.vacancyPct / 100)
         )
   );
   const yearlyLeadTimeLoss = years.map((year) =>
     year === 1
       ? roundCurrency(
-          (yearlyGrossRentalIncome[year] ?? 0) *
+          (yearlyEligibleGrossRentalIncome[year] ?? 0) *
             (Math.max(0, assumptions.operating.leadTimeMonths) / 12)
         )
       : 0

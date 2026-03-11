@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extractRentalFinancialsFallback } from "./extractRentalFinancialsFallback.js";
+import { extractRentalFinancialsFromTextTables } from "./extractRentalFinancialsFromTextTables.js";
 
 const WEST_9TH_TEXT = `
 27 WEST 9TH STREET
@@ -46,9 +46,9 @@ TAX CLASS
 Annual Tax Bill$51,123$52,143
 `;
 
-describe("extractRentalFinancialsFallback", () => {
+describe("extractRentalFinancialsFromTextTables", () => {
   it("extracts a rent roll, expenses, and NOI from plain-text residential OMs", () => {
-    const result = extractRentalFinancialsFallback(WEST_9TH_TEXT);
+    const result = extractRentalFinancialsFromTextTables(WEST_9TH_TEXT);
 
     expect(result.omAnalysis?.propertyInfo?.price).toBe(6_395_000);
     expect(result.omAnalysis?.propertyInfo?.neighborhood).toBe("Greenwich Village");
@@ -62,7 +62,7 @@ describe("extractRentalFinancialsFallback", () => {
   });
 
   it("extracts mixed-use property facts even when the PDF text misses the financial tables", () => {
-    const result = extractRentalFinancialsFallback(CHRISTOPHER_TEXT);
+    const result = extractRentalFinancialsFromTextTables(CHRISTOPHER_TEXT);
 
     expect(result.omAnalysis?.propertyInfo?.price).toBe(8_135_000);
     expect(result.omAnalysis?.propertyInfo?.unitsResidential).toBe(8);

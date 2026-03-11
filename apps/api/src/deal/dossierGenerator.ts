@@ -396,7 +396,7 @@ function pushYearlyCashFlowTable(lines: string[], ctx: UnderwritingContext): voi
     tableRow(
       boldRow([
         "CF after financing (cash)",
-        ...currencySeriesCells(yearly.cashFlowAfterFinancing),
+        ...negativeSeriesCells(yearly.cashFlowAfterFinancing),
       ])
     )
   );
@@ -444,7 +444,7 @@ function pushYearlyCashFlowTable(lines: string[], ctx: UnderwritingContext): voi
   );
   lines.push(
     tableRow(
-      boldRow(["Levered CF", ...currencySeriesCells(yearly.leveredCashFlow)])
+      boldRow(["Levered CF", ...negativeSeriesCells(yearly.leveredCashFlow)])
     )
   );
 }

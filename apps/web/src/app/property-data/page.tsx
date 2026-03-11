@@ -704,12 +704,11 @@ function PropertyDataContent() {
     let dossierReadyCount = 0;
     for (const prop of canonicalProperties) {
       const details = (prop.details ?? null) as Record<string, unknown> | null;
-      const rentalFinancials = details?.rentalFinancials as Record<string, unknown> | undefined;
-      const hasOmAnalysis = Boolean(
-        rentalFinancials &&
-        typeof rentalFinancials === "object" &&
-        rentalFinancials.omAnalysis &&
-        typeof rentalFinancials.omAnalysis === "object"
+      const hasAuthoritativeOm = Boolean(
+        details?.omData &&
+        typeof details.omData === "object" &&
+        (details.omData as Record<string, unknown>).authoritative &&
+        typeof (details.omData as Record<string, unknown>).authoritative === "object"
       );
       const persistedDossier = getPropertyDossierGeneration(details);
       const localJob = localDossierJobs[prop.id];
@@ -717,8 +716,8 @@ function PropertyDataContent() {
       const dossierReady = localJob?.status === "completed" || persistedDossier?.status === "completed";
       if (prop.omStatus === "Not received") newCount++;
       if (prop.omStatus === "OM pending") inquiryOut++;
-      if (prop.omStatus === "OM received" && !hasOmAnalysis) omReceived++;
-      if (hasOmAnalysis || prop.dealScore != null) underwritingReady++;
+      if (prop.omStatus === "OM received" && !hasAuthoritativeOm) omReceived++;
+      if (hasAuthoritativeOm || prop.dealScore != null) underwritingReady++;
       if (dossierRunning) dossierRunningCount++;
       if (dossierReady) dossierReadyCount++;
     }
@@ -736,12 +735,11 @@ function PropertyDataContent() {
 
   const underwritingCellMeta = (prop: CanonicalProperty) => {
     const details = (prop.details ?? null) as Record<string, unknown> | null;
-    const rentalFinancials = details?.rentalFinancials as Record<string, unknown> | undefined;
-    const hasOmAnalysis = Boolean(
-      rentalFinancials &&
-      typeof rentalFinancials === "object" &&
-      rentalFinancials.omAnalysis &&
-      typeof rentalFinancials.omAnalysis === "object"
+    const hasAuthoritativeOm = Boolean(
+      details?.omData &&
+      typeof details.omData === "object" &&
+      (details.omData as Record<string, unknown>).authoritative &&
+      typeof (details.omData as Record<string, unknown>).authoritative === "object"
     );
     if (refreshingPropertyIds.has(prop.id)) {
       return {
@@ -750,7 +748,7 @@ function PropertyDataContent() {
         style: workflowStatusStyle("running"),
       };
     }
-    if (hasOmAnalysis || prop.dealScore != null) {
+    if (hasAuthoritativeOm || prop.dealScore != null) {
       return {
         label: "Ready",
         detail: prop.dealScore != null ? `Score ${prop.dealScore}` : "OM parsed",
@@ -760,7 +758,7 @@ function PropertyDataContent() {
     if (prop.omStatus === "OM received") {
       return {
         label: "OM received",
-        detail: "Ready to parse",
+        detail: "Awaiting authoritative OM",
         style: workflowStatusStyle("partial"),
       };
     }

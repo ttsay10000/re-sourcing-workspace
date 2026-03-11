@@ -234,7 +234,12 @@ export function getPdfAttachmentParts(msg: GmailMessage): Array<{ filename: stri
  * Send an email via Gmail API (uses the authenticated account as sender).
  * Requires OAuth2 scope https://www.googleapis.com/auth/gmail.send
  */
-export async function sendMessage(to: string, subject: string, body: string): Promise<{ id: string }> {
+export async function sendMessage(
+  to: string,
+  subject: string,
+  body: string,
+  options?: { threadId?: string | null }
+): Promise<{ id: string; threadId: string | null }> {
   const gmail = getGmail();
   const lines: string[] = [
     `To: ${to}`,
@@ -247,9 +252,12 @@ export async function sendMessage(to: string, subject: string, body: string): Pr
   const encoded = Buffer.from(raw, "utf-8").toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
   const res = await gmail.users.messages.send({
     userId: "me",
-    requestBody: { raw: encoded },
+    requestBody: {
+      raw: encoded,
+      threadId: options?.threadId ?? undefined,
+    },
   });
-  return { id: res.data.id! };
+  return { id: res.data.id!, threadId: res.data.threadId ?? null };
 }
 
 /** Attachment for sendMessageWithAttachments: filename and buffer. */
@@ -279,8 +287,9 @@ export async function sendMessageWithAttachments(
   to: string,
   subject: string,
   body: string,
-  attachments: EmailAttachment[]
-): Promise<{ id: string }> {
+  attachments: EmailAttachment[],
+  options?: { threadId?: string | null }
+): Promise<{ id: string; threadId: string | null }> {
   const gmail = getGmail();
   const boundary = `boundary_${Date.now()}_${Math.random().toString(36).slice(2, 12)}`;
   const parts: string[] = [];
@@ -318,7 +327,10 @@ export async function sendMessageWithAttachments(
 
   const res = await gmail.users.messages.send({
     userId: "me",
-    requestBody: { raw: encoded },
+    requestBody: {
+      raw: encoded,
+      threadId: options?.threadId ?? undefined,
+    },
   });
-  return { id: res.data.id! };
+  return { id: res.data.id!, threadId: res.data.threadId ?? null };
 }

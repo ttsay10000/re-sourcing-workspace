@@ -42,10 +42,19 @@ export type { InquiryEmailRepoOptions, InsertInquiryEmailParams } from "./repos/
 export { InquiryDocumentRepo } from "./repos/InquiryDocumentRepo.js";
 export type { InquiryDocumentRepoOptions, InsertInquiryDocumentParams } from "./repos/InquiryDocumentRepo.js";
 export { InquirySendRepo } from "./repos/InquirySendRepo.js";
-export type { InquirySendRepoOptions } from "./repos/InquirySendRepo.js";
+export type { InquirySendRepoOptions, InquiryReplyMatchingSendRow } from "./repos/InquirySendRepo.js";
 export { PropertyUploadedDocumentRepo } from "./repos/PropertyUploadedDocumentRepo.js";
 export type { PropertyUploadedDocumentRepoOptions, InsertPropertyUploadedDocumentParams } from "./repos/PropertyUploadedDocumentRepo.js";
-export { mapDocument, mapUserProfile, mapSavedDeal, mapDealSignalRow } from "./map.js";
+export { mapDocument, mapUserProfile, mapSavedDeal, mapDealSignalRow, mapDealScoreOverride } from "./map.js";
+export {
+  mapBrokerContact,
+  mapRecipientResolution,
+  mapPropertySourcingState,
+  mapPropertyOutreachFlag,
+  mapPropertyActionItem,
+  mapOutreachBatch,
+  mapOutreachBatchItem,
+} from "./map.js";
 export { DocumentRepo } from "./repos/DocumentRepo.js";
 export type { DocumentRepoOptions, InsertDocumentParams } from "./repos/DocumentRepo.js";
 export { UserProfileRepo } from "./repos/UserProfileRepo.js";
@@ -54,3 +63,34 @@ export { SavedDealsRepo } from "./repos/SavedDealsRepo.js";
 export type { SavedDealsRepoOptions } from "./repos/SavedDealsRepo.js";
 export { DealSignalsRepo } from "./repos/DealSignalsRepo.js";
 export type { DealSignalsRepoOptions, InsertDealSignalsParams } from "./repos/DealSignalsRepo.js";
+export { BrokerContactRepo } from "./repos/BrokerContactRepo.js";
+export type { BrokerContactRepoOptions, UpsertBrokerContactParams } from "./repos/BrokerContactRepo.js";
+export { RecipientResolutionRepo } from "./repos/RecipientResolutionRepo.js";
+export type { RecipientResolutionRepoOptions, UpsertRecipientResolutionParams } from "./repos/RecipientResolutionRepo.js";
+export { PropertySourcingStateRepo } from "./repos/PropertySourcingStateRepo.js";
+export type { PropertySourcingStateRepoOptions, UpsertPropertySourcingStateParams } from "./repos/PropertySourcingStateRepo.js";
+export { PropertyOutreachFlagRepo } from "./repos/PropertyOutreachFlagRepo.js";
+export type { PropertyOutreachFlagRepoOptions } from "./repos/PropertyOutreachFlagRepo.js";
+export { PropertyActionItemRepo } from "./repos/PropertyActionItemRepo.js";
+export type { PropertyActionItemRepoOptions } from "./repos/PropertyActionItemRepo.js";
+export { OutreachBatchRepo } from "./repos/OutreachBatchRepo.js";
+export type { OutreachBatchRepoOptions, CreateOutreachBatchParams } from "./repos/OutreachBatchRepo.js";
+export { InboxSyncStateRepo } from "./repos/InboxSyncStateRepo.js";
+export type { InboxSyncStateRepoOptions } from "./repos/InboxSyncStateRepo.js";
+export { DealScoreOverridesRepo } from "./repos/DealScoreOverridesRepo.js";
+export type {
+  DealScoreOverridesRepoOptions,
+  UpsertDealScoreOverrideParams,
+} from "./repos/DealScoreOverridesRepo.js";
+export { mapOmAuthoritativeSnapshotRecord, mapOmIngestionRun } from "./map.js";
+export { OmIngestionRunRepo } from "./repos/OmIngestionRunRepo.js";
+export type {
+  CreateOmIngestionRunParams,
+  OmIngestionRunRepoOptions,
+  UpdateOmIngestionRunParams,
+} from "./repos/OmIngestionRunRepo.js";
+export { OmAuthoritativeSnapshotRepo } from "./repos/OmAuthoritativeSnapshotRepo.js";
+export type {
+  OmAuthoritativeSnapshotRepoOptions,
+  PromoteOmAuthoritativeSnapshotParams,
+} from "./repos/OmAuthoritativeSnapshotRepo.js";

@@ -27,6 +27,18 @@ import type {
   UserProfile,
   SavedDeal,
   DealSignalRow,
+  DealScoreOverride,
+  OmAuthoritativeSnapshot,
+  OmAuthoritativeSnapshotRecord,
+  OmCoverage,
+  OmIngestionRun,
+  BrokerContact,
+  RecipientResolution,
+  PropertySourcingState,
+  PropertyOutreachFlag,
+  PropertyActionItem,
+  OutreachBatch,
+  OutreachBatchItem,
 } from "@re-sourcing/contracts";
 import type { ListingSource, ListingLifecycleState, LocationMode, IngestionRunStatus, IngestionJobStatus, MatchStatus } from "@re-sourcing/contracts";
 
@@ -37,10 +49,20 @@ function toSourceToggles(v: unknown): SourceToggles {
   return { streeteasy: true, manual: true };
 }
 
+function toStringArray(v: unknown): string[] {
+  return Array.isArray(v) ? v.filter((item): item is string => typeof item === "string") : [];
+}
+
+function toJsonObject(v: unknown): Record<string, unknown> {
+  if (v && typeof v === "object" && !Array.isArray(v)) return v as Record<string, unknown>;
+  return {};
+}
+
 export function mapProfile(row: Record<string, unknown>): SearchProfile {
   return {
     id: row.id as string,
     name: row.name as string,
+    enabled: row.enabled != null ? Boolean(row.enabled) : true,
     locationMode: row.location_mode as LocationMode,
     singleLocationSlug: (row.single_location_slug as string) ?? null,
     areaCodes: (row.area_codes as string[]) ?? [],
@@ -53,7 +75,17 @@ export function mapProfile(row: Record<string, unknown>): SearchProfile {
     minSqft: (row.min_sqft as number) ?? null,
     maxSqft: (row.max_sqft as number) ?? null,
     requiredAmenities: (row.required_amenities as string[]) ?? [],
+    propertyTypes: toStringArray(row.property_types),
     sourceToggles: toSourceToggles(row.source_toggles),
+    scheduleCadence: ((row.schedule_cadence as SearchProfile["scheduleCadence"]) ?? "manual"),
+    timezone: (row.timezone as string) ?? "America/New_York",
+    runTimeLocal: row.run_time_local != null ? String(row.run_time_local) : null,
+    weeklyRunDay: row.weekly_run_day != null ? Number(row.weekly_run_day) : null,
+    monthlyRunDay: row.monthly_run_day != null ? Number(row.monthly_run_day) : null,
+    nextRunAt: row.next_run_at != null ? toIso(row.next_run_at) : null,
+    lastRunAt: row.last_run_at != null ? toIso(row.last_run_at) : null,
+    lastSuccessAt: row.last_success_at != null ? toIso(row.last_success_at) : null,
+    outreachRules: toJsonObject(row.outreach_rules) as SearchProfile["outreachRules"],
     scheduleCron: (row.schedule_cron as string) ?? null,
     runIntervalMinutes: (row.run_interval_minutes as number) ?? null,
     createdAt: (row.created_at as Date)?.toISOString?.() ?? String(row.created_at),
@@ -69,6 +101,8 @@ export function mapRun(row: Record<string, unknown>): IngestionRun {
     finishedAt: row.finished_at != null ? (row.finished_at as Date)?.toISOString?.() ?? String(row.finished_at) : null,
     status: row.status as IngestionRunStatus,
     summary: (row.summary as RunSummary) ?? null,
+    triggerSource: (row.trigger_source as string) ?? "manual",
+    metadata: toJsonObject(row.metadata),
     createdAt: (row.created_at as Date)?.toISOString?.() ?? String(row.created_at),
   };
 }
@@ -176,14 +210,23 @@ export function mapEvent(row: Record<string, unknown>): SystemEvent {
 }
 
 export function mapInquiryEmail(row: Record<string, unknown>): PropertyInquiryEmail {
+  const linkedPropertyIds = Array.isArray(row.property_ids)
+    ? row.property_ids.filter((value): value is string => typeof value === "string")
+    : typeof row.property_id === "string"
+      ? [row.property_id]
+      : [];
   return {
     id: row.id as string,
     propertyId: row.property_id as string,
+    linkedPropertyIds,
     messageId: row.message_id as string,
+    gmailThreadId: (row.gmail_thread_id as string) ?? null,
+    matchedBatchId: (row.matched_batch_id as string) ?? null,
     subject: (row.subject as string) ?? null,
     fromAddress: (row.from_address as string) ?? null,
     receivedAt: row.received_at != null ? toIso(row.received_at) : null,
     bodyText: (row.body_text as string) ?? null,
+    processingStatus: (row.processing_status as string) ?? null,
     bodySummary: (row.body_summary as string) ?? null,
     receiptDateFromBroker: (row.receipt_date_from_broker as string) ?? null,
     attachmentsList: (row.attachments_list as string) ?? null,
@@ -235,6 +278,15 @@ export function mapUserProfile(row: Record<string, unknown>): UserProfile {
     name: (row.name as string) ?? null,
     email: (row.email as string) ?? null,
     organization: (row.organization as string) ?? null,
+    automationPaused: Boolean(row.automation_paused),
+    automationPauseReason: (row.automation_pause_reason as string) ?? null,
+    automationPausedAt: row.automation_paused_at != null ? toIso(row.automation_paused_at) : null,
+    dailyDigestEnabled:
+      row.daily_digest_enabled != null ? Boolean(row.daily_digest_enabled) : true,
+    dailyDigestTimeLocal: (row.daily_digest_time_local as string) ?? null,
+    dailyDigestTimezone: (row.daily_digest_timezone as string) ?? null,
+    lastDailyDigestSentAt:
+      row.last_daily_digest_sent_at != null ? toIso(row.last_daily_digest_sent_at) : null,
     defaultPurchaseClosingCostPct:
       row.default_purchase_closing_cost_pct != null ? Number(row.default_purchase_closing_cost_pct) : null,
     defaultLtv: row.default_ltv != null ? Number(row.default_ltv) : null,
@@ -287,6 +339,18 @@ export function mapSavedDeal(row: Record<string, unknown>): SavedDeal {
   };
 }
 
+export function mapDealScoreOverride(row: Record<string, unknown>): DealScoreOverride {
+  return {
+    id: row.id as string,
+    propertyId: row.property_id as string,
+    score: Number(row.score),
+    reason: String(row.reason ?? ""),
+    createdBy: (row.created_by as string) ?? null,
+    createdAt: toIso(row.created_at),
+    clearedAt: row.cleared_at != null ? toIso(row.cleared_at) : null,
+  };
+}
+
 export function mapDealSignalRow(row: Record<string, unknown>): DealSignalRow {
   return {
     id: row.id as string,
@@ -309,7 +373,169 @@ export function mapDealSignalRow(row: Record<string, unknown>): DealSignalRow {
     holdYears: row.hold_years != null ? Number(row.hold_years) : null,
     currentNoi: row.current_noi != null ? Number(row.current_noi) : null,
     adjustedNoi: row.adjusted_noi != null ? Number(row.adjusted_noi) : null,
+    scoreBreakdown: (row.score_breakdown as DealSignalRow["scoreBreakdown"]) ?? null,
+    riskProfile: (row.risk_profile as DealSignalRow["riskProfile"]) ?? null,
+    riskFlags: (row.risk_flags as string[]) ?? null,
+    capReasons: (row.cap_reasons as string[]) ?? null,
+    confidenceScore: row.confidence_score != null ? Number(row.confidence_score) : null,
+    scoreSensitivity: (row.score_sensitivity as DealSignalRow["scoreSensitivity"]) ?? null,
+    scoreVersion: (row.score_version as string) ?? null,
     generatedAt: toIso(row.generated_at),
+  };
+}
+
+export function mapBrokerContact(row: Record<string, unknown>): BrokerContact {
+  return {
+    id: row.id as string,
+    normalizedEmail: row.normalized_email as string,
+    displayName: (row.display_name as string) ?? null,
+    firm: (row.firm as string) ?? null,
+    preferredThreadId: (row.preferred_thread_id as string) ?? null,
+    lastOutreachAt: row.last_outreach_at != null ? toIso(row.last_outreach_at) : null,
+    lastReplyAt: row.last_reply_at != null ? toIso(row.last_reply_at) : null,
+    doNotContactUntil: row.do_not_contact_until != null ? toIso(row.do_not_contact_until) : null,
+    manualReviewOnly: Boolean(row.manual_review_only),
+    notes: (row.notes as string) ?? null,
+    activitySummary: toJsonObject(row.activity_summary),
+    createdAt: toIso(row.created_at),
+    updatedAt: toIso(row.updated_at),
+  };
+}
+
+export function mapRecipientResolution(row: Record<string, unknown>): RecipientResolution {
+  return {
+    propertyId: row.property_id as string,
+    status: row.status as RecipientResolution["status"],
+    contactId: (row.contact_id as string) ?? null,
+    contactEmail: (row.contact_email as string) ?? null,
+    confidence: row.confidence != null ? Number(row.confidence) : null,
+    resolutionReason: (row.resolution_reason as string) ?? null,
+    candidateContacts: Array.isArray(row.candidate_contacts)
+      ? (row.candidate_contacts as RecipientResolution["candidateContacts"])
+      : [],
+    createdAt: toIso(row.created_at),
+    updatedAt: toIso(row.updated_at),
+  };
+}
+
+export function mapPropertySourcingState(row: Record<string, unknown>): PropertySourcingState {
+  return {
+    propertyId: row.property_id as string,
+    workflowState: row.workflow_state as PropertySourcingState["workflowState"],
+    disposition: row.disposition as PropertySourcingState["disposition"],
+    holdReason: (row.hold_reason as string) ?? null,
+    holdNote: (row.hold_note as string) ?? null,
+    originatingProfileId: (row.originating_profile_id as string) ?? null,
+    originatingRunId: (row.originating_run_id as string) ?? null,
+    latestRunId: (row.latest_run_id as string) ?? null,
+    outreachReason: (row.outreach_reason as string) ?? null,
+    firstEligibleAt: row.first_eligible_at != null ? toIso(row.first_eligible_at) : null,
+    lastContactedAt: row.last_contacted_at != null ? toIso(row.last_contacted_at) : null,
+    lastReplyAt: row.last_reply_at != null ? toIso(row.last_reply_at) : null,
+    manualOmReviewAt: row.manual_om_review_at != null ? toIso(row.manual_om_review_at) : null,
+    createdAt: toIso(row.created_at),
+    updatedAt: toIso(row.updated_at),
+  };
+}
+
+export function mapPropertyOutreachFlag(row: Record<string, unknown>): PropertyOutreachFlag {
+  return {
+    id: row.id as string,
+    propertyId: row.property_id as string,
+    flagType: row.flag_type as string,
+    status: row.status as PropertyOutreachFlag["status"],
+    summary: (row.summary as string) ?? null,
+    details: toJsonObject(row.details),
+    createdAt: toIso(row.created_at),
+    resolvedAt: row.resolved_at != null ? toIso(row.resolved_at) : null,
+    updatedAt: toIso(row.updated_at),
+  };
+}
+
+export function mapPropertyActionItem(row: Record<string, unknown>): PropertyActionItem {
+  return {
+    id: row.id as string,
+    propertyId: row.property_id as string,
+    actionType: row.action_type as string,
+    status: row.status as PropertyActionItem["status"],
+    priority: (row.priority as PropertyActionItem["priority"]) ?? "medium",
+    summary: (row.summary as string) ?? null,
+    details: toJsonObject(row.details),
+    createdAt: toIso(row.created_at),
+    dueAt: row.due_at != null ? toIso(row.due_at) : null,
+    resolvedAt: row.resolved_at != null ? toIso(row.resolved_at) : null,
+    updatedAt: toIso(row.updated_at),
+  };
+}
+
+export function mapOutreachBatchItem(row: Record<string, unknown>): OutreachBatchItem {
+  return {
+    id: row.id as string,
+    batchId: row.batch_id as string,
+    propertyId: row.property_id as string,
+    status: row.status as string,
+    createdAt: toIso(row.created_at),
+    updatedAt: toIso(row.updated_at),
+  };
+}
+
+export function mapOutreachBatch(row: Record<string, unknown>): OutreachBatch {
+  return {
+    id: row.id as string,
+    contactId: (row.contact_id as string) ?? null,
+    toAddress: row.to_address as string,
+    status: row.status as string,
+    createdBy: row.created_by as string,
+    reviewReason: (row.review_reason as string) ?? null,
+    gmailMessageId: (row.gmail_message_id as string) ?? null,
+    gmailThreadId: (row.gmail_thread_id as string) ?? null,
+    sentAt: row.sent_at != null ? toIso(row.sent_at) : null,
+    metadata: toJsonObject(row.metadata),
+    createdAt: toIso(row.created_at),
+    updatedAt: toIso(row.updated_at),
+  };
+}
+
+export function mapOmIngestionRun(row: Record<string, unknown>): OmIngestionRun {
+  return {
+    id: row.id as string,
+    propertyId: row.property_id as string,
+    sourceDocumentId: (row.source_document_id as string) ?? null,
+    sourceType: row.source_type as OmIngestionRun["sourceType"],
+    status: row.status as OmIngestionRun["status"],
+    snapshotVersion:
+      row.snapshot_version != null ? Number(row.snapshot_version) : null,
+    extractionMethod:
+      (row.extraction_method as OmIngestionRun["extractionMethod"]) ?? null,
+    pageCount: row.page_count != null ? Number(row.page_count) : null,
+    financialPageCount:
+      row.financial_page_count != null ? Number(row.financial_page_count) : null,
+    ocrPageCount: row.ocr_page_count != null ? Number(row.ocr_page_count) : null,
+    sourceMeta: (row.source_meta as Record<string, unknown>) ?? null,
+    coverage: (row.coverage as OmCoverage) ?? null,
+    lastError: (row.last_error as string) ?? null,
+    startedAt: row.started_at != null ? toIso(row.started_at) : null,
+    completedAt: row.completed_at != null ? toIso(row.completed_at) : null,
+    promotedAt: row.promoted_at != null ? toIso(row.promoted_at) : null,
+    createdAt: toIso(row.created_at),
+    updatedAt: toIso(row.updated_at),
+  };
+}
+
+export function mapOmAuthoritativeSnapshotRecord(
+  row: Record<string, unknown>
+): OmAuthoritativeSnapshotRecord {
+  return {
+    id: row.id as string,
+    propertyId: row.property_id as string,
+    runId: (row.run_id as string) ?? null,
+    sourceDocumentId: (row.source_document_id as string) ?? null,
+    snapshotVersion:
+      row.snapshot_version != null ? Number(row.snapshot_version) : null,
+    snapshot: (row.snapshot as OmAuthoritativeSnapshot) ?? {},
+    isActive: Boolean(row.is_active),
+    createdAt: toIso(row.created_at),
+    updatedAt: toIso(row.updated_at),
   };
 }
 

@@ -3,7 +3,19 @@
  */
 
 import { Router, type Request, type Response } from "express";
-import { getPool, UserProfileRepo, SavedDealsRepo, PropertyRepo, MatchRepo, ListingRepo, DealSignalsRepo } from "@re-sourcing/db";
+import type { PropertyDetails } from "@re-sourcing/contracts";
+import {
+  getPool,
+  UserProfileRepo,
+  SavedDealsRepo,
+  PropertyRepo,
+  MatchRepo,
+  ListingRepo,
+  DealSignalsRepo,
+  DealScoreOverridesRepo,
+} from "@re-sourcing/db";
+import { resolveEffectiveDealScore } from "../deal/effectiveDealScore.js";
+import { resolvePreferredOmUnitCount } from "../om/authoritativeOm.js";
 
 const router = Router();
 
@@ -43,6 +55,12 @@ router.put("/profile", async (req: Request, res: Response) => {
       name?: string | null;
       email?: string | null;
       organization?: string | null;
+      automationPaused?: boolean | null;
+      automationPauseReason?: string | null;
+      automationPausedAt?: string | null;
+      dailyDigestEnabled?: boolean | null;
+      dailyDigestTimeLocal?: string | null;
+      dailyDigestTimezone?: string | null;
       defaultPurchaseClosingCostPct?: number | null;
       defaultLtv?: number | null;
       defaultInterestRate?: number | null;
@@ -66,6 +84,24 @@ router.put("/profile", async (req: Request, res: Response) => {
     if (typeof body.name === "string") params.name = body.name.trim() || null;
     if (typeof body.email === "string") params.email = body.email.trim() || null;
     if (typeof body.organization === "string") params.organization = body.organization.trim() || null;
+    if (typeof body.automationPaused === "boolean") {
+      params.automationPaused = body.automationPaused;
+      params.automationPauseReason =
+        typeof body.automationPauseReason === "string" ? body.automationPauseReason.trim() || null : null;
+      params.automationPausedAt = body.automationPaused ? new Date().toISOString() : null;
+    } else if (typeof body.automationPauseReason === "string") {
+      params.automationPauseReason = body.automationPauseReason.trim() || null;
+    }
+    if (typeof body.dailyDigestEnabled === "boolean") {
+      params.dailyDigestEnabled = body.dailyDigestEnabled;
+    }
+    if (typeof body.dailyDigestTimeLocal === "string") {
+      const trimmed = body.dailyDigestTimeLocal.trim();
+      params.dailyDigestTimeLocal = /^\d{2}:\d{2}$/.test(trimmed) ? trimmed : null;
+    }
+    if (typeof body.dailyDigestTimezone === "string") {
+      params.dailyDigestTimezone = body.dailyDigestTimezone.trim() || null;
+    }
     if (typeof body.defaultPurchaseClosingCostPct === "number" && !Number.isNaN(body.defaultPurchaseClosingCostPct)) {
       params.defaultPurchaseClosingCostPct = body.defaultPurchaseClosingCostPct;
     }
@@ -159,6 +195,7 @@ router.get("/profile/saved-deals", async (_req: Request, res: Response) => {
     const matchRepo = new MatchRepo({ pool });
     const listingRepo = new ListingRepo({ pool });
     const signalsRepo = new DealSignalsRepo({ pool });
+    const overridesRepo = new DealScoreOverridesRepo({ pool });
     const saved = await savedRepo.listByUserId(userId);
     const results: Array<{
       savedDeal: { id: string; propertyId: string; dealStatus: string; createdAt: string };
@@ -173,18 +210,20 @@ router.get("/profile/saved-deals", async (_req: Request, res: Response) => {
       const { matches } = await matchRepo.list({ propertyId: row.propertyId, limit: 1 });
       const listing = matches[0] ? await listingRepo.byId(matches[0].listingId) : null;
       const price = listing?.price ?? null;
-      const details = (property?.details ?? {}) as Record<string, unknown>;
+      const details = (property?.details ?? {}) as PropertyDetails;
       const rentalUnits = (details.rentalFinancials as Record<string, unknown> | undefined)?.rentalUnits as unknown[] | undefined;
-      const fromLlm = (details.rentalFinancials as Record<string, unknown> | undefined)?.fromLlm as Record<string, unknown> | undefined;
-      const omUnits = fromLlm?.rentalNumbersPerUnit as unknown[] | undefined;
-      const units = (rentalUnits?.length ?? omUnits?.length ?? null) ?? null;
-      const latestSignal = await signalsRepo.getLatestByPropertyId(row.propertyId);
+      const units = resolvePreferredOmUnitCount(details) ?? rentalUnits?.length ?? null;
+      const [latestSignal, scoreOverride] = await Promise.all([
+        signalsRepo.getLatestByPropertyId(row.propertyId),
+        overridesRepo.getActiveByPropertyId(row.propertyId),
+      ]);
+      const authoritativeReady = !!(details.omData?.authoritative && typeof details.omData.authoritative === "object");
       results.push({
         savedDeal: { id: row.id, propertyId: row.propertyId, dealStatus: row.dealStatus, createdAt: row.createdAt },
         address,
         price,
         units,
-        dealScore: latestSignal?.dealScore ?? null,
+        dealScore: authoritativeReady ? resolveEffectiveDealScore(latestSignal?.dealScore ?? null, scoreOverride) : null,
       });
     }
     res.json({ savedDeals: results });

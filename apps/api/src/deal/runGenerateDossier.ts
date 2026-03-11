@@ -3,7 +3,6 @@
  */
 
 import type {
-  OmAnalysis,
   PropertyDealDossierGeneration,
   PropertyDetails,
 } from "@re-sourcing/contracts";
@@ -15,14 +14,24 @@ import {
   ListingRepo,
   UserProfileRepo,
   DealSignalsRepo,
+  DealScoreOverridesRepo,
   DocumentRepo,
 } from "@re-sourcing/db";
 import { randomUUID } from "crypto";
 import { sendMessageWithAttachments } from "../inquiry/gmailClient.js";
+import {
+  getAuthoritativeOmSnapshot,
+  resolvePreferredOmExpenseTable,
+  resolvePreferredOmExpenseTotal,
+  resolvePreferredOmPropertyInfo,
+  resolvePreferredOmRentRoll,
+  resolvePreferredOmRevenueComposition,
+  resolvePreferredOmUnitCount,
+} from "../om/authoritativeOm.js";
 import { resolveCurrentFinancialsFromDetails } from "../rental/currentFinancials.js";
 import { computeDealSignals } from "./computeDealSignals.js";
-import { scoreDealWithLlm } from "./dealScoringLlm.js";
-import { resolveFinalDealScore } from "./dealScoringEngine.js";
+import { buildDealScoreSensitivity } from "./dealScoreSensitivity.js";
+import { resolveEffectiveDealScore } from "./effectiveDealScore.js";
 import { buildDossierStructuredText } from "./dossierGenerator.js";
 import { dossierTextToPdf } from "./dossierToPdf.js";
 import { buildExcelProForma } from "./excelProForma.js";
@@ -53,10 +62,14 @@ import type {
 export interface GenerateDossierResult {
   dossierDoc: { id: string; fileName: string; storagePath: string };
   excelDoc: { id: string; fileName: string; storagePath: string };
-  /** Deal score 0–100 (from LLM or fallback engine); included so UI can confirm it flowed through. */
+  /** Deal score 0–100 from the deterministic scoring engine; included so UI can confirm it flowed through. */
   dealScore: number | null;
   /** True if email was sent to profile email with attachments. */
   emailSent?: boolean;
+}
+
+export interface RunGenerateDossierOptions {
+  sendEmail?: boolean;
 }
 
 function runningGenerationState(
@@ -76,29 +89,17 @@ function runningGenerationState(
 }
 
 function unitCountFromDetails(details: PropertyDetails | null): number | null {
-  if (!details?.rentalFinancials) return null;
-  const rf = details.rentalFinancials as {
-    rentalUnits?: unknown[];
-    fromLlm?: { rentalNumbersPerUnit?: unknown[] };
-    omAnalysis?: { rentRoll?: unknown[]; propertyInfo?: Record<string, unknown> };
-  };
-  const omRoll = rf.omAnalysis?.rentRoll ?? [];
-  const omTotal = rf.omAnalysis?.propertyInfo?.totalUnits as number | undefined;
-  const rapid = rf.rentalUnits ?? [];
-  const om = rf.fromLlm?.rentalNumbersPerUnit ?? [];
-  const candidates = [
-    omRoll.length > 0 ? omRoll.length : null,
-    omTotal != null && Number.isFinite(omTotal) ? omTotal : null,
-    rapid.length > 0 ? rapid.length : null,
-    om.length > 0 ? om.length : null,
-  ].filter((value): value is number => value != null && value > 0);
-  return candidates.length > 0 ? Math.max(...candidates) : null;
+  return resolvePreferredOmUnitCount(details);
 }
 
-function rentRollRowsFromOm(om: OmAnalysis | null, _currentGrossRent: number | null): GrossRentRow[] {
-  if (!om?.rentRoll || !Array.isArray(om.rentRoll)) return [];
+function rentRollRowsFromDetails(
+  details: PropertyDetails | null,
+  _currentGrossRent: number | null
+): GrossRentRow[] {
+  const cleanRows = resolvePreferredOmRentRoll(details);
+  if (cleanRows.length === 0) return [];
   const rows: GrossRentRow[] = [];
-  for (const r of om.rentRoll) {
+  for (const r of cleanRows) {
     const annual =
       (r as {
         annualTotalRent?: number;
@@ -141,23 +142,22 @@ function rentRollRowsFromOm(om: OmAnalysis | null, _currentGrossRent: number | n
   return rows;
 }
 
-function expenseRowsFromOm(om: OmAnalysis | null): { rows: ExpenseRow[]; total: number } {
-  const exp = om?.expenses as
-    | { expensesTable?: Array<{ lineItem: string; amount: number }>; totalExpenses?: number }
-    | undefined;
-  const table = exp?.expensesTable;
-  if (!table || !Array.isArray(table)) return { rows: [], total: exp?.totalExpenses ?? 0 };
+function expenseRowsFromDetails(details: PropertyDetails | null): { rows: ExpenseRow[]; total: number } {
+  const table = resolvePreferredOmExpenseTable(details);
+  if (!table || !Array.isArray(table)) {
+    return { rows: [], total: resolvePreferredOmExpenseTotal(details) ?? 0 };
+  }
   const rows: ExpenseRow[] = table.map((e) => ({
     lineItem: e.lineItem ?? "—",
     amount: typeof e.amount === "number" ? e.amount : 0,
   }));
-  const total = exp?.totalExpenses ?? rows.reduce((sum, row) => sum + row.amount, 0);
+  const total = resolvePreferredOmExpenseTotal(details) ?? rows.reduce((sum, row) => sum + row.amount, 0);
   return { rows, total };
 }
 
-function omRevenueMixFlag(om: OmAnalysis | null): string | null {
-  const propertyInfo = om?.propertyInfo as Record<string, unknown> | undefined;
-  const revenue = om?.revenueComposition as Record<string, unknown> | undefined;
+function omRevenueMixFlag(details: PropertyDetails | null): string | null {
+  const propertyInfo = resolvePreferredOmPropertyInfo(details) ?? undefined;
+  const revenue = resolvePreferredOmRevenueComposition(details) ?? undefined;
   const unitsResidential =
     typeof propertyInfo?.unitsResidential === "number" ? propertyInfo.unitsResidential : null;
   const unitsCommercial =
@@ -192,40 +192,75 @@ function omRevenueMixFlag(om: OmAnalysis | null): string | null {
   return parts.length > 0 ? parts.join("; ") : null;
 }
 
-function omDiscrepancyFlag(om: OmAnalysis | null): string | null {
-  const discrepancies = om?.reportedDiscrepancies;
-  if (!Array.isArray(discrepancies) || discrepancies.length === 0) return null;
-  const first = discrepancies[0] as {
-    field?: unknown;
-    reportedValues?: unknown;
-    selectedValue?: unknown;
-  };
-  const field = typeof first.field === "string" ? first.field : "OM data";
-  const values = Array.isArray(first.reportedValues)
-    ? first.reportedValues
-        .filter((value): value is string => typeof value === "string" && value.trim() !== "")
-        .slice(0, 2)
-    : [];
-  const selected = typeof first.selectedValue === "string" ? first.selectedValue : null;
-  const reported = values.length > 0 ? values.join(" vs ") : "conflicting values";
-  return `Verify ${field}: ${reported}${selected ? `; underwriting uses ${selected}` : ""}`;
+function authoritativeValidationMessages(details: PropertyDetails | null): string[] {
+  const flags = getAuthoritativeOmSnapshot(details)?.validationFlags;
+  if (!Array.isArray(flags)) return [];
+  return flags
+    .map((flag) => {
+      const field = typeof flag?.field === "string" ? flag.field : "OM data";
+      const brokerValue =
+        typeof flag?.brokerValue === "string" || typeof flag?.brokerValue === "number"
+          ? String(flag.brokerValue)
+          : null;
+      const externalValue =
+        typeof flag?.externalValue === "string" || typeof flag?.externalValue === "number"
+          ? String(flag.externalValue)
+          : null;
+      const message =
+        typeof flag?.message === "string" && flag.message.trim().length > 0
+          ? flag.message.trim()
+          : null;
+      const compared = [brokerValue, externalValue].filter(Boolean).join(" vs ");
+      if (message) return message;
+      if (compared) return `Verify ${field}: ${compared}`;
+      return `Verify ${field}`;
+    })
+    .slice(0, 5);
+}
+
+function omDiscrepancyFlag(details: PropertyDetails | null): string | null {
+  const authoritativeFlag = getAuthoritativeOmSnapshot(details)?.validationFlags?.[0] as
+    | {
+        field?: unknown;
+        brokerValue?: unknown;
+        externalValue?: unknown;
+        message?: unknown;
+      }
+    | undefined;
+  if (authoritativeFlag) {
+    const field = typeof authoritativeFlag.field === "string" ? authoritativeFlag.field : "OM data";
+    const brokerValue =
+      typeof authoritativeFlag.brokerValue === "string" || typeof authoritativeFlag.brokerValue === "number"
+        ? String(authoritativeFlag.brokerValue)
+        : null;
+    const externalValue =
+      typeof authoritativeFlag.externalValue === "string" || typeof authoritativeFlag.externalValue === "number"
+        ? String(authoritativeFlag.externalValue)
+        : null;
+    const message =
+      typeof authoritativeFlag.message === "string" && authoritativeFlag.message.trim().length > 0
+        ? authoritativeFlag.message.trim()
+        : null;
+    const compared = [brokerValue, externalValue].filter(Boolean).join(" vs ");
+    if (message) return message;
+    if (compared) return `Verify ${field}: ${compared}`;
+    return `Verify ${field}`;
+  }
+  return null;
 }
 
 const RENT_STAB_PATTERN = /rent\s+stabiliz/i;
 
 function detectRentStabilization(details: PropertyDetails | null, dossierText?: string | null): boolean {
-  const om = details?.rentalFinancials?.omAnalysis;
-  if (om) {
-    const takeaways = om.investmentTakeaways ?? [];
-    for (const takeaway of takeaways) {
-      if (typeof takeaway === "string" && RENT_STAB_PATTERN.test(takeaway)) return true;
-    }
-    const memo = om.dossierMemo;
-    if (memo && typeof memo === "object") {
-      for (const value of Object.values(memo)) {
-        if (typeof value === "string" && RENT_STAB_PATTERN.test(value)) return true;
-      }
-    }
+  const preferredRoll = resolvePreferredOmRentRoll(details);
+  for (const row of preferredRoll) {
+    const label = [row.rentType, row.notes, row.tenantStatus].filter(Boolean).join(" ");
+    if (RENT_STAB_PATTERN.test(label)) return true;
+  }
+  const revenue = resolvePreferredOmRevenueComposition(details);
+  const rentStabilizedUnits = typeof revenue?.rentStabilizedUnits === "number" ? revenue.rentStabilizedUnits : null;
+  if (rentStabilizedUnits != null && rentStabilizedUnits > 0) {
+    return true;
   }
   if (dossierText && RENT_STAB_PATTERN.test(dossierText)) return true;
   return false;
@@ -236,13 +271,14 @@ function rentStabilizedUnitCount(
   _dossierText: string | null,
   anyRentStab: boolean
 ): number {
-  const om = details?.rentalFinancials?.omAnalysis;
-  const roll = om?.rentRoll;
+  const roll = resolvePreferredOmRentRoll(details);
   if (Array.isArray(roll)) {
     let count = 0;
     for (const row of roll) {
-      const notes = (row as { notes?: string }).notes;
-      if (typeof notes === "string" && RENT_STAB_PATTERN.test(notes)) count++;
+      const haystack = [(row as { notes?: string }).notes, (row as { rentType?: string }).rentType]
+        .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+        .join(" ");
+      if (RENT_STAB_PATTERN.test(haystack)) count++;
     }
     if (count > 0) return count;
   }
@@ -251,7 +287,8 @@ function rentStabilizedUnitCount(
 
 export async function runGenerateDossier(
   propertyId: string,
-  assumptionOverrides?: DossierAssumptionOverrides | null
+  assumptionOverrides?: DossierAssumptionOverrides | null,
+  options?: RunGenerateDossierOptions
 ): Promise<GenerateDossierResult> {
   const pool = getPool();
   const propertyRepo = new PropertyRepo({ pool });
@@ -259,6 +296,7 @@ export async function runGenerateDossier(
   const listingRepo = new ListingRepo({ pool });
   const profileRepo = new UserProfileRepo({ pool });
   const signalsRepo = new DealSignalsRepo({ pool });
+  const overridesRepo = new DealScoreOverridesRepo({ pool });
   const documentRepo = new DocumentRepo({ pool });
 
   const property = await propertyRepo.byId(propertyId);
@@ -296,14 +334,16 @@ export async function runGenerateDossier(
     if (!profile) throw new Error("Profile not available");
 
     const details = property.details as PropertyDetails | null;
+    if (!getAuthoritativeOmSnapshot(details)) {
+      throw new Error("Authoritative OM snapshot required before dossier generation and deal scoring.");
+    }
     const currentFinancials = resolveCurrentFinancialsFromDetails(details);
     const currentNoi = currentFinancials.noi;
     const currentGrossRent = currentFinancials.grossRentalIncome;
     const currentOtherIncome = currentFinancials.otherIncome;
     const unitCount = unitCountFromDetails(details);
-    const omAnalysis: OmAnalysis | null = details?.rentalFinancials?.omAnalysis ?? null;
-    const rentRollRows = rentRollRowsFromOm(omAnalysis, currentGrossRent);
-    const { rows: expenseRows, total: extractedExpenseTotal } = expenseRowsFromOm(omAnalysis);
+    const rentRollRows = rentRollRowsFromDetails(details, currentGrossRent);
+    const { rows: expenseRows, total: extractedExpenseTotal } = expenseRowsFromDetails(details);
     const propertyAssumptionOverrides = propertyAssumptionsToOverrides(
       getPropertyDossierAssumptions(details)
     );
@@ -351,7 +391,7 @@ export async function runGenerateDossier(
       canonicalAddress: property.canonicalAddress,
       listing,
       details,
-      omAnalysis,
+      omAnalysis: null,
     });
     const packageContext = resolveDossierPackageContext(property.canonicalAddress, details);
     const propertyOverview = propertyOverviewFromDetails(details, packageContext);
@@ -402,10 +442,11 @@ export async function runGenerateDossier(
           : `Asking price already clears the ${recommendedOffer.targetIrrPct.toFixed(0)}% target IRR`
       );
     }
-    const revenueMixFlag = omRevenueMixFlag(omAnalysis);
+    const revenueMixFlag = omRevenueMixFlag(details);
     if (revenueMixFlag) financialFlags.push(revenueMixFlag);
-    const discrepancyFlag = omDiscrepancyFlag(omAnalysis);
+    const discrepancyFlag = omDiscrepancyFlag(details);
     if (discrepancyFlag) financialFlags.push(discrepancyFlag);
+    financialFlags.push(...authoritativeValidationMessages(details).filter((message) => !financialFlags.includes(message)));
 
     const assetCapRateForCtx =
       assumptions.acquisition.purchasePrice != null && currentNoi != null && currentNoi >= 0
@@ -538,44 +579,6 @@ export async function runGenerateDossier(
       rentStabilizedUnitCount(details, dossierText, anyRentStab)
     );
 
-    const hpd = details?.enrichment?.hpd_violations_summary;
-    const dob = details?.enrichment?.dob_complaints_summary;
-    const lit = details?.enrichment?.housing_litigations_summary;
-
-    const llmInputs = {
-      assetCapRatePct: assetCapRateForCtx,
-      adjustedCapRatePct: adjustedCapRateForCtx,
-      irrPct: projection.returns.irr ?? null,
-      equityMultiple: projection.returns.equityMultiple ?? null,
-      cocPct: projection.returns.year1CashOnCashReturn ?? null,
-      holdPeriodYears: assumptions.holdPeriodYears,
-      targetIrrPct: assumptions.targetIrrPct,
-      recommendedOfferLow: recommendedOffer.recommendedOfferLow,
-      recommendedOfferHigh: recommendedOffer.recommendedOfferHigh,
-      requiredDiscountPct: recommendedOffer.discountToAskingPct,
-      rentStabilizedUnitCount: rentStabCount,
-      commercialUnitCount: assumptions.propertyMix.commercialUnits,
-      blendedRentUpliftPct: assumptions.operating.blendedRentUpliftPct,
-      hpdTotal: hpd?.total,
-      hpdOpenCount: hpd?.openCount,
-      hpdRentImpairingOpen: hpd?.rentImpairingOpen,
-      dobOpenCount: dob?.openCount,
-      dobCount30: dob?.count30,
-      dobCount365: dob?.count365,
-      dobTopCategories: dob?.topCategories,
-      litigationTotal: lit?.total,
-      litigationOpenCount: lit?.openCount,
-      litigationTotalPenalty: lit?.totalPenalty,
-      address: packageContext.dossierAddress,
-      riskBullets: [
-        ...(omAnalysis?.investmentTakeaways ?? [])
-          .slice(0, 5)
-          .filter((value): value is string => typeof value === "string"),
-        ...financialFlags,
-      ],
-    };
-
-    const llmScore = await scoreDealWithLlm(llmInputs);
     const { insertParams, scoringResult } = computeDealSignals({
       propertyId,
       canonicalAddress: property.canonicalAddress,
@@ -588,25 +591,43 @@ export async function runGenerateDossier(
       },
       irrPct: projection.returns.irr ?? null,
       cocPct: projection.returns.year1CashOnCashReturn ?? null,
+      equityMultiple: projection.returns.equityMultiple ?? null,
       adjustedCapRatePct: adjustedCapRateForCtx,
+      adjustedNoi: projection.operating.stabilizedNoi ?? null,
       recommendedOfferHigh: recommendedOffer.recommendedOfferHigh,
       blendedRentUpliftPct: assumptions.operating.blendedRentUpliftPct,
+      annualExpenseGrowthPct: assumptions.operating.annualExpenseGrowthPct,
+      vacancyPct: assumptions.operating.vacancyPct,
+      exitCapRatePct: assumptions.exit.exitCapPct,
       rentStabilizedUnitCount: rentStabCount,
       commercialUnitCount: assumptions.propertyMix.commercialUnits,
     });
-
-    const finalScore = resolveFinalDealScore({
-      llmScore: llmScore?.dealScore ?? null,
-      deterministicScore: scoringResult.isScoreable ? scoringResult.dealScore : null,
-      irrPct: projection.returns.irr ?? null,
-      equityMultiple: projection.returns.equityMultiple ?? null,
-      requiredDiscountPct: recommendedOffer.discountToAskingPct ?? null,
+    insertParams.scoreSensitivity = buildDealScoreSensitivity({
+      propertyId,
+      canonicalAddress: property.canonicalAddress,
+      details,
+      primaryListing: {
+        price: assumptions.acquisition.purchasePrice,
+        city: listingCity,
+        listedAt: listing?.listedAt ?? null,
+        priceHistory: listing?.priceHistory ?? null,
+      },
+      assumptions,
+      currentGrossRent,
+      currentNoi,
+      currentOtherIncome,
+      currentExpensesTotal: resolvedCurrentExpensesTotal ?? undefined,
+      expenseRows,
+      baseCalculatedScore: scoringResult.isScoreable ? scoringResult.dealScore : null,
     });
-    ctx.dealScore = finalScore;
-    insertParams.dealScore = finalScore;
 
-    if (llmScore?.rationale?.trim()) financialFlags.push(llmScore.rationale);
-    else if (scoringResult.negativeSignals.length > 0) financialFlags.push(scoringResult.negativeSignals[0]);
+    const scoreOverride = await overridesRepo.getActiveByPropertyId(propertyId);
+    const calculatedScore = scoringResult.isScoreable ? scoringResult.dealScore : null;
+    const finalScore = resolveEffectiveDealScore(calculatedScore, scoreOverride);
+    ctx.dealScore = finalScore;
+    insertParams.dealScore = calculatedScore ?? undefined;
+
+    if (scoringResult.negativeSignals.length > 0) financialFlags.push(scoringResult.negativeSignals[0]);
     else if (scoringResult.positiveSignals.length > 0) financialFlags.push(scoringResult.positiveSignals[0]);
 
     const scoredDossierText = dossierText.replace(
@@ -667,7 +688,7 @@ export async function runGenerateDossier(
 
     let emailSent = false;
     const toEmail = profile.email?.trim();
-    if (toEmail && dossierBuffer.length > 0 && excelBuffer.length > 0) {
+    if (options?.sendEmail !== false && toEmail && dossierBuffer.length > 0 && excelBuffer.length > 0) {
       try {
         await sendMessageWithAttachments(
           toEmail,

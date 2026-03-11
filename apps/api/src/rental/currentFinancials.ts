@@ -1,8 +1,11 @@
 import type {
+  OmAuthoritativeSnapshot,
   OmAnalysis,
   PropertyDetails,
   RentalFinancialsFromLlm,
 } from "@re-sourcing/contracts";
+import { getAuthoritativeOmSnapshot } from "../om/authoritativeOm.js";
+import { sanitizeExpenseTableRows } from "./omAnalysisUtils.js";
 
 export interface ResolvedCurrentFinancials {
   noi: number | null;
@@ -175,11 +178,164 @@ export function resolveCurrentFinancialsFromOmAnalysis(
   };
 }
 
+export function resolveCurrentFinancialsFromAuthoritativeSnapshot(
+  snapshot: OmAuthoritativeSnapshot | null | undefined
+): ResolvedCurrentFinancials {
+  const current = asRecord(snapshot?.currentFinancials);
+  const income = asRecord(snapshot?.incomeStatement);
+  const expenses = asRecord(snapshot?.expenses);
+  const revenue = asRecord(snapshot?.revenueComposition);
+
+  const noi = roundCurrency(
+    firstNumber(
+      current?.noi,
+      income?.reportedNoi,
+      income?.reportedNOI,
+      income?.noi,
+      income?.NOI
+    )
+  );
+  const otherIncome = roundCurrency(
+    nonNegative(
+      firstNumber(
+        current?.otherIncome,
+        income?.otherIncome,
+        income?.other_income,
+        income?.otherAnnualIncome,
+        income?.other_annual_income,
+        income?.miscIncome,
+        income?.misc_income,
+        revenue?.otherIncomeAnnual,
+        revenue?.other_income_annual,
+        revenue?.otherIncome,
+        revenue?.other_income
+      )
+    )
+  );
+  const vacancyLoss = roundCurrency(
+    nonNegative(
+      firstNumber(
+        current?.vacancyLoss,
+        income?.vacancyLoss,
+        income?.vacancy_loss,
+        income?.vacancyCollectionLoss,
+        income?.vacancy_collection_loss,
+        income?.vacancyAndCollectionLoss,
+        income?.vacancy_and_collection_loss
+      )
+    )
+  );
+
+  const componentGrossPotential = sumNumbers(
+    nonNegative(
+      firstNumber(
+        income?.grossRentResidentialPotential,
+        income?.gross_rent_residential_potential,
+        revenue?.residentialAnnualRent,
+        revenue?.residential_annual_rent
+      )
+    ),
+    nonNegative(
+      firstNumber(
+        income?.grossRentCommercialPotential,
+        income?.gross_rent_commercial_potential,
+        revenue?.commercialAnnualRent,
+        revenue?.commercial_annual_rent
+      )
+    )
+  );
+  const directGrossPotential = nonNegative(
+    firstNumber(
+      current?.grossRentalIncome,
+      current?.gross_potential_rent,
+      income?.grossPotentialRent,
+      income?.gross_potential_rent,
+      income?.grossRentPotential,
+      income?.gross_rent_potential,
+      income?.grossRentActual,
+      income?.gross_rent_actual,
+      income?.grossRentalIncome,
+      income?.gross_rental_income,
+      income?.grossIncome,
+      income?.gross_income
+    )
+  );
+  const effectiveGrossIncome = roundCurrency(
+    nonNegative(
+      firstNumber(
+        current?.effectiveGrossIncome,
+        income?.effectiveGrossIncome,
+        income?.effective_gross_income,
+        income?.effectiveGrossRent,
+        income?.effective_gross_rent,
+        componentGrossPotential != null && vacancyLoss != null
+          ? componentGrossPotential + (otherIncome ?? 0) - vacancyLoss
+          : null,
+        directGrossPotential != null && vacancyLoss != null
+          ? directGrossPotential + (otherIncome ?? 0) - vacancyLoss
+          : null
+      )
+    )
+  );
+
+  const grossRentalIncome = roundCurrency(
+    nonNegative(
+      directGrossPotential ??
+        componentGrossPotential ??
+        (effectiveGrossIncome != null && vacancyLoss != null
+          ? effectiveGrossIncome - (otherIncome ?? 0) + vacancyLoss
+          : null)
+    )
+  );
+  const explicitExpenseTotal = roundCurrency(
+    nonNegative(
+      firstNumber(
+        current?.operatingExpenses,
+        expenses?.totalExpenses,
+        expenses?.total_expenses
+      )
+    )
+  );
+  const operatingExpenses = roundCurrency(
+    nonNegative(
+      explicitExpenseTotal ??
+        (effectiveGrossIncome != null && noi != null ? effectiveGrossIncome - noi : null)
+    )
+  );
+
+  return {
+    noi,
+    grossRentalIncome,
+    otherIncome,
+    vacancyLoss,
+    effectiveGrossIncome,
+    operatingExpenses,
+  };
+}
+
 export function resolveExpenseRowsFromOmAnalysis(
   omAnalysis: OmAnalysis | null | undefined
 ): ResolvedExpenseRow[] {
-  const expenseTable = (omAnalysis?.expenses as { expensesTable?: Array<{ lineItem?: unknown; amount?: unknown }> } | null)
-    ?.expensesTable;
+  const expenseTable = sanitizeExpenseTableRows(
+    (omAnalysis?.expenses as { expensesTable?: Array<{ lineItem?: unknown; amount?: unknown }> } | null)
+      ?.expensesTable
+  );
+  if (!Array.isArray(expenseTable)) return [];
+  return expenseTable
+    .map((row) => ({
+      lineItem: typeof row?.lineItem === "string" && row.lineItem.trim().length > 0 ? row.lineItem.trim() : "—",
+      amount: toFiniteNumber(row?.amount) ?? 0,
+    }))
+    .filter((row) => Number.isFinite(row.amount) && row.amount >= 0);
+}
+
+export function resolveExpenseRowsFromAuthoritativeSnapshot(
+  snapshot: OmAuthoritativeSnapshot | null | undefined
+): ResolvedExpenseRow[] {
+  const expenseTable = sanitizeExpenseTableRows(
+    (snapshot?.expenses as { expensesTable?: Array<{ lineItem?: unknown; amount?: unknown }> } | null)
+      ?.expensesTable
+  );
   if (!Array.isArray(expenseTable)) return [];
   return expenseTable
     .map((row) => ({
@@ -192,14 +348,22 @@ export function resolveExpenseRowsFromOmAnalysis(
 export function resolveCurrentFinancialsFromDetails(
   details: PropertyDetails | null | undefined
 ): ResolvedCurrentFinancials {
-  return resolveCurrentFinancialsFromOmAnalysis(
-    details?.rentalFinancials?.omAnalysis ?? null,
-    details?.rentalFinancials?.fromLlm ?? null
-  );
+  const authoritative = getAuthoritativeOmSnapshot(details);
+  return authoritative
+    ? resolveCurrentFinancialsFromAuthoritativeSnapshot(authoritative)
+    : {
+        noi: null,
+        grossRentalIncome: null,
+        otherIncome: null,
+        vacancyLoss: null,
+        effectiveGrossIncome: null,
+        operatingExpenses: null,
+      };
 }
 
 export function resolveExpenseRowsFromDetails(
   details: PropertyDetails | null | undefined
 ): ResolvedExpenseRow[] {
-  return resolveExpenseRowsFromOmAnalysis(details?.rentalFinancials?.omAnalysis ?? null);
+  const authoritative = getAuthoritativeOmSnapshot(details);
+  return authoritative ? resolveExpenseRowsFromAuthoritativeSnapshot(authoritative) : [];
 }

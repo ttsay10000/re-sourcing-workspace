@@ -16,8 +16,8 @@ describe("dossierPropertyContext", () => {
           lastRegistrationDate: "2025-06-11",
         },
       },
-      rentalFinancials: {
-        omAnalysis: {
+      omData: {
+        authoritative: {
           propertyInfo: {
             address: "18-20 Christopher Street",
             block: 593,
@@ -40,5 +40,35 @@ describe("dossierPropertyContext", () => {
     expect(propertyOverview?.bbl).toBeUndefined();
     expect(propertyOverview?.hpdRegistrationId).toBeUndefined();
     expect(propertyOverview?.packageNote).toContain("canonical listing address");
+  });
+
+  it("prefers authoritative OM property info over legacy OM fields", () => {
+    const details: PropertyDetails = {
+      rentalFinancials: {
+        omAnalysis: {
+          propertyInfo: {
+            address: "123 Legacy Avenue",
+          },
+        },
+      },
+      omData: {
+        authoritative: {
+          propertyInfo: {
+            address: "125-127 Authoritative Avenue",
+            block: 999,
+            lotNumbers: [10, 11],
+          },
+        },
+      },
+    };
+
+    const packageContext = resolveDossierPackageContext(
+      "125 Authoritative Avenue, Manhattan, NY 10001",
+      details
+    );
+
+    expect(packageContext.dossierAddress).toBe("125-127 Authoritative Avenue, Manhattan, NY 10001");
+    expect(packageContext.isPackage).toBe(true);
+    expect(packageContext.packageNote).toContain("Block 999, Lots 10 and 11");
   });
 });

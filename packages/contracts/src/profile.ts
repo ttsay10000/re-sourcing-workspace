@@ -1,5 +1,15 @@
 import type { LocationMode } from "./enums.js";
 
+export type SearchCadence = "manual" | "daily" | "weekly" | "monthly";
+
+export interface SearchOutreachRules {
+  minUnits?: number | null;
+  maxPrice?: number | null;
+  propertyTypes?: string[] | null;
+  requireResolvedRecipient?: boolean;
+  minimumRecipientConfidence?: number | null;
+}
+
 /**
  * Search profile: filters, source toggles, and schedule.
  * Used for automated ingestion and UI.
@@ -7,6 +17,7 @@ import type { LocationMode } from "./enums.js";
 export interface SearchProfile {
   id: string;
   name: string;
+  enabled: boolean;
   /** single = one location slug; multi = area_codes or multiple slugs. */
   locationMode: LocationMode;
   /** When locationMode is 'single', the slug (e.g. StreetEasy neighborhood). */
@@ -31,8 +42,24 @@ export interface SearchProfile {
   maxSqft: number | null;
   /** Amenities that must be present (e.g. "doorman", "laundry_in_unit"). */
   requiredAmenities: string[];
+  /** Property types supported by the StreetEasy source query (e.g. condo, coop, house, multi_family). */
+  propertyTypes: string[];
   /** Source toggles: which sources are enabled for this profile. */
   sourceToggles: SourceToggles;
+  /** V1 saved-search cadence. */
+  scheduleCadence: SearchCadence;
+  /** Local timezone for the scheduled run. */
+  timezone: string;
+  /** Local time string in HH:MM:SS format. */
+  runTimeLocal: string | null;
+  /** 0 = Sunday through 6 = Saturday for weekly cadence. */
+  weeklyRunDay: number | null;
+  /** 1-31 for monthly cadence. */
+  monthlyRunDay: number | null;
+  nextRunAt: string | null;
+  lastRunAt: string | null;
+  lastSuccessAt: string | null;
+  outreachRules: SearchOutreachRules;
   /** Schedule: cron expression or null for manual-only. */
   scheduleCron: string | null;
   /** Alternative: run interval in minutes (if no cron). */
@@ -56,6 +83,7 @@ export interface SourceToggles {
  */
 export interface SearchProfileInput {
   name: string;
+  enabled?: boolean;
   locationMode: LocationMode;
   singleLocationSlug?: string | null;
   areaCodes?: string[];
@@ -68,7 +96,20 @@ export interface SearchProfileInput {
   minSqft?: number | null;
   maxSqft?: number | null;
   requiredAmenities?: string[];
+  propertyTypes?: string[];
   sourceToggles?: SourceToggles;
+  scheduleCadence?: SearchCadence;
+  timezone?: string | null;
+  runTimeLocal?: string | null;
+  weeklyRunDay?: number | null;
+  monthlyRunDay?: number | null;
+  nextRunAt?: string | null;
+  lastRunAt?: string | null;
+  lastSuccessAt?: string | null;
+  outreachRules?: SearchOutreachRules;
   scheduleCron?: string | null;
   runIntervalMinutes?: number | null;
 }
+
+export type SavedSearch = SearchProfile;
+export type SavedSearchInput = SearchProfileInput;

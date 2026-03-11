@@ -4,6 +4,10 @@
 
 import { Router, type Request, type Response } from "express";
 import { processInbox } from "../inquiry/processInbox.js";
+import { getPool, UserProfileRepo } from "@re-sourcing/db";
+import { runDueSavedSearches } from "../sourcing/savedSearchRunner.js";
+import { runDailyOutreach } from "../sourcing/outreachAutomation.js";
+import { sendDailyDigest } from "../notifications/dailyDigest.js";
 import {
   createWorkflowRun,
   mergeWorkflowRunMetadata,
@@ -23,10 +27,46 @@ function checkCronSecret(req: Request): boolean {
   return header === secret;
 }
 
+async function getAutomationPauseState(): Promise<{ paused: boolean; reason: string | null }> {
+  const pool = getPool();
+  const repo = new UserProfileRepo({ pool });
+  await repo.ensureDefault();
+  const profile = await repo.getDefault();
+  return {
+    paused: Boolean(profile?.automationPaused),
+    reason: profile?.automationPauseReason ?? null,
+  };
+}
+
+async function withCronLock<T>(lockKey: string, handler: () => Promise<T>): Promise<{ acquired: boolean; result?: T }> {
+  const pool = getPool();
+  const client = await pool.connect();
+  let acquired = false;
+  try {
+    const lockResult = await client.query<{ locked: boolean }>(
+      "SELECT pg_try_advisory_lock(hashtext($1)) AS locked",
+      [lockKey]
+    );
+    acquired = Boolean(lockResult.rows[0]?.locked);
+    if (!acquired) return { acquired: false };
+    return { acquired: true, result: await handler() };
+  } finally {
+    if (acquired) {
+      await client.query("SELECT pg_advisory_unlock(hashtext($1))", [lockKey]).catch(() => {});
+    }
+    client.release();
+  }
+}
+
 /** POST /api/cron/process-inbox - run inbox processing (match replies to properties, save emails and attachments). */
 router.post("/cron/process-inbox", async (req: Request, res: Response) => {
   if (!checkCronSecret(req)) {
     res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  const pauseState = await getAutomationPauseState();
+  if (pauseState.paused) {
+    res.json({ ok: true, skipped: true, reason: pauseState.reason ?? "Automation is paused" });
     return;
   }
   let workflowRunId: string | null = null;
@@ -34,28 +74,35 @@ router.post("/cron/process-inbox", async (req: Request, res: Response) => {
   try {
     const maxMessages = req.body?.maxMessages != null ? Number(req.body.maxMessages) : undefined;
     const requestedMax = maxMessages != null && Number.isFinite(maxMessages) ? Math.max(0, maxMessages) : 50;
-    workflowRunId = await createWorkflowRun({
-      runType: "process_inbox",
-      displayName: "Process inbox",
-      scopeLabel: `up to ${requestedMax} message${requestedMax === 1 ? "" : "s"}`,
-      triggerSource: "cron",
-      totalItems: requestedMax,
-      metadata: { requestedMaxMessages: requestedMax },
-      steps: [
-        {
-          stepKey: "inbox",
-          totalItems: requestedMax,
-          status: requestedMax === 0 ? "completed" : "running",
-          startedAt: workflowStartedAt,
-          finishedAt: requestedMax === 0 ? workflowStartedAt : null,
-          lastMessage:
-            requestedMax === 0
-              ? "No messages requested"
-              : `Processing up to ${requestedMax} inbox message${requestedMax === 1 ? "" : "s"}`,
-        },
-      ],
+    const locked = await withCronLock("process-inbox", async () => {
+      workflowRunId = await createWorkflowRun({
+        runType: "process_inbox",
+        displayName: "Process inbox",
+        scopeLabel: `up to ${requestedMax} message${requestedMax === 1 ? "" : "s"}`,
+        triggerSource: "cron",
+        totalItems: requestedMax,
+        metadata: { requestedMaxMessages: requestedMax },
+        steps: [
+          {
+            stepKey: "inbox",
+            totalItems: requestedMax,
+            status: requestedMax === 0 ? "completed" : "running",
+            startedAt: workflowStartedAt,
+            finishedAt: requestedMax === 0 ? workflowStartedAt : null,
+            lastMessage:
+              requestedMax === 0
+                ? "No messages requested"
+                : `Processing up to ${requestedMax} inbox message${requestedMax === 1 ? "" : "s"}`,
+          },
+        ],
+      });
+      return processInbox({ maxMessages });
     });
-    const result = await processInbox({ maxMessages });
+    if (!locked.acquired || !locked.result) {
+      res.json({ ok: true, skipped: true, reason: "process-inbox is already running" });
+      return;
+    }
+    const result = locked.result;
     await upsertWorkflowStep(workflowRunId, {
       stepKey: "inbox",
       totalItems: result.processed,
@@ -104,6 +151,84 @@ router.post("/cron/process-inbox", async (req: Request, res: Response) => {
       finishedAt: new Date().toISOString(),
     });
     res.status(503).json({ error: "Process inbox failed.", details: message });
+  }
+});
+
+router.post("/cron/run-saved-searches", async (req: Request, res: Response) => {
+  if (!checkCronSecret(req)) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  const pauseState = await getAutomationPauseState();
+  if (pauseState.paused) {
+    res.json({ ok: true, skipped: true, reason: pauseState.reason ?? "Automation is paused" });
+    return;
+  }
+  try {
+    const locked = await withCronLock("run-saved-searches", () => runDueSavedSearches());
+    if (!locked.acquired || !locked.result) {
+      res.json({ ok: true, skipped: true, reason: "run-saved-searches is already running" });
+      return;
+    }
+    const result = locked.result;
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[cron run-saved-searches]", err);
+    res.status(503).json({ error: "Run saved searches failed.", details: message });
+  }
+});
+
+router.post("/cron/run-daily-outreach", async (req: Request, res: Response) => {
+  if (!checkCronSecret(req)) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  const pauseState = await getAutomationPauseState();
+  if (pauseState.paused) {
+    res.json({ ok: true, skipped: true, reason: pauseState.reason ?? "Automation is paused" });
+    return;
+  }
+  try {
+    const locked = await withCronLock("run-daily-outreach", () => runDailyOutreach());
+    if (!locked.acquired || !locked.result) {
+      res.json({ ok: true, skipped: true, reason: "run-daily-outreach is already running" });
+      return;
+    }
+    const result = locked.result;
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[cron run-daily-outreach]", err);
+    res.status(503).json({ error: "Run daily outreach failed.", details: message });
+  }
+});
+
+router.post("/cron/send-daily-digest", async (req: Request, res: Response) => {
+  if (!checkCronSecret(req)) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  const pauseState = await getAutomationPauseState();
+  if (pauseState.paused) {
+    res.json({ ok: true, skipped: true, reason: pauseState.reason ?? "Automation is paused" });
+    return;
+  }
+  try {
+    const locked = await withCronLock("send-daily-digest", () => sendDailyDigest());
+    if (!locked.acquired || !locked.result) {
+      res.json({ ok: true, skipped: true, reason: "send-daily-digest is already running" });
+      return;
+    }
+    if (!locked.result.sent) {
+      res.json({ ok: true, skipped: true, reason: locked.result.skippedReason ?? "no_send" });
+      return;
+    }
+    res.json({ ok: true, ...locked.result });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[cron send-daily-digest]", err);
+    res.status(503).json({ error: "Send daily digest failed.", details: message });
   }
 });
 

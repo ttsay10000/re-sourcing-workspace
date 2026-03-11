@@ -5,7 +5,6 @@ import type {
   RentalFinancialsFromLlm,
   RentalNumberPerUnit,
 } from "@re-sourcing/contracts";
-import { resolveCurrentFinancialsFromOmAnalysis } from "./currentFinancials.js";
 
 const COMMERCIAL_PATTERN =
   /\b(commercial|retail|office|storefront|store front|restaurant|cafe|gallery|medical|community facility|store)\b/i;
@@ -357,15 +356,22 @@ function buildInvestmentTakeaways(input: {
 }
 
 function fromLlmFromOmAnalysis(om: OmAnalysis): RentalFinancialsFromLlm {
-  const expenses = om.expenses as { totalExpenses?: number; expensesTable?: ExpenseLineItem[] } | undefined;
+  const income = om.income as Record<string, unknown> | undefined;
   const valuation = om.valuationMetrics as Record<string, unknown> | undefined;
   const ui = om.uiFinancialSummary as Record<string, unknown> | undefined;
-  const resolved = resolveCurrentFinancialsFromOmAnalysis(om);
-  const noi = resolved.noi;
+  const expenses = om.expenses as { totalExpenses?: number; expensesTable?: ExpenseLineItem[] } | undefined;
+  const noi =
+    om.noiReported ??
+    (income?.NOI as number | undefined) ??
+    (valuation?.NOI as number | undefined) ??
+    (ui?.noi as number | undefined);
   const capRate =
     (valuation?.capRate as number | undefined) ??
     (ui?.capRate as number | undefined);
-  const grossRentTotal = resolved.grossRentalIncome;
+  const grossRentTotal =
+    (income?.grossRentActual as number | undefined) ??
+    (income?.grossRentPotential as number | undefined) ??
+    (ui?.grossRent as number | undefined);
 
   const rentalNumbersPerUnit: RentalNumberPerUnit[] =
     om.rentRoll?.map((row) => {
@@ -405,8 +411,7 @@ function fromLlmFromOmAnalysis(om: OmAnalysis): RentalFinancialsFromLlm {
   if (noi != null) output.noi = noi;
   if (capRate != null) output.capRate = capRate;
   if (grossRentTotal != null) output.grossRentTotal = grossRentTotal;
-  if (resolved.operatingExpenses != null) output.totalExpenses = resolved.operatingExpenses;
-  else if (expenses?.totalExpenses != null) output.totalExpenses = expenses.totalExpenses;
+  if (expenses?.totalExpenses != null) output.totalExpenses = expenses.totalExpenses;
   if (expenses?.expensesTable?.length) output.expensesTable = expenses.expensesTable;
   if (rentalNumbersPerUnit.length > 0) output.rentalNumbersPerUnit = rentalNumbersPerUnit;
   if (Array.isArray(om.investmentTakeaways) && om.investmentTakeaways.length > 0) {
@@ -415,7 +420,7 @@ function fromLlmFromOmAnalysis(om: OmAnalysis): RentalFinancialsFromLlm {
   return output;
 }
 
-export function extractRentalFinancialsFallback(text: string): {
+export function extractRentalFinancialsFromTextTables(text: string): {
   fromLlm: RentalFinancialsFromLlm | null;
   omAnalysis: OmAnalysis | null;
 } {
@@ -549,11 +554,14 @@ export function extractRentalFinancialsFallback(text: string): {
     investmentTakeaways: investmentTakeaways.length > 0 ? investmentTakeaways : undefined,
     reportedDiscrepancies: reportedDiscrepancies.length > 0 ? reportedDiscrepancies : undefined,
     sourceCoverage: {
-      mode: "deterministic_fallback",
+      mode: "deterministic_text_tables",
       extractedTextOnly: true,
+      propertyInfoExtracted: Object.keys(propertyInfo).length > 0,
       rentRollExtracted: rentRoll.length > 0,
-      expensesExtracted: expensesTable.length > 0,
+      incomeStatementExtracted: Object.keys(income).length > 0,
+      expensesExtracted: expensesTable.length > 0 || totalExpenses != null,
       currentFinancialsExtracted: currentGrossRent != null || noi != null,
+      unitCountExtracted: totalUnits != null,
     },
     uiFinancialSummary: Object.keys(uiFinancialSummary).length > 0 ? uiFinancialSummary : undefined,
     noiReported: noi ?? undefined,

@@ -11,6 +11,13 @@ export interface UpsertUserProfileParams {
   name?: string | null;
   email?: string | null;
   organization?: string | null;
+  automationPaused?: boolean | null;
+  automationPauseReason?: string | null;
+  automationPausedAt?: string | null;
+  dailyDigestEnabled?: boolean | null;
+  dailyDigestTimeLocal?: string | null;
+  dailyDigestTimezone?: string | null;
+  lastDailyDigestSentAt?: string | null;
   defaultPurchaseClosingCostPct?: number | null;
   defaultLtv?: number | null;
   defaultInterestRate?: number | null;
@@ -110,25 +117,36 @@ export class UserProfileRepo {
         name = COALESCE($2, name),
         email = COALESCE($3, email),
         organization = COALESCE($4, organization),
-        default_purchase_closing_cost_pct = COALESCE($5, default_purchase_closing_cost_pct),
-        default_ltv = COALESCE($6, default_ltv),
-        default_interest_rate = COALESCE($7, default_interest_rate),
-        default_amortization = COALESCE($8, default_amortization),
-        default_hold_period_years = COALESCE($9, default_hold_period_years),
-        default_exit_cap = COALESCE($10, default_exit_cap),
-        default_exit_closing_cost_pct = COALESCE($11, default_exit_closing_cost_pct),
-        default_rent_uplift = COALESCE($12, default_rent_uplift),
-        default_expense_increase = COALESCE($13, default_expense_increase),
-        default_management_fee = COALESCE($14, default_management_fee),
-        default_target_irr_pct = COALESCE($15, default_target_irr_pct),
-        default_vacancy_pct = COALESCE($16, default_vacancy_pct),
-        default_lead_time_months = COALESCE($17, default_lead_time_months),
-        default_annual_rent_growth_pct = COALESCE($18, default_annual_rent_growth_pct),
-        default_annual_other_income_growth_pct = COALESCE($19, default_annual_other_income_growth_pct),
-        default_annual_expense_growth_pct = COALESCE($20, default_annual_expense_growth_pct),
-        default_annual_property_tax_growth_pct = COALESCE($21, default_annual_property_tax_growth_pct),
-        default_recurring_capex_annual = COALESCE($22, default_recurring_capex_annual),
-        default_loan_fee_pct = COALESCE($23, default_loan_fee_pct),
+        automation_paused = COALESCE($5, automation_paused),
+        automation_pause_reason = CASE WHEN $5 IS NULL THEN COALESCE($6, automation_pause_reason) ELSE $6 END,
+        automation_paused_at = CASE
+          WHEN $5 = true THEN COALESCE($7::timestamptz, now())
+          WHEN $5 = false THEN NULL
+          ELSE COALESCE($7::timestamptz, automation_paused_at)
+        END,
+        daily_digest_enabled = COALESCE($8, daily_digest_enabled),
+        daily_digest_time_local = COALESCE($9, daily_digest_time_local),
+        daily_digest_timezone = COALESCE($10, daily_digest_timezone),
+        last_daily_digest_sent_at = COALESCE($11::timestamptz, last_daily_digest_sent_at),
+        default_purchase_closing_cost_pct = COALESCE($12, default_purchase_closing_cost_pct),
+        default_ltv = COALESCE($13, default_ltv),
+        default_interest_rate = COALESCE($14, default_interest_rate),
+        default_amortization = COALESCE($15, default_amortization),
+        default_hold_period_years = COALESCE($16, default_hold_period_years),
+        default_exit_cap = COALESCE($17, default_exit_cap),
+        default_exit_closing_cost_pct = COALESCE($18, default_exit_closing_cost_pct),
+        default_rent_uplift = COALESCE($19, default_rent_uplift),
+        default_expense_increase = COALESCE($20, default_expense_increase),
+        default_management_fee = COALESCE($21, default_management_fee),
+        default_target_irr_pct = COALESCE($22, default_target_irr_pct),
+        default_vacancy_pct = COALESCE($23, default_vacancy_pct),
+        default_lead_time_months = COALESCE($24, default_lead_time_months),
+        default_annual_rent_growth_pct = COALESCE($25, default_annual_rent_growth_pct),
+        default_annual_other_income_growth_pct = COALESCE($26, default_annual_other_income_growth_pct),
+        default_annual_expense_growth_pct = COALESCE($27, default_annual_expense_growth_pct),
+        default_annual_property_tax_growth_pct = COALESCE($28, default_annual_property_tax_growth_pct),
+        default_recurring_capex_annual = COALESCE($29, default_recurring_capex_annual),
+        default_loan_fee_pct = COALESCE($30, default_loan_fee_pct),
         updated_at = now()
        WHERE id = $1`,
       [
@@ -136,6 +154,13 @@ export class UserProfileRepo {
         params.name ?? null,
         params.email ?? null,
         params.organization ?? null,
+        params.automationPaused ?? null,
+        params.automationPauseReason ?? null,
+        params.automationPausedAt ?? null,
+        params.dailyDigestEnabled ?? null,
+        params.dailyDigestTimeLocal ?? null,
+        params.dailyDigestTimezone ?? null,
+        params.lastDailyDigestSentAt ?? null,
         params.defaultPurchaseClosingCostPct ?? null,
         params.defaultLtv ?? null,
         params.defaultInterestRate ?? null,

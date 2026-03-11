@@ -21,7 +21,15 @@ import {
 } from "../enrichment/openaiModels.js";
 import { OM_ANALYSIS_PROMPT_PREFIX } from "./omAnalysisPrompt.js";
 import { resolveCurrentFinancialsFromOmAnalysis } from "./currentFinancials.js";
-import { extractRentalFinancialsFallback } from "./extractRentalFinancialsFallback.js";
+import {
+  hasStructuredRentRollDetails,
+  isPlaceholderRentRollRow,
+  rentRollQualityScore,
+  sanitizeExpenseTableRows,
+  sanitizeOmRentRollRows,
+  sanitizeRentalNumberRows,
+} from "./omAnalysisUtils.js";
+import { extractRentalFinancialsFromTextTables } from "./extractRentalFinancialsFromTextTables.js";
 
 function getApiKey(): string | null {
   const raw = process.env.OPENAI_API_KEY;
@@ -52,74 +60,6 @@ function hasMeaningfulValue(value: unknown): boolean {
   return true;
 }
 
-function mergeArrayValues(primary: unknown[], fallback: unknown[]): unknown[] {
-  if (primary.length === 0) return fallback;
-  if (fallback.length === 0) return primary;
-  if (primary.every((value) => typeof value === "string") && fallback.every((value) => typeof value === "string")) {
-    return Array.from(new Set([...(primary as string[]), ...(fallback as string[])]));
-  }
-  return primary;
-}
-
-function mergeMissingValues<T>(primary: T, fallback: T): T {
-  if (!hasMeaningfulValue(primary)) return fallback;
-  if (!hasMeaningfulValue(fallback)) return primary;
-  if (Array.isArray(primary) && Array.isArray(fallback)) {
-    return mergeArrayValues(primary, fallback) as T;
-  }
-  if (isPlainObject(primary) && isPlainObject(fallback)) {
-    const merged: Record<string, unknown> = {};
-    const keys = new Set([...Object.keys(fallback), ...Object.keys(primary)]);
-    for (const key of keys) {
-      merged[key] = mergeMissingValues(primary[key], fallback[key]);
-    }
-    return merged as T;
-  }
-  return primary;
-}
-
-function overrideWithFallbackFields(
-  target: Record<string, unknown>,
-  fallback: Record<string, unknown>,
-  keys: string[]
-): Record<string, unknown> {
-  const next = { ...target };
-  for (const key of keys) {
-    if (hasMeaningfulValue(fallback[key])) next[key] = fallback[key];
-  }
-  return next;
-}
-
-function rowHasStructuredDetails(value: unknown): boolean {
-  if (!isPlainObject(value)) return false;
-  return [
-    "monthlyRent",
-    "annualRent",
-    "monthlyBaseRent",
-    "annualBaseRent",
-    "monthlyTotalRent",
-    "annualTotalRent",
-    "beds",
-    "baths",
-    "sqft",
-    "tenantName",
-    "leaseStartDate",
-    "leaseEndDate",
-    "lastRentedDate",
-    "dateVacant",
-    "reimbursementAmount",
-  ].some((key) => hasMeaningfulValue(value[key]));
-}
-
-function shouldPreferFallbackRows(primaryRows: unknown[], fallbackRows: unknown[]): boolean {
-  if (fallbackRows.length === 0) return false;
-  if (primaryRows.length === 0) return true;
-  const primaryHasStructuredDetails = primaryRows.some((row) => rowHasStructuredDetails(row));
-  const fallbackHasStructuredDetails = fallbackRows.some((row) => rowHasStructuredDetails(row));
-  if (fallbackHasStructuredDetails && !primaryHasStructuredDetails) return true;
-  return !primaryHasStructuredDetails && fallbackRows.length > primaryRows.length;
-}
-
 function getReportedTotalUnits(omAnalysis: OmAnalysis | null | undefined): number | null {
   const propertyInfo = isPlainObject(omAnalysis?.propertyInfo) ? omAnalysis.propertyInfo : null;
   const totalUnits = propertyInfo?.totalUnits;
@@ -129,7 +69,7 @@ function getReportedTotalUnits(omAnalysis: OmAnalysis | null | undefined): numbe
 function shouldDropIncompleteRows(rows: unknown[], totalUnits: number | null): boolean {
   if (rows.length === 0 || totalUnits == null || totalUnits <= 0) return false;
   if (rows.length >= totalUnits) return false;
-  return !rows.some((row) => rowHasStructuredDetails(row));
+  return !rows.some((row) => hasStructuredRentRollDetails(row));
 }
 
 function shouldDropPartialRows(rows: unknown[], totalUnits: number | null): boolean {
@@ -146,9 +86,20 @@ function removeRecordKeys(value: unknown, keys: string[]): Record<string, unknow
 
 export function sanitizeOmAnalysisByCoverage(
   omAnalysis: OmAnalysis,
-  fallbackOmAnalysis: OmAnalysis | null | undefined
+  _fallbackOmAnalysis: OmAnalysis | null | undefined
 ): OmAnalysis {
   const next: OmAnalysis = { ...omAnalysis };
+  const sanitizedRentRoll = sanitizeOmRentRollRows(Array.isArray(next.rentRoll) ? next.rentRoll : []);
+  next.rentRoll = sanitizedRentRoll.length > 0 ? sanitizedRentRoll : undefined;
+  const sanitizedExpenses = sanitizeExpenseTableRows(
+    (next.expenses as { expensesTable?: ExpenseLineItem[] } | undefined)?.expensesTable
+  );
+  if (next.expenses && typeof next.expenses === "object") {
+    next.expenses = {
+      ...next.expenses,
+      expensesTable: sanitizedExpenses.length > 0 ? sanitizedExpenses : undefined,
+    };
+  }
   const coverage = isPlainObject(next.sourceCoverage) ? next.sourceCoverage : null;
   const currentFinancialsExtracted = coverage?.currentFinancialsExtracted === true;
   const expensesExtracted = coverage?.expensesExtracted === true;
@@ -156,7 +107,6 @@ export function sanitizeOmAnalysisByCoverage(
   const totalUnits = getReportedTotalUnits(next);
 
   if (!currentFinancialsExtracted) {
-    next.income = isPlainObject(fallbackOmAnalysis?.income) ? fallbackOmAnalysis?.income ?? undefined : undefined;
     next.revenueComposition = removeRecordKeys(next.revenueComposition, [
       "commercialAnnualRent",
       "commercialMonthlyRent",
@@ -191,7 +141,7 @@ export function sanitizeOmAnalysisByCoverage(
   }
 
   if (!expensesExtracted) {
-    next.expenses = fallbackOmAnalysis?.expenses ?? undefined;
+    next.expenses = undefined;
     next.uiFinancialSummary = removeRecordKeys(next.uiFinancialSummary, ["expenseRatio"]);
   }
 
@@ -204,71 +154,43 @@ export function sanitizeOmAnalysisByCoverage(
 
 function applyDeterministicFallbackOverrides(
   merged: ExtractRentalFinancialsResult,
-  fallback: ExtractRentalFinancialsResult
+  _fallback: ExtractRentalFinancialsResult
 ): ExtractRentalFinancialsResult {
   const next: ExtractRentalFinancialsResult = {
     fromLlm: merged.fromLlm ?? null,
     omAnalysis: merged.omAnalysis ?? null,
   };
 
-  const fallbackOm = isPlainObject(fallback.omAnalysis) ? fallback.omAnalysis : null;
   const mergedOm = isPlainObject(next.omAnalysis) ? ({ ...next.omAnalysis } as OmAnalysis) : null;
   if (mergedOm) {
-    if (fallbackOm) {
-      const fallbackPropertyInfo = isPlainObject(fallbackOm.propertyInfo) ? fallbackOm.propertyInfo : null;
-      const mergedPropertyInfo = isPlainObject(mergedOm.propertyInfo) ? mergedOm.propertyInfo : null;
-      if (fallbackPropertyInfo) {
-        mergedOm.propertyInfo = overrideWithFallbackFields(
-          mergedPropertyInfo ?? {},
-          fallbackPropertyInfo,
-          [
-            "address",
-            "packageAddress",
-            "block",
-            "lotNumbers",
-            "unitsResidential",
-            "unitsCommercial",
-            "totalUnits",
-            "unitCountSource",
-            "borough",
-            "propertyType",
-            "portfolioType",
-            "commercialSummary",
-          ]
-        );
-      }
-
-      const fallbackRevenueComposition = isPlainObject(fallbackOm.revenueComposition) ? fallbackOm.revenueComposition : null;
-      const mergedRevenueComposition = isPlainObject(mergedOm.revenueComposition) ? mergedOm.revenueComposition : null;
-      if (fallbackRevenueComposition) {
-        mergedOm.revenueComposition = overrideWithFallbackFields(
-          mergedRevenueComposition ?? {},
-          fallbackRevenueComposition,
-          ["commercialUnits", "freeMarketUnits", "rentStabilizedUnits", "notes"]
-        );
-      }
+    const mergedRentRoll = sanitizeOmRentRollRows(Array.isArray(mergedOm.rentRoll) ? mergedOm.rentRoll : []);
+    if (shouldDropIncompleteRows(mergedRentRoll, getReportedTotalUnits(mergedOm))) {
+      delete mergedOm.rentRoll;
+    } else if (mergedRentRoll.length > 0) {
+      mergedOm.rentRoll = mergedRentRoll;
     }
 
-    const mergedRentRoll = Array.isArray(mergedOm.rentRoll) ? mergedOm.rentRoll : [];
-    const fallbackRentRoll = Array.isArray(fallbackOm?.rentRoll) ? fallbackOm.rentRoll : [];
-    if (shouldPreferFallbackRows(mergedRentRoll, fallbackRentRoll)) {
-      mergedOm.rentRoll = fallbackRentRoll;
-    } else if (shouldDropIncompleteRows(mergedRentRoll, getReportedTotalUnits(mergedOm))) {
-      delete mergedOm.rentRoll;
+    const mergedExpenses = mergedOm.expenses as { expensesTable?: ExpenseLineItem[]; totalExpenses?: number } | undefined;
+    if (mergedExpenses) {
+      const expenseRows = sanitizeExpenseTableRows(mergedExpenses.expensesTable);
+      mergedOm.expenses = {
+        ...mergedExpenses,
+        expensesTable: expenseRows.length > 0 ? expenseRows : undefined,
+      };
     }
 
     next.omAnalysis = mergedOm;
   }
 
   const mergedFromLlm = isPlainObject(next.fromLlm) ? ({ ...next.fromLlm } as RentalFinancialsFromLlm) : null;
-  const fallbackFromLlm = isPlainObject(fallback.fromLlm) ? fallback.fromLlm : null;
   if (mergedFromLlm) {
-    const mergedRows = Array.isArray(mergedFromLlm.rentalNumbersPerUnit) ? mergedFromLlm.rentalNumbersPerUnit : [];
-    const fallbackRows = Array.isArray(fallbackFromLlm?.rentalNumbersPerUnit) ? fallbackFromLlm.rentalNumbersPerUnit : [];
-    if (shouldPreferFallbackRows(mergedRows, fallbackRows)) {
-      mergedFromLlm.rentalNumbersPerUnit = fallbackRows as RentalNumberPerUnit[];
-    } else if (shouldDropIncompleteRows(mergedRows, getReportedTotalUnits(next.omAnalysis ?? null))) {
+    const mergedRows = sanitizeRentalNumberRows(
+      Array.isArray(mergedFromLlm.rentalNumbersPerUnit) ? mergedFromLlm.rentalNumbersPerUnit : []
+    );
+    if (shouldDropIncompleteRows(mergedRows, getReportedTotalUnits(next.omAnalysis ?? null))) {
       delete mergedFromLlm.rentalNumbersPerUnit;
+    } else if (mergedRows.length > 0) {
+      mergedFromLlm.rentalNumbersPerUnit = mergedRows as RentalNumberPerUnit[];
     }
     next.fromLlm = mergedFromLlm;
   }
@@ -280,6 +202,60 @@ function nonEmptyObject<T extends Record<string, unknown> | null | undefined>(va
   return isPlainObject(value) && Object.keys(value).length > 0 ? value : null;
 }
 
+function mergeRecordValues(
+  primary: Record<string, unknown> | null | undefined,
+  fallback: Record<string, unknown> | null | undefined
+): Record<string, unknown> | undefined {
+  const merged: Record<string, unknown> = {};
+  if (isPlainObject(fallback)) {
+    for (const [key, value] of Object.entries(fallback)) {
+      if (hasMeaningfulValue(value)) merged[key] = value;
+    }
+  }
+  if (isPlainObject(primary)) {
+    for (const [key, value] of Object.entries(primary)) {
+      if (hasMeaningfulValue(value)) merged[key] = value;
+    }
+  }
+  return Object.keys(merged).length > 0 ? merged : undefined;
+}
+
+function mergeCoverage(
+  primary: Record<string, unknown> | null | undefined,
+  fallback: Record<string, unknown> | null | undefined
+): Record<string, unknown> | undefined {
+  const merged = mergeRecordValues(primary, fallback);
+  if (!merged) return undefined;
+  const booleanKeys = [
+    "propertyInfoExtracted",
+    "rentRollExtracted",
+    "incomeStatementExtracted",
+    "expensesExtracted",
+    "currentFinancialsExtracted",
+    "unitCountExtracted",
+  ];
+  for (const key of booleanKeys) {
+    const primaryValue = isPlainObject(primary) ? primary[key] : undefined;
+    const fallbackValue = isPlainObject(fallback) ? fallback[key] : undefined;
+    if (typeof primaryValue === "boolean" || typeof fallbackValue === "boolean") {
+      merged[key] = Boolean(primaryValue) || Boolean(fallbackValue);
+    }
+  }
+  return merged;
+}
+
+function mergeUniqueItems<T>(primary: T[] | null | undefined, fallback: T[] | null | undefined): T[] | undefined {
+  const out: T[] = [];
+  const seen = new Set<string>();
+  for (const value of [...(fallback ?? []), ...(primary ?? [])]) {
+    const key = JSON.stringify(value);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(value);
+  }
+  return out.length > 0 ? out : undefined;
+}
+
 /**
  * Keep the richer LLM parse, but backfill missing structure from deterministic parsing.
  * This preserves package/unit mix facts when the model returns only financial summaries.
@@ -288,18 +264,132 @@ export function mergeExtractionResultWithFallback(
   primary: ExtractRentalFinancialsResult,
   fallback: ExtractRentalFinancialsResult
 ): ExtractRentalFinancialsResult {
-  const mergedFromLlm = nonEmptyObject(
-    mergeMissingValues(
-      (primary.fromLlm ?? null) as RentalFinancialsFromLlm | null,
-      (fallback.fromLlm ?? null) as RentalFinancialsFromLlm | null
-    )
+  const primaryOm = nonEmptyObject(primary.omAnalysis ?? null) as OmAnalysis | null;
+  const fallbackOm = nonEmptyObject(fallback.omAnalysis ?? null) as OmAnalysis | null;
+  const primaryRentRoll = sanitizeOmRentRollRows(primaryOm?.rentRoll ?? []);
+  const fallbackRentRoll = sanitizeOmRentRollRows(fallbackOm?.rentRoll ?? []);
+  const primaryExpenseRows = sanitizeExpenseTableRows(
+    (primaryOm?.expenses as { expensesTable?: ExpenseLineItem[] } | undefined)?.expensesTable
+  );
+  const fallbackExpenseRows = sanitizeExpenseTableRows(
+    (fallbackOm?.expenses as { expensesTable?: ExpenseLineItem[] } | undefined)?.expensesTable
+  );
+  const mergedPropertyInfo = mergeRecordValues(
+    nonEmptyObject(primaryOm?.propertyInfo ?? null),
+    nonEmptyObject(fallbackOm?.propertyInfo ?? null)
+  );
+  const mergedIncome = mergeRecordValues(
+    nonEmptyObject(primaryOm?.income ?? null),
+    nonEmptyObject(fallbackOm?.income ?? null)
+  );
+  const mergedExpenses =
+    primaryExpenseRows.length > 0 ||
+    hasMeaningfulValue((primaryOm?.expenses as { totalExpenses?: unknown } | undefined)?.totalExpenses)
+      ? {
+          ...(isPlainObject(fallbackOm?.expenses) ? fallbackOm?.expenses : {}),
+          ...(isPlainObject(primaryOm?.expenses) ? primaryOm?.expenses : {}),
+          expensesTable: primaryExpenseRows.length > 0 ? primaryExpenseRows : undefined,
+        }
+      : fallbackExpenseRows.length > 0 ||
+          hasMeaningfulValue((fallbackOm?.expenses as { totalExpenses?: unknown } | undefined)?.totalExpenses)
+        ? {
+            ...(isPlainObject(fallbackOm?.expenses) ? fallbackOm?.expenses : {}),
+            expensesTable: fallbackExpenseRows.length > 0 ? fallbackExpenseRows : undefined,
+          }
+        : undefined;
+  const mergedRentRoll =
+    primaryRentRoll.length > 0
+      ? primaryRentRoll
+      : fallbackRentRoll.length > 0
+        ? fallbackRentRoll
+        : undefined;
+  const mergedCoverage =
+    mergeCoverage(
+      nonEmptyObject(primaryOm?.sourceCoverage ?? null),
+      nonEmptyObject(fallbackOm?.sourceCoverage ?? null)
+    ) ??
+    ({
+      propertyInfoExtracted: !!mergedPropertyInfo,
+      rentRollExtracted: Array.isArray(mergedRentRoll) && mergedRentRoll.length > 0,
+      incomeStatementExtracted: !!mergedIncome,
+      expensesExtracted:
+        Array.isArray(mergedExpenses?.expensesTable) && mergedExpenses.expensesTable.length > 0 ||
+        hasMeaningfulValue(mergedExpenses?.totalExpenses),
+      currentFinancialsExtracted:
+        hasMeaningfulValue((mergedIncome ?? {}).grossRentActual) ||
+        hasMeaningfulValue((mergedIncome ?? {}).grossRentPotential) ||
+        hasMeaningfulValue((mergedIncome ?? {}).effectiveGrossIncome) ||
+        hasMeaningfulValue((mergedIncome ?? {}).NOI) ||
+        hasMeaningfulValue((mergedIncome ?? {}).noi),
+      unitCountExtracted: hasMeaningfulValue((mergedPropertyInfo ?? {}).totalUnits),
+    } as Record<string, unknown>);
+
+  const mergedOmAnalysis = (primaryOm || fallbackOm)
+    ? sanitizeOmAnalysisByCoverage(
+        {
+          ...fallbackOm,
+          ...primaryOm,
+          propertyInfo: mergedPropertyInfo,
+          income: mergedIncome,
+          expenses: mergedExpenses,
+          revenueComposition: mergeRecordValues(
+            nonEmptyObject(primaryOm?.revenueComposition ?? null),
+            nonEmptyObject(fallbackOm?.revenueComposition ?? null)
+          ),
+          financialMetrics: mergeRecordValues(
+            nonEmptyObject(primaryOm?.financialMetrics ?? null),
+            nonEmptyObject(fallbackOm?.financialMetrics ?? null)
+          ),
+          valuationMetrics: mergeRecordValues(
+            nonEmptyObject(primaryOm?.valuationMetrics ?? null),
+            nonEmptyObject(fallbackOm?.valuationMetrics ?? null)
+          ),
+          underwritingMetrics: mergeRecordValues(
+            nonEmptyObject(primaryOm?.underwritingMetrics ?? null),
+            nonEmptyObject(fallbackOm?.underwritingMetrics ?? null)
+          ),
+          nycRegulatorySummary: mergeRecordValues(
+            nonEmptyObject(primaryOm?.nycRegulatorySummary ?? null),
+            nonEmptyObject(fallbackOm?.nycRegulatorySummary ?? null)
+          ),
+          furnishedModel: mergeRecordValues(
+            nonEmptyObject(primaryOm?.furnishedModel ?? null),
+            nonEmptyObject(fallbackOm?.furnishedModel ?? null)
+          ),
+          recommendedOfferAnalysis: mergeRecordValues(
+            nonEmptyObject(primaryOm?.recommendedOfferAnalysis ?? null),
+            nonEmptyObject(fallbackOm?.recommendedOfferAnalysis ?? null)
+          ),
+          uiFinancialSummary: mergeRecordValues(
+            nonEmptyObject(primaryOm?.uiFinancialSummary ?? null),
+            nonEmptyObject(fallbackOm?.uiFinancialSummary ?? null)
+          ),
+          dossierMemo: mergeRecordValues(
+            nonEmptyObject(primaryOm?.dossierMemo ?? null),
+            nonEmptyObject(fallbackOm?.dossierMemo ?? null)
+          ) as Record<string, string> | undefined,
+          sourceCoverage: mergedCoverage,
+          rentRoll: mergedRentRoll,
+          investmentTakeaways: mergeUniqueItems(primaryOm?.investmentTakeaways ?? null, fallbackOm?.investmentTakeaways ?? null),
+          reportedDiscrepancies: mergeUniqueItems(primaryOm?.reportedDiscrepancies ?? null, fallbackOm?.reportedDiscrepancies ?? null),
+          noiReported:
+            toNum(primaryOm?.noiReported) ??
+            toNum(fallbackOm?.noiReported) ??
+            undefined,
+        },
+        fallbackOm
+      )
+    : null;
+
+  const mergedFromLlmRecord = mergeRecordValues(
+    nonEmptyObject(primary.fromLlm ?? null),
+    nonEmptyObject(fallback.fromLlm ?? null)
+  );
+  const derivedFromMergedOm = mergedOmAnalysis ? fromLlmFromOmAnalysis(mergedOmAnalysis) : null;
+  const mergedFromLlm = mergeRecordValues(
+    derivedFromMergedOm ? (derivedFromMergedOm as unknown as Record<string, unknown>) : null,
+    mergedFromLlmRecord
   ) as RentalFinancialsFromLlm | null;
-  const mergedOmAnalysis = nonEmptyObject(
-    mergeMissingValues(
-      (primary.omAnalysis ?? null) as OmAnalysis | null,
-      (fallback.omAnalysis ?? null) as OmAnalysis | null
-    )
-  ) as OmAnalysis | null;
   return applyDeterministicFallbackOverrides({
     fromLlm: mergedFromLlm,
     omAnalysis: mergedOmAnalysis,
@@ -328,6 +418,7 @@ const MIN_TEXT_LENGTH_FOR_LLM = 20;
 const MAX_MULTIMODAL_DOCS = 1;
 const MAX_MULTIMODAL_DOC_BYTES = 10 * 1024 * 1024;
 const OM_FILE_PARSE_TIMEOUT_MS = Number(process.env.OPENAI_OM_FILE_TIMEOUT_MS) || 30_000;
+const OM_FILE_DEEP_RETRY_TIMEOUT_MS = Number(process.env.OPENAI_OM_FILE_DEEP_RETRY_TIMEOUT_MS) || 90_000;
 
 /** Cap rate and furnished cap rate: store as percentage number (5.47 for 5.47%). */
 const UI_PERCENT_KEYS = ["capRate", "adjustedCapRate", "furnishedCapRate", "rentUpsidePercent"];
@@ -454,10 +545,22 @@ export function buildOmStyleMessages(prompt: string, documentFiles: OmInputDocum
   return [{ role: "user", content }];
 }
 
+function buildOmDeepRetryPrompt(prompt: string): string {
+  return `${prompt}
+
+DEEP RETRY INSTRUCTIONS:
+- The first extraction pass appeared incomplete, inconsistent, or too summary-level.
+- Re-read the attached PDF carefully page by page, including image-based rent rolls, screenshots, and financial tables.
+- Do not include TOTAL, SUBTOTAL, or summary rows as units.
+- If the document shows CURRENT and PRO FORMA columns, use CURRENT figures for all current-state fields.
+- Preserve exact current figures and unit counts; do not round them into cleaner approximations.`;
+}
+
 async function createOmStyleCompletion(
   openai: OpenAI,
   prompt: string,
-  documentFiles: OmInputDocument[]
+  documentFiles: OmInputDocument[],
+  timeoutMs = OM_FILE_PARSE_TIMEOUT_MS
 ) {
   const model = getOmAnalysisModel();
   const reasoningEffort = getOmAnalysisReasoningEffort();
@@ -467,7 +570,7 @@ async function createOmStyleCompletion(
       messages: buildOmStyleMessages(prompt, documentFiles),
       response_format: { type: "json_object" },
       ...(supportsReasoningEffort(model) ? { reasoning_effort: reasoningEffort } : {}),
-    }, documentFiles.length > 0 ? { timeout: OM_FILE_PARSE_TIMEOUT_MS, maxRetries: 0 } : undefined);
+    }, documentFiles.length > 0 ? { timeout: timeoutMs, maxRetries: 0 } : undefined);
   } catch (err) {
     if (documentFiles.length === 0) throw err;
     console.warn(
@@ -481,6 +584,92 @@ async function createOmStyleCompletion(
       ...(supportsReasoningEffort(model) ? { reasoning_effort: reasoningEffort } : {}),
     });
   }
+}
+
+function parseCompletionJsonContent(content: string | null | undefined): Record<string, unknown> | null {
+  if (!content || typeof content !== "string") return null;
+  let jsonStr = content.trim();
+  const codeBlock = jsonStr.match(/^```(?:json)?\s*([\s\S]*?)```$/);
+  if (codeBlock) jsonStr = codeBlock[1].trim();
+  return JSON.parse(jsonStr) as Record<string, unknown>;
+}
+
+function omAnalysisFromParsedJson(
+  parsed: Record<string, unknown>
+): OmAnalysis {
+  const rawUi = (parsed.uiFinancialSummary as Record<string, unknown>) ?? undefined;
+  return sanitizeOmAnalysisByCoverage({
+    propertyInfo: (parsed.propertyInfo as Record<string, unknown>) ?? undefined,
+    rentRoll: Array.isArray(parsed.rentRoll)
+      ? (parsed.rentRoll as OmRentRollRow[])
+      : undefined,
+    income: (parsed.income as Record<string, unknown>) ?? undefined,
+    expenses: (parsed.expenses as OmAnalysis["expenses"]) ?? undefined,
+    revenueComposition: (parsed.revenueComposition as Record<string, unknown>) ?? undefined,
+    financialMetrics: (parsed.financialMetrics as Record<string, unknown>) ?? undefined,
+    valuationMetrics: (parsed.valuationMetrics as Record<string, unknown>) ?? undefined,
+    underwritingMetrics: (parsed.underwritingMetrics as Record<string, unknown>) ?? undefined,
+    nycRegulatorySummary: (parsed.nycRegulatorySummary as Record<string, unknown>) ?? undefined,
+    furnishedModel: (parsed.furnishedModel as Record<string, unknown>) ?? undefined,
+    reportedDiscrepancies: Array.isArray(parsed.reportedDiscrepancies)
+      ? (parsed.reportedDiscrepancies as Array<Record<string, unknown>>)
+      : undefined,
+    sourceCoverage: (parsed.sourceCoverage as Record<string, unknown>) ?? undefined,
+    investmentTakeaways: Array.isArray(parsed.investmentTakeaways)
+      ? (parsed.investmentTakeaways as string[])
+      : undefined,
+    recommendedOfferAnalysis: (parsed.recommendedOfferAnalysis as Record<string, unknown>) ?? undefined,
+    uiFinancialSummary: normalizeUiFinancialSummary(rawUi),
+    dossierMemo: (parsed.dossierMemo as Record<string, string>) ?? undefined,
+    noiReported:
+      typeof parsed.noiReported === "number" && !Number.isNaN(parsed.noiReported)
+        ? parsed.noiReported
+        : undefined,
+  }, null);
+}
+
+function weakOmSignalCount(result: ExtractRentalFinancialsResult): number {
+  const om = result.omAnalysis ?? null;
+  if (!om) return 99;
+  const rentRoll = sanitizeOmRentRollRows(om.rentRoll ?? []);
+  const expenseRows = sanitizeExpenseTableRows(
+    (om.expenses as { expensesTable?: ExpenseLineItem[] } | undefined)?.expensesTable
+  );
+  const currentFinancials = resolveCurrentFinancialsFromOmAnalysis(om, result.fromLlm ?? null);
+  const totalUnits = getReportedTotalUnits(om);
+  const placeholderRows = rentRoll.filter((row) => isPlaceholderRentRollRow(row)).length;
+
+  let weakSignals = 0;
+  if (
+    currentFinancials.grossRentalIncome == null ||
+    currentFinancials.noi == null ||
+    currentFinancials.operatingExpenses == null
+  ) {
+    weakSignals += 1;
+  }
+  if (rentRoll.length === 0) weakSignals += 1;
+  if (expenseRows.length === 0) weakSignals += 1;
+  if (placeholderRows > 0) weakSignals += 1;
+  if (totalUnits != null && rentRoll.length > 0 && rentRoll.length < totalUnits) weakSignals += 1;
+  return weakSignals;
+}
+
+function extractionResultQualityScore(result: ExtractRentalFinancialsResult): number {
+  const om = result.omAnalysis ?? null;
+  if (!om) return 0;
+  const rentRoll = sanitizeOmRentRollRows(om.rentRoll ?? []);
+  const expenseRows = sanitizeExpenseTableRows(
+    (om.expenses as { expensesTable?: ExpenseLineItem[] } | undefined)?.expensesTable
+  );
+  const currentFinancials = resolveCurrentFinancialsFromOmAnalysis(om, result.fromLlm ?? null);
+  let score = 0;
+  if (currentFinancials.grossRentalIncome != null) score += 4;
+  if (currentFinancials.noi != null) score += 4;
+  if (currentFinancials.operatingExpenses != null) score += 3;
+  if (getReportedTotalUnits(om) != null) score += 1;
+  score += expenseRows.length;
+  score += rentRollQualityScore(rentRoll);
+  return score;
 }
 
 /**
@@ -498,8 +687,8 @@ function fromLlmFromOmAnalysis(om: OmAnalysis): RentalFinancialsFromLlm {
   if (capRate != null && typeof capRate === "number" && capRate > 0 && capRate <= 1) capRate = capRate * 100;
   const grossRentTotal = resolved.grossRentalIncome;
   const totalExpenses = resolved.operatingExpenses ?? expenses?.totalExpenses;
-  const expensesTable = expenses?.expensesTable;
-  const rentRoll = om.rentRoll ?? [];
+  const expensesTable = sanitizeExpenseTableRows(expenses?.expensesTable);
+  const rentRoll = sanitizeOmRentRollRows(om.rentRoll ?? []);
   const sourceCoverage = isPlainObject(om.sourceCoverage) ? om.sourceCoverage : null;
   const rentRollExtracted = sourceCoverage?.rentRollExtracted === true;
   const investmentTakeaways = om.investmentTakeaways ?? [];
@@ -564,11 +753,12 @@ function fromLlmFromOmAnalysis(om: OmAnalysis): RentalFinancialsFromLlm {
   if (grossRentTotal != null && typeof grossRentTotal === "number") out.grossRentTotal = grossRentTotal;
   if (totalExpenses != null && typeof totalExpenses === "number") out.totalExpenses = totalExpenses;
   if (Array.isArray(expensesTable) && expensesTable.length > 0) out.expensesTable = expensesTable;
+  const cleanedRentalNumbersPerUnit = sanitizeRentalNumberRows(rentalNumbersPerUnit);
   const shouldOmitRentalRows =
-    (!rentRollExtracted && shouldDropPartialRows(rentalNumbersPerUnit, getReportedTotalUnits(om))) ||
-    shouldDropIncompleteRows(rentalNumbersPerUnit, getReportedTotalUnits(om));
-  if (!shouldOmitRentalRows && rentalNumbersPerUnit.length > 0) {
-    out.rentalNumbersPerUnit = rentalNumbersPerUnit;
+    (!rentRollExtracted && shouldDropPartialRows(cleanedRentalNumbersPerUnit, getReportedTotalUnits(om))) ||
+    shouldDropIncompleteRows(cleanedRentalNumbersPerUnit, getReportedTotalUnits(om));
+  if (!shouldOmitRentalRows && cleanedRentalNumbersPerUnit.length > 0) {
+    out.rentalNumbersPerUnit = cleanedRentalNumbersPerUnit;
   }
   if (investmentTakeaways.length > 0)
     out.keyTakeaways = (investmentTakeaways as string[]).map((t: string) => (t.startsWith("•") ? t : `• ${t}`)).join("\n");
@@ -587,21 +777,23 @@ export async function extractRentalFinancialsFromText(
   const trimmed = (text ?? "").trim();
   const omDocumentFiles = selectOmDocumentFiles(options?.documentFiles);
   const hasDocumentFiles = omDocumentFiles.length > 0;
-  const fallbackResult = extractRentalFinancialsFallback(trimmed);
   const key = getApiKey();
   if (!key) {
     console.warn("[extractRentalFinancialsFromText] OPENAI_API_KEY missing or invalid; skipping OpenAI call.");
-    return fallbackResult;
+    return { fromLlm: null, omAnalysis: null };
   }
   if ((!trimmed || trimmed.length < MIN_TEXT_LENGTH_FOR_LLM) && !hasDocumentFiles) {
     console.warn("[extractRentalFinancialsFromText] Text too short for LLM (length:", trimmed.length, "); skipping OpenAI call.");
-    return fallbackResult;
+    return { fromLlm: null, omAnalysis: null };
   }
 
   const isOmStyle =
     options?.forceOmStyle === true ||
     hasDocumentFiles ||
     (options?.allowImplicitOmStyle !== false && trimmed.length >= OM_STYLE_MIN_LENGTH);
+  const deterministicFallback = isOmStyle
+    ? extractRentalFinancialsFromTextTables(trimmed)
+    : { fromLlm: null, omAnalysis: null };
   /** For OM-style, use more context so long/complex OMs (e.g. full Executive Summary + appendices) are not truncated; rent roll often appears later in the doc. */
   const omDocLimit = 48000;
   const docLimit = isOmStyle ? omDocLimit : 15000;
@@ -662,48 +854,44 @@ ${trimmed.slice(0, 15000)}`;
 
     const content = completion.choices[0]?.message?.content;
     if (!content || typeof content !== "string")
-      return fallbackResult;
+      return { fromLlm: null, omAnalysis: null };
 
-    let jsonStr = content.trim();
-    const codeBlock = jsonStr.match(/^```(?:json)?\s*([\s\S]*?)```$/);
-    if (codeBlock) jsonStr = codeBlock[1].trim();
-
-    const parsed = JSON.parse(jsonStr) as Record<string, unknown>;
+    const parsed = parseCompletionJsonContent(content);
+    if (!parsed) return { fromLlm: null, omAnalysis: null };
 
     if (isOmStyle) {
-      const rawUi = (parsed.uiFinancialSummary as Record<string, unknown>) ?? undefined;
-      const omAnalysis = sanitizeOmAnalysisByCoverage({
-        propertyInfo: (parsed.propertyInfo as Record<string, unknown>) ?? undefined,
-        rentRoll: Array.isArray(parsed.rentRoll)
-          ? (parsed.rentRoll as OmRentRollRow[])
-          : undefined,
-        income: (parsed.income as Record<string, unknown>) ?? undefined,
-        expenses: (parsed.expenses as OmAnalysis["expenses"]) ?? undefined,
-        revenueComposition: (parsed.revenueComposition as Record<string, unknown>) ?? undefined,
-        financialMetrics: (parsed.financialMetrics as Record<string, unknown>) ?? undefined,
-        valuationMetrics: (parsed.valuationMetrics as Record<string, unknown>) ?? undefined,
-        underwritingMetrics: (parsed.underwritingMetrics as Record<string, unknown>) ?? undefined,
-        nycRegulatorySummary: (parsed.nycRegulatorySummary as Record<string, unknown>) ?? undefined,
-        furnishedModel: (parsed.furnishedModel as Record<string, unknown>) ?? undefined,
-        reportedDiscrepancies: Array.isArray(parsed.reportedDiscrepancies)
-          ? (parsed.reportedDiscrepancies as Array<Record<string, unknown>>)
-          : undefined,
-        sourceCoverage: (parsed.sourceCoverage as Record<string, unknown>) ?? undefined,
-        investmentTakeaways: Array.isArray(parsed.investmentTakeaways)
-          ? (parsed.investmentTakeaways as string[])
-          : undefined,
-        recommendedOfferAnalysis: (parsed.recommendedOfferAnalysis as Record<string, unknown>) ?? undefined,
-        uiFinancialSummary: normalizeUiFinancialSummary(rawUi),
-        dossierMemo: (parsed.dossierMemo as Record<string, string>) ?? undefined,
-        noiReported:
-          typeof parsed.noiReported === "number" && !Number.isNaN(parsed.noiReported)
-            ? parsed.noiReported
-            : undefined,
-      }, fallbackResult.omAnalysis ?? null);
-      return mergeExtractionResultWithFallback(
+      const omAnalysis = omAnalysisFromParsedJson(parsed);
+      let mergedResult = mergeExtractionResultWithFallback(
         { fromLlm: fromLlmFromOmAnalysis(omAnalysis), omAnalysis },
-        fallbackResult
+        deterministicFallback
       );
+      if (hasDocumentFiles && weakOmSignalCount(mergedResult) >= 2) {
+        try {
+          const retryCompletion = await createOmStyleCompletion(
+            openai,
+            buildOmDeepRetryPrompt(prompt),
+            omDocumentFiles,
+            Math.max(OM_FILE_PARSE_TIMEOUT_MS, OM_FILE_DEEP_RETRY_TIMEOUT_MS)
+          );
+          const retryParsed = parseCompletionJsonContent(retryCompletion.choices[0]?.message?.content);
+          if (retryParsed) {
+            const retryOmAnalysis = omAnalysisFromParsedJson(retryParsed);
+            const retryResult = mergeExtractionResultWithFallback(
+              { fromLlm: fromLlmFromOmAnalysis(retryOmAnalysis), omAnalysis: retryOmAnalysis },
+              deterministicFallback
+            );
+            if (extractionResultQualityScore(retryResult) > extractionResultQualityScore(mergedResult)) {
+              mergedResult = retryResult;
+            }
+          }
+        } catch (retryErr) {
+          console.warn(
+            "[extractRentalFinancialsFromText] Deep OM retry failed:",
+            retryErr instanceof Error ? retryErr.message : retryErr
+          );
+        }
+      }
+      return mergedResult;
     }
 
     const result: RentalFinancialsFromLlm = {};
@@ -745,16 +933,8 @@ ${trimmed.slice(0, 15000)}`;
     if (typeof parsed.keyTakeaways === "string" && parsed.keyTakeaways.trim())
       result.keyTakeaways = parsed.keyTakeaways.trim();
 
-    const mergedShortResult = mergeExtractionResultWithFallback(
-      {
-        fromLlm: Object.keys(result).length > 0 ? result : null,
-        omAnalysis: null,
-      },
-      { fromLlm: fallbackResult.fromLlm, omAnalysis: null }
-    );
-
     return {
-      fromLlm: mergedShortResult.fromLlm,
+      fromLlm: Object.keys(result).length > 0 ? result : null,
       omAnalysis: null,
     };
   } catch (err) {
@@ -771,6 +951,6 @@ ${trimmed.slice(0, 15000)}`;
       const apiErr = (err as { error?: { message?: string; code?: string } }).error;
       if (apiErr?.message) console.error("[extractRentalFinancialsFromText] API error:", apiErr.message, apiErr.code ?? "");
     }
-    return fallbackResult;
+    return { fromLlm: null, omAnalysis: null };
   }
 }

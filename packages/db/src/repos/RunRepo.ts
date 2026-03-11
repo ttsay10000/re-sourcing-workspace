@@ -43,21 +43,46 @@ export class RunRepo {
     return r.rows.map(mapRun);
   }
 
-  async create(profileId: string): Promise<IngestionRun> {
+  async create(
+    profileId: string,
+    options?: { triggerSource?: string; metadata?: Record<string, unknown> | null }
+  ): Promise<IngestionRun> {
     const r = await this.client.query(
-      `INSERT INTO ingestion_runs (profile_id, started_at, status)
-       VALUES ($1, now(), 'running')
+      `INSERT INTO ingestion_runs (profile_id, started_at, status, trigger_source, metadata)
+       VALUES ($1, now(), 'running', $2, $3)
        RETURNING *`,
-      [profileId]
+      [profileId, options?.triggerSource ?? "manual", JSON.stringify(options?.metadata ?? {})]
     );
     return mapRun(r.rows[0]);
   }
 
-  async finish(id: string, status: "completed" | "failed" | "cancelled", summary?: RunSummary | null): Promise<IngestionRun | null> {
+  async hasRunningForProfile(profileId: string): Promise<boolean> {
     const r = await this.client.query(
-      `UPDATE ingestion_runs SET finished_at = now(), status = $1, summary = $2
-       WHERE id = $3 RETURNING *`,
-      [status, summary ? JSON.stringify(summary) : null, id]
+      `SELECT 1
+         FROM ingestion_runs
+        WHERE profile_id = $1
+          AND status = 'running'
+        LIMIT 1`,
+      [profileId]
+    );
+    return (r.rowCount ?? 0) > 0;
+  }
+
+  async finish(
+    id: string,
+    status: "completed" | "failed" | "cancelled",
+    summary?: RunSummary | null,
+    metadata?: Record<string, unknown> | null
+  ): Promise<IngestionRun | null> {
+    const r = await this.client.query(
+      `UPDATE ingestion_runs
+       SET finished_at = now(),
+           status = $1,
+           summary = $2,
+           metadata = COALESCE(metadata, '{}'::jsonb) || $3::jsonb
+       WHERE id = $4
+       RETURNING *`,
+      [status, summary ? JSON.stringify(summary) : null, JSON.stringify(metadata ?? {}), id]
     );
     return r.rows[0] ? mapRun(r.rows[0]) : null;
   }

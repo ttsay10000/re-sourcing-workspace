@@ -137,6 +137,10 @@ function sampleContext(): UnderwritingContext {
       eligibleResidentialUnits: 6,
       commercialUnits: 0,
       rentStabilizedUnits: 0,
+      totalAnnualRent: 24_000,
+      commercialAnnualRent: 0,
+      rentStabilizedAnnualRent: 0,
+      freeMarketAnnualRent: 24_000,
       eligibleRevenueSharePct: 1,
       eligibleUnitSharePct: 1,
     },
@@ -186,6 +190,8 @@ describe("buildDossierStructuredText", () => {
     expect(text).toContain("NSP before debt payoff");
     expect(text).toContain("Total cash uses incl. financing fees");
     expect(text).toContain("Equity yield (year 1)");
+    expect(text).toContain("| **CF after financing (cash)** | **$0** | **($7,442)** |");
+    expect(text).toContain("| **Levered CF** | **($450,000)** | **($7,442)** |");
   });
 
   it("renders package notes in the property overview", () => {

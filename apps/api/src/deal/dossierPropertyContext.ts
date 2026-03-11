@@ -1,4 +1,5 @@
 import type { PropertyDetails } from "@re-sourcing/contracts";
+import { resolvePreferredOmPropertyInfo } from "../om/authoritativeOm.js";
 import type { DossierPropertyOverview } from "./underwritingContext.js";
 
 export interface DossierPackageContext {
@@ -32,8 +33,7 @@ function addressSuffix(value: string): string[] {
 }
 
 function omPropertyInfo(details: PropertyDetails | null): Record<string, unknown> | null {
-  const propertyInfo = details?.rentalFinancials?.omAnalysis?.propertyInfo;
-  return propertyInfo && typeof propertyInfo === "object" ? (propertyInfo as Record<string, unknown>) : null;
+  return resolvePreferredOmPropertyInfo(details);
 }
 
 function stringValue(value: unknown): string | null {

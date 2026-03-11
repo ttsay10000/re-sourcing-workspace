@@ -265,8 +265,8 @@ describe("underwritingModel", () => {
       null,
       {
         details: {
-          rentalFinancials: {
-            omAnalysis: {
+          omData: {
+            authoritative: {
               propertyInfo: { totalUnits: 4, unitsResidential: 3, unitsCommercial: 1 },
               rentRoll: [
                 { unit: "1", annualRent: 100_000, beds: 2, sqft: 900, unitCategory: "Residential" },
@@ -286,6 +286,63 @@ describe("underwritingModel", () => {
     expect(assumptions.operating.rentUpliftPct).toBe(76.3);
     expect(assumptions.operating.blendedRentUpliftPct).toBeCloseTo(38.15, 2);
     expect(assumptions.acquisition.furnishingSetupCosts).toBe(22_500);
+  });
+
+  it("applies uplift, vacancy, and lead time only to eligible free-market rent while protected rent stays flat", () => {
+    const assumptions = resolveDossierAssumptions(
+      {
+        id: "profile-protected",
+        createdAt: "2026-03-10T00:00:00.000Z",
+        updatedAt: "2026-03-10T00:00:00.000Z",
+        defaultPurchaseClosingCostPct: 3,
+        defaultLtv: 70,
+        defaultInterestRate: 6,
+        defaultAmortization: 30,
+        defaultHoldPeriodYears: 3,
+        defaultExitCap: 6,
+        defaultExitClosingCostPct: 2,
+        defaultRentUplift: 50,
+        defaultExpenseIncrease: 0,
+        defaultManagementFee: 8,
+        defaultVacancyPct: 10,
+        defaultLeadTimeMonths: 2,
+        defaultAnnualRentGrowthPct: 5,
+        defaultAnnualOtherIncomeGrowthPct: 0,
+        defaultAnnualExpenseGrowthPct: 0,
+        defaultAnnualPropertyTaxGrowthPct: 0,
+        defaultRecurringCapexAnnual: 0,
+        defaultLoanFeePct: 0,
+      },
+      1_000_000,
+      null,
+      {
+        details: {
+          omData: {
+            authoritative: {
+              propertyInfo: { totalUnits: 4, unitsResidential: 3, unitsCommercial: 1 },
+              rentRoll: [
+                { unit: "1", annualRent: 120_000, unitCategory: "Residential" },
+                { unit: "2", annualRent: 80_000, unitCategory: "Residential", rentType: "Rent Stabilized" },
+                { unit: "Store", annualRent: 100_000, unitCategory: "Commercial" },
+              ],
+            },
+          },
+        },
+      }
+    );
+
+    const projection = computeUnderwritingProjection({
+      assumptions,
+      currentGrossRent: 300_000,
+      currentNoi: 240_000,
+    });
+
+    expect(assumptions.operating.blendedRentUpliftPct).toBeCloseTo(20, 2);
+    expect(projection.yearly.grossRentalIncome[1]).toBeCloseTo(360_000, 2);
+    expect(projection.yearly.grossRentalIncome[2]).toBeCloseTo(369_000, 2);
+    expect(projection.yearly.vacancyLoss[1]).toBeCloseTo(18_000, 2);
+    expect(projection.yearly.vacancyLoss[2]).toBeCloseTo(18_900, 2);
+    expect(projection.yearly.leadTimeLoss[1]).toBeCloseTo(30_000, 2);
   });
 
   it("maps NYC tax classes to normalized underwriting tax-growth defaults", () => {

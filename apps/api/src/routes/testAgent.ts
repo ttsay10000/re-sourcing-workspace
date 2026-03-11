@@ -280,8 +280,8 @@ router.post("/test-agent/test-single-property", async (req: Request, res: Respon
         if (agentEnrichment?.length) normalized.agentEnrichment = agentEnrichment;
       } else {
         normalized.agentEnrichment = existing.agentEnrichment ?? null;
-        normalized.priceHistory = existing.priceHistory ?? null;
-        normalized.rentalPriceHistory = existing.rentalPriceHistory ?? null;
+        normalized.priceHistory = normalized.priceHistory ?? existing.priceHistory ?? null;
+        normalized.rentalPriceHistory = normalized.rentalPriceHistory ?? existing.rentalPriceHistory ?? null;
       }
 
       const { listing } = await listingRepo.upsert(normalized, { uploadedRunId: null });
@@ -648,24 +648,34 @@ router.post("/test-agent/runs/:id/send-to-property-data", async (req: Request, r
         const existing = await listingRepo.bySourceAndExternalId(normalized.source, normalized.externalId);
 
         if (existing) {
-          normalized.priceHistory = existing.priceHistory ?? null;
-          normalized.rentalPriceHistory = existing.rentalPriceHistory ?? null;
+          normalized.priceHistory = normalized.priceHistory ?? existing.priceHistory ?? null;
+          normalized.rentalPriceHistory = normalized.rentalPriceHistory ?? existing.rentalPriceHistory ?? null;
         }
 
-        // Run broker LLM only once per property when initially uploaded (or when existing has no enrichment yet). Re-sends use stored agentEnrichment; no LLM call on every load.
+        // Refresh broker enrichment on each pull so new broker emails or corrected agent data are captured.
         const agentNames = normalized.agentNames ?? [];
         const hasAgentNames = Array.isArray(agentNames) && agentNames.length > 0;
         const existingHasEnrichment = existing?.agentEnrichment != null && Array.isArray(existing.agentEnrichment) && existing.agentEnrichment.length > 0;
-        const shouldRunBrokerLlm = hasAgentNames && (!existing || !existingHasEnrichment);
+        const shouldRunBrokerLlm = hasAgentNames;
         if (shouldRunBrokerLlm) {
           const propertyContext = [normalized.address, normalized.city, normalized.zip].filter(Boolean).join(", ") || undefined;
-          const agentEnrichment = await enrichBrokers(normalized.agentNames, propertyContext);
-          if (agentEnrichment && agentEnrichment.length > 0) {
-            normalized.agentEnrichment = agentEnrichment;
-            console.log(`[send-to-property-data] Broker LLM enriched ${agentEnrichment.length} agent(s) for ${normalized.externalId}`);
-          } else {
-            normalized.agentEnrichment = null;
-            console.warn(`[send-to-property-data] Broker LLM returned no enrichment for ${normalized.externalId} (agentNames: ${agentNames.length}). Check OPENAI_API_KEY and OPENAI_MODEL.`);
+          try {
+            const agentEnrichment = await enrichBrokers(normalized.agentNames, propertyContext);
+            if (agentEnrichment && agentEnrichment.length > 0) {
+              normalized.agentEnrichment = agentEnrichment;
+              console.log(`[send-to-property-data] Broker LLM enriched ${agentEnrichment.length} agent(s) for ${normalized.externalId}`);
+            } else if (existingHasEnrichment) {
+              normalized.agentEnrichment = existing?.agentEnrichment ?? null;
+            } else {
+              normalized.agentEnrichment = null;
+              console.warn(`[send-to-property-data] Broker LLM returned no enrichment for ${normalized.externalId} (agentNames: ${agentNames.length}). Check OPENAI_API_KEY and OPENAI_MODEL.`);
+            }
+          } catch (err) {
+            normalized.agentEnrichment = existingHasEnrichment ? (existing?.agentEnrichment ?? null) : null;
+            console.warn(
+              `[send-to-property-data] Broker enrichment failed for ${normalized.externalId}:`,
+              err instanceof Error ? err.message : err
+            );
           }
         } else if (existing) {
           normalized.agentEnrichment = existing.agentEnrichment ?? null;

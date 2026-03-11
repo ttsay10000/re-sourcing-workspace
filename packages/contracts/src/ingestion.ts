@@ -10,6 +10,8 @@ export interface IngestionRun {
   startedAt: string;
   finishedAt: string | null;
   status: IngestionRunStatus;
+  triggerSource?: string;
+  metadata?: Record<string, unknown>;
   /** Counts, errors, etc. */
   summary: RunSummary | null;
   createdAt: string;

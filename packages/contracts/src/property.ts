@@ -203,6 +203,166 @@ export interface OmAnalysis {
   [key: string]: unknown;
 }
 
+export type OmIngestionRunStatus =
+  | "queued"
+  | "processing"
+  | "completed"
+  | "promoted"
+  | "needs_review"
+  | "failed";
+
+export type OmIngestionSourceType =
+  | "uploaded_document"
+  | "inquiry_attachment"
+  | "manual_refresh"
+  | "backfill"
+  | "other";
+
+export type OmExtractionMethod = "text_tables" | "ocr_tables" | "hybrid";
+
+export type OmPageType =
+  | "COVER_PAGE"
+  | "PROPERTY_OVERVIEW"
+  | "FINANCIAL_SECTION_HEADER"
+  | "FINANCIAL_OVERVIEW"
+  | "RENT_ROLL"
+  | "INCOME_EXPENSE"
+  | "PROPERTY_DESCRIPTION"
+  | "FLOOR_PLANS"
+  | "MAPS"
+  | "PHOTOS"
+  | "BROKER_INFO"
+  | "DISCLAIMERS"
+  | "IRRELEVANT";
+
+export type OmExtractionMethodCandidate = "text_table" | "ocr_table" | "ignore";
+
+export interface OmPageClassification {
+  pageNumber: number;
+  pageType: OmPageType;
+  extractionMethodCandidate: OmExtractionMethodCandidate;
+  textDensity?: number | null;
+  imageDensity?: number | null;
+  numericDensity?: number | null;
+  layoutBlocks?: string[] | null;
+  detectedKeywords?: string[] | null;
+  [key: string]: unknown;
+}
+
+export interface OmTableRegion {
+  pageNumber: number;
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  regionType?: string | null;
+  extractionMethod?: OmExtractionMethodCandidate | null;
+  confidence?: number | null;
+  [key: string]: unknown;
+}
+
+export interface OmValidationFlag {
+  flagType: string;
+  field?: string | null;
+  severity?: "info" | "warning" | "error" | null;
+  brokerValue?: unknown;
+  externalValue?: unknown;
+  confidenceScore?: number | null;
+  message?: string | null;
+  pageNumber?: number | null;
+  source?: string | null;
+  [key: string]: unknown;
+}
+
+export interface OmCoverage {
+  propertyInfoExtracted?: boolean | null;
+  rentRollExtracted?: boolean | null;
+  incomeStatementExtracted?: boolean | null;
+  expensesExtracted?: boolean | null;
+  currentFinancialsExtracted?: boolean | null;
+  unitCountExtracted?: boolean | null;
+  pageCountAnalyzed?: number | null;
+  financialPagesDetected?: number | null;
+  ocrPagesUsed?: number | null;
+  placeholderRowsGenerated?: number | null;
+  brokerBlankRowsObserved?: number | null;
+  [key: string]: unknown;
+}
+
+export interface OmAuthoritativeCurrentFinancials {
+  noi?: number | null;
+  grossRentalIncome?: number | null;
+  otherIncome?: number | null;
+  vacancyLoss?: number | null;
+  effectiveGrossIncome?: number | null;
+  operatingExpenses?: number | null;
+  [key: string]: unknown;
+}
+
+export interface OmAuthoritativeSnapshot {
+  id?: string;
+  runId?: string | null;
+  sourceDocumentId?: string | null;
+  extractionMethod?: OmExtractionMethod | null;
+  propertyInfo?: Record<string, unknown> | null;
+  rentRoll?: OmRentRollRow[] | null;
+  incomeStatement?: Record<string, unknown> | null;
+  expenses?: { expensesTable?: ExpenseLineItem[] | null; totalExpenses?: number | null; [key: string]: unknown } | null;
+  revenueComposition?: Record<string, unknown> | null;
+  currentFinancials?: OmAuthoritativeCurrentFinancials | null;
+  validationFlags?: OmValidationFlag[] | null;
+  coverage?: OmCoverage | null;
+  pageClassification?: OmPageClassification[] | null;
+  tableRegions?: OmTableRegion[] | null;
+  sourceMeta?: Record<string, unknown> | null;
+  promotedAt?: string | null;
+  [key: string]: unknown;
+}
+
+export interface OmData {
+  activeRunId?: string | null;
+  activeSnapshotId?: string | null;
+  latestRunId?: string | null;
+  status?: OmIngestionRunStatus | null;
+  snapshotVersion?: number | null;
+  lastProcessedAt?: string | null;
+  authoritative?: OmAuthoritativeSnapshot | null;
+  [key: string]: unknown;
+}
+
+export interface OmIngestionRun {
+  id: string;
+  propertyId: string;
+  sourceDocumentId?: string | null;
+  sourceType: OmIngestionSourceType;
+  status: OmIngestionRunStatus;
+  snapshotVersion?: number | null;
+  extractionMethod?: OmExtractionMethod | null;
+  pageCount?: number | null;
+  financialPageCount?: number | null;
+  ocrPageCount?: number | null;
+  sourceMeta?: Record<string, unknown> | null;
+  coverage?: OmCoverage | null;
+  lastError?: string | null;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  promotedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface OmAuthoritativeSnapshotRecord {
+  id: string;
+  propertyId: string;
+  runId?: string | null;
+  sourceDocumentId?: string | null;
+  snapshotVersion?: number | null;
+  snapshot: OmAuthoritativeSnapshot;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 /** Rental data on a property: per-unit table (from API or inquiry) + LLM-extracted financials. */
 export interface RentalFinancials {
   rentalUnits?: RentalUnitRow[] | null;
@@ -246,11 +406,15 @@ export interface PropertyDealDossier {
 export interface PropertyInquiryEmail {
   id: string;
   propertyId: string;
+  linkedPropertyIds?: string[] | null;
   messageId: string;
+  gmailThreadId?: string | null;
+  matchedBatchId?: string | null;
   subject?: string | null;
   fromAddress?: string | null;
   receivedAt?: string | null;
   bodyText?: string | null;
+  processingStatus?: string | null;
   /** LLM summary of email body. */
   bodySummary?: string | null;
   /** Latest receipt/send date mentioned from broker (LLM-extracted). */
@@ -302,6 +466,8 @@ export interface PropertyDetails {
   /** Owner name from valuations dataset (8y4t-faws); shown in UI as "Owner (Valuations module): XXXX". */
   ownerValuations?: string | null;
   omFurnishedPricing?: string | null;
+  /** OM ingestion V2 state. When authoritative is present, downstream calculations must prefer it. */
+  omData?: OmData | null;
   /** Rental data: per-unit table + LLM financials (from RapidAPI, listing LLM, or inquiry). */
   rentalFinancials?: RentalFinancials | null;
   /** Monthly HOA from listing (GET sale details); for financial calculations. */
@@ -382,6 +548,13 @@ export interface UserProfile {
   name?: string | null;
   email?: string | null;
   organization?: string | null;
+  automationPaused?: boolean;
+  automationPauseReason?: string | null;
+  automationPausedAt?: string | null;
+  dailyDigestEnabled?: boolean;
+  dailyDigestTimeLocal?: string | null;
+  dailyDigestTimezone?: string | null;
+  lastDailyDigestSentAt?: string | null;
   defaultPurchaseClosingCostPct?: number | null;
   defaultLtv?: number | null;
   defaultInterestRate?: number | null;
@@ -414,6 +587,63 @@ export interface SavedDeal {
   createdAt: string;
 }
 
+export interface DealScoreBreakdown {
+  returnScore: number;
+  marketLiquidityScore: number;
+  assumptionPenalty: number;
+  structuralPenalty: number;
+  regulatoryPenalty: number;
+  preCapScore: number;
+  cappedScore: number;
+}
+
+export interface DealRiskProfile {
+  commercialRevenueSharePct?: number | null;
+  rentStabilizedRevenueSharePct?: number | null;
+  largestUnitRevenueSharePct?: number | null;
+  rollover12moRevenueSharePct?: number | null;
+  rentRollCoveragePct?: number | null;
+  omDiscrepancyCount: number;
+  rapidOmMismatch: boolean;
+  taxBurdenPct?: number | null;
+  unsupportedRentGrowthPct?: number | null;
+  missingLeaseDataPct?: number | null;
+  missingOccupancyDataPct?: number | null;
+  missingLeaseDataMajority: boolean;
+  missingOccupancyDataMajority: boolean;
+  smallAssetRiskLevel?: "none" | "5_to_9" | "under_5";
+  isPackageOm: boolean;
+  missingEnrichmentGroup: boolean;
+  explicitRecordMismatch: boolean;
+  totalUnits?: number | null;
+  usableRentRowsCount?: number | null;
+  rentRowsCount?: number | null;
+}
+
+export interface DealScoreSensitivityScenario {
+  key: "rentUpliftDown20Pts" | "exitCapUp50Bps" | "expenseGrowthUp200Bps";
+  label: string;
+  adjustedValue: number | null;
+  score: number | null;
+  delta: number | null;
+}
+
+export interface DealScoreSensitivity {
+  rentUpliftDown20Pts?: DealScoreSensitivityScenario | null;
+  exitCapUp50Bps?: DealScoreSensitivityScenario | null;
+  expenseGrowthUp200Bps?: DealScoreSensitivityScenario | null;
+}
+
+export interface DealScoreOverride {
+  id: string;
+  propertyId: string;
+  score: number;
+  reason: string;
+  createdBy?: string | null;
+  createdAt: string;
+  clearedAt?: string | null;
+}
+
 /** Deal signals row (one per property per generation). */
 export interface DealSignalRow {
   id: string;
@@ -438,5 +668,12 @@ export interface DealSignalRow {
   holdYears?: number | null;
   currentNoi?: number | null;
   adjustedNoi?: number | null;
+  scoreBreakdown?: DealScoreBreakdown | null;
+  riskProfile?: DealRiskProfile | null;
+  riskFlags?: string[] | null;
+  capReasons?: string[] | null;
+  confidenceScore?: number | null;
+  scoreSensitivity?: DealScoreSensitivity | null;
+  scoreVersion?: string | null;
   generatedAt: string;
 }
