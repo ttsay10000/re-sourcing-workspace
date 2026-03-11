@@ -7,6 +7,10 @@ import { deriveListingActivitySummary, type PriceHistoryEntry, type PropertyDeta
 import { getPool, UserProfileRepo } from "@re-sourcing/db";
 import { analyzePropertyForUnderwriting } from "../deal/propertyAssumptions.js";
 import {
+  resolveCurrentFinancialsFromDetails,
+  resolveExpenseRowsFromDetails,
+} from "../rental/currentFinancials.js";
+import {
   computeRecommendedOffer,
   computeUnderwritingProjection,
   resolveDossierAssumptions,
@@ -23,31 +27,6 @@ function toFiniteNumber(value: unknown): number | null {
     if (Number.isFinite(parsed)) return parsed;
   }
   return null;
-}
-
-function noiFromDetails(details: PropertyDetails | null): number | null {
-  const om = details?.rentalFinancials?.omAnalysis;
-  const ui = om?.uiFinancialSummary as Record<string, unknown> | undefined;
-  const income = om?.income as Record<string, unknown> | undefined;
-  const noi =
-    (ui?.noi as number | undefined) ??
-    om?.noiReported ??
-    (income?.NOI as number | undefined) ??
-    details?.rentalFinancials?.fromLlm?.noi;
-  return toFiniteNumber(noi);
-}
-
-function grossRentFromDetails(details: PropertyDetails | null): number | null {
-  const om = details?.rentalFinancials?.omAnalysis;
-  const ui = om?.uiFinancialSummary as Record<string, unknown> | undefined;
-  const income = om?.income as Record<string, unknown> | undefined;
-  const gross =
-    (ui?.grossRent as number | undefined) ??
-    (income?.grossRentActual as number | undefined) ??
-    (income?.grossRentPotential as number | undefined) ??
-    details?.rentalFinancials?.fromLlm?.grossRentTotal;
-  const parsed = toFiniteNumber(gross);
-  return parsed != null && parsed > 0 ? parsed : null;
 }
 
 function inferAggregateBeds(details: PropertyDetails | null, fallback: number | null): number | null {
@@ -163,8 +142,10 @@ router.get("/deals", async (req: Request, res: Response) => {
       const unitsFromRental = row.units_from_rental != null ? Number(row.units_from_rental) : null;
       const mix = analyzePropertyForUnderwriting(details);
       const units = mix.totalUnits ?? (unitsFromRental != null && unitsFromRental > 0 ? unitsFromRental : (omUnits?.length ?? null));
-      const currentNoi = noiFromDetails(details);
-      const currentGrossRent = grossRentFromDetails(details) ?? (currentNoi != null ? currentNoi * 1.5 : null);
+      const currentFinancials = resolveCurrentFinancialsFromDetails(details);
+      const expenseRows = resolveExpenseRowsFromDetails(details);
+      const currentNoi = currentFinancials.noi;
+      const currentGrossRent = currentFinancials.grossRentalIncome;
       const askingPrice = row.price != null ? Number(row.price) : null;
       const listedAt = row.listed_at instanceof Date ? row.listed_at.toISOString() : (row.listed_at as string | null) ?? null;
       const listingActivity = deriveListingActivitySummary({
@@ -177,11 +158,17 @@ router.get("/deals", async (req: Request, res: Response) => {
         assumptions,
         currentGrossRent,
         currentNoi,
+        currentOtherIncome: currentFinancials.otherIncome,
+        currentExpensesTotal: currentFinancials.operatingExpenses,
+        expenseRows,
       });
       const projection = computeUnderwritingProjection({
         assumptions,
         currentGrossRent,
         currentNoi,
+        currentOtherIncome: currentFinancials.otherIncome,
+        currentExpensesTotal: currentFinancials.operatingExpenses,
+        expenseRows,
       });
       const dossierCreatedAt = row.dossier_created_at instanceof Date
         ? row.dossier_created_at.toISOString()
@@ -209,6 +196,7 @@ router.get("/deals", async (req: Request, res: Response) => {
         targetMetAtAsking: recommendedOffer.targetMetAtAsking,
         stabilizedNoi: projection.operating.stabilizedNoi,
         annualDebtService: projection.financing.annualDebtService,
+        year1EquityYield: projection.returns.year1EquityYield,
         dossierDocumentId: typeof row.dossier_document_id === "string" ? row.dossier_document_id : null,
         dossierFileName: typeof row.dossier_file_name === "string" ? row.dossier_file_name : null,
         dossierCreatedAt,

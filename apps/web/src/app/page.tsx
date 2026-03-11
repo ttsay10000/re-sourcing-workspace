@@ -28,6 +28,7 @@ type DealRow = {
   adjustedNoi: number | null;
   stabilizedNoi: number | null;
   annualDebtService: number | null;
+  year1EquityYield: number | null;
   dealScore: number | null;
   assetCapRate: number | null;
   adjustedCapRate: number | null;
@@ -60,6 +61,13 @@ function getDealStatusTag(score: number): string {
   return "Weak";
 }
 
+function getDealStatusToneClass(score: number): string {
+  if (score >= 80) return "home-deal-market-pill--strong";
+  if (score >= 70) return "home-deal-market-pill--attractive";
+  if (score >= 60) return "home-deal-market-pill--neutral";
+  return "home-deal-market-pill--weak";
+}
+
 function formatPrice(n: number | null | undefined): string {
   if (n == null || Number.isNaN(n)) return "—";
   if (Math.abs(n) >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`;
@@ -75,6 +83,16 @@ function formatCount(n: number | null | undefined, suffix = ""): string {
   if (n == null || Number.isNaN(n)) return "—";
   const whole = Math.abs(n % 1) < 0.001;
   return `${whole ? n.toFixed(0) : n.toFixed(1)}${suffix}`;
+}
+
+function formatCountLabel(
+  value: number | null | undefined,
+  singular: string,
+  plural = `${singular}s`
+): string | null {
+  if (value == null || Number.isNaN(value)) return null;
+  const label = Math.abs(value - 1) < 0.001 ? singular : plural;
+  return `${formatCount(value)} ${label}`;
 }
 
 function formatPctPoints(n: number | null | undefined): string {
@@ -102,6 +120,49 @@ function daysOnMarket(value: string | null | undefined): number | null {
   today.setHours(0, 0, 0, 0);
   listedAt.setHours(0, 0, 0, 0);
   return Math.max(0, Math.floor((today.getTime() - listedAt.getTime()) / (1000 * 60 * 60 * 24)));
+}
+
+function formatDaysOnMarket(value: number | null): string | null {
+  if (value == null) return null;
+  return `${value} ${value === 1 ? "Day" : "Days"} on Market`;
+}
+
+function buildFactPills(deal: DealRow): string[] {
+  const facts: string[] = [];
+  const totalUnits = formatCountLabel(deal.totalUnits, "Unit");
+  const beds = deal.beds != null && deal.beds > 0 ? formatCountLabel(deal.beds, "Bed") : null;
+  const baths = deal.baths != null && deal.baths > 0 ? formatCountLabel(deal.baths, "Bath") : null;
+
+  if (totalUnits) facts.push(totalUnits);
+  if (beds) facts.push(beds);
+  if (baths) facts.push(baths);
+
+  const shouldShowResidentialMix =
+    (deal.commercialUnits ?? 0) > 0 ||
+    (deal.rentStabilizedUnits ?? 0) > 0 ||
+    (deal.totalUnits != null &&
+      deal.residentialUnits != null &&
+      Math.abs(deal.totalUnits - deal.residentialUnits) > 0.001);
+
+  if (shouldShowResidentialMix && deal.residentialUnits != null && deal.residentialUnits > 0) {
+    facts.push(`${formatCount(deal.residentialUnits)} Residential`);
+  }
+  if (deal.commercialUnits != null && deal.commercialUnits > 0) {
+    facts.push(`${formatCount(deal.commercialUnits)} Commercial`);
+  }
+  if (deal.rentStabilizedUnits != null && deal.rentStabilizedUnits > 0) {
+    facts.push(`${formatCount(deal.rentStabilizedUnits)} Rent Stabilized`);
+  }
+
+  return facts;
+}
+
+function buildDateItems(deal: DealRow): Array<{ label: string; value: string }> {
+  return [
+    { label: "Listed", value: formatDateLabel(deal.listedAt) },
+    { label: "Scored", value: formatDateLabel(deal.generatedAt) },
+    { label: "Dossier", value: formatDateLabel(deal.dossierCreatedAt) },
+  ].filter((item) => item.value !== "—");
 }
 
 function buildDossierFileUrl(deal: DealRow): string | null {
@@ -446,6 +507,8 @@ export default function HomePage() {
                 const dom = daysOnMarket(deal.listedAt);
                 const score = deal.dealScore ?? 0;
                 const dossierUrl = buildDossierFileUrl(deal);
+                const factPills = buildFactPills(deal);
+                const dateItems = buildDateItems(deal);
 
                 return (
                   <article
@@ -480,12 +543,21 @@ export default function HomePage() {
 
                     <div className="home-deal-card-body">
                       <div className="home-deal-card-header">
-                        <div className="property-card-header-left">
+                        <div className="home-deal-title-block">
                           <div className="property-card-address">{deal.address || "—"}</div>
-                          <div className="property-card-meta">
-                            {formatPrice(deal.price)} Ask
-                            {dom != null ? ` • ${dom}d on market` : ""}
-                            {deal.dealScore != null ? ` • ${getDealStatusTag(deal.dealScore)}` : ""}
+                          <div className="home-deal-market-pills">
+                            {dom != null && (
+                              <span className="home-deal-market-pill">{formatDaysOnMarket(dom)}</span>
+                            )}
+                            {deal.dealScore != null && (
+                              <span
+                                className={`home-deal-market-pill ${getDealStatusToneClass(
+                                  deal.dealScore
+                                )}`}
+                              >
+                                {getDealStatusTag(deal.dealScore)}
+                              </span>
+                            )}
                           </div>
                         </div>
                         <label className="property-card-checkbox-wrap">
@@ -499,31 +571,47 @@ export default function HomePage() {
                         </label>
                       </div>
 
+                      <div className="home-deal-price-row">
+                        <div className="home-deal-price-block">
+                          <span className="home-deal-price-label">Ask</span>
+                          <strong className="home-deal-price-value">{formatPrice(deal.price)}</strong>
+                        </div>
+                      </div>
+
                       <div className="home-deal-facts">
-                        <span className="home-fact-pill">{formatCount(deal.totalUnits)} units</span>
-                        <span className="home-fact-pill">{formatCount(deal.beds)} beds</span>
-                        <span className="home-fact-pill">{formatCount(deal.baths)} baths</span>
-                        <span className="home-fact-pill">{formatCount(deal.residentialUnits)} res</span>
-                        <span className="home-fact-pill">{formatCount(deal.commercialUnits)} comm</span>
-                        <span className="home-fact-pill">{formatCount(deal.rentStabilizedUnits)} RS</span>
+                        {factPills.map((fact) => (
+                          <span key={fact} className="home-fact-pill">
+                            {fact}
+                          </span>
+                        ))}
                       </div>
 
                       <div className="home-offer-strip">
-                        <div className="home-offer-strip-item">
-                          <span className="home-offer-strip-label">Recommended offer</span>
-                          <strong>
-                            {deal.recommendedOfferLow != null && deal.recommendedOfferHigh != null
-                              ? `${formatPrice(deal.recommendedOfferLow)} - ${formatPrice(deal.recommendedOfferHigh)}`
-                              : "—"}
-                          </strong>
+                        <div className="home-offer-strip-header">
+                          <span className="home-offer-strip-title">Offer guidance</span>
+                          {deal.targetIrrPct != null && (
+                            <span className="home-offer-strip-note">
+                              Underwritten to {deal.targetIrrPct.toFixed(0)}% target IRR
+                            </span>
+                          )}
                         </div>
-                        <div className="home-offer-strip-item">
-                          <span className="home-offer-strip-label">Discount to ask</span>
-                          <strong>{deal.targetMetAtAsking ? "Target met at ask" : formatPctPoints(deal.discountToAskingPct)}</strong>
-                        </div>
-                        <div className="home-offer-strip-item">
-                          <span className="home-offer-strip-label">Target IRR</span>
-                          <strong>{deal.targetIrrPct != null ? `${deal.targetIrrPct.toFixed(0)}%` : "—"}</strong>
+                        <div className="home-offer-strip-grid">
+                          <div className="home-offer-strip-item">
+                            <span className="home-offer-strip-label">Recommended offer</span>
+                            <strong>
+                              {deal.recommendedOfferLow != null && deal.recommendedOfferHigh != null
+                                ? `${formatPrice(deal.recommendedOfferLow)} - ${formatPrice(deal.recommendedOfferHigh)}`
+                                : "—"}
+                            </strong>
+                          </div>
+                          <div className="home-offer-strip-item">
+                            <span className="home-offer-strip-label">Discount to ask</span>
+                            <strong>
+                              {deal.targetMetAtAsking
+                                ? "Target met at ask"
+                                : formatPctPoints(deal.discountToAskingPct)}
+                            </strong>
+                          </div>
                         </div>
                       </div>
 
@@ -539,8 +627,8 @@ export default function HomePage() {
                             <span className="property-metric-value">{formatPrice(deal.currentNoi)}</span>
                           </div>
                           <div className="property-metric">
-                            <span className="property-metric-label">IRR at asking</span>
-                            <span className="property-metric-value">{formatPctDecimal(deal.irrAtAskingPct)}</span>
+                            <span className="property-metric-label">Debt service</span>
+                            <span className="property-metric-value">{formatPrice(deal.annualDebtService)}</span>
                           </div>
                         </div>
                         <div className="property-card-metrics-col">
@@ -567,8 +655,8 @@ export default function HomePage() {
                             <span className="property-metric-value">{formatPctDecimal(deal.irrPct)}</span>
                           </div>
                           <div className="property-metric">
-                            <span className="property-metric-label">CoC</span>
-                            <span className="property-metric-value">{formatPctDecimal(deal.cocPct)}</span>
+                            <span className="property-metric-label">Equity yield</span>
+                            <span className="property-metric-value">{formatPctDecimal(deal.year1EquityYield)}</span>
                           </div>
                         </div>
                         <div className="property-card-metrics-col">
@@ -576,18 +664,20 @@ export default function HomePage() {
                             <span className="property-metric-label">Equity multiple</span>
                             <span className="property-metric-value">{deal.equityMultiple != null ? `${deal.equityMultiple.toFixed(2)}x` : "—"}</span>
                           </div>
-                          <div className="property-metric">
-                            <span className="property-metric-label">Debt service</span>
-                            <span className="property-metric-value">{formatPrice(deal.annualDebtService)}</span>
-                          </div>
                         </div>
                       </div>
 
                       <div className="home-deal-card-footer">
-                        <div className="home-deal-card-meta-footer">
-                          Listed {formatDateLabel(deal.listedAt)} • Scored {formatDateLabel(deal.generatedAt)}
-                          {deal.dossierCreatedAt ? ` • Dossier ${formatDateLabel(deal.dossierCreatedAt)}` : ""}
-                        </div>
+                        {dateItems.length > 0 && (
+                          <div className="home-deal-date-grid">
+                            {dateItems.map((item) => (
+                              <div key={item.label} className="home-deal-date-item">
+                                <span className="home-deal-date-label">{item.label}</span>
+                                <span className="home-deal-date-value">{item.value}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                         <div className="property-card-actions">
                           <Link href={`/property/${deal.id}`} className="btn-card">
                             View deal

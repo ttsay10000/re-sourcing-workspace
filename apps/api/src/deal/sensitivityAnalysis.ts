@@ -10,6 +10,7 @@ export interface SensitivityScenario {
   valuePct: number;
   irrPct: number | null;
   year1CashOnCashReturn: number | null;
+  year1EquityYield: number | null;
   stabilizedNoi: number;
   annualOperatingCashFlow: number;
 }
@@ -28,10 +29,12 @@ export interface SensitivityAnalysis {
     valuePct: number | null;
     irrPct: number | null;
     year1CashOnCashReturn: number | null;
+    year1EquityYield: number | null;
   };
   ranges: {
     irrPct: SensitivityMetricRange;
     year1CashOnCashReturn: SensitivityMetricRange;
+    year1EquityYield: SensitivityMetricRange;
   };
 }
 
@@ -50,6 +53,7 @@ function scenarioFromProjection(valuePct: number, projection: ReturnType<typeof 
     valuePct,
     irrPct: projection.returns.irr,
     year1CashOnCashReturn: projection.returns.year1CashOnCashReturn,
+    year1EquityYield: projection.returns.year1EquityYield,
     stabilizedNoi: projection.operating.stabilizedNoi,
     annualOperatingCashFlow: projection.cashFlows.annualOperatingCashFlow,
   };
@@ -145,11 +149,15 @@ export function buildSensitivityAnalyses(input: {
         valuePct: assumptions.operating.rentUpliftPct,
         irrPct: baseProjection.returns.irr,
         year1CashOnCashReturn: baseProjection.returns.year1CashOnCashReturn,
+        year1EquityYield: baseProjection.returns.year1EquityYield,
       },
       ranges: {
         irrPct: range(rentalUpliftScenarios.map((scenario) => scenario.irrPct)),
         year1CashOnCashReturn: range(
           rentalUpliftScenarios.map((scenario) => scenario.year1CashOnCashReturn)
+        ),
+        year1EquityYield: range(
+          rentalUpliftScenarios.map((scenario) => scenario.year1EquityYield)
         ),
       },
     },
@@ -162,11 +170,15 @@ export function buildSensitivityAnalyses(input: {
         valuePct: assumptions.operating.expenseIncreasePct,
         irrPct: baseProjection.returns.irr,
         year1CashOnCashReturn: baseProjection.returns.year1CashOnCashReturn,
+        year1EquityYield: baseProjection.returns.year1EquityYield,
       },
       ranges: {
         irrPct: range(expenseIncreaseScenarios.map((scenario) => scenario.irrPct)),
         year1CashOnCashReturn: range(
           expenseIncreaseScenarios.map((scenario) => scenario.year1CashOnCashReturn)
+        ),
+        year1EquityYield: range(
+          expenseIncreaseScenarios.map((scenario) => scenario.year1EquityYield)
         ),
       },
     },
@@ -179,11 +191,15 @@ export function buildSensitivityAnalyses(input: {
         valuePct: assumptions.operating.managementFeePct,
         irrPct: baseProjection.returns.irr,
         year1CashOnCashReturn: baseProjection.returns.year1CashOnCashReturn,
+        year1EquityYield: baseProjection.returns.year1EquityYield,
       },
       ranges: {
         irrPct: range(managementFeeScenarios.map((scenario) => scenario.irrPct)),
         year1CashOnCashReturn: range(
           managementFeeScenarios.map((scenario) => scenario.year1CashOnCashReturn)
+        ),
+        year1EquityYield: range(
+          managementFeeScenarios.map((scenario) => scenario.year1EquityYield)
         ),
       },
     },

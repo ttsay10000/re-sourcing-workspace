@@ -61,7 +61,7 @@ REQUIRED DOCUMENT STRUCTURE (output in this order)
    [blank line]
 
 6. Section "5. FINANCING & CASH FLOW" with heading line "-------------------------"
-   - Pipe table rows for purchase closing costs, total project cost, loan amount, initial equity invested, annual debt service, annual operating cash flow, final year cash flow
+   - Pipe table rows for purchase closing costs, total project cost, loan amount, initial equity invested, annual debt service, year 1 cash flow after debt service, final year cash flow
    - If amortization schedule provided, a table with columns Year, Y1, Y2... and rows Principal, Interest, Debt service, Ending balance
    [blank line]
 
@@ -73,8 +73,8 @@ REQUIRED DOCUMENT STRUCTURE (output in this order)
    - Pipe table:
    | IRR (N-year) | X.XX% |
    | Equity multiple | X.XXx |
-   | Cash-on-cash (year 1) | X.XX% |
-   | Average cash-on-cash | X.XX% |
+   | Equity yield (year 1) | X.XX% |
+   | Average annual equity yield | X.XX% |
    [blank line]
 
 9. Section "8. ASSUMPTIONS USED" with heading line "--------------------"
@@ -82,8 +82,8 @@ REQUIRED DOCUMENT STRUCTURE (output in this order)
    [blank line]
 
 10. Section "9. SENSITIVITY ANALYSIS" with heading line "------------------------" if sensitivity data is provided
-   - For each sensitivity, give one short pullout line with base case input, IRR range, and CoC range
-   - Then a clean pipe table with columns [input label, Stabilized NOI, IRR, Cash-on-cash]
+   - For each sensitivity, give one short pullout line with base case input, IRR range, and equity-yield range
+   - Then a clean pipe table with columns [input label, Stabilized NOI, IRR, Equity yield]
    - Include the base case row and every provided scenario row
    [blank line]
 

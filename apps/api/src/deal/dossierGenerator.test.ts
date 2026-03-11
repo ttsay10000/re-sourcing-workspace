@@ -31,7 +31,7 @@ function sampleContext(): UnderwritingContext {
         blendedRentUpliftPct: 8,
         expenseIncreasePct: 5,
         managementFeePct: 4,
-        annualPropertyTaxGrowthPct: 8,
+        annualPropertyTaxGrowthPct: 3,
       },
       holdPeriodYears: 5,
       targetIrrPct: 14,
@@ -71,14 +71,54 @@ function sampleContext(): UnderwritingContext {
     cashFlows: {
       annualOperatingCashFlow: 34_357.92,
       annualOperatingCashFlows: [34_357.92, 34_357.92, 34_357.92, 34_357.92, 34_357.92],
+      annualPrincipalPaydown: 8_704.73,
+      annualPrincipalPaydowns: [8_704.73, 9_242.35, 9_813.18, 10_419.29, 11_062.84],
+      annualEquityGain: 43_062.65,
+      annualEquityGains: [43_062.65, 43_600.27, 44_171.1, 44_777.21, 45_420.76],
       finalYearCashFlow: 767_117.92,
       equityCashFlowSeries: [-450_000, 34_357.92, 34_357.92, 34_357.92, 34_357.92, 767_117.92],
+    },
+    yearlyCashFlow: {
+      years: [0, 1, 2, 3, 4, 5],
+      endingLabels: ["Y0", "Y1", "Y2", "Y3", "Y4", "Y5"],
+      propertyValue: [1_000_000, 1_000_000, 1_000_000, 1_000_000, 1_000_000, 1_000_000],
+      grossRentalIncome: [0, 132_000, 132_000, 132_000, 132_000, 132_000],
+      otherIncome: [0, 0, 0, 0, 0, 0],
+      vacancyLoss: [0, 19_800, 19_800, 19_800, 19_800, 19_800],
+      leadTimeLoss: [0, 22_000, 0, 0, 0, 0],
+      netRentalIncome: [0, 90_200, 112_200, 112_200, 112_200, 112_200],
+      managementFee: [0, 5_280, 5_280, 5_280, 5_280, 5_280],
+      expenseLineItems: [
+        { lineItem: "Taxes", annualGrowthPct: 8, baseAmount: 20_000, yearlyAmounts: [20_000, 21_600, 23_328, 25_194, 27_210] },
+      ],
+      totalOperatingExpenses: [0, 47_280, 48_880, 50_608, 52_474, 54_490],
+      noi: [0, 42_920, 63_320, 61_592, 59_726, 57_710],
+      recurringCapex: [0, 0, 0, 0, 0, 0],
+      cashFlowFromOperations: [0, 42_920, 63_320, 61_592, 59_726, 57_710],
+      capRateOnPurchase: [null, 0.04292, 0.06332, 0.061592, 0.059726, 0.05771],
+      debtService: [0, 50_362.08, 50_362.08, 50_362.08, 50_362.08, 50_362.08],
+      principalPaid: [0, 8_704.73, 9_242.35, 9_813.18, 10_419.29, 11_062.84],
+      interestPaid: [0, 41_657.35, 41_119.73, 40_548.9, 39_942.79, 39_299.24],
+      cashFlowAfterFinancing: [0, -7_442.08, 12_957.92, 11_229.92, 9_363.92, 7_347.92],
+      totalInvestmentCost: [-1_150_000, 0, 0, 0, 0, 0],
+      financingFunding: [700_000, 0, 0, 0, 0, 0],
+      financingFees: [0, 0, 0, 0, 0, 0],
+      saleValue: [0, 0, 0, 0, 0, 1_412_000],
+      saleClosingCosts: [0, 0, 0, 0, 0, 28_240],
+      remainingLoanBalance: [700_000, 691_295.27, 682_052.92, 672_239.74, 661_820.45, 651_000],
+      financingPayoff: [0, 0, 0, 0, 0, 651_000],
+      netSaleProceedsBeforeDebtPayoff: [0, 0, 0, 0, 0, 1_383_760],
+      netSaleProceedsToEquity: [0, 0, 0, 0, 0, 732_760],
+      unleveredCashFlow: [-1_150_000, 42_920, 63_320, 61_592, 59_726, 1_441_470],
+      leveredCashFlow: [-450_000, -7_442.08, 12_957.92, 11_229.92, 9_363.92, 740_107.92],
     },
     returns: {
       irrPct: 0.156,
       equityMultiple: 2.02,
       year1CashOnCashReturn: 0.076,
       averageCashOnCashReturn: 0.076,
+      year1EquityYield: 0.0957,
+      averageEquityYield: 0.0976,
     },
     rentRollRows: [
       { label: "Unit 1", annualRent: 24_000 },
@@ -130,7 +170,7 @@ describe("buildDossierStructuredText", () => {
     const text = buildDossierStructuredText(sampleContext());
 
     expect(text).toContain(
-      "Property-tax growth source: auto from NYC tax class 2A cap (8.00% annual assessed-value cap for small Class 2 property)."
+      "Property-tax growth source: auto NYC underwriting default for tax class 2A (3.00% normalized annual tax-growth assumption for small Class 2 property)."
     );
     expect(text).toContain("Condition: Dated / value-add");
     expect(text).toContain("Renovation scope: Moderate");
@@ -138,7 +178,14 @@ describe("buildDossierStructuredText", () => {
     expect(text).toContain("Photos cover: exterior, kitchen, bathroom");
     expect(text).toContain("Not visible in photos: mechanicals, roof");
     expect(text).not.toContain("IRR at asking");
-    expect(text).toContain("Year 1 cash flow after debt service");
+    expect(text).toContain("**Gross rental income**");
+    expect(text).toContain("Vacancy loss");
+    expect(text).toContain("Operating expenses ex management");
+    expect(text).toContain("Management fee (4%)");
+    expect(text).toContain("Principal paydown (equity build)");
+    expect(text).toContain("NSP before debt payoff");
+    expect(text).toContain("Total cash uses incl. financing fees");
+    expect(text).toContain("Equity yield (year 1)");
   });
 
   it("renders package notes in the property overview", () => {

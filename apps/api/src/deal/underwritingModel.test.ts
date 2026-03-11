@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   MAX_UNDERWRITING_HOLD_PERIOD_YEARS,
-  conservativeAnnualPropertyTaxGrowthPctFromNycTaxCode,
+  defaultAnnualPropertyTaxGrowthPctFromNycTaxCode,
   computeRecommendedOffer,
   computeUnderwritingProjection,
   resolveDossierAssumptions,
@@ -60,9 +60,14 @@ describe("underwritingModel", () => {
     expect(projection.yearly.cashFlowFromOperations[0]).toBe(0);
     expect(projection.yearly.totalInvestmentCost[0]).toBeCloseTo(-1_150_000, 2);
     expect(projection.cashFlows.annualOperatingCashFlows).toHaveLength(5);
+    expect(projection.cashFlows.annualPrincipalPaydowns).toHaveLength(5);
     expect(projection.cashFlows.equityCashFlowSeries).toHaveLength(6);
     expect(projection.cashFlows.equityCashFlowSeries[0]).toBeCloseTo(-450_000, 2);
     expect(projection.cashFlows.finalYearCashFlow).toBeGreaterThan(projection.cashFlows.annualOperatingCashFlow);
+    expect(projection.cashFlows.annualEquityGain).toBeCloseTo(
+      projection.cashFlows.annualOperatingCashFlow + projection.cashFlows.annualPrincipalPaydown,
+      2
+    );
 
     expect(projection.exit.exitPropertyValue).toBeCloseTo(1_412_000, 2);
     expect(projection.exit.saleClosingCosts).toBeCloseTo(28_240, 2);
@@ -76,6 +81,10 @@ describe("underwritingModel", () => {
     expect(projection.returns.equityMultiple).toBeGreaterThan(1);
     expect(projection.returns.year1CashOnCashReturn).not.toBeNull();
     expect(projection.returns.averageCashOnCashReturn).not.toBeNull();
+    expect(projection.returns.year1EquityYield).not.toBeNull();
+    expect((projection.returns.year1EquityYield ?? 0)).toBeGreaterThan(
+      projection.returns.year1CashOnCashReturn ?? -1
+    );
   });
 
   it("applies vacancy and lead-time deductions while recovering principal paydown through the exit payoff", () => {
@@ -122,6 +131,14 @@ describe("underwritingModel", () => {
     expect(projection.yearly.managementFee[1]).toBeCloseTo(5_280, 2);
     expect(projection.yearly.noi[1]).toBeCloseTo(42_920, 2);
     expect(projection.yearly.cashFlowFromOperations[1]).toBeCloseTo(41_720, 2);
+    expect(projection.cashFlows.annualPrincipalPaydown).toBeCloseTo(
+      projection.yearly.principalPaid[1] ?? 0,
+      2
+    );
+    expect(projection.cashFlows.annualEquityGain).toBeCloseTo(
+      (projection.yearly.cashFlowAfterFinancing[1] ?? 0) + (projection.yearly.principalPaid[1] ?? 0),
+      2
+    );
 
     expect(projection.exit.principalPaydownToDate).toBeCloseTo(
       projection.financing.loanAmount - projection.exit.remainingLoanBalance,
@@ -178,6 +195,57 @@ describe("underwritingModel", () => {
     expect(projection.yearly.expenseLineItems[0]?.yearlyAmounts).toEqual([40_000, 43_200, 46_656]);
   });
 
+  it("removes explicit management-fee lines from the expense base before projecting opex", () => {
+    const assumptions = resolveDossierAssumptions(
+      {
+        id: "profile-4c",
+        createdAt: "2026-03-10T00:00:00.000Z",
+        updatedAt: "2026-03-10T00:00:00.000Z",
+        defaultPurchaseClosingCostPct: 3,
+        defaultLtv: 70,
+        defaultInterestRate: 6,
+        defaultAmortization: 30,
+        defaultHoldPeriodYears: 3,
+        defaultExitCap: 6,
+        defaultExitClosingCostPct: 2,
+        defaultRentUplift: 0,
+        defaultExpenseIncrease: 20,
+        defaultManagementFee: 8,
+        defaultVacancyPct: 0,
+        defaultLeadTimeMonths: 0,
+        defaultAnnualRentGrowthPct: 0,
+        defaultAnnualOtherIncomeGrowthPct: 0,
+        defaultAnnualExpenseGrowthPct: 0,
+        defaultAnnualPropertyTaxGrowthPct: 8,
+        defaultRecurringCapexAnnual: 0,
+        defaultLoanFeePct: 0,
+      },
+      1_000_000
+    );
+
+    const projection = computeUnderwritingProjection({
+      assumptions,
+      currentGrossRent: 100_000,
+      currentNoi: 82_000,
+      currentExpensesTotal: 18_000,
+      expenseRows: [
+        { lineItem: "Property Taxes", amount: 10_000 },
+        { lineItem: "Insurance", amount: 5_000 },
+        { lineItem: "Management Fee", amount: 3_000 },
+      ],
+    });
+
+    expect(projection.yearly.expenseLineItems.map((row) => row.lineItem)).toEqual([
+      "Property Taxes",
+      "Insurance",
+    ]);
+    expect(projection.operating.currentExpenses).toBeCloseTo(15_000, 2);
+    expect(projection.operating.adjustedOperatingExpenses).toBeCloseTo(18_000, 2);
+    expect(projection.yearly.managementFee[1]).toBeCloseTo(8_000, 2);
+    expect(projection.yearly.totalOperatingExpenses[1]).toBeCloseTo(26_000, 2);
+    expect(projection.yearly.totalOperatingExpenses[2]).toBeCloseTo(26_960, 2);
+  });
+
   it("caps hold periods to the supported Excel model horizon", () => {
     const assumptions = resolveDossierAssumptions(
       null,
@@ -220,13 +288,13 @@ describe("underwritingModel", () => {
     expect(assumptions.acquisition.furnishingSetupCosts).toBe(22_500);
   });
 
-  it("maps NYC tax classes to conservative property-tax growth defaults", () => {
-    expect(conservativeAnnualPropertyTaxGrowthPctFromNycTaxCode("1")).toBe(6);
-    expect(conservativeAnnualPropertyTaxGrowthPctFromNycTaxCode(" 2b ")).toBe(8);
-    expect(conservativeAnnualPropertyTaxGrowthPctFromNycTaxCode("2")).toBe(20);
-    expect(conservativeAnnualPropertyTaxGrowthPctFromNycTaxCode("4")).toBe(20);
-    expect(conservativeAnnualPropertyTaxGrowthPctFromNycTaxCode("3")).toBeNull();
-    expect(conservativeAnnualPropertyTaxGrowthPctFromNycTaxCode(null)).toBeNull();
+  it("maps NYC tax classes to normalized underwriting tax-growth defaults", () => {
+    expect(defaultAnnualPropertyTaxGrowthPctFromNycTaxCode("1")).toBe(3);
+    expect(defaultAnnualPropertyTaxGrowthPctFromNycTaxCode(" 2b ")).toBe(3);
+    expect(defaultAnnualPropertyTaxGrowthPctFromNycTaxCode("2")).toBe(4);
+    expect(defaultAnnualPropertyTaxGrowthPctFromNycTaxCode("4")).toBe(4);
+    expect(defaultAnnualPropertyTaxGrowthPctFromNycTaxCode("3")).toBeNull();
+    expect(defaultAnnualPropertyTaxGrowthPctFromNycTaxCode(null)).toBeNull();
   });
 
   it("uses NYC tax-class auto defaults before profile fallback while preserving explicit overrides", () => {
@@ -258,7 +326,7 @@ describe("underwritingModel", () => {
     const autoAssumptions = resolveDossierAssumptions(profile, 5_000_000, null, {
       details: { taxCode: "2A" },
     });
-    expect(autoAssumptions.operating.annualPropertyTaxGrowthPct).toBe(8);
+    expect(autoAssumptions.operating.annualPropertyTaxGrowthPct).toBe(3);
 
     const fallbackAssumptions = resolveDossierAssumptions(profile, 5_000_000, null, {
       details: { taxCode: "3" },

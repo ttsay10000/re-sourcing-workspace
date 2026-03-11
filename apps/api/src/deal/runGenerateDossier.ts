@@ -19,8 +19,10 @@ import {
 } from "@re-sourcing/db";
 import { randomUUID } from "crypto";
 import { sendMessageWithAttachments } from "../inquiry/gmailClient.js";
+import { resolveCurrentFinancialsFromDetails } from "../rental/currentFinancials.js";
 import { computeDealSignals } from "./computeDealSignals.js";
 import { scoreDealWithLlm } from "./dealScoringLlm.js";
+import { resolveFinalDealScore } from "./dealScoringEngine.js";
 import { buildDossierStructuredText } from "./dossierGenerator.js";
 import { dossierTextToPdf } from "./dossierToPdf.js";
 import { buildExcelProForma } from "./excelProForma.js";
@@ -57,15 +59,6 @@ export interface GenerateDossierResult {
   emailSent?: boolean;
 }
 
-function toFiniteNumber(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string") {
-    const parsed = Number(value.replace(/[$,%\s,]/g, ""));
-    if (Number.isFinite(parsed)) return parsed;
-  }
-  return null;
-}
-
 function runningGenerationState(
   startedAt: string,
   stageLabel: string
@@ -80,45 +73,6 @@ function runningGenerationState(
     dossierDocumentId: null,
     excelDocumentId: null,
   };
-}
-
-function noiFromDetails(details: PropertyDetails | null): number | null {
-  const om = details?.rentalFinancials?.omAnalysis;
-  const ui = om?.uiFinancialSummary as Record<string, unknown> | undefined;
-  const income = om?.income as Record<string, unknown> | undefined;
-  const noi =
-    (ui?.noi as number | undefined) ??
-    om?.noiReported ??
-    (income?.NOI as number | undefined) ??
-    details?.rentalFinancials?.fromLlm?.noi;
-  if (noi != null && typeof noi === "number" && !Number.isNaN(noi)) return noi;
-  return null;
-}
-
-function grossRentFromDetails(details: PropertyDetails | null): number | null {
-  const om = details?.rentalFinancials?.omAnalysis;
-  const ui = om?.uiFinancialSummary as Record<string, unknown> | undefined;
-  const income = om?.income as Record<string, unknown> | undefined;
-  const gross =
-    (ui?.grossRent as number | undefined) ??
-    (income?.grossRentActual as number | undefined) ??
-    (income?.grossRentPotential as number | undefined) ??
-    details?.rentalFinancials?.fromLlm?.grossRentTotal;
-  if (gross != null && typeof gross === "number" && !Number.isNaN(gross) && gross > 0) return gross;
-  return null;
-}
-
-function otherIncomeFromDetails(details: PropertyDetails | null): number | null {
-  const om = details?.rentalFinancials?.omAnalysis;
-  const income = om?.income as Record<string, unknown> | undefined;
-  const revenue = om?.revenueComposition as Record<string, unknown> | undefined;
-  const otherIncome =
-    toFiniteNumber(income?.otherIncome) ??
-    toFiniteNumber(income?.otherAnnualIncome) ??
-    toFiniteNumber(income?.miscIncome) ??
-    toFiniteNumber(revenue?.otherIncomeAnnual) ??
-    toFiniteNumber(revenue?.otherIncome);
-  return otherIncome != null && otherIncome > 0 ? otherIncome : null;
 }
 
 function unitCountFromDetails(details: PropertyDetails | null): number | null {
@@ -342,10 +296,10 @@ export async function runGenerateDossier(
     if (!profile) throw new Error("Profile not available");
 
     const details = property.details as PropertyDetails | null;
-    const currentNoi = noiFromDetails(details);
-    const currentGrossRent =
-      grossRentFromDetails(details) ?? (currentNoi != null ? currentNoi * 1.5 : null);
-    const currentOtherIncome = otherIncomeFromDetails(details);
+    const currentFinancials = resolveCurrentFinancialsFromDetails(details);
+    const currentNoi = currentFinancials.noi;
+    const currentGrossRent = currentFinancials.grossRentalIncome;
+    const currentOtherIncome = currentFinancials.otherIncome;
     const unitCount = unitCountFromDetails(details);
     const omAnalysis: OmAnalysis | null = details?.rentalFinancials?.omAnalysis ?? null;
     const rentRollRows = rentRollRowsFromOm(omAnalysis, currentGrossRent);
@@ -366,11 +320,7 @@ export async function runGenerateDossier(
       { details }
     );
     const resolvedCurrentExpensesTotal =
-      extractedExpenseTotal > 0
-        ? extractedExpenseTotal
-        : currentGrossRent != null && currentNoi != null
-          ? Math.max(0, currentGrossRent + (currentOtherIncome ?? 0) - currentNoi)
-          : null;
+      extractedExpenseTotal > 0 ? extractedExpenseTotal : currentFinancials.operatingExpenses;
     const projection = computeUnderwritingProjection({
       assumptions,
       currentGrossRent,
@@ -544,6 +494,10 @@ export async function runGenerateDossier(
       },
       cashFlows: {
         ...projection.cashFlows,
+        annualPrincipalPaydown: projection.cashFlows.annualPrincipalPaydown,
+        annualPrincipalPaydowns: projection.cashFlows.annualPrincipalPaydowns,
+        annualEquityGain: projection.cashFlows.annualEquityGain,
+        annualEquityGains: projection.cashFlows.annualEquityGains,
         annualUnleveredCashFlows: projection.cashFlows.annualUnleveredCashFlows,
         unleveredCashFlowSeries: projection.cashFlows.unleveredCashFlowSeries,
       },
@@ -552,6 +506,8 @@ export async function runGenerateDossier(
         equityMultiple: projection.returns.equityMultiple,
         year1CashOnCashReturn: projection.returns.year1CashOnCashReturn,
         averageCashOnCashReturn: projection.returns.averageCashOnCashReturn,
+        year1EquityYield: projection.returns.year1EquityYield,
+        averageEquityYield: projection.returns.averageEquityYield,
       },
       propertyOverview: propertyOverview ?? undefined,
       rentRollRows: rentRollRows.length > 0 ? rentRollRows : undefined,
@@ -590,6 +546,7 @@ export async function runGenerateDossier(
       assetCapRatePct: assetCapRateForCtx,
       adjustedCapRatePct: adjustedCapRateForCtx,
       irrPct: projection.returns.irr ?? null,
+      equityMultiple: projection.returns.equityMultiple ?? null,
       cocPct: projection.returns.year1CashOnCashReturn ?? null,
       holdPeriodYears: assumptions.holdPeriodYears,
       targetIrrPct: assumptions.targetIrrPct,
@@ -638,12 +595,13 @@ export async function runGenerateDossier(
       commercialUnitCount: assumptions.propertyMix.commercialUnits,
     });
 
-    const finalScore =
-      llmScore != null
-        ? llmScore.dealScore
-        : scoringResult.isScoreable
-          ? scoringResult.dealScore
-          : null;
+    const finalScore = resolveFinalDealScore({
+      llmScore: llmScore?.dealScore ?? null,
+      deterministicScore: scoringResult.isScoreable ? scoringResult.dealScore : null,
+      irrPct: projection.returns.irr ?? null,
+      equityMultiple: projection.returns.equityMultiple ?? null,
+      requiredDiscountPct: recommendedOffer.discountToAskingPct ?? null,
+    });
     ctx.dealScore = finalScore;
     insertParams.dealScore = finalScore;
 

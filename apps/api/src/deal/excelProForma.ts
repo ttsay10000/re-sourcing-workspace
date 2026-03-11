@@ -1,6 +1,9 @@
 import * as XLSX from "xlsx";
 import type { UnderwritingContext, ExpenseRow } from "./underwritingContext.js";
-import { MAX_UNDERWRITING_HOLD_PERIOD_YEARS } from "./underwritingModel.js";
+import {
+  MAX_UNDERWRITING_HOLD_PERIOD_YEARS,
+  normalizeExpenseProjectionInputs,
+} from "./underwritingModel.js";
 
 const MAX_MODEL_YEARS = MAX_UNDERWRITING_HOLD_PERIOD_YEARS;
 const CURRENCY_FMT = "$#,##0";
@@ -97,28 +100,26 @@ function num(value: number | null | undefined): number {
   return value != null && Number.isFinite(value) ? value : 0;
 }
 
-function expenseLineItems(ctx: UnderwritingContext): ExpenseRow[] {
-  if (ctx.expenseRows && ctx.expenseRows.length > 0) return ctx.expenseRows;
-  return [
-    {
-      lineItem: "Operating expenses",
-      amount: num(ctx.currentExpensesTotal ?? ctx.operating.currentExpenses),
-    },
-  ];
-}
-
 function isTaxExpense(lineItem: string): boolean {
   return /tax/i.test(lineItem);
 }
 
-function usesAggregateExpenseFallback(ctx: UnderwritingContext): boolean {
-  return !ctx.expenseRows || ctx.expenseRows.length === 0;
-}
-
 export function buildExcelProForma(ctx: UnderwritingContext): Buffer {
   const wb = XLSX.utils.book_new();
-  const expenses = expenseLineItems(ctx);
-  const aggregateExpenseFallback = usesAggregateExpenseFallback(ctx);
+  const normalizedExpenseInputs = normalizeExpenseProjectionInputs<ExpenseRow>({
+    currentExpensesTotal: num(ctx.currentExpensesTotal ?? ctx.operating.currentExpenses),
+    expenseRows: ctx.expenseRows,
+  });
+  const expenses =
+    normalizedExpenseInputs.expenseRowsExManagement.length > 0
+      ? normalizedExpenseInputs.expenseRowsExManagement
+      : [
+          {
+            lineItem: "Operating expenses",
+            amount: normalizedExpenseInputs.currentExpensesTotalExManagement,
+          },
+        ];
+  const aggregateExpenseFallback = normalizedExpenseInputs.expenseRowsExManagement.length === 0;
   const assumptionRows = {
     purchasePrice: 7,
     purchaseClosingPct: 8,
@@ -162,7 +163,10 @@ export function buildExcelProForma(ctx: UnderwritingContext): Buffer {
       [s("Furnishing / setup costs", inputLabelStyle), n(num(ctx.assumptions.acquisition.furnishingSetupCosts), CURRENCY_FMT, inputValueStyle)],
       [s("Current gross rent", labelStyle), n(num(ctx.currentGrossRent), CURRENCY_FMT, textValueStyle)],
       [s("Current other income", labelStyle), n(num(ctx.currentOtherIncome), CURRENCY_FMT, textValueStyle)],
-      [s("Current expenses", labelStyle), n(num(ctx.currentExpensesTotal ?? ctx.operating.currentExpenses), CURRENCY_FMT, textValueStyle)],
+      [
+        s("Current expenses (ex management)", labelStyle),
+        n(normalizedExpenseInputs.currentExpensesTotalExManagement, CURRENCY_FMT, textValueStyle),
+      ],
       ["", ""],
       [s("Loan-to-value (%)", inputLabelStyle), n(num(ctx.assumptions.financing.ltvPct), INPUT_PERCENT_FMT, inputValueStyle)],
       [s("Interest rate (%)", inputLabelStyle), n(num(ctx.assumptions.financing.interestRatePct), INPUT_PERCENT_FMT, inputValueStyle)],
@@ -501,7 +505,7 @@ export function buildExcelProForma(ctx: UnderwritingContext): Buffer {
       [s("Financing fees", labelStyle), f("Financing!B3", CURRENCY_FMT, formulaValueStyle), "", s("Unlevered EMx", labelStyle), f(`IF(ABS('Cash Flow'!C${unleveredCfRow})=0,0,SUMPRODUCT(('Cash Flow'!D${unleveredCfRow}:INDEX(${unleveredCfRow}:${unleveredCfRow},3+Assumptions!B${assumptionRows.holdPeriodYears}))*--('Cash Flow'!D${unleveredCfRow}:INDEX(${unleveredCfRow}:${unleveredCfRow},3+Assumptions!B${assumptionRows.holdPeriodYears})>0))/ABS('Cash Flow'!C${unleveredCfRow}))`, MULTIPLE_FMT, formulaValueStyle)],
       [s("Total capitalization", sectionStyle), f("Financing!B5+Financing!B3", CURRENCY_FMT, formulaValueStyle), "", s("Levered IRR", labelStyle), f(`IFERROR(IRR('Cash Flow'!C${leveredCfRow}:INDEX(${leveredCfRow}:${leveredCfRow},3+Assumptions!B${assumptionRows.holdPeriodYears})),"")`, PERCENT_FMT, formulaValueStyle)],
       [s("Loan funding", labelStyle), f("Financing!B2", CURRENCY_FMT, formulaValueStyle), "", s("Levered EMx", labelStyle), f(`IF(ABS('Cash Flow'!C${leveredCfRow})=0,0,SUMPRODUCT(('Cash Flow'!D${leveredCfRow}:INDEX(${leveredCfRow}:${leveredCfRow},3+Assumptions!B${assumptionRows.holdPeriodYears}))*--('Cash Flow'!D${leveredCfRow}:INDEX(${leveredCfRow}:${leveredCfRow},3+Assumptions!B${assumptionRows.holdPeriodYears})>0))/ABS('Cash Flow'!C${leveredCfRow}))`, MULTIPLE_FMT, formulaValueStyle)],
-      [s("LTV", labelStyle), f(`Assumptions!B${assumptionRows.ltvPct}/100`, PERCENT_FMT, formulaValueStyle), "", s("Cash on cash return", labelStyle), f(`IF(ABS('Cash Flow'!C${leveredCfRow})=0,0,AVERAGE('Cash Flow'!D${cfAfterFinancingRow}:INDEX(${cfAfterFinancingRow}:${cfAfterFinancingRow},3+Assumptions!B${assumptionRows.holdPeriodYears}))/ABS('Cash Flow'!C${leveredCfRow}))`, PERCENT_FMT, formulaValueStyle)],
+      [s("LTV", labelStyle), f(`Assumptions!B${assumptionRows.ltvPct}/100`, PERCENT_FMT, formulaValueStyle), "", s("Equity yield", labelStyle), f(`IF(ABS('Cash Flow'!C${leveredCfRow})=0,0,(AVERAGE('Cash Flow'!D${cfAfterFinancingRow}:INDEX(${cfAfterFinancingRow}:${cfAfterFinancingRow},3+Assumptions!B${assumptionRows.holdPeriodYears}))-AVERAGE('Cash Flow'!D${principalRow}:INDEX(${principalRow}:${principalRow},3+Assumptions!B${assumptionRows.holdPeriodYears})))/ABS('Cash Flow'!C${leveredCfRow}))`, PERCENT_FMT, formulaValueStyle)],
       [s("Interest rate", labelStyle), f(`Assumptions!B${assumptionRows.interestRatePct}/100`, PERCENT_FMT, formulaValueStyle), "", s("Target IRR", labelStyle), f(`Assumptions!B${assumptionRows.targetIrrPct}/100`, PERCENT_FMT, formulaValueStyle)],
       [s("Cash required", sectionStyle), f(`ABS('Cash Flow'!C${leveredCfRow})`, CURRENCY_FMT, formulaValueStyle), "", "", ""],
     ]),

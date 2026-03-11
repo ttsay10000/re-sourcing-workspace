@@ -13,6 +13,8 @@ export interface DealScoringLlmInputs {
   adjustedCapRatePct?: number | null;
   /** Hold-period IRR as decimal (e.g. 0.22 = 22%). */
   irrPct: number | null;
+  /** Hold-period equity multiple. */
+  equityMultiple?: number | null;
   /** Cash-on-cash as decimal (e.g. 0.10 = 10%). */
   cocPct: number | null;
   /** Hold period used for the IRR calculation. */
@@ -71,6 +73,9 @@ SCORING RUBRIC (use as the backbone; you may adjust for context):
 3) RETURNS AT ASK
 - IRR, cash-on-cash, and stabilized cap rate still matter, but less than pricing.
 - 25%+ IRR is top tier; sub-20% IRR is a drag.
+- If IRR is below 10%, the score should usually stay below 50.
+- If IRR is negative, the score should rarely exceed 35, even with a decent current cap rate.
+- If equity multiple is below 1.0x or the required discount is greater than 25%, score should stay low.
 
 4) RISK — DEDUCT POINTS (do not add; only subtract)
 - Rent-stabilized units: deduct points for EACH rent-stabilized unit (they limit rent growth and exit).
@@ -99,6 +104,7 @@ function buildScoringPrompt(inputs: DealScoringLlmInputs): string {
     `Asset cap rate: ${inputs.assetCapRatePct != null ? `${inputs.assetCapRatePct.toFixed(2)}%` : "—"}`,
     `Stabilized cap rate: ${inputs.adjustedCapRatePct != null ? `${inputs.adjustedCapRatePct.toFixed(2)}%` : "—"}`,
     `${inputs.holdPeriodYears ?? 5}-year IRR: ${inputs.irrPct != null ? `${(inputs.irrPct * 100).toFixed(2)}%` : "—"}`,
+    `Equity multiple: ${inputs.equityMultiple != null ? `${inputs.equityMultiple.toFixed(2)}x` : "—"}`,
     `Cash-on-cash: ${inputs.cocPct != null ? `${(inputs.cocPct * 100).toFixed(2)}%` : "—"}`,
     `Rent-stabilized units: ${inputs.rentStabilizedUnitCount}`,
     `Commercial units: ${inputs.commercialUnitCount ?? 0}`,

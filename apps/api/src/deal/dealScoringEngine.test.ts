@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { computeDealScore } from "./dealScoringEngine.js";
+import { computeDealScore, resolveFinalDealScore } from "./dealScoringEngine.js";
 
 describe("dealScoringEngine", () => {
   it("rewards pricing that already clears the target IRR", () => {
@@ -56,5 +56,30 @@ describe("dealScoringEngine", () => {
     expect(result.dealScore).toBeGreaterThan(60);
     expect(result.positiveSignals.some((signal) => signal.includes("Recent 5.4% price cut"))).toBe(true);
     expect(today).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  it("keeps the final dossier score conservative when returns are objectively poor", () => {
+    const deterministic = computeDealScore({
+      purchasePrice: 8_135_000,
+      noi: 446_730,
+      adjustedCapRatePct: 5.48,
+      irrPct: -0.0402,
+      cocPct: -0.0493,
+      recommendedOfferHigh: 5_324_000,
+      blendedRentUpliftPct: 38.18,
+      rentStabilizedUnitCount: 2,
+      commercialUnitCount: 3,
+    });
+
+    const finalScore = resolveFinalDealScore({
+      llmScore: 65,
+      deterministicScore: deterministic.dealScore,
+      irrPct: -0.0402,
+      equityMultiple: 0.86,
+      requiredDiscountPct: 34.55,
+    });
+
+    expect(deterministic.dealScore).toBeLessThan(50);
+    expect(finalScore).toBeLessThanOrEqual(35);
   });
 });

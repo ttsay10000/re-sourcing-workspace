@@ -20,6 +20,7 @@ import {
   supportsReasoningEffort,
 } from "../enrichment/openaiModels.js";
 import { OM_ANALYSIS_PROMPT_PREFIX } from "./omAnalysisPrompt.js";
+import { resolveCurrentFinancialsFromOmAnalysis } from "./currentFinancials.js";
 import { extractRentalFinancialsFallback } from "./extractRentalFinancialsFallback.js";
 
 function getApiKey(): string | null {
@@ -486,35 +487,17 @@ async function createOmStyleCompletion(
  * Derive legacy fromLlm from OmAnalysis for backward compatibility and property page fallback.
  */
 function fromLlmFromOmAnalysis(om: OmAnalysis): RentalFinancialsFromLlm {
-  const income = om.income as Record<string, unknown> | undefined;
-  const revenueComposition = om.revenueComposition as Record<string, unknown> | undefined;
   const expenses = om.expenses as { totalExpenses?: number; expensesTable?: ExpenseLineItem[] } | undefined;
   const valuation = om.valuationMetrics as Record<string, unknown> | undefined;
-  const financial = om.financialMetrics as Record<string, unknown> | undefined;
   const ui = om.uiFinancialSummary as Record<string, unknown> | undefined;
-  const noi =
-    om.noiReported ??
-    (income?.NOI as number | undefined) ??
-    (valuation?.NOI as number | undefined) ??
-    (financial?.noi as number | undefined) ??
-    (ui?.noi as number | undefined);
+  const resolved = resolveCurrentFinancialsFromOmAnalysis(om);
+  const noi = resolved.noi;
   let capRate =
     (valuation?.capRate as number | undefined) ?? (ui?.capRate as number | undefined);
   // LLM may return cap rate as decimal (0.0356); we store and display as percentage (3.56)
   if (capRate != null && typeof capRate === "number" && capRate > 0 && capRate <= 1) capRate = capRate * 100;
-  const revenueSplitTotal =
-    typeof revenueComposition?.residentialAnnualRent === "number" ||
-    typeof revenueComposition?.commercialAnnualRent === "number"
-      ? ((revenueComposition?.residentialAnnualRent as number | undefined) ?? 0) +
-        ((revenueComposition?.commercialAnnualRent as number | undefined) ?? 0)
-      : undefined;
-  const grossRentTotal =
-    (income?.grossRentActual as number | undefined) ??
-    (income?.grossRentPotential as number | undefined) ??
-    (income?.effectiveGrossIncome as number | undefined) ??
-    revenueSplitTotal ??
-    (ui?.grossRent as number | undefined);
-  const totalExpenses = expenses?.totalExpenses;
+  const grossRentTotal = resolved.grossRentalIncome;
+  const totalExpenses = resolved.operatingExpenses ?? expenses?.totalExpenses;
   const expensesTable = expenses?.expensesTable;
   const rentRoll = om.rentRoll ?? [];
   const sourceCoverage = isPlainObject(om.sourceCoverage) ? om.sourceCoverage : null;

@@ -32,6 +32,8 @@ The extracted text may be incomplete on pages where tables are embedded as page 
 
 Extract every unit, every revenue component, and every expense line you find; do not stop after the first table.
 
+When the OM shows exact financial figures in a current/pro forma table, preserve the exact current figures as shown. Do not round specific numbers into placeholders or neat approximations. For example, if the OM shows $619,139 or $610,352, do not replace it with $600,000.
+
 Your output must extract the financials, compute underwriting metrics, highlight risks and opportunities, and generate buyer-oriented insights.
 
 Return ONE structured JSON object.
@@ -192,6 +194,12 @@ EffectiveGrossIncome =
 grossRentPotential
 + otherIncome
 - vacancyLoss
+
+Important:
+- grossRentPotential and grossRentActual should represent rental revenue before vacancy/credit loss.
+- effectiveGrossIncome should represent post-vacancy income.
+- Do not put effective gross income into grossRentPotential, grossRentActual, or uiFinancialSummary.grossRent.
+- If the OM only gives effective gross income and not true gross rent before vacancy, leave gross-rent fields null and populate only effectiveGrossIncome.
 
 -----------------------------------------------------
 
@@ -510,7 +518,7 @@ UI FINANCIAL SUMMARY
 
 These metrics represent the current state from the OM (as-is financials). Return condensed metrics used on the property page. All values must be numbers (no strings, no dollar signs).
 
-• price, pricePerUnit, pricePerSqft, grossRent, noi, furnishedNOI: dollar amounts as numbers (e.g. 8135000, 600000).
+• price, pricePerUnit, pricePerSqft, grossRent, noi, furnishedNOI: dollar amounts as numbers using the exact OM figures.
 • capRate, adjustedCapRate, furnishedCapRate: percentage as a number (e.g. 5.47 for 5.47%), NOT as decimal (not 0.0547).
 • expenseRatio, breakEvenOccupancy: ratio as decimal between 0 and 1 (e.g. 0.24 for 24%), NOT as percentage number (not 24).
 • rentUpsidePercent: optional; if present, as percentage number (e.g. 10 for 10%).

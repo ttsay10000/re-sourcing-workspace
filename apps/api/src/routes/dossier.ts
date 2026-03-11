@@ -6,6 +6,7 @@ import { Router, type Request, type Response } from "express";
 import type { PropertyDetails } from "@re-sourcing/contracts";
 import { getPool, UserProfileRepo, PropertyRepo, MatchRepo, ListingRepo } from "@re-sourcing/db";
 import { runGenerateDossier } from "../deal/runGenerateDossier.js";
+import { resolveCurrentFinancialsFromDetails } from "../rental/currentFinancials.js";
 import { resolveDossierAssumptions, type DossierAssumptionOverrides } from "../deal/underwritingModel.js";
 import {
   getPropertyDossierAssumptions,
@@ -25,32 +26,6 @@ async function getDefaultUserId(): Promise<string> {
   const pool = getPool();
   const profileRepo = new UserProfileRepo({ pool });
   return profileRepo.ensureDefault();
-}
-
-function noiFromDetails(details: PropertyDetails | null): number | null {
-  const om = details?.rentalFinancials?.omAnalysis;
-  const ui = om?.uiFinancialSummary as Record<string, unknown> | undefined;
-  const income = om?.income as Record<string, unknown> | undefined;
-  const noi =
-    (ui?.noi as number | undefined) ??
-    om?.noiReported ??
-    (income?.NOI as number | undefined) ??
-    details?.rentalFinancials?.fromLlm?.noi;
-  if (noi != null && typeof noi === "number" && !Number.isNaN(noi)) return noi;
-  return null;
-}
-
-function grossRentFromDetails(details: PropertyDetails | null): number | null {
-  const om = details?.rentalFinancials?.omAnalysis;
-  const ui = om?.uiFinancialSummary as Record<string, unknown> | undefined;
-  const income = om?.income as Record<string, unknown> | undefined;
-  const gross =
-    (ui?.grossRent as number | undefined) ??
-    (income?.grossRentActual as number | undefined) ??
-    (income?.grossRentPotential as number | undefined) ??
-    details?.rentalFinancials?.fromLlm?.grossRentTotal;
-  if (gross != null && typeof gross === "number" && !Number.isNaN(gross) && gross > 0) return gross;
-  return null;
 }
 
 /** GET /api/dossier-assumptions?property_id=X - profile defaults and optional property summary for the assumptions form. */
@@ -91,7 +66,7 @@ router.get("/dossier-assumptions", async (req: Request, res: Response) => {
             : null,
         };
         const details = (prop.details ?? null) as PropertyDetails | null;
-        const currentGrossRent = grossRentFromDetails(details) ?? (noiFromDetails(details) != null ? noiFromDetails(details)! * 1.5 : null);
+        const currentFinancials = resolveCurrentFinancialsFromDetails(details);
         const propertyAssumptions = getPropertyDossierAssumptions(details);
         const formulaAssumptions = resolveDossierAssumptions(profile, listing?.price ?? null, null, {
           details,
@@ -128,8 +103,8 @@ router.get("/dossier-assumptions", async (req: Request, res: Response) => {
           exitCapPct: assumptions.exit.exitCapPct,
           exitClosingCostPct: assumptions.exit.exitClosingCostPct,
           targetIrrPct: assumptions.targetIrrPct,
-          currentGrossRent,
-          currentNoi: noiFromDetails(details),
+          currentGrossRent: currentFinancials.grossRentalIncome,
+          currentNoi: currentFinancials.noi,
         };
         formulaDefaults = {
           renovationCosts: 0,

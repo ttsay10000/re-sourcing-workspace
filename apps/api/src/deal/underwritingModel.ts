@@ -33,9 +33,10 @@ export const DEFAULT_ANNUAL_EXPENSE_GROWTH_PCT = 0;
 export const DEFAULT_ANNUAL_PROPERTY_TAX_GROWTH_PCT = 6;
 export const DEFAULT_RECURRING_CAPEX_ANNUAL = 1_200;
 export const DEFAULT_LOAN_FEE_PCT = 0.63;
-const NYC_CLASS_ONE_ASSESSMENT_CAP_PCT = 6;
-const NYC_SMALL_CLASS_TWO_ASSESSMENT_CAP_PCT = 8;
-const NYC_TRANSITIONAL_PHASE_IN_TOP_RANGE_PCT = 20;
+const NYC_CLASS_ONE_UNDERWRITING_TAX_GROWTH_PCT = 3;
+const NYC_SMALL_CLASS_TWO_UNDERWRITING_TAX_GROWTH_PCT = 3;
+const NYC_LARGE_CLASS_TWO_UNDERWRITING_TAX_GROWTH_PCT = 4;
+const NYC_CLASS_FOUR_UNDERWRITING_TAX_GROWTH_PCT = 4;
 
 export interface DossierAssumptionOverrides {
   purchasePrice?: number | null;
@@ -187,12 +188,19 @@ export interface UnderwritingProjection {
   cashFlows: {
     annualOperatingCashFlow: number;
     annualOperatingCashFlows: number[];
+    annualPrincipalPaydown: number;
+    annualPrincipalPaydowns: number[];
+    annualEquityGain: number;
+    annualEquityGains: number[];
     annualUnleveredCashFlows: number[];
     finalYearCashFlow: number;
     unleveredCashFlowSeries: number[];
     equityCashFlowSeries: number[];
   };
-  returns: IrrResult;
+  returns: IrrResult & {
+    year1EquityYield: number | null;
+    averageEquityYield: number | null;
+  };
 }
 
 export interface RecommendedOfferAnalysis {
@@ -269,21 +277,17 @@ function normalizeTaxCode(taxCode: string | null | undefined): string | null {
   return normalized.length > 0 ? normalized : null;
 }
 
-export function conservativeAnnualPropertyTaxGrowthPctFromNycTaxCode(
+export function defaultAnnualPropertyTaxGrowthPctFromNycTaxCode(
   taxCode: string | null | undefined
 ): number | null {
   const normalized = normalizeTaxCode(taxCode);
   if (!normalized) return null;
-  if (normalized.startsWith("1")) return NYC_CLASS_ONE_ASSESSMENT_CAP_PCT;
+  if (normalized.startsWith("1")) return NYC_CLASS_ONE_UNDERWRITING_TAX_GROWTH_PCT;
   if (normalized.startsWith("2A") || normalized.startsWith("2B") || normalized.startsWith("2C")) {
-    return NYC_SMALL_CLASS_TWO_ASSESSMENT_CAP_PCT;
+    return NYC_SMALL_CLASS_TWO_UNDERWRITING_TAX_GROWTH_PCT;
   }
-  // NYC does not use the same statutory annual cap for larger Class 2 and Class 4 assets.
-  // Instead, assessed-value changes are phased in 20% per year over five years. We use
-  // that 20% phase-in as the conservative top-of-range annual tax-growth default.
-  if (normalized.startsWith("2") || normalized.startsWith("4")) {
-    return NYC_TRANSITIONAL_PHASE_IN_TOP_RANGE_PCT;
-  }
+  if (normalized.startsWith("2")) return NYC_LARGE_CLASS_TWO_UNDERWRITING_TAX_GROWTH_PCT;
+  if (normalized.startsWith("4")) return NYC_CLASS_FOUR_UNDERWRITING_TAX_GROWTH_PCT;
   return null;
 }
 
@@ -291,6 +295,43 @@ function compoundAnnual(base: number, growthPct: number, yearsElapsed: number): 
   if (!Number.isFinite(base) || base === 0) return 0;
   if (!Number.isFinite(growthPct) || yearsElapsed <= 0) return base;
   return base * Math.pow(1 + growthPct / 100, yearsElapsed);
+}
+
+export function isManagementFeeExpenseLine(lineItem: string): boolean {
+  return /\b(management|mgmt)\b/i.test(lineItem);
+}
+
+export function normalizeExpenseProjectionInputs<T extends { lineItem: string; amount: number }>(input: {
+  currentExpensesTotal: number;
+  expenseRows?: T[] | null;
+}): {
+  currentExpensesTotalExManagement: number;
+  expenseRowsExManagement: T[];
+  removedManagementFeeAmount: number;
+} {
+  const detailedRows = Array.isArray(input.expenseRows)
+    ? input.expenseRows.filter(
+        (row): row is T =>
+          !!row &&
+          typeof row.lineItem === "string" &&
+          row.lineItem.trim().length > 0 &&
+          typeof row.amount === "number" &&
+          Number.isFinite(row.amount) &&
+          row.amount >= 0
+      )
+    : [];
+  const removedManagementFeeAmount = detailedRows.reduce(
+    (sum, row) => sum + (isManagementFeeExpenseLine(row.lineItem) ? row.amount : 0),
+    0
+  );
+  const expenseRowsExManagement = detailedRows.filter(
+    (row) => !isManagementFeeExpenseLine(row.lineItem)
+  );
+  return {
+    currentExpensesTotalExManagement: Math.max(0, input.currentExpensesTotal - removedManagementFeeAmount),
+    expenseRowsExManagement,
+    removedManagementFeeAmount: roundCurrency(removedManagementFeeAmount),
+  };
 }
 
 function expenseGrowthPctForLine(
@@ -372,7 +413,7 @@ export function resolveDossierAssumptions(
     DEFAULT_RENT_UPLIFT_PCT
   );
   const propertyMix = analyzePropertyForUnderwriting(propertyContext?.details ?? null);
-  const autoAnnualPropertyTaxGrowthPct = conservativeAnnualPropertyTaxGrowthPctFromNycTaxCode(
+  const autoAnnualPropertyTaxGrowthPct = defaultAnnualPropertyTaxGrowthPctFromNycTaxCode(
     propertyContext?.details?.taxCode
   );
 
@@ -520,13 +561,17 @@ export function computeUnderwritingProjection(
     currentExpensesTotal != null && Number.isFinite(currentExpensesTotal) && currentExpensesTotal >= 0
       ? currentExpensesTotal
       : impliedExpenses;
+  const normalizedExpenseInputs = normalizeExpenseProjectionInputs({
+    currentExpensesTotal: resolvedCurrentExpenses,
+    expenseRows,
+  });
 
   const grossRentalIncomeBase =
     currentRent * (1 + Math.max(0, assumptions.operating.blendedRentUpliftPct) / 100);
   const expenseLineItems = projectExpenseLines({
     assumptions,
-    currentExpensesTotal: resolvedCurrentExpenses,
-    expenseRows,
+    currentExpensesTotal: normalizedExpenseInputs.currentExpensesTotalExManagement,
+    expenseRows: normalizedExpenseInputs.expenseRowsExManagement,
   });
   const projectedNonManagementExpenses = Array.from(
     { length: assumptions.holdPeriodYears },
@@ -721,14 +766,30 @@ export function computeUnderwritingProjection(
   );
 
   const annualOperatingCashFlows = yearlyCashFlowAfterFinancing.slice(1);
+  const annualPrincipalPaydowns = yearlyPrincipalPaid.slice(1);
+  const annualEquityGains = annualOperatingCashFlows.map((cashFlow, index) =>
+    roundCurrency(cashFlow + (annualPrincipalPaydowns[index] ?? 0))
+  );
   const annualUnleveredCashFlows = yearlyCashFlowFromOperations.slice(1);
   const annualOperatingCashFlow = annualOperatingCashFlows[0] ?? 0;
+  const annualPrincipalPaydown = annualPrincipalPaydowns[0] ?? 0;
+  const annualEquityGain = annualEquityGains[0] ?? 0;
   const finalYearCashFlow =
     yearlyLeveredCashFlow[assumptions.holdPeriodYears] ??
     yearlyLeveredCashFlow[yearlyLeveredCashFlow.length - 1] ??
     0;
   const equityCashFlowSeries = yearlyLeveredCashFlow.slice();
   const unleveredCashFlowSeries = yearlyUnleveredCashFlow.slice();
+  const averageEquityYield =
+    annualEquityGains.length > 0 && initialEquityInvested !== 0
+      ? annualEquityGains.reduce((sum, value) => sum + value, 0) /
+        annualEquityGains.length /
+        initialEquityInvested
+      : null;
+  const year1EquityYield =
+    annualEquityGains.length > 0 && initialEquityInvested !== 0
+      ? annualEquityGains[0]! / initialEquityInvested
+      : null;
   const exitPropertyValue =
     yearlySaleValue[assumptions.holdPeriodYears] ?? yearlySaleValue[yearlySaleValue.length - 1] ?? 0;
   const saleClosingCosts =
@@ -769,7 +830,7 @@ export function computeUnderwritingProjection(
       amortizationSchedule,
     },
     operating: {
-      currentExpenses: roundCurrency(resolvedCurrentExpenses),
+      currentExpenses: roundCurrency(normalizedExpenseInputs.currentExpensesTotalExManagement),
       currentOtherIncome: roundCurrency(otherIncome),
       adjustedGrossRent: roundCurrency(yearlyGrossRentalIncome[stabilizedIndex] ?? grossRentalIncomeBase),
       adjustedOperatingExpenses: roundCurrency(
@@ -821,15 +882,23 @@ export function computeUnderwritingProjection(
     cashFlows: {
       annualOperatingCashFlow: roundCurrency(annualOperatingCashFlow),
       annualOperatingCashFlows: annualOperatingCashFlows.map(roundCurrency),
+      annualPrincipalPaydown: roundCurrency(annualPrincipalPaydown),
+      annualPrincipalPaydowns: annualPrincipalPaydowns.map(roundCurrency),
+      annualEquityGain: roundCurrency(annualEquityGain),
+      annualEquityGains: annualEquityGains.map(roundCurrency),
       annualUnleveredCashFlows: annualUnleveredCashFlows.map(roundCurrency),
       finalYearCashFlow: roundCurrency(finalYearCashFlow),
       unleveredCashFlowSeries: unleveredCashFlowSeries.map(roundCurrency),
       equityCashFlowSeries: equityCashFlowSeries.map(roundCurrency),
     },
-    returns: computeIrr({
-      equityCashFlows: equityCashFlowSeries,
-      operatingCashFlows: annualOperatingCashFlows,
-    }),
+    returns: {
+      ...computeIrr({
+        equityCashFlows: equityCashFlowSeries,
+        operatingCashFlows: annualOperatingCashFlows,
+      }),
+      year1EquityYield,
+      averageEquityYield,
+    },
   };
 }
 

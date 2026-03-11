@@ -44,5 +44,8 @@ describe("sensitivityAnalysis", () => {
     expect(sensitivities[1]?.ranges.year1CashOnCashReturn.min).toBeLessThan(
       sensitivities[1]?.ranges.year1CashOnCashReturn.max ?? 1
     );
+    expect(sensitivities[1]?.ranges.year1EquityYield?.min).toBeLessThan(
+      sensitivities[1]?.ranges.year1EquityYield?.max ?? 1
+    );
   });
 });

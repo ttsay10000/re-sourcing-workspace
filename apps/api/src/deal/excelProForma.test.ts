@@ -132,6 +132,10 @@ describe("buildExcelProForma", () => {
     expect(workbook.Sheets.Summary?.E13?.f).toBe(
       `IF(ABS('Cash Flow'!C36)=0,0,SUMPRODUCT(('Cash Flow'!D36:INDEX(36:36,3+Assumptions!B32))*--('Cash Flow'!D36:INDEX(36:36,3+Assumptions!B32)>0))/ABS('Cash Flow'!C36))`
     );
+    expect(workbook.Sheets.Summary?.E14?.f).toBe(
+      `IF(ABS('Cash Flow'!C36)=0,0,(AVERAGE('Cash Flow'!D26:INDEX(26:26,3+Assumptions!B32))-AVERAGE('Cash Flow'!D24:INDEX(24:24,3+Assumptions!B32)))/ABS('Cash Flow'!C36))`
+    );
+    expect(workbook.Sheets.Summary?.E15?.f).toBe(`Assumptions!B35/100`);
     expect(workbook.Sheets.Summary?.E6?.f).toBe(
       `INDEX('Cash Flow'!C19:M19,1,IF(Assumptions!B25>0,MIN(Assumptions!B32,2),MIN(Assumptions!B32,1))+1)`
     );

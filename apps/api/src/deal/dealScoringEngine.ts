@@ -57,6 +57,14 @@ export interface DealScoringResult {
   adjustedCapRate: number | null;
 }
 
+export interface FinalDealScoreInputs {
+  llmScore?: number | null;
+  deterministicScore?: number | null;
+  irrPct?: number | null;
+  equityMultiple?: number | null;
+  requiredDiscountPct?: number | null;
+}
+
 function assetCapScore(assetCapRate: number | null): number {
   if (assetCapRate == null || Number.isNaN(assetCapRate)) return 0;
   const pct = assetCapRate;
@@ -244,4 +252,38 @@ export function computeDealScore(inputs: DealScoringInputs): DealScoringResult {
     assetCapRate,
     adjustedCapRate: inputs.adjustedCapRatePct ?? null,
   };
+}
+
+export function resolveFinalDealScore(inputs: FinalDealScoreInputs): number | null {
+  const llmScore =
+    inputs.llmScore != null && Number.isFinite(inputs.llmScore) ? Math.round(inputs.llmScore) : null;
+  const deterministicScore =
+    inputs.deterministicScore != null && Number.isFinite(inputs.deterministicScore)
+      ? Math.round(inputs.deterministicScore)
+      : null;
+  let score = deterministicScore ?? llmScore;
+  if (score == null && llmScore != null) score = llmScore;
+  if (score == null) return null;
+
+  if (llmScore != null && deterministicScore != null) {
+    // Keep the LLM as a qualitative overlay, but never let it overstate the hard numbers.
+    score = Math.min(llmScore, deterministicScore);
+  }
+
+  const caps: number[] = [];
+  if (inputs.requiredDiscountPct != null && Number.isFinite(inputs.requiredDiscountPct)) {
+    if (inputs.requiredDiscountPct > 25) caps.push(40);
+    else if (inputs.requiredDiscountPct > 15) caps.push(55);
+  }
+  if (inputs.equityMultiple != null && Number.isFinite(inputs.equityMultiple) && inputs.equityMultiple < 1) {
+    caps.push(40);
+  }
+  if (inputs.irrPct != null && Number.isFinite(inputs.irrPct)) {
+    if (inputs.irrPct < 0) caps.push(35);
+    else if (inputs.irrPct < 0.1) caps.push(45);
+    else if (inputs.irrPct < 0.15) caps.push(55);
+  }
+
+  if (caps.length > 0) score = Math.min(score, ...caps);
+  return Math.max(0, Math.min(100, Math.round(score)));
 }

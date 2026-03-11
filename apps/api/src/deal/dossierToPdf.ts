@@ -31,6 +31,10 @@ const CHIP_TEXT = "#1e3a5f";
 type TableCell = { text: string; bold: boolean };
 type LayoutState = { y: number; pageNumber: number };
 
+function isSectionBreakRow(row: TableCell[]): boolean {
+  return row.length > 0 && row[0]?.bold === true && row.slice(1).every((cell) => cell.text.trim() === "");
+}
+
 function pageWidth(doc: PDFKit.PDFDocument): number {
   return doc.page.width;
 }
@@ -224,8 +228,13 @@ function drawParagraph(doc: PDFKit.PDFDocument, state: LayoutState, line: string
 
 function tableColumnWidths(tableWidth: number, colCount: number, keyValue: boolean): number[] {
   if (keyValue) return [tableWidth * 0.56, tableWidth * 0.44];
-  if (colCount >= 6) {
-    const first = tableWidth * 0.23;
+  if (colCount >= 7) {
+    const first = tableWidth * 0.29;
+    const remaining = (tableWidth - first) / (colCount - 1);
+    return [first, ...Array.from({ length: colCount - 1 }, () => remaining)];
+  }
+  if (colCount === 6) {
+    const first = tableWidth * 0.28;
     const remaining = (tableWidth - first) / (colCount - 1);
     return [first, ...Array.from({ length: colCount - 1 }, () => remaining)];
   }
@@ -260,10 +269,11 @@ function measureTableHeight(
     const isHeader = !keyValue && rowIndex === 0;
     let rowHeight = fontSize + cellPadding * 2;
     row.forEach((cell, colIndex) => {
+      const align = !keyValue && colIndex > 0 ? "center" : colIndex > 0 && isNumericLike(cell.text) ? "center" : "left";
       doc.font(cell.bold || isHeader ? "Helvetica-Bold" : "Helvetica").fontSize(fontSize);
       const height = doc.heightOfString(cell.text, {
         width: (widths[colIndex] ?? widths[0] ?? 0) - cellPadding * 2,
-        align: colIndex > 0 && isNumericLike(cell.text) ? "right" : "left",
+        align,
         lineGap: 1,
       });
       rowHeight = Math.max(rowHeight, height + cellPadding * 2);
@@ -282,8 +292,9 @@ function drawTable(
   const colCount = Math.max(...rows.map((row) => row.length));
   const keyValue = colCount === 2 && rows.length <= 8;
   const compact = colCount >= 6;
-  const fontSize = compact ? 7.25 : keyValue ? 9.5 : 8.5;
-  const cellPadding = compact ? 3.5 : keyValue ? 6 : 5;
+  const veryCompact = colCount >= 7;
+  const fontSize = veryCompact ? 6.35 : compact ? 6.9 : keyValue ? 9.25 : 8.3;
+  const cellPadding = veryCompact ? 2.8 : compact ? 3.2 : keyValue ? 5.8 : 4.8;
   const widths = tableColumnWidths(bodyWidth(doc), colCount, keyValue);
   const estimatedHeight = measureTableHeight(doc, rows, widths, fontSize, cellPadding, keyValue);
   ensureSpace(doc, state, estimatedHeight + 8);
@@ -291,12 +302,14 @@ function drawTable(
   let currentY = state.y;
   rows.forEach((row, rowIndex) => {
     const isHeader = !keyValue && rowIndex === 0;
+    const isSectionRow = !isHeader && isSectionBreakRow(row);
     let rowHeight = fontSize + cellPadding * 2;
     row.forEach((cell, colIndex) => {
+      const align = !keyValue && colIndex > 0 ? "center" : colIndex > 0 && isNumericLike(cell.text) ? "center" : "left";
       doc.font(cell.bold || isHeader ? "Helvetica-Bold" : "Helvetica").fontSize(fontSize);
       const height = doc.heightOfString(cell.text, {
         width: (widths[colIndex] ?? widths[0] ?? 0) - cellPadding * 2,
-        align: colIndex > 0 && isNumericLike(cell.text) ? "right" : "left",
+        align,
         lineGap: 1,
       });
       rowHeight = Math.max(rowHeight, height + cellPadding * 2);
@@ -305,7 +318,7 @@ function drawTable(
     let currentX = MARGIN;
     row.forEach((cell, colIndex) => {
       const width = widths[colIndex] ?? widths[0] ?? 0;
-      const fillColor = isHeader
+      const fillColor = isHeader || isSectionRow
         ? TABLE_HEADER_BG
         : keyValue && colIndex === 0
           ? LABEL_BG
@@ -316,14 +329,20 @@ function drawTable(
       doc.roundedRect(currentX, currentY, width, rowHeight, 0).fill(fillColor);
       doc.restore();
       doc.strokeColor(RULE_COLOR).lineWidth(0.6).rect(currentX, currentY, width, rowHeight).stroke();
-      const align = colIndex > 0 && isNumericLike(cell.text) ? "right" : "left";
-      const color = isHeader
+      const align = !keyValue && colIndex > 0 ? "center" : colIndex > 0 && isNumericLike(cell.text) ? "center" : "left";
+      const color = isHeader || isSectionRow
         ? SECTION_HEADING_COLOR
         : /^\(/.test(cell.text.trim()) || /^-/.test(cell.text.trim())
           ? NEGATIVE_TEXT_COLOR
           : BODY_TEXT_COLOR;
       doc.fillColor(color).font(cell.bold || isHeader ? "Helvetica-Bold" : "Helvetica").fontSize(fontSize);
-      doc.text(cell.text, currentX + cellPadding, currentY + cellPadding - 0.5, {
+      const textHeight = doc.heightOfString(cell.text, {
+        width: width - cellPadding * 2,
+        align,
+        lineGap: 1,
+      });
+      const textY = currentY + Math.max(cellPadding - 0.5, (rowHeight - textHeight) / 2);
+      doc.text(cell.text, currentX + cellPadding, textY, {
         width: width - cellPadding * 2,
         align,
         lineGap: 1,

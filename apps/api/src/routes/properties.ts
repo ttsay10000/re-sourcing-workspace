@@ -33,6 +33,10 @@ import { runEnrichmentForProperty } from "../enrichment/runEnrichment.js";
 import { normalizeAddressLineForDisplay, getBBLForProperty } from "../enrichment/resolvePropertyBBL.js";
 import { runRentalApiStep } from "../rental/rentalApiClient.js";
 import { extractRentalFinancialsFromListing, extractRentalFinancialsFromText } from "../rental/extractRentalFinancialsFromListing.js";
+import {
+  resolveCurrentFinancialsFromDetails,
+  resolveExpenseRowsFromDetails,
+} from "../rental/currentFinancials.js";
 import { extractTextFromUploadedFile, extractTextFromBuffer } from "../upload/extractTextFromUploadedFile.js";
 import { suggestRentalDataGaps } from "../rental/suggestRentalDataGaps.js";
 import { getRentRollComparison } from "../rental/rentRollComparison.js";
@@ -1681,32 +1685,6 @@ router.get("/properties/:id", async (req: Request, res: Response) => {
   }
 });
 
-function noiFromDetails(details: PropertyDetails | null): number | null {
-  const om = details?.rentalFinancials?.omAnalysis;
-  const ui = om?.uiFinancialSummary as Record<string, unknown> | undefined;
-  const income = om?.income as Record<string, unknown> | undefined;
-  const noi =
-    (ui?.noi as number | undefined) ??
-    om?.noiReported ??
-    (income?.NOI as number | undefined) ??
-    details?.rentalFinancials?.fromLlm?.noi;
-  if (noi != null && typeof noi === "number" && !Number.isNaN(noi)) return noi;
-  return null;
-}
-
-function grossRentFromDetails(details: PropertyDetails | null): number | null {
-  const om = details?.rentalFinancials?.omAnalysis;
-  const ui = om?.uiFinancialSummary as Record<string, unknown> | undefined;
-  const income = om?.income as Record<string, unknown> | undefined;
-  const gross =
-    (ui?.grossRent as number | undefined) ??
-    (income?.grossRentActual as number | undefined) ??
-    (income?.grossRentPotential as number | undefined) ??
-    details?.rentalFinancials?.fromLlm?.grossRentTotal;
-  if (gross != null && typeof gross === "number" && !Number.isNaN(gross) && gross > 0) return gross;
-  return null;
-}
-
 function optionalNonNegativeNumber(value: unknown): number | null | "invalid" {
   if (value == null || value === "") return null;
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return "invalid";
@@ -1775,8 +1753,10 @@ router.post("/properties/:id/compute-score", async (req: Request, res: Response)
       priceHistory: listing?.priceHistory ?? null,
     };
     const details = property.details as PropertyDetails | null;
-    const currentNoi = noiFromDetails(details);
-    const currentGrossRent = grossRentFromDetails(details) ?? (currentNoi != null ? currentNoi * 1.5 : null);
+    const currentFinancials = resolveCurrentFinancialsFromDetails(details);
+    const expenseRows = resolveExpenseRowsFromDetails(details);
+    const currentNoi = currentFinancials.noi;
+    const currentGrossRent = currentFinancials.grossRentalIncome;
     await profileRepo.ensureDefault();
     const profile = await profileRepo.getDefault();
     const assumptions = resolveDossierAssumptions(profile, purchasePrice, null, {
@@ -1786,12 +1766,18 @@ router.post("/properties/:id/compute-score", async (req: Request, res: Response)
       assumptions,
       currentGrossRent,
       currentNoi,
+      currentOtherIncome: currentFinancials.otherIncome,
+      currentExpensesTotal: currentFinancials.operatingExpenses,
+      expenseRows,
     });
     const hasCurrentFinancials = currentGrossRent != null && currentNoi != null;
     const recommendedOffer = computeRecommendedOffer({
       assumptions,
       currentGrossRent,
       currentNoi,
+      currentOtherIncome: currentFinancials.otherIncome,
+      currentExpensesTotal: currentFinancials.operatingExpenses,
+      expenseRows,
     });
     const input = {
       propertyId,

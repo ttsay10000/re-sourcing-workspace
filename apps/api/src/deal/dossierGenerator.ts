@@ -1,8 +1,5 @@
-import type {
-  UnderwritingContext,
-  YearlyCashFlowProjectionContext,
-} from "./underwritingContext.js";
-import { conservativeAnnualPropertyTaxGrowthPctFromNycTaxCode } from "./underwritingModel.js";
+import type { UnderwritingContext } from "./underwritingContext.js";
+import { defaultAnnualPropertyTaxGrowthPctFromNycTaxCode } from "./underwritingModel.js";
 
 function num(value: number | null | undefined): number {
   return value != null && Number.isFinite(value) ? value : 0;
@@ -10,11 +7,9 @@ function num(value: number | null | undefined): number {
 
 function fmtMoney(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(value)) return "—";
-  const rounded = Math.round(value * 100) / 100;
-  const isWhole = Math.abs(rounded - Math.round(rounded)) < 0.005;
-  return rounded.toLocaleString("en-US", {
-    maximumFractionDigits: isWhole ? 0 : 2,
-    minimumFractionDigits: isWhole ? 0 : 2,
+  return Math.round(value).toLocaleString("en-US", {
+    maximumFractionDigits: 0,
+    minimumFractionDigits: 0,
   });
 }
 
@@ -54,6 +49,18 @@ function tableRow(cells: string[]): string {
   return `| ${cells.join(" | ")} |`;
 }
 
+function boldCell(value: string): string {
+  return value.trim().length > 0 ? `**${value}**` : value;
+}
+
+function boldRow(cells: string[]): string[] {
+  return cells.map((cell) => boldCell(cell));
+}
+
+function sectionRow(label: string, colCount: number): string[] {
+  return [boldCell(label), ...Array.from({ length: Math.max(0, colCount - 1) }, () => "")];
+}
+
 function pushConditionReview(lines: string[], ctx: UnderwritingContext): void {
   const review = ctx.conditionReview;
   if (!review) return;
@@ -79,7 +86,7 @@ function pushConditionReview(lines: string[], ctx: UnderwritingContext): void {
 function propertyTaxGrowthSourceLine(ctx: UnderwritingContext): string {
   const taxCode = ctx.propertyOverview?.taxCode?.trim() || null;
   const growthPct = ctx.assumptions.operating.annualPropertyTaxGrowthPct;
-  const autoPct = conservativeAnnualPropertyTaxGrowthPctFromNycTaxCode(taxCode);
+  const autoPct = defaultAnnualPropertyTaxGrowthPctFromNycTaxCode(taxCode);
   if (growthPct == null || !Number.isFinite(growthPct)) {
     return "Property-tax growth source: —";
   }
@@ -88,16 +95,22 @@ function propertyTaxGrowthSourceLine(ctx: UnderwritingContext): string {
   }
   const normalizedTaxCode = taxCode.toUpperCase();
   if (autoPct == null) {
-    return `Property-tax growth source: NYC tax code ${normalizedTaxCode} does not map to an automatic cap in the model; using the underwriting assumption entered for this deal.`;
+    return `Property-tax growth source: NYC tax code ${normalizedTaxCode} does not map to an automatic underwriting default in the model; using the underwriting assumption entered for this deal.`;
   }
   if (Math.abs(autoPct - growthPct) < 0.005) {
     if (/^1/.test(normalizedTaxCode)) {
-      return `Property-tax growth source: auto from NYC tax class ${normalizedTaxCode} cap (${pctValue(autoPct)} annual assessed-value cap).`;
+      return `Property-tax growth source: auto NYC underwriting default for tax class ${normalizedTaxCode} (${pctValue(autoPct)} normalized annual tax-growth assumption for Class 1).`;
     }
     if (/^2[ABC]/.test(normalizedTaxCode)) {
-      return `Property-tax growth source: auto from NYC tax class ${normalizedTaxCode} cap (${pctValue(autoPct)} annual assessed-value cap for small Class 2 property).`;
+      return `Property-tax growth source: auto NYC underwriting default for tax class ${normalizedTaxCode} (${pctValue(autoPct)} normalized annual tax-growth assumption for small Class 2 property).`;
     }
-    return `Property-tax growth source: auto from NYC tax class ${normalizedTaxCode} conservative top-of-range assumption (${pctValue(autoPct)} annual transitional assessed-value phase-in).`;
+    if (/^2/.test(normalizedTaxCode)) {
+      return `Property-tax growth source: auto NYC underwriting default for tax class ${normalizedTaxCode} (${pctValue(autoPct)} normalized annual tax-growth assumption for larger Class 2 property).`;
+    }
+    if (/^4/.test(normalizedTaxCode)) {
+      return `Property-tax growth source: auto NYC underwriting default for tax class ${normalizedTaxCode} (${pctValue(autoPct)} normalized annual tax-growth assumption for Class 4 property).`;
+    }
+    return `Property-tax growth source: auto NYC underwriting default for tax class ${normalizedTaxCode} (${pctValue(autoPct)} annual tax-growth assumption).`;
   }
   return `Property-tax growth source: custom override at ${pctValue(growthPct)}; NYC tax class ${normalizedTaxCode} auto default would be ${pctValue(autoPct)}.`;
 }
@@ -119,14 +132,133 @@ function negativeSeriesCells(values: number[], options?: { blankYearZero?: boole
   });
 }
 
-function pushYearlyCashFlowTable(lines: string[], yearly: YearlyCashFlowProjectionContext): void {
+function yearZeroOnlyCells(
+  years: number[],
+  value: number | null | undefined,
+  options?: { negative?: boolean }
+): string[] {
+  const negative = options?.negative === true;
+  return years.map((year, index) => {
+    if (index !== 0 || year !== 0) return "";
+    if (value == null || !Number.isFinite(value) || Math.abs(value) <= 0.005) return "$0";
+    return negative ? `(${moneyLabel(Math.abs(value))})` : moneyLabel(value);
+  });
+}
+
+function exitOnlyCells(
+  years: number[],
+  value: number | null | undefined,
+  options?: { negative?: boolean }
+): string[] {
+  const negative = options?.negative === true;
+  const holdPeriodYear = years[years.length - 1] ?? 0;
+  return years.map((year) => {
+    if (year !== holdPeriodYear) return "";
+    if (value == null || !Number.isFinite(value) || Math.abs(value) <= 0.005) return "$0";
+    return negative ? `(${moneyLabel(Math.abs(value))})` : moneyLabel(value);
+  });
+}
+
+function pushYearlyCashFlowTable(lines: string[], ctx: UnderwritingContext): void {
+  const yearly = ctx.yearlyCashFlow;
+  if (!yearly) return;
   const headers = ["Line item", ...yearly.years.map((year) => `Y${year}`)];
+  const amortizationByYear = new Map((ctx.amortizationSchedule ?? []).map((row) => [row.year, row]));
+  const nonManagementExpenseSeries = yearly.totalOperatingExpenses.map((value, index) =>
+    Math.max(0, num(value) - num(yearly.managementFee[index]))
+  );
+  const hasExpenseBreakout =
+    yearly.expenseLineItems.length > 1 ||
+    (yearly.expenseLineItems[0]?.lineItem != null &&
+      !/^operating expenses$/i.test(yearly.expenseLineItems[0].lineItem.trim()));
+  const interestSeries = yearly.years.map((year, index) => {
+    if (index === 0) return 0;
+    const scheduledRow = amortizationByYear.get(year);
+    if (scheduledRow) return num(scheduledRow.interestPayment);
+    return Math.max(0, num(yearly.debtService[index]) - num(yearly.principalPaid[index]));
+  });
+  const loanBalanceSeries = yearly.years.map((year, index) => {
+    if (index === 0) return num(ctx.financing.loanAmount);
+    const scheduledRow = amortizationByYear.get(year);
+    if (scheduledRow) return num(scheduledRow.endingBalance);
+    const cumulativePrincipalPaid = yearly.principalPaid
+      .slice(1, index + 1)
+      .reduce((sum, value) => sum + num(value), 0);
+    return Math.max(0, num(ctx.financing.loanAmount) - cumulativePrincipalPaid);
+  });
+  const yearlyEquityGain = yearly.cashFlowAfterFinancing.map((value, index) =>
+    index === 0 ? 0 : value + (yearly.principalPaid[index] ?? 0)
+  );
+
   lines.push(tableRow(headers));
+  lines.push(tableRow(sectionRow("Acquisition & Capitalization", headers.length)));
   lines.push(
     tableRow([
-      "Gross rental income",
-      ...currencySeriesCells(yearly.grossRentalIncome, { blankYearZero: true }),
+      "Purchase price",
+      ...yearZeroOnlyCells(yearly.years, ctx.purchasePrice, { negative: true }),
     ])
+  );
+  lines.push(
+    tableRow([
+      "Purchase closing costs",
+      ...yearZeroOnlyCells(yearly.years, ctx.acquisition.purchaseClosingCosts, { negative: true }),
+    ])
+  );
+  lines.push(
+    tableRow([
+      "Renovation costs",
+      ...yearZeroOnlyCells(yearly.years, ctx.assumptions.acquisition.renovationCosts, {
+        negative: true,
+      }),
+    ])
+  );
+  lines.push(
+    tableRow([
+      "Furnishing / setup costs",
+      ...yearZeroOnlyCells(yearly.years, ctx.assumptions.acquisition.furnishingSetupCosts, {
+        negative: true,
+      }),
+    ])
+  );
+  lines.push(
+    tableRow([
+      "Financing fees",
+      ...yearZeroOnlyCells(yearly.years, ctx.acquisition.financingFees, { negative: true }),
+    ])
+  );
+  lines.push(
+    tableRow(
+      boldRow([
+        "Total cash uses incl. financing fees",
+        ...yearZeroOnlyCells(yearly.years, ctx.acquisition.totalProjectCost + num(ctx.acquisition.financingFees), {
+          negative: true,
+        }),
+      ])
+    )
+  );
+  lines.push(
+    tableRow([
+      "Loan proceeds / leverage",
+      ...yearZeroOnlyCells(yearly.years, ctx.financing.loanAmount),
+    ])
+  );
+  lines.push(
+    tableRow(
+      boldRow([
+        "Net equity invested",
+        ...yearZeroOnlyCells(yearly.years, ctx.acquisition.initialEquityInvested, { negative: true }),
+      ])
+    )
+  );
+
+  lines.push(tableRow(sectionRow("Operating Cash Flow", headers.length)));
+  lines.push(
+    tableRow(
+      boldRow([
+        "Gross rental income",
+        ...currencySeriesCells(yearly.grossRentalIncome, { blankYearZero: true }),
+      ])
+    )
   );
   if (yearly.otherIncome.some((value, index) => index > 0 && Math.abs(value) > 0.005)) {
     lines.push(
@@ -136,34 +268,79 @@ function pushYearlyCashFlowTable(lines: string[], yearly: YearlyCashFlowProjecti
   lines.push(
     tableRow([
       "Vacancy loss",
-      ...negativeSeriesCells(yearly.vacancyLoss, { blankYearZero: true }),
+      ...negativeSeriesCells(yearly.vacancyLoss.map((value) => -Math.abs(value)), {
+        blankYearZero: true,
+      }),
     ])
   );
   if (yearly.leadTimeLoss.some((value, index) => index > 0 && Math.abs(value) > 0.005)) {
     lines.push(
       tableRow([
         "Lead time loss",
-        ...negativeSeriesCells(yearly.leadTimeLoss, { blankYearZero: true }),
+        ...negativeSeriesCells(yearly.leadTimeLoss.map((value) => -Math.abs(value)), {
+          blankYearZero: true,
+        }),
       ])
     );
   }
   lines.push(
-    tableRow(["Net rental income", ...currencySeriesCells(yearly.netRentalIncome, { blankYearZero: true })])
+    tableRow(
+      boldRow(["Net rental income", ...currencySeriesCells(yearly.netRentalIncome, { blankYearZero: true })])
+    )
+  );
+  if (hasExpenseBreakout) {
+    yearly.expenseLineItems.forEach((row) => {
+      const projectedValues = yearly.years.map((year, index) =>
+        index === 0 || year === 0 ? 0 : num(row.yearlyAmounts[index - 1])
+      );
+      lines.push(
+        tableRow([
+          row.lineItem,
+          ...negativeSeriesCells(projectedValues.map((value) => -Math.abs(value)), {
+            blankYearZero: true,
+          }),
+        ])
+      );
+    });
+  }
+  lines.push(
+    tableRow(
+      boldRow([
+        "Operating expenses ex management",
+        ...negativeSeriesCells(
+          nonManagementExpenseSeries.map((value) => -Math.abs(value)),
+          { blankYearZero: true }
+        ),
+      ])
+    )
   );
   lines.push(
     tableRow([
-      "Total operating expenses",
+      `Management fee (${ctx.assumptions.operating.managementFeePct ?? 0}%)`,
       ...negativeSeriesCells(
-        yearly.totalOperatingExpenses.map((value) => -Math.abs(value)),
+        yearly.managementFee.map((value) => -Math.abs(value)),
         { blankYearZero: true }
       ),
     ])
   );
   lines.push(
-    tableRow([
-      "Net operating income (NOI)",
-      ...currencySeriesCells(yearly.noi, { blankYearZero: true }),
-    ])
+    tableRow(
+      boldRow([
+        "Total operating expenses",
+        ...negativeSeriesCells(
+          yearly.totalOperatingExpenses.map((value) => -Math.abs(value)),
+          { blankYearZero: true }
+        ),
+      ])
+    )
+  );
+  lines.push(
+    tableRow(
+      boldRow([
+        "Net operating income (NOI)",
+        ...currencySeriesCells(yearly.noi, { blankYearZero: true }),
+      ])
+    )
   );
   lines.push(
     tableRow([
@@ -175,11 +352,30 @@ function pushYearlyCashFlowTable(lines: string[], yearly: YearlyCashFlowProjecti
     ])
   );
   lines.push(
-    tableRow([
-      "CF from operations",
-      ...currencySeriesCells(yearly.cashFlowFromOperations, { blankYearZero: true }),
-    ])
+    tableRow(
+      boldRow([
+        "CF from operations",
+        ...currencySeriesCells(yearly.cashFlowFromOperations, { blankYearZero: true }),
+      ])
+    )
   );
+  lines.push(tableRow(sectionRow("Debt & Financing", headers.length)));
+  if (interestSeries.some((value, index) => index > 0 && Math.abs(value) > 0.005)) {
+    lines.push(
+      tableRow([
+        "Interest expense",
+        ...currencySeriesCells(interestSeries, { blankYearZero: true }),
+      ])
+    );
+  }
+  if (yearly.principalPaid.some((value, index) => index > 0 && Math.abs(value) > 0.005)) {
+    lines.push(
+      tableRow([
+        "Principal paydown (equity build)",
+        ...currencySeriesCells(yearly.principalPaid, { blankYearZero: true }),
+      ])
+    );
+  }
   lines.push(
     tableRow([
       "Debt service payments",
@@ -188,16 +384,69 @@ function pushYearlyCashFlowTable(lines: string[], yearly: YearlyCashFlowProjecti
       }),
     ])
   );
+  if (loanBalanceSeries.some((value) => Math.abs(value) > 0.005)) {
+    lines.push(
+      tableRow([
+        "Ending loan balance",
+        ...currencySeriesCells(loanBalanceSeries),
+      ])
+    );
+  }
   lines.push(
-    tableRow(["CF after financing", ...currencySeriesCells(yearly.cashFlowAfterFinancing)])
+    tableRow(
+      boldRow([
+        "CF after financing (cash)",
+        ...currencySeriesCells(yearly.cashFlowAfterFinancing),
+      ])
+    )
   );
   lines.push(
     tableRow([
-      "Net sale proceeds to equity",
-      ...currencySeriesCells(yearly.netSaleProceedsToEquity, { blankYearZero: true }),
+      "Economic benefit incl. paydown",
+      ...currencySeriesCells(yearlyEquityGain),
     ])
   );
-  lines.push(tableRow(["Levered CF", ...currencySeriesCells(yearly.leveredCashFlow)]));
+
+  lines.push(tableRow(sectionRow("Exit Waterfall", headers.length)));
+  lines.push(
+    tableRow([
+      "Gross sale proceeds",
+      ...exitOnlyCells(yearly.years, ctx.exit.exitPropertyValue),
+    ])
+  );
+  lines.push(
+    tableRow([
+      "Less: sale closing costs / fees",
+      ...exitOnlyCells(yearly.years, ctx.exit.saleClosingCosts, { negative: true }),
+    ])
+  );
+  lines.push(
+    tableRow(
+      boldRow([
+        "NSP before debt payoff",
+        ...exitOnlyCells(yearly.years, ctx.exit.netSaleProceedsBeforeDebtPayoff),
+      ])
+    )
+  );
+  lines.push(
+    tableRow([
+      "Less: remaining loan balance",
+      ...exitOnlyCells(yearly.years, ctx.exit.remainingLoanBalance, { negative: true }),
+    ])
+  );
+  lines.push(
+    tableRow(
+      boldRow([
+        "Net sale proceeds to equity",
+        ...currencySeriesCells(yearly.netSaleProceedsToEquity, { blankYearZero: true }),
+      ])
+    )
+  );
+  lines.push(
+    tableRow(
+      boldRow(["Levered CF", ...currencySeriesCells(yearly.leveredCashFlow)])
+    )
+  );
 }
 
 export function buildDossierText(ctx: UnderwritingContext): string {
@@ -311,45 +560,7 @@ export function buildDossierStructuredText(ctx: UnderwritingContext): string {
 
   lines.push("5. FINANCING & EQUITY CASH FLOW");
   lines.push("-------------------------------");
-  lines.push(tableRow(["Purchase price", moneyLabel(ctx.purchasePrice)]));
-  lines.push(
-    tableRow([
-      `Purchase closing costs (${ctx.assumptions.acquisition.purchaseClosingCostPct != null ? ctx.assumptions.acquisition.purchaseClosingCostPct.toFixed(2) : "—"}%)`,
-      moneyLabel(ctx.acquisition.purchaseClosingCosts),
-    ])
-  );
-  lines.push(tableRow(["Renovation costs", moneyLabel(ctx.assumptions.acquisition.renovationCosts)]));
-  lines.push(tableRow(["Furnishing/setup costs", moneyLabel(ctx.assumptions.acquisition.furnishingSetupCosts)]));
-  lines.push(tableRow(["Financing fees", moneyLabel(ctx.acquisition.financingFees)]));
-  lines.push(tableRow(["Total project cost", moneyLabel(ctx.acquisition.totalProjectCost)]));
-  lines.push(tableRow(["Loan amount", moneyLabel(ctx.financing.loanAmount)]));
-  lines.push(tableRow(["Initial equity invested", moneyLabel(ctx.acquisition.initialEquityInvested)]));
-  lines.push(tableRow(["Annual debt service", moneyLabel(ctx.financing.annualDebtService)]));
-  lines.push(
-    tableRow([
-      "Year 1 cash flow after debt service",
-      moneyLabel(ctx.cashFlows.annualOperatingCashFlow),
-    ])
-  );
-  lines.push(tableRow(["Net sale proceeds to equity", moneyLabel(ctx.exit.netProceedsToEquity)]));
-  lines.push(tableRow(["Exit-year levered cash flow", moneyLabel(ctx.cashFlows.finalYearCashFlow)]));
-  if (ctx.amortizationSchedule && ctx.amortizationSchedule.length > 0) {
-    lines.push("");
-    lines.push(tableRow(["Year", ...ctx.amortizationSchedule.map((row) => `Y${row.year}`)]));
-    lines.push(tableRow(["Principal", ...ctx.amortizationSchedule.map((row) => moneyLabel(row.principalPayment))]));
-    lines.push(tableRow(["Interest", ...ctx.amortizationSchedule.map((row) => moneyLabel(row.interestPayment))]));
-    lines.push(tableRow(["Debt service", ...ctx.amortizationSchedule.map((row) => moneyLabel(row.debtService))]));
-    lines.push(tableRow(["Ending balance", ...ctx.amortizationSchedule.map((row) => moneyLabel(row.endingBalance))]));
-  }
-  if (ctx.yearlyCashFlow) {
-    lines.push("");
-    pushYearlyCashFlowTable(lines, ctx.yearlyCashFlow);
-  }
-  lines.push(tableRow(["Hold period", `${ctx.assumptions.holdPeriodYears ?? "—"} years`]));
-  lines.push(tableRow(["Net sale proceeds before debt payoff", moneyLabel(ctx.exit.netSaleProceedsBeforeDebtPayoff)]));
-  lines.push(tableRow(["Remaining loan balance", moneyLabel(ctx.exit.remainingLoanBalance)]));
-  lines.push(tableRow(["Principal paydown to date", moneyLabel(ctx.exit.principalPaydownToDate)]));
-  lines.push(tableRow(["**Net proceeds to equity**", moneyLabel(ctx.exit.netProceedsToEquity)]));
+  pushYearlyCashFlowTable(lines, ctx);
   lines.push("");
 
   lines.push("6. RETURNS");
@@ -368,17 +579,17 @@ export function buildDossierStructuredText(ctx: UnderwritingContext): string {
   );
   lines.push(
     tableRow([
-      "Cash-on-cash (year 1)",
-      ctx.returns.year1CashOnCashReturn != null
-        ? `${(ctx.returns.year1CashOnCashReturn * 100).toFixed(2)}%`
+      "Equity yield (year 1)",
+      ctx.returns.year1EquityYield != null
+        ? `${(ctx.returns.year1EquityYield * 100).toFixed(2)}%`
         : "—",
     ])
   );
   lines.push(
     tableRow([
-      "Average cash-on-cash",
-      ctx.returns.averageCashOnCashReturn != null
-        ? `${(ctx.returns.averageCashOnCashReturn * 100).toFixed(2)}%`
+      "Average annual equity yield",
+      ctx.returns.averageEquityYield != null
+        ? `${(ctx.returns.averageEquityYield * 100).toFixed(2)}%`
         : "—",
     ])
   );
@@ -415,25 +626,29 @@ export function buildDossierStructuredText(ctx: UnderwritingContext): string {
     lines.push("8. SENSITIVITY ANALYSIS");
     lines.push("------------------------");
     ctx.sensitivities.forEach((sensitivity) => {
+      const sensitivityEquityYieldRange =
+        sensitivity.ranges.year1EquityYield ?? sensitivity.ranges.year1CashOnCashReturn;
       lines.push(
         `• Base ${sensitivity.inputLabel.toLowerCase()}: ${pctValue(
           sensitivity.baseCase.valuePct
         )}; IRR range ${sensitivityRangeLabel(
           sensitivity.ranges.irrPct.min,
           sensitivity.ranges.irrPct.max
-        )}; CoC range ${sensitivityRangeLabel(
-          sensitivity.ranges.year1CashOnCashReturn.min,
-          sensitivity.ranges.year1CashOnCashReturn.max
+        )}; Equity-yield range ${sensitivityRangeLabel(
+          sensitivityEquityYieldRange?.min,
+          sensitivityEquityYieldRange?.max
         )}`
       );
-      lines.push(tableRow([sensitivity.inputLabel, "Stabilized NOI", "IRR", "Cash-on-cash"]));
+      lines.push(tableRow([sensitivity.inputLabel, "Stabilized NOI", "IRR", "Equity yield"]));
       lines.push(
         tableRow([
           `Base (${pctValue(sensitivity.baseCase.valuePct)})`,
           moneyLabel(ctx.operating.stabilizedNoi),
           ctx.returns.irrPct != null ? `${(ctx.returns.irrPct * 100).toFixed(2)}%` : "—",
-          ctx.returns.year1CashOnCashReturn != null
-            ? `${(ctx.returns.year1CashOnCashReturn * 100).toFixed(2)}%`
+          (ctx.returns.year1EquityYield ?? ctx.returns.year1CashOnCashReturn) != null
+            ? `${(
+                (ctx.returns.year1EquityYield ?? ctx.returns.year1CashOnCashReturn ?? 0) * 100
+              ).toFixed(2)}%`
             : "—",
         ])
       );
@@ -443,8 +658,10 @@ export function buildDossierStructuredText(ctx: UnderwritingContext): string {
             pctValue(scenario.valuePct),
             moneyLabel(scenario.stabilizedNoi),
             scenario.irrPct != null ? `${(scenario.irrPct * 100).toFixed(2)}%` : "—",
-            scenario.year1CashOnCashReturn != null
-              ? `${(scenario.year1CashOnCashReturn * 100).toFixed(2)}%`
+            (scenario.year1EquityYield ?? scenario.year1CashOnCashReturn) != null
+              ? `${(
+                  ((scenario.year1EquityYield ?? scenario.year1CashOnCashReturn) ?? 0) * 100
+                ).toFixed(2)}%`
               : "—",
           ])
         );
@@ -461,13 +678,6 @@ export function buildDossierStructuredText(ctx: UnderwritingContext): string {
   if (ctx.recommendedOffer?.discountToAskingPct != null && ctx.recommendedOffer.discountToAskingPct > 0) {
     lines.push(
       `• High-end recommended offer is ${ctx.recommendedOffer.discountToAskingPct.toFixed(2)}% below ask to clear the target IRR.`
-    );
-  }
-  if (ctx.exit.principalPaydownToDate != null) {
-    lines.push(
-      `• Exit equity includes ${moneyLabel(
-        ctx.exit.principalPaydownToDate
-      )} of debt paydown recovered through the lower payoff balance, not as a separate sale add-back.`
     );
   }
   lines.push("");

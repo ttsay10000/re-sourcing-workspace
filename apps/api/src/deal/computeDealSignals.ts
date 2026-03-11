@@ -6,6 +6,7 @@
 
 import { deriveListingActivitySummary, type PriceHistoryEntry } from "@re-sourcing/contracts";
 import type { PropertyDetails, RentalFinancials } from "@re-sourcing/contracts";
+import { resolveCurrentFinancialsFromDetails } from "../rental/currentFinancials.js";
 import { computeDealScore, type DealScoringResult } from "./dealScoringEngine.js";
 import type { InsertDealSignalsParams } from "@re-sourcing/db";
 
@@ -65,16 +66,7 @@ function unitCountFromDetails(details: PropertyDetails | null): number | null {
 }
 
 function noiFromDetails(details: PropertyDetails | null): number | null {
-  const om = details?.rentalFinancials?.omAnalysis;
-  const ui = om?.uiFinancialSummary as Record<string, unknown> | undefined;
-  const income = om?.income as Record<string, unknown> | undefined;
-  const noi =
-    (ui?.noi as number | undefined) ??
-    om?.noiReported ??
-    (income?.NOI as number | undefined) ??
-    details?.rentalFinancials?.fromLlm?.noi;
-  if (noi != null && typeof noi === "number" && !Number.isNaN(noi)) return noi;
-  return null;
+  return resolveCurrentFinancialsFromDetails(details).noi;
 }
 
 function scoringInputFromDetails(

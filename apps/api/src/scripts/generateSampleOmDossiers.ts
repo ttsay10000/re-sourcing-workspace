@@ -12,7 +12,11 @@ import { computeDealScore } from "../deal/dealScoringEngine.js";
 import { buildSensitivityAnalyses } from "../deal/sensitivityAnalysis.js";
 import { buildDossierStructuredText } from "../deal/dossierGenerator.js";
 import { dossierTextToPdf } from "../deal/dossierToPdf.js";
-import type { ExpenseRow, GrossRentRow, UnderwritingContext } from "../deal/underwritingContext.js";
+import type { GrossRentRow, UnderwritingContext } from "../deal/underwritingContext.js";
+import {
+  resolveCurrentFinancialsFromDetails,
+  resolveExpenseRowsFromDetails,
+} from "../rental/currentFinancials.js";
 
 interface SampleDefinition {
   slug: string;
@@ -35,23 +39,6 @@ const SAMPLES: SampleDefinition[] = [
     pdfPath: "/Users/tylertsay/Downloads/18-20 Christopher Street - Executive Summary (1)-compressed (1).pdf",
   },
 ];
-
-function noiFromOm(om: OmAnalysis | null): number | null {
-  const ui = om?.uiFinancialSummary as Record<string, unknown> | undefined;
-  const income = om?.income as Record<string, unknown> | undefined;
-  const noi = (ui?.noi as number | undefined) ?? om?.noiReported ?? (income?.NOI as number | undefined);
-  return typeof noi === "number" && Number.isFinite(noi) ? noi : null;
-}
-
-function grossRentFromOm(om: OmAnalysis | null): number | null {
-  const ui = om?.uiFinancialSummary as Record<string, unknown> | undefined;
-  const income = om?.income as Record<string, unknown> | undefined;
-  const gross =
-    (ui?.grossRent as number | undefined) ??
-    (income?.grossRentActual as number | undefined) ??
-    (income?.grossRentPotential as number | undefined);
-  return typeof gross === "number" && Number.isFinite(gross) ? gross : null;
-}
 
 function unitCountFromOm(om: OmAnalysis | null): number | null {
   const total = om?.propertyInfo?.totalUnits;
@@ -81,26 +68,6 @@ function rentRollRowsFromOm(om: OmAnalysis | null): GrossRentRow[] {
         : null;
     })
     .filter((row): row is GrossRentRow => row != null);
-}
-
-function expenseRowsFromOm(om: OmAnalysis | null): { rows: ExpenseRow[]; total: number | null } {
-  const expenseBlock = om?.expenses;
-  const rows = Array.isArray(expenseBlock?.expensesTable)
-    ? expenseBlock.expensesTable
-        .map((row) =>
-          typeof row?.lineItem === "string" && typeof row?.amount === "number"
-            ? { lineItem: row.lineItem, amount: row.amount }
-            : null
-        )
-        .filter((row): row is ExpenseRow => row != null)
-    : [];
-  const total =
-    typeof expenseBlock?.totalExpenses === "number" && Number.isFinite(expenseBlock.totalExpenses)
-      ? expenseBlock.totalExpenses
-      : rows.length > 0
-        ? rows.reduce((sum, row) => sum + row.amount, 0)
-        : null;
-  return { rows, total };
 }
 
 function buildFinancialFlags(ctx: {
@@ -169,25 +136,36 @@ async function generateSample(sample: SampleDefinition, outputDir: string) {
 
   const purchasePrice =
     typeof omAnalysis?.propertyInfo?.price === "number" ? omAnalysis.propertyInfo.price : null;
-  const currentNoi = noiFromOm(omAnalysis);
-  const currentGrossRent = grossRentFromOm(omAnalysis);
+  const currentFinancials = resolveCurrentFinancialsFromDetails(details);
+  const expenseRows = resolveExpenseRowsFromDetails(details);
+  const currentNoi = currentFinancials.noi;
+  const currentGrossRent = currentFinancials.grossRentalIncome;
   const unitCount = unitCountFromOm(omAnalysis);
   const assumptions = resolveDossierAssumptions(null, purchasePrice, null, { details });
   const projection = computeUnderwritingProjection({
     assumptions,
     currentGrossRent,
     currentNoi,
+    currentOtherIncome: currentFinancials.otherIncome,
+    currentExpensesTotal: currentFinancials.operatingExpenses,
+    expenseRows,
   });
   const hasCurrentFinancials = currentGrossRent != null && currentNoi != null;
   const recommendedOffer = computeRecommendedOffer({
     assumptions,
     currentGrossRent,
     currentNoi,
+    currentOtherIncome: currentFinancials.otherIncome,
+    currentExpensesTotal: currentFinancials.operatingExpenses,
+    expenseRows,
   });
   const sensitivities = buildSensitivityAnalyses({
     assumptions,
     currentGrossRent,
     currentNoi,
+    currentOtherIncome: currentFinancials.otherIncome,
+    currentExpensesTotal: currentFinancials.operatingExpenses,
+    expenseRows,
     baseProjection: projection,
   });
 
@@ -209,7 +187,6 @@ async function generateSample(sample: SampleDefinition, outputDir: string) {
     commercialUnitCount: assumptions.propertyMix.commercialUnits,
   });
 
-  const { rows: expenseRows, total: currentExpensesTotal } = expenseRowsFromOm(omAnalysis);
   const rentRollRows = rentRollRowsFromOm(omAnalysis);
   const financialFlags = buildFinancialFlags({
     purchasePrice,
@@ -278,10 +255,12 @@ async function generateSample(sample: SampleDefinition, outputDir: string) {
       equityMultiple: projection.returns.equityMultiple,
       year1CashOnCashReturn: projection.returns.year1CashOnCashReturn,
       averageCashOnCashReturn: projection.returns.averageCashOnCashReturn,
+      year1EquityYield: projection.returns.year1EquityYield,
+      averageEquityYield: projection.returns.averageEquityYield,
     },
     rentRollRows: rentRollRows.length > 0 ? rentRollRows : undefined,
     expenseRows: expenseRows.length > 0 ? expenseRows : undefined,
-    currentExpensesTotal: currentExpensesTotal ?? undefined,
+    currentExpensesTotal: currentFinancials.operatingExpenses ?? undefined,
     financialFlags,
     amortizationSchedule: projection.financing.amortizationSchedule,
     sensitivities,

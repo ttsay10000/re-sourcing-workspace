@@ -116,7 +116,7 @@ function serializeUnderwritingContext(ctx: UnderwritingContext): string {
     `  Loan amount: $${fmt(ctx.financing.loanAmount)}`,
     `  Annual debt service: $${fmt(ctx.financing.annualDebtService)}`,
     `  Remaining balance at exit: $${fmt(ctx.financing.remainingLoanBalanceAtExit)}`,
-    `  Annual operating cash flow: $${fmt(ctx.cashFlows.annualOperatingCashFlow)}`
+    `  Year 1 cash flow after debt service: $${fmt(ctx.cashFlows.annualOperatingCashFlow)}`
   );
   if (ctx.amortizationSchedule && ctx.amortizationSchedule.length > 0) {
     lines.push("Amortization by year (use for Financing table):");
@@ -126,8 +126,14 @@ function serializeUnderwritingContext(ctx: UnderwritingContext): string {
   }
   const irr = ctx.returns.irrPct != null ? (ctx.returns.irrPct * 100).toFixed(2) + "%" : "—";
   const em = ctx.returns.equityMultiple != null ? `${ctx.returns.equityMultiple.toFixed(2)}x` : "—";
-  const coc = ctx.returns.year1CashOnCashReturn != null ? (ctx.returns.year1CashOnCashReturn * 100).toFixed(2) + "%" : "—";
-  const avgCoc = ctx.returns.averageCashOnCashReturn != null ? (ctx.returns.averageCashOnCashReturn * 100).toFixed(2) + "%" : "—";
+  const equityYield =
+    ctx.returns.year1EquityYield != null
+      ? (ctx.returns.year1EquityYield * 100).toFixed(2) + "%"
+      : "—";
+  const avgEquityYield =
+    ctx.returns.averageEquityYield != null
+      ? (ctx.returns.averageEquityYield * 100).toFixed(2) + "%"
+      : "—";
   lines.push(
     "Exit:",
     `  Hold period: ${a.holdPeriodYears ?? "—"} years`,
@@ -140,8 +146,8 @@ function serializeUnderwritingContext(ctx: UnderwritingContext): string {
     "Returns:",
     `  IRR: ${irr}`,
     `  Equity multiple: ${em}`,
-    `  Cash-on-cash (year 1): ${coc}`,
-    `  Average cash-on-cash: ${avgCoc}`
+    `  Equity yield (year 1): ${equityYield}`,
+    `  Average annual equity yield: ${avgEquityYield}`
   );
   lines.push(
     "Assumptions:",
@@ -157,16 +163,16 @@ function serializeUnderwritingContext(ctx: UnderwritingContext): string {
           ? `${(sensitivity.ranges.irrPct.min * 100).toFixed(2)}% to ${(sensitivity.ranges.irrPct.max * 100).toFixed(2)}%`
           : "—";
       const cocRange =
-        sensitivity.ranges.year1CashOnCashReturn.min != null &&
-        sensitivity.ranges.year1CashOnCashReturn.max != null
-          ? `${(sensitivity.ranges.year1CashOnCashReturn.min * 100).toFixed(2)}% to ${(sensitivity.ranges.year1CashOnCashReturn.max * 100).toFixed(2)}%`
+        (sensitivity.ranges.year1EquityYield?.min ?? sensitivity.ranges.year1CashOnCashReturn.min) != null &&
+        (sensitivity.ranges.year1EquityYield?.max ?? sensitivity.ranges.year1CashOnCashReturn.max) != null
+          ? `${(((sensitivity.ranges.year1EquityYield?.min ?? sensitivity.ranges.year1CashOnCashReturn.min) ?? 0) * 100).toFixed(2)}% to ${(((sensitivity.ranges.year1EquityYield?.max ?? sensitivity.ranges.year1CashOnCashReturn.max) ?? 0) * 100).toFixed(2)}%`
           : "—";
       lines.push(
-        `  ${sensitivity.title}: base ${sensitivity.inputLabel.toLowerCase()} ${sensitivity.baseCase.valuePct != null ? pct(sensitivity.baseCase.valuePct) : "—"}, IRR range ${irrRange}, CoC range ${cocRange}`
+        `  ${sensitivity.title}: base ${sensitivity.inputLabel.toLowerCase()} ${sensitivity.baseCase.valuePct != null ? pct(sensitivity.baseCase.valuePct) : "—"}, IRR range ${irrRange}, equity-yield range ${cocRange}`
       );
       sensitivity.scenarios.forEach((scenario) => {
         lines.push(
-          `    ${pct(scenario.valuePct)} => NOI $${fmt(scenario.stabilizedNoi)}, IRR ${scenario.irrPct != null ? `${(scenario.irrPct * 100).toFixed(2)}%` : "—"}, CoC ${scenario.year1CashOnCashReturn != null ? `${(scenario.year1CashOnCashReturn * 100).toFixed(2)}%` : "—"}`
+          `    ${pct(scenario.valuePct)} => NOI $${fmt(scenario.stabilizedNoi)}, IRR ${scenario.irrPct != null ? `${(scenario.irrPct * 100).toFixed(2)}%` : "—"}, equity yield ${(scenario.year1EquityYield ?? scenario.year1CashOnCashReturn) != null ? `${(((scenario.year1EquityYield ?? scenario.year1CashOnCashReturn) ?? 0) * 100).toFixed(2)}%` : "—"}`
         );
       });
     });

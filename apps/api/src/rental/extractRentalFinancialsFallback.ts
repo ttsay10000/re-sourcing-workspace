@@ -5,6 +5,7 @@ import type {
   RentalFinancialsFromLlm,
   RentalNumberPerUnit,
 } from "@re-sourcing/contracts";
+import { resolveCurrentFinancialsFromOmAnalysis } from "./currentFinancials.js";
 
 const COMMERCIAL_PATTERN =
   /\b(commercial|retail|office|storefront|store front|restaurant|cafe|gallery|medical|community facility|store)\b/i;
@@ -356,22 +357,15 @@ function buildInvestmentTakeaways(input: {
 }
 
 function fromLlmFromOmAnalysis(om: OmAnalysis): RentalFinancialsFromLlm {
-  const income = om.income as Record<string, unknown> | undefined;
+  const expenses = om.expenses as { totalExpenses?: number; expensesTable?: ExpenseLineItem[] } | undefined;
   const valuation = om.valuationMetrics as Record<string, unknown> | undefined;
   const ui = om.uiFinancialSummary as Record<string, unknown> | undefined;
-  const expenses = om.expenses as { totalExpenses?: number; expensesTable?: ExpenseLineItem[] } | undefined;
-  const noi =
-    om.noiReported ??
-    (income?.NOI as number | undefined) ??
-    (valuation?.NOI as number | undefined) ??
-    (ui?.noi as number | undefined);
+  const resolved = resolveCurrentFinancialsFromOmAnalysis(om);
+  const noi = resolved.noi;
   const capRate =
     (valuation?.capRate as number | undefined) ??
     (ui?.capRate as number | undefined);
-  const grossRentTotal =
-    (income?.grossRentActual as number | undefined) ??
-    (income?.grossRentPotential as number | undefined) ??
-    (ui?.grossRent as number | undefined);
+  const grossRentTotal = resolved.grossRentalIncome;
 
   const rentalNumbersPerUnit: RentalNumberPerUnit[] =
     om.rentRoll?.map((row) => {
@@ -411,7 +405,8 @@ function fromLlmFromOmAnalysis(om: OmAnalysis): RentalFinancialsFromLlm {
   if (noi != null) output.noi = noi;
   if (capRate != null) output.capRate = capRate;
   if (grossRentTotal != null) output.grossRentTotal = grossRentTotal;
-  if (expenses?.totalExpenses != null) output.totalExpenses = expenses.totalExpenses;
+  if (resolved.operatingExpenses != null) output.totalExpenses = resolved.operatingExpenses;
+  else if (expenses?.totalExpenses != null) output.totalExpenses = expenses.totalExpenses;
   if (expenses?.expensesTable?.length) output.expensesTable = expenses.expensesTable;
   if (rentalNumbersPerUnit.length > 0) output.rentalNumbersPerUnit = rentalNumbersPerUnit;
   if (Array.isArray(om.investmentTakeaways) && om.investmentTakeaways.length > 0) {

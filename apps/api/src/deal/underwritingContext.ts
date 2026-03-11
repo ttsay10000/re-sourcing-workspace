@@ -77,6 +77,7 @@ export interface SensitivityScenarioRow {
   valuePct: number;
   irrPct: number | null;
   year1CashOnCashReturn: number | null;
+  year1EquityYield?: number | null;
   stabilizedNoi: number;
   annualOperatingCashFlow: number;
 }
@@ -90,6 +91,7 @@ export interface SensitivityAnalysisContext {
     valuePct: number | null;
     irrPct: number | null;
     year1CashOnCashReturn: number | null;
+    year1EquityYield?: number | null;
   };
   ranges: {
     irrPct: {
@@ -97,6 +99,10 @@ export interface SensitivityAnalysisContext {
       max: number | null;
     };
     year1CashOnCashReturn: {
+      min: number | null;
+      max: number | null;
+    };
+    year1EquityYield?: {
       min: number | null;
       max: number | null;
     };
@@ -225,6 +231,10 @@ export interface UnderwritingContext {
   cashFlows: {
     annualOperatingCashFlow: number;
     annualOperatingCashFlows: number[];
+    annualPrincipalPaydown?: number;
+    annualPrincipalPaydowns?: number[];
+    annualEquityGain?: number;
+    annualEquityGains?: number[];
     annualUnleveredCashFlows?: number[];
     finalYearCashFlow: number;
     unleveredCashFlowSeries?: number[];
@@ -235,6 +245,8 @@ export interface UnderwritingContext {
     equityMultiple: number | null;
     year1CashOnCashReturn: number | null;
     averageCashOnCashReturn: number | null;
+    year1EquityYield?: number | null;
+    averageEquityYield?: number | null;
   };
   /** Optional: property overview for dossier (tax code, HPD registration). */
   propertyOverview?: DossierPropertyOverview | null;
