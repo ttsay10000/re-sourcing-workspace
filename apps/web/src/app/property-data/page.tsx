@@ -321,8 +321,14 @@ function PropertyDataContent() {
     fetch(`${API_BASE}/api/properties?includeListingSummary=1`)
       .then(async (r) => {
         const data = await r.json().catch(() => ({}));
-        if (!r.ok) throw new Error((data.error || data.details || `HTTP ${r.status}`) as string);
-        if (data.error) throw new Error(data.error);
+        const genericApiError = typeof data.error === "string" ? data.error.trim() : "";
+        const apiDetails = typeof data.details === "string" ? data.details.trim() : "";
+        const preferredMessage =
+          apiDetails && /^failed to load properties\.?$/i.test(genericApiError)
+            ? apiDetails
+            : (genericApiError || apiDetails || `HTTP ${r.status}`);
+        if (!r.ok) throw new Error(preferredMessage);
+        if (data.error) throw new Error(preferredMessage);
         setCanonicalProperties(data.properties ?? []);
       })
       .catch((e) => {

@@ -83,6 +83,173 @@ function hasAuthoritativeOm(details: unknown): boolean {
   );
 }
 
+function isMissingPropertyScoringSchemaError(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const code = "code" in err ? String((err as { code?: unknown }).code ?? "") : "";
+  const message = err instanceof Error ? err.message : String(err);
+  const normalized = message.toLowerCase();
+  const missingRelation = code === "42P01";
+  const missingColumn = code === "42703";
+  if (!(missingRelation || missingColumn)) return false;
+  return normalized.includes("deal_signals")
+    || normalized.includes("deal_score_overrides")
+    || normalized.includes("score_breakdown")
+    || normalized.includes("risk_profile")
+    || normalized.includes("risk_flags")
+    || normalized.includes("cap_reasons")
+    || normalized.includes("confidence_score")
+    || normalized.includes("score_sensitivity")
+    || normalized.includes("score_version");
+}
+
+function mapPropertyListRows(rows: Array<Record<string, unknown>>) {
+  return rows.map((row) => {
+    const details = row.details ?? null;
+    const authoritativeReady = hasAuthoritativeOm(details);
+    const createdAt = row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at ?? "");
+    const updatedAt = row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at ?? "");
+    const listingListedAt = row.listing_listed_at != null
+      ? (row.listing_listed_at instanceof Date ? row.listing_listed_at.toISOString() : String(row.listing_listed_at))
+      : null;
+    const listingActivity = deriveListingActivitySummary({
+      listedAt: listingListedAt,
+      currentPrice: row.listing_price != null ? Number(row.listing_price) : null,
+      priceHistory: (row.listing_price_history as PriceHistoryEntry[] | null) ?? null,
+    });
+    return {
+      id: row.id,
+      canonicalAddress: row.canonical_address,
+      details,
+      createdAt,
+      updatedAt,
+      primaryListing: {
+        price: row.listing_price != null ? Number(row.listing_price) : null,
+        listedAt: listingListedAt,
+        city: (row.listing_city as string) ?? null,
+        lastActivity: listingActivity,
+      },
+      omStatus: (row.om_status as string) ?? "Not received",
+      dealScore:
+        authoritativeReady && row.score_override_score != null
+          ? Number(row.score_override_score)
+          : authoritativeReady && row.calculated_deal_score != null
+            ? Number(row.calculated_deal_score)
+            : null,
+      calculatedDealScore:
+        authoritativeReady && row.calculated_deal_score != null ? Number(row.calculated_deal_score) : null,
+      scoreOverride:
+        row.score_override_id != null
+          ? {
+              id: String(row.score_override_id),
+              propertyId: String(row.id),
+              score: Number(row.score_override_score),
+              reason: String(row.score_override_reason ?? ""),
+              createdBy: (row.score_override_created_by as string) ?? null,
+              createdAt:
+                row.score_override_created_at instanceof Date
+                  ? row.score_override_created_at.toISOString()
+                  : String(row.score_override_created_at ?? ""),
+              clearedAt: null,
+            }
+          : null,
+    };
+  });
+}
+
+async function listPropertiesWithListingSummary(pool: import("pg").Pool) {
+  const advancedQuery = `SELECT DISTINCT ON (p.id)
+      p.id, p.canonical_address, p.details, p.created_at, p.updated_at,
+      l.price AS listing_price, l.listed_at AS listing_listed_at, l.city AS listing_city, l.price_history AS listing_price_history,
+      (CASE
+        WHEN EXISTS (
+          SELECT 1
+          FROM property_inquiry_documents d
+          WHERE d.property_id = p.id
+            AND LOWER(COALESCE(d.filename, '')) ~ '(offering|memorandum|(^|[^a-z])om([^a-z]|$)|brochure|rent[ _-]?roll)'
+        )
+          OR EXISTS (
+            SELECT 1
+            FROM property_uploaded_documents u
+            WHERE u.property_id = p.id
+              AND u.category IN ('OM', 'Brochure', 'Rent Roll')
+          )
+        ) OR COALESCE(p.details->'omData'->'authoritative', 'null'::jsonb) <> 'null'::jsonb
+        THEN 'OM received'
+        WHEN EXISTS (SELECT 1 FROM property_inquiry_sends s WHERE s.property_id = p.id)
+        THEN 'OM pending'
+        ELSE 'Not received'
+      END) AS om_status,
+      ds.deal_score AS calculated_deal_score,
+      ov.id AS score_override_id,
+      ov.score AS score_override_score,
+      ov.reason AS score_override_reason,
+      ov.created_by AS score_override_created_by,
+      ov.created_at AS score_override_created_at
+    FROM properties p
+    LEFT JOIN listing_property_matches m ON m.property_id = p.id
+    LEFT JOIN listings l ON l.id = m.listing_id
+    LEFT JOIN LATERAL (
+      SELECT deal_score
+      FROM deal_signals
+      WHERE property_id = p.id
+      ORDER BY generated_at DESC
+      LIMIT 1
+    ) ds ON true
+    LEFT JOIN LATERAL (
+      SELECT id, score, reason, created_by, created_at
+      FROM deal_score_overrides
+      WHERE property_id = p.id AND cleared_at IS NULL
+      ORDER BY created_at DESC
+      LIMIT 1
+    ) ov ON true
+    ORDER BY p.id, m.confidence DESC NULLS LAST, m.created_at DESC
+    LIMIT 500`;
+
+  const fallbackQuery = `SELECT DISTINCT ON (p.id)
+      p.id, p.canonical_address, p.details, p.created_at, p.updated_at,
+      l.price AS listing_price, l.listed_at AS listing_listed_at, l.city AS listing_city, l.price_history AS listing_price_history,
+      (CASE
+        WHEN EXISTS (
+          SELECT 1
+          FROM property_inquiry_documents d
+          WHERE d.property_id = p.id
+            AND LOWER(COALESCE(d.filename, '')) ~ '(offering|memorandum|(^|[^a-z])om([^a-z]|$)|brochure|rent[ _-]?roll)'
+        )
+          OR EXISTS (
+            SELECT 1
+            FROM property_uploaded_documents u
+            WHERE u.property_id = p.id
+              AND u.category IN ('OM', 'Brochure', 'Rent Roll')
+          )
+        ) OR COALESCE(p.details->'omData'->'authoritative', 'null'::jsonb) <> 'null'::jsonb
+        THEN 'OM received'
+        WHEN EXISTS (SELECT 1 FROM property_inquiry_sends s WHERE s.property_id = p.id)
+        THEN 'OM pending'
+        ELSE 'Not received'
+      END) AS om_status,
+      NULL::numeric AS calculated_deal_score,
+      NULL::uuid AS score_override_id,
+      NULL::numeric AS score_override_score,
+      NULL::text AS score_override_reason,
+      NULL::text AS score_override_created_by,
+      NULL::timestamptz AS score_override_created_at
+    FROM properties p
+    LEFT JOIN listing_property_matches m ON m.property_id = p.id
+    LEFT JOIN listings l ON l.id = m.listing_id
+    ORDER BY p.id, m.confidence DESC NULLS LAST, m.created_at DESC
+    LIMIT 500`;
+
+  try {
+    const result = await pool.query(advancedQuery);
+    return mapPropertyListRows(result.rows);
+  } catch (err) {
+    if (!isMissingPropertyScoringSchemaError(err)) throw err;
+    console.warn("[properties list] scoring schema unavailable; falling back to basic property list", err);
+    const result = await pool.query(fallbackQuery);
+    return mapPropertyListRows(result.rows);
+  }
+}
+
 /**
  * Run authoritative OM ingestion in background after upload
  * so the upload response can return immediately (avoids Render request timeout).
@@ -142,106 +309,7 @@ router.get("/properties", async (req: Request, res: Response) => {
       res.json({ properties, total: properties.length });
       return;
     }
-    const r = await pool.query(
-      `SELECT DISTINCT ON (p.id)
-         p.id, p.canonical_address, p.details, p.created_at, p.updated_at,
-         l.price AS listing_price, l.listed_at AS listing_listed_at, l.city AS listing_city, l.price_history AS listing_price_history,
-         (CASE
-           WHEN EXISTS (
-             SELECT 1
-             FROM property_inquiry_documents d
-             WHERE d.property_id = p.id
-               AND LOWER(COALESCE(d.filename, '')) ~ '(offering|memorandum|(^|[^a-z])om([^a-z]|$)|brochure|rent[ _-]?roll)'
-           )
-             OR EXISTS (
-               SELECT 1
-               FROM property_uploaded_documents u
-               WHERE u.property_id = p.id
-                 AND u.category IN ('OM', 'Brochure', 'Rent Roll')
-             )
-           ) OR COALESCE(p.details->'omData'->'authoritative', 'null'::jsonb) <> 'null'::jsonb
-           THEN 'OM received'
-           WHEN EXISTS (SELECT 1 FROM property_inquiry_sends s WHERE s.property_id = p.id)
-           THEN 'OM pending'
-           ELSE 'Not received'
-         END) AS om_status,
-         ds.deal_score AS calculated_deal_score,
-         ov.id AS score_override_id,
-         ov.score AS score_override_score,
-         ov.reason AS score_override_reason,
-         ov.created_by AS score_override_created_by,
-         ov.created_at AS score_override_created_at
-       FROM properties p
-       LEFT JOIN listing_property_matches m ON m.property_id = p.id
-       LEFT JOIN listings l ON l.id = m.listing_id
-       LEFT JOIN LATERAL (
-         SELECT deal_score
-         FROM deal_signals
-         WHERE property_id = p.id
-         ORDER BY generated_at DESC
-         LIMIT 1
-       ) ds ON true
-       LEFT JOIN LATERAL (
-         SELECT id, score, reason, created_by, created_at
-         FROM deal_score_overrides
-         WHERE property_id = p.id AND cleared_at IS NULL
-         ORDER BY created_at DESC
-         LIMIT 1
-       ) ov ON true
-       ORDER BY p.id, m.confidence DESC NULLS LAST, m.created_at DESC
-       LIMIT 500`
-    );
-	    const properties = r.rows.map((row: Record<string, unknown>) => {
-	      const details = row.details ?? null;
-	      const authoritativeReady = hasAuthoritativeOm(details);
-	      const createdAt = row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at ?? "");
-	      const updatedAt = row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at ?? "");
-      const listingListedAt = row.listing_listed_at != null
-        ? (row.listing_listed_at instanceof Date ? row.listing_listed_at.toISOString() : String(row.listing_listed_at))
-        : null;
-      const listingActivity = deriveListingActivitySummary({
-        listedAt: listingListedAt,
-        currentPrice: row.listing_price != null ? Number(row.listing_price) : null,
-        priceHistory: (row.listing_price_history as PriceHistoryEntry[] | null) ?? null,
-      });
-      return {
-	        id: row.id,
-	        canonicalAddress: row.canonical_address,
-	        details,
-	        createdAt,
-	        updatedAt,
-        primaryListing: {
-          price: row.listing_price != null ? Number(row.listing_price) : null,
-          listedAt: listingListedAt,
-          city: (row.listing_city as string) ?? null,
-          lastActivity: listingActivity,
-        },
-	        omStatus: (row.om_status as string) ?? "Not received",
-	        dealScore:
-	          authoritativeReady && row.score_override_score != null
-	            ? Number(row.score_override_score)
-	            : authoritativeReady && row.calculated_deal_score != null
-	              ? Number(row.calculated_deal_score)
-	              : null,
-	        calculatedDealScore:
-	          authoritativeReady && row.calculated_deal_score != null ? Number(row.calculated_deal_score) : null,
-        scoreOverride:
-          row.score_override_id != null
-            ? {
-                id: String(row.score_override_id),
-                propertyId: String(row.id),
-                score: Number(row.score_override_score),
-                reason: String(row.score_override_reason ?? ""),
-                createdBy: (row.score_override_created_by as string) ?? null,
-                createdAt:
-                  row.score_override_created_at instanceof Date
-                    ? row.score_override_created_at.toISOString()
-                    : String(row.score_override_created_at ?? ""),
-                clearedAt: null,
-              }
-            : null,
-      };
-    });
+    const properties = await listPropertiesWithListingSummary(pool);
     res.json({ properties, total: properties.length });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
