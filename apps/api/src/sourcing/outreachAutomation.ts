@@ -1,5 +1,5 @@
 import { EventRepo, InquirySendRepo, OutreachBatchRepo, PropertyActionItemRepo, PropertySourcingStateRepo, getPool } from "@re-sourcing/db";
-import { sendMessage } from "../inquiry/gmailClient.js";
+import { getBodyText, getHeader, getMessage, sendMessage } from "../inquiry/gmailClient.js";
 import { syncPropertySourcingWorkflow } from "./workflow.js";
 
 interface EligiblePropertyRow {
@@ -13,28 +13,163 @@ interface EligiblePropertyRow {
   preferred_thread_id: string | null;
 }
 
+interface HistoricalOutreachBatchRow {
+  id: string;
+  gmail_message_id: string | null;
+  metadata: Record<string, unknown> | null;
+  sent_at: Date | string | null;
+}
+
+export function normalizeOutreachAddressKey(address: string | null | undefined): string | null {
+  if (typeof address !== "string") return null;
+  const normalized = address.trim();
+  if (!normalized) return null;
+
+  const [addressLine] = normalized
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const normalizedLine = (addressLine ?? normalized)
+    .toLowerCase()
+    .replace(/[^\da-z\s-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalizedLine) return null;
+
+  const zipMatch = normalized.match(/\b(\d{5})(?:-\d{4})?\b/);
+  return zipMatch?.[1] ? `${normalizedLine}|${zipMatch[1]}` : normalizedLine;
+}
+
+function extractBulletAddresses(body: string): string[] {
+  return body
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith("- "))
+    .map((line) => line.slice(2).trim())
+    .filter(Boolean);
+}
+
+export function extractOutreachAddressesFromMessage(input: {
+  subject?: string | null;
+  body?: string | null;
+}): string[] {
+  const bulletAddresses = extractBulletAddresses(input.body ?? "");
+  if (bulletAddresses.length > 0) return bulletAddresses;
+
+  const subject = input.subject?.trim() ?? "";
+  const subjectMatch = subject.match(/^OM Request - (.+)$/i);
+  if (!subjectMatch?.[1]) return [];
+  return subjectMatch[1]
+    .split(/\s+and\s+/i)
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+function metadataCanonicalAddresses(metadata: Record<string, unknown> | null | undefined): string[] {
+  const value = metadata?.canonicalAddresses;
+  if (!Array.isArray(value)) return [];
+  return value.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0);
+}
+
+async function resolveHistoricalBatchAddresses(
+  batch: HistoricalOutreachBatchRow,
+  batchRepo: OutreachBatchRepo
+): Promise<string[] | null> {
+  const existing = metadataCanonicalAddresses(batch.metadata);
+  if (existing.length > 0) return existing;
+  if (!batch.gmail_message_id) return null;
+
+  try {
+    const msg = await getMessage(batch.gmail_message_id);
+    const recovered = extractOutreachAddressesFromMessage({
+      subject: getHeader(msg, "Subject"),
+      body: getBodyText(msg),
+    });
+    if (recovered.length === 0) return null;
+    await batchRepo.updateStatus(batch.id, {
+      metadata: {
+        canonicalAddresses: recovered,
+        canonicalAddressesRecoveredAt: new Date().toISOString(),
+      },
+    });
+    return recovered;
+  } catch (err) {
+    console.error(
+      "[runDailyOutreach] failed to recover historical batch addresses",
+      batch.id,
+      err instanceof Error ? err.message : err
+    );
+    return null;
+  }
+}
+
+async function loadHistoricalAddressKeys(
+  batchRepo: OutreachBatchRepo,
+  pool: import("pg").Pool
+): Promise<{ addressKeys: Set<string>; unresolvedHistory: boolean }> {
+  const history = await pool.query<HistoricalOutreachBatchRow>(
+    `SELECT id, gmail_message_id, metadata, sent_at
+     FROM outreach_batches
+     WHERE status = 'sent'
+     ORDER BY sent_at DESC NULLS LAST, created_at DESC`,
+    []
+  );
+
+  const addressKeys = new Set<string>();
+  let unresolvedHistory = false;
+
+  for (const row of history.rows) {
+    const addresses = await resolveHistoricalBatchAddresses(row, batchRepo);
+    if (!addresses || addresses.length === 0) {
+      unresolvedHistory = true;
+      continue;
+    }
+    for (const address of addresses) {
+      const key = normalizeOutreachAddressKey(address);
+      if (key) addressKeys.add(key);
+    }
+  }
+
+  return { addressKeys, unresolvedHistory };
+}
+
 function buildSubject(addresses: string[]): string {
   if (addresses.length === 1) return `OM Request - ${addresses[0]}`;
   if (addresses.length === 2) return `OM Request - ${addresses[0]} and ${addresses[1]}`;
   return `OM Request - ${addresses.length} properties`;
 }
 
-function buildBody(contactName: string | null, addresses: string[]): string {
+export function buildOutreachBody(contactName: string | null, addresses: string[]): string {
   const greeting = contactName ? `Hi ${contactName.split(/\s+/)[0]},` : "Hi,";
+  const list = addresses.map((address) => `- ${address}`).join("\n");
   const intro =
     addresses.length === 1
-      ? "Could you please send over the OM and any supporting materials for the property below?"
-      : "Could you please send over the OMs and any supporting materials for the properties below?";
-  const list = addresses.map((address) => `- ${address}`).join("\n");
+      ? "My name is Tyler Tsay, and I'm reaching out on behalf of a client regarding the property below currently on the market. We are evaluating the building and would appreciate the opportunity to review further."
+      : "My name is Tyler Tsay, and I'm reaching out on behalf of a client regarding the properties below currently on the market. We are evaluating them and would appreciate the opportunity to review further.";
+  const request =
+    addresses.length === 1
+      ? "Would you be able to share the OM, current rent roll, expenses, and/or any available financials?"
+      : "Would you be able to share the OMs, current rent rolls, expenses, and/or any available financials for these properties?";
+  const contactRedirect =
+    addresses.length === 1
+      ? "If there is a better contact for this property, please feel free to point me in the right direction."
+      : "If there is a better contact for any of these, please feel free to point me in the right direction.";
   return `${greeting}
 
 ${intro}
 
 ${list}
 
-If there is a better contact for any of these, please feel free to point me in the right direction.
+${request}
 
-Thank you.`;
+${contactRedirect}
+
+Thanks in advance - looking forward to taking a look.
+
+Best,
+Tyler Tsay
+617 306 3336
+tyler@stayhaus.co`;
 }
 
 export async function runDailyOutreach(): Promise<{ sent: number; reviewRequired: number; batchIds: string[] }> {
@@ -103,8 +238,36 @@ export async function runDailyOutreach(): Promise<{ sent: number; reviewRequired
   let sent = 0;
   let reviewRequired = 0;
   const batchIds: string[] = [];
+  const historicalAddressState = await loadHistoricalAddressKeys(batchRepo, pool);
 
   for (const [toAddress, properties] of grouped) {
+    const blockedByHistoricalOutreach = properties.filter((property) => {
+      const key = normalizeOutreachAddressKey(property.canonical_address);
+      return key != null && historicalAddressState.addressKeys.has(key);
+    });
+    const sendableProperties = properties.filter((property) => {
+      const key = normalizeOutreachAddressKey(property.canonical_address);
+      return key == null || !historicalAddressState.addressKeys.has(key);
+    });
+
+    for (const property of blockedByHistoricalOutreach) {
+      await actionRepo.upsertOpen(property.property_id, "confirm_follow_up", {
+        priority: "high",
+        summary: "Historical outreach already exists for this address; auto-send blocked",
+        details: { toAddress, source: "historical_outreach_recovery" },
+      });
+      await stateRepo.upsert({
+        propertyId: property.property_id,
+        workflowState: "review_required",
+        latestRunId: null,
+      });
+    }
+
+    if (sendableProperties.length === 0) {
+      if (blockedByHistoricalOutreach.length > 0) reviewRequired += blockedByHistoricalOutreach.length;
+      continue;
+    }
+
     const recentSends = await pool.query<{ gmail_thread_id: string | null; sent_at: Date | string }>(
       `SELECT gmail_thread_id, sent_at
        FROM property_inquiry_sends
@@ -122,9 +285,11 @@ export async function runDailyOutreach(): Promise<{ sent: number; reviewRequired
     const reviewReason =
       properties.some((property) => property.manual_review_only)
         ? "Contact marked as manual-review-only"
-        : properties.some((property) => property.do_not_contact_until && new Date(property.do_not_contact_until).getTime() > Date.now())
+      : properties.some((property) => property.do_not_contact_until && new Date(property.do_not_contact_until).getTime() > Date.now())
           ? "Contact is in a do-not-contact window"
-          : hasSentWithinOneDay
+        : historicalAddressState.unresolvedHistory
+          ? "Historical outreach exists, but prior contacted addresses could not be reconstructed safely"
+        : hasSentWithinOneDay
             ? "Recipient already received automated outreach within the past 24 hours"
           : hasRecentHistory && hasUnthreadedRecentSend
             ? "Recent outreach exists for this recipient, but no Gmail thread is recorded"
@@ -133,22 +298,23 @@ export async function runDailyOutreach(): Promise<{ sent: number; reviewRequired
             : null;
 
     const batch = await batchRepo.create({
-      contactId: properties[0]?.contact_id ?? null,
+      contactId: sendableProperties[0]?.contact_id ?? null,
       toAddress,
       status: reviewReason ? "review_required" : "queued",
       createdBy: "automation",
       reviewReason,
       metadata: {
-        propertyIds: properties.map((property) => property.property_id),
-        suggestedThreadId: reviewReason ? null : (distinctThreads[0] ?? properties[0]?.preferred_thread_id ?? null),
+        propertyIds: sendableProperties.map((property) => property.property_id),
+        canonicalAddresses: sendableProperties.map((property) => property.canonical_address),
+        suggestedThreadId: reviewReason ? null : (distinctThreads[0] ?? sendableProperties[0]?.preferred_thread_id ?? null),
       },
-      propertyIds: properties.map((property) => property.property_id),
+      propertyIds: sendableProperties.map((property) => property.property_id),
     });
     batchIds.push(batch.id);
 
     if (reviewReason) {
       reviewRequired++;
-      for (const property of properties) {
+      for (const property of sendableProperties) {
         await actionRepo.upsertOpen(property.property_id, "review_thread_conflict", {
           priority: "high",
           summary: reviewReason,
@@ -164,13 +330,13 @@ export async function runDailyOutreach(): Promise<{ sent: number; reviewRequired
         batchId: batch.id,
         toAddress,
         reviewReason,
-        propertyIds: properties.map((property) => property.property_id),
+        propertyIds: sendableProperties.map((property) => property.property_id),
       });
       continue;
     }
 
-    const subject = buildSubject(properties.map((property) => property.canonical_address));
-    const body = buildBody(properties[0]?.contact_name ?? null, properties.map((property) => property.canonical_address));
+    const subject = buildSubject(sendableProperties.map((property) => property.canonical_address));
+    const body = buildOutreachBody(sendableProperties[0]?.contact_name ?? null, sendableProperties.map((property) => property.canonical_address));
     const result = await sendMessage(toAddress, subject, body, {
       threadId: distinctThreads.length === 1 ? distinctThreads[0] : null,
     });
@@ -182,7 +348,7 @@ export async function runDailyOutreach(): Promise<{ sent: number; reviewRequired
       sentAt: new Date().toISOString(),
     });
 
-    for (const property of properties) {
+    for (const property of sendableProperties) {
       await inquirySendRepo.create(property.property_id, result.id, {
         toAddress,
         source: "automation",
@@ -197,7 +363,7 @@ export async function runDailyOutreach(): Promise<{ sent: number; reviewRequired
     await eventRepo.emit("job.job.completed", {
       batchId: batch.id,
       toAddress,
-      propertyIds: properties.map((property) => property.property_id),
+      propertyIds: sendableProperties.map((property) => property.property_id),
       threadId: result.threadId,
     });
   }
