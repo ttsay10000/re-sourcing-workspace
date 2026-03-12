@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   fromLlmFromOmAnalysis,
+  parseCompletionJsonContent,
   sanitizeOmAnalysisByCoverage,
   summarizeOmAnalysisCoverage,
 } from "./omAnalysisShared.js";
@@ -106,5 +107,15 @@ describe("omAnalysisShared", () => {
       hasExpenses: true,
       expenseLineCount: 1,
     });
+  });
+
+  it("parses JSON wrapped in code fences", () => {
+    expect(parseCompletionJsonContent("```json\n{\"propertyInfo\":{\"totalUnits\":6}}\n```")).toEqual({
+      propertyInfo: { totalUnits: 6 },
+    });
+  });
+
+  it("returns null for malformed JSON instead of throwing", () => {
+    expect(parseCompletionJsonContent("{\"propertyInfo\":\"unterminated}")).toBeNull();
   });
 });

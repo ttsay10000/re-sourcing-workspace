@@ -113,7 +113,20 @@ export function parseCompletionJsonContent(content: string | null | undefined): 
   let jsonStr = content.trim();
   const codeBlock = jsonStr.match(/^```(?:json)?\s*([\s\S]*?)```$/);
   if (codeBlock) jsonStr = codeBlock[1].trim();
-  return JSON.parse(jsonStr) as Record<string, unknown>;
+  try {
+    return JSON.parse(jsonStr) as Record<string, unknown>;
+  } catch {
+    const firstBrace = jsonStr.indexOf("{");
+    const lastBrace = jsonStr.lastIndexOf("}");
+    if (firstBrace >= 0 && lastBrace > firstBrace) {
+      try {
+        return JSON.parse(jsonStr.slice(firstBrace, lastBrace + 1)) as Record<string, unknown>;
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
 }
 
 export function sanitizeOmAnalysisByCoverage(omAnalysis: OmAnalysis): OmAnalysis {

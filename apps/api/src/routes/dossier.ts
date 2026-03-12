@@ -6,6 +6,7 @@ import { Router, type Request, type Response } from "express";
 import type { PropertyDetails } from "@re-sourcing/contracts";
 import { getPool, UserProfileRepo, PropertyRepo, MatchRepo, ListingRepo } from "@re-sourcing/db";
 import { runGenerateDossier } from "../deal/runGenerateDossier.js";
+import { runWithDossierGenerationQueue } from "../deal/dossierGenerationQueue.js";
 import { refreshAuthoritativeOmForProperty } from "../om/ingestAuthoritativeOm.js";
 import { isGeminiAuthoritativeOmSnapshot } from "../om/authoritativeOm.js";
 import { resolveCurrentFinancialsFromDetails } from "../rental/currentFinancials.js";
@@ -238,165 +239,167 @@ function parseAssumptionOverrides(rawAssumptions: unknown): DossierAssumptionOve
 
 /** POST /api/dossier/generate - run underwriting, build Excel + dossier, save to documents. Body: { propertyId }. */
 router.post("/dossier/generate", async (req: Request, res: Response) => {
-  let workflowRunId: string | null = null;
-  const workflowStartedAt = new Date().toISOString();
-  try {
-    const propertyId = typeof req.body?.propertyId === "string" ? req.body.propertyId.trim() : null;
-    if (!propertyId) {
-      res.status(400).json({ error: "propertyId required." });
-      return;
-    }
-    const pool = getPool();
-    const propertyRepo = new PropertyRepo({ pool });
-    const property = await propertyRepo.byId(propertyId);
-    if (!property) {
-      res.status(404).json({ error: "Property not found" });
-      return;
-    }
-    const assumptions = parseAssumptionOverrides(req.body?.assumptions);
-    const requiresGeminiRefresh = !isGeminiAuthoritativeOmSnapshot((property.details ?? null) as PropertyDetails | null);
-    workflowRunId = await createWorkflowRun({
-      runType: "generate_dossier",
-      displayName: "Generate dossier",
-      scopeLabel: property.canonicalAddress,
-      triggerSource: "manual",
-      totalItems: 1,
-      metadata: { propertyIds: [propertyId] },
-      steps: [
-        {
+  return runWithDossierGenerationQueue(async () => {
+    let workflowRunId: string | null = null;
+    const workflowStartedAt = new Date().toISOString();
+    try {
+      const propertyId = typeof req.body?.propertyId === "string" ? req.body.propertyId.trim() : null;
+      if (!propertyId) {
+        res.status(400).json({ error: "propertyId required." });
+        return;
+      }
+      const pool = getPool();
+      const propertyRepo = new PropertyRepo({ pool });
+      const property = await propertyRepo.byId(propertyId);
+      if (!property) {
+        res.status(404).json({ error: "Property not found" });
+        return;
+      }
+      const assumptions = parseAssumptionOverrides(req.body?.assumptions);
+      const requiresGeminiRefresh = !isGeminiAuthoritativeOmSnapshot((property.details ?? null) as PropertyDetails | null);
+      workflowRunId = await createWorkflowRun({
+        runType: "generate_dossier",
+        displayName: "Generate dossier",
+        scopeLabel: property.canonicalAddress,
+        triggerSource: "manual",
+        totalItems: 1,
+        metadata: { propertyIds: [propertyId] },
+        steps: [
+          {
+            stepKey: "dossier",
+            totalItems: 1,
+            status: "running",
+            startedAt: workflowStartedAt,
+            lastMessage: "Generating dossier",
+          },
+        ],
+      });
+      if (requiresGeminiRefresh) {
+        await upsertWorkflowStep(workflowRunId, {
           stepKey: "dossier",
           totalItems: 1,
+          completedItems: 0,
+          failedItems: 0,
           status: "running",
           startedAt: workflowStartedAt,
-          lastMessage: "Generating dossier",
-        },
-      ],
-    });
-    if (requiresGeminiRefresh) {
-      await upsertWorkflowStep(workflowRunId, {
-        stepKey: "dossier",
-        totalItems: 1,
-        completedItems: 0,
-        failedItems: 0,
-        status: "running",
-        startedAt: workflowStartedAt,
-        lastMessage: "Refreshing Gemini authoritative OM before dossier generation",
-      });
+          lastMessage: "Refreshing Gemini authoritative OM before dossier generation",
+        });
 
-      const refresh = await refreshAuthoritativeOmForProperty(propertyId, pool);
-      if (refresh.error) {
-        throw new Error(refresh.error);
+        const refresh = await refreshAuthoritativeOmForProperty(propertyId, pool, { triggerDossier: false });
+        if (refresh.error) {
+          throw new Error(refresh.error);
+        }
+
+        await mergeWorkflowRunMetadata(workflowRunId, {
+          authoritativeOmRunId: refresh.runId,
+          authoritativeOmSnapshotId: refresh.snapshotId,
+        });
+        await upsertWorkflowStep(workflowRunId, {
+          stepKey: "dossier",
+          totalItems: 1,
+          completedItems: 0,
+          failedItems: 0,
+          status: "running",
+          startedAt: workflowStartedAt,
+          lastMessage: "Gemini authoritative OM refreshed; generating dossier",
+        });
       }
+      let result;
+      try {
+        result = await runGenerateDossier(propertyId, assumptions);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (message !== MISSING_AUTHORITATIVE_OM_ERROR || requiresGeminiRefresh) throw err;
 
-      await mergeWorkflowRunMetadata(workflowRunId, {
-        authoritativeOmRunId: refresh.runId,
-        authoritativeOmSnapshotId: refresh.snapshotId,
-      });
+        await upsertWorkflowStep(workflowRunId, {
+          stepKey: "dossier",
+          totalItems: 1,
+          completedItems: 0,
+          failedItems: 0,
+          status: "running",
+          startedAt: workflowStartedAt,
+          lastMessage: "Refreshing Gemini authoritative OM before dossier generation",
+        });
+
+        const refresh = await refreshAuthoritativeOmForProperty(propertyId, pool, { triggerDossier: false });
+        if (refresh.error) {
+          throw new Error(refresh.error);
+        }
+
+        await mergeWorkflowRunMetadata(workflowRunId, {
+          authoritativeOmRunId: refresh.runId,
+          authoritativeOmSnapshotId: refresh.snapshotId,
+        });
+        await upsertWorkflowStep(workflowRunId, {
+          stepKey: "dossier",
+          totalItems: 1,
+          completedItems: 0,
+          failedItems: 0,
+          status: "running",
+          startedAt: workflowStartedAt,
+          lastMessage: "Gemini authoritative OM refreshed; generating dossier",
+        });
+
+        result = await runGenerateDossier(propertyId, assumptions);
+      }
       await upsertWorkflowStep(workflowRunId, {
         stepKey: "dossier",
         totalItems: 1,
-        completedItems: 0,
+        completedItems: 1,
         failedItems: 0,
-        status: "running",
+        status: "completed",
         startedAt: workflowStartedAt,
-        lastMessage: "Gemini authoritative OM refreshed; generating dossier",
+        finishedAt: new Date().toISOString(),
+        lastMessage: "Dossier ready",
       });
-    }
-    let result;
-    try {
-      result = await runGenerateDossier(propertyId, assumptions);
+      await mergeWorkflowRunMetadata(workflowRunId, {
+        dealScore: result.dealScore,
+        emailSent: result.emailSent ?? false,
+        dossierDocumentId: result.dossierDoc?.id ?? null,
+        excelDocumentId: result.excelDoc?.id ?? null,
+      });
+      await updateWorkflowRun(workflowRunId, {
+        status: "completed",
+        finishedAt: new Date().toISOString(),
+      });
+      res.status(201).json({
+        ok: true,
+        propertyId,
+        dossierDoc: result.dossierDoc,
+        excelDoc: result.excelDoc,
+        dealScore: result.dealScore,
+        emailSent: result.emailSent ?? false,
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      if (message !== MISSING_AUTHORITATIVE_OM_ERROR || requiresGeminiRefresh) throw err;
-
+      console.error("[dossier generate]", err);
       await upsertWorkflowStep(workflowRunId, {
         stepKey: "dossier",
         totalItems: 1,
         completedItems: 0,
-        failedItems: 0,
-        status: "running",
+        failedItems: 1,
+        status: "failed",
         startedAt: workflowStartedAt,
-        lastMessage: "Refreshing Gemini authoritative OM before dossier generation",
+        finishedAt: new Date().toISOString(),
+        lastError: message,
+        lastMessage: "Dossier generation failed",
       });
-
-      const refresh = await refreshAuthoritativeOmForProperty(propertyId, pool);
-      if (refresh.error) {
-        throw new Error(refresh.error);
+      await mergeWorkflowRunMetadata(workflowRunId, { error: message });
+      await updateWorkflowRun(workflowRunId, {
+        status: "failed",
+        finishedAt: new Date().toISOString(),
+      });
+      if (message === "Property not found") {
+        res.status(404).json({ error: message });
+        return;
       }
-
-      await mergeWorkflowRunMetadata(workflowRunId, {
-        authoritativeOmRunId: refresh.runId,
-        authoritativeOmSnapshotId: refresh.snapshotId,
-      });
-      await upsertWorkflowStep(workflowRunId, {
-        stepKey: "dossier",
-        totalItems: 1,
-        completedItems: 0,
-        failedItems: 0,
-        status: "running",
-        startedAt: workflowStartedAt,
-        lastMessage: "Gemini authoritative OM refreshed; generating dossier",
-      });
-
-      result = await runGenerateDossier(propertyId, assumptions);
+      if (message === "Profile not available") {
+        res.status(503).json({ error: message });
+        return;
+      }
+      res.status(503).json({ error: "Failed to generate dossier.", details: message });
     }
-    await upsertWorkflowStep(workflowRunId, {
-      stepKey: "dossier",
-      totalItems: 1,
-      completedItems: 1,
-      failedItems: 0,
-      status: "completed",
-      startedAt: workflowStartedAt,
-      finishedAt: new Date().toISOString(),
-      lastMessage: "Dossier ready",
-    });
-    await mergeWorkflowRunMetadata(workflowRunId, {
-      dealScore: result.dealScore,
-      emailSent: result.emailSent ?? false,
-      dossierDocumentId: result.dossierDoc?.id ?? null,
-      excelDocumentId: result.excelDoc?.id ?? null,
-    });
-    await updateWorkflowRun(workflowRunId, {
-      status: "completed",
-      finishedAt: new Date().toISOString(),
-    });
-    res.status(201).json({
-      ok: true,
-      propertyId,
-      dossierDoc: result.dossierDoc,
-      excelDoc: result.excelDoc,
-      dealScore: result.dealScore,
-      emailSent: result.emailSent ?? false,
-    });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error("[dossier generate]", err);
-    await upsertWorkflowStep(workflowRunId, {
-      stepKey: "dossier",
-      totalItems: 1,
-      completedItems: 0,
-      failedItems: 1,
-      status: "failed",
-      startedAt: workflowStartedAt,
-      finishedAt: new Date().toISOString(),
-      lastError: message,
-      lastMessage: "Dossier generation failed",
-    });
-    await mergeWorkflowRunMetadata(workflowRunId, { error: message });
-    await updateWorkflowRun(workflowRunId, {
-      status: "failed",
-      finishedAt: new Date().toISOString(),
-    });
-    if (message === "Property not found") {
-      res.status(404).json({ error: message });
-      return;
-    }
-    if (message === "Profile not available") {
-      res.status(503).json({ error: message });
-      return;
-    }
-    res.status(503).json({ error: "Failed to generate dossier.", details: message });
-  }
+  });
 });
 
 export default router;

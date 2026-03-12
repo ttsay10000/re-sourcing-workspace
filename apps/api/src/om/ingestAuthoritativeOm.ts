@@ -4,6 +4,7 @@ import type {
   OmAuthoritativeSnapshot,
   OmAnalysis,
   OmCoverage,
+  OmExtractionMethod,
   OmValidationFlag,
   PropertyDetails,
   RentalFinancials,
@@ -76,6 +77,12 @@ export interface RefreshAuthoritativeOmResult {
   dossierGenerated: boolean;
   error?: string;
 }
+
+export interface RefreshAuthoritativeOmOptions {
+  triggerDossier?: boolean;
+}
+
+const GEMINI_OM_EXTRACTION_METHOD: OmExtractionMethod = "hybrid";
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return value != null && typeof value === "object" && !Array.isArray(value);
@@ -437,7 +444,7 @@ export async function ingestAuthoritativeOm(
       sourceDocumentId: candidateDocuments[0]?.id ?? null,
       sourceType: params.sourceType,
       status: unreadableFileError ? "failed" : "processing",
-      extractionMethod: null,
+      extractionMethod: GEMINI_OM_EXTRACTION_METHOD,
       pageCount: null,
       financialPageCount: null,
       ocrPageCount: null,
@@ -462,7 +469,7 @@ export async function ingestAuthoritativeOm(
       const error = "Authoritative OM ingestion requires at least one readable PDF document for Gemini parsing.";
       await ingestionRunRepo.update(run.id, {
         status: "failed",
-        extractionMethod: null,
+        extractionMethod: GEMINI_OM_EXTRACTION_METHOD,
         pageCount: null,
         financialPageCount: null,
         ocrPageCount: null,
@@ -487,10 +494,12 @@ export async function ingestAuthoritativeOm(
       model: geminiModel,
     });
     if (!extracted.omAnalysis) {
-      const error = "Gemini authoritative OM extraction returned no structured OM analysis.";
+      const error = extracted.parseError
+        ? `Gemini authoritative OM extraction failed: ${extracted.parseError}`
+        : "Gemini authoritative OM extraction returned no structured OM analysis.";
       await ingestionRunRepo.update(run.id, {
         status: "failed",
-        extractionMethod: null,
+        extractionMethod: GEMINI_OM_EXTRACTION_METHOD,
         pageCount: null,
         financialPageCount: null,
         ocrPageCount: null,
@@ -546,7 +555,7 @@ export async function ingestAuthoritativeOm(
     const snapshotBase: OmAuthoritativeSnapshot = {
       runId: run.id,
       sourceDocumentId: candidateDocuments[0]?.id ?? null,
-      extractionMethod: null,
+      extractionMethod: GEMINI_OM_EXTRACTION_METHOD,
       propertyInfo: sanitizedOmAnalysis.propertyInfo ?? null,
       rentRoll: sanitizedOmAnalysis.rentRoll ?? null,
       incomeStatement: sanitizedOmAnalysis.income ?? null,
@@ -572,7 +581,7 @@ export async function ingestAuthoritativeOm(
     await insertExtractedSnapshot(pool, {
       runId: run.id,
       propertyId: params.propertyId,
-      extractionMethod: null,
+      extractionMethod: GEMINI_OM_EXTRACTION_METHOD,
       snapshot,
     });
     const promoted = await authoritativeRepo.promote({
@@ -595,7 +604,7 @@ export async function ingestAuthoritativeOm(
     await propertyRepo.mergeDetails(params.propertyId, mergedDetails);
     await ingestionRunRepo.update(run.id, {
       status: "promoted",
-      extractionMethod: null,
+      extractionMethod: GEMINI_OM_EXTRACTION_METHOD,
       pageCount: null,
       financialPageCount: null,
       ocrPageCount: null,
@@ -641,6 +650,7 @@ export async function ingestAuthoritativeOm(
         sourceDocumentId: candidateDocuments[0]?.id ?? null,
         sourceType: params.sourceType,
         status: "failed",
+        extractionMethod: GEMINI_OM_EXTRACTION_METHOD,
         sourceMeta: {
           documents: candidateDocumentSourceMeta,
         },
@@ -662,7 +672,8 @@ export async function ingestAuthoritativeOm(
 
 export async function refreshAuthoritativeOmForProperty(
   propertyId: string,
-  pool: Pool = getPool()
+  pool: Pool = getPool(),
+  options?: RefreshAuthoritativeOmOptions
 ): Promise<RefreshAuthoritativeOmResult> {
   const documents = await listOmAutomationDocumentsForProperty(propertyId, pool);
   return ingestAuthoritativeOm({
@@ -670,5 +681,6 @@ export async function refreshAuthoritativeOmForProperty(
     sourceType: "manual_refresh",
     documents,
     pool,
+    triggerDossier: options?.triggerDossier ?? false,
   });
 }

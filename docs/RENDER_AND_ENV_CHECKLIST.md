@@ -28,6 +28,9 @@ Optional env:
 - `SOCRATA_APP_TOKEN`
 - `GEOCLIENT_SUBSCRIPTION_KEY`
 - `GEMINI_OM_MODEL`
+- `GEMINI_OM_TIMEOUT_MS`
+- `GEMINI_OM_MAX_CONCURRENCY`
+- `GEMINI_OM_THINKING_LEVEL`
 - `PROCESS_INBOX_CRON_SECRET`
 - `INQUIRY_DOCS_PATH`
 - `UPLOADED_DOCS_PATH`
@@ -38,6 +41,8 @@ Notes:
 
 - `UPLOADED_DOCS_PATH` defaults to `uploads/property-docs`
 - authoritative OM parsing now runs through Gemini PDF ingestion; set `GEMINI_API_KEY` on the API service and keep `GEMINI_OM_MODEL=gemini-3-flash-preview` unless you are intentionally testing another model
+- dossier generation is serialized per API process; Gemini OM parsing is also serialized by default with `GEMINI_OM_MAX_CONCURRENCY=1`
+- Gemini 3 OM extraction defaults to `GEMINI_OM_THINKING_LEVEL=low` unless you override it
 - inquiry attachments, uploaded property docs, and generated docs store file bytes in the DB, so new files can still be downloaded on ephemeral disks
 - after deploying this change, run `npm run backfill:documents -w @re-sourcing/api` once before the next restart/redeploy if you need older disk-only files preserved too
 - large uploads can still be blocked by the Render proxy before they reach the app

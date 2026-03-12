@@ -9,6 +9,10 @@ import {
   omAnalysisFromParsedJson,
   parseCompletionJsonContent,
 } from "./omAnalysisShared.js";
+import {
+  getSharedGeminiOmRequestQueue,
+  runWithGeminiOmRequestQueue,
+} from "../asyncTaskQueue.js";
 
 export interface GeminiPdfOnlyOmExtractionParams {
   documents: OmInputDocument[];
@@ -21,6 +25,7 @@ export interface GeminiPdfOnlyOmExtractionResult extends OmAnalysisExtractionRes
   model: string;
   rawOutput: string | null;
   finishReason: string | null;
+  parseError?: string | null;
 }
 
 interface GeminiGenerateContentResponse {
@@ -35,7 +40,23 @@ interface GeminiGenerateContentResponse {
   promptFeedback?: {
     blockReason?: string;
   };
+  usageMetadata?: {
+    promptTokenCount?: number;
+    candidatesTokenCount?: number;
+    totalTokenCount?: number;
+    thoughtsTokenCount?: number;
+    cachedContentTokenCount?: number;
+    cacheTokensDetails?: Array<{
+      tokenCount?: number;
+    }>;
+  };
 }
+
+type GeminiThinkingLevel = "minimal" | "low" | "medium" | "high";
+
+const geminiHttpsAgent = new https.Agent({
+  keepAlive: true,
+});
 
 function getGeminiApiKey(): string | null {
   const raw = process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY;
@@ -59,6 +80,32 @@ function getGeminiTimeoutMs(): number {
     if (Number.isFinite(parsed) && parsed >= 30_000) return parsed;
   }
   return 420_000;
+}
+
+function isGeminiThreeModel(model: string): boolean {
+  return /^gemini-3([-.]|$)/i.test(model.trim());
+}
+
+function resolveGeminiOmThinkingLevel(model: string): GeminiThinkingLevel | null {
+  const raw = process.env.GEMINI_OM_THINKING_LEVEL;
+  if (typeof raw === "string") {
+    const normalized = raw.trim().toLowerCase();
+    if (normalized === "minimal" || normalized === "low" || normalized === "medium" || normalized === "high") {
+      return normalized;
+    }
+  }
+
+  if (isGeminiThreeModel(model)) return "low";
+  return null;
+}
+
+function sumTokenCounts(details: Array<{ tokenCount?: number }> | undefined): number | null {
+  if (!Array.isArray(details) || details.length === 0) return null;
+  const total = details.reduce((sum, entry) => {
+    if (typeof entry?.tokenCount !== "number" || !Number.isFinite(entry.tokenCount)) return sum;
+    return sum + entry.tokenCount;
+  }, 0);
+  return total > 0 ? total : null;
 }
 
 function buildPdfOnlyOmPrompt(params: {
@@ -100,6 +147,7 @@ function emptyResult(model: string): GeminiPdfOnlyOmExtractionResult {
     model,
     rawOutput: null,
     finishReason: null,
+    parseError: null,
   };
 }
 
@@ -154,6 +202,13 @@ function getResponseText(response: GeminiGenerateContentResponse): string | null
     .join("")
     .trim();
   return text || null;
+}
+
+function summarizeRawOutputForLog(rawOutput: string | null): string | null {
+  if (!rawOutput) return null;
+  const compact = rawOutput.replace(/\s+/g, " ").trim();
+  if (!compact) return null;
+  return compact.length > 400 ? `${compact.slice(0, 400)}...` : compact;
 }
 
 function buildStructuredOutputSchema() {
@@ -286,6 +341,7 @@ async function postGeminiGenerateContent(params: {
         hostname: target.hostname,
         port: target.port || undefined,
         path: `${target.pathname}${target.search}`,
+        agent: geminiHttpsAgent,
         headers: {
           "Content-Type": "application/json",
           "Content-Length": Buffer.byteLength(params.payload),
@@ -318,10 +374,10 @@ async function postGeminiGenerateContent(params: {
 export async function extractOmAnalysisFromGeminiPdfOnly(
   params: GeminiPdfOnlyOmExtractionParams
 ): Promise<GeminiPdfOnlyOmExtractionResult> {
-  const documents = params.documents.filter((doc) => doc.buffer instanceof Buffer && doc.buffer.length > 0);
-  const pdfDocuments = documents.filter((doc) => isPdfLikeOmInputDocument(doc));
   const model = resolveGeminiOmModel(params.model);
   const apiKey = getGeminiApiKey();
+  const documents = params.documents.filter((doc) => doc.buffer instanceof Buffer && doc.buffer.length > 0);
+  const pdfDocuments = documents.filter((doc) => isPdfLikeOmInputDocument(doc));
 
   if (!apiKey) {
     console.warn("[extractOmAnalysisFromGeminiPdfOnly] GEMINI_API_KEY missing or invalid; skipping Gemini call.");
@@ -332,77 +388,128 @@ export async function extractOmAnalysisFromGeminiPdfOnly(
     return emptyResult(model);
   }
 
-  const prompt = buildPdfOnlyOmPrompt({
-    propertyContext: params.propertyContext ?? null,
-    enrichmentContext: params.enrichmentContext ?? null,
-    filenames: pdfDocuments.map((doc) => doc.filename),
-  });
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
-  const timeoutMs = getGeminiTimeoutMs();
-  const payload = JSON.stringify({
-    contents: [
-      {
-        role: "user",
-        parts: [
-          ...pdfDocuments.map((doc) => ({
-            inlineData: {
-              mimeType: doc.mimeType ?? "application/pdf",
-              data: doc.buffer.toString("base64"),
+  const queuedAt = Date.now();
+  const pendingBeforeQueue = getSharedGeminiOmRequestQueue().getPendingCount();
+
+  return runWithGeminiOmRequestQueue(async () => {
+    const queueWaitMs = Date.now() - queuedAt;
+    const prompt = buildPdfOnlyOmPrompt({
+      propertyContext: params.propertyContext ?? null,
+      enrichmentContext: params.enrichmentContext ?? null,
+      filenames: pdfDocuments.map((doc) => doc.filename),
+    });
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
+    const timeoutMs = getGeminiTimeoutMs();
+    const thinkingLevel = resolveGeminiOmThinkingLevel(model);
+    const payload = JSON.stringify({
+      contents: [
+        {
+          role: "user",
+          parts: [
+            ...pdfDocuments.map((doc) => ({
+              inlineData: {
+                mimeType: doc.mimeType ?? "application/pdf",
+                data: doc.buffer.toString("base64"),
+              },
+            })),
+            {
+              text: prompt,
             },
-          })),
-          {
-            text: prompt,
-          },
-        ],
+          ],
+        },
+      ],
+      generationConfig: {
+        temperature: 0,
+        responseMimeType: "application/json",
+        responseJsonSchema: buildStructuredOutputSchema(),
+        thinkingConfig: thinkingLevel ? { thinkingLevel } : undefined,
       },
-    ],
-    generationConfig: {
-      temperature: 0,
-      responseMimeType: "application/json",
-      responseJsonSchema: buildStructuredOutputSchema(),
-    },
-  });
-  const response = await postGeminiGenerateContent({
-    url,
-    apiKey,
-    timeoutMs,
-    payload,
-  });
+    });
+    const requestStartedAt = Date.now();
+    const response = await postGeminiGenerateContent({
+      url,
+      apiKey,
+      timeoutMs,
+      payload,
+    });
+    const requestDurationMs = Date.now() - requestStartedAt;
 
-  if (response.status < 200 || response.status >= 300) {
-    const bodyText = response.body;
-    console.error(`[extractOmAnalysisFromGeminiPdfOnly] Gemini call failed: ${response.status} ${bodyText}`);
-    return emptyResult(model);
-  }
+    if (response.status < 200 || response.status >= 300) {
+      const bodyText = response.body;
+      console.error(`[extractOmAnalysisFromGeminiPdfOnly] Gemini call failed: ${response.status} ${bodyText}`);
+      return emptyResult(model);
+    }
 
-  const data = JSON.parse(response.body) as GeminiGenerateContentResponse;
-  if (data.promptFeedback?.blockReason) {
-    console.error(
-      `[extractOmAnalysisFromGeminiPdfOnly] Gemini blocked the request: ${data.promptFeedback.blockReason}`
-    );
-    return emptyResult(model);
-  }
+    let data: GeminiGenerateContentResponse;
+    try {
+      data = JSON.parse(response.body) as GeminiGenerateContentResponse;
+    } catch (error) {
+      console.error("[extractOmAnalysisFromGeminiPdfOnly] Failed to parse Gemini API response JSON", {
+        model,
+        error: error instanceof Error ? error.message : String(error),
+        bodyPreview: response.body.slice(0, 400),
+      });
+      return emptyResult(model);
+    }
+    if (data.promptFeedback?.blockReason) {
+      console.error(
+        `[extractOmAnalysisFromGeminiPdfOnly] Gemini blocked the request: ${data.promptFeedback.blockReason}`
+      );
+      return emptyResult(model);
+    }
 
-  const rawOutput = getResponseText(data);
-  const finishReason =
-    Array.isArray(data.candidates) && typeof data.candidates[0]?.finishReason === "string"
-      ? data.candidates[0].finishReason
-      : null;
-  const parsed = parseCompletionJsonContent(rawOutput);
-  if (!parsed) {
+    const rawOutput = getResponseText(data);
+    const finishReason =
+      Array.isArray(data.candidates) && typeof data.candidates[0]?.finishReason === "string"
+        ? data.candidates[0].finishReason
+        : null;
+    const usage = data.usageMetadata;
+    const cacheHitTokens = sumTokenCounts(usage?.cacheTokensDetails);
+
+    console.info("[extractOmAnalysisFromGeminiPdfOnly] Gemini OM request completed", {
+      model,
+      documentCount: pdfDocuments.length,
+      totalFileBytes: pdfDocuments.reduce((sum, doc) => sum + doc.buffer.length, 0),
+      queueWaitMs,
+      requestDurationMs,
+      queuedBehind: pendingBeforeQueue,
+      thinkingLevel,
+      finishReason,
+      promptTokenCount: usage?.promptTokenCount ?? null,
+      candidatesTokenCount: usage?.candidatesTokenCount ?? null,
+      thoughtsTokenCount: usage?.thoughtsTokenCount ?? null,
+      totalTokenCount: usage?.totalTokenCount ?? null,
+      cachedContentTokenCount: usage?.cachedContentTokenCount ?? null,
+      cacheHitTokens,
+    });
+
+    const parsed = parseCompletionJsonContent(rawOutput);
+    if (!parsed) {
+      const parseError =
+        finishReason === "MAX_TOKENS"
+          ? "Gemini returned truncated JSON output before completing the structured response."
+          : "Gemini returned malformed JSON for the structured OM response.";
+      console.warn("[extractOmAnalysisFromGeminiPdfOnly] Failed to parse Gemini OM JSON payload", {
+        model,
+        finishReason,
+        parseError,
+        rawOutputPreview: summarizeRawOutputForLog(rawOutput),
+      });
+      return {
+        ...emptyResult(model),
+        rawOutput,
+        finishReason,
+        parseError,
+      };
+    }
+
+    const omAnalysis = omAnalysisFromParsedJson(applyInferredSourceCoverage(parsed));
     return {
-      ...emptyResult(model),
+      fromLlm: fromLlmFromOmAnalysis(omAnalysis),
+      omAnalysis,
+      model,
       rawOutput,
       finishReason,
     };
-  }
-
-  const omAnalysis = omAnalysisFromParsedJson(applyInferredSourceCoverage(parsed));
-  return {
-    fromLlm: fromLlmFromOmAnalysis(omAnalysis),
-    omAnalysis,
-    model,
-    rawOutput,
-    finishReason,
-  };
+  });
 }
