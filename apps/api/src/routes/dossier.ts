@@ -6,7 +6,7 @@ import { Router, type Request, type Response } from "express";
 import type { PropertyDetails } from "@re-sourcing/contracts";
 import { getPool, UserProfileRepo, PropertyRepo, MatchRepo, ListingRepo } from "@re-sourcing/db";
 import { runGenerateDossier } from "../deal/runGenerateDossier.js";
-import { runWithDossierGenerationQueue } from "../deal/dossierGenerationQueue.js";
+import { getDossierGenerationQueue, runWithDossierGenerationQueue } from "../deal/dossierGenerationQueue.js";
 import { refreshAuthoritativeOmForProperty } from "../om/ingestAuthoritativeOm.js";
 import { isGeminiAuthoritativeOmSnapshot } from "../om/authoritativeOm.js";
 import { resolveCurrentFinancialsFromDetails } from "../rental/currentFinancials.js";
@@ -239,9 +239,14 @@ function parseAssumptionOverrides(rawAssumptions: unknown): DossierAssumptionOve
 
 /** POST /api/dossier/generate - run underwriting, build Excel + dossier, save to documents. Body: { propertyId }. */
 router.post("/dossier/generate", async (req: Request, res: Response) => {
+  const queue = getDossierGenerationQueue();
+  const queuedAt = Date.now();
+  const queuedBehind = queue.getPendingCount() + queue.getRunningCount();
+
   return runWithDossierGenerationQueue(async () => {
     let workflowRunId: string | null = null;
     const workflowStartedAt = new Date().toISOString();
+    const requestStartedAtMs = Date.now();
     try {
       const propertyId = typeof req.body?.propertyId === "string" ? req.body.propertyId.trim() : null;
       if (!propertyId) {
@@ -255,6 +260,11 @@ router.post("/dossier/generate", async (req: Request, res: Response) => {
         res.status(404).json({ error: "Property not found" });
         return;
       }
+      console.info("[dossier generate] Started", {
+        propertyId,
+        queueWaitMs: requestStartedAtMs - queuedAt,
+        queuedBehind,
+      });
       const assumptions = parseAssumptionOverrides(req.body?.assumptions);
       const requiresGeminiRefresh = !isGeminiAuthoritativeOmSnapshot((property.details ?? null) as PropertyDetails | null);
       workflowRunId = await createWorkflowRun({
@@ -275,6 +285,7 @@ router.post("/dossier/generate", async (req: Request, res: Response) => {
         ],
       });
       if (requiresGeminiRefresh) {
+        const refreshStartedAtMs = Date.now();
         await upsertWorkflowStep(workflowRunId, {
           stepKey: "dossier",
           totalItems: 1,
@@ -289,6 +300,13 @@ router.post("/dossier/generate", async (req: Request, res: Response) => {
         if (refresh.error) {
           throw new Error(refresh.error);
         }
+        console.info("[dossier generate] Authoritative OM refresh completed", {
+          propertyId,
+          workflowRunId,
+          refreshDurationMs: Date.now() - refreshStartedAtMs,
+          authoritativeOmRunId: refresh.runId,
+          authoritativeOmSnapshotId: refresh.snapshotId,
+        });
 
         await mergeWorkflowRunMetadata(workflowRunId, {
           authoritativeOmRunId: refresh.runId,
@@ -306,11 +324,18 @@ router.post("/dossier/generate", async (req: Request, res: Response) => {
       }
       let result;
       try {
+        const dossierStartedAtMs = Date.now();
         result = await runGenerateDossier(propertyId, assumptions);
+        console.info("[dossier generate] Dossier generation completed", {
+          propertyId,
+          workflowRunId,
+          dossierDurationMs: Date.now() - dossierStartedAtMs,
+        });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         if (message !== MISSING_AUTHORITATIVE_OM_ERROR || requiresGeminiRefresh) throw err;
 
+        const refreshStartedAtMs = Date.now();
         await upsertWorkflowStep(workflowRunId, {
           stepKey: "dossier",
           totalItems: 1,
@@ -325,6 +350,14 @@ router.post("/dossier/generate", async (req: Request, res: Response) => {
         if (refresh.error) {
           throw new Error(refresh.error);
         }
+        console.info("[dossier generate] Authoritative OM refresh completed", {
+          propertyId,
+          workflowRunId,
+          refreshDurationMs: Date.now() - refreshStartedAtMs,
+          authoritativeOmRunId: refresh.runId,
+          authoritativeOmSnapshotId: refresh.snapshotId,
+          triggeredAfterMissingSnapshotError: true,
+        });
 
         await mergeWorkflowRunMetadata(workflowRunId, {
           authoritativeOmRunId: refresh.runId,
@@ -340,7 +373,14 @@ router.post("/dossier/generate", async (req: Request, res: Response) => {
           lastMessage: "Gemini authoritative OM refreshed; generating dossier",
         });
 
+        const dossierStartedAtMs = Date.now();
         result = await runGenerateDossier(propertyId, assumptions);
+        console.info("[dossier generate] Dossier generation completed", {
+          propertyId,
+          workflowRunId,
+          dossierDurationMs: Date.now() - dossierStartedAtMs,
+          refreshedAfterMissingSnapshotError: true,
+        });
       }
       await upsertWorkflowStep(workflowRunId, {
         stepKey: "dossier",
@@ -362,6 +402,14 @@ router.post("/dossier/generate", async (req: Request, res: Response) => {
         status: "completed",
         finishedAt: new Date().toISOString(),
       });
+      console.info("[dossier generate] Completed", {
+        propertyId,
+        workflowRunId,
+        totalDurationMs: Date.now() - requestStartedAtMs,
+        queueWaitMs: requestStartedAtMs - queuedAt,
+        queuedBehind,
+        emailSent: result.emailSent ?? false,
+      });
       res.status(201).json({
         ok: true,
         propertyId,
@@ -373,6 +421,13 @@ router.post("/dossier/generate", async (req: Request, res: Response) => {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error("[dossier generate]", err);
+      console.info("[dossier generate] Failed", {
+        workflowRunId,
+        totalDurationMs: Date.now() - requestStartedAtMs,
+        queueWaitMs: requestStartedAtMs - queuedAt,
+        queuedBehind,
+        error: message,
+      });
       await upsertWorkflowStep(workflowRunId, {
         stepKey: "dossier",
         totalItems: 1,

@@ -290,6 +290,7 @@ export async function runGenerateDossier(
   assumptionOverrides?: DossierAssumptionOverrides | null,
   options?: RunGenerateDossierOptions
 ): Promise<GenerateDossierResult> {
+  const generationStartedAtMs = Date.now();
   const pool = getPool();
   const propertyRepo = new PropertyRepo({ pool });
   const matchRepo = new MatchRepo({ pool });
@@ -386,12 +387,27 @@ export async function runGenerateDossier(
       expenseRows,
       baseProjection: projection,
     });
+    console.info("[runGenerateDossier] Financial model prepared", {
+      propertyId,
+      durationMs: Date.now() - generationStartedAtMs,
+      hasCurrentGrossRent: currentGrossRent != null,
+      hasCurrentNoi: currentNoi != null,
+      rentRollRowCount: rentRollRows.length,
+      expenseRowCount: expenseRows.length,
+    });
 
+    const conditionReviewStartedAtMs = Date.now();
     const conditionReview = await analyzePropertyConditionReview({
       canonicalAddress: property.canonicalAddress,
       listing,
       details,
       omAnalysis: null,
+    });
+    console.info("[runGenerateDossier] Condition review completed", {
+      propertyId,
+      durationMs: Date.now() - conditionReviewStartedAtMs,
+      usedImageReview: conditionReview?.source === "images_and_text",
+      imageCountAnalyzed: conditionReview?.imageCountAnalyzed ?? 0,
     });
     const packageContext = resolveDossierPackageContext(property.canonicalAddress, details);
     const propertyOverview = propertyOverviewFromDetails(details, packageContext);
@@ -571,7 +587,13 @@ export async function runGenerateDossier(
     const excelFileName = `Pro-Forma-${slug}-${dateStr}.xlsx`;
 
     await setGenerationState(runningGenerationState(startedAt, "Drafting investment memo"));
+    const draftingStartedAtMs = Date.now();
     const dossierText = buildDossierStructuredText(ctx);
+    console.info("[runGenerateDossier] Dossier text drafted", {
+      propertyId,
+      durationMs: Date.now() - draftingStartedAtMs,
+      textLength: dossierText.length,
+    });
 
     const anyRentStab = detectRentStabilization(details, dossierText);
     const rentStabCount = Math.max(
@@ -636,10 +658,18 @@ export async function runGenerateDossier(
     );
 
     await setGenerationState(runningGenerationState(startedAt, "Rendering PDF and Excel"));
+    const renderStartedAtMs = Date.now();
     const dossierBuffer = await dossierTextToPdf(scoredDossierText);
     const excelBuffer = buildExcelProForma(ctx);
+    console.info("[runGenerateDossier] Rendered PDF and Excel", {
+      propertyId,
+      durationMs: Date.now() - renderStartedAtMs,
+      dossierBytes: dossierBuffer.length,
+      excelBytes: excelBuffer.length,
+    });
 
     await setGenerationState(runningGenerationState(startedAt, "Saving documents"));
+    const saveStartedAtMs = Date.now();
     await signalsRepo.insert({
       ...insertParams,
       irrPct: projection.returns.irr ?? null,
@@ -685,11 +715,18 @@ export async function runGenerateDossier(
     });
 
     await deleteSupersededGeneratedDocuments([dossierDoc.id, excelDoc.id]);
+    console.info("[runGenerateDossier] Persisted dossier outputs", {
+      propertyId,
+      durationMs: Date.now() - saveStartedAtMs,
+      dossierDocumentId: dossierDoc.id,
+      excelDocumentId: excelDoc.id,
+    });
 
     let emailSent = false;
     const toEmail = profile.email?.trim();
     if (options?.sendEmail !== false && toEmail && dossierBuffer.length > 0 && excelBuffer.length > 0) {
       try {
+        const emailStartedAtMs = Date.now();
         await sendMessageWithAttachments(
           toEmail,
           `Deal dossier: ${packageContext.dossierAddress}`,
@@ -708,9 +745,26 @@ export async function runGenerateDossier(
           ]
         );
         emailSent = true;
+        console.info("[runGenerateDossier] Sent dossier email", {
+          propertyId,
+          durationMs: Date.now() - emailStartedAtMs,
+          toEmail,
+        });
       } catch (err) {
         console.error("[runGenerateDossier] Failed to send email:", err);
       }
+    } else {
+      console.info("[runGenerateDossier] Skipped dossier email", {
+        propertyId,
+        reason:
+          options?.sendEmail === false
+            ? "sendEmail disabled"
+            : !toEmail
+              ? "profile email missing"
+              : dossierBuffer.length === 0 || excelBuffer.length === 0
+                ? "generated attachments missing"
+                : "not_applicable",
+      });
     }
 
     await setGenerationState({
@@ -722,6 +776,12 @@ export async function runGenerateDossier(
       dealScore: finalScore,
       dossierDocumentId: dossierDoc.id,
       excelDocumentId: excelDoc.id,
+    });
+    console.info("[runGenerateDossier] Completed", {
+      propertyId,
+      totalDurationMs: Date.now() - generationStartedAtMs,
+      emailSent,
+      dealScore: finalScore,
     });
 
     return {
@@ -740,6 +800,11 @@ export async function runGenerateDossier(
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    console.info("[runGenerateDossier] Failed", {
+      propertyId,
+      totalDurationMs: Date.now() - generationStartedAtMs,
+      error: message,
+    });
     await setGenerationState({
       status: "failed",
       stageLabel: "Generation failed",

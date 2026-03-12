@@ -52,11 +52,36 @@ interface GeminiGenerateContentResponse {
   };
 }
 
+interface GeminiFileResource {
+  name?: string;
+  displayName?: string;
+  mimeType?: string;
+  uri?: string;
+  state?: string;
+  error?: {
+    code?: number;
+    message?: string;
+  };
+}
+
+interface GeminiFileResponse {
+  file?: GeminiFileResource;
+}
+
+interface GeminiHttpResponse {
+  status: number;
+  body: string;
+  headers: Record<string, string | string[] | undefined>;
+}
+
 type GeminiThinkingLevel = "minimal" | "low" | "medium" | "high";
 
 const geminiHttpsAgent = new https.Agent({
   keepAlive: true,
 });
+const GEMINI_FILES_UPLOAD_URL = "https://generativelanguage.googleapis.com/upload/v1beta/files";
+const GEMINI_FILES_METADATA_URL = "https://generativelanguage.googleapis.com/v1beta";
+const GEMINI_FILE_POLL_INTERVAL_MS = 5_000;
 
 function getGeminiApiKey(): string | null {
   const raw = process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY;
@@ -106,6 +131,10 @@ function sumTokenCounts(details: Array<{ tokenCount?: number }> | undefined): nu
     return sum + entry.tokenCount;
   }, 0);
   return total > 0 ? total : null;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function buildPdfOnlyOmPrompt(params: {
@@ -327,26 +356,40 @@ function buildStructuredOutputSchema() {
 
 async function postGeminiGenerateContent(params: {
   url: string;
-  apiKey: string;
+  apiKey?: string | null;
   timeoutMs: number;
-  payload: string;
-}): Promise<{ status: number; body: string }> {
+  payload?: string | Buffer;
+  headers?: Record<string, string>;
+  method?: "GET" | "POST" | "DELETE";
+}): Promise<GeminiHttpResponse> {
   const target = new URL(params.url);
+  const payloadBuffer =
+    typeof params.payload === "string"
+      ? Buffer.from(params.payload, "utf-8")
+      : params.payload instanceof Buffer
+        ? params.payload
+        : null;
+  const headers: Record<string, string> = {
+    ...(params.headers ?? {}),
+  };
+
+  if (params.apiKey) {
+    headers["x-goog-api-key"] = params.apiKey;
+  }
+  if (payloadBuffer) {
+    headers["Content-Length"] = String(payloadBuffer.length);
+  }
 
   return new Promise((resolve, reject) => {
     const request = https.request(
       {
-        method: "POST",
+        method: params.method ?? "POST",
         protocol: target.protocol,
         hostname: target.hostname,
         port: target.port || undefined,
         path: `${target.pathname}${target.search}`,
         agent: geminiHttpsAgent,
-        headers: {
-          "Content-Type": "application/json",
-          "Content-Length": Buffer.byteLength(params.payload),
-          "x-goog-api-key": params.apiKey,
-        },
+        headers,
       },
       (response) => {
         const chunks: Buffer[] = [];
@@ -357,6 +400,7 @@ async function postGeminiGenerateContent(params: {
           resolve({
             status: response.statusCode ?? 0,
             body: Buffer.concat(chunks).toString("utf-8"),
+            headers: response.headers,
           });
         });
       }
@@ -366,9 +410,185 @@ async function postGeminiGenerateContent(params: {
       request.destroy(new Error(`Gemini request timed out after ${params.timeoutMs}ms`));
     });
     request.on("error", reject);
-    request.write(params.payload);
+    if (payloadBuffer) request.write(payloadBuffer);
     request.end();
   });
+}
+
+function parseJsonResponse<T>(body: string): T | null {
+  try {
+    return JSON.parse(body) as T;
+  } catch {
+    return null;
+  }
+}
+
+function getGeminiFileFromResponse(body: string): GeminiFileResource | null {
+  const parsed = parseJsonResponse<GeminiFileResponse | GeminiFileResource>(body);
+  if (!parsed) return null;
+  if (isPlainObject((parsed as GeminiFileResponse).file)) {
+    return (parsed as GeminiFileResponse).file as GeminiFileResource;
+  }
+  return isPlainObject(parsed) ? (parsed as GeminiFileResource) : null;
+}
+
+function getGeminiFileErrorMessage(file: GeminiFileResource | null): string | null {
+  if (!file?.error) return null;
+  if (typeof file.error.message === "string" && file.error.message.trim()) return file.error.message.trim();
+  if (typeof file.error.code === "number") return `Gemini file processing failed with code ${file.error.code}.`;
+  return "Gemini file processing failed.";
+}
+
+function buildGeminiFileMetadataUrl(name: string): string {
+  const trimmed = name.trim().replace(/^\/+/, "");
+  const normalized = trimmed.startsWith("files/") ? trimmed : `files/${trimmed}`;
+  return `${GEMINI_FILES_METADATA_URL}/${normalized}`;
+}
+
+async function startGeminiFileUpload(params: {
+  apiKey: string;
+  timeoutMs: number;
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+}): Promise<string> {
+  const response = await postGeminiGenerateContent({
+    url: GEMINI_FILES_UPLOAD_URL,
+    apiKey: params.apiKey,
+    timeoutMs: params.timeoutMs,
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Goog-Upload-Protocol": "resumable",
+      "X-Goog-Upload-Command": "start",
+      "X-Goog-Upload-Header-Content-Length": String(params.sizeBytes),
+      "X-Goog-Upload-Header-Content-Type": params.mimeType,
+    },
+    payload: JSON.stringify({
+      file: {
+        displayName: params.filename,
+      },
+    }),
+  });
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error(`Gemini file upload start failed: ${response.status} ${response.body}`);
+  }
+  const uploadUrlHeader = response.headers["x-goog-upload-url"];
+  const uploadUrl = Array.isArray(uploadUrlHeader) ? uploadUrlHeader[0] : uploadUrlHeader;
+  if (!uploadUrl || typeof uploadUrl !== "string") {
+    throw new Error("Gemini file upload start succeeded but did not return an upload URL.");
+  }
+  return uploadUrl.trim();
+}
+
+async function finalizeGeminiFileUpload(params: {
+  uploadUrl: string;
+  timeoutMs: number;
+  buffer: Buffer;
+}): Promise<GeminiFileResource> {
+  const response = await postGeminiGenerateContent({
+    url: params.uploadUrl,
+    timeoutMs: params.timeoutMs,
+    method: "POST",
+    headers: {
+      "X-Goog-Upload-Offset": "0",
+      "X-Goog-Upload-Command": "upload, finalize",
+    },
+    payload: params.buffer,
+  });
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error(`Gemini file upload finalize failed: ${response.status} ${response.body}`);
+  }
+  const file = getGeminiFileFromResponse(response.body);
+  if (!file?.name) {
+    throw new Error("Gemini file upload finalize succeeded but did not return a file resource.");
+  }
+  return file;
+}
+
+async function getGeminiFile(params: {
+  apiKey: string;
+  timeoutMs: number;
+  name: string;
+}): Promise<GeminiFileResource> {
+  const response = await postGeminiGenerateContent({
+    url: buildGeminiFileMetadataUrl(params.name),
+    apiKey: params.apiKey,
+    timeoutMs: params.timeoutMs,
+    method: "GET",
+  });
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error(`Gemini file get failed: ${response.status} ${response.body}`);
+  }
+  const file = getGeminiFileFromResponse(response.body);
+  if (!file?.name) {
+    throw new Error("Gemini file get succeeded but did not return a file resource.");
+  }
+  return file;
+}
+
+async function deleteGeminiFile(params: {
+  apiKey: string;
+  timeoutMs: number;
+  name: string;
+}): Promise<void> {
+  const response = await postGeminiGenerateContent({
+    url: buildGeminiFileMetadataUrl(params.name),
+    apiKey: params.apiKey,
+    timeoutMs: params.timeoutMs,
+    method: "DELETE",
+  });
+  if (response.status >= 200 && response.status < 300) return;
+  if (response.status === 404) return;
+  throw new Error(`Gemini file delete failed: ${response.status} ${response.body}`);
+}
+
+async function uploadGeminiFileAndWaitUntilReady(params: {
+  apiKey: string;
+  timeoutMs: number;
+  document: OmInputDocument;
+}): Promise<{ file: GeminiFileResource; uploadDurationMs: number; processingDurationMs: number }> {
+  const uploadStartedAt = Date.now();
+  const uploadUrl = await startGeminiFileUpload({
+    apiKey: params.apiKey,
+    timeoutMs: params.timeoutMs,
+    filename: params.document.filename,
+    mimeType: params.document.mimeType ?? "application/pdf",
+    sizeBytes: params.document.buffer.length,
+  });
+  let file = await finalizeGeminiFileUpload({
+    uploadUrl,
+    timeoutMs: params.timeoutMs,
+    buffer: params.document.buffer,
+  });
+  const uploadDurationMs = Date.now() - uploadStartedAt;
+
+  const processingStartedAt = Date.now();
+  while (file.state === "PROCESSING" || file.state === "STATE_UNSPECIFIED") {
+    await sleep(GEMINI_FILE_POLL_INTERVAL_MS);
+    file = await getGeminiFile({
+      apiKey: params.apiKey,
+      timeoutMs: params.timeoutMs,
+      name: file.name ?? "",
+    });
+  }
+  const processingDurationMs = Date.now() - processingStartedAt;
+
+  if (file.state === "FAILED") {
+    throw new Error(
+      getGeminiFileErrorMessage(file)
+      ?? `Gemini file processing failed for ${params.document.filename}.`
+    );
+  }
+  if (!file.uri) {
+    throw new Error(`Gemini file processing finished without a file URI for ${params.document.filename}.`);
+  }
+
+  return {
+    file,
+    uploadDurationMs,
+    processingDurationMs,
+  };
 }
 
 export async function extractOmAnalysisFromGeminiPdfOnly(
@@ -401,115 +621,173 @@ export async function extractOmAnalysisFromGeminiPdfOnly(
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
     const timeoutMs = getGeminiTimeoutMs();
     const thinkingLevel = resolveGeminiOmThinkingLevel(model);
-    const payload = JSON.stringify({
-      contents: [
-        {
-          role: "user",
-          parts: [
-            ...pdfDocuments.map((doc) => ({
-              inlineData: {
-                mimeType: doc.mimeType ?? "application/pdf",
-                data: doc.buffer.toString("base64"),
-              },
-            })),
-            {
-              text: prompt,
-            },
-          ],
-        },
-      ],
-      generationConfig: {
-        temperature: 0,
-        responseMimeType: "application/json",
-        responseJsonSchema: buildStructuredOutputSchema(),
-        thinkingConfig: thinkingLevel ? { thinkingLevel } : undefined,
-      },
-    });
-    const requestStartedAt = Date.now();
-    const response = await postGeminiGenerateContent({
-      url,
-      apiKey,
-      timeoutMs,
-      payload,
-    });
-    const requestDurationMs = Date.now() - requestStartedAt;
+    const uploadedFiles: GeminiFileResource[] = [];
+    let totalFileUploadMs = 0;
+    let totalFileProcessingMs = 0;
 
-    if (response.status < 200 || response.status >= 300) {
-      const bodyText = response.body;
-      console.error(`[extractOmAnalysisFromGeminiPdfOnly] Gemini call failed: ${response.status} ${bodyText}`);
-      return emptyResult(model);
-    }
-
-    let data: GeminiGenerateContentResponse;
     try {
-      data = JSON.parse(response.body) as GeminiGenerateContentResponse;
-    } catch (error) {
-      console.error("[extractOmAnalysisFromGeminiPdfOnly] Failed to parse Gemini API response JSON", {
-        model,
-        error: error instanceof Error ? error.message : String(error),
-        bodyPreview: response.body.slice(0, 400),
+      const uploadedPdfDocuments: Array<{ file: GeminiFileResource; document: OmInputDocument }> = [];
+      for (const document of pdfDocuments) {
+        const uploaded = await uploadGeminiFileAndWaitUntilReady({
+          apiKey,
+          timeoutMs,
+          document,
+        });
+        uploadedFiles.push(uploaded.file);
+        uploadedPdfDocuments.push({
+          file: uploaded.file,
+          document,
+        });
+        totalFileUploadMs += uploaded.uploadDurationMs;
+        totalFileProcessingMs += uploaded.processingDurationMs;
+        console.info("[extractOmAnalysisFromGeminiPdfOnly] Uploaded Gemini OM file", {
+          model,
+          filename: document.filename,
+          fileName: uploaded.file.name ?? null,
+          fileUri: uploaded.file.uri ?? null,
+          fileState: uploaded.file.state ?? null,
+          sizeBytes: document.buffer.length,
+          uploadDurationMs: uploaded.uploadDurationMs,
+          processingDurationMs: uploaded.processingDurationMs,
+        });
+      }
+
+      const payload = JSON.stringify({
+        contents: [
+          {
+            role: "user",
+            parts: [
+              ...uploadedPdfDocuments.map(({ file, document }) => ({
+                fileData: {
+                  mimeType: file.mimeType ?? document.mimeType ?? "application/pdf",
+                  fileUri: file.uri,
+                },
+              })),
+              {
+                text: prompt,
+              },
+            ],
+          },
+        ],
+        generationConfig: {
+          temperature: 0,
+          responseMimeType: "application/json",
+          responseJsonSchema: buildStructuredOutputSchema(),
+          thinkingConfig: thinkingLevel ? { thinkingLevel } : undefined,
+        },
       });
-      return emptyResult(model);
-    }
-    if (data.promptFeedback?.blockReason) {
-      console.error(
-        `[extractOmAnalysisFromGeminiPdfOnly] Gemini blocked the request: ${data.promptFeedback.blockReason}`
-      );
-      return emptyResult(model);
-    }
+      const requestStartedAt = Date.now();
+      const response = await postGeminiGenerateContent({
+        url,
+        apiKey,
+        timeoutMs,
+        payload,
+      });
+      const requestDurationMs = Date.now() - requestStartedAt;
 
-    const rawOutput = getResponseText(data);
-    const finishReason =
-      Array.isArray(data.candidates) && typeof data.candidates[0]?.finishReason === "string"
-        ? data.candidates[0].finishReason
-        : null;
-    const usage = data.usageMetadata;
-    const cacheHitTokens = sumTokenCounts(usage?.cacheTokensDetails);
+      if (response.status < 200 || response.status >= 300) {
+        const bodyText = response.body;
+        console.error(`[extractOmAnalysisFromGeminiPdfOnly] Gemini call failed: ${response.status} ${bodyText}`);
+        return emptyResult(model);
+      }
 
-    console.info("[extractOmAnalysisFromGeminiPdfOnly] Gemini OM request completed", {
-      model,
-      documentCount: pdfDocuments.length,
-      totalFileBytes: pdfDocuments.reduce((sum, doc) => sum + doc.buffer.length, 0),
-      queueWaitMs,
-      requestDurationMs,
-      queuedBehind: pendingBeforeQueue,
-      thinkingLevel,
-      finishReason,
-      promptTokenCount: usage?.promptTokenCount ?? null,
-      candidatesTokenCount: usage?.candidatesTokenCount ?? null,
-      thoughtsTokenCount: usage?.thoughtsTokenCount ?? null,
-      totalTokenCount: usage?.totalTokenCount ?? null,
-      cachedContentTokenCount: usage?.cachedContentTokenCount ?? null,
-      cacheHitTokens,
-    });
+      let data: GeminiGenerateContentResponse;
+      try {
+        data = JSON.parse(response.body) as GeminiGenerateContentResponse;
+      } catch (error) {
+        console.error("[extractOmAnalysisFromGeminiPdfOnly] Failed to parse Gemini API response JSON", {
+          model,
+          error: error instanceof Error ? error.message : String(error),
+          bodyPreview: response.body.slice(0, 400),
+        });
+        return emptyResult(model);
+      }
+      if (data.promptFeedback?.blockReason) {
+        console.error(
+          `[extractOmAnalysisFromGeminiPdfOnly] Gemini blocked the request: ${data.promptFeedback.blockReason}`
+        );
+        return emptyResult(model);
+      }
 
-    const parsed = parseCompletionJsonContent(rawOutput);
-    if (!parsed) {
-      const parseError =
-        finishReason === "MAX_TOKENS"
-          ? "Gemini returned truncated JSON output before completing the structured response."
-          : "Gemini returned malformed JSON for the structured OM response.";
-      console.warn("[extractOmAnalysisFromGeminiPdfOnly] Failed to parse Gemini OM JSON payload", {
+      const rawOutput = getResponseText(data);
+      const finishReason =
+        Array.isArray(data.candidates) && typeof data.candidates[0]?.finishReason === "string"
+          ? data.candidates[0].finishReason
+          : null;
+      const usage = data.usageMetadata;
+      const cacheHitTokens = sumTokenCounts(usage?.cacheTokensDetails);
+
+      console.info("[extractOmAnalysisFromGeminiPdfOnly] Gemini OM request completed", {
         model,
+        documentCount: pdfDocuments.length,
+        totalFileBytes: pdfDocuments.reduce((sum, doc) => sum + doc.buffer.length, 0),
+        queueWaitMs,
+        requestDurationMs,
+        queuedBehind: pendingBeforeQueue,
+        thinkingLevel,
         finishReason,
-        parseError,
-        rawOutputPreview: summarizeRawOutputForLog(rawOutput),
+        promptTokenCount: usage?.promptTokenCount ?? null,
+        candidatesTokenCount: usage?.candidatesTokenCount ?? null,
+        thoughtsTokenCount: usage?.thoughtsTokenCount ?? null,
+        totalTokenCount: usage?.totalTokenCount ?? null,
+        cachedContentTokenCount: usage?.cachedContentTokenCount ?? null,
+        cacheHitTokens,
+        totalFileUploadMs,
+        totalFileProcessingMs,
       });
+
+      const parsed = parseCompletionJsonContent(rawOutput);
+      if (!parsed) {
+        const parseError =
+          finishReason === "MAX_TOKENS"
+            ? "Gemini returned truncated JSON output before completing the structured response."
+            : "Gemini returned malformed JSON for the structured OM response.";
+        console.warn("[extractOmAnalysisFromGeminiPdfOnly] Failed to parse Gemini OM JSON payload", {
+          model,
+          finishReason,
+          parseError,
+          rawOutputPreview: summarizeRawOutputForLog(rawOutput),
+        });
+        return {
+          ...emptyResult(model),
+          rawOutput,
+          finishReason,
+          parseError,
+        };
+      }
+
+      const omAnalysis = omAnalysisFromParsedJson(applyInferredSourceCoverage(parsed));
       return {
-        ...emptyResult(model),
+        fromLlm: fromLlmFromOmAnalysis(omAnalysis),
+        omAnalysis,
+        model,
         rawOutput,
         finishReason,
-        parseError,
       };
+    } finally {
+      const fileNames = uploadedFiles
+        .map((file) => file.name)
+        .filter((name): name is string => typeof name === "string" && name.trim().length > 0);
+      if (fileNames.length > 0) {
+        const deletionResults = await Promise.allSettled(
+          fileNames.map((name) =>
+            deleteGeminiFile({
+              apiKey,
+              timeoutMs,
+              name,
+            })
+          )
+        );
+        for (let index = 0; index < deletionResults.length; index += 1) {
+          const result = deletionResults[index];
+          if (result?.status === "rejected") {
+            console.warn("[extractOmAnalysisFromGeminiPdfOnly] Failed to delete Gemini file", {
+              fileName: fileNames[index] ?? null,
+              error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+            });
+          }
+        }
+      }
     }
-
-    const omAnalysis = omAnalysisFromParsedJson(applyInferredSourceCoverage(parsed));
-    return {
-      fromLlm: fromLlmFromOmAnalysis(omAnalysis),
-      omAnalysis,
-      model,
-      rawOutput,
-      finishReason,
-    };
   });
 }
