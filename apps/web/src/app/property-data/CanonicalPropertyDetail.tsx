@@ -441,6 +441,7 @@ export function CanonicalPropertyDetail({
   const [dossierSettingsSaving, setDossierSettingsSaving] = useState(false);
   const [dossierError, setDossierError] = useState<string | null>(null);
   const [dossierGenerating, setDossierGenerating] = useState(false);
+  const [authoritativeOmRefreshing, setAuthoritativeOmRefreshing] = useState(false);
   const hasAutoSavedRef = React.useRef(false);
   const [sendAnotherConfirm, setSendAnotherConfirm] = useState(false);
   const [dosEntityLoading, setDosEntityLoading] = useState(false);
@@ -924,6 +925,7 @@ export function CanonicalPropertyDetail({
     (dossierDraft.furnishingSetupCosts ?? null) !== (savedDossierDraft.furnishingSetupCosts ?? null);
   const isDossierBusy =
     dossierGenerating ||
+    authoritativeOmRefreshing ||
     dossierSettingsSaving ||
     dossierJob?.status === "running" ||
     persistedDossierGeneration?.status === "running";
@@ -1047,8 +1049,60 @@ export function CanonicalPropertyDetail({
     }
   };
 
+  const handleRefreshAuthoritativeOm = async () => {
+    if (authoritativeOmRefreshing || !hasOmDocument) return;
+    try {
+      setAuthoritativeOmRefreshing(true);
+      setDossierError(null);
+      onWorkflowActivity?.();
+
+      const res = await fetch(`${API_BASE}/api/properties/${property.id}/refresh-om-financials`, {
+        method: "POST",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          typeof data?.details === "string"
+            ? data.details
+            : typeof data?.error === "string"
+              ? data.error
+              : "Failed to build authoritative OM"
+        );
+      }
+
+      await Promise.all([
+        refreshPropertySnapshot().catch(() => {}),
+        fetch(`${API_BASE}/api/properties/${property.id}/documents`)
+          .then((r) => r.json())
+          .then((docs) => setUnifiedDocuments(docs?.documents ?? []))
+          .catch(() => {}),
+      ]);
+
+      onRefreshPropertyData?.();
+      onWorkflowActivity?.();
+      onDossierNotice?.(property.id, {
+        type: "success",
+        message: `Authoritative OM ready for ${property.canonicalAddress}.`,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to build authoritative OM";
+      setDossierError(message);
+      onDossierNotice?.(property.id, {
+        type: "error",
+        message: `Authoritative OM refresh failed for ${property.canonicalAddress}: ${message}`,
+      });
+      onWorkflowActivity?.();
+    } finally {
+      setAuthoritativeOmRefreshing(false);
+    }
+  };
+
   const handleGenerateDossier = async () => {
     if (dossierGenerating) return;
+    if (!hasAuthoritativeOm) {
+      setDossierError("Generate dossier requires a promoted authoritative OM snapshot. Build the authoritative OM first.");
+      return;
+    }
     try {
       const savedDraft = await persistDossierSettings();
       const startedAt = Date.now();
@@ -1070,7 +1124,13 @@ export function CanonicalPropertyDetail({
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        throw new Error(typeof data?.error === "string" ? data.error : data?.details ?? "Failed to generate dossier");
+        throw new Error(
+          typeof data?.details === "string"
+            ? data.details
+            : typeof data?.error === "string"
+              ? data.error
+              : "Failed to generate dossier"
+        );
       }
 
       await Promise.all([
@@ -1484,6 +1544,23 @@ export function CanonicalPropertyDetail({
                   </div>
                 </div>
               )}
+              {!hasAuthoritativeOm && (
+                <div
+                  style={{
+                    marginTop: "1rem",
+                    padding: "0.85rem 1rem",
+                    borderRadius: "10px",
+                    border: "1px solid #cbd5e1",
+                    background: "#f8fafc",
+                    color: "#334155",
+                    fontSize: "0.92rem",
+                  }}
+                >
+                  {hasOmDocument
+                    ? "Generate dossier now requires a promoted authoritative OM snapshot. Build the authoritative OM first, then run dossier generation."
+                    : "Upload an OM, brochure, or rent roll before generating a dossier."}
+                </div>
+              )}
               <div style={{ display: "flex", flexWrap: "wrap", gap: "0.65rem", marginTop: "1rem" }}>
                 <button
                   type="button"
@@ -1527,9 +1604,27 @@ export function CanonicalPropertyDetail({
                 >
                   Use formula default
                 </button>
+                {hasOmDocument && !hasAuthoritativeOm && (
+                  <button
+                    type="button"
+                    disabled={isDossierBusy}
+                    onClick={handleRefreshAuthoritativeOm}
+                    style={{
+                      padding: "0.55rem 0.9rem",
+                      borderRadius: "8px",
+                      border: "1px solid #0f766e",
+                      background: "#ecfeff",
+                      color: "#115e59",
+                      fontWeight: 600,
+                      cursor: isDossierBusy ? "not-allowed" : "pointer",
+                    }}
+                  >
+                    {authoritativeOmRefreshing ? "Building OM..." : "Build authoritative OM"}
+                  </button>
+                )}
                 <button
                   type="button"
-                  disabled={isDossierBusy}
+                  disabled={isDossierBusy || !hasAuthoritativeOm}
                   onClick={handleGenerateDossier}
                   style={{
                     padding: "0.55rem 1rem",
@@ -1538,10 +1633,11 @@ export function CanonicalPropertyDetail({
                     background: "#0066cc",
                     color: "#fff",
                     fontWeight: 600,
-                    cursor: isDossierBusy ? "not-allowed" : "pointer",
+                    cursor: isDossierBusy || !hasAuthoritativeOm ? "not-allowed" : "pointer",
+                    opacity: !hasAuthoritativeOm ? 0.65 : 1,
                   }}
                 >
-                  {isDossierBusy ? "Generating…" : "Generate dossier"}
+                  {dossierGenerating ? "Generating..." : "Generate dossier"}
                 </button>
                 <a
                   href={`/dossier-assumptions?property_id=${encodeURIComponent(property.id)}`}

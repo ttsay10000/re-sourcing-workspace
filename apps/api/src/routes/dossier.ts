@@ -7,7 +7,6 @@ import type { PropertyDetails } from "@re-sourcing/contracts";
 import { getPool, UserProfileRepo, PropertyRepo, MatchRepo, ListingRepo } from "@re-sourcing/db";
 import { runGenerateDossier } from "../deal/runGenerateDossier.js";
 import { getDossierGenerationQueue, runWithDossierGenerationQueue } from "../deal/dossierGenerationQueue.js";
-import { refreshAuthoritativeOmForProperty } from "../om/ingestAuthoritativeOm.js";
 import { isGeminiAuthoritativeOmSnapshot } from "../om/authoritativeOm.js";
 import { resolveCurrentFinancialsFromDetails } from "../rental/currentFinancials.js";
 import { resolveDossierAssumptions, type DossierAssumptionOverrides } from "../deal/underwritingModel.js";
@@ -25,6 +24,8 @@ import {
 
 const router = Router();
 const MISSING_AUTHORITATIVE_OM_ERROR = "Authoritative OM snapshot required before dossier generation and deal scoring.";
+const MISSING_AUTHORITATIVE_OM_DETAILS =
+  "Generate dossier requires a promoted authoritative OM snapshot. Run OM refresh first.";
 
 async function getDefaultUserId(): Promise<string> {
   const pool = getPool();
@@ -285,103 +286,39 @@ router.post("/dossier/generate", async (req: Request, res: Response) => {
         ],
       });
       if (requiresGeminiRefresh) {
-        const refreshStartedAtMs = Date.now();
         await upsertWorkflowStep(workflowRunId, {
           stepKey: "dossier",
           totalItems: 1,
           completedItems: 0,
-          failedItems: 0,
-          status: "running",
+          failedItems: 1,
+          status: "failed",
           startedAt: workflowStartedAt,
-          lastMessage: "Refreshing Gemini authoritative OM before dossier generation",
+          finishedAt: new Date().toISOString(),
+          lastError: MISSING_AUTHORITATIVE_OM_DETAILS,
+          lastMessage: "Authoritative OM required before dossier generation",
         });
-
-        const refresh = await refreshAuthoritativeOmForProperty(propertyId, pool, { triggerDossier: false });
-        if (refresh.error) {
-          throw new Error(refresh.error);
-        }
-        console.info("[dossier generate] Authoritative OM refresh completed", {
-          propertyId,
-          workflowRunId,
-          refreshDurationMs: Date.now() - refreshStartedAtMs,
-          authoritativeOmRunId: refresh.runId,
-          authoritativeOmSnapshotId: refresh.snapshotId,
-        });
-
         await mergeWorkflowRunMetadata(workflowRunId, {
-          authoritativeOmRunId: refresh.runId,
-          authoritativeOmSnapshotId: refresh.snapshotId,
+          error: MISSING_AUTHORITATIVE_OM_DETAILS,
+          authoritativeOmRequired: true,
         });
-        await upsertWorkflowStep(workflowRunId, {
-          stepKey: "dossier",
-          totalItems: 1,
-          completedItems: 0,
-          failedItems: 0,
-          status: "running",
-          startedAt: workflowStartedAt,
-          lastMessage: "Gemini authoritative OM refreshed; generating dossier",
+        await updateWorkflowRun(workflowRunId, {
+          status: "failed",
+          finishedAt: new Date().toISOString(),
         });
+        res.status(409).json({
+          error: MISSING_AUTHORITATIVE_OM_ERROR,
+          details: MISSING_AUTHORITATIVE_OM_DETAILS,
+          code: "authoritative_om_required",
+        });
+        return;
       }
-      let result;
-      try {
-        const dossierStartedAtMs = Date.now();
-        result = await runGenerateDossier(propertyId, assumptions);
-        console.info("[dossier generate] Dossier generation completed", {
-          propertyId,
-          workflowRunId,
-          dossierDurationMs: Date.now() - dossierStartedAtMs,
-        });
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        if (message !== MISSING_AUTHORITATIVE_OM_ERROR || requiresGeminiRefresh) throw err;
-
-        const refreshStartedAtMs = Date.now();
-        await upsertWorkflowStep(workflowRunId, {
-          stepKey: "dossier",
-          totalItems: 1,
-          completedItems: 0,
-          failedItems: 0,
-          status: "running",
-          startedAt: workflowStartedAt,
-          lastMessage: "Refreshing Gemini authoritative OM before dossier generation",
-        });
-
-        const refresh = await refreshAuthoritativeOmForProperty(propertyId, pool, { triggerDossier: false });
-        if (refresh.error) {
-          throw new Error(refresh.error);
-        }
-        console.info("[dossier generate] Authoritative OM refresh completed", {
-          propertyId,
-          workflowRunId,
-          refreshDurationMs: Date.now() - refreshStartedAtMs,
-          authoritativeOmRunId: refresh.runId,
-          authoritativeOmSnapshotId: refresh.snapshotId,
-          triggeredAfterMissingSnapshotError: true,
-        });
-
-        await mergeWorkflowRunMetadata(workflowRunId, {
-          authoritativeOmRunId: refresh.runId,
-          authoritativeOmSnapshotId: refresh.snapshotId,
-        });
-        await upsertWorkflowStep(workflowRunId, {
-          stepKey: "dossier",
-          totalItems: 1,
-          completedItems: 0,
-          failedItems: 0,
-          status: "running",
-          startedAt: workflowStartedAt,
-          lastMessage: "Gemini authoritative OM refreshed; generating dossier",
-        });
-
-        const dossierStartedAtMs = Date.now();
-        result = await runGenerateDossier(propertyId, assumptions);
-        console.info("[dossier generate] Dossier generation completed", {
-          propertyId,
-          workflowRunId,
-          dossierDurationMs: Date.now() - dossierStartedAtMs,
-          refreshedAfterMissingSnapshotError: true,
-        });
-      }
+      const dossierStartedAtMs = Date.now();
+      const result = await runGenerateDossier(propertyId, assumptions, { sendEmail: false });
+      console.info("[dossier generate] Dossier generation completed", {
+        propertyId,
+        workflowRunId,
+        dossierDurationMs: Date.now() - dossierStartedAtMs,
+      });
       await upsertWorkflowStep(workflowRunId, {
         stepKey: "dossier",
         totalItems: 1,

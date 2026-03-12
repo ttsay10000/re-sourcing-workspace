@@ -4,6 +4,7 @@
 
 import type {
   PropertyDealDossierGeneration,
+  PropertyDealDossierSummary,
   PropertyDetails,
 } from "@re-sourcing/contracts";
 import { deriveListingActivitySummary, describeListingActivity } from "@re-sourcing/contracts";
@@ -18,7 +19,6 @@ import {
   DocumentRepo,
 } from "@re-sourcing/db";
 import { randomUUID } from "crypto";
-import { sendMessageWithAttachments } from "../inquiry/gmailClient.js";
 import {
   getAuthoritativeOmSnapshot,
   resolvePreferredOmExpenseTable,
@@ -36,7 +36,6 @@ import { buildDossierStructuredText } from "./dossierGenerator.js";
 import { dossierTextToPdf } from "./dossierToPdf.js";
 import { buildExcelProForma } from "./excelProForma.js";
 import { deleteGeneratedDocumentFile, saveGeneratedDocument } from "./generatedDocStorage.js";
-import { analyzePropertyConditionReview } from "./propertyConditionReview.js";
 import { buildSensitivityAnalyses } from "./sensitivityAnalysis.js";
 import {
   propertyOverviewFromDetails,
@@ -64,7 +63,7 @@ export interface GenerateDossierResult {
   excelDoc: { id: string; fileName: string; storagePath: string };
   /** Deal score 0–100 from the deterministic scoring engine; included so UI can confirm it flowed through. */
   dealScore: number | null;
-  /** True if email was sent to profile email with attachments. */
+  /** Legacy field retained for API compatibility; browser-triggered dossier runs no longer send email. */
   emailSent?: boolean;
 }
 
@@ -85,6 +84,50 @@ function runningGenerationState(
     dealScore: null,
     dossierDocumentId: null,
     excelDocumentId: null,
+  };
+}
+
+function buildPersistedDossierSummary(params: {
+  generatedAt: string;
+  dealSignalsId: string;
+  dealSignalsGeneratedAt: string;
+  dossierDocumentId: string;
+  excelDocumentId: string;
+  askingPrice: number | null;
+  purchasePrice: number | null;
+  recommendedOffer: ReturnType<typeof computeRecommendedOffer>;
+  projection: ReturnType<typeof computeUnderwritingProjection>;
+  currentNoi: number | null;
+  adjustedNoi: number | null;
+  finalScore: number | null;
+  calculatedScore: number | null;
+  holdYears: number;
+}): PropertyDealDossierSummary {
+  return {
+    generatedAt: params.generatedAt,
+    askingPrice: params.askingPrice,
+    purchasePrice: params.purchasePrice,
+    recommendedOfferLow: params.recommendedOffer.recommendedOfferLow,
+    recommendedOfferHigh: params.recommendedOffer.recommendedOfferHigh,
+    targetIrrPct: params.recommendedOffer.targetIrrPct,
+    discountToAskingPct: params.recommendedOffer.discountToAskingPct,
+    irrAtAskingPct: params.recommendedOffer.irrAtAskingPct,
+    targetMetAtAsking: params.recommendedOffer.targetMetAtAsking,
+    currentNoi: params.currentNoi,
+    adjustedNoi: params.adjustedNoi,
+    stabilizedNoi: params.projection.operating.stabilizedNoi ?? params.adjustedNoi,
+    annualDebtService: params.projection.financing.annualDebtService,
+    year1EquityYield: params.projection.returns.year1EquityYield,
+    irrPct: params.projection.returns.irr,
+    equityMultiple: params.projection.returns.equityMultiple,
+    cocPct: params.projection.returns.averageCashOnCashReturn,
+    holdYears: params.holdYears,
+    dealScore: params.finalScore,
+    calculatedDealScore: params.calculatedScore,
+    dealSignalsId: params.dealSignalsId,
+    dealSignalsGeneratedAt: params.dealSignalsGeneratedAt,
+    dossierDocumentId: params.dossierDocumentId,
+    excelDocumentId: params.excelDocumentId,
   };
 }
 
@@ -288,7 +331,7 @@ function rentStabilizedUnitCount(
 export async function runGenerateDossier(
   propertyId: string,
   assumptionOverrides?: DossierAssumptionOverrides | null,
-  options?: RunGenerateDossierOptions
+  _options?: RunGenerateDossierOptions
 ): Promise<GenerateDossierResult> {
   const generationStartedAtMs = Date.now();
   const pool = getPool();
@@ -396,19 +439,6 @@ export async function runGenerateDossier(
       expenseRowCount: expenseRows.length,
     });
 
-    const conditionReviewStartedAtMs = Date.now();
-    const conditionReview = await analyzePropertyConditionReview({
-      canonicalAddress: property.canonicalAddress,
-      listing,
-      details,
-      omAnalysis: null,
-    });
-    console.info("[runGenerateDossier] Condition review completed", {
-      propertyId,
-      durationMs: Date.now() - conditionReviewStartedAtMs,
-      usedImageReview: conditionReview?.source === "images_and_text",
-      imageCountAnalyzed: conditionReview?.imageCountAnalyzed ?? 0,
-    });
     const packageContext = resolveDossierPackageContext(property.canonicalAddress, details);
     const propertyOverview = propertyOverviewFromDetails(details, packageContext);
     const financialFlags: string[] = [];
@@ -576,7 +606,6 @@ export async function runGenerateDossier(
       yearlyCashFlow: projection.yearly,
       propertyMix: assumptions.propertyMix,
       recommendedOffer,
-      conditionReview,
     };
 
     const dateStr = new Date().toISOString().slice(0, 10);
@@ -670,7 +699,7 @@ export async function runGenerateDossier(
 
     await setGenerationState(runningGenerationState(startedAt, "Saving documents"));
     const saveStartedAtMs = Date.now();
-    await signalsRepo.insert({
+    const persistedSignals = await signalsRepo.insert({
       ...insertParams,
       irrPct: projection.returns.irr ?? null,
       equityMultiple: projection.returns.equityMultiple ?? null,
@@ -720,58 +749,41 @@ export async function runGenerateDossier(
       durationMs: Date.now() - saveStartedAtMs,
       dossierDocumentId: dossierDoc.id,
       excelDocumentId: excelDoc.id,
+      dealSignalsId: persistedSignals.id,
     });
 
-    let emailSent = false;
-    const toEmail = profile.email?.trim();
-    if (options?.sendEmail !== false && toEmail && dossierBuffer.length > 0 && excelBuffer.length > 0) {
-      try {
-        const emailStartedAtMs = Date.now();
-        await sendMessageWithAttachments(
-          toEmail,
-          `Deal dossier: ${packageContext.dossierAddress}`,
-          `Your deal dossier and Excel pro forma for ${packageContext.dossierAddress} are attached.`,
-          [
-            {
-              filename: dossierFileName,
-              buffer: dossierBuffer,
-              mimeType: "application/pdf",
-            },
-            {
-              filename: excelFileName,
-              buffer: excelBuffer,
-              mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            },
-          ]
-        );
-        emailSent = true;
-        console.info("[runGenerateDossier] Sent dossier email", {
-          propertyId,
-          durationMs: Date.now() - emailStartedAtMs,
-          toEmail,
-        });
-      } catch (err) {
-        console.error("[runGenerateDossier] Failed to send email:", err);
-      }
-    } else {
-      console.info("[runGenerateDossier] Skipped dossier email", {
-        propertyId,
-        reason:
-          options?.sendEmail === false
-            ? "sendEmail disabled"
-            : !toEmail
-              ? "profile email missing"
-              : dossierBuffer.length === 0 || excelBuffer.length === 0
-                ? "generated attachments missing"
-                : "not_applicable",
-      });
-    }
+    const completedAt = new Date().toISOString();
+    await propertyRepo.updateDetails(
+      propertyId,
+      "dealDossier.summary",
+      buildPersistedDossierSummary({
+        generatedAt: completedAt,
+        dossierDocumentId: dossierDoc.id,
+        excelDocumentId: excelDoc.id,
+        askingPrice: recommendedOffer.askingPrice,
+        purchasePrice: assumptions.acquisition.purchasePrice,
+        recommendedOffer,
+        projection,
+        currentNoi: currentNoi ?? null,
+        adjustedNoi: projection.operating.stabilizedNoi ?? currentNoi ?? null,
+        finalScore,
+        calculatedScore,
+        holdYears: assumptions.holdPeriodYears,
+        dealSignalsId: persistedSignals.id,
+        dealSignalsGeneratedAt: persistedSignals.generatedAt,
+      }) as Record<string, unknown>
+    );
+
+    const emailSent = false;
+    console.info("[runGenerateDossier] Dossier email disabled", {
+      propertyId,
+    });
 
     await setGenerationState({
       status: "completed",
       stageLabel: "Dossier ready",
       startedAt,
-      completedAt: new Date().toISOString(),
+      completedAt,
       lastError: null,
       dealScore: finalScore,
       dossierDocumentId: dossierDoc.id,
