@@ -55,6 +55,14 @@ export function hasAuthoritativeOmSnapshot(
   return getAuthoritativeOmSnapshot(details) != null;
 }
 
+export function isGeminiAuthoritativeOmSnapshot(
+  details: PropertyDetails | null | undefined
+): boolean {
+  const snapshot = getAuthoritativeOmSnapshot(details);
+  const parser = asRecord(snapshot?.sourceMeta)?.parser;
+  return asRecord(parser)?.provider === "gemini";
+}
+
 export function resolvePreferredOmPropertyInfo(
   details: PropertyDetails | null | undefined
 ): Record<string, unknown> | null {

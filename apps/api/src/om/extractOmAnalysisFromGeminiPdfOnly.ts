@@ -1,14 +1,14 @@
-import type { OmAnalysis } from "@re-sourcing/contracts";
 import https from "node:https";
 import { URL } from "node:url";
 import { OM_ANALYSIS_PROMPT_PREFIX } from "../rental/omAnalysisPrompt.js";
 import {
-  type ExtractRentalFinancialsResult,
   fromLlmFromOmAnalysis,
+  type OmAnalysisExtractionResult,
+  type OmInputDocument,
+  isPdfLikeOmInputDocument,
   omAnalysisFromParsedJson,
   parseCompletionJsonContent,
-  type OmInputDocument,
-} from "../rental/extractRentalFinancialsFromListing.js";
+} from "./omAnalysisShared.js";
 
 export interface GeminiPdfOnlyOmExtractionParams {
   documents: OmInputDocument[];
@@ -17,7 +17,7 @@ export interface GeminiPdfOnlyOmExtractionParams {
   model?: string | null;
 }
 
-export interface GeminiPdfOnlyOmExtractionResult extends ExtractRentalFinancialsResult {
+export interface GeminiPdfOnlyOmExtractionResult extends OmAnalysisExtractionResult {
   model: string;
   rawOutput: string | null;
   finishReason: string | null;
@@ -45,9 +45,11 @@ function getGeminiApiKey(): string | null {
   return key;
 }
 
-function getGeminiModel(explicit?: string | null): string {
+export const DEFAULT_GEMINI_OM_MODEL = "gemini-3-flash-preview";
+
+export function resolveGeminiOmModel(explicit?: string | null): string {
   const envModel = process.env.GEMINI_OM_MODEL;
-  return explicit?.trim() || envModel?.trim() || "gemini-3-flash-preview";
+  return explicit?.trim() || envModel?.trim() || DEFAULT_GEMINI_OM_MODEL;
 }
 
 function getGeminiTimeoutMs(): number {
@@ -317,14 +319,15 @@ export async function extractOmAnalysisFromGeminiPdfOnly(
   params: GeminiPdfOnlyOmExtractionParams
 ): Promise<GeminiPdfOnlyOmExtractionResult> {
   const documents = params.documents.filter((doc) => doc.buffer instanceof Buffer && doc.buffer.length > 0);
-  const model = getGeminiModel(params.model);
+  const pdfDocuments = documents.filter((doc) => isPdfLikeOmInputDocument(doc));
+  const model = resolveGeminiOmModel(params.model);
   const apiKey = getGeminiApiKey();
 
   if (!apiKey) {
     console.warn("[extractOmAnalysisFromGeminiPdfOnly] GEMINI_API_KEY missing or invalid; skipping Gemini call.");
     return emptyResult(model);
   }
-  if (documents.length === 0) {
+  if (pdfDocuments.length === 0) {
     console.warn("[extractOmAnalysisFromGeminiPdfOnly] No readable PDF documents were provided.");
     return emptyResult(model);
   }
@@ -332,7 +335,7 @@ export async function extractOmAnalysisFromGeminiPdfOnly(
   const prompt = buildPdfOnlyOmPrompt({
     propertyContext: params.propertyContext ?? null,
     enrichmentContext: params.enrichmentContext ?? null,
-    filenames: documents.map((doc) => doc.filename),
+    filenames: pdfDocuments.map((doc) => doc.filename),
   });
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
   const timeoutMs = getGeminiTimeoutMs();
@@ -341,7 +344,7 @@ export async function extractOmAnalysisFromGeminiPdfOnly(
       {
         role: "user",
         parts: [
-          ...documents.map((doc) => ({
+          ...pdfDocuments.map((doc) => ({
             inlineData: {
               mimeType: doc.mimeType ?? "application/pdf",
               data: doc.buffer.toString("base64"),
@@ -396,7 +399,7 @@ export async function extractOmAnalysisFromGeminiPdfOnly(
 
   const omAnalysis = omAnalysisFromParsedJson(applyInferredSourceCoverage(parsed));
   return {
-    fromLlm: fromLlmFromOmAnalysis(omAnalysis as OmAnalysis),
+    fromLlm: fromLlmFromOmAnalysis(omAnalysis),
     omAnalysis,
     model,
     rawOutput,

@@ -19,9 +19,10 @@ import {
 import { resolveInquiryFilePath } from "../inquiry/storage.js";
 import { runGenerateDossier } from "../deal/runGenerateDossier.js";
 import {
-  extractRentalFinancialsFromText,
   type OmInputDocument,
-} from "../rental/extractRentalFinancialsFromListing.js";
+  isPdfLikeOmInputDocument,
+} from "./omAnalysisShared.js";
+import { extractOmAnalysisFromGeminiPdfOnly, resolveGeminiOmModel } from "./extractOmAnalysisFromGeminiPdfOnly.js";
 import {
   type ResolvedCurrentFinancials,
   resolveCurrentFinancialsFromOmAnalysis,
@@ -30,7 +31,6 @@ import {
   sanitizeExpenseTableRows,
   sanitizeOmRentRollRows,
 } from "../rental/omAnalysisUtils.js";
-import { decideOmExtractionRouting } from "./omExtractionRouting.js";
 import { resolveUploadedDocFilePath } from "../upload/uploadedDocStorage.js";
 import { syncPropertySourcingWorkflow } from "../sourcing/workflow.js";
 
@@ -57,15 +57,7 @@ export interface OmAutomationDocument {
 
 interface PreparedOmAutomationDocument extends OmAutomationDocument {
   buffer: Buffer;
-  extractedText: string;
-  pageCount: number | null;
   fileBytes: number;
-  pageStats: Array<{
-    pageNumber: number;
-    textChars: number;
-    textItems: number;
-    textSample: string;
-  }>;
 }
 
 export interface IngestAuthoritativeOmParams {
@@ -241,13 +233,9 @@ async function buildDocumentPayloads(
   pool: Pool
 ): Promise<{
   preparedDocuments: PreparedOmAutomationDocument[];
-  readableTextSections: string[];
   skippedNoFile: number;
 }> {
-  const { extractTextMetadataFromBuffer } = await import("../upload/extractTextFromUploadedFile.js");
-
   const preparedDocuments: PreparedOmAutomationDocument[] = [];
-  const readableTextSections: string[] = [];
   let skippedNoFile = 0;
 
   for (const doc of documents) {
@@ -256,31 +244,23 @@ async function buildDocumentPayloads(
       skippedNoFile++;
       continue;
     }
-    const extracted = await extractTextMetadataFromBuffer(buffer, doc.filename);
     const prepared: PreparedOmAutomationDocument = {
       ...doc,
       buffer,
-      extractedText: extracted.text,
-      pageCount: extracted.pageCount,
       fileBytes: buffer.length,
-      pageStats: extracted.pages ?? [],
     };
     preparedDocuments.push(prepared);
-    if (prepared.extractedText.trim()) {
-      readableTextSections.push(`Document: ${doc.filename}\n${prepared.extractedText.trim()}`);
-    }
   }
 
   return {
     preparedDocuments,
-    readableTextSections,
     skippedNoFile,
   };
 }
 
 async function insertExtractedSnapshot(
   pool: Pool,
-  params: { runId: string; propertyId: string; extractionMethod: string; snapshot: OmAuthoritativeSnapshot }
+  params: { runId: string; propertyId: string; extractionMethod: string | null; snapshot: OmAuthoritativeSnapshot }
 ): Promise<void> {
   await pool.query(
     `INSERT INTO om_extracted_snapshots (run_id, property_id, extraction_method, snapshot)
@@ -429,25 +409,23 @@ export async function ingestAuthoritativeOm(
   let runId: string | null = null;
 
   try {
-    const { preparedDocuments, readableTextSections, skippedNoFile } = await buildDocumentPayloads(candidateDocuments, pool);
-    const routingDecision = decideOmExtractionRouting(
-      preparedDocuments.map((doc) => ({
-        id: doc.id,
+    const { preparedDocuments, skippedNoFile } = await buildDocumentPayloads(candidateDocuments, pool);
+    const geminiDocuments: OmInputDocument[] = preparedDocuments
+      .filter((doc) => isPdfLikeOmInputDocument(doc))
+      .map((doc) => ({
         filename: doc.filename,
-        mimeType: doc.mimeType ?? null,
-        fileBytes: doc.fileBytes,
-        pageCount: doc.pageCount,
-        extractedText: doc.extractedText,
-        pageStats: doc.pageStats,
-      }))
-    );
+        mimeType: doc.mimeType ?? "application/pdf",
+        buffer: doc.buffer,
+      }));
+    const geminiModel = resolveGeminiOmModel();
     const sourceMeta = {
       documents: candidateDocumentSourceMeta,
-      routing: {
-        extractionMethod: routingDecision.extractionMethod,
-        attachFileDocumentIds: routingDecision.attachFileDocumentIds,
-        rationale: routingDecision.rationale,
-        documents: routingDecision.documents,
+      parser: {
+        provider: "gemini",
+        mode: "pdf_only",
+        model: geminiModel,
+        documentCount: geminiDocuments.length,
+        documentFilenames: geminiDocuments.map((doc) => doc.filename),
       },
     };
     const unreadableFileError =
@@ -459,12 +437,12 @@ export async function ingestAuthoritativeOm(
       sourceDocumentId: candidateDocuments[0]?.id ?? null,
       sourceType: params.sourceType,
       status: unreadableFileError ? "failed" : "processing",
-      extractionMethod: routingDecision.extractionMethod,
-      pageCount: routingDecision.pageCount,
-      financialPageCount: routingDecision.financialPageCount,
-      ocrPageCount: routingDecision.ocrPageCount,
+      extractionMethod: null,
+      pageCount: null,
+      financialPageCount: null,
+      ocrPageCount: null,
       sourceMeta,
-      coverage: routingDecision.coverage,
+      coverage: null,
       lastError: unreadableFileError,
       completedAt: unreadableFileError ? new Date().toISOString() : null,
     });
@@ -480,29 +458,43 @@ export async function ingestAuthoritativeOm(
         error: unreadableFileError ?? "OM ingestion could not read any document bytes from the available files.",
       };
     }
-
-    const primaryDocumentFiles: OmInputDocument[] = preparedDocuments
-      .filter((doc) => routingDecision.attachFileDocumentIds.includes(doc.id))
-      .map((doc) => ({
-        filename: doc.filename,
-        mimeType: doc.mimeType ?? "application/pdf",
-        buffer: doc.buffer,
-      }));
-
-    const extracted = await extractRentalFinancialsFromText(readableTextSections.join("\n\n"), {
-      forceOmStyle: true,
-      documentFiles: primaryDocumentFiles,
-      omExtractionMethod: routingDecision.extractionMethod,
-    });
-    if (!extracted.omAnalysis) {
-      const error = "Authoritative OM extraction returned no structured OM analysis.";
+    if (geminiDocuments.length === 0) {
+      const error = "Authoritative OM ingestion requires at least one readable PDF document for Gemini parsing.";
       await ingestionRunRepo.update(run.id, {
         status: "failed",
-        extractionMethod: routingDecision.extractionMethod,
-        pageCount: routingDecision.pageCount,
-        financialPageCount: routingDecision.financialPageCount,
-        ocrPageCount: routingDecision.ocrPageCount,
-        coverage: routingDecision.coverage,
+        extractionMethod: null,
+        pageCount: null,
+        financialPageCount: null,
+        ocrPageCount: null,
+        coverage: null,
+        lastError: error,
+        completedAt: new Date().toISOString(),
+      });
+      return {
+        documentsProcessed: preparedDocuments.length,
+        documentsSkippedNoFile: skippedNoFile,
+        runId,
+        snapshotId: null,
+        dossierGenerated: false,
+        error,
+      };
+    }
+
+    const extracted = await extractOmAnalysisFromGeminiPdfOnly({
+      documents: geminiDocuments,
+      propertyContext: property.canonicalAddress ?? property.id,
+      enrichmentContext: null,
+      model: geminiModel,
+    });
+    if (!extracted.omAnalysis) {
+      const error = "Gemini authoritative OM extraction returned no structured OM analysis.";
+      await ingestionRunRepo.update(run.id, {
+        status: "failed",
+        extractionMethod: null,
+        pageCount: null,
+        financialPageCount: null,
+        ocrPageCount: null,
+        coverage: null,
         lastError: error,
         completedAt: new Date().toISOString(),
       });
@@ -548,14 +540,13 @@ export async function ingestAuthoritativeOm(
       revenueComposition: sanitizedOmAnalysis.revenueComposition ?? null,
       currentFinancials,
       coverage: {
-        ...(routingDecision.coverage ?? {}),
         ...(((sanitizedOmAnalysis.sourceCoverage as OmCoverage | null | undefined) ?? {})),
       },
     });
     const snapshotBase: OmAuthoritativeSnapshot = {
       runId: run.id,
       sourceDocumentId: candidateDocuments[0]?.id ?? null,
-      extractionMethod: routingDecision.extractionMethod,
+      extractionMethod: null,
       propertyInfo: sanitizedOmAnalysis.propertyInfo ?? null,
       rentRoll: sanitizedOmAnalysis.rentRoll ?? null,
       incomeStatement: sanitizedOmAnalysis.income ?? null,
@@ -569,12 +560,7 @@ export async function ingestAuthoritativeOm(
       sourceMeta: {
         sourceType: params.sourceType,
         documents: candidateDocumentSourceMeta,
-        routing: {
-          extractionMethod: routingDecision.extractionMethod,
-          attachFileDocumentIds: routingDecision.attachFileDocumentIds,
-          rationale: routingDecision.rationale,
-          documents: routingDecision.documents,
-        },
+        parser: sourceMeta.parser,
       },
       promotedAt: completedAt,
     };
@@ -586,7 +572,7 @@ export async function ingestAuthoritativeOm(
     await insertExtractedSnapshot(pool, {
       runId: run.id,
       propertyId: params.propertyId,
-      extractionMethod: routingDecision.extractionMethod,
+      extractionMethod: null,
       snapshot,
     });
     const promoted = await authoritativeRepo.promote({
@@ -609,10 +595,10 @@ export async function ingestAuthoritativeOm(
     await propertyRepo.mergeDetails(params.propertyId, mergedDetails);
     await ingestionRunRepo.update(run.id, {
       status: "promoted",
-      extractionMethod: routingDecision.extractionMethod,
-      pageCount: routingDecision.pageCount,
-      financialPageCount: routingDecision.financialPageCount,
-      ocrPageCount: routingDecision.ocrPageCount,
+      extractionMethod: null,
+      pageCount: null,
+      financialPageCount: null,
+      ocrPageCount: null,
       coverage: snapshot.coverage ?? null,
       completedAt,
       promotedAt: completedAt,

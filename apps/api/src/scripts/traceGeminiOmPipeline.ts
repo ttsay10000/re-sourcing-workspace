@@ -11,7 +11,7 @@ import type { PropertyDetails } from "@re-sourcing/contracts";
 import { listOmAutomationDocumentsForProperty } from "../om/ingestAuthoritativeOm.js";
 import { resolveUploadedDocFilePath } from "../upload/uploadedDocStorage.js";
 import { extractOmAnalysisFromGeminiPdfOnly } from "../om/extractOmAnalysisFromGeminiPdfOnly.js";
-import type { OmInputDocument } from "../rental/extractRentalFinancialsFromListing.js";
+import type { OmInputDocument } from "../om/omAnalysisShared.js";
 import { resolveCurrentFinancialsFromOmAnalysis } from "../rental/currentFinancials.js";
 import { sanitizeExpenseTableRows, sanitizeOmRentRollRows } from "../rental/omAnalysisUtils.js";
 import { getAuthoritativeOmSnapshot, resolvePreferredOmUnitCount } from "../om/authoritativeOm.js";

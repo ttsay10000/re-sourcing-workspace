@@ -40,6 +40,10 @@ services:
         sync: false
       - key: OPENAI_API_KEY
         sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_OM_MODEL
+        value: gemini-3-flash-preview
       - key: SOCRATA_APP_TOKEN
         sync: false
       - key: GEOCLIENT_SUBSCRIPTION_KEY
@@ -95,6 +99,16 @@ services:
           type: web
           name: re-sourcing-api
           envVarKey: OPENAI_API_KEY
+      - key: GEMINI_API_KEY
+        fromService:
+          type: web
+          name: re-sourcing-api
+          envVarKey: GEMINI_API_KEY
+      - key: GEMINI_OM_MODEL
+        fromService:
+          type: web
+          name: re-sourcing-api
+          envVarKey: GEMINI_OM_MODEL
 
   # Daily cron: start enabled saved searches that are due for the current local calendar day.
   - type: cron

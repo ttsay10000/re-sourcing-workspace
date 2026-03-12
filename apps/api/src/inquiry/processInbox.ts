@@ -303,8 +303,8 @@ async function persistMatchedMessage(
 }
 
 /**
- * Run the same OM-style financial extraction as manual upload: forceOmStyle + enrichmentContext,
- * then merge into property.details.rentalFinancials so the user can recall on the property and re-run enrichment if needed.
+ * Run the same Gemini authoritative OM ingestion path as manual upload,
+ * then persist the promoted authoritative snapshot onto the property.
  */
 async function runOmStyleExtractionAndMerge(
   propertyRepo: PropertyRepo,

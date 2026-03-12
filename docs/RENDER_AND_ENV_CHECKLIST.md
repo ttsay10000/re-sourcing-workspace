@@ -18,6 +18,7 @@ Required env:
 - `CORS_ORIGIN`
 - `RAPIDAPI_KEY`
 - `OPENAI_API_KEY`
+- `GEMINI_API_KEY`
 - `GMAIL_CLIENT_ID`
 - `GMAIL_CLIENT_SECRET`
 - `GMAIL_REFRESH_TOKEN`
@@ -26,6 +27,7 @@ Optional env:
 
 - `SOCRATA_APP_TOKEN`
 - `GEOCLIENT_SUBSCRIPTION_KEY`
+- `GEMINI_OM_MODEL`
 - `PROCESS_INBOX_CRON_SECRET`
 - `INQUIRY_DOCS_PATH`
 - `UPLOADED_DOCS_PATH`
@@ -35,6 +37,7 @@ Optional env:
 Notes:
 
 - `UPLOADED_DOCS_PATH` defaults to `uploads/property-docs`
+- authoritative OM parsing now runs through Gemini PDF ingestion; set `GEMINI_API_KEY` on the API service and keep `GEMINI_OM_MODEL=gemini-3-flash-preview` unless you are intentionally testing another model
 - inquiry attachments, uploaded property docs, and generated docs store file bytes in the DB, so new files can still be downloaded on ephemeral disks
 - after deploying this change, run `npm run backfill:documents -w @re-sourcing/api` once before the next restart/redeploy if you need older disk-only files preserved too
 - large uploads can still be blocked by the Render proxy before they reach the app
@@ -64,6 +67,7 @@ Optional env:
 - `INQUIRY_DOCS_PATH`
 
 All Gmail/OpenAI credentials are inherited from `re-sourcing-api` via `fromService`.
+Gemini OM parser credentials are also inherited from `re-sourcing-api` via `fromService`.
 
 Schedule in blueprint:
 
@@ -74,8 +78,8 @@ Behavior:
 - reads Gmail inbox
 - matches replies by subject, broker email, or thread
 - stores inquiry emails and attachments on the property
-- runs OM-style extraction when readable content is present
-- inherits Gmail/OpenAI credentials from `re-sourcing-api` via `fromService`
+- runs Gemini authoritative OM ingestion when OM PDFs are present
+- inherits Gmail/OpenAI/Gemini credentials from `re-sourcing-api` via `fromService`
 
 ## Saved Search Cron
 

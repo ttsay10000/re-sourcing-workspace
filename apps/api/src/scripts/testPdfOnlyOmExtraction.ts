@@ -17,15 +17,13 @@ import { mkdir, readFile, writeFile } from "fs/promises";
 import { basename } from "path";
 import { getPool, PropertyRepo, PropertyUploadedDocumentRepo } from "@re-sourcing/db";
 import { extractOmAnalysisFromGeminiPdfOnly } from "../om/extractOmAnalysisFromGeminiPdfOnly.js";
-import { extractOmAnalysisFromPdfOnly, summarizePdfOnlyOmCoverage } from "../om/extractOmAnalysisFromPdfOnly.js";
+import { summarizeOmAnalysisCoverage, type OmInputDocument } from "../om/omAnalysisShared.js";
 import { resolveCurrentFinancialsFromOmAnalysis } from "../rental/currentFinancials.js";
-import type { OmInputDocument } from "../rental/extractRentalFinancialsFromListing.js";
 
 interface ParsedArgs {
   files: string[];
   properties: string[];
   outDir: string;
-  provider: "openai" | "gemini";
 }
 
 interface ExtractionSource {
@@ -37,8 +35,9 @@ interface ExtractionSource {
 type SharedExtractionResult = {
   model: string;
   rawOutput: string | null;
-  omAnalysis?: Awaited<ReturnType<typeof extractOmAnalysisFromPdfOnly>>["omAnalysis"];
-  fromLlm?: Awaited<ReturnType<typeof extractOmAnalysisFromPdfOnly>>["fromLlm"];
+  finishReason: string | null;
+  omAnalysis?: Awaited<ReturnType<typeof extractOmAnalysisFromGeminiPdfOnly>>["omAnalysis"];
+  fromLlm?: Awaited<ReturnType<typeof extractOmAnalysisFromGeminiPdfOnly>>["fromLlm"];
 };
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -46,7 +45,6 @@ function parseArgs(argv: string[]): ParsedArgs {
     files: [],
     properties: [],
     outDir: resolve(process.cwd(), "tmp/pdf-only-om-results"),
-    provider: "openai",
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -69,15 +67,6 @@ function parseArgs(argv: string[]): ParsedArgs {
       const value = argv[index + 1];
       if (!value) throw new Error("--out-dir requires a directory path");
       parsed.outDir = resolve(process.cwd(), value);
-      index += 1;
-      continue;
-    }
-    if (arg === "--provider") {
-      const value = argv[index + 1];
-      if (value !== "openai" && value !== "gemini") {
-        throw new Error("--provider must be 'openai' or 'gemini'");
-      }
-      parsed.provider = value;
       index += 1;
       continue;
     }
@@ -153,7 +142,7 @@ async function buildPropertySources(properties: string[]): Promise<ExtractionSou
 function summarizeReadiness(result: SharedExtractionResult) {
   const currentFinancials = resolveCurrentFinancialsFromOmAnalysis(result.omAnalysis ?? null, result.fromLlm ?? null);
   const propertyInfo = (result.omAnalysis?.propertyInfo ?? {}) as Record<string, unknown>;
-  const coverage = summarizePdfOnlyOmCoverage(result.omAnalysis ?? null);
+  const coverage = summarizeOmAnalysisCoverage(result.omAnalysis ?? null);
   const missing: string[] = [];
   if (!coverage.hasUnitCount) missing.push("totalUnits");
   if (!coverage.hasPrice) missing.push("price");
@@ -175,14 +164,8 @@ function summarizeReadiness(result: SharedExtractionResult) {
   };
 }
 
-async function runExtraction(
-  provider: ParsedArgs["provider"],
-  params: Parameters<typeof extractOmAnalysisFromPdfOnly>[0]
-) {
-  if (provider === "gemini") {
-    return extractOmAnalysisFromGeminiPdfOnly(params);
-  }
-  return extractOmAnalysisFromPdfOnly(params);
+async function runExtraction(params: Parameters<typeof extractOmAnalysisFromGeminiPdfOnly>[0]) {
+  return extractOmAnalysisFromGeminiPdfOnly(params);
 }
 
 async function main() {
@@ -198,18 +181,17 @@ async function main() {
   await mkdir(args.outDir, { recursive: true });
 
   for (const source of sources) {
-    console.log(`[testPdfOnlyOmExtraction] Running provider=${args.provider} ${source.label}`);
-    const result = await runExtraction(args.provider, {
+    console.log(`[testPdfOnlyOmExtraction] Running provider=gemini ${source.label}`);
+    const result = await runExtraction({
       documents: source.documents,
       propertyContext: source.propertyContext ?? null,
     });
     const readiness = summarizeReadiness(result);
     const output = {
       source: source.label,
-      provider: args.provider,
+      provider: "gemini",
       model: result.model,
-      responseId: "responseId" in result ? result.responseId : null,
-      finishReason: "finishReason" in result ? result.finishReason : null,
+      finishReason: result.finishReason,
       readiness,
       takeaways: result.omAnalysis?.investmentTakeaways ?? [],
       omAnalysis: result.omAnalysis ?? null,

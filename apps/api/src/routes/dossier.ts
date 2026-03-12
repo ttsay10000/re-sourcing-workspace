@@ -7,6 +7,7 @@ import type { PropertyDetails } from "@re-sourcing/contracts";
 import { getPool, UserProfileRepo, PropertyRepo, MatchRepo, ListingRepo } from "@re-sourcing/db";
 import { runGenerateDossier } from "../deal/runGenerateDossier.js";
 import { refreshAuthoritativeOmForProperty } from "../om/ingestAuthoritativeOm.js";
+import { isGeminiAuthoritativeOmSnapshot } from "../om/authoritativeOm.js";
 import { resolveCurrentFinancialsFromDetails } from "../rental/currentFinancials.js";
 import { resolveDossierAssumptions, type DossierAssumptionOverrides } from "../deal/underwritingModel.js";
 import {
@@ -253,6 +254,7 @@ router.post("/dossier/generate", async (req: Request, res: Response) => {
       return;
     }
     const assumptions = parseAssumptionOverrides(req.body?.assumptions);
+    const requiresGeminiRefresh = !isGeminiAuthoritativeOmSnapshot((property.details ?? null) as PropertyDetails | null);
     workflowRunId = await createWorkflowRun({
       runType: "generate_dossier",
       displayName: "Generate dossier",
@@ -270,13 +272,7 @@ router.post("/dossier/generate", async (req: Request, res: Response) => {
         },
       ],
     });
-    let result;
-    try {
-      result = await runGenerateDossier(propertyId, assumptions);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      if (message !== MISSING_AUTHORITATIVE_OM_ERROR) throw err;
-
+    if (requiresGeminiRefresh) {
       await upsertWorkflowStep(workflowRunId, {
         stepKey: "dossier",
         totalItems: 1,
@@ -284,7 +280,7 @@ router.post("/dossier/generate", async (req: Request, res: Response) => {
         failedItems: 0,
         status: "running",
         startedAt: workflowStartedAt,
-        lastMessage: "Refreshing authoritative OM before dossier generation",
+        lastMessage: "Refreshing Gemini authoritative OM before dossier generation",
       });
 
       const refresh = await refreshAuthoritativeOmForProperty(propertyId, pool);
@@ -303,7 +299,43 @@ router.post("/dossier/generate", async (req: Request, res: Response) => {
         failedItems: 0,
         status: "running",
         startedAt: workflowStartedAt,
-        lastMessage: "Authoritative OM refreshed; generating dossier",
+        lastMessage: "Gemini authoritative OM refreshed; generating dossier",
+      });
+    }
+    let result;
+    try {
+      result = await runGenerateDossier(propertyId, assumptions);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message !== MISSING_AUTHORITATIVE_OM_ERROR || requiresGeminiRefresh) throw err;
+
+      await upsertWorkflowStep(workflowRunId, {
+        stepKey: "dossier",
+        totalItems: 1,
+        completedItems: 0,
+        failedItems: 0,
+        status: "running",
+        startedAt: workflowStartedAt,
+        lastMessage: "Refreshing Gemini authoritative OM before dossier generation",
+      });
+
+      const refresh = await refreshAuthoritativeOmForProperty(propertyId, pool);
+      if (refresh.error) {
+        throw new Error(refresh.error);
+      }
+
+      await mergeWorkflowRunMetadata(workflowRunId, {
+        authoritativeOmRunId: refresh.runId,
+        authoritativeOmSnapshotId: refresh.snapshotId,
+      });
+      await upsertWorkflowStep(workflowRunId, {
+        stepKey: "dossier",
+        totalItems: 1,
+        completedItems: 0,
+        failedItems: 0,
+        status: "running",
+        startedAt: workflowStartedAt,
+        lastMessage: "Gemini authoritative OM refreshed; generating dossier",
       });
 
       result = await runGenerateDossier(propertyId, assumptions);
