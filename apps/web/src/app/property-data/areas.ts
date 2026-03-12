@@ -7,6 +7,8 @@ export const AREA_OPTIONS: { value: string; label: string }[] = [
   { value: "Manhattan", label: "Manhattan" },
   { value: "Brooklyn", label: "Brooklyn" },
   { value: "Queens", label: "Queens" },
+  { value: "Bronx", label: "Bronx" },
+  { value: "Staten Island", label: "Staten Island" },
   { value: "Roosevelt Island", label: "Roosevelt Island" },
   { value: "Other", label: "Other" },
 ];

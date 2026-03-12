@@ -263,6 +263,7 @@ function PropertyDataContent() {
   const [lastEnrichmentResult, setLastEnrichmentResult] = useState<LastEnrichmentResult | null>(null);
   const [localDossierJobs, setLocalDossierJobs] = useState<Record<string, LocalDossierJobState>>({});
   const [dossierNotice, setDossierNotice] = useState<DossierNotice | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
 
   // Filter/sort state (shared concept for raw and canonical)
   const [sortBy, setSortBy] = useState<"price" | "listedAt" | "lastActivity" | "area">("lastActivity");
@@ -500,9 +501,25 @@ function PropertyDataContent() {
     const t = new Date(s.trim()).getTime();
     return Number.isNaN(t) ? null : t;
   };
+  const normalizedSearch = searchQuery.trim().toLowerCase();
 
   const filteredSortedListings = useMemo(() => {
     let out = listings.filter((row) => {
+      if (normalizedSearch) {
+        const haystack = [
+          row.externalId,
+          row.address,
+          row.city,
+          row.state,
+          row.zip,
+          row.source,
+          cityToArea(row.city),
+        ]
+          .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+          .join(" ")
+          .toLowerCase();
+        if (!haystack.includes(normalizedSearch)) return false;
+      }
       if (areaFilter) {
         const area = cityToArea(row.city);
         if (area !== areaFilter) return false;
@@ -545,13 +562,25 @@ function PropertyDataContent() {
       return mult * areaA.localeCompare(areaB);
     });
     return out;
-  }, [listings, areaFilter, minPrice, maxPrice, listedAfter, listedBefore, sortBy, sortDir]);
+  }, [listings, normalizedSearch, areaFilter, minPrice, maxPrice, listedAfter, listedBefore, sortBy, sortDir]);
 
   const filteredSortedCanonical = useMemo(() => {
     let out = canonicalProperties.filter((prop) => {
       const area = prop.primaryListing?.city != null
         ? cityToArea(prop.primaryListing.city)
         : cityFromCanonicalAddress(prop.canonicalAddress);
+      if (normalizedSearch) {
+        const haystack = [
+          prop.id,
+          prop.canonicalAddress,
+          prop.primaryListing?.city ?? null,
+          area,
+        ]
+          .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+          .join(" ")
+          .toLowerCase();
+        if (!haystack.includes(normalizedSearch)) return false;
+      }
       if (areaFilter && area !== areaFilter) return false;
       const price = prop.primaryListing?.price ?? null;
       if (price != null) {
@@ -586,7 +615,7 @@ function PropertyDataContent() {
       return mult * areaA.localeCompare(areaB);
     });
     return out;
-  }, [canonicalProperties, areaFilter, minPrice, maxPrice, listedAfter, listedBefore, sortBy, sortDir]);
+  }, [canonicalProperties, normalizedSearch, areaFilter, minPrice, maxPrice, listedAfter, listedBefore, sortBy, sortDir]);
 
   const formatPrice = (n: number) =>
     n != null && !Number.isNaN(n)
@@ -1135,9 +1164,11 @@ function PropertyDataContent() {
       <div className="property-data-search-row">
         <input
           type="search"
-          placeholder="Search by Address, property ID, or Listing ID"
+          placeholder="Search by address, property ID, listing ID, or area"
           className="input-text property-data-search"
-          disabled
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          aria-label="Search properties"
         />
       </div>
 
@@ -1540,7 +1571,6 @@ function PropertyDataContent() {
                   <th>Source</th>
                   <th>Raw Address</th>
                   <th>Price</th>
-                  <th>Area</th>
                   <th>Last activity</th>
                   <th>Listed date</th>
                   <th>Days on market</th>
@@ -1551,7 +1581,7 @@ function PropertyDataContent() {
               <tbody>
                 {filteredSortedListings.length === 0 ? (
                   <tr>
-                    <td colSpan={12} style={{ padding: "2rem", color: "#737373", textAlign: "center" }}>
+                    <td colSpan={11} style={{ padding: "2rem", color: "#737373", textAlign: "center" }}>
                       {listings.length === 0
                         ? "No raw listings yet. Run a flow from StreetEasy Agent, then use \"Send to property data\" for a completed run."
                         : "No listings match the current filters."}
@@ -1592,7 +1622,6 @@ function PropertyDataContent() {
                         <td>{row.source === "streeteasy" ? "Streeteasy" : row.source}</td>
                         <td>{fullAddress(row)}</td>
                         <td>{formatPrice(row.price)}</td>
-                        <td>{cityToArea(row.city)}</td>
                         <td title={describeListingActivity(row.lastActivity ?? deriveListingActivitySummary({
                           listedAt: row.listedAt ?? null,
                           currentPrice: row.price ?? null,
@@ -1621,7 +1650,7 @@ function PropertyDataContent() {
                       </tr>
                       {expandedRowId === row.id && (
                         <tr key={`${row.id}-detail`} className="property-data-detail-row">
-                          <td colSpan={12} className="property-data-detail-cell" style={{ paddingLeft: "2.5rem", backgroundColor: "#fafafa" }}>
+                          <td colSpan={11} className="property-data-detail-cell" style={{ paddingLeft: "2.5rem", backgroundColor: "#fafafa" }}>
                             <PropertyDetailCollapsible listing={row} />
                           </td>
                         </tr>
