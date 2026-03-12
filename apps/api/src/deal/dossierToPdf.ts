@@ -30,6 +30,12 @@ const CHIP_TEXT = "#1e3a5f";
 
 type TableCell = { text: string; bold: boolean };
 type LayoutState = { y: number; pageNumber: number };
+type TableLayout = {
+  widths: number[];
+  fontSize: number;
+  cellPadding: number;
+  keyValue: boolean;
+};
 
 function isSectionBreakRow(row: TableCell[]): boolean {
   return row.length > 0 && row[0]?.bold === true && row.slice(1).every((cell) => cell.text.trim() === "");
@@ -89,15 +95,6 @@ function isBullet(line: string): boolean {
 
 function cleanBullet(line: string): string {
   return line.trimStart().replace(/^([•*-])\s+/, "");
-}
-
-function isNumericLike(text: string): boolean {
-  const trimmed = text.trim();
-  if (!trimmed) return false;
-  if (/^Y\d+$/.test(trimmed)) return true;
-  if (/%$/.test(trimmed) || /x$/.test(trimmed)) return true;
-  if (/^(?:\(|-)?\$?[\d,]+(?:\.\d+)?\)?$/.test(trimmed)) return true;
-  return /^\d+\s+years?$/.test(trimmed);
 }
 
 function addPage(doc: PDFKit.PDFDocument, state: LayoutState): void {
@@ -226,6 +223,10 @@ function drawParagraph(doc: PDFKit.PDFDocument, state: LayoutState, line: string
   state.y += height + PARAGRAPH_SPACING;
 }
 
+function tableCellAlign(colIndex: number): "left" | "center" {
+  return colIndex === 0 ? "left" : "center";
+}
+
 function tableColumnWidths(tableWidth: number, colCount: number, keyValue: boolean): number[] {
   if (keyValue) return [tableWidth * 0.56, tableWidth * 0.44];
   if (colCount >= 7) {
@@ -256,31 +257,136 @@ function tableColumnWidths(tableWidth: number, colCount: number, keyValue: boole
   return Array.from({ length: colCount }, () => tableWidth / colCount);
 }
 
+function tableLayout(doc: PDFKit.PDFDocument, rows: TableCell[][]): TableLayout {
+  const colCount = Math.max(...rows.map((row) => row.length));
+  const keyValue = colCount === 2 && rows.length <= 8;
+  const compact = colCount >= 6;
+  const veryCompact = colCount >= 7;
+  const fontSize = veryCompact ? 6.35 : compact ? 6.9 : keyValue ? 9.25 : 8.3;
+  const cellPadding = veryCompact ? 2.8 : compact ? 3.2 : keyValue ? 5.8 : 4.8;
+  return {
+    widths: tableColumnWidths(bodyWidth(doc), colCount, keyValue),
+    fontSize,
+    cellPadding,
+    keyValue,
+  };
+}
+
+function measureTableRowHeight(
+  doc: PDFKit.PDFDocument,
+  row: TableCell[],
+  rowIndex: number,
+  layout: TableLayout
+): number {
+  const isHeader = !layout.keyValue && rowIndex === 0;
+  let rowHeight = layout.fontSize + layout.cellPadding * 2;
+  row.forEach((cell, colIndex) => {
+    doc.font(cell.bold || isHeader ? "Helvetica-Bold" : "Helvetica").fontSize(layout.fontSize);
+    const height = doc.heightOfString(cell.text, {
+      width: (layout.widths[colIndex] ?? layout.widths[0] ?? 0) - layout.cellPadding * 2,
+      align: tableCellAlign(colIndex),
+      lineGap: 1,
+    });
+    rowHeight = Math.max(rowHeight, height + layout.cellPadding * 2);
+  });
+  return rowHeight;
+}
+
 function measureTableHeight(
   doc: PDFKit.PDFDocument,
   rows: TableCell[][],
-  widths: number[],
-  fontSize: number,
-  cellPadding: number,
-  keyValue: boolean
+  layout: TableLayout
 ): number {
   let total = 0;
   rows.forEach((row, rowIndex) => {
-    const isHeader = !keyValue && rowIndex === 0;
-    let rowHeight = fontSize + cellPadding * 2;
-    row.forEach((cell, colIndex) => {
-      const align = !keyValue && colIndex > 0 ? "center" : colIndex > 0 && isNumericLike(cell.text) ? "center" : "left";
-      doc.font(cell.bold || isHeader ? "Helvetica-Bold" : "Helvetica").fontSize(fontSize);
-      const height = doc.heightOfString(cell.text, {
-        width: (widths[colIndex] ?? widths[0] ?? 0) - cellPadding * 2,
-        align,
-        lineGap: 1,
-      });
-      rowHeight = Math.max(rowHeight, height + cellPadding * 2);
-    });
-    total += rowHeight;
+    total += measureTableRowHeight(doc, row, rowIndex, layout);
   });
   return total;
+}
+
+function drawTableRow(
+  doc: PDFKit.PDFDocument,
+  row: TableCell[],
+  rowIndex: number,
+  y: number,
+  rowHeight: number,
+  layout: TableLayout,
+  options?: { forceHeader?: boolean }
+): number {
+  const isHeader = options?.forceHeader === true || (!layout.keyValue && rowIndex === 0);
+  const isSectionRow = !isHeader && isSectionBreakRow(row);
+  let currentX = MARGIN;
+
+  row.forEach((cell, colIndex) => {
+    const width = layout.widths[colIndex] ?? layout.widths[0] ?? 0;
+    const fillColor = isHeader || isSectionRow
+      ? TABLE_HEADER_BG
+      : layout.keyValue && colIndex === 0
+        ? LABEL_BG
+        : rowIndex % 2 === 0
+          ? "#ffffff"
+          : TABLE_ALT_BG;
+    doc.save();
+    doc.roundedRect(currentX, y, width, rowHeight, 0).fill(fillColor);
+    doc.restore();
+    doc.strokeColor(RULE_COLOR).lineWidth(0.6).rect(currentX, y, width, rowHeight).stroke();
+    const color = isHeader || isSectionRow
+      ? SECTION_HEADING_COLOR
+      : /^\(/.test(cell.text.trim()) || /^-/.test(cell.text.trim())
+        ? NEGATIVE_TEXT_COLOR
+        : BODY_TEXT_COLOR;
+    doc.fillColor(color).font(cell.bold || isHeader ? "Helvetica-Bold" : "Helvetica").fontSize(layout.fontSize);
+    const textHeight = doc.heightOfString(cell.text, {
+      width: width - layout.cellPadding * 2,
+      align: tableCellAlign(colIndex),
+      lineGap: 1,
+    });
+    const textY = y + Math.max(layout.cellPadding - 0.5, (rowHeight - textHeight) / 2);
+    doc.text(cell.text, currentX + layout.cellPadding, textY, {
+      width: width - layout.cellPadding * 2,
+      align: tableCellAlign(colIndex),
+      lineGap: 1,
+    });
+    currentX += width;
+  });
+
+  return y + rowHeight;
+}
+
+function collectImmediateTableRows(lines: string[], startIndex: number): TableCell[][] {
+  const rows: TableCell[][] = [];
+
+  for (let index = startIndex; index < lines.length; index += 1) {
+    const candidate = lines[index]?.trimEnd() ?? "";
+    if (!candidate.trim() || isDivider(candidate)) continue;
+    if (!isTableRow(candidate)) return [];
+
+    rows.push(parseTableRow(candidate));
+    for (let tableIndex = index + 1; tableIndex < lines.length; tableIndex += 1) {
+      const tableLine = lines[tableIndex]?.trimEnd() ?? "";
+      if (!tableLine.trim()) return rows;
+      if (!isTableRow(tableLine)) return rows;
+      rows.push(parseTableRow(tableLine));
+    }
+    return rows;
+  }
+
+  return rows;
+}
+
+function ensureSectionFitsWithTable(
+  doc: PDFKit.PDFDocument,
+  state: LayoutState,
+  lines: string[],
+  nextIndex: number
+): void {
+  const tableRows = collectImmediateTableRows(lines, nextIndex);
+  if (tableRows.length === 0) return;
+
+  const layout = tableLayout(doc, tableRows);
+  const previewRows = layout.keyValue ? tableRows : tableRows.slice(0, Math.min(tableRows.length, 3));
+  const needed = 28 + measureTableHeight(doc, previewRows, layout) + 8;
+  if (state.y + needed > maxY(doc)) addPage(doc, state);
 }
 
 function drawTable(
@@ -289,67 +395,27 @@ function drawTable(
   rows: TableCell[][]
 ): void {
   if (rows.length === 0) return;
-  const colCount = Math.max(...rows.map((row) => row.length));
-  const keyValue = colCount === 2 && rows.length <= 8;
-  const compact = colCount >= 6;
-  const veryCompact = colCount >= 7;
-  const fontSize = veryCompact ? 6.35 : compact ? 6.9 : keyValue ? 9.25 : 8.3;
-  const cellPadding = veryCompact ? 2.8 : compact ? 3.2 : keyValue ? 5.8 : 4.8;
-  const widths = tableColumnWidths(bodyWidth(doc), colCount, keyValue);
-  const estimatedHeight = measureTableHeight(doc, rows, widths, fontSize, cellPadding, keyValue);
-  ensureSpace(doc, state, estimatedHeight + 8);
-
+  const layout = tableLayout(doc, rows);
+  const rowHeights = rows.map((row, rowIndex) => measureTableRowHeight(doc, row, rowIndex, layout));
+  const headerHeight = !layout.keyValue && rows.length > 0 ? rowHeights[0] ?? 0 : 0;
   let currentY = state.y;
-  rows.forEach((row, rowIndex) => {
-    const isHeader = !keyValue && rowIndex === 0;
-    const isSectionRow = !isHeader && isSectionBreakRow(row);
-    let rowHeight = fontSize + cellPadding * 2;
-    row.forEach((cell, colIndex) => {
-      const align = !keyValue && colIndex > 0 ? "center" : colIndex > 0 && isNumericLike(cell.text) ? "center" : "left";
-      doc.font(cell.bold || isHeader ? "Helvetica-Bold" : "Helvetica").fontSize(fontSize);
-      const height = doc.heightOfString(cell.text, {
-        width: (widths[colIndex] ?? widths[0] ?? 0) - cellPadding * 2,
-        align,
-        lineGap: 1,
-      });
-      rowHeight = Math.max(rowHeight, height + cellPadding * 2);
-    });
+  let needsRepeatedHeader = false;
 
-    let currentX = MARGIN;
-    row.forEach((cell, colIndex) => {
-      const width = widths[colIndex] ?? widths[0] ?? 0;
-      const fillColor = isHeader || isSectionRow
-        ? TABLE_HEADER_BG
-        : keyValue && colIndex === 0
-          ? LABEL_BG
-          : rowIndex % 2 === 0
-            ? "#ffffff"
-            : TABLE_ALT_BG;
-      doc.save();
-      doc.roundedRect(currentX, currentY, width, rowHeight, 0).fill(fillColor);
-      doc.restore();
-      doc.strokeColor(RULE_COLOR).lineWidth(0.6).rect(currentX, currentY, width, rowHeight).stroke();
-      const align = !keyValue && colIndex > 0 ? "center" : colIndex > 0 && isNumericLike(cell.text) ? "center" : "left";
-      const color = isHeader || isSectionRow
-        ? SECTION_HEADING_COLOR
-        : /^\(/.test(cell.text.trim()) || /^-/.test(cell.text.trim())
-          ? NEGATIVE_TEXT_COLOR
-          : BODY_TEXT_COLOR;
-      doc.fillColor(color).font(cell.bold || isHeader ? "Helvetica-Bold" : "Helvetica").fontSize(fontSize);
-      const textHeight = doc.heightOfString(cell.text, {
-        width: width - cellPadding * 2,
-        align,
-        lineGap: 1,
-      });
-      const textY = currentY + Math.max(cellPadding - 0.5, (rowHeight - textHeight) / 2);
-      doc.text(cell.text, currentX + cellPadding, textY, {
-        width: width - cellPadding * 2,
-        align,
-        lineGap: 1,
-      });
-      currentX += width;
-    });
-    currentY += rowHeight;
+  rows.forEach((row, rowIndex) => {
+    const rowHeight = rowHeights[rowIndex] ?? measureTableRowHeight(doc, row, rowIndex, layout);
+    const repeatedHeaderHeight = needsRepeatedHeader ? headerHeight : 0;
+    if (currentY + repeatedHeaderHeight + rowHeight > maxY(doc)) {
+      addPage(doc, state);
+      currentY = state.y;
+      needsRepeatedHeader = !layout.keyValue && rowIndex > 0;
+    }
+
+    if (needsRepeatedHeader && !layout.keyValue) {
+      currentY = drawTableRow(doc, rows[0] ?? [], 0, currentY, headerHeight, layout, { forceHeader: true });
+      needsRepeatedHeader = false;
+    }
+
+    currentY = drawTableRow(doc, row, rowIndex, currentY, rowHeight, layout);
   });
 
   state.y = currentY + 10;
@@ -394,6 +460,7 @@ export function dossierTextToPdf(dossierText: string): Promise<Buffer> {
       }
       if (isHeading(line)) {
         flushTable();
+        ensureSectionFitsWithTable(doc, state, lines, index + 1);
         drawSectionHeading(doc, state, line);
         return;
       }

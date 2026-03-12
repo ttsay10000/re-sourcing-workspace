@@ -81,6 +81,13 @@ interface WorkflowBoardPayload {
   runs: WorkflowBoardRun[];
 }
 
+interface WorkflowDisplayColumn {
+  key: string;
+  label: string;
+  shortLabel: string;
+  stepKeys: string[];
+}
+
 const DEFAULT_WORKFLOW_COLUMNS: WorkflowBoardColumn[] = [
   { key: "raw_ingest", label: "Raw Ingest", shortLabel: "Raw" },
   { key: "canonical", label: "Canonical", shortLabel: "Canonical" },
@@ -96,6 +103,29 @@ const DEFAULT_WORKFLOW_COLUMNS: WorkflowBoardColumn[] = [
   { key: "inquiry", label: "Inquiry", shortLabel: "Inquiry" },
   { key: "inbox", label: "Inbox", shortLabel: "Inbox" },
   { key: "dossier", label: "Dossier", shortLabel: "Dossier" },
+];
+
+const WORKFLOW_DISPLAY_COLUMNS: WorkflowDisplayColumn[] = [
+  { key: "raw_ingest", label: "Raw ingest", shortLabel: "Ingest", stepKeys: ["raw_ingest"] },
+  { key: "canonical", label: "Canonical", shortLabel: "Canonical", stepKeys: ["canonical"] },
+  {
+    key: "enrichment",
+    label: "Enrichment",
+    shortLabel: "Enrich",
+    stepKeys: [
+      "permits",
+      "hpd_registration",
+      "certificate_of_occupancy",
+      "zoning_ztl",
+      "dob_complaints",
+      "hpd_violations",
+      "housing_litigations",
+      "rental_flow",
+    ],
+  },
+  { key: "om_financials", label: "OM", shortLabel: "OM", stepKeys: ["om_financials"] },
+  { key: "inquiry", label: "Inquiry", shortLabel: "Inquiry", stepKeys: ["inquiry", "inbox"] },
+  { key: "dossier", label: "Dossier", shortLabel: "Dossier", stepKeys: ["dossier"] },
 ];
 
 interface PipelineEnrichmentRow {
@@ -194,6 +224,27 @@ function formatActivitySummary(
   return `${formatListedDate(activity.lastActivityDate)} · ${formatListingEventLabel(activity.lastActivityEvent)}`;
 }
 
+function formatPriceReductionSummary(activity: ListingActivitySummary | null | undefined): string | null {
+  if (!activity) return null;
+  const totalReduction = activity.currentDiscountFromOriginalAskAmount;
+  if (totalReduction == null || !Number.isFinite(totalReduction) || totalReduction <= 0) return null;
+
+  const cutCount = activity.totalPriceDrops;
+  const countLabel = cutCount > 0 ? `${cutCount} price cut${cutCount === 1 ? "" : "s"}` : "Price reduced";
+  const amountLabel = new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  }).format(totalReduction);
+  const pctLabel =
+    activity.currentDiscountFromOriginalAskPct != null && activity.currentDiscountFromOriginalAskPct > 0
+      ? ` (${activity.currentDiscountFromOriginalAskPct.toFixed(1)}%)`
+      : "";
+
+  return `${countLabel} · Down ${amountLabel}${pctLabel} since listed`;
+}
+
 function workflowStatusStyle(status: WorkflowBoardRun["status"] | WorkflowBoardStep["status"]) {
   switch (status) {
     case "running":
@@ -222,6 +273,76 @@ function workflowStatusLabel(status: WorkflowBoardRun["status"] | WorkflowBoardS
     default:
       return "Pending";
   }
+}
+
+function summarizeWorkflowGroupStatus(steps: WorkflowBoardStep[]): WorkflowBoardStep["status"] {
+  if (steps.some((step) => step.status === "running")) return "running";
+  const hasProgress = steps.some(
+    (step) =>
+      step.status === "completed" ||
+      step.status === "partial" ||
+      step.completedItems > 0 ||
+      step.failedItems > 0 ||
+      step.skippedItems > 0
+  );
+  if (steps.some((step) => step.status === "failed")) {
+    return hasProgress ? "partial" : "failed";
+  }
+  if (steps.some((step) => step.status === "partial")) return "partial";
+  if (steps.every((step) => step.status === "completed")) return "completed";
+  if (hasProgress) return "partial";
+  return "pending";
+}
+
+function summarizeWorkflowSteps(run: WorkflowBoardRun, column: WorkflowDisplayColumn): WorkflowBoardStep | null {
+  const matchedSteps = run.steps.filter((step) => column.stepKeys.includes(step.key));
+  if (matchedSteps.length === 0) return null;
+  if (matchedSteps.length === 1) return matchedSteps[0];
+
+  const startedAt = matchedSteps.find((step) => step.startedAt)?.startedAt ?? null;
+  const finishedAt = [...matchedSteps].reverse().find((step) => step.finishedAt)?.finishedAt ?? null;
+  const lastError = [...matchedSteps].reverse().find((step) => step.lastError)?.lastError ?? null;
+  const lastMessage = [...matchedSteps].reverse().find((step) => step.lastMessage)?.lastMessage ?? null;
+
+  return {
+    key: column.key,
+    label: column.label,
+    status: summarizeWorkflowGroupStatus(matchedSteps),
+    totalItems: matchedSteps.reduce((sum, step) => sum + step.totalItems, 0),
+    completedItems: matchedSteps.reduce((sum, step) => sum + step.completedItems, 0),
+    failedItems: matchedSteps.reduce((sum, step) => sum + step.failedItems, 0),
+    skippedItems: matchedSteps.reduce((sum, step) => sum + step.skippedItems, 0),
+    lastMessage,
+    lastError,
+    startedAt,
+    finishedAt,
+    metadata: null,
+  };
+}
+
+function joinCompact(values: Array<string | null | undefined>): string {
+  return values.filter((value): value is string => Boolean(value && value.trim())).join(" · ");
+}
+
+function StatusChip({
+  label,
+  detail,
+  style,
+  className = "",
+}: {
+  label: string;
+  detail?: string | null;
+  style: React.CSSProperties;
+  className?: string;
+}) {
+  const classes = ["property-status-chip", className].filter(Boolean).join(" ");
+
+  return (
+    <div className={classes} style={style}>
+      <span className="property-status-chip-label">{label}</span>
+      {detail ? <span className="property-status-chip-detail">{detail}</span> : null}
+    </div>
+  );
 }
 
 function PropertyDataContent() {
@@ -888,10 +1009,16 @@ function PropertyDataContent() {
     };
   };
 
-  const workflowColumns = workflowBoard.columns.length > 0 ? workflowBoard.columns : DEFAULT_WORKFLOW_COLUMNS;
-
-  const workflowStepForColumn = (run: WorkflowBoardRun, columnKey: string) =>
-    run.steps.find((step) => step.key === columnKey) ?? null;
+  const workflowDisplayColumns = useMemo(() => {
+    const visibleColumns = WORKFLOW_DISPLAY_COLUMNS.filter((column) =>
+      workflowBoard.runs.some((run) => run.steps.some((step) => column.stepKeys.includes(step.key)))
+    );
+    return visibleColumns.length > 0
+      ? visibleColumns
+      : WORKFLOW_DISPLAY_COLUMNS.filter((column) =>
+          ["canonical", "om_financials", "inquiry", "dossier"].includes(column.key)
+        );
+  }, [workflowBoard.runs]);
 
   const formatDateTime = (iso: string | null | undefined) => {
     if (!iso) return "—";
@@ -1318,7 +1445,7 @@ function PropertyDataContent() {
                   Loading canonical properties…
                 </div>
               ) : (
-                <table className="property-data-table">
+                <table className="property-data-table property-data-table--canonical">
                   <thead>
                     <tr>
                       <th className="property-data-table-expand-col" aria-label="Expand row" />
@@ -1335,22 +1462,17 @@ function PropertyDataContent() {
                         )}
                       </th>
                       <th style={{ width: "2rem" }} aria-label="Save deal" title="Save / Unsave deal" />
-                      <th>Canonical address</th>
-                      <th>Area</th>
-                      <th>Price</th>
-                      <th>Last activity</th>
-                      <th>Listed date</th>
-                      <th>Saved search</th>
+                      <th>Property</th>
+                      <th>Activity</th>
+                      <th>Latest status</th>
                       <th>OM</th>
-                      <th>Underwriting</th>
                       <th>Active run</th>
-                      <th>Dossier</th>
                     </tr>
                   </thead>
                   <tbody>
                     {filteredSortedCanonical.length === 0 ? (
                       <tr>
-                        <td colSpan={13} style={{ padding: "2rem", color: "#737373", textAlign: "center" }}>
+                        <td colSpan={8} style={{ padding: "2rem", color: "#737373", textAlign: "center" }}>
                           {canonicalProperties.length === 0
                             ? "No canonical properties yet. Send raw listings to canonical properties from the raw listings tab."
                             : "No properties match the current filters."}
@@ -1358,12 +1480,18 @@ function PropertyDataContent() {
                       </tr>
                     ) : (
                       filteredSortedCanonical.map((prop) => {
-                        const area = prop.primaryListing?.city != null ? cityToArea(prop.primaryListing.city) : cityFromCanonicalAddress(prop.canonicalAddress);
                         const omMeta = omCellMeta(prop);
-                        const underwritingMeta = underwritingCellMeta(prop);
                         const activeRunMeta = activeRunCellMeta(prop);
-                        const dossierMeta = dossierCellMeta(prop);
                         const sourcingUpdateMeta = getSourcingUpdateMeta(prop.details ?? null);
+                        const priceReductionSummary = formatPriceReductionSummary(prop.primaryListing?.lastActivity ?? null);
+                        const propertyMeta = joinCompact([
+                          prop.primaryListing?.price != null ? formatPrice(prop.primaryListing.price) : null,
+                          prop.primaryListing?.listedAt ? `Listed ${formatListedDate(prop.primaryListing.listedAt)}` : null,
+                        ]);
+                        const activityLabel = formatActivitySummary(
+                          prop.primaryListing?.lastActivity ?? null,
+                          prop.primaryListing?.listedAt ?? null
+                        );
                         return (
                           <React.Fragment key={prop.id}>
                             <tr
@@ -1424,103 +1552,47 @@ function PropertyDataContent() {
                                   {savedPropertyIds.has(prop.id) ? "★" : "☆"}
                                 </button>
                               </td>
-                              <td>{prop.canonicalAddress}</td>
-                              <td>{area}</td>
-                              <td>{prop.primaryListing?.price != null ? formatPrice(prop.primaryListing.price) : "—"}</td>
-                              <td title={describeListingActivity(prop.primaryListing?.lastActivity ?? null) ?? undefined}>
-                                {formatActivitySummary(prop.primaryListing?.lastActivity ?? null, prop.primaryListing?.listedAt ?? null)}
-                              </td>
-                              <td>{formatListedDate(prop.primaryListing?.listedAt ?? null)}</td>
-                              <td>
-                                <div
-                                  style={{
-                                    display: "inline-flex",
-                                    flexDirection: "column",
-                                    gap: "0.15rem",
-                                    padding: "0.35rem 0.55rem",
-                                    borderRadius: "999px",
-                                    border: "1px solid",
-                                    whiteSpace: "nowrap",
-                                    ...sourcingUpdateMeta.style,
-                                  }}
-                                >
-                                  <span style={{ fontSize: "0.78rem", fontWeight: 600 }}>{sourcingUpdateMeta.label}</span>
-                                  <span style={{ fontSize: "0.7rem", opacity: 0.85 }}>{sourcingUpdateMeta.detail}</span>
-                                </div>
+                              <td className="property-data-cell-primary">
+                                <div className="property-data-cell-title">{prop.canonicalAddress}</div>
+                                <div className="property-data-cell-meta">{propertyMeta || "No listing summary yet"}</div>
+                                {priceReductionSummary ? (
+                                  <div
+                                    className="property-data-cell-meta"
+                                    style={{ color: "#9a3412", fontWeight: 600, marginTop: "0.15rem" }}
+                                  >
+                                    {priceReductionSummary}
+                                  </div>
+                                ) : null}
                               </td>
                               <td>
                                 <div
-                                  style={{
-                                    display: "inline-flex",
-                                    flexDirection: "column",
-                                    gap: "0.15rem",
-                                    padding: "0.35rem 0.55rem",
-                                    borderRadius: "999px",
-                                    border: "1px solid",
-                                    whiteSpace: "nowrap",
-                                    ...omMeta.style,
-                                  }}
+                                  className="property-data-cell-title"
+                                  title={describeListingActivity(prop.primaryListing?.lastActivity ?? null) ?? undefined}
                                 >
-                                  <span style={{ fontSize: "0.78rem", fontWeight: 600 }}>{omMeta.label}</span>
-                                  <span style={{ fontSize: "0.7rem", opacity: 0.85 }}>{omMeta.detail}</span>
+                                  {activityLabel}
                                 </div>
                               </td>
                               <td>
-                                <div
-                                  style={{
-                                    display: "inline-flex",
-                                    flexDirection: "column",
-                                    gap: "0.15rem",
-                                    padding: "0.35rem 0.55rem",
-                                    borderRadius: "999px",
-                                    border: "1px solid",
-                                    whiteSpace: "nowrap",
-                                    ...underwritingMeta.style,
-                                  }}
-                                >
-                                  <span style={{ fontSize: "0.78rem", fontWeight: 600 }}>{underwritingMeta.label}</span>
-                                  <span style={{ fontSize: "0.7rem", opacity: 0.85 }}>{underwritingMeta.detail}</span>
-                                </div>
+                                <StatusChip
+                                  label={sourcingUpdateMeta.label}
+                                  detail={sourcingUpdateMeta.detail}
+                                  style={sourcingUpdateMeta.style}
+                                />
                               </td>
                               <td>
-                                <div
-                                  style={{
-                                    display: "inline-flex",
-                                    flexDirection: "column",
-                                    gap: "0.15rem",
-                                    padding: "0.35rem 0.55rem",
-                                    borderRadius: "999px",
-                                    border: "1px solid",
-                                    whiteSpace: "nowrap",
-                                    maxWidth: "12rem",
-                                    ...activeRunMeta.style,
-                                  }}
-                                >
-                                  <span style={{ fontSize: "0.78rem", fontWeight: 600 }}>{activeRunMeta.label}</span>
-                                  <span style={{ fontSize: "0.7rem", opacity: 0.85, overflow: "hidden", textOverflow: "ellipsis" }}>{activeRunMeta.detail}</span>
-                                </div>
+                                <StatusChip label={omMeta.label} detail={omMeta.detail} style={omMeta.style} />
                               </td>
                               <td>
-                                <div
-                                  style={{
-                                    display: "inline-flex",
-                                    flexDirection: "column",
-                                    gap: "0.15rem",
-                                    padding: "0.35rem 0.55rem",
-                                    borderRadius: "999px",
-                                    border: "1px solid",
-                                    whiteSpace: "nowrap",
-                                    ...dossierMeta.style,
-                                  }}
-                                >
-                                  <span style={{ fontSize: "0.78rem", fontWeight: 600 }}>{dossierMeta.label}</span>
-                                  <span style={{ fontSize: "0.7rem", opacity: 0.85 }}>{dossierMeta.detail}</span>
-                                </div>
+                                <StatusChip
+                                  label={activeRunMeta.label}
+                                  detail={activeRunMeta.detail}
+                                  style={activeRunMeta.style}
+                                />
                               </td>
                             </tr>
                             {expandedCanonicalId === prop.id && (
                               <tr className="property-data-detail-row">
-                                <td colSpan={13} className="property-data-detail-cell" style={{ padding: "1rem 1rem 1rem 2.5rem", backgroundColor: "#fafafa" }}>
+                                <td colSpan={8} className="property-data-detail-cell" style={{ padding: "1rem 1rem 1rem 2.5rem", backgroundColor: "#fafafa" }}>
                                   <CanonicalPropertyDetail
                                     property={prop}
                                     isSaved={savedPropertyIds.has(prop.id)}
@@ -1893,9 +1965,6 @@ function PropertyDataContent() {
           <div
             className="workflow-stage-summary"
             style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(8, minmax(0, 1fr))",
-              gap: "0.55rem",
               maxWidth: "1200px",
               marginBottom: "1rem",
             }}
@@ -1905,18 +1974,13 @@ function PropertyDataContent() {
                 key={item.label}
                 className="card workflow-stage-card"
                 style={{
-                  padding: "0.7rem 0.8rem",
                   borderColor: item.border,
                   background: item.bg,
                   color: item.tone,
                 }}
               >
-                <div style={{ fontSize: "0.7rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em" }}>
-                  {item.label}
-                </div>
-                <div style={{ marginTop: "0.2rem", fontSize: "1.35rem", fontWeight: 700, lineHeight: 1.1 }}>
-                  {item.count}
-                </div>
+                <div className="workflow-stage-card-label">{item.label}</div>
+                <div className="workflow-stage-card-value">{item.count}</div>
               </div>
             ))}
           </div>
@@ -2004,13 +2068,14 @@ function PropertyDataContent() {
               <p style={{ color: "#737373", fontSize: "0.875rem" }}>No workflow runs recorded yet.</p>
             ) : (
               <div style={{ overflowX: "auto", maxWidth: "100%" }}>
-                <table className="property-data-table" style={{ minWidth: `${420 + workflowColumns.length * 145}px`, fontSize: "0.84rem" }}>
+                <table
+                  className="property-data-table property-data-table--workflow"
+                  style={{ minWidth: `${320 + workflowDisplayColumns.length * 130}px`, fontSize: "0.84rem" }}
+                >
                   <thead>
                     <tr>
-                      <th>Triggered</th>
                       <th>Run</th>
-                      <th>Scope</th>
-                      {workflowColumns.map((column) => (
+                      {workflowDisplayColumns.map((column) => (
                         <th key={column.key}>{column.shortLabel}</th>
                       ))}
                     </tr>
@@ -2018,37 +2083,23 @@ function PropertyDataContent() {
                   <tbody>
                     {workflowBoard.runs.map((run) => (
                       <tr key={run.id}>
-                        <td style={{ minWidth: "9rem", verticalAlign: "top" }}>
-                          <div style={{ fontWeight: 600 }}>{formatDateTime(run.startedAt)}</div>
-                          <div style={{ fontSize: "0.72rem", color: "#64748b", marginTop: "0.25rem" }}>
-                            {run.finishedAt ? `Updated ${formatDateTime(run.finishedAt)}` : "Live"}
+                        <td className="property-data-workflow-run-cell">
+                          <div className="property-data-workflow-run-title">{run.displayName}</div>
+                          <div className="property-data-workflow-run-meta">
+                            {formatDateTime(run.startedAt)}
+                            {run.finishedAt ? ` · Updated ${formatDateTime(run.finishedAt)}` : " · Live"}
                           </div>
-                        </td>
-                        <td style={{ minWidth: "13rem", verticalAlign: "top" }}>
-                          <div style={{ fontWeight: 600 }}>{run.displayName}</div>
-                          <div
-                            style={{
-                              display: "inline-flex",
-                              alignItems: "center",
-                              gap: "0.35rem",
-                              marginTop: "0.35rem",
-                              padding: "0.2rem 0.45rem",
-                              borderRadius: "999px",
-                              border: "1px solid",
-                              fontSize: "0.72rem",
-                              fontWeight: 700,
-                              ...workflowStatusStyle(run.status),
-                            }}
-                          >
-                            <span>{workflowStatusLabel(run.status)}</span>
-                            <span>#{run.runNumber}</span>
+                          <div className="property-data-workflow-run-scope">
+                            {run.scopeLabel ?? (run.totalItems > 0 ? `${run.totalItems} item${run.totalItems === 1 ? "" : "s"}` : "No scoped items")}
                           </div>
+                          <StatusChip
+                            label={`${workflowStatusLabel(run.status)} #${run.runNumber}`}
+                            style={workflowStatusStyle(run.status)}
+                            className="property-status-chip--compact property-status-chip--run"
+                          />
                         </td>
-                        <td style={{ minWidth: "10rem", verticalAlign: "top" }}>
-                          {run.scopeLabel ?? (run.totalItems > 0 ? `${run.totalItems} item${run.totalItems === 1 ? "" : "s"}` : "—")}
-                        </td>
-                        {workflowColumns.map((column) => {
-                          const step = workflowStepForColumn(run, column.key);
+                        {workflowDisplayColumns.map((column) => {
+                          const step = summarizeWorkflowSteps(run, column);
                           if (!step) {
                             return (
                               <td key={`${run.id}-${column.key}`} style={{ color: "#94a3b8", textAlign: "center" }}>
@@ -2065,37 +2116,21 @@ function PropertyDataContent() {
                                 ? `${processed}`
                                 : "0";
                           return (
-                            <td key={`${run.id}-${column.key}`} style={{ minWidth: "9rem", verticalAlign: "top" }}>
-                              <div
-                                style={{
-                                  display: "inline-flex",
-                                  alignItems: "center",
-                                  padding: "0.2rem 0.45rem",
-                                  borderRadius: "999px",
-                                  border: "1px solid",
-                                  fontSize: "0.7rem",
-                                  fontWeight: 700,
-                                  ...workflowStatusStyle(step.status),
-                                }}
-                              >
-                                {workflowStatusLabel(step.status)}
-                              </div>
-                              <div style={{ marginTop: "0.35rem", fontVariantNumeric: "tabular-nums", fontWeight: 600 }}>
+                            <td key={`${run.id}-${column.key}`} className="property-data-workflow-stage-cell">
+                              <StatusChip
+                                label={workflowStatusLabel(step.status)}
+                                style={workflowStatusStyle(step.status)}
+                                className="property-status-chip--compact"
+                              />
+                              <div className="property-data-workflow-stage-count">
                                 {progressText}
                                 {step.failedItems > 0 ? ` · ${step.failedItems} failed` : ""}
                               </div>
                               {note ? (
                                 <div
                                   title={note}
-                                  style={{
-                                    marginTop: "0.25rem",
-                                    fontSize: "0.7rem",
-                                    color: step.lastError ? "#b91c1c" : "#64748b",
-                                    lineHeight: 1.35,
-                                    maxWidth: "9rem",
-                                    overflow: "hidden",
-                                    textOverflow: "ellipsis",
-                                  }}
+                                  className="property-data-workflow-stage-note"
+                                  style={{ color: step.lastError ? "#b91c1c" : undefined }}
                                 >
                                   {note}
                                 </div>

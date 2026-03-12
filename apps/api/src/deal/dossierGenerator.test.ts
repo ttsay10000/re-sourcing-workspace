@@ -208,4 +208,78 @@ describe("buildDossierStructuredText", () => {
     expect(text).toContain("Address: 18-20 Christopher Street, Manhattan, NY 10014");
     expect(text).toContain("Package note: Package OM covers multiple buildings or lots (Block 593, Lots 42 and 43); property-level BBL and HPD registration data may reflect only the canonical listing address.");
   });
+
+  it("renders a sale-cap sensitivity table with IRR by exit cap", () => {
+    const ctx = sampleContext();
+    ctx.sensitivities = [
+      {
+        key: "exit_cap_rate",
+        title: "Sale Cap Rate Sensitivity",
+        inputLabel: "Sale cap rate (%)",
+        baseCase: {
+          valuePct: 6,
+          irrPct: 0.156,
+          year1CashOnCashReturn: 0.076,
+          year1EquityYield: 0.0957,
+        },
+        ranges: {
+          irrPct: { min: 0.132, max: 0.184 },
+          year1CashOnCashReturn: { min: 0.076, max: 0.076 },
+          year1EquityYield: { min: 0.0957, max: 0.0957 },
+        },
+        scenarios: [
+          {
+            valuePct: 5,
+            irrPct: 0.184,
+            year1CashOnCashReturn: 0.076,
+            year1EquityYield: 0.0957,
+            stabilizedNoi: 84_720,
+            annualOperatingCashFlow: 34_357.92,
+            exitPropertyValue: 1_694_400,
+            netProceedsToEquity: 1_009_272,
+          },
+          {
+            valuePct: 5.5,
+            irrPct: 0.169,
+            year1CashOnCashReturn: 0.076,
+            year1EquityYield: 0.0957,
+            stabilizedNoi: 84_720,
+            annualOperatingCashFlow: 34_357.92,
+            exitPropertyValue: 1_540_364,
+            netProceedsToEquity: 858_557,
+          },
+          {
+            valuePct: 6.5,
+            irrPct: 0.143,
+            year1CashOnCashReturn: 0.076,
+            year1EquityYield: 0.0957,
+            stabilizedNoi: 84_720,
+            annualOperatingCashFlow: 34_357.92,
+            exitPropertyValue: 1_303_385,
+            netProceedsToEquity: 626_317,
+          },
+          {
+            valuePct: 7,
+            irrPct: 0.132,
+            year1CashOnCashReturn: 0.076,
+            year1EquityYield: 0.0957,
+            stabilizedNoi: 84_720,
+            annualOperatingCashFlow: 34_357.92,
+            exitPropertyValue: 1_210_286,
+            netProceedsToEquity: 535_080,
+          },
+        ],
+      },
+    ];
+
+    const text = buildDossierStructuredText(ctx);
+
+    expect(text).toContain("• Base sale cap rate (%): 6.00%; IRR range 13.20% to 18.40% across alternate sale-cap assumptions");
+    expect(text).toContain("| Sale cap rate (%) | Exit value | Net sale proceeds to equity | IRR |");
+    expect(text).toContain("| 5.00% | $1,694,400 | $1,009,272 | 18.40% |");
+    expect(text).toContain("| **Base (6.00%)** | **$1,412,000** | **$732,760** | **15.60%** |");
+    expect(text).toContain("| 7.00% | $1,210,286 | $535,080 | 13.20% |");
+    expect(text.indexOf("| 5.50% |")).toBeLessThan(text.indexOf("| **Base (6.00%)** |"));
+    expect(text.indexOf("| **Base (6.00%)** |")).toBeLessThan(text.indexOf("| 6.50% |"));
+  });
 });

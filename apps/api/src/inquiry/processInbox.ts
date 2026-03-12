@@ -17,10 +17,8 @@ import {
 import { listMessages, getMessage, getAttachment, getHeader, getBodyText, getAttachmentParts, parseEmailFromHeader, getThreadMessageIds } from "./gmailClient.js";
 import { parseAddressFromInquirySubject, parseAddressFromSubjectFallback } from "./addressFromSubject.js";
 import { saveInquiryAttachment } from "./storage.js";
-import { extractTextFromFile } from "./extractTextFromAttachment.js";
 import { extractEmailSummary } from "./extractEmailSummary.js";
 import { syncPropertySourcingWorkflow } from "../sourcing/workflow.js";
-import { ingestAuthoritativeOm } from "../om/ingestAuthoritativeOm.js";
 
 /** Build map: broker email (normalized) -> property_id. Uses first listing match per email. */
 async function getBrokerEmailToPropertyIdMap(pool: Pool): Promise<Map<string, string | null>> {
@@ -55,9 +53,6 @@ async function getBrokerEmailToPropertyIdMap(pool: Pool): Promise<Map<string, st
   return map;
 }
 
-/** Min combined text length to run OM-style extraction (same as manual upload). Skip when nothing readable from OM. */
-const OM_STYLE_MIN_READABLE_CHARS = 50;
-
 interface SavedAttachment {
   id?: string;
   filePath: string;
@@ -80,10 +75,6 @@ interface MessageMatchTargets {
   propertyLinks: MatchedPropertyLink[];
   matchedBatchId: string | null;
   processingStatus: string;
-}
-
-function attachmentDocs(savedAttachments: SavedAttachment[]): SavedAttachment[] | undefined {
-  return savedAttachments.length > 0 ? savedAttachments : undefined;
 }
 
 function dedupePropertyLinks(propertyLinks: MatchedPropertyLink[]): MatchedPropertyLink[] {
@@ -277,57 +268,10 @@ async function persistMatchedMessage(
     params.result.errors.push(`${params.phaseLabel} email summary: ${e instanceof Error ? e.message : String(e)}`);
   }
 
-  const attachmentTexts: string[] = [];
-  for (const { filePath, filename } of savedPaths) {
-    const text = await extractTextFromFile(filePath, filename);
-    if (text) attachmentTexts.push(text);
-  }
-  const combinedText = [bodyText, ...attachmentTexts].filter(Boolean).join("\n\n");
-  const omDocs = attachmentDocs(savedPaths);
-  if (
-    ENABLE_OM_AUTOMATION_V2 &&
-    params.targets.propertyLinks.length === 1 &&
-    (combinedText.length >= OM_STYLE_MIN_READABLE_CHARS || omDocs?.length)
-  ) {
-    try {
-      await runOmStyleExtractionAndMerge(params.propertyRepo, primaryProperty, combinedText, omDocs);
-    } catch (e) {
-      params.result.errors.push(`${params.phaseLabel} llm merge: ${e instanceof Error ? e.message : String(e)}`);
-    }
-  }
-
   for (const link of params.targets.propertyLinks) {
     await syncPropertySourcingWorkflow(link.propertyId, { pool: params.pool });
   }
   return true;
-}
-
-/**
- * Run the same Gemini authoritative OM ingestion path as manual upload,
- * then persist the promoted authoritative snapshot onto the property.
- */
-async function runOmStyleExtractionAndMerge(
-  propertyRepo: PropertyRepo,
-  property: { id: string; details?: unknown },
-  combinedText: string,
-  documentFiles?: SavedAttachment[]
-): Promise<void> {
-  void propertyRepo;
-  void combinedText;
-  if (!documentFiles || documentFiles.length === 0) return;
-  const result = await ingestAuthoritativeOm({
-    propertyId: property.id,
-    sourceType: "inquiry_attachment",
-    documents: documentFiles.map((doc, index) => ({
-      id: doc.id ?? `inbox:${property.id}:${index}:${doc.filename}`,
-      origin: "inquiry_attachment",
-      filename: doc.filename,
-      mimeType: doc.mimeType ?? "application/pdf",
-      filePath: doc.filePath,
-      buffer: doc.buffer,
-    })),
-  });
-  if (result.error) throw new Error(result.error);
 }
 
 export interface ProcessInboxResult {
@@ -360,7 +304,6 @@ const MAX_MESSAGES_PER_BROKER = 30;
 const THREAD_LOOKBACK_DAYS = 90;
 const MAX_THREADS_PER_RUN = 50;
 const INBOX_SYNC_OVERLAP_DAYS = 2;
-const ENABLE_OM_AUTOMATION_V2 = process.env.ENABLE_OM_AUTOMATION_V2 === "1";
 const INBOX_INITIAL_SYNC_START = new Date("2026-03-01T00:00:00-05:00");
 
 export async function processInbox(options?: { maxMessages?: number }): Promise<ProcessInboxResult> {

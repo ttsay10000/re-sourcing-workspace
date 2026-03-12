@@ -397,9 +397,37 @@ export interface PropertyDealDossierGeneration {
   excelDocumentId?: string | null;
 }
 
+export interface PropertyDealDossierSummary {
+  generatedAt?: string | null;
+  askingPrice?: number | null;
+  purchasePrice?: number | null;
+  recommendedOfferLow?: number | null;
+  recommendedOfferHigh?: number | null;
+  targetIrrPct?: number | null;
+  discountToAskingPct?: number | null;
+  irrAtAskingPct?: number | null;
+  targetMetAtAsking?: boolean | null;
+  currentNoi?: number | null;
+  adjustedNoi?: number | null;
+  stabilizedNoi?: number | null;
+  annualDebtService?: number | null;
+  year1EquityYield?: number | null;
+  irrPct?: number | null;
+  equityMultiple?: number | null;
+  cocPct?: number | null;
+  holdYears?: number | null;
+  dealScore?: number | null;
+  calculatedDealScore?: number | null;
+  dealSignalsId?: string | null;
+  dealSignalsGeneratedAt?: string | null;
+  dossierDocumentId?: string | null;
+  excelDocumentId?: string | null;
+}
+
 export interface PropertyDealDossier {
   assumptions?: PropertyDealDossierAssumptions | null;
   generation?: PropertyDealDossierGeneration | null;
+  summary?: PropertyDealDossierSummary | null;
 }
 
 export type PropertySourcingUpdateStatus = "new" | "updated" | "unchanged";

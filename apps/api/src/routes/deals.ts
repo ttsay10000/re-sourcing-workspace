@@ -4,18 +4,10 @@
 
 import { Router, type Request, type Response } from "express";
 import { deriveListingActivitySummary, type PriceHistoryEntry, type PropertyDetails } from "@re-sourcing/contracts";
-import { getPool, UserProfileRepo } from "@re-sourcing/db";
+import { getPool } from "@re-sourcing/db";
 import { analyzePropertyForUnderwriting } from "../deal/propertyAssumptions.js";
-import { resolvePreferredOmRentRoll } from "../om/authoritativeOm.js";
-import {
-  resolveCurrentFinancialsFromDetails,
-  resolveExpenseRowsFromDetails,
-} from "../rental/currentFinancials.js";
-import {
-  computeRecommendedOffer,
-  computeUnderwritingProjection,
-  resolveDossierAssumptions,
-} from "../deal/underwritingModel.js";
+import { getPropertyDossierSummary } from "../deal/propertyDossierState.js";
+import { resolvePreferredOmRentRoll, resolvePreferredOmUnitCount } from "../om/authoritativeOm.js";
 
 const router = Router();
 
@@ -50,15 +42,10 @@ function inferAggregateBaths(details: PropertyDetails | null, fallback: number |
   return null;
 }
 
-function hasAuthoritativeOm(details: PropertyDetails | null): boolean {
-  return !!(details?.omData?.authoritative && typeof details.omData.authoritative === "object");
-}
-
 /** GET /api/deals - list scored deals for discovery feed. */
 router.get("/deals", async (req: Request, res: Response) => {
   try {
     const pool = getPool();
-    const profileRepo = new UserProfileRepo({ pool });
     const sort = (req.query.sort as SortKey) || "deal_score";
     const order = req.query.order === "asc" ? "ASC" : "DESC";
     const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 100);
@@ -77,16 +64,7 @@ router.get("/deals", async (req: Request, res: Response) => {
     const orderClause = `${sortColumn} ${order} NULLS LAST`;
 
     const r = await pool.query(
-      `WITH latest_signal AS (
-         SELECT DISTINCT ON (property_id) id, property_id, deal_score, asset_cap_rate, adjusted_cap_rate, rent_upside,
-           irr_pct, equity_multiple, coc_pct, hold_years, current_noi, adjusted_noi,
-           score_breakdown, risk_profile, risk_flags, cap_reasons, confidence_score, score_sensitivity, score_version,
-           generated_at
-         FROM deal_signals
-         WHERE deal_score IS NOT NULL
-         ORDER BY property_id, generated_at DESC
-       )
-       SELECT
+      `SELECT
          p.id,
          p.canonical_address AS address,
          p.details,
@@ -124,12 +102,50 @@ router.get("/deals", async (req: Request, res: Response) => {
          ov.created_at AS score_override_created_at,
          ls.generated_at
        FROM properties p
-       INNER JOIN latest_signal ls ON ls.property_id = p.id
+       INNER JOIN LATERAL (
+         SELECT *
+         FROM deal_signals
+         WHERE property_id = p.id
+           AND deal_score IS NOT NULL
+           AND (
+             (
+               COALESCE(NULLIF(p.details->'dealDossier'->'summary'->>'dealSignalsId', ''), '') <> ''
+               AND id::text = p.details->'dealDossier'->'summary'->>'dealSignalsId'
+             )
+             OR (
+               COALESCE(NULLIF(p.details->'dealDossier'->'summary'->>'dealSignalsId', ''), '') = ''
+               AND COALESCE(
+                 NULLIF(p.details->'dealDossier'->'summary'->>'dealSignalsGeneratedAt', ''),
+                 NULLIF(p.details->'dealDossier'->'summary'->>'generatedAt', '')
+               ) <> ''
+               AND generated_at <= COALESCE(
+                 NULLIF(p.details->'dealDossier'->'summary'->>'dealSignalsGeneratedAt', ''),
+                 NULLIF(p.details->'dealDossier'->'summary'->>'generatedAt', '')
+               )::timestamptz
+             )
+             OR (
+               COALESCE(NULLIF(p.details->'dealDossier'->'summary'->>'dealSignalsId', ''), '') = ''
+               AND COALESCE(
+                 NULLIF(p.details->'dealDossier'->'summary'->>'dealSignalsGeneratedAt', ''),
+                 NULLIF(p.details->'dealDossier'->'summary'->>'generatedAt', '')
+               ) = ''
+             )
+           )
+         ORDER BY
+           CASE
+             WHEN COALESCE(NULLIF(p.details->'dealDossier'->'summary'->>'dealSignalsId', ''), '') <> ''
+               AND id::text = p.details->'dealDossier'->'summary'->>'dealSignalsId'
+             THEN 0
+             ELSE 1
+           END,
+           generated_at DESC
+         LIMIT 1
+       ) ls ON true
        LEFT JOIN LATERAL (
          SELECT listing_id FROM listing_property_matches WHERE property_id = p.id ORDER BY confidence DESC NULLS LAST, created_at DESC LIMIT 1
        ) m ON true
        LEFT JOIN listings l ON l.id = m.listing_id
-       LEFT JOIN LATERAL (
+       INNER JOIN LATERAL (
          SELECT id, file_name, created_at
          FROM documents
          WHERE property_id = p.id AND source = 'generated_dossier'
@@ -148,19 +164,15 @@ router.get("/deals", async (req: Request, res: Response) => {
       [limit, offset]
     );
 
-    await profileRepo.ensureDefault();
-    const profile = await profileRepo.getDefault();
-
     const deals = r.rows.map((row: Record<string, unknown>) => {
       const details = (row.details ?? null) as PropertyDetails | null;
-      const authoritativeReady = hasAuthoritativeOm(details);
+      const dossierSummary = getPropertyDossierSummary(details);
       const unitsFromRental = row.units_from_rental != null ? Number(row.units_from_rental) : null;
       const mix = analyzePropertyForUnderwriting(details);
-      const units = mix.totalUnits ?? (unitsFromRental != null && unitsFromRental > 0 ? unitsFromRental : null);
-      const currentFinancials = resolveCurrentFinancialsFromDetails(details);
-      const expenseRows = resolveExpenseRowsFromDetails(details);
-      const currentNoi = currentFinancials.noi;
-      const currentGrossRent = currentFinancials.grossRentalIncome;
+      const units =
+        resolvePreferredOmUnitCount(details)
+        ?? mix.totalUnits
+        ?? (unitsFromRental != null && unitsFromRental > 0 ? unitsFromRental : null);
       const askingPrice = row.price != null ? Number(row.price) : null;
       const listedAt = row.listed_at instanceof Date ? row.listed_at.toISOString() : (row.listed_at as string | null) ?? null;
       const listingActivity = deriveListingActivitySummary({
@@ -168,26 +180,15 @@ router.get("/deals", async (req: Request, res: Response) => {
         currentPrice: askingPrice,
         priceHistory: (row.price_history as PriceHistoryEntry[] | null) ?? null,
       });
-      const assumptions = resolveDossierAssumptions(profile, askingPrice, null, { details });
-      const recommendedOffer = computeRecommendedOffer({
-        assumptions,
-        currentGrossRent,
-        currentNoi,
-        currentOtherIncome: currentFinancials.otherIncome,
-        currentExpensesTotal: currentFinancials.operatingExpenses,
-        expenseRows,
-      });
-      const projection = computeUnderwritingProjection({
-        assumptions,
-        currentGrossRent,
-        currentNoi,
-        currentOtherIncome: currentFinancials.otherIncome,
-        currentExpensesTotal: currentFinancials.operatingExpenses,
-        expenseRows,
-      });
       const dossierCreatedAt = row.dossier_created_at instanceof Date
         ? row.dossier_created_at.toISOString()
         : (row.dossier_created_at as string | null) ?? null;
+      const generatedAt = dossierSummary?.generatedAt
+        ?? (row.generated_at instanceof Date ? row.generated_at.toISOString() : (row.generated_at as string | null) ?? null);
+      const calculatedDealScore =
+        dossierSummary?.calculatedDealScore
+        ?? dossierSummary?.dealScore
+        ?? (row.calculated_deal_score != null ? Number(row.calculated_deal_score) : null);
 
       return {
         id: row.id,
@@ -203,36 +204,34 @@ router.get("/deals", async (req: Request, res: Response) => {
         commercialUnits: mix.commercialUnits,
         rentStabilizedUnits: mix.rentStabilizedUnits,
         eligibleResidentialUnits: mix.eligibleResidentialUnits,
-        recommendedOfferLow: recommendedOffer.recommendedOfferLow,
-        recommendedOfferHigh: recommendedOffer.recommendedOfferHigh,
-        targetIrrPct: recommendedOffer.targetIrrPct,
-        discountToAskingPct: recommendedOffer.discountToAskingPct,
-        irrAtAskingPct: recommendedOffer.irrAtAskingPct,
-        targetMetAtAsking: recommendedOffer.targetMetAtAsking,
-        stabilizedNoi: projection.operating.stabilizedNoi,
-        annualDebtService: projection.financing.annualDebtService,
-        year1EquityYield: projection.returns.year1EquityYield,
+        recommendedOfferLow: dossierSummary?.recommendedOfferLow ?? null,
+        recommendedOfferHigh: dossierSummary?.recommendedOfferHigh ?? null,
+        targetIrrPct: dossierSummary?.targetIrrPct ?? null,
+        discountToAskingPct: dossierSummary?.discountToAskingPct ?? null,
+        irrAtAskingPct: dossierSummary?.irrAtAskingPct ?? null,
+        targetMetAtAsking: dossierSummary?.targetMetAtAsking === true,
+        stabilizedNoi: dossierSummary?.stabilizedNoi ?? (row.adjusted_noi != null ? Number(row.adjusted_noi) : null),
+        annualDebtService: dossierSummary?.annualDebtService ?? null,
+        year1EquityYield: dossierSummary?.year1EquityYield ?? null,
         dossierDocumentId: typeof row.dossier_document_id === "string" ? row.dossier_document_id : null,
         dossierFileName: typeof row.dossier_file_name === "string" ? row.dossier_file_name : null,
         dossierCreatedAt,
         dealScore:
-          authoritativeReady
-            ? row.score_override_score != null
-              ? Number(row.score_override_score)
-              : row.calculated_deal_score != null
-                ? Number(row.calculated_deal_score)
-                : null
-            : null,
-        calculatedDealScore: authoritativeReady && row.calculated_deal_score != null ? Number(row.calculated_deal_score) : null,
+          row.score_override_score != null
+            ? Number(row.score_override_score)
+            : calculatedDealScore != null
+              ? calculatedDealScore
+              : null,
+        calculatedDealScore,
         assetCapRate: row.asset_cap_rate != null ? Number(row.asset_cap_rate) : null,
         adjustedCapRate: row.adjusted_cap_rate != null ? Number(row.adjusted_cap_rate) : null,
         rentUpside: row.rent_upside != null ? Number(row.rent_upside) : null,
-        irrPct: row.irr_pct != null ? Number(row.irr_pct) : null,
-        equityMultiple: row.equity_multiple != null ? Number(row.equity_multiple) : null,
-        cocPct: row.coc_pct != null ? Number(row.coc_pct) : null,
-        holdYears: row.hold_years != null ? Number(row.hold_years) : null,
-        currentNoi: row.current_noi != null ? Number(row.current_noi) : null,
-        adjustedNoi: row.adjusted_noi != null ? Number(row.adjusted_noi) : null,
+        irrPct: dossierSummary?.irrPct ?? (row.irr_pct != null ? Number(row.irr_pct) : null),
+        equityMultiple: dossierSummary?.equityMultiple ?? (row.equity_multiple != null ? Number(row.equity_multiple) : null),
+        cocPct: dossierSummary?.cocPct ?? (row.coc_pct != null ? Number(row.coc_pct) : null),
+        holdYears: dossierSummary?.holdYears ?? (row.hold_years != null ? Number(row.hold_years) : null),
+        currentNoi: dossierSummary?.currentNoi ?? (row.current_noi != null ? Number(row.current_noi) : null),
+        adjustedNoi: dossierSummary?.adjustedNoi ?? (row.adjusted_noi != null ? Number(row.adjusted_noi) : null),
         confidenceScore: row.confidence_score != null ? Number(row.confidence_score) : null,
         scoreBreakdown: (row.score_breakdown as Record<string, unknown> | null) ?? null,
         riskProfile: (row.risk_profile as Record<string, unknown> | null) ?? null,
@@ -255,18 +254,59 @@ router.get("/deals", async (req: Request, res: Response) => {
                 clearedAt: null,
               }
             : null,
-        generatedAt: row.generated_at instanceof Date ? row.generated_at.toISOString() : row.generated_at,
+        generatedAt,
       };
     }).filter((deal) => deal.dealScore != null || deal.calculatedDealScore != null);
 
     const countResult = await pool.query(
-      `WITH latest_signal AS (
-         SELECT DISTINCT ON (property_id) property_id
+      `SELECT COUNT(*) AS total
+       FROM properties p
+       INNER JOIN LATERAL (
+         SELECT 1
          FROM deal_signals
-         WHERE deal_score IS NOT NULL
-         ORDER BY property_id, generated_at DESC
-       )
-       SELECT COUNT(*) AS total FROM properties p INNER JOIN latest_signal ls ON ls.property_id = p.id`
+         WHERE property_id = p.id
+           AND deal_score IS NOT NULL
+           AND (
+             (
+               COALESCE(NULLIF(p.details->'dealDossier'->'summary'->>'dealSignalsId', ''), '') <> ''
+               AND id::text = p.details->'dealDossier'->'summary'->>'dealSignalsId'
+             )
+             OR (
+               COALESCE(NULLIF(p.details->'dealDossier'->'summary'->>'dealSignalsId', ''), '') = ''
+               AND COALESCE(
+                 NULLIF(p.details->'dealDossier'->'summary'->>'dealSignalsGeneratedAt', ''),
+                 NULLIF(p.details->'dealDossier'->'summary'->>'generatedAt', '')
+               ) <> ''
+               AND generated_at <= COALESCE(
+                 NULLIF(p.details->'dealDossier'->'summary'->>'dealSignalsGeneratedAt', ''),
+                 NULLIF(p.details->'dealDossier'->'summary'->>'generatedAt', '')
+               )::timestamptz
+             )
+             OR (
+               COALESCE(NULLIF(p.details->'dealDossier'->'summary'->>'dealSignalsId', ''), '') = ''
+               AND COALESCE(
+                 NULLIF(p.details->'dealDossier'->'summary'->>'dealSignalsGeneratedAt', ''),
+                 NULLIF(p.details->'dealDossier'->'summary'->>'generatedAt', '')
+               ) = ''
+             )
+           )
+         ORDER BY
+           CASE
+             WHEN COALESCE(NULLIF(p.details->'dealDossier'->'summary'->>'dealSignalsId', ''), '') <> ''
+               AND id::text = p.details->'dealDossier'->'summary'->>'dealSignalsId'
+             THEN 0
+             ELSE 1
+           END,
+           generated_at DESC
+         LIMIT 1
+       ) ls ON true
+       INNER JOIN LATERAL (
+         SELECT 1
+         FROM documents
+         WHERE property_id = p.id AND source = 'generated_dossier'
+         ORDER BY created_at DESC
+         LIMIT 1
+       ) gd ON true`
     );
     const total = Number((countResult.rows[0] as Record<string, unknown>)?.total ?? 0);
 

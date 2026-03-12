@@ -1,6 +1,7 @@
 import type {
   PropertyDealDossierAssumptions,
   PropertyDealDossierGeneration,
+  PropertyDealDossierSummary,
   PropertyDetails,
 } from "@re-sourcing/contracts";
 import type { DossierAssumptionOverrides } from "./underwritingModel.js";
@@ -39,6 +40,69 @@ export function getPropertyDossierGeneration(
   const generation = details?.dealDossier?.generation;
   if (!generation || typeof generation !== "object") return null;
   return generation;
+}
+
+export function hasCompletedDealDossier(
+  details: PropertyDetails | null | undefined
+): boolean {
+  const generation = getPropertyDossierGeneration(details);
+  return generation?.status === "completed";
+}
+
+export function getPropertyDossierSummary(
+  details: PropertyDetails | null | undefined
+): PropertyDealDossierSummary | null {
+  const summary = details?.dealDossier?.summary;
+  if (!summary || typeof summary !== "object") return null;
+
+  const generatedAt =
+    typeof summary.generatedAt === "string" && summary.generatedAt.trim().length > 0
+      ? summary.generatedAt.trim()
+      : null;
+  const targetMetAtAsking =
+    typeof summary.targetMetAtAsking === "boolean" ? summary.targetMetAtAsking : null;
+
+  const parsed: PropertyDealDossierSummary = {
+    generatedAt,
+    askingPrice: toFiniteNumber(summary.askingPrice),
+    purchasePrice: toFiniteNumber(summary.purchasePrice),
+    recommendedOfferLow: toFiniteNumber(summary.recommendedOfferLow),
+    recommendedOfferHigh: toFiniteNumber(summary.recommendedOfferHigh),
+    targetIrrPct: toFiniteNumber(summary.targetIrrPct),
+    discountToAskingPct: toFiniteNumber(summary.discountToAskingPct),
+    irrAtAskingPct: toFiniteNumber(summary.irrAtAskingPct),
+    targetMetAtAsking,
+    currentNoi: toFiniteNumber(summary.currentNoi),
+    adjustedNoi: toFiniteNumber(summary.adjustedNoi),
+    stabilizedNoi: toFiniteNumber(summary.stabilizedNoi),
+    annualDebtService: toFiniteNumber(summary.annualDebtService),
+    year1EquityYield: toFiniteNumber(summary.year1EquityYield),
+    irrPct: toFiniteNumber(summary.irrPct),
+    equityMultiple: toFiniteNumber(summary.equityMultiple),
+    cocPct: toFiniteNumber(summary.cocPct),
+    holdYears: toFiniteNumber(summary.holdYears),
+    dealScore: toFiniteNumber(summary.dealScore),
+    calculatedDealScore: toFiniteNumber(summary.calculatedDealScore),
+    dealSignalsId:
+      typeof summary.dealSignalsId === "string" && summary.dealSignalsId.trim().length > 0
+        ? summary.dealSignalsId.trim()
+        : null,
+    dealSignalsGeneratedAt:
+      typeof summary.dealSignalsGeneratedAt === "string" && summary.dealSignalsGeneratedAt.trim().length > 0
+        ? summary.dealSignalsGeneratedAt.trim()
+        : null,
+    dossierDocumentId:
+      typeof summary.dossierDocumentId === "string" && summary.dossierDocumentId.trim().length > 0
+        ? summary.dossierDocumentId.trim()
+        : null,
+    excelDocumentId:
+      typeof summary.excelDocumentId === "string" && summary.excelDocumentId.trim().length > 0
+        ? summary.excelDocumentId.trim()
+        : null,
+  };
+
+  const hasValue = Object.entries(parsed).some(([, value]) => value != null);
+  return hasValue ? parsed : null;
 }
 
 export function propertyAssumptionsToOverrides(

@@ -80,10 +80,12 @@ export interface SensitivityScenarioRow {
   year1EquityYield?: number | null;
   stabilizedNoi: number;
   annualOperatingCashFlow: number;
+  exitPropertyValue: number;
+  netProceedsToEquity: number;
 }
 
 export interface SensitivityAnalysisContext {
-  key: "rental_uplift" | "expense_increase" | "management_fee";
+  key: "rental_uplift" | "expense_increase" | "management_fee" | "exit_cap_rate";
   title: string;
   inputLabel: string;
   scenarios: SensitivityScenarioRow[];

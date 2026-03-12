@@ -1358,12 +1358,31 @@ textarea {
 }
 
 .workflow-stage-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 0.55rem;
   align-items: stretch;
 }
 
 .workflow-stage-card {
   min-height: 0;
+  padding: 0.65rem 0.75rem;
+  border-radius: 12px;
   box-shadow: none;
+}
+
+.workflow-stage-card-label {
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.workflow-stage-card-value {
+  margin-top: 0.22rem;
+  font-size: 1.2rem;
+  font-weight: 700;
+  line-height: 1.05;
 }
 
 .metric-card {
@@ -1968,6 +1987,13 @@ textarea {
   font-size: 0.875rem;
 }
 
+.property-data-table--canonical th,
+.property-data-table--workflow th {
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
 .property-data-table th,
 .property-data-table td {
   text-align: left;
@@ -1985,6 +2011,11 @@ textarea {
 
 .property-data-table td {
   color: #111;
+}
+
+.property-data-table--canonical td,
+.property-data-table--workflow td {
+  vertical-align: top;
 }
 
 .property-data-table tbody tr:hover {
@@ -2015,6 +2046,70 @@ textarea {
 
 .property-data-table-checkbox-col input[type="checkbox"] {
   cursor: pointer;
+}
+
+.property-data-cell-primary {
+  min-width: 20rem;
+}
+
+.property-data-cell-title {
+  font-weight: 600;
+  line-height: 1.35;
+  color: #1f2937;
+}
+
+.property-data-cell-meta,
+.property-data-cell-subtle {
+  margin-top: 0.25rem;
+  font-size: 0.76rem;
+  line-height: 1.4;
+  color: #64748b;
+}
+
+.property-status-chip {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.12rem;
+  max-width: min(100%, 15rem);
+  padding: 0.36rem 0.58rem;
+  border: 1px solid;
+  border-radius: 14px;
+  line-height: 1.2;
+  white-space: normal;
+}
+
+.property-status-chip-label {
+  font-size: 0.79rem;
+  font-weight: 700;
+}
+
+.property-status-chip-detail {
+  font-size: 0.71rem;
+  opacity: 0.9;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  text-wrap: pretty;
+}
+
+.property-status-chip--compact {
+  gap: 0;
+  padding: 0.24rem 0.48rem;
+  border-radius: 999px;
+}
+
+.property-status-chip--compact .property-status-chip-label {
+  font-size: 0.72rem;
+}
+
+.property-status-chip--compact .property-status-chip-detail {
+  display: none;
+}
+
+.property-status-chip--run {
+  margin-top: 0.5rem;
 }
 
 .property-data-row-expand-btn {
@@ -2053,6 +2148,51 @@ textarea {
 
 .property-data-table tbody tr.property-data-detail-row:hover {
   background: #fafafa;
+}
+
+.property-data-workflow-run-cell {
+  min-width: 18rem;
+}
+
+.property-data-workflow-run-title {
+  font-weight: 600;
+  color: #1f2937;
+}
+
+.property-data-workflow-run-meta {
+  margin-top: 0.25rem;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: #64748b;
+}
+
+.property-data-workflow-run-scope {
+  margin-top: 0.2rem;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  color: #334155;
+}
+
+.property-data-workflow-stage-cell {
+  min-width: 8.5rem;
+}
+
+.property-data-workflow-stage-count {
+  margin-top: 0.35rem;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.property-data-workflow-stage-note {
+  margin-top: 0.25rem;
+  font-size: 0.71rem;
+  line-height: 1.35;
+  color: #64748b;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .property-data-detail-row td {

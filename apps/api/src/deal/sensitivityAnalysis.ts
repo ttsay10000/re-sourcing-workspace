@@ -4,7 +4,7 @@ import {
   type ResolvedDossierAssumptions,
 } from "./underwritingModel.js";
 
-export type SensitivityKey = "rental_uplift" | "expense_increase" | "management_fee";
+export type SensitivityKey = "rental_uplift" | "expense_increase" | "management_fee" | "exit_cap_rate";
 
 export interface SensitivityScenario {
   valuePct: number;
@@ -13,6 +13,8 @@ export interface SensitivityScenario {
   year1EquityYield: number | null;
   stabilizedNoi: number;
   annualOperatingCashFlow: number;
+  exitPropertyValue: number;
+  netProceedsToEquity: number;
 }
 
 export interface SensitivityMetricRange {
@@ -41,6 +43,12 @@ export interface SensitivityAnalysis {
 export const RENTAL_UPLIFT_SENSITIVITY_VALUES = [50, 60, 70, 80, 90];
 export const EXPENSE_INCREASE_SENSITIVITY_VALUES = [10, 17.5, 25, 30];
 export const MANAGEMENT_FEE_SENSITIVITY_VALUES = [6, 8, 10, 12];
+export const EXIT_CAP_RATE_SENSITIVITY_OFFSETS_BPS = [-100, -50, 50, 100];
+const MIN_EXIT_CAP_RATE_PCT = 0.25;
+
+function roundPct(value: number): number {
+  return Math.round(value * 100) / 100;
+}
 
 function range(values: Array<number | null | undefined>): SensitivityMetricRange {
   const numeric = values.filter((value): value is number => value != null && Number.isFinite(value));
@@ -56,7 +64,21 @@ function scenarioFromProjection(valuePct: number, projection: ReturnType<typeof 
     year1EquityYield: projection.returns.year1EquityYield,
     stabilizedNoi: projection.operating.stabilizedNoi,
     annualOperatingCashFlow: projection.cashFlows.annualOperatingCashFlow,
+    exitPropertyValue: projection.exit.exitPropertyValue,
+    netProceedsToEquity: projection.exit.netProceedsToEquity,
   };
+}
+
+function buildExitCapRateSensitivityValues(baseExitCapPct: number): number[] {
+  const values = new Set<number>();
+  for (const offsetBps of EXIT_CAP_RATE_SENSITIVITY_OFFSETS_BPS) {
+    const adjustedValue = roundPct(
+      Math.max(MIN_EXIT_CAP_RATE_PCT, baseExitCapPct + offsetBps / 100)
+    );
+    if (Math.abs(adjustedValue - baseExitCapPct) < 0.0001) continue;
+    values.add(adjustedValue);
+  }
+  return Array.from(values).sort((left, right) => left - right);
 }
 
 export function buildSensitivityAnalyses(input: {
@@ -139,6 +161,27 @@ export function buildSensitivityAnalyses(input: {
     )
   );
 
+  const exitCapRateScenarios = buildExitCapRateSensitivityValues(assumptions.exit.exitCapPct).map(
+    (valuePct) =>
+      scenarioFromProjection(
+        valuePct,
+        computeUnderwritingProjection({
+          assumptions: {
+            ...assumptions,
+            exit: {
+              ...assumptions.exit,
+              exitCapPct: valuePct,
+            },
+          },
+          currentGrossRent,
+          currentNoi,
+          currentOtherIncome,
+          currentExpensesTotal,
+          expenseRows,
+        })
+      )
+  );
+
   return [
     {
       key: "rental_uplift",
@@ -200,6 +243,27 @@ export function buildSensitivityAnalyses(input: {
         ),
         year1EquityYield: range(
           managementFeeScenarios.map((scenario) => scenario.year1EquityYield)
+        ),
+      },
+    },
+    {
+      key: "exit_cap_rate",
+      title: "Sale Cap Rate Sensitivity",
+      inputLabel: "Sale cap rate (%)",
+      scenarios: exitCapRateScenarios,
+      baseCase: {
+        valuePct: assumptions.exit.exitCapPct,
+        irrPct: baseProjection.returns.irr,
+        year1CashOnCashReturn: baseProjection.returns.year1CashOnCashReturn,
+        year1EquityYield: baseProjection.returns.year1EquityYield,
+      },
+      ranges: {
+        irrPct: range(exitCapRateScenarios.map((scenario) => scenario.irrPct)),
+        year1CashOnCashReturn: range(
+          exitCapRateScenarios.map((scenario) => scenario.year1CashOnCashReturn)
+        ),
+        year1EquityYield: range(
+          exitCapRateScenarios.map((scenario) => scenario.year1EquityYield)
         ),
       },
     },

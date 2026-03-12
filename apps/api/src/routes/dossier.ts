@@ -7,7 +7,7 @@ import type { PropertyDetails } from "@re-sourcing/contracts";
 import { getPool, UserProfileRepo, PropertyRepo, MatchRepo, ListingRepo } from "@re-sourcing/db";
 import { runGenerateDossier } from "../deal/runGenerateDossier.js";
 import { getDossierGenerationQueue, runWithDossierGenerationQueue } from "../deal/dossierGenerationQueue.js";
-import { isGeminiAuthoritativeOmSnapshot } from "../om/authoritativeOm.js";
+import { isGeminiAuthoritativeOmSnapshot, resolvePreferredOmUnitCount } from "../om/authoritativeOm.js";
 import { resolveCurrentFinancialsFromDetails } from "../rental/currentFinancials.js";
 import { resolveDossierAssumptions, type DossierAssumptionOverrides } from "../deal/underwritingModel.js";
 import {
@@ -116,7 +116,7 @@ router.get("/dossier-assumptions", async (req: Request, res: Response) => {
           furnishingSetupCosts: formulaAssumptions.acquisition.furnishingSetupCosts,
         };
         mixSummary = {
-          totalUnits: assumptions.propertyMix.totalUnits,
+          totalUnits: resolvePreferredOmUnitCount(details) ?? assumptions.propertyMix.totalUnits,
           residentialUnits: assumptions.propertyMix.residentialUnits,
           eligibleResidentialUnits: assumptions.propertyMix.eligibleResidentialUnits,
           commercialUnits: assumptions.propertyMix.commercialUnits,

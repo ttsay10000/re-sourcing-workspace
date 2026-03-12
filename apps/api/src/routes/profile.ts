@@ -15,6 +15,7 @@ import {
   DealScoreOverridesRepo,
 } from "@re-sourcing/db";
 import { resolveEffectiveDealScore } from "../deal/effectiveDealScore.js";
+import { getPropertyDossierSummary, hasCompletedDealDossier } from "../deal/propertyDossierState.js";
 import { resolvePreferredOmUnitCount } from "../om/authoritativeOm.js";
 
 const router = Router();
@@ -217,13 +218,19 @@ router.get("/profile/saved-deals", async (_req: Request, res: Response) => {
         signalsRepo.getLatestByPropertyId(row.propertyId),
         overridesRepo.getActiveByPropertyId(row.propertyId),
       ]);
-      const authoritativeReady = !!(details.omData?.authoritative && typeof details.omData.authoritative === "object");
+      const dossierReady = hasCompletedDealDossier(details);
+      const dossierSummary = getPropertyDossierSummary(details);
+      const calculatedDealScore =
+        dossierSummary?.calculatedDealScore
+        ?? dossierSummary?.dealScore
+        ?? latestSignal?.dealScore
+        ?? null;
       results.push({
         savedDeal: { id: row.id, propertyId: row.propertyId, dealStatus: row.dealStatus, createdAt: row.createdAt },
         address,
         price,
         units,
-        dealScore: authoritativeReady ? resolveEffectiveDealScore(latestSignal?.dealScore ?? null, scoreOverride) : null,
+        dealScore: dossierReady ? resolveEffectiveDealScore(calculatedDealScore, scoreOverride) : null,
       });
     }
     res.json({ savedDeals: results });

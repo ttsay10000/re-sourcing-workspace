@@ -21,7 +21,6 @@ import {
   DealSignalsRepo,
   DealScoreOverridesRepo,
   DocumentRepo,
-  UserProfileRepo,
 } from "@re-sourcing/db";
 import { deriveListingActivitySummary, type PriceHistoryEntry, type PropertyDocumentCategory } from "@re-sourcing/contracts";
 import multer from "multer";
@@ -35,22 +34,13 @@ import { runEnrichmentForProperty } from "../enrichment/runEnrichment.js";
 import { normalizeAddressLineForDisplay, getBBLForProperty } from "../enrichment/resolvePropertyBBL.js";
 import { runRentalApiStep } from "../rental/rentalApiClient.js";
 import { extractRentalFinancialsFromListing } from "../rental/extractRentalFinancialsFromListing.js";
-import {
-  resolveCurrentFinancialsFromDetails,
-  resolveExpenseRowsFromDetails,
-} from "../rental/currentFinancials.js";
 import { suggestRentalDataGaps } from "../rental/suggestRentalDataGaps.js";
 import { getRentRollComparison } from "../rental/rentRollComparison.js";
 import { fetchNyDosEntityByName } from "../enrichment/nyDosEntity.js";
 import { fetchAcrisDocumentsByOwnerName } from "../enrichment/acrisDocuments.js";
-import { computeDealSignals } from "../deal/computeDealSignals.js";
-import { buildDealScoreSensitivity } from "../deal/dealScoreSensitivity.js";
 import { resolveEffectiveDealScore } from "../deal/effectiveDealScore.js";
-import {
-  computeRecommendedOffer,
-  computeUnderwritingProjection,
-  resolveDossierAssumptions,
-} from "../deal/underwritingModel.js";
+import { getPersistedDossierSignals } from "../deal/persistedDossierSignals.js";
+import { getPropertyDossierSummary, hasCompletedDealDossier } from "../deal/propertyDossierState.js";
 import { resolveGeneratedDocPath, deleteGeneratedDocumentFile } from "../deal/generatedDocStorage.js";
 import { unlink } from "fs/promises";
 import {
@@ -64,24 +54,12 @@ import {
 } from "../workflow/workflowTracker.js";
 import type { WorkflowRunStepSeed } from "../workflow/workflowTracker.js";
 import { syncPropertySourcingWorkflow } from "../sourcing/workflow.js";
-import {
-  ingestAuthoritativeOm,
-  refreshAuthoritativeOmForProperty,
-} from "../om/ingestAuthoritativeOm.js";
+import { refreshAuthoritativeOmForProperty } from "../om/ingestAuthoritativeOm.js";
 
 const router = Router();
 
 const ENRICHMENT_RATE_LIMIT_DELAY_MS = Number(process.env.ENRICHMENT_RATE_LIMIT_DELAY_MS || process.env.PERMITS_RATE_LIMIT_DELAY_MS) || 300;
 const ENABLE_OM_AUTOMATION_V2 = process.env.ENABLE_OM_AUTOMATION_V2 === "1";
-
-function hasAuthoritativeOm(details: unknown): boolean {
-  return !!(
-    details &&
-    typeof details === "object" &&
-    (details as { omData?: { authoritative?: unknown } }).omData?.authoritative &&
-    typeof (details as { omData?: { authoritative?: unknown } }).omData?.authoritative === "object"
-  );
-}
 
 function isMissingPropertyScoringSchemaError(err: unknown): boolean {
   if (!err || typeof err !== "object") return false;
@@ -105,7 +83,12 @@ function isMissingPropertyScoringSchemaError(err: unknown): boolean {
 function mapPropertyListRows(rows: Array<Record<string, unknown>>) {
   return rows.map((row) => {
     const details = row.details ?? null;
-    const authoritativeReady = hasAuthoritativeOm(details);
+    const dossierReady = hasCompletedDealDossier(details as PropertyDetails | null);
+    const dossierSummary = getPropertyDossierSummary(details as PropertyDetails | null);
+    const calculatedDealScore =
+      dossierSummary?.calculatedDealScore
+      ?? dossierSummary?.dealScore
+      ?? (row.calculated_deal_score != null ? Number(row.calculated_deal_score) : null);
     const createdAt = row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at ?? "");
     const updatedAt = row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at ?? "");
     const listingListedAt = row.listing_listed_at != null
@@ -130,13 +113,12 @@ function mapPropertyListRows(rows: Array<Record<string, unknown>>) {
       },
       omStatus: (row.om_status as string) ?? "Not received",
       dealScore:
-        authoritativeReady && row.score_override_score != null
+        dossierReady && row.score_override_score != null
           ? Number(row.score_override_score)
-          : authoritativeReady && row.calculated_deal_score != null
-            ? Number(row.calculated_deal_score)
+          : dossierReady && calculatedDealScore != null
+            ? calculatedDealScore
             : null,
-      calculatedDealScore:
-        authoritativeReady && row.calculated_deal_score != null ? Number(row.calculated_deal_score) : null,
+      calculatedDealScore: dossierReady ? calculatedDealScore : null,
       scoreOverride:
         row.score_override_id != null
           ? {
@@ -251,38 +233,6 @@ async function listPropertiesWithListingSummary(pool: import("pg").Pool) {
     console.warn("[properties list] scoring schema unavailable; falling back to basic property list", err);
     const result = await pool.query(fallbackQuery);
     return mapPropertyListRows(result.rows);
-  }
-}
-
-/**
- * Run authoritative OM ingestion in background after upload
- * so the upload response can return immediately (avoids Render request timeout).
- */
-async function runOmExtractionInBackground(
-  propertyId: string,
-  fileBuffer: Buffer,
-  filename: string,
-  mimeType: string | null,
-  category: PropertyDocumentCategory,
-  pool: import("pg").Pool
-): Promise<void> {
-  const result = await ingestAuthoritativeOm({
-    propertyId,
-    sourceType: "uploaded_document",
-    pool,
-    documents: [
-      {
-        id: `upload:${propertyId}:${filename}`,
-        origin: "uploaded_document",
-        filename,
-        mimeType: mimeType ?? null,
-        buffer: fileBuffer,
-        category,
-      },
-    ],
-  });
-  if (result.error) {
-    throw new Error(result.error);
   }
 }
 
@@ -1368,15 +1318,9 @@ router.post(
 
       await syncPropertySourcingWorkflow(propertyId, { pool });
 
-      // Return immediately so Render/timeouts don't kill the request. Authoritative OM ingestion runs in background.
+      // Upload only persists the document. Authoritative OM promotion is manual now
+      // so inbox noise or partial uploads do not replace a stronger dossier-backed state.
       res.status(201).json({ propertyId, document: inserted });
-
-      // When user uploads OM-like source material, ingest authoritative OM and generate the dossier automatically.
-      if (ENABLE_OM_AUTOMATION_V2 && (category === "OM" || category === "Brochure" || category === "Rent Roll")) {
-        void runOmExtractionInBackground(propertyId, file.buffer, filename, file.mimetype || null, category, pool).catch((e) => {
-          console.error("[documents/upload background] authoritative OM ingestion failed:", e instanceof Error ? e.message : e);
-        });
-      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error("[properties documents upload]", err);
@@ -1744,26 +1688,33 @@ router.get("/properties/:id", async (req: Request, res: Response) => {
     const inquirySendRepo = new InquirySendRepo({ pool });
     const signalsRepo = new DealSignalsRepo({ pool });
     const overridesRepo = new DealScoreOverridesRepo({ pool });
-	    const [lastInquirySentAt, latestSignals, scoreOverride] = await Promise.all([
-	      inquirySendRepo.getLastSentAt(propertyId),
-	      signalsRepo.getLatestByPropertyId(propertyId),
-	      overridesRepo.getActiveByPropertyId(propertyId),
-	    ]);
-	    const authoritativeReady = hasAuthoritativeOm(property.details);
-	    const rentRollComparison = getRentRollComparison(property.details as PropertyDetails | null);
-	    res.json({
+    const details = property.details as PropertyDetails | null;
+    const [lastInquirySentAt, latestSignals, scoreOverride] = await Promise.all([
+      inquirySendRepo.getLastSentAt(propertyId),
+      getPersistedDossierSignals({ pool, propertyId, details, signalsRepo }),
+      overridesRepo.getActiveByPropertyId(propertyId),
+    ]);
+    const dossierReady = hasCompletedDealDossier(details);
+    const dossierSummary = getPropertyDossierSummary(details);
+    const calculatedDealScore =
+      dossierSummary?.calculatedDealScore
+      ?? dossierSummary?.dealScore
+      ?? latestSignals?.dealScore
+      ?? null;
+    const rentRollComparison = getRentRollComparison(details);
+    res.json({
       id: property.id,
       canonicalAddress: property.canonicalAddress,
       details: property.details ?? null,
       createdAt: property.createdAt,
-	      updatedAt: property.updatedAt,
-	      lastInquirySentAt: lastInquirySentAt ?? null,
-	      rentRollComparison: rentRollComparison ?? undefined,
-	      dealScore: authoritativeReady ? resolveEffectiveDealScore(latestSignals?.dealScore ?? null, scoreOverride) : null,
-	      calculatedDealScore: authoritativeReady ? latestSignals?.dealScore ?? null : null,
-	      scoreOverride: authoritativeReady ? scoreOverride ?? null : null,
-	      dealSignals: authoritativeReady ? latestSignals ?? null : null,
-	    });
+      updatedAt: property.updatedAt,
+      lastInquirySentAt: lastInquirySentAt ?? null,
+      rentRollComparison: rentRollComparison ?? undefined,
+      dealScore: dossierReady ? resolveEffectiveDealScore(calculatedDealScore, scoreOverride) : null,
+      calculatedDealScore: dossierReady ? calculatedDealScore : null,
+      scoreOverride: dossierReady ? scoreOverride ?? null : null,
+      dealSignals: dossierReady ? latestSignals ?? null : null,
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[properties get by id]", err);
@@ -1814,131 +1765,70 @@ router.put("/properties/:id/dossier-settings", async (req: Request, res: Respons
   }
 });
 
-/** POST /api/properties/:id/compute-score - compute deal signals and full underwriting, persist to deal_signals, return score and signals. */
+/** POST /api/properties/:id/compute-score - return the latest dossier-backed deal score/signals for this property. */
 router.post("/properties/:id/compute-score", async (req: Request, res: Response) => {
   try {
     const { id: propertyId } = req.params;
     const pool = getPool();
     const propertyRepo = new PropertyRepo({ pool });
-    const matchRepo = new MatchRepo({ pool });
-    const listingRepo = new ListingRepo({ pool });
-    const profileRepo = new UserProfileRepo({ pool });
     const overridesRepo = new DealScoreOverridesRepo({ pool });
+    const signalsRepo = new DealSignalsRepo({ pool });
     const property = await propertyRepo.byId(propertyId);
     if (!property) {
       res.status(404).json({ error: "Property not found", propertyId });
       return;
     }
-    const { matches } = await matchRepo.list({ propertyId, limit: 1 });
-    const match = matches[0];
-    const listing = match ? await listingRepo.byId(match.listingId) : null;
-    const purchasePrice = listing?.price ?? null;
-    const primaryListing = {
-      price: purchasePrice,
-      city: listing?.city ?? null,
-      listedAt: listing?.listedAt ?? null,
-      priceHistory: listing?.priceHistory ?? null,
-    };
     const details = property.details as PropertyDetails | null;
-    const currentFinancials = resolveCurrentFinancialsFromDetails(details);
-    const expenseRows = resolveExpenseRowsFromDetails(details);
-    const currentNoi = currentFinancials.noi;
-    const currentGrossRent = currentFinancials.grossRentalIncome;
-    await profileRepo.ensureDefault();
-    const profile = await profileRepo.getDefault();
-    const assumptions = resolveDossierAssumptions(profile, purchasePrice, null, {
-      details,
-    });
-    const projection = computeUnderwritingProjection({
-      assumptions,
-      currentGrossRent,
-      currentNoi,
-      currentOtherIncome: currentFinancials.otherIncome,
-      currentExpensesTotal: currentFinancials.operatingExpenses,
-      expenseRows,
-    });
-    const hasCurrentFinancials = currentGrossRent != null && currentNoi != null;
-    const recommendedOffer = computeRecommendedOffer({
-      assumptions,
-      currentGrossRent,
-      currentNoi,
-      currentOtherIncome: currentFinancials.otherIncome,
-      currentExpensesTotal: currentFinancials.operatingExpenses,
-      expenseRows,
-    });
-    const input = {
-      propertyId,
-      canonicalAddress: property.canonicalAddress,
-      details: property.details ?? null,
-      primaryListing,
-      irrPct: projection.returns.irr ?? null,
-      cocPct: projection.returns.averageCashOnCashReturn ?? null,
-      equityMultiple: projection.returns.equityMultiple ?? null,
-      adjustedCapRatePct:
-        assumptions.acquisition.purchasePrice != null && hasCurrentFinancials && projection.operating.stabilizedNoi >= 0
-          ? (projection.operating.stabilizedNoi / assumptions.acquisition.purchasePrice) * 100
-          : null,
-      adjustedNoi: projection.operating.stabilizedNoi ?? null,
-      recommendedOfferHigh: recommendedOffer.recommendedOfferHigh,
-      blendedRentUpliftPct: assumptions.operating.blendedRentUpliftPct,
-      annualExpenseGrowthPct: assumptions.operating.annualExpenseGrowthPct,
-      vacancyPct: assumptions.operating.vacancyPct,
-      exitCapRatePct: assumptions.exit.exitCapPct,
-      rentStabilizedUnitCount: assumptions.propertyMix.rentStabilizedUnits,
-      commercialUnitCount: assumptions.propertyMix.commercialUnits,
-    };
-    const { insertParams, scoringResult } = computeDealSignals(input);
-    insertParams.scoreSensitivity = buildDealScoreSensitivity({
-      propertyId,
-      canonicalAddress: property.canonicalAddress,
-      details: property.details ?? null,
-      primaryListing,
-      assumptions,
-      currentGrossRent,
-      currentNoi,
-      currentOtherIncome: currentFinancials.otherIncome,
-      currentExpensesTotal: currentFinancials.operatingExpenses,
-      expenseRows,
-      baseCalculatedScore: scoringResult.isScoreable ? scoringResult.dealScore : null,
-    });
-    const signalsRepo = new DealSignalsRepo({ pool });
-    const row = await signalsRepo.insert({
-      ...insertParams,
-      dealScore: scoringResult.isScoreable ? scoringResult.dealScore : null,
-      irrPct: projection.returns.irr ?? null,
-      equityMultiple: projection.returns.equityMultiple ?? null,
-      cocPct: projection.returns.averageCashOnCashReturn ?? null,
-      holdYears: assumptions.holdPeriodYears,
-      currentNoi: currentNoi ?? null,
-      adjustedNoi: projection.operating.stabilizedNoi ?? currentNoi ?? null,
-    });
-    const scoreOverride = await overridesRepo.getActiveByPropertyId(propertyId);
+    if (!hasCompletedDealDossier(details)) {
+      res.status(409).json({
+        error: "Deal dossier has not been generated for this property.",
+        propertyId,
+      });
+      return;
+    }
+    const [scoreOverride, latestSignals] = await Promise.all([
+      overridesRepo.getActiveByPropertyId(propertyId),
+      getPersistedDossierSignals({ pool, propertyId, details, signalsRepo }),
+    ]);
+    const dossierSummary = getPropertyDossierSummary(details);
+    const calculatedDealScore =
+      dossierSummary?.calculatedDealScore
+      ?? dossierSummary?.dealScore
+      ?? latestSignals?.dealScore
+      ?? null;
+    if (!latestSignals) {
+      res.status(409).json({
+        error: "No persisted deal signals found for this property's generated dossier.",
+        propertyId,
+      });
+      return;
+    }
     res.json({
-      dealScore: resolveEffectiveDealScore(row.dealScore ?? null, scoreOverride),
-      calculatedDealScore: row.dealScore ?? (scoringResult.isScoreable ? scoringResult.dealScore : null),
+      dealScore: resolveEffectiveDealScore(calculatedDealScore, scoreOverride),
+      calculatedDealScore,
       scoreOverride: scoreOverride ?? null,
-      dealSignals: row,
+      dealSignals: latestSignals,
       scoringResult: {
-        isScoreable: scoringResult.isScoreable,
-        assetYieldScore: scoringResult.assetYieldScore,
-        scoreBreakdown: scoringResult.scoreBreakdown,
-        confidenceScore: scoringResult.confidenceScore,
-        riskScore: scoringResult.riskScore,
-        positiveSignals: scoringResult.positiveSignals,
-        negativeSignals: scoringResult.negativeSignals,
-        assetCapRate: scoringResult.assetCapRate,
-        adjustedCapRate: scoringResult.adjustedCapRate,
-        riskFlags: scoringResult.riskFlags,
-        capReasons: scoringResult.capReasons,
-        riskProfile: scoringResult.riskProfile,
-        scoreSensitivity: insertParams.scoreSensitivity ?? null,
-        scoreVersion: scoringResult.scoreVersion,
+        isScoreable: latestSignals.dealScore != null,
+        assetYieldScore: latestSignals.scoreBreakdown?.returnScore ?? null,
+        scoreBreakdown: latestSignals.scoreBreakdown ?? null,
+        confidenceScore: latestSignals.confidenceScore ?? null,
+        riskScore: latestSignals.riskScore ?? null,
+        positiveSignals: [],
+        negativeSignals: latestSignals.riskFlags ?? [],
+        assetCapRate: latestSignals.assetCapRate ?? null,
+        adjustedCapRate: latestSignals.adjustedCapRate ?? null,
+        riskFlags: latestSignals.riskFlags ?? null,
+        capReasons: latestSignals.capReasons ?? null,
+        riskProfile: latestSignals.riskProfile ?? null,
+        scoreSensitivity: latestSignals.scoreSensitivity ?? null,
+        scoreVersion: latestSignals.scoreVersion ?? null,
       },
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[properties compute-score]", err);
-    res.status(503).json({ error: "Failed to compute deal score.", details: message });
+    res.status(503).json({ error: "Failed to load dossier-backed deal score.", details: message });
   }
 });
 
@@ -1978,13 +1868,22 @@ router.post("/properties/:id/score-override", async (req: Request, res: Response
       createdBy,
     });
     const signalsRepo = new DealSignalsRepo({ pool });
-    const latestSignals = await signalsRepo.getLatestByPropertyId(propertyId);
+    const details = property.details as PropertyDetails | null;
+    const [dossierSignals, dossierSummary] = await Promise.all([
+      getPersistedDossierSignals({ pool, propertyId, details, signalsRepo }),
+      Promise.resolve(getPropertyDossierSummary(details)),
+    ]);
+    const calculatedDealScore =
+      dossierSummary?.calculatedDealScore
+      ?? dossierSummary?.dealScore
+      ?? dossierSignals?.dealScore
+      ?? null;
     res.json({
       ok: true,
-      dealScore: resolveEffectiveDealScore(latestSignals?.dealScore ?? null, override),
-      calculatedDealScore: latestSignals?.dealScore ?? null,
+      dealScore: resolveEffectiveDealScore(calculatedDealScore, override),
+      calculatedDealScore,
       scoreOverride: override,
-      dealSignals: latestSignals ?? null,
+      dealSignals: dossierSignals ?? null,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -2006,17 +1905,26 @@ router.delete("/properties/:id/score-override", async (req: Request, res: Respon
     }
     const overridesRepo = new DealScoreOverridesRepo({ pool });
     const cleared = await overridesRepo.clearActive(propertyId);
-	    const signalsRepo = new DealSignalsRepo({ pool });
-	    const latestSignals = await signalsRepo.getLatestByPropertyId(propertyId);
-	    const authoritativeReady = hasAuthoritativeOm(property.details);
-	    res.json({
-	      ok: true,
-	      cleared,
-	      dealScore: authoritativeReady ? latestSignals?.dealScore ?? null : null,
-	      calculatedDealScore: authoritativeReady ? latestSignals?.dealScore ?? null : null,
-	      scoreOverride: null,
-	      dealSignals: authoritativeReady ? latestSignals ?? null : null,
-	    });
+    const signalsRepo = new DealSignalsRepo({ pool });
+    const details = property.details as PropertyDetails | null;
+    const [dossierSignals, dossierSummary] = await Promise.all([
+      getPersistedDossierSignals({ pool, propertyId, details, signalsRepo }),
+      Promise.resolve(getPropertyDossierSummary(details)),
+    ]);
+    const dossierReady = hasCompletedDealDossier(details);
+    const calculatedDealScore =
+      dossierSummary?.calculatedDealScore
+      ?? dossierSummary?.dealScore
+      ?? dossierSignals?.dealScore
+      ?? null;
+    res.json({
+      ok: true,
+      cleared,
+      dealScore: dossierReady ? calculatedDealScore : null,
+      calculatedDealScore: dossierReady ? calculatedDealScore : null,
+      scoreOverride: null,
+      dealSignals: dossierReady ? dossierSignals ?? null : null,
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[properties score-override delete]", err);

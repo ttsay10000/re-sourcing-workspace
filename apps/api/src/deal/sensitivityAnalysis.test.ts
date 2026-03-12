@@ -3,7 +3,7 @@ import { computeUnderwritingProjection, resolveDossierAssumptions } from "./unde
 import { buildSensitivityAnalyses } from "./sensitivityAnalysis.js";
 
 describe("sensitivityAnalysis", () => {
-  it("builds one-way sensitivity ranges for rent uplift, expense increase, and management fee", () => {
+  it("builds one-way sensitivity ranges including a sale-cap-rate IRR table", () => {
     const assumptions = resolveDossierAssumptions(
       {
         id: "profile-1",
@@ -36,16 +36,24 @@ describe("sensitivityAnalysis", () => {
       baseProjection,
     });
 
-    expect(sensitivities).toHaveLength(3);
+    expect(sensitivities).toHaveLength(4);
     expect(sensitivities[0]?.scenarios).toHaveLength(5);
     expect(sensitivities[1]?.scenarios).toHaveLength(4);
     expect(sensitivities[2]?.scenarios).toHaveLength(4);
+    expect(sensitivities[3]?.key).toBe("exit_cap_rate");
+    expect(sensitivities[3]?.scenarios.map((scenario) => scenario.valuePct)).toEqual([5, 5.5, 6.5, 7]);
     expect(sensitivities[0]?.ranges.irrPct.max).toBeGreaterThan(sensitivities[0]?.ranges.irrPct.min ?? 0);
     expect(sensitivities[1]?.ranges.year1CashOnCashReturn.min).toBeLessThan(
       sensitivities[1]?.ranges.year1CashOnCashReturn.max ?? 1
     );
     expect(sensitivities[1]?.ranges.year1EquityYield?.min).toBeLessThan(
       sensitivities[1]?.ranges.year1EquityYield?.max ?? 1
+    );
+    expect((sensitivities[3]?.scenarios[0]?.irrPct ?? 0)).toBeGreaterThan(
+      sensitivities[3]?.scenarios[3]?.irrPct ?? 0
+    );
+    expect((sensitivities[3]?.scenarios[0]?.exitPropertyValue ?? 0)).toBeGreaterThan(
+      sensitivities[3]?.scenarios[3]?.exitPropertyValue ?? 0
     );
   });
 });

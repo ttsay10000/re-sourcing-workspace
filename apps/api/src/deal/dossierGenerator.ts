@@ -21,6 +21,10 @@ function pctValue(value: number | null | undefined): string {
   return value != null && Number.isFinite(value) ? `${value.toFixed(2)}%` : "—";
 }
 
+function decimalPctLabel(value: number | null | undefined): string {
+  return value != null && Number.isFinite(value) ? `${(value * 100).toFixed(2)}%` : "—";
+}
+
 function sensitivityRangeLabel(
   min: number | null | undefined,
   max: number | null | undefined
@@ -156,6 +160,108 @@ function exitOnlyCells(
     if (year !== holdPeriodYear) return "";
     if (value == null || !Number.isFinite(value) || Math.abs(value) <= 0.005) return "$0";
     return negative ? `(${moneyLabel(Math.abs(value))})` : moneyLabel(value);
+  });
+}
+
+function pushSensitivityAnalysis(lines: string[], ctx: UnderwritingContext): void {
+  if (!ctx.sensitivities || ctx.sensitivities.length === 0) return;
+
+  lines.push("8. SENSITIVITY ANALYSIS");
+  lines.push("------------------------");
+
+  ctx.sensitivities.forEach((sensitivity) => {
+    if (sensitivity.key === "exit_cap_rate") {
+      lines.push(
+        `• Base ${sensitivity.inputLabel.toLowerCase()}: ${pctValue(
+          sensitivity.baseCase.valuePct
+        )}; IRR range ${sensitivityRangeLabel(
+          sensitivity.ranges.irrPct.min,
+          sensitivity.ranges.irrPct.max
+        )} across alternate sale-cap assumptions`
+      );
+      lines.push(
+        tableRow([
+          sensitivity.inputLabel,
+          "Exit value",
+          "Net sale proceeds to equity",
+          "IRR",
+        ])
+      );
+      const exitCapRows = [
+        {
+          valuePct: sensitivity.baseCase.valuePct,
+          exitPropertyValue: ctx.exit.exitPropertyValue,
+          netProceedsToEquity: ctx.exit.netProceedsToEquity,
+          irrPct: ctx.returns.irrPct,
+          isBase: true,
+        },
+        ...sensitivity.scenarios.map((scenario) => ({
+          valuePct: scenario.valuePct,
+          exitPropertyValue: scenario.exitPropertyValue,
+          netProceedsToEquity: scenario.netProceedsToEquity,
+          irrPct: scenario.irrPct,
+          isBase: false,
+        })),
+      ]
+        .filter(
+          (
+            row
+          ): row is {
+            valuePct: number;
+            exitPropertyValue: number;
+            netProceedsToEquity: number;
+            irrPct: number | null;
+            isBase: boolean;
+          } => row.valuePct != null && Number.isFinite(row.valuePct)
+        )
+        .sort((left, right) => left.valuePct - right.valuePct);
+
+      exitCapRows.forEach((row) => {
+        const cells = [
+          row.isBase ? `Base (${pctValue(row.valuePct)})` : pctValue(row.valuePct),
+          moneyLabel(row.exitPropertyValue),
+          moneyLabel(row.netProceedsToEquity),
+          decimalPctLabel(row.irrPct),
+        ];
+        lines.push(tableRow(row.isBase ? boldRow(cells) : cells));
+      });
+      lines.push("");
+      return;
+    }
+
+    const sensitivityEquityYieldRange =
+      sensitivity.ranges.year1EquityYield ?? sensitivity.ranges.year1CashOnCashReturn;
+    lines.push(
+      `• Base ${sensitivity.inputLabel.toLowerCase()}: ${pctValue(
+        sensitivity.baseCase.valuePct
+      )}; IRR range ${sensitivityRangeLabel(
+        sensitivity.ranges.irrPct.min,
+        sensitivity.ranges.irrPct.max
+      )}; Equity-yield range ${sensitivityRangeLabel(
+        sensitivityEquityYieldRange?.min,
+        sensitivityEquityYieldRange?.max
+      )}`
+    );
+    lines.push(tableRow([sensitivity.inputLabel, "Stabilized NOI", "IRR", "Equity yield"]));
+    lines.push(
+      tableRow([
+        `Base (${pctValue(sensitivity.baseCase.valuePct)})`,
+        moneyLabel(ctx.operating.stabilizedNoi),
+        decimalPctLabel(ctx.returns.irrPct),
+        decimalPctLabel(ctx.returns.year1EquityYield ?? ctx.returns.year1CashOnCashReturn),
+      ])
+    );
+    sensitivity.scenarios.forEach((scenario) => {
+      lines.push(
+        tableRow([
+          pctValue(scenario.valuePct),
+          moneyLabel(scenario.stabilizedNoi),
+          decimalPctLabel(scenario.irrPct),
+          decimalPctLabel(scenario.year1EquityYield ?? scenario.year1CashOnCashReturn),
+        ])
+      );
+    });
+    lines.push("");
   });
 }
 
@@ -638,53 +744,7 @@ export function buildDossierStructuredText(ctx: UnderwritingContext): string {
   lines.push(`Target IRR: ${pctValue(ctx.assumptions.targetIrrPct)}`);
   lines.push("");
 
-  if (ctx.sensitivities && ctx.sensitivities.length > 0) {
-    lines.push("8. SENSITIVITY ANALYSIS");
-    lines.push("------------------------");
-    ctx.sensitivities.forEach((sensitivity) => {
-      const sensitivityEquityYieldRange =
-        sensitivity.ranges.year1EquityYield ?? sensitivity.ranges.year1CashOnCashReturn;
-      lines.push(
-        `• Base ${sensitivity.inputLabel.toLowerCase()}: ${pctValue(
-          sensitivity.baseCase.valuePct
-        )}; IRR range ${sensitivityRangeLabel(
-          sensitivity.ranges.irrPct.min,
-          sensitivity.ranges.irrPct.max
-        )}; Equity-yield range ${sensitivityRangeLabel(
-          sensitivityEquityYieldRange?.min,
-          sensitivityEquityYieldRange?.max
-        )}`
-      );
-      lines.push(tableRow([sensitivity.inputLabel, "Stabilized NOI", "IRR", "Equity yield"]));
-      lines.push(
-        tableRow([
-          `Base (${pctValue(sensitivity.baseCase.valuePct)})`,
-          moneyLabel(ctx.operating.stabilizedNoi),
-          ctx.returns.irrPct != null ? `${(ctx.returns.irrPct * 100).toFixed(2)}%` : "—",
-          (ctx.returns.year1EquityYield ?? ctx.returns.year1CashOnCashReturn) != null
-            ? `${(
-                (ctx.returns.year1EquityYield ?? ctx.returns.year1CashOnCashReturn ?? 0) * 100
-              ).toFixed(2)}%`
-            : "—",
-        ])
-      );
-      sensitivity.scenarios.forEach((scenario) => {
-        lines.push(
-          tableRow([
-            pctValue(scenario.valuePct),
-            moneyLabel(scenario.stabilizedNoi),
-            scenario.irrPct != null ? `${(scenario.irrPct * 100).toFixed(2)}%` : "—",
-            (scenario.year1EquityYield ?? scenario.year1CashOnCashReturn) != null
-              ? `${(
-                  ((scenario.year1EquityYield ?? scenario.year1CashOnCashReturn) ?? 0) * 100
-                ).toFixed(2)}%`
-              : "—",
-          ])
-        );
-      });
-      lines.push("");
-    });
-  }
+  pushSensitivityAnalysis(lines, ctx);
 
   lines.push("9. KEY TAKEAWAYS");
   lines.push("----------------");
