@@ -353,7 +353,6 @@ function PropertyDataContent() {
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [expandedRowId, setExpandedRowId] = useState<string | null>(null);
-  const [clearing, setClearing] = useState(false);
   const [clearingCanonical, setClearingCanonical] = useState(false);
   const [pipelineStats, setPipelineStats] = useState<PipelineStats | null>(null);
   const [pipelineStatsOpen, setPipelineStatsOpen] = useState(false);
@@ -372,6 +371,7 @@ function PropertyDataContent() {
   const [rerunningEnrichment, setRerunningEnrichment] = useState(false);
   const [runningRentalFlow, setRunningRentalFlow] = useState(false);
   const [expandedCanonicalId, setExpandedCanonicalId] = useState<string | null>(null);
+  const [inquiryComposerRequest, setInquiryComposerRequest] = useState<{ propertyId: string; nonce: number } | null>(null);
   const [savedPropertyIds, setSavedPropertyIds] = useState<Set<string>>(new Set());
   const [savedDealsLoading, setSavedDealsLoading] = useState<Set<string>>(new Set());
   const [selectedListingIds, setSelectedListingIds] = useState<Set<string>>(new Set());
@@ -1027,26 +1027,6 @@ function PropertyDataContent() {
     return date.toLocaleString("en-US", { month: "numeric", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
   };
 
-  const handleClearRawListings = () => {
-    if (!confirm("Clear all raw listings and their snapshots? This cannot be undone.")) return;
-    setClearing(true);
-    setError(null);
-    fetch(`${API_BASE}/api/test-agent/property-data?confirm=1`, { method: "DELETE" })
-      .then((r) => r.json().then((data) => ({ ok: r.ok, data })))
-      .then(({ ok, data }) => {
-        if (!ok && data?.error) {
-          const detail = data.details ? ` — ${data.details}` : "";
-          throw new Error(data.error + detail);
-        }
-        if (data?.error) throw new Error(data.error);
-        fetchListings();
-        fetchPipelineStats(true);
-        fetchWorkflowBoard();
-      })
-      .catch((e) => setError(e instanceof Error ? e.message : "Failed to clear raw listings"))
-      .finally(() => setClearing(false));
-  };
-
   const handleClearCanonicalProperties = () => {
     if (!confirm("Clear all canonical properties and their matches/enrichment data? This cannot be undone.")) return;
     setClearingCanonical(true);
@@ -1483,6 +1463,11 @@ function PropertyDataContent() {
                         const omMeta = omCellMeta(prop);
                         const activeRunMeta = activeRunCellMeta(prop);
                         const sourcingUpdateMeta = getSourcingUpdateMeta(prop.details ?? null);
+                        const canOpenInquiryComposer = Boolean(
+                          prop.recipientContactEmail &&
+                          !prop.lastInquirySentAt &&
+                          prop.omStatus === "Not received"
+                        );
                         const priceReductionSummary = formatPriceReductionSummary(prop.primaryListing?.lastActivity ?? null);
                         const propertyMeta = joinCompact([
                           prop.primaryListing?.price != null ? formatPrice(prop.primaryListing.price) : null,
@@ -1563,6 +1548,31 @@ function PropertyDataContent() {
                                     {priceReductionSummary}
                                   </div>
                                 ) : null}
+                                {canOpenInquiryComposer ? (
+                                  <div style={{ marginTop: "0.45rem" }}>
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setExpandedCanonicalId(prop.id);
+                                        setInquiryComposerRequest({ propertyId: prop.id, nonce: Date.now() });
+                                      }}
+                                      style={{
+                                        padding: "0.35rem 0.6rem",
+                                        borderRadius: "999px",
+                                        border: "1px solid #cbd5e1",
+                                        background: "#fff",
+                                        color: "#0f172a",
+                                        fontSize: "0.75rem",
+                                        fontWeight: 600,
+                                        cursor: "pointer",
+                                      }}
+                                      title={`Open inquiry draft for ${prop.recipientContactEmail}`}
+                                    >
+                                      Request info / OM
+                                    </button>
+                                  </div>
+                                ) : null}
                               </td>
                               <td>
                                 <div
@@ -1601,6 +1611,7 @@ function PropertyDataContent() {
                                     onDossierNotice={handleDossierNotice}
                                     onRefreshPropertyData={() => fetchCanonicalProperties(true)}
                                     onWorkflowActivity={fetchWorkflowBoard}
+                                    autoOpenInquiryComposerNonce={inquiryComposerRequest?.propertyId === prop.id ? inquiryComposerRequest.nonce : null}
                                     onSavedChange={(propertyId, saved) => {
                                       if (saved) setSavedPropertyIds((prev) => new Set(prev).add(propertyId));
                                       else setSavedPropertyIds((prev) => {
@@ -1820,15 +1831,6 @@ function PropertyDataContent() {
             title="Review potential duplicate listings (score ≥ 80)"
           >
             Review duplicates
-          </button>
-          <button
-            type="button"
-            className="btn-secondary"
-            onClick={handleClearRawListings}
-            disabled={Boolean(clearing || total === 0)}
-            title="Remove all raw listings and their snapshots. Cannot be undone."
-          >
-            {clearing ? "Clearing…" : "Clear raw listings"}
           </button>
           <button
             type="button"

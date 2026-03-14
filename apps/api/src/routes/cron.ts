@@ -165,7 +165,9 @@ router.post("/cron/run-saved-searches", async (req: Request, res: Response) => {
     return;
   }
   try {
-    const locked = await withCronLock("run-saved-searches", () => runDueSavedSearches());
+    const locked = await withCronLock("run-saved-searches", () =>
+      runDueSavedSearches(new Date(), { dueMode: "local-day" })
+    );
     if (!locked.acquired || !locked.result) {
       res.json({ ok: true, skipped: true, reason: "run-saved-searches is already running" });
       return;

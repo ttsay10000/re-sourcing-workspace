@@ -94,6 +94,9 @@ function mapPropertyListRows(rows: Array<Record<string, unknown>>) {
     const listingListedAt = row.listing_listed_at != null
       ? (row.listing_listed_at instanceof Date ? row.listing_listed_at.toISOString() : String(row.listing_listed_at))
       : null;
+    const lastInquirySentAt = row.last_inquiry_sent_at != null
+      ? (row.last_inquiry_sent_at instanceof Date ? row.last_inquiry_sent_at.toISOString() : String(row.last_inquiry_sent_at))
+      : null;
     const listingActivity = deriveListingActivitySummary({
       listedAt: listingListedAt,
       currentPrice: row.listing_price != null ? Number(row.listing_price) : null,
@@ -112,6 +115,9 @@ function mapPropertyListRows(rows: Array<Record<string, unknown>>) {
         lastActivity: listingActivity,
       },
       omStatus: (row.om_status as string) ?? "Not received",
+      recipientContactName: (row.recipient_contact_name as string) ?? null,
+      recipientContactEmail: (row.recipient_contact_email as string) ?? null,
+      lastInquirySentAt,
       dealScore:
         dossierReady && row.score_override_score != null
           ? Number(row.score_override_score)
@@ -142,6 +148,9 @@ async function listPropertiesWithListingSummary(pool: import("pg").Pool) {
   const advancedQuery = `SELECT DISTINCT ON (p.id)
       p.id, p.canonical_address, p.details, p.created_at, p.updated_at,
       l.price AS listing_price, l.listed_at AS listing_listed_at, l.city AS listing_city, l.price_history AS listing_price_history,
+      rr.contact_email AS recipient_contact_email,
+      bc.display_name AS recipient_contact_name,
+      inquiry.sent_at AS last_inquiry_sent_at,
       (CASE
         WHEN (
           EXISTS (
@@ -172,6 +181,15 @@ async function listPropertiesWithListingSummary(pool: import("pg").Pool) {
     FROM properties p
     LEFT JOIN listing_property_matches m ON m.property_id = p.id
     LEFT JOIN listings l ON l.id = m.listing_id
+    LEFT JOIN property_recipient_resolution rr ON rr.property_id = p.id
+    LEFT JOIN broker_contacts bc ON bc.id = rr.contact_id
+    LEFT JOIN LATERAL (
+      SELECT sent_at
+      FROM property_inquiry_sends
+      WHERE property_id = p.id
+      ORDER BY sent_at DESC NULLS LAST, created_at DESC
+      LIMIT 1
+    ) inquiry ON true
     LEFT JOIN LATERAL (
       SELECT deal_score
       FROM deal_signals
@@ -192,6 +210,9 @@ async function listPropertiesWithListingSummary(pool: import("pg").Pool) {
   const fallbackQuery = `SELECT DISTINCT ON (p.id)
       p.id, p.canonical_address, p.details, p.created_at, p.updated_at,
       l.price AS listing_price, l.listed_at AS listing_listed_at, l.city AS listing_city, l.price_history AS listing_price_history,
+      rr.contact_email AS recipient_contact_email,
+      bc.display_name AS recipient_contact_name,
+      inquiry.sent_at AS last_inquiry_sent_at,
       (CASE
         WHEN (
           EXISTS (
@@ -222,6 +243,15 @@ async function listPropertiesWithListingSummary(pool: import("pg").Pool) {
     FROM properties p
     LEFT JOIN listing_property_matches m ON m.property_id = p.id
     LEFT JOIN listings l ON l.id = m.listing_id
+    LEFT JOIN property_recipient_resolution rr ON rr.property_id = p.id
+    LEFT JOIN broker_contacts bc ON bc.id = rr.contact_id
+    LEFT JOIN LATERAL (
+      SELECT sent_at
+      FROM property_inquiry_sends
+      WHERE property_id = p.id
+      ORDER BY sent_at DESC NULLS LAST, created_at DESC
+      LIMIT 1
+    ) inquiry ON true
     ORDER BY p.id, m.confidence DESC NULLS LAST, m.created_at DESC
     LIMIT 500`;
 

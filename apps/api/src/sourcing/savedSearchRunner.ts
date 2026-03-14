@@ -12,7 +12,7 @@ import {
 } from "@re-sourcing/db";
 import { fetchActiveSalesWithCriteria, fetchSaleDetailsByUrl, type NycsSearchCriteria } from "../nycRealEstateApi.js";
 import { normalizeStreetEasySaleDetails } from "./normalizeStreetEasyListing.js";
-import { enrichBrokers } from "../enrichment/brokerEnrichment.js";
+import { enrichBrokers, hasMeaningfulBrokerEnrichment } from "../enrichment/brokerEnrichment.js";
 import { computeDuplicateScores } from "../dedup/addressDedup.js";
 import { normalizeAddressLineForDisplay, getBBLForProperty } from "../enrichment/resolvePropertyBBL.js";
 import { runEnrichmentForProperty } from "../enrichment/runEnrichment.js";
@@ -251,7 +251,9 @@ async function persistListingForRun(runId: string, raw: Record<string, unknown>)
     if (agentNames.length > 0) {
       try {
         const context = [normalized.address, normalized.city, normalized.zip].filter(Boolean).join(", ");
-        normalized.agentEnrichment = await enrichBrokers(agentNames, context || undefined);
+        const agentEnrichment = await enrichBrokers(agentNames, context || undefined);
+        if (hasMeaningfulBrokerEnrichment(agentEnrichment)) normalized.agentEnrichment = agentEnrichment;
+        else if (existing?.agentEnrichment?.length) normalized.agentEnrichment = existing.agentEnrichment;
       } catch (err) {
         if (existing?.agentEnrichment?.length) normalized.agentEnrichment = existing.agentEnrichment;
         errors.push(`broker-enrichment:${normalized.externalId}:${err instanceof Error ? err.message : String(err)}`);
@@ -972,12 +974,18 @@ export async function startSavedSearchRun(
 
 export async function runDueSavedSearches(
   now = new Date(),
-  options?: { dueMode?: "timestamp" | "local-day" }
-): Promise<{ started: number; searchIds: string[] }> {
+  options?: {
+    dueMode?: "timestamp" | "local-day";
+    executionMode?: "background" | "blocking";
+    triggerSource?: string;
+  }
+): Promise<{ started: number; searchIds: string[]; failedSearchIds: string[] }> {
   const pool = getPool();
   const profileRepo = new ProfileRepo({ pool });
   const runRepo = new RunRepo({ pool });
   const dueMode = options?.dueMode ?? "timestamp";
+  const executionMode = options?.executionMode ?? "background";
+  const triggerSource = options?.triggerSource ?? "scheduled";
   const searches = await profileRepo.list();
   const due = searches.filter(
     (search) =>
@@ -989,6 +997,7 @@ export async function runDueSavedSearches(
         : new Date(search.nextRunAt).getTime() <= now.getTime())
   );
   const startedIds: string[] = [];
+  const failedIds: string[] = [];
   for (const search of due) {
     if (await runRepo.hasRunningForProfile(search.id)) continue;
     const nextRunAnchor =
@@ -999,13 +1008,22 @@ export async function runDueSavedSearches(
             return scheduledAt.getTime() > now.getTime() ? scheduledAt : now;
           })()
         : now;
-    await profileRepo.update(search.id, {
-      nextRunAt: buildNextRunAt(search, nextRunAnchor),
-    });
-    await startSavedSearchRun(search.id, { triggerSource: "scheduled" });
-    startedIds.push(search.id);
+    try {
+      await profileRepo.update(search.id, {
+        nextRunAt: buildNextRunAt(search, nextRunAnchor),
+      });
+      if (executionMode === "blocking") {
+        await executeSavedSearchRun(search.id, { triggerSource });
+      } else {
+        await startSavedSearchRun(search.id, { triggerSource });
+      }
+      startedIds.push(search.id);
+    } catch (err) {
+      failedIds.push(search.id);
+      console.error("[runDueSavedSearches]", search.id, err instanceof Error ? err.message : err);
+    }
   }
-  return { started: startedIds.length, searchIds: startedIds };
+  return { started: startedIds.length, searchIds: startedIds, failedSearchIds: failedIds };
 }
 
 export { buildNextRunAt };

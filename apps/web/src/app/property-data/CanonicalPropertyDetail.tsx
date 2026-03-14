@@ -8,6 +8,7 @@ import {
   getPropertyDossierGeneration,
   type LocalDossierJobState,
 } from "./dossierState";
+import { buildInquiryDraft } from "./inquiryDraft";
 import { formatSourcingUpdateChange, getSourcingUpdate, getSourcingUpdateMeta } from "./sourcingUpdate";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
@@ -30,6 +31,9 @@ export interface CanonicalProperty {
   } | null;
   /** OM status: from inquiry/uploaded docs and inquiry sends. */
   omStatus?: OmStatus | null;
+  recipientContactName?: string | null;
+  recipientContactEmail?: string | null;
+  lastInquirySentAt?: string | null;
   /** Deal score 0–100 from latest deal_signals (when listed with includeListingSummary). */
   dealScore?: number | null;
 }
@@ -353,6 +357,7 @@ export function CanonicalPropertyDetail({
   onDossierNotice,
   onRefreshPropertyData,
   onWorkflowActivity,
+  autoOpenInquiryComposerNonce,
 }: {
   property: CanonicalProperty;
   isSaved?: boolean;
@@ -362,6 +367,7 @@ export function CanonicalPropertyDetail({
   onDossierNotice?: (propertyId: string, notice: { type: "success" | "error"; message: string }) => void;
   onRefreshPropertyData?: () => void;
   onWorkflowActivity?: () => void;
+  autoOpenInquiryComposerNonce?: number | null;
 }) {
   const [primaryListing, setPrimaryListing] = useState<ListingRow | null | "loading">("loading");
   /** Fresh details from GET /api/properties/:id so enriched data (CO, zoning, HPD) is current after re-run. */
@@ -397,7 +403,7 @@ export function CanonicalPropertyDetail({
     sameRecipientSamePropertyAt: string | null;
     sameRecipientOtherProperties: Array<{ propertyId: string; canonicalAddress: string; sentAt: string }>;
   } | null>(null);
-  const [lastInquirySentAt, setLastInquirySentAt] = useState<string | null>(null);
+  const [lastInquirySentAt, setLastInquirySentAt] = useState<string | null>(property.lastInquirySentAt ?? null);
   const [manualInquiryModalOpen, setManualInquiryModalOpen] = useState(false);
   const [manualInquiryDraft, setManualInquiryDraft] = useState<{ to: string; sentAt: string }>({
     to: "",
@@ -443,6 +449,7 @@ export function CanonicalPropertyDetail({
   const [dossierGenerating, setDossierGenerating] = useState(false);
   const [authoritativeOmRefreshing, setAuthoritativeOmRefreshing] = useState(false);
   const hasAutoSavedRef = React.useRef(false);
+  const lastAutoOpenInquiryNonceRef = React.useRef<number | null>(null);
   const [sendAnotherConfirm, setSendAnotherConfirm] = useState(false);
   const [dosEntityLoading, setDosEntityLoading] = useState(false);
   const [dosEntity, setDosEntity] = useState<NyDosEntityResult | "n/a" | null>(null);
@@ -527,6 +534,10 @@ export function CanonicalPropertyDetail({
       });
     return () => { cancelled = true; };
   }, [property.id]);
+
+  useEffect(() => {
+    setLastInquirySentAt(property.lastInquirySentAt ?? null);
+  }, [property.id, property.lastInquirySentAt]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1182,9 +1193,10 @@ export function CanonicalPropertyDetail({
     .map((agent) => ({ email: agent.email?.trim() ?? "", name: agent.name }))
     .filter((entry) => entry.email);
   const primaryBroker = brokerEmailOptions[0] ?? null;
-  const brokerFirstName = primaryBroker?.name?.trim()
-    ? primaryBroker.name.trim().split(/\s+/)[0] ?? "[Broker Name]"
-    : "[Broker Name]";
+  const preferredInquiryRecipient = {
+    email: property.recipientContactEmail?.trim() || primaryBroker?.email || "",
+    name: property.recipientContactName?.trim() || primaryBroker?.name || null,
+  };
   const inquiryNeedsOverride = Boolean(
     lastInquirySentAt ||
     inquiryGuard?.sameRecipientSamePropertyAt ||
@@ -1229,6 +1241,27 @@ export function CanonicalPropertyDetail({
     if (!node) return;
     node.scrollIntoView({ behavior: "smooth", block: "start" });
   };
+
+  useEffect(() => {
+    if (autoOpenInquiryComposerNonce == null) return;
+    if (lastAutoOpenInquiryNonceRef.current === autoOpenInquiryComposerNonce) return;
+    lastAutoOpenInquiryNonceRef.current = autoOpenInquiryComposerNonce;
+    setOpenSections((prev) => ({ ...prev, rentalOm: true }));
+    setInquiryDraft(buildInquiryDraft({
+      canonicalAddress: property.canonicalAddress,
+      recipientName: preferredInquiryRecipient.name,
+      to: preferredInquiryRecipient.email,
+    }));
+    setInquirySendError(null);
+    setInquiryGuard(null);
+    setSendAnotherConfirm(false);
+    setInquiryEmailModalOpen(true);
+  }, [
+    autoOpenInquiryComposerNonce,
+    preferredInquiryRecipient.email,
+    preferredInquiryRecipient.name,
+    property.canonicalAddress,
+  ]);
 
   return (
     <div className="property-detail-collapsible">
@@ -2074,21 +2107,11 @@ export function CanonicalPropertyDetail({
                 type="button"
                 disabled={hasOmDocument}
                 onClick={() => {
-                  const addressLine = property.canonicalAddress.split(",")[0]?.trim() || property.canonicalAddress;
-                  const subject = "Inquiry about " + addressLine;
-                  const body = `Hi ${brokerFirstName},
-
-My name is Tyler Tsay, and I'm reaching out on behalf of a client regarding the property at ${addressLine} currently on the market. We are evaluating the building and would appreciate the opportunity to review further.
-
-Would you be able to share the OM, current rent roll, expenses, and/or any available financials?
-
-Thanks in advance - looking forward to taking a look.
-
-Best,
-Tyler Tsay
-617 306 3336
-tyler@stayhaus.co`;
-                  setInquiryDraft({ to: primaryBroker?.email ?? "", subject, body });
+                  setInquiryDraft(buildInquiryDraft({
+                    canonicalAddress: property.canonicalAddress,
+                    recipientName: preferredInquiryRecipient.name,
+                    to: preferredInquiryRecipient.email,
+                  }));
                   setInquirySendError(null);
                   setInquiryGuard(null);
                   setSendAnotherConfirm(false);
@@ -2111,7 +2134,7 @@ tyler@stayhaus.co`;
                 disabled={hasOmDocument}
                 onClick={() => {
                   setManualInquiryDraft({
-                    to: primaryBroker?.email ?? "",
+                    to: preferredInquiryRecipient.email,
                     sentAt: new Date().toISOString().slice(0, 10),
                   });
                   setManualInquiryError(null);

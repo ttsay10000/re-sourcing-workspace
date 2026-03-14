@@ -9,7 +9,7 @@ import { Router, type Request, type Response } from "express";
 import type { ListingNormalized, PriceHistoryEntry } from "@re-sourcing/contracts";
 import type { NycsSearchCriteria } from "../nycRealEstateApi.js";
 import { fetchActiveSalesWithCriteria, fetchSaleDetailsByUrl } from "../nycRealEstateApi.js";
-import { enrichBrokers } from "../enrichment/brokerEnrichment.js";
+import { enrichBrokers, hasMeaningfulBrokerEnrichment } from "../enrichment/brokerEnrichment.js";
 import { computeDuplicateScores } from "../dedup/addressDedup.js";
 import {
   createWorkflowRun,
@@ -277,7 +277,7 @@ router.post("/test-agent/test-single-property", async (req: Request, res: Respon
       if (!existing) {
         const propertyContext = [normalized.address, normalized.city, normalized.zip].filter(Boolean).join(", ") || undefined;
         const agentEnrichment = await enrichBrokers(normalized.agentNames, propertyContext);
-        if (agentEnrichment?.length) normalized.agentEnrichment = agentEnrichment;
+        if (hasMeaningfulBrokerEnrichment(agentEnrichment)) normalized.agentEnrichment = agentEnrichment;
       } else {
         normalized.agentEnrichment = existing.agentEnrichment ?? null;
         normalized.priceHistory = normalized.priceHistory ?? existing.priceHistory ?? null;
@@ -661,9 +661,9 @@ router.post("/test-agent/runs/:id/send-to-property-data", async (req: Request, r
           const propertyContext = [normalized.address, normalized.city, normalized.zip].filter(Boolean).join(", ") || undefined;
           try {
             const agentEnrichment = await enrichBrokers(normalized.agentNames, propertyContext);
-            if (agentEnrichment && agentEnrichment.length > 0) {
+            if (hasMeaningfulBrokerEnrichment(agentEnrichment)) {
               normalized.agentEnrichment = agentEnrichment;
-              console.log(`[send-to-property-data] Broker LLM enriched ${agentEnrichment.length} agent(s) for ${normalized.externalId}`);
+              console.log(`[send-to-property-data] Broker LLM enriched ${agentEnrichment?.length ?? 0} agent(s) for ${normalized.externalId}`);
             } else if (existingHasEnrichment) {
               normalized.agentEnrichment = existing?.agentEnrichment ?? null;
             } else {
