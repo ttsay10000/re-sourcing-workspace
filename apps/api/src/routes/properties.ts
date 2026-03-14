@@ -187,7 +187,7 @@ async function listPropertiesWithListingSummary(pool: import("pg").Pool) {
       SELECT sent_at
       FROM property_inquiry_sends
       WHERE property_id = p.id
-      ORDER BY sent_at DESC NULLS LAST, property_inquiry_sends.created_at DESC
+      ORDER BY sent_at DESC NULLS LAST
       LIMIT 1
     ) inquiry ON true
     LEFT JOIN LATERAL (
@@ -249,7 +249,7 @@ async function listPropertiesWithListingSummary(pool: import("pg").Pool) {
       SELECT sent_at
       FROM property_inquiry_sends
       WHERE property_id = p.id
-      ORDER BY sent_at DESC NULLS LAST, property_inquiry_sends.created_at DESC
+      ORDER BY sent_at DESC NULLS LAST
       LIMIT 1
     ) inquiry ON true
     ORDER BY p.id, m.confidence DESC NULLS LAST, m.created_at DESC
