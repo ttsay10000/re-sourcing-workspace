@@ -29,6 +29,7 @@ export interface CanonicalProperty {
     city: string | null;
     lastActivity?: ListingActivitySummary | null;
   } | null;
+  listingAgentEnrichment?: { name: string; firm?: string | null; email?: string | null; phone?: string | null }[] | null;
   /** OM status: from inquiry/uploaded docs and inquiry sends. */
   omStatus?: OmStatus | null;
   recipientContactName?: string | null;
@@ -1189,7 +1190,7 @@ export function CanonicalPropertyDetail({
   const hasListing = primaryListing && primaryListing !== "loading";
   const listingForDisplay = hasListing ? primaryListing : null;
   const listingAgents = listingForDisplay?.agentEnrichment ?? [];
-  const brokerEmailOptions = listingAgents
+  const brokerEmailOptions = (listingAgents.length > 0 ? listingAgents : (property.listingAgentEnrichment ?? []))
     .map((agent) => ({ email: agent.email?.trim() ?? "", name: agent.name }))
     .filter((entry) => entry.email);
   const primaryBroker = brokerEmailOptions[0] ?? null;

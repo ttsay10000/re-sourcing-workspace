@@ -1463,8 +1463,12 @@ function PropertyDataContent() {
                         const omMeta = omCellMeta(prop);
                         const activeRunMeta = activeRunCellMeta(prop);
                         const sourcingUpdateMeta = getSourcingUpdateMeta(prop.details ?? null);
+                        const listingBrokerEmail =
+                          prop.listingAgentEnrichment?.find((entry) => typeof entry.email === "string" && entry.email.trim().length > 0)?.email?.trim()
+                          ?? null;
+                        const quickInquiryEmail = prop.recipientContactEmail?.trim() || listingBrokerEmail;
                         const canOpenInquiryComposer = Boolean(
-                          prop.recipientContactEmail &&
+                          quickInquiryEmail &&
                           !prop.lastInquirySentAt &&
                           prop.omStatus === "Not received"
                         );
@@ -1567,7 +1571,7 @@ function PropertyDataContent() {
                                         fontWeight: 600,
                                         cursor: "pointer",
                                       }}
-                                      title={`Open inquiry draft for ${prop.recipientContactEmail}`}
+                                      title={`Open inquiry draft for ${quickInquiryEmail}`}
                                     >
                                       Request info / OM
                                     </button>

@@ -22,7 +22,7 @@ import {
   DealScoreOverridesRepo,
   DocumentRepo,
 } from "@re-sourcing/db";
-import { deriveListingActivitySummary, type PriceHistoryEntry, type PropertyDocumentCategory } from "@re-sourcing/contracts";
+import { deriveListingActivitySummary, type AgentEnrichmentEntry, type PriceHistoryEntry, type PropertyDocumentCategory } from "@re-sourcing/contracts";
 import multer from "multer";
 import { randomUUID } from "crypto";
 import { resolveInquiryFilePath } from "../inquiry/storage.js";
@@ -114,6 +114,7 @@ function mapPropertyListRows(rows: Array<Record<string, unknown>>) {
         city: (row.listing_city as string) ?? null,
         lastActivity: listingActivity,
       },
+      listingAgentEnrichment: (row.listing_agent_enrichment as AgentEnrichmentEntry[] | null) ?? null,
       omStatus: (row.om_status as string) ?? "Not received",
       recipientContactName: (row.recipient_contact_name as string) ?? null,
       recipientContactEmail: (row.recipient_contact_email as string) ?? null,
@@ -147,7 +148,7 @@ function mapPropertyListRows(rows: Array<Record<string, unknown>>) {
 async function listPropertiesWithListingSummary(pool: import("pg").Pool) {
   const advancedQuery = `SELECT DISTINCT ON (p.id)
       p.id, p.canonical_address, p.details, p.created_at, p.updated_at,
-      l.price AS listing_price, l.listed_at AS listing_listed_at, l.city AS listing_city, l.price_history AS listing_price_history,
+      l.price AS listing_price, l.listed_at AS listing_listed_at, l.city AS listing_city, l.price_history AS listing_price_history, l.agent_enrichment AS listing_agent_enrichment,
       rr.contact_email AS recipient_contact_email,
       bc.display_name AS recipient_contact_name,
       inquiry.sent_at AS last_inquiry_sent_at,
@@ -209,7 +210,7 @@ async function listPropertiesWithListingSummary(pool: import("pg").Pool) {
 
   const fallbackQuery = `SELECT DISTINCT ON (p.id)
       p.id, p.canonical_address, p.details, p.created_at, p.updated_at,
-      l.price AS listing_price, l.listed_at AS listing_listed_at, l.city AS listing_city, l.price_history AS listing_price_history,
+      l.price AS listing_price, l.listed_at AS listing_listed_at, l.city AS listing_city, l.price_history AS listing_price_history, l.agent_enrichment AS listing_agent_enrichment,
       rr.contact_email AS recipient_contact_email,
       bc.display_name AS recipient_contact_name,
       inquiry.sent_at AS last_inquiry_sent_at,
