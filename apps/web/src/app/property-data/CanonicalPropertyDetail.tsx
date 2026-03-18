@@ -1,7 +1,13 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import { deriveListingActivitySummary, describeListingActivity, type ListingActivitySummary } from "@re-sourcing/contracts";
+import {
+  deriveListingActivitySummary,
+  describeListingActivity,
+  type ListingActivitySummary,
+  type RecipientContactCandidate,
+  type RecipientResolution,
+} from "@re-sourcing/contracts";
 import {
   estimateGenerationProgress,
   getPropertyDossierAssumptions,
@@ -91,6 +97,118 @@ interface DossierAssumptionsResponse {
     commercialUnits?: number | null;
     rentStabilizedUnits?: number | null;
   } | null;
+}
+
+interface RecipientResolutionResponse {
+  recipientResolution?: RecipientResolution | null;
+  error?: string;
+  details?: string;
+}
+
+interface InquiryGuardHistoryRow {
+  propertyId: string;
+  canonicalAddress: string;
+  sentAt: string;
+}
+
+interface InquiryGuardBrokerTeamRow extends InquiryGuardHistoryRow {
+  sharedBrokers: string[];
+}
+
+interface InquiryGuardState {
+  toAddress: string | null;
+  lastInquirySentAt: string | null;
+  hasOmDocument: boolean;
+  sameRecipientSamePropertyAt: string | null;
+  sameRecipientOtherProperties: InquiryGuardHistoryRow[];
+  sameBrokerTeamOtherProperties: InquiryGuardBrokerTeamRow[];
+}
+
+interface BrokerEmailOption {
+  email: string;
+  name: string | null;
+  firm: string | null;
+}
+
+function normalizeInquiryGuardHistoryRows(value: unknown): InquiryGuardHistoryRow[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    if (!entry || typeof entry !== "object") return [];
+    const row = entry as Record<string, unknown>;
+    if (
+      typeof row.propertyId !== "string"
+      || typeof row.canonicalAddress !== "string"
+      || typeof row.sentAt !== "string"
+    ) {
+      return [];
+    }
+    return [{
+      propertyId: row.propertyId,
+      canonicalAddress: row.canonicalAddress,
+      sentAt: row.sentAt,
+    }];
+  });
+}
+
+function normalizeInquiryGuardBrokerTeamRows(value: unknown): InquiryGuardBrokerTeamRow[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    if (!entry || typeof entry !== "object") return [];
+    const row = entry as Record<string, unknown>;
+    if (
+      typeof row.propertyId !== "string"
+      || typeof row.canonicalAddress !== "string"
+      || typeof row.sentAt !== "string"
+    ) {
+      return [];
+    }
+    return [{
+      propertyId: row.propertyId,
+      canonicalAddress: row.canonicalAddress,
+      sentAt: row.sentAt,
+      sharedBrokers: Array.isArray(row.sharedBrokers)
+        ? row.sharedBrokers.filter((broker): broker is string => typeof broker === "string" && broker.trim().length > 0)
+        : [],
+    }];
+  });
+}
+
+function normalizeInquiryGuardState(value: unknown): InquiryGuardState | null {
+  if (!value || typeof value !== "object") return null;
+  const guard = value as Record<string, unknown>;
+  return {
+    toAddress: typeof guard.toAddress === "string" ? guard.toAddress : null,
+    lastInquirySentAt: typeof guard.lastInquirySentAt === "string" ? guard.lastInquirySentAt : null,
+    hasOmDocument: Boolean(guard.hasOmDocument),
+    sameRecipientSamePropertyAt: typeof guard.sameRecipientSamePropertyAt === "string" ? guard.sameRecipientSamePropertyAt : null,
+    sameRecipientOtherProperties: normalizeInquiryGuardHistoryRows(guard.sameRecipientOtherProperties),
+    sameBrokerTeamOtherProperties: normalizeInquiryGuardBrokerTeamRows(guard.sameBrokerTeamOtherProperties),
+  };
+}
+
+function normalizeEmailAddress(value: string | null | undefined): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase();
+  return normalized || null;
+}
+
+function brokerOptionFromCandidate(candidate: RecipientContactCandidate): BrokerEmailOption | null {
+  const email = candidate.email?.trim();
+  if (!email) return null;
+  return {
+    email,
+    name: candidate.name?.trim() || null,
+    firm: candidate.firm?.trim() || null,
+  };
+}
+
+function findBrokerEmailOption(
+  options: BrokerEmailOption[],
+  email: string | null | undefined
+): BrokerEmailOption | null {
+  const normalizedEmail = normalizeEmailAddress(email);
+  if (!normalizedEmail) return null;
+  return options.find((option) => normalizeEmailAddress(option.email) === normalizedEmail) ?? null;
 }
 
 function formatPrice(n: number | null | undefined): string {
@@ -397,14 +515,14 @@ export function CanonicalPropertyDetail({
   const [inquirySendError, setInquirySendError] = useState<string | null>(null);
   const [inquirySendSuccess, setInquirySendSuccess] = useState<string | null>(null);
   const [inquiryGuardLoading, setInquiryGuardLoading] = useState(false);
-  const [inquiryGuard, setInquiryGuard] = useState<{
-    toAddress: string | null;
-    lastInquirySentAt: string | null;
-    hasOmDocument: boolean;
-    sameRecipientSamePropertyAt: string | null;
-    sameRecipientOtherProperties: Array<{ propertyId: string; canonicalAddress: string; sentAt: string }>;
-  } | null>(null);
+  const [inquiryGuard, setInquiryGuard] = useState<InquiryGuardState | null>(null);
   const [lastInquirySentAt, setLastInquirySentAt] = useState<string | null>(property.lastInquirySentAt ?? null);
+  const [recipientResolution, setRecipientResolution] = useState<RecipientResolution | null>(null);
+  const [recipientResolutionLoading, setRecipientResolutionLoading] = useState(false);
+  const [recipientOverrideDraft, setRecipientOverrideDraft] = useState("");
+  const [recipientOverrideSaving, setRecipientOverrideSaving] = useState(false);
+  const [recipientOverrideError, setRecipientOverrideError] = useState<string | null>(null);
+  const [recipientOverrideNotice, setRecipientOverrideNotice] = useState<string | null>(null);
   const [manualInquiryModalOpen, setManualInquiryModalOpen] = useState(false);
   const [manualInquiryDraft, setManualInquiryDraft] = useState<{ to: string; sentAt: string }>({
     to: "",
@@ -504,6 +622,28 @@ export function CanonicalPropertyDetail({
     applyPropertySnapshot(data as Record<string, unknown>);
   };
 
+  const refreshRecipientResolution = async (options?: { keepDraft?: boolean }) => {
+    setRecipientResolutionLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/properties/${property.id}/recipient-resolution`);
+      const data: RecipientResolutionResponse = await res.json().catch(() => ({}));
+      if (!res.ok || data?.error) {
+        throw new Error((data?.error || data?.details || "Failed to load broker recipient") as string);
+      }
+      const nextResolution = data.recipientResolution ?? null;
+      setRecipientResolution(nextResolution);
+      if (!options?.keepDraft) {
+        setRecipientOverrideDraft((current) => {
+          if (current.trim()) return current;
+          return nextResolution?.status === "manual_override" ? nextResolution.contactEmail?.trim() || "" : "";
+        });
+      }
+      return nextResolution;
+    } finally {
+      setRecipientResolutionLoading(false);
+    }
+  };
+
   useEffect(() => {
     let cancelled = false;
     setPrimaryListing("loading");
@@ -539,6 +679,24 @@ export function CanonicalPropertyDetail({
   useEffect(() => {
     setLastInquirySentAt(property.lastInquirySentAt ?? null);
   }, [property.id, property.lastInquirySentAt]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setRecipientOverrideError(null);
+    setRecipientOverrideNotice(null);
+    setRecipientOverrideDraft("");
+    refreshRecipientResolution()
+      .catch((err) => {
+        if (!cancelled) {
+          setRecipientResolution(null);
+          setRecipientOverrideError(err instanceof Error ? err.message : "Failed to load broker recipient");
+          setRecipientOverrideDraft("");
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [property.id]);
 
   useEffect(() => {
     let cancelled = false;
@@ -606,13 +764,7 @@ export function CanonicalPropertyDetail({
       .then((r) => r.json())
       .then((data) => {
         if (cancelled || data?.error) return;
-        setInquiryGuard({
-          toAddress: data.toAddress ?? null,
-          lastInquirySentAt: data.lastInquirySentAt ?? null,
-          hasOmDocument: Boolean(data.hasOmDocument),
-          sameRecipientSamePropertyAt: data.sameRecipientSamePropertyAt ?? null,
-          sameRecipientOtherProperties: Array.isArray(data.sameRecipientOtherProperties) ? data.sameRecipientOtherProperties : [],
-        });
+        setInquiryGuard(normalizeInquiryGuardState(data));
         if (data.lastInquirySentAt != null) setLastInquirySentAt(data.lastInquirySentAt);
       })
       .catch(() => {
@@ -670,6 +822,74 @@ export function CanonicalPropertyDetail({
       setScoreOverrideError(err instanceof Error ? err.message : "Failed to clear score override");
     } finally {
       setScoreOverrideSaving(false);
+    }
+  };
+
+  const saveRecipientOverride = async () => {
+    const email = recipientOverrideDraft.trim().toLowerCase();
+    if (!email) {
+      setRecipientOverrideError("Broker email is required.");
+      return;
+    }
+    const matchedOption = findBrokerEmailOption(brokerEmailOptions, email);
+    setRecipientOverrideSaving(true);
+    setRecipientOverrideError(null);
+    setRecipientOverrideNotice(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/properties/${property.id}/recipient-resolution/manual`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email,
+          name: matchedOption?.name ?? null,
+          firm: matchedOption?.firm ?? null,
+        }),
+      });
+      const data: RecipientResolutionResponse = await res.json().catch(() => ({}));
+      if (!res.ok || data?.error) {
+        throw new Error((data?.error || data?.details || "Failed to save broker recipient") as string);
+      }
+      const nextResolution = data.recipientResolution ?? null;
+      const nextEmail = nextResolution?.contactEmail?.trim() || email;
+      setRecipientResolution(nextResolution);
+      setRecipientOverrideDraft(nextEmail);
+      setInquiryDraft((prev) => ({ ...prev, to: nextEmail }));
+      setManualInquiryDraft((prev) => ({ ...prev, to: nextEmail }));
+      setRecipientOverrideNotice("Preferred broker email saved. Inquiry actions will use it first.");
+      onRefreshPropertyData?.();
+      onWorkflowActivity?.();
+    } catch (err) {
+      setRecipientOverrideError(err instanceof Error ? err.message : "Failed to save broker recipient");
+    } finally {
+      setRecipientOverrideSaving(false);
+    }
+  };
+
+  const clearRecipientOverride = async () => {
+    setRecipientOverrideSaving(true);
+    setRecipientOverrideError(null);
+    setRecipientOverrideNotice(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/properties/${property.id}/recipient-resolution/manual`, {
+        method: "DELETE",
+      });
+      const data: RecipientResolutionResponse = await res.json().catch(() => ({}));
+      if (!res.ok || data?.error) {
+        throw new Error((data?.error || data?.details || "Failed to clear broker recipient") as string);
+      }
+      const nextResolution = data.recipientResolution ?? null;
+      const nextEmail = nextResolution?.contactEmail?.trim() || "";
+      setRecipientResolution(nextResolution);
+      setRecipientOverrideDraft("");
+      setInquiryDraft((prev) => ({ ...prev, to: nextEmail }));
+      setManualInquiryDraft((prev) => ({ ...prev, to: nextEmail }));
+      setRecipientOverrideNotice("Manual broker email cleared. Inquiry actions will use sourced broker emails again.");
+      onRefreshPropertyData?.();
+      onWorkflowActivity?.();
+    } catch (err) {
+      setRecipientOverrideError(err instanceof Error ? err.message : "Failed to clear broker recipient");
+    } finally {
+      setRecipientOverrideSaving(false);
     }
   };
 
@@ -1190,18 +1410,42 @@ export function CanonicalPropertyDetail({
   const hasListing = primaryListing && primaryListing !== "loading";
   const listingForDisplay = hasListing ? primaryListing : null;
   const listingAgents = listingForDisplay?.agentEnrichment ?? [];
-  const brokerEmailOptions = (listingAgents.length > 0 ? listingAgents : (property.listingAgentEnrichment ?? []))
-    .map((agent) => ({ email: agent.email?.trim() ?? "", name: agent.name }))
-    .filter((entry) => entry.email);
+  const listingAgentSource = listingAgents.length > 0 ? listingAgents : (property.listingAgentEnrichment ?? []);
+  const brokerEmailOptionMap = new Map<string, BrokerEmailOption>();
+  for (const candidate of recipientResolution?.candidateContacts ?? []) {
+    const option = brokerOptionFromCandidate(candidate);
+    if (!option) continue;
+    const key = option.email.toLowerCase();
+    if (!brokerEmailOptionMap.has(key)) brokerEmailOptionMap.set(key, option);
+  }
+  for (const agent of listingAgentSource) {
+    const email = agent.email?.trim();
+    if (!email) continue;
+    const key = email.toLowerCase();
+    if (!brokerEmailOptionMap.has(key)) {
+      brokerEmailOptionMap.set(key, {
+        email,
+        name: agent.name?.trim() || null,
+        firm: agent.firm?.trim() || null,
+      });
+    }
+  }
+  const brokerEmailOptions = [...brokerEmailOptionMap.values()];
   const primaryBroker = brokerEmailOptions[0] ?? null;
+  const usingManualRecipientOverride = recipientResolution?.status === "manual_override";
+  const preferredRecipientEmail =
+    recipientResolution?.contactEmail?.trim() || property.recipientContactEmail?.trim() || primaryBroker?.email || "";
+  const preferredRecipientOption = findBrokerEmailOption(brokerEmailOptions, preferredRecipientEmail);
   const preferredInquiryRecipient = {
-    email: property.recipientContactEmail?.trim() || primaryBroker?.email || "",
-    name: property.recipientContactName?.trim() || primaryBroker?.name || null,
+    email: preferredRecipientEmail,
+    name: preferredRecipientOption?.name ?? property.recipientContactName?.trim() ?? primaryBroker?.name ?? null,
+    firm: preferredRecipientOption?.firm ?? null,
   };
   const inquiryNeedsOverride = Boolean(
     lastInquirySentAt ||
     inquiryGuard?.sameRecipientSamePropertyAt ||
-    (inquiryGuard?.sameRecipientOtherProperties.length ?? 0) > 0
+    (inquiryGuard?.sameRecipientOtherProperties.length ?? 0) > 0 ||
+    (inquiryGuard?.sameBrokerTeamOtherProperties.length ?? 0) > 0
   );
   const extra = listingForDisplay?.extra as Record<string, unknown> | undefined;
   const listingActivity = listingForDisplay
@@ -2103,6 +2347,116 @@ export function CanonicalPropertyDetail({
                 OM already received or uploaded. See <strong>Documents (from inquiry replies)</strong> and <strong>Uploaded documents</strong> below.
               </p>
             )}
+            <div
+              style={{
+                margin: "0 0 0.75rem",
+                padding: "0.7rem 0.8rem",
+                borderRadius: "8px",
+                border: "1px solid #e5e7eb",
+                backgroundColor: "#fafafa",
+              }}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", flexWrap: "wrap", alignItems: "flex-start" }}>
+                <div>
+                  <div style={{ fontSize: "0.72rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: "#4b5563" }}>
+                    Preferred broker email
+                  </div>
+                  <div style={{ marginTop: "0.2rem", fontSize: "0.92rem", fontWeight: 600, color: "#111827" }}>
+                    {preferredInquiryRecipient.email || "No broker email selected yet"}
+                  </div>
+                  <div style={{ marginTop: "0.2rem", fontSize: "0.75rem", color: "#6b7280", lineHeight: 1.5 }}>
+                    {usingManualRecipientOverride
+                      ? "Manual override is active. Inquiry actions use this email first."
+                      : recipientResolution?.status === "resolved"
+                        ? "Currently using the LLM/listing-sourced broker email. Save a manual override if you found a better address."
+                        : recipientResolution?.status === "multiple_candidates"
+                          ? "Multiple broker emails were sourced. Save one manual email to make it the default."
+                          : "No broker email is locked in yet. Add one manually if you found it outside the LLM run."}
+                  </div>
+                </div>
+                {recipientResolutionLoading ? (
+                  <span style={{ fontSize: "0.75rem", color: "#64748b" }}>Refreshing…</span>
+                ) : null}
+              </div>
+              {recipientOverrideNotice && (
+                <p style={{ margin: "0.6rem 0 0", fontSize: "0.78rem", color: "#166534" }}>{recipientOverrideNotice}</p>
+              )}
+              {recipientOverrideError && (
+                <p style={{ margin: "0.6rem 0 0", fontSize: "0.78rem", color: "#b91c1c" }}>{recipientOverrideError}</p>
+              )}
+              <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginTop: "0.65rem" }}>
+                <input
+                  type="text"
+                  value={recipientOverrideDraft}
+                  onChange={(e) => setRecipientOverrideDraft(e.target.value)}
+                  placeholder={preferredInquiryRecipient.email || "broker@firm.com"}
+                  style={{ flex: "1 1 18rem", minWidth: "14rem", padding: "0.45rem", fontSize: "0.85rem", border: "1px solid #cbd5e1", borderRadius: "6px" }}
+                />
+                <button
+                  type="button"
+                  onClick={saveRecipientOverride}
+                  disabled={Boolean(recipientOverrideSaving || !recipientOverrideDraft.trim())}
+                  style={{
+                    padding: "0.4rem 0.7rem",
+                    borderRadius: "6px",
+                    border: "1px solid #0f766e",
+                    backgroundColor: recipientOverrideSaving ? "#99f6e4" : "#ccfbf1",
+                    color: "#115e59",
+                    cursor: recipientOverrideSaving ? "wait" : "pointer",
+                    fontSize: "0.8rem",
+                    fontWeight: 600,
+                  }}
+                >
+                  {recipientOverrideSaving ? "Saving…" : usingManualRecipientOverride ? "Update preferred email" : "Save preferred email"}
+                </button>
+                {usingManualRecipientOverride && (
+                  <button
+                    type="button"
+                    onClick={clearRecipientOverride}
+                    disabled={recipientOverrideSaving}
+                    style={{
+                      padding: "0.4rem 0.7rem",
+                      borderRadius: "6px",
+                      border: "1px solid #cbd5e1",
+                      backgroundColor: "#fff",
+                      color: "#334155",
+                      cursor: recipientOverrideSaving ? "wait" : "pointer",
+                      fontSize: "0.8rem",
+                    }}
+                  >
+                    Use sourced email
+                  </button>
+                )}
+              </div>
+              {brokerEmailOptions.length > 0 && (
+                <div style={{ marginTop: "0.65rem" }}>
+                  <div style={{ marginBottom: "0.35rem", fontSize: "0.72rem", fontWeight: 600, color: "#6b7280" }}>
+                    LLM / listing candidate emails
+                  </div>
+                  <div style={{ display: "flex", gap: "0.35rem", flexWrap: "wrap" }}>
+                    {brokerEmailOptions.map((option) => (
+                      <button
+                        key={option.email.toLowerCase()}
+                        type="button"
+                        onClick={() => setRecipientOverrideDraft(option.email)}
+                        style={{
+                          padding: "0.25rem 0.55rem",
+                          borderRadius: "999px",
+                          border: "1px solid #d1d5db",
+                          backgroundColor: "#fff",
+                          color: "#374151",
+                          cursor: "pointer",
+                          fontSize: "0.74rem",
+                        }}
+                        title={option.name ? `${option.name} - ${option.email}` : option.email}
+                      >
+                        {option.email}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
             <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
               <button
                 type="button"
@@ -2185,21 +2539,32 @@ export function CanonicalPropertyDetail({
                     ))}
                   </div>
                 ) : null}
+                {inquiryGuard?.sameBrokerTeamOtherProperties.length ? (
+                  <div style={{ margin: "0 0 0.75rem", padding: "0.5rem 0.6rem", backgroundColor: "#fff7ed", border: "1px solid #fb923c", borderRadius: "6px", fontSize: "0.8rem", color: "#9a3412" }}>
+                    <strong style={{ display: "block", marginBottom: "0.25rem" }}>A broker on this listing team was already involved on another contacted property.</strong>
+                    {inquiryGuard.sameBrokerTeamOtherProperties.map((row) => (
+                      <div key={`${row.propertyId}-${row.sentAt}`}>
+                        {row.canonicalAddress} — {formatDateOnly(row.sentAt)}
+                        {row.sharedBrokers.length ? ` — shared broker${row.sharedBrokers.length === 1 ? "" : "s"}: ${row.sharedBrokers.join(", ")}` : ""}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
                 <div style={{ marginBottom: "0.75rem" }}>
                   <label style={{ display: "block", fontSize: "0.75rem", marginBottom: "0.25rem", color: "#555" }}>To (broker)</label>
                   <input
                     type="text"
                     value={inquiryDraft.to}
                     onChange={(e) => setInquiryDraft((p) => ({ ...p, to: e.target.value }))}
-                    placeholder="Broker email (from listing)"
+                    placeholder="Preferred broker email"
                     style={{ width: "100%", padding: "0.4rem", fontSize: "0.875rem", border: "1px solid #ccc", borderRadius: "4px" }}
                   />
-                  {!inquiryDraft.to && listingForDisplay && (
-                    <p style={{ margin: "0.25rem 0 0", fontSize: "0.75rem", color: "#888" }}>No broker email on file. Add agent enrichment or enter manually.</p>
+                  {!inquiryDraft.to && (
+                    <p style={{ margin: "0.25rem 0 0", fontSize: "0.75rem", color: "#888" }}>No broker email on file yet. Save a preferred email above or enter one here manually.</p>
                   )}
-                  {listingAgents.length > 1 && (
+                  {brokerEmailOptions.length > 1 && (
                     <p style={{ margin: "0.25rem 0 0", fontSize: "0.75rem", color: "#666" }}>
-                      Other agents: {listingAgents.slice(1).map((a) => a.email?.trim()).filter(Boolean).join(", ") || "—"}
+                      Other sourced emails: {brokerEmailOptions.slice(1).map((entry) => entry.email).join(", ") || "—"}
                     </p>
                   )}
                 </div>
@@ -2254,26 +2619,14 @@ export function CanonicalPropertyDetail({
                             setLastInquirySentAt(data.guard.lastInquirySentAt);
                           }
                           if (data?.guard) {
-                            setInquiryGuard({
-                              toAddress: data.guard.toAddress ?? null,
-                              lastInquirySentAt: data.guard.lastInquirySentAt ?? null,
-                              hasOmDocument: Boolean(data.guard.hasOmDocument),
-                              sameRecipientSamePropertyAt: data.guard.sameRecipientSamePropertyAt ?? null,
-                              sameRecipientOtherProperties: Array.isArray(data.guard.sameRecipientOtherProperties) ? data.guard.sameRecipientOtherProperties : [],
-                            });
+                            setInquiryGuard(normalizeInquiryGuardState(data.guard));
                           }
                           const msg = typeof data?.details === "string" ? data.details : typeof data?.error === "string" ? data.error : "Failed to send";
                           throw new Error(msg);
                         }
                         setLastInquirySentAt(data.sentAt ?? null);
                         if (data.guard) {
-                          setInquiryGuard({
-                            toAddress: data.guard.toAddress ?? null,
-                            lastInquirySentAt: data.guard.lastInquirySentAt ?? null,
-                            hasOmDocument: Boolean(data.guard.hasOmDocument),
-                            sameRecipientSamePropertyAt: data.guard.sameRecipientSamePropertyAt ?? null,
-                            sameRecipientOtherProperties: Array.isArray(data.guard.sameRecipientOtherProperties) ? data.guard.sameRecipientOtherProperties : [],
-                          });
+                          setInquiryGuard(normalizeInquiryGuardState(data.guard));
                         }
                         setInquirySendSuccess("Email sent successfully.");
                         setInquiryEmailModalOpen(false);
@@ -2312,13 +2665,24 @@ export function CanonicalPropertyDetail({
                     ))}
                   </div>
                 ) : null}
+                {inquiryGuard?.sameBrokerTeamOtherProperties.length ? (
+                  <div style={{ margin: "0 0 0.75rem", padding: "0.5rem 0.6rem", backgroundColor: "#fff7ed", border: "1px solid #fb923c", borderRadius: "6px", fontSize: "0.8rem", color: "#9a3412" }}>
+                    <strong style={{ display: "block", marginBottom: "0.25rem" }}>This listing team overlaps with other properties that already have inquiry history.</strong>
+                    {inquiryGuard.sameBrokerTeamOtherProperties.map((row) => (
+                      <div key={`${row.propertyId}-${row.sentAt}`}>
+                        {row.canonicalAddress} — {formatDateOnly(row.sentAt)}
+                        {row.sharedBrokers.length ? ` — shared broker${row.sharedBrokers.length === 1 ? "" : "s"}: ${row.sharedBrokers.join(", ")}` : ""}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
                 <div style={{ marginBottom: "0.75rem" }}>
                   <label style={{ display: "block", fontSize: "0.75rem", marginBottom: "0.25rem", color: "#555" }}>Broker email</label>
                   <input
                     type="text"
                     value={manualInquiryDraft.to}
                     onChange={(e) => setManualInquiryDraft((prev) => ({ ...prev, to: e.target.value }))}
-                    placeholder="Broker email (optional but recommended)"
+                    placeholder="Preferred broker email (optional but recommended)"
                     style={{ width: "100%", padding: "0.4rem", fontSize: "0.875rem", border: "1px solid #ccc", borderRadius: "4px" }}
                   />
                 </div>
@@ -2353,13 +2717,7 @@ export function CanonicalPropertyDetail({
                         }
                         setLastInquirySentAt(data.inquirySend?.sentAt ?? data.guard?.lastInquirySentAt ?? null);
                         if (data.guard) {
-                          setInquiryGuard({
-                            toAddress: data.guard.toAddress ?? null,
-                            lastInquirySentAt: data.guard.lastInquirySentAt ?? null,
-                            hasOmDocument: Boolean(data.guard.hasOmDocument),
-                            sameRecipientSamePropertyAt: data.guard.sameRecipientSamePropertyAt ?? null,
-                            sameRecipientOtherProperties: Array.isArray(data.guard.sameRecipientOtherProperties) ? data.guard.sameRecipientOtherProperties : [],
-                          });
+                          setInquiryGuard(normalizeInquiryGuardState(data.guard));
                         }
                         setInquirySendSuccess("Prior inquiry recorded.");
                         setManualInquiryModalOpen(false);

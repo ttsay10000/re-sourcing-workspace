@@ -22,6 +22,58 @@ function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
 }
 
+function mergeRecipientCandidate(
+  existing: RecipientContactCandidate | undefined,
+  incoming: RecipientContactCandidate
+): RecipientContactCandidate {
+  return {
+    email: normalizeEmail(incoming.email),
+    name: existing?.name ?? incoming.name ?? null,
+    firm: existing?.firm ?? incoming.firm ?? null,
+    contactId: existing?.contactId ?? incoming.contactId ?? null,
+  };
+}
+
+function dedupeRecipientCandidates(
+  candidates: Array<RecipientContactCandidate | null | undefined>
+): RecipientContactCandidate[] {
+  const deduped = new Map<string, RecipientContactCandidate>();
+  for (const candidate of candidates) {
+    const email = candidate?.email?.trim();
+    if (!email) continue;
+    const normalizedEmail = normalizeEmail(email);
+    deduped.set(
+      normalizedEmail,
+      mergeRecipientCandidate(deduped.get(normalizedEmail), {
+        ...candidate,
+        email: normalizedEmail,
+      })
+    );
+  }
+  return [...deduped.values()];
+}
+
+export function mergeManualOverrideCandidateContacts(params: {
+  manualResolution: RecipientResolution;
+  listingCandidates: RecipientContactCandidate[];
+}): RecipientContactCandidate[] {
+  const manualEmail = params.manualResolution.contactEmail?.trim();
+  const manualMatch = params.manualResolution.candidateContacts.find(
+    (candidate) => candidate.email?.trim().toLowerCase() === manualEmail?.toLowerCase()
+  );
+  const manualCandidate =
+    manualEmail != null && manualEmail.length > 0
+      ? {
+          email: manualEmail,
+          name: manualMatch?.name ?? null,
+          firm: manualMatch?.firm ?? null,
+          contactId: params.manualResolution.contactId ?? manualMatch?.contactId ?? null,
+        }
+      : null;
+
+  return dedupeRecipientCandidates([manualCandidate, ...params.listingCandidates]);
+}
+
 export async function getPrimaryListingForProperty(
   propertyId: string,
   pool: import("pg").Pool = getPool()
@@ -63,7 +115,10 @@ export async function syncRecipientResolution(
   const candidates = await buildRecipientCandidatesForProperty(propertyId, pool);
 
   if (existing?.status === "manual_override" && existing.contactEmail) {
-    const candidateContacts = candidates.length > 0 ? candidates : existing.candidateContacts;
+    const candidateContacts = mergeManualOverrideCandidateContacts({
+      manualResolution: existing,
+      listingCandidates: candidates,
+    });
     return resolutionRepo.upsert({
       propertyId,
       status: "manual_override",

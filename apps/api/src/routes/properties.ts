@@ -21,14 +21,22 @@ import {
   DealSignalsRepo,
   DealScoreOverridesRepo,
   DocumentRepo,
+  RecipientResolutionRepo,
 } from "@re-sourcing/db";
-import { deriveListingActivitySummary, type AgentEnrichmentEntry, type PriceHistoryEntry, type PropertyDocumentCategory } from "@re-sourcing/contracts";
+import {
+  deriveListingActivitySummary,
+  type AgentEnrichmentEntry,
+  type PriceHistoryEntry,
+  type PropertyDocumentCategory,
+  type RecipientContactCandidate,
+} from "@re-sourcing/contracts";
 import multer from "multer";
 import { randomUUID } from "crypto";
 import { resolveInquiryFilePath } from "../inquiry/storage.js";
 import { saveUploadedDocument, resolveUploadedDocFilePath, deleteUploadedDocumentFile, uploadedDocFileExists } from "../upload/uploadedDocStorage.js";
 import { sendMessage as gmailSendMessage } from "../inquiry/gmailClient.js";
 import { findBrokerPropertyConversationHistory } from "../inquiry/gmailConversationHistory.js";
+import { buildBrokerTeamRecords, findBrokerTeamOverlapMatches } from "../inquiry/brokerTeamOverlap.js";
 import type { PropertyDetails, RentalFinancials, RentalFinancialsFromLlm } from "@re-sourcing/contracts";
 import { runEnrichmentForProperty } from "../enrichment/runEnrichment.js";
 import { normalizeAddressLineForDisplay, getBBLForProperty } from "../enrichment/resolvePropertyBBL.js";
@@ -53,7 +61,12 @@ import {
   WORKFLOW_BOARD_COLUMNS,
 } from "../workflow/workflowTracker.js";
 import type { WorkflowRunStepSeed } from "../workflow/workflowTracker.js";
-import { syncPropertySourcingWorkflow } from "../sourcing/workflow.js";
+import {
+  getPrimaryListingForProperty,
+  setManualRecipientResolution,
+  syncPropertySourcingWorkflow,
+  syncRecipientResolution,
+} from "../sourcing/workflow.js";
 import { refreshAuthoritativeOmForProperty } from "../om/ingestAuthoritativeOm.js";
 
 const router = Router();
@@ -1388,12 +1401,324 @@ interface InquiryGuardState {
   hasOmDocument: boolean;
   sameRecipientSamePropertyAt: string | null;
   sameRecipientOtherProperties: Array<{ propertyId: string; canonicalAddress: string; sentAt: string }>;
+  sameBrokerTeamOtherProperties: Array<{
+    propertyId: string;
+    canonicalAddress: string;
+    sentAt: string;
+    sharedBrokers: string[];
+  }>;
 }
 
 function normalizeRecipientEmail(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const normalized = value.trim().toLowerCase();
   return normalized || null;
+}
+
+interface InquiryGuardBrokerTeamHistoryRow {
+  property_id: string;
+  canonical_address: string;
+  sent_at: Date | string;
+  listing_agent_enrichment: AgentEnrichmentEntry[] | null;
+  contact_email: string | null;
+  candidate_contacts: RecipientContactCandidate[] | null;
+}
+
+function formatInquiryGuardSentAt(value: Date | string | null | undefined): string | null {
+  if (value == null) return null;
+  return value instanceof Date ? value.toISOString() : String(value);
+}
+
+async function listBrokerTeamOverlapHistory(
+  pool: import("pg").Pool,
+  propertyId: string,
+  toAddress?: string | null
+): Promise<Array<{ propertyId: string; canonicalAddress: string; sentAt: string; sharedBrokers: string[] }>> {
+  const recipientResolutionRepo = new RecipientResolutionRepo({ pool });
+  const [listing, resolution, historyResult] = await Promise.all([
+    getPrimaryListingForProperty(propertyId, pool),
+    recipientResolutionRepo.get(propertyId),
+    pool.query<InquiryGuardBrokerTeamHistoryRow>(
+      `SELECT
+         p.id AS property_id,
+         p.canonical_address,
+         inquiry.sent_at,
+         listing.agent_enrichment AS listing_agent_enrichment,
+         rr.contact_email,
+         rr.candidate_contacts
+       FROM properties p
+       INNER JOIN LATERAL (
+         SELECT sent_at
+         FROM property_inquiry_sends s
+         WHERE s.property_id = p.id
+         ORDER BY s.sent_at DESC NULLS LAST
+         LIMIT 1
+       ) inquiry ON true
+       LEFT JOIN LATERAL (
+         SELECT l.agent_enrichment
+         FROM listing_property_matches m
+         INNER JOIN listings l ON l.id = m.listing_id
+         WHERE m.property_id = p.id
+         ORDER BY m.confidence DESC NULLS LAST, m.created_at DESC
+         LIMIT 1
+       ) listing ON true
+       LEFT JOIN property_recipient_resolution rr ON rr.property_id = p.id
+       WHERE p.id <> $1
+       ORDER BY inquiry.sent_at DESC NULLS LAST`,
+      [propertyId]
+    ),
+  ]);
+
+  const currentBrokers = buildBrokerTeamRecords({
+    listingAgents: Array.isArray(listing?.agentEnrichment) ? listing.agentEnrichment : [],
+    candidateContacts: resolution?.candidateContacts ?? [],
+    resolvedContactEmail: resolution?.contactEmail ?? null,
+    extraRecords: toAddress ? [{ email: toAddress }] : [],
+  });
+  if (currentBrokers.length === 0) return [];
+
+  return findBrokerTeamOverlapMatches({
+    currentBrokers,
+    contactedProperties: historyResult.rows
+      .map((row) => {
+        const sentAt = formatInquiryGuardSentAt(row.sent_at);
+        if (!sentAt) return null;
+        return {
+          propertyId: row.property_id,
+          canonicalAddress: row.canonical_address,
+          sentAt,
+          brokers: buildBrokerTeamRecords({
+            listingAgents: Array.isArray(row.listing_agent_enrichment) ? row.listing_agent_enrichment : [],
+            candidateContacts: Array.isArray(row.candidate_contacts) ? row.candidate_contacts : [],
+            resolvedContactEmail: row.contact_email ?? null,
+          }),
+        };
+      })
+      .filter(
+        (
+          row
+        ): row is {
+          propertyId: string;
+          canonicalAddress: string;
+          sentAt: string;
+          brokers: ReturnType<typeof buildBrokerTeamRecords>;
+        } => row != null
+      ),
+  });
+}
+
+type BulkInquiryRecipientSource =
+  | "manual_override"
+  | "primary_broker"
+  | "secondary_broker"
+  | "listing_candidate"
+  | "missing";
+
+interface BulkInquiryRecipient {
+  email: string | null;
+  name: string | null;
+  source: BulkInquiryRecipientSource;
+}
+
+interface PreparedInquirySend {
+  normalizedTo: string;
+  guard: InquiryGuardState;
+}
+
+interface CompletedInquirySend {
+  messageId: string;
+  sentAt: string;
+  threadId: string | null;
+  guard: InquiryGuardState;
+}
+
+class InquirySendBlockedError extends Error {
+  constructor(
+    message: string,
+    public readonly code: string,
+    public readonly guard: InquiryGuardState,
+    public readonly gmailHistory?: unknown
+  ) {
+    super(message);
+    this.name = "InquirySendBlockedError";
+  }
+}
+
+function buildInquiryDraft(input: {
+  canonicalAddress: string;
+  recipientName?: string | null;
+  to?: string | null;
+}): { to: string; subject: string; body: string } {
+  const addressLine = input.canonicalAddress.split(",")[0]?.trim() || input.canonicalAddress;
+  const firstName = input.recipientName?.trim() ? input.recipientName.trim().split(/\s+/)[0] ?? null : null;
+  const greeting = firstName ? `Hi ${firstName},` : "Hi,";
+
+  return {
+    to: input.to?.trim() ?? "",
+    subject: `Inquiry about ${addressLine}`,
+    body: `${greeting}
+
+My name is Tyler Tsay, and I'm reaching out on behalf of a client regarding the property at ${addressLine} currently on the market. We are evaluating the building and would appreciate the opportunity to review further.
+
+Would you be able to share the OM, current rent roll, expenses, and/or any available financials?
+
+Thanks in advance - looking forward to taking a look.
+
+Best,
+Tyler Tsay
+617 306 3336
+tyler@stayhaus.co`,
+  };
+}
+
+function extractInquiryErrorMessage(err: unknown): string {
+  if (err instanceof Error) {
+    const g = err as Error & {
+      response?: {
+        data?: {
+          error?: string | { message?: string; errors?: Array<{ message?: string }> };
+          message?: string;
+        };
+      };
+    };
+    const d = g.response?.data;
+    if (d) {
+      const e = d.error;
+      if (typeof e === "string") return e;
+      if (e && typeof e === "object" && typeof e.message === "string") return e.message;
+      if (e && typeof e === "object" && Array.isArray(e.errors) && e.errors[0]?.message) return e.errors[0].message;
+      if (typeof d.message === "string") return d.message;
+    }
+    return g.message;
+  }
+  return String(err);
+}
+
+async function resolveBulkInquiryRecipient(
+  propertyId: string,
+  pool: import("pg").Pool
+): Promise<BulkInquiryRecipient> {
+  const resolution = await syncRecipientResolution(propertyId, pool);
+  if (resolution.status === "manual_override" && resolution.contactEmail) {
+    return {
+      email: normalizeRecipientEmail(resolution.contactEmail),
+      name: resolution.candidateContacts.find(
+        (candidate) => normalizeRecipientEmail(candidate.email) === normalizeRecipientEmail(resolution.contactEmail)
+      )?.name?.trim() || null,
+      source: "manual_override",
+    };
+  }
+
+  const listing = await getPrimaryListingForProperty(propertyId, pool);
+  const seen = new Set<string>();
+  const enrichedAgents = Array.isArray(listing?.agentEnrichment) ? listing.agentEnrichment : [];
+  for (let index = 0; index < enrichedAgents.length; index += 1) {
+    const agent = enrichedAgents[index] as AgentEnrichmentEntry | null | undefined;
+    const email = normalizeRecipientEmail(agent?.email);
+    if (!email || seen.has(email)) continue;
+    seen.add(email);
+    return {
+      email,
+      name: agent?.name?.trim() || null,
+      source: index === 0 ? "primary_broker" : index === 1 ? "secondary_broker" : "listing_candidate",
+    };
+  }
+
+  const fallbackCandidate = resolution.candidateContacts.find((candidate) => normalizeRecipientEmail(candidate.email));
+  if (fallbackCandidate) {
+    return {
+      email: normalizeRecipientEmail(fallbackCandidate.email),
+      name: fallbackCandidate.name?.trim() || null,
+      source: "listing_candidate",
+    };
+  }
+
+  return {
+    email: null,
+    name: null,
+    source: "missing",
+  };
+}
+
+async function prepareInquirySend(params: {
+  pool: import("pg").Pool;
+  propertyId: string;
+  canonicalAddress: string;
+  toAddress: string;
+  force?: boolean;
+}): Promise<PreparedInquirySend> {
+  const normalizedTo = normalizeRecipientEmail(params.toAddress);
+  if (!normalizedTo) {
+    throw new Error("Missing or invalid 'to' address.");
+  }
+  const guard = await getInquiryGuardState(params.pool, params.propertyId, normalizedTo);
+  if (guard.hasOmDocument && !params.force) {
+    throw new InquirySendBlockedError(
+      "OM already received for this property. Inquiry email blocked.",
+      "om_already_received",
+      guard
+    );
+  }
+  if (guard.lastInquirySentAt && !params.force) {
+    throw new InquirySendBlockedError(
+      "An inquiry has already been logged for this property. Inquiry email blocked until you confirm a resend.",
+      "inquiry_already_sent",
+      guard
+    );
+  }
+  if (guard.sameRecipientOtherProperties.length > 0 && !params.force) {
+    throw new InquirySendBlockedError(
+      "This broker email has already been contacted for another property. Inquiry email blocked until you confirm.",
+      "recipient_contacted_elsewhere",
+      guard
+    );
+  }
+  if (guard.sameBrokerTeamOtherProperties.length > 0 && !params.force) {
+    throw new InquirySendBlockedError(
+      "A broker on this listing team was already contacted on another property. Inquiry email blocked until you confirm.",
+      "broker_team_contacted_elsewhere",
+      guard
+    );
+  }
+  if (!params.force) {
+    const gmailHistory = await findBrokerPropertyConversationHistory({
+      toAddress: normalizedTo,
+      canonicalAddress: params.canonicalAddress,
+    });
+    if (gmailHistory.matches.length > 0) {
+      throw new InquirySendBlockedError(
+        "A Gmail conversation already exists for this broker and property. Inquiry email blocked until you confirm a resend.",
+        "gmail_history_exists",
+        guard,
+        gmailHistory
+      );
+    }
+  }
+  return { normalizedTo, guard };
+}
+
+async function completeInquirySend(params: {
+  pool: import("pg").Pool;
+  propertyId: string;
+  canonicalAddress: string;
+  normalizedTo: string;
+  subject: string;
+  body: string;
+}): Promise<CompletedInquirySend> {
+  const result = await gmailSendMessage(params.normalizedTo, params.subject.trim() || "Inquiry", params.body);
+  const inquirySendRepo = new InquirySendRepo({ pool: params.pool });
+  const { sentAt } = await inquirySendRepo.create(params.propertyId, result.id, {
+    toAddress: params.normalizedTo,
+    source: "gmail_api",
+    gmailThreadId: result.threadId,
+  });
+  await syncPropertySourcingWorkflow(params.propertyId, { pool: params.pool });
+  return {
+    messageId: result.id,
+    sentAt,
+    threadId: result.threadId,
+    guard: await getInquiryGuardState(params.pool, params.propertyId, params.normalizedTo),
+  };
 }
 
 async function getInquiryGuardState(
@@ -1403,7 +1728,7 @@ async function getInquiryGuardState(
 ): Promise<InquiryGuardState> {
   const inquirySendRepo = new InquirySendRepo({ pool });
   const normalizedTo = normalizeRecipientEmail(toAddress);
-  const [lastInquirySentAt, omResult, recipientHistory] = await Promise.all([
+  const [lastInquirySentAt, omResult, recipientHistory, brokerTeamHistory] = await Promise.all([
     inquirySendRepo.getLastSentAt(propertyId),
     pool.query<{ has_om_document: boolean }>(
       `SELECT EXISTS (
@@ -1425,11 +1750,14 @@ async function getInquiryGuardState(
       [propertyId]
     ),
     normalizedTo ? inquirySendRepo.listByRecipient(normalizedTo) : Promise.resolve([]),
+    listBrokerTeamOverlapHistory(pool, propertyId, normalizedTo),
   ]);
 
   const sameRecipientSamePropertyAt =
     recipientHistory.find((row) => row.propertyId === propertyId)?.sentAt ?? null;
   const sameRecipientOtherProperties = recipientHistory.filter((row) => row.propertyId !== propertyId);
+  const sameRecipientPropertyIds = new Set(sameRecipientOtherProperties.map((row) => row.propertyId));
+  const sameBrokerTeamOtherProperties = brokerTeamHistory.filter((row) => !sameRecipientPropertyIds.has(row.propertyId));
 
   return {
     propertyId,
@@ -1438,10 +1766,11 @@ async function getInquiryGuardState(
     hasOmDocument: Boolean(omResult.rows[0]?.has_om_document),
     sameRecipientSamePropertyAt,
     sameRecipientOtherProperties,
+    sameBrokerTeamOtherProperties,
   };
 }
 
-/** GET /api/properties/:id/inquiry-guard - persisted inquiry history for this property and optional broker email. */
+/** GET /api/properties/:id/inquiry-guard - inquiry history for this property, recipient, and overlapping broker teams. */
 router.get("/properties/:id/inquiry-guard", async (req: Request, res: Response) => {
   try {
     const { id: propertyId } = req.params;
@@ -1459,6 +1788,92 @@ router.get("/properties/:id/inquiry-guard", async (req: Request, res: Response) 
     const message = err instanceof Error ? err.message : String(err);
     console.error("[properties inquiry-guard]", err);
     res.status(503).json({ error: "Failed to load inquiry guard.", details: message });
+  }
+});
+
+/** GET /api/properties/:id/recipient-resolution - current broker recipient resolution plus candidate emails from listing enrichment. */
+router.get("/properties/:id/recipient-resolution", async (req: Request, res: Response) => {
+  try {
+    const { id: propertyId } = req.params;
+    const pool = getPool();
+    const propertyRepo = new PropertyRepo({ pool });
+    const property = await propertyRepo.byId(propertyId);
+    if (!property) {
+      res.status(404).json({ error: "Property not found", propertyId });
+      return;
+    }
+    const recipientResolution = await syncRecipientResolution(propertyId, pool);
+    res.json({ propertyId, recipientResolution });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[properties recipient-resolution]", err);
+    res.status(503).json({ error: "Failed to load broker recipient.", details: message });
+  }
+});
+
+/** PUT /api/properties/:id/recipient-resolution/manual - save a manual preferred broker email override. */
+router.put("/properties/:id/recipient-resolution/manual", async (req: Request, res: Response) => {
+  try {
+    const { id: propertyId } = req.params;
+    const pool = getPool();
+    const propertyRepo = new PropertyRepo({ pool });
+    const property = await propertyRepo.byId(propertyId);
+    if (!property) {
+      res.status(404).json({ error: "Property not found", propertyId });
+      return;
+    }
+    const email = normalizeRecipientEmail(req.body?.email);
+    if (!email) {
+      res.status(400).json({ error: "Missing or invalid broker email." });
+      return;
+    }
+    const name = typeof req.body?.name === "string" ? req.body.name.trim() || null : null;
+    const firm = typeof req.body?.firm === "string" ? req.body.firm.trim() || null : null;
+    await setManualRecipientResolution(
+      propertyId,
+      {
+        email,
+        name,
+        firm,
+      },
+      pool
+    );
+    const summary = await syncPropertySourcingWorkflow(propertyId, { pool });
+    res.json({
+      ok: true,
+      propertyId,
+      recipientResolution: summary.recipientResolution,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[properties recipient-resolution manual put]", err);
+    res.status(503).json({ error: "Failed to save broker email override.", details: message });
+  }
+});
+
+/** DELETE /api/properties/:id/recipient-resolution/manual - clear the manual preferred broker email override. */
+router.delete("/properties/:id/recipient-resolution/manual", async (req: Request, res: Response) => {
+  try {
+    const { id: propertyId } = req.params;
+    const pool = getPool();
+    const propertyRepo = new PropertyRepo({ pool });
+    const property = await propertyRepo.byId(propertyId);
+    if (!property) {
+      res.status(404).json({ error: "Property not found", propertyId });
+      return;
+    }
+    const recipientResolutionRepo = new RecipientResolutionRepo({ pool });
+    await recipientResolutionRepo.delete(propertyId);
+    const summary = await syncPropertySourcingWorkflow(propertyId, { pool });
+    res.json({
+      ok: true,
+      propertyId,
+      recipientResolution: summary.recipientResolution,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[properties recipient-resolution manual delete]", err);
+    res.status(503).json({ error: "Failed to clear broker email override.", details: message });
   }
 });
 
@@ -1551,6 +1966,207 @@ router.post("/properties/:id/mark-inquiry-sent", async (req: Request, res: Respo
   }
 });
 
+/** POST /api/properties/send-bulk-inquiry-emails - send inquiry emails for selected properties using manual override first, then listing broker order. */
+router.post("/properties/send-bulk-inquiry-emails", async (req: Request, res: Response) => {
+  let workflowRunId: string | null = null;
+  const workflowStartedAt = new Date().toISOString();
+  try {
+    const rawPropertyIds: unknown[] = Array.isArray(req.body?.propertyIds) ? (req.body.propertyIds as unknown[]) : [];
+    const propertyIds = rawPropertyIds.filter(
+      (value: unknown): value is string => typeof value === "string" && value.trim().length > 0
+    );
+    if (propertyIds.length === 0) {
+      res.status(400).json({ error: "Provide at least one property ID." });
+      return;
+    }
+
+    const uniquePropertyIds = [...new Set(propertyIds)];
+    const pool = getPool();
+    const propertyRepo = new PropertyRepo({ pool });
+    workflowRunId = await createWorkflowRun({
+      runType: "send_bulk_inquiry_email",
+      displayName: "Send bulk inquiry emails",
+      scopeLabel: `${uniquePropertyIds.length} selected propert${uniquePropertyIds.length === 1 ? "y" : "ies"}`,
+      triggerSource: "manual",
+      totalItems: uniquePropertyIds.length,
+      metadata: { propertyIds: uniquePropertyIds },
+      steps: [
+        {
+          stepKey: "inquiry",
+          totalItems: uniquePropertyIds.length,
+          status: "running",
+          startedAt: workflowStartedAt,
+          lastMessage: `Preparing inquiry emails for ${uniquePropertyIds.length} selected propert${uniquePropertyIds.length === 1 ? "y" : "ies"}`,
+        },
+      ],
+    });
+
+    const results: Array<{
+      propertyId: string;
+      canonicalAddress: string;
+      status: "sent" | "skipped" | "failed";
+      toAddress: string | null;
+      recipientSource: BulkInquiryRecipientSource;
+      messageId?: string | null;
+      sentAt?: string | null;
+      reasonCode?: string | null;
+      reason?: string | null;
+    }> = [];
+    let sent = 0;
+    let skipped = 0;
+    let failed = 0;
+
+    for (const propertyId of uniquePropertyIds) {
+      const property = await propertyRepo.byId(propertyId);
+      if (!property) {
+        failed += 1;
+        results.push({
+          propertyId,
+          canonicalAddress: propertyId,
+          status: "failed",
+          toAddress: null,
+          recipientSource: "missing",
+          reasonCode: "property_not_found",
+          reason: "Property not found.",
+        });
+        continue;
+      }
+
+      const recipient = await resolveBulkInquiryRecipient(propertyId, pool);
+      if (!recipient.email) {
+        skipped += 1;
+        await syncPropertySourcingWorkflow(propertyId, { pool }).catch(() => {});
+        results.push({
+          propertyId,
+          canonicalAddress: property.canonicalAddress,
+          status: "skipped",
+          toAddress: null,
+          recipientSource: recipient.source,
+          reasonCode: "missing_recipient",
+          reason: "No broker email is available for this property.",
+        });
+        continue;
+      }
+
+      const draft = buildInquiryDraft({
+        canonicalAddress: property.canonicalAddress,
+        recipientName: recipient.name,
+        to: recipient.email,
+      });
+
+      try {
+        const prepared = await prepareInquirySend({
+          pool,
+          propertyId,
+          canonicalAddress: property.canonicalAddress,
+          toAddress: recipient.email,
+        });
+        const completed = await completeInquirySend({
+          pool,
+          propertyId,
+          canonicalAddress: property.canonicalAddress,
+          normalizedTo: prepared.normalizedTo,
+          subject: draft.subject,
+          body: draft.body,
+        });
+        sent += 1;
+        results.push({
+          propertyId,
+          canonicalAddress: property.canonicalAddress,
+          status: "sent",
+          toAddress: prepared.normalizedTo,
+          recipientSource: recipient.source,
+          messageId: completed.messageId,
+          sentAt: completed.sentAt,
+        });
+      } catch (err) {
+        if (err instanceof InquirySendBlockedError) {
+          skipped += 1;
+          results.push({
+            propertyId,
+            canonicalAddress: property.canonicalAddress,
+            status: "skipped",
+            toAddress: recipient.email,
+            recipientSource: recipient.source,
+            reasonCode: err.code,
+            reason: err.message,
+          });
+          continue;
+        }
+
+        failed += 1;
+        results.push({
+          propertyId,
+          canonicalAddress: property.canonicalAddress,
+          status: "failed",
+          toAddress: recipient.email,
+          recipientSource: recipient.source,
+          reasonCode: "send_failed",
+          reason: extractInquiryErrorMessage(err),
+        });
+      }
+    }
+
+    const status = deriveWorkflowStatusFromCounts({
+      totalItems: uniquePropertyIds.length,
+      completedItems: sent,
+      failedItems: failed,
+      skippedItems: skipped,
+    });
+    await upsertWorkflowStep(workflowRunId, {
+      stepKey: "inquiry",
+      totalItems: uniquePropertyIds.length,
+      completedItems: sent,
+      failedItems: failed,
+      skippedItems: skipped,
+      status,
+      startedAt: workflowStartedAt,
+      finishedAt: new Date().toISOString(),
+      lastMessage: `${sent} sent, ${skipped} skipped, ${failed} failed`,
+      lastError: failed > 0 ? results.find((result) => result.status === "failed")?.reason ?? null : null,
+      metadata: { results },
+    });
+    await mergeWorkflowRunMetadata(workflowRunId, {
+      sent,
+      skipped,
+      failed,
+      results,
+    });
+    await updateWorkflowRun(workflowRunId, {
+      status,
+      finishedAt: new Date().toISOString(),
+    });
+
+    res.json({
+      ok: true,
+      sent,
+      skipped,
+      failed,
+      results,
+    });
+  } catch (err) {
+    const message = extractInquiryErrorMessage(err);
+    console.error("[properties send-bulk-inquiry-emails]", err);
+    await upsertWorkflowStep(workflowRunId, {
+      stepKey: "inquiry",
+      totalItems: 1,
+      completedItems: 0,
+      failedItems: 1,
+      status: "failed",
+      startedAt: workflowStartedAt,
+      finishedAt: new Date().toISOString(),
+      lastError: message,
+      lastMessage: "Bulk inquiry send failed",
+    });
+    await mergeWorkflowRunMetadata(workflowRunId, { error: message });
+    await updateWorkflowRun(workflowRunId, {
+      status: "failed",
+      finishedAt: new Date().toISOString(),
+    });
+    res.status(503).json({ error: "Failed to send bulk inquiry emails.", details: message });
+  }
+});
+
 /** POST /api/properties/:id/send-inquiry-email - send inquiry email via Gmail API. Body: { to, subject, body }. */
 router.post("/properties/:id/send-inquiry-email", async (req: Request, res: Response) => {
   let workflowRunId: string | null = null;
@@ -1570,51 +2186,13 @@ router.post("/properties/:id/send-inquiry-email", async (req: Request, res: Resp
       res.status(400).json({ error: "Missing or invalid 'to' address." });
       return;
     }
-    const normalizedTo = normalizeRecipientEmail(to);
-    if (!normalizedTo) {
-      res.status(400).json({ error: "Missing or invalid 'to' address." });
-      return;
-    }
-    const guard = await getInquiryGuardState(pool, propertyId, normalizedTo);
-    if (guard.hasOmDocument && !force) {
-      res.status(409).json({
-        error: "OM already received for this property. Inquiry email blocked.",
-        code: "om_already_received",
-        guard,
-      });
-      return;
-    }
-    if (guard.lastInquirySentAt && !force) {
-      res.status(409).json({
-        error: "An inquiry has already been logged for this property. Inquiry email blocked until you confirm a resend.",
-        code: "inquiry_already_sent",
-        guard,
-      });
-      return;
-    }
-    if (guard.sameRecipientOtherProperties.length > 0 && !force) {
-      res.status(409).json({
-        error: "This broker email has already been contacted for another property. Inquiry email blocked until you confirm.",
-        code: "recipient_contacted_elsewhere",
-        guard,
-      });
-      return;
-    }
-    if (!force) {
-      const gmailHistory = await findBrokerPropertyConversationHistory({
-        toAddress: normalizedTo,
-        canonicalAddress: property.canonicalAddress,
-      });
-      if (gmailHistory.matches.length > 0) {
-        res.status(409).json({
-          error: "A Gmail conversation already exists for this broker and property. Inquiry email blocked until you confirm a resend.",
-          code: "gmail_history_exists",
-          guard,
-          gmailHistory,
-        });
-        return;
-      }
-    }
+    const prepared = await prepareInquirySend({
+      pool,
+      propertyId,
+      canonicalAddress: property.canonicalAddress,
+      toAddress: to,
+      force,
+    });
     const subj = typeof subject === "string" ? subject.trim() : "";
     const b = typeof body === "string" ? body : "";
     workflowRunId = await createWorkflowRun({
@@ -1623,25 +2201,25 @@ router.post("/properties/:id/send-inquiry-email", async (req: Request, res: Resp
       scopeLabel: property.canonicalAddress,
       triggerSource: "manual",
       totalItems: 1,
-      metadata: { propertyIds: [propertyId], toAddress: normalizedTo },
+      metadata: { propertyIds: [propertyId], toAddress: prepared.normalizedTo },
       steps: [
         {
           stepKey: "inquiry",
           totalItems: 1,
           status: "running",
           startedAt: workflowStartedAt,
-          lastMessage: `Sending inquiry to ${normalizedTo}`,
+          lastMessage: `Sending inquiry to ${prepared.normalizedTo}`,
         },
       ],
     });
-    const result = await gmailSendMessage(to.trim(), subj || "Inquiry", b);
-    const inquirySendRepo = new InquirySendRepo({ pool });
-    const { sentAt } = await inquirySendRepo.create(propertyId, result.id, {
-      toAddress: normalizedTo,
-      source: "gmail_api",
-      gmailThreadId: result.threadId,
+    const completed = await completeInquirySend({
+      pool,
+      propertyId,
+      canonicalAddress: property.canonicalAddress,
+      normalizedTo: prepared.normalizedTo,
+      subject: subj,
+      body: b,
     });
-    await syncPropertySourcingWorkflow(propertyId, { pool });
     await upsertWorkflowStep(workflowRunId, {
       stepKey: "inquiry",
       totalItems: 1,
@@ -1653,37 +2231,26 @@ router.post("/properties/:id/send-inquiry-email", async (req: Request, res: Resp
       lastMessage: "Inquiry email sent",
     });
     await mergeWorkflowRunMetadata(workflowRunId, {
-      messageId: result.id,
-      sentAt,
+      messageId: completed.messageId,
+      sentAt: completed.sentAt,
     });
     await updateWorkflowRun(workflowRunId, {
       status: "completed",
       finishedAt: new Date().toISOString(),
     });
-    res.json({ ok: true, messageId: result.id, sentAt, guard: await getInquiryGuardState(pool, propertyId, normalizedTo) });
+    res.json({ ok: true, messageId: completed.messageId, sentAt: completed.sentAt, guard: completed.guard });
   } catch (err) {
-    const message = (() => {
-      if (err instanceof Error) {
-        const g = err as Error & {
-          response?: {
-            data?: {
-              error?: string | { message?: string; errors?: Array<{ message?: string }> };
-              message?: string;
-            };
-          };
-        };
-        const d = g.response?.data;
-        if (d) {
-          const e = d.error;
-          if (typeof e === "string") return e;
-          if (e && typeof e === "object" && typeof e.message === "string") return e.message;
-          if (e && typeof e === "object" && Array.isArray(e.errors) && e.errors[0]?.message) return e.errors[0].message;
-          if (typeof d.message === "string") return d.message;
-        }
-        return g.message;
-      }
-      return String(err);
-    })();
+    if (err instanceof InquirySendBlockedError) {
+      res.status(409).json({
+        error: err.message,
+        code: err.code,
+        guard: err.guard,
+        ...(err.gmailHistory ? { gmailHistory: err.gmailHistory } : {}),
+      });
+      return;
+    }
+
+    const message = extractInquiryErrorMessage(err);
     console.error("[properties send-inquiry-email]", err);
     await upsertWorkflowStep(workflowRunId, {
       stepKey: "inquiry",

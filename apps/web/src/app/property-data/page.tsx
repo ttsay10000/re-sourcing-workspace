@@ -156,6 +156,33 @@ interface LastEnrichmentResult {
   rentalFlow?: { ran: boolean; success: number; failed: number };
 }
 
+type BulkInquiryRecipientSource =
+  | "manual_override"
+  | "primary_broker"
+  | "secondary_broker"
+  | "listing_candidate"
+  | "missing";
+
+interface BulkInquirySendResultRow {
+  propertyId: string;
+  canonicalAddress: string;
+  status: "sent" | "skipped" | "failed";
+  toAddress: string | null;
+  recipientSource: BulkInquiryRecipientSource;
+  messageId?: string | null;
+  sentAt?: string | null;
+  reasonCode?: string | null;
+  reason?: string | null;
+}
+
+interface BulkInquirySendResponse {
+  ok: boolean;
+  sent: number;
+  skipped: number;
+  failed: number;
+  results: BulkInquirySendResultRow[];
+}
+
 interface DossierNotice {
   type: "success" | "error";
   message: string;
@@ -324,6 +351,21 @@ function joinCompact(values: Array<string | null | undefined>): string {
   return values.filter((value): value is string => Boolean(value && value.trim())).join(" · ");
 }
 
+function formatBulkInquiryRecipientSource(source: BulkInquiryRecipientSource): string {
+  switch (source) {
+    case "manual_override":
+      return "Manual email";
+    case "primary_broker":
+      return "Primary broker";
+    case "secondary_broker":
+      return "Secondary broker";
+    case "listing_candidate":
+      return "Listing fallback";
+    default:
+      return "No email";
+  }
+}
+
 function StatusChip({
   label,
   detail,
@@ -370,6 +412,8 @@ function PropertyDataContent() {
   const [sendingToCanonical, setSendingToCanonical] = useState(false);
   const [rerunningEnrichment, setRerunningEnrichment] = useState(false);
   const [runningRentalFlow, setRunningRentalFlow] = useState(false);
+  const [bulkInquirySending, setBulkInquirySending] = useState(false);
+  const [bulkInquiryResult, setBulkInquiryResult] = useState<BulkInquirySendResponse | null>(null);
   const [expandedCanonicalId, setExpandedCanonicalId] = useState<string | null>(null);
   const [inquiryComposerRequest, setInquiryComposerRequest] = useState<{ propertyId: string; nonce: number } | null>(null);
   const [savedPropertyIds, setSavedPropertyIds] = useState<Set<string>>(new Set());
@@ -1242,6 +1286,43 @@ function PropertyDataContent() {
       .finally(() => setRunningRentalFlow(false));
   };
 
+  const handleSendBulkInquiryEmails = () => {
+    if (selectedCanonicalIds.size === 0 || bulkInquirySending) return;
+    const propertyIds = Array.from(selectedCanonicalIds);
+    const confirmed = confirm(
+      `Send inquiry emails for ${propertyIds.length} selected canonical propert${propertyIds.length === 1 ? "y" : "ies"}? `
+      + "This uses a manually saved email first, then the first available broker email from listing order, and skips properties blocked by OM/inquiry guardrails."
+    );
+    if (!confirmed) return;
+    setBulkInquirySending(true);
+    setBulkInquiryResult(null);
+    setError(null);
+    fetchWorkflowBoard();
+    fetch(`${API_BASE}/api/properties/send-bulk-inquiry-emails`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ propertyIds }),
+    })
+      .then(async (r) => {
+        const data = await r.json().catch(() => ({}));
+        const message =
+          typeof data?.details === "string"
+            ? data.details
+            : typeof data?.error === "string"
+              ? data.error
+              : `Request failed (${r.status})`;
+        if (!r.ok || data?.error) throw new Error(message);
+        return data as BulkInquirySendResponse;
+      })
+      .then((data) => {
+        setBulkInquiryResult(data);
+        fetchCanonicalProperties(true);
+        fetchWorkflowBoard();
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : "Failed to send inquiry emails"))
+      .finally(() => setBulkInquirySending(false));
+  };
+
   const allSelected = filteredSortedListings.length > 0 && filteredSortedListings.every((l) => selectedListingIds.has(l.id));
   const someSelected = selectedListingIds.size > 0;
   const allCanonicalSelected =
@@ -1265,6 +1346,70 @@ function PropertyDataContent() {
       {sentMessage && (
         <div className="card" style={{ marginBottom: "1rem", padding: "0.75rem 1rem", background: "#f0fdf4", borderColor: "#86efac" }}>
           {decodeURIComponent(sentMessage)}
+        </div>
+      )}
+      {bulkInquiryResult && (
+        <div
+          className="card"
+          style={{
+            marginBottom: "1rem",
+            padding: "1rem",
+            borderColor: bulkInquiryResult.failed > 0 ? "#fca5a5" : bulkInquiryResult.skipped > 0 ? "#fdba74" : "#86efac",
+            background: bulkInquiryResult.failed > 0 ? "#fef2f2" : bulkInquiryResult.skipped > 0 ? "#fff7ed" : "#f0fdf4",
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", flexWrap: "wrap", alignItems: "center" }}>
+            <div>
+              <div style={{ fontSize: "1rem", fontWeight: 700, color: "#111827" }}>Bulk broker email run</div>
+              <div style={{ marginTop: "0.2rem", fontSize: "0.9rem", color: "#475569" }}>
+                {bulkInquiryResult.sent} sent, {bulkInquiryResult.skipped} skipped, {bulkInquiryResult.failed} failed
+              </div>
+            </div>
+            <button type="button" className="btn-secondary" onClick={() => setBulkInquiryResult(null)}>
+              Dismiss
+            </button>
+          </div>
+          {bulkInquiryResult.results.length > 0 && (
+            <div style={{ marginTop: "0.85rem", overflowX: "auto" }}>
+              <table className="property-data-table" style={{ fontSize: "0.85rem" }}>
+                <thead>
+                  <tr>
+                    <th>Property</th>
+                    <th>Status</th>
+                    <th>Recipient</th>
+                    <th>Notes</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {bulkInquiryResult.results.map((row) => (
+                    <tr key={`${row.propertyId}-${row.status}-${row.toAddress ?? "no-email"}`}>
+                      <td>{row.canonicalAddress}</td>
+                      <td>
+                        <StatusChip
+                          label={row.status === "sent" ? "Sent" : row.status === "skipped" ? "Skipped" : "Failed"}
+                          style={workflowStatusStyle(
+                            row.status === "sent" ? "completed" : row.status === "skipped" ? "partial" : "failed"
+                          )}
+                          className="property-status-chip--compact"
+                        />
+                      </td>
+                      <td>
+                        <div>{row.toAddress || "—"}</div>
+                        <div style={{ fontSize: "0.74rem", color: "#6b7280" }}>
+                          {formatBulkInquiryRecipientSource(row.recipientSource)}
+                        </div>
+                      </td>
+                      <td style={{ color: row.status === "failed" ? "#b91c1c" : "#475569" }}>
+                        {row.status === "sent"
+                          ? `Sent ${row.sentAt ? formatDateTime(row.sentAt) : "just now"}`
+                          : row.reason || "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
 
@@ -1807,6 +1952,15 @@ function PropertyDataContent() {
           </button>
           {activeTab === "canonical" && canonicalProperties.length > 0 && (
             <>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={handleSendBulkInquiryEmails}
+                disabled={Boolean(bulkInquirySending || selectedCanonicalIds.size === 0)}
+                title="Send inquiry emails for selected canonical properties using manual override first, then broker emails in listing order."
+              >
+                {bulkInquirySending ? "Sending inquiries…" : someCanonicalSelected ? `Email brokers (${selectedCanonicalIds.size})` : "Email brokers"}
+              </button>
               <button
                 type="button"
                 className="btn-secondary"

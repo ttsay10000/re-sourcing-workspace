@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { analyzePropertyForUnderwriting } from "./propertyAssumptions.js";
+import {
+  analyzePropertyForUnderwriting,
+  resolveConservativeProjectedResidentialLeaseUpRent,
+} from "./propertyAssumptions.js";
 
 describe("propertyAssumptions", () => {
   it("sizes furnishing defaults from eligible-unit beds, baths, and sqft", () => {
@@ -120,5 +123,46 @@ describe("propertyAssumptions", () => {
     expect(mix.eligibleResidentialUnits).toBe(1);
     expect(mix.totalAnnualRent).toBe(132_000);
     expect(mix.eligibleAnnualRent).toBe(72_000);
+  });
+
+  it("captures conservative projected rent for vacant residential units while skipping ancillary spaces", () => {
+    const projectedRent = resolveConservativeProjectedResidentialLeaseUpRent({
+      omData: {
+        authoritative: {
+          propertyInfo: { totalUnits: 4, unitsResidential: 4 },
+          rentRoll: [
+            {
+              unit: "Owner's Garden Level",
+              annualRent: 0,
+              unitCategory: "Residential",
+              occupied: false,
+              notes: "Projected rent $6,000-$7,000; currently owner-occupied or delivered vacant.",
+            },
+            {
+              unit: "Apt. 1",
+              annualRent: 49_200,
+              unitCategory: "Residential",
+              occupied: true,
+            },
+            {
+              unit: "Basement",
+              annualRent: 0,
+              unitCategory: "Residential",
+              occupied: false,
+              notes: "Projected rent $2,000-$2,500 basement storage.",
+            },
+            {
+              unit: "Store",
+              annualRent: 0,
+              unitCategory: "Commercial",
+              occupied: false,
+              notes: "Projected rent $9,000-$10,000.",
+            },
+          ],
+        },
+      },
+    });
+
+    expect(projectedRent).toBe(72_000);
   });
 });

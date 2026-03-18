@@ -4,6 +4,7 @@ import {
   computeBlendedRentUpliftPct,
   computeRecommendedOffer,
   computeUnderwritingProjection,
+  resolveAssetCapRateNoiBasis,
   type ProjectedExpenseInputRow,
   type ResolvedDossierAssumptions,
 } from "./underwritingModel.js";
@@ -19,6 +20,7 @@ interface BuildDealScoreSensitivityInput {
   currentOtherIncome?: number | null;
   currentExpensesTotal?: number | null;
   expenseRows?: ProjectedExpenseInputRow[] | null;
+  conservativeProjectedLeaseUpRent?: number | null;
   baseCalculatedScore: number | null;
 }
 
@@ -52,6 +54,7 @@ function scoreForScenario(
     currentOtherIncome: input.currentOtherIncome,
     currentExpensesTotal: input.currentExpensesTotal,
     expenseRows: input.expenseRows,
+    conservativeProjectedLeaseUpRent: input.conservativeProjectedLeaseUpRent,
   });
   const recommendedOffer = computeRecommendedOffer({
     assumptions,
@@ -60,6 +63,7 @@ function scoreForScenario(
     currentOtherIncome: input.currentOtherIncome,
     currentExpensesTotal: input.currentExpensesTotal,
     expenseRows: input.expenseRows,
+    conservativeProjectedLeaseUpRent: input.conservativeProjectedLeaseUpRent,
   });
   const adjustedCapRatePct =
     assumptions.acquisition.purchasePrice != null && assumptions.acquisition.purchasePrice > 0
@@ -70,6 +74,10 @@ function scoreForScenario(
     canonicalAddress: input.canonicalAddress,
     details: input.details,
     primaryListing: input.primaryListing,
+    assetCapRateNoi: resolveAssetCapRateNoiBasis({
+      currentNoi: input.currentNoi,
+      conservativeProjectedLeaseUpRent: input.conservativeProjectedLeaseUpRent,
+    }),
     irrPct: projection.returns.irr ?? null,
     cocPct: projection.returns.averageCashOnCashReturn ?? null,
     equityMultiple: projection.returns.equityMultiple ?? null,
@@ -99,6 +107,7 @@ export function buildDealScoreSensitivity(input: BuildDealScoreSensitivityInput)
     currentOtherIncome: input.currentOtherIncome,
     currentExpensesTotal: input.currentExpensesTotal,
     expenseRows: input.expenseRows,
+    conservativeProjectedLeaseUpRent: input.conservativeProjectedLeaseUpRent,
   };
 
   const rentUpliftPct = Math.max(0, assumptions.operating.rentUpliftPct - 20);

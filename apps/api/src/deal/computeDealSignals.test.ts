@@ -261,6 +261,32 @@ describe("computeDealSignals", () => {
     expect(result.scoringResult.riskFlags).not.toContain("Tax burden 55.9% of EGI");
   });
 
+  it("uses the conservative projected lease-up rent in the ask cap-rate basis when provided", () => {
+    const result = computeDealSignals({
+      propertyId: "property-5c",
+      canonicalAddress: "115 West 87th Street, Manhattan, NY 10024",
+      primaryListing: {
+        price: 3_000_000,
+        city: "Manhattan",
+      },
+      assetCapRateNoi: 224_400,
+      details: {
+        omData: {
+          authoritative: {
+            currentFinancials: {
+              noi: 152_400,
+              grossRentalIncome: 152_400,
+              operatingExpenses: 0,
+              effectiveGrossIncome: 152_400,
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.insertParams.assetCapRate).toBe(7.48);
+  });
+
   it("does not derive unit count from legacy OM data without an authoritative snapshot", () => {
     const result = computeDealSignals({
       propertyId: "property-6",

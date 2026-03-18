@@ -23,6 +23,7 @@ const RULE_COLOR = "#cbd5e1";
 const TABLE_HEADER_BG = "#e9f0f7";
 const TABLE_ALT_BG = "#f8fafc";
 const LABEL_BG = "#f3f6fa";
+const SENSITIVITY_BASE_BG = "#e3edf8";
 const HERO_BG = "#1e3a5f";
 const HERO_ACCENT = "#8fb9d8";
 const CHIP_BG = "#f8fafc";
@@ -70,6 +71,10 @@ function isHeading(line: string): boolean {
 
 function isDivider(line: string): boolean {
   return /^[-=]{3,}$/.test(line.trim());
+}
+
+function normalizeHeading(line: string): string {
+  return line.replace(/^#+\s*/, "").replace(/^\d+[.)]\s*/, "").trim();
 }
 
 function isTableRow(line: string): boolean {
@@ -190,7 +195,7 @@ function drawHero(
 
 function drawSectionHeading(doc: PDFKit.PDFDocument, state: LayoutState, heading: string): void {
   ensureSpace(doc, state, 28);
-  const clean = heading.replace(/^#+\s*/, "").replace(/^\d+[.)]\s*/, "").trim();
+  const clean = normalizeHeading(heading);
   doc.save();
   doc.fillColor(SECTION_HEADING_COLOR).font("Helvetica-Bold").fontSize(HEADING_FONT_SIZE);
   doc.text(clean, MARGIN, state.y, { width: bodyWidth(doc) });
@@ -311,7 +316,7 @@ function drawTableRow(
   y: number,
   rowHeight: number,
   layout: TableLayout,
-  options?: { forceHeader?: boolean }
+  options?: { forceHeader?: boolean; highlightRow?: boolean }
 ): number {
   const isHeader = options?.forceHeader === true || (!layout.keyValue && rowIndex === 0);
   const isSectionRow = !isHeader && isSectionBreakRow(row);
@@ -321,11 +326,13 @@ function drawTableRow(
     const width = layout.widths[colIndex] ?? layout.widths[0] ?? 0;
     const fillColor = isHeader || isSectionRow
       ? TABLE_HEADER_BG
-      : layout.keyValue && colIndex === 0
-        ? LABEL_BG
-        : rowIndex % 2 === 0
-          ? "#ffffff"
-          : TABLE_ALT_BG;
+      : options?.highlightRow === true
+        ? SENSITIVITY_BASE_BG
+        : layout.keyValue && colIndex === 0
+          ? LABEL_BG
+          : rowIndex % 2 === 0
+            ? "#ffffff"
+            : TABLE_ALT_BG;
     doc.save();
     doc.roundedRect(currentX, y, width, rowHeight, 0).fill(fillColor);
     doc.restore();
@@ -392,7 +399,8 @@ function ensureSectionFitsWithTable(
 function drawTable(
   doc: PDFKit.PDFDocument,
   state: LayoutState,
-  rows: TableCell[][]
+  rows: TableCell[][],
+  options?: { highlightBoldRows?: boolean }
 ): void {
   if (rows.length === 0) return;
   const layout = tableLayout(doc, rows);
@@ -404,6 +412,7 @@ function drawTable(
   rows.forEach((row, rowIndex) => {
     const rowHeight = rowHeights[rowIndex] ?? measureTableRowHeight(doc, row, rowIndex, layout);
     const repeatedHeaderHeight = needsRepeatedHeader ? headerHeight : 0;
+    const highlightRow = options?.highlightBoldRows === true && rowIndex > 0 && row.every((cell) => cell.bold);
     if (currentY + repeatedHeaderHeight + rowHeight > maxY(doc)) {
       addPage(doc, state);
       currentY = state.y;
@@ -415,7 +424,7 @@ function drawTable(
       needsRepeatedHeader = false;
     }
 
-    currentY = drawTableRow(doc, row, rowIndex, currentY, rowHeight, layout);
+    currentY = drawTableRow(doc, row, rowIndex, currentY, rowHeight, layout, { highlightRow });
   });
 
   state.y = currentY + 10;
@@ -433,6 +442,7 @@ export function dossierTextToPdf(dossierText: string): Promise<Buffer> {
     const meta = extractMeta(lines);
     const state: LayoutState = { y: MARGIN + 8, pageNumber: 1 };
     let tableBuffer: TableCell[][] = [];
+    let currentHeading: string | null = null;
 
     drawPageChrome(doc, state.pageNumber);
     drawHero(doc, state, meta);
@@ -446,7 +456,9 @@ export function dossierTextToPdf(dossierText: string): Promise<Buffer> {
 
     const flushTable = (): void => {
       if (tableBuffer.length === 0) return;
-      drawTable(doc, state, tableBuffer);
+      drawTable(doc, state, tableBuffer, {
+        highlightBoldRows: currentHeading === "SENSITIVITY ANALYSIS",
+      });
       tableBuffer = [];
     };
 
@@ -461,6 +473,7 @@ export function dossierTextToPdf(dossierText: string): Promise<Buffer> {
       if (isHeading(line)) {
         flushTable();
         ensureSectionFitsWithTable(doc, state, lines, index + 1);
+        currentHeading = normalizeHeading(line);
         drawSectionHeading(doc, state, line);
         return;
       }

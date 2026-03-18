@@ -100,8 +100,11 @@ Optional env:
 
 - `SOCRATA_APP_TOKEN`
 - `GEOCLIENT_SUBSCRIPTION_KEY`
+- `GMAIL_CLIENT_ID`
+- `GMAIL_CLIENT_SECRET`
+- `GMAIL_REFRESH_TOKEN`
 
-All shared runtime credentials are inherited from `re-sourcing-api` via `fromService`.
+RapidAPI/OpenAI and the Gmail OAuth credentials are inherited from `re-sourcing-api` via `fromService`.
 
 Schedule in blueprint:
 
@@ -112,8 +115,9 @@ Behavior:
 - runs once daily from Render
 - evaluates saved searches against their stored cadence/timezone schedule
 - starts any enabled searches due on the current local calendar day
+- runs the automated broker outreach step for properties that become eligible during the saved-search run
 - advances `nextRunAt` before launching each search so the daily tick does not double-trigger later that day
-- inherits RapidAPI/OpenAI/Socrata/Geoclient credentials from `re-sourcing-api` via `fromService`
+- inherits RapidAPI/OpenAI/Gmail/Socrata/Geoclient credentials from `re-sourcing-api` via `fromService`
 
 ## Gmail Setup
 

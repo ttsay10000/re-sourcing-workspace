@@ -43,6 +43,7 @@ export interface ComputeDealSignalsInput {
   canonicalAddress: string | null;
   details: PropertyDetails | null;
   primaryListing: PropertyListingInput;
+  assetCapRateNoi?: number | null;
   irrPct?: number | null;
   cocPct?: number | null;
   equityMultiple?: number | null;
@@ -240,7 +241,7 @@ function scoringInputFromDetails(
 
   return {
     purchasePrice,
-    noi: currentFinancials.noi,
+    noi: input.assetCapRateNoi ?? currentFinancials.noi,
     grossRentalIncome: currentFinancials.grossRentalIncome,
     irrPct: input.irrPct ?? null,
     cocPct: input.cocPct ?? null,

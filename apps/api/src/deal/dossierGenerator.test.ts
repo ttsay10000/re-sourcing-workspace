@@ -277,9 +277,10 @@ describe("buildDossierStructuredText", () => {
     expect(text).toContain("• Base sale cap rate (%): 6.00%; IRR range 13.20% to 18.40% across alternate sale-cap assumptions");
     expect(text).toContain("| Sale cap rate (%) | Exit value | Net sale proceeds to equity | IRR |");
     expect(text).toContain("| 5.00% | $1,694,400 | $1,009,272 | 18.40% |");
-    expect(text).toContain("| **Base (6.00%)** | **$1,412,000** | **$732,760** | **15.60%** |");
+    expect(text).toContain("| **6.00%** | **$1,412,000** | **$732,760** | **15.60%** |");
     expect(text).toContain("| 7.00% | $1,210,286 | $535,080 | 13.20% |");
-    expect(text.indexOf("| 5.50% |")).toBeLessThan(text.indexOf("| **Base (6.00%)** |"));
-    expect(text.indexOf("| **Base (6.00%)** |")).toBeLessThan(text.indexOf("| 6.50% |"));
+    expect(text.indexOf("| 5.50% |")).toBeLessThan(text.indexOf("| **6.00%** |"));
+    expect(text.indexOf("| **6.00%** |")).toBeLessThan(text.indexOf("| 6.50% |"));
+    expect(text).not.toContain("Base (6.00%)");
   });
 });

@@ -150,4 +150,13 @@ describe("buildExcelProForma", () => {
 
     expect(workbook.Sheets["Cash Flow"]?.B14?.f).toBe("MAX(Assumptions!B28/100,Assumptions!B29/100)");
   });
+
+  it("uses the augmented ask-cap NOI basis when provided", () => {
+    const ctx = sampleContext();
+    ctx.assetCapRateNoiBasis = 152_000;
+
+    const workbook = XLSX.read(buildExcelProForma(ctx), { type: "buffer" });
+
+    expect(workbook.Sheets.Summary?.B6?.f).toBe("IF(Assumptions!B7=0,0,152000/Assumptions!B7)");
+  });
 });

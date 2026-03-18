@@ -41,6 +41,10 @@ export class RecipientResolutionRepo {
     return r.rows.map(mapRecipientResolution);
   }
 
+  async delete(propertyId: string): Promise<void> {
+    await this.client.query("DELETE FROM property_recipient_resolution WHERE property_id = $1", [propertyId]);
+  }
+
   async upsert(params: UpsertRecipientResolutionParams): Promise<RecipientResolution> {
     const r = await this.client.query(
       `INSERT INTO property_recipient_resolution (

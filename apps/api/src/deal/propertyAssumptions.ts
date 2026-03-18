@@ -8,6 +8,9 @@ import {
 const COMMERCIAL_PATTERN =
   /\b(commercial|retail|office|storefront|store front|restaurant|cafe|gallery|medical|community facility)\b/i;
 const RENT_STABILIZED_PATTERN = /(rent[\s-]*(?:stabilized|stabilised|controlled?)|\bRS\b)/i;
+const ANCILLARY_SPACE_PATTERN = /\b(basement|cellar|storage|mechanical|boiler|laundry|garage|parking)\b/i;
+const RESIDENTIAL_PATTERN = /\b(residential|apt|apartment|duplex|bed(?:room)?|bath|garden level|parlor|floor-through)\b/i;
+const VACANT_LIKE_PATTERN = /\b(vacant|delivered vacant|available|owner[\s-]*occupied|owner occupied|owner's unit)\b/i;
 
 export interface NormalizedUnderwritingRentRow {
   annualRent: number | null;
@@ -77,6 +80,62 @@ function annualRentFromRecord(record: Record<string, unknown>): number | null {
   return null;
 }
 
+function lowerBoundRange(first: number | null, second: number | null): number | null {
+  if (first == null) return null;
+  if (second == null) return first;
+  return Math.min(first, second);
+}
+
+function conservativeProjectedAnnualRentFromRecord(record: Record<string, unknown>): number | null {
+  const directAnnual = lowerBoundRange(
+    toFiniteNumber(record.projectedAnnualRentLow) ??
+      toFiniteNumber(record.projectedAnnualRent) ??
+      toFiniteNumber(record.projectedAnnualBaseRentLow) ??
+      toFiniteNumber(record.projectedAnnualBaseRent),
+    toFiniteNumber(record.projectedAnnualRentHigh) ??
+      toFiniteNumber(record.projectedAnnualRentMax) ??
+      toFiniteNumber(record.projectedAnnualBaseRentHigh)
+  );
+  if (directAnnual != null && directAnnual > 0) return directAnnual;
+
+  const directMonthly = lowerBoundRange(
+    toFiniteNumber(record.projectedMonthlyRentLow) ??
+      toFiniteNumber(record.projectedMonthlyRent) ??
+      toFiniteNumber(record.projectedMonthlyBaseRentLow) ??
+      toFiniteNumber(record.projectedMonthlyBaseRent),
+    toFiniteNumber(record.projectedMonthlyRentHigh) ??
+      toFiniteNumber(record.projectedMonthlyRentMax) ??
+      toFiniteNumber(record.projectedMonthlyBaseRentHigh)
+  );
+  if (directMonthly != null && directMonthly > 0) return directMonthly * 12;
+
+  const text = classificationText(record);
+  const annualMatch = text.match(
+    /(?:projected|market)(?:\s+\w+){0,3}\s+annual\s+rent[^$]{0,20}\$?\s*([\d,]+)(?:\s*(?:-|to|–|—)\s*\$?\s*([\d,]+))?/i
+  );
+  if (annualMatch) {
+    const low = lowerBoundRange(toFiniteNumber(annualMatch[1]), toFiniteNumber(annualMatch[2]));
+    if (low != null && low > 0) return low;
+  }
+
+  const monthlyMatch = text.match(
+    /(?:projected|market)(?:\s+\w+){0,3}\s+(?:monthly\s+)?rent[^$]{0,20}\$?\s*([\d,]+)(?:\s*(?:-|to|–|—)\s*\$?\s*([\d,]+))?/i
+  );
+  if (monthlyMatch) {
+    const low = lowerBoundRange(toFiniteNumber(monthlyMatch[1]), toFiniteNumber(monthlyMatch[2]));
+    if (low != null && low > 0) return low * 12;
+  }
+
+  return null;
+}
+
+function isVacantLikeRecord(record: Record<string, unknown>): boolean {
+  if (record.occupied === false) return true;
+  if (typeof record.occupied === "string" && /\bvacant\b/i.test(record.occupied)) return true;
+  if (typeof record.tenantStatus === "string" && VACANT_LIKE_PATTERN.test(record.tenantStatus)) return true;
+  return VACANT_LIKE_PATTERN.test(classificationText(record));
+}
+
 function classificationText(record: Record<string, unknown>): string {
   return [
     record.unitCategory,
@@ -117,6 +176,35 @@ export function resolveNormalizedUnderwritingRentRows(
   }
 
   return [];
+}
+
+export function resolveConservativeProjectedResidentialLeaseUpRent(
+  details: PropertyDetails | null
+): number | null {
+  const omRoll = resolvePreferredOmRentRoll(details);
+  if (!Array.isArray(omRoll) || omRoll.length === 0) return null;
+
+  const total = omRoll.reduce((sum, row) => {
+    const record = row as Record<string, unknown>;
+    const labels = classificationText(record);
+    const currentAnnualRent = annualRentFromRecord(record);
+    const projectedAnnualRent = conservativeProjectedAnnualRentFromRecord(record);
+    const clearlyResidential =
+      !COMMERCIAL_PATTERN.test(labels) &&
+      !ANCILLARY_SPACE_PATTERN.test(labels) &&
+      (RESIDENTIAL_PATTERN.test(labels) ||
+        toFiniteNumber(record.beds) != null ||
+        toFiniteNumber(record.baths) != null ||
+        String(record.unitCategory ?? "").trim().toLowerCase() === "residential");
+
+    if (!clearlyResidential) return sum;
+    if (!isVacantLikeRecord(record)) return sum;
+    if (currentAnnualRent != null && currentAnnualRent > 0) return sum;
+    if (projectedAnnualRent == null || !Number.isFinite(projectedAnnualRent) || projectedAnnualRent <= 0) return sum;
+    return sum + projectedAnnualRent;
+  }, 0);
+
+  return total > 0 ? Math.round(total * 100) / 100 : null;
 }
 
 function roundCurrency(value: number): number {

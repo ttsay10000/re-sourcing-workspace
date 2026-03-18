@@ -163,6 +163,29 @@ function exitOnlyCells(
   });
 }
 
+function sensitivityRows<T extends { valuePct: number | null }>(
+  baseRow: T,
+  scenarioRows: T[]
+): Array<Omit<T, "valuePct"> & { valuePct: number; isBase: boolean }> {
+  const rowsByValue = new Map<number, Omit<T, "valuePct"> & { valuePct: number; isBase: boolean }>();
+  const addRow = (row: T, isBase: boolean): void => {
+    if (row.valuePct == null || !Number.isFinite(row.valuePct)) return;
+    const key = Math.round(row.valuePct * 100) / 100;
+    const normalizedRow = { ...row, valuePct: row.valuePct, isBase };
+    const existing = rowsByValue.get(key);
+    if (existing) {
+      if (isBase) rowsByValue.set(key, normalizedRow);
+      return;
+    }
+    rowsByValue.set(key, normalizedRow);
+  };
+
+  addRow(baseRow, true);
+  scenarioRows.forEach((row) => addRow(row, false));
+
+  return Array.from(rowsByValue.values()).sort((left, right) => left.valuePct - right.valuePct);
+}
+
 function pushSensitivityAnalysis(lines: string[], ctx: UnderwritingContext): void {
   if (!ctx.sensitivities || ctx.sensitivities.length === 0) return;
 
@@ -187,38 +210,24 @@ function pushSensitivityAnalysis(lines: string[], ctx: UnderwritingContext): voi
           "IRR",
         ])
       );
-      const exitCapRows = [
+      const exitCapRows = sensitivityRows(
         {
           valuePct: sensitivity.baseCase.valuePct,
           exitPropertyValue: ctx.exit.exitPropertyValue,
           netProceedsToEquity: ctx.exit.netProceedsToEquity,
           irrPct: ctx.returns.irrPct,
-          isBase: true,
         },
-        ...sensitivity.scenarios.map((scenario) => ({
+        sensitivity.scenarios.map((scenario) => ({
           valuePct: scenario.valuePct,
           exitPropertyValue: scenario.exitPropertyValue,
           netProceedsToEquity: scenario.netProceedsToEquity,
           irrPct: scenario.irrPct,
-          isBase: false,
         })),
-      ]
-        .filter(
-          (
-            row
-          ): row is {
-            valuePct: number;
-            exitPropertyValue: number;
-            netProceedsToEquity: number;
-            irrPct: number | null;
-            isBase: boolean;
-          } => row.valuePct != null && Number.isFinite(row.valuePct)
-        )
-        .sort((left, right) => left.valuePct - right.valuePct);
+      );
 
       exitCapRows.forEach((row) => {
         const cells = [
-          row.isBase ? `Base (${pctValue(row.valuePct)})` : pctValue(row.valuePct),
+          pctValue(row.valuePct),
           moneyLabel(row.exitPropertyValue),
           moneyLabel(row.netProceedsToEquity),
           decimalPctLabel(row.irrPct),
@@ -243,21 +252,35 @@ function pushSensitivityAnalysis(lines: string[], ctx: UnderwritingContext): voi
       )}`
     );
     lines.push(tableRow([sensitivity.inputLabel, "Stabilized NOI", "IRR", "Equity yield"]));
-    lines.push(
-      tableRow([
-        `Base (${pctValue(sensitivity.baseCase.valuePct)})`,
-        moneyLabel(ctx.operating.stabilizedNoi),
-        decimalPctLabel(ctx.returns.irrPct),
-        decimalPctLabel(ctx.returns.year1EquityYield ?? ctx.returns.year1CashOnCashReturn),
-      ])
-    );
-    sensitivity.scenarios.forEach((scenario) => {
+    sensitivityRows(
+      {
+        valuePct: sensitivity.baseCase.valuePct,
+        stabilizedNoi: ctx.operating.stabilizedNoi,
+        irrPct: ctx.returns.irrPct,
+        year1EquityYield: ctx.returns.year1EquityYield ?? ctx.returns.year1CashOnCashReturn,
+      },
+      sensitivity.scenarios.map((scenario) => ({
+        valuePct: scenario.valuePct,
+        stabilizedNoi: scenario.stabilizedNoi,
+        irrPct: scenario.irrPct,
+        year1EquityYield: scenario.year1EquityYield ?? scenario.year1CashOnCashReturn,
+      }))
+    ).forEach((scenario) => {
       lines.push(
         tableRow([
-          pctValue(scenario.valuePct),
-          moneyLabel(scenario.stabilizedNoi),
-          decimalPctLabel(scenario.irrPct),
-          decimalPctLabel(scenario.year1EquityYield ?? scenario.year1CashOnCashReturn),
+          ...(scenario.isBase
+            ? boldRow([
+                pctValue(scenario.valuePct),
+                moneyLabel(scenario.stabilizedNoi),
+                decimalPctLabel(scenario.irrPct),
+                decimalPctLabel(scenario.year1EquityYield),
+              ])
+            : [
+                pctValue(scenario.valuePct),
+                moneyLabel(scenario.stabilizedNoi),
+                decimalPctLabel(scenario.irrPct),
+                decimalPctLabel(scenario.year1EquityYield),
+              ]),
         ])
       );
     });

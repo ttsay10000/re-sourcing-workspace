@@ -46,9 +46,11 @@ import {
   mergeDossierAssumptionOverrides,
   propertyAssumptionsToOverrides,
 } from "./propertyDossierState.js";
+import { resolveConservativeProjectedResidentialLeaseUpRent } from "./propertyAssumptions.js";
 import {
   computeRecommendedOffer,
   computeUnderwritingProjection,
+  resolveAssetCapRateNoiBasis,
   resolveDossierAssumptions,
   type DossierAssumptionOverrides,
 } from "./underwritingModel.js";
@@ -403,6 +405,7 @@ export async function runGenerateDossier(
       mergedAssumptionOverrides,
       { details }
     );
+    const conservativeProjectedLeaseUpRent = resolveConservativeProjectedResidentialLeaseUpRent(details);
     const resolvedCurrentExpensesTotal =
       extractedExpenseTotal > 0 ? extractedExpenseTotal : currentFinancials.operatingExpenses;
     const projection = computeUnderwritingProjection({
@@ -412,6 +415,7 @@ export async function runGenerateDossier(
       currentOtherIncome,
       currentExpensesTotal: resolvedCurrentExpensesTotal,
       expenseRows,
+      conservativeProjectedLeaseUpRent,
     });
     const recommendedOffer = computeRecommendedOffer({
       assumptions,
@@ -420,6 +424,7 @@ export async function runGenerateDossier(
       currentOtherIncome,
       currentExpensesTotal: resolvedCurrentExpensesTotal,
       expenseRows,
+      conservativeProjectedLeaseUpRent,
     });
     const sensitivities = buildSensitivityAnalyses({
       assumptions,
@@ -428,6 +433,7 @@ export async function runGenerateDossier(
       currentOtherIncome,
       currentExpensesTotal: resolvedCurrentExpensesTotal,
       expenseRows,
+      conservativeProjectedLeaseUpRent,
       baseProjection: projection,
     });
     console.info("[runGenerateDossier] Financial model prepared", {
@@ -443,6 +449,10 @@ export async function runGenerateDossier(
     const propertyOverview = propertyOverviewFromDetails(details, packageContext);
     const financialFlags: string[] = [];
     const hasCurrentFinancials = currentGrossRent != null && currentNoi != null;
+    const assetCapRateNoiBasis = resolveAssetCapRateNoiBasis({
+      currentNoi,
+      conservativeProjectedLeaseUpRent,
+    });
     const listingActivity = deriveListingActivitySummary({
       listedAt: listing?.listedAt ?? null,
       currentPrice: listing?.price ?? null,
@@ -455,6 +465,14 @@ export async function runGenerateDossier(
           maximumFractionDigits: 0,
           minimumFractionDigits: 0,
         })}`
+      );
+    }
+    if (conservativeProjectedLeaseUpRent != null && conservativeProjectedLeaseUpRent > 0) {
+      financialFlags.push(
+        `Cap rate includes $${conservativeProjectedLeaseUpRent.toLocaleString("en-US", {
+          maximumFractionDigits: 0,
+          minimumFractionDigits: 0,
+        })} conservative projected rent for delivered-vacant residential unit(s)`
       );
     }
     const listingActivitySummary = describeListingActivity(listingActivity);
@@ -495,8 +513,10 @@ export async function runGenerateDossier(
     financialFlags.push(...authoritativeValidationMessages(details).filter((message) => !financialFlags.includes(message)));
 
     const assetCapRateForCtx =
-      assumptions.acquisition.purchasePrice != null && currentNoi != null && currentNoi >= 0
-        ? (currentNoi / assumptions.acquisition.purchasePrice) * 100
+      assumptions.acquisition.purchasePrice != null &&
+      assetCapRateNoiBasis != null &&
+      assetCapRateNoiBasis >= 0
+        ? (assetCapRateNoiBasis / assumptions.acquisition.purchasePrice) * 100
         : null;
     const adjustedNoiForCtx = projection.operating.stabilizedNoi;
     const adjustedCapRateForCtx =
@@ -527,6 +547,7 @@ export async function runGenerateDossier(
       currentOtherIncome,
       unitCount,
       dealScore: null,
+      assetCapRateNoiBasis,
       assetCapRate: assetCapRateForCtx,
       adjustedCapRate: adjustedCapRateForCtx,
       assumptions: {
@@ -640,6 +661,7 @@ export async function runGenerateDossier(
         listedAt: listing?.listedAt ?? null,
         priceHistory: listing?.priceHistory ?? null,
       },
+      assetCapRateNoi: assetCapRateNoiBasis,
       irrPct: projection.returns.irr ?? null,
       cocPct: projection.returns.averageCashOnCashReturn ?? null,
       equityMultiple: projection.returns.equityMultiple ?? null,
@@ -669,6 +691,7 @@ export async function runGenerateDossier(
       currentOtherIncome,
       currentExpensesTotal: resolvedCurrentExpensesTotal ?? undefined,
       expenseRows,
+      conservativeProjectedLeaseUpRent,
       baseCalculatedScore: scoringResult.isScoreable ? scoringResult.dealScore : null,
     });
 

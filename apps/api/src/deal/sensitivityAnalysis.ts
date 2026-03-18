@@ -88,6 +88,7 @@ export function buildSensitivityAnalyses(input: {
   currentOtherIncome?: number | null;
   currentExpensesTotal?: number | null;
   expenseRows?: Array<{ lineItem: string; amount: number }> | null;
+  conservativeProjectedLeaseUpRent?: number | null;
   baseProjection: ReturnType<typeof computeUnderwritingProjection>;
 }): SensitivityAnalysis[] {
   const {
@@ -97,6 +98,7 @@ export function buildSensitivityAnalyses(input: {
     currentOtherIncome,
     currentExpensesTotal,
     expenseRows,
+    conservativeProjectedLeaseUpRent,
     baseProjection,
   } = input;
 
@@ -117,6 +119,7 @@ export function buildSensitivityAnalyses(input: {
         currentOtherIncome,
         currentExpensesTotal,
         expenseRows,
+        conservativeProjectedLeaseUpRent,
       })
     )
   );
@@ -137,6 +140,7 @@ export function buildSensitivityAnalyses(input: {
         currentOtherIncome,
         currentExpensesTotal,
         expenseRows,
+        conservativeProjectedLeaseUpRent,
       })
     )
   );
@@ -157,6 +161,7 @@ export function buildSensitivityAnalyses(input: {
         currentOtherIncome,
         currentExpensesTotal,
         expenseRows,
+        conservativeProjectedLeaseUpRent,
       })
     )
   );
@@ -178,6 +183,7 @@ export function buildSensitivityAnalyses(input: {
           currentOtherIncome,
           currentExpensesTotal,
           expenseRows,
+          conservativeProjectedLeaseUpRent,
         })
       )
   );

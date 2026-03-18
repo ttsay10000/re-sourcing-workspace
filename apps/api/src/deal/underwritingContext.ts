@@ -161,6 +161,7 @@ export interface UnderwritingContext {
   unitCount: number | null;
   /** Deal score 0–100. */
   dealScore: number | null;
+  assetCapRateNoiBasis?: number | null;
   assetCapRate: number | null;
   adjustedCapRate: number | null;
   /** Assumptions used, grouped by underwriting bucket. */

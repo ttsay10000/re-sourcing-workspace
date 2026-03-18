@@ -220,10 +220,21 @@ export interface UnderwritingProjectionInput {
   currentOtherIncome?: number | null;
   currentExpensesTotal?: number | null;
   expenseRows?: ProjectedExpenseInputRow[] | null;
+  conservativeProjectedLeaseUpRent?: number | null;
 }
 
 function safeNumber(value: number | null | undefined, fallback = 0): number {
   return value != null && Number.isFinite(value) ? value : fallback;
+}
+
+export function resolveAssetCapRateNoiBasis(input: {
+  currentNoi: number | null;
+  conservativeProjectedLeaseUpRent?: number | null;
+}): number | null {
+  const currentNoi =
+    input.currentNoi != null && Number.isFinite(input.currentNoi) ? input.currentNoi : null;
+  if (currentNoi == null) return null;
+  return roundCurrency(currentNoi + Math.max(0, safeNumber(input.conservativeProjectedLeaseUpRent)));
 }
 
 function safePositiveInteger(
@@ -541,6 +552,7 @@ export function computeUnderwritingProjection(
     currentOtherIncome,
     currentExpensesTotal,
     expenseRows,
+    conservativeProjectedLeaseUpRent,
   } = input;
   const purchasePrice = assumptions.acquisition.purchasePrice ?? 0;
   const purchaseClosingCosts =
@@ -576,9 +588,13 @@ export function computeUnderwritingProjection(
     assumptions.propertyMix.eligibleUnitSharePct ?? 1
   );
   const eligibleCurrentRent = roundCurrency(currentRent * eligibleRevenueShare);
+  const projectedLeaseUpRentBase = roundCurrency(Math.max(0, safeNumber(conservativeProjectedLeaseUpRent)));
   const protectedCurrentRent = roundCurrency(Math.max(0, currentRent - eligibleCurrentRent));
-  const eligibleGrossRentalIncomeBase = roundCurrency(
+  const upliftedEligibleCurrentRent = roundCurrency(
     eligibleCurrentRent * (1 + Math.max(0, assumptions.operating.rentUpliftPct) / 100)
+  );
+  const eligibleGrossRentalIncomeBase = roundCurrency(
+    upliftedEligibleCurrentRent + projectedLeaseUpRentBase
   );
   const protectedGrossRentalIncomeBase = protectedCurrentRent;
   const grossRentalIncomeBase = roundCurrency(
@@ -941,6 +957,7 @@ export function computeRecommendedOffer(input: UnderwritingProjectionInput): Rec
     currentOtherIncome,
     currentExpensesTotal,
     expenseRows,
+    conservativeProjectedLeaseUpRent,
   } = input;
   const askingPrice = assumptions.acquisition.purchasePrice;
   const targetIrrPct = assumptions.targetIrrPct;
@@ -965,6 +982,7 @@ export function computeRecommendedOffer(input: UnderwritingProjectionInput): Rec
     currentOtherIncome,
     currentExpensesTotal,
     expenseRows,
+    conservativeProjectedLeaseUpRent,
   });
   const irrAtAskingPct = baseProjection.returns.irr ?? null;
   const targetMetAtAsking = irrAtAskingPct != null && irrAtAskingPct >= targetIrr;
@@ -995,6 +1013,7 @@ export function computeRecommendedOffer(input: UnderwritingProjectionInput): Rec
     currentOtherIncome,
     currentExpensesTotal,
     expenseRows,
+    conservativeProjectedLeaseUpRent,
   });
   if (projectionAtLowPrice.returns.irr == null || projectionAtLowPrice.returns.irr < targetIrr) {
     return {
@@ -1025,6 +1044,7 @@ export function computeRecommendedOffer(input: UnderwritingProjectionInput): Rec
       currentOtherIncome,
       currentExpensesTotal,
       expenseRows,
+      conservativeProjectedLeaseUpRent,
     });
     const irr = trialProjection.returns.irr;
     if (irr != null && irr >= targetIrr) low = mid;

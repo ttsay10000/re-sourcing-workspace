@@ -111,6 +111,8 @@ services:
           envVarKey: GEMINI_OM_MODEL
 
   # Daily cron: start enabled saved searches that are due for the current local calendar day.
+  # This cron also runs automated broker outreach for properties that become eligible,
+  # so it needs the same Gmail OAuth env as the API service.
   - type: cron
     name: re-sourcing-run-saved-searches
     runtime: node
@@ -132,6 +134,21 @@ services:
           type: web
           name: re-sourcing-api
           envVarKey: OPENAI_API_KEY
+      - key: GMAIL_CLIENT_ID
+        fromService:
+          type: web
+          name: re-sourcing-api
+          envVarKey: GMAIL_CLIENT_ID
+      - key: GMAIL_CLIENT_SECRET
+        fromService:
+          type: web
+          name: re-sourcing-api
+          envVarKey: GMAIL_CLIENT_SECRET
+      - key: GMAIL_REFRESH_TOKEN
+        fromService:
+          type: web
+          name: re-sourcing-api
+          envVarKey: GMAIL_REFRESH_TOKEN
       - key: SOCRATA_APP_TOKEN
         fromService:
           type: web

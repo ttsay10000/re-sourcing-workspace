@@ -106,6 +106,7 @@ function isTaxExpense(lineItem: string): boolean {
 
 export function buildExcelProForma(ctx: UnderwritingContext): Buffer {
   const wb = XLSX.utils.book_new();
+  const assetCapRateNoiBasis = num(ctx.assetCapRateNoiBasis ?? ctx.currentNoi);
   const normalizedExpenseInputs = normalizeExpenseProjectionInputs<ExpenseRow>({
     currentExpensesTotal: num(ctx.currentExpensesTotal ?? ctx.operating.currentExpenses),
     expenseRows: ctx.expenseRows,
@@ -497,7 +498,7 @@ export function buildExcelProForma(ctx: UnderwritingContext): Buffer {
       [s("Units", labelStyle), f("Assumptions!B4", INTEGER_FMT, formulaValueStyle), "", s("Stabilized occupancy", labelStyle), f(`1-(Assumptions!B${assumptionRows.vacancyPct}/100)`, PERCENT_FMT, formulaValueStyle)],
       [s("Current gross rent", labelStyle), f(`Assumptions!B${assumptionRows.currentGrossRent}+Assumptions!B${assumptionRows.currentOtherIncome}`, CURRENCY_FMT, formulaValueStyle), "", s("Management fee", labelStyle), f(`Assumptions!B${assumptionRows.managementFeePct}/100`, PERCENT_FMT, formulaValueStyle)],
       [s("Current NOI", labelStyle), n(num(ctx.currentNoi), CURRENCY_FMT, textValueStyle), "", s("Lead time to first rental", labelStyle), f(`Assumptions!B${assumptionRows.leadTimeMonths}`, INTEGER_FMT, formulaValueStyle)],
-      [s("Cap rate (purchase price)", labelStyle), f(`IF(Assumptions!B${assumptionRows.purchasePrice}=0,0,${num(ctx.currentNoi)}/Assumptions!B${assumptionRows.purchasePrice})`, PERCENT_FMT, formulaValueStyle), "", s("Stabilized NOI", labelStyle), f(`INDEX('Cash Flow'!C${noiRow}:${col(2 + MAX_MODEL_YEARS)}${noiRow},1,IF(Assumptions!B${assumptionRows.leadTimeMonths}>0,MIN(Assumptions!B${assumptionRows.holdPeriodYears},2),MIN(Assumptions!B${assumptionRows.holdPeriodYears},1))+1)`, CURRENCY_FMT, formulaValueStyle)],
+      [s("Cap rate (purchase price)", labelStyle), f(`IF(Assumptions!B${assumptionRows.purchasePrice}=0,0,${assetCapRateNoiBasis}/Assumptions!B${assumptionRows.purchasePrice})`, PERCENT_FMT, formulaValueStyle), "", s("Stabilized NOI", labelStyle), f(`INDEX('Cash Flow'!C${noiRow}:${col(2 + MAX_MODEL_YEARS)}${noiRow},1,IF(Assumptions!B${assumptionRows.leadTimeMonths}>0,MIN(Assumptions!B${assumptionRows.holdPeriodYears},2),MIN(Assumptions!B${assumptionRows.holdPeriodYears},1))+1)`, CURRENCY_FMT, formulaValueStyle)],
       [s("Purchase price", labelStyle), f(`Assumptions!B${assumptionRows.purchasePrice}`, CURRENCY_FMT, formulaValueStyle), "", s("Target cap rate @ sale", labelStyle), f(`Assumptions!B${assumptionRows.exitCapPct}/100`, PERCENT_FMT, formulaValueStyle)],
       [s("Est. closing costs", labelStyle), f("Financing!B4", CURRENCY_FMT, formulaValueStyle), "", s("Gross sale value", labelStyle), f(`INDEX('Cash Flow'!C${saleValueRow}:${col(2 + MAX_MODEL_YEARS)}${saleValueRow},1,Assumptions!B${assumptionRows.holdPeriodYears}+1)`, CURRENCY_FMT, formulaValueStyle)],
       [s("CapEx", labelStyle), f(`Assumptions!B${assumptionRows.renovationCosts}`, CURRENCY_FMT, formulaValueStyle), "", s("Net sale value", labelStyle), f(`INDEX('Cash Flow'!C${saleValueRow}:${col(2 + MAX_MODEL_YEARS)}${saleValueRow},1,Assumptions!B${assumptionRows.holdPeriodYears}+1)+INDEX('Cash Flow'!C${saleClosingCostsRow}:${col(2 + MAX_MODEL_YEARS)}${saleClosingCostsRow},1,Assumptions!B${assumptionRows.holdPeriodYears}+1)`, CURRENCY_FMT, formulaValueStyle)],
