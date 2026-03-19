@@ -1,6 +1,6 @@
 import type { DealRiskProfile, DealScoreBreakdown } from "@re-sourcing/contracts";
 
-export const DEAL_SCORE_VERSION = "v2";
+export const DEAL_SCORE_VERSION = "v3";
 
 /**
  * Deterministic deal scoring engine:
@@ -75,7 +75,7 @@ interface PenaltyResult {
   flags: string[];
 }
 
-const MAX_COMPOSITE_SCORE = 75;
+const MAX_COMPOSITE_SCORE = 80;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
@@ -121,9 +121,9 @@ function scoreIrr(irrPctDecimal: number | null | undefined): number {
   if (irrPct == null) return 0;
   if (irrPct >= 25) return 20;
   if (irrPct >= 20) return 17;
-  if (irrPct >= 15) return 13;
-  if (irrPct >= 12) return 9;
-  if (irrPct >= 8) return 5;
+  if (irrPct >= 15) return 15;
+  if (irrPct >= 12) return 11;
+  if (irrPct >= 8) return 6;
   if (irrPct >= 0) return 2;
   return 0;
 }
@@ -131,45 +131,83 @@ function scoreIrr(irrPctDecimal: number | null | undefined): number {
 function scoreCoc(cocPctDecimal: number | null | undefined): number {
   const cocPct = asPct(cocPctDecimal);
   if (cocPct == null) return 0;
-  if (cocPct >= 10) return 17;
-  if (cocPct >= 8) return 14;
-  if (cocPct >= 6) return 10;
-  if (cocPct >= 4) return 6;
-  if (cocPct >= 2) return 3;
+  if (cocPct >= 10) return 10;
+  if (cocPct >= 8) return 8;
+  if (cocPct >= 6) return 6;
+  if (cocPct >= 4) return 4;
+  if (cocPct >= 2) return 2;
   if (cocPct >= 0) return 1;
   return 0;
 }
 
 function scoreAskCap(assetCapRate: number | null): number {
   if (assetCapRate == null) return 0;
-  if (assetCapRate >= 6.5) return 15;
-  if (assetCapRate >= 6.0) return 13;
-  if (assetCapRate >= 5.5) return 10;
-  if (assetCapRate >= 5.0) return 7;
-  if (assetCapRate >= 4.5) return 4;
-  if (assetCapRate >= 4.0) return 2;
+  if (assetCapRate >= 7.0) return 15;
+  if (assetCapRate >= 6.5) return 13;
+  if (assetCapRate >= 6.0) return 11;
+  if (assetCapRate >= 5.5) return 9;
+  if (assetCapRate >= 5.0) return 6;
+  if (assetCapRate >= 4.75) return 4;
+  if (assetCapRate >= 4.5) return 3;
+  if (assetCapRate >= 4.0) return 1;
+  return 0;
+}
+
+function scoreAdjustedCap(adjustedCapRate: number | null): number {
+  if (adjustedCapRate == null) return 0;
+  if (adjustedCapRate >= 7.5) return 18;
+  if (adjustedCapRate >= 7.0) return 18;
+  if (adjustedCapRate >= 6.75) return 17;
+  if (adjustedCapRate >= 6.5) return 16;
+  if (adjustedCapRate >= 6.25) return 14;
+  if (adjustedCapRate >= 6.0) return 12;
+  if (adjustedCapRate >= 5.5) return 8;
+  if (adjustedCapRate >= 5.0) return 5;
+  if (adjustedCapRate >= 4.5) return 2;
   return 0;
 }
 
 function scoreRequiredDiscount(discountPct: number | null): number {
   if (discountPct == null) return 0;
   if (discountPct <= 0) return 8;
-  if (discountPct <= 5) return 7;
-  if (discountPct <= 10) return 5;
-  if (discountPct <= 15) return 3;
-  if (discountPct <= 20) return 1;
+  if (discountPct <= 5) return 8;
+  if (discountPct <= 10) return 7;
+  if (discountPct <= 20) return 6;
+  if (discountPct <= 30) return 5;
+  if (discountPct <= 40) return 2;
   return 0;
 }
 
 function scoreStabilizedSpread(assetCapRate: number | null, adjustedCapRate: number | null): number {
   if (assetCapRate == null || adjustedCapRate == null) return 0;
   const spreadBps = (adjustedCapRate - assetCapRate) * 100;
-  if (spreadBps >= 150) return 5;
-  if (spreadBps >= 100) return 4;
-  if (spreadBps >= 50) return 3;
-  if (spreadBps >= 25) return 2;
-  if (spreadBps >= 0) return 1;
+  if (spreadBps >= 150) return 4;
+  if (spreadBps >= 100) return 3;
+  if (spreadBps >= 50) return 2;
+  if (spreadBps >= 25) return 1;
   return 0;
+}
+
+function scoreSmallResidentialOpportunity(
+  inputs: DealScoringInputs,
+  assetCapRate: number | null,
+  adjustedCapRate: number | null,
+  discountPct: number | null,
+  riskProfile: DealRiskProfile
+): number {
+  const totalUnits = inputs.totalUnits ?? riskProfile.totalUnits ?? null;
+  const irrPct = asPct(inputs.irrPct);
+  if (totalUnits == null || totalUnits > 4) return 0;
+  if ((riskProfile.commercialRevenueSharePct ?? 0) > 0.05) return 0;
+  if ((riskProfile.rentStabilizedRevenueSharePct ?? 0) > 0) return 0;
+  if (adjustedCapRate == null || adjustedCapRate < 6.5) return 0;
+  if (irrPct == null || irrPct < 15) return 0;
+
+  let score = 10;
+  if (assetCapRate != null && assetCapRate >= 4.75) score += 2;
+  if (discountPct != null && discountPct <= 15) score += 2;
+  if ((inputs.blendedRentUpliftPct ?? 0) <= 75) score += 2;
+  return Math.min(16, score);
 }
 
 function hasMeaningfulPriceCut(inputs: DealScoringInputs): boolean {
@@ -181,12 +219,12 @@ function hasMeaningfulPriceCut(inputs: DealScoringInputs): boolean {
 }
 
 function marketLiquidityScore(inputs: DealScoringInputs, riskProfile: DealRiskProfile): number {
-  let score = 3;
+  let score = 4;
   const totalUnits = inputs.totalUnits ?? riskProfile.totalUnits ?? null;
   if (totalUnits != null) {
     if (totalUnits >= 20) score += 2;
     else if (totalUnits >= 10) score += 1;
-    else if (totalUnits < 5) score -= 2;
+    else if (totalUnits < 3) score -= 1;
   }
   if (hasMeaningfulPriceCut(inputs)) score += 1;
   return clamp(score, 0, 10);
@@ -210,14 +248,17 @@ function assumptionPenalty(
       ? inputs.adjustedNoi / inputs.noi
       : null;
 
-  if (blendedRentUpliftPct > 60) {
-    value += 6;
+  if (blendedRentUpliftPct > 80) {
+    value += 3;
+    flags.push(`Very high blended rent uplift (${blendedRentUpliftPct.toFixed(1)}%)`);
+  } else if (blendedRentUpliftPct > 60) {
+    value += 2;
     flags.push(`Aggressive blended rent uplift (${blendedRentUpliftPct.toFixed(1)}%)`);
   } else if (blendedRentUpliftPct > 45) {
-    value += 4;
+    value += 1;
     flags.push(`Elevated blended rent uplift (${blendedRentUpliftPct.toFixed(1)}%)`);
   } else if (blendedRentUpliftPct > 30) {
-    value += 2;
+    value += 1;
     flags.push(`Meaningful blended rent uplift (${blendedRentUpliftPct.toFixed(1)}%)`);
   }
 
@@ -228,7 +269,7 @@ function assumptionPenalty(
 
   if (vacancyPct != null) {
     if (vacancyPct < 3) {
-      value += 3;
+      value += 2;
       flags.push(`Vacancy assumption below 3% (${vacancyPct.toFixed(1)}%)`);
     } else if (vacancyPct < 5) {
       value += 1;
@@ -238,58 +279,56 @@ function assumptionPenalty(
 
   if (adjustedCapRatePct != null && exitCapRatePct != null) {
     const diffBps = (adjustedCapRatePct - exitCapRatePct) * 100;
-    if (diffBps > 25) {
-      value += 4;
+    if (diffBps > 150) {
+      value += 1;
       flags.push(
         `Exit cap ${exitCapRatePct.toFixed(2)}% is over 25 bps below stabilized entry cap ${adjustedCapRatePct.toFixed(2)}%`
       );
-    } else if (diffBps >= 0) {
-      value += 2;
+    } else if (diffBps > 25) {
+      value += 1;
       flags.push(
         `Exit cap ${exitCapRatePct.toFixed(2)}% is at/below stabilized entry cap ${adjustedCapRatePct.toFixed(2)}%`
       );
     }
   } else if (assetCapRate != null && exitCapRatePct != null) {
     const diffBps = (assetCapRate - exitCapRatePct) * 100;
-    if (diffBps > 25) {
-      value += 2;
+    if (diffBps > 75) {
+      value += 1;
       flags.push(`Exit cap ${exitCapRatePct.toFixed(2)}% is tighter than current cap ${assetCapRate.toFixed(2)}%`);
     }
   }
 
   if ((annualExpenseGrowthPct ?? 100) < 2 && !inputs.hasDetailedExpenseRows) {
-    value += 3;
+    value += 2;
     flags.push("Expense growth under 2% without detailed expense rows");
   }
 
   if (stabilizedToCurrentNoiRatio != null) {
-    if (stabilizedToCurrentNoiRatio > 1.35) {
-      value += 3;
-      flags.push(`Stabilized NOI is ${(stabilizedToCurrentNoiRatio * 100).toFixed(0)}% of current NOI`);
-    } else if (stabilizedToCurrentNoiRatio > 1.2) {
+    if (stabilizedToCurrentNoiRatio > 1.5) {
       value += 1;
       flags.push(`Stabilized NOI is ${(stabilizedToCurrentNoiRatio * 100).toFixed(0)}% of current NOI`);
     }
   }
 
-  return { value: Math.min(12, value), flags };
+  return { value: Math.min(6, value), flags };
 }
 
 function structuralPenalty(riskProfile: DealRiskProfile): PenaltyResult {
   let value = 0;
   const flags: string[] = [];
+  const totalUnits = riskProfile.totalUnits ?? null;
 
   const rsShare = riskProfile.rentStabilizedRevenueSharePct ?? null;
   if (rsShare != null) {
     const rsPct = rsShare * 100;
     if (rsPct > 50) {
-      value += 8;
+      value += 4;
       flags.push(`Rent-stabilized revenue share ${rsPct.toFixed(1)}%`);
     } else if (rsPct > 25) {
-      value += 5;
+      value += 2;
       flags.push(`Rent-stabilized revenue share ${rsPct.toFixed(1)}%`);
     } else if (rsPct > 0) {
-      value += 3;
+      value += 1;
       flags.push(`Any rent-stabilized revenue exposure (${rsPct.toFixed(1)}%)`);
     }
   }
@@ -298,25 +337,28 @@ function structuralPenalty(riskProfile: DealRiskProfile): PenaltyResult {
   if (commercialShare != null) {
     const commercialPct = commercialShare * 100;
     if (commercialPct > 50) {
-      value += 6;
-      flags.push(`Commercial revenue share ${commercialPct.toFixed(1)}%`);
-    } else if (commercialPct >= 30) {
       value += 4;
       flags.push(`Commercial revenue share ${commercialPct.toFixed(1)}%`);
-    } else if (commercialPct >= 15) {
+    } else if (commercialPct >= 30) {
       value += 2;
+      flags.push(`Commercial revenue share ${commercialPct.toFixed(1)}%`);
+    } else if (commercialPct >= 15) {
+      value += 1;
       flags.push(`Commercial revenue share ${commercialPct.toFixed(1)}%`);
     }
   }
 
   const largestUnitShare = riskProfile.largestUnitRevenueSharePct ?? null;
-  if (largestUnitShare != null) {
+  if (largestUnitShare != null && (totalUnits ?? Number.POSITIVE_INFINITY) >= 4) {
     const largestPct = largestUnitShare * 100;
-    if (largestPct > 35) {
-      value += 5;
+    if (largestPct > 45) {
+      value += 3;
+      flags.push(`Largest unit contributes ${largestPct.toFixed(1)}% of rent`);
+    } else if (largestPct > 35) {
+      value += 2;
       flags.push(`Largest unit contributes ${largestPct.toFixed(1)}% of rent`);
     } else if (largestPct >= 25) {
-      value += 3;
+      value += 1;
       flags.push(`Largest unit contributes ${largestPct.toFixed(1)}% of rent`);
     }
   }
@@ -325,10 +367,10 @@ function structuralPenalty(riskProfile: DealRiskProfile): PenaltyResult {
   if (rolloverShare != null) {
     const rolloverPct = rolloverShare * 100;
     if (rolloverPct > 40) {
-      value += 4;
+      value += 2;
       flags.push(`Lease rollover within 12 months is ${rolloverPct.toFixed(1)}% of rent`);
     } else if (rolloverPct >= 25) {
-      value += 2;
+      value += 1;
       flags.push(`Lease rollover within 12 months is ${rolloverPct.toFixed(1)}% of rent`);
     }
   }
@@ -337,28 +379,30 @@ function structuralPenalty(riskProfile: DealRiskProfile): PenaltyResult {
   if (coverage != null) {
     const coveragePct = coverage * 100;
     if (coveragePct < 50) {
-      value += 3;
+      value += 2;
       flags.push(`Rent-roll coverage only ${coveragePct.toFixed(0)}%`);
     } else if (coveragePct < 75) {
-      value += 2;
+      value += 1;
       flags.push(`Rent-roll coverage only ${coveragePct.toFixed(0)}%`);
     }
   }
 
-  if (riskProfile.missingLeaseDataMajority) {
-    value += 2;
+  if (riskProfile.missingLeaseDataMajority && (totalUnits ?? Number.POSITIVE_INFINITY) >= 4) {
+    value += 1;
     flags.push("Lease dates missing on more than half of rent-roll rows");
   }
 
   if (riskProfile.smallAssetRiskLevel === "under_5") {
-    value += 4;
-    flags.push("Small asset liquidity risk (<5 units)");
+    if ((totalUnits ?? Number.POSITIVE_INFINITY) >= 3) {
+      value += 1;
+      flags.push("Small asset liquidity risk (<5 units)");
+    }
   } else if (riskProfile.smallAssetRiskLevel === "5_to_9") {
-    value += 2;
+    value += 1;
     flags.push("Small asset liquidity risk (5-9 units)");
   }
 
-  return { value: Math.min(13, value), flags };
+  return { value: Math.min(8, value), flags };
 }
 
 function regulatoryPenalty(inputs: DealScoringInputs, riskProfile: DealRiskProfile): PenaltyResult {
@@ -366,54 +410,51 @@ function regulatoryPenalty(inputs: DealScoringInputs, riskProfile: DealRiskProfi
   const flags: string[] = [];
 
   if ((inputs.hpdRentImpairingOpen ?? 0) > 0) {
-    value += 6;
+    value += 5;
     flags.push("Open rent-impairing HPD violations");
   } else {
     const hpdOpen = inputs.hpdOpenCount ?? 0;
     if (hpdOpen >= 5) {
-      value += 4;
+      value += 3;
       flags.push(`${hpdOpen} open HPD violations`);
     } else if (hpdOpen > 0) {
-      value += 2;
+      value += 1;
       flags.push(`${hpdOpen} open HPD violations`);
     }
   }
 
   const dobRecentOrOpen = Math.max(inputs.dobOpenCount ?? 0, inputs.dobCount30 ?? 0);
   if (dobRecentOrOpen >= 3) {
-    value += 4;
+    value += 3;
     flags.push("Open or very recent DOB complaints");
   } else if (dobRecentOrOpen > 0 || (inputs.dobCount365 ?? 0) > 0) {
-    value += 2;
+    value += 1;
     flags.push("DOB complaint history");
   }
 
   const litigationPenaltyDriver = Math.max(inputs.litigationOpenCount ?? 0, inputs.litigationTotal ?? 0);
   if ((inputs.litigationOpenCount ?? 0) > 0 || (inputs.litigationTotalPenalty ?? 0) >= 5_000) {
-    value += 4;
+    value += 3;
     flags.push("Open housing litigation / penalty exposure");
   } else if (litigationPenaltyDriver > 0 || (inputs.litigationTotalPenalty ?? 0) > 0) {
-    value += 2;
+    value += 1;
     flags.push("Housing litigation history");
   }
 
   const taxBurdenPct = riskProfile.taxBurdenPct != null ? riskProfile.taxBurdenPct * 100 : null;
   if (taxBurdenPct != null) {
-    if (taxBurdenPct > 20) {
-      value += 3;
-      flags.push(`Tax burden ${taxBurdenPct.toFixed(1)}% of EGI`);
-    } else if (taxBurdenPct >= 12) {
+    if (taxBurdenPct > 25) {
       value += 1;
       flags.push(`Tax burden ${taxBurdenPct.toFixed(1)}% of EGI`);
     }
   }
 
-  if (riskProfile.isPackageOm || (riskProfile.explicitRecordMismatch && riskProfile.omDiscrepancyCount >= 2)) {
-    value += 2;
+  if (riskProfile.explicitRecordMismatch && riskProfile.omDiscrepancyCount >= 2) {
+    value += 1;
     flags.push("Package OM or explicit record mismatch needs verification");
   }
 
-  return { value: Math.min(10, value), flags };
+  return { value: Math.min(8, value), flags };
 }
 
 function confidenceScore(inputs: DealScoringInputs, riskProfile: DealRiskProfile): number {
@@ -450,19 +491,20 @@ function capScore(inputs: DealScoringInputs, riskProfile: DealRiskProfile, confi
   if (
     (irrPct != null && irrPct < 0) ||
     ((inputs.equityMultiple ?? Number.POSITIVE_INFINITY) < 1) ||
-    ((requiredDiscount ?? 0) > 25)
+    ((requiredDiscount ?? 0) > 50)
   ) {
-    score = Math.min(score, 40);
+    score = Math.min(score, 35);
     reasons.push("Financial viability cap");
-  } else if ((irrPct != null && irrPct < 10) || ((requiredDiscount ?? 0) >= 15 && (requiredDiscount ?? 0) <= 25)) {
-    score = Math.min(score, 55);
+  } else if ((irrPct != null && irrPct < 8) || (requiredDiscount ?? 0) > 40) {
+    score = Math.min(score, 50);
     reasons.push("Weak return / discount cap");
   }
 
   if (
-    ((riskProfile.commercialRevenueSharePct ?? 0) > 0.5) ||
-    ((riskProfile.rentStabilizedRevenueSharePct ?? 0) > 0.25) ||
-    ((riskProfile.largestUnitRevenueSharePct ?? 0) > 0.35)
+    (((riskProfile.commercialRevenueSharePct ?? 0) > 0.5) && ((riskProfile.largestUnitRevenueSharePct ?? 0) > 0.35)) ||
+    ((riskProfile.commercialRevenueSharePct ?? 0) > 0.6) ||
+    ((riskProfile.rentStabilizedRevenueSharePct ?? 0) > 0.5) ||
+    (((riskProfile.totalUnits ?? Number.POSITIVE_INFINITY) >= 4) && ((riskProfile.largestUnitRevenueSharePct ?? 0) > 0.6))
   ) {
     score = Math.min(score, 68);
     reasons.push("Structural concentration cap");
@@ -470,18 +512,18 @@ function capScore(inputs: DealScoringInputs, riskProfile: DealRiskProfile, confi
 
   if (
     (inputs.hpdRentImpairingOpen ?? 0) > 0 ||
-    confidence < 0.45 ||
+    confidence < 0.4 ||
     (riskProfile.rapidOmMismatch && riskProfile.omDiscrepancyCount >= 2)
   ) {
     score = Math.min(score, 60);
     reasons.push("Data / regulatory cap");
   }
-  if (confidence < 0.3) {
+  if (confidence < 0.25) {
     score = Math.min(score, 50);
     reasons.push("Very low confidence cap");
   }
 
-  if ((inputs.blendedRentUpliftPct ?? 0) > 50 && (riskProfile.rentRollCoveragePct ?? 1) < 0.75) {
+  if ((inputs.blendedRentUpliftPct ?? 0) > 65 && (riskProfile.rentRollCoveragePct ?? 1) < 0.6) {
     score = Math.min(score, 65);
     reasons.push("Unsupported upside cap");
   }
@@ -489,18 +531,25 @@ function capScore(inputs: DealScoringInputs, riskProfile: DealRiskProfile, confi
   return { score, reasons };
 }
 
-function buildPositiveSignals(inputs: DealScoringInputs, assetCapRate: number | null, discountPct: number | null): string[] {
+function buildPositiveSignals(
+  inputs: DealScoringInputs,
+  assetCapRate: number | null,
+  adjustedCapRate: number | null,
+  discountPct: number | null
+): string[] {
   const signals: string[] = [];
   const irrPct = asPct(inputs.irrPct);
   const cocPct = asPct(inputs.cocPct);
   if (irrPct != null && irrPct >= 20) signals.push(`IRR ${irrPct.toFixed(1)}%`);
+  else if (irrPct != null && irrPct >= 15) signals.push(`IRR ${irrPct.toFixed(1)}%`);
   if (cocPct != null && cocPct >= 8) signals.push(`Average CoC ${cocPct.toFixed(1)}%`);
   if (assetCapRate != null && assetCapRate >= 5.5) signals.push(`Ask cap ${assetCapRate.toFixed(2)}%`);
-  if (discountPct != null && discountPct <= 5) {
+  if (adjustedCapRate != null && adjustedCapRate >= 6.5) signals.push(`Adjusted cap ${adjustedCapRate.toFixed(2)}%`);
+  if (discountPct != null && discountPct <= 20) {
     signals.push(
       discountPct <= 0
         ? "Asking price clears target IRR"
-        : `Only ${discountPct.toFixed(1)}% discount needed to clear target IRR`
+        : `${discountPct.toFixed(1)}% discount clears target IRR`
     );
   }
   if (hasMeaningfulPriceCut(inputs)) {
@@ -535,15 +584,27 @@ export function computeDealScore(inputs: DealScoringInputs): DealScoringResult {
     scoreIrr(inputs.irrPct ?? null) +
     scoreCoc(inputs.cocPct ?? null) +
     scoreAskCap(assetCapRate) +
+    scoreAdjustedCap(adjustedCapRate) +
     scoreRequiredDiscount(discountPct) +
     scoreStabilizedSpread(assetCapRate, adjustedCapRate);
+  const smallResidentialOpportunityScore = scoreSmallResidentialOpportunity(
+    inputs,
+    assetCapRate,
+    adjustedCapRate,
+    discountPct,
+    riskProfile
+  );
   const marketScore = marketLiquidityScore(inputs, riskProfile);
   const assumption = assumptionPenalty(inputs, riskProfile, assetCapRate);
   const structural = structuralPenalty(riskProfile);
   const regulatory = regulatoryPenalty(inputs, riskProfile);
   const confidence = confidenceScore(inputs, riskProfile);
   const totalPenalty = assumption.value + structural.value + regulatory.value;
-  const rawCompositeScore = clamp(Math.round(returnScore + marketScore - totalPenalty), 0, MAX_COMPOSITE_SCORE);
+  const rawCompositeScore = clamp(
+    Math.round(returnScore + smallResidentialOpportunityScore + marketScore - totalPenalty),
+    0,
+    MAX_COMPOSITE_SCORE
+  );
   const preCapScore = normalizeCompositeScore(rawCompositeScore);
   const cap = capScore(inputs, riskProfile, confidence, preCapScore);
   const dealScore = isScoreable ? clamp(Math.round(cap.score), 0, 100) : 0;
@@ -573,7 +634,7 @@ export function computeDealScore(inputs: DealScoringInputs): DealScoringResult {
     locationScore: 0,
     riskScore: clamp(Math.round(100 - (totalPenalty / 35) * 100), 0, 100),
     liquidityScore: marketScore * 10,
-    positiveSignals: buildPositiveSignals(inputs, assetCapRate, discountPct),
+    positiveSignals: buildPositiveSignals(inputs, assetCapRate, adjustedCapRate, discountPct),
     negativeSignals,
     assetCapRate: round2(assetCapRate),
     adjustedCapRate: round2(adjustedCapRate),

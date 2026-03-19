@@ -46,10 +46,146 @@ describe("dealScoringEngine", () => {
       },
     });
 
-    expect(result.dealScore).toBeGreaterThanOrEqual(70);
-    expect(result.dealScore).toBeLessThanOrEqual(85);
+    expect(result.dealScore).toBeGreaterThanOrEqual(75);
+    expect(result.dealScore).toBeLessThanOrEqual(90);
     expect(result.confidenceScore).toBeGreaterThan(0.8);
     expect(result.capReasons).toHaveLength(0);
+  });
+
+  it("pushes small, high-adjusted-cap townhouse opportunities into the target high-conviction range", () => {
+    const result = computeDealScore({
+      purchasePrice: 3_999_000,
+      noi: 197_368,
+      grossRentalIncome: 312_000,
+      adjustedCapRatePct: 6.98,
+      adjustedNoi: 278_970,
+      irrPct: 0.1787,
+      cocPct: 0.0363,
+      equityMultiple: 2.26,
+      recommendedOfferHigh: 3_539_000,
+      blendedRentUpliftPct: 70,
+      annualExpenseGrowthPct: 1,
+      vacancyPct: 15,
+      exitCapRatePct: 5,
+      hasDetailedExpenseRows: true,
+      totalUnits: 2,
+      riskProfile: {
+        commercialRevenueSharePct: 0,
+        rentStabilizedRevenueSharePct: 0,
+        largestUnitRevenueSharePct: 0.54,
+        rollover12moRevenueSharePct: 0,
+        rentRollCoveragePct: 1,
+        omDiscrepancyCount: 1,
+        rapidOmMismatch: false,
+        taxBurdenPct: 0.25,
+        unsupportedRentGrowthPct: 0,
+        missingLeaseDataPct: 1,
+        missingOccupancyDataPct: 0,
+        missingLeaseDataMajority: true,
+        missingOccupancyDataMajority: false,
+        smallAssetRiskLevel: "under_5",
+        isPackageOm: true,
+        missingEnrichmentGroup: false,
+        explicitRecordMismatch: false,
+        totalUnits: 2,
+        usableRentRowsCount: 2,
+        rentRowsCount: 2,
+      },
+    });
+
+    expect(result.dealScore).toBeGreaterThanOrEqual(80);
+    expect(result.dealScore).toBeLessThanOrEqual(85);
+    expect(result.positiveSignals).toContain("Adjusted cap 6.98%");
+  });
+
+  it("keeps mid-quality mixed-use package deals in a medium range instead of forcing them into near-zero scores", () => {
+    const result = computeDealScore({
+      purchasePrice: 8_135_000,
+      noi: 446_272,
+      grossRentalIncome: 617_208,
+      adjustedCapRatePct: 6.35,
+      adjustedNoi: 516_601,
+      irrPct: 0.1255,
+      cocPct: 0.0235,
+      equityMultiple: 1.79,
+      recommendedOfferHigh: 6_665_000,
+      blendedRentUpliftPct: 36.08,
+      annualExpenseGrowthPct: 1,
+      vacancyPct: 15,
+      exitCapRatePct: 5,
+      hasDetailedExpenseRows: true,
+      totalUnits: 10,
+      riskProfile: {
+        commercialRevenueSharePct: 0.46,
+        rentStabilizedRevenueSharePct: 0.04,
+        largestUnitRevenueSharePct: 0.23,
+        rollover12moRevenueSharePct: 0.29,
+        rentRollCoveragePct: 1,
+        omDiscrepancyCount: 1,
+        rapidOmMismatch: false,
+        taxBurdenPct: 0.17,
+        unsupportedRentGrowthPct: 0,
+        missingLeaseDataPct: 0,
+        missingOccupancyDataPct: 0,
+        missingLeaseDataMajority: false,
+        missingOccupancyDataMajority: false,
+        smallAssetRiskLevel: "none",
+        isPackageOm: true,
+        missingEnrichmentGroup: false,
+        explicitRecordMismatch: false,
+        totalUnits: 10,
+        usableRentRowsCount: 10,
+        rentRowsCount: 10,
+      },
+    });
+
+    expect(result.dealScore).toBeGreaterThanOrEqual(40);
+    expect(result.dealScore).toBeLessThanOrEqual(65);
+  });
+
+  it("does not let the townhouse opportunity overlay rescue small assets with negative returns", () => {
+    const result = computeDealScore({
+      purchasePrice: 4_750_000,
+      noi: 159_414,
+      grossRentalIncome: 224_400,
+      adjustedCapRatePct: 4.57,
+      adjustedNoi: 216_938,
+      irrPct: -0.1413,
+      cocPct: -0.0353,
+      equityMultiple: 0.56,
+      recommendedOfferHigh: 2_746_000,
+      blendedRentUpliftPct: 70,
+      annualExpenseGrowthPct: 1,
+      vacancyPct: 15,
+      exitCapRatePct: 5,
+      hasDetailedExpenseRows: true,
+      totalUnits: 4,
+      riskProfile: {
+        commercialRevenueSharePct: 0,
+        rentStabilizedRevenueSharePct: 0,
+        largestUnitRevenueSharePct: 0.32,
+        rollover12moRevenueSharePct: 0,
+        rentRollCoveragePct: 1,
+        omDiscrepancyCount: 1,
+        rapidOmMismatch: false,
+        taxBurdenPct: 0.18,
+        unsupportedRentGrowthPct: 0,
+        missingLeaseDataPct: 0.25,
+        missingOccupancyDataPct: 0.25,
+        missingLeaseDataMajority: false,
+        missingOccupancyDataMajority: false,
+        smallAssetRiskLevel: "under_5",
+        isPackageOm: true,
+        missingEnrichmentGroup: false,
+        explicitRecordMismatch: false,
+        totalUnits: 4,
+        usableRentRowsCount: 4,
+        rentRowsCount: 4,
+      },
+    });
+
+    expect(result.dealScore).toBeLessThanOrEqual(10);
+    expect(result.capReasons).toContain("Financial viability cap");
   });
 
   it("caps structurally risky mixed-use deals even when returns are strong", () => {
@@ -139,7 +275,7 @@ describe("dealScoringEngine", () => {
       },
     });
 
-    expect(result.dealScore).toBeLessThanOrEqual(40);
+    expect(result.dealScore).toBeLessThanOrEqual(35);
     expect(result.capReasons).toContain("Financial viability cap");
     expect(resolveFinalDealScore({ llmScore: 90, deterministicScore: result.dealScore })).toBe(result.dealScore);
   });

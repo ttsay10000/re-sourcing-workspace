@@ -192,7 +192,7 @@ describe("computeDealSignals", () => {
     expect(result.insertParams.scoreBreakdown).toBeTruthy();
     expect(result.insertParams.riskProfile).toBeTruthy();
     expect(result.insertParams.confidenceScore).toBeLessThan(1);
-    expect(result.insertParams.scoreVersion).toBe("v2");
+    expect(result.insertParams.scoreVersion).toBe("v3");
   });
 
   it("prefers authoritative OM annual taxes over stale legacy tax fields", () => {
