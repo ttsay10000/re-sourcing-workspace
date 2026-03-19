@@ -5,6 +5,7 @@ import {
   deriveListingActivitySummary,
   describeListingActivity,
   type ListingActivitySummary,
+  type PropertyManualSourceLinks,
   type RecipientContactCandidate,
   type RecipientResolution,
 } from "@re-sourcing/contracts";
@@ -128,6 +129,30 @@ interface BrokerEmailOption {
   email: string;
   name: string | null;
   firm: string | null;
+}
+
+function normalizePropertyManualSourceLinks(value: unknown): PropertyManualSourceLinks | null {
+  if (!value || typeof value !== "object") return null;
+  const links = value as Record<string, unknown>;
+  const normalized: PropertyManualSourceLinks = {
+    streetEasyUrl: typeof links.streetEasyUrl === "string" ? links.streetEasyUrl : null,
+    omUrl: typeof links.omUrl === "string" ? links.omUrl : null,
+    addedAt: typeof links.addedAt === "string" ? links.addedAt : null,
+    omImportedAt: typeof links.omImportedAt === "string" ? links.omImportedAt : null,
+    omDocumentId: typeof links.omDocumentId === "string" ? links.omDocumentId : null,
+    omFileName: typeof links.omFileName === "string" ? links.omFileName : null,
+  };
+  if (
+    !normalized.streetEasyUrl &&
+    !normalized.omUrl &&
+    !normalized.addedAt &&
+    !normalized.omImportedAt &&
+    !normalized.omDocumentId &&
+    !normalized.omFileName
+  ) {
+    return null;
+  }
+  return normalized;
 }
 
 function normalizeInquiryGuardHistoryRows(value: unknown): InquiryGuardHistoryRow[] {
@@ -979,6 +1004,7 @@ export function CanonicalPropertyDetail({
   const lon = d?.lon ?? d?.longitude;
   const monthlyHoa = d?.monthlyHoa ?? d?.monthly_hoa;
   const monthlyTax = d?.monthlyTax ?? d?.monthly_tax;
+  const manualSourceLinks = normalizePropertyManualSourceLinks(d?.manualSourceLinks);
   const ownerInfo = d?.ownerInfo ?? d?.owner_info;
   const ownerModuleName = d?.ownerModuleName ?? d?.owner_module_name ?? null;
   const ownerModuleBusiness = d?.ownerModuleBusiness ?? d?.owner_module_business ?? null;
@@ -1574,6 +1600,45 @@ export function CanonicalPropertyDetail({
                 )}
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {manualSourceLinks && (
+        <div className="linked-listing-bar" style={{ marginTop: "0.5rem", marginBottom: "0.5rem" }}>
+          <div className="linked-listing-bar-inner" style={{ flexWrap: "wrap", gap: "0.75rem" }}>
+            <div className="property-metric">
+              <div className="property-metric-label">Manual add</div>
+              <div className="property-metric-value">
+                {manualSourceLinks.addedAt ? formatDateOnly(manualSourceLinks.addedAt) : "Saved"}
+              </div>
+            </div>
+            {manualSourceLinks.streetEasyUrl && manualSourceLinks.streetEasyUrl !== listingForDisplay?.url ? (
+              <div className="property-metric">
+                <div className="property-metric-label">StreetEasy link</div>
+                <div className="property-metric-value">
+                  <a href={manualSourceLinks.streetEasyUrl} target="_blank" rel="noopener noreferrer">
+                    open source
+                  </a>
+                </div>
+              </div>
+            ) : null}
+            {manualSourceLinks.omUrl ? (
+              <div className="property-metric">
+                <div className="property-metric-label">OM link</div>
+                <div className="property-metric-value">
+                  <a href={manualSourceLinks.omUrl} target="_blank" rel="noopener noreferrer">
+                    {manualSourceLinks.omFileName?.trim() || "open OM"}
+                  </a>
+                </div>
+              </div>
+            ) : null}
+            {manualSourceLinks.omImportedAt ? (
+              <div className="property-metric">
+                <div className="property-metric-label">OM imported</div>
+                <div className="property-metric-value">{formatDateOnly(manualSourceLinks.omImportedAt)}</div>
+              </div>
+            ) : null}
           </div>
         </div>
       )}

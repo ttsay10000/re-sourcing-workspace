@@ -183,6 +183,24 @@ interface BulkInquirySendResponse {
   results: BulkInquirySendResultRow[];
 }
 
+interface ManualAddResponse {
+  ok: boolean;
+  propertyId: string;
+  listingId: string;
+  canonicalAddress: string;
+  createdProperty: boolean;
+  createdListing: boolean;
+  omImport?: {
+    requested?: boolean;
+    imported?: boolean;
+    omUrl?: string | null;
+    resolvedOmUrl?: string | null;
+    fileName?: string | null;
+    authoritativeOmBuilt?: boolean;
+    warning?: string | null;
+  } | null;
+}
+
 interface DossierNotice {
   type: "success" | "error";
   message: string;
@@ -407,6 +425,11 @@ function PropertyDataContent() {
   const [duplicateCandidates, setDuplicateCandidates] = useState<ListingRow[]>([]);
   const [loadingDup, setLoadingDup] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [manualAddModalOpen, setManualAddModalOpen] = useState(false);
+  const [manualAddDraft, setManualAddDraft] = useState({ streetEasyUrl: "", omUrl: "" });
+  const [manualAddSubmitting, setManualAddSubmitting] = useState(false);
+  const [manualAddError, setManualAddError] = useState<string | null>(null);
+  const [manualAddNotice, setManualAddNotice] = useState<DossierNotice | null>(null);
   const [canonicalProperties, setCanonicalProperties] = useState<CanonicalProperty[]>([]);
   const [loadingCanonical, setLoadingCanonical] = useState(false);
   const [sendingToCanonical, setSendingToCanonical] = useState(false);
@@ -519,6 +542,12 @@ function PropertyDataContent() {
     const timeoutId = window.setTimeout(() => setDossierNotice(null), 7000);
     return () => window.clearTimeout(timeoutId);
   }, [dossierNotice]);
+
+  useEffect(() => {
+    if (!manualAddNotice) return;
+    const timeoutId = window.setTimeout(() => setManualAddNotice(null), 7000);
+    return () => window.clearTimeout(timeoutId);
+  }, [manualAddNotice]);
 
   const anyRunningDossierJobs = Object.values(localDossierJobs).some((job) => job.status === "running");
 
@@ -1174,6 +1203,62 @@ function PropertyDataContent() {
       .finally(() => setSendingToCanonical(false));
   };
 
+  const handleManualAddProperty = async () => {
+    const streetEasyUrl = manualAddDraft.streetEasyUrl.trim();
+    const omUrl = manualAddDraft.omUrl.trim();
+    if (!streetEasyUrl) {
+      setManualAddError("StreetEasy URL is required.");
+      return;
+    }
+
+    setManualAddSubmitting(true);
+    setManualAddError(null);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/properties/manual-add`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          streetEasyUrl,
+          omUrl: omUrl || null,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      const message =
+        typeof data?.details === "string"
+          ? data.details
+          : typeof data?.error === "string"
+            ? data.error
+            : `Request failed (${res.status})`;
+      if (!res.ok || data?.error) throw new Error(message);
+
+      const payload = data as ManualAddResponse;
+      const omWarning = payload.omImport?.warning?.trim() || "";
+      const omMessage =
+        payload.omImport?.imported && payload.omImport?.fileName
+          ? ` OM saved as ${payload.omImport.fileName}.`
+          : payload.omImport?.requested && omWarning
+            ? ` StreetEasy import succeeded, but OM import needs attention: ${omWarning}`
+            : "";
+      setManualAddNotice({
+        type: payload.omImport?.requested && !payload.omImport?.imported && omWarning ? "error" : "success",
+        message: `Added ${payload.canonicalAddress}.${omMessage}`.trim(),
+      });
+      setManualAddDraft({ streetEasyUrl: "", omUrl: "" });
+      setManualAddModalOpen(false);
+      setActiveTab("canonical");
+      setExpandedCanonicalId(payload.propertyId);
+      fetchListings();
+      fetchCanonicalProperties();
+      fetchPipelineStats(true);
+      fetchWorkflowBoard();
+    } catch (err) {
+      setManualAddError(err instanceof Error ? err.message : "Failed to add property.");
+    } finally {
+      setManualAddSubmitting(false);
+    }
+  };
+
   const toggleListingSelection = (id: string) => {
     setSelectedListingIds((prev) => {
       const next = new Set(prev);
@@ -1348,6 +1433,20 @@ function PropertyDataContent() {
           {decodeURIComponent(sentMessage)}
         </div>
       )}
+      {manualAddNotice && (
+        <div
+          className="card"
+          style={{
+            marginBottom: "1rem",
+            padding: "0.85rem 1rem",
+            background: manualAddNotice.type === "success" ? "#f0fdf4" : "#fff7ed",
+            borderColor: manualAddNotice.type === "success" ? "#86efac" : "#fdba74",
+            color: manualAddNotice.type === "success" ? "#166534" : "#9a3412",
+          }}
+        >
+          {manualAddNotice.message}
+        </div>
+      )}
       {bulkInquiryResult && (
         <div
           className="card"
@@ -1413,7 +1512,10 @@ function PropertyDataContent() {
         </div>
       )}
 
-      <div className="property-data-search-row">
+      <div
+        className="property-data-search-row"
+        style={{ display: "flex", gap: "0.75rem", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap" }}
+      >
         <input
           type="search"
           placeholder="Search by address, property ID, listing ID, or area"
@@ -1421,7 +1523,18 @@ function PropertyDataContent() {
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           aria-label="Search properties"
+          style={{ flex: "1 1 24rem", maxWidth: "32rem" }}
         />
+        <button
+          type="button"
+          className="btn-secondary"
+          onClick={() => {
+            setManualAddError(null);
+            setManualAddModalOpen(true);
+          }}
+        >
+          Manual add property
+        </button>
       </div>
 
       <div className="property-data-tabs-row">
@@ -2047,6 +2160,88 @@ function PropertyDataContent() {
             <div style={{ marginTop: "1rem", paddingTop: "0.75rem", borderTop: "1px solid #e5e5e5" }}>
               <button type="button" className="btn-primary" onClick={() => setReviewDupOpen(false)}>Close</button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {manualAddModalOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="manual-add-title"
+          style={{ position: "fixed", inset: 0, background: "rgba(15, 23, 42, 0.45)", zIndex: 1100, display: "flex", alignItems: "center", justifyContent: "center", padding: "1rem" }}
+        >
+          <div className="card" style={{ width: "100%", maxWidth: "620px" }}>
+            <h2 id="manual-add-title" style={{ margin: 0, marginBottom: "0.75rem", fontSize: "1.15rem" }}>
+              Manual add property
+            </h2>
+            <p style={{ marginTop: 0, marginBottom: "1rem", color: "#475569", fontSize: "0.92rem", lineHeight: 1.5 }}>
+              Paste a StreetEasy sale URL to create or update the raw listing and canonical property. Add a direct OM document link too and we’ll save it into Documents automatically when it resolves to a downloadable file.
+            </p>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                void handleManualAddProperty();
+              }}
+            >
+              <label style={{ display: "block", marginBottom: "0.85rem" }}>
+                <span style={{ display: "block", marginBottom: "0.35rem", fontSize: "0.82rem", fontWeight: 600, color: "#0f172a" }}>
+                  StreetEasy URL
+                </span>
+                <input
+                  type="url"
+                  required
+                  autoFocus
+                  className="input-text"
+                  placeholder="https://streeteasy.com/sale/..."
+                  value={manualAddDraft.streetEasyUrl}
+                  onChange={(e) => setManualAddDraft((prev) => ({ ...prev, streetEasyUrl: e.target.value }))}
+                  style={{ width: "100%" }}
+                />
+              </label>
+              <label style={{ display: "block", marginBottom: "0.35rem" }}>
+                <span style={{ display: "block", marginBottom: "0.35rem", fontSize: "0.82rem", fontWeight: 600, color: "#0f172a" }}>
+                  OM URL
+                </span>
+                <input
+                  type="url"
+                  className="input-text"
+                  placeholder="https://.../offering-memo.pdf"
+                  value={manualAddDraft.omUrl}
+                  onChange={(e) => setManualAddDraft((prev) => ({ ...prev, omUrl: e.target.value }))}
+                  style={{ width: "100%" }}
+                />
+              </label>
+              <p style={{ margin: "0 0 1rem", fontSize: "0.8rem", color: "#64748b", lineHeight: 1.5 }}>
+                The OM link works best when it points directly to a PDF or downloadable file rather than an HTML landing page.
+              </p>
+              {manualAddError && (
+                <p style={{ margin: "0 0 1rem", color: "#b91c1c", fontSize: "0.85rem" }}>
+                  {manualAddError}
+                </p>
+              )}
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.6rem", flexWrap: "wrap" }}>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => {
+                    if (manualAddSubmitting) return;
+                    setManualAddModalOpen(false);
+                    setManualAddError(null);
+                  }}
+                  disabled={manualAddSubmitting}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="btn-primary"
+                  disabled={Boolean(manualAddSubmitting || !manualAddDraft.streetEasyUrl.trim())}
+                >
+                  {manualAddSubmitting ? "Adding…" : "Add property"}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

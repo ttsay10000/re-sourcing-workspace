@@ -9,6 +9,7 @@ import {
   ListingRepo,
   PropertyRepo,
   MatchRepo,
+  SnapshotRepo,
   PermitRepo,
   PropertyEnrichmentStateRepo,
   HpdViolationsRepo,
@@ -28,6 +29,7 @@ import {
   type AgentEnrichmentEntry,
   type PriceHistoryEntry,
   type PropertyDocumentCategory,
+  type PropertyManualSourceLinks,
   type RecipientContactCandidate,
 } from "@re-sourcing/contracts";
 import multer from "multer";
@@ -46,11 +48,13 @@ import { suggestRentalDataGaps } from "../rental/suggestRentalDataGaps.js";
 import { getRentRollComparison } from "../rental/rentRollComparison.js";
 import { fetchNyDosEntityByName } from "../enrichment/nyDosEntity.js";
 import { fetchAcrisDocumentsByOwnerName } from "../enrichment/acrisDocuments.js";
+import { enrichBrokers, hasMeaningfulBrokerEnrichment } from "../enrichment/brokerEnrichment.js";
 import { resolveEffectiveDealScore } from "../deal/effectiveDealScore.js";
 import { getPersistedDossierSignals } from "../deal/persistedDossierSignals.js";
 import { getPropertyDossierSummary, hasCompletedDealDossier } from "../deal/propertyDossierState.js";
 import { resolveGeneratedDocPath, deleteGeneratedDocumentFile } from "../deal/generatedDocStorage.js";
 import { unlink } from "fs/promises";
+import { basename, extname } from "path";
 import {
   createWorkflowRun,
   deriveWorkflowStatusFromCounts,
@@ -67,12 +71,192 @@ import {
   syncPropertySourcingWorkflow,
   syncRecipientResolution,
 } from "../sourcing/workflow.js";
+import { normalizeStreetEasySaleDetails } from "../sourcing/normalizeStreetEasyListing.js";
 import { refreshAuthoritativeOmForProperty } from "../om/ingestAuthoritativeOm.js";
+import { fetchSaleDetailsByUrl } from "../nycRealEstateApi.js";
 
 const router = Router();
 
 const ENRICHMENT_RATE_LIMIT_DELAY_MS = Number(process.env.ENRICHMENT_RATE_LIMIT_DELAY_MS || process.env.PERMITS_RATE_LIMIT_DELAY_MS) || 300;
 const ENABLE_OM_AUTOMATION_V2 = process.env.ENABLE_OM_AUTOMATION_V2 === "1";
+const MANUAL_OM_MAX_BYTES = Number(process.env.MANUAL_OM_MAX_BYTES || 25 * 1024 * 1024);
+const MANUAL_OM_DOWNLOAD_TIMEOUT_MS = Number(process.env.MANUAL_OM_DOWNLOAD_TIMEOUT_MS || 20_000);
+
+function normalizeManualUrl(
+  value: unknown,
+  options?: { requireStreetEasyHost?: boolean }
+): string | null | "invalid" {
+  if (value == null || value === "") return null;
+  if (typeof value !== "string") return "invalid";
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  try {
+    const parsed = new URL(trimmed);
+    if (!["http:", "https:"].includes(parsed.protocol)) return "invalid";
+    if (options?.requireStreetEasyHost) {
+      const host = parsed.hostname.toLowerCase();
+      if (host !== "streeteasy.com" && !host.endsWith(".streeteasy.com")) return "invalid";
+    }
+    return trimmed;
+  } catch {
+    return "invalid";
+  }
+}
+
+function readManualSourceLinks(details: PropertyDetails | null | undefined): PropertyManualSourceLinks {
+  const raw = details?.manualSourceLinks;
+  if (!raw || typeof raw !== "object") return {};
+  return raw as PropertyManualSourceLinks;
+}
+
+function mergeManualSourceLinks(
+  details: PropertyDetails | null | undefined,
+  patch: Partial<PropertyManualSourceLinks>
+): PropertyManualSourceLinks {
+  return {
+    ...readManualSourceLinks(details),
+    ...patch,
+  };
+}
+
+function coerceNonNegativeDetailNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value) && value >= 0) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = parseFloat(value.replace(/[$,]/g, ""));
+    if (Number.isFinite(parsed) && parsed >= 0) return parsed;
+  }
+  return null;
+}
+
+function buildPropertyDetailsMergeFromListing(listing: {
+  lat?: number | null;
+  lon?: number | null;
+  extra?: Record<string, unknown> | null;
+}): Record<string, unknown> {
+  const merge: Record<string, unknown> = {};
+  if (
+    listing.lat != null &&
+    typeof listing.lat === "number" &&
+    !Number.isNaN(listing.lat) &&
+    listing.lon != null &&
+    typeof listing.lon === "number" &&
+    !Number.isNaN(listing.lon)
+  ) {
+    merge.lat = listing.lat;
+    merge.lon = listing.lon;
+  }
+  const extra = listing.extra;
+  if (extra && typeof extra === "object") {
+    const bbl = extra.bbl ?? extra.BBL ?? extra.borough_block_lot;
+    const bin = extra.bin ?? extra.BIN ?? extra.building_identification_number;
+    const bblStr = typeof bbl === "string" && /^\d{10}$/.test(bbl.trim()) ? bbl.trim() : null;
+    if (bblStr) {
+      merge.bbl = bblStr;
+      if (typeof bin === "string" && bin.trim()) merge.bin = bin.trim();
+    }
+    const monthlyHoa = coerceNonNegativeDetailNumber(extra.monthlyHoa ?? extra.monthly_hoa ?? extra.hoa);
+    const monthlyTax = coerceNonNegativeDetailNumber(extra.monthlyTax ?? extra.monthly_tax ?? extra.tax);
+    if (monthlyHoa != null) merge.monthlyHoa = monthlyHoa;
+    if (monthlyTax != null) merge.monthlyTax = monthlyTax;
+  }
+  return merge;
+}
+
+function decodeFilename(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+function fileNameFromContentDisposition(header: string | null): string | null {
+  if (!header) return null;
+  const encodedMatch = header.match(/filename\*\s*=\s*UTF-8''([^;]+)/i);
+  if (encodedMatch?.[1]) return decodeFilename(encodedMatch[1].trim().replace(/^"(.*)"$/, "$1"));
+  const plainMatch = header.match(/filename\s*=\s*"?([^";]+)"?/i);
+  return plainMatch?.[1] ? decodeFilename(plainMatch[1].trim()) : null;
+}
+
+function fileNameFromUrl(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    const name = basename(parsed.pathname);
+    if (!name || name === "/") return null;
+    return decodeFilename(name);
+  } catch {
+    return null;
+  }
+}
+
+function ensureDownloadedDocumentFilename(filename: string | null, contentType: string | null): string {
+  const trimmed = filename?.trim() || "document";
+  if (contentType?.toLowerCase().includes("pdf") && !/\.pdf$/i.test(trimmed)) {
+    return `${trimmed}.pdf`;
+  }
+  return trimmed;
+}
+
+async function downloadManualOmDocument(url: string): Promise<{
+  buffer: Buffer;
+  contentType: string | null;
+  filename: string;
+  resolvedUrl: string;
+}> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), MANUAL_OM_DOWNLOAD_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, { redirect: "follow", signal: controller.signal });
+    if (!response.ok) {
+      const message = await response.text().catch(() => response.statusText);
+      throw new Error(`OM download failed (${response.status}): ${message || response.statusText}`);
+    }
+
+    const contentLengthHeader = response.headers.get("content-length");
+    const contentLength = contentLengthHeader ? parseInt(contentLengthHeader, 10) : NaN;
+    if (Number.isFinite(contentLength) && contentLength > MANUAL_OM_MAX_BYTES) {
+      throw new Error(`OM file is too large (${contentLength} bytes).`);
+    }
+
+    const buffer = Buffer.from(await response.arrayBuffer());
+    if (buffer.length === 0) {
+      throw new Error("OM link returned an empty file.");
+    }
+    if (buffer.length > MANUAL_OM_MAX_BYTES) {
+      throw new Error(`OM file is too large (${buffer.length} bytes).`);
+    }
+
+    const contentType = response.headers.get("content-type");
+    const preview = buffer.subarray(0, 256).toString("utf8").trimStart().toLowerCase();
+    if (
+      contentType?.toLowerCase().includes("text/html") &&
+      (preview.startsWith("<!doctype html") || preview.startsWith("<html"))
+    ) {
+      throw new Error("OM link returned HTML instead of a downloadable document.");
+    }
+
+    const filename = ensureDownloadedDocumentFilename(
+      fileNameFromContentDisposition(response.headers.get("content-disposition"))
+        ?? fileNameFromUrl(response.url)
+        ?? fileNameFromUrl(url),
+      contentType
+    );
+
+    return {
+      buffer,
+      contentType,
+      filename,
+      resolvedUrl: response.url || url,
+    };
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error("Timed out while downloading the OM document.");
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
 
 function isMissingPropertyScoringSchemaError(err: unknown): boolean {
   if (!err || typeof err !== "object") return false;
@@ -333,6 +517,214 @@ router.delete("/properties", async (req: Request, res: Response) => {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[properties delete all]", err);
     res.status(503).json({ error: "Failed to clear canonical properties.", details: message });
+  }
+});
+
+/** POST /api/properties/manual-add - create/update a property directly from a StreetEasy URL and optional OM document link. */
+router.post("/properties/manual-add", async (req: Request, res: Response) => {
+  const streetEasyUrl = normalizeManualUrl(req.body?.streetEasyUrl ?? req.body?.streeteasyUrl, {
+    requireStreetEasyHost: true,
+  });
+  const omUrl = normalizeManualUrl(req.body?.omUrl);
+
+  if (streetEasyUrl == null) {
+    res.status(400).json({ error: "streetEasyUrl is required." });
+    return;
+  }
+  if (streetEasyUrl === "invalid") {
+    res.status(400).json({ error: "streetEasyUrl must be a valid StreetEasy URL." });
+    return;
+  }
+  if (omUrl === "invalid") {
+    res.status(400).json({ error: "omUrl must be a valid http(s) URL when provided." });
+    return;
+  }
+
+  let propertyId = "";
+  let listingId = "";
+  let canonicalAddress = "";
+  let createdProperty = false;
+  let createdListing = false;
+  let manualSourceLinks: PropertyManualSourceLinks | null = null;
+
+  try {
+    const raw = await fetchSaleDetailsByUrl(streetEasyUrl);
+    const normalized = normalizeStreetEasySaleDetails({ ...raw, _fetchUrl: streetEasyUrl }, 0);
+    const addressLine = normalizeAddressLineForDisplay(normalized.address?.trim() ?? "");
+    canonicalAddress = [addressLine, normalized.city, normalized.state, normalized.zip].filter(Boolean).join(", ");
+    if (!canonicalAddress || addressLine === "—") {
+      res.status(422).json({ error: "StreetEasy response did not include a usable address." });
+      return;
+    }
+
+    const pool = getPool();
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const listingRepo = new ListingRepo({ pool, client });
+      const propertyRepo = new PropertyRepo({ pool, client });
+      const matchRepo = new MatchRepo({ pool, client });
+      const snapshotRepo = new SnapshotRepo({ pool, client });
+
+      const existingListing = await listingRepo.bySourceAndExternalId(normalized.source, normalized.externalId);
+      if (existingListing) {
+        normalized.agentEnrichment = existingListing.agentEnrichment ?? null;
+        normalized.priceHistory = normalized.priceHistory ?? existingListing.priceHistory ?? null;
+        normalized.rentalPriceHistory = normalized.rentalPriceHistory ?? existingListing.rentalPriceHistory ?? null;
+      }
+
+      if (Array.isArray(normalized.agentNames) && normalized.agentNames.length > 0) {
+        const propertyContext = [normalized.address, normalized.city, normalized.zip].filter(Boolean).join(", ") || undefined;
+        try {
+          const agentEnrichment = await enrichBrokers(normalized.agentNames, propertyContext);
+          if (hasMeaningfulBrokerEnrichment(agentEnrichment)) {
+            normalized.agentEnrichment = agentEnrichment;
+          }
+        } catch (error) {
+          console.warn(
+            `[properties manual-add] broker enrichment failed for ${normalized.externalId}:`,
+            error instanceof Error ? error.message : error
+          );
+        }
+      }
+
+      const existingProperty = await propertyRepo.byCanonicalAddress(canonicalAddress);
+      const listingUpsert = await listingRepo.upsert(normalized, { uploadedRunId: null });
+      const property = await propertyRepo.create(canonicalAddress);
+      await matchRepo.create({
+        listingId: listingUpsert.listing.id,
+        propertyId: property.id,
+        confidence: 1,
+        reasons: { addressMatch: true, normalizedAddressDistance: 0 },
+      });
+      await snapshotRepo.create({
+        listingId: listingUpsert.listing.id,
+        runId: null,
+        rawPayloadPath: "inline",
+        metadata: {
+          manualAdd: true,
+          capturedAt: new Date().toISOString(),
+          rawPayload: { ...raw, _fetchUrl: streetEasyUrl },
+          agentEnrichment: normalized.agentEnrichment ?? null,
+          priceHistory: normalized.priceHistory ?? null,
+          rentalPriceHistory: normalized.rentalPriceHistory ?? null,
+          normalizedListing: {
+            source: normalized.source,
+            externalId: normalized.externalId,
+            address: normalized.address,
+            city: normalized.city,
+            state: normalized.state,
+            zip: normalized.zip,
+            url: normalized.url,
+          },
+        },
+      });
+
+      createdListing = listingUpsert.created;
+      createdProperty = existingProperty == null;
+      propertyId = property.id;
+      listingId = listingUpsert.listing.id;
+      manualSourceLinks = mergeManualSourceLinks(existingProperty?.details ?? property.details, {
+        streetEasyUrl,
+        omUrl: omUrl ?? null,
+        addedAt: new Date().toISOString(),
+      });
+      const propertyDetailsMerge = buildPropertyDetailsMergeFromListing(listingUpsert.listing);
+      propertyDetailsMerge.manualSourceLinks = manualSourceLinks;
+      await propertyRepo.mergeDetails(property.id, propertyDetailsMerge);
+
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    const propertyRepo = new PropertyRepo({ pool });
+    const uploadedDocRepo = new PropertyUploadedDocumentRepo({ pool });
+    const omImport: {
+      requested: boolean;
+      imported: boolean;
+      omUrl: string | null;
+      resolvedOmUrl: string | null;
+      fileName: string | null;
+      authoritativeOmBuilt: boolean;
+      warning: string | null;
+    } = {
+      requested: Boolean(omUrl),
+      imported: false,
+      omUrl: omUrl ?? null,
+      resolvedOmUrl: null,
+      fileName: null,
+      authoritativeOmBuilt: false,
+      warning: null,
+    };
+
+    if (omUrl) {
+      try {
+        const downloaded = await downloadManualOmDocument(omUrl);
+        const docId = randomUUID();
+        const filePath = await saveUploadedDocument(propertyId, docId, downloaded.filename, downloaded.buffer);
+        const inserted = await uploadedDocRepo.insert({
+          id: docId,
+          propertyId,
+          filename: downloaded.filename,
+          contentType: downloaded.contentType,
+          filePath,
+          category: "OM",
+          source: "Manual OM link",
+          fileContent: downloaded.buffer,
+        });
+        omImport.imported = true;
+        omImport.resolvedOmUrl = downloaded.resolvedUrl;
+        omImport.fileName = inserted.filename;
+        manualSourceLinks = mergeManualSourceLinks((await propertyRepo.byId(propertyId))?.details ?? null, {
+          streetEasyUrl,
+          omUrl: downloaded.resolvedUrl,
+          omImportedAt: inserted.createdAt,
+          omDocumentId: inserted.id,
+          omFileName: inserted.filename,
+        });
+        await propertyRepo.mergeDetails(propertyId, { manualSourceLinks });
+        await syncPropertySourcingWorkflow(propertyId, { pool });
+
+        const isPdf =
+          downloaded.contentType?.toLowerCase().includes("pdf") ||
+          extname(inserted.filename).toLowerCase() === ".pdf";
+        if (isPdf) {
+          const refreshResult = await refreshOmFinancialsForProperty(propertyId, pool);
+          omImport.authoritativeOmBuilt = refreshResult.documentsProcessed > 0 && !refreshResult.error;
+          if (refreshResult.error) omImport.warning = refreshResult.error;
+        } else {
+          omImport.warning = "OM document was saved, but authoritative OM build currently expects a PDF.";
+        }
+      } catch (error) {
+        omImport.warning = error instanceof Error ? error.message : "Failed to import OM link.";
+      }
+    }
+
+    await syncPropertySourcingWorkflow(propertyId, { pool });
+    const property = await propertyRepo.byId(propertyId);
+
+    res.status(createdProperty ? 201 : 200).json({
+      ok: true,
+      propertyId,
+      listingId,
+      canonicalAddress,
+      createdProperty,
+      createdListing,
+      omImport,
+      property,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[properties manual-add]", err);
+    if (/DATABASE_URL|connection|ECONNREFUSED|getPool/i.test(message)) {
+      res.status(503).json({ error: "Database unavailable.", details: message });
+      return;
+    }
+    res.status(502).json({ error: "Failed to add property from links.", details: message });
   }
 });
 

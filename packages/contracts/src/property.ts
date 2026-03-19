@@ -507,6 +507,15 @@ export interface PropertyUploadedDocument {
   createdAt: string;
 }
 
+export interface PropertyManualSourceLinks {
+  streetEasyUrl?: string | null;
+  omUrl?: string | null;
+  addedAt?: string | null;
+  omImportedAt?: string | null;
+  omDocumentId?: string | null;
+  omFileName?: string | null;
+}
+
 /** Placeholder keys for canonical property details (permit, tax, owner, etc.). */
 export interface PropertyDetails {
   permitInfo?: string | null;
@@ -526,6 +535,8 @@ export interface PropertyDetails {
   monthlyHoa?: number | null;
   /** Monthly tax from listing (GET sale details); for financial calculations. */
   monthlyTax?: number | null;
+  /** Original manual source links used to seed this property into Property Data. */
+  manualSourceLinks?: PropertyManualSourceLinks | null;
   /** Current market value total from valuations (curmkttot). */
   assessedMarketValue?: number | null;
   /** Current actual/assessed total from valuations (curacttot). */
