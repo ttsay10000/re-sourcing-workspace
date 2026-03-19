@@ -150,13 +150,22 @@ router.post("/saved-searches/:id/run-now", async (req: Request, res: Response) =
   try {
     const pool = getPool();
     const repo = new ProfileRepo({ pool });
+    const runRepo = new RunRepo({ pool });
     const savedSearch = await repo.byId(req.params.id);
     if (!savedSearch) {
       res.status(404).json({ error: "Saved search not found." });
       return;
     }
+    if (await runRepo.hasRunningForProfile(savedSearch.id)) {
+      res.status(409).json({
+        error: "Saved search run already in progress.",
+        code: "already_running",
+        savedSearchId: savedSearch.id,
+      });
+      return;
+    }
     await startSavedSearchRun(savedSearch.id, { triggerSource: "manual" });
-    res.status(202).json({ ok: true, savedSearchId: savedSearch.id });
+    res.status(202).json({ ok: true, savedSearchId: savedSearch.id, code: "started" });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[saved-searches run-now]", err);

@@ -597,6 +597,15 @@ export default function RunsPage() {
         headers: { "Content-Type": "application/json" },
       });
       const data = await res.json();
+      if (res.status === 409 || data?.code === "already_running") {
+        setExpandedSavedSearchId(savedSearchId);
+        setNotice("Saved search is already running. Open Property Data for the live workflow tracker while it continues ingesting and enrichment catches up.");
+        window.setTimeout(() => {
+          void fetchSavedSearches();
+          void fetchSavedSearchRuns(savedSearchId);
+        }, 400);
+        return;
+      }
       if (!res.ok) throw new Error(data?.error || data?.details || "Failed to start saved search run");
       setExpandedSavedSearchId(savedSearchId);
       setNotice("Saved search run started. Open Property Data for the live workflow tracker while it ingests, enriches, and evaluates outreach.");

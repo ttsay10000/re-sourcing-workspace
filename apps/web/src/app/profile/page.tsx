@@ -574,6 +574,11 @@ export default function ProfilePage() {
     try {
       const res = await fetch(`${API_BASE}/api/saved-searches/${encodeURIComponent(savedSearchId)}/run-now`, { method: "POST" });
       const data = await res.json();
+      if (res.status === 409 || data?.code === "already_running") {
+        setSavedSearchNotice("Saved search is already running. Open Property Data for live workflow tracking while the current run finishes.");
+        await fetchSavedSearches();
+        return;
+      }
       if (!res.ok) throw new Error(data?.error || data?.details || "Failed to start saved search");
       setSavedSearchNotice("Saved search started. Open Property Data for live workflow tracking.");
       await fetchSavedSearches();
