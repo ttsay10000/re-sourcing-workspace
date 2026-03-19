@@ -587,12 +587,21 @@ export function buildDossierStructuredText(ctx: UnderwritingContext): string {
   const hasCurrentFinancials = ctx.currentGrossRent != null || ctx.currentNoi != null;
   const grossRentTotal = ctx.currentGrossRent;
   const otherIncome = ctx.currentOtherIncome ?? null;
+  const conservativeProjectedLeaseUpRent =
+    ctx.conservativeProjectedLeaseUpRent != null && ctx.conservativeProjectedLeaseUpRent > 0
+      ? ctx.conservativeProjectedLeaseUpRent
+      : null;
+  const displayedGrossRentTotal =
+    grossRentTotal != null
+      ? grossRentTotal + num(otherIncome) + num(conservativeProjectedLeaseUpRent)
+      : null;
   const expensesTotal =
     ctx.currentExpensesTotal ??
     (ctx.currentGrossRent != null && ctx.currentNoi != null
       ? ctx.currentGrossRent + num(ctx.currentOtherIncome) - ctx.currentNoi
       : null);
   const noi =
+    ctx.currentStateNoi ??
     ctx.currentNoi ??
     (ctx.currentGrossRent != null && expensesTotal != null
       ? ctx.currentGrossRent + num(ctx.currentOtherIncome) - expensesTotal
@@ -653,7 +662,15 @@ export function buildDossierStructuredText(ctx: UnderwritingContext): string {
   if (otherIncome != null && Math.abs(otherIncome) > 0.005) {
     lines.push(tableRow(["Other income", moneyLabel(otherIncome)]));
   }
-  lines.push(tableRow(["**Total gross rent**", moneyLabel(grossRentTotal != null ? grossRentTotal + num(otherIncome) : grossRentTotal)]));
+  if (conservativeProjectedLeaseUpRent != null) {
+    lines.push(
+      tableRow([
+        "Conservative projected vacant residential rent",
+        moneyLabel(conservativeProjectedLeaseUpRent),
+      ])
+    );
+  }
+  lines.push(tableRow(["**Total gross rent**", moneyLabel(displayedGrossRentTotal)]));
   lines.push("");
   lines.push(tableRow(["Expenses", "Annual"]));
   if (ctx.expenseRows && ctx.expenseRows.length > 0) {
@@ -666,7 +683,14 @@ export function buildDossierStructuredText(ctx: UnderwritingContext): string {
     lines.push(tableRow(["Current expenses not extracted from OM text", "—"]));
   }
   lines.push("");
-  lines.push(tableRow(["**NOI**", moneyLabel(noi)]));
+  lines.push(
+    tableRow([
+      conservativeProjectedLeaseUpRent != null
+        ? "**NOI incl. projected vacant residential rent**"
+        : "**NOI**",
+      moneyLabel(noi),
+    ])
+  );
   lines.push(tableRow(["Cap rate", pctValue(ctx.assetCapRate)]));
   lines.push("");
 

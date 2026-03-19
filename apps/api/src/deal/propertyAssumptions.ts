@@ -40,6 +40,12 @@ export interface UnderwritingPropertyMixSummary {
   furnishingSetupCostEstimate: number;
 }
 
+export interface ProjectedResidentialLeaseUpRentSummary {
+  totalAnnualRent: number | null;
+  protectedAnnualRent: number | null;
+  eligibleAnnualRent: number | null;
+}
+
 interface MetricStats {
   total: number;
   count: number;
@@ -181,30 +187,66 @@ export function resolveNormalizedUnderwritingRentRows(
 export function resolveConservativeProjectedResidentialLeaseUpRent(
   details: PropertyDetails | null
 ): number | null {
+  return resolveProjectedResidentialLeaseUpRentSummary(details).totalAnnualRent;
+}
+
+export function resolveProjectedResidentialLeaseUpRentSummary(
+  details: PropertyDetails | null
+): ProjectedResidentialLeaseUpRentSummary {
   const omRoll = resolvePreferredOmRentRoll(details);
-  if (!Array.isArray(omRoll) || omRoll.length === 0) return null;
+  if (!Array.isArray(omRoll) || omRoll.length === 0) {
+    return {
+      totalAnnualRent: null,
+      protectedAnnualRent: null,
+      eligibleAnnualRent: null,
+    };
+  }
 
-  const total = omRoll.reduce((sum, row) => {
-    const record = row as Record<string, unknown>;
-    const labels = classificationText(record);
-    const currentAnnualRent = annualRentFromRecord(record);
-    const projectedAnnualRent = conservativeProjectedAnnualRentFromRecord(record);
-    const clearlyResidential =
-      !COMMERCIAL_PATTERN.test(labels) &&
-      !ANCILLARY_SPACE_PATTERN.test(labels) &&
-      (RESIDENTIAL_PATTERN.test(labels) ||
-        toFiniteNumber(record.beds) != null ||
-        toFiniteNumber(record.baths) != null ||
-        String(record.unitCategory ?? "").trim().toLowerCase() === "residential");
+  const totals = omRoll.reduce<{ total: number; protected: number }>(
+    (sum, row) => {
+      const record = row as Record<string, unknown>;
+      const labels = classificationText(record);
+      const currentAnnualRent = annualRentFromRecord(record);
+      const projectedAnnualRent = conservativeProjectedAnnualRentFromRecord(record);
+      const isRentStabilized = RENT_STABILIZED_PATTERN.test(labels);
+      const clearlyResidential =
+        !COMMERCIAL_PATTERN.test(labels) &&
+        !ANCILLARY_SPACE_PATTERN.test(labels) &&
+        (RESIDENTIAL_PATTERN.test(labels) ||
+          toFiniteNumber(record.beds) != null ||
+          toFiniteNumber(record.baths) != null ||
+          String(record.unitCategory ?? "").trim().toLowerCase() === "residential");
 
-    if (!clearlyResidential) return sum;
-    if (!isVacantLikeRecord(record)) return sum;
-    if (currentAnnualRent != null && currentAnnualRent > 0) return sum;
-    if (projectedAnnualRent == null || !Number.isFinite(projectedAnnualRent) || projectedAnnualRent <= 0) return sum;
-    return sum + projectedAnnualRent;
-  }, 0);
+      if (!clearlyResidential) return sum;
+      if (!isVacantLikeRecord(record)) return sum;
+      if (currentAnnualRent != null && currentAnnualRent > 0) return sum;
+      if (
+        projectedAnnualRent == null ||
+        !Number.isFinite(projectedAnnualRent) ||
+        projectedAnnualRent <= 0
+      ) {
+        return sum;
+      }
+      sum.total += projectedAnnualRent;
+      if (isRentStabilized) sum.protected += projectedAnnualRent;
+      return sum;
+    },
+    { total: 0, protected: 0 }
+  );
 
-  return total > 0 ? Math.round(total * 100) / 100 : null;
+  const totalAnnualRent = totals.total > 0 ? Math.round(totals.total * 100) / 100 : null;
+  const protectedAnnualRent =
+    totals.protected > 0 ? Math.round(totals.protected * 100) / 100 : null;
+  const eligibleAnnualRent =
+    totalAnnualRent != null
+      ? Math.round((totalAnnualRent - (protectedAnnualRent ?? 0)) * 100) / 100
+      : null;
+
+  return {
+    totalAnnualRent,
+    protectedAnnualRent,
+    eligibleAnnualRent: eligibleAnnualRent != null && eligibleAnnualRent > 0 ? eligibleAnnualRent : null,
+  };
 }
 
 function roundCurrency(value: number): number {

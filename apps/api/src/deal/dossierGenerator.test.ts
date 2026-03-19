@@ -209,6 +209,34 @@ describe("buildDossierStructuredText", () => {
     expect(text).toContain("Package note: Package OM covers multiple buildings or lots (Block 593, Lots 42 and 43); property-level BBL and HPD registration data may reflect only the canonical listing address.");
   });
 
+  it("shows projected vacant residential rent in current-state totals and NOI when used for ask cap rate", () => {
+    const ctx = sampleContext();
+    ctx.currentGrossRent = 152_400;
+    ctx.currentNoi = 79_794;
+    ctx.currentExpensesTotal = 64_986;
+    ctx.currentOtherIncome = 0;
+    ctx.conservativeProjectedLeaseUpRent = 72_000;
+    ctx.currentStateNoi = 159_414;
+    ctx.assetCapRate = 3.36;
+    ctx.rentRollRows = [
+      {
+        label:
+          "115 West 87th Street - Owner's Garden Level (Residential; Projected rent $6,000-$7,000; currently owner-occupied or delivered vacant.)",
+        annualRent: 0,
+      },
+      { label: "115 West 87th Street - Apt. 1 (Residential; Second floor unit.)", annualRent: 49_200 },
+      { label: "115 West 87th Street - Apt. 2 (Residential; Third floor unit.)", annualRent: 52_200 },
+      { label: "115 West 87th Street - Apt. 3 (Residential; Fourth floor unit.)", annualRent: 51_000 },
+    ];
+
+    const text = buildDossierStructuredText(ctx);
+
+    expect(text).toContain("| Conservative projected vacant residential rent | $72,000 |");
+    expect(text).toContain("| **Total gross rent** | $224,400 |");
+    expect(text).toContain("| **NOI incl. projected vacant residential rent** | $159,414 |");
+    expect(text).toContain("| Cap rate | 3.36% |");
+  });
+
   it("renders a sale-cap sensitivity table with IRR by exit cap", () => {
     const ctx = sampleContext();
     ctx.sensitivities = [

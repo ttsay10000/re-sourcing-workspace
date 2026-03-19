@@ -21,6 +21,7 @@ interface BuildDealScoreSensitivityInput {
   currentExpensesTotal?: number | null;
   expenseRows?: ProjectedExpenseInputRow[] | null;
   conservativeProjectedLeaseUpRent?: number | null;
+  protectedProjectedLeaseUpRent?: number | null;
   baseCalculatedScore: number | null;
 }
 
@@ -55,6 +56,7 @@ function scoreForScenario(
     currentExpensesTotal: input.currentExpensesTotal,
     expenseRows: input.expenseRows,
     conservativeProjectedLeaseUpRent: input.conservativeProjectedLeaseUpRent,
+    protectedProjectedLeaseUpRent: input.protectedProjectedLeaseUpRent,
   });
   const recommendedOffer = computeRecommendedOffer({
     assumptions,
@@ -64,6 +66,7 @@ function scoreForScenario(
     currentExpensesTotal: input.currentExpensesTotal,
     expenseRows: input.expenseRows,
     conservativeProjectedLeaseUpRent: input.conservativeProjectedLeaseUpRent,
+    protectedProjectedLeaseUpRent: input.protectedProjectedLeaseUpRent,
   });
   const adjustedCapRatePct =
     assumptions.acquisition.purchasePrice != null && assumptions.acquisition.purchasePrice > 0
@@ -76,6 +79,9 @@ function scoreForScenario(
     primaryListing: input.primaryListing,
     assetCapRateNoi: resolveAssetCapRateNoiBasis({
       currentNoi: input.currentNoi,
+      currentGrossRent: input.currentGrossRent,
+      currentOtherIncome: input.currentOtherIncome,
+      currentExpensesTotal: input.currentExpensesTotal,
       conservativeProjectedLeaseUpRent: input.conservativeProjectedLeaseUpRent,
     }),
     irrPct: projection.returns.irr ?? null,
@@ -108,6 +114,7 @@ export function buildDealScoreSensitivity(input: BuildDealScoreSensitivityInput)
     currentExpensesTotal: input.currentExpensesTotal,
     expenseRows: input.expenseRows,
     conservativeProjectedLeaseUpRent: input.conservativeProjectedLeaseUpRent,
+    protectedProjectedLeaseUpRent: input.protectedProjectedLeaseUpRent,
   };
 
   const rentUpliftPct = Math.max(0, assumptions.operating.rentUpliftPct - 20);

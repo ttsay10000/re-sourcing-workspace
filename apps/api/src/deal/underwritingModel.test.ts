@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   MAX_UNDERWRITING_HOLD_PERIOD_YEARS,
-  defaultAnnualPropertyTaxGrowthPctFromNycTaxCode,
   computeRecommendedOffer,
   computeUnderwritingProjection,
+  defaultAnnualPropertyTaxGrowthPctFromNycTaxCode,
+  resolveAssetCapRateNoiBasis,
   resolveDossierAssumptions,
 } from "./underwritingModel.js";
 
@@ -345,7 +346,7 @@ describe("underwritingModel", () => {
     expect(projection.yearly.leadTimeLoss[1]).toBeCloseTo(30_000, 2);
   });
 
-  it("adds vacant residential projected rent to lease-up without uplifting it again", () => {
+  it("adds vacant free-market residential projected rent into the uplift base", () => {
     const assumptions = resolveDossierAssumptions(
       {
         id: "profile-vacant-project",
@@ -380,9 +381,60 @@ describe("underwritingModel", () => {
       conservativeProjectedLeaseUpRent: 72_000,
     });
 
-    expect(projection.yearly.grossRentalIncome[1]).toBeCloseTo(331_080, 2);
-    expect(projection.yearly.grossRentalIncome[1]).toBeCloseTo(152_400 * 1.7 + 72_000, 2);
-    expect(projection.yearly.grossRentalIncome[1]).not.toBeCloseTo((152_400 + 72_000) * 1.7, 2);
+    expect(projection.yearly.grossRentalIncome[1]).toBeCloseTo(381_480, 2);
+    expect(projection.yearly.grossRentalIncome[1]).toBeCloseTo((152_400 + 72_000) * 1.7, 2);
+    expect(projection.yearly.grossRentalIncome[1]).not.toBeCloseTo(152_400 * 1.7 + 72_000, 2);
+  });
+
+  it("keeps protected projected rent outside the uplift base", () => {
+    const assumptions = resolveDossierAssumptions(
+      {
+        id: "profile-protected-vacant-project",
+        createdAt: "2026-03-10T00:00:00.000Z",
+        updatedAt: "2026-03-10T00:00:00.000Z",
+        defaultPurchaseClosingCostPct: 3,
+        defaultLtv: 70,
+        defaultInterestRate: 6,
+        defaultAmortization: 30,
+        defaultHoldPeriodYears: 3,
+        defaultExitCap: 6,
+        defaultExitClosingCostPct: 2,
+        defaultRentUplift: 70,
+        defaultExpenseIncrease: 0,
+        defaultManagementFee: 0,
+        defaultVacancyPct: 0,
+        defaultLeadTimeMonths: 0,
+        defaultAnnualRentGrowthPct: 0,
+        defaultAnnualOtherIncomeGrowthPct: 0,
+        defaultAnnualExpenseGrowthPct: 0,
+        defaultAnnualPropertyTaxGrowthPct: 0,
+        defaultRecurringCapexAnnual: 0,
+        defaultLoanFeePct: 0,
+      },
+      1_000_000
+    );
+
+    const projection = computeUnderwritingProjection({
+      assumptions,
+      currentGrossRent: 152_400,
+      currentNoi: 152_400,
+      conservativeProjectedLeaseUpRent: 86_400,
+      protectedProjectedLeaseUpRent: 14_400,
+    });
+
+    expect(projection.yearly.grossRentalIncome[1]).toBeCloseTo(395_880, 2);
+    expect(projection.yearly.grossRentalIncome[1]).toBeCloseTo((152_400 + 72_000) * 1.7 + 14_400, 2);
+  });
+
+  it("reconstructs the ask-cap NOI basis from current gross rent and expenses when vacant projected rent is available", () => {
+    const noiBasis = resolveAssetCapRateNoiBasis({
+      currentNoi: 79_794,
+      currentGrossRent: 152_400,
+      currentExpensesTotal: 64_986,
+      conservativeProjectedLeaseUpRent: 72_000,
+    });
+
+    expect(noiBasis).toBe(159_414);
   });
 
   it("maps NYC tax classes to normalized underwriting tax-growth defaults", () => {

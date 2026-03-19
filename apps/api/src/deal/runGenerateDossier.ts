@@ -46,7 +46,7 @@ import {
   mergeDossierAssumptionOverrides,
   propertyAssumptionsToOverrides,
 } from "./propertyDossierState.js";
-import { resolveConservativeProjectedResidentialLeaseUpRent } from "./propertyAssumptions.js";
+import { resolveProjectedResidentialLeaseUpRentSummary } from "./propertyAssumptions.js";
 import {
   computeRecommendedOffer,
   computeUnderwritingProjection,
@@ -405,7 +405,9 @@ export async function runGenerateDossier(
       mergedAssumptionOverrides,
       { details }
     );
-    const conservativeProjectedLeaseUpRent = resolveConservativeProjectedResidentialLeaseUpRent(details);
+    const projectedLeaseUpRentSummary = resolveProjectedResidentialLeaseUpRentSummary(details);
+    const conservativeProjectedLeaseUpRent = projectedLeaseUpRentSummary.totalAnnualRent;
+    const protectedProjectedLeaseUpRent = projectedLeaseUpRentSummary.protectedAnnualRent;
     const resolvedCurrentExpensesTotal =
       extractedExpenseTotal > 0 ? extractedExpenseTotal : currentFinancials.operatingExpenses;
     const projection = computeUnderwritingProjection({
@@ -416,6 +418,7 @@ export async function runGenerateDossier(
       currentExpensesTotal: resolvedCurrentExpensesTotal,
       expenseRows,
       conservativeProjectedLeaseUpRent,
+      protectedProjectedLeaseUpRent,
     });
     const recommendedOffer = computeRecommendedOffer({
       assumptions,
@@ -425,6 +428,7 @@ export async function runGenerateDossier(
       currentExpensesTotal: resolvedCurrentExpensesTotal,
       expenseRows,
       conservativeProjectedLeaseUpRent,
+      protectedProjectedLeaseUpRent,
     });
     const sensitivities = buildSensitivityAnalyses({
       assumptions,
@@ -434,6 +438,7 @@ export async function runGenerateDossier(
       currentExpensesTotal: resolvedCurrentExpensesTotal,
       expenseRows,
       conservativeProjectedLeaseUpRent,
+      protectedProjectedLeaseUpRent,
       baseProjection: projection,
     });
     console.info("[runGenerateDossier] Financial model prepared", {
@@ -451,6 +456,9 @@ export async function runGenerateDossier(
     const hasCurrentFinancials = currentGrossRent != null && currentNoi != null;
     const assetCapRateNoiBasis = resolveAssetCapRateNoiBasis({
       currentNoi,
+      currentGrossRent,
+      currentOtherIncome,
+      currentExpensesTotal: resolvedCurrentExpensesTotal,
       conservativeProjectedLeaseUpRent,
     });
     const listingActivity = deriveListingActivitySummary({
@@ -547,6 +555,8 @@ export async function runGenerateDossier(
       currentOtherIncome,
       unitCount,
       dealScore: null,
+      conservativeProjectedLeaseUpRent,
+      currentStateNoi: assetCapRateNoiBasis,
       assetCapRateNoiBasis,
       assetCapRate: assetCapRateForCtx,
       adjustedCapRate: adjustedCapRateForCtx,
@@ -692,6 +702,7 @@ export async function runGenerateDossier(
       currentExpensesTotal: resolvedCurrentExpensesTotal ?? undefined,
       expenseRows,
       conservativeProjectedLeaseUpRent,
+      protectedProjectedLeaseUpRent,
       baseCalculatedScore: scoringResult.isScoreable ? scoringResult.dealScore : null,
     });
 

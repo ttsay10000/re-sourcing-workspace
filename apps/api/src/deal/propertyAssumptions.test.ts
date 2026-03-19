@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   analyzePropertyForUnderwriting,
   resolveConservativeProjectedResidentialLeaseUpRent,
+  resolveProjectedResidentialLeaseUpRentSummary,
 } from "./propertyAssumptions.js";
 
 describe("propertyAssumptions", () => {
@@ -164,5 +165,36 @@ describe("propertyAssumptions", () => {
     });
 
     expect(projectedRent).toBe(72_000);
+  });
+
+  it("treats rent-stabilized vacant projected rent as protected from uplift", () => {
+    const projectedRent = resolveProjectedResidentialLeaseUpRentSummary({
+      omData: {
+        authoritative: {
+          propertyInfo: { totalUnits: 3, unitsResidential: 3 },
+          rentRoll: [
+            {
+              unit: "Owner's Garden Level",
+              annualRent: 0,
+              unitCategory: "Residential",
+              occupied: false,
+              notes: "Projected rent $6,000-$7,000; currently owner-occupied or delivered vacant.",
+            },
+            {
+              unit: "RS Apt",
+              annualRent: 0,
+              unitCategory: "Residential",
+              occupied: false,
+              rentType: "Rent Stabilized",
+              notes: "Projected rent $1,200-$1,500 after turnover.",
+            },
+          ],
+        },
+      },
+    });
+
+    expect(projectedRent.totalAnnualRent).toBe(86_400);
+    expect(projectedRent.eligibleAnnualRent).toBe(72_000);
+    expect(projectedRent.protectedAnnualRent).toBe(14_400);
   });
 });

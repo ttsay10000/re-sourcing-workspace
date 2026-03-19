@@ -221,6 +221,7 @@ export interface UnderwritingProjectionInput {
   currentExpensesTotal?: number | null;
   expenseRows?: ProjectedExpenseInputRow[] | null;
   conservativeProjectedLeaseUpRent?: number | null;
+  protectedProjectedLeaseUpRent?: number | null;
 }
 
 function safeNumber(value: number | null | undefined, fallback = 0): number {
@@ -229,8 +230,29 @@ function safeNumber(value: number | null | undefined, fallback = 0): number {
 
 export function resolveAssetCapRateNoiBasis(input: {
   currentNoi: number | null;
+  currentGrossRent?: number | null;
+  currentOtherIncome?: number | null;
+  currentExpensesTotal?: number | null;
   conservativeProjectedLeaseUpRent?: number | null;
 }): number | null {
+  const currentGrossRent =
+    input.currentGrossRent != null && Number.isFinite(input.currentGrossRent)
+      ? input.currentGrossRent
+      : null;
+  const currentExpensesTotal =
+    input.currentExpensesTotal != null && Number.isFinite(input.currentExpensesTotal)
+      ? input.currentExpensesTotal
+      : null;
+  const reconstructedNoi =
+    currentGrossRent != null && currentExpensesTotal != null
+      ? roundCurrency(
+          currentGrossRent +
+            safeNumber(input.currentOtherIncome) +
+            Math.max(0, safeNumber(input.conservativeProjectedLeaseUpRent)) -
+            currentExpensesTotal
+        )
+      : null;
+  if (reconstructedNoi != null) return reconstructedNoi;
   const currentNoi =
     input.currentNoi != null && Number.isFinite(input.currentNoi) ? input.currentNoi : null;
   if (currentNoi == null) return null;
@@ -553,6 +575,7 @@ export function computeUnderwritingProjection(
     currentExpensesTotal,
     expenseRows,
     conservativeProjectedLeaseUpRent,
+    protectedProjectedLeaseUpRent,
   } = input;
   const purchasePrice = assumptions.acquisition.purchasePrice ?? 0;
   const purchaseClosingCosts =
@@ -588,15 +611,24 @@ export function computeUnderwritingProjection(
     assumptions.propertyMix.eligibleUnitSharePct ?? 1
   );
   const eligibleCurrentRent = roundCurrency(currentRent * eligibleRevenueShare);
-  const projectedLeaseUpRentBase = roundCurrency(Math.max(0, safeNumber(conservativeProjectedLeaseUpRent)));
+  const totalProjectedLeaseUpRentBase = roundCurrency(
+    Math.max(0, safeNumber(conservativeProjectedLeaseUpRent))
+  );
+  const protectedProjectedLeaseUpRentBase = roundCurrency(
+    Math.min(totalProjectedLeaseUpRentBase, Math.max(0, safeNumber(protectedProjectedLeaseUpRent)))
+  );
+  const eligibleProjectedLeaseUpRentBase = roundCurrency(
+    Math.max(0, totalProjectedLeaseUpRentBase - protectedProjectedLeaseUpRentBase)
+  );
   const protectedCurrentRent = roundCurrency(Math.max(0, currentRent - eligibleCurrentRent));
   const upliftedEligibleCurrentRent = roundCurrency(
-    eligibleCurrentRent * (1 + Math.max(0, assumptions.operating.rentUpliftPct) / 100)
+    (eligibleCurrentRent + eligibleProjectedLeaseUpRentBase) *
+      (1 + Math.max(0, assumptions.operating.rentUpliftPct) / 100)
   );
-  const eligibleGrossRentalIncomeBase = roundCurrency(
-    upliftedEligibleCurrentRent + projectedLeaseUpRentBase
+  const eligibleGrossRentalIncomeBase = upliftedEligibleCurrentRent;
+  const protectedGrossRentalIncomeBase = roundCurrency(
+    protectedCurrentRent + protectedProjectedLeaseUpRentBase
   );
-  const protectedGrossRentalIncomeBase = protectedCurrentRent;
   const grossRentalIncomeBase = roundCurrency(
     eligibleGrossRentalIncomeBase + protectedGrossRentalIncomeBase
   );
@@ -958,6 +990,7 @@ export function computeRecommendedOffer(input: UnderwritingProjectionInput): Rec
     currentExpensesTotal,
     expenseRows,
     conservativeProjectedLeaseUpRent,
+    protectedProjectedLeaseUpRent,
   } = input;
   const askingPrice = assumptions.acquisition.purchasePrice;
   const targetIrrPct = assumptions.targetIrrPct;
@@ -983,6 +1016,7 @@ export function computeRecommendedOffer(input: UnderwritingProjectionInput): Rec
     currentExpensesTotal,
     expenseRows,
     conservativeProjectedLeaseUpRent,
+    protectedProjectedLeaseUpRent,
   });
   const irrAtAskingPct = baseProjection.returns.irr ?? null;
   const targetMetAtAsking = irrAtAskingPct != null && irrAtAskingPct >= targetIrr;
@@ -1014,6 +1048,7 @@ export function computeRecommendedOffer(input: UnderwritingProjectionInput): Rec
     currentExpensesTotal,
     expenseRows,
     conservativeProjectedLeaseUpRent,
+    protectedProjectedLeaseUpRent,
   });
   if (projectionAtLowPrice.returns.irr == null || projectionAtLowPrice.returns.irr < targetIrr) {
     return {
@@ -1045,6 +1080,7 @@ export function computeRecommendedOffer(input: UnderwritingProjectionInput): Rec
       currentExpensesTotal,
       expenseRows,
       conservativeProjectedLeaseUpRent,
+      protectedProjectedLeaseUpRent,
     });
     const irr = trialProjection.returns.irr;
     if (irr != null && irr >= targetIrr) low = mid;

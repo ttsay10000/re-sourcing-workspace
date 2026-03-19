@@ -161,6 +161,8 @@ export interface UnderwritingContext {
   unitCount: number | null;
   /** Deal score 0–100. */
   dealScore: number | null;
+  conservativeProjectedLeaseUpRent?: number | null;
+  currentStateNoi?: number | null;
   assetCapRateNoiBasis?: number | null;
   assetCapRate: number | null;
   adjustedCapRate: number | null;
