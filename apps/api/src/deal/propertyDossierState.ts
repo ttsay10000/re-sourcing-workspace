@@ -6,6 +6,31 @@ import type {
 } from "@re-sourcing/contracts";
 import type { DossierAssumptionOverrides } from "./underwritingModel.js";
 
+const DOSSIER_ASSUMPTION_NUMERIC_KEYS = [
+  "purchasePrice",
+  "purchaseClosingCostPct",
+  "renovationCosts",
+  "furnishingSetupCosts",
+  "ltvPct",
+  "interestRatePct",
+  "amortizationYears",
+  "loanFeePct",
+  "rentUpliftPct",
+  "expenseIncreasePct",
+  "managementFeePct",
+  "vacancyPct",
+  "leadTimeMonths",
+  "annualRentGrowthPct",
+  "annualOtherIncomeGrowthPct",
+  "annualExpenseGrowthPct",
+  "annualPropertyTaxGrowthPct",
+  "recurringCapexAnnual",
+  "holdPeriodYears",
+  "exitCapPct",
+  "exitClosingCostPct",
+  "targetIrrPct",
+] as const satisfies ReadonlyArray<keyof DossierAssumptionOverrides>;
+
 function toFiniteNumber(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "string") {
@@ -20,16 +45,25 @@ export function getPropertyDossierAssumptions(
 ): PropertyDealDossierAssumptions | null {
   const assumptions = details?.dealDossier?.assumptions;
   if (!assumptions || typeof assumptions !== "object") return null;
-  const renovationCosts = toFiniteNumber(assumptions.renovationCosts);
-  const furnishingSetupCosts = toFiniteNumber(assumptions.furnishingSetupCosts);
+  const parsedNumbers = Object.fromEntries(
+    DOSSIER_ASSUMPTION_NUMERIC_KEYS.flatMap((key) => {
+      const parsed = toFiniteNumber(assumptions[key]);
+      return parsed != null ? [[key, parsed]] : [];
+    })
+  ) as DossierAssumptionOverrides;
+  const brokerEmailNotes =
+    typeof assumptions.brokerEmailNotes === "string" && assumptions.brokerEmailNotes.trim().length > 0
+      ? assumptions.brokerEmailNotes.trim()
+      : null;
   const updatedAt =
     typeof assumptions.updatedAt === "string" && assumptions.updatedAt.trim().length > 0
       ? assumptions.updatedAt.trim()
       : null;
-  if (renovationCosts == null && furnishingSetupCosts == null && updatedAt == null) return null;
+  const hasNumericValue = Object.keys(parsedNumbers).length > 0;
+  if (!hasNumericValue && brokerEmailNotes == null && updatedAt == null) return null;
   return {
-    renovationCosts,
-    furnishingSetupCosts,
+    ...parsedNumbers,
+    brokerEmailNotes,
     updatedAt,
   };
 }
@@ -110,11 +144,11 @@ export function propertyAssumptionsToOverrides(
 ): DossierAssumptionOverrides | null {
   if (!assumptions) return null;
   const overrides: DossierAssumptionOverrides = {};
-  if (assumptions.renovationCosts != null && Number.isFinite(assumptions.renovationCosts)) {
-    overrides.renovationCosts = assumptions.renovationCosts;
-  }
-  if (assumptions.furnishingSetupCosts != null && Number.isFinite(assumptions.furnishingSetupCosts)) {
-    overrides.furnishingSetupCosts = assumptions.furnishingSetupCosts;
+  for (const key of DOSSIER_ASSUMPTION_NUMERIC_KEYS) {
+    const value = assumptions[key];
+    if (value != null && Number.isFinite(value)) {
+      overrides[key] = value;
+    }
   }
   return Object.keys(overrides).length > 0 ? overrides : null;
 }
@@ -124,32 +158,7 @@ export function mergeDossierAssumptionOverrides(
   override: DossierAssumptionOverrides | null | undefined
 ): DossierAssumptionOverrides | null {
   const merged: DossierAssumptionOverrides = {};
-  const keys = new Set<keyof DossierAssumptionOverrides>([
-    "purchasePrice",
-    "purchaseClosingCostPct",
-    "renovationCosts",
-    "furnishingSetupCosts",
-    "ltvPct",
-    "interestRatePct",
-    "amortizationYears",
-    "loanFeePct",
-    "rentUpliftPct",
-    "expenseIncreasePct",
-    "managementFeePct",
-    "vacancyPct",
-    "leadTimeMonths",
-    "annualRentGrowthPct",
-    "annualOtherIncomeGrowthPct",
-    "annualExpenseGrowthPct",
-    "annualPropertyTaxGrowthPct",
-    "recurringCapexAnnual",
-    "holdPeriodYears",
-    "exitCapPct",
-    "exitClosingCostPct",
-    "targetIrrPct",
-  ]);
-
-  for (const key of keys) {
+  for (const key of DOSSIER_ASSUMPTION_NUMERIC_KEYS) {
     const overrideValue = override?.[key];
     if (typeof overrideValue === "number" && Number.isFinite(overrideValue)) {
       merged[key] = overrideValue;

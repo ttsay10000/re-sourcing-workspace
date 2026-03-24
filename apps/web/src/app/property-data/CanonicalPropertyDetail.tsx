@@ -17,6 +17,13 @@ import {
 } from "./dossierState";
 import { buildInquiryDraft } from "./inquiryDraft";
 import { formatSourcingUpdateChange, getSourcingUpdate, getSourcingUpdateMeta } from "./sourcingUpdate";
+import {
+  OmCalculationPanel,
+  OM_CALC_NUMERIC_FIELDS,
+  type OmCalculationDraft,
+  type OmCalculationNumericField,
+  type OmCalculationSnapshot,
+} from "./OmCalculationPanel";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
 
@@ -79,15 +86,31 @@ interface UnifiedEnrichmentRow {
   info: string;
 }
 
-interface DossierSettingsDraft {
-  renovationCosts: number | null;
-  furnishingSetupCosts: number | null;
-}
-
 interface DossierAssumptionsResponse {
   defaults?: {
+    purchasePrice?: number | null;
+    purchaseClosingCostPct?: number | null;
     renovationCosts?: number | null;
     furnishingSetupCosts?: number | null;
+    ltvPct?: number | null;
+    interestRatePct?: number | null;
+    amortizationYears?: number | null;
+    loanFeePct?: number | null;
+    rentUpliftPct?: number | null;
+    expenseIncreasePct?: number | null;
+    managementFeePct?: number | null;
+    vacancyPct?: number | null;
+    leadTimeMonths?: number | null;
+    annualRentGrowthPct?: number | null;
+    annualOtherIncomeGrowthPct?: number | null;
+    annualExpenseGrowthPct?: number | null;
+    annualPropertyTaxGrowthPct?: number | null;
+    recurringCapexAnnual?: number | null;
+    holdPeriodYears?: number | null;
+    exitCapPct?: number | null;
+    exitClosingCostPct?: number | null;
+    targetIrrPct?: number | null;
+    brokerEmailNotes?: string | null;
   } | null;
   formulaDefaults?: {
     renovationCosts?: number | null;
@@ -492,6 +515,34 @@ function CollapsibleSection({
   );
 }
 
+function emptyOmCalculationDraft(): OmCalculationDraft {
+  return {
+    purchasePrice: null,
+    purchaseClosingCostPct: null,
+    renovationCosts: 0,
+    furnishingSetupCosts: null,
+    ltvPct: null,
+    interestRatePct: null,
+    amortizationYears: null,
+    loanFeePct: null,
+    rentUpliftPct: null,
+    expenseIncreasePct: null,
+    managementFeePct: null,
+    vacancyPct: null,
+    leadTimeMonths: null,
+    annualRentGrowthPct: null,
+    annualOtherIncomeGrowthPct: null,
+    annualExpenseGrowthPct: null,
+    annualPropertyTaxGrowthPct: null,
+    recurringCapexAnnual: null,
+    holdPeriodYears: null,
+    exitCapPct: null,
+    exitClosingCostPct: null,
+    targetIrrPct: null,
+    brokerEmailNotes: "",
+  };
+}
+
 export function CanonicalPropertyDetail({
   property,
   isSaved,
@@ -518,6 +569,7 @@ export function CanonicalPropertyDetail({
   const [detailsFromApi, setDetailsFromApi] = useState<Record<string, unknown> | null | undefined>(undefined);
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({
     dealDossier: true,
+    omCalculation: true,
     photosFloorplans: true,
     detailsBrokerAmenitiesPriceHistory: true,
     owner: true,
@@ -572,18 +624,9 @@ export function CanonicalPropertyDetail({
   });
   const [scoreOverrideSaving, setScoreOverrideSaving] = useState(false);
   const [scoreOverrideError, setScoreOverrideError] = useState<string | null>(null);
-  const [dossierDraft, setDossierDraft] = useState<DossierSettingsDraft>({
-    renovationCosts: 0,
-    furnishingSetupCosts: null,
-  });
-  const [savedDossierDraft, setSavedDossierDraft] = useState<DossierSettingsDraft>({
-    renovationCosts: 0,
-    furnishingSetupCosts: null,
-  });
-  const [formulaDossierDefaults, setFormulaDossierDefaults] = useState<DossierSettingsDraft>({
-    renovationCosts: 0,
-    furnishingSetupCosts: null,
-  });
+  const [dossierDraft, setDossierDraft] = useState<OmCalculationDraft>(emptyOmCalculationDraft);
+  const [savedDossierDraft, setSavedDossierDraft] = useState<OmCalculationDraft>(emptyOmCalculationDraft);
+  const [formulaDossierDefaults, setFormulaDossierDefaults] = useState<OmCalculationDraft>(emptyOmCalculationDraft);
   const [dossierMixSummary, setDossierMixSummary] = useState<
     DossierAssumptionsResponse["mixSummary"]
   >(null);
@@ -591,6 +634,10 @@ export function CanonicalPropertyDetail({
   const [dossierSettingsSaving, setDossierSettingsSaving] = useState(false);
   const [dossierError, setDossierError] = useState<string | null>(null);
   const [dossierGenerating, setDossierGenerating] = useState(false);
+  const [omCalculation, setOmCalculation] = useState<OmCalculationSnapshot | null>(null);
+  const [omCalculationLoading, setOmCalculationLoading] = useState(true);
+  const [omCalculationRunning, setOmCalculationRunning] = useState(false);
+  const [omCalculationError, setOmCalculationError] = useState<string | null>(null);
   const [authoritativeOmRefreshing, setAuthoritativeOmRefreshing] = useState(false);
   const hasAutoSavedRef = React.useRef(false);
   const lastAutoOpenInquiryNonceRef = React.useRef<number | null>(null);
@@ -723,6 +770,43 @@ export function CanonicalPropertyDetail({
     };
   }, [property.id]);
 
+  const hydrateDossierAssumptions = (data: DossierAssumptionsResponse): OmCalculationDraft => {
+    const nextDraft: OmCalculationDraft = {
+      purchasePrice: data.defaults?.purchasePrice ?? null,
+      purchaseClosingCostPct: data.defaults?.purchaseClosingCostPct ?? null,
+      renovationCosts: data.defaults?.renovationCosts ?? 0,
+      furnishingSetupCosts: data.defaults?.furnishingSetupCosts ?? null,
+      ltvPct: data.defaults?.ltvPct ?? null,
+      interestRatePct: data.defaults?.interestRatePct ?? null,
+      amortizationYears: data.defaults?.amortizationYears ?? null,
+      loanFeePct: data.defaults?.loanFeePct ?? null,
+      rentUpliftPct: data.defaults?.rentUpliftPct ?? null,
+      expenseIncreasePct: data.defaults?.expenseIncreasePct ?? null,
+      managementFeePct: data.defaults?.managementFeePct ?? null,
+      vacancyPct: data.defaults?.vacancyPct ?? null,
+      leadTimeMonths: data.defaults?.leadTimeMonths ?? null,
+      annualRentGrowthPct: data.defaults?.annualRentGrowthPct ?? null,
+      annualOtherIncomeGrowthPct: data.defaults?.annualOtherIncomeGrowthPct ?? null,
+      annualExpenseGrowthPct: data.defaults?.annualExpenseGrowthPct ?? null,
+      annualPropertyTaxGrowthPct: data.defaults?.annualPropertyTaxGrowthPct ?? null,
+      recurringCapexAnnual: data.defaults?.recurringCapexAnnual ?? null,
+      holdPeriodYears: data.defaults?.holdPeriodYears ?? null,
+      exitCapPct: data.defaults?.exitCapPct ?? null,
+      exitClosingCostPct: data.defaults?.exitClosingCostPct ?? null,
+      targetIrrPct: data.defaults?.targetIrrPct ?? null,
+      brokerEmailNotes: data.defaults?.brokerEmailNotes ?? "",
+    };
+    setDossierDraft(nextDraft);
+    setSavedDossierDraft(nextDraft);
+    setFormulaDossierDefaults({
+      ...emptyOmCalculationDraft(),
+      renovationCosts: data.formulaDefaults?.renovationCosts ?? 0,
+      furnishingSetupCosts: data.formulaDefaults?.furnishingSetupCosts ?? null,
+    });
+    setDossierMixSummary(data.mixSummary ?? null);
+    return nextDraft;
+  };
+
   useEffect(() => {
     let cancelled = false;
     setDossierSettingsLoading(true);
@@ -731,17 +815,7 @@ export function CanonicalPropertyDetail({
       .then((r) => r.json())
       .then((data: DossierAssumptionsResponse & { error?: string }) => {
         if (cancelled || data?.error) return;
-        const nextDraft: DossierSettingsDraft = {
-          renovationCosts: data.defaults?.renovationCosts ?? 0,
-          furnishingSetupCosts: data.defaults?.furnishingSetupCosts ?? null,
-        };
-        setDossierDraft(nextDraft);
-        setSavedDossierDraft(nextDraft);
-        setFormulaDossierDefaults({
-          renovationCosts: data.formulaDefaults?.renovationCosts ?? 0,
-          furnishingSetupCosts: data.formulaDefaults?.furnishingSetupCosts ?? null,
-        });
-        setDossierMixSummary(data.mixSummary ?? null);
+        hydrateDossierAssumptions(data);
       })
       .catch(() => {
         if (!cancelled) setDossierError("Failed to load dossier defaults");
@@ -1178,9 +1252,17 @@ export function CanonicalPropertyDetail({
   const assessedRetailAreaGross = (d?.assessedRetailAreaGross ?? d?.assessed_retail_area_gross) as number | null | undefined;
   const assessedApptDate = (d?.assessedApptDate ?? d?.assessed_appt_date) as string | null | undefined;
   const assessedExtractDate = (d?.assessedExtractDate ?? d?.assessed_extract_date) as string | null | undefined;
+  const numericDossierFieldsDirty = OM_CALC_NUMERIC_FIELDS.some(
+    (field) => (dossierDraft[field] ?? null) !== (savedDossierDraft[field] ?? null)
+  );
   const isDossierDirty =
-    (dossierDraft.renovationCosts ?? 0) !== (savedDossierDraft.renovationCosts ?? 0) ||
-    (dossierDraft.furnishingSetupCosts ?? null) !== (savedDossierDraft.furnishingSetupCosts ?? null);
+    numericDossierFieldsDirty ||
+    dossierDraft.brokerEmailNotes.trim() !== savedDossierDraft.brokerEmailNotes.trim();
+  const hasSavedBrokerEmailNotes = savedDossierDraft.brokerEmailNotes.trim().length > 0;
+  const hasBrokerEmailNotes =
+    dossierDraft.brokerEmailNotes.trim().length > 0 ||
+    hasSavedBrokerEmailNotes;
+  const canGenerateDossier = hasAuthoritativeOm || hasBrokerEmailNotes;
   const isDossierBusy =
     dossierGenerating ||
     authoritativeOmRefreshing ||
@@ -1266,11 +1348,11 @@ export function CanonicalPropertyDetail({
   };
 
   const persistDossierSettings = async (
-    nextDraft: DossierSettingsDraft = dossierDraft
-  ): Promise<DossierSettingsDraft> => {
-    const payload: DossierSettingsDraft = {
-      renovationCosts: nextDraft.renovationCosts ?? 0,
-      furnishingSetupCosts: nextDraft.furnishingSetupCosts ?? null,
+    nextDraft: OmCalculationDraft = dossierDraft
+  ): Promise<OmCalculationDraft> => {
+    const payload: OmCalculationDraft = {
+      ...nextDraft,
+      brokerEmailNotes: nextDraft.brokerEmailNotes.trim(),
     };
     setDossierSettingsSaving(true);
     setDossierError(null);
@@ -1289,14 +1371,14 @@ export function CanonicalPropertyDetail({
       setDetailsFromApi((prev) => {
         const base = ((prev ?? d ?? {}) as Record<string, unknown>) ?? {};
         const dealDossier = ((base.dealDossier as Record<string, unknown> | undefined) ?? {});
+        const updatedAt = new Date().toISOString();
         return {
           ...base,
           dealDossier: {
             ...dealDossier,
             assumptions: {
-              renovationCosts: payload.renovationCosts,
-              furnishingSetupCosts: payload.furnishingSetupCosts,
-              updatedAt: new Date().toISOString(),
+              ...payload,
+              updatedAt,
             },
           },
         };
@@ -1306,6 +1388,59 @@ export function CanonicalPropertyDetail({
       setDossierSettingsSaving(false);
     }
   };
+
+  const fetchOmCalculation = async (
+    nextDraft: OmCalculationDraft = dossierDraft,
+    options?: { initialLoad?: boolean }
+  ) => {
+    if (options?.initialLoad) setOmCalculationLoading(true);
+    else setOmCalculationRunning(true);
+    setOmCalculationError(null);
+    try {
+      const assumptions = OM_CALC_NUMERIC_FIELDS.reduce<Record<string, number | null>>((acc, field) => {
+        acc[field] = nextDraft[field] ?? null;
+        return acc;
+      }, {});
+      const res = await fetch(`${API_BASE}/api/properties/${property.id}/om-calculation`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          assumptions,
+          brokerEmailNotes: nextDraft.brokerEmailNotes.trim(),
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          typeof data?.details === "string"
+            ? data.details
+            : typeof data?.error === "string"
+              ? data.error
+              : "Failed to run OM calculation"
+        );
+      }
+      setOmCalculation(data as OmCalculationSnapshot);
+      return data as OmCalculationSnapshot;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to run OM calculation";
+      setOmCalculationError(message);
+      return null;
+    } finally {
+      setOmCalculationLoading(false);
+      setOmCalculationRunning(false);
+    }
+  };
+
+  useEffect(() => {
+    if (dossierSettingsLoading) return;
+    if (!hasAuthoritativeOm && !hasSavedBrokerEmailNotes) {
+      setOmCalculation(null);
+      setOmCalculationLoading(false);
+      return;
+    }
+    void fetchOmCalculation(dossierDraft, { initialLoad: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- run after persisted assumptions or OM availability change
+  }, [property.id, dossierSettingsLoading, hasAuthoritativeOm, hasSavedBrokerEmailNotes]);
 
   const handleRefreshAuthoritativeOm = async () => {
     if (authoritativeOmRefreshing || !hasOmDocument) return;
@@ -1335,6 +1470,7 @@ export function CanonicalPropertyDetail({
           .then((docs) => setUnifiedDocuments(docs?.documents ?? []))
           .catch(() => {}),
       ]);
+      void fetchOmCalculation(dossierDraft, { initialLoad: true });
 
       onRefreshPropertyData?.();
       onWorkflowActivity?.();
@@ -1357,8 +1493,10 @@ export function CanonicalPropertyDetail({
 
   const handleGenerateDossier = async () => {
     if (dossierGenerating) return;
-    if (!hasAuthoritativeOm) {
-      setDossierError("Generate dossier requires a promoted authoritative OM snapshot. Build the authoritative OM first.");
+    if (!canGenerateDossier) {
+      setDossierError(
+        "Generate dossier requires either a promoted authoritative OM snapshot or saved broker email notes with rent/expense inputs."
+      );
       return;
     }
     try {
@@ -1433,6 +1571,52 @@ export function CanonicalPropertyDetail({
     }
   };
 
+  const handleOmCalculationFieldChange = (
+    field: OmCalculationNumericField,
+    value: number | null
+  ) => {
+    setDossierDraft((prev) => ({
+      ...prev,
+      [field]: value,
+    }));
+  };
+
+  const handleOmCalculationSave = async () => {
+    try {
+      const savedDraft = await persistDossierSettings();
+      await fetchOmCalculation(savedDraft);
+      onRefreshPropertyData?.();
+    } catch (err) {
+      setOmCalculationError(err instanceof Error ? err.message : "Failed to save OM defaults");
+    }
+  };
+
+  const handleOmCalculationReset = () => {
+    setDossierDraft(savedDossierDraft);
+    setOmCalculationError(null);
+  };
+
+  const handleClearSavedOmOverrides = async () => {
+    try {
+      await persistDossierSettings(emptyOmCalculationDraft());
+      const res = await fetch(`${API_BASE}/api/dossier-assumptions?property_id=${encodeURIComponent(property.id)}`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data?.error) {
+        throw new Error(typeof data?.error === "string" ? data.error : data?.details ?? "Failed to reload defaults");
+      }
+      const nextDraft = hydrateDossierAssumptions(data as DossierAssumptionsResponse);
+      if (hasAuthoritativeOm || nextDraft.brokerEmailNotes.trim().length > 0) {
+        await fetchOmCalculation(nextDraft, { initialLoad: true });
+      } else {
+        setOmCalculation(null);
+        setOmCalculationLoading(false);
+      }
+      onRefreshPropertyData?.();
+    } catch (err) {
+      setOmCalculationError(err instanceof Error ? err.message : "Failed to clear OM overrides");
+    }
+  };
+
   const hasListing = primaryListing && primaryListing !== "loading";
   const listingForDisplay = hasListing ? primaryListing : null;
   const listingAgents = listingForDisplay?.agentEnrichment ?? [];
@@ -1489,6 +1673,7 @@ export function CanonicalPropertyDetail({
   const [unitGalleryIndices, setUnitGalleryIndices] = useState<Record<number, number>>({});
   const sectionLinks = [
     { id: "deal-dossier", label: "Dossier", open: !!openSections.dealDossier },
+    { id: "om-calculation", label: "OM calculation", open: !!openSections.omCalculation },
     { id: "photos-floorplans", label: "Media", open: !!openSections.photosFloorplans },
     { id: "details-broker-amenities-price-history", label: "Listing", open: !!openSections.detailsBrokerAmenitiesPriceHistory },
     { id: "owner", label: "Owner", open: !!openSections.owner },
@@ -1804,7 +1989,7 @@ export function CanonicalPropertyDetail({
           }}
         >
           <p style={{ margin: "0 0 0.85rem", fontSize: "0.85rem", color: "#475569", lineHeight: 1.5 }}>
-            Save renovation and furnishing costs on this property, then generate the dossier here using those property-level costs plus your profile defaults for leverage, exit, and operating assumptions.
+            Save renovation costs, furnishing costs, and any broker email notes for this property, then generate the dossier here using those property-level inputs plus your profile defaults for leverage, exit, and operating assumptions.
           </p>
           {dossierSettingsLoading ? (
             <p style={{ margin: 0, fontSize: "0.85rem", color: "#64748b" }}>Loading dossier defaults…</p>
@@ -1842,12 +2027,40 @@ export function CanonicalPropertyDetail({
                   />
                 </label>
               </div>
+              <label style={{ display: "flex", flexDirection: "column", gap: "0.3rem", marginTop: "0.85rem" }}>
+                <span style={{ fontSize: "0.82rem", fontWeight: 600, color: "#0f172a" }}>
+                  Broker email notes for rent, expenses, and OM assumptions
+                </span>
+                <textarea
+                  value={dossierDraft.brokerEmailNotes}
+                  onChange={(e) =>
+                    setDossierDraft((prev) => ({
+                      ...prev,
+                      brokerEmailNotes: e.target.value,
+                    }))
+                  }
+                  rows={7}
+                  placeholder="Paste broker email notes, rent roll bullets, T12 highlights, vacancy notes, projected rents, or expense assumptions here. These notes can be used to generate the dossier when there is no promoted OM yet."
+                  style={{
+                    padding: "0.65rem 0.75rem",
+                    border: "1px solid #cbd5e1",
+                    borderRadius: "8px",
+                    resize: "vertical",
+                    minHeight: "150px",
+                    fontFamily: "inherit",
+                    lineHeight: 1.5,
+                  }}
+                />
+              </label>
               <div style={{ marginTop: "0.75rem", fontSize: "0.78rem", color: "#64748b", lineHeight: 1.5 }}>
                 <div>
                   Formula default: {formatPrice(formulaDossierDefaults.furnishingSetupCosts ?? 0)} using eligible-unit count, bed/bath mix, and average eligible unit sqft from the rent roll or building square footage.
                 </div>
                 <div>
                   Target sizing is roughly $10k per unit around 500-1,500 sqft, $15k-$20k per unit above that, and $25k-$30k per unit once average unit size is above 2,500 sqft. Override this with your actual furnishing quote whenever you have one.
+                </div>
+                <div>
+                  Broker note inputs are treated as property-specific underwriting source material. When present, they can supplement OM financials or serve as the dossier input when a broker only emailed rents and expenses.
                 </div>
                 {dossierMixSummary && (
                   <div>
@@ -1887,7 +2100,7 @@ export function CanonicalPropertyDetail({
                   </div>
                 </div>
               )}
-              {!hasAuthoritativeOm && (
+              {!hasAuthoritativeOm && !hasBrokerEmailNotes && (
                 <div
                   style={{
                     marginTop: "1rem",
@@ -1900,8 +2113,23 @@ export function CanonicalPropertyDetail({
                   }}
                 >
                   {hasOmDocument
-                    ? "Generate dossier now requires a promoted authoritative OM snapshot. Build the authoritative OM first, then run dossier generation."
-                    : "Upload an OM, brochure, or rent roll before generating a dossier."}
+                    ? "Build the authoritative OM first, or paste broker email notes above if the broker only shared rents and expenses in email."
+                    : "Upload an OM, brochure, or rent roll, or paste broker email notes above before generating a dossier."}
+                </div>
+              )}
+              {!hasAuthoritativeOm && hasBrokerEmailNotes && (
+                <div
+                  style={{
+                    marginTop: "1rem",
+                    padding: "0.85rem 1rem",
+                    borderRadius: "10px",
+                    border: "1px solid #bfdbfe",
+                    background: "#eff6ff",
+                    color: "#1e3a8a",
+                    fontSize: "0.92rem",
+                  }}
+                >
+                  No promoted OM snapshot is available yet. This dossier run will use the saved broker email notes as the current rent and expense source.
                 </div>
               )}
               <div style={{ display: "flex", flexWrap: "wrap", gap: "0.65rem", marginTop: "1rem" }}>
@@ -1925,7 +2153,7 @@ export function CanonicalPropertyDetail({
                     cursor: isDossierBusy || !isDossierDirty ? "not-allowed" : "pointer",
                   }}
                 >
-                  {dossierSettingsSaving ? "Saving…" : "Save property costs"}
+                  {dossierSettingsSaving ? "Saving…" : "Save dossier inputs"}
                 </button>
                 <button
                   type="button"
@@ -1967,7 +2195,7 @@ export function CanonicalPropertyDetail({
                 )}
                 <button
                   type="button"
-                  disabled={isDossierBusy || !hasAuthoritativeOm}
+                  disabled={isDossierBusy || !canGenerateDossier}
                   onClick={handleGenerateDossier}
                   style={{
                     padding: "0.55rem 1rem",
@@ -1976,8 +2204,8 @@ export function CanonicalPropertyDetail({
                     background: "#0066cc",
                     color: "#fff",
                     fontWeight: 600,
-                    cursor: isDossierBusy || !hasAuthoritativeOm ? "not-allowed" : "pointer",
-                    opacity: !hasAuthoritativeOm ? 0.65 : 1,
+                    cursor: isDossierBusy || !canGenerateDossier ? "not-allowed" : "pointer",
+                    opacity: !canGenerateDossier ? 0.65 : 1,
                   }}
                 >
                   {dossierGenerating ? "Generating..." : "Generate dossier"}
@@ -2001,6 +2229,43 @@ export function CanonicalPropertyDetail({
             </>
           )}
         </div>
+      </CollapsibleSection>
+
+      <CollapsibleSection
+        id="om-calculation"
+        title="OM calculation"
+        open={!!openSections.omCalculation}
+        onToggle={() => toggle("omCalculation")}
+      >
+        <OmCalculationPanel
+          draft={dossierDraft}
+          calculation={omCalculation}
+          loading={omCalculationLoading}
+          running={omCalculationRunning}
+          saving={dossierSettingsSaving}
+          error={omCalculationError}
+          isDirty={isDossierDirty}
+          hasAuthoritativeOm={hasAuthoritativeOm}
+          hasBrokerEmailNotes={hasBrokerEmailNotes}
+          formulaFurnishingSetupCosts={formulaDossierDefaults.furnishingSetupCosts}
+          onDraftNumberChange={handleOmCalculationFieldChange}
+          onRunCalculation={() => {
+            void fetchOmCalculation(dossierDraft);
+          }}
+          onSave={() => {
+            void handleOmCalculationSave();
+          }}
+          onResetToSaved={handleOmCalculationReset}
+          onApplyFormulaDefault={() =>
+            setDossierDraft((prev) => ({
+              ...prev,
+              furnishingSetupCosts: formulaDossierDefaults.furnishingSetupCosts ?? null,
+            }))
+          }
+          onClearSaved={() => {
+            void handleClearSavedOmOverrides();
+          }}
+        />
       </CollapsibleSection>
 
       {/* 1. Photos / floor plans — side by side, same layout as raw listings */}
@@ -2845,7 +3110,7 @@ export function CanonicalPropertyDetail({
                   ].filter(Boolean).join("; ");
                   return (
                     <div key={`${unitLabel}-${i}`} style={{ border: "1px solid #e5e5e5", borderRadius: "8px", overflow: "hidden", backgroundColor: "#fafafa", display: "flex", flexDirection: "row", alignItems: "stretch", minHeight: "120px", boxShadow: "0 1px 3px rgba(0,0,0,0.06)", flexWrap: "wrap" }}>
-                      <div style={{ flex: 1, display: "flex", flexDirection: "column", padding: "0.5rem 0.75rem", justifyContent: "center", gap: "0.35rem", minWidth: 0, borderRight: "1px solid #eee" }}>
+                      <div style={{ flex: 1, display: "flex", flexDirection: "column", padding: "0.65rem 0.75rem 0.75rem", justifyContent: "flex-start", gap: "0.35rem", minWidth: 0, borderRight: "1px solid #eee" }}>
                         <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.2rem", flexWrap: "wrap" }}>
                           <strong style={{ fontSize: "0.95rem", color: "#1a1a1a" }}>Unit {unitLabel}</strong>
                           {mediaRow?.streeteasyUrl && (

@@ -375,8 +375,29 @@ export interface RentalFinancials {
 }
 
 export interface PropertyDealDossierAssumptions {
+  purchasePrice?: number | null;
+  purchaseClosingCostPct?: number | null;
   renovationCosts?: number | null;
   furnishingSetupCosts?: number | null;
+  ltvPct?: number | null;
+  interestRatePct?: number | null;
+  amortizationYears?: number | null;
+  loanFeePct?: number | null;
+  rentUpliftPct?: number | null;
+  expenseIncreasePct?: number | null;
+  managementFeePct?: number | null;
+  vacancyPct?: number | null;
+  leadTimeMonths?: number | null;
+  annualRentGrowthPct?: number | null;
+  annualOtherIncomeGrowthPct?: number | null;
+  annualExpenseGrowthPct?: number | null;
+  annualPropertyTaxGrowthPct?: number | null;
+  recurringCapexAnnual?: number | null;
+  holdPeriodYears?: number | null;
+  exitCapPct?: number | null;
+  exitClosingCostPct?: number | null;
+  targetIrrPct?: number | null;
+  brokerEmailNotes?: string | null;
   updatedAt?: string | null;
 }
 

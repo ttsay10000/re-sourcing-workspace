@@ -52,6 +52,8 @@ import { enrichBrokers, hasMeaningfulBrokerEnrichment } from "../enrichment/brok
 import { resolveEffectiveDealScore } from "../deal/effectiveDealScore.js";
 import { getPersistedDossierSignals } from "../deal/persistedDossierSignals.js";
 import { getPropertyDossierSummary, hasCompletedDealDossier } from "../deal/propertyDossierState.js";
+import { buildOmCalculationSnapshot } from "../deal/buildOmCalculation.js";
+import type { DossierAssumptionOverrides } from "../deal/underwritingModel.js";
 import { resolveGeneratedDocPath, deleteGeneratedDocumentFile } from "../deal/generatedDocStorage.js";
 import { unlink } from "fs/promises";
 import { basename, extname } from "path";
@@ -81,6 +83,30 @@ const ENRICHMENT_RATE_LIMIT_DELAY_MS = Number(process.env.ENRICHMENT_RATE_LIMIT_
 const ENABLE_OM_AUTOMATION_V2 = process.env.ENABLE_OM_AUTOMATION_V2 === "1";
 const MANUAL_OM_MAX_BYTES = Number(process.env.MANUAL_OM_MAX_BYTES || 25 * 1024 * 1024);
 const MANUAL_OM_DOWNLOAD_TIMEOUT_MS = Number(process.env.MANUAL_OM_DOWNLOAD_TIMEOUT_MS || 20_000);
+const DOSSIER_ASSUMPTION_NUMERIC_FIELDS = [
+  "purchasePrice",
+  "purchaseClosingCostPct",
+  "renovationCosts",
+  "furnishingSetupCosts",
+  "ltvPct",
+  "interestRatePct",
+  "amortizationYears",
+  "loanFeePct",
+  "rentUpliftPct",
+  "expenseIncreasePct",
+  "managementFeePct",
+  "vacancyPct",
+  "leadTimeMonths",
+  "annualRentGrowthPct",
+  "annualOtherIncomeGrowthPct",
+  "annualExpenseGrowthPct",
+  "annualPropertyTaxGrowthPct",
+  "recurringCapexAnnual",
+  "holdPeriodYears",
+  "exitCapPct",
+  "exitClosingCostPct",
+  "targetIrrPct",
+] as const satisfies ReadonlyArray<keyof DossierAssumptionOverrides>;
 
 function normalizeManualUrl(
   value: unknown,
@@ -2718,15 +2744,73 @@ function optionalNonNegativeNumber(value: unknown): number | null | "invalid" {
   return value;
 }
 
-/** PUT /api/properties/:id/dossier-settings - save per-property renovation and furnishing overrides. */
+function optionalTrimmedText(value: unknown, maxLength = 20_000): string | null | "invalid" {
+  if (value == null || value === "") return null;
+  if (typeof value !== "string") return "invalid";
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  return trimmed.length <= maxLength ? trimmed : "invalid";
+}
+
+function parseDossierAssumptionOverridesPayload(
+  raw: unknown
+): DossierAssumptionOverrides | null | "invalid" {
+  if (raw == null) return null;
+  if (typeof raw !== "object" || Array.isArray(raw)) return "invalid";
+
+  const record = raw as Record<string, unknown>;
+  const overrides: DossierAssumptionOverrides = {};
+
+  for (const key of DOSSIER_ASSUMPTION_NUMERIC_FIELDS) {
+    const parsed = optionalNonNegativeNumber(record[key]);
+    if (parsed === "invalid") return "invalid";
+    overrides[key] = parsed;
+  }
+
+  return overrides;
+}
+
+router.post("/properties/:id/om-calculation", async (req: Request, res: Response) => {
+  try {
+    const { id: propertyId } = req.params;
+    const assumptionOverrides = parseDossierAssumptionOverridesPayload(req.body?.assumptions);
+    const brokerEmailNotes = optionalTrimmedText(req.body?.brokerEmailNotes);
+    if (assumptionOverrides === "invalid") {
+      res.status(400).json({
+        error: "assumptions must be an object containing only non-negative numbers or null values.",
+      });
+      return;
+    }
+    if (brokerEmailNotes === "invalid") {
+      res.status(400).json({
+        error: "brokerEmailNotes must be a string under 20,000 characters.",
+      });
+      return;
+    }
+
+    const snapshot = await buildOmCalculationSnapshot({
+      propertyId,
+      assumptionOverrides,
+      brokerEmailNotes,
+    });
+    res.json(snapshot);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const status = /not found/i.test(message) ? 404 : 503;
+    console.error("[properties om calculation]", err);
+    res.status(status).json({ error: "Failed to build OM calculation.", details: message });
+  }
+});
+
+/** PUT /api/properties/:id/dossier-settings - save per-property costs plus optional broker email notes. */
 router.put("/properties/:id/dossier-settings", async (req: Request, res: Response) => {
   try {
     const { id: propertyId } = req.params;
-    const renovationCosts = optionalNonNegativeNumber(req.body?.renovationCosts);
-    const furnishingSetupCosts = optionalNonNegativeNumber(req.body?.furnishingSetupCosts);
-    if (renovationCosts === "invalid" || furnishingSetupCosts === "invalid") {
+    const assumptionOverrides = parseDossierAssumptionOverridesPayload(req.body);
+    const brokerEmailNotes = optionalTrimmedText(req.body?.brokerEmailNotes);
+    if (assumptionOverrides === "invalid" || brokerEmailNotes === "invalid") {
       res.status(400).json({
-        error: "renovationCosts and furnishingSetupCosts must be non-negative numbers or null.",
+        error: "Assumption fields must be non-negative numbers or null, and brokerEmailNotes must be a string under 20,000 characters.",
       });
       return;
     }
@@ -2738,8 +2822,8 @@ router.put("/properties/:id/dossier-settings", async (req: Request, res: Respons
       return;
     }
     const assumptionsPatch = {
-      renovationCosts,
-      furnishingSetupCosts,
+      ...assumptionOverrides,
+      brokerEmailNotes,
       updatedAt: new Date().toISOString(),
     };
     await repo.updateDetails(propertyId, "dealDossier.assumptions", assumptionsPatch);
