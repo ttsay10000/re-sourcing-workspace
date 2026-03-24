@@ -82,7 +82,9 @@ function DossierSuccessContent() {
             {" · "}
           </>
         )}
-        <Link href="/dossier-assumptions">Back to dossier assumptions</Link>
+        <Link href={propertyId ? `/deal-analysis?property_id=${encodeURIComponent(propertyId)}` : "/deal-analysis"}>
+          Back to deal analysis
+        </Link>
       </p>
     </div>
   );

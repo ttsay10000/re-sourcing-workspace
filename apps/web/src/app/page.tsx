@@ -687,8 +687,8 @@ export default function HomePage() {
                               Download dossier
                             </a>
                           ) : (
-                            <Link href={`/dossier-assumptions?property_id=${encodeURIComponent(deal.id)}`} className="btn-card">
-                              Generate dossier
+                            <Link href={`/deal-analysis?property_id=${encodeURIComponent(deal.id)}`} className="btn-card">
+                              Open deal analysis
                             </Link>
                           )}
                         </div>

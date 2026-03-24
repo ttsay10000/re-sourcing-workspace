@@ -1283,6 +1283,18 @@ export function CanonicalPropertyDetail({
     dossierJob?.status === "running"
       ? dossierJob.stageLabel
       : persistedDossierGeneration?.stageLabel ?? "Not started";
+  const analysisStatusLabel =
+    dossierJob?.status === "running"
+      ? `${Math.min(activeDossierProgressPct, 100)}% complete`
+      : persistedDossierGeneration?.status === "completed"
+        ? "Dossier ready"
+        : persistedDossierGeneration?.status === "failed"
+          ? "Last run failed"
+          : hasAuthoritativeOm
+            ? "Ready for underwriting"
+            : hasOmDocument
+              ? "OM uploaded"
+              : "Waiting on OM or notes";
 
   const fetchUnifiedTable = () => {
     if (unifiedFetched) return;
@@ -1672,8 +1684,6 @@ export function CanonicalPropertyDetail({
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
   const [unitGalleryIndices, setUnitGalleryIndices] = useState<Record<number, number>>({});
   const sectionLinks = [
-    { id: "deal-dossier", label: "Dossier", open: !!openSections.dealDossier },
-    { id: "om-calculation", label: "OM calculation", open: !!openSections.omCalculation },
     { id: "photos-floorplans", label: "Media", open: !!openSections.photosFloorplans },
     { id: "details-broker-amenities-price-history", label: "Listing", open: !!openSections.detailsBrokerAmenitiesPriceHistory },
     { id: "owner", label: "Owner", open: !!openSections.owner },
@@ -1926,6 +1936,78 @@ export function CanonicalPropertyDetail({
         ))}
       </div>
 
+      <div
+        style={{
+          marginBottom: "1rem",
+          padding: "1rem 1.1rem",
+          borderRadius: "1rem",
+          border: "1px solid #dbeafe",
+          background: "linear-gradient(135deg, #f8fbff 0%, #ffffff 100%)",
+          display: "flex",
+          justifyContent: "space-between",
+          gap: "1rem",
+          flexWrap: "wrap",
+          alignItems: "center",
+        }}
+      >
+        <div style={{ maxWidth: "760px" }}>
+          <div style={{ fontSize: "0.76rem", fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1d4ed8" }}>
+            Deal Analysis
+          </div>
+          <div style={{ marginTop: "0.25rem", fontSize: "1rem", fontWeight: 700, color: "#0f172a" }}>
+            OM calculation and dossier generation now live on a standalone page.
+          </div>
+          <p style={{ margin: "0.45rem 0 0", fontSize: "0.9rem", color: "#475569", lineHeight: 1.55 }}>
+            Use the dedicated analysis workspace to save property-specific underwriting, run the simplified OM metrics view, and generate the dossier without adding more collapsible sections here.
+          </p>
+          <div style={{ marginTop: "0.55rem", fontSize: "0.82rem", color: "#475569" }}>
+            Status: <strong style={{ color: "#0f172a" }}>{analysisStatusLabel}</strong>
+            {persistedDossierGeneration?.completedAt ? ` · Last completed ${formatDateOnly(persistedDossierGeneration.completedAt)}` : ""}
+            {persistedDossierGeneration?.status === "running" ? ` · ${activeDossierStageLabel}` : ""}
+          </div>
+          {persistedDossierGeneration?.status === "failed" && persistedDossierGeneration.lastError && (
+            <div style={{ marginTop: "0.35rem", fontSize: "0.82rem", color: "#b91c1c" }}>
+              Last run failed: {persistedDossierGeneration.lastError}
+            </div>
+          )}
+        </div>
+        <div style={{ display: "flex", gap: "0.65rem", flexWrap: "wrap" }}>
+          <a
+            href={`/deal-analysis?property_id=${encodeURIComponent(property.id)}`}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              padding: "0.7rem 1rem",
+              borderRadius: "999px",
+              background: "#0f172a",
+              color: "#fff",
+              textDecoration: "none",
+              fontWeight: 700,
+            }}
+          >
+            Open deal analysis
+          </a>
+          <a
+            href={`/dossier-assumptions?property_id=${encodeURIComponent(property.id)}`}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              padding: "0.7rem 1rem",
+              borderRadius: "999px",
+              border: "1px solid #cbd5e1",
+              background: "#fff",
+              color: "#334155",
+              textDecoration: "none",
+              fontWeight: 600,
+            }}
+          >
+            Advanced assumptions
+          </a>
+        </div>
+      </div>
+
       {sourcingUpdate && (
         <div
           style={{
@@ -1973,300 +2055,6 @@ export function CanonicalPropertyDetail({
           </button>
         ))}
       </div>
-
-      <CollapsibleSection
-        id="deal-dossier"
-        title="Deal dossier"
-        open={!!openSections.dealDossier}
-        onToggle={() => toggle("dealDossier")}
-      >
-        <div
-          style={{
-            padding: "1rem",
-            border: "1px solid #dbeafe",
-            borderRadius: "12px",
-            background: "#f8fbff",
-          }}
-        >
-          <p style={{ margin: "0 0 0.85rem", fontSize: "0.85rem", color: "#475569", lineHeight: 1.5 }}>
-            Save renovation costs, furnishing costs, and any broker email notes for this property, then generate the dossier here using those property-level inputs plus your profile defaults for leverage, exit, and operating assumptions.
-          </p>
-          {dossierSettingsLoading ? (
-            <p style={{ margin: 0, fontSize: "0.85rem", color: "#64748b" }}>Loading dossier defaults…</p>
-          ) : (
-            <>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.85rem" }}>
-                <label style={{ display: "flex", flexDirection: "column", gap: "0.3rem" }}>
-                  <span style={{ fontSize: "0.82rem", fontWeight: 600, color: "#0f172a" }}>Renovation costs</span>
-                  <input
-                    type="number"
-                    min={0}
-                    value={dossierDraft.renovationCosts ?? ""}
-                    onChange={(e) =>
-                      setDossierDraft((prev) => ({
-                        ...prev,
-                        renovationCosts: e.target.value === "" ? null : Number(e.target.value),
-                      }))
-                    }
-                    style={{ padding: "0.55rem 0.65rem", border: "1px solid #cbd5e1", borderRadius: "8px" }}
-                  />
-                </label>
-                <label style={{ display: "flex", flexDirection: "column", gap: "0.3rem" }}>
-                  <span style={{ fontSize: "0.82rem", fontWeight: 600, color: "#0f172a" }}>Furnishing / setup costs</span>
-                  <input
-                    type="number"
-                    min={0}
-                    value={dossierDraft.furnishingSetupCosts ?? ""}
-                    onChange={(e) =>
-                      setDossierDraft((prev) => ({
-                        ...prev,
-                        furnishingSetupCosts: e.target.value === "" ? null : Number(e.target.value),
-                      }))
-                    }
-                    style={{ padding: "0.55rem 0.65rem", border: "1px solid #cbd5e1", borderRadius: "8px" }}
-                  />
-                </label>
-              </div>
-              <label style={{ display: "flex", flexDirection: "column", gap: "0.3rem", marginTop: "0.85rem" }}>
-                <span style={{ fontSize: "0.82rem", fontWeight: 600, color: "#0f172a" }}>
-                  Broker email notes for rent, expenses, and OM assumptions
-                </span>
-                <textarea
-                  value={dossierDraft.brokerEmailNotes}
-                  onChange={(e) =>
-                    setDossierDraft((prev) => ({
-                      ...prev,
-                      brokerEmailNotes: e.target.value,
-                    }))
-                  }
-                  rows={7}
-                  placeholder="Paste broker email notes, rent roll bullets, T12 highlights, vacancy notes, projected rents, or expense assumptions here. These notes can be used to generate the dossier when there is no promoted OM yet."
-                  style={{
-                    padding: "0.65rem 0.75rem",
-                    border: "1px solid #cbd5e1",
-                    borderRadius: "8px",
-                    resize: "vertical",
-                    minHeight: "150px",
-                    fontFamily: "inherit",
-                    lineHeight: 1.5,
-                  }}
-                />
-              </label>
-              <div style={{ marginTop: "0.75rem", fontSize: "0.78rem", color: "#64748b", lineHeight: 1.5 }}>
-                <div>
-                  Formula default: {formatPrice(formulaDossierDefaults.furnishingSetupCosts ?? 0)} using eligible-unit count, bed/bath mix, and average eligible unit sqft from the rent roll or building square footage.
-                </div>
-                <div>
-                  Target sizing is roughly $10k per unit around 500-1,500 sqft, $15k-$20k per unit above that, and $25k-$30k per unit once average unit size is above 2,500 sqft. Override this with your actual furnishing quote whenever you have one.
-                </div>
-                <div>
-                  Broker note inputs are treated as property-specific underwriting source material. When present, they can supplement OM financials or serve as the dossier input when a broker only emailed rents and expenses.
-                </div>
-                {dossierMixSummary && (
-                  <div>
-                    Mix context: {dossierMixSummary.eligibleResidentialUnits ?? 0} eligible residential unit(s), {dossierMixSummary.commercialUnits ?? 0} commercial, {dossierMixSummary.rentStabilizedUnits ?? 0} rent-stabilized.
-                  </div>
-                )}
-                {persistedDossierAssumptions?.updatedAt && (
-                  <div>Last saved: {formatListedDate(persistedDossierAssumptions.updatedAt)}</div>
-                )}
-              </div>
-              {dossierError && (
-                <p style={{ margin: "0.75rem 0 0", fontSize: "0.82rem", color: "#b91c1c" }}>{dossierError}</p>
-              )}
-              {persistedDossierGeneration?.status === "failed" && !dossierError && persistedDossierGeneration.lastError && (
-                <p style={{ margin: "0.75rem 0 0", fontSize: "0.82rem", color: "#b91c1c" }}>
-                  Last generation failed: {persistedDossierGeneration.lastError}
-                </p>
-              )}
-              {showDossierProgress && (
-                <div className="dossier-progress-shell" style={{ marginTop: "0.9rem" }} aria-live="polite">
-                  <div className="dossier-progress-header">
-                    <div>
-                      <div className="dossier-progress-title">{Math.min(activeDossierProgressPct, 100)}% complete</div>
-                      <div className="dossier-progress-subtitle">{activeDossierStageLabel}</div>
-                    </div>
-                    <div className="dossier-progress-step">Property-level dossier run</div>
-                  </div>
-                  <div
-                    className="dossier-progress-track"
-                    role="progressbar"
-                    aria-label="Property dossier generation progress"
-                    aria-valuemin={0}
-                    aria-valuemax={100}
-                    aria-valuenow={Math.min(activeDossierProgressPct, 100)}
-                  >
-                    <div className="dossier-progress-fill" style={{ width: `${Math.min(activeDossierProgressPct, 100)}%` }} />
-                  </div>
-                </div>
-              )}
-              {!hasAuthoritativeOm && !hasBrokerEmailNotes && (
-                <div
-                  style={{
-                    marginTop: "1rem",
-                    padding: "0.85rem 1rem",
-                    borderRadius: "10px",
-                    border: "1px solid #cbd5e1",
-                    background: "#f8fafc",
-                    color: "#334155",
-                    fontSize: "0.92rem",
-                  }}
-                >
-                  {hasOmDocument
-                    ? "Build the authoritative OM first, or paste broker email notes above if the broker only shared rents and expenses in email."
-                    : "Upload an OM, brochure, or rent roll, or paste broker email notes above before generating a dossier."}
-                </div>
-              )}
-              {!hasAuthoritativeOm && hasBrokerEmailNotes && (
-                <div
-                  style={{
-                    marginTop: "1rem",
-                    padding: "0.85rem 1rem",
-                    borderRadius: "10px",
-                    border: "1px solid #bfdbfe",
-                    background: "#eff6ff",
-                    color: "#1e3a8a",
-                    fontSize: "0.92rem",
-                  }}
-                >
-                  No promoted OM snapshot is available yet. This dossier run will use the saved broker email notes as the current rent and expense source.
-                </div>
-              )}
-              <div style={{ display: "flex", flexWrap: "wrap", gap: "0.65rem", marginTop: "1rem" }}>
-                <button
-                  type="button"
-                  disabled={isDossierBusy || !isDossierDirty}
-                  onClick={async () => {
-                    try {
-                      await persistDossierSettings();
-                      onRefreshPropertyData?.();
-                    } catch (err) {
-                      setDossierError(err instanceof Error ? err.message : "Failed to save dossier settings");
-                    }
-                  }}
-                  style={{
-                    padding: "0.55rem 0.9rem",
-                    borderRadius: "8px",
-                    border: "1px solid #cbd5e1",
-                    background: "#fff",
-                    color: "#0f172a",
-                    cursor: isDossierBusy || !isDossierDirty ? "not-allowed" : "pointer",
-                  }}
-                >
-                  {dossierSettingsSaving ? "Saving…" : "Save dossier inputs"}
-                </button>
-                <button
-                  type="button"
-                  disabled={isDossierBusy}
-                  onClick={() =>
-                    setDossierDraft((prev) => ({
-                      ...prev,
-                      furnishingSetupCosts: formulaDossierDefaults.furnishingSetupCosts ?? null,
-                    }))
-                  }
-                  style={{
-                    padding: "0.55rem 0.9rem",
-                    borderRadius: "8px",
-                    border: "1px solid #cbd5e1",
-                    background: "#eff6ff",
-                    color: "#1d4ed8",
-                    cursor: isDossierBusy ? "not-allowed" : "pointer",
-                  }}
-                >
-                  Use formula default
-                </button>
-                {hasOmDocument && !hasAuthoritativeOm && (
-                  <button
-                    type="button"
-                    disabled={isDossierBusy}
-                    onClick={handleRefreshAuthoritativeOm}
-                    style={{
-                      padding: "0.55rem 0.9rem",
-                      borderRadius: "8px",
-                      border: "1px solid #0f766e",
-                      background: "#ecfeff",
-                      color: "#115e59",
-                      fontWeight: 600,
-                      cursor: isDossierBusy ? "not-allowed" : "pointer",
-                    }}
-                  >
-                    {authoritativeOmRefreshing ? "Building OM..." : "Build authoritative OM"}
-                  </button>
-                )}
-                <button
-                  type="button"
-                  disabled={isDossierBusy || !canGenerateDossier}
-                  onClick={handleGenerateDossier}
-                  style={{
-                    padding: "0.55rem 1rem",
-                    borderRadius: "8px",
-                    border: "none",
-                    background: "#0066cc",
-                    color: "#fff",
-                    fontWeight: 600,
-                    cursor: isDossierBusy || !canGenerateDossier ? "not-allowed" : "pointer",
-                    opacity: !canGenerateDossier ? 0.65 : 1,
-                  }}
-                >
-                  {dossierGenerating ? "Generating..." : "Generate dossier"}
-                </button>
-                <a
-                  href={`/dossier-assumptions?property_id=${encodeURIComponent(property.id)}`}
-                  style={{
-                    display: "inline-flex",
-                    alignItems: "center",
-                    padding: "0.55rem 0.9rem",
-                    borderRadius: "8px",
-                    border: "1px solid #cbd5e1",
-                    color: "#334155",
-                    textDecoration: "none",
-                    background: "#fff",
-                  }}
-                >
-                  Advanced assumptions
-                </a>
-              </div>
-            </>
-          )}
-        </div>
-      </CollapsibleSection>
-
-      <CollapsibleSection
-        id="om-calculation"
-        title="OM calculation"
-        open={!!openSections.omCalculation}
-        onToggle={() => toggle("omCalculation")}
-      >
-        <OmCalculationPanel
-          draft={dossierDraft}
-          calculation={omCalculation}
-          loading={omCalculationLoading}
-          running={omCalculationRunning}
-          saving={dossierSettingsSaving}
-          error={omCalculationError}
-          isDirty={isDossierDirty}
-          hasAuthoritativeOm={hasAuthoritativeOm}
-          hasBrokerEmailNotes={hasBrokerEmailNotes}
-          formulaFurnishingSetupCosts={formulaDossierDefaults.furnishingSetupCosts}
-          onDraftNumberChange={handleOmCalculationFieldChange}
-          onRunCalculation={() => {
-            void fetchOmCalculation(dossierDraft);
-          }}
-          onSave={() => {
-            void handleOmCalculationSave();
-          }}
-          onResetToSaved={handleOmCalculationReset}
-          onApplyFormulaDefault={() =>
-            setDossierDraft((prev) => ({
-              ...prev,
-              furnishingSetupCosts: formulaDossierDefaults.furnishingSetupCosts ?? null,
-            }))
-          }
-          onClearSaved={() => {
-            void handleClearSavedOmOverrides();
-          }}
-        />
-      </CollapsibleSection>
 
       {/* 1. Photos / floor plans — side by side, same layout as raw listings */}
       <CollapsibleSection

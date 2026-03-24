@@ -16,6 +16,7 @@ import profileRouter from "./routes/profile.js";
 import dossierRouter from "./routes/dossier.js";
 import dealsRouter from "./routes/deals.js";
 import savedSearchesRouter from "./routes/savedSearches.js";
+import salesMetricsRouter from "./routes/salesMetrics.js";
 
 const PORT = Number(process.env.PORT) || 4000;
 const version = process.env.npm_package_version || "1.0.0";
@@ -63,6 +64,7 @@ app.use("/api", profileRouter);
 app.use("/api", dossierRouter);
 app.use("/api", dealsRouter);
 app.use("/api", savedSearchesRouter);
+app.use("/api", salesMetricsRouter);
 
 // Optional: read DATABASE_URL for future routes; do not connect at startup
 const databaseUrl = process.env.DATABASE_URL;

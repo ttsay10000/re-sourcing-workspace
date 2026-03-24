@@ -511,8 +511,8 @@ export function OmCalculationPanel({
             fontSize: "0.92rem",
           }}
         >
-          Save broker email notes in the Deal dossier section or build the authoritative OM first so this property
-          has current financial inputs to underwrite against.
+          Save broker email notes in this workspace or build the authoritative OM first so this property has
+          current financial inputs to underwrite against.
         </div>
       )}
 

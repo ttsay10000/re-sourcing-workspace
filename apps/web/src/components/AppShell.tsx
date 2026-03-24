@@ -8,6 +8,8 @@ const NAV_LINKS = [
   { href: "/", label: "Home" },
   { href: "/runs", label: "StreetEasy Agent" },
   { href: "/property-data", label: "Property Data" },
+  { href: "/deal-analysis", label: "Deal Analysis" },
+  { href: "/sales-metrics", label: "Sales Metrics" },
   { href: "/profile", label: "Profile" },
 ] as const;
 const API_BASE = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000").replace(/\/$/, "");
