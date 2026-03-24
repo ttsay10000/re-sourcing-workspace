@@ -6,6 +6,8 @@
 import express from "express";
 import cors from "cors";
 import type { HealthResponse } from "@re-sourcing/contracts";
+import { requireSiteAuth } from "./siteAuth.js";
+import siteAuthRouter from "./routes/siteAuth.js";
 import testAgentRouter from "./routes/testAgent.js";
 import listingsRouter from "./routes/listings.js";
 import propertiesRouter from "./routes/properties.js";
@@ -27,6 +29,7 @@ const allowedOrigins = process.env.CORS_ORIGIN
   : ["http://localhost:3000", "http://127.0.0.1:3000"];
 app.use(
   cors({
+    credentials: true,
     origin: (origin, cb) => {
       if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
       return cb(null, false);
@@ -50,6 +53,9 @@ app.get("/api/health", (_req, res) => {
   res.json(body);
 });
 
+app.use("/api", siteAuthRouter);
+app.use("/api", cronRouter);
+app.use("/api", requireSiteAuth);
 app.use("/api", testAgentRouter);
 app.use("/api", listingsRouter);
 app.use("/api", propertiesRouter);
@@ -57,7 +63,6 @@ app.use("/api", profileRouter);
 app.use("/api", dossierRouter);
 app.use("/api", dealsRouter);
 app.use("/api", savedSearchesRouter);
-app.use("/api", cronRouter);
 
 // Optional: read DATABASE_URL for future routes; do not connect at startup
 const databaseUrl = process.env.DATABASE_URL;

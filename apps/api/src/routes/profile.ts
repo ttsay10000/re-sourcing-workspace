@@ -1,5 +1,5 @@
 /**
- * User profile API (single global user): GET/PUT profile, assumption defaults, saved deals.
+ * User profile API (single global user): GET/PUT profile, site password, assumption defaults, saved deals.
  */
 
 import { Router, type Request, type Response } from "express";
@@ -17,6 +17,7 @@ import {
 import { resolveEffectiveDealScore } from "../deal/effectiveDealScore.js";
 import { getPropertyDossierSummary, hasCompletedDealDossier } from "../deal/propertyDossierState.js";
 import { resolvePreferredOmUnitCount } from "../om/authoritativeOm.js";
+import { setSiteAuthSessionCookie, updateDefaultSitePassword, verifyDefaultSitePassword } from "../siteAuth.js";
 
 const router = Router();
 
@@ -52,6 +53,10 @@ router.put("/profile", async (req: Request, res: Response) => {
     const repo = new UserProfileRepo({ pool });
     const id = await repo.ensureDefault();
     const body = req.body ?? {};
+    const nextSitePassword =
+      typeof body.newSitePassword === "string" ? body.newSitePassword.trim() : "";
+    const currentSitePassword =
+      typeof body.currentSitePassword === "string" ? body.currentSitePassword : "";
     const params: {
       name?: string | null;
       email?: string | null;
@@ -82,6 +87,17 @@ router.put("/profile", async (req: Request, res: Response) => {
       defaultRecurringCapexAnnual?: number | null;
       defaultLoanFeePct?: number | null;
     } = {};
+    if (nextSitePassword) {
+      if (nextSitePassword.length < 8) {
+        res.status(400).json({ error: "New password must be at least 8 characters." });
+        return;
+      }
+      const currentPasswordValid = await verifyDefaultSitePassword(currentSitePassword);
+      if (!currentPasswordValid.ok || !currentPasswordValid.profileId) {
+        res.status(400).json({ error: "Current password is incorrect." });
+        return;
+      }
+    }
     if (typeof body.name === "string") params.name = body.name.trim() || null;
     if (typeof body.email === "string") params.email = body.email.trim() || null;
     if (typeof body.organization === "string") params.organization = body.organization.trim() || null;
@@ -159,6 +175,10 @@ router.put("/profile", async (req: Request, res: Response) => {
       params.defaultLoanFeePct = body.defaultLoanFeePct;
     }
     const updated = await repo.update(id, params);
+    if (nextSitePassword) {
+      const profileId = await updateDefaultSitePassword(nextSitePassword);
+      setSiteAuthSessionCookie(res, profileId);
+    }
     res.json(updated);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

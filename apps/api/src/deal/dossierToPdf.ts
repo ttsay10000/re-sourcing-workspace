@@ -28,6 +28,22 @@ const HERO_BG = "#1e3a5f";
 const HERO_ACCENT = "#8fb9d8";
 const CHIP_BG = "#f8fafc";
 const CHIP_TEXT = "#1e3a5f";
+const COVER_BG = "#e2e8f0";
+const COVER_TINT = "#f8fafc";
+const COVER_PANEL_BG = "#ffffff";
+const COVER_PANEL_BORDER = "#dbe5ee";
+const COVER_ADDRESS_BG = "#ffffff";
+const COVER_ADDRESS_TEXT = "#0f172a";
+const COVER_SECTION_COLOR = "#111827";
+const COVER_LABEL_COLOR = "#334155";
+const COVER_VALUE_COLOR = "#0f172a";
+const COVER_ADDRESS_FONT_SIZE = 28;
+const COVER_SECTION_FONT_SIZE = 13.5;
+const COVER_LABEL_FONT_SIZE = 9.8;
+const COVER_VALUE_FONT_SIZE = 12.2;
+const COVER_VALUE_STRONG_FONT_SIZE = 13.5;
+const COVER_IMAGE_TIMEOUT_MS = 8_000;
+const COVER_IMAGE_MAX_BYTES = 8 * 1024 * 1024;
 
 type TableCell = { text: string; bold: boolean };
 type LayoutState = { y: number; pageNumber: number };
@@ -37,6 +53,30 @@ type TableLayout = {
   cellPadding: number;
   keyValue: boolean;
 };
+
+export interface DossierPdfCoverField {
+  label: string;
+  value: string;
+  emphasis?: boolean;
+}
+
+export interface DossierPdfCoverSection {
+  title: string;
+  rows: DossierPdfCoverField[];
+}
+
+export interface DossierPdfCoverData {
+  address: string;
+  backgroundImageUrl?: string | null;
+  propertyInfo: DossierPdfCoverSection;
+  acquisitionInfo: DossierPdfCoverSection;
+  keyFinancials: DossierPdfCoverSection;
+  expectedReturns: DossierPdfCoverSection;
+}
+
+export interface DossierTextToPdfOptions {
+  cover?: DossierPdfCoverData | null;
+}
 
 function isSectionBreakRow(row: TableCell[]): boolean {
   return row.length > 0 && row[0]?.bold === true && row.slice(1).every((cell) => cell.text.trim() === "");
@@ -130,6 +170,224 @@ function drawPageChrome(doc: PDFKit.PDFDocument, pageNumber: number): void {
     lineBreak: false,
   });
   doc.restore();
+}
+
+function imageContentTypeSupported(contentType: string | null, url: string): boolean {
+  const normalized = contentType?.toLowerCase() ?? "";
+  if (normalized.includes("image/jpeg") || normalized.includes("image/jpg") || normalized.includes("image/png")) {
+    return true;
+  }
+  return /\.(jpe?g|png)(\?|#|$)/i.test(url);
+}
+
+async function loadCoverImageBuffer(url: string | null | undefined): Promise<Buffer | null> {
+  if (!url || typeof url !== "string" || url.trim().length === 0) return null;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), COVER_IMAGE_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, { signal: controller.signal, redirect: "follow" });
+    if (!response.ok) return null;
+    if (!imageContentTypeSupported(response.headers.get("content-type"), response.url || url)) {
+      return null;
+    }
+    const contentLength = Number(response.headers.get("content-length") ?? "0");
+    if (Number.isFinite(contentLength) && contentLength > COVER_IMAGE_MAX_BYTES) return null;
+    const buffer = Buffer.from(await response.arrayBuffer());
+    if (buffer.length === 0 || buffer.length > COVER_IMAGE_MAX_BYTES) return null;
+    return buffer;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function drawCoverFallback(doc: PDFKit.PDFDocument): void {
+  const width = pageWidth(doc);
+  const height = pageHeight(doc);
+  doc.save();
+  doc.rect(0, 0, width, height).fill(COVER_BG);
+  doc.opacity(0.35).fillColor("#cbd5e1").circle(width * 0.18, height * 0.14, 110).fill();
+  doc.opacity(0.30).fillColor("#bfdbfe").circle(width * 0.76, height * 0.18, 150).fill();
+  doc.opacity(0.24).fillColor("#bbf7d0").circle(width * 0.86, height * 0.64, 170).fill();
+  doc.opacity(0.20).fillColor("#fef3c7").circle(width * 0.16, height * 0.82, 140).fill();
+  doc.restore();
+}
+
+function drawCoverBackground(doc: PDFKit.PDFDocument, coverImage: Buffer | null): void {
+  const width = pageWidth(doc);
+  const height = pageHeight(doc);
+  if (coverImage) {
+    try {
+      doc.image(coverImage, 0, 0, { width, height });
+    } catch {
+      drawCoverFallback(doc);
+    }
+  } else {
+    drawCoverFallback(doc);
+  }
+  doc.save();
+  doc.opacity(0.20).fillColor(COVER_TINT).rect(0, 0, width, height).fill();
+  doc.restore();
+}
+
+function drawGlassPanel(
+  doc: PDFKit.PDFDocument,
+  x: number,
+  y: number,
+  width: number,
+  height: number
+): void {
+  doc.save();
+  doc.opacity(0.76).roundedRect(x, y, width, height, 28).fill(COVER_PANEL_BG);
+  doc.opacity(0.18).lineWidth(1).roundedRect(x, y, width, height, 28).stroke(COVER_PANEL_BORDER);
+  doc.restore();
+}
+
+function drawCoverDivider(
+  doc: PDFKit.PDFDocument,
+  x: number,
+  y: number,
+  width: number
+): void {
+  doc.save();
+  doc.strokeColor(COVER_PANEL_BORDER).lineWidth(0.85);
+  doc.moveTo(x, y).lineTo(x + width, y).stroke();
+  doc.restore();
+}
+
+function drawCoverSection(
+  doc: PDFKit.PDFDocument,
+  section: DossierPdfCoverSection,
+  x: number,
+  y: number,
+  width: number,
+  options?: { labelRatio?: number }
+): number {
+  const labelRatio = options?.labelRatio ?? 0.5;
+  const labelWidth = width * labelRatio;
+  const valueWidth = width - labelWidth - 10;
+  let currentY = y;
+
+  doc.save();
+  doc.fillColor(COVER_SECTION_COLOR).font("Helvetica-Bold").fontSize(COVER_SECTION_FONT_SIZE);
+  doc.text(section.title, x, currentY, { width });
+  doc.restore();
+  currentY += 30;
+
+  section.rows.forEach((row) => {
+    doc.font("Helvetica").fontSize(COVER_LABEL_FONT_SIZE);
+    const labelHeight = doc.heightOfString(row.label, {
+      width: labelWidth,
+      lineGap: 2,
+    });
+    doc.font(row.emphasis ? "Helvetica-Bold" : "Helvetica")
+      .fontSize(row.emphasis ? COVER_VALUE_STRONG_FONT_SIZE : COVER_VALUE_FONT_SIZE);
+    const valueHeight = doc.heightOfString(row.value, {
+      width: valueWidth,
+      align: "right",
+      lineGap: 2,
+    });
+    const rowHeight = Math.max(labelHeight, valueHeight, 14);
+
+    doc.save();
+    doc.fillColor(COVER_LABEL_COLOR).font("Helvetica").fontSize(COVER_LABEL_FONT_SIZE);
+    doc.text(row.label, x, currentY, {
+      width: labelWidth,
+      lineGap: 2,
+    });
+    doc.fillColor(COVER_VALUE_COLOR)
+      .font(row.emphasis ? "Helvetica-Bold" : "Helvetica")
+      .fontSize(row.emphasis ? COVER_VALUE_STRONG_FONT_SIZE : COVER_VALUE_FONT_SIZE);
+    doc.text(row.value, x + labelWidth + 10, currentY, {
+      width: valueWidth,
+      align: "right",
+      lineGap: 2,
+    });
+    doc.restore();
+
+    currentY += rowHeight + 13;
+  });
+
+  return currentY;
+}
+
+function drawCoverAddressBanner(doc: PDFKit.PDFDocument, address: string): number {
+  const pageW = pageWidth(doc);
+  const x = 34;
+  const y = 36;
+  const width = Math.min(430, pageW - 150);
+
+  doc.font("Helvetica").fontSize(COVER_ADDRESS_FONT_SIZE);
+  const textHeight = doc.heightOfString(address, {
+    width: width - 36,
+    lineGap: 4,
+  });
+  const height = Math.max(84, textHeight + 32);
+
+  doc.save();
+  doc.opacity(0.72).roundedRect(x, y, width, height, 24).fill(COVER_ADDRESS_BG);
+  doc.opacity(0.16).lineWidth(1).roundedRect(x, y, width, height, 24).stroke(COVER_PANEL_BORDER);
+  doc.fillColor(COVER_ADDRESS_TEXT).font("Helvetica").fontSize(COVER_ADDRESS_FONT_SIZE);
+  doc.text(address, x + 18, y + 16, {
+    width: width - 36,
+    lineGap: 4,
+  });
+  doc.restore();
+
+  return y + height;
+}
+
+function drawStructuredCoverPage(
+  doc: PDFKit.PDFDocument,
+  cover: DossierPdfCoverData,
+  coverImage: Buffer | null
+): void {
+  const pageW = pageWidth(doc);
+  const pageH = pageHeight(doc);
+  drawCoverBackground(doc, coverImage);
+
+  const bannerBottom = drawCoverAddressBanner(doc, cover.address);
+  const outerPad = 34;
+  const gap = 16;
+  const leftWidth = 220;
+  const rightWidth = pageW - outerPad * 2 - gap - leftWidth;
+  const panelTop = bannerBottom + 18;
+  const panelHeight = pageH - panelTop - 38;
+  const leftX = outerPad;
+  const rightX = leftX + leftWidth + gap;
+  const innerPad = 18;
+
+  drawGlassPanel(doc, leftX, panelTop, leftWidth, panelHeight);
+  drawGlassPanel(doc, rightX, panelTop, rightWidth, panelHeight);
+
+  let leftY = panelTop + innerPad;
+  leftY = drawCoverSection(doc, cover.propertyInfo, leftX + innerPad, leftY, leftWidth - innerPad * 2, {
+    labelRatio: 0.5,
+  });
+  drawCoverDivider(doc, leftX + innerPad, leftY + 4, leftWidth - innerPad * 2);
+  leftY = drawCoverSection(
+    doc,
+    cover.acquisitionInfo,
+    leftX + innerPad,
+    leftY + 18,
+    leftWidth - innerPad * 2,
+    { labelRatio: 0.52 }
+  );
+
+  let rightY = panelTop + innerPad;
+  rightY = drawCoverSection(doc, cover.keyFinancials, rightX + innerPad, rightY, rightWidth - innerPad * 2, {
+    labelRatio: 0.55,
+  });
+  drawCoverDivider(doc, rightX + innerPad, rightY + 2, rightWidth - innerPad * 2);
+  drawCoverSection(
+    doc,
+    cover.expectedReturns,
+    rightX + innerPad,
+    rightY + 18,
+    rightWidth - innerPad * 2,
+    { labelRatio: 0.55 }
+  );
 }
 
 function extractMeta(lines: string[]): {
@@ -430,7 +688,10 @@ function drawTable(
   state.y = currentY + 10;
 }
 
-export function dossierTextToPdf(dossierText: string): Promise<Buffer> {
+export function dossierTextToPdf(
+  dossierText: string,
+  options?: DossierTextToPdfOptions
+): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     const doc = new PDFDocument({ margin: MARGIN, size: "letter" });
@@ -438,54 +699,67 @@ export function dossierTextToPdf(dossierText: string): Promise<Buffer> {
     doc.on("end", () => resolve(Buffer.concat(chunks)));
     doc.on("error", reject);
 
-    const lines = dossierText.split(/\r?\n/);
-    const meta = extractMeta(lines);
-    const state: LayoutState = { y: MARGIN + 8, pageNumber: 1 };
-    let tableBuffer: TableCell[][] = [];
-    let currentHeading: string | null = null;
+    void (async () => {
+      try {
+        const lines = dossierText.split(/\r?\n/);
+        const meta = extractMeta(lines);
+        const state: LayoutState = { y: MARGIN + 8, pageNumber: 1 };
+        let tableBuffer: TableCell[][] = [];
+        let currentHeading: string | null = null;
 
-    drawPageChrome(doc, state.pageNumber);
-    drawHero(doc, state, meta);
+        if (options?.cover) {
+          const coverImage = await loadCoverImageBuffer(options.cover.backgroundImageUrl);
+          drawStructuredCoverPage(doc, options.cover, coverImage);
+          addPage(doc, state);
+        } else {
+          drawPageChrome(doc, state.pageNumber);
+          drawHero(doc, state, meta);
+        }
 
-    const skipLine = (line: string, index: number): boolean => {
-      if (index === 0 && line.trim() === meta.title) return true;
-      if (isDivider(line)) return true;
-      if (line.startsWith("Deal score:") || line.startsWith("Generated:")) return true;
-      return false;
-    };
+        const skipLine = (line: string, index: number): boolean => {
+          if (index === 0 && line.trim() === meta.title) return true;
+          if (isDivider(line)) return true;
+          if (line.startsWith("Deal score:") || line.startsWith("Generated:")) return true;
+          if (options?.cover && line.startsWith("Address:")) return true;
+          return false;
+        };
 
-    const flushTable = (): void => {
-      if (tableBuffer.length === 0) return;
-      drawTable(doc, state, tableBuffer, {
-        highlightBoldRows: currentHeading === "SENSITIVITY ANALYSIS",
-      });
-      tableBuffer = [];
-    };
+        const flushTable = (): void => {
+          if (tableBuffer.length === 0) return;
+          drawTable(doc, state, tableBuffer, {
+            highlightBoldRows: currentHeading === "SENSITIVITY ANALYSIS",
+          });
+          tableBuffer = [];
+        };
 
-    lines.forEach((raw, index) => {
-      const line = raw.trimEnd();
-      if (skipLine(line, index)) return;
-      if (!line.trim()) {
+        lines.forEach((raw, index) => {
+          const line = raw.trimEnd();
+          if (skipLine(line, index)) return;
+          if (!line.trim()) {
+            flushTable();
+            state.y += 4;
+            return;
+          }
+          if (isHeading(line)) {
+            flushTable();
+            ensureSectionFitsWithTable(doc, state, lines, index + 1);
+            currentHeading = normalizeHeading(line);
+            drawSectionHeading(doc, state, line);
+            return;
+          }
+          if (isTableRow(line)) {
+            tableBuffer.push(parseTableRow(line));
+            return;
+          }
+          flushTable();
+          drawParagraph(doc, state, line);
+        });
+
         flushTable();
-        state.y += 4;
-        return;
+        doc.end();
+      } catch (error) {
+        reject(error);
       }
-      if (isHeading(line)) {
-        flushTable();
-        ensureSectionFitsWithTable(doc, state, lines, index + 1);
-        currentHeading = normalizeHeading(line);
-        drawSectionHeading(doc, state, line);
-        return;
-      }
-      if (isTableRow(line)) {
-        tableBuffer.push(parseTableRow(line));
-        return;
-      }
-      flushTable();
-      drawParagraph(doc, state, line);
-    });
-
-    flushTable();
-    doc.end();
+    })();
   });
 }

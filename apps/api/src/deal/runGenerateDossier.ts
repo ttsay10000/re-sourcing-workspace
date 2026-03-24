@@ -31,6 +31,7 @@ import {
 import { resolveCurrentFinancialsFromDetails } from "../rental/currentFinancials.js";
 import { computeDealSignals } from "./computeDealSignals.js";
 import { buildDealScoreSensitivity } from "./dealScoreSensitivity.js";
+import { buildDossierPdfCoverData } from "./dossierPdfCover.js";
 import { resolveEffectiveDealScore } from "./effectiveDealScore.js";
 import { buildDossierStructuredText } from "./dossierGenerator.js";
 import { dossierTextToPdf } from "./dossierToPdf.js";
@@ -41,6 +42,11 @@ import {
   propertyOverviewFromDetails,
   resolveDossierPackageContext,
 } from "./dossierPropertyContext.js";
+import {
+  extractBrokerDossierNotes,
+  getBrokerEmailNotes,
+  mergeBrokerNotesIntoDetails,
+} from "./brokerDossierNotes.js";
 import {
   getPropertyDossierAssumptions,
   mergeDossierAssumptionOverrides,
@@ -330,6 +336,31 @@ function rentStabilizedUnitCount(
   return anyRentStab ? 1 : 0;
 }
 
+function brokerNotesSuppliedFinancialInputs(
+  extract: Awaited<ReturnType<typeof extractBrokerDossierNotes>> | null | undefined
+): boolean {
+  return Boolean(
+    extract?.currentFinancials?.grossRentalIncome != null ||
+      extract?.currentFinancials?.operatingExpenses != null ||
+      extract?.currentFinancials?.noi != null ||
+      (extract?.rentRoll?.length ?? 0) > 0 ||
+      (extract?.expenses?.expensesTable?.length ?? 0) > 0 ||
+      extract?.expenses?.totalExpenses != null
+  );
+}
+
+function prependUniqueFlag(flags: string[], value: string | null | undefined): void {
+  if (!value || flags.includes(value)) return;
+  flags.unshift(value);
+}
+
+function scoreCertaintyLabel(value: number | null | undefined): string {
+  if (value == null || Number.isNaN(value)) return "unknown";
+  if (value >= 0.85) return "high";
+  if (value >= 0.65) return "moderate";
+  return "low";
+}
+
 export async function runGenerateDossier(
   propertyId: string,
   assumptionOverrides?: DossierAssumptionOverrides | null,
@@ -379,19 +410,37 @@ export async function runGenerateDossier(
     const profile = await profileRepo.getDefault();
     if (!profile) throw new Error("Profile not available");
 
-    const details = property.details as PropertyDetails | null;
+    const rawDetails = property.details as PropertyDetails | null;
+    const brokerEmailNotes = getBrokerEmailNotes(rawDetails);
+    const brokerNotesExtract = await extractBrokerDossierNotes(brokerEmailNotes);
+    const details = mergeBrokerNotesIntoDetails(rawDetails, brokerNotesExtract);
+    const hasAuthoritativeOm = getAuthoritativeOmSnapshot(rawDetails) != null;
+    const hasBrokerFinancialInputs = brokerNotesSuppliedFinancialInputs(brokerNotesExtract);
     if (!getAuthoritativeOmSnapshot(details)) {
-      throw new Error("Authoritative OM snapshot required before dossier generation and deal scoring.");
+      throw new Error(
+        "Authoritative OM snapshot or saved broker email notes required before dossier generation and deal scoring."
+      );
     }
     const currentFinancials = resolveCurrentFinancialsFromDetails(details);
     const currentNoi = currentFinancials.noi;
     const currentGrossRent = currentFinancials.grossRentalIncome;
     const currentOtherIncome = currentFinancials.otherIncome;
+    if (
+      !hasAuthoritativeOm &&
+      !(
+        currentGrossRent != null &&
+        (currentNoi != null || currentFinancials.operatingExpenses != null)
+      )
+    ) {
+      throw new Error(
+        "Saved broker email notes did not include enough current financial data. Add gross rent plus NOI or expenses, or build the authoritative OM first."
+      );
+    }
     const unitCount = unitCountFromDetails(details);
     const rentRollRows = rentRollRowsFromDetails(details, currentGrossRent);
     const { rows: expenseRows, total: extractedExpenseTotal } = expenseRowsFromDetails(details);
     const propertyAssumptionOverrides = propertyAssumptionsToOverrides(
-      getPropertyDossierAssumptions(details)
+      getPropertyDossierAssumptions(rawDetails)
     );
     const mergedAssumptionOverrides = mergeDossierAssumptionOverrides(
       propertyAssumptionOverrides,
@@ -475,6 +524,16 @@ export async function runGenerateDossier(
         })}`
       );
     }
+    if (hasBrokerFinancialInputs) {
+      financialFlags.push(
+        hasAuthoritativeOm
+          ? "Broker email notes supplemented the OM-backed underwriting inputs."
+          : "Current rent and expense inputs came from saved broker email notes."
+      );
+    }
+    if (brokerNotesExtract?.notesSummary) {
+      financialFlags.push(`Broker note summary: ${brokerNotesExtract.notesSummary}`);
+    }
     if (conservativeProjectedLeaseUpRent != null && conservativeProjectedLeaseUpRent > 0) {
       financialFlags.push(
         `Cap rate includes $${conservativeProjectedLeaseUpRent.toLocaleString("en-US", {
@@ -489,7 +548,9 @@ export async function runGenerateDossier(
     }
     if (!hasCurrentFinancials) {
       financialFlags.push(
-        "Current rent and/or NOI could not be extracted from the OM text alone; pricing and underwriting are incomplete until a fuller rent roll or operating statement is parsed."
+        hasBrokerFinancialInputs
+          ? "Current rent and/or NOI could not be fully resolved from the saved broker notes; underwriting remains incomplete until a fuller rent roll or operating statement is available."
+          : "Current rent and/or NOI could not be extracted from the OM text alone; pricing and underwriting are incomplete until a fuller rent roll or operating statement is parsed."
       );
     }
     if (
@@ -519,6 +580,13 @@ export async function runGenerateDossier(
     const discrepancyFlag = omDiscrepancyFlag(details);
     if (discrepancyFlag) financialFlags.push(discrepancyFlag);
     financialFlags.push(...authoritativeValidationMessages(details).filter((message) => !financialFlags.includes(message)));
+    if (brokerNotesExtract?.investmentTakeaways?.length) {
+      financialFlags.push(
+        ...brokerNotesExtract.investmentTakeaways.filter(
+          (message) => !financialFlags.includes(message)
+        )
+      );
+    }
 
     const assetCapRateForCtx =
       assumptions.acquisition.purchasePrice != null &&
@@ -712,17 +780,35 @@ export async function runGenerateDossier(
     ctx.dealScore = finalScore;
     insertParams.dealScore = calculatedScore ?? undefined;
 
-    if (scoringResult.negativeSignals.length > 0) financialFlags.push(scoringResult.negativeSignals[0]);
-    else if (scoringResult.positiveSignals.length > 0) financialFlags.push(scoringResult.positiveSignals[0]);
-
-    const scoredDossierText = dossierText.replace(
-      /^Deal score: .*$/im,
-      ctx.dealScore != null ? `Deal score: ${ctx.dealScore}/100` : "Deal score: —"
+    prependUniqueFlag(
+      financialFlags,
+      `Execution certainty: ${scoreCertaintyLabel(scoringResult.confidenceScore)}`
     );
+
+    if (finalScore != null && finalScore >= 60 && scoringResult.positiveSignals.length > 0) {
+      prependUniqueFlag(financialFlags, `Score upside: ${scoringResult.positiveSignals[0]}`);
+      if (scoringResult.negativeSignals.length > 0) {
+        prependUniqueFlag(financialFlags, `Score drag: ${scoringResult.negativeSignals[0]}`);
+      }
+    } else if (scoringResult.negativeSignals.length > 0) {
+      prependUniqueFlag(financialFlags, `Score drag: ${scoringResult.negativeSignals[0]}`);
+      if (scoringResult.positiveSignals.length > 0) {
+        prependUniqueFlag(financialFlags, `Score upside: ${scoringResult.positiveSignals[0]}`);
+      }
+    } else if (scoringResult.positiveSignals.length > 0) {
+      prependUniqueFlag(financialFlags, `Score upside: ${scoringResult.positiveSignals[0]}`);
+    }
+
+    const scoredDossierText = buildDossierStructuredText(ctx);
+    const dossierCover = buildDossierPdfCoverData({
+      ctx,
+      details,
+      listing,
+    });
 
     await setGenerationState(runningGenerationState(startedAt, "Rendering PDF and Excel"));
     const renderStartedAtMs = Date.now();
-    const dossierBuffer = await dossierTextToPdf(scoredDossierText);
+    const dossierBuffer = await dossierTextToPdf(scoredDossierText, { cover: dossierCover });
     const excelBuffer = buildExcelProForma(ctx);
     console.info("[runGenerateDossier] Rendered PDF and Excel", {
       propertyId,

@@ -10,6 +10,7 @@ import { getDossierGenerationQueue, runWithDossierGenerationQueue } from "../dea
 import { isGeminiAuthoritativeOmSnapshot, resolvePreferredOmUnitCount } from "../om/authoritativeOm.js";
 import { resolveCurrentFinancialsFromDetails } from "../rental/currentFinancials.js";
 import { resolveDossierAssumptions, type DossierAssumptionOverrides } from "../deal/underwritingModel.js";
+import { hasBrokerEmailNotes } from "../deal/brokerDossierNotes.js";
 import {
   getPropertyDossierAssumptions,
   mergeDossierAssumptionOverrides,
@@ -23,9 +24,10 @@ import {
 } from "../workflow/workflowTracker.js";
 
 const router = Router();
-const MISSING_AUTHORITATIVE_OM_ERROR = "Authoritative OM snapshot required before dossier generation and deal scoring.";
-const MISSING_AUTHORITATIVE_OM_DETAILS =
-  "Generate dossier requires a promoted authoritative OM snapshot. Run OM refresh first.";
+const MISSING_DOSSIER_SOURCE_ERROR =
+  "Authoritative OM snapshot or broker email notes required before dossier generation and deal scoring.";
+const MISSING_DOSSIER_SOURCE_DETAILS =
+  "Generate dossier requires either a promoted authoritative OM snapshot or saved broker email notes with rent/expense inputs.";
 
 async function getDefaultUserId(): Promise<string> {
   const pool = getPool();
@@ -52,7 +54,7 @@ router.get("/dossier-assumptions", async (req: Request, res: Response) => {
           primaryListing: { price: number | null; city: string | null } | null;
         }
       | null = null;
-    let defaults: Record<string, number | null> | null = null;
+    let defaults: Record<string, number | string | null> | null = null;
     let formulaDefaults: Record<string, number | null> | null = null;
     let mixSummary: Record<string, number | null> | null = null;
     if (propertyId) {
@@ -89,6 +91,7 @@ router.get("/dossier-assumptions", async (req: Request, res: Response) => {
           purchaseClosingCostPct: assumptions.acquisition.purchaseClosingCostPct,
           renovationCosts: assumptions.acquisition.renovationCosts,
           furnishingSetupCosts: assumptions.acquisition.furnishingSetupCosts,
+          brokerEmailNotes: propertyAssumptions?.brokerEmailNotes ?? null,
           ltvPct: assumptions.financing.ltvPct,
           interestRatePct: assumptions.financing.interestRatePct,
           amortizationYears: assumptions.financing.amortizationYears,
@@ -133,6 +136,7 @@ router.get("/dossier-assumptions", async (req: Request, res: Response) => {
         purchaseClosingCostPct: assumptions.acquisition.purchaseClosingCostPct,
         renovationCosts: assumptions.acquisition.renovationCosts,
         furnishingSetupCosts: assumptions.acquisition.furnishingSetupCosts,
+        brokerEmailNotes: null,
         ltvPct: assumptions.financing.ltvPct,
         interestRatePct: assumptions.financing.interestRatePct,
         amortizationYears: assumptions.financing.amortizationYears,
@@ -267,7 +271,9 @@ router.post("/dossier/generate", async (req: Request, res: Response) => {
         queuedBehind,
       });
       const assumptions = parseAssumptionOverrides(req.body?.assumptions);
-      const requiresGeminiRefresh = !isGeminiAuthoritativeOmSnapshot((property.details ?? null) as PropertyDetails | null);
+      const propertyDetails = (property.details ?? null) as PropertyDetails | null;
+      const requiresStructuredSource =
+        !isGeminiAuthoritativeOmSnapshot(propertyDetails) && !hasBrokerEmailNotes(propertyDetails);
       workflowRunId = await createWorkflowRun({
         runType: "generate_dossier",
         displayName: "Generate dossier",
@@ -285,7 +291,7 @@ router.post("/dossier/generate", async (req: Request, res: Response) => {
           },
         ],
       });
-      if (requiresGeminiRefresh) {
+      if (requiresStructuredSource) {
         await upsertWorkflowStep(workflowRunId, {
           stepKey: "dossier",
           totalItems: 1,
@@ -294,21 +300,21 @@ router.post("/dossier/generate", async (req: Request, res: Response) => {
           status: "failed",
           startedAt: workflowStartedAt,
           finishedAt: new Date().toISOString(),
-          lastError: MISSING_AUTHORITATIVE_OM_DETAILS,
-          lastMessage: "Authoritative OM required before dossier generation",
+          lastError: MISSING_DOSSIER_SOURCE_DETAILS,
+          lastMessage: "Authoritative OM or broker notes required before dossier generation",
         });
         await mergeWorkflowRunMetadata(workflowRunId, {
-          error: MISSING_AUTHORITATIVE_OM_DETAILS,
-          authoritativeOmRequired: true,
+          error: MISSING_DOSSIER_SOURCE_DETAILS,
+          dossierSourceRequired: true,
         });
         await updateWorkflowRun(workflowRunId, {
           status: "failed",
           finishedAt: new Date().toISOString(),
         });
         res.status(409).json({
-          error: MISSING_AUTHORITATIVE_OM_ERROR,
-          details: MISSING_AUTHORITATIVE_OM_DETAILS,
-          code: "authoritative_om_required",
+          error: MISSING_DOSSIER_SOURCE_ERROR,
+          details: MISSING_DOSSIER_SOURCE_DETAILS,
+          code: "dossier_source_required",
         });
         return;
       }
