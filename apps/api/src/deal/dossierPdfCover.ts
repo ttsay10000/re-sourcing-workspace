@@ -1,5 +1,5 @@
 import type { ListingRow, PropertyDetails } from "@re-sourcing/contracts";
-import { resolvePreferredOmPropertyInfo } from "../om/authoritativeOm.js";
+import { resolvePreferredOmPropertyInfo, resolvePreferredOmRentRoll } from "../om/authoritativeOm.js";
 import type { DossierPdfCoverData, DossierPdfCoverField } from "./dossierToPdf.js";
 import type { UnderwritingContext } from "./underwritingContext.js";
 
@@ -56,9 +56,28 @@ function integerPctLabel(value: number | null | undefined): string {
   return `${rounded > 0 ? "+" : rounded < 0 ? "" : ""}${rounded}%`;
 }
 
+function wordLabel(value: number): string {
+  const lookup = ["Zero", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten"];
+  const rounded = Math.round(value);
+  if (rounded >= 0 && rounded < lookup.length) return lookup[rounded]!;
+  return numberLabel(rounded);
+}
+
 function pctLabel(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(value)) return "—";
   return `${value.toFixed(2)}%`;
+}
+
+function dateLabel(value: string | null | undefined): string {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value.trim())) return "—";
+  const parsed = new Date(`${value.trim()}T00:00:00Z`);
+  if (Number.isNaN(parsed.getTime())) return value.trim();
+  return parsed.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC",
+  });
 }
 
 function sqftLabel(value: number | null | undefined): string {
@@ -164,6 +183,31 @@ function resolveExistingUnits(
   ctx: UnderwritingContext,
   listing: Pick<ListingRow, "beds" | "baths"> | null | undefined
 ): string {
+  const rentRoll = resolvePreferredOmRentRoll(details);
+  const groupedResidentialUnits = Array.from(
+    rentRoll.reduce((map, row) => {
+      const unitCategory = firstString(row.unitCategory)?.toLowerCase() ?? "";
+      const tenantName = firstString(row.tenantName)?.toLowerCase() ?? "";
+      const unitText = `${unitCategory} ${tenantName}`;
+      if (/\b(commercial|retail|office|storefront)\b/i.test(unitText)) return map;
+      const beds = firstNumber(row.beds);
+      const baths = firstNumber(row.baths);
+      if (beds == null && baths == null) return map;
+      const key = `${beds ?? "?"}-${baths ?? "?"}`;
+      const current = map.get(key) ?? { beds, baths, count: 0 };
+      current.count += 1;
+      map.set(key, current);
+      return map;
+    }, new Map<string, { beds: number | null; baths: number | null; count: number }>())
+  )
+    .sort((left, right) => (right[0] > left[0] ? 1 : -1))
+    .map(([, entry]) => {
+      const bedsLabel = entry.beds != null ? `${numberLabel(entry.beds)}Br` : "Studio";
+      const bathsLabel = entry.baths != null ? `${formatBaths(entry.baths)}Ba` : "Ba?";
+      return `${wordLabel(entry.count)} ${bedsLabel}/${bathsLabel}`;
+    });
+  if (groupedResidentialUnits.length > 0) return groupedResidentialUnits.join("\n");
+
   const totalUnits = resolveTotalUnits(details, ctx);
   const residentialUnits = resolveResidentialUnits(details, ctx);
   const commercialUnits = resolveCommercialUnits(details, ctx);
@@ -212,9 +256,16 @@ function resolveZoning(details: PropertyDetails | null): string {
 }
 
 function resolveInvestmentProfile(ctx: UnderwritingContext): string {
+  if (
+    typeof ctx.assumptions.acquisition.investmentProfile === "string" &&
+    ctx.assumptions.acquisition.investmentProfile.trim().length > 0
+  ) {
+    return ctx.assumptions.acquisition.investmentProfile.trim();
+  }
   const upfrontCapex =
     Math.max(0, ctx.assumptions.acquisition.renovationCosts ?? 0) +
-    Math.max(0, ctx.assumptions.acquisition.furnishingSetupCosts ?? 0);
+    Math.max(0, ctx.assumptions.acquisition.furnishingSetupCosts ?? 0) +
+    Math.max(0, ctx.assumptions.acquisition.onboardingCosts ?? 0);
   const upliftPct =
     ctx.assumptions.operating.blendedRentUpliftPct ??
     ctx.assumptions.operating.rentUpliftPct ??
@@ -248,11 +299,7 @@ function currentNoiBasis(ctx: UnderwritingContext): number | null {
 
 function displayedCurrentRent(ctx: UnderwritingContext): number | null {
   if (ctx.currentGrossRent == null || !Number.isFinite(ctx.currentGrossRent)) return null;
-  const projectedLeaseUp =
-    ctx.conservativeProjectedLeaseUpRent != null && ctx.conservativeProjectedLeaseUpRent > 0
-      ? ctx.conservativeProjectedLeaseUpRent
-      : 0;
-  return ctx.currentGrossRent + (ctx.currentOtherIncome ?? 0) + projectedLeaseUp;
+  return ctx.currentGrossRent;
 }
 
 function resolveYearValue(values: number[] | null | undefined, year: number): number | null {
@@ -305,8 +352,6 @@ export function buildDossierPdfCoverData(params: {
   const { ctx, details, listing } = params;
   const buildingSqft = resolveBuildingSqft(details, listing);
   const currentRent = displayedCurrentRent(ctx);
-  const projectedLeaseUpIncluded =
-    ctx.conservativeProjectedLeaseUpRent != null && ctx.conservativeProjectedLeaseUpRent > 0;
   const currentExpenses = currentExpensesTotal(ctx);
   const currentNoi = currentNoiBasis(ctx);
   const yearTwoRent = resolveYearValue(ctx.yearlyCashFlow?.grossRentalIncome, 2);
@@ -318,7 +363,15 @@ export function buildDossierPdfCoverData(params: {
       : null;
   const upfrontCapex =
     Math.max(0, ctx.assumptions.acquisition.renovationCosts ?? 0) +
-    Math.max(0, ctx.assumptions.acquisition.furnishingSetupCosts ?? 0);
+    Math.max(0, ctx.assumptions.acquisition.furnishingSetupCosts ?? 0) +
+    Math.max(0, ctx.assumptions.acquisition.onboardingCosts ?? 0);
+  const listedPrice = firstNumber(listing?.price, ctx.recommendedOffer?.askingPrice);
+  const expectedNegotiatedPrice = firstNumber(
+    ctx.assumptions.acquisition.purchasePrice,
+    ctx.recommendedOffer?.recommendedOfferHigh
+  );
+  const holdYears = ctx.assumptions.holdPeriodYears ?? 5;
+  const targetAcquisitionDateLabel = dateLabel(ctx.assumptions.acquisition.targetAcquisitionDate);
 
   return {
     address: ctx.canonicalAddress,
@@ -338,22 +391,26 @@ export function buildDossierPdfCoverData(params: {
       title: "ACQUISITION INFO",
       rows: [
         coverField("Investment profile", resolveInvestmentProfile(ctx)),
-        coverField("Target acquisition date", ctx.purchasePrice != null ? "ASAP" : "—"),
-        coverField("Listed price", moneyLabel(ctx.purchasePrice ?? listing?.price ?? null)),
         coverField(
-          "Negotiated price",
-          negotiatedPriceLabel(ctx.recommendedOffer?.recommendedOfferHigh, buildingSqft)
+          "Target acquisition date",
+          targetAcquisitionDateLabel !== "—"
+            ? targetAcquisitionDateLabel
+            : ctx.purchasePrice != null
+              ? "ASAP"
+              : "—"
+        ),
+        coverField("Listed price", moneyLabel(listedPrice)),
+        coverField(
+          "Expected negotiated price",
+          negotiatedPriceLabel(expectedNegotiatedPrice, buildingSqft)
         ),
       ],
     },
     keyFinancials: {
       title: "KEY FINANCIALS",
       rows: [
-        coverField(
-          "Current rent",
-          `${moneyLabel(currentRent)}${projectedLeaseUpIncluded ? " (projected)" : ""}`
-        ),
-        coverField("Expenses", moneyLabel(currentExpenses)),
+        coverField("Current rent", moneyLabel(currentRent)),
+        coverField("Current expenses", moneyLabel(currentExpenses)),
         coverField("Current NOI", moneyLabel(currentNoi), { emphasis: true }),
         coverField("Current cap rate", pctLabel(ctx.assetCapRate), { emphasis: true }),
         coverField("Projected Y2 rent", moneyLabel(yearTwoRent)),
@@ -366,6 +423,7 @@ export function buildDossierPdfCoverData(params: {
       title: "EXPECTED RETURNS",
       rows: [
         coverField("Upfront CapEx", moneyLabel(upfrontCapex)),
+        coverField("Expected purchase price", moneyLabel(expectedNegotiatedPrice)),
         coverField("Financing terms", financingTermsLabel(ctx)),
         coverField(
           "Target hold period",
@@ -374,12 +432,28 @@ export function buildDossierPdfCoverData(params: {
             : "—"
         ),
         coverField(
-          `Projected ${(ctx.assumptions.holdPeriodYears ?? 5).toFixed(0)}-year IRR`,
+          `Projected ${holdYears.toFixed(0)}-year IRR`,
           pctLabel(
             ctx.returns.irrPct != null && Number.isFinite(ctx.returns.irrPct)
               ? ctx.returns.irrPct * 100
               : null
           ),
+          { emphasis: true }
+        ),
+        coverField(
+          "Projected CoC",
+          pctLabel(
+            ctx.returns.averageCashOnCashReturn != null && Number.isFinite(ctx.returns.averageCashOnCashReturn)
+              ? ctx.returns.averageCashOnCashReturn * 100
+              : null
+          ),
+          { emphasis: true }
+        ),
+        coverField(
+          "Projected EMx",
+          ctx.returns.equityMultiple != null && Number.isFinite(ctx.returns.equityMultiple)
+            ? `${ctx.returns.equityMultiple.toFixed(2)}x`
+            : "—",
           { emphasis: true }
         ),
       ],

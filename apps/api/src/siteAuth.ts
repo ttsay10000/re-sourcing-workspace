@@ -157,6 +157,10 @@ export function verifySiteAuthSessionToken(
 ): SessionVerificationResult {
   try {
     const raw = Buffer.from(token, "base64url").toString("utf8");
+    const canonicalToken = Buffer.from(raw, "utf8").toString("base64url");
+    if (!safeCompareStrings(token, canonicalToken)) {
+      return { valid: false };
+    }
     const [profileId, issuedAtRaw, expiresAtRaw, nonce, signature] = raw.split(".");
     if (!profileId || !issuedAtRaw || !expiresAtRaw || !nonce || !signature) {
       return { valid: false };

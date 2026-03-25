@@ -111,43 +111,59 @@ export function buildExcelProForma(ctx: UnderwritingContext): Buffer {
     currentExpensesTotal: num(ctx.currentExpensesTotal ?? ctx.operating.currentExpenses),
     expenseRows: ctx.expenseRows,
   });
+  const projectedExpenseRows =
+    ctx.yearlyCashFlow?.expenseLineItems?.map((row) => ({
+      lineItem: row.lineItem,
+      amount: row.baseAmount,
+      annualGrowthPct: row.annualGrowthPct,
+      yearlyAmounts: row.yearlyAmounts,
+    })) ?? [];
   const expenses =
-    normalizedExpenseInputs.expenseRowsExManagement.length > 0
-      ? normalizedExpenseInputs.expenseRowsExManagement
+    projectedExpenseRows.length > 0
+      ? projectedExpenseRows
+      : normalizedExpenseInputs.expenseRowsExManagement.length > 0
+      ? normalizedExpenseInputs.expenseRowsExManagement.map((row) => ({
+          ...row,
+          yearlyAmounts: undefined,
+        }))
       : [
           {
             lineItem: "Operating expenses",
             amount: normalizedExpenseInputs.currentExpensesTotalExManagement,
+            yearlyAmounts: undefined,
           },
         ];
-  const aggregateExpenseFallback = normalizedExpenseInputs.expenseRowsExManagement.length === 0;
+  const aggregateExpenseFallback =
+    projectedExpenseRows.length === 0 && normalizedExpenseInputs.expenseRowsExManagement.length === 0;
   const assumptionRows = {
     purchasePrice: 7,
     purchaseClosingPct: 8,
     renovationCosts: 9,
     furnishingCosts: 10,
-    currentGrossRent: 11,
-    currentOtherIncome: 12,
-    currentExpenses: 13,
-    ltvPct: 15,
-    interestRatePct: 16,
-    amortizationYears: 17,
-    loanFeePct: 18,
-    rentUpliftPct: 20,
-    blendedRentUpliftPct: 21,
-    expenseIncreasePct: 22,
-    managementFeePct: 23,
-    vacancyPct: 24,
-    leadTimeMonths: 25,
-    annualRentGrowthPct: 26,
-    annualOtherIncomeGrowthPct: 27,
-    annualExpenseGrowthPct: 28,
-    annualPropertyTaxGrowthPct: 29,
-    recurringCapexAnnual: 30,
-    holdPeriodYears: 32,
-    exitCapPct: 33,
-    exitClosingCostPct: 34,
-    targetIrrPct: 35,
+    onboardingCosts: 11,
+    currentGrossRent: 12,
+    currentOtherIncome: 13,
+    currentExpenses: 14,
+    ltvPct: 16,
+    interestRatePct: 17,
+    amortizationYears: 18,
+    loanFeePct: 19,
+    rentUpliftPct: 21,
+    blendedRentUpliftPct: 22,
+    expenseIncreasePct: 23,
+    managementFeePct: 24,
+    occupancyTaxPct: 25,
+    vacancyPct: 26,
+    leadTimeMonths: 27,
+    annualRentGrowthPct: 28,
+    annualOtherIncomeGrowthPct: 29,
+    annualExpenseGrowthPct: 30,
+    annualPropertyTaxGrowthPct: 31,
+    recurringCapexAnnual: 32,
+    holdPeriodYears: 34,
+    exitCapPct: 35,
+    exitClosingCostPct: 36,
+    targetIrrPct: 37,
   } as const;
 
   const assumptionsSheet = widthSheet(
@@ -162,6 +178,7 @@ export function buildExcelProForma(ctx: UnderwritingContext): Buffer {
       [s("Purchase closing costs (%)", inputLabelStyle), n(num(ctx.assumptions.acquisition.purchaseClosingCostPct), INPUT_PERCENT_FMT, inputValueStyle)],
       [s("Renovation costs", inputLabelStyle), n(num(ctx.assumptions.acquisition.renovationCosts), CURRENCY_FMT, inputValueStyle)],
       [s("Furnishing / setup costs", inputLabelStyle), n(num(ctx.assumptions.acquisition.furnishingSetupCosts), CURRENCY_FMT, inputValueStyle)],
+      [s("Onboarding / unit turn costs", inputLabelStyle), n(num(ctx.assumptions.acquisition.onboardingCosts), CURRENCY_FMT, inputValueStyle)],
       [s("Current gross rent", labelStyle), n(num(ctx.currentGrossRent), CURRENCY_FMT, textValueStyle)],
       [s("Current other income", labelStyle), n(num(ctx.currentOtherIncome), CURRENCY_FMT, textValueStyle)],
       [
@@ -178,6 +195,7 @@ export function buildExcelProForma(ctx: UnderwritingContext): Buffer {
       [s("Blended rent uplift (%)", labelStyle), n(num(ctx.assumptions.operating.blendedRentUpliftPct), INPUT_PERCENT_FMT, textValueStyle)],
       [s("Expense increase (%)", inputLabelStyle), n(num(ctx.assumptions.operating.expenseIncreasePct), INPUT_PERCENT_FMT, inputValueStyle)],
       [s("Management fee (%)", inputLabelStyle), n(num(ctx.assumptions.operating.managementFeePct), INPUT_PERCENT_FMT, inputValueStyle)],
+      [s("Occupancy tax (%)", inputLabelStyle), n(num(ctx.assumptions.operating.occupancyTaxPct), INPUT_PERCENT_FMT, inputValueStyle)],
       [s("Vacancy (%)", inputLabelStyle), n(num(ctx.assumptions.operating.vacancyPct), INPUT_PERCENT_FMT, inputValueStyle)],
       [s("Lead time (months)", inputLabelStyle), n(num(ctx.assumptions.operating.leadTimeMonths), INTEGER_FMT, inputValueStyle)],
       [s("Annual rent growth (%)", inputLabelStyle), n(num(ctx.assumptions.operating.annualRentGrowthPct), INPUT_PERCENT_FMT, inputValueStyle)],
@@ -202,7 +220,7 @@ export function buildExcelProForma(ctx: UnderwritingContext): Buffer {
     [s("Loan amount", labelStyle), f(`Assumptions!B${assumptionRows.purchasePrice}*(Assumptions!B${assumptionRows.ltvPct}/100)`, CURRENCY_FMT, formulaValueStyle)],
     [s("Financing fees", labelStyle), f(`B2*(Assumptions!B${assumptionRows.loanFeePct}/100)`, CURRENCY_FMT, formulaValueStyle)],
     [s("Purchase closing costs", labelStyle), f(`Assumptions!B${assumptionRows.purchasePrice}*(Assumptions!B${assumptionRows.purchaseClosingPct}/100)`, CURRENCY_FMT, formulaValueStyle)],
-    [s("Total project cost", sectionStyle), f(`SUM(Assumptions!B${assumptionRows.purchasePrice},B4,Assumptions!B${assumptionRows.renovationCosts},Assumptions!B${assumptionRows.furnishingCosts})`, CURRENCY_FMT, formulaValueStyle)],
+    [s("Total project cost", sectionStyle), f(`SUM(Assumptions!B${assumptionRows.purchasePrice},B4,Assumptions!B${assumptionRows.renovationCosts},Assumptions!B${assumptionRows.furnishingCosts},Assumptions!B${assumptionRows.onboardingCosts})`, CURRENCY_FMT, formulaValueStyle)],
     [s("Initial equity invested", sectionStyle), f(`B5+B3-B2`, CURRENCY_FMT, formulaValueStyle)],
     [s("Monthly interest rate", labelStyle), f(`Assumptions!B${assumptionRows.interestRatePct}/100/12`, "0.0000%", formulaValueStyle)],
     [s("Total amortization months", labelStyle), f(`Assumptions!B${assumptionRows.amortizationYears}*12`, INTEGER_FMT, formulaValueStyle)],
@@ -281,15 +299,17 @@ export function buildExcelProForma(ctx: UnderwritingContext): Buffer {
   expenses.forEach((expense) => {
     cashFlowRows.push([
       s(expense.lineItem, labelStyle),
-      aggregateExpenseFallback
-        ? f(
-            `MAX(Assumptions!B${assumptionRows.annualExpenseGrowthPct}/100,Assumptions!B${assumptionRows.annualPropertyTaxGrowthPct}/100)`,
-            PERCENT_FMT,
-            formulaValueStyle
-          )
-        : isTaxExpense(expense.lineItem)
-        ? f(`Assumptions!B${assumptionRows.annualPropertyTaxGrowthPct}/100`, PERCENT_FMT, formulaValueStyle)
-        : f(`Assumptions!B${assumptionRows.annualExpenseGrowthPct}/100`, PERCENT_FMT, formulaValueStyle),
+      expense.annualGrowthPct != null && Number.isFinite(expense.annualGrowthPct)
+        ? n(expense.annualGrowthPct / 100, PERCENT_FMT, formulaValueStyle)
+        : aggregateExpenseFallback
+          ? f(
+              `MAX(Assumptions!B${assumptionRows.annualExpenseGrowthPct}/100,Assumptions!B${assumptionRows.annualPropertyTaxGrowthPct}/100)`,
+              PERCENT_FMT,
+              formulaValueStyle
+            )
+          : isTaxExpense(expense.lineItem)
+            ? f(`Assumptions!B${assumptionRows.annualPropertyTaxGrowthPct}/100`, PERCENT_FMT, formulaValueStyle)
+            : f(`Assumptions!B${assumptionRows.annualExpenseGrowthPct}/100`, PERCENT_FMT, formulaValueStyle),
     ]);
   });
 
@@ -363,12 +383,20 @@ export function buildExcelProForma(ctx: UnderwritingContext): Buffer {
 
     expenses.forEach((expense, expenseIndex) => {
       const row = expenseStartRow + expenseIndex;
-      const baseExpense = expense.amount;
-      cashFlowSheet[`${column}${row}`] = f(
-        `IF(${activeOperatingYearCondition},0,-(${baseExpense}*(1+Assumptions!B${assumptionRows.expenseIncreasePct}/100))*((1+B${row})^(${column}$5-1)))`,
-        CURRENCY_FMT,
-        formulaValueStyle
-      );
+      const projectedValue =
+        year === 0
+          ? 0
+          : Array.isArray(expense.yearlyAmounts)
+            ? expense.yearlyAmounts[year - 1] ?? 0
+            : null;
+      cashFlowSheet[`${column}${row}`] =
+        projectedValue != null
+          ? n(-Math.abs(projectedValue), CURRENCY_FMT, formulaValueStyle)
+          : f(
+              `IF(${activeOperatingYearCondition},0,-(${expense.amount}*(1+Assumptions!B${assumptionRows.expenseIncreasePct}/100))*((1+B${row})^(${column}$5-1)))`,
+              CURRENCY_FMT,
+              formulaValueStyle
+            );
     });
 
     const managementCell = `${column}${managementRow}`;
@@ -503,7 +531,8 @@ export function buildExcelProForma(ctx: UnderwritingContext): Buffer {
       [s("Est. closing costs", labelStyle), f("Financing!B4", CURRENCY_FMT, formulaValueStyle), "", s("Gross sale value", labelStyle), f(`INDEX('Cash Flow'!C${saleValueRow}:${col(2 + MAX_MODEL_YEARS)}${saleValueRow},1,Assumptions!B${assumptionRows.holdPeriodYears}+1)`, CURRENCY_FMT, formulaValueStyle)],
       [s("CapEx", labelStyle), f(`Assumptions!B${assumptionRows.renovationCosts}`, CURRENCY_FMT, formulaValueStyle), "", s("Net sale value", labelStyle), f(`INDEX('Cash Flow'!C${saleValueRow}:${col(2 + MAX_MODEL_YEARS)}${saleValueRow},1,Assumptions!B${assumptionRows.holdPeriodYears}+1)+INDEX('Cash Flow'!C${saleClosingCostsRow}:${col(2 + MAX_MODEL_YEARS)}${saleClosingCostsRow},1,Assumptions!B${assumptionRows.holdPeriodYears}+1)`, CURRENCY_FMT, formulaValueStyle)],
       [s("Furnishing / setup", labelStyle), f(`Assumptions!B${assumptionRows.furnishingCosts}`, CURRENCY_FMT, formulaValueStyle), "", s("Unlevered IRR", labelStyle), f(`IFERROR(IRR('Cash Flow'!C${unleveredCfRow}:INDEX(${unleveredCfRow}:${unleveredCfRow},3+Assumptions!B${assumptionRows.holdPeriodYears})),"")`, PERCENT_FMT, formulaValueStyle)],
-      [s("Financing fees", labelStyle), f("Financing!B3", CURRENCY_FMT, formulaValueStyle), "", s("Unlevered EMx", labelStyle), f(`IF(ABS('Cash Flow'!C${unleveredCfRow})=0,0,SUMPRODUCT(('Cash Flow'!D${unleveredCfRow}:INDEX(${unleveredCfRow}:${unleveredCfRow},3+Assumptions!B${assumptionRows.holdPeriodYears}))*--('Cash Flow'!D${unleveredCfRow}:INDEX(${unleveredCfRow}:${unleveredCfRow},3+Assumptions!B${assumptionRows.holdPeriodYears})>0))/ABS('Cash Flow'!C${unleveredCfRow}))`, MULTIPLE_FMT, formulaValueStyle)],
+      [s("Onboarding / unit turn", labelStyle), f(`Assumptions!B${assumptionRows.onboardingCosts}`, CURRENCY_FMT, formulaValueStyle), "", s("Unlevered EMx", labelStyle), f(`IF(ABS('Cash Flow'!C${unleveredCfRow})=0,0,SUMPRODUCT(('Cash Flow'!D${unleveredCfRow}:INDEX(${unleveredCfRow}:${unleveredCfRow},3+Assumptions!B${assumptionRows.holdPeriodYears}))*--('Cash Flow'!D${unleveredCfRow}:INDEX(${unleveredCfRow}:${unleveredCfRow},3+Assumptions!B${assumptionRows.holdPeriodYears})>0))/ABS('Cash Flow'!C${unleveredCfRow}))`, MULTIPLE_FMT, formulaValueStyle)],
+      [s("Financing fees", labelStyle), f("Financing!B3", CURRENCY_FMT, formulaValueStyle), "", "", ""],
       [s("Total capitalization", sectionStyle), f("Financing!B5+Financing!B3", CURRENCY_FMT, formulaValueStyle), "", s("Levered IRR", labelStyle), f(`IFERROR(IRR('Cash Flow'!C${leveredCfRow}:INDEX(${leveredCfRow}:${leveredCfRow},3+Assumptions!B${assumptionRows.holdPeriodYears})),"")`, PERCENT_FMT, formulaValueStyle)],
       [s("Loan funding", labelStyle), f("Financing!B2", CURRENCY_FMT, formulaValueStyle), "", s("Levered EMx", labelStyle), f(`IF(ABS('Cash Flow'!C${leveredCfRow})=0,0,SUMPRODUCT(('Cash Flow'!D${leveredCfRow}:INDEX(${leveredCfRow}:${leveredCfRow},3+Assumptions!B${assumptionRows.holdPeriodYears}))*--('Cash Flow'!D${leveredCfRow}:INDEX(${leveredCfRow}:${leveredCfRow},3+Assumptions!B${assumptionRows.holdPeriodYears})>0))/ABS('Cash Flow'!C${leveredCfRow}))`, MULTIPLE_FMT, formulaValueStyle)],
       [s("LTV", labelStyle), f(`Assumptions!B${assumptionRows.ltvPct}/100`, PERCENT_FMT, formulaValueStyle), "", s("Equity yield", labelStyle), f(`IF(ABS('Cash Flow'!C${leveredCfRow})=0,0,(AVERAGE('Cash Flow'!D${cfAfterFinancingRow}:INDEX(${cfAfterFinancingRow}:${cfAfterFinancingRow},3+Assumptions!B${assumptionRows.holdPeriodYears}))-AVERAGE('Cash Flow'!D${principalRow}:INDEX(${principalRow}:${principalRow},3+Assumptions!B${assumptionRows.holdPeriodYears})))/ABS('Cash Flow'!C${leveredCfRow}))`, PERCENT_FMT, formulaValueStyle)],

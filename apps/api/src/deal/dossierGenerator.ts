@@ -349,6 +349,16 @@ function pushYearlyCashFlowTable(lines: string[], ctx: UnderwritingContext): voi
       }),
     ])
   );
+  if ((ctx.assumptions.acquisition.onboardingCosts ?? 0) > 0) {
+    lines.push(
+      tableRow([
+        "Unit onboarding costs",
+        ...yearZeroOnlyCells(yearly.years, ctx.assumptions.acquisition.onboardingCosts, {
+          negative: true,
+        }),
+      ])
+    );
+  }
   lines.push(
     tableRow([
       "Financing fees",
@@ -769,6 +779,13 @@ export function buildDossierStructuredText(ctx: UnderwritingContext): string {
   lines.push(`Purchase closing costs: ${pctValue(ctx.assumptions.acquisition.purchaseClosingCostPct)}`);
   lines.push(`Renovation: ${moneyLabel(ctx.assumptions.acquisition.renovationCosts)}`);
   lines.push(`Furnishing/setup: ${moneyLabel(ctx.assumptions.acquisition.furnishingSetupCosts)}`);
+  lines.push(`Onboarding / unit turn costs: ${moneyLabel(ctx.assumptions.acquisition.onboardingCosts)}`);
+  lines.push(
+    `Investment profile: ${ctx.assumptions.acquisition.investmentProfile?.trim() || "—"}`
+  );
+  lines.push(
+    `Target acquisition date: ${ctx.assumptions.acquisition.targetAcquisitionDate ?? "—"}`
+  );
   lines.push(`LTV: ${pctValue(ctx.assumptions.financing.ltvPct)}`);
   lines.push(`Interest rate: ${pctValue(ctx.assumptions.financing.interestRatePct)}`);
   lines.push(`Amortization: ${ctx.assumptions.financing.amortizationYears ?? "—"} years`);
@@ -777,6 +794,7 @@ export function buildDossierStructuredText(ctx: UnderwritingContext): string {
   lines.push(`Blended rent uplift: ${pctValue(ctx.assumptions.operating.blendedRentUpliftPct)}`);
   lines.push(`Expense increase: ${pctValue(ctx.assumptions.operating.expenseIncreasePct)}`);
   lines.push(`Management fee: ${pctValue(ctx.assumptions.operating.managementFeePct)}`);
+  lines.push(`Occupancy tax: ${pctValue(ctx.assumptions.operating.occupancyTaxPct)}`);
   lines.push(`Vacancy: ${pctValue(ctx.assumptions.operating.vacancyPct)}`);
   lines.push(`Lead time: ${ctx.assumptions.operating.leadTimeMonths ?? "—"} months`);
   lines.push(`Annual rent growth: ${pctValue(ctx.assumptions.operating.annualRentGrowthPct)}`);

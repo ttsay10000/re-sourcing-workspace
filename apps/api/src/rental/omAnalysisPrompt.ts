@@ -196,6 +196,9 @@ otherIncome
 concessions
 vacancyLoss
 effectiveGrossIncome
+reportedOccupancyPct
+reportedVacancyPct
+currentRentBasis
 
 If vacancy not provided:
 
@@ -211,6 +214,10 @@ Important:
 - effectiveGrossIncome should represent post-vacancy income.
 - Do not put effective gross income into grossRentPotential, grossRentActual, or uiFinancialSummary.grossRent.
 - If the OM only gives effective gross income and not true gross rent before vacancy, leave gross-rent fields null and populate only effectiveGrossIncome.
+- Search the entire OM for occupancy %, economic occupancy, physical occupancy, vacancy %, and vacancy/collection loss, not just the main financial summary.
+- If the OM shows gross rental income with a separate vacancy / collection-loss line, set currentRentBasis = "gross_before_vacancy".
+- If the OM shows rental income / actuals / collections with no separate vacancy-loss line and the figure appears to already be after vacancy, set currentRentBasis = "effective_after_vacancy".
+- If you cannot tell whether the current rent figure is pre- or post-vacancy, set currentRentBasis = "unknown".
 - If the OM shows both CURRENT and PRO FORMA columns, the fields in income, uiFinancialSummary, noiReported, valuationMetrics, and current-state takeaways must use CURRENT figures only.
 - Do not round exact current figures into approximate placeholders; preserve the exact numbers shown in the current column.
 

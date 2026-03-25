@@ -52,6 +52,11 @@ import {
   mergeDossierAssumptionOverrides,
   propertyAssumptionsToOverrides,
 } from "./propertyDossierState.js";
+import {
+  expenseModelRowsToProjectionRows,
+  resolveDetailedCashFlowModel,
+  unitModelRowsToProjectionRows,
+} from "./detailedCashFlowModel.js";
 import { resolveProjectedResidentialLeaseUpRentSummary } from "./propertyAssumptions.js";
 import {
   computeRecommendedOffer,
@@ -439,9 +444,8 @@ export async function runGenerateDossier(
     const unitCount = unitCountFromDetails(details);
     const rentRollRows = rentRollRowsFromDetails(details, currentGrossRent);
     const { rows: expenseRows, total: extractedExpenseTotal } = expenseRowsFromDetails(details);
-    const propertyAssumptionOverrides = propertyAssumptionsToOverrides(
-      getPropertyDossierAssumptions(rawDetails)
-    );
+    const propertyAssumptions = getPropertyDossierAssumptions(rawDetails);
+    const propertyAssumptionOverrides = propertyAssumptionsToOverrides(propertyAssumptions);
     const mergedAssumptionOverrides = mergeDossierAssumptionOverrides(
       propertyAssumptionOverrides,
       assumptionOverrides
@@ -454,6 +458,15 @@ export async function runGenerateDossier(
       mergedAssumptionOverrides,
       { details }
     );
+    const detailedModel = resolveDetailedCashFlowModel({
+      details,
+      defaultRentUpliftPct: assumptions.operating.rentUpliftPct,
+      defaultVacancyPct: assumptions.operating.vacancyPct,
+      defaultAnnualExpenseGrowthPct: assumptions.operating.annualExpenseGrowthPct,
+      defaultAnnualPropertyTaxGrowthPct: assumptions.operating.annualPropertyTaxGrowthPct,
+      unitModelRows: propertyAssumptions?.unitModelRows,
+      expenseModelRows: propertyAssumptions?.expenseModelRows,
+    });
     const projectedLeaseUpRentSummary = resolveProjectedResidentialLeaseUpRentSummary(details);
     const conservativeProjectedLeaseUpRent = projectedLeaseUpRentSummary.totalAnnualRent;
     const protectedProjectedLeaseUpRent = projectedLeaseUpRentSummary.protectedAnnualRent;
@@ -465,7 +478,8 @@ export async function runGenerateDossier(
       currentNoi,
       currentOtherIncome,
       currentExpensesTotal: resolvedCurrentExpensesTotal,
-      expenseRows,
+      expenseRows: expenseModelRowsToProjectionRows(detailedModel.expenseModelRows),
+      unitRows: unitModelRowsToProjectionRows(detailedModel.unitModelRows),
       conservativeProjectedLeaseUpRent,
       protectedProjectedLeaseUpRent,
     });
@@ -475,17 +489,19 @@ export async function runGenerateDossier(
       currentNoi,
       currentOtherIncome,
       currentExpensesTotal: resolvedCurrentExpensesTotal,
-      expenseRows,
+      expenseRows: expenseModelRowsToProjectionRows(detailedModel.expenseModelRows),
+      unitRows: unitModelRowsToProjectionRows(detailedModel.unitModelRows),
       conservativeProjectedLeaseUpRent,
       protectedProjectedLeaseUpRent,
     });
     const sensitivities = buildSensitivityAnalyses({
-      assumptions,
+      assumptions: projection.assumptions,
       currentGrossRent,
       currentNoi,
       currentOtherIncome,
       currentExpensesTotal: resolvedCurrentExpensesTotal,
-      expenseRows,
+      expenseRows: expenseModelRowsToProjectionRows(detailedModel.expenseModelRows),
+      unitRows: unitModelRowsToProjectionRows(detailedModel.unitModelRows),
       conservativeProjectedLeaseUpRent,
       protectedProjectedLeaseUpRent,
       baseProjection: projection,
@@ -565,7 +581,7 @@ export async function runGenerateDossier(
         protectedParts.push(`${assumptions.propertyMix.rentStabilizedUnits} rent-stabilized`);
       }
       financialFlags.push(
-        `${protectedParts.join(" + ")} unit(s) excluded from residential uplift; blended rent uplift underwritten at ${assumptions.operating.blendedRentUpliftPct.toFixed(2)}%`
+        `${protectedParts.join(" + ")} unit(s) excluded from residential uplift; blended rent uplift underwritten at ${projection.assumptions.operating.blendedRentUpliftPct.toFixed(2)}%`
       );
     }
     if (recommendedOffer.recommendedOfferHigh != null) {
@@ -633,7 +649,10 @@ export async function runGenerateDossier(
           purchasePrice: assumptions.acquisition.purchasePrice,
           purchaseClosingCostPct: assumptions.acquisition.purchaseClosingCostPct,
           renovationCosts: assumptions.acquisition.renovationCosts,
-          furnishingSetupCosts: assumptions.acquisition.furnishingSetupCosts,
+          furnishingSetupCosts: projection.assumptions.acquisition.furnishingSetupCosts,
+          onboardingCosts: projection.assumptions.acquisition.onboardingCosts,
+          investmentProfile: projection.assumptions.acquisition.investmentProfile,
+          targetAcquisitionDate: projection.assumptions.acquisition.targetAcquisitionDate,
         },
         financing: {
           ltvPct: assumptions.financing.ltvPct,
@@ -642,23 +661,24 @@ export async function runGenerateDossier(
           loanFeePct: assumptions.financing.loanFeePct,
         },
         operating: {
-          rentUpliftPct: assumptions.operating.rentUpliftPct,
-          blendedRentUpliftPct: assumptions.operating.blendedRentUpliftPct,
-          expenseIncreasePct: assumptions.operating.expenseIncreasePct,
-          managementFeePct: assumptions.operating.managementFeePct,
-          vacancyPct: assumptions.operating.vacancyPct,
-          leadTimeMonths: assumptions.operating.leadTimeMonths,
-          annualRentGrowthPct: assumptions.operating.annualRentGrowthPct,
-          annualOtherIncomeGrowthPct: assumptions.operating.annualOtherIncomeGrowthPct,
-          annualExpenseGrowthPct: assumptions.operating.annualExpenseGrowthPct,
-          annualPropertyTaxGrowthPct: assumptions.operating.annualPropertyTaxGrowthPct,
-          recurringCapexAnnual: assumptions.operating.recurringCapexAnnual,
+          rentUpliftPct: projection.assumptions.operating.rentUpliftPct,
+          blendedRentUpliftPct: projection.assumptions.operating.blendedRentUpliftPct,
+          expenseIncreasePct: projection.assumptions.operating.expenseIncreasePct,
+          managementFeePct: projection.assumptions.operating.managementFeePct,
+          occupancyTaxPct: projection.assumptions.operating.occupancyTaxPct,
+          vacancyPct: projection.assumptions.operating.vacancyPct,
+          leadTimeMonths: projection.assumptions.operating.leadTimeMonths,
+          annualRentGrowthPct: projection.assumptions.operating.annualRentGrowthPct,
+          annualOtherIncomeGrowthPct: projection.assumptions.operating.annualOtherIncomeGrowthPct,
+          annualExpenseGrowthPct: projection.assumptions.operating.annualExpenseGrowthPct,
+          annualPropertyTaxGrowthPct: projection.assumptions.operating.annualPropertyTaxGrowthPct,
+          recurringCapexAnnual: projection.assumptions.operating.recurringCapexAnnual,
         },
-        holdPeriodYears: assumptions.holdPeriodYears,
-        targetIrrPct: assumptions.targetIrrPct,
+        holdPeriodYears: projection.assumptions.holdPeriodYears,
+        targetIrrPct: projection.assumptions.targetIrrPct,
         exit: {
-          exitCapPct: assumptions.exit.exitCapPct,
-          exitClosingCostPct: assumptions.exit.exitClosingCostPct,
+          exitCapPct: projection.assumptions.exit.exitCapPct,
+          exitClosingCostPct: projection.assumptions.exit.exitClosingCostPct,
         },
       },
       acquisition: projection.acquisition,
@@ -697,13 +717,23 @@ export async function runGenerateDossier(
       },
       propertyOverview: propertyOverview ?? undefined,
       rentRollRows: rentRollRows.length > 0 ? rentRollRows : undefined,
-      expenseRows: expenseRows.length > 0 ? expenseRows : undefined,
+      expenseRows:
+        detailedModel.expenseModelRows.length > 0
+          ? detailedModel.expenseModelRows
+              .filter((row) => row.amount != null)
+              .map((row) => ({
+                lineItem: row.lineItem,
+                amount: row.amount ?? 0,
+                annualGrowthPct: row.annualGrowthPct,
+                treatment: row.treatment,
+              }))
+          : undefined,
       currentExpensesTotal: resolvedCurrentExpensesTotal ?? undefined,
       financialFlags: financialFlags.length > 0 ? financialFlags : undefined,
       amortizationSchedule,
       sensitivities,
       yearlyCashFlow: projection.yearly,
-      propertyMix: assumptions.propertyMix,
+      propertyMix: projection.assumptions.propertyMix,
       recommendedOffer,
     };
 
@@ -746,12 +776,12 @@ export async function runGenerateDossier(
       adjustedCapRatePct: adjustedCapRateForCtx,
       adjustedNoi: projection.operating.stabilizedNoi ?? null,
       recommendedOfferHigh: recommendedOffer.recommendedOfferHigh,
-      blendedRentUpliftPct: assumptions.operating.blendedRentUpliftPct,
-      annualExpenseGrowthPct: assumptions.operating.annualExpenseGrowthPct,
-      vacancyPct: assumptions.operating.vacancyPct,
-      exitCapRatePct: assumptions.exit.exitCapPct,
+      blendedRentUpliftPct: projection.assumptions.operating.blendedRentUpliftPct,
+      annualExpenseGrowthPct: projection.assumptions.operating.annualExpenseGrowthPct,
+      vacancyPct: projection.assumptions.operating.vacancyPct,
+      exitCapRatePct: projection.assumptions.exit.exitCapPct,
       rentStabilizedUnitCount: rentStabCount,
-      commercialUnitCount: assumptions.propertyMix.commercialUnits,
+      commercialUnitCount: projection.assumptions.propertyMix.commercialUnits,
     });
     insertParams.scoreSensitivity = buildDealScoreSensitivity({
       propertyId,
@@ -763,12 +793,13 @@ export async function runGenerateDossier(
         listedAt: listing?.listedAt ?? null,
         priceHistory: listing?.priceHistory ?? null,
       },
-      assumptions,
+      assumptions: projection.assumptions,
       currentGrossRent,
       currentNoi,
       currentOtherIncome,
       currentExpensesTotal: resolvedCurrentExpensesTotal ?? undefined,
-      expenseRows,
+      expenseRows: expenseModelRowsToProjectionRows(detailedModel.expenseModelRows),
+      unitRows: unitModelRowsToProjectionRows(detailedModel.unitModelRows),
       conservativeProjectedLeaseUpRent,
       protectedProjectedLeaseUpRent,
       baseCalculatedScore: scoringResult.isScoreable ? scoringResult.dealScore : null,
@@ -824,7 +855,7 @@ export async function runGenerateDossier(
       irrPct: projection.returns.irr ?? null,
       equityMultiple: projection.returns.equityMultiple ?? null,
       cocPct: projection.returns.averageCashOnCashReturn ?? null,
-      holdYears: assumptions.holdPeriodYears,
+      holdYears: projection.assumptions.holdPeriodYears,
       currentNoi: currentNoi ?? null,
       adjustedNoi: projection.operating.stabilizedNoi ?? currentNoi ?? null,
     });
@@ -888,7 +919,7 @@ export async function runGenerateDossier(
         adjustedNoi: projection.operating.stabilizedNoi ?? currentNoi ?? null,
         finalScore,
         calculatedScore,
-        holdYears: assumptions.holdPeriodYears,
+        holdYears: projection.assumptions.holdPeriodYears,
         dealSignalsId: persistedSignals.id,
         dealSignalsGeneratedAt: persistedSignals.generatedAt,
       }) as Record<string, unknown>

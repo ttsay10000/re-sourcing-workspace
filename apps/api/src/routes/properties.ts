@@ -51,7 +51,13 @@ import { fetchAcrisDocumentsByOwnerName } from "../enrichment/acrisDocuments.js"
 import { enrichBrokers, hasMeaningfulBrokerEnrichment } from "../enrichment/brokerEnrichment.js";
 import { resolveEffectiveDealScore } from "../deal/effectiveDealScore.js";
 import { getPersistedDossierSignals } from "../deal/persistedDossierSignals.js";
-import { getPropertyDossierSummary, hasCompletedDealDossier } from "../deal/propertyDossierState.js";
+import {
+  getPropertyDossierAssumptions,
+  getPropertyDossierSummary,
+  hasCompletedDealDossier,
+  parsePropertyDealDossierExpenseModelRows,
+  parsePropertyDealDossierUnitModelRows,
+} from "../deal/propertyDossierState.js";
 import { buildOmCalculationSnapshot } from "../deal/buildOmCalculation.js";
 import type { DossierAssumptionOverrides } from "../deal/underwritingModel.js";
 import { resolveGeneratedDocPath, deleteGeneratedDocumentFile } from "../deal/generatedDocStorage.js";
@@ -76,6 +82,8 @@ import {
 import { normalizeStreetEasySaleDetails } from "../sourcing/normalizeStreetEasyListing.js";
 import { refreshAuthoritativeOmForProperty } from "../om/ingestAuthoritativeOm.js";
 import { fetchSaleDetailsByUrl } from "../nycRealEstateApi.js";
+import { extractOmAnalysisFromGeminiPdfOnly } from "../om/extractOmAnalysisFromGeminiPdfOnly.js";
+import { resolveOmPropertyAddress } from "../om/resolveOmPropertyAddress.js";
 
 const router = Router();
 
@@ -95,6 +103,7 @@ const DOSSIER_ASSUMPTION_NUMERIC_FIELDS = [
   "rentUpliftPct",
   "expenseIncreasePct",
   "managementFeePct",
+  "occupancyTaxPct",
   "vacancyPct",
   "leadTimeMonths",
   "annualRentGrowthPct",
@@ -751,6 +760,224 @@ router.post("/properties/manual-add", async (req: Request, res: Response) => {
       return;
     }
     res.status(502).json({ error: "Failed to add property from links.", details: message });
+  }
+});
+
+/** POST /api/properties/manual-add-from-om - create/update a property directly from a PDF OM URL using OM-extracted address. */
+router.post("/properties/manual-add-from-om", async (req: Request, res: Response) => {
+  const omUrl = normalizeManualUrl(req.body?.omUrl);
+
+  if (omUrl == null) {
+    res.status(400).json({ error: "omUrl is required." });
+    return;
+  }
+  if (omUrl === "invalid") {
+    res.status(400).json({ error: "omUrl must be a valid http(s) URL." });
+    return;
+  }
+
+  let propertyId = "";
+  let canonicalAddress = "";
+  let createdProperty = false;
+  let matchStrategy: "exact_canonical" | "address_line" | "new" = "new";
+  let manualSourceLinks: PropertyManualSourceLinks | null = null;
+
+  try {
+    const downloaded = await downloadManualOmDocument(omUrl);
+    const isPdf =
+      downloaded.contentType?.toLowerCase().includes("pdf") ||
+      extname(downloaded.filename).toLowerCase() === ".pdf";
+    if (!isPdf) {
+      res.status(422).json({
+        error: "OM-only property creation currently requires a PDF so the address can be extracted reliably.",
+      });
+      return;
+    }
+
+    const extracted = await extractOmAnalysisFromGeminiPdfOnly({
+      documents: [
+        {
+          filename: downloaded.filename,
+          mimeType: downloaded.contentType ?? "application/pdf",
+          buffer: downloaded.buffer,
+        },
+      ],
+      propertyContext: downloaded.filename,
+    });
+    if (!extracted.omAnalysis) {
+      res.status(422).json({
+        error: extracted.parseError
+          ? `Failed to parse the OM PDF: ${extracted.parseError}`
+          : "The OM PDF did not return structured property details.",
+      });
+      return;
+    }
+
+    const resolvedOmAddress = resolveOmPropertyAddress(extracted.omAnalysis.propertyInfo);
+    if (!resolvedOmAddress) {
+      res.status(422).json({
+        error:
+          "The OM parsed successfully, but it did not return a usable building address. Try a clearer OM PDF or use the StreetEasy path.",
+      });
+      return;
+    }
+    canonicalAddress = resolvedOmAddress.canonicalAddress;
+
+    const pool = getPool();
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const propertyRepo = new PropertyRepo({ pool, client });
+
+      const exactProperty = await propertyRepo.byCanonicalAddress(canonicalAddress);
+      const firstLineMatch =
+        exactProperty == null
+          ? await propertyRepo.findByAddressFirstLine(resolvedOmAddress.addressLine)
+          : null;
+      const matchedProperty = exactProperty ?? firstLineMatch;
+      const property = matchedProperty ?? (await propertyRepo.create(canonicalAddress));
+
+      createdProperty = matchedProperty == null;
+      matchStrategy =
+        exactProperty != null ? "exact_canonical" : firstLineMatch != null ? "address_line" : "new";
+      propertyId = property.id;
+      canonicalAddress = property.canonicalAddress;
+      manualSourceLinks = mergeManualSourceLinks(matchedProperty?.details ?? property.details, {
+        omUrl: downloaded.resolvedUrl,
+        addedAt: new Date().toISOString(),
+      });
+      await propertyRepo.mergeDetails(property.id, {
+        manualSourceLinks,
+        omDerivedAddress: {
+          rawAddress: resolvedOmAddress.rawAddress,
+          addressLine: resolvedOmAddress.addressLine,
+          locality: resolvedOmAddress.locality,
+          zip: resolvedOmAddress.zip,
+          canonicalAddress: resolvedOmAddress.canonicalAddress,
+          addressSource: resolvedOmAddress.addressSource,
+        },
+      });
+
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    const propertyRepo = new PropertyRepo({ pool });
+    const uploadedDocRepo = new PropertyUploadedDocumentRepo({ pool });
+    const omImport: {
+      requested: boolean;
+      imported: boolean;
+      omUrl: string | null;
+      resolvedOmUrl: string | null;
+      fileName: string | null;
+      authoritativeOmBuilt: boolean;
+      warning: string | null;
+    } = {
+      requested: true,
+      imported: false,
+      omUrl,
+      resolvedOmUrl: downloaded.resolvedUrl,
+      fileName: null,
+      authoritativeOmBuilt: false,
+      warning: null,
+    };
+    const enrichment: {
+      attempted: boolean;
+      ok: boolean;
+      bbl: string | null;
+      bin: string | null;
+      warning: string | null;
+    } = {
+      attempted: false,
+      ok: false,
+      bbl: null,
+      bin: null,
+      warning: null,
+    };
+
+    try {
+      const docId = randomUUID();
+      const filePath = await saveUploadedDocument(propertyId, docId, downloaded.filename, downloaded.buffer);
+      const inserted = await uploadedDocRepo.insert({
+        id: docId,
+        propertyId,
+        filename: downloaded.filename,
+        contentType: downloaded.contentType,
+        filePath,
+        category: "OM",
+        source: "Manual OM link",
+        fileContent: downloaded.buffer,
+      });
+      omImport.imported = true;
+      omImport.fileName = inserted.filename;
+      manualSourceLinks = mergeManualSourceLinks((await propertyRepo.byId(propertyId))?.details ?? null, {
+        omUrl: downloaded.resolvedUrl,
+        omImportedAt: inserted.createdAt,
+        omDocumentId: inserted.id,
+        omFileName: inserted.filename,
+      });
+      await propertyRepo.mergeDetails(propertyId, { manualSourceLinks });
+      await syncPropertySourcingWorkflow(propertyId, { pool });
+
+      const refreshResult = await refreshOmFinancialsForProperty(propertyId, pool);
+      omImport.authoritativeOmBuilt = refreshResult.documentsProcessed > 0 && !refreshResult.error;
+      if (refreshResult.error) omImport.warning = refreshResult.error;
+    } catch (error) {
+      omImport.warning = error instanceof Error ? error.message : "Failed to save the OM document.";
+    }
+
+    try {
+      enrichment.attempted = true;
+      const appToken = process.env.SOCRATA_APP_TOKEN ?? null;
+      const resolvedBbl = await getBBLForProperty(propertyId, { appToken });
+      enrichment.bbl = resolvedBbl?.bbl ?? null;
+      enrichment.bin = resolvedBbl?.bin ?? null;
+      if (!resolvedBbl?.bbl && !resolvedBbl?.bin) {
+        enrichment.warning =
+          "Property record created from the OM, but BBL/BIN could not be resolved from the extracted address yet.";
+      } else {
+        const result = await runEnrichmentForProperty(propertyId, undefined, {
+          appToken,
+          rateLimitDelayMs: ENRICHMENT_RATE_LIMIT_DELAY_MS,
+        });
+        enrichment.ok = result.ok;
+        if (!result.ok) {
+          enrichment.warning = "Enrichment ran, but one or more modules failed.";
+        }
+      }
+    } catch (error) {
+      enrichment.attempted = true;
+      enrichment.warning = error instanceof Error ? error.message : "Failed to run enrichment.";
+    }
+
+    await syncPropertySourcingWorkflow(propertyId, { pool });
+    const property = await propertyRepo.byId(propertyId);
+
+    res.status(createdProperty ? 201 : 200).json({
+      ok: true,
+      propertyId,
+      listingId: null,
+      canonicalAddress,
+      createdProperty,
+      createdListing: false,
+      matchStrategy,
+      omAddress: resolvedOmAddress,
+      omImport,
+      enrichment,
+      property,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[properties manual-add-from-om]", err);
+    if (/DATABASE_URL|connection|ECONNREFUSED|getPool/i.test(message)) {
+      res.status(503).json({ error: "Database unavailable.", details: message });
+      return;
+    }
+    res.status(502).json({ error: "Failed to add property from OM.", details: message });
   }
 });
 
@@ -2752,6 +2979,12 @@ function optionalTrimmedText(value: unknown, maxLength = 20_000): string | null 
   return trimmed.length <= maxLength ? trimmed : "invalid";
 }
 
+function optionalDateString(value: unknown): string | null | "invalid" {
+  const parsed = optionalTrimmedText(value, 40);
+  if (parsed == null || parsed === "invalid") return parsed;
+  return /^\d{4}-\d{2}-\d{2}$/.test(parsed) ? parsed : "invalid";
+}
+
 function parseDossierAssumptionOverridesPayload(
   raw: unknown
 ): DossierAssumptionOverrides | null | "invalid" {
@@ -2767,17 +3000,27 @@ function parseDossierAssumptionOverridesPayload(
     overrides[key] = parsed;
   }
 
+  const investmentProfile = optionalTrimmedText(record.investmentProfile, 200);
+  const targetAcquisitionDate = optionalDateString(record.targetAcquisitionDate);
+  if (investmentProfile === "invalid" || targetAcquisitionDate === "invalid") return "invalid";
+  overrides.investmentProfile = investmentProfile;
+  overrides.targetAcquisitionDate = targetAcquisitionDate;
+
   return overrides;
 }
 
 router.post("/properties/:id/om-calculation", async (req: Request, res: Response) => {
   try {
     const { id: propertyId } = req.params;
+    const requestBody = req.body as Record<string, unknown> | null | undefined;
     const assumptionOverrides = parseDossierAssumptionOverridesPayload(req.body?.assumptions);
     const brokerEmailNotes = optionalTrimmedText(req.body?.brokerEmailNotes);
+    const unitModelRows = parsePropertyDealDossierUnitModelRows(req.body?.unitModelRows);
+    const expenseModelRows = parsePropertyDealDossierExpenseModelRows(req.body?.expenseModelRows);
     if (assumptionOverrides === "invalid") {
       res.status(400).json({
-        error: "assumptions must be an object containing only non-negative numbers or null values.",
+        error:
+          "assumptions must be an object containing non-negative numbers, an optional investment profile, and an optional YYYY-MM-DD acquisition date.",
       });
       return;
     }
@@ -2787,11 +3030,25 @@ router.post("/properties/:id/om-calculation", async (req: Request, res: Response
       });
       return;
     }
+    if (unitModelRows === "invalid" || expenseModelRows === "invalid") {
+      res.status(400).json({
+        error: "unitModelRows and expenseModelRows must be arrays of valid table rows.",
+      });
+      return;
+    }
 
     const snapshot = await buildOmCalculationSnapshot({
       propertyId,
       assumptionOverrides,
       brokerEmailNotes,
+      unitModelRows:
+        requestBody && Object.prototype.hasOwnProperty.call(requestBody, "unitModelRows")
+          ? unitModelRows
+          : undefined,
+      expenseModelRows:
+        requestBody && Object.prototype.hasOwnProperty.call(requestBody, "expenseModelRows")
+          ? expenseModelRows
+          : undefined,
     });
     res.json(snapshot);
   } catch (err) {
@@ -2806,11 +3063,20 @@ router.post("/properties/:id/om-calculation", async (req: Request, res: Response
 router.put("/properties/:id/dossier-settings", async (req: Request, res: Response) => {
   try {
     const { id: propertyId } = req.params;
+    const requestBody = req.body as Record<string, unknown> | null | undefined;
     const assumptionOverrides = parseDossierAssumptionOverridesPayload(req.body);
     const brokerEmailNotes = optionalTrimmedText(req.body?.brokerEmailNotes);
-    if (assumptionOverrides === "invalid" || brokerEmailNotes === "invalid") {
+    const unitModelRows = parsePropertyDealDossierUnitModelRows(req.body?.unitModelRows);
+    const expenseModelRows = parsePropertyDealDossierExpenseModelRows(req.body?.expenseModelRows);
+    if (
+      assumptionOverrides === "invalid" ||
+      brokerEmailNotes === "invalid" ||
+      unitModelRows === "invalid" ||
+      expenseModelRows === "invalid"
+    ) {
       res.status(400).json({
-        error: "Assumption fields must be non-negative numbers or null, and brokerEmailNotes must be a string under 20,000 characters.",
+        error:
+          "Assumption fields must be non-negative numbers or null with optional investment profile / acquisition date fields, brokerEmailNotes must be a string under 20,000 characters, and table rows must be valid arrays.",
       });
       return;
     }
@@ -2821,11 +3087,31 @@ router.put("/properties/:id/dossier-settings", async (req: Request, res: Respons
       res.status(404).json({ error: "Property not found", propertyId });
       return;
     }
-    const assumptionsPatch = {
-      ...assumptionOverrides,
-      brokerEmailNotes,
+    const existingAssumptions = getPropertyDossierAssumptions(property.details);
+    const assumptionsPatch: Record<string, unknown> = {
+      ...(existingAssumptions ?? {}),
       updatedAt: new Date().toISOString(),
     };
+    for (const key of DOSSIER_ASSUMPTION_NUMERIC_FIELDS) {
+      if (requestBody && Object.prototype.hasOwnProperty.call(requestBody, key)) {
+        assumptionsPatch[key] = assumptionOverrides?.[key] ?? null;
+      }
+    }
+    if (requestBody && Object.prototype.hasOwnProperty.call(requestBody, "investmentProfile")) {
+      assumptionsPatch.investmentProfile = assumptionOverrides?.investmentProfile ?? null;
+    }
+    if (requestBody && Object.prototype.hasOwnProperty.call(requestBody, "targetAcquisitionDate")) {
+      assumptionsPatch.targetAcquisitionDate = assumptionOverrides?.targetAcquisitionDate ?? null;
+    }
+    if (requestBody && Object.prototype.hasOwnProperty.call(requestBody, "unitModelRows")) {
+      assumptionsPatch.unitModelRows = unitModelRows;
+    }
+    if (requestBody && Object.prototype.hasOwnProperty.call(requestBody, "expenseModelRows")) {
+      assumptionsPatch.expenseModelRows = expenseModelRows;
+    }
+    if (requestBody && Object.prototype.hasOwnProperty.call(requestBody, "brokerEmailNotes")) {
+      assumptionsPatch.brokerEmailNotes = brokerEmailNotes;
+    }
     await repo.updateDetails(propertyId, "dealDossier.assumptions", assumptionsPatch);
     res.json({
       ok: true,

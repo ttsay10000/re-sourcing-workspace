@@ -1,7 +1,10 @@
 import type {
+  PropertyDealDossierExpenseModelRow,
+  PropertyDealDossierExpenseTreatment,
   PropertyDealDossierAssumptions,
   PropertyDealDossierGeneration,
   PropertyDealDossierSummary,
+  PropertyDealDossierUnitModelRow,
   PropertyDetails,
 } from "@re-sourcing/contracts";
 import type { DossierAssumptionOverrides } from "./underwritingModel.js";
@@ -18,6 +21,7 @@ const DOSSIER_ASSUMPTION_NUMERIC_KEYS = [
   "rentUpliftPct",
   "expenseIncreasePct",
   "managementFeePct",
+  "occupancyTaxPct",
   "vacancyPct",
   "leadTimeMonths",
   "annualRentGrowthPct",
@@ -31,6 +35,16 @@ const DOSSIER_ASSUMPTION_NUMERIC_KEYS = [
   "targetIrrPct",
 ] as const satisfies ReadonlyArray<keyof DossierAssumptionOverrides>;
 
+const DOSSIER_ASSUMPTION_STRING_KEYS = [
+  "investmentProfile",
+  "targetAcquisitionDate",
+] as const satisfies ReadonlyArray<keyof DossierAssumptionOverrides>;
+const DOSSIER_EXPENSE_TREATMENTS: PropertyDealDossierExpenseTreatment[] = [
+  "operating",
+  "replace_management",
+  "exclude",
+];
+
 function toFiniteNumber(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "string") {
@@ -38,6 +52,145 @@ function toFiniteNumber(value: unknown): number | null {
     if (Number.isFinite(parsed)) return parsed;
   }
   return null;
+}
+
+function toTrimmedString(
+  value: unknown,
+  maxLength: number
+): string | null | "invalid" {
+  if (value == null) return null;
+  if (typeof value !== "string") return "invalid";
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  return trimmed.length <= maxLength ? trimmed : "invalid";
+}
+
+function toOptionalBoolean(value: unknown): boolean | null | "invalid" {
+  if (value == null) return null;
+  if (typeof value === "boolean") return value;
+  return "invalid";
+}
+
+function toDateString(value: unknown): string | null | "invalid" {
+  if (value == null) return null;
+  if (typeof value !== "string") return "invalid";
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  return /^\d{4}-\d{2}-\d{2}$/.test(trimmed) ? trimmed : "invalid";
+}
+
+export function parsePropertyDealDossierUnitModelRows(
+  raw: unknown
+): PropertyDealDossierUnitModelRow[] | null | "invalid" {
+  if (raw == null) return null;
+  if (!Array.isArray(raw)) return "invalid";
+
+  const rows: PropertyDealDossierUnitModelRow[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return "invalid";
+    const record = entry as Record<string, unknown>;
+    const rowId = toTrimmedString(record.rowId, 200);
+    const unitLabel = toTrimmedString(record.unitLabel, 200);
+    const building = toTrimmedString(record.building, 200);
+    const unitCategory = toTrimmedString(record.unitCategory, 200);
+    const tenantName = toTrimmedString(record.tenantName, 200);
+    const tenantStatus = toTrimmedString(record.tenantStatus, 200);
+    const notes = toTrimmedString(record.notes, 1_000);
+    const includeInUnderwriting = toOptionalBoolean(record.includeInUnderwriting);
+    const isProtected = toOptionalBoolean(record.isProtected);
+    if (
+      rowId === "invalid" ||
+      unitLabel === "invalid" ||
+      building === "invalid" ||
+      unitCategory === "invalid" ||
+      tenantName === "invalid" ||
+      tenantStatus === "invalid" ||
+      notes === "invalid" ||
+      includeInUnderwriting === "invalid" ||
+      isProtected === "invalid"
+    ) {
+      return "invalid";
+    }
+    if (rowId == null) return "invalid";
+
+    const nextRow: PropertyDealDossierUnitModelRow = {
+      rowId,
+      unitLabel,
+      building,
+      unitCategory,
+      tenantName,
+      currentAnnualRent: toFiniteNumber(record.currentAnnualRent),
+      underwrittenAnnualRent: toFiniteNumber(record.underwrittenAnnualRent),
+      rentUpliftPct: toFiniteNumber(record.rentUpliftPct),
+      occupancyPct: toFiniteNumber(record.occupancyPct),
+      furnishingCost: toFiniteNumber(record.furnishingCost),
+      onboardingFee: toFiniteNumber(record.onboardingFee),
+      monthlyHospitalityExpense: toFiniteNumber(record.monthlyHospitalityExpense),
+      includeInUnderwriting,
+      isProtected,
+      beds: toFiniteNumber(record.beds),
+      baths: toFiniteNumber(record.baths),
+      sqft: toFiniteNumber(record.sqft),
+      tenantStatus,
+      notes,
+    };
+
+    const hasMeaningfulValue =
+      nextRow.unitLabel != null ||
+      nextRow.currentAnnualRent != null ||
+      nextRow.underwrittenAnnualRent != null ||
+      nextRow.rentUpliftPct != null ||
+      nextRow.occupancyPct != null ||
+      nextRow.furnishingCost != null ||
+      nextRow.onboardingFee != null ||
+      nextRow.monthlyHospitalityExpense != null;
+    if (hasMeaningfulValue) rows.push(nextRow);
+  }
+
+  return rows.length > 0 ? rows : null;
+}
+
+export function parsePropertyDealDossierExpenseModelRows(
+  raw: unknown
+): PropertyDealDossierExpenseModelRow[] | null | "invalid" {
+  if (raw == null) return null;
+  if (!Array.isArray(raw)) return "invalid";
+
+  const rows: PropertyDealDossierExpenseModelRow[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return "invalid";
+    const record = entry as Record<string, unknown>;
+    const rowId = toTrimmedString(record.rowId, 200);
+    const lineItem = toTrimmedString(record.lineItem, 200);
+    const rawTreatment = toTrimmedString(record.treatment, 40);
+    if (rowId === "invalid" || lineItem === "invalid" || rawTreatment === "invalid") return "invalid";
+    if (rowId == null) return "invalid";
+    const treatment =
+      rawTreatment == null
+        ? null
+        : DOSSIER_EXPENSE_TREATMENTS.includes(rawTreatment as PropertyDealDossierExpenseTreatment)
+          ? (rawTreatment as PropertyDealDossierExpenseTreatment)
+          : "invalid";
+    if (treatment === "invalid") return "invalid";
+
+    const nextRow: PropertyDealDossierExpenseModelRow = {
+      rowId,
+      lineItem: lineItem ?? "",
+      amount: toFiniteNumber(record.amount),
+      annualGrowthPct: toFiniteNumber(record.annualGrowthPct),
+      treatment,
+    };
+
+    const hasMeaningfulValue =
+      nextRow.lineItem.trim().length > 0 ||
+      nextRow.amount != null ||
+      nextRow.annualGrowthPct != null;
+    if (!hasMeaningfulValue) continue;
+    if (!nextRow.lineItem.trim()) return "invalid";
+    rows.push(nextRow);
+  }
+
+  return rows.length > 0 ? rows : null;
 }
 
 export function getPropertyDossierAssumptions(
@@ -51,18 +204,44 @@ export function getPropertyDossierAssumptions(
       return parsed != null ? [[key, parsed]] : [];
     })
   ) as DossierAssumptionOverrides;
+  const parsedStrings = Object.fromEntries(
+    DOSSIER_ASSUMPTION_STRING_KEYS.flatMap((key) => {
+      const parsed =
+        key === "targetAcquisitionDate"
+          ? toDateString(assumptions[key])
+          : toTrimmedString(assumptions[key], 200);
+      return typeof parsed === "string" && parsed.length > 0 ? [[key, parsed]] : [];
+    })
+  ) as Partial<DossierAssumptionOverrides>;
   const brokerEmailNotes =
     typeof assumptions.brokerEmailNotes === "string" && assumptions.brokerEmailNotes.trim().length > 0
       ? assumptions.brokerEmailNotes.trim()
       : null;
+  const unitModelRows = parsePropertyDealDossierUnitModelRows(assumptions.unitModelRows);
+  const expenseModelRows = parsePropertyDealDossierExpenseModelRows(assumptions.expenseModelRows);
   const updatedAt =
     typeof assumptions.updatedAt === "string" && assumptions.updatedAt.trim().length > 0
       ? assumptions.updatedAt.trim()
       : null;
   const hasNumericValue = Object.keys(parsedNumbers).length > 0;
-  if (!hasNumericValue && brokerEmailNotes == null && updatedAt == null) return null;
+  const hasStringValue = Object.keys(parsedStrings).length > 0;
+  if (
+    !hasNumericValue &&
+    !hasStringValue &&
+    brokerEmailNotes == null &&
+    updatedAt == null &&
+    unitModelRows !== "invalid" &&
+    expenseModelRows !== "invalid" &&
+    unitModelRows == null &&
+    expenseModelRows == null
+  ) {
+    return null;
+  }
   return {
     ...parsedNumbers,
+    ...parsedStrings,
+    unitModelRows: unitModelRows === "invalid" ? null : unitModelRows,
+    expenseModelRows: expenseModelRows === "invalid" ? null : expenseModelRows,
     brokerEmailNotes,
     updatedAt,
   };
@@ -150,6 +329,12 @@ export function propertyAssumptionsToOverrides(
       overrides[key] = value;
     }
   }
+  for (const key of DOSSIER_ASSUMPTION_STRING_KEYS) {
+    const value = assumptions[key];
+    if (typeof value === "string" && value.trim().length > 0) {
+      overrides[key] = value.trim();
+    }
+  }
   return Object.keys(overrides).length > 0 ? overrides : null;
 }
 
@@ -167,6 +352,18 @@ export function mergeDossierAssumptionOverrides(
     const baseValue = base?.[key];
     if (typeof baseValue === "number" && Number.isFinite(baseValue)) {
       merged[key] = baseValue;
+    }
+  }
+
+  for (const key of DOSSIER_ASSUMPTION_STRING_KEYS) {
+    const overrideValue = override?.[key];
+    if (typeof overrideValue === "string" && overrideValue.trim().length > 0) {
+      merged[key] = overrideValue.trim();
+      continue;
+    }
+    const baseValue = base?.[key];
+    if (typeof baseValue === "string" && baseValue.trim().length > 0) {
+      merged[key] = baseValue.trim();
     }
   }
 

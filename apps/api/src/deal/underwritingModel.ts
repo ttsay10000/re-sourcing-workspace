@@ -22,6 +22,7 @@ export const DEFAULT_AMORTIZATION_YEARS = 30;
 export const DEFAULT_RENT_UPLIFT_PCT = 76.3;
 export const DEFAULT_EXPENSE_INCREASE_PCT = 0;
 export const DEFAULT_MANAGEMENT_FEE_PCT = 8;
+export const DEFAULT_OCCUPANCY_TAX_PCT = 6;
 export const DEFAULT_EXIT_CAP_PCT = 5;
 export const DEFAULT_EXIT_CLOSING_COST_PCT = 6;
 export const DEFAULT_TARGET_IRR_PCT = 25;
@@ -43,6 +44,8 @@ export interface DossierAssumptionOverrides {
   purchaseClosingCostPct?: number | null;
   renovationCosts?: number | null;
   furnishingSetupCosts?: number | null;
+  investmentProfile?: string | null;
+  targetAcquisitionDate?: string | null;
   ltvPct?: number | null;
   interestRatePct?: number | null;
   amortizationYears?: number | null;
@@ -50,6 +53,7 @@ export interface DossierAssumptionOverrides {
   rentUpliftPct?: number | null;
   expenseIncreasePct?: number | null;
   managementFeePct?: number | null;
+  occupancyTaxPct?: number | null;
   vacancyPct?: number | null;
   leadTimeMonths?: number | null;
   annualRentGrowthPct?: number | null;
@@ -70,6 +74,22 @@ export interface DossierPropertyContext {
 export interface ProjectedExpenseInputRow {
   lineItem: string;
   amount: number;
+  annualGrowthPct?: number | null;
+  treatment?: "operating" | "replace_management" | "exclude" | null;
+}
+
+export interface ProjectedUnitInputRow {
+  rowId: string;
+  unitLabel: string;
+  currentAnnualRent?: number | null;
+  underwrittenAnnualRent?: number | null;
+  rentUpliftPct?: number | null;
+  occupancyPct?: number | null;
+  furnishingCost?: number | null;
+  onboardingFee?: number | null;
+  monthlyHospitalityExpense?: number | null;
+  includeInUnderwriting?: boolean | null;
+  isProtected?: boolean | null;
 }
 
 export interface ResolvedDossierAssumptions {
@@ -78,6 +98,9 @@ export interface ResolvedDossierAssumptions {
     purchaseClosingCostPct: number;
     renovationCosts: number;
     furnishingSetupCosts: number;
+    onboardingCosts: number;
+    investmentProfile: string | null;
+    targetAcquisitionDate: string | null;
   };
   financing: {
     ltvPct: number;
@@ -90,6 +113,7 @@ export interface ResolvedDossierAssumptions {
     blendedRentUpliftPct: number;
     expenseIncreasePct: number;
     managementFeePct: number;
+    occupancyTaxPct: number;
     vacancyPct: number;
     leadTimeMonths: number;
     annualRentGrowthPct: number;
@@ -220,6 +244,7 @@ export interface UnderwritingProjectionInput {
   currentOtherIncome?: number | null;
   currentExpensesTotal?: number | null;
   expenseRows?: ProjectedExpenseInputRow[] | null;
+  unitRows?: ProjectedUnitInputRow[] | null;
   conservativeProjectedLeaseUpRent?: number | null;
   protectedProjectedLeaseUpRent?: number | null;
 }
@@ -300,6 +325,19 @@ function pickNumber(...values: Array<number | null | undefined>): number | null 
   return null;
 }
 
+function pickTrimmedText(...values: Array<string | null | undefined>): string | null {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim().length > 0) return value.trim();
+  }
+  return null;
+}
+
+function normalizeDateString(value: string | null | undefined): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(trimmed) ? trimmed : null;
+}
+
 function roundCurrency(value: number): number {
   return Math.round(value * 100) / 100;
 }
@@ -307,6 +345,30 @@ function roundCurrency(value: number): number {
 function clampUnitShare(value: number | null | undefined, fallback = 1): number {
   const resolved = value != null && Number.isFinite(value) ? value : fallback;
   return Math.max(0, Math.min(1, resolved));
+}
+
+function resolvedUnitOccupancyPct(
+  row: Pick<ProjectedUnitInputRow, "occupancyPct" | "isProtected">,
+  fallbackVacancyPct: number
+): number {
+  if (row.occupancyPct != null && Number.isFinite(row.occupancyPct)) {
+    return Math.max(0, Math.min(100, row.occupancyPct));
+  }
+  if (row.isProtected === true) return 100;
+  return Math.max(0, Math.min(100, 100 - fallbackVacancyPct));
+}
+
+function grossAnnualRentForUnit(row: ProjectedUnitInputRow): number {
+  return roundCurrency(
+    Math.max(0, safeNumber(row.underwrittenAnnualRent, 0)) *
+      (1 + Math.max(0, safeNumber(row.rentUpliftPct, 0)) / 100)
+  );
+}
+
+function effectiveAnnualRentForUnit(row: ProjectedUnitInputRow, fallbackVacancyPct: number): number {
+  return roundCurrency(
+    grossAnnualRentForUnit(row) * (resolvedUnitOccupancyPct(row, fallbackVacancyPct) / 100)
+  );
 }
 
 function normalizeTaxCode(taxCode: string | null | undefined): string | null {
@@ -339,7 +401,22 @@ export function isManagementFeeExpenseLine(lineItem: string): boolean {
   return /\b(management|mgmt)\b/i.test(lineItem);
 }
 
-export function normalizeExpenseProjectionInputs<T extends { lineItem: string; amount: number }>(input: {
+function resolvedExpenseTreatment<T extends { lineItem: string; treatment?: string | null }>(
+  row: T
+): "operating" | "replace_management" | "exclude" {
+  if (
+    row.treatment === "operating" ||
+    row.treatment === "replace_management" ||
+    row.treatment === "exclude"
+  ) {
+    return row.treatment;
+  }
+  return isManagementFeeExpenseLine(row.lineItem) ? "replace_management" : "operating";
+}
+
+export function normalizeExpenseProjectionInputs<
+  T extends { lineItem: string; amount: number; treatment?: string | null }
+>(input: {
   currentExpensesTotal: number;
   expenseRows?: T[] | null;
 }): {
@@ -359,12 +436,11 @@ export function normalizeExpenseProjectionInputs<T extends { lineItem: string; a
       )
     : [];
   const removedManagementFeeAmount = detailedRows.reduce(
-    (sum, row) => sum + (isManagementFeeExpenseLine(row.lineItem) ? row.amount : 0),
+    (sum, row) =>
+      sum + (resolvedExpenseTreatment(row) === "replace_management" ? row.amount : 0),
     0
   );
-  const expenseRowsExManagement = detailedRows.filter(
-    (row) => !isManagementFeeExpenseLine(row.lineItem)
-  );
+  const expenseRowsExManagement = detailedRows.filter((row) => resolvedExpenseTreatment(row) === "operating");
   return {
     currentExpensesTotalExManagement: Math.max(0, input.currentExpensesTotal - removedManagementFeeAmount),
     expenseRowsExManagement,
@@ -409,10 +485,15 @@ function projectExpenseLines(input: {
           .map((row) => ({
             lineItem: row.lineItem.trim(),
             amount: row.amount,
+            annualGrowthPct: row.annualGrowthPct,
           }))
       : [];
   const aggregateFallback = detailedRows.length === 0;
-  const normalizedRows = aggregateFallback
+  const normalizedRows: Array<{
+    lineItem: string;
+    amount: number;
+    annualGrowthPct?: number | null;
+  }> = aggregateFallback
     ? [{ lineItem: "Operating expenses", amount: currentExpensesTotal }]
     : detailedRows;
 
@@ -424,9 +505,12 @@ function projectExpenseLines(input: {
   const increaseFactor = 1 + assumptions.operating.expenseIncreasePct / 100;
 
   return normalizedRows.map((row) => {
-    const annualGrowthPct = expenseGrowthPctForLine(row.lineItem, assumptions, {
-      aggregateFallback,
-    });
+    const annualGrowthPct =
+      row.annualGrowthPct != null && Number.isFinite(row.annualGrowthPct)
+        ? row.annualGrowthPct
+        : expenseGrowthPctForLine(row.lineItem, assumptions, {
+            aggregateFallback,
+          });
     const baseAmount = row.amount * scale * increaseFactor;
     const yearlyAmounts = Array.from({ length: assumptions.holdPeriodYears }, (_, index) =>
       roundCurrency(compoundAnnual(baseAmount, annualGrowthPct, index))
@@ -467,6 +551,9 @@ export function resolveDossierAssumptions(
         overrides?.furnishingSetupCosts,
         propertyMix.furnishingSetupCostEstimate
       ),
+      onboardingCosts: 0,
+      investmentProfile: pickTrimmedText(overrides?.investmentProfile),
+      targetAcquisitionDate: normalizeDateString(overrides?.targetAcquisitionDate),
     },
     financing: {
       ltvPct: safeNumber(pickNumber(overrides?.ltvPct, profile?.defaultLtv), DEFAULT_LTV_PCT),
@@ -495,6 +582,12 @@ export function resolveDossierAssumptions(
       managementFeePct: safeNumber(
         pickNumber(overrides?.managementFeePct, profile?.defaultManagementFee),
         DEFAULT_MANAGEMENT_FEE_PCT
+      ),
+      occupancyTaxPct: safeBoundedNumber(
+        overrides?.occupancyTaxPct,
+        DEFAULT_OCCUPANCY_TAX_PCT,
+        0,
+        100
       ),
       vacancyPct: safeBoundedNumber(
         pickNumber(overrides?.vacancyPct, profile?.defaultVacancyPct),
@@ -568,15 +661,91 @@ export function computeUnderwritingProjection(
   input: UnderwritingProjectionInput
 ): UnderwritingProjection {
   const {
-    assumptions,
+    assumptions: baseAssumptions,
     currentGrossRent,
     currentNoi,
     currentOtherIncome,
     currentExpensesTotal,
     expenseRows,
+    unitRows,
     conservativeProjectedLeaseUpRent,
     protectedProjectedLeaseUpRent,
   } = input;
+  const normalizedUnitRows = Array.isArray(unitRows)
+    ? unitRows.filter(
+        (row): row is ProjectedUnitInputRow =>
+          !!row &&
+          typeof row.rowId === "string" &&
+          row.rowId.trim().length > 0 &&
+          typeof row.unitLabel === "string" &&
+          row.unitLabel.trim().length > 0
+      )
+    : [];
+  const detailedUnitModelActive = normalizedUnitRows.length > 0;
+  const effectiveFurnishingSetupCosts = detailedUnitModelActive
+    ? roundCurrency(
+        normalizedUnitRows.reduce(
+          (sum, row) =>
+            sum +
+            (row.includeInUnderwriting === false
+              ? 0
+              : Math.max(0, safeNumber(row.furnishingCost, 0))),
+          0
+        )
+      )
+    : baseAssumptions.acquisition.furnishingSetupCosts;
+  const effectiveOnboardingCosts = detailedUnitModelActive
+    ? roundCurrency(
+        normalizedUnitRows.reduce(
+          (sum, row) =>
+            sum +
+            (row.includeInUnderwriting === false
+              ? 0
+              : Math.max(0, safeNumber(row.onboardingFee, 0))),
+          0
+        )
+      )
+    : baseAssumptions.acquisition.onboardingCosts;
+  const effectiveHospitalityExpenseAnnualBase = detailedUnitModelActive
+    ? roundCurrency(
+        normalizedUnitRows.reduce(
+          (sum, row) =>
+            sum +
+            (row.includeInUnderwriting === false
+              ? 0
+              : Math.max(0, safeNumber(row.monthlyHospitalityExpense, 0)) * 12),
+          0
+        )
+      )
+    : 0;
+  const effectiveBlendedRentUpliftPct = detailedUnitModelActive
+    ? (() => {
+        const includedRows = normalizedUnitRows.filter((row) => row.includeInUnderwriting !== false);
+        const baseAnnual = includedRows.reduce(
+          (sum, row) => sum + Math.max(0, safeNumber(row.underwrittenAnnualRent, 0)),
+          0
+        );
+        const modeledAnnual = includedRows.reduce(
+          (sum, row) => sum + grossAnnualRentForUnit(row),
+          0
+        );
+        return baseAnnual > 0
+          ? ((modeledAnnual - baseAnnual) / baseAnnual) * 100
+          : baseAssumptions.operating.blendedRentUpliftPct;
+      })()
+    : baseAssumptions.operating.blendedRentUpliftPct;
+  const assumptions: ResolvedDossierAssumptions = {
+    ...baseAssumptions,
+    acquisition: {
+      ...baseAssumptions.acquisition,
+      furnishingSetupCosts: effectiveFurnishingSetupCosts,
+      onboardingCosts: effectiveOnboardingCosts,
+    },
+    operating: {
+      ...baseAssumptions.operating,
+      blendedRentUpliftPct: effectiveBlendedRentUpliftPct,
+    },
+  };
   const purchasePrice = assumptions.acquisition.purchasePrice ?? 0;
   const purchaseClosingCosts =
     purchasePrice * (Math.max(0, assumptions.acquisition.purchaseClosingCostPct) / 100);
@@ -584,7 +753,8 @@ export function computeUnderwritingProjection(
     purchasePrice +
     purchaseClosingCosts +
     Math.max(0, assumptions.acquisition.renovationCosts) +
-    Math.max(0, assumptions.acquisition.furnishingSetupCosts);
+    Math.max(0, assumptions.acquisition.furnishingSetupCosts) +
+    Math.max(0, assumptions.acquisition.onboardingCosts);
   const loanAmount =
     purchasePrice > 0
       ? purchasePrice * (Math.max(0, assumptions.financing.ltvPct) / 100)
@@ -610,42 +780,67 @@ export function computeUnderwritingProjection(
     assumptions.propertyMix.eligibleRevenueSharePct,
     assumptions.propertyMix.eligibleUnitSharePct ?? 1
   );
-  const eligibleCurrentRent = roundCurrency(currentRent * eligibleRevenueShare);
-  const totalProjectedLeaseUpRentBase = roundCurrency(
-    Math.max(0, safeNumber(conservativeProjectedLeaseUpRent))
-  );
-  const protectedProjectedLeaseUpRentBase = roundCurrency(
-    Math.min(totalProjectedLeaseUpRentBase, Math.max(0, safeNumber(protectedProjectedLeaseUpRent)))
-  );
-  const eligibleProjectedLeaseUpRentBase = roundCurrency(
-    Math.max(0, totalProjectedLeaseUpRentBase - protectedProjectedLeaseUpRentBase)
-  );
-  const protectedCurrentRent = roundCurrency(Math.max(0, currentRent - eligibleCurrentRent));
-  const upliftedEligibleCurrentRent = roundCurrency(
-    (eligibleCurrentRent + eligibleProjectedLeaseUpRentBase) *
-      (1 + Math.max(0, assumptions.operating.rentUpliftPct) / 100)
-  );
-  const eligibleGrossRentalIncomeBase = upliftedEligibleCurrentRent;
-  const protectedGrossRentalIncomeBase = roundCurrency(
-    protectedCurrentRent + protectedProjectedLeaseUpRentBase
-  );
-  const grossRentalIncomeBase = roundCurrency(
-    eligibleGrossRentalIncomeBase + protectedGrossRentalIncomeBase
-  );
-  const expenseLineItems = projectExpenseLines({
-    assumptions,
-    currentExpensesTotal: normalizedExpenseInputs.currentExpensesTotalExManagement,
-    expenseRows: normalizedExpenseInputs.expenseRowsExManagement,
-  });
-  const projectedNonManagementExpenses = Array.from(
-    { length: assumptions.holdPeriodYears },
-    (_, yearIndex) =>
-      roundCurrency(
-        expenseLineItems.reduce(
-          (sum, row) => sum + (row.yearlyAmounts[yearIndex] ?? 0),
-          0
-        )
+  const eligibleGrossRentalIncomeBase = detailedUnitModelActive
+    ? roundCurrency(
+        normalizedUnitRows.reduce((sum, row) => {
+          if (row.includeInUnderwriting === false || row.isProtected === true) return sum;
+          return sum + grossAnnualRentForUnit(row);
+        }, 0)
       )
+    : (() => {
+        const eligibleCurrentRent = roundCurrency(currentRent * eligibleRevenueShare);
+        const totalProjectedLeaseUpRentBase = roundCurrency(
+          Math.max(0, safeNumber(conservativeProjectedLeaseUpRent))
+        );
+        const protectedProjectedLeaseUpRentBase = roundCurrency(
+          Math.min(totalProjectedLeaseUpRentBase, Math.max(0, safeNumber(protectedProjectedLeaseUpRent)))
+        );
+        const eligibleProjectedLeaseUpRentBase = roundCurrency(
+          Math.max(0, totalProjectedLeaseUpRentBase - protectedProjectedLeaseUpRentBase)
+        );
+        return roundCurrency(
+          (eligibleCurrentRent + eligibleProjectedLeaseUpRentBase) *
+            (1 + Math.max(0, assumptions.operating.rentUpliftPct) / 100)
+        );
+      })();
+  const protectedGrossRentalIncomeBase = detailedUnitModelActive
+    ? roundCurrency(
+        normalizedUnitRows.reduce((sum, row) => {
+          if (row.includeInUnderwriting === false || row.isProtected !== true) return sum;
+          return sum + grossAnnualRentForUnit(row);
+        }, 0)
+      )
+    : (() => {
+        const eligibleCurrentRent = roundCurrency(currentRent * eligibleRevenueShare);
+        const totalProjectedLeaseUpRentBase = roundCurrency(
+          Math.max(0, safeNumber(conservativeProjectedLeaseUpRent))
+        );
+        const protectedProjectedLeaseUpRentBase = roundCurrency(
+          Math.min(totalProjectedLeaseUpRentBase, Math.max(0, safeNumber(protectedProjectedLeaseUpRent)))
+        );
+        const protectedCurrentRent = roundCurrency(Math.max(0, currentRent - eligibleCurrentRent));
+        return roundCurrency(protectedCurrentRent + protectedProjectedLeaseUpRentBase);
+      })();
+  const eligibleOccupiedRentalIncomeBase = detailedUnitModelActive
+    ? roundCurrency(
+        normalizedUnitRows.reduce((sum, row) => {
+          if (row.includeInUnderwriting === false || row.isProtected === true) return sum;
+          return sum + effectiveAnnualRentForUnit(row, assumptions.operating.vacancyPct);
+        }, 0)
+      )
+    : roundCurrency(
+        eligibleGrossRentalIncomeBase * (1 - Math.max(0, assumptions.operating.vacancyPct) / 100)
+      );
+  const protectedOccupiedRentalIncomeBase = detailedUnitModelActive
+    ? roundCurrency(
+        normalizedUnitRows.reduce((sum, row) => {
+          if (row.includeInUnderwriting === false || row.isProtected !== true) return sum;
+          return sum + effectiveAnnualRentForUnit(row, assumptions.operating.vacancyPct);
+        }, 0)
+      )
+    : protectedGrossRentalIncomeBase;
+  const occupiedRentalIncomeBase = roundCurrency(
+    eligibleOccupiedRentalIncomeBase + protectedOccupiedRentalIncomeBase
   );
 
   const mortgage =
@@ -703,6 +898,78 @@ export function computeUnderwritingProjection(
             (yearlyProtectedGrossRentalIncome[year] ?? 0)
         )
   );
+  const yearlyEligibleOccupiedRentalIncome = years.map((year) =>
+    year === 0
+      ? 0
+      : roundCurrency(
+          compoundAnnual(
+            eligibleOccupiedRentalIncomeBase,
+            assumptions.operating.annualRentGrowthPct,
+            year - 1
+          )
+        )
+  );
+  const yearlyProtectedOccupiedRentalIncome = years.map((year) =>
+    year === 0 ? 0 : roundCurrency(protectedOccupiedRentalIncomeBase)
+  );
+  const yearlyOccupiedRentalIncome = years.map((year) =>
+    year === 0
+      ? 0
+      : roundCurrency(
+          (yearlyEligibleOccupiedRentalIncome[year] ?? 0) +
+            (yearlyProtectedOccupiedRentalIncome[year] ?? 0)
+        )
+  );
+  const expenseLineItems: UnderwritingProjectionExpenseLine[] = [
+    ...projectExpenseLines({
+      assumptions,
+      currentExpensesTotal: normalizedExpenseInputs.currentExpensesTotalExManagement,
+      expenseRows: normalizedExpenseInputs.expenseRowsExManagement,
+    }),
+  ];
+  if (effectiveHospitalityExpenseAnnualBase > 0) {
+    expenseLineItems.push({
+      lineItem: "Monthly hospitality / unit opex",
+      annualGrowthPct: assumptions.operating.annualExpenseGrowthPct,
+      baseAmount: roundCurrency(effectiveHospitalityExpenseAnnualBase),
+      yearlyAmounts: Array.from({ length: assumptions.holdPeriodYears }, (_, index) =>
+        roundCurrency(
+          compoundAnnual(
+            effectiveHospitalityExpenseAnnualBase,
+            assumptions.operating.annualExpenseGrowthPct,
+            index
+          )
+        )
+      ),
+    });
+  }
+  if (assumptions.operating.occupancyTaxPct > 0) {
+    const occupancyTaxBase = roundCurrency(
+      occupiedRentalIncomeBase * (assumptions.operating.occupancyTaxPct / 100)
+    );
+    expenseLineItems.push({
+      lineItem: `Occupancy tax (${assumptions.operating.occupancyTaxPct.toFixed(1)}%)`,
+      annualGrowthPct: assumptions.operating.annualRentGrowthPct,
+      baseAmount: occupancyTaxBase,
+      yearlyAmounts: Array.from({ length: assumptions.holdPeriodYears }, (_, index) => {
+        const year = index + 1;
+        return roundCurrency(
+          Math.max(0, yearlyOccupiedRentalIncome[year] ?? 0) *
+            (assumptions.operating.occupancyTaxPct / 100)
+        );
+      }),
+    });
+  }
+  const projectedNonManagementExpenses = Array.from(
+    { length: assumptions.holdPeriodYears },
+    (_, yearIndex) =>
+      roundCurrency(
+        expenseLineItems.reduce(
+          (sum, row) => sum + (row.yearlyAmounts[yearIndex] ?? 0),
+          0
+        )
+      )
+  );
   const yearlyOtherIncome = years.map((year) =>
     year === 0
       ? 0
@@ -718,7 +985,7 @@ export function computeUnderwritingProjection(
     year === 0
       ? 0
       : roundCurrency(
-          (yearlyEligibleGrossRentalIncome[year] ?? 0) * (assumptions.operating.vacancyPct / 100)
+          Math.max(0, (yearlyGrossRentalIncome[year] ?? 0) - (yearlyOccupiedRentalIncome[year] ?? 0))
         )
   );
   const yearlyLeadTimeLoss = years.map((year) =>
@@ -733,9 +1000,8 @@ export function computeUnderwritingProjection(
     year === 0
       ? 0
       : roundCurrency(
-          (yearlyGrossRentalIncome[year] ?? 0) +
+          (yearlyOccupiedRentalIncome[year] ?? 0) +
             (yearlyOtherIncome[year] ?? 0) -
-            (yearlyVacancyLoss[year] ?? 0) -
             (yearlyLeadTimeLoss[year] ?? 0)
         )
   );
@@ -743,7 +1009,7 @@ export function computeUnderwritingProjection(
     year === 0
       ? 0
       : roundCurrency(
-          (yearlyGrossRentalIncome[year] ?? 0) *
+          (yearlyOccupiedRentalIncome[year] ?? 0) *
             (Math.max(0, assumptions.operating.managementFeePct) / 100)
         )
   );
@@ -907,7 +1173,7 @@ export function computeUnderwritingProjection(
     operating: {
       currentExpenses: roundCurrency(normalizedExpenseInputs.currentExpensesTotalExManagement),
       currentOtherIncome: roundCurrency(otherIncome),
-      adjustedGrossRent: roundCurrency(yearlyGrossRentalIncome[stabilizedIndex] ?? grossRentalIncomeBase),
+      adjustedGrossRent: roundCurrency(yearlyOccupiedRentalIncome[stabilizedIndex] ?? occupiedRentalIncomeBase),
       adjustedOperatingExpenses: roundCurrency(
         projectedNonManagementExpenses[stabilizedIndex - 1] ?? projectedNonManagementExpenses[0] ?? 0
       ),
@@ -989,6 +1255,7 @@ export function computeRecommendedOffer(input: UnderwritingProjectionInput): Rec
     currentOtherIncome,
     currentExpensesTotal,
     expenseRows,
+    unitRows,
     conservativeProjectedLeaseUpRent,
     protectedProjectedLeaseUpRent,
   } = input;
@@ -1015,6 +1282,7 @@ export function computeRecommendedOffer(input: UnderwritingProjectionInput): Rec
     currentOtherIncome,
     currentExpensesTotal,
     expenseRows,
+    unitRows,
     conservativeProjectedLeaseUpRent,
     protectedProjectedLeaseUpRent,
   });
@@ -1047,6 +1315,7 @@ export function computeRecommendedOffer(input: UnderwritingProjectionInput): Rec
     currentOtherIncome,
     currentExpensesTotal,
     expenseRows,
+    unitRows,
     conservativeProjectedLeaseUpRent,
     protectedProjectedLeaseUpRent,
   });
@@ -1079,6 +1348,7 @@ export function computeRecommendedOffer(input: UnderwritingProjectionInput): Rec
       currentOtherIncome,
       currentExpensesTotal,
       expenseRows,
+      unitRows,
       conservativeProjectedLeaseUpRent,
       protectedProjectedLeaseUpRent,
     });

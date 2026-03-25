@@ -22,6 +22,8 @@ export interface GrossRentRow {
 export interface ExpenseRow {
   lineItem: string;
   amount: number;
+  annualGrowthPct?: number | null;
+  treatment?: "operating" | "replace_management" | "exclude" | null;
 }
 
 /** Per-year amortization row for financing table. */
@@ -173,6 +175,9 @@ export interface UnderwritingContext {
       purchaseClosingCostPct: number | null;
       renovationCosts: number | null;
       furnishingSetupCosts: number | null;
+      onboardingCosts?: number | null;
+      investmentProfile?: string | null;
+      targetAcquisitionDate?: string | null;
     };
     financing: {
       ltvPct: number | null;
@@ -185,6 +190,7 @@ export interface UnderwritingContext {
       blendedRentUpliftPct?: number | null;
       expenseIncreasePct: number | null;
       managementFeePct: number | null;
+      occupancyTaxPct?: number | null;
       vacancyPct?: number | null;
       leadTimeMonths?: number | null;
       annualRentGrowthPct?: number | null;

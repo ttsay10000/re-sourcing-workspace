@@ -1,5 +1,9 @@
 "use client";
 
+import type {
+  PropertyDealDossierExpenseModelRow,
+  PropertyDealDossierUnitModelRow,
+} from "@re-sourcing/contracts";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -14,8 +18,10 @@ import {
   OM_CALC_NUMERIC_FIELDS,
   OmCalculationPanel,
   type OmCalculationDraft,
+  type OmCalculationExpenseModelRow,
   type OmCalculationNumericField,
   type OmCalculationSnapshot,
+  type OmCalculationUnitModelRow,
 } from "../property-data/OmCalculationPanel";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
@@ -50,6 +56,8 @@ interface DossierAssumptionsResponse {
     purchaseClosingCostPct?: number | null;
     renovationCosts?: number | null;
     furnishingSetupCosts?: number | null;
+    investmentProfile?: string | null;
+    targetAcquisitionDate?: string | null;
     ltvPct?: number | null;
     interestRatePct?: number | null;
     amortizationYears?: number | null;
@@ -57,6 +65,7 @@ interface DossierAssumptionsResponse {
     rentUpliftPct?: number | null;
     expenseIncreasePct?: number | null;
     managementFeePct?: number | null;
+    occupancyTaxPct?: number | null;
     vacancyPct?: number | null;
     leadTimeMonths?: number | null;
     annualRentGrowthPct?: number | null;
@@ -68,6 +77,8 @@ interface DossierAssumptionsResponse {
     exitCapPct?: number | null;
     exitClosingCostPct?: number | null;
     targetIrrPct?: number | null;
+    unitModelRows?: PropertyDealDossierUnitModelRow[] | null;
+    expenseModelRows?: PropertyDealDossierExpenseModelRow[] | null;
     brokerEmailNotes?: string | null;
     updatedAt?: string | null;
   } | null;
@@ -85,10 +96,11 @@ interface DossierAssumptionsResponse {
 interface ManualAddResponse {
   ok: boolean;
   propertyId: string;
-  listingId: string;
+  listingId: string | null;
   canonicalAddress: string;
   createdProperty: boolean;
   createdListing: boolean;
+  matchStrategy?: "exact_canonical" | "address_line" | "new";
   omImport?: {
     requested?: boolean;
     imported?: boolean;
@@ -97,12 +109,203 @@ interface ManualAddResponse {
   } | null;
 }
 
+const COMMERCIAL_ROW_PATTERN =
+  /\b(commercial|retail|office|storefront|store front|restaurant|cafe|gallery|medical|community facility)\b/i;
+const RENT_STABILIZED_ROW_PATTERN = /(rent[\s-]*(?:stabilized|stabilised|controlled?)|\bRS\b)/i;
+const VACANT_LIKE_ROW_PATTERN = /\b(vacant|available|delivered vacant|owner[\s-]*occupied|owner occupied)\b/i;
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function toFiniteNumber(value: unknown): number | null {
+  return isFiniteNumber(value) ? value : null;
+}
+
+function trimmedOrNull(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+function roundCurrencyAmount(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+function isManagementLineItem(lineItem: string): boolean {
+  return /\b(management|mgmt)\b/i.test(lineItem);
+}
+
+function normalizeUnitModelRows(
+  rows: Array<PropertyDealDossierUnitModelRow | OmCalculationUnitModelRow> | null | undefined
+): OmCalculationUnitModelRow[] | undefined {
+  if (!Array.isArray(rows)) return undefined;
+
+  const normalized = rows.flatMap((row, index) => {
+    const rowId = trimmedOrNull(row.rowId);
+    if (!rowId) return [];
+
+    const unitLabel = trimmedOrNull(row.unitLabel) ?? `Unit ${index + 1}`;
+    const building = trimmedOrNull(row.building);
+    const unitCategory = trimmedOrNull(row.unitCategory);
+    const tenantName = trimmedOrNull(row.tenantName);
+    const tenantStatus = trimmedOrNull(row.tenantStatus);
+    const notes = trimmedOrNull(row.notes);
+    const descriptor = [unitLabel, unitCategory, tenantStatus, notes].filter(Boolean).join(" ");
+    const isCommercial =
+      "isCommercial" in row && typeof row.isCommercial === "boolean"
+        ? row.isCommercial
+        : COMMERCIAL_ROW_PATTERN.test(descriptor);
+    const isRentStabilized =
+      "isRentStabilized" in row && typeof row.isRentStabilized === "boolean"
+        ? row.isRentStabilized
+        : RENT_STABILIZED_ROW_PATTERN.test(descriptor);
+    const isVacantLike =
+      "isVacantLike" in row && typeof row.isVacantLike === "boolean"
+        ? row.isVacantLike
+        : VACANT_LIKE_ROW_PATTERN.test(descriptor);
+    const isProtected = row.isProtected ?? (isCommercial || isRentStabilized);
+    const currentAnnualRent = toFiniteNumber(row.currentAnnualRent);
+    const underwrittenAnnualRent =
+      toFiniteNumber(row.underwrittenAnnualRent) ?? currentAnnualRent;
+    const rentUpliftPct = toFiniteNumber(row.rentUpliftPct) ?? (isProtected ? 0 : null);
+    const occupancyPct = toFiniteNumber(row.occupancyPct);
+    const furnishingCost = toFiniteNumber(row.furnishingCost);
+    const onboardingFee = toFiniteNumber(row.onboardingFee);
+    const monthlyHospitalityExpense = toFiniteNumber(row.monthlyHospitalityExpense);
+    const includeInUnderwriting = row.includeInUnderwriting ?? true;
+    const defaultProjectedAnnualRent =
+      "defaultProjectedAnnualRent" in row && isFiniteNumber(row.defaultProjectedAnnualRent)
+        ? row.defaultProjectedAnnualRent
+        : underwrittenAnnualRent ?? currentAnnualRent;
+    const modeledAnnualRent =
+      includeInUnderwriting && underwrittenAnnualRent != null
+        ? roundCurrencyAmount(
+            underwrittenAnnualRent *
+              (1 + Math.max(0, rentUpliftPct ?? 0) / 100) *
+              (Math.max(0, occupancyPct ?? 100) / 100)
+          )
+        : null;
+
+    return [
+      {
+        rowId,
+        unitLabel,
+        building,
+        unitCategory,
+        tenantName,
+        currentAnnualRent,
+        underwrittenAnnualRent,
+        rentUpliftPct,
+        occupancyPct,
+        furnishingCost,
+        onboardingFee,
+        monthlyHospitalityExpense,
+        includeInUnderwriting,
+        isProtected,
+        beds: toFiniteNumber(row.beds),
+        baths: toFiniteNumber(row.baths),
+        sqft: toFiniteNumber(row.sqft),
+        tenantStatus,
+        notes,
+        isCommercial,
+        isRentStabilized,
+        isVacantLike,
+        modeledAnnualRent,
+        defaultProjectedAnnualRent,
+      },
+    ];
+  });
+
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizeExpenseModelRows(
+  rows: Array<PropertyDealDossierExpenseModelRow | OmCalculationExpenseModelRow> | null | undefined
+): OmCalculationExpenseModelRow[] | undefined {
+  if (!Array.isArray(rows)) return undefined;
+
+  const normalized = rows.flatMap((row) => {
+    const rowId = trimmedOrNull(row.rowId);
+    if (!rowId) return [];
+
+    const lineItem = trimmedOrNull(row.lineItem) ?? "";
+    const amount = toFiniteNumber(row.amount);
+    const annualGrowthPct = toFiniteNumber(row.annualGrowthPct);
+    if (!lineItem && amount == null && annualGrowthPct == null) return [];
+
+    const isManagementLine =
+      "isManagementLine" in row && typeof row.isManagementLine === "boolean"
+        ? row.isManagementLine
+        : isManagementLineItem(lineItem);
+    const treatment =
+      row.treatment === "operating" ||
+      row.treatment === "replace_management" ||
+      row.treatment === "exclude"
+        ? row.treatment
+        : isManagementLine
+          ? "replace_management"
+          : "operating";
+
+    return [
+      {
+        rowId,
+        lineItem,
+        amount,
+        annualGrowthPct,
+        treatment,
+        isManagementLine,
+      },
+    ];
+  });
+
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function serializeUnitModelRows(rows: OmCalculationUnitModelRow[] | undefined): string {
+  return JSON.stringify(
+    (rows ?? []).map((row) => ({
+      rowId: row.rowId,
+      unitLabel: row.unitLabel,
+      building: row.building ?? null,
+      unitCategory: row.unitCategory ?? null,
+      tenantName: row.tenantName ?? null,
+      currentAnnualRent: row.currentAnnualRent ?? null,
+      underwrittenAnnualRent: row.underwrittenAnnualRent ?? null,
+      rentUpliftPct: row.rentUpliftPct ?? null,
+      occupancyPct: row.occupancyPct ?? null,
+      furnishingCost: row.furnishingCost ?? null,
+      onboardingFee: row.onboardingFee ?? null,
+      monthlyHospitalityExpense: row.monthlyHospitalityExpense ?? null,
+      includeInUnderwriting: row.includeInUnderwriting,
+      isProtected: row.isProtected,
+      beds: row.beds ?? null,
+      baths: row.baths ?? null,
+      sqft: row.sqft ?? null,
+      tenantStatus: row.tenantStatus ?? null,
+      notes: row.notes ?? null,
+    }))
+  );
+}
+
+function serializeExpenseModelRows(rows: OmCalculationExpenseModelRow[] | undefined): string {
+  return JSON.stringify(
+    (rows ?? []).map((row) => ({
+      rowId: row.rowId,
+      lineItem: row.lineItem,
+      amount: row.amount ?? null,
+      annualGrowthPct: row.annualGrowthPct ?? null,
+      treatment: row.treatment,
+    }))
+  );
+}
+
 function emptyOmCalculationDraft(): OmCalculationDraft {
   return {
     purchasePrice: null,
     purchaseClosingCostPct: null,
     renovationCosts: 0,
     furnishingSetupCosts: null,
+    investmentProfile: "",
+    targetAcquisitionDate: "",
     ltvPct: null,
     interestRatePct: null,
     amortizationYears: null,
@@ -110,6 +313,7 @@ function emptyOmCalculationDraft(): OmCalculationDraft {
     rentUpliftPct: null,
     expenseIncreasePct: null,
     managementFeePct: null,
+    occupancyTaxPct: null,
     vacancyPct: null,
     leadTimeMonths: null,
     annualRentGrowthPct: null,
@@ -153,6 +357,15 @@ function documentLooksLikeOm(doc: { fileName?: string | null; source?: string | 
   return /(offering\s*memo|offering memorandum|\bom\b|brochure|rent\s*roll|t-?12|financial)/i.test(haystack);
 }
 
+function categoryTriggersOmBuild(category: string): boolean {
+  return category === "OM" || category === "Brochure" || category === "Rent Roll";
+}
+
+function fileLooksLikePdf(filename: string | null | undefined, mimeType?: string | null): boolean {
+  if (typeof mimeType === "string" && mimeType.toLowerCase().includes("pdf")) return true;
+  return typeof filename === "string" && /\.pdf$/i.test(filename.trim());
+}
+
 function DealAnalysisContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -192,6 +405,12 @@ function DealAnalysisContent() {
   const [manualAddSubmitting, setManualAddSubmitting] = useState(false);
   const [manualAddError, setManualAddError] = useState<string | null>(null);
   const [manualAddNotice, setManualAddNotice] = useState<string | null>(null);
+  const [documentUploadCategory, setDocumentUploadCategory] = useState("OM");
+  const [documentUploadSource, setDocumentUploadSource] = useState("");
+  const [documentUploadError, setDocumentUploadError] = useState<string | null>(null);
+  const [documentUploadNotice, setDocumentUploadNotice] = useState<string | null>(null);
+  const [documentUploading, setDocumentUploading] = useState(false);
+  const documentFileInputRef = useRef<HTMLInputElement | null>(null);
   const activePropertyIdRef = useRef(propertyId);
 
   const setPropertyParam = useCallback((nextPropertyId: string | null) => {
@@ -208,6 +427,8 @@ function DealAnalysisContent() {
       purchaseClosingCostPct: data.defaults?.purchaseClosingCostPct ?? null,
       renovationCosts: data.defaults?.renovationCosts ?? 0,
       furnishingSetupCosts: data.defaults?.furnishingSetupCosts ?? null,
+      investmentProfile: data.defaults?.investmentProfile ?? "",
+      targetAcquisitionDate: data.defaults?.targetAcquisitionDate ?? "",
       ltvPct: data.defaults?.ltvPct ?? null,
       interestRatePct: data.defaults?.interestRatePct ?? null,
       amortizationYears: data.defaults?.amortizationYears ?? null,
@@ -215,6 +436,7 @@ function DealAnalysisContent() {
       rentUpliftPct: data.defaults?.rentUpliftPct ?? null,
       expenseIncreasePct: data.defaults?.expenseIncreasePct ?? null,
       managementFeePct: data.defaults?.managementFeePct ?? null,
+      occupancyTaxPct: data.defaults?.occupancyTaxPct ?? null,
       vacancyPct: data.defaults?.vacancyPct ?? null,
       leadTimeMonths: data.defaults?.leadTimeMonths ?? null,
       annualRentGrowthPct: data.defaults?.annualRentGrowthPct ?? null,
@@ -226,6 +448,8 @@ function DealAnalysisContent() {
       exitCapPct: data.defaults?.exitCapPct ?? null,
       exitClosingCostPct: data.defaults?.exitClosingCostPct ?? null,
       targetIrrPct: data.defaults?.targetIrrPct ?? null,
+      unitModelRows: normalizeUnitModelRows(data.defaults?.unitModelRows),
+      expenseModelRows: normalizeExpenseModelRows(data.defaults?.expenseModelRows),
       brokerEmailNotes: data.defaults?.brokerEmailNotes ?? "",
     };
 
@@ -328,16 +552,20 @@ function DealAnalysisContent() {
     setOmCalculationError(null);
 
     try {
-      const assumptions = OM_CALC_NUMERIC_FIELDS.reduce<Record<string, number | null>>((acc, field) => {
+      const assumptions = OM_CALC_NUMERIC_FIELDS.reduce<Record<string, number | string | null>>((acc, field) => {
         acc[field] = nextDraft[field] ?? null;
         return acc;
       }, {});
+      assumptions.investmentProfile = nextDraft.investmentProfile.trim() || null;
+      assumptions.targetAcquisitionDate = nextDraft.targetAcquisitionDate.trim() || null;
       const res = await fetch(`${API_BASE}/api/properties/${encodeURIComponent(targetPropertyId)}/om-calculation`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           assumptions,
           brokerEmailNotes: nextDraft.brokerEmailNotes.trim(),
+          unitModelRows: nextDraft.unitModelRows,
+          expenseModelRows: nextDraft.expenseModelRows,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -416,7 +644,19 @@ function DealAnalysisContent() {
         const nextDraft = hydrateDossierAssumptions(assumptionsData as DossierAssumptionsResponse, listing?.price ?? canonical.primaryListing?.price ?? null);
         const authoritativeOm = ((canonical.details as Record<string, unknown> | null | undefined)?.omData as { authoritative?: unknown } | null | undefined)?.authoritative;
         if (authoritativeOm != null || nextDraft.brokerEmailNotes.trim().length > 0) {
-          await runOmCalculation(nextDraft, { initialLoad: true, propertyIdOverride: propertyId });
+          const calculation = await runOmCalculation(nextDraft, {
+            initialLoad: true,
+            propertyIdOverride: propertyId,
+          });
+          if (!cancelled && calculation) {
+            const syncedDraft: OmCalculationDraft = {
+              ...nextDraft,
+              unitModelRows: calculation.unitModelRows,
+              expenseModelRows: calculation.expenseModelRows,
+            };
+            setDraft(syncedDraft);
+            setSavedDraft(syncedDraft);
+          }
         } else {
           setOmCalculation(null);
           setOmCalculationLoading(false);
@@ -459,6 +699,12 @@ function DealAnalysisContent() {
     return () => window.clearTimeout(timeoutId);
   }, [manualAddNotice]);
 
+  useEffect(() => {
+    if (!documentUploadNotice) return;
+    const timeoutId = window.setTimeout(() => setDocumentUploadNotice(null), 7000);
+    return () => window.clearTimeout(timeoutId);
+  }, [documentUploadNotice]);
+
   const filteredProperties = useMemo(() => {
     const normalized = propertySearch.trim().toLowerCase();
     const sorted = [...properties].sort((a, b) => a.canonicalAddress.localeCompare(b.canonicalAddress));
@@ -481,12 +727,24 @@ function DealAnalysisContent() {
     authoritative?: unknown;
   } | null | undefined)?.authoritative ?? null) as Record<string, unknown> | null;
   const hasAuthoritativeOm = authoritativeOm != null;
-  const hasOmDocument = documents.some((document) => document.source === "OM" || document.source === "Brochure" || documentLooksLikeOm(document));
+  const omDocuments = documents.filter((document) => document.source === "OM" || document.source === "Brochure" || documentLooksLikeOm(document));
+  const hasOmDocument = omDocuments.length > 0;
   const persistedDossierGeneration = getPropertyDossierGeneration(selectedProperty?.details);
   const persistedDossierAssumptions = getPropertyDossierAssumptions(selectedProperty?.details);
 
   const numericFieldsDirty = OM_CALC_NUMERIC_FIELDS.some((field) => (draft[field] ?? null) !== (savedDraft[field] ?? null));
-  const isDirty = numericFieldsDirty || draft.brokerEmailNotes.trim() !== savedDraft.brokerEmailNotes.trim();
+  const unitModelRowsDirty = serializeUnitModelRows(draft.unitModelRows) !== serializeUnitModelRows(savedDraft.unitModelRows);
+  const expenseModelRowsDirty =
+    serializeExpenseModelRows(draft.expenseModelRows) !== serializeExpenseModelRows(savedDraft.expenseModelRows);
+  const metadataDirty =
+    draft.investmentProfile.trim() !== savedDraft.investmentProfile.trim() ||
+    draft.targetAcquisitionDate !== savedDraft.targetAcquisitionDate;
+  const isDirty =
+    numericFieldsDirty ||
+    metadataDirty ||
+    unitModelRowsDirty ||
+    expenseModelRowsDirty ||
+    draft.brokerEmailNotes.trim() !== savedDraft.brokerEmailNotes.trim();
   const hasSavedBrokerEmailNotes = savedDraft.brokerEmailNotes.trim().length > 0;
   const hasBrokerEmailNotes = draft.brokerEmailNotes.trim().length > 0 || hasSavedBrokerEmailNotes;
   const canGenerateDossier = hasAuthoritativeOm || hasBrokerEmailNotes;
@@ -537,6 +795,8 @@ function DealAnalysisContent() {
     if (!propertyId) throw new Error("Select a property first.");
     const payload: OmCalculationDraft = {
       ...nextDraft,
+      unitModelRows: nextDraft.unitModelRows ?? savedDraft.unitModelRows,
+      expenseModelRows: nextDraft.expenseModelRows ?? savedDraft.expenseModelRows,
       brokerEmailNotes: nextDraft.brokerEmailNotes.trim(),
     };
 
@@ -565,18 +825,29 @@ function DealAnalysisContent() {
     } finally {
       setDossierSettingsSaving(false);
     }
-  }, [draft, propertyId, updateLocalAssumptionsState]);
+  }, [draft, propertyId, savedDraft.expenseModelRows, savedDraft.unitModelRows, updateLocalAssumptionsState]);
 
   const handleDraftNumberChange = useCallback((field: OmCalculationNumericField, value: number | null) => {
     setDraft((prev) => ({ ...prev, [field]: value }));
   }, []);
 
-  const handleRefreshAuthoritativeOm = useCallback(async () => {
-    if (!propertyId || !hasOmDocument || authoritativeOmRefreshing) return;
+  const handleDraftTextChange = useCallback((field: "investmentProfile" | "targetAcquisitionDate", value: string) => {
+    setDraft((prev) => ({ ...prev, [field]: value }));
+  }, []);
+
+  const refreshAuthoritativeOmWorkspace = useCallback(async (
+    targetPropertyId: string,
+    nextDraft: OmCalculationDraft,
+    options?: { skipDocumentCheck?: boolean }
+  ) => {
+    if (!targetPropertyId || authoritativeOmRefreshing) return;
+    if (!options?.skipDocumentCheck && !hasOmDocument) return;
+
+    setAuthoritativeOmRefreshing(true);
+    setDossierError(null);
+    setOmCalculationError(null);
     try {
-      setAuthoritativeOmRefreshing(true);
-      setDossierError(null);
-      const res = await fetch(`${API_BASE}/api/properties/${encodeURIComponent(propertyId)}/refresh-om-financials`, {
+      const res = await fetch(`${API_BASE}/api/properties/${encodeURIComponent(targetPropertyId)}/refresh-om-financials`, {
         method: "POST",
       });
       const data = await res.json().catch(() => ({}));
@@ -589,21 +860,95 @@ function DealAnalysisContent() {
               : "Failed to build authoritative OM"
         );
       }
-      const refreshed = await fetchPropertyCore(propertyId);
-      applyPropertyCore(propertyId, refreshed);
+      const refreshed = await fetchPropertyCore(targetPropertyId);
+      applyPropertyCore(targetPropertyId, refreshed);
       const nextHasAuthoritativeOm =
         ((((refreshed.canonical.details as Record<string, unknown> | null | undefined)?.omData as {
           authoritative?: unknown;
         } | null | undefined)?.authoritative ?? null) != null);
-      if (hasBrokerEmailNotes || nextHasAuthoritativeOm) {
-        await runOmCalculation(draft, { initialLoad: true, propertyIdOverride: propertyId });
+      if (nextDraft.brokerEmailNotes.trim().length > 0 || nextHasAuthoritativeOm) {
+        await runOmCalculation(nextDraft, { initialLoad: true, propertyIdOverride: targetPropertyId });
       }
-    } catch (err) {
-      setDossierError(err instanceof Error ? err.message : "Failed to build authoritative OM");
     } finally {
       setAuthoritativeOmRefreshing(false);
     }
-  }, [applyPropertyCore, authoritativeOmRefreshing, draft, fetchPropertyCore, hasBrokerEmailNotes, hasOmDocument, propertyId, runOmCalculation]);
+  }, [applyPropertyCore, authoritativeOmRefreshing, fetchPropertyCore, hasOmDocument, runOmCalculation]);
+
+  const handleRefreshAuthoritativeOm = useCallback(async () => {
+    if (!propertyId || !hasOmDocument || authoritativeOmRefreshing) return;
+    try {
+      await refreshAuthoritativeOmWorkspace(propertyId, draft);
+    } catch (err) {
+      setDossierError(err instanceof Error ? err.message : "Failed to build authoritative OM");
+    }
+  }, [authoritativeOmRefreshing, draft, hasOmDocument, propertyId, refreshAuthoritativeOmWorkspace]);
+
+  const handleUploadDocument = useCallback(async () => {
+    if (!propertyId) {
+      setDocumentUploadError("Select a property first.");
+      return;
+    }
+
+    const file = documentFileInputRef.current?.files?.[0];
+    if (!file) {
+      setDocumentUploadError("Select a file to upload.");
+      return;
+    }
+
+    setDocumentUploading(true);
+    setDocumentUploadError(null);
+    setDocumentUploadNotice(null);
+    setDossierError(null);
+
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("category", documentUploadCategory);
+      if (documentUploadSource.trim()) formData.append("source", documentUploadSource.trim());
+
+      const res = await fetch(`${API_BASE}/api/properties/${encodeURIComponent(propertyId)}/documents/upload`, {
+        method: "POST",
+        body: formData,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          typeof data?.details === "string"
+            ? data.details
+            : typeof data?.error === "string"
+              ? data.error
+              : "Failed to upload document"
+        );
+      }
+
+      const uploadedFileName =
+        typeof data?.document?.filename === "string" && data.document.filename.trim().length > 0
+          ? data.document.filename.trim()
+          : file.name;
+      const refreshed = await fetchPropertyCore(propertyId);
+      applyPropertyCore(propertyId, refreshed);
+
+      if (categoryTriggersOmBuild(documentUploadCategory) && fileLooksLikePdf(uploadedFileName, file.type)) {
+        setDocumentUploadNotice(`Uploaded ${uploadedFileName}. Building authoritative OM...`);
+        await refreshAuthoritativeOmWorkspace(propertyId, draft, { skipDocumentCheck: true });
+        setDocumentUploadNotice(`Uploaded ${uploadedFileName} and refreshed the OM analysis workspace.`);
+      } else {
+        setDocumentUploadNotice(
+          categoryTriggersOmBuild(documentUploadCategory)
+            ? `Uploaded ${uploadedFileName}. Use a PDF OM when you want to build the authoritative analysis automatically.`
+            : `Uploaded ${uploadedFileName}.`
+        );
+      }
+
+      if (documentFileInputRef.current) documentFileInputRef.current.value = "";
+      setDocumentUploadCategory("OM");
+      setDocumentUploadSource("");
+    } catch (err) {
+      setDocumentUploadError(err instanceof Error ? err.message : "Failed to upload document");
+    } finally {
+      setDocumentUploading(false);
+    }
+  }, [applyPropertyCore, documentUploadCategory, documentUploadSource, draft, fetchPropertyCore, propertyId, refreshAuthoritativeOmWorkspace]);
 
   const handleGenerateDossier = useCallback(async () => {
     if (!propertyId) {
@@ -670,7 +1015,11 @@ function DealAnalysisContent() {
   const handleClearSavedOverrides = useCallback(async () => {
     if (!propertyId) return;
     try {
-      await persistDossierSettings(emptyOmCalculationDraft());
+      await persistDossierSettings({
+        ...emptyOmCalculationDraft(),
+        unitModelRows: [],
+        expenseModelRows: [],
+      });
       const res = await fetch(`${API_BASE}/api/dossier-assumptions?property_id=${encodeURIComponent(propertyId)}`);
       const data = await res.json().catch(() => ({}));
       if (!res.ok || data?.error) {
@@ -694,22 +1043,32 @@ function DealAnalysisContent() {
     }
   }, [hasAuthoritativeOm, hydrateDossierAssumptions, persistDossierSettings, propertyId, runOmCalculation, selectedListing?.price, selectedProperty?.primaryListing?.price]);
 
-  const handleManualAddProperty = useCallback(async () => {
+  const runWorkspaceSetup = useCallback(async (mode: "streeteasy" | "om") => {
     const streetEasyUrl = manualAddDraft.streetEasyUrl.trim();
     const omUrl = manualAddDraft.omUrl.trim();
-    if (!streetEasyUrl) {
+    if (mode === "streeteasy" && !streetEasyUrl) {
       setManualAddError("StreetEasy URL is required.");
+      return;
+    }
+    if (mode === "om" && !omUrl) {
+      setManualAddError("OM URL is required.");
       return;
     }
 
     setManualAddSubmitting(true);
     setManualAddError(null);
     try {
-      const res = await fetch(`${API_BASE}/api/properties/manual-add`, {
+      const res = await fetch(
+        `${API_BASE}/api/properties/${mode === "streeteasy" ? "manual-add" : "manual-add-from-om"}`,
+        {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ streetEasyUrl, omUrl: omUrl || null }),
-      });
+          body:
+            mode === "streeteasy"
+              ? JSON.stringify({ streetEasyUrl, omUrl: omUrl || null })
+              : JSON.stringify({ omUrl }),
+        }
+      );
       const data = await res.json().catch(() => ({}));
       if (!res.ok || data?.error) {
         throw new Error(
@@ -723,6 +1082,11 @@ function DealAnalysisContent() {
 
       const payload = data as ManualAddResponse;
       const warning = payload.omImport?.warning?.trim() || "";
+      const recordMessage = payload.createdProperty
+        ? `Created a new OM workspace for ${payload.canonicalAddress}.`
+        : payload.matchStrategy === "address_line"
+          ? `Matched an existing property workspace for ${payload.canonicalAddress} from the OM address line.`
+          : `Matched the existing property workspace for ${payload.canonicalAddress}.`;
       const omMessage =
         payload.omImport?.imported && payload.omImport?.fileName
           ? ` OM saved as ${payload.omImport.fileName}.`
@@ -730,7 +1094,7 @@ function DealAnalysisContent() {
             ? ` OM import needs attention: ${warning}`
             : "";
 
-      setManualAddNotice(`Added ${payload.canonicalAddress}.${omMessage}`.trim());
+      setManualAddNotice(`${recordMessage}${omMessage}`.trim());
       setManualAddDraft({ streetEasyUrl: "", omUrl: "" });
       setPropertySearch(payload.canonicalAddress);
       await fetchProperties(true);
@@ -742,10 +1106,19 @@ function DealAnalysisContent() {
     }
   }, [fetchProperties, manualAddDraft.omUrl, manualAddDraft.streetEasyUrl, setPropertyParam]);
 
+  const handleManualAddProperty = useCallback(async () => {
+    await runWorkspaceSetup("streeteasy");
+  }, [runWorkspaceSetup]);
+
+  const handleOmOnlyAddProperty = useCallback(async () => {
+    await runWorkspaceSetup("om");
+  }, [runWorkspaceSetup]);
+
   const propertySummaryCards = [
     { label: "Address", value: selectedProperty?.canonicalAddress ?? "Select a property" },
     { label: "List price", value: formatCurrency(selectedListing?.price ?? selectedProperty?.primaryListing?.price ?? null) },
-    { label: "Documents", value: String(documents.length) },
+    { label: "OM files", value: String(omDocuments.length) },
+    { label: "All docs", value: String(documents.length) },
     { label: "OM status", value: hasAuthoritativeOm ? "Authoritative OM ready" : hasOmDocument ? "OM document uploaded" : "No OM yet" },
     { label: "Deal score", value: selectedProperty?.dealScore != null ? `${selectedProperty.dealScore}/100` : "Pending dossier" },
     { label: "Saved inputs", value: persistedDossierAssumptions?.updatedAt ? formatDateOnly(persistedDossierAssumptions.updatedAt) : "Not saved" },
@@ -759,7 +1132,9 @@ function DealAnalysisContent() {
         </p>
         <h1 className="page-title" style={{ marginBottom: "0.35rem" }}>Deal Analysis</h1>
         <p style={{ margin: 0, maxWidth: "900px", color: "#475569", lineHeight: 1.6 }}>
-          Run OM calculations and property-specific dossier underwriting away from the Property Data table. Use this page to pick a property, create one from a StreetEasy URL when needed, save tailored deal inputs, and generate the final dossier from the same workspace.
+          Analyze each OM as its own underwriting workspace. Start from an existing canonical property, or
+          create and match one from a StreetEasy listing when you need persistence, then upload the OM,
+          tune the assumptions, and generate the dossier from the same screen.
         </p>
       </div>
 
@@ -767,9 +1142,9 @@ function DealAnalysisContent() {
         <section className="card" style={{ padding: "1rem" }}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", flexWrap: "wrap", alignItems: "center" }}>
             <div>
-              <h2 style={{ margin: 0, fontSize: "1.05rem" }}>Select property</h2>
+              <h2 style={{ margin: 0, fontSize: "1.05rem" }}>Select OM workspace</h2>
               <p style={{ margin: "0.3rem 0 0", color: "#64748b", fontSize: "0.9rem" }}>
-                Search existing property records, then open their tailored OM and dossier workflow here.
+                Search existing canonical property records, then open their OM analysis and dossier workflow here.
               </p>
             </div>
             {propertyId && (
@@ -825,9 +1200,11 @@ function DealAnalysisContent() {
         </section>
 
         <section className="card" style={{ padding: "1rem" }}>
-          <h2 style={{ margin: 0, fontSize: "1.05rem" }}>Create property record</h2>
+          <h2 style={{ margin: 0, fontSize: "1.05rem" }}>Create or match workspace</h2>
           <p style={{ margin: "0.3rem 0 0.85rem", color: "#64748b", fontSize: "0.9rem", lineHeight: 1.5 }}>
-            Use this when an off-market deal or fresh OM needs its own property record before underwriting.
+            Use StreetEasy when you have the listing handy, or create directly from a PDF OM URL when the OM
+            itself has the building address. If the address already matches a canonical property record, we
+            will attach to that existing record instead of creating a duplicate.
           </p>
           <label style={{ display: "block", marginBottom: "0.75rem" }}>
             <span style={{ display: "block", marginBottom: "0.35rem", fontSize: "0.82rem", fontWeight: 600, color: "#0f172a" }}>
@@ -854,18 +1231,28 @@ function DealAnalysisContent() {
             />
           </label>
           <p style={{ margin: "0 0 0.9rem", color: "#64748b", fontSize: "0.82rem", lineHeight: 1.5 }}>
-            Best results come from a direct PDF or downloadable OM link rather than an HTML landing page.
+            Best OM-only results come from a direct PDF or downloadable OM link rather than an HTML landing page.
           </p>
           {manualAddError && <p style={{ margin: "0 0 0.8rem", color: "#b91c1c", fontSize: "0.85rem" }}>{manualAddError}</p>}
           {manualAddNotice && <p style={{ margin: "0 0 0.8rem", color: "#166534", fontSize: "0.85rem" }}>{manualAddNotice}</p>}
-          <button
-            type="button"
-            className="btn-primary"
-            onClick={() => void handleManualAddProperty()}
-            disabled={manualAddSubmitting || !manualAddDraft.streetEasyUrl.trim()}
-          >
-            {manualAddSubmitting ? "Creating..." : "Create / update property"}
-          </button>
+          <div style={{ display: "flex", gap: "0.65rem", flexWrap: "wrap" }}>
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={() => void handleManualAddProperty()}
+              disabled={manualAddSubmitting || !manualAddDraft.streetEasyUrl.trim()}
+            >
+              {manualAddSubmitting ? "Setting up..." : "Create / match from StreetEasy"}
+            </button>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => void handleOmOnlyAddProperty()}
+              disabled={manualAddSubmitting || !manualAddDraft.omUrl.trim()}
+            >
+              {manualAddSubmitting ? "Setting up..." : "Create / match from OM"}
+            </button>
+          </div>
         </section>
       </div>
 
@@ -878,7 +1265,8 @@ function DealAnalysisContent() {
                   {selectedProperty?.canonicalAddress ?? propertyId}
                 </h2>
                 <p style={{ margin: "0.35rem 0 0", color: "#64748b", fontSize: "0.9rem", lineHeight: 1.5 }}>
-                  Property-specific underwriting inputs saved here will carry through to dossier and pro forma generation for this record.
+                  This OM workspace stays tied to the canonical property record so uploads, assumptions, and
+                  dossier output persist in one place.
                 </p>
               </div>
               <div style={{ display: "flex", gap: "0.65rem", flexWrap: "wrap" }}>
@@ -906,15 +1294,16 @@ function DealAnalysisContent() {
           </section>
 
           <section className="card" style={{ padding: "1rem" }}>
-            <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.2fr) minmax(260px, 0.8fr)", gap: "1rem" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.05fr) minmax(320px, 0.95fr)", gap: "1rem" }}>
               <div>
-                <h2 style={{ margin: 0, fontSize: "1.05rem" }}>Property-specific source inputs</h2>
+                <h2 style={{ margin: 0, fontSize: "1.05rem" }}>OM notes and fallback inputs</h2>
                 <p style={{ margin: "0.3rem 0 0.85rem", fontSize: "0.9rem", color: "#64748b", lineHeight: 1.55 }}>
-                  Save the broker email notes, rent roll bullets, or T12 highlights that should drive this property’s tailored OM calculation and dossier output.
+                  Save the broker notes, rent roll bullets, or T12 highlights that should fill gaps when the
+                  OM is incomplete or when you want to override what was extracted.
                 </p>
                 <label style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
                   <span style={{ fontSize: "0.82rem", fontWeight: 600, color: "#0f172a" }}>
-                    Broker notes, rent roll notes, or OM assumptions
+                    Broker notes, rent roll notes, or OM fallback assumptions
                   </span>
                   <textarea
                     value={draft.brokerEmailNotes}
@@ -934,7 +1323,8 @@ function DealAnalysisContent() {
                 </label>
                 <div style={{ marginTop: "0.75rem", fontSize: "0.82rem", color: "#64748b", lineHeight: 1.55 }}>
                   <div>
-                    Save property defaults below to persist both the assumptions grid and these notes onto the property record.
+                    Save assumptions below to persist both the calculator inputs and these notes onto the
+                    property workspace.
                   </div>
                   <div>
                     Formula furnishing default: {formatCurrency(formulaDefaults.furnishingSetupCosts ?? 0)}.
@@ -947,34 +1337,120 @@ function DealAnalysisContent() {
                 </div>
               </div>
 
-              <div style={{ border: "1px solid #dbe2ea", borderRadius: "14px", padding: "1rem", background: "#fbfdff" }}>
-                <h3 style={{ margin: 0, fontSize: "0.98rem", color: "#0f172a" }}>Source readiness</h3>
-                <div style={{ marginTop: "0.75rem", display: "grid", gap: "0.55rem", fontSize: "0.9rem", color: "#334155" }}>
-                  <div>OM documents: <strong>{hasOmDocument ? "Available" : "Not uploaded"}</strong></div>
-                  <div>Authoritative OM: <strong>{hasAuthoritativeOm ? "Ready" : "Not built yet"}</strong></div>
-                  <div>Broker notes saved: <strong>{hasSavedBrokerEmailNotes ? "Yes" : "No"}</strong></div>
-                  <div>Dossier status: <strong>{persistedDossierGeneration?.status ?? "not_started"}</strong></div>
-                </div>
-                <div style={{ marginTop: "1rem", display: "flex", gap: "0.6rem", flexWrap: "wrap" }}>
-                  {hasOmDocument && !hasAuthoritativeOm && (
+              <div style={{ display: "grid", gap: "0.9rem" }}>
+                <div style={{ border: "1px solid #dbe2ea", borderRadius: "14px", padding: "1rem", background: "#fbfdff" }}>
+                  <h3 style={{ margin: 0, fontSize: "0.98rem", color: "#0f172a" }}>Upload OM / rent roll</h3>
+                  <p style={{ margin: "0.35rem 0 0.85rem", color: "#64748b", fontSize: "0.85rem", lineHeight: 1.5 }}>
+                    Upload PDFs and supporting files directly from this workspace. PDF OM, brochure, and rent
+                    roll uploads can refresh the authoritative OM analysis automatically here.
+                  </p>
+                  <input
+                    ref={documentFileInputRef}
+                    type="file"
+                    accept=".pdf,.doc,.docx,.xls,.xlsx,.txt,.csv,image/*"
+                    style={{ width: "100%", fontSize: "0.84rem" }}
+                  />
+                  <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(170px, 210px)", gap: "0.55rem", marginTop: "0.75rem" }}>
+                    <input
+                      type="text"
+                      value={documentUploadSource}
+                      onChange={(event) => setDocumentUploadSource(event.target.value)}
+                      placeholder="Source, e.g. broker or seller"
+                      className="profile-input"
+                    />
+                    <select
+                      value={documentUploadCategory}
+                      onChange={(event) => setDocumentUploadCategory(event.target.value)}
+                      className="profile-input"
+                    >
+                      <option value="OM">OM</option>
+                      <option value="Brochure">Brochure</option>
+                      <option value="Rent Roll">Rent Roll</option>
+                      <option value="Financial Model">Financial Model</option>
+                      <option value="T12 / Operating Summary">T12 / Operating Summary</option>
+                      <option value="Other">Other</option>
+                    </select>
+                  </div>
+                  {documentUploadError && (
+                    <p style={{ margin: "0.75rem 0 0", color: "#b91c1c", fontSize: "0.84rem" }}>{documentUploadError}</p>
+                  )}
+                  {documentUploadNotice && (
+                    <p style={{ margin: "0.75rem 0 0", color: "#166534", fontSize: "0.84rem" }}>{documentUploadNotice}</p>
+                  )}
+                  <div style={{ marginTop: "0.85rem", display: "flex", gap: "0.6rem", flexWrap: "wrap" }}>
                     <button
                       type="button"
-                      className="btn-secondary"
-                      onClick={() => void handleRefreshAuthoritativeOm()}
-                      disabled={authoritativeOmRefreshing || isBusy}
+                      className="btn-primary"
+                      onClick={() => void handleUploadDocument()}
+                      disabled={documentUploading || dossierGenerating}
                     >
-                      {authoritativeOmRefreshing ? "Building OM..." : "Build authoritative OM"}
+                      {documentUploading ? "Uploading..." : "Upload document"}
                     </button>
-                  )}
-                  <Link href={`/property/${encodeURIComponent(propertyId)}`} className="btn-secondary">
-                    Manage documents
-                  </Link>
+                    {hasOmDocument && !hasAuthoritativeOm && (
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        onClick={() => void handleRefreshAuthoritativeOm()}
+                        disabled={authoritativeOmRefreshing || isBusy || documentUploading}
+                      >
+                        {authoritativeOmRefreshing ? "Building OM..." : "Build authoritative OM"}
+                      </button>
+                    )}
+                  </div>
                 </div>
-                {!hasOmDocument && !hasBrokerEmailNotes && (
-                  <p style={{ margin: "0.9rem 0 0", color: "#64748b", fontSize: "0.85rem", lineHeight: 1.5 }}>
-                    Upload an OM or rent roll to the property documents, or save broker notes here for quick analysis on off-market deals.
-                  </p>
-                )}
+
+                <div style={{ border: "1px solid #dbe2ea", borderRadius: "14px", padding: "1rem", background: "#fbfdff" }}>
+                  <h3 style={{ margin: 0, fontSize: "0.98rem", color: "#0f172a" }}>Source readiness</h3>
+                  <div style={{ marginTop: "0.75rem", display: "grid", gap: "0.55rem", fontSize: "0.9rem", color: "#334155" }}>
+                    <div>OM documents: <strong>{hasOmDocument ? `${omDocuments.length} file(s)` : "Not uploaded"}</strong></div>
+                    <div>Authoritative OM: <strong>{hasAuthoritativeOm ? "Ready" : "Not built yet"}</strong></div>
+                    <div>Broker notes saved: <strong>{hasSavedBrokerEmailNotes ? "Yes" : "No"}</strong></div>
+                    <div>Dossier status: <strong>{persistedDossierGeneration?.status ?? "not_started"}</strong></div>
+                  </div>
+                  <div style={{ marginTop: "0.95rem" }}>
+                    <div style={{ fontSize: "0.78rem", fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "#64748b" }}>
+                      Recent OM files
+                    </div>
+                    <div style={{ marginTop: "0.55rem", display: "grid", gap: "0.5rem" }}>
+                      {omDocuments.length > 0 ? (
+                        omDocuments.slice(0, 4).map((document) => (
+                          <a
+                            key={document.id}
+                            href={`${API_BASE}/api/properties/${encodeURIComponent(propertyId)}/documents/${encodeURIComponent(document.id)}/file`}
+                            target="_blank"
+                            rel="noreferrer"
+                            style={{
+                              display: "flex",
+                              justifyContent: "space-between",
+                              gap: "0.75rem",
+                              padding: "0.6rem 0.7rem",
+                              border: "1px solid #e2e8f0",
+                              borderRadius: "10px",
+                              background: "#fff",
+                              color: "#0f172a",
+                              textDecoration: "none",
+                              fontSize: "0.84rem",
+                            }}
+                          >
+                            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                              {document.fileName}
+                            </span>
+                            <span style={{ color: "#64748b", flexShrink: 0 }}>{formatDateOnly(document.createdAt)}</span>
+                          </a>
+                        ))
+                      ) : (
+                        <p style={{ margin: 0, color: "#64748b", fontSize: "0.84rem", lineHeight: 1.5 }}>
+                          Upload an OM, brochure, or rent roll to start building this workspace.
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                  <div style={{ marginTop: "0.85rem", display: "flex", gap: "0.6rem", flexWrap: "wrap" }}>
+                    <Link href={`/property/${encodeURIComponent(propertyId)}`} className="btn-secondary">
+                      Open all documents
+                    </Link>
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -1041,6 +1517,13 @@ function DealAnalysisContent() {
               hasBrokerEmailNotes={hasBrokerEmailNotes}
               formulaFurnishingSetupCosts={formulaDefaults.furnishingSetupCosts}
               onDraftNumberChange={handleDraftNumberChange}
+              onDraftTextChange={handleDraftTextChange}
+              onUnitModelRowsChange={(unitModelRows) => {
+                setDraft((prev) => ({ ...prev, unitModelRows }));
+              }}
+              onExpenseModelRowsChange={(expenseModelRows) => {
+                setDraft((prev) => ({ ...prev, expenseModelRows }));
+              }}
               onRunCalculation={() => {
                 void runOmCalculation(draft, { propertyIdOverride: propertyId });
               }}
@@ -1066,7 +1549,9 @@ function DealAnalysisContent() {
           <section className="card" style={{ padding: "1rem" }}>
             <h2 style={{ margin: 0, fontSize: "1.05rem" }}>Generate dossier</h2>
             <p style={{ margin: "0.35rem 0 0.85rem", color: "#64748b", fontSize: "0.9rem", lineHeight: 1.55 }}>
-              Once the tailored OM calculation looks right, generate the dossier and Excel using these saved property inputs.
+              Once the OM analysis looks right, generate the dossier and Excel using these saved inputs. The
+              package will carry forward the current state, cash flow tables, sensitivities, and resolved
+              assumptions from this workspace.
             </p>
             {!hasAuthoritativeOm && !hasBrokerEmailNotes && (
               <div style={{ marginBottom: "0.9rem", padding: "0.85rem 1rem", borderRadius: "12px", border: "1px solid #cbd5e1", background: "#f8fafc", color: "#334155", fontSize: "0.92rem" }}>

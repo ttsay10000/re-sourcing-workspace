@@ -14,6 +14,10 @@ export interface ResolvedCurrentFinancials {
   vacancyLoss: number | null;
   effectiveGrossIncome: number | null;
   operatingExpenses: number | null;
+  rentBasis: "gross_before_vacancy" | "effective_after_vacancy" | "unknown";
+  assumedLongTermOccupancyPct: number | null;
+  reportedOccupancyPct: number | null;
+  reportedVacancyPct: number | null;
 }
 
 export interface ResolvedExpenseRow {
@@ -64,6 +68,65 @@ function approxEqual(left: number | null, right: number | null, tolerance = 1_50
   return left != null && right != null && Math.abs(left - right) <= tolerance;
 }
 
+function normalizePct(value: unknown): number | null {
+  const parsed = toFiniteNumber(value);
+  if (parsed == null) return null;
+  return Math.max(0, Math.min(100, parsed));
+}
+
+function normalizeRentBasis(value: unknown): ResolvedCurrentFinancials["rentBasis"] | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase().replace(/[\s-]+/g, "_");
+  if (!normalized) return null;
+  if (normalized === "gross_before_vacancy" || normalized === "gross_potential") {
+    return "gross_before_vacancy";
+  }
+  if (
+    normalized === "effective_after_vacancy" ||
+    normalized === "actual_effective" ||
+    normalized === "effective_gross_income"
+  ) {
+    return "effective_after_vacancy";
+  }
+  if (normalized === "unknown") return "unknown";
+  return null;
+}
+
+function deriveRentBasis(params: {
+  explicitBasis: ResolvedCurrentFinancials["rentBasis"] | null;
+  vacancyLoss: number | null;
+  componentGrossPotential: number | null;
+  directGrossPotential: number | null;
+  effectiveGrossIncome: number | null;
+  summaryLooksLikeEffectiveGrossIncome?: boolean;
+}): ResolvedCurrentFinancials["rentBasis"] {
+  if (params.explicitBasis) return params.explicitBasis;
+  if (
+    params.vacancyLoss != null ||
+    params.componentGrossPotential != null ||
+    params.directGrossPotential != null
+  ) {
+    return "gross_before_vacancy";
+  }
+  if (params.effectiveGrossIncome != null || params.summaryLooksLikeEffectiveGrossIncome) {
+    return "effective_after_vacancy";
+  }
+  return "unknown";
+}
+
+function assumedLongTermOccupancyPct(params: {
+  rentBasis: ResolvedCurrentFinancials["rentBasis"];
+  reportedOccupancyPct: number | null;
+  reportedVacancyPct: number | null;
+}): number | null {
+  if (params.rentBasis !== "effective_after_vacancy") return null;
+  return (
+    normalizePct(params.reportedOccupancyPct) ??
+    (params.reportedVacancyPct != null ? Math.max(0, 100 - params.reportedVacancyPct) : null) ??
+    97
+  );
+}
+
 export function resolveCurrentFinancialsFromOmAnalysis(
   omAnalysis: OmAnalysis | null | undefined,
   fromLlm?: RentalFinancialsFromLlm | null
@@ -108,6 +171,21 @@ export function resolveCurrentFinancialsFromOmAnalysis(
       )
     )
   );
+  const reportedOccupancyPct = normalizePct(
+    firstNumber(
+      income?.reportedOccupancyPct,
+      income?.occupancyPct,
+      income?.economicOccupancyPct,
+      income?.physicalOccupancyPct
+    )
+  );
+  const reportedVacancyPct = normalizePct(
+    firstNumber(
+      income?.reportedVacancyPct,
+      income?.vacancyPct,
+      income?.economicVacancyPct
+    )
+  );
 
   const componentGrossPotential = sumNumbers(
     nonNegative(firstNumber(income?.grossRentResidentialPotential, revenue?.residentialAnnualRent)),
@@ -145,6 +223,14 @@ export function resolveCurrentFinancialsFromOmAnalysis(
   const summaryLooksLikeEffectiveGrossIncome =
     approxEqual(summaryGross, effectiveGrossIncome) ||
     approxEqual(summaryGross, noi != null && explicitExpenseTotal != null ? noi + explicitExpenseTotal : null);
+  const rentBasis = deriveRentBasis({
+    explicitBasis: normalizeRentBasis(income?.currentRentBasis ?? income?.rentBasis),
+    vacancyLoss,
+    componentGrossPotential,
+    directGrossPotential,
+    effectiveGrossIncome,
+    summaryLooksLikeEffectiveGrossIncome,
+  });
 
   const grossRentalIncome = roundCurrency(
     nonNegative(
@@ -167,6 +253,11 @@ export function resolveCurrentFinancialsFromOmAnalysis(
           : null)
     )
   );
+  const assumedOccupancyPct = assumedLongTermOccupancyPct({
+    rentBasis,
+    reportedOccupancyPct,
+    reportedVacancyPct,
+  });
 
   return {
     noi,
@@ -175,6 +266,10 @@ export function resolveCurrentFinancialsFromOmAnalysis(
     vacancyLoss,
     effectiveGrossIncome,
     operatingExpenses,
+    rentBasis,
+    assumedLongTermOccupancyPct: assumedOccupancyPct,
+    reportedOccupancyPct,
+    reportedVacancyPct,
   };
 }
 
@@ -223,6 +318,28 @@ export function resolveCurrentFinancialsFromAuthoritativeSnapshot(
         income?.vacancyAndCollectionLoss,
         income?.vacancy_and_collection_loss
       )
+    )
+  );
+  const reportedOccupancyPct = normalizePct(
+    firstNumber(
+      current?.reportedOccupancyPct,
+      income?.reportedOccupancyPct,
+      income?.occupancyPct,
+      income?.occupancy_pct,
+      income?.economicOccupancyPct,
+      income?.economic_occupancy_pct,
+      income?.physicalOccupancyPct,
+      income?.physical_occupancy_pct
+    )
+  );
+  const reportedVacancyPct = normalizePct(
+    firstNumber(
+      current?.reportedVacancyPct,
+      income?.reportedVacancyPct,
+      income?.vacancyPct,
+      income?.vacancy_pct,
+      income?.economicVacancyPct,
+      income?.economic_vacancy_pct
     )
   );
 
@@ -302,6 +419,19 @@ export function resolveCurrentFinancialsFromAuthoritativeSnapshot(
         (effectiveGrossIncome != null && noi != null ? effectiveGrossIncome - noi : null)
     )
   );
+  const rentBasis = deriveRentBasis({
+    explicitBasis: normalizeRentBasis(current?.rentBasis ?? income?.currentRentBasis ?? income?.rentBasis),
+    vacancyLoss,
+    componentGrossPotential,
+    directGrossPotential,
+    effectiveGrossIncome,
+    summaryLooksLikeEffectiveGrossIncome: false,
+  });
+  const assumedOccupancyPct = assumedLongTermOccupancyPct({
+    rentBasis,
+    reportedOccupancyPct,
+    reportedVacancyPct,
+  });
 
   return {
     noi,
@@ -310,6 +440,10 @@ export function resolveCurrentFinancialsFromAuthoritativeSnapshot(
     vacancyLoss,
     effectiveGrossIncome,
     operatingExpenses,
+    rentBasis,
+    assumedLongTermOccupancyPct: assumedOccupancyPct,
+    reportedOccupancyPct,
+    reportedVacancyPct,
   };
 }
 
@@ -358,6 +492,10 @@ export function resolveCurrentFinancialsFromDetails(
         vacancyLoss: null,
         effectiveGrossIncome: null,
         operatingExpenses: null,
+        rentBasis: "unknown",
+        assumedLongTermOccupancyPct: null,
+        reportedOccupancyPct: null,
+        reportedVacancyPct: null,
       };
 }
 

@@ -8,7 +8,7 @@ describe("buildDossierPdfCoverData", () => {
     const ctx: UnderwritingContext = {
       propertyId: "prop-1",
       canonicalAddress: "347 East 19th Street, New York, NY 10003",
-      purchasePrice: 3_999_999,
+      purchasePrice: 3_800_000,
       listingCity: "Manhattan",
       currentNoi: 165_000,
       currentGrossRent: 280_000,
@@ -22,10 +22,13 @@ describe("buildDossierPdfCoverData", () => {
       adjustedCapRate: 6.98,
       assumptions: {
         acquisition: {
-          purchasePrice: 3_999_999,
+          purchasePrice: 3_800_000,
           purchaseClosingCostPct: 2,
           renovationCosts: 55_000,
           furnishingSetupCosts: 0,
+          onboardingCosts: 12_000,
+          investmentProfile: "Value-add",
+          targetAcquisitionDate: "2026-06-15",
         },
         financing: {
           ltvPct: 65,
@@ -38,6 +41,7 @@ describe("buildDossierPdfCoverData", () => {
           blendedRentUpliftPct: 18,
           expenseIncreasePct: 8,
           managementFeePct: 4,
+          occupancyTaxPct: 6,
           vacancyPct: 5,
           leadTimeMonths: 3,
           annualRentGrowthPct: 3,
@@ -210,12 +214,17 @@ describe("buildDossierPdfCoverData", () => {
       emphasis: false,
     });
     expect(cover.propertyInfo.rows[1]?.value).toBe("5,940 SQFT");
+    expect(cover.acquisitionInfo.rows[0]?.value).toBe("Value-add");
+    expect(cover.acquisitionInfo.rows[1]?.value).toBe("Jun 15, 2026");
     expect(cover.acquisitionInfo.rows[2]?.value).toBe("$3,999,999");
     expect(cover.acquisitionInfo.rows[3]?.value).toBe("$3,800,000 / $640 PSF");
-    expect(cover.keyFinancials.rows[0]?.value).toBe("$296,400 (projected)");
+    expect(cover.keyFinancials.rows[0]?.value).toBe("$280,000");
     expect(cover.keyFinancials.rows[2]?.value).toBe("$197,368");
     expect(cover.keyFinancials.rows[7]?.value).toBe("+41%");
-    expect(cover.expectedReturns.rows[0]?.value).toBe("$55,000");
-    expect(cover.expectedReturns.rows[3]?.value).toBe("22.00%");
+    expect(cover.expectedReturns.rows[0]?.value).toBe("$67,000");
+    expect(cover.expectedReturns.rows[1]?.value).toBe("$3,800,000");
+    expect(cover.expectedReturns.rows[4]?.value).toBe("22.00%");
+    expect(cover.expectedReturns.rows[5]?.value).toBe("7.40%");
+    expect(cover.expectedReturns.rows[6]?.value).toBe("2.10x");
   });
 });

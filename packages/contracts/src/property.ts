@@ -99,6 +99,11 @@ export interface ExpenseLineItem {
   amount: number;
 }
 
+export type PropertyDealDossierExpenseTreatment =
+  | "operating"
+  | "replace_management"
+  | "exclude";
+
 /** One unit row from OM/brochure rent roll (for table display). */
 export interface RentalNumberPerUnit {
   unit?: string;
@@ -379,6 +384,8 @@ export interface PropertyDealDossierAssumptions {
   purchaseClosingCostPct?: number | null;
   renovationCosts?: number | null;
   furnishingSetupCosts?: number | null;
+  investmentProfile?: string | null;
+  targetAcquisitionDate?: string | null;
   ltvPct?: number | null;
   interestRatePct?: number | null;
   amortizationYears?: number | null;
@@ -386,6 +393,7 @@ export interface PropertyDealDossierAssumptions {
   rentUpliftPct?: number | null;
   expenseIncreasePct?: number | null;
   managementFeePct?: number | null;
+  occupancyTaxPct?: number | null;
   vacancyPct?: number | null;
   leadTimeMonths?: number | null;
   annualRentGrowthPct?: number | null;
@@ -397,8 +405,40 @@ export interface PropertyDealDossierAssumptions {
   exitCapPct?: number | null;
   exitClosingCostPct?: number | null;
   targetIrrPct?: number | null;
+  unitModelRows?: PropertyDealDossierUnitModelRow[] | null;
+  expenseModelRows?: PropertyDealDossierExpenseModelRow[] | null;
   brokerEmailNotes?: string | null;
   updatedAt?: string | null;
+}
+
+export interface PropertyDealDossierUnitModelRow {
+  rowId: string;
+  unitLabel?: string | null;
+  building?: string | null;
+  unitCategory?: string | null;
+  tenantName?: string | null;
+  currentAnnualRent?: number | null;
+  underwrittenAnnualRent?: number | null;
+  rentUpliftPct?: number | null;
+  occupancyPct?: number | null;
+  furnishingCost?: number | null;
+  onboardingFee?: number | null;
+  monthlyHospitalityExpense?: number | null;
+  includeInUnderwriting?: boolean | null;
+  isProtected?: boolean | null;
+  beds?: number | null;
+  baths?: number | null;
+  sqft?: number | null;
+  tenantStatus?: string | null;
+  notes?: string | null;
+}
+
+export interface PropertyDealDossierExpenseModelRow {
+  rowId: string;
+  lineItem: string;
+  amount?: number | null;
+  annualGrowthPct?: number | null;
+  treatment?: PropertyDealDossierExpenseTreatment | null;
 }
 
 export type PropertyDealDossierGenerationStatus =

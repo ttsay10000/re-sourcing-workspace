@@ -2,6 +2,8 @@ import type {
   ExpenseLineItem,
   OmRentRollRow,
   PropertyDealDossierAssumptions,
+  PropertyDealDossierExpenseModelRow,
+  PropertyDealDossierUnitModelRow,
   PropertyDetails,
 } from "@re-sourcing/contracts";
 import {
@@ -22,6 +24,13 @@ import {
   getPropertyDossierAssumptions,
   propertyAssumptionsToOverrides,
 } from "./propertyDossierState.js";
+import {
+  expenseModelRowsToProjectionRows,
+  resolveDetailedCashFlowModel,
+  type ResolvedExpenseModelRow,
+  type ResolvedUnitModelRow,
+  unitModelRowsToProjectionRows,
+} from "./detailedCashFlowModel.js";
 import { resolveProjectedResidentialLeaseUpRentSummary } from "./propertyAssumptions.js";
 import {
   computeRecommendedOffer,
@@ -29,6 +38,7 @@ import {
   resolveDossierAssumptions,
   type DossierAssumptionOverrides,
 } from "./underwritingModel.js";
+import { buildSensitivityAnalyses, type SensitivityAnalysis } from "./sensitivityAnalysis.js";
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value != null && typeof value === "object" && !Array.isArray(value)
@@ -164,6 +174,7 @@ function flattenedAssumptions(
     purchaseClosingCostPct: assumptions.acquisition.purchaseClosingCostPct,
     renovationCosts: assumptions.acquisition.renovationCosts,
     furnishingSetupCosts: assumptions.acquisition.furnishingSetupCosts,
+    onboardingCosts: assumptions.acquisition.onboardingCosts,
     ltvPct: assumptions.financing.ltvPct,
     interestRatePct: assumptions.financing.interestRatePct,
     amortizationYears: assumptions.financing.amortizationYears,
@@ -172,6 +183,7 @@ function flattenedAssumptions(
     blendedRentUpliftPct: assumptions.operating.blendedRentUpliftPct,
     expenseIncreasePct: assumptions.operating.expenseIncreasePct,
     managementFeePct: assumptions.operating.managementFeePct,
+    occupancyTaxPct: assumptions.operating.occupancyTaxPct,
     vacancyPct: assumptions.operating.vacancyPct,
     leadTimeMonths: assumptions.operating.leadTimeMonths,
     annualRentGrowthPct: assumptions.operating.annualRentGrowthPct,
@@ -212,14 +224,21 @@ export interface OmCalculationSnapshot {
   };
   savedAssumptions: PropertyDealDossierAssumptions | null;
   assumptions: Record<string, number | null>;
+  acquisitionMetadata: {
+    investmentProfile: string | null;
+    targetAcquisitionDate: string | null;
+  };
   currentFinancials: {
     grossRentalIncome: number | null;
     otherIncome: number | null;
+    vacancyLoss: number | null;
     effectiveGrossIncome: number | null;
     operatingExpenses: number | null;
     noi: number | null;
     expenseRatioPct: number | null;
     currentCapRatePct: number | null;
+    rentBasis: string | null;
+    assumedLongTermOccupancyPct: number | null;
   };
   topLineMetrics: {
     projectedYearNumber: number;
@@ -240,12 +259,16 @@ export interface OmCalculationSnapshot {
     annualDebtService: number | null;
     holdPeriodYears: number | null;
     irrPct: number | null;
+    averageCashOnCashReturn: number | null;
     year1CashOnCashReturn: number | null;
     year1EquityYield: number | null;
     equityMultiple: number | null;
   };
   rentRoll: OmRentRollRow[];
   expenseRows: ExpenseLineItem[];
+  unitModelRows: ResolvedUnitModelRow[];
+  expenseModelRows: ResolvedExpenseModelRow[];
+  sensitivities: SensitivityAnalysis[];
   yearlyCashFlow: ReturnType<typeof computeUnderwritingProjection>["yearly"];
   acquisition: ReturnType<typeof computeUnderwritingProjection>["acquisition"];
   financing: ReturnType<typeof computeUnderwritingProjection>["financing"];
@@ -260,6 +283,8 @@ export async function buildOmCalculationSnapshot(params: {
   propertyId: string;
   assumptionOverrides?: DossierAssumptionOverrides | null;
   brokerEmailNotes?: string | null;
+  unitModelRows?: PropertyDealDossierUnitModelRow[] | null;
+  expenseModelRows?: PropertyDealDossierExpenseModelRow[] | null;
 }): Promise<OmCalculationSnapshot> {
   const pool = getPool();
   const propertyRepo = new PropertyRepo({ pool });
@@ -301,6 +326,19 @@ export async function buildOmCalculationSnapshot(params: {
     mergedAssumptionOverrides,
     { details }
   );
+  const detailedModel = resolveDetailedCashFlowModel({
+    details,
+    defaultRentUpliftPct: assumptions.operating.rentUpliftPct,
+    defaultVacancyPct: assumptions.operating.vacancyPct,
+    defaultAnnualExpenseGrowthPct: assumptions.operating.annualExpenseGrowthPct,
+    defaultAnnualPropertyTaxGrowthPct: assumptions.operating.annualPropertyTaxGrowthPct,
+    unitModelRows:
+      params.unitModelRows !== undefined ? params.unitModelRows : propertyAssumptions?.unitModelRows,
+    expenseModelRows:
+      params.expenseModelRows !== undefined
+        ? params.expenseModelRows
+        : propertyAssumptions?.expenseModelRows,
+  });
   const currentFinancials = resolveCurrentFinancialsFromDetails(details);
   const leaseUpRentSummary = resolveProjectedResidentialLeaseUpRentSummary(details);
   const resolvedExpenseTotal = expenseTotal(details) ?? currentFinancials.operatingExpenses;
@@ -310,7 +348,8 @@ export async function buildOmCalculationSnapshot(params: {
     currentNoi: currentFinancials.noi,
     currentOtherIncome: currentFinancials.otherIncome,
     currentExpensesTotal: resolvedExpenseTotal,
-    expenseRows: expenseRows(details),
+    expenseRows: expenseModelRowsToProjectionRows(detailedModel.expenseModelRows),
+    unitRows: unitModelRowsToProjectionRows(detailedModel.unitModelRows),
     conservativeProjectedLeaseUpRent: leaseUpRentSummary.totalAnnualRent,
     protectedProjectedLeaseUpRent: leaseUpRentSummary.protectedAnnualRent,
   });
@@ -320,9 +359,22 @@ export async function buildOmCalculationSnapshot(params: {
     currentNoi: currentFinancials.noi,
     currentOtherIncome: currentFinancials.otherIncome,
     currentExpensesTotal: resolvedExpenseTotal,
-    expenseRows: expenseRows(details),
+    expenseRows: expenseModelRowsToProjectionRows(detailedModel.expenseModelRows),
+    unitRows: unitModelRowsToProjectionRows(detailedModel.unitModelRows),
     conservativeProjectedLeaseUpRent: leaseUpRentSummary.totalAnnualRent,
     protectedProjectedLeaseUpRent: leaseUpRentSummary.protectedAnnualRent,
+  });
+  const sensitivities = buildSensitivityAnalyses({
+    assumptions: projection.assumptions,
+    currentGrossRent: currentFinancials.grossRentalIncome,
+    currentNoi: currentFinancials.noi,
+    currentOtherIncome: currentFinancials.otherIncome,
+    currentExpensesTotal: resolvedExpenseTotal,
+    expenseRows: expenseModelRowsToProjectionRows(detailedModel.expenseModelRows),
+    unitRows: unitModelRowsToProjectionRows(detailedModel.unitModelRows),
+    conservativeProjectedLeaseUpRent: leaseUpRentSummary.totalAnnualRent,
+    protectedProjectedLeaseUpRent: leaseUpRentSummary.protectedAnnualRent,
+    baseProjection: projection,
   });
 
   const modeledPurchasePrice = assumptions.acquisition.purchasePrice;
@@ -378,15 +430,22 @@ export async function buildOmCalculationSnapshot(params: {
       rentStabilizedUnits: assumptions.propertyMix.rentStabilizedUnits,
     },
     savedAssumptions: propertyAssumptions,
-    assumptions: flattenedAssumptions(assumptions),
+    assumptions: flattenedAssumptions(projection.assumptions),
+    acquisitionMetadata: {
+      investmentProfile: projection.assumptions.acquisition.investmentProfile,
+      targetAcquisitionDate: projection.assumptions.acquisition.targetAcquisitionDate,
+    },
     currentFinancials: {
       grossRentalIncome: currentFinancials.grossRentalIncome,
       otherIncome: currentFinancials.otherIncome,
+      vacancyLoss: currentFinancials.vacancyLoss,
       effectiveGrossIncome: currentFinancials.effectiveGrossIncome,
       operatingExpenses: currentFinancials.operatingExpenses,
       noi: currentFinancials.noi,
       expenseRatioPct,
       currentCapRatePct,
+      rentBasis: currentFinancials.rentBasis,
+      assumedLongTermOccupancyPct: currentFinancials.assumedLongTermOccupancyPct,
     },
     topLineMetrics: {
       projectedYearNumber,
@@ -402,19 +461,24 @@ export async function buildOmCalculationSnapshot(params: {
       stabilizedCapRatePct,
       upfrontCapex:
         (assumptions.acquisition.renovationCosts ?? 0) +
-        (assumptions.acquisition.furnishingSetupCosts ?? 0),
+        (projection.assumptions.acquisition.furnishingSetupCosts ?? 0) +
+        (projection.assumptions.acquisition.onboardingCosts ?? 0),
       purchaseClosingCosts: projection.acquisition.purchaseClosingCosts,
       financingFees: projection.acquisition.financingFees,
       totalProjectCost: projection.acquisition.totalProjectCost,
       annualDebtService: projection.financing.annualDebtService,
       holdPeriodYears: assumptions.holdPeriodYears,
       irrPct: projection.returns.irr,
+      averageCashOnCashReturn: projection.returns.averageCashOnCashReturn,
       year1CashOnCashReturn: projection.returns.year1CashOnCashReturn,
       year1EquityYield: projection.returns.year1EquityYield,
       equityMultiple: projection.returns.equityMultiple,
     },
     rentRoll: rentRollRows(details),
     expenseRows: expenseRows(details),
+    unitModelRows: detailedModel.unitModelRows,
+    expenseModelRows: detailedModel.expenseModelRows,
+    sensitivities,
     yearlyCashFlow: projection.yearly,
     acquisition: projection.acquisition,
     financing: projection.financing,

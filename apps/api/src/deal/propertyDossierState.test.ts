@@ -16,6 +16,8 @@ describe("propertyDossierState", () => {
           purchaseClosingCostPct: 2.5,
           renovationCosts: 15_000,
           furnishingSetupCosts: 27_500,
+          investmentProfile: "Value-add",
+          targetAcquisitionDate: "2026-05-15",
           ltvPct: 68,
           interestRatePct: 6.25,
           amortizationYears: 30,
@@ -23,6 +25,7 @@ describe("propertyDossierState", () => {
           rentUpliftPct: 18,
           expenseIncreasePct: 6,
           managementFeePct: 5,
+          occupancyTaxPct: 6,
           vacancyPct: 3,
           leadTimeMonths: 4,
           annualRentGrowthPct: 3,
@@ -45,6 +48,8 @@ describe("propertyDossierState", () => {
       purchaseClosingCostPct: 2.5,
       renovationCosts: 15_000,
       furnishingSetupCosts: 27_500,
+      investmentProfile: "Value-add",
+      targetAcquisitionDate: "2026-05-15",
       ltvPct: 68,
       interestRatePct: 6.25,
       amortizationYears: 30,
@@ -52,6 +57,7 @@ describe("propertyDossierState", () => {
       rentUpliftPct: 18,
       expenseIncreasePct: 6,
       managementFeePct: 5,
+      occupancyTaxPct: 6,
       vacancyPct: 3,
       leadTimeMonths: 4,
       annualRentGrowthPct: 3,
@@ -63,6 +69,8 @@ describe("propertyDossierState", () => {
       exitCapPct: 5.25,
       exitClosingCostPct: 2,
       targetIrrPct: 22,
+      unitModelRows: null,
+      expenseModelRows: null,
       brokerEmailNotes: "Broker shared current gross rent of $180,000 and expenses of $62,000.",
       updatedAt: "2026-03-11T00:00:00.000Z",
     });
@@ -71,6 +79,8 @@ describe("propertyDossierState", () => {
       purchaseClosingCostPct: 2.5,
       renovationCosts: 15_000,
       furnishingSetupCosts: 27_500,
+      investmentProfile: "Value-add",
+      targetAcquisitionDate: "2026-05-15",
       ltvPct: 68,
       interestRatePct: 6.25,
       amortizationYears: 30,
@@ -78,6 +88,7 @@ describe("propertyDossierState", () => {
       rentUpliftPct: 18,
       expenseIncreasePct: 6,
       managementFeePct: 5,
+      occupancyTaxPct: 6,
       vacancyPct: 3,
       leadTimeMonths: 4,
       annualRentGrowthPct: 3,
@@ -97,10 +108,13 @@ describe("propertyDossierState", () => {
       {
         renovationCosts: 10_000,
         furnishingSetupCosts: 24_000,
+        investmentProfile: "Core-plus",
       },
       {
         renovationCosts: null,
         furnishingSetupCosts: 30_000,
+        investmentProfile: null,
+        targetAcquisitionDate: "2026-06-01",
         targetIrrPct: 22,
       }
     );
@@ -108,6 +122,8 @@ describe("propertyDossierState", () => {
     expect(merged).toEqual({
       renovationCosts: 10_000,
       furnishingSetupCosts: 30_000,
+      investmentProfile: "Core-plus",
+      targetAcquisitionDate: "2026-06-01",
       targetIrrPct: 22,
     });
   });

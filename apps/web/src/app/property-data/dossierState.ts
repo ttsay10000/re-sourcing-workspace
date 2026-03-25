@@ -9,6 +9,8 @@ export interface PropertyDossierAssumptions {
   purchaseClosingCostPct?: number | null;
   renovationCosts?: number | null;
   furnishingSetupCosts?: number | null;
+  investmentProfile?: string | null;
+  targetAcquisitionDate?: string | null;
   ltvPct?: number | null;
   interestRatePct?: number | null;
   amortizationYears?: number | null;
@@ -16,6 +18,7 @@ export interface PropertyDossierAssumptions {
   rentUpliftPct?: number | null;
   expenseIncreasePct?: number | null;
   managementFeePct?: number | null;
+  occupancyTaxPct?: number | null;
   vacancyPct?: number | null;
   leadTimeMonths?: number | null;
   annualRentGrowthPct?: number | null;

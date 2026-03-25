@@ -38,6 +38,7 @@ describe("underwritingModel", () => {
       {
         renovationCosts: 100_000,
         furnishingSetupCosts: 20_000,
+        occupancyTaxPct: 0,
       }
     );
 
@@ -117,6 +118,7 @@ describe("underwritingModel", () => {
       {
         renovationCosts: 100_000,
         furnishingSetupCosts: 20_000,
+        occupancyTaxPct: 0,
       }
     );
 
@@ -129,9 +131,9 @@ describe("underwritingModel", () => {
     expect(projection.yearly.grossRentalIncome[1]).toBeCloseTo(132_000, 2);
     expect(projection.yearly.vacancyLoss[1]).toBeCloseTo(19_800, 2);
     expect(projection.yearly.leadTimeLoss[1]).toBeCloseTo(22_000, 2);
-    expect(projection.yearly.managementFee[1]).toBeCloseTo(5_280, 2);
-    expect(projection.yearly.noi[1]).toBeCloseTo(42_920, 2);
-    expect(projection.yearly.cashFlowFromOperations[1]).toBeCloseTo(41_720, 2);
+    expect(projection.yearly.managementFee[1]).toBeCloseTo(4_488, 2);
+    expect(projection.yearly.noi[1]).toBeCloseTo(43_712, 2);
+    expect(projection.yearly.cashFlowFromOperations[1]).toBeCloseTo(42_512, 2);
     expect(projection.cashFlows.annualPrincipalPaydown).toBeCloseTo(
       projection.yearly.principalPaid[1] ?? 0,
       2
@@ -181,7 +183,8 @@ describe("underwritingModel", () => {
         defaultRecurringCapexAnnual: 0,
         defaultLoanFeePct: 0,
       },
-      1_000_000
+      1_000_000,
+      { occupancyTaxPct: 0 }
     );
 
     const projection = computeUnderwritingProjection({
@@ -221,7 +224,8 @@ describe("underwritingModel", () => {
         defaultRecurringCapexAnnual: 0,
         defaultLoanFeePct: 0,
       },
-      1_000_000
+      1_000_000,
+      { occupancyTaxPct: 0 }
     );
 
     const projection = computeUnderwritingProjection({
@@ -247,6 +251,55 @@ describe("underwritingModel", () => {
     expect(projection.yearly.totalOperatingExpenses[2]).toBeCloseTo(26_960, 2);
   });
 
+  it("honors explicit replace-management treatment even when the line item name is generic", () => {
+    const assumptions = resolveDossierAssumptions(
+      {
+        id: "profile-4d",
+        createdAt: "2026-03-10T00:00:00.000Z",
+        updatedAt: "2026-03-10T00:00:00.000Z",
+        defaultPurchaseClosingCostPct: 3,
+        defaultLtv: 70,
+        defaultInterestRate: 6,
+        defaultAmortization: 30,
+        defaultHoldPeriodYears: 3,
+        defaultExitCap: 6,
+        defaultExitClosingCostPct: 2,
+        defaultRentUplift: 0,
+        defaultExpenseIncrease: 20,
+        defaultManagementFee: 8,
+        defaultVacancyPct: 0,
+        defaultLeadTimeMonths: 0,
+        defaultAnnualRentGrowthPct: 0,
+        defaultAnnualOtherIncomeGrowthPct: 0,
+        defaultAnnualExpenseGrowthPct: 0,
+        defaultAnnualPropertyTaxGrowthPct: 8,
+        defaultRecurringCapexAnnual: 0,
+        defaultLoanFeePct: 0,
+      },
+      1_000_000,
+      { occupancyTaxPct: 0 }
+    );
+
+    const projection = computeUnderwritingProjection({
+      assumptions,
+      currentGrossRent: 100_000,
+      currentNoi: 82_000,
+      currentExpensesTotal: 18_000,
+      expenseRows: [
+        { lineItem: "Property Taxes", amount: 10_000 },
+        { lineItem: "Insurance", amount: 5_000 },
+        { lineItem: "Payroll Allocation", amount: 3_000, treatment: "replace_management" },
+      ],
+    });
+
+    expect(projection.yearly.expenseLineItems.map((row) => row.lineItem)).toEqual([
+      "Property Taxes",
+      "Insurance",
+    ]);
+    expect(projection.operating.currentExpenses).toBeCloseTo(15_000, 2);
+    expect(projection.yearly.totalOperatingExpenses[1]).toBeCloseTo(26_000, 2);
+  });
+
   it("caps hold periods to the supported Excel model horizon", () => {
     const assumptions = resolveDossierAssumptions(
       null,
@@ -263,7 +316,7 @@ describe("underwritingModel", () => {
     const assumptions = resolveDossierAssumptions(
       null,
       5_000_000,
-      null,
+      { occupancyTaxPct: 0 },
       {
         details: {
           omData: {
@@ -315,7 +368,7 @@ describe("underwritingModel", () => {
         defaultLoanFeePct: 0,
       },
       1_000_000,
-      null,
+      { occupancyTaxPct: 0 },
       {
         details: {
           omData: {
@@ -371,7 +424,8 @@ describe("underwritingModel", () => {
         defaultRecurringCapexAnnual: 0,
         defaultLoanFeePct: 0,
       },
-      1_000_000
+      1_000_000,
+      { occupancyTaxPct: 0 }
     );
 
     const projection = computeUnderwritingProjection({
@@ -411,7 +465,8 @@ describe("underwritingModel", () => {
         defaultRecurringCapexAnnual: 0,
         defaultLoanFeePct: 0,
       },
-      1_000_000
+      1_000_000,
+      { occupancyTaxPct: 0 }
     );
 
     const projection = computeUnderwritingProjection({
@@ -517,7 +572,8 @@ describe("underwritingModel", () => {
         defaultRecurringCapexAnnual: 0,
         defaultLoanFeePct: 0,
       },
-      1_400_000
+      1_400_000,
+      { occupancyTaxPct: 0 }
     );
 
     const recommendedOffer = computeRecommendedOffer({
@@ -530,5 +586,98 @@ describe("underwritingModel", () => {
     expect(recommendedOffer.recommendedOfferHigh ?? 0).toBeLessThan(1_400_000);
     expect(recommendedOffer.discountToAskingPct ?? 0).toBeGreaterThan(0);
     expect(recommendedOffer.targetMetAtAsking).toBe(false);
+  });
+
+  it("uses per-unit overrides for furnishing, occupancy-aware revenue, and recommended-offer math", () => {
+    const assumptions = resolveDossierAssumptions(
+      {
+        id: "profile-unit-model",
+        createdAt: "2026-03-10T00:00:00.000Z",
+        updatedAt: "2026-03-10T00:00:00.000Z",
+        defaultPurchaseClosingCostPct: 3,
+        defaultLtv: 70,
+        defaultInterestRate: 6,
+        defaultAmortization: 30,
+        defaultHoldPeriodYears: 5,
+        defaultExitCap: 6,
+        defaultExitClosingCostPct: 2,
+        defaultRentUplift: 0,
+        defaultExpenseIncrease: 0,
+        defaultManagementFee: 0,
+        defaultTargetIrrPct: 25,
+        defaultVacancyPct: 0,
+        defaultLeadTimeMonths: 0,
+        defaultAnnualRentGrowthPct: 0,
+        defaultAnnualOtherIncomeGrowthPct: 0,
+        defaultAnnualExpenseGrowthPct: 0,
+        defaultAnnualPropertyTaxGrowthPct: 0,
+        defaultRecurringCapexAnnual: 0,
+        defaultLoanFeePct: 0,
+      },
+      1_400_000,
+      {
+        furnishingSetupCosts: 0,
+        occupancyTaxPct: 0,
+      }
+    );
+
+    const unitRows = [
+      {
+        rowId: "market-1",
+        unitLabel: "Unit 1",
+        underwrittenAnnualRent: 100_000,
+        rentUpliftPct: 20,
+        occupancyPct: 80,
+        furnishingCost: 10_000,
+        onboardingFee: 2_500,
+        monthlyHospitalityExpense: 300,
+        includeInUnderwriting: true,
+        isProtected: false,
+      },
+      {
+        rowId: "protected-2",
+        unitLabel: "Unit 2",
+        underwrittenAnnualRent: 80_000,
+        rentUpliftPct: 0,
+        occupancyPct: 100,
+        furnishingCost: 0,
+        onboardingFee: 0,
+        monthlyHospitalityExpense: 100,
+        includeInUnderwriting: true,
+        isProtected: true,
+      },
+    ] as const;
+
+    const projection = computeUnderwritingProjection({
+      assumptions,
+      currentGrossRent: 180_000,
+      currentNoi: 180_000,
+      unitRows: [...unitRows],
+    });
+    const recommendedOfferWithUnitRows = computeRecommendedOffer({
+      assumptions,
+      currentGrossRent: 180_000,
+      currentNoi: 180_000,
+      unitRows: [...unitRows],
+    });
+    const recommendedOfferWithoutUnitRows = computeRecommendedOffer({
+      assumptions,
+      currentGrossRent: 180_000,
+      currentNoi: 180_000,
+    });
+
+    expect(projection.assumptions.acquisition.furnishingSetupCosts).toBe(10_000);
+    expect(projection.assumptions.acquisition.onboardingCosts).toBe(2_500);
+    expect(projection.assumptions.operating.blendedRentUpliftPct).toBeCloseTo(11.11, 2);
+    expect(projection.yearly.grossRentalIncome[1]).toBeCloseTo(200_000, 2);
+    expect(projection.yearly.vacancyLoss[1]).toBeCloseTo(24_000, 2);
+    expect(projection.operating.adjustedGrossRent).toBeCloseTo(176_000, 2);
+    expect(
+      projection.yearly.expenseLineItems.find((row) => row.lineItem === "Monthly hospitality / unit opex")
+        ?.yearlyAmounts[0]
+    ).toBe(4_800);
+    expect(recommendedOfferWithUnitRows.irrAtAskingPct ?? 0).toBeLessThan(
+      recommendedOfferWithoutUnitRows.irrAtAskingPct ?? 0
+    );
   });
 });

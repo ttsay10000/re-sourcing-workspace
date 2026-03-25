@@ -54,7 +54,7 @@ router.get("/dossier-assumptions", async (req: Request, res: Response) => {
           primaryListing: { price: number | null; city: string | null } | null;
         }
       | null = null;
-    let defaults: Record<string, number | string | null> | null = null;
+    let defaults: Record<string, unknown> | null = null;
     let formulaDefaults: Record<string, number | null> | null = null;
     let mixSummary: Record<string, number | null> | null = null;
     if (propertyId) {
@@ -91,6 +91,13 @@ router.get("/dossier-assumptions", async (req: Request, res: Response) => {
           purchaseClosingCostPct: assumptions.acquisition.purchaseClosingCostPct,
           renovationCosts: assumptions.acquisition.renovationCosts,
           furnishingSetupCosts: assumptions.acquisition.furnishingSetupCosts,
+          investmentProfile:
+            propertyAssumptions?.investmentProfile ?? assumptions.acquisition.investmentProfile,
+          targetAcquisitionDate:
+            propertyAssumptions?.targetAcquisitionDate ??
+            assumptions.acquisition.targetAcquisitionDate,
+          unitModelRows: propertyAssumptions?.unitModelRows ?? null,
+          expenseModelRows: propertyAssumptions?.expenseModelRows ?? null,
           brokerEmailNotes: propertyAssumptions?.brokerEmailNotes ?? null,
           ltvPct: assumptions.financing.ltvPct,
           interestRatePct: assumptions.financing.interestRatePct,
@@ -100,6 +107,7 @@ router.get("/dossier-assumptions", async (req: Request, res: Response) => {
           blendedRentUpliftPct: assumptions.operating.blendedRentUpliftPct,
           expenseIncreasePct: assumptions.operating.expenseIncreasePct,
           managementFeePct: assumptions.operating.managementFeePct,
+          occupancyTaxPct: assumptions.operating.occupancyTaxPct,
           vacancyPct: assumptions.operating.vacancyPct,
           leadTimeMonths: assumptions.operating.leadTimeMonths,
           annualRentGrowthPct: assumptions.operating.annualRentGrowthPct,
@@ -136,6 +144,10 @@ router.get("/dossier-assumptions", async (req: Request, res: Response) => {
         purchaseClosingCostPct: assumptions.acquisition.purchaseClosingCostPct,
         renovationCosts: assumptions.acquisition.renovationCosts,
         furnishingSetupCosts: assumptions.acquisition.furnishingSetupCosts,
+        investmentProfile: assumptions.acquisition.investmentProfile,
+        targetAcquisitionDate: assumptions.acquisition.targetAcquisitionDate,
+        unitModelRows: null,
+        expenseModelRows: null,
         brokerEmailNotes: null,
         ltvPct: assumptions.financing.ltvPct,
         interestRatePct: assumptions.financing.interestRatePct,
@@ -145,6 +157,7 @@ router.get("/dossier-assumptions", async (req: Request, res: Response) => {
         blendedRentUpliftPct: assumptions.operating.blendedRentUpliftPct,
         expenseIncreasePct: assumptions.operating.expenseIncreasePct,
         managementFeePct: assumptions.operating.managementFeePct,
+        occupancyTaxPct: assumptions.operating.occupancyTaxPct,
         vacancyPct: assumptions.operating.vacancyPct,
         leadTimeMonths: assumptions.operating.leadTimeMonths,
         annualRentGrowthPct: assumptions.operating.annualRentGrowthPct,
@@ -208,6 +221,15 @@ function parseAssumptionOverrides(rawAssumptions: unknown): DossierAssumptionOve
     renovationCosts: typeof record.renovationCosts === "number" ? record.renovationCosts : null,
     furnishingSetupCosts:
       typeof record.furnishingSetupCosts === "number" ? record.furnishingSetupCosts : null,
+    investmentProfile:
+      typeof record.investmentProfile === "string" && record.investmentProfile.trim().length > 0
+        ? record.investmentProfile.trim()
+        : null,
+    targetAcquisitionDate:
+      typeof record.targetAcquisitionDate === "string" &&
+      /^\d{4}-\d{2}-\d{2}$/.test(record.targetAcquisitionDate.trim())
+        ? record.targetAcquisitionDate.trim()
+        : null,
     ltvPct: typeof record.ltvPct === "number" ? record.ltvPct : null,
     interestRatePct: typeof record.interestRatePct === "number" ? record.interestRatePct : null,
     amortizationYears: typeof record.amortizationYears === "number" ? record.amortizationYears : null,
@@ -215,6 +237,7 @@ function parseAssumptionOverrides(rawAssumptions: unknown): DossierAssumptionOve
     rentUpliftPct: typeof record.rentUpliftPct === "number" ? record.rentUpliftPct : null,
     expenseIncreasePct: typeof record.expenseIncreasePct === "number" ? record.expenseIncreasePct : null,
     managementFeePct: typeof record.managementFeePct === "number" ? record.managementFeePct : null,
+    occupancyTaxPct: typeof record.occupancyTaxPct === "number" ? record.occupancyTaxPct : null,
     vacancyPct: typeof record.vacancyPct === "number" ? record.vacancyPct : null,
     leadTimeMonths: typeof record.leadTimeMonths === "number" ? record.leadTimeMonths : null,
     annualRentGrowthPct:

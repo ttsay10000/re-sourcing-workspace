@@ -27,6 +27,8 @@ describe("currentFinancials", () => {
     expect(resolved.otherIncome).toBe(1_931);
     expect(resolved.effectiveGrossIncome).toBe(610_352);
     expect(resolved.operatingExpenses).toBe(164_080);
+    expect(resolved.rentBasis).toBe("gross_before_vacancy");
+    expect(resolved.assumedLongTermOccupancyPct).toBeNull();
   });
 
   it("uses effective gross income minus NOI for expenses when no expense table exists", () => {
@@ -46,6 +48,7 @@ describe("currentFinancials", () => {
 
     expect(resolved.grossRentalIncome).toBe(617_208);
     expect(resolved.operatingExpenses).toBe(164_080);
+    expect(resolved.rentBasis).toBe("gross_before_vacancy");
   });
 
   it("returns empty current financials when no authoritative OM snapshot exists", () => {
@@ -67,6 +70,10 @@ describe("currentFinancials", () => {
       vacancyLoss: null,
       effectiveGrossIncome: null,
       operatingExpenses: null,
+      rentBasis: "unknown",
+      assumedLongTermOccupancyPct: null,
+      reportedOccupancyPct: null,
+      reportedVacancyPct: null,
     });
   });
 
@@ -79,6 +86,24 @@ describe("currentFinancials", () => {
     });
 
     expect(resolved.grossRentalIncome).toBe(550_000);
+    expect(resolved.rentBasis).toBe("gross_before_vacancy");
+  });
+
+  it("flags effective-only current rent and falls back to a 97% LTR occupancy assumption", () => {
+    const resolved = resolveCurrentFinancialsFromOmAnalysis({
+      income: {
+        effectiveGrossIncome: 291_000,
+        NOI: 210_000,
+      },
+      uiFinancialSummary: {
+        grossRent: 291_000,
+        noi: 210_000,
+      },
+    });
+
+    expect(resolved.grossRentalIncome).toBe(291_000);
+    expect(resolved.rentBasis).toBe("effective_after_vacancy");
+    expect(resolved.assumedLongTermOccupancyPct).toBe(97);
   });
 
   it("returns normalized expense rows from the OM table", () => {

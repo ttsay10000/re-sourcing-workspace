@@ -1,6 +1,8 @@
 import {
   computeBlendedRentUpliftPct,
   computeUnderwritingProjection,
+  type ProjectedExpenseInputRow,
+  type ProjectedUnitInputRow,
   type ResolvedDossierAssumptions,
 } from "./underwritingModel.js";
 
@@ -87,7 +89,8 @@ export function buildSensitivityAnalyses(input: {
   currentNoi: number | null;
   currentOtherIncome?: number | null;
   currentExpensesTotal?: number | null;
-  expenseRows?: Array<{ lineItem: string; amount: number }> | null;
+  expenseRows?: ProjectedExpenseInputRow[] | null;
+  unitRows?: ProjectedUnitInputRow[] | null;
   conservativeProjectedLeaseUpRent?: number | null;
   protectedProjectedLeaseUpRent?: number | null;
   baseProjection: ReturnType<typeof computeUnderwritingProjection>;
@@ -99,6 +102,7 @@ export function buildSensitivityAnalyses(input: {
     currentOtherIncome,
     currentExpensesTotal,
     expenseRows,
+    unitRows,
     conservativeProjectedLeaseUpRent,
     protectedProjectedLeaseUpRent,
     baseProjection,
@@ -121,6 +125,12 @@ export function buildSensitivityAnalyses(input: {
         currentOtherIncome,
         currentExpensesTotal,
         expenseRows,
+        unitRows:
+          unitRows?.map((row) =>
+            row.includeInUnderwriting === false || row.isProtected === true
+              ? row
+              : { ...row, rentUpliftPct: valuePct }
+          ) ?? null,
         conservativeProjectedLeaseUpRent,
         protectedProjectedLeaseUpRent,
       })
@@ -143,6 +153,7 @@ export function buildSensitivityAnalyses(input: {
         currentOtherIncome,
         currentExpensesTotal,
         expenseRows,
+        unitRows,
         conservativeProjectedLeaseUpRent,
         protectedProjectedLeaseUpRent,
       })
@@ -165,6 +176,7 @@ export function buildSensitivityAnalyses(input: {
         currentOtherIncome,
         currentExpensesTotal,
         expenseRows,
+        unitRows,
         conservativeProjectedLeaseUpRent,
         protectedProjectedLeaseUpRent,
       })
@@ -188,6 +200,7 @@ export function buildSensitivityAnalyses(input: {
           currentOtherIncome,
           currentExpensesTotal,
           expenseRows,
+          unitRows,
           conservativeProjectedLeaseUpRent,
           protectedProjectedLeaseUpRent,
         })

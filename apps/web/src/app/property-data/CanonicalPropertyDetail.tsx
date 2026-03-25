@@ -92,6 +92,8 @@ interface DossierAssumptionsResponse {
     purchaseClosingCostPct?: number | null;
     renovationCosts?: number | null;
     furnishingSetupCosts?: number | null;
+    investmentProfile?: string | null;
+    targetAcquisitionDate?: string | null;
     ltvPct?: number | null;
     interestRatePct?: number | null;
     amortizationYears?: number | null;
@@ -99,6 +101,7 @@ interface DossierAssumptionsResponse {
     rentUpliftPct?: number | null;
     expenseIncreasePct?: number | null;
     managementFeePct?: number | null;
+    occupancyTaxPct?: number | null;
     vacancyPct?: number | null;
     leadTimeMonths?: number | null;
     annualRentGrowthPct?: number | null;
@@ -521,6 +524,8 @@ function emptyOmCalculationDraft(): OmCalculationDraft {
     purchaseClosingCostPct: null,
     renovationCosts: 0,
     furnishingSetupCosts: null,
+    investmentProfile: "",
+    targetAcquisitionDate: "",
     ltvPct: null,
     interestRatePct: null,
     amortizationYears: null,
@@ -528,6 +533,7 @@ function emptyOmCalculationDraft(): OmCalculationDraft {
     rentUpliftPct: null,
     expenseIncreasePct: null,
     managementFeePct: null,
+    occupancyTaxPct: null,
     vacancyPct: null,
     leadTimeMonths: null,
     annualRentGrowthPct: null,
@@ -776,6 +782,8 @@ export function CanonicalPropertyDetail({
       purchaseClosingCostPct: data.defaults?.purchaseClosingCostPct ?? null,
       renovationCosts: data.defaults?.renovationCosts ?? 0,
       furnishingSetupCosts: data.defaults?.furnishingSetupCosts ?? null,
+      investmentProfile: data.defaults?.investmentProfile ?? "",
+      targetAcquisitionDate: data.defaults?.targetAcquisitionDate ?? "",
       ltvPct: data.defaults?.ltvPct ?? null,
       interestRatePct: data.defaults?.interestRatePct ?? null,
       amortizationYears: data.defaults?.amortizationYears ?? null,
@@ -783,6 +791,7 @@ export function CanonicalPropertyDetail({
       rentUpliftPct: data.defaults?.rentUpliftPct ?? null,
       expenseIncreasePct: data.defaults?.expenseIncreasePct ?? null,
       managementFeePct: data.defaults?.managementFeePct ?? null,
+      occupancyTaxPct: data.defaults?.occupancyTaxPct ?? null,
       vacancyPct: data.defaults?.vacancyPct ?? null,
       leadTimeMonths: data.defaults?.leadTimeMonths ?? null,
       annualRentGrowthPct: data.defaults?.annualRentGrowthPct ?? null,
@@ -1409,10 +1418,12 @@ export function CanonicalPropertyDetail({
     else setOmCalculationRunning(true);
     setOmCalculationError(null);
     try {
-      const assumptions = OM_CALC_NUMERIC_FIELDS.reduce<Record<string, number | null>>((acc, field) => {
+      const assumptions = OM_CALC_NUMERIC_FIELDS.reduce<Record<string, number | string | null>>((acc, field) => {
         acc[field] = nextDraft[field] ?? null;
         return acc;
       }, {});
+      assumptions.investmentProfile = nextDraft.investmentProfile.trim() || null;
+      assumptions.targetAcquisitionDate = nextDraft.targetAcquisitionDate.trim() || null;
       const res = await fetch(`${API_BASE}/api/properties/${property.id}/om-calculation`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },

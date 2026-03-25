@@ -6,6 +6,7 @@ import {
   computeUnderwritingProjection,
   resolveAssetCapRateNoiBasis,
   type ProjectedExpenseInputRow,
+  type ProjectedUnitInputRow,
   type ResolvedDossierAssumptions,
 } from "./underwritingModel.js";
 
@@ -20,6 +21,7 @@ interface BuildDealScoreSensitivityInput {
   currentOtherIncome?: number | null;
   currentExpensesTotal?: number | null;
   expenseRows?: ProjectedExpenseInputRow[] | null;
+  unitRows?: ProjectedUnitInputRow[] | null;
   conservativeProjectedLeaseUpRent?: number | null;
   protectedProjectedLeaseUpRent?: number | null;
   baseCalculatedScore: number | null;
@@ -55,6 +57,7 @@ function scoreForScenario(
     currentOtherIncome: input.currentOtherIncome,
     currentExpensesTotal: input.currentExpensesTotal,
     expenseRows: input.expenseRows,
+    unitRows: input.unitRows,
     conservativeProjectedLeaseUpRent: input.conservativeProjectedLeaseUpRent,
     protectedProjectedLeaseUpRent: input.protectedProjectedLeaseUpRent,
   });
@@ -65,6 +68,7 @@ function scoreForScenario(
     currentOtherIncome: input.currentOtherIncome,
     currentExpensesTotal: input.currentExpensesTotal,
     expenseRows: input.expenseRows,
+    unitRows: input.unitRows,
     conservativeProjectedLeaseUpRent: input.conservativeProjectedLeaseUpRent,
     protectedProjectedLeaseUpRent: input.protectedProjectedLeaseUpRent,
   });
@@ -90,7 +94,7 @@ function scoreForScenario(
     adjustedCapRatePct,
     adjustedNoi: projection.operating.stabilizedNoi ?? null,
     recommendedOfferHigh: recommendedOffer.recommendedOfferHigh,
-    blendedRentUpliftPct: assumptions.operating.blendedRentUpliftPct,
+    blendedRentUpliftPct: projection.assumptions.operating.blendedRentUpliftPct,
     annualExpenseGrowthPct: assumptions.operating.annualExpenseGrowthPct,
     vacancyPct: assumptions.operating.vacancyPct,
     exitCapRatePct: assumptions.exit.exitCapPct,
@@ -113,6 +117,7 @@ export function buildDealScoreSensitivity(input: BuildDealScoreSensitivityInput)
     currentOtherIncome: input.currentOtherIncome,
     currentExpensesTotal: input.currentExpensesTotal,
     expenseRows: input.expenseRows,
+    unitRows: input.unitRows,
     conservativeProjectedLeaseUpRent: input.conservativeProjectedLeaseUpRent,
     protectedProjectedLeaseUpRent: input.protectedProjectedLeaseUpRent,
   };
@@ -145,7 +150,18 @@ export function buildDealScoreSensitivity(input: BuildDealScoreSensitivityInput)
     },
   };
 
-  const rentScenarioScore = scoreForScenario(scenarioBaseInput, rentScenarioAssumptions);
+  const rentScenarioScore = scoreForScenario(
+    {
+      ...scenarioBaseInput,
+      unitRows:
+        input.unitRows?.map((row) =>
+          row.includeInUnderwriting === false || row.isProtected === true
+            ? row
+            : { ...row, rentUpliftPct }
+        ) ?? null,
+    },
+    rentScenarioAssumptions
+  );
   const exitScenarioScore = scoreForScenario(scenarioBaseInput, exitScenarioAssumptions);
   const expenseScenarioScore = scoreForScenario(scenarioBaseInput, expenseScenarioAssumptions);
 

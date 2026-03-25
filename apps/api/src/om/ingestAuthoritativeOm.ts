@@ -154,6 +154,10 @@ function toAuthoritativeCurrentFinancials(
     vacancyLoss: current.vacancyLoss,
     effectiveGrossIncome: current.effectiveGrossIncome,
     operatingExpenses: current.operatingExpenses,
+    rentBasis: current.rentBasis,
+    assumedLongTermOccupancyPct: current.assumedLongTermOccupancyPct,
+    reportedOccupancyPct: current.reportedOccupancyPct,
+    reportedVacancyPct: current.reportedVacancyPct,
   };
 }
 
