@@ -251,6 +251,7 @@ export interface OmCalculationSnapshot {
 }
 
 interface OmCalculationPanelProps {
+  mode?: "property" | "standalone";
   draft: OmCalculationDraft;
   calculation: OmCalculationSnapshot | null;
   loading: boolean;
@@ -537,6 +538,7 @@ function nextExpenseRowId(): string {
 }
 
 export function OmCalculationPanel({
+  mode = "property",
   draft,
   calculation,
   loading,
@@ -557,14 +559,19 @@ export function OmCalculationPanel({
   onApplyFormulaDefault,
   onClearSaved,
 }: OmCalculationPanelProps) {
+  const showPersistenceActions = mode === "property";
   const canCalculate = hasAuthoritativeOm || hasBrokerEmailNotes;
   const effectiveLabel = calculation
     ? `Using ${calculation.source.sourceLabel}`
     : hasAuthoritativeOm
-      ? "Ready to run against authoritative OM"
+      ? mode === "standalone"
+        ? "Ready to refresh uploaded OM analysis"
+        : "Ready to run against authoritative OM"
       : hasBrokerEmailNotes
         ? "Ready to run against saved broker notes"
-        : "Upload an OM/rent roll or save broker notes first";
+        : mode === "standalone"
+          ? "Upload OM PDF(s) to start the deal analysis workspace"
+          : "Upload an OM/rent roll or save broker notes first";
   const unitModelRows = draft.unitModelRows ?? calculation?.unitModelRows ?? [];
   const expenseModelRows = draft.expenseModelRows ?? calculation?.expenseModelRows ?? [];
   const detailedFurnishingTotal = unitModelRows.reduce(
@@ -787,7 +794,13 @@ export function OmCalculationPanel({
                 fontWeight: 700,
               }}
             >
-              {isDirty ? "Unsaved assumption edits" : "Assumptions synced"}
+              {isDirty
+                ? mode === "standalone"
+                  ? "Unapplied underwriting edits"
+                  : "Unsaved assumption edits"
+                : mode === "standalone"
+                  ? "Analysis synced"
+                  : "Assumptions synced"}
             </span>
           </div>
         </div>
@@ -807,54 +820,64 @@ export function OmCalculationPanel({
               opacity: !canCalculate ? 0.65 : 1,
             }}
           >
-            {running ? "Analyzing..." : "Analyze OM"}
+            {running
+              ? "Analyzing..."
+              : mode === "standalone"
+                ? calculation
+                  ? "Refresh analysis"
+                  : "Analyze uploaded OMs"
+                : "Analyze OM"}
           </button>
-          <button
-            type="button"
-            onClick={onSave}
-            disabled={saving || running || !isDirty}
-            style={{
-              padding: "0.6rem 0.95rem",
-              borderRadius: "10px",
-              border: "1px solid #cbd5e1",
-              background: "#fff",
-              color: "#0f172a",
-              fontWeight: 600,
-              cursor: saving || running || !isDirty ? "not-allowed" : "pointer",
-            }}
-          >
-            {saving ? "Saving..." : "Save assumptions"}
-          </button>
-          <button
-            type="button"
-            onClick={onResetToSaved}
-            disabled={saving || running || !isDirty}
-            style={{
-              padding: "0.6rem 0.95rem",
-              borderRadius: "10px",
-              border: "1px solid #cbd5e1",
-              background: "#f8fafc",
-              color: "#334155",
-              cursor: saving || running || !isDirty ? "not-allowed" : "pointer",
-            }}
-          >
-            Reset edits
-          </button>
-          <button
-            type="button"
-            onClick={onClearSaved}
-            disabled={saving || running}
-            style={{
-              padding: "0.6rem 0.95rem",
-              borderRadius: "10px",
-              border: "1px solid #fecaca",
-              background: "#fff1f2",
-              color: "#b91c1c",
-              cursor: saving || running ? "not-allowed" : "pointer",
-            }}
-          >
-            Clear saved overrides
-          </button>
+          {showPersistenceActions ? (
+            <>
+              <button
+                type="button"
+                onClick={onSave}
+                disabled={saving || running || !isDirty}
+                style={{
+                  padding: "0.6rem 0.95rem",
+                  borderRadius: "10px",
+                  border: "1px solid #cbd5e1",
+                  background: "#fff",
+                  color: "#0f172a",
+                  fontWeight: 600,
+                  cursor: saving || running || !isDirty ? "not-allowed" : "pointer",
+                }}
+              >
+                {saving ? "Saving..." : "Save assumptions"}
+              </button>
+              <button
+                type="button"
+                onClick={onResetToSaved}
+                disabled={saving || running || !isDirty}
+                style={{
+                  padding: "0.6rem 0.95rem",
+                  borderRadius: "10px",
+                  border: "1px solid #cbd5e1",
+                  background: "#f8fafc",
+                  color: "#334155",
+                  cursor: saving || running || !isDirty ? "not-allowed" : "pointer",
+                }}
+              >
+                Reset edits
+              </button>
+              <button
+                type="button"
+                onClick={onClearSaved}
+                disabled={saving || running}
+                style={{
+                  padding: "0.6rem 0.95rem",
+                  borderRadius: "10px",
+                  border: "1px solid #fecaca",
+                  background: "#fff1f2",
+                  color: "#b91c1c",
+                  cursor: saving || running ? "not-allowed" : "pointer",
+                }}
+              >
+                Clear saved overrides
+              </button>
+            </>
+          ) : null}
         </div>
       </div>
 
@@ -869,8 +892,9 @@ export function OmCalculationPanel({
             fontSize: "0.92rem",
           }}
         >
-          Upload an OM, build the authoritative OM, or save broker notes first so this workspace has a
-          current revenue and expense base to analyze.
+          {mode === "standalone"
+            ? "Upload one or more OM PDFs and run analysis so this workspace can populate current state, unit-level underwriting rows, and dossier outputs."
+            : "Upload an OM, build the authoritative OM, or save broker notes first so this workspace has a current revenue and expense base to analyze."}
         </div>
       ) : null}
 
@@ -1145,8 +1169,9 @@ export function OmCalculationPanel({
             ))}
           </div>
           <div style={{ marginTop: "0.8rem", fontSize: "0.8rem", color: "#64748b", lineHeight: 1.5 }}>
-            Save assumptions when you want these inputs, unit edits, and expense edits to carry through to
-            the generated deal dossier and Excel model.
+            {mode === "standalone"
+              ? "Adjust inputs here, then refresh analysis so the current state, sensitivities, and deal dossier all reflect the latest underwriting edits."
+              : "Save assumptions when you want these inputs, unit edits, and expense edits to carry through to the generated deal dossier and Excel model."}
           </div>
         </div>
       </div>

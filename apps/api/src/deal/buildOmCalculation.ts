@@ -5,6 +5,7 @@ import type {
   PropertyDealDossierExpenseModelRow,
   PropertyDealDossierUnitModelRow,
   PropertyDetails,
+  UserProfile,
 } from "@re-sourcing/contracts";
 import {
   getPool,
@@ -279,30 +280,39 @@ export interface OmCalculationSnapshot {
   validationMessages: string[];
 }
 
-export async function buildOmCalculationSnapshot(params: {
-  propertyId: string;
+export interface OmCalculationPropertyInput {
+  id: string;
+  canonicalAddress: string;
+  city: string | null;
+  askingPrice: number | null;
+  listedAt: string | null;
+}
+
+export interface ResolvedOmCalculationArtifacts {
+  rawDetails: PropertyDetails | null;
+  details: PropertyDetails | null;
+  source: OmCalculationSnapshot["source"];
+  savedAssumptions: PropertyDealDossierAssumptions | null;
+  assumptions: ReturnType<typeof resolveDossierAssumptions>;
+  detailedModel: ReturnType<typeof resolveDetailedCashFlowModel>;
+  currentFinancials: ReturnType<typeof resolveCurrentFinancialsFromDetails>;
+  resolvedExpenseTotal: number | null;
+  projection: ReturnType<typeof computeUnderwritingProjection>;
+  recommendedOffer: ReturnType<typeof computeRecommendedOffer>;
+  sensitivities: SensitivityAnalysis[];
+}
+
+export async function resolveOmCalculationArtifactsFromInputs(params: {
+  profile: UserProfile;
+  askingPrice: number | null;
+  rawDetails: PropertyDetails | null;
+  savedAssumptions?: PropertyDealDossierAssumptions | null;
   assumptionOverrides?: DossierAssumptionOverrides | null;
   brokerEmailNotes?: string | null;
   unitModelRows?: PropertyDealDossierUnitModelRow[] | null;
   expenseModelRows?: PropertyDealDossierExpenseModelRow[] | null;
-}): Promise<OmCalculationSnapshot> {
-  const pool = getPool();
-  const propertyRepo = new PropertyRepo({ pool });
-  const matchRepo = new MatchRepo({ pool });
-  const listingRepo = new ListingRepo({ pool });
-  const profileRepo = new UserProfileRepo({ pool });
-
-  const property = await propertyRepo.byId(params.propertyId);
-  if (!property) throw new Error("Property not found");
-
-  const { matches } = await matchRepo.list({ propertyId: params.propertyId, limit: 1 });
-  const listing = matches[0] ? await listingRepo.byId(matches[0].listingId) : null;
-
-  await profileRepo.ensureDefault();
-  const profile = await profileRepo.getDefault();
-  if (!profile) throw new Error("Profile not available");
-
-  const rawDetails = property.details as PropertyDetails | null;
+}): Promise<ResolvedOmCalculationArtifacts> {
+  const rawDetails = params.rawDetails ?? null;
   const brokerEmailNotes = trimmedString(params.brokerEmailNotes) ?? getBrokerEmailNotes(rawDetails);
   const brokerNotesExtract = await extractBrokerDossierNotes(brokerEmailNotes);
   const details = mergeBrokerNotesIntoDetails(rawDetails, brokerNotesExtract);
@@ -315,14 +325,14 @@ export async function buildOmCalculationSnapshot(params: {
     );
   }
 
-  const propertyAssumptions = getPropertyDossierAssumptions(rawDetails);
+  const savedAssumptions = params.savedAssumptions ?? null;
   const mergedAssumptionOverrides =
     params.assumptionOverrides != null
       ? params.assumptionOverrides
-      : propertyAssumptionsToOverrides(propertyAssumptions);
+      : propertyAssumptionsToOverrides(savedAssumptions);
   const assumptions = resolveDossierAssumptions(
-    profile,
-    listing?.price ?? null,
+    params.profile,
+    params.askingPrice ?? null,
     mergedAssumptionOverrides,
     { details }
   );
@@ -333,11 +343,11 @@ export async function buildOmCalculationSnapshot(params: {
     defaultAnnualExpenseGrowthPct: assumptions.operating.annualExpenseGrowthPct,
     defaultAnnualPropertyTaxGrowthPct: assumptions.operating.annualPropertyTaxGrowthPct,
     unitModelRows:
-      params.unitModelRows !== undefined ? params.unitModelRows : propertyAssumptions?.unitModelRows,
+      params.unitModelRows !== undefined ? params.unitModelRows : savedAssumptions?.unitModelRows,
     expenseModelRows:
       params.expenseModelRows !== undefined
         ? params.expenseModelRows
-        : propertyAssumptions?.expenseModelRows,
+        : savedAssumptions?.expenseModelRows,
   });
   const currentFinancials = resolveCurrentFinancialsFromDetails(details);
   const leaseUpRentSummary = resolveProjectedResidentialLeaseUpRentSummary(details);
@@ -377,6 +387,46 @@ export async function buildOmCalculationSnapshot(params: {
     baseProjection: projection,
   });
 
+  return {
+    rawDetails,
+    details,
+    source: {
+      hasAuthoritativeOm,
+      hasBrokerFinancialInputs,
+      sourceLabel: hasAuthoritativeOm
+        ? hasBrokerFinancialInputs
+          ? "Authoritative OM + broker notes"
+          : "Authoritative OM"
+        : "Broker notes",
+    },
+    savedAssumptions,
+    assumptions,
+    detailedModel,
+    currentFinancials,
+    resolvedExpenseTotal,
+    projection,
+    recommendedOffer,
+    sensitivities,
+  };
+}
+
+export function buildOmCalculationSnapshotFromInputs(params: {
+  property: OmCalculationPropertyInput;
+  artifacts: ResolvedOmCalculationArtifacts;
+}): OmCalculationSnapshot {
+  const { property, artifacts } = params;
+  const {
+    details,
+    source,
+    savedAssumptions,
+    assumptions,
+    detailedModel,
+    currentFinancials,
+    projection,
+    recommendedOffer,
+    sensitivities,
+  } = artifacts;
+
   const modeledPurchasePrice = assumptions.acquisition.purchasePrice;
   const projectedYearNumber = assumptions.holdPeriodYears >= 2 ? 2 : 1;
   const projectedYearRent = projection.yearly.grossRentalIncome[projectedYearNumber] ?? null;
@@ -387,7 +437,9 @@ export async function buildOmCalculationSnapshot(params: {
       ? (currentFinancials.noi / modeledPurchasePrice) * 100
       : null;
   const stabilizedCapRatePct =
-    modeledPurchasePrice != null && modeledPurchasePrice > 0 && projection.operating.stabilizedNoi != null
+    modeledPurchasePrice != null &&
+    modeledPurchasePrice > 0 &&
+    projection.operating.stabilizedNoi != null
       ? (projection.operating.stabilizedNoi / modeledPurchasePrice) * 100
       : null;
   const stabilizedNoiIncreasePct =
@@ -409,19 +461,11 @@ export async function buildOmCalculationSnapshot(params: {
     property: {
       id: property.id,
       canonicalAddress: property.canonicalAddress,
-      city: listing?.city ?? null,
-      askingPrice: listing?.price ?? null,
-      listedAt: listing?.listedAt ?? null,
+      city: property.city,
+      askingPrice: property.askingPrice,
+      listedAt: property.listedAt,
     },
-    source: {
-      hasAuthoritativeOm,
-      hasBrokerFinancialInputs,
-      sourceLabel: hasAuthoritativeOm
-        ? hasBrokerFinancialInputs
-          ? "Authoritative OM + broker notes"
-          : "Authoritative OM"
-        : "Broker notes",
-    },
+    source,
     propertyInfo: {
       ...infoSummary,
       totalUnits: resolvePreferredOmUnitCount(details) ?? assumptions.propertyMix.totalUnits,
@@ -429,7 +473,7 @@ export async function buildOmCalculationSnapshot(params: {
       commercialUnits: assumptions.propertyMix.commercialUnits,
       rentStabilizedUnits: assumptions.propertyMix.rentStabilizedUnits,
     },
-    savedAssumptions: propertyAssumptions,
+    savedAssumptions,
     assumptions: flattenedAssumptions(projection.assumptions),
     acquisitionMetadata: {
       investmentProfile: projection.assumptions.acquisition.investmentProfile,
@@ -488,4 +532,52 @@ export async function buildOmCalculationSnapshot(params: {
     recommendedOffer,
     validationMessages: validationMessages(details),
   };
+}
+
+export async function buildOmCalculationSnapshot(params: {
+  propertyId: string;
+  assumptionOverrides?: DossierAssumptionOverrides | null;
+  brokerEmailNotes?: string | null;
+  unitModelRows?: PropertyDealDossierUnitModelRow[] | null;
+  expenseModelRows?: PropertyDealDossierExpenseModelRow[] | null;
+}): Promise<OmCalculationSnapshot> {
+  const pool = getPool();
+  const propertyRepo = new PropertyRepo({ pool });
+  const matchRepo = new MatchRepo({ pool });
+  const listingRepo = new ListingRepo({ pool });
+  const profileRepo = new UserProfileRepo({ pool });
+
+  const property = await propertyRepo.byId(params.propertyId);
+  if (!property) throw new Error("Property not found");
+
+  const { matches } = await matchRepo.list({ propertyId: params.propertyId, limit: 1 });
+  const listing = matches[0] ? await listingRepo.byId(matches[0].listingId) : null;
+
+  await profileRepo.ensureDefault();
+  const profile = await profileRepo.getDefault();
+  if (!profile) throw new Error("Profile not available");
+
+  const rawDetails = property.details as PropertyDetails | null;
+  const propertyAssumptions = getPropertyDossierAssumptions(rawDetails);
+  const artifacts = await resolveOmCalculationArtifactsFromInputs({
+    profile,
+    askingPrice: listing?.price ?? null,
+    rawDetails,
+    savedAssumptions: propertyAssumptions,
+    assumptionOverrides: params.assumptionOverrides,
+    brokerEmailNotes: params.brokerEmailNotes,
+    unitModelRows: params.unitModelRows,
+    expenseModelRows: params.expenseModelRows,
+  });
+
+  return buildOmCalculationSnapshotFromInputs({
+    property: {
+      id: property.id,
+      canonicalAddress: property.canonicalAddress,
+      city: listing?.city ?? null,
+      askingPrice: listing?.price ?? null,
+      listedAt: listing?.listedAt ?? null,
+    },
+    artifacts,
+  });
 }

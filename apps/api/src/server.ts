@@ -17,6 +17,7 @@ import dossierRouter from "./routes/dossier.js";
 import dealsRouter from "./routes/deals.js";
 import savedSearchesRouter from "./routes/savedSearches.js";
 import salesMetricsRouter from "./routes/salesMetrics.js";
+import dealAnalysisRouter from "./routes/dealAnalysis.js";
 
 const PORT = Number(process.env.PORT) || 4000;
 const version = process.env.npm_package_version || "1.0.0";
@@ -37,7 +38,7 @@ app.use(
     },
   })
 );
-app.use(express.json());
+app.use(express.json({ limit: "15mb" }));
 
 // Root: avoid "Cannot GET /" when opening API URL in browser
 app.get("/", (_req, res) => {
@@ -65,6 +66,7 @@ app.use("/api", dossierRouter);
 app.use("/api", dealsRouter);
 app.use("/api", savedSearchesRouter);
 app.use("/api", salesMetricsRouter);
+app.use("/api", dealAnalysisRouter);
 
 // Optional: read DATABASE_URL for future routes; do not connect at startup
 const databaseUrl = process.env.DATABASE_URL;
