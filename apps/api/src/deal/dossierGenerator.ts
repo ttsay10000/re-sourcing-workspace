@@ -672,6 +672,26 @@ export function buildDossierStructuredText(ctx: UnderwritingContext): string {
   if (otherIncome != null && Math.abs(otherIncome) > 0.005) {
     lines.push(tableRow(["Other income", moneyLabel(otherIncome)]));
   }
+  if (ctx.rentBreakdown) {
+    lines.push(
+      tableRow([
+        "Free-market residential gross rent",
+        moneyLabel(ctx.rentBreakdown.current.freeMarketResidential),
+      ])
+    );
+    lines.push(
+      tableRow([
+        "RS / RC residential gross rent",
+        moneyLabel(ctx.rentBreakdown.current.protectedResidential),
+      ])
+    );
+    lines.push(
+      tableRow([
+        "Commercial gross rent",
+        moneyLabel(ctx.rentBreakdown.current.commercial),
+      ])
+    );
+  }
   if (conservativeProjectedLeaseUpRent != null) {
     lines.push(
       tableRow([
@@ -717,6 +737,32 @@ export function buildDossierStructuredText(ctx: UnderwritingContext): string {
       moneyLabel(hasCurrentFinancials ? ctx.operating.managementFeeAmount : null),
     ])
   );
+  if (ctx.rentBreakdown) {
+    lines.push(
+      tableRow([
+        `Free-market residential gross (Y${ctx.rentBreakdown.stabilizedYearNumber})`,
+        moneyLabel(ctx.rentBreakdown.stabilized.freeMarketResidential),
+      ])
+    );
+    lines.push(
+      tableRow([
+        `RS / RC residential gross (Y${ctx.rentBreakdown.stabilizedYearNumber})`,
+        moneyLabel(ctx.rentBreakdown.stabilized.protectedResidential),
+      ])
+    );
+    lines.push(
+      tableRow([
+        `Commercial gross (Y${ctx.rentBreakdown.stabilizedYearNumber})`,
+        moneyLabel(ctx.rentBreakdown.stabilized.commercial),
+      ])
+    );
+    lines.push(
+      tableRow([
+        "Free-market residential lift",
+        moneyLabel(ctx.rentBreakdown.freeMarketResidentialLift),
+      ])
+    );
+  }
   lines.push(tableRow(["**Stabilized NOI**", moneyLabel(hasCurrentFinancials ? ctx.operating.stabilizedNoi : null)]));
   lines.push(tableRow(["Stabilized cap rate", pctValue(ctx.adjustedCapRate)]));
   lines.push("");
@@ -797,7 +843,10 @@ export function buildDossierStructuredText(ctx: UnderwritingContext): string {
   lines.push(`Occupancy tax: ${pctValue(ctx.assumptions.operating.occupancyTaxPct)}`);
   lines.push(`Vacancy: ${pctValue(ctx.assumptions.operating.vacancyPct)}`);
   lines.push(`Lead time: ${ctx.assumptions.operating.leadTimeMonths ?? "—"} months`);
-  lines.push(`Annual rent growth: ${pctValue(ctx.assumptions.operating.annualRentGrowthPct)}`);
+  lines.push(`Annual FM rent growth: ${pctValue(ctx.assumptions.operating.annualRentGrowthPct)}`);
+  lines.push(
+    `Annual commercial rent growth: ${pctValue(ctx.assumptions.operating.annualCommercialRentGrowthPct)}`
+  );
   lines.push(`Annual other-income growth: ${pctValue(ctx.assumptions.operating.annualOtherIncomeGrowthPct)}`);
   lines.push(`Annual expense growth: ${pctValue(ctx.assumptions.operating.annualExpenseGrowthPct)}`);
   lines.push(`Annual property-tax growth: ${pctValue(ctx.assumptions.operating.annualPropertyTaxGrowthPct)}`);

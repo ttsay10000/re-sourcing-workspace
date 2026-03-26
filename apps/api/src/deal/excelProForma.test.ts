@@ -109,44 +109,53 @@ describe("buildExcelProForma", () => {
 
     expect(workbook.SheetNames).toEqual(["Assumptions", "Financing", "Cash Flow", "Summary"]);
 
-    expect(workbook.Sheets.Financing?.B2?.f).toBe("Assumptions!B7*(Assumptions!B16/100)");
-    expect(workbook.Sheets.Financing?.B3?.f).toBe("B2*(Assumptions!B19/100)");
+    expect(workbook.Sheets.Financing?.B2?.f).toBe("Assumptions!B7*(Assumptions!B20/100)");
+    expect(workbook.Sheets.Financing?.B3?.f).toBe("B2*(Assumptions!B23/100)");
     expect(workbook.Sheets.Financing?.F13?.f).toBe(
       "IF(B13=0,0,IF(A13*12>=$B$8,0,IF($B$7=0,MAX(0,$B$2-($B$9*12*A13)),MAX(0,$B$2*(1+$B$7)^(MIN(A13*12,$B$8))-$B$9*(((1+$B$7)^(MIN(A13*12,$B$8))-1)/$B$7)))))"
     );
 
     expect(workbook.Sheets["Cash Flow"]?.D7?.f).toBe(
-      "IF(OR(D$5=0,D$5>Assumptions!B34),0,Assumptions!B12*(1+Assumptions!B22/100)*(1+Assumptions!B28/100)^(D$5-1))"
+      "IF(OR(D$5=0,D$5>Assumptions!B41),0,D8+D9+D10)"
     );
     expect(workbook.Sheets["Cash Flow"]?.I7?.f).toBe(
-      "IF(OR(I$5=0,I$5>Assumptions!B34),0,Assumptions!B12*(1+Assumptions!B22/100)*(1+Assumptions!B28/100)^(I$5-1))"
+      "IF(OR(I$5=0,I$5>Assumptions!B41),0,I8+I9+I10)"
     );
-    expect(workbook.Sheets["Cash Flow"]?.A21?.v).toBe("CF from operations");
-    expect(workbook.Sheets["Cash Flow"]?.C21?.f).toBe("IF(OR(C$5=0,C$5>Assumptions!B34),0,C19+C20)");
-    expect(workbook.Sheets["Cash Flow"]?.A36?.v).toBe("Levered CF");
-    expect(workbook.Sheets["Cash Flow"]?.C36?.f).toBe("C26+C29+C30+C33+C34+C35");
+    expect(workbook.Sheets["Cash Flow"]?.D8?.f).toBe(
+      "IF(OR(D$5=0,D$5>Assumptions!B41),0,Assumptions!B13*(1+Assumptions!B26/100)*(1+Assumptions!B33/100)^(D$5-1))"
+    );
+    expect(workbook.Sheets["Cash Flow"]?.D9?.f).toBe(
+      "IF(OR(D$5=0,D$5>Assumptions!B41),0,Assumptions!B14)"
+    );
+    expect(workbook.Sheets["Cash Flow"]?.D10?.f).toBe(
+      "IF(OR(D$5=0,D$5>Assumptions!B41),0,Assumptions!B15*(1+Assumptions!B34/100)^(D$5-1))"
+    );
+    expect(workbook.Sheets["Cash Flow"]?.A21?.v).toBe("Total operating expenses");
+    expect(workbook.Sheets["Cash Flow"]?.C21?.f).toBe("IF(OR(C$5=0,C$5>Assumptions!B41),0,SUM(C17:C20))");
+    expect(workbook.Sheets["Cash Flow"]?.A39?.v).toBe("Levered CF");
+    expect(workbook.Sheets["Cash Flow"]?.C39?.f).toBe("C29+C32+C33+C36+C37+C38");
 
     expect(workbook.Sheets.Summary?.E10?.f).toBe(
-      `IFERROR(IRR('Cash Flow'!C31:INDEX(31:31,3+Assumptions!B34)),"")`
+      `IFERROR(IRR('Cash Flow'!C34:INDEX(34:34,3+Assumptions!B41)),"")`
     );
     expect(workbook.Sheets.Summary?.E11?.f).toBe(
-      `IF(ABS('Cash Flow'!C31)=0,0,SUMPRODUCT(('Cash Flow'!D31:INDEX(31:31,3+Assumptions!B34))*--('Cash Flow'!D31:INDEX(31:31,3+Assumptions!B34)>0))/ABS('Cash Flow'!C31))`
+      `IF(ABS('Cash Flow'!C34)=0,0,SUMPRODUCT(('Cash Flow'!D34:INDEX(34:34,3+Assumptions!B41))*--('Cash Flow'!D34:INDEX(34:34,3+Assumptions!B41)>0))/ABS('Cash Flow'!C34))`
     );
     expect(workbook.Sheets.Summary?.E13?.f).toBe(
-      `IFERROR(IRR('Cash Flow'!C36:INDEX(36:36,3+Assumptions!B34)),"")`
+      `IFERROR(IRR('Cash Flow'!C39:INDEX(39:39,3+Assumptions!B41)),"")`
     );
     expect(workbook.Sheets.Summary?.E14?.f).toBe(
-      `IF(ABS('Cash Flow'!C36)=0,0,SUMPRODUCT(('Cash Flow'!D36:INDEX(36:36,3+Assumptions!B34))*--('Cash Flow'!D36:INDEX(36:36,3+Assumptions!B34)>0))/ABS('Cash Flow'!C36))`
+      `IF(ABS('Cash Flow'!C39)=0,0,SUMPRODUCT(('Cash Flow'!D39:INDEX(39:39,3+Assumptions!B41))*--('Cash Flow'!D39:INDEX(39:39,3+Assumptions!B41)>0))/ABS('Cash Flow'!C39))`
     );
     expect(workbook.Sheets.Summary?.E15?.f).toBe(
-      `IF(ABS('Cash Flow'!C36)=0,0,(AVERAGE('Cash Flow'!D26:INDEX(26:26,3+Assumptions!B34))-AVERAGE('Cash Flow'!D24:INDEX(24:24,3+Assumptions!B34)))/ABS('Cash Flow'!C36))`
+      `IF(ABS('Cash Flow'!C39)=0,0,(AVERAGE('Cash Flow'!D29:INDEX(29:29,3+Assumptions!B41))-AVERAGE('Cash Flow'!D27:INDEX(27:27,3+Assumptions!B41)))/ABS('Cash Flow'!C39))`
     );
     expect(workbook.Sheets.Summary?.E16?.f).toBe(
-      `Assumptions!B37/100`
+      `Assumptions!B44/100`
     );
-    expect(workbook.Sheets.Summary?.E7?.f).toBe(`Assumptions!B35/100`);
+    expect(workbook.Sheets.Summary?.E7?.f).toBe(`Assumptions!B42/100`);
     expect(workbook.Sheets.Summary?.E6?.f).toBe(
-      `INDEX('Cash Flow'!C19:M19,1,IF(Assumptions!B27>0,MIN(Assumptions!B34,2),MIN(Assumptions!B34,1))+1)`
+      `INDEX('Cash Flow'!C22:M22,1,IF(Assumptions!B32>0,MIN(Assumptions!B41,2),MIN(Assumptions!B41,1))+1)`
     );
     expect(workbook.Sheets.Summary?.B11?.f).toBe("Assumptions!B11");
     expect(workbook.Sheets.Summary?.B12?.f).toBe("Financing!B3");
@@ -158,7 +167,7 @@ describe("buildExcelProForma", () => {
 
     const workbook = XLSX.read(buildExcelProForma(ctx), { type: "buffer" });
 
-    expect(workbook.Sheets["Cash Flow"]?.B14?.f).toBe("MAX(Assumptions!B30/100,Assumptions!B31/100)");
+    expect(workbook.Sheets["Cash Flow"]?.B17?.f).toBe("MAX(Assumptions!B36/100,Assumptions!B37/100)");
   });
 
   it("uses the augmented ask-cap NOI basis when provided", () => {

@@ -105,6 +105,7 @@ interface DossierAssumptionsResponse {
     vacancyPct?: number | null;
     leadTimeMonths?: number | null;
     annualRentGrowthPct?: number | null;
+    annualCommercialRentGrowthPct?: number | null;
     annualOtherIncomeGrowthPct?: number | null;
     annualExpenseGrowthPct?: number | null;
     annualPropertyTaxGrowthPct?: number | null;
@@ -537,6 +538,7 @@ function emptyOmCalculationDraft(): OmCalculationDraft {
     vacancyPct: null,
     leadTimeMonths: null,
     annualRentGrowthPct: null,
+    annualCommercialRentGrowthPct: null,
     annualOtherIncomeGrowthPct: null,
     annualExpenseGrowthPct: null,
     annualPropertyTaxGrowthPct: null,
@@ -795,6 +797,7 @@ export function CanonicalPropertyDetail({
       vacancyPct: data.defaults?.vacancyPct ?? null,
       leadTimeMonths: data.defaults?.leadTimeMonths ?? null,
       annualRentGrowthPct: data.defaults?.annualRentGrowthPct ?? null,
+      annualCommercialRentGrowthPct: data.defaults?.annualCommercialRentGrowthPct ?? null,
       annualOtherIncomeGrowthPct: data.defaults?.annualOtherIncomeGrowthPct ?? null,
       annualExpenseGrowthPct: data.defaults?.annualExpenseGrowthPct ?? null,
       annualPropertyTaxGrowthPct: data.defaults?.annualPropertyTaxGrowthPct ?? null,

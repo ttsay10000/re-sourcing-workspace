@@ -41,6 +41,7 @@ type AssumptionFieldKey =
   | "defaultVacancyPct"
   | "defaultLeadTimeMonths"
   | "defaultAnnualRentGrowthPct"
+  | "defaultAnnualCommercialRentGrowthPct"
   | "defaultAnnualOtherIncomeGrowthPct"
   | "defaultAnnualExpenseGrowthPct"
   | "defaultAnnualPropertyTaxGrowthPct"
@@ -91,7 +92,8 @@ const assumptionSections: Array<{
     title: "Growth and reserves",
     description: "Annual escalators and recurring reserve assumptions.",
     fields: [
-      { key: "defaultAnnualRentGrowthPct", label: "Annual rent growth (%)", step: "0.1" },
+      { key: "defaultAnnualRentGrowthPct", label: "Annual FM rent growth (%)", step: "0.1" },
+      { key: "defaultAnnualCommercialRentGrowthPct", label: "Annual commercial rent growth (%)", step: "0.1" },
       { key: "defaultAnnualOtherIncomeGrowthPct", label: "Annual other income growth (%)", step: "0.1" },
       { key: "defaultAnnualExpenseGrowthPct", label: "Annual expense growth (%)", step: "0.1" },
       { key: "defaultAnnualPropertyTaxGrowthPct", label: "Fallback annual property tax growth (%)", step: "0.1" },
@@ -129,6 +131,7 @@ interface UserProfile {
   defaultVacancyPct?: number | null;
   defaultLeadTimeMonths?: number | null;
   defaultAnnualRentGrowthPct?: number | null;
+  defaultAnnualCommercialRentGrowthPct?: number | null;
   defaultAnnualOtherIncomeGrowthPct?: number | null;
   defaultAnnualExpenseGrowthPct?: number | null;
   defaultAnnualPropertyTaxGrowthPct?: number | null;
@@ -375,6 +378,7 @@ export default function ProfilePage() {
         defaultVacancyPct: data.defaultVacancyPct ?? 15,
         defaultLeadTimeMonths: data.defaultLeadTimeMonths ?? 2,
         defaultAnnualRentGrowthPct: data.defaultAnnualRentGrowthPct ?? 1,
+        defaultAnnualCommercialRentGrowthPct: data.defaultAnnualCommercialRentGrowthPct ?? 1.5,
         defaultAnnualOtherIncomeGrowthPct: data.defaultAnnualOtherIncomeGrowthPct ?? 0,
         defaultAnnualExpenseGrowthPct: data.defaultAnnualExpenseGrowthPct ?? 0,
         defaultAnnualPropertyTaxGrowthPct: data.defaultAnnualPropertyTaxGrowthPct ?? 6,
@@ -440,6 +444,8 @@ export default function ProfilePage() {
           defaultLeadTimeMonths: draft.defaultLeadTimeMonths ?? profile.defaultLeadTimeMonths,
           defaultAnnualRentGrowthPct:
             draft.defaultAnnualRentGrowthPct ?? profile.defaultAnnualRentGrowthPct,
+          defaultAnnualCommercialRentGrowthPct:
+            draft.defaultAnnualCommercialRentGrowthPct ?? profile.defaultAnnualCommercialRentGrowthPct,
           defaultAnnualOtherIncomeGrowthPct:
             draft.defaultAnnualOtherIncomeGrowthPct ?? profile.defaultAnnualOtherIncomeGrowthPct,
           defaultAnnualExpenseGrowthPct:

@@ -39,6 +39,7 @@ import {
   resolveDossierAssumptions,
   type DossierAssumptionOverrides,
 } from "./underwritingModel.js";
+import { buildRentBreakdown as buildSharedRentBreakdown } from "./rentBreakdown.js";
 import { buildSensitivityAnalyses, type SensitivityAnalysis } from "./sensitivityAnalysis.js";
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -188,6 +189,7 @@ function flattenedAssumptions(
     vacancyPct: assumptions.operating.vacancyPct,
     leadTimeMonths: assumptions.operating.leadTimeMonths,
     annualRentGrowthPct: assumptions.operating.annualRentGrowthPct,
+    annualCommercialRentGrowthPct: assumptions.operating.annualCommercialRentGrowthPct,
     annualOtherIncomeGrowthPct: assumptions.operating.annualOtherIncomeGrowthPct,
     annualExpenseGrowthPct: assumptions.operating.annualExpenseGrowthPct,
     annualPropertyTaxGrowthPct: assumptions.operating.annualPropertyTaxGrowthPct,
@@ -241,6 +243,23 @@ export interface OmCalculationSnapshot {
     rentBasis: string | null;
     assumedLongTermOccupancyPct: number | null;
   };
+  rentBreakdown: {
+    current: {
+      freeMarketResidential: number | null;
+      protectedResidential: number | null;
+      commercial: number | null;
+      total: number | null;
+    };
+    stabilizedYearNumber: number;
+    stabilized: {
+      freeMarketResidential: number | null;
+      protectedResidential: number | null;
+      commercial: number | null;
+      total: number | null;
+    };
+    freeMarketResidentialLift: number | null;
+    totalLift: number | null;
+  };
   topLineMetrics: {
     projectedYearNumber: number;
     currentRent: number | null;
@@ -286,6 +305,34 @@ export interface OmCalculationPropertyInput {
   city: string | null;
   askingPrice: number | null;
   listedAt: string | null;
+}
+
+export interface RentBreakdownInput {
+  currentFinancials: {
+    grossRentalIncome: number | null;
+  };
+  assumptions: {
+    propertyMix: {
+      freeMarketAnnualRent: number | null;
+      rentStabilizedAnnualRent: number | null;
+      commercialAnnualRent: number | null;
+    };
+  };
+  projection: Pick<ReturnType<typeof computeUnderwritingProjection>, "assumptions" | "yearly">;
+}
+
+export function buildRentBreakdown(artifacts: RentBreakdownInput) {
+  return buildSharedRentBreakdown({
+    currentGrossRent: artifacts.currentFinancials.grossRentalIncome,
+    propertyMix: {
+      freeMarketAnnualRent: artifacts.assumptions.propertyMix.freeMarketAnnualRent,
+      rentStabilizedAnnualRent: artifacts.assumptions.propertyMix.rentStabilizedAnnualRent,
+      commercialAnnualRent: artifacts.assumptions.propertyMix.commercialAnnualRent,
+    },
+    holdPeriodYears: artifacts.projection.assumptions.holdPeriodYears,
+    leadTimeMonths: artifacts.projection.assumptions.operating.leadTimeMonths,
+    yearly: artifacts.projection.yearly,
+  });
 }
 
 export interface ResolvedOmCalculationArtifacts {
@@ -456,6 +503,7 @@ export function buildOmCalculationSnapshotFromInputs(params: {
       : null;
 
   const infoSummary = buildPropertyInfoSummary(details);
+  const rentBreakdown = buildRentBreakdown(artifacts);
 
   return {
     property: {
@@ -491,6 +539,7 @@ export function buildOmCalculationSnapshotFromInputs(params: {
       rentBasis: currentFinancials.rentBasis,
       assumedLongTermOccupancyPct: currentFinancials.assumedLongTermOccupancyPct,
     },
+    rentBreakdown,
     topLineMetrics: {
       projectedYearNumber,
       currentRent: currentFinancials.grossRentalIncome,

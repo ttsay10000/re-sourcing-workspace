@@ -25,6 +25,7 @@ const DOSSIER_ASSUMPTION_NUMERIC_KEYS = [
   "vacancyPct",
   "leadTimeMonths",
   "annualRentGrowthPct",
+  "annualCommercialRentGrowthPct",
   "annualOtherIncomeGrowthPct",
   "annualExpenseGrowthPct",
   "annualPropertyTaxGrowthPct",
@@ -98,6 +99,8 @@ export function parsePropertyDealDossierUnitModelRows(
     const notes = toTrimmedString(record.notes, 1_000);
     const includeInUnderwriting = toOptionalBoolean(record.includeInUnderwriting);
     const isProtected = toOptionalBoolean(record.isProtected);
+    const isCommercial = toOptionalBoolean(record.isCommercial);
+    const isRentStabilized = toOptionalBoolean(record.isRentStabilized);
     if (
       rowId === "invalid" ||
       unitLabel === "invalid" ||
@@ -107,7 +110,9 @@ export function parsePropertyDealDossierUnitModelRows(
       tenantStatus === "invalid" ||
       notes === "invalid" ||
       includeInUnderwriting === "invalid" ||
-      isProtected === "invalid"
+      isProtected === "invalid" ||
+      isCommercial === "invalid" ||
+      isRentStabilized === "invalid"
     ) {
       return "invalid";
     }
@@ -124,10 +129,15 @@ export function parsePropertyDealDossierUnitModelRows(
       rentUpliftPct: toFiniteNumber(record.rentUpliftPct),
       occupancyPct: toFiniteNumber(record.occupancyPct),
       furnishingCost: toFiniteNumber(record.furnishingCost),
+      onboardingLaborFee: toFiniteNumber(record.onboardingLaborFee),
+      onboardingOtherCosts: toFiniteNumber(record.onboardingOtherCosts),
       onboardingFee: toFiniteNumber(record.onboardingFee),
+      monthlyRecurringOpex: toFiniteNumber(record.monthlyRecurringOpex),
       monthlyHospitalityExpense: toFiniteNumber(record.monthlyHospitalityExpense),
       includeInUnderwriting,
       isProtected,
+      isCommercial,
+      isRentStabilized,
       beds: toFiniteNumber(record.beds),
       baths: toFiniteNumber(record.baths),
       sqft: toFiniteNumber(record.sqft),
@@ -142,7 +152,10 @@ export function parsePropertyDealDossierUnitModelRows(
       nextRow.rentUpliftPct != null ||
       nextRow.occupancyPct != null ||
       nextRow.furnishingCost != null ||
+      nextRow.onboardingLaborFee != null ||
+      nextRow.onboardingOtherCosts != null ||
       nextRow.onboardingFee != null ||
+      nextRow.monthlyRecurringOpex != null ||
       nextRow.monthlyHospitalityExpense != null;
     if (hasMeaningfulValue) rows.push(nextRow);
   }

@@ -32,6 +32,7 @@ export interface UpsertUserProfileParams {
   defaultVacancyPct?: number | null;
   defaultLeadTimeMonths?: number | null;
   defaultAnnualRentGrowthPct?: number | null;
+  defaultAnnualCommercialRentGrowthPct?: number | null;
   defaultAnnualOtherIncomeGrowthPct?: number | null;
   defaultAnnualExpenseGrowthPct?: number | null;
   defaultAnnualPropertyTaxGrowthPct?: number | null;
@@ -75,6 +76,7 @@ export class UserProfileRepo {
          default_vacancy_pct,
          default_lead_time_months,
          default_annual_rent_growth_pct,
+         default_annual_commercial_rent_growth_pct,
          default_annual_other_income_growth_pct,
          default_annual_expense_growth_pct,
          default_annual_property_tax_growth_pct,
@@ -96,6 +98,7 @@ export class UserProfileRepo {
          15,
          2,
          1,
+         1.5,
          0,
          0,
          6,
@@ -142,11 +145,12 @@ export class UserProfileRepo {
         default_vacancy_pct = COALESCE($23, default_vacancy_pct),
         default_lead_time_months = COALESCE($24, default_lead_time_months),
         default_annual_rent_growth_pct = COALESCE($25, default_annual_rent_growth_pct),
-        default_annual_other_income_growth_pct = COALESCE($26, default_annual_other_income_growth_pct),
-        default_annual_expense_growth_pct = COALESCE($27, default_annual_expense_growth_pct),
-        default_annual_property_tax_growth_pct = COALESCE($28, default_annual_property_tax_growth_pct),
-        default_recurring_capex_annual = COALESCE($29, default_recurring_capex_annual),
-        default_loan_fee_pct = COALESCE($30, default_loan_fee_pct),
+        default_annual_commercial_rent_growth_pct = COALESCE($26, default_annual_commercial_rent_growth_pct),
+        default_annual_other_income_growth_pct = COALESCE($27, default_annual_other_income_growth_pct),
+        default_annual_expense_growth_pct = COALESCE($28, default_annual_expense_growth_pct),
+        default_annual_property_tax_growth_pct = COALESCE($29, default_annual_property_tax_growth_pct),
+        default_recurring_capex_annual = COALESCE($30, default_recurring_capex_annual),
+        default_loan_fee_pct = COALESCE($31, default_loan_fee_pct),
         updated_at = now()
        WHERE id = $1`,
       [
@@ -175,6 +179,7 @@ export class UserProfileRepo {
         params.defaultVacancyPct ?? null,
         params.defaultLeadTimeMonths ?? null,
         params.defaultAnnualRentGrowthPct ?? null,
+        params.defaultAnnualCommercialRentGrowthPct ?? null,
         params.defaultAnnualOtherIncomeGrowthPct ?? null,
         params.defaultAnnualExpenseGrowthPct ?? null,
         params.defaultAnnualPropertyTaxGrowthPct ?? null,

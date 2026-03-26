@@ -81,6 +81,7 @@ router.put("/profile", async (req: Request, res: Response) => {
       defaultVacancyPct?: number | null;
       defaultLeadTimeMonths?: number | null;
       defaultAnnualRentGrowthPct?: number | null;
+      defaultAnnualCommercialRentGrowthPct?: number | null;
       defaultAnnualOtherIncomeGrowthPct?: number | null;
       defaultAnnualExpenseGrowthPct?: number | null;
       defaultAnnualPropertyTaxGrowthPct?: number | null;
@@ -146,6 +147,12 @@ router.put("/profile", async (req: Request, res: Response) => {
     }
     if (typeof body.defaultAnnualRentGrowthPct === "number" && !Number.isNaN(body.defaultAnnualRentGrowthPct)) {
       params.defaultAnnualRentGrowthPct = body.defaultAnnualRentGrowthPct;
+    }
+    if (
+      typeof body.defaultAnnualCommercialRentGrowthPct === "number" &&
+      !Number.isNaN(body.defaultAnnualCommercialRentGrowthPct)
+    ) {
+      params.defaultAnnualCommercialRentGrowthPct = body.defaultAnnualCommercialRentGrowthPct;
     }
     if (
       typeof body.defaultAnnualOtherIncomeGrowthPct === "number" &&

@@ -52,6 +52,7 @@ const DOSSIER_ASSUMPTION_NUMERIC_FIELDS = [
   "vacancyPct",
   "leadTimeMonths",
   "annualRentGrowthPct",
+  "annualCommercialRentGrowthPct",
   "annualOtherIncomeGrowthPct",
   "annualExpenseGrowthPct",
   "annualPropertyTaxGrowthPct",

@@ -361,6 +361,7 @@ describe("underwritingModel", () => {
         defaultVacancyPct: 10,
         defaultLeadTimeMonths: 2,
         defaultAnnualRentGrowthPct: 5,
+        defaultAnnualCommercialRentGrowthPct: 1.5,
         defaultAnnualOtherIncomeGrowthPct: 0,
         defaultAnnualExpenseGrowthPct: 0,
         defaultAnnualPropertyTaxGrowthPct: 0,
@@ -393,9 +394,15 @@ describe("underwritingModel", () => {
 
     expect(assumptions.operating.blendedRentUpliftPct).toBeCloseTo(20, 2);
     expect(projection.yearly.grossRentalIncome[1]).toBeCloseTo(360_000, 2);
-    expect(projection.yearly.grossRentalIncome[2]).toBeCloseTo(369_000, 2);
+    expect(projection.yearly.grossRentalIncome[2]).toBeCloseTo(370_500, 2);
+    expect(projection.yearly.freeMarketResidentialGrossRentalIncome[1]).toBeCloseTo(180_000, 2);
+    expect(projection.yearly.freeMarketResidentialGrossRentalIncome[2]).toBeCloseTo(189_000, 2);
+    expect(projection.yearly.protectedResidentialGrossRentalIncome[1]).toBeCloseTo(80_000, 2);
+    expect(projection.yearly.protectedResidentialGrossRentalIncome[2]).toBeCloseTo(80_000, 2);
+    expect(projection.yearly.commercialGrossRentalIncome[1]).toBeCloseTo(100_000, 2);
+    expect(projection.yearly.commercialGrossRentalIncome[2]).toBeCloseTo(101_500, 2);
     expect(projection.yearly.vacancyLoss[1]).toBeCloseTo(18_000, 2);
-    expect(projection.yearly.vacancyLoss[2]).toBeCloseTo(18_900, 2);
+    expect(projection.yearly.vacancyLoss[2]).toBeCloseTo(20_400, 2);
     expect(projection.yearly.leadTimeLoss[1]).toBeCloseTo(30_000, 2);
   });
 
@@ -673,7 +680,7 @@ describe("underwritingModel", () => {
     expect(projection.yearly.vacancyLoss[1]).toBeCloseTo(24_000, 2);
     expect(projection.operating.adjustedGrossRent).toBeCloseTo(176_000, 2);
     expect(
-      projection.yearly.expenseLineItems.find((row) => row.lineItem === "Monthly hospitality / unit opex")
+      projection.yearly.expenseLineItems.find((row) => row.lineItem === "Recurring unit OpEx")
         ?.yearlyAmounts[0]
     ).toBe(4_800);
     expect(recommendedOfferWithUnitRows.irrAtAskingPct ?? 0).toBeLessThan(

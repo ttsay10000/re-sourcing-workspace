@@ -310,6 +310,10 @@ export function mapUserProfile(row: Record<string, unknown>): UserProfile {
       row.default_annual_rent_growth_pct != null
         ? Number(row.default_annual_rent_growth_pct)
         : null,
+    defaultAnnualCommercialRentGrowthPct:
+      row.default_annual_commercial_rent_growth_pct != null
+        ? Number(row.default_annual_commercial_rent_growth_pct)
+        : null,
     defaultAnnualOtherIncomeGrowthPct:
       row.default_annual_other_income_growth_pct != null
         ? Number(row.default_annual_other_income_growth_pct)

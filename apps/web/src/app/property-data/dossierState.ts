@@ -22,6 +22,7 @@ export interface PropertyDossierAssumptions {
   vacancyPct?: number | null;
   leadTimeMonths?: number | null;
   annualRentGrowthPct?: number | null;
+  annualCommercialRentGrowthPct?: number | null;
   annualOtherIncomeGrowthPct?: number | null;
   annualExpenseGrowthPct?: number | null;
   annualPropertyTaxGrowthPct?: number | null;

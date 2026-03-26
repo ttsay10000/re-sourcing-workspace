@@ -29,6 +29,7 @@ export const DEFAULT_TARGET_IRR_PCT = 25;
 export const DEFAULT_VACANCY_PCT = 15;
 export const DEFAULT_LEAD_TIME_MONTHS = 2;
 export const DEFAULT_ANNUAL_RENT_GROWTH_PCT = 1;
+export const DEFAULT_ANNUAL_COMMERCIAL_RENT_GROWTH_PCT = 1.5;
 export const DEFAULT_ANNUAL_OTHER_INCOME_GROWTH_PCT = 0;
 export const DEFAULT_ANNUAL_EXPENSE_GROWTH_PCT = 0;
 export const DEFAULT_ANNUAL_PROPERTY_TAX_GROWTH_PCT = 6;
@@ -57,6 +58,7 @@ export interface DossierAssumptionOverrides {
   vacancyPct?: number | null;
   leadTimeMonths?: number | null;
   annualRentGrowthPct?: number | null;
+  annualCommercialRentGrowthPct?: number | null;
   annualOtherIncomeGrowthPct?: number | null;
   annualExpenseGrowthPct?: number | null;
   annualPropertyTaxGrowthPct?: number | null;
@@ -86,10 +88,15 @@ export interface ProjectedUnitInputRow {
   rentUpliftPct?: number | null;
   occupancyPct?: number | null;
   furnishingCost?: number | null;
+  onboardingLaborFee?: number | null;
+  onboardingOtherCosts?: number | null;
   onboardingFee?: number | null;
+  monthlyRecurringOpex?: number | null;
   monthlyHospitalityExpense?: number | null;
   includeInUnderwriting?: boolean | null;
   isProtected?: boolean | null;
+  isCommercial?: boolean | null;
+  isRentStabilized?: boolean | null;
 }
 
 export interface ResolvedDossierAssumptions {
@@ -117,6 +124,7 @@ export interface ResolvedDossierAssumptions {
     vacancyPct: number;
     leadTimeMonths: number;
     annualRentGrowthPct: number;
+    annualCommercialRentGrowthPct: number;
     annualOtherIncomeGrowthPct: number;
     annualExpenseGrowthPct: number;
     annualPropertyTaxGrowthPct: number;
@@ -143,6 +151,9 @@ export interface UnderwritingProjectionYearly {
   endingLabels: string[];
   propertyValue: number[];
   grossRentalIncome: number[];
+  freeMarketResidentialGrossRentalIncome: number[];
+  protectedResidentialGrossRentalIncome: number[];
+  commercialGrossRentalIncome: number[];
   otherIncome: number[];
   vacancyLoss: number[];
   leadTimeLoss: number[];
@@ -347,6 +358,40 @@ function clampUnitShare(value: number | null | undefined, fallback = 1): number 
   return Math.max(0, Math.min(1, resolved));
 }
 
+interface GrossRentBreakdown {
+  freeMarketResidential: number;
+  protectedResidential: number;
+  commercial: number;
+}
+
+function scaleGrossRentBreakdownToTotal(
+  breakdown: GrossRentBreakdown,
+  total: number | null | undefined
+): GrossRentBreakdown {
+  const resolvedTotal = total != null && Number.isFinite(total) ? Math.max(0, total) : null;
+  const breakdownTotal = breakdown.freeMarketResidential + breakdown.protectedResidential + breakdown.commercial;
+  if (resolvedTotal == null) {
+    return {
+      freeMarketResidential: roundCurrency(breakdown.freeMarketResidential),
+      protectedResidential: roundCurrency(breakdown.protectedResidential),
+      commercial: roundCurrency(breakdown.commercial),
+    };
+  }
+  if (breakdownTotal <= 0) {
+    return {
+      freeMarketResidential: roundCurrency(resolvedTotal),
+      protectedResidential: 0,
+      commercial: 0,
+    };
+  }
+  const scale = resolvedTotal / breakdownTotal;
+  return {
+    freeMarketResidential: roundCurrency(breakdown.freeMarketResidential * scale),
+    protectedResidential: roundCurrency(breakdown.protectedResidential * scale),
+    commercial: roundCurrency(breakdown.commercial * scale),
+  };
+}
+
 function resolvedUnitOccupancyPct(
   row: Pick<ProjectedUnitInputRow, "occupancyPct" | "isProtected">,
   fallbackVacancyPct: number
@@ -369,6 +414,20 @@ function effectiveAnnualRentForUnit(row: ProjectedUnitInputRow, fallbackVacancyP
   return roundCurrency(
     grossAnnualRentForUnit(row) * (resolvedUnitOccupancyPct(row, fallbackVacancyPct) / 100)
   );
+}
+
+function onboardingCostForUnit(row: ProjectedUnitInputRow): number {
+  if (row.onboardingFee != null && Number.isFinite(row.onboardingFee)) {
+    return Math.max(0, row.onboardingFee);
+  }
+  return Math.max(0, safeNumber(row.onboardingLaborFee, 0)) + Math.max(0, safeNumber(row.onboardingOtherCosts, 0));
+}
+
+function recurringMonthlyOpexForUnit(row: ProjectedUnitInputRow): number {
+  if (row.monthlyRecurringOpex != null && Number.isFinite(row.monthlyRecurringOpex)) {
+    return Math.max(0, row.monthlyRecurringOpex);
+  }
+  return Math.max(0, safeNumber(row.monthlyHospitalityExpense, 0));
 }
 
 function normalizeTaxCode(taxCode: string | null | undefined): string | null {
@@ -610,6 +669,13 @@ export function resolveDossierAssumptions(
         pickNumber(overrides?.annualRentGrowthPct, profile?.defaultAnnualRentGrowthPct),
         DEFAULT_ANNUAL_RENT_GROWTH_PCT
       ),
+      annualCommercialRentGrowthPct: safeNumber(
+        pickNumber(
+          overrides?.annualCommercialRentGrowthPct,
+          profile?.defaultAnnualCommercialRentGrowthPct
+        ),
+        DEFAULT_ANNUAL_COMMERCIAL_RENT_GROWTH_PCT
+      ),
       annualOtherIncomeGrowthPct: safeNumber(
         pickNumber(
           overrides?.annualOtherIncomeGrowthPct,
@@ -701,7 +767,7 @@ export function computeUnderwritingProjection(
             sum +
             (row.includeInUnderwriting === false
               ? 0
-              : Math.max(0, safeNumber(row.onboardingFee, 0))),
+              : onboardingCostForUnit(row)),
           0
         )
       )
@@ -713,7 +779,7 @@ export function computeUnderwritingProjection(
             sum +
             (row.includeInUnderwriting === false
               ? 0
-              : Math.max(0, safeNumber(row.monthlyHospitalityExpense, 0)) * 12),
+              : recurringMonthlyOpexForUnit(row) * 12),
           0
         )
       )
@@ -776,6 +842,45 @@ export function computeUnderwritingProjection(
     expenseRows,
   });
 
+  const currentGrossBreakdownBase = detailedUnitModelActive
+    ? scaleGrossRentBreakdownToTotal(
+        {
+          freeMarketResidential: normalizedUnitRows.reduce((sum, row) => {
+            if (row.includeInUnderwriting === false || row.isCommercial === true || row.isProtected === true) {
+              return sum;
+            }
+            return sum + Math.max(0, safeNumber(row.currentAnnualRent, 0));
+          }, 0),
+          protectedResidential: normalizedUnitRows.reduce((sum, row) => {
+            if (row.includeInUnderwriting === false || row.isCommercial === true || row.isProtected !== true) {
+              return sum;
+            }
+            return sum + Math.max(0, safeNumber(row.currentAnnualRent, 0));
+          }, 0),
+          commercial: normalizedUnitRows.reduce((sum, row) => {
+            if (row.includeInUnderwriting === false || row.isCommercial !== true) return sum;
+            return sum + Math.max(0, safeNumber(row.currentAnnualRent, 0));
+          }, 0),
+        },
+        currentRent
+      )
+    : (() => {
+        const mixFreeMarket = Math.max(0, safeNumber(assumptions.propertyMix.freeMarketAnnualRent, 0));
+        const mixProtectedResidential = Math.max(
+          0,
+          safeNumber(assumptions.propertyMix.rentStabilizedAnnualRent, 0)
+        );
+        const mixCommercial = Math.max(0, safeNumber(assumptions.propertyMix.commercialAnnualRent, 0));
+        return scaleGrossRentBreakdownToTotal(
+          {
+            freeMarketResidential: mixFreeMarket,
+            protectedResidential: mixProtectedResidential,
+            commercial: mixCommercial,
+          },
+          currentRent
+        );
+      })();
+
   const eligibleRevenueShare = clampUnitShare(
     assumptions.propertyMix.eligibleRevenueSharePct,
     assumptions.propertyMix.eligibleUnitSharePct ?? 1
@@ -821,6 +926,34 @@ export function computeUnderwritingProjection(
         const protectedCurrentRent = roundCurrency(Math.max(0, currentRent - eligibleCurrentRent));
         return roundCurrency(protectedCurrentRent + protectedProjectedLeaseUpRentBase);
       })();
+  const freeMarketResidentialGrossRentalIncomeBase = detailedUnitModelActive
+    ? roundCurrency(
+        normalizedUnitRows.reduce((sum, row) => {
+          if (row.includeInUnderwriting === false || row.isCommercial === true || row.isProtected === true) {
+            return sum;
+          }
+          return sum + grossAnnualRentForUnit(row);
+        }, 0)
+      )
+    : eligibleGrossRentalIncomeBase;
+  const commercialGrossRentalIncomeBase = detailedUnitModelActive
+    ? roundCurrency(
+        normalizedUnitRows.reduce((sum, row) => {
+          if (row.includeInUnderwriting === false || row.isCommercial !== true) return sum;
+          return sum + grossAnnualRentForUnit(row);
+        }, 0)
+      )
+    : currentGrossBreakdownBase.commercial;
+  const protectedResidentialGrossRentalIncomeBase = detailedUnitModelActive
+    ? roundCurrency(
+        normalizedUnitRows.reduce((sum, row) => {
+          if (row.includeInUnderwriting === false || row.isCommercial === true || row.isProtected !== true) {
+            return sum;
+          }
+          return sum + grossAnnualRentForUnit(row);
+        }, 0)
+      )
+    : roundCurrency(Math.max(0, protectedGrossRentalIncomeBase - commercialGrossRentalIncomeBase));
   const eligibleOccupiedRentalIncomeBase = detailedUnitModelActive
     ? roundCurrency(
         normalizedUnitRows.reduce((sum, row) => {
@@ -887,15 +1020,38 @@ export function computeUnderwritingProjection(
           )
         )
   );
-  const yearlyProtectedGrossRentalIncome = years.map((year) =>
-    year === 0 ? 0 : roundCurrency(protectedGrossRentalIncomeBase)
+  const yearlyFreeMarketResidentialGrossRentalIncome = years.map((year) =>
+    year === 0
+      ? 0
+      : roundCurrency(
+          compoundAnnual(
+            freeMarketResidentialGrossRentalIncomeBase,
+            assumptions.operating.annualRentGrowthPct,
+            year - 1
+          )
+        )
+  );
+  const yearlyProtectedResidentialGrossRentalIncome = years.map((year) =>
+    year === 0 ? 0 : roundCurrency(protectedResidentialGrossRentalIncomeBase)
+  );
+  const yearlyCommercialGrossRentalIncome = years.map((year) =>
+    year === 0
+      ? 0
+      : roundCurrency(
+          compoundAnnual(
+            commercialGrossRentalIncomeBase,
+            assumptions.operating.annualCommercialRentGrowthPct,
+            year - 1
+          )
+        )
   );
   const yearlyGrossRentalIncome = years.map((year) =>
     year === 0
       ? 0
       : roundCurrency(
-          (yearlyEligibleGrossRentalIncome[year] ?? 0) +
-            (yearlyProtectedGrossRentalIncome[year] ?? 0)
+          (yearlyFreeMarketResidentialGrossRentalIncome[year] ?? 0) +
+            (yearlyProtectedResidentialGrossRentalIncome[year] ?? 0) +
+            (yearlyCommercialGrossRentalIncome[year] ?? 0)
         )
   );
   const yearlyEligibleOccupiedRentalIncome = years.map((year) =>
@@ -929,7 +1085,7 @@ export function computeUnderwritingProjection(
   ];
   if (effectiveHospitalityExpenseAnnualBase > 0) {
     expenseLineItems.push({
-      lineItem: "Monthly hospitality / unit opex",
+      lineItem: "Recurring unit OpEx",
       annualGrowthPct: assumptions.operating.annualExpenseGrowthPct,
       baseAmount: roundCurrency(effectiveHospitalityExpenseAnnualBase),
       yearlyAmounts: Array.from({ length: assumptions.holdPeriodYears }, (_, index) =>
@@ -1193,6 +1349,9 @@ export function computeUnderwritingProjection(
       endingLabels,
       propertyValue: yearlyPropertyValue,
       grossRentalIncome: yearlyGrossRentalIncome,
+      freeMarketResidentialGrossRentalIncome: yearlyFreeMarketResidentialGrossRentalIncome,
+      protectedResidentialGrossRentalIncome: yearlyProtectedResidentialGrossRentalIncome,
+      commercialGrossRentalIncome: yearlyCommercialGrossRentalIncome,
       otherIncome: yearlyOtherIncome,
       vacancyLoss: yearlyVacancyLoss,
       leadTimeLoss: yearlyLeadTimeLoss,

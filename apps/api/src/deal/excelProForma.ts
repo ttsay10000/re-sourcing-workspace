@@ -135,6 +135,28 @@ export function buildExcelProForma(ctx: UnderwritingContext): Buffer {
         ];
   const aggregateExpenseFallback =
     projectedExpenseRows.length === 0 && normalizedExpenseInputs.expenseRowsExManagement.length === 0;
+  const currentGrossRent = num(ctx.currentGrossRent);
+  const currentRentBreakdown =
+    ctx.rentBreakdown?.current != null
+      ? {
+          freeMarketResidential: num(ctx.rentBreakdown.current.freeMarketResidential),
+          protectedResidential: num(ctx.rentBreakdown.current.protectedResidential),
+          commercial: num(ctx.rentBreakdown.current.commercial),
+        }
+      : {
+          freeMarketResidential: currentGrossRent,
+          protectedResidential: 0,
+          commercial: 0,
+        };
+  if (
+    currentRentBreakdown.freeMarketResidential +
+      currentRentBreakdown.protectedResidential +
+      currentRentBreakdown.commercial <=
+    0 &&
+    currentGrossRent > 0
+  ) {
+    currentRentBreakdown.freeMarketResidential = currentGrossRent;
+  }
   const assumptionRows = {
     purchasePrice: 7,
     purchaseClosingPct: 8,
@@ -142,28 +164,32 @@ export function buildExcelProForma(ctx: UnderwritingContext): Buffer {
     furnishingCosts: 10,
     onboardingCosts: 11,
     currentGrossRent: 12,
-    currentOtherIncome: 13,
-    currentExpenses: 14,
-    ltvPct: 16,
-    interestRatePct: 17,
-    amortizationYears: 18,
-    loanFeePct: 19,
-    rentUpliftPct: 21,
-    blendedRentUpliftPct: 22,
-    expenseIncreasePct: 23,
-    managementFeePct: 24,
-    occupancyTaxPct: 25,
-    vacancyPct: 26,
-    leadTimeMonths: 27,
-    annualRentGrowthPct: 28,
-    annualOtherIncomeGrowthPct: 29,
-    annualExpenseGrowthPct: 30,
-    annualPropertyTaxGrowthPct: 31,
-    recurringCapexAnnual: 32,
-    holdPeriodYears: 34,
-    exitCapPct: 35,
-    exitClosingCostPct: 36,
-    targetIrrPct: 37,
+    currentFreeMarketResidentialGrossRent: 13,
+    currentProtectedResidentialGrossRent: 14,
+    currentCommercialGrossRent: 15,
+    currentOtherIncome: 16,
+    currentExpenses: 17,
+    ltvPct: 20,
+    interestRatePct: 21,
+    amortizationYears: 22,
+    loanFeePct: 23,
+    rentUpliftPct: 26,
+    blendedRentUpliftPct: 27,
+    expenseIncreasePct: 28,
+    managementFeePct: 29,
+    occupancyTaxPct: 30,
+    vacancyPct: 31,
+    leadTimeMonths: 32,
+    annualRentGrowthPct: 33,
+    annualCommercialRentGrowthPct: 34,
+    annualOtherIncomeGrowthPct: 35,
+    annualExpenseGrowthPct: 36,
+    annualPropertyTaxGrowthPct: 37,
+    recurringCapexAnnual: 38,
+    holdPeriodYears: 41,
+    exitCapPct: 42,
+    exitClosingCostPct: 43,
+    targetIrrPct: 44,
   } as const;
 
   const assumptionsSheet = widthSheet(
@@ -179,7 +205,19 @@ export function buildExcelProForma(ctx: UnderwritingContext): Buffer {
       [s("Renovation costs", inputLabelStyle), n(num(ctx.assumptions.acquisition.renovationCosts), CURRENCY_FMT, inputValueStyle)],
       [s("Furnishing / setup costs", inputLabelStyle), n(num(ctx.assumptions.acquisition.furnishingSetupCosts), CURRENCY_FMT, inputValueStyle)],
       [s("Onboarding / unit turn costs", inputLabelStyle), n(num(ctx.assumptions.acquisition.onboardingCosts), CURRENCY_FMT, inputValueStyle)],
-      [s("Current gross rent", labelStyle), n(num(ctx.currentGrossRent), CURRENCY_FMT, textValueStyle)],
+      [s("Current gross rent", labelStyle), n(currentGrossRent, CURRENCY_FMT, textValueStyle)],
+      [
+        s("Current FM residential gross rent", labelStyle),
+        n(currentRentBreakdown.freeMarketResidential, CURRENCY_FMT, textValueStyle),
+      ],
+      [
+        s("Current RS / RC residential gross rent", labelStyle),
+        n(currentRentBreakdown.protectedResidential, CURRENCY_FMT, textValueStyle),
+      ],
+      [
+        s("Current commercial gross rent", labelStyle),
+        n(currentRentBreakdown.commercial, CURRENCY_FMT, textValueStyle),
+      ],
       [s("Current other income", labelStyle), n(num(ctx.currentOtherIncome), CURRENCY_FMT, textValueStyle)],
       [
         s("Current expenses (ex management)", labelStyle),
@@ -198,7 +236,8 @@ export function buildExcelProForma(ctx: UnderwritingContext): Buffer {
       [s("Occupancy tax (%)", inputLabelStyle), n(num(ctx.assumptions.operating.occupancyTaxPct), INPUT_PERCENT_FMT, inputValueStyle)],
       [s("Vacancy (%)", inputLabelStyle), n(num(ctx.assumptions.operating.vacancyPct), INPUT_PERCENT_FMT, inputValueStyle)],
       [s("Lead time (months)", inputLabelStyle), n(num(ctx.assumptions.operating.leadTimeMonths), INTEGER_FMT, inputValueStyle)],
-      [s("Annual rent growth (%)", inputLabelStyle), n(num(ctx.assumptions.operating.annualRentGrowthPct), INPUT_PERCENT_FMT, inputValueStyle)],
+      [s("Annual FM rent growth (%)", inputLabelStyle), n(num(ctx.assumptions.operating.annualRentGrowthPct), INPUT_PERCENT_FMT, inputValueStyle)],
+      [s("Annual commercial rent growth (%)", inputLabelStyle), n(num(ctx.assumptions.operating.annualCommercialRentGrowthPct), INPUT_PERCENT_FMT, inputValueStyle)],
       [s("Annual other-income growth (%)", inputLabelStyle), n(num(ctx.assumptions.operating.annualOtherIncomeGrowthPct), INPUT_PERCENT_FMT, inputValueStyle)],
       [s("Annual expense growth (%)", inputLabelStyle), n(num(ctx.assumptions.operating.annualExpenseGrowthPct), INPUT_PERCENT_FMT, inputValueStyle)],
       [s("Annual property-tax growth (%)", inputLabelStyle), n(num(ctx.assumptions.operating.annualPropertyTaxGrowthPct), INPUT_PERCENT_FMT, inputValueStyle)],
@@ -260,7 +299,7 @@ export function buildExcelProForma(ctx: UnderwritingContext): Buffer {
   XLSX.utils.book_append_sheet(wb, financingSheet, "Financing");
 
   const yearColumns = Array.from({ length: MAX_MODEL_YEARS + 1 }, (_, index) => col(2 + index));
-  const expenseStartRow = 14;
+  const expenseStartRow = 17;
   const managementRow = expenseStartRow + expenses.length;
   const totalOperatingExpensesRow = managementRow + 1;
   const noiRow = totalOperatingExpensesRow + 1;
@@ -287,7 +326,10 @@ export function buildExcelProForma(ctx: UnderwritingContext): Buffer {
     ["", "", "", "", "", ""],
     [s("Line item", columnHeaderStyle), s("Growth", columnHeaderStyle), ...Array.from({ length: MAX_MODEL_YEARS + 1 }, (_, year) => s(`Y${year}`, columnHeaderStyle))],
     [s("Property value", labelStyle), f(`Assumptions!B${assumptionRows.annualRentGrowthPct}/100`, PERCENT_FMT, formulaValueStyle)],
-    [s("Gross rental income", labelStyle), f(`Assumptions!B${assumptionRows.annualRentGrowthPct}/100`, PERCENT_FMT, formulaValueStyle)],
+    [s("Gross rental income", labelStyle), ""],
+    [s("Free-market residential gross rent", labelStyle), f(`Assumptions!B${assumptionRows.annualRentGrowthPct}/100`, PERCENT_FMT, formulaValueStyle)],
+    [s("RS / RC residential gross rent", labelStyle), s("Flat", textValueStyle)],
+    [s("Commercial gross rent", labelStyle), f(`Assumptions!B${assumptionRows.annualCommercialRentGrowthPct}/100`, PERCENT_FMT, formulaValueStyle)],
     [s("Other income", labelStyle), f(`Assumptions!B${assumptionRows.annualOtherIncomeGrowthPct}/100`, PERCENT_FMT, formulaValueStyle)],
     [s("Vacancy assumption", labelStyle), f(`Assumptions!B${assumptionRows.vacancyPct}/100`, PERCENT_FMT, formulaValueStyle)],
     [s("Lead time assumption", labelStyle), s("Year 1 only", textValueStyle)],
@@ -345,30 +387,48 @@ export function buildExcelProForma(ctx: UnderwritingContext): Buffer {
     const activeOperatingYearCondition = `OR(${column}$5=0,${column}$5>${holdPeriodRef})`;
     cashFlowSheet[yearCell] = n(year, INTEGER_FMT, columnHeaderStyle);
     const grossRentCell = `${column}7`;
-    cashFlowSheet[grossRentCell] = f(
-      `IF(${activeOperatingYearCondition},0,Assumptions!B${assumptionRows.currentGrossRent}*(1+Assumptions!B${assumptionRows.blendedRentUpliftPct}/100)*(1+Assumptions!B${assumptionRows.annualRentGrowthPct}/100)^(${column}$5-1))`,
+    const freeMarketGrossRentCell = `${column}8`;
+    cashFlowSheet[freeMarketGrossRentCell] = f(
+      `IF(${activeOperatingYearCondition},0,Assumptions!B${assumptionRows.currentFreeMarketResidentialGrossRent}*(1+Assumptions!B${assumptionRows.rentUpliftPct}/100)*(1+Assumptions!B${assumptionRows.annualRentGrowthPct}/100)^(${column}$5-1))`,
       CURRENCY_FMT,
       formulaValueStyle
     );
-    const otherIncomeCell = `${column}8`;
+    const protectedGrossRentCell = `${column}9`;
+    cashFlowSheet[protectedGrossRentCell] = f(
+      `IF(${activeOperatingYearCondition},0,Assumptions!B${assumptionRows.currentProtectedResidentialGrossRent})`,
+      CURRENCY_FMT,
+      formulaValueStyle
+    );
+    const commercialGrossRentCell = `${column}10`;
+    cashFlowSheet[commercialGrossRentCell] = f(
+      `IF(${activeOperatingYearCondition},0,Assumptions!B${assumptionRows.currentCommercialGrossRent}*(1+Assumptions!B${assumptionRows.annualCommercialRentGrowthPct}/100)^(${column}$5-1))`,
+      CURRENCY_FMT,
+      formulaValueStyle
+    );
+    cashFlowSheet[grossRentCell] = f(
+      `IF(${activeOperatingYearCondition},0,${freeMarketGrossRentCell}+${protectedGrossRentCell}+${commercialGrossRentCell})`,
+      CURRENCY_FMT,
+      formulaValueStyle
+    );
+    const otherIncomeCell = `${column}11`;
     cashFlowSheet[otherIncomeCell] = f(
       `IF(${activeOperatingYearCondition},0,Assumptions!B${assumptionRows.currentOtherIncome}*(1+Assumptions!B${assumptionRows.annualOtherIncomeGrowthPct}/100)^(${column}$5-1))`,
       CURRENCY_FMT,
       formulaValueStyle
     );
-    const vacancyCell = `${column}9`;
+    const vacancyCell = `${column}12`;
     cashFlowSheet[vacancyCell] = f(
       `IF(${activeOperatingYearCondition},0,-${grossRentCell}*(Assumptions!B${assumptionRows.vacancyPct}/100))`,
       CURRENCY_FMT,
       formulaValueStyle
     );
-    const leadTimeCell = `${column}10`;
+    const leadTimeCell = `${column}13`;
     cashFlowSheet[leadTimeCell] = f(
       `IF(${column}$5=1,-${grossRentCell}*(Assumptions!B${assumptionRows.leadTimeMonths}/12),0)`,
       CURRENCY_FMT,
       formulaValueStyle
     );
-    const netRentalIncomeCell = `${column}11`;
+    const netRentalIncomeCell = `${column}14`;
     cashFlowSheet[netRentalIncomeCell] = f(
       `${grossRentCell}+${otherIncomeCell}+${vacancyCell}+${leadTimeCell}`,
       CURRENCY_FMT,

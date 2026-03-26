@@ -111,6 +111,7 @@ router.get("/dossier-assumptions", async (req: Request, res: Response) => {
           vacancyPct: assumptions.operating.vacancyPct,
           leadTimeMonths: assumptions.operating.leadTimeMonths,
           annualRentGrowthPct: assumptions.operating.annualRentGrowthPct,
+          annualCommercialRentGrowthPct: assumptions.operating.annualCommercialRentGrowthPct,
           annualOtherIncomeGrowthPct: assumptions.operating.annualOtherIncomeGrowthPct,
           annualExpenseGrowthPct: assumptions.operating.annualExpenseGrowthPct,
           annualPropertyTaxGrowthPct: assumptions.operating.annualPropertyTaxGrowthPct,
@@ -161,6 +162,7 @@ router.get("/dossier-assumptions", async (req: Request, res: Response) => {
         vacancyPct: assumptions.operating.vacancyPct,
         leadTimeMonths: assumptions.operating.leadTimeMonths,
         annualRentGrowthPct: assumptions.operating.annualRentGrowthPct,
+        annualCommercialRentGrowthPct: assumptions.operating.annualCommercialRentGrowthPct,
         annualOtherIncomeGrowthPct: assumptions.operating.annualOtherIncomeGrowthPct,
         annualExpenseGrowthPct: assumptions.operating.annualExpenseGrowthPct,
         annualPropertyTaxGrowthPct: assumptions.operating.annualPropertyTaxGrowthPct,
@@ -193,6 +195,7 @@ router.get("/dossier-assumptions", async (req: Request, res: Response) => {
         defaultVacancyPct: profile.defaultVacancyPct,
         defaultLeadTimeMonths: profile.defaultLeadTimeMonths,
         defaultAnnualRentGrowthPct: profile.defaultAnnualRentGrowthPct,
+        defaultAnnualCommercialRentGrowthPct: profile.defaultAnnualCommercialRentGrowthPct,
         defaultAnnualOtherIncomeGrowthPct: profile.defaultAnnualOtherIncomeGrowthPct,
         defaultAnnualExpenseGrowthPct: profile.defaultAnnualExpenseGrowthPct,
         defaultAnnualPropertyTaxGrowthPct: profile.defaultAnnualPropertyTaxGrowthPct,
@@ -242,6 +245,10 @@ function parseAssumptionOverrides(rawAssumptions: unknown): DossierAssumptionOve
     leadTimeMonths: typeof record.leadTimeMonths === "number" ? record.leadTimeMonths : null,
     annualRentGrowthPct:
       typeof record.annualRentGrowthPct === "number" ? record.annualRentGrowthPct : null,
+    annualCommercialRentGrowthPct:
+      typeof record.annualCommercialRentGrowthPct === "number"
+        ? record.annualCommercialRentGrowthPct
+        : null,
     annualOtherIncomeGrowthPct:
       typeof record.annualOtherIncomeGrowthPct === "number"
         ? record.annualOtherIncomeGrowthPct

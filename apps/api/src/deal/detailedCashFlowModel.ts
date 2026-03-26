@@ -29,6 +29,9 @@ const DEFAULT_FURNISHING_BATHS_PER_UNIT = 1;
 const DEFAULT_FURNISHING_UNIT_SQFT = 900;
 const MAX_FURNISHING_COST_PER_UNIT = 30_000;
 const DEFAULT_ASSUMED_LTR_OCCUPANCY_PCT = 97;
+const DEFAULT_ONBOARDING_LABOR_PER_UNIT = 2_500;
+const DEFAULT_ONBOARDING_OTHER_COSTS_PER_UNIT = 1_500;
+const DEFAULT_MONTHLY_RECURRING_OPEX_PER_UNIT = 300;
 
 export interface ResolvedUnitModelRow extends PropertyDealDossierUnitModelRow {
   rowId: string;
@@ -38,7 +41,10 @@ export interface ResolvedUnitModelRow extends PropertyDealDossierUnitModelRow {
   rentUpliftPct: number | null;
   occupancyPct: number | null;
   furnishingCost: number | null;
+  onboardingLaborFee: number | null;
+  onboardingOtherCosts: number | null;
   onboardingFee: number | null;
+  monthlyRecurringOpex: number | null;
   monthlyHospitalityExpense: number | null;
   includeInUnderwriting: boolean;
   isProtected: boolean;
@@ -231,6 +237,32 @@ function defaultModeledOccupancyPct(params: {
   return clampPct(100 - (params.defaultVacancyPct ?? 0)) ?? 100;
 }
 
+function splitLegacyOnboardingFee(total: number | null | undefined): {
+  labor: number | null;
+  other: number | null;
+} {
+  if (total == null || !Number.isFinite(total) || total <= 0) {
+    return { labor: null, other: null };
+  }
+  const labor = Math.min(total, DEFAULT_ONBOARDING_LABOR_PER_UNIT);
+  return {
+    labor: roundCurrency(labor),
+    other: roundCurrency(Math.max(0, total - labor)),
+  };
+}
+
+function defaultOnboardingLaborFee(isProtected: boolean): number {
+  return isProtected ? 0 : DEFAULT_ONBOARDING_LABOR_PER_UNIT;
+}
+
+function defaultOnboardingOtherCosts(isProtected: boolean): number {
+  return isProtected ? 0 : DEFAULT_ONBOARDING_OTHER_COSTS_PER_UNIT;
+}
+
+function defaultMonthlyRecurringOpex(isProtected: boolean): number {
+  return isProtected ? 0 : DEFAULT_MONTHLY_RECURRING_OPEX_PER_UNIT;
+}
+
 function roundFurnishingCost(value: number): number {
   return Math.max(0, Math.round(value / 500) * 500);
 }
@@ -360,8 +392,21 @@ export function resolveDetailedCashFlowModel(params: {
         sqft: override?.sqft ?? toFiniteNumber(record.sqft),
         isProtected,
       });
-    const onboardingFee = override?.onboardingFee ?? null;
-    const monthlyHospitalityExpense = override?.monthlyHospitalityExpense ?? null;
+    const legacyOnboarding = splitLegacyOnboardingFee(override?.onboardingFee ?? null);
+    const onboardingLaborFee =
+      override?.onboardingLaborFee ?? legacyOnboarding.labor ?? defaultOnboardingLaborFee(isProtected);
+    const onboardingOtherCosts =
+      override?.onboardingOtherCosts ??
+      legacyOnboarding.other ??
+      defaultOnboardingOtherCosts(isProtected);
+    const onboardingFee = roundCurrency(
+      Math.max(0, onboardingLaborFee ?? 0) + Math.max(0, onboardingOtherCosts ?? 0)
+    );
+    const monthlyRecurringOpex =
+      override?.monthlyRecurringOpex ??
+      override?.monthlyHospitalityExpense ??
+      defaultMonthlyRecurringOpex(isProtected);
+    const monthlyHospitalityExpense = monthlyRecurringOpex;
     const includeInUnderwriting = override?.includeInUnderwriting ?? true;
     const modeledAnnualRent = modeledAnnualRentFromInputs({
       underwrittenAnnualRent,
@@ -392,7 +437,10 @@ export function resolveDetailedCashFlowModel(params: {
       rentUpliftPct,
       occupancyPct,
       furnishingCost,
+      onboardingLaborFee,
+      onboardingOtherCosts,
       onboardingFee,
+      monthlyRecurringOpex,
       monthlyHospitalityExpense,
       includeInUnderwriting,
       isProtected,
@@ -412,7 +460,8 @@ export function resolveDetailedCashFlowModel(params: {
 
   for (const savedRow of params.unitModelRows ?? []) {
     if (seenUnitRowIds.has(savedRow.rowId)) continue;
-    const isProtected = savedRow.isProtected ?? false;
+    const isProtected =
+      savedRow.isProtected ?? (savedRow.isCommercial === true || savedRow.isRentStabilized === true);
     const isVacantLike = false;
     const includeInUnderwriting = savedRow.includeInUnderwriting ?? true;
     const underwrittenAnnualRent = savedRow.underwrittenAnnualRent ?? savedRow.currentAnnualRent ?? null;
@@ -432,8 +481,21 @@ export function resolveDetailedCashFlowModel(params: {
         sqft: savedRow.sqft ?? null,
         isProtected,
       });
-    const onboardingFee = savedRow.onboardingFee ?? null;
-    const monthlyHospitalityExpense = savedRow.monthlyHospitalityExpense ?? null;
+    const legacyOnboarding = splitLegacyOnboardingFee(savedRow.onboardingFee ?? null);
+    const onboardingLaborFee =
+      savedRow.onboardingLaborFee ?? legacyOnboarding.labor ?? defaultOnboardingLaborFee(isProtected);
+    const onboardingOtherCosts =
+      savedRow.onboardingOtherCosts ??
+      legacyOnboarding.other ??
+      defaultOnboardingOtherCosts(isProtected);
+    const onboardingFee = roundCurrency(
+      Math.max(0, onboardingLaborFee ?? 0) + Math.max(0, onboardingOtherCosts ?? 0)
+    );
+    const monthlyRecurringOpex =
+      savedRow.monthlyRecurringOpex ??
+      savedRow.monthlyHospitalityExpense ??
+      defaultMonthlyRecurringOpex(isProtected);
+    const monthlyHospitalityExpense = monthlyRecurringOpex;
     unitModelRows.push({
       rowId: savedRow.rowId,
       unitLabel: savedRow.unitLabel ?? savedRow.rowId,
@@ -445,7 +507,10 @@ export function resolveDetailedCashFlowModel(params: {
       rentUpliftPct,
       occupancyPct,
       furnishingCost,
+      onboardingLaborFee,
+      onboardingOtherCosts,
       onboardingFee,
+      monthlyRecurringOpex,
       monthlyHospitalityExpense,
       includeInUnderwriting,
       isProtected,
@@ -454,8 +519,8 @@ export function resolveDetailedCashFlowModel(params: {
       sqft: savedRow.sqft ?? null,
       tenantStatus: savedRow.tenantStatus ?? null,
       notes: savedRow.notes ?? null,
-      isCommercial: false,
-      isRentStabilized: false,
+      isCommercial: savedRow.isCommercial ?? false,
+      isRentStabilized: savedRow.isRentStabilized ?? false,
       isVacantLike,
       modeledAnnualRent: modeledAnnualRentFromInputs({
         underwrittenAnnualRent,
@@ -561,10 +626,15 @@ export function unitModelRowsToProjectionRows(
   rentUpliftPct?: number | null;
   occupancyPct?: number | null;
   furnishingCost?: number | null;
+  onboardingLaborFee?: number | null;
+  onboardingOtherCosts?: number | null;
   onboardingFee?: number | null;
+  monthlyRecurringOpex?: number | null;
   monthlyHospitalityExpense?: number | null;
   includeInUnderwriting?: boolean | null;
   isProtected?: boolean | null;
+  isCommercial?: boolean | null;
+  isRentStabilized?: boolean | null;
 }> {
   return rows.map((row) => ({
     rowId: row.rowId,
@@ -574,9 +644,14 @@ export function unitModelRowsToProjectionRows(
     rentUpliftPct: row.rentUpliftPct,
     occupancyPct: row.occupancyPct,
     furnishingCost: row.furnishingCost,
+    onboardingLaborFee: row.onboardingLaborFee,
+    onboardingOtherCosts: row.onboardingOtherCosts,
     onboardingFee: row.onboardingFee,
+    monthlyRecurringOpex: row.monthlyRecurringOpex,
     monthlyHospitalityExpense: row.monthlyHospitalityExpense,
     includeInUnderwriting: row.includeInUnderwriting,
     isProtected: row.isProtected,
+    isCommercial: row.isCommercial,
+    isRentStabilized: row.isRentStabilized,
   }));
 }

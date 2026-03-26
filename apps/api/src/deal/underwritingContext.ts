@@ -194,6 +194,7 @@ export interface UnderwritingContext {
       vacancyPct?: number | null;
       leadTimeMonths?: number | null;
       annualRentGrowthPct?: number | null;
+      annualCommercialRentGrowthPct?: number | null;
       annualOtherIncomeGrowthPct?: number | null;
       annualExpenseGrowthPct?: number | null;
       annualPropertyTaxGrowthPct?: number | null;
@@ -277,6 +278,24 @@ export interface UnderwritingContext {
   yearlyCashFlow?: YearlyCashFlowProjectionContext | null;
   /** Optional: protected-unit / convertible-unit mix used for uplift logic. */
   propertyMix?: DossierPropertyMixContext | null;
+  /** Optional: current vs stabilized gross rent split for free-market residential vs protected/commercial. */
+  rentBreakdown?: {
+    current: {
+      freeMarketResidential: number | null;
+      protectedResidential: number | null;
+      commercial: number | null;
+      total: number | null;
+    };
+    stabilizedYearNumber: number;
+    stabilized: {
+      freeMarketResidential: number | null;
+      protectedResidential: number | null;
+      commercial: number | null;
+      total: number | null;
+    };
+    freeMarketResidentialLift: number | null;
+    totalLift: number | null;
+  } | null;
   /** Optional: target-IRR-based recommended offer analysis. */
   recommendedOffer?: DossierRecommendedOfferContext | null;
   /** Optional: listing-photo + OM/listing-text condition review for dossier narrative. */

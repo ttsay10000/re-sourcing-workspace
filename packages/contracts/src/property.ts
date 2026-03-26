@@ -397,6 +397,7 @@ export interface PropertyDealDossierAssumptions {
   vacancyPct?: number | null;
   leadTimeMonths?: number | null;
   annualRentGrowthPct?: number | null;
+  annualCommercialRentGrowthPct?: number | null;
   annualOtherIncomeGrowthPct?: number | null;
   annualExpenseGrowthPct?: number | null;
   annualPropertyTaxGrowthPct?: number | null;
@@ -422,10 +423,15 @@ export interface PropertyDealDossierUnitModelRow {
   rentUpliftPct?: number | null;
   occupancyPct?: number | null;
   furnishingCost?: number | null;
+  onboardingLaborFee?: number | null;
+  onboardingOtherCosts?: number | null;
   onboardingFee?: number | null;
+  monthlyRecurringOpex?: number | null;
   monthlyHospitalityExpense?: number | null;
   includeInUnderwriting?: boolean | null;
   isProtected?: boolean | null;
+  isCommercial?: boolean | null;
+  isRentStabilized?: boolean | null;
   beds?: number | null;
   baths?: number | null;
   sqft?: number | null;
@@ -693,6 +699,7 @@ export interface UserProfile {
   defaultVacancyPct?: number | null;
   defaultLeadTimeMonths?: number | null;
   defaultAnnualRentGrowthPct?: number | null;
+  defaultAnnualCommercialRentGrowthPct?: number | null;
   defaultAnnualOtherIncomeGrowthPct?: number | null;
   defaultAnnualExpenseGrowthPct?: number | null;
   defaultAnnualPropertyTaxGrowthPct?: number | null;

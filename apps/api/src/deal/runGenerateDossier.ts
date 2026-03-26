@@ -31,7 +31,9 @@ import {
 import { resolveCurrentFinancialsFromDetails } from "../rental/currentFinancials.js";
 import { computeDealSignals } from "./computeDealSignals.js";
 import { buildDealScoreSensitivity } from "./dealScoreSensitivity.js";
+import { buildRentBreakdown } from "./buildOmCalculation.js";
 import { buildDossierPdfCoverData } from "./dossierPdfCover.js";
+import { buildDossierPdfFileName, buildProFormaFileName } from "./dossierFileName.js";
 import { resolveEffectiveDealScore } from "./effectiveDealScore.js";
 import { buildDossierStructuredText } from "./dossierGenerator.js";
 import { dossierTextToPdf } from "./dossierToPdf.js";
@@ -669,6 +671,8 @@ export async function runGenerateDossier(
           vacancyPct: projection.assumptions.operating.vacancyPct,
           leadTimeMonths: projection.assumptions.operating.leadTimeMonths,
           annualRentGrowthPct: projection.assumptions.operating.annualRentGrowthPct,
+          annualCommercialRentGrowthPct:
+            projection.assumptions.operating.annualCommercialRentGrowthPct,
           annualOtherIncomeGrowthPct: projection.assumptions.operating.annualOtherIncomeGrowthPct,
           annualExpenseGrowthPct: projection.assumptions.operating.annualExpenseGrowthPct,
           annualPropertyTaxGrowthPct: projection.assumptions.operating.annualPropertyTaxGrowthPct,
@@ -734,15 +738,16 @@ export async function runGenerateDossier(
       sensitivities,
       yearlyCashFlow: projection.yearly,
       propertyMix: projection.assumptions.propertyMix,
+      rentBreakdown: buildRentBreakdown({
+        currentFinancials,
+        assumptions,
+        projection,
+      }),
       recommendedOffer,
     };
 
-    const dateStr = new Date().toISOString().slice(0, 10);
-    const slug =
-      packageContext.dossierAddress.replace(/[^a-zA-Z0-9]/g, "-").slice(0, 40) ||
-      propertyId.slice(0, 8);
-    const dossierFileName = `Deal-Dossier-${slug}-${dateStr}.pdf`;
-    const excelFileName = `Pro-Forma-${slug}-${dateStr}.xlsx`;
+    const dossierFileName = buildDossierPdfFileName(packageContext.dossierAddress);
+    const excelFileName = buildProFormaFileName(packageContext.dossierAddress);
 
     await setGenerationState(runningGenerationState(startedAt, "Drafting investment memo"));
     const draftingStartedAtMs = Date.now();

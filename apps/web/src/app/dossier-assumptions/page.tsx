@@ -25,6 +25,7 @@ interface AssumptionsProfile {
   defaultVacancyPct?: number | null;
   defaultLeadTimeMonths?: number | null;
   defaultAnnualRentGrowthPct?: number | null;
+  defaultAnnualCommercialRentGrowthPct?: number | null;
   defaultAnnualOtherIncomeGrowthPct?: number | null;
   defaultAnnualExpenseGrowthPct?: number | null;
   defaultAnnualPropertyTaxGrowthPct?: number | null;
@@ -53,6 +54,7 @@ interface DossierAssumptionsDraft {
   vacancyPct?: number;
   leadTimeMonths?: number;
   annualRentGrowthPct?: number;
+  annualCommercialRentGrowthPct?: number;
   annualOtherIncomeGrowthPct?: number;
   annualExpenseGrowthPct?: number;
   annualPropertyTaxGrowthPct?: number;
@@ -154,6 +156,7 @@ function DossierAssumptionsContent() {
         vacancyPct: defaults.vacancyPct ?? undefined,
         leadTimeMonths: defaults.leadTimeMonths ?? undefined,
         annualRentGrowthPct: defaults.annualRentGrowthPct ?? undefined,
+        annualCommercialRentGrowthPct: defaults.annualCommercialRentGrowthPct ?? undefined,
         annualOtherIncomeGrowthPct: defaults.annualOtherIncomeGrowthPct ?? undefined,
         annualExpenseGrowthPct: defaults.annualExpenseGrowthPct ?? undefined,
         annualPropertyTaxGrowthPct: defaults.annualPropertyTaxGrowthPct ?? undefined,
@@ -210,6 +213,7 @@ function DossierAssumptionsContent() {
           defaultVacancyPct: draft.vacancyPct,
           defaultLeadTimeMonths: draft.leadTimeMonths,
           defaultAnnualRentGrowthPct: draft.annualRentGrowthPct,
+          defaultAnnualCommercialRentGrowthPct: draft.annualCommercialRentGrowthPct,
           defaultAnnualOtherIncomeGrowthPct: draft.annualOtherIncomeGrowthPct,
           defaultAnnualExpenseGrowthPct: draft.annualExpenseGrowthPct,
           defaultAnnualPropertyTaxGrowthPct: draft.annualPropertyTaxGrowthPct,
@@ -259,6 +263,7 @@ function DossierAssumptionsContent() {
             vacancyPct: draft.vacancyPct,
             leadTimeMonths: draft.leadTimeMonths,
             annualRentGrowthPct: draft.annualRentGrowthPct,
+            annualCommercialRentGrowthPct: draft.annualCommercialRentGrowthPct,
             annualOtherIncomeGrowthPct: draft.annualOtherIncomeGrowthPct,
             annualExpenseGrowthPct: draft.annualExpenseGrowthPct,
             annualPropertyTaxGrowthPct: draft.annualPropertyTaxGrowthPct,
@@ -551,12 +556,22 @@ function DossierAssumptionsContent() {
             />
           </label>
           <label style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
-            <span style={{ fontSize: "0.875rem", fontWeight: 500 }}>Annual rent growth (%)</span>
+            <span style={{ fontSize: "0.875rem", fontWeight: 500 }}>Annual FM rent growth (%)</span>
             <input
               type="number"
               step="0.1"
               value={draft.annualRentGrowthPct ?? ""}
               onChange={(e) => setDraft((p) => ({ ...p, annualRentGrowthPct: e.target.value ? Number(e.target.value) : undefined }))}
+              style={inputStyle}
+            />
+          </label>
+          <label style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+            <span style={{ fontSize: "0.875rem", fontWeight: 500 }}>Annual commercial rent growth (%)</span>
+            <input
+              type="number"
+              step="0.1"
+              value={draft.annualCommercialRentGrowthPct ?? ""}
+              onChange={(e) => setDraft((p) => ({ ...p, annualCommercialRentGrowthPct: e.target.value ? Number(e.target.value) : undefined }))}
               style={inputStyle}
             />
           </label>

@@ -18,6 +18,7 @@ import {
 } from "../rental/omAnalysisUtils.js";
 import { resolveOmPropertyAddress } from "../om/resolveOmPropertyAddress.js";
 import {
+  buildRentBreakdown,
   buildOmCalculationSnapshotFromInputs,
   resolveOmCalculationArtifactsFromInputs,
   type OmCalculationPropertyInput,
@@ -29,6 +30,7 @@ import {
   buildDossierStructuredText,
 } from "./dossierGenerator.js";
 import { buildDossierPdfCoverData } from "./dossierPdfCover.js";
+import { buildDossierPdfFileName } from "./dossierFileName.js";
 import { dossierTextToPdf } from "./dossierToPdf.js";
 import {
   propertyOverviewFromDetails,
@@ -498,6 +500,8 @@ export async function buildStandaloneUnderwritingContext(params: {
         vacancyPct: artifacts.projection.assumptions.operating.vacancyPct,
         leadTimeMonths: artifacts.projection.assumptions.operating.leadTimeMonths,
         annualRentGrowthPct: artifacts.projection.assumptions.operating.annualRentGrowthPct,
+        annualCommercialRentGrowthPct:
+          artifacts.projection.assumptions.operating.annualCommercialRentGrowthPct,
         annualOtherIncomeGrowthPct:
           artifacts.projection.assumptions.operating.annualOtherIncomeGrowthPct,
         annualExpenseGrowthPct:
@@ -566,6 +570,7 @@ export async function buildStandaloneUnderwritingContext(params: {
     sensitivities: artifacts.sensitivities,
     yearlyCashFlow: artifacts.projection.yearly,
     propertyMix: artifacts.projection.assumptions.propertyMix,
+    rentBreakdown: buildRentBreakdown(artifacts),
     recommendedOffer: artifacts.recommendedOffer,
   };
 
@@ -593,9 +598,6 @@ export async function buildStandaloneDossierPdf(params: {
     listing: null,
   });
   const buffer = await dossierTextToPdf(dossierText, { cover: dossierCover });
-  const slug =
-    params.property.canonicalAddress.replace(/[^a-zA-Z0-9]/g, "-").replace(/-+/g, "-").slice(0, 48) ||
-    "uploaded-om";
-  const fileName = `Deal-Dossier-${slug}-${new Date().toISOString().slice(0, 10)}.pdf`;
+  const fileName = buildDossierPdfFileName(params.property.canonicalAddress);
   return { buffer, fileName, ctx };
 }
