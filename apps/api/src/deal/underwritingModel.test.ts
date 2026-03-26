@@ -385,7 +385,7 @@ describe("underwritingModel", () => {
     expect(assumptions.propertyMix.eligibleResidentialUnits).toBe(2);
     expect(assumptions.operating.rentUpliftPct).toBe(76.3);
     expect(assumptions.operating.blendedRentUpliftPct).toBeCloseTo(38.15, 2);
-    expect(assumptions.operating.recurringCapexAnnual).toBe(10_000);
+    expect(assumptions.operating.recurringCapexAnnual).toBe(4_000);
     expect(assumptions.acquisition.furnishingSetupCosts).toBe(22_500);
   });
 
@@ -502,7 +502,7 @@ describe("underwritingModel", () => {
       }
     );
 
-    expect(assumptions.operating.recurringCapexAnnual).toBe(10_000);
+    expect(assumptions.operating.recurringCapexAnnual).toBe(4_000);
   });
 
   it("treats the legacy $1.2k deal override as a fallback when unit mix is known", () => {
@@ -535,7 +535,7 @@ describe("underwritingModel", () => {
       }
     );
 
-    expect(assumptions.operating.recurringCapexAnnual).toBe(10_000);
+    expect(assumptions.operating.recurringCapexAnnual).toBe(4_000);
   });
 
   it("adds vacant free-market residential projected rent into the uplift base", () => {
@@ -862,19 +862,28 @@ describe("underwritingModel", () => {
       ],
     });
 
-    expect(projection.assumptions.operating.recurringCapexAnnual).toBe(5_000);
-    expect(projection.yearly.recurringCapex[1]).toBe(5_000);
-    expect(projection.yearly.recurringCapex[2]).toBe(5_000);
-    expect(projection.yearly.reserveRelease[2]).toBe(10_000);
+    expect(projection.assumptions.operating.recurringCapexAnnual).toBe(2_000);
+    expect(projection.yearly.recurringCapex[1]).toBe(2_000);
+    expect(projection.yearly.recurringCapex[2]).toBe(2_000);
+    expect(projection.yearly.reserveRelease[2]).toBe(4_000);
     expect(projection.yearly.leveredCashFlow[2]).toBeCloseTo(
       (projection.yearly.cashFlowAfterFinancing[2] ?? 0) +
         (projection.yearly.netSaleProceedsToEquity[2] ?? 0) +
-        10_000,
+        4_000,
       2
     );
     expect(projection.cashFlows.annualOperatingCashFlows[1]).toBeCloseTo(
       projection.yearly.cashFlowAfterFinancing[2] ?? 0,
       2
+    );
+    expect(projection.returns.year1CashOnCashReturn).toBeCloseTo(
+      ((projection.yearly.noi[1] ?? 0) - (projection.yearly.debtService[1] ?? 0)) /
+        (projection.acquisition.initialEquityInvested || 1),
+      6
+    );
+    expect((projection.returns.year1CashOnCashReturn ?? 0)).toBeGreaterThan(
+      (projection.yearly.cashFlowAfterFinancing[1] ?? 0) /
+        (projection.acquisition.initialEquityInvested || 1)
     );
   });
 });

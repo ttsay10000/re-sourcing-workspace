@@ -139,7 +139,7 @@ describe("buildExcelProForma", () => {
       'IF(OR(D$5=0,D$5>Assumptions!B41),"",IF(D26=0,"",D24/ABS(D26)))'
     );
     expect(workbook.Sheets["Cash Flow"]?.D32?.f).toBe(
-      'IF(OR(D$5=0,D$5>Assumptions!B41),"",IF(Financing!$B$6=0,"",D29/Financing!$B$6))'
+      'IF(OR(D$5=0,D$5>Assumptions!B41),"",IF(Financing!$B$6=0,"",(D22+D26)/Financing!$B$6))'
     );
     expect(workbook.Sheets["Cash Flow"]?.H37?.f).toBe(
       "IF(H$5=Assumptions!B41,-SUM(C23:H23),0)"

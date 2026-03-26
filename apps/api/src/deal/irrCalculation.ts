@@ -3,7 +3,7 @@
 export interface EquityReturnInputs {
   /** Full equity cash flow series, including year 0 negative equity and final-year sale proceeds. */
   equityCashFlows: number[];
-  /** Operating cash flows only, excluding sale proceeds, for cash-on-cash calculations. */
+  /** Pretax periodic cash flows, excluding sale proceeds, for cash-on-cash calculations. */
   operatingCashFlows?: number[];
 }
 

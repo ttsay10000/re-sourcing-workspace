@@ -547,7 +547,7 @@ export function buildExcelProForma(ctx: UnderwritingContext): Buffer {
     );
     const cashOnCashCell = `${column}${cashOnCashRow}`;
     cashFlowSheet[cashOnCashCell] = f(
-      `IF(${activeOperatingYearCondition},"",IF(Financing!$B$6=0,"",${cfAfterFinancingCell}/Financing!$B$6))`,
+      `IF(${activeOperatingYearCondition},"",IF(Financing!$B$6=0,"",(${noiCell}+${debtServiceCell})/Financing!$B$6))`,
       PERCENT_FMT,
       formulaValueStyle
     );

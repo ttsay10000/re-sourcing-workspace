@@ -34,7 +34,7 @@ export const DEFAULT_ANNUAL_OTHER_INCOME_GROWTH_PCT = 0;
 export const DEFAULT_ANNUAL_EXPENSE_GROWTH_PCT = 0;
 export const DEFAULT_ANNUAL_PROPERTY_TAX_GROWTH_PCT = 6;
 export const DEFAULT_RECURRING_CAPEX_ANNUAL = 1_200;
-export const DEFAULT_RECURRING_CAPEX_PER_ELIGIBLE_UNIT_ANNUAL = 5_000;
+export const DEFAULT_RECURRING_CAPEX_PER_ELIGIBLE_UNIT_ANNUAL = 2_000;
 export const DEFAULT_LOAN_FEE_PCT = 0.63;
 const NYC_CLASS_ONE_UNDERWRITING_TAX_GROWTH_PCT = 3;
 const NYC_SMALL_CLASS_TWO_UNDERWRITING_TAX_GROWTH_PCT = 3;
@@ -1348,6 +1348,9 @@ export function computeUnderwritingProjection(
   );
 
   const annualOperatingCashFlows = yearlyCashFlowAfterFinancing.slice(1);
+  const annualCashOnCashFlows = years
+    .slice(1)
+    .map((year) => roundCurrency((yearlyNoi[year] ?? 0) - (yearlyDebtService[year] ?? 0)));
   const annualPrincipalPaydowns = yearlyPrincipalPaid.slice(1);
   const annualEquityGains = annualOperatingCashFlows.map((cashFlow, index) =>
     roundCurrency(cashFlow + (annualPrincipalPaydowns[index] ?? 0))
@@ -1482,7 +1485,7 @@ export function computeUnderwritingProjection(
     returns: {
       ...computeIrr({
         equityCashFlows: equityCashFlowSeries,
-        operatingCashFlows: annualOperatingCashFlows,
+        operatingCashFlows: annualCashOnCashFlows,
       }),
       year1EquityYield,
       averageEquityYield,

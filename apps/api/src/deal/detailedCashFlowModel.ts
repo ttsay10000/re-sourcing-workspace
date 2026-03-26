@@ -33,10 +33,13 @@ const DEFAULT_ONBOARDING_LABOR_PER_UNIT = 2_500;
 const DEFAULT_ONBOARDING_OTHER_COSTS_PER_UNIT = 1_500;
 const DEFAULT_MONTHLY_RECURRING_OPEX_PER_UNIT = 300;
 const DEFAULT_WIFI_COST_PER_UNIT_MONTH = 100;
-const DEFAULT_IN_UNIT_ELECTRIC_COST_PER_UNIT_MONTH = 250;
+const DEFAULT_FURNISHED_RENTAL_UTILITIES_COST_PER_UNIT_MONTH = 300;
 const DEFAULT_REPAIRS_AND_MAINTENANCE_STEP_UP_PCT = 10;
 const REPAIRS_AND_MAINTENANCE_PATTERN =
   /\b(r\s*&\s*m|repairs?(?:\s*(?:&|and)\s*maintenance)?|repairs?)\b/i;
+const LEGACY_IN_UNIT_ELECTRIC_ROW_ID = "expense-derived-in-unit-electric";
+const DERIVED_FURNISHED_UTILITIES_ROW_ID = "expense-derived-furnished-rental-utilities";
+const DERIVED_FURNISHED_UTILITIES_LABEL = "Furnished rental utilities";
 
 export interface ResolvedUnitModelRow extends PropertyDealDossierUnitModelRow {
   rowId: string;
@@ -360,10 +363,12 @@ function buildDerivedUtilityExpenseRows(
       aggregateFallback: false,
     },
     {
-      rowId: "expense-derived-in-unit-electric",
-      lineItem: "In-unit electric",
+      rowId: DERIVED_FURNISHED_UTILITIES_ROW_ID,
+      lineItem: DERIVED_FURNISHED_UTILITIES_LABEL,
       amount: roundMoney(
-        hospitalityEligibleUnitCount * DEFAULT_IN_UNIT_ELECTRIC_COST_PER_UNIT_MONTH * 12
+        hospitalityEligibleUnitCount *
+          DEFAULT_FURNISHED_RENTAL_UTILITIES_COST_PER_UNIT_MONTH *
+          12
       ),
       aggregateFallback: false,
     },
@@ -398,6 +403,17 @@ export function resolveDetailedCashFlowModel(params: {
   const currentFinancials = resolveCurrentFinancialsFromDetails(params.details);
   const aggregateExpenseTotal =
     resolvePreferredOmExpenseTotal(params.details) ?? currentFinancials.operatingExpenses ?? 0;
+
+  const normalizedSavedExpenseRows = (params.expenseModelRows ?? []).map((row) => {
+    if (row.rowId === LEGACY_IN_UNIT_ELECTRIC_ROW_ID) {
+      return {
+        ...row,
+        rowId: DERIVED_FURNISHED_UTILITIES_ROW_ID,
+        lineItem: DERIVED_FURNISHED_UTILITIES_LABEL,
+      };
+    }
+    return row;
+  });
 
   const savedUnitRows = new Map(
     (params.unitModelRows ?? []).map((row) => [row.rowId, row] as const)
@@ -588,7 +604,7 @@ export function resolveDetailedCashFlowModel(params: {
   }
 
   const savedExpenseRows = new Map(
-    (params.expenseModelRows ?? []).map((row) => [row.rowId, row] as const)
+    normalizedSavedExpenseRows.map((row) => [row.rowId, row] as const)
   );
   const seenExpenseRowIds = new Set<string>();
   const hospitalityEligibleUnitCount = countHospitalityEligibleUnits(unitModelRows);
@@ -640,7 +656,7 @@ export function resolveDetailedCashFlowModel(params: {
     };
   });
 
-  for (const savedRow of params.expenseModelRows ?? []) {
+  for (const savedRow of normalizedSavedExpenseRows) {
     if (seenExpenseRowIds.has(savedRow.rowId)) continue;
     const lineItem = savedRow.lineItem.trim();
     if (!lineItem) continue;

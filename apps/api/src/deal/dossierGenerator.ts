@@ -356,11 +356,11 @@ function pushYearlyCashFlowTable(lines: string[], ctx: UnderwritingContext): voi
     if (Math.abs(debtService) <= 0.005) return null;
     return num(value) / debtService;
   });
-  const cashOnCashSeries = yearly.cashFlowAfterFinancing.map((value, index) => {
+  const cashOnCashSeries = yearly.noi.map((value, index) => {
     if (index === 0) return null;
     const initialEquityInvested = num(ctx.acquisition.initialEquityInvested);
     if (Math.abs(initialEquityInvested) <= 0.005) return null;
-    return num(value) / initialEquityInvested;
+    return (num(value) - num(yearly.debtService[index])) / initialEquityInvested;
   });
 
   lines.push(tableRow(headers));

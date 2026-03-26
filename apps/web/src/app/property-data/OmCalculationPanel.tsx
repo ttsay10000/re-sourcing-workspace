@@ -978,14 +978,20 @@ export function OmCalculationPanel({
       return (value ?? 0) / debtService;
     }) ?? [];
   const cashOnCashSeries =
-    calculation?.yearlyCashFlow.cashFlowAfterFinancing.map((value, index) => {
+    calculation?.yearlyCashFlow.noi.map((value, index) => {
       if (index === 0) return null;
       const initialEquityInvested = calculation.acquisition.initialEquityInvested ?? 0;
       if (!Number.isFinite(initialEquityInvested) || Math.abs(initialEquityInvested) < 0.005) {
         return null;
       }
-      return (value ?? 0) / initialEquityInvested;
+      return ((value ?? 0) - (calculation.yearlyCashFlow.debtService[index] ?? 0)) / initialEquityInvested;
     }) ?? [];
+  const projectedExpenseLineSeries = (
+    yearlyAmounts: Array<number | null | undefined>
+  ): Array<number | null> =>
+    calculation?.yearlyCashFlow.years.map((year, index) =>
+      index === 0 || year === 0 ? null : (yearlyAmounts[index - 1] ?? 0)
+    ) ?? [];
   const rentBasisLabel = calculation
     ? calculation.currentFinancials.rentBasis === "gross_before_vacancy"
       ? "Gross before vacancy"
@@ -2452,7 +2458,9 @@ export function OmCalculationPanel({
                       {calculation.yearlyCashFlow.expenseLineItems.map((row) =>
                         renderCashFlowValueRow(
                           row.lineItem,
-                          row.yearlyAmounts.map((value) => (value != null ? -Math.abs(value) : value)),
+                          projectedExpenseLineSeries(row.yearlyAmounts).map((value) =>
+                            value != null ? -Math.abs(value) : value
+                          ),
                           { blankZero: true }
                         )
                       )}

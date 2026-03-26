@@ -99,12 +99,55 @@ describe("detailedCashFlowModel", () => {
           annualGrowthPct: 2,
         }),
         expect.objectContaining({
-          rowId: "expense-derived-in-unit-electric",
-          lineItem: "In-unit electric",
-          amount: 6_000,
+          rowId: "expense-derived-furnished-rental-utilities",
+          lineItem: "Furnished rental utilities",
+          amount: 7_200,
           annualGrowthPct: 2,
         }),
       ])
     );
+  });
+
+  it("migrates the legacy in-unit-electric saved row onto furnished rental utilities", () => {
+    const model = resolveDetailedCashFlowModel({
+      details: {
+        omData: {
+          authoritative: {
+            rentRoll: [{ unit: "1A", unitCategory: "Residential", annualRent: 36_000 }],
+            expenses: {
+              expensesTable: [{ lineItem: "Insurance", amount: 5_000 }],
+            },
+          },
+        },
+      } as never,
+      defaultRentUpliftPct: 70,
+      defaultVacancyPct: 15,
+      defaultAnnualExpenseGrowthPct: 2,
+      defaultAnnualPropertyTaxGrowthPct: 3,
+      unitModelRows: null,
+      expenseModelRows: [
+        {
+          rowId: "expense-derived-in-unit-electric",
+          lineItem: "In-unit electric",
+          amount: 4_200,
+          annualGrowthPct: 5,
+        },
+      ],
+    });
+
+    expect(
+      model.expenseModelRows.filter(
+        (row) =>
+          row.rowId === "expense-derived-furnished-rental-utilities" ||
+          row.rowId === "expense-derived-in-unit-electric"
+      )
+    ).toEqual([
+      expect.objectContaining({
+        rowId: "expense-derived-furnished-rental-utilities",
+        lineItem: "Furnished rental utilities",
+        amount: 4_200,
+        annualGrowthPct: 5,
+      }),
+    ]);
   });
 });
