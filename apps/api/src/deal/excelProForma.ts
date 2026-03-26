@@ -6,7 +6,7 @@ import {
 } from "./underwritingModel.js";
 
 const MAX_MODEL_YEARS = MAX_UNDERWRITING_HOLD_PERIOD_YEARS;
-const CURRENCY_FMT = "$#,##0";
+const CURRENCY_FMT = "$#,##0;[Red]($#,##0)";
 const PERCENT_FMT = "0.00%";
 const INPUT_PERCENT_FMT = "0.00";
 const MULTIPLE_FMT = "0.00x";
@@ -35,6 +35,10 @@ const columnHeaderStyle: CellStyle = {
 
 const labelStyle: CellStyle = {
   font: { bold: true, color: { rgb: "404040" } },
+};
+
+const memoLabelStyle: CellStyle = {
+  font: { italic: true, color: { rgb: "404040" } },
 };
 
 const inputLabelStyle: CellStyle = {
@@ -310,10 +314,14 @@ export function buildExcelProForma(ctx: UnderwritingContext): Buffer {
   const principalRow = debtServiceRow + 1;
   const interestRow = principalRow + 1;
   const cfAfterFinancingRow = interestRow + 1;
-  const totalInvestmentCostRow = cfAfterFinancingRow + 2;
+  const equityValueCreationRow = cfAfterFinancingRow + 1;
+  const dscrRow = equityValueCreationRow + 1;
+  const cashOnCashRow = dscrRow + 1;
+  const totalInvestmentCostRow = cashOnCashRow + 2;
   const saleValueRow = totalInvestmentCostRow + 1;
   const saleClosingCostsRow = saleValueRow + 1;
-  const unleveredCfRow = saleClosingCostsRow + 1;
+  const reserveReleaseRow = saleClosingCostsRow + 1;
+  const unleveredCfRow = reserveReleaseRow + 1;
   const financingFundingRow = unleveredCfRow + 2;
   const financingFeesRow = financingFundingRow + 1;
   const financingPayoffRow = financingFeesRow + 1;
@@ -359,22 +367,26 @@ export function buildExcelProForma(ctx: UnderwritingContext): Buffer {
   cashFlowRows.push([s("Total operating expenses", sectionStyle), ""]);
   cashFlowRows.push([s("Net operating income (NOI)", sectionStyle), ""]);
   cashFlowRows.push([s("Recurring CapEx / reserve", labelStyle), ""]);
-  cashFlowRows.push([s("CF from operations", sectionStyle), ""]);
+  cashFlowRows.push([s("Unlevered CF after reserves", sectionStyle), ""]);
   cashFlowRows.push([s("Cap rate (starting purchase price)", labelStyle), ""]);
-  cashFlowRows.push([s("Debt service payments", labelStyle), ""]);
-  cashFlowRows.push([s("Principal paid", labelStyle), ""]);
-  cashFlowRows.push([s("Interest paid", labelStyle), ""]);
-  cashFlowRows.push([s("CF after financing", sectionStyle), ""]);
+  cashFlowRows.push([s("Total debt service", labelStyle), ""]);
+  cashFlowRows.push([s("Principal paydown (equity build)", labelStyle), ""]);
+  cashFlowRows.push([s("Interest expense", labelStyle), ""]);
+  cashFlowRows.push([s("Levered CF to equity", sectionStyle), ""]);
+  cashFlowRows.push([s("Equity value creation incl. principal paydown (memo only)", memoLabelStyle), ""]);
+  cashFlowRows.push([s("DSCR (after reserves)", labelStyle), ""]);
+  cashFlowRows.push([s("Cash-on-cash return", labelStyle), ""]);
   cashFlowRows.push(["", ""]);
   cashFlowRows.push([s("Total investment cost", labelStyle), ""]);
   cashFlowRows.push([s("Sale value", labelStyle), f(`Assumptions!B${assumptionRows.exitCapPct}/100`, PERCENT_FMT, formulaValueStyle)]);
   cashFlowRows.push([s("Closing costs @ sale", labelStyle), f(`Assumptions!B${assumptionRows.exitClosingCostPct}/100`, PERCENT_FMT, formulaValueStyle)]);
+  cashFlowRows.push([s("Reserve release at exit", labelStyle), ""]);
   cashFlowRows.push([s("Unlevered CF", sectionStyle), ""]);
   cashFlowRows.push(["", ""]);
   cashFlowRows.push([s("Financing funding", labelStyle), ""]);
   cashFlowRows.push([s("Financing fees", labelStyle), ""]);
   cashFlowRows.push([s("Financing payoff", labelStyle), ""]);
-  cashFlowRows.push([s("Levered CF", sectionStyle), ""]);
+  cashFlowRows.push([s("Total levered CF incl. exit", sectionStyle), ""]);
 
   const cashFlowSheet = sheet(cashFlowRows);
   cashFlowSheet["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 5 } }];
@@ -461,7 +473,7 @@ export function buildExcelProForma(ctx: UnderwritingContext): Buffer {
 
     const managementCell = `${column}${managementRow}`;
     cashFlowSheet[managementCell] = f(
-      `IF(${activeOperatingYearCondition},0,-${grossRentCell}*(Assumptions!B${assumptionRows.managementFeePct}/100))`,
+      `IF(${activeOperatingYearCondition},0,-MAX(0,${grossRentCell}+${vacancyCell}+${leadTimeCell})*(Assumptions!B${assumptionRows.managementFeePct}/100))`,
       CURRENCY_FMT,
       formulaValueStyle
     );
@@ -521,6 +533,24 @@ export function buildExcelProForma(ctx: UnderwritingContext): Buffer {
       CURRENCY_FMT,
       formulaValueStyle
     );
+    const equityValueCreationCell = `${column}${equityValueCreationRow}`;
+    cashFlowSheet[equityValueCreationCell] = f(
+      `IF(${activeOperatingYearCondition},0,${cfAfterFinancingCell}-${principalCell})`,
+      CURRENCY_FMT,
+      formulaValueStyle
+    );
+    const dscrCell = `${column}${dscrRow}`;
+    cashFlowSheet[dscrCell] = f(
+      `IF(${activeOperatingYearCondition},"",IF(${debtServiceCell}=0,"",${cfOpsCell}/ABS(${debtServiceCell})))`,
+      MULTIPLE_FMT,
+      formulaValueStyle
+    );
+    const cashOnCashCell = `${column}${cashOnCashRow}`;
+    cashFlowSheet[cashOnCashCell] = f(
+      `IF(${activeOperatingYearCondition},"",IF(Financing!$B$6=0,"",${cfAfterFinancingCell}/Financing!$B$6))`,
+      PERCENT_FMT,
+      formulaValueStyle
+    );
     const totalInvestmentCell = `${column}${totalInvestmentCostRow}`;
     cashFlowSheet[totalInvestmentCell] = f(
       `IF(${column}$5=0,-Financing!$B$5,0)`,
@@ -539,9 +569,15 @@ export function buildExcelProForma(ctx: UnderwritingContext): Buffer {
       CURRENCY_FMT,
       formulaValueStyle
     );
+    const reserveReleaseCell = `${column}${reserveReleaseRow}`;
+    cashFlowSheet[reserveReleaseCell] = f(
+      `IF(${column}$5=${holdPeriodRef},-SUM(C${recurringCapexRow}:${column}${recurringCapexRow}),0)`,
+      CURRENCY_FMT,
+      formulaValueStyle
+    );
     const unleveredCell = `${column}${unleveredCfRow}`;
     cashFlowSheet[unleveredCell] = f(
-      `${cfOpsCell}+${saleValueCell}+${saleClosingCell}+${totalInvestmentCell}`,
+      `${cfOpsCell}+${reserveReleaseCell}+${saleValueCell}+${saleClosingCell}+${totalInvestmentCell}`,
       CURRENCY_FMT,
       formulaValueStyle
     );
@@ -565,7 +601,7 @@ export function buildExcelProForma(ctx: UnderwritingContext): Buffer {
     );
     const leveredCell = `${column}${leveredCfRow}`;
     cashFlowSheet[leveredCell] = f(
-      `${cfAfterFinancingCell}+${saleValueCell}+${saleClosingCell}+${fundingCell}+${financingFeeCell}+${payoffCell}`,
+      `${cfAfterFinancingCell}+${reserveReleaseCell}+${saleValueCell}+${saleClosingCell}+${fundingCell}+${financingFeeCell}+${payoffCell}`,
       CURRENCY_FMT,
       formulaValueStyle
     );

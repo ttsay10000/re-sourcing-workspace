@@ -57,6 +57,10 @@ function boldCell(value: string): string {
   return value.trim().length > 0 ? `**${value}**` : value;
 }
 
+function italicCell(value: string): string {
+  return value.trim().length > 0 ? `*${value}*` : value;
+}
+
 function boldRow(cells: string[]): string[] {
   return cells.map((cell) => boldCell(cell));
 }
@@ -133,6 +137,34 @@ function negativeSeriesCells(values: number[], options?: { blankYearZero?: boole
     if (blankYearZero && index === 0) return "";
     if (Math.abs(value) <= 0.005) return "$0";
     return value < 0 ? `(${moneyLabel(Math.abs(value))})` : moneyLabel(value);
+  });
+}
+
+function ratioPercentSeriesCells(
+  values: Array<number | null | undefined>,
+  options?: { blankYearZero?: boolean; digits?: number }
+): string[] {
+  const { blankYearZero = false, digits = 1 } = options ?? {};
+  return values.map((value, index) => {
+    if (blankYearZero && index === 0) return "";
+    if (value == null || !Number.isFinite(value)) return "";
+    return value < -0.00005
+      ? `(${Math.abs(value * 100).toFixed(digits)}%)`
+      : `${(value * 100).toFixed(digits)}%`;
+  });
+}
+
+function multipleSeriesCells(
+  values: Array<number | null | undefined>,
+  options?: { blankYearZero?: boolean; digits?: number }
+): string[] {
+  const { blankYearZero = false, digits = 2 } = options ?? {};
+  return values.map((value, index) => {
+    if (blankYearZero && index === 0) return "";
+    if (value == null || !Number.isFinite(value)) return "";
+    return value < -0.00005
+      ? `(${Math.abs(value).toFixed(digits)}x)`
+      : `${value.toFixed(digits)}x`;
   });
 }
 
@@ -318,6 +350,18 @@ function pushYearlyCashFlowTable(lines: string[], ctx: UnderwritingContext): voi
   const yearlyEquityGain = yearly.cashFlowAfterFinancing.map((value, index) =>
     index === 0 ? 0 : value + (yearly.principalPaid[index] ?? 0)
   );
+  const dscrSeries = yearly.cashFlowFromOperations.map((value, index) => {
+    if (index === 0) return null;
+    const debtService = num(yearly.debtService[index]);
+    if (Math.abs(debtService) <= 0.005) return null;
+    return num(value) / debtService;
+  });
+  const cashOnCashSeries = yearly.cashFlowAfterFinancing.map((value, index) => {
+    if (index === 0) return null;
+    const initialEquityInvested = num(ctx.acquisition.initialEquityInvested);
+    if (Math.abs(initialEquityInvested) <= 0.005) return null;
+    return num(value) / initialEquityInvested;
+  });
 
   lines.push(tableRow(headers));
   lines.push(tableRow(sectionRow("Acquisition & Capitalization", headers.length)));
@@ -493,7 +537,7 @@ function pushYearlyCashFlowTable(lines: string[], ctx: UnderwritingContext): voi
   lines.push(
     tableRow(
       boldRow([
-        "CF from operations",
+        "Unlevered CF after reserves",
         ...currencySeriesCells(yearly.cashFlowFromOperations, { blankYearZero: true }),
       ])
     )
@@ -534,15 +578,27 @@ function pushYearlyCashFlowTable(lines: string[], ctx: UnderwritingContext): voi
   lines.push(
     tableRow(
       boldRow([
-        "CF after financing (cash)",
+        "Levered CF to equity",
         ...negativeSeriesCells(yearly.cashFlowAfterFinancing),
       ])
     )
   );
   lines.push(
     tableRow([
-      "Economic benefit incl. paydown",
+      italicCell("Equity value creation incl. principal paydown (memo only)"),
       ...currencySeriesCells(yearlyEquityGain),
+    ])
+  );
+  lines.push(
+    tableRow([
+      "DSCR (after reserves)",
+      ...multipleSeriesCells(dscrSeries, { blankYearZero: true }),
+    ])
+  );
+  lines.push(
+    tableRow([
+      "Cash-on-cash return",
+      ...ratioPercentSeriesCells(cashOnCashSeries, { blankYearZero: true, digits: 1 }),
     ])
   );
 
@@ -559,6 +615,17 @@ function pushYearlyCashFlowTable(lines: string[], ctx: UnderwritingContext): voi
       ...exitOnlyCells(yearly.years, ctx.exit.saleClosingCosts, { negative: true }),
     ])
   );
+  if (
+    Array.isArray(yearly.reserveRelease) &&
+    yearly.reserveRelease.some((value, index) => index > 0 && Math.abs(value) > 0.005)
+  ) {
+    lines.push(
+      tableRow([
+        "Reserve release at exit",
+        ...currencySeriesCells(yearly.reserveRelease, { blankYearZero: true }),
+      ])
+    );
+  }
   lines.push(
     tableRow(
       boldRow([
@@ -583,7 +650,7 @@ function pushYearlyCashFlowTable(lines: string[], ctx: UnderwritingContext): voi
   );
   lines.push(
     tableRow(
-      boldRow(["Levered CF", ...negativeSeriesCells(yearly.leveredCashFlow)])
+      boldRow(["Total levered CF incl. exit", ...negativeSeriesCells(yearly.leveredCashFlow)])
     )
   );
 }

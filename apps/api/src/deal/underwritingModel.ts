@@ -34,6 +34,7 @@ export const DEFAULT_ANNUAL_OTHER_INCOME_GROWTH_PCT = 0;
 export const DEFAULT_ANNUAL_EXPENSE_GROWTH_PCT = 0;
 export const DEFAULT_ANNUAL_PROPERTY_TAX_GROWTH_PCT = 6;
 export const DEFAULT_RECURRING_CAPEX_ANNUAL = 1_200;
+export const DEFAULT_RECURRING_CAPEX_PER_ELIGIBLE_UNIT_ANNUAL = 5_000;
 export const DEFAULT_LOAN_FEE_PCT = 0.63;
 const NYC_CLASS_ONE_UNDERWRITING_TAX_GROWTH_PCT = 3;
 const NYC_SMALL_CLASS_TWO_UNDERWRITING_TAX_GROWTH_PCT = 3;
@@ -163,6 +164,7 @@ export interface UnderwritingProjectionYearly {
   totalOperatingExpenses: number[];
   noi: number[];
   recurringCapex: number[];
+  reserveRelease: number[];
   cashFlowFromOperations: number[];
   capRateOnPurchase: Array<number | null>;
   debtService: number[];
@@ -430,6 +432,43 @@ function recurringMonthlyOpexForUnit(row: ProjectedUnitInputRow): number {
   return Math.max(0, safeNumber(row.monthlyHospitalityExpense, 0));
 }
 
+function countReserveEligibleUnits(
+  rows: ReadonlyArray<
+    Pick<ProjectedUnitInputRow, "includeInUnderwriting" | "isCommercial" | "isProtected">
+  >
+): number {
+  return rows.filter(
+    (row) =>
+      row.includeInUnderwriting !== false &&
+      row.isCommercial !== true &&
+      row.isProtected !== true
+  ).length;
+}
+
+function defaultRecurringCapexAnnualForEligibleUnitCount(
+  eligibleUnitCount: number | null | undefined,
+  hasKnownUnitSet = false
+): number {
+  const normalizedEligibleUnitCount =
+    eligibleUnitCount != null && Number.isFinite(eligibleUnitCount)
+      ? Math.max(0, Math.round(eligibleUnitCount))
+      : null;
+  if (normalizedEligibleUnitCount != null && normalizedEligibleUnitCount > 0) {
+    return normalizedEligibleUnitCount * DEFAULT_RECURRING_CAPEX_PER_ELIGIBLE_UNIT_ANNUAL;
+  }
+  if (hasKnownUnitSet && normalizedEligibleUnitCount === 0) return 0;
+  return DEFAULT_RECURRING_CAPEX_ANNUAL;
+}
+
+function defaultRecurringCapexAnnualFromPropertyMix(
+  propertyMix: Pick<UnderwritingPropertyMixSummary, "eligibleResidentialUnits" | "totalUnits"> | null | undefined
+): number {
+  return defaultRecurringCapexAnnualForEligibleUnitCount(
+    propertyMix?.eligibleResidentialUnits,
+    propertyMix?.totalUnits != null && Number.isFinite(propertyMix.totalUnits)
+  );
+}
+
 function normalizeTaxCode(taxCode: string | null | undefined): string | null {
   if (taxCode == null) return null;
   const normalized = String(taxCode).trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
@@ -556,11 +595,6 @@ function projectExpenseLines(input: {
     ? [{ lineItem: "Operating expenses", amount: currentExpensesTotal }]
     : detailedRows;
 
-  const totalFromRows = normalizedRows.reduce((sum, row) => sum + row.amount, 0);
-  const scale =
-    totalFromRows > 0 && currentExpensesTotal > 0
-      ? currentExpensesTotal / totalFromRows
-      : 1;
   const increaseFactor = 1 + assumptions.operating.expenseIncreasePct / 100;
 
   return normalizedRows.map((row) => {
@@ -570,7 +604,7 @@ function projectExpenseLines(input: {
         : expenseGrowthPctForLine(row.lineItem, assumptions, {
             aggregateFallback,
           });
-    const baseAmount = row.amount * scale * increaseFactor;
+    const baseAmount = row.amount * (aggregateFallback ? increaseFactor : 1);
     const yearlyAmounts = Array.from({ length: assumptions.holdPeriodYears }, (_, index) =>
       roundCurrency(compoundAnnual(baseAmount, annualGrowthPct, index))
     );
@@ -594,6 +628,18 @@ export function resolveDossierAssumptions(
     DEFAULT_RENT_UPLIFT_PCT
   );
   const propertyMix = analyzePropertyForUnderwriting(propertyContext?.details ?? null);
+  const autoRecurringCapexAnnual = defaultRecurringCapexAnnualFromPropertyMix(propertyMix);
+  const overrideRecurringCapexAnnual =
+    overrides?.recurringCapexAnnual != null &&
+    (Math.abs(overrides.recurringCapexAnnual - DEFAULT_RECURRING_CAPEX_ANNUAL) > 0.005 ||
+      Math.abs(autoRecurringCapexAnnual - DEFAULT_RECURRING_CAPEX_ANNUAL) <= 0.005)
+      ? overrides.recurringCapexAnnual
+      : null;
+  const profileRecurringCapexAnnual =
+    profile?.defaultRecurringCapexAnnual != null &&
+    Math.abs(profile.defaultRecurringCapexAnnual - DEFAULT_RECURRING_CAPEX_ANNUAL) > 0.005
+      ? profile.defaultRecurringCapexAnnual
+      : null;
   const autoAnnualPropertyTaxGrowthPct = defaultAnnualPropertyTaxGrowthPctFromNycTaxCode(
     propertyContext?.details?.taxCode
   );
@@ -696,8 +742,12 @@ export function resolveDossierAssumptions(
         DEFAULT_ANNUAL_PROPERTY_TAX_GROWTH_PCT
       ),
       recurringCapexAnnual: safeNumber(
-        pickNumber(overrides?.recurringCapexAnnual, profile?.defaultRecurringCapexAnnual),
-        DEFAULT_RECURRING_CAPEX_ANNUAL
+        pickNumber(
+          overrideRecurringCapexAnnual,
+          profileRecurringCapexAnnual,
+          autoRecurringCapexAnnual
+        ),
+        autoRecurringCapexAnnual
       ),
     },
     holdPeriodYears: safePositiveInteger(
@@ -784,6 +834,24 @@ export function computeUnderwritingProjection(
         )
       )
     : 0;
+  const autoRecurringCapexAnnualFromMix = defaultRecurringCapexAnnualFromPropertyMix(
+    baseAssumptions.propertyMix
+  );
+  const effectiveRecurringCapexAnnual = (() => {
+    const baseRecurringCapexAnnual = roundCurrency(
+      Math.max(0, safeNumber(baseAssumptions.operating.recurringCapexAnnual))
+    );
+    if (!detailedUnitModelActive) return baseRecurringCapexAnnual;
+    const detailedDefaultRecurringCapexAnnual = defaultRecurringCapexAnnualForEligibleUnitCount(
+      countReserveEligibleUnits(normalizedUnitRows),
+      normalizedUnitRows.length > 0
+    );
+    const usesAutoRecurringCapexDefault =
+      Math.abs(baseRecurringCapexAnnual - autoRecurringCapexAnnualFromMix) < 0.005;
+    return usesAutoRecurringCapexDefault
+      ? detailedDefaultRecurringCapexAnnual
+      : baseRecurringCapexAnnual;
+  })();
   const effectiveBlendedRentUpliftPct = detailedUnitModelActive
     ? (() => {
         const includedRows = normalizedUnitRows.filter((row) => row.includeInUnderwriting !== false);
@@ -810,6 +878,7 @@ export function computeUnderwritingProjection(
     operating: {
       ...baseAssumptions.operating,
       blendedRentUpliftPct: effectiveBlendedRentUpliftPct,
+      recurringCapexAnnual: effectiveRecurringCapexAnnual,
     },
   };
   const purchasePrice = assumptions.acquisition.purchasePrice ?? 0;
@@ -972,10 +1041,6 @@ export function computeUnderwritingProjection(
         }, 0)
       )
     : protectedGrossRentalIncomeBase;
-  const occupiedRentalIncomeBase = roundCurrency(
-    eligibleOccupiedRentalIncomeBase + protectedOccupiedRentalIncomeBase
-  );
-
   const mortgage =
     loanAmount > 0 && assumptions.financing.amortizationYears > 0
       ? computeMortgage({
@@ -1099,33 +1164,6 @@ export function computeUnderwritingProjection(
       ),
     });
   }
-  if (assumptions.operating.occupancyTaxPct > 0) {
-    const occupancyTaxBase = roundCurrency(
-      occupiedRentalIncomeBase * (assumptions.operating.occupancyTaxPct / 100)
-    );
-    expenseLineItems.push({
-      lineItem: `Occupancy tax (${assumptions.operating.occupancyTaxPct.toFixed(1)}%)`,
-      annualGrowthPct: assumptions.operating.annualRentGrowthPct,
-      baseAmount: occupancyTaxBase,
-      yearlyAmounts: Array.from({ length: assumptions.holdPeriodYears }, (_, index) => {
-        const year = index + 1;
-        return roundCurrency(
-          Math.max(0, yearlyOccupiedRentalIncome[year] ?? 0) *
-            (assumptions.operating.occupancyTaxPct / 100)
-        );
-      }),
-    });
-  }
-  const projectedNonManagementExpenses = Array.from(
-    { length: assumptions.holdPeriodYears },
-    (_, yearIndex) =>
-      roundCurrency(
-        expenseLineItems.reduce(
-          (sum, row) => sum + (row.yearlyAmounts[yearIndex] ?? 0),
-          0
-        )
-      )
-  );
   const yearlyOtherIncome = years.map((year) =>
     year === 0
       ? 0
@@ -1152,22 +1190,57 @@ export function computeUnderwritingProjection(
         )
       : 0
   );
+  const yearlyFeeEligibleRentalIncome = years.map((year) =>
+    year === 0
+      ? 0
+      : roundCurrency(
+          Math.max(
+            0,
+            (yearlyOccupiedRentalIncome[year] ?? 0) - (yearlyLeadTimeLoss[year] ?? 0)
+          )
+        )
+  );
   const yearlyNetRentalIncome = years.map((year) =>
     year === 0
       ? 0
       : roundCurrency(
-          (yearlyOccupiedRentalIncome[year] ?? 0) +
-            (yearlyOtherIncome[year] ?? 0) -
-            (yearlyLeadTimeLoss[year] ?? 0)
+          (yearlyFeeEligibleRentalIncome[year] ?? 0) + (yearlyOtherIncome[year] ?? 0)
         )
   );
   const yearlyManagementFee = years.map((year) =>
     year === 0
       ? 0
       : roundCurrency(
-          (yearlyOccupiedRentalIncome[year] ?? 0) *
+          (yearlyFeeEligibleRentalIncome[year] ?? 0) *
             (Math.max(0, assumptions.operating.managementFeePct) / 100)
         )
+  );
+  if (assumptions.operating.occupancyTaxPct > 0) {
+    const occupancyTaxBase = roundCurrency(
+      (yearlyFeeEligibleRentalIncome[1] ?? 0) * (assumptions.operating.occupancyTaxPct / 100)
+    );
+    expenseLineItems.push({
+      lineItem: `Occupancy tax (${assumptions.operating.occupancyTaxPct.toFixed(1)}%)`,
+      annualGrowthPct: assumptions.operating.annualRentGrowthPct,
+      baseAmount: occupancyTaxBase,
+      yearlyAmounts: Array.from({ length: assumptions.holdPeriodYears }, (_, index) => {
+        const year = index + 1;
+        return roundCurrency(
+          Math.max(0, yearlyFeeEligibleRentalIncome[year] ?? 0) *
+            (assumptions.operating.occupancyTaxPct / 100)
+        );
+      }),
+    });
+  }
+  const projectedNonManagementExpenses = Array.from(
+    { length: assumptions.holdPeriodYears },
+    (_, yearIndex) =>
+      roundCurrency(
+        expenseLineItems.reduce(
+          (sum, row) => sum + (row.yearlyAmounts[yearIndex] ?? 0),
+          0
+        )
+      )
   );
   const yearlyTotalOperatingExpenses = years.map((year) =>
     year === 0
@@ -1183,6 +1256,15 @@ export function computeUnderwritingProjection(
   );
   const yearlyRecurringCapex = years.map((year) =>
     year === 0 ? 0 : roundCurrency(Math.max(0, assumptions.operating.recurringCapexAnnual))
+  );
+  const yearlyReserveRelease = years.map((year) =>
+    year === assumptions.holdPeriodYears
+      ? roundCurrency(
+          yearlyRecurringCapex
+            .slice(1, assumptions.holdPeriodYears + 1)
+            .reduce((sum, value) => sum + (value ?? 0), 0)
+        )
+      : 0
   );
   const yearlyCashFlowFromOperations = years.map((year) =>
     year === 0 ? 0 : roundCurrency((yearlyNoi[year] ?? 0) - (yearlyRecurringCapex[year] ?? 0))
@@ -1250,6 +1332,7 @@ export function computeUnderwritingProjection(
   const yearlyUnleveredCashFlow = years.map((year) =>
     roundCurrency(
       (yearlyCashFlowFromOperations[year] ?? 0) +
+        (yearlyReserveRelease[year] ?? 0) +
         (yearlyNetSaleBeforeDebt[year] ?? 0) +
         (yearlyTotalInvestmentCost[year] ?? 0)
     )
@@ -1258,7 +1341,9 @@ export function computeUnderwritingProjection(
     year === 0
       ? roundCurrency(-initialEquityInvested)
       : roundCurrency(
-          (yearlyCashFlowAfterFinancing[year] ?? 0) + (yearlyNetSaleToEquity[year] ?? 0)
+          (yearlyCashFlowAfterFinancing[year] ?? 0) +
+            (yearlyReserveRelease[year] ?? 0) +
+            (yearlyNetSaleToEquity[year] ?? 0)
         )
   );
 
@@ -1329,7 +1414,9 @@ export function computeUnderwritingProjection(
     operating: {
       currentExpenses: roundCurrency(normalizedExpenseInputs.currentExpensesTotalExManagement),
       currentOtherIncome: roundCurrency(otherIncome),
-      adjustedGrossRent: roundCurrency(yearlyOccupiedRentalIncome[stabilizedIndex] ?? occupiedRentalIncomeBase),
+      adjustedGrossRent: roundCurrency(
+        yearlyFeeEligibleRentalIncome[stabilizedIndex] ?? yearlyFeeEligibleRentalIncome[1] ?? 0
+      ),
       adjustedOperatingExpenses: roundCurrency(
         projectedNonManagementExpenses[stabilizedIndex - 1] ?? projectedNonManagementExpenses[0] ?? 0
       ),
@@ -1361,6 +1448,7 @@ export function computeUnderwritingProjection(
       totalOperatingExpenses: yearlyTotalOperatingExpenses,
       noi: yearlyNoi,
       recurringCapex: yearlyRecurringCapex,
+      reserveRelease: yearlyReserveRelease,
       cashFlowFromOperations: yearlyCashFlowFromOperations,
       capRateOnPurchase: yearlyCapRateOnPurchase,
       debtService: yearlyDebtService,

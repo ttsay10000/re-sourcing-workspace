@@ -56,6 +56,7 @@ export interface YearlyCashFlowProjectionContext {
   totalOperatingExpenses: number[];
   noi: number[];
   recurringCapex: number[];
+  reserveRelease: number[];
   cashFlowFromOperations: number[];
   capRateOnPurchase: Array<number | null>;
   debtService: number[];
@@ -87,7 +88,7 @@ export interface SensitivityScenarioRow {
 }
 
 export interface SensitivityAnalysisContext {
-  key: "rental_uplift" | "expense_increase" | "management_fee" | "exit_cap_rate";
+  key: "rental_uplift" | "management_fee" | "exit_cap_rate";
   title: string;
   inputLabel: string;
   scenarios: SensitivityScenarioRow[];

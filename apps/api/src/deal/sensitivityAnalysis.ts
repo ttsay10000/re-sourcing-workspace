@@ -6,7 +6,7 @@ import {
   type ResolvedDossierAssumptions,
 } from "./underwritingModel.js";
 
-export type SensitivityKey = "rental_uplift" | "expense_increase" | "management_fee" | "exit_cap_rate";
+export type SensitivityKey = "rental_uplift" | "management_fee" | "exit_cap_rate";
 
 export interface SensitivityScenario {
   valuePct: number;
@@ -43,7 +43,6 @@ export interface SensitivityAnalysis {
 }
 
 export const RENTAL_UPLIFT_SENSITIVITY_VALUES = [50, 60, 70, 80, 90];
-export const EXPENSE_INCREASE_SENSITIVITY_VALUES = [10, 17.5, 25, 30];
 export const MANAGEMENT_FEE_SENSITIVITY_VALUES = [6, 8, 10, 12];
 export const EXIT_CAP_RATE_SENSITIVITY_OFFSETS_BPS = [-100, -50, 50, 100];
 const MIN_EXIT_CAP_RATE_PCT = 0.25;
@@ -137,29 +136,6 @@ export function buildSensitivityAnalyses(input: {
     )
   );
 
-  const expenseIncreaseScenarios = EXPENSE_INCREASE_SENSITIVITY_VALUES.map((valuePct) =>
-    scenarioFromProjection(
-      valuePct,
-      computeUnderwritingProjection({
-        assumptions: {
-          ...assumptions,
-          operating: {
-            ...assumptions.operating,
-            expenseIncreasePct: valuePct,
-          },
-        },
-        currentGrossRent,
-        currentNoi,
-        currentOtherIncome,
-        currentExpensesTotal,
-        expenseRows,
-        unitRows,
-        conservativeProjectedLeaseUpRent,
-        protectedProjectedLeaseUpRent,
-      })
-    )
-  );
-
   const managementFeeScenarios = MANAGEMENT_FEE_SENSITIVITY_VALUES.map((valuePct) =>
     scenarioFromProjection(
       valuePct,
@@ -226,27 +202,6 @@ export function buildSensitivityAnalyses(input: {
         ),
         year1EquityYield: range(
           rentalUpliftScenarios.map((scenario) => scenario.year1EquityYield)
-        ),
-      },
-    },
-    {
-      key: "expense_increase",
-      title: "Expense Increase Sensitivity",
-      inputLabel: "Expense increase (%)",
-      scenarios: expenseIncreaseScenarios,
-      baseCase: {
-        valuePct: assumptions.operating.expenseIncreasePct,
-        irrPct: baseProjection.returns.irr,
-        year1CashOnCashReturn: baseProjection.returns.year1CashOnCashReturn,
-        year1EquityYield: baseProjection.returns.year1EquityYield,
-      },
-      ranges: {
-        irrPct: range(expenseIncreaseScenarios.map((scenario) => scenario.irrPct)),
-        year1CashOnCashReturn: range(
-          expenseIncreaseScenarios.map((scenario) => scenario.year1CashOnCashReturn)
-        ),
-        year1EquityYield: range(
-          expenseIncreaseScenarios.map((scenario) => scenario.year1EquityYield)
         ),
       },
     },

@@ -27,7 +27,6 @@ export {
 export {
   buildSensitivityAnalyses,
   RENTAL_UPLIFT_SENSITIVITY_VALUES,
-  EXPENSE_INCREASE_SENSITIVITY_VALUES,
   MANAGEMENT_FEE_SENSITIVITY_VALUES,
   type SensitivityAnalysis,
   type SensitivityScenario,

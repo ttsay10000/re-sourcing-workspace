@@ -51,4 +51,60 @@ describe("detailedCashFlowModel", () => {
       ])
     );
   });
+
+  it("adds default utility lines for modeled hospitality units and bumps repairs without inflating other rows", () => {
+    const model = resolveDetailedCashFlowModel({
+      details: {
+        omData: {
+          authoritative: {
+            rentRoll: [
+              { unit: "1A", unitCategory: "Residential", annualRent: 36_000 },
+              { unit: "2A", unitCategory: "Residential", annualRent: 42_000 },
+              { unit: "3A", unitCategory: "Residential", annualRent: 30_000, rentType: "Rent Stabilized" },
+              { unit: "Retail", unitCategory: "Commercial", annualRent: 60_000 },
+            ],
+            expenses: {
+              expensesTable: [
+                { lineItem: "Repairs and Maintenance", amount: 10_000 },
+                { lineItem: "Insurance", amount: 5_000 },
+              ],
+            },
+          },
+        },
+      } as never,
+      defaultRentUpliftPct: 70,
+      defaultVacancyPct: 15,
+      defaultAnnualExpenseGrowthPct: 2,
+      defaultAnnualPropertyTaxGrowthPct: 3,
+      unitModelRows: null,
+      expenseModelRows: null,
+    });
+
+    expect(model.expenseModelRows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          lineItem: "Repairs and Maintenance",
+          amount: 11_000,
+          annualGrowthPct: 2,
+        }),
+        expect.objectContaining({
+          lineItem: "Insurance",
+          amount: 5_000,
+          annualGrowthPct: 2,
+        }),
+        expect.objectContaining({
+          rowId: "expense-derived-wifi-internet",
+          lineItem: "WiFi / internet",
+          amount: 2_400,
+          annualGrowthPct: 2,
+        }),
+        expect.objectContaining({
+          rowId: "expense-derived-in-unit-electric",
+          lineItem: "In-unit electric",
+          amount: 6_000,
+          annualGrowthPct: 2,
+        }),
+      ])
+    );
+  });
 });

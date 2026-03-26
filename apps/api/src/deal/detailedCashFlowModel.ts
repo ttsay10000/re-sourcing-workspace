@@ -32,6 +32,11 @@ const DEFAULT_ASSUMED_LTR_OCCUPANCY_PCT = 97;
 const DEFAULT_ONBOARDING_LABOR_PER_UNIT = 2_500;
 const DEFAULT_ONBOARDING_OTHER_COSTS_PER_UNIT = 1_500;
 const DEFAULT_MONTHLY_RECURRING_OPEX_PER_UNIT = 300;
+const DEFAULT_WIFI_COST_PER_UNIT_MONTH = 100;
+const DEFAULT_IN_UNIT_ELECTRIC_COST_PER_UNIT_MONTH = 250;
+const DEFAULT_REPAIRS_AND_MAINTENANCE_STEP_UP_PCT = 10;
+const REPAIRS_AND_MAINTENANCE_PATTERN =
+  /\b(r\s*&\s*m|repairs?(?:\s*(?:&|and)\s*maintenance)?|repairs?)\b/i;
 
 export interface ResolvedUnitModelRow extends PropertyDealDossierUnitModelRow {
   rowId: string;
@@ -315,6 +320,56 @@ function defaultExpenseGrowthPct(params: {
     : params.annualExpenseGrowthPct;
 }
 
+function roundMoney(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+function isRepairsAndMaintenanceExpenseLine(lineItem: string): boolean {
+  return REPAIRS_AND_MAINTENANCE_PATTERN.test(lineItem);
+}
+
+function defaultModeledExpenseAmount(lineItem: string, amount: number): number {
+  const baseAmount = Math.max(0, amount);
+  if (!isRepairsAndMaintenanceExpenseLine(lineItem)) return roundMoney(baseAmount);
+  return roundMoney(baseAmount * (1 + DEFAULT_REPAIRS_AND_MAINTENANCE_STEP_UP_PCT / 100));
+}
+
+function countHospitalityEligibleUnits(rows: ResolvedUnitModelRow[]): number {
+  return rows.filter(
+    (row) =>
+      row.includeInUnderwriting !== false &&
+      row.isCommercial !== true &&
+      row.isProtected !== true
+  ).length;
+}
+
+function buildDerivedUtilityExpenseRows(
+  hospitalityEligibleUnitCount: number
+): Array<{
+  rowId: string;
+  lineItem: string;
+  amount: number;
+  aggregateFallback: false;
+}> {
+  if (hospitalityEligibleUnitCount <= 0) return [];
+  return [
+    {
+      rowId: "expense-derived-wifi-internet",
+      lineItem: "WiFi / internet",
+      amount: roundMoney(hospitalityEligibleUnitCount * DEFAULT_WIFI_COST_PER_UNIT_MONTH * 12),
+      aggregateFallback: false,
+    },
+    {
+      rowId: "expense-derived-in-unit-electric",
+      lineItem: "In-unit electric",
+      amount: roundMoney(
+        hospitalityEligibleUnitCount * DEFAULT_IN_UNIT_ELECTRIC_COST_PER_UNIT_MONTH * 12
+      ),
+      aggregateFallback: false,
+    },
+  ];
+}
+
 function resolvedExpenseTreatment(
   row: PropertyDealDossierExpenseModelRow | null | undefined,
   lineItem: string
@@ -536,14 +591,22 @@ export function resolveDetailedCashFlowModel(params: {
     (params.expenseModelRows ?? []).map((row) => [row.rowId, row] as const)
   );
   const seenExpenseRowIds = new Set<string>();
+  const hospitalityEligibleUnitCount = countHospitalityEligibleUnits(unitModelRows);
+  const derivedExpenseRowsSource =
+    sourceExpenseRows.length > 0
+      ? buildDerivedUtilityExpenseRows(hospitalityEligibleUnitCount)
+      : [];
   const expenseRowsSource =
     sourceExpenseRows.length > 0
-      ? sourceExpenseRows.map((row, index) => ({
-          rowId: expenseRowId(row.lineItem, index),
-          lineItem: row.lineItem,
-          amount: row.amount,
-          aggregateFallback: false,
-        }))
+      ? [
+          ...sourceExpenseRows.map((row, index) => ({
+            rowId: expenseRowId(row.lineItem, index),
+            lineItem: row.lineItem,
+            amount: row.amount,
+            aggregateFallback: false,
+          })),
+          ...derivedExpenseRowsSource,
+        ]
       : aggregateExpenseTotal > 0
         ? [
             {
@@ -563,7 +626,7 @@ export function resolveDetailedCashFlowModel(params: {
     return {
       rowId: row.rowId,
       lineItem,
-      amount: override?.amount ?? row.amount,
+      amount: override?.amount ?? defaultModeledExpenseAmount(lineItem, row.amount),
       annualGrowthPct:
         override?.annualGrowthPct ??
         defaultExpenseGrowthPct({

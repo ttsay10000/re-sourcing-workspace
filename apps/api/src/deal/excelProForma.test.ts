@@ -130,25 +130,37 @@ describe("buildExcelProForma", () => {
     expect(workbook.Sheets["Cash Flow"]?.D10?.f).toBe(
       "IF(OR(D$5=0,D$5>Assumptions!B41),0,Assumptions!B15*(1+Assumptions!B34/100)^(D$5-1))"
     );
+    expect(workbook.Sheets["Cash Flow"]?.D20?.f).toBe(
+      "IF(OR(D$5=0,D$5>Assumptions!B41),0,-MAX(0,D7+D12+D13)*(Assumptions!B29/100))"
+    );
     expect(workbook.Sheets["Cash Flow"]?.A21?.v).toBe("Total operating expenses");
     expect(workbook.Sheets["Cash Flow"]?.C21?.f).toBe("IF(OR(C$5=0,C$5>Assumptions!B41),0,SUM(C17:C20))");
-    expect(workbook.Sheets["Cash Flow"]?.A39?.v).toBe("Levered CF");
-    expect(workbook.Sheets["Cash Flow"]?.C39?.f).toBe("C29+C32+C33+C36+C37+C38");
+    expect(workbook.Sheets["Cash Flow"]?.D31?.f).toBe(
+      'IF(OR(D$5=0,D$5>Assumptions!B41),"",IF(D26=0,"",D24/ABS(D26)))'
+    );
+    expect(workbook.Sheets["Cash Flow"]?.D32?.f).toBe(
+      'IF(OR(D$5=0,D$5>Assumptions!B41),"",IF(Financing!$B$6=0,"",D29/Financing!$B$6))'
+    );
+    expect(workbook.Sheets["Cash Flow"]?.H37?.f).toBe(
+      "IF(H$5=Assumptions!B41,-SUM(C23:H23),0)"
+    );
+    expect(workbook.Sheets["Cash Flow"]?.A43?.v).toBe("Total levered CF incl. exit");
+    expect(workbook.Sheets["Cash Flow"]?.C43?.f).toBe("C29+C37+C35+C36+C40+C41+C42");
 
     expect(workbook.Sheets.Summary?.E10?.f).toBe(
-      `IFERROR(IRR('Cash Flow'!C34:INDEX(34:34,3+Assumptions!B41)),"")`
+      `IFERROR(IRR('Cash Flow'!C38:INDEX(38:38,3+Assumptions!B41)),"")`
     );
     expect(workbook.Sheets.Summary?.E11?.f).toBe(
-      `IF(ABS('Cash Flow'!C34)=0,0,SUMPRODUCT(('Cash Flow'!D34:INDEX(34:34,3+Assumptions!B41))*--('Cash Flow'!D34:INDEX(34:34,3+Assumptions!B41)>0))/ABS('Cash Flow'!C34))`
+      `IF(ABS('Cash Flow'!C38)=0,0,SUMPRODUCT(('Cash Flow'!D38:INDEX(38:38,3+Assumptions!B41))*--('Cash Flow'!D38:INDEX(38:38,3+Assumptions!B41)>0))/ABS('Cash Flow'!C38))`
     );
     expect(workbook.Sheets.Summary?.E13?.f).toBe(
-      `IFERROR(IRR('Cash Flow'!C39:INDEX(39:39,3+Assumptions!B41)),"")`
+      `IFERROR(IRR('Cash Flow'!C43:INDEX(43:43,3+Assumptions!B41)),"")`
     );
     expect(workbook.Sheets.Summary?.E14?.f).toBe(
-      `IF(ABS('Cash Flow'!C39)=0,0,SUMPRODUCT(('Cash Flow'!D39:INDEX(39:39,3+Assumptions!B41))*--('Cash Flow'!D39:INDEX(39:39,3+Assumptions!B41)>0))/ABS('Cash Flow'!C39))`
+      `IF(ABS('Cash Flow'!C43)=0,0,SUMPRODUCT(('Cash Flow'!D43:INDEX(43:43,3+Assumptions!B41))*--('Cash Flow'!D43:INDEX(43:43,3+Assumptions!B41)>0))/ABS('Cash Flow'!C43))`
     );
     expect(workbook.Sheets.Summary?.E15?.f).toBe(
-      `IF(ABS('Cash Flow'!C39)=0,0,(AVERAGE('Cash Flow'!D29:INDEX(29:29,3+Assumptions!B41))-AVERAGE('Cash Flow'!D27:INDEX(27:27,3+Assumptions!B41)))/ABS('Cash Flow'!C39))`
+      `IF(ABS('Cash Flow'!C43)=0,0,(AVERAGE('Cash Flow'!D29:INDEX(29:29,3+Assumptions!B41))-AVERAGE('Cash Flow'!D27:INDEX(27:27,3+Assumptions!B41)))/ABS('Cash Flow'!C43))`
     );
     expect(workbook.Sheets.Summary?.E16?.f).toBe(
       `Assumptions!B44/100`

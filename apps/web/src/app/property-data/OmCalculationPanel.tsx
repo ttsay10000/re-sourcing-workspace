@@ -143,6 +143,7 @@ interface OmCalculationYearlyCashFlow {
   totalOperatingExpenses: number[];
   noi: number[];
   recurringCapex: number[];
+  reserveRelease: number[];
   cashFlowFromOperations: number[];
   debtService: number[];
   principalPaid: number[];
@@ -281,6 +282,15 @@ export interface OmCalculationSnapshot {
   expenseModelRows: OmCalculationExpenseModelRow[];
   sensitivities: OmCalculationSensitivity[];
   yearlyCashFlow: OmCalculationYearlyCashFlow;
+  acquisition: {
+    purchaseClosingCosts: number;
+    financingFees: number;
+    totalProjectCost: number;
+    loanAmount: number;
+    equityRequiredForPurchase: number;
+    initialEquityInvested: number;
+    year0CashFlow: number;
+  };
   operating: {
     currentExpenses: number;
     currentOtherIncome: number;
@@ -365,7 +375,7 @@ const FIELD_GROUPS: Array<{ title: string; fields: FieldConfig[] }> = [
       { key: "annualOtherIncomeGrowthPct", label: "Annual other-income growth", step: 0.1, suffix: "%" },
       { key: "annualExpenseGrowthPct", label: "Default expense growth", step: 0.1, suffix: "%" },
       { key: "annualPropertyTaxGrowthPct", label: "Property-tax growth", step: 0.1, suffix: "%" },
-      { key: "recurringCapexAnnual", label: "Additional annual reserve", step: 1000, prefix: "$" },
+      { key: "recurringCapexAnnual", label: "Annual reserve", step: 1000, prefix: "$" },
     ],
   },
   {
@@ -401,6 +411,37 @@ const sectionCardStyle: React.CSSProperties = {
   overflow: "hidden",
 };
 
+const unitTableSubtextStyle: React.CSSProperties = {
+  marginTop: "0.12rem",
+  color: "#64748b",
+  fontSize: "0.71rem",
+  lineHeight: 1.35,
+};
+
+const unitTableAnnualValueStyle: React.CSSProperties = {
+  marginTop: "0.12rem",
+  fontSize: "0.68rem",
+  color: "#64748b",
+  fontStyle: "italic",
+};
+
+const unitTableComputedLabelStyle: React.CSSProperties = {
+  marginTop: "0.18rem",
+  fontSize: "0.62rem",
+  fontWeight: 700,
+  letterSpacing: "0.05em",
+  textTransform: "uppercase",
+  color: "#64748b",
+};
+
+const unitTableComputedValueStyle: React.CSSProperties = {
+  marginTop: "0.06rem",
+  fontSize: "0.69rem",
+  fontWeight: 600,
+  color: "#334155",
+  whiteSpace: "nowrap",
+};
+
 function formatCurrency(value: number | null | undefined): string {
   if (value == null || Number.isNaN(value)) return "—";
   return new Intl.NumberFormat("en-US", {
@@ -409,6 +450,12 @@ function formatCurrency(value: number | null | undefined): string {
     minimumFractionDigits: 0,
     maximumFractionDigits: 0,
   }).format(value);
+}
+
+function formatAccountingCurrency(value: number | null | undefined): string {
+  if (value == null || Number.isNaN(value)) return "—";
+  const absoluteValue = formatCurrency(Math.abs(value));
+  return value < -0.004 ? `(${absoluteValue})` : absoluteValue;
 }
 
 function formatPercent(value: number | null | undefined, digits = 1): string {
@@ -448,7 +495,33 @@ function formatMultiple(value: number | null | undefined): string {
 function formatCashFlowCellValue(value: number | null | undefined, blankZero = false): string {
   if (value == null || Number.isNaN(value)) return "";
   if (blankZero && Math.abs(value) < 0.005) return "";
-  return formatCurrency(value);
+  return formatAccountingCurrency(value);
+}
+
+function formatCashFlowRatioPercentValue(
+  value: number | null | undefined,
+  blankZero = false,
+  digits = 1
+): string {
+  if (value == null || Number.isNaN(value)) return "";
+  if (blankZero && Math.abs(value) < 0.00005) return "";
+  const absoluteValue = `${(Math.abs(value) * 100).toFixed(digits)}%`;
+  return value < -0.00005 ? `(${absoluteValue})` : absoluteValue;
+}
+
+function formatCashFlowMultipleValue(
+  value: number | null | undefined,
+  blankZero = false,
+  digits = 2
+): string {
+  if (value == null || Number.isNaN(value)) return "";
+  if (blankZero && Math.abs(value) < 0.00005) return "";
+  const absoluteValue = `${Math.abs(value).toFixed(digits)}x`;
+  return value < -0.00005 ? `(${absoluteValue})` : absoluteValue;
+}
+
+function cashFlowValueColor(value: number | null | undefined): string {
+  return value != null && Number.isFinite(value) && value < -0.004 ? "#b42318" : "#0f172a";
 }
 
 function sensitivityRangeLabel(range: OmCalculationSensitivityRange | null | undefined): string {
@@ -461,48 +534,8 @@ function nearlyEqual(a: number | null | undefined, b: number | null | undefined,
   return Math.abs(a - b) <= tolerance;
 }
 
-function extent(values: Array<number | null | undefined>): { min: number; max: number } | null {
-  const numericValues = values.filter((value): value is number => value != null && Number.isFinite(value));
-  if (numericValues.length === 0) return null;
-  return {
-    min: Math.min(...numericValues),
-    max: Math.max(...numericValues),
-  };
-}
-
-function heatTone(value: number | null | undefined, range: { min: number; max: number } | null): {
-  background: string;
-  color: string;
-} {
-  if (value == null || Number.isNaN(value) || !range || Math.abs(range.max - range.min) < 0.000001) {
-    return {
-      background: "#f8fafc",
-      color: "#334155",
-    };
-  }
-  const normalized = Math.min(1, Math.max(0, (value - range.min) / (range.max - range.min)));
-  const hue = 8 + normalized * 122;
-  const saturation = 72;
-  const lightness = 97 - normalized * 11;
-  return {
-    background: `hsl(${hue} ${saturation}% ${lightness}%)`,
-    color: normalized >= 0.62 ? "#166534" : normalized <= 0.28 ? "#991b1b" : "#334155",
-  };
-}
-
-function sensitivityMetricCellStyle(
-  value: number | null | undefined,
-  range: { min: number; max: number } | null,
-  baseStyle?: React.CSSProperties
-): React.CSSProperties {
-  const tone = heatTone(value, range);
-  return {
-    ...tableCellStyle,
-    ...baseStyle,
-    background: tone.background,
-    color: tone.color,
-    fontWeight: 600,
-  };
+function sensitivityMetricTextColor(value: number | null | undefined): string {
+  return value != null && Number.isFinite(value) && value < 0 ? "#b42318" : "#0f172a";
 }
 
 function formatDraftValue(draft: OmCalculationDraft, field: FieldConfig): string {
@@ -713,6 +746,67 @@ function normalizeUnitRow(row: OmCalculationUnitModelRow): OmCalculationUnitMode
   };
 }
 
+function projectedBoostedAnnualRent(
+  row: Pick<OmCalculationUnitModelRow, "underwrittenAnnualRent" | "rentUpliftPct">
+): number | null {
+  if (row.underwrittenAnnualRent == null || Number.isNaN(row.underwrittenAnnualRent)) return null;
+  const uplift = Math.max(0, row.rentUpliftPct ?? 0);
+  return Math.round(row.underwrittenAnnualRent * (1 + uplift / 100) * 100) / 100;
+}
+
+function unitTableRowBackground(row: OmCalculationUnitModelRow, rowIndex: number): string {
+  if (row.includeInUnderwriting === false) return "#f8fafc";
+  return rowIndex % 2 === 0 ? "#ffffff" : "#fbfdff";
+}
+
+function unitTableCellStyleForRow(
+  row: OmCalculationUnitModelRow,
+  rowIndex: number,
+  options?: {
+    align?: React.CSSProperties["textAlign"];
+    pinned?: boolean;
+    metric?: boolean;
+    lastColumn?: boolean;
+  }
+): React.CSSProperties {
+  const baseBackground = unitTableRowBackground(row, rowIndex);
+  const background = options?.metric
+    ? row.includeInUnderwriting === false
+      ? "#f2f5f8"
+      : "#f3f8ff"
+    : options?.pinned
+      ? row.includeInUnderwriting === false
+        ? "#f4f7fa"
+        : rowIndex % 2 === 0
+          ? "#f8fbff"
+          : "#f2f8ff"
+      : baseBackground;
+
+  return {
+    ...tableCellStyle,
+    textAlign: options?.align ?? "left",
+    background,
+    borderBottom: "1px solid #dbe5ef",
+    borderRight: options?.lastColumn ? "none" : "1px solid #e6eef5",
+  };
+}
+
+function unitTableHeaderCellStyle(options?: {
+  align?: React.CSSProperties["textAlign"];
+  lastColumn?: boolean;
+}): React.CSSProperties {
+  return {
+    ...tableCellStyle,
+    textAlign: options?.align ?? "left",
+    fontWeight: 700,
+    color: "#0f172a",
+    background: "#eef4fb",
+    borderBottom: "1px solid #d8e3ee",
+    borderRight: options?.lastColumn ? "none" : "1px solid #dbe5ef",
+    whiteSpace: "nowrap",
+  };
+}
+
 function nextExpenseRowId(): string {
   return `expense-manual-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -754,7 +848,9 @@ export function OmCalculationPanel({
           : "Upload an OM/rent roll or save broker notes first";
   const unitModelRows = draft.unitModelRows ?? calculation?.unitModelRows ?? [];
   const expenseModelRows = draft.expenseModelRows ?? calculation?.expenseModelRows ?? [];
-  const showExpenseFallbackFields = expenseModelRows.length === 0;
+  const hasAggregateExpenseFallbackRow =
+    expenseModelRows.length === 1 && expenseModelRows[0]?.lineItem === "Operating expenses";
+  const showExpenseFallbackFields = expenseModelRows.length === 0 || hasAggregateExpenseFallbackRow;
   const visibleFieldGroups = FIELD_GROUPS.map((group) => {
     if (group.title !== "Operating") return group;
     return {
@@ -818,7 +914,9 @@ export function OmCalculationPanel({
     calculation?.recommendedOffer.recommendedOfferHigh != null
       ? `${formatCurrency(calculation.recommendedOffer.recommendedOfferLow)} - ${formatCurrency(calculation.recommendedOffer.recommendedOfferHigh)}`
       : "—";
-  const sensitivityCards = calculation?.sensitivities ?? [];
+  const sensitivityCards = (calculation?.sensitivities ?? []).filter(
+    (sensitivity) => sensitivity.title !== "Expense Increase Sensitivity"
+  );
   const propertyUnitsLabel = calculation
     ? [
         calculation.propertyInfo.totalUnits != null
@@ -867,6 +965,27 @@ export function OmCalculationPanel({
           .join(", ")
       : "—"
     : "—";
+  const leveredCashFlowToEquitySeries = calculation?.yearlyCashFlow.cashFlowAfterFinancing ?? [];
+  const equityValueCreationSeries =
+    calculation?.yearlyCashFlow.cashFlowAfterFinancing.map((value, index) =>
+      index === 0 ? 0 : (value ?? 0) + (calculation.yearlyCashFlow.principalPaid[index] ?? 0)
+    ) ?? [];
+  const dscrSeries =
+    calculation?.yearlyCashFlow.cashFlowFromOperations.map((value, index) => {
+      if (index === 0) return null;
+      const debtService = calculation.yearlyCashFlow.debtService[index] ?? 0;
+      if (!Number.isFinite(debtService) || Math.abs(debtService) < 0.005) return null;
+      return (value ?? 0) / debtService;
+    }) ?? [];
+  const cashOnCashSeries =
+    calculation?.yearlyCashFlow.cashFlowAfterFinancing.map((value, index) => {
+      if (index === 0) return null;
+      const initialEquityInvested = calculation.acquisition.initialEquityInvested ?? 0;
+      if (!Number.isFinite(initialEquityInvested) || Math.abs(initialEquityInvested) < 0.005) {
+        return null;
+      }
+      return (value ?? 0) / initialEquityInvested;
+    }) ?? [];
   const rentBasisLabel = calculation
     ? calculation.currentFinancials.rentBasis === "gross_before_vacancy"
       ? "Gross before vacancy"
@@ -932,17 +1051,21 @@ export function OmCalculationPanel({
       blankZero?: boolean;
       bold?: boolean;
       highlight?: boolean;
+      italic?: boolean;
+      formatter?: (value: number | null | undefined, blankZero: boolean) => string;
     }
   ) {
     const yearLabels = calculation?.yearlyCashFlow.endingLabels ?? [];
     const background = options?.highlight ? "#f8fafc" : "#fff";
     const fontWeight = options?.bold ? 700 : 500;
+    const fontStyle = options?.italic ? "italic" : "normal";
     return (
       <tr key={label}>
         <td
           style={{
             ...tableCellStyle,
             fontWeight,
+            fontStyle,
             color: "#0f172a",
             background,
             minWidth: "240px",
@@ -957,12 +1080,16 @@ export function OmCalculationPanel({
               ...tableCellStyle,
               textAlign: "right",
               fontWeight,
-              color: "#0f172a",
+              fontStyle,
+              color: cashFlowValueColor(values[index]),
               background,
               whiteSpace: "nowrap",
             }}
           >
-            {formatCashFlowCellValue(values[index], options?.blankZero ?? false)}
+            {(options?.formatter ?? formatCashFlowCellValue)(
+              values[index],
+              options?.blankZero ?? false
+            )}
           </td>
         ))}
       </tr>
@@ -985,17 +1112,6 @@ export function OmCalculationPanel({
               ? scenario
               : closest;
           }, null));
-    const equityValues = sensitivity.scenarios.map(
-      (scenario) => scenario.year1EquityYield ?? scenario.year1CashOnCashReturn
-    );
-    const irrRange = extent(sensitivity.scenarios.map((scenario) => scenario.irrPct));
-    const equityRange = extent(equityValues);
-    const outputRange = extent(
-      sensitivity.scenarios.map((scenario) =>
-        sensitivity.key === "exit_cap_rate" ? scenario.netProceedsToEquity : scenario.stabilizedNoi
-      )
-    );
-
     return (
       <div
         key={sensitivity.key}
@@ -1027,7 +1143,7 @@ export function OmCalculationPanel({
               </span>
             </div>
             <div style={{ marginTop: "0.22rem", fontSize: "0.76rem", color: "#64748b" }}>
-              Heat map runs from weaker outcomes in warm tones to stronger outcomes in green.
+              Base row stays highlighted below; negative values are shown in red.
             </div>
           </div>
           <div style={{ textAlign: "right", fontSize: "0.76rem", color: "#475569" }}>
@@ -1116,96 +1232,103 @@ export function OmCalculationPanel({
               </tr>
             </thead>
             <tbody>
-              {sensitivity.scenarios.map((scenario) => (
-              <tr key={`${sensitivity.key}-${scenario.valuePct}`}>
-                <td
-                  style={{
-                    ...tableCellStyle,
-                    background: nearlyEqual(scenario.valuePct, sensitivity.baseCase.valuePct) ? "#eff6ff" : "#ffffff",
-                    borderTop: nearlyEqual(scenario.valuePct, sensitivity.baseCase.valuePct)
-                      ? "1px solid #93c5fd"
-                      : "1px solid #e2e8f0",
-                    borderBottom: nearlyEqual(scenario.valuePct, sensitivity.baseCase.valuePct)
-                      ? "1px solid #93c5fd"
-                      : "1px solid #e2e8f0",
-                    borderLeft: nearlyEqual(scenario.valuePct, sensitivity.baseCase.valuePct)
-                      ? "4px solid #2563eb"
-                      : "1px solid #e2e8f0",
-                    borderRight: "1px solid #e2e8f0",
-                    borderTopLeftRadius: "10px",
-                    borderBottomLeftRadius: "10px",
-                    fontWeight: nearlyEqual(scenario.valuePct, sensitivity.baseCase.valuePct) ? 700 : 600,
-                  }}
-                >
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: "0.45rem", alignItems: "center" }}>
-                    <span>{formatPercent(scenario.valuePct, 1)}</span>
-                    {nearlyEqual(scenario.valuePct, sensitivity.baseCase.valuePct) ? (
-                      <span
-                        style={{
-                          display: "inline-flex",
-                          alignItems: "center",
-                          padding: "0.12rem 0.42rem",
-                          borderRadius: "999px",
-                          background: "#dbeafe",
-                          color: "#1d4ed8",
-                          fontSize: "0.68rem",
-                          fontWeight: 700,
-                        }}
-                      >
-                        Base
-                      </span>
-                    ) : null}
-                  </div>
-                </td>
-                <td
-                  style={sensitivityMetricCellStyle(scenario.irrPct, irrRange, {
-                    textAlign: "right",
-                    borderTop: "1px solid #e2e8f0",
-                    borderBottom: "1px solid #e2e8f0",
-                  })}
-                >
-                    {formatRatioPercent(scenario.irrPct, 1)}
-                  </td>
-                  <td
-                    style={sensitivityMetricCellStyle(
-                      scenario.year1EquityYield ?? scenario.year1CashOnCashReturn,
-                      equityRange,
-                      {
+              {sensitivity.scenarios.map((scenario) => {
+                const isBaseRow = nearlyEqual(scenario.valuePct, sensitivity.baseCase.valuePct);
+                const rowBackground = isBaseRow ? "#eff6ff" : "#ffffff";
+                const rowBorderColor = isBaseRow ? "#93c5fd" : "#e2e8f0";
+                return (
+                  <tr key={`${sensitivity.key}-${scenario.valuePct}`}>
+                    <td
+                      style={{
+                        ...tableCellStyle,
+                        background: rowBackground,
+                        borderTop: `1px solid ${rowBorderColor}`,
+                        borderBottom: `1px solid ${rowBorderColor}`,
+                        borderLeft: isBaseRow ? "4px solid #2563eb" : `1px solid ${rowBorderColor}`,
+                        borderRight: `1px solid ${rowBorderColor}`,
+                        borderTopLeftRadius: "10px",
+                        borderBottomLeftRadius: "10px",
+                        fontWeight: isBaseRow ? 700 : 600,
+                      }}
+                    >
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: "0.45rem", alignItems: "center" }}>
+                        <span>{formatPercent(scenario.valuePct, 1)}</span>
+                        {isBaseRow ? (
+                          <span
+                            style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              padding: "0.12rem 0.42rem",
+                              borderRadius: "999px",
+                              background: "#dbeafe",
+                              color: "#1d4ed8",
+                              fontSize: "0.68rem",
+                              fontWeight: 700,
+                            }}
+                          >
+                            Base
+                          </span>
+                        ) : null}
+                      </div>
+                    </td>
+                    <td
+                      style={{
+                        ...tableCellStyle,
                         textAlign: "right",
-                        borderTop: "1px solid #e2e8f0",
-                        borderBottom: "1px solid #e2e8f0",
-                      }
-                    )}
-                  >
-                    {formatRatioPercent(
-                      scenario.year1EquityYield ?? scenario.year1CashOnCashReturn,
-                      1
-                    )}
-                  </td>
-                  <td
-                    style={sensitivityMetricCellStyle(
-                      sensitivity.key === "exit_cap_rate"
-                        ? scenario.netProceedsToEquity
-                        : scenario.stabilizedNoi,
-                      outputRange,
-                      {
+                        background: rowBackground,
+                        color: sensitivityMetricTextColor(scenario.irrPct),
+                        fontWeight: isBaseRow ? 700 : 600,
+                        borderTop: `1px solid ${rowBorderColor}`,
+                        borderBottom: `1px solid ${rowBorderColor}`,
+                      }}
+                    >
+                      {formatRatioPercent(scenario.irrPct, 1)}
+                    </td>
+                    <td
+                      style={{
+                        ...tableCellStyle,
                         textAlign: "right",
-                        borderTop: "1px solid #e2e8f0",
-                        borderBottom: "1px solid #e2e8f0",
-                        borderRight: "1px solid #e2e8f0",
+                        background: rowBackground,
+                        color: sensitivityMetricTextColor(
+                          scenario.year1EquityYield ?? scenario.year1CashOnCashReturn
+                        ),
+                        fontWeight: isBaseRow ? 700 : 600,
+                        borderTop: `1px solid ${rowBorderColor}`,
+                        borderBottom: `1px solid ${rowBorderColor}`,
+                      }}
+                    >
+                      {formatRatioPercent(
+                        scenario.year1EquityYield ?? scenario.year1CashOnCashReturn,
+                        1
+                      )}
+                    </td>
+                    <td
+                      style={{
+                        ...tableCellStyle,
+                        textAlign: "right",
+                        background: rowBackground,
+                        color: sensitivityMetricTextColor(
+                          sensitivity.key === "exit_cap_rate"
+                            ? scenario.netProceedsToEquity
+                            : scenario.stabilizedNoi
+                        ),
+                        fontWeight: isBaseRow ? 700 : 600,
+                        borderTop: `1px solid ${rowBorderColor}`,
+                        borderBottom: `1px solid ${rowBorderColor}`,
+                        borderRight: `1px solid ${rowBorderColor}`,
                         borderTopRightRadius: "10px",
                         borderBottomRightRadius: "10px",
-                      }
-                    )}
-                  >
-                    {formatCurrency(
-                      sensitivity.key === "exit_cap_rate"
-                        ? scenario.netProceedsToEquity
-                        : scenario.stabilizedNoi
-                    )}
-                  </td>
-                </tr>
-              ))}
+                      }}
+                    >
+                      {formatCurrency(
+                        sensitivity.key === "exit_cap_rate"
+                          ? scenario.netProceedsToEquity
+                          : scenario.stabilizedNoi
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -1534,172 +1657,195 @@ export function OmCalculationPanel({
           </div>
         </div>
         <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.76rem" }}>
-            <thead style={{ background: "#f8fafc" }}>
+          <table
+            style={{
+              width: "100%",
+              minWidth: "1540px",
+              borderCollapse: "collapse",
+              fontSize: "0.76rem",
+            }}
+          >
+            <thead>
               <tr>
-                <th style={{ ...tableCellStyle, textAlign: "left", fontWeight: 700 }}>Unit</th>
-                <th style={{ ...tableCellStyle, textAlign: "left", fontWeight: 700 }}>Mix</th>
-                <th style={{ ...tableCellStyle, textAlign: "right", fontWeight: 700 }}>Current / mo</th>
-                <th style={{ ...tableCellStyle, textAlign: "right", fontWeight: 700 }}>Base / mo</th>
-                <th style={{ ...tableCellStyle, textAlign: "right", fontWeight: 700 }}>Uplift %</th>
-                <th style={{ ...tableCellStyle, textAlign: "right", fontWeight: 700 }}>Occ. %</th>
-                <th style={{ ...tableCellStyle, textAlign: "right", fontWeight: 700 }}>FF&amp;E</th>
-                <th style={{ ...tableCellStyle, textAlign: "right", fontWeight: 700 }}>Labor</th>
-                <th style={{ ...tableCellStyle, textAlign: "right", fontWeight: 700 }}>Other</th>
-                <th style={{ ...tableCellStyle, textAlign: "right", fontWeight: 700 }}>OpEx / mo</th>
-                <th style={{ ...tableCellStyle, textAlign: "center", fontWeight: 700 }}>Model</th>
-                <th style={{ ...tableCellStyle, textAlign: "right", fontWeight: 700 }}>Modeled / mo</th>
+                <th style={unitTableHeaderCellStyle()}>Unit</th>
+                <th style={unitTableHeaderCellStyle()}>Mix</th>
+                <th style={unitTableHeaderCellStyle({ align: "right" })}>Current / mo</th>
+                <th style={unitTableHeaderCellStyle({ align: "right" })}>Base / mo</th>
+                <th style={unitTableHeaderCellStyle({ align: "right" })}>Uplift %</th>
+                <th style={unitTableHeaderCellStyle({ align: "right" })}>Occ. %</th>
+                <th style={unitTableHeaderCellStyle({ align: "right" })}>FF&amp;E</th>
+                <th style={unitTableHeaderCellStyle({ align: "right" })}>Labor</th>
+                <th style={unitTableHeaderCellStyle({ align: "right" })}>Other</th>
+                <th style={unitTableHeaderCellStyle({ align: "right" })}>OpEx / mo</th>
+                <th style={unitTableHeaderCellStyle({ align: "center" })}>Model</th>
+                <th style={unitTableHeaderCellStyle({ align: "right", lastColumn: true })}>
+                  Modeled / mo
+                </th>
               </tr>
             </thead>
             <tbody>
               {unitModelRows.length > 0 ? (
-                unitModelRows.map((row) => (
-                  <tr key={row.rowId}>
-                    <td style={tableCellStyle}>
-                      <div style={{ fontWeight: 600, color: "#0f172a", fontSize: "0.74rem" }}>{row.unitLabel}</div>
-                      <div style={{ marginTop: "0.12rem", color: "#64748b", fontSize: "0.71rem", lineHeight: 1.35 }}>
-                        {[row.tenantStatus, row.notes].filter(Boolean).join(" · ") || "—"}
-                      </div>
-                    </td>
-                    <td style={tableCellStyle}>
-                      <div style={{ fontSize: "0.73rem" }}>{row.unitCategory ?? "—"}</div>
-                      <div style={{ marginTop: "0.12rem", color: "#64748b", fontSize: "0.71rem", lineHeight: 1.35 }}>
-                        {[row.beds != null ? `${formatNumber(row.beds)}Br` : null, row.baths != null ? `${row.baths}Ba` : null, row.sqft != null ? `${formatNumber(row.sqft)} SF` : null]
-                          .filter(Boolean)
-                          .join(" · ") || "—"}
-                      </div>
-                      <div style={{ marginTop: "0.12rem", color: "#64748b", fontSize: "0.71rem" }}>
-                        {row.isCommercial
-                          ? "Commercial"
-                          : row.isRentStabilized
-                            ? "Rent stabilized"
-                            : row.isProtected
-                              ? "Protected"
-                              : row.isVacantLike
-                                ? "Vacant / projected"
-                                : "Eligible"}
-                      </div>
-                    </td>
-                    <td style={{ ...tableCellStyle, textAlign: "right" }}>
-                      <div>{formatCurrency(monthlyFromAnnual(row.currentAnnualRent))}</div>
-                      <div style={{ marginTop: "0.12rem", fontSize: "0.68rem", color: "#64748b", fontStyle: "italic" }}>
-                        {formatCurrency(row.currentAnnualRent)} / yr
-                      </div>
-                    </td>
-                    <td style={{ ...tableCellStyle, textAlign: "right" }}>
-                      <input
-                        type="number"
-                        value={displayMonthlyInputValue(row.underwrittenAnnualRent)}
-                        onChange={(event) =>
-                          updateUnitRow(row.rowId, {
-                            underwrittenAnnualRent:
-                              event.target.value === "" ? null : annualFromMonthly(Number(event.target.value)),
-                          })
-                        }
-                        style={tableInputStyle("98px")}
-                      />
-                      <div style={{ marginTop: "0.14rem", fontSize: "0.68rem", color: "#64748b", fontStyle: "italic" }}>
-                        {formatCurrency(row.underwrittenAnnualRent)} / yr
-                      </div>
-                    </td>
-                    <td style={{ ...tableCellStyle, textAlign: "right" }}>
-                      <input
-                        type="number"
-                        step="0.1"
-                        value={row.rentUpliftPct ?? ""}
-                        onChange={(event) =>
-                          updateUnitRow(row.rowId, {
-                            rentUpliftPct: event.target.value === "" ? null : Number(event.target.value),
-                          })
-                        }
-                        style={tableInputStyle("74px")}
-                      />
-                    </td>
-                    <td style={{ ...tableCellStyle, textAlign: "right" }}>
-                      <input
-                        type="number"
-                        step="0.1"
-                        value={row.occupancyPct ?? ""}
-                        onChange={(event) =>
-                          updateUnitRow(row.rowId, {
-                            occupancyPct: event.target.value === "" ? null : Number(event.target.value),
-                          })
-                        }
-                        style={tableInputStyle("74px")}
-                      />
-                    </td>
-                    <td style={{ ...tableCellStyle, textAlign: "right" }}>
-                      <input
-                        type="number"
-                        step="100"
-                        value={row.furnishingCost ?? ""}
-                        onChange={(event) =>
-                          updateUnitRow(row.rowId, {
-                            furnishingCost: event.target.value === "" ? null : Number(event.target.value),
-                          })
-                        }
-                        style={tableInputStyle("92px")}
-                      />
-                    </td>
-                    <td style={{ ...tableCellStyle, textAlign: "right" }}>
-                      <input
-                        type="number"
-                        step="100"
-                        value={resolvedOnboardingBreakdown(row).labor ?? ""}
-                        onChange={(event) =>
-                          updateUnitRow(row.rowId, {
-                            onboardingLaborFee:
-                              event.target.value === "" ? null : Number(event.target.value),
-                          })
-                        }
-                        style={tableInputStyle("86px")}
-                      />
-                    </td>
-                    <td style={{ ...tableCellStyle, textAlign: "right" }}>
-                      <input
-                        type="number"
-                        step="100"
-                        value={resolvedOnboardingBreakdown(row).other ?? ""}
-                        onChange={(event) =>
-                          updateUnitRow(row.rowId, {
-                            onboardingOtherCosts:
-                              event.target.value === "" ? null : Number(event.target.value),
-                          })
-                        }
-                        style={tableInputStyle("86px")}
-                      />
-                    </td>
-                    <td style={{ ...tableCellStyle, textAlign: "right" }}>
-                      <input
-                        type="number"
-                        step="10"
-                        value={resolvedMonthlyRecurringOpex(row) ?? ""}
-                        onChange={(event) =>
-                          updateUnitRow(row.rowId, {
-                            monthlyRecurringOpex:
-                              event.target.value === "" ? null : Number(event.target.value),
-                          })
-                        }
-                        style={tableInputStyle("86px")}
-                      />
-                    </td>
-                    <td style={{ ...tableCellStyle, textAlign: "center" }}>
-                      <input
-                        type="checkbox"
-                        checked={row.includeInUnderwriting}
-                        onChange={(event) =>
-                          updateUnitRow(row.rowId, { includeInUnderwriting: event.target.checked })
-                        }
-                      />
-                    </td>
-                    <td style={{ ...tableCellStyle, textAlign: "right" }}>
-                      <div style={{ fontWeight: 600 }}>{formatCurrency(monthlyFromAnnual(row.modeledAnnualRent))}</div>
-                      <div style={{ marginTop: "0.12rem", fontSize: "0.68rem", color: "#64748b", fontStyle: "italic" }}>
-                        {formatCurrency(row.modeledAnnualRent)} / yr
-                      </div>
-                    </td>
-                  </tr>
-                ))
+                unitModelRows.map((row, rowIndex) => {
+                  const boostedGrossAnnualRent = projectedBoostedAnnualRent(row);
+
+                  return (
+                    <tr key={row.rowId}>
+                      <td style={unitTableCellStyleForRow(row, rowIndex, { pinned: true })}>
+                        <div style={{ fontWeight: 600, color: "#0f172a", fontSize: "0.74rem" }}>{row.unitLabel}</div>
+                        <div style={unitTableSubtextStyle}>
+                          {[row.tenantStatus, row.notes].filter(Boolean).join(" · ") || "—"}
+                        </div>
+                      </td>
+                      <td style={unitTableCellStyleForRow(row, rowIndex, { pinned: true })}>
+                        <div style={{ fontSize: "0.73rem" }}>{row.unitCategory ?? "—"}</div>
+                        <div style={unitTableSubtextStyle}>
+                          {[row.beds != null ? `${formatNumber(row.beds)}Br` : null, row.baths != null ? `${row.baths}Ba` : null, row.sqft != null ? `${formatNumber(row.sqft)} SF` : null]
+                            .filter(Boolean)
+                            .join(" · ") || "—"}
+                        </div>
+                        <div style={{ ...unitTableSubtextStyle, lineHeight: 1.2 }}>
+                          {row.isCommercial
+                            ? "Commercial"
+                            : row.isRentStabilized
+                              ? "Rent stabilized"
+                              : row.isProtected
+                                ? "Protected"
+                                : row.isVacantLike
+                                  ? "Vacant / projected"
+                                  : "Eligible"}
+                        </div>
+                      </td>
+                      <td style={unitTableCellStyleForRow(row, rowIndex, { align: "right" })}>
+                        <div>{formatCurrency(monthlyFromAnnual(row.currentAnnualRent))}</div>
+                        <div style={unitTableAnnualValueStyle}>
+                          {formatCurrency(row.currentAnnualRent)} / yr
+                        </div>
+                      </td>
+                      <td style={unitTableCellStyleForRow(row, rowIndex, { align: "right" })}>
+                        <input
+                          type="number"
+                          value={displayMonthlyInputValue(row.underwrittenAnnualRent)}
+                          onChange={(event) =>
+                            updateUnitRow(row.rowId, {
+                              underwrittenAnnualRent:
+                                event.target.value === "" ? null : annualFromMonthly(Number(event.target.value)),
+                            })
+                          }
+                          style={tableInputStyle("98px")}
+                        />
+                        <div style={unitTableAnnualValueStyle}>
+                          {formatCurrency(row.underwrittenAnnualRent)} / yr
+                        </div>
+                      </td>
+                      <td style={unitTableCellStyleForRow(row, rowIndex, { align: "right" })}>
+                        <input
+                          type="number"
+                          step="0.1"
+                          value={row.rentUpliftPct ?? ""}
+                          onChange={(event) =>
+                            updateUnitRow(row.rowId, {
+                              rentUpliftPct: event.target.value === "" ? null : Number(event.target.value),
+                            })
+                          }
+                          style={tableInputStyle("74px")}
+                        />
+                        <div style={unitTableComputedLabelStyle}>Boosted gross</div>
+                        <div style={unitTableComputedValueStyle}>
+                          {formatCurrency(monthlyFromAnnual(boostedGrossAnnualRent))} / mo
+                        </div>
+                      </td>
+                      <td style={unitTableCellStyleForRow(row, rowIndex, { align: "right" })}>
+                        <input
+                          type="number"
+                          step="0.1"
+                          value={row.occupancyPct ?? ""}
+                          onChange={(event) =>
+                            updateUnitRow(row.rowId, {
+                              occupancyPct: event.target.value === "" ? null : Number(event.target.value),
+                            })
+                          }
+                          style={tableInputStyle("74px")}
+                        />
+                      </td>
+                      <td style={unitTableCellStyleForRow(row, rowIndex, { align: "right" })}>
+                        <input
+                          type="number"
+                          step="100"
+                          value={row.furnishingCost ?? ""}
+                          onChange={(event) =>
+                            updateUnitRow(row.rowId, {
+                              furnishingCost: event.target.value === "" ? null : Number(event.target.value),
+                            })
+                          }
+                          style={tableInputStyle("92px")}
+                        />
+                      </td>
+                      <td style={unitTableCellStyleForRow(row, rowIndex, { align: "right" })}>
+                        <input
+                          type="number"
+                          step="100"
+                          value={resolvedOnboardingBreakdown(row).labor ?? ""}
+                          onChange={(event) =>
+                            updateUnitRow(row.rowId, {
+                              onboardingLaborFee:
+                                event.target.value === "" ? null : Number(event.target.value),
+                            })
+                          }
+                          style={tableInputStyle("86px")}
+                        />
+                      </td>
+                      <td style={unitTableCellStyleForRow(row, rowIndex, { align: "right" })}>
+                        <input
+                          type="number"
+                          step="100"
+                          value={resolvedOnboardingBreakdown(row).other ?? ""}
+                          onChange={(event) =>
+                            updateUnitRow(row.rowId, {
+                              onboardingOtherCosts:
+                                event.target.value === "" ? null : Number(event.target.value),
+                            })
+                          }
+                          style={tableInputStyle("86px")}
+                        />
+                      </td>
+                      <td style={unitTableCellStyleForRow(row, rowIndex, { align: "right" })}>
+                        <input
+                          type="number"
+                          step="10"
+                          value={resolvedMonthlyRecurringOpex(row) ?? ""}
+                          onChange={(event) =>
+                            updateUnitRow(row.rowId, {
+                              monthlyRecurringOpex:
+                                event.target.value === "" ? null : Number(event.target.value),
+                            })
+                          }
+                          style={tableInputStyle("86px")}
+                        />
+                      </td>
+                      <td style={unitTableCellStyleForRow(row, rowIndex, { align: "center" })}>
+                        <input
+                          type="checkbox"
+                          checked={row.includeInUnderwriting}
+                          onChange={(event) =>
+                            updateUnitRow(row.rowId, { includeInUnderwriting: event.target.checked })
+                          }
+                        />
+                      </td>
+                      <td
+                        style={unitTableCellStyleForRow(row, rowIndex, {
+                          align: "right",
+                          metric: true,
+                          lastColumn: true,
+                        })}
+                      >
+                        <div style={{ fontWeight: 600 }}>{formatCurrency(monthlyFromAnnual(row.modeledAnnualRent))}</div>
+                        <div style={unitTableAnnualValueStyle}>
+                          {formatCurrency(row.modeledAnnualRent)} / yr
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
               ) : (
                 <tr>
                   <td colSpan={12} style={{ ...tableCellStyle, color: "#64748b" }}>
@@ -2337,7 +2483,7 @@ export function OmCalculationPanel({
                         { blankZero: true }
                       )}
                       {renderCashFlowValueRow(
-                        "CF from operations",
+                        "Unlevered CF after reserves",
                         calculation.yearlyCashFlow.cashFlowFromOperations,
                         { blankZero: true, bold: true, highlight: true }
                       )}
@@ -2368,17 +2514,30 @@ export function OmCalculationPanel({
                         { blankZero: true }
                       )}
                       {renderCashFlowValueRow(
-                        "CF after financing (cash)",
-                        calculation.yearlyCashFlow.cashFlowAfterFinancing,
+                        "Levered CF to equity",
+                        leveredCashFlowToEquitySeries,
                         { blankZero: true, bold: true, highlight: true }
                       )}
                       {renderCashFlowValueRow(
-                        "Economic benefit incl. paydown",
-                        calculation.yearlyCashFlow.cashFlowAfterFinancing.map(
-                          (value, index) =>
-                            (value ?? 0) + (calculation.yearlyCashFlow.principalPaid[index] ?? 0)
-                        ),
-                        { blankZero: true }
+                        "Equity value creation incl. principal paydown (memo only)",
+                        equityValueCreationSeries,
+                        { blankZero: true, italic: true }
+                      )}
+                      {renderCashFlowValueRow(
+                        "DSCR (after reserves)",
+                        dscrSeries,
+                        {
+                          formatter: (value, blankZero) =>
+                            formatCashFlowMultipleValue(value, blankZero, 2),
+                        }
+                      )}
+                      {renderCashFlowValueRow(
+                        "Cash-on-cash return",
+                        cashOnCashSeries,
+                        {
+                          formatter: (value, blankZero) =>
+                            formatCashFlowRatioPercentValue(value, blankZero, 1),
+                        }
                       )}
 
                       {renderCashFlowSectionRow("Exit waterfall")}
@@ -2394,6 +2553,16 @@ export function OmCalculationPanel({
                         ),
                         { blankZero: true }
                       )}
+                      {Array.isArray(calculation.yearlyCashFlow.reserveRelease) &&
+                      calculation.yearlyCashFlow.reserveRelease.some(
+                        (value) => Math.abs(value ?? 0) > 0.005
+                      )
+                        ? renderCashFlowValueRow(
+                            "Reserve release at exit",
+                            calculation.yearlyCashFlow.reserveRelease,
+                            { blankZero: true }
+                          )
+                        : null}
                       {renderCashFlowValueRow(
                         "NSP before debt payoff",
                         calculation.yearlyCashFlow.netSaleProceedsBeforeDebtPayoff,
@@ -2412,7 +2581,7 @@ export function OmCalculationPanel({
                         { blankZero: true, bold: true }
                       )}
                       {renderCashFlowValueRow(
-                        "Levered CF",
+                        "Total levered CF incl. exit",
                         calculation.yearlyCashFlow.leveredCashFlow,
                         { blankZero: true, bold: true, highlight: true }
                       )}
@@ -2436,8 +2605,8 @@ export function OmCalculationPanel({
                   Sensitivity analyses
                 </div>
                 <div style={{ marginTop: "0.2rem", fontSize: "0.83rem", color: "#64748b", lineHeight: 1.5 }}>
-                  Primary scenario sweeps behind the deal dossier, with the base case highlighted and heat
-                  mapped for faster scanning.
+                  Primary scenario sweeps behind the deal dossier, with the base row highlighted and negative
+                  outcomes called out in red.
                 </div>
               </div>
               <div style={sectionCardStyle}>
@@ -2446,9 +2615,9 @@ export function OmCalculationPanel({
                     padding: "1rem",
                     display: "grid",
                     gridTemplateColumns:
-                      sensitivityCards.length > 1 ? "repeat(auto-fit, minmax(470px, 1fr))" : "1fr",
+                      sensitivityCards.length > 1 ? "repeat(auto-fit, minmax(340px, 1fr))" : "1fr",
                     gap: "0.9rem",
-                    maxWidth: "1180px",
+                    maxWidth: "none",
                     margin: "0 auto",
                   }}
                 >
@@ -2484,230 +2653,245 @@ export function OmCalculationPanel({
               <div
                 style={{
                   display: "grid",
-                  gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
                   gap: "0.9rem",
                 }}
               >
-                <div style={sectionCardStyle}>
-                  <div style={{ padding: "0.9rem 1rem", borderBottom: "1px solid #e2e8f0" }}>
-                    <strong style={{ color: "#0f172a" }}>Assumptions used</strong>
-                    <div style={{ marginTop: "0.2rem", fontSize: "0.78rem", color: "#64748b" }}>
-                      These are the resolved assumptions from the latest OM analysis run.
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
+                    gap: "0.9rem",
+                  }}
+                >
+                  <div style={sectionCardStyle}>
+                    <div style={{ padding: "0.9rem 1rem", borderBottom: "1px solid #e2e8f0" }}>
+                      <strong style={{ color: "#0f172a" }}>Assumptions used</strong>
+                      <div style={{ marginTop: "0.2rem", fontSize: "0.78rem", color: "#64748b" }}>
+                        These are the resolved assumptions from the latest OM analysis run.
+                      </div>
                     </div>
-                  </div>
-                  <div style={{ padding: "0 1rem 0.4rem" }}>
-                    {summaryRow(
-                      "Investment profile",
-                      (calculation.acquisitionMetadata.investmentProfile ?? draft.investmentProfile) ||
-                        "—"
-                    )}
-                    {summaryRow(
-                      "Target acquisition date",
-                      formatDateLabel(
-                        calculation.acquisitionMetadata.targetAcquisitionDate ?? draft.targetAcquisitionDate
-                      )
-                    )}
-                    {summaryRow("Modeled purchase price", formatCurrency(calculation.assumptions.purchasePrice))}
-                    {summaryRow("Closing costs", formatPercent(calculation.assumptions.purchaseClosingCostPct))}
-                    {summaryRow("LTV / rate / amort.", financingTermsLabel)}
-                    {summaryRow("Default rent uplift", formatPercent(calculation.assumptions.rentUpliftPct))}
-                    {summaryRow("Effective blended uplift", formatPercent(calculation.assumptions.blendedRentUpliftPct))}
-                    {showExpenseFallbackFields
-                      ? summaryRow("Expense step-up", formatPercent(calculation.assumptions.expenseIncreasePct))
-                      : null}
-                    {summaryRow(
-                      "Mgmt / occupancy tax",
-                      calculation.assumptions.managementFeePct != null ||
-                        calculation.assumptions.occupancyTaxPct != null
-                        ? `${formatPercent(calculation.assumptions.managementFeePct)} / ${formatPercent(calculation.assumptions.occupancyTaxPct)}`
-                        : "—"
-                    )}
-                    {summaryRow(
-                      "Unit FF&E / onboarding",
-                      `${formatCurrency(calculation.assumptions.furnishingSetupCosts)} / ${formatCurrency(calculation.assumptions.onboardingCosts)}`
-                    )}
-                    {summaryRow(
-                      "Onboarding labor / other",
-                      `${formatCurrency(detailedOnboardingLaborTotal)} / ${formatCurrency(detailedOnboardingOtherTotal)}`
-                    )}
-                    {summaryRow(
-                      "Recurring unit OpEx / mo",
-                      formatCurrency(detailedRecurringOpexMonthlyTotal)
-                    )}
-                    {summaryRow("Weighted modeled occupancy", formatPercent(weightedModeledOccupancyPct, 1))}
-                    {summaryRow(
-                      "Fallback vacancy / lead time",
-                      calculation.assumptions.vacancyPct != null || calculation.assumptions.leadTimeMonths != null
-                        ? `${formatPercent(calculation.assumptions.vacancyPct)} / ${formatNumber(calculation.assumptions.leadTimeMonths)} mo`
-                        : "—"
-                    )}
-                    {summaryRow(
-                      "Annual FM / commercial growth",
-                      calculation.assumptions.annualRentGrowthPct != null ||
-                        calculation.assumptions.annualCommercialRentGrowthPct != null
-                        ? `FM ${formatPercent(calculation.assumptions.annualRentGrowthPct)} / Comm ${formatPercent(calculation.assumptions.annualCommercialRentGrowthPct)}`
-                        : "—"
-                    )}
-                    {showExpenseFallbackFields
-                      ? summaryRow(
-                          "Annual other-income / expense growth",
-                          calculation.assumptions.annualOtherIncomeGrowthPct != null ||
-                            calculation.assumptions.annualExpenseGrowthPct != null
-                            ? `Other ${formatPercent(calculation.assumptions.annualOtherIncomeGrowthPct)} / Expense ${formatPercent(calculation.assumptions.annualExpenseGrowthPct)}`
-                            : "—"
+                    <div style={{ padding: "0 1rem 0.4rem" }}>
+                      {summaryRow(
+                        "Investment profile",
+                        (calculation.acquisitionMetadata.investmentProfile ?? draft.investmentProfile) ||
+                          "—"
+                      )}
+                      {summaryRow(
+                        "Target acquisition date",
+                        formatDateLabel(
+                          calculation.acquisitionMetadata.targetAcquisitionDate ?? draft.targetAcquisitionDate
                         )
-                      : summaryRow(
-                          "Annual other-income growth",
-                          formatPercent(calculation.assumptions.annualOtherIncomeGrowthPct)
-                        )}
-                    {summaryRow(
-                      "Exit cap / close costs",
-                      calculation.assumptions.exitCapPct != null ||
-                        calculation.assumptions.exitClosingCostPct != null
-                        ? `${formatPercent(calculation.assumptions.exitCapPct)} / ${formatPercent(calculation.assumptions.exitClosingCostPct)}`
-                        : "—"
-                    )}
-                    {summaryRow("Target IRR", formatPercent(calculation.assumptions.targetIrrPct))}
+                      )}
+                      {summaryRow("Modeled purchase price", formatCurrency(calculation.assumptions.purchasePrice))}
+                      {summaryRow("Closing costs", formatPercent(calculation.assumptions.purchaseClosingCostPct))}
+                      {summaryRow("LTV / rate / amort.", financingTermsLabel)}
+                      {summaryRow("Default rent uplift", formatPercent(calculation.assumptions.rentUpliftPct))}
+                      {summaryRow("Effective blended uplift", formatPercent(calculation.assumptions.blendedRentUpliftPct))}
+                      {showExpenseFallbackFields
+                        ? summaryRow("Expense step-up", formatPercent(calculation.assumptions.expenseIncreasePct))
+                        : null}
+                      {summaryRow(
+                        "Mgmt / occupancy tax",
+                        calculation.assumptions.managementFeePct != null ||
+                          calculation.assumptions.occupancyTaxPct != null
+                          ? `${formatPercent(calculation.assumptions.managementFeePct)} / ${formatPercent(calculation.assumptions.occupancyTaxPct)}`
+                          : "—"
+                      )}
+                      {summaryRow(
+                        "Unit FF&E / onboarding",
+                        `${formatCurrency(calculation.assumptions.furnishingSetupCosts)} / ${formatCurrency(calculation.assumptions.onboardingCosts)}`
+                      )}
+                      {summaryRow(
+                        "Onboarding labor / other",
+                        `${formatCurrency(detailedOnboardingLaborTotal)} / ${formatCurrency(detailedOnboardingOtherTotal)}`
+                      )}
+                      {summaryRow(
+                        "Recurring unit OpEx / mo",
+                        formatCurrency(detailedRecurringOpexMonthlyTotal)
+                      )}
+                      {summaryRow("Weighted modeled occupancy", formatPercent(weightedModeledOccupancyPct, 1))}
+                      {summaryRow(
+                        "Fallback vacancy / lead time",
+                        calculation.assumptions.vacancyPct != null || calculation.assumptions.leadTimeMonths != null
+                          ? `${formatPercent(calculation.assumptions.vacancyPct)} / ${formatNumber(calculation.assumptions.leadTimeMonths)} mo`
+                          : "—"
+                      )}
+                      {summaryRow(
+                        "Annual FM / commercial growth",
+                        calculation.assumptions.annualRentGrowthPct != null ||
+                          calculation.assumptions.annualCommercialRentGrowthPct != null
+                          ? `FM ${formatPercent(calculation.assumptions.annualRentGrowthPct)} / Comm ${formatPercent(calculation.assumptions.annualCommercialRentGrowthPct)}`
+                          : "—"
+                      )}
+                      {showExpenseFallbackFields
+                        ? summaryRow(
+                            "Annual other-income / expense growth",
+                            calculation.assumptions.annualOtherIncomeGrowthPct != null ||
+                              calculation.assumptions.annualExpenseGrowthPct != null
+                              ? `Other ${formatPercent(calculation.assumptions.annualOtherIncomeGrowthPct)} / Expense ${formatPercent(calculation.assumptions.annualExpenseGrowthPct)}`
+                              : "—"
+                          )
+                        : summaryRow(
+                            "Annual other-income growth",
+                            formatPercent(calculation.assumptions.annualOtherIncomeGrowthPct)
+                          )}
+                      {summaryRow(
+                        "Exit cap / close costs",
+                        calculation.assumptions.exitCapPct != null ||
+                          calculation.assumptions.exitClosingCostPct != null
+                          ? `${formatPercent(calculation.assumptions.exitCapPct)} / ${formatPercent(calculation.assumptions.exitClosingCostPct)}`
+                          : "—"
+                      )}
+                      {summaryRow("Target IRR", formatPercent(calculation.assumptions.targetIrrPct))}
+                    </div>
+                  </div>
+
+                  <div style={sectionCardStyle}>
+                    <div style={{ padding: "0.9rem 1rem", borderBottom: "1px solid #e2e8f0" }}>
+                      <strong style={{ color: "#0f172a" }}>Current OM state</strong>
+                      <div style={{ marginTop: "0.2rem", fontSize: "0.78rem", color: "#64748b" }}>
+                        Extracted baseline income, rent basis, and expense context before stabilization is applied.
+                      </div>
+                    </div>
+                    <div style={{ padding: "0 1rem 0.4rem" }}>
+                      {summaryRow("Source", calculation.source.sourceLabel)}
+                      {summaryRow("Detected rent basis", rentBasisLabel)}
+                      {summaryRow(
+                        "Assumed LTR occupancy",
+                        formatPercent(calculation.currentFinancials.assumedLongTermOccupancyPct, 1)
+                      )}
+                      {summaryRow(
+                        "Gross rental income",
+                        formatCurrency(calculation.currentFinancials.grossRentalIncome)
+                      )}
+                      {summaryRow(
+                        "Other income",
+                        formatCurrency(calculation.currentFinancials.otherIncome)
+                      )}
+                      {summaryRow(
+                        "Vacancy / collection loss",
+                        formatCurrency(calculation.currentFinancials.vacancyLoss)
+                      )}
+                      {summaryRow(
+                        "Effective gross income",
+                        formatCurrency(calculation.currentFinancials.effectiveGrossIncome)
+                      )}
+                      {summaryRow(
+                        "Operating expenses",
+                        formatCurrency(calculation.currentFinancials.operatingExpenses)
+                      )}
+                      {summaryRow("Current NOI", formatCurrency(calculation.currentFinancials.noi))}
+                      {summaryRow(
+                        "Expense ratio",
+                        formatPercent(calculation.currentFinancials.expenseRatioPct, 1)
+                      )}
+                      {summaryRow(
+                        "Adjusted opex ex mgmt",
+                        formatCurrency(calculation.operating.adjustedOperatingExpenses)
+                      )}
+                      {summaryRow(
+                        "Modeled management fee",
+                        formatCurrency(calculation.operating.managementFeeAmount)
+                      )}
+                    </div>
                   </div>
                 </div>
 
-                <div style={sectionCardStyle}>
-                  <div style={{ padding: "0.9rem 1rem", borderBottom: "1px solid #e2e8f0" }}>
-                    <strong style={{ color: "#0f172a" }}>Current OM state</strong>
-                    <div style={{ marginTop: "0.2rem", fontSize: "0.78rem", color: "#64748b" }}>
-                      Extracted baseline income, rent basis, and expense context before stabilization is applied.
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
+                    gap: "0.9rem",
+                  }}
+                >
+                  <div style={sectionCardStyle}>
+                    <div style={{ padding: "0.9rem 1rem", borderBottom: "1px solid #e2e8f0" }}>
+                      <strong style={{ color: "#0f172a" }}>Source rent roll</strong>
+                      <div style={{ marginTop: "0.2rem", fontSize: "0.78rem", color: "#64748b" }}>
+                        OM-extracted unit rows feeding the monthly underwriting table above.
+                      </div>
                     </div>
-                  </div>
-                  <div style={{ padding: "0 1rem 0.4rem" }}>
-                    {summaryRow("Source", calculation.source.sourceLabel)}
-                    {summaryRow("Detected rent basis", rentBasisLabel)}
-                    {summaryRow(
-                      "Assumed LTR occupancy",
-                      formatPercent(calculation.currentFinancials.assumedLongTermOccupancyPct, 1)
-                    )}
-                    {summaryRow(
-                      "Gross rental income",
-                      formatCurrency(calculation.currentFinancials.grossRentalIncome)
-                    )}
-                    {summaryRow(
-                      "Other income",
-                      formatCurrency(calculation.currentFinancials.otherIncome)
-                    )}
-                    {summaryRow(
-                      "Vacancy / collection loss",
-                      formatCurrency(calculation.currentFinancials.vacancyLoss)
-                    )}
-                    {summaryRow(
-                      "Effective gross income",
-                      formatCurrency(calculation.currentFinancials.effectiveGrossIncome)
-                    )}
-                    {summaryRow(
-                      "Operating expenses",
-                      formatCurrency(calculation.currentFinancials.operatingExpenses)
-                    )}
-                    {summaryRow("Current NOI", formatCurrency(calculation.currentFinancials.noi))}
-                    {summaryRow(
-                      "Expense ratio",
-                      formatPercent(calculation.currentFinancials.expenseRatioPct, 1)
-                    )}
-                    {summaryRow(
-                      "Adjusted opex ex mgmt",
-                      formatCurrency(calculation.operating.adjustedOperatingExpenses)
-                    )}
-                    {summaryRow(
-                      "Modeled management fee",
-                      formatCurrency(calculation.operating.managementFeeAmount)
-                    )}
-                  </div>
-                </div>
-
-                <div style={sectionCardStyle}>
-                  <div style={{ padding: "0.9rem 1rem", borderBottom: "1px solid #e2e8f0" }}>
-                    <strong style={{ color: "#0f172a" }}>Source rent roll</strong>
-                    <div style={{ marginTop: "0.2rem", fontSize: "0.78rem", color: "#64748b" }}>
-                      OM-extracted unit rows feeding the monthly underwriting table above.
-                    </div>
-                  </div>
-                  <div style={{ overflowX: "auto" }}>
-                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.84rem" }}>
-                      <thead style={{ background: "#f8fafc" }}>
-                        <tr>
-                          <th style={{ ...tableCellStyle, textAlign: "left", fontWeight: 700 }}>Unit</th>
-                          <th style={{ ...tableCellStyle, textAlign: "left", fontWeight: 700 }}>Mix</th>
-                          <th style={{ ...tableCellStyle, textAlign: "right", fontWeight: 700 }}>Monthly</th>
-                          <th style={{ ...tableCellStyle, textAlign: "right", fontWeight: 700 }}>Annual</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {calculation.rentRoll.length > 0 ? (
-                          calculation.rentRoll.map((row, index) => (
-                            <tr key={`${row.unit ?? row.tenantName ?? "row"}-${index}`}>
-                              <td style={tableCellStyle}>{row.unit ?? row.tenantName ?? "—"}</td>
-                              <td style={tableCellStyle}>
-                                {[
-                                  row.beds != null ? `${formatNumber(row.beds)}Br` : null,
-                                  row.baths != null ? `${row.baths}Ba` : null,
-                                  row.sqft != null ? `${formatNumber(row.sqft)} SF` : null,
-                                ]
-                                  .filter(Boolean)
-                                  .join(" · ") || "—"}
-                              </td>
-                              <td style={{ ...tableCellStyle, textAlign: "right" }}>
-                                {formatCurrency(row.monthlyRent)}
-                              </td>
-                              <td style={{ ...tableCellStyle, textAlign: "right" }}>
-                                {formatCurrency(
-                                  row.annualRent ?? (row.monthlyRent != null ? row.monthlyRent * 12 : null)
-                                )}
+                    <div style={{ overflowX: "auto" }}>
+                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.84rem" }}>
+                        <thead style={{ background: "#f8fafc" }}>
+                          <tr>
+                            <th style={{ ...tableCellStyle, textAlign: "left", fontWeight: 700 }}>Unit</th>
+                            <th style={{ ...tableCellStyle, textAlign: "left", fontWeight: 700 }}>Mix</th>
+                            <th style={{ ...tableCellStyle, textAlign: "right", fontWeight: 700 }}>Monthly</th>
+                            <th style={{ ...tableCellStyle, textAlign: "right", fontWeight: 700 }}>Annual</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {calculation.rentRoll.length > 0 ? (
+                            calculation.rentRoll.map((row, index) => (
+                              <tr key={`${row.unit ?? row.tenantName ?? "row"}-${index}`}>
+                                <td style={tableCellStyle}>{row.unit ?? row.tenantName ?? "—"}</td>
+                                <td style={tableCellStyle}>
+                                  {[
+                                    row.beds != null ? `${formatNumber(row.beds)}Br` : null,
+                                    row.baths != null ? `${row.baths}Ba` : null,
+                                    row.sqft != null ? `${formatNumber(row.sqft)} SF` : null,
+                                  ]
+                                    .filter(Boolean)
+                                    .join(" · ") || "—"}
+                                </td>
+                                <td style={{ ...tableCellStyle, textAlign: "right" }}>
+                                  {formatCurrency(row.monthlyRent)}
+                                </td>
+                                <td style={{ ...tableCellStyle, textAlign: "right" }}>
+                                  {formatCurrency(
+                                    row.annualRent ?? (row.monthlyRent != null ? row.monthlyRent * 12 : null)
+                                  )}
+                                </td>
+                              </tr>
+                            ))
+                          ) : (
+                            <tr>
+                              <td colSpan={4} style={{ ...tableCellStyle, color: "#64748b" }}>
+                                No rent roll rows were extracted from the OM source.
                               </td>
                             </tr>
-                          ))
-                        ) : (
-                          <tr>
-                            <td colSpan={4} style={{ ...tableCellStyle, color: "#64748b" }}>
-                              No rent roll rows were extracted from the OM source.
-                            </td>
-                          </tr>
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-
-                <div style={sectionCardStyle}>
-                  <div style={{ padding: "0.9rem 1rem", borderBottom: "1px solid #e2e8f0" }}>
-                    <strong style={{ color: "#0f172a" }}>Current expense table</strong>
-                    <div style={{ marginTop: "0.2rem", fontSize: "0.78rem", color: "#64748b" }}>
-                      Raw OM expense lines before any model treatments, exclusions, or replacement logic.
+                          )}
+                        </tbody>
+                      </table>
                     </div>
                   </div>
-                  <div style={{ overflowX: "auto" }}>
-                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.84rem" }}>
-                      <thead style={{ background: "#f8fafc" }}>
-                        <tr>
-                          <th style={{ ...tableCellStyle, textAlign: "left", fontWeight: 700 }}>Line item</th>
-                          <th style={{ ...tableCellStyle, textAlign: "right", fontWeight: 700 }}>Amount</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {calculation.expenseRows.length > 0 ? (
-                          calculation.expenseRows.map((row) => (
-                            <tr key={`${row.lineItem}-${row.amount}`}>
-                              <td style={tableCellStyle}>{row.lineItem}</td>
-                              <td style={{ ...tableCellStyle, textAlign: "right" }}>
-                                {formatCurrency(row.amount)}
+
+                  <div style={sectionCardStyle}>
+                    <div style={{ padding: "0.9rem 1rem", borderBottom: "1px solid #e2e8f0" }}>
+                      <strong style={{ color: "#0f172a" }}>Current expense table</strong>
+                      <div style={{ marginTop: "0.2rem", fontSize: "0.78rem", color: "#64748b" }}>
+                        Raw OM expense lines before any model treatments, exclusions, or replacement logic.
+                      </div>
+                    </div>
+                    <div style={{ overflowX: "auto" }}>
+                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.84rem" }}>
+                        <thead style={{ background: "#f8fafc" }}>
+                          <tr>
+                            <th style={{ ...tableCellStyle, textAlign: "left", fontWeight: 700 }}>Line item</th>
+                            <th style={{ ...tableCellStyle, textAlign: "right", fontWeight: 700 }}>Amount</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {calculation.expenseRows.length > 0 ? (
+                            calculation.expenseRows.map((row) => (
+                              <tr key={`${row.lineItem}-${row.amount}`}>
+                                <td style={tableCellStyle}>{row.lineItem}</td>
+                                <td style={{ ...tableCellStyle, textAlign: "right" }}>
+                                  {formatCurrency(row.amount)}
+                                </td>
+                              </tr>
+                            ))
+                          ) : (
+                            <tr>
+                              <td colSpan={2} style={{ ...tableCellStyle, color: "#64748b" }}>
+                                No detailed expense rows were extracted from the OM source.
                               </td>
                             </tr>
-                          ))
-                        ) : (
-                          <tr>
-                            <td colSpan={2} style={{ ...tableCellStyle, color: "#64748b" }}>
-                              No detailed expense rows were extracted from the OM source.
-                            </td>
-                          </tr>
-                        )}
-                      </tbody>
-                    </table>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
                 </div>
               </div>

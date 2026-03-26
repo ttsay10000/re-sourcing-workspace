@@ -94,6 +94,7 @@ function sampleContext(): UnderwritingContext {
       totalOperatingExpenses: [0, 47_280, 48_880, 50_608, 52_474, 54_490],
       noi: [0, 42_920, 63_320, 61_592, 59_726, 57_710],
       recurringCapex: [0, 0, 0, 0, 0, 0],
+      reserveRelease: [0, 0, 0, 0, 0, 0],
       cashFlowFromOperations: [0, 42_920, 63_320, 61_592, 59_726, 57_710],
       capRateOnPurchase: [null, 0.04292, 0.06332, 0.061592, 0.059726, 0.05771],
       debtService: [0, 50_362.08, 50_362.08, 50_362.08, 50_362.08, 50_362.08],
@@ -190,8 +191,10 @@ describe("buildDossierStructuredText", () => {
     expect(text).toContain("NSP before debt payoff");
     expect(text).toContain("Total cash uses incl. financing fees");
     expect(text).toContain("Equity yield (year 1)");
-    expect(text).toContain("| **CF after financing (cash)** | **$0** | **($7,442)** |");
-    expect(text).toContain("| **Levered CF** | **($450,000)** | **($7,442)** |");
+    expect(text).toContain("| **Levered CF to equity** | **$0** | **($7,442)** |");
+    expect(text).toContain("| DSCR (after reserves) |  | 0.85x |");
+    expect(text).toContain("| Cash-on-cash return |  | (1.7%) |");
+    expect(text).toContain("| **Total levered CF incl. exit** | **($450,000)** | **($7,442)** |");
   });
 
   it("renders package notes in the property overview", () => {

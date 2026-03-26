@@ -131,9 +131,9 @@ describe("underwritingModel", () => {
     expect(projection.yearly.grossRentalIncome[1]).toBeCloseTo(132_000, 2);
     expect(projection.yearly.vacancyLoss[1]).toBeCloseTo(19_800, 2);
     expect(projection.yearly.leadTimeLoss[1]).toBeCloseTo(22_000, 2);
-    expect(projection.yearly.managementFee[1]).toBeCloseTo(4_488, 2);
-    expect(projection.yearly.noi[1]).toBeCloseTo(43_712, 2);
-    expect(projection.yearly.cashFlowFromOperations[1]).toBeCloseTo(42_512, 2);
+    expect(projection.yearly.managementFee[1]).toBeCloseTo(3_608, 2);
+    expect(projection.yearly.noi[1]).toBeCloseTo(44_592, 2);
+    expect(projection.yearly.cashFlowFromOperations[1]).toBeCloseTo(43_392, 2);
     expect(projection.cashFlows.annualPrincipalPaydown).toBeCloseTo(
       projection.yearly.principalPaid[1] ?? 0,
       2
@@ -156,6 +156,52 @@ describe("underwritingModel", () => {
         (projection.financing.loanAmount - projection.exit.principalPaydownToDate),
       2
     );
+  });
+
+  it("applies management and occupancy fees only to rent actually collected after vacancy and lead time", () => {
+    const assumptions = resolveDossierAssumptions(
+      {
+        id: "profile-fee-basis",
+        createdAt: "2026-03-10T00:00:00.000Z",
+        updatedAt: "2026-03-10T00:00:00.000Z",
+        defaultPurchaseClosingCostPct: 3,
+        defaultLtv: 70,
+        defaultInterestRate: 6,
+        defaultAmortization: 30,
+        defaultHoldPeriodYears: 3,
+        defaultExitCap: 6,
+        defaultExitClosingCostPct: 2,
+        defaultRentUplift: 0,
+        defaultExpenseIncrease: 0,
+        defaultManagementFee: 4,
+        defaultVacancyPct: 10,
+        defaultLeadTimeMonths: 1,
+        defaultAnnualRentGrowthPct: 0,
+        defaultAnnualOtherIncomeGrowthPct: 0,
+        defaultAnnualExpenseGrowthPct: 0,
+        defaultAnnualPropertyTaxGrowthPct: 0,
+        defaultRecurringCapexAnnual: 0,
+        defaultLoanFeePct: 0,
+      },
+      1_000_000,
+      { occupancyTaxPct: 6 }
+    );
+
+    const projection = computeUnderwritingProjection({
+      assumptions,
+      currentGrossRent: 100_000,
+      currentNoi: 100_000,
+    });
+
+    expect(projection.yearly.grossRentalIncome[1]).toBeCloseTo(100_000, 2);
+    expect(projection.yearly.vacancyLoss[1]).toBeCloseTo(10_000, 2);
+    expect(projection.yearly.leadTimeLoss[1]).toBeCloseTo(8_333.33, 2);
+    expect(projection.yearly.netRentalIncome[1]).toBeCloseTo(81_666.67, 2);
+    expect(projection.yearly.managementFee[1]).toBeCloseTo(3_266.67, 2);
+    expect(
+      projection.yearly.expenseLineItems.find((row) => row.lineItem === "Occupancy tax (6.0%)")
+        ?.yearlyAmounts[0]
+    ).toBeCloseTo(4_900, 2);
   });
 
   it("applies a conservative blended opex growth fallback when taxes cannot be isolated", () => {
@@ -245,10 +291,10 @@ describe("underwritingModel", () => {
       "Insurance",
     ]);
     expect(projection.operating.currentExpenses).toBeCloseTo(15_000, 2);
-    expect(projection.operating.adjustedOperatingExpenses).toBeCloseTo(18_000, 2);
+    expect(projection.operating.adjustedOperatingExpenses).toBeCloseTo(15_000, 2);
     expect(projection.yearly.managementFee[1]).toBeCloseTo(8_000, 2);
-    expect(projection.yearly.totalOperatingExpenses[1]).toBeCloseTo(26_000, 2);
-    expect(projection.yearly.totalOperatingExpenses[2]).toBeCloseTo(26_960, 2);
+    expect(projection.yearly.totalOperatingExpenses[1]).toBeCloseTo(23_000, 2);
+    expect(projection.yearly.totalOperatingExpenses[2]).toBeCloseTo(23_800, 2);
   });
 
   it("honors explicit replace-management treatment even when the line item name is generic", () => {
@@ -297,7 +343,7 @@ describe("underwritingModel", () => {
       "Insurance",
     ]);
     expect(projection.operating.currentExpenses).toBeCloseTo(15_000, 2);
-    expect(projection.yearly.totalOperatingExpenses[1]).toBeCloseTo(26_000, 2);
+    expect(projection.yearly.totalOperatingExpenses[1]).toBeCloseTo(23_000, 2);
   });
 
   it("caps hold periods to the supported Excel model horizon", () => {
@@ -339,6 +385,7 @@ describe("underwritingModel", () => {
     expect(assumptions.propertyMix.eligibleResidentialUnits).toBe(2);
     expect(assumptions.operating.rentUpliftPct).toBe(76.3);
     expect(assumptions.operating.blendedRentUpliftPct).toBeCloseTo(38.15, 2);
+    expect(assumptions.operating.recurringCapexAnnual).toBe(10_000);
     expect(assumptions.acquisition.furnishingSetupCosts).toBe(22_500);
   });
 
@@ -404,6 +451,91 @@ describe("underwritingModel", () => {
     expect(projection.yearly.vacancyLoss[1]).toBeCloseTo(18_000, 2);
     expect(projection.yearly.vacancyLoss[2]).toBeCloseTo(20_400, 2);
     expect(projection.yearly.leadTimeLoss[1]).toBeCloseTo(30_000, 2);
+  });
+
+  it("treats the legacy $1.2k profile reserve default as a fallback when unit mix is known", () => {
+    const assumptions = resolveDossierAssumptions(
+      {
+        id: "profile-legacy-reserve",
+        createdAt: "2026-03-10T00:00:00.000Z",
+        updatedAt: "2026-03-10T00:00:00.000Z",
+        defaultPurchaseClosingCostPct: 3,
+        defaultLtv: 70,
+        defaultInterestRate: 6,
+        defaultAmortization: 30,
+        defaultHoldPeriodYears: 3,
+        defaultExitCap: 6,
+        defaultExitClosingCostPct: 2,
+        defaultRentUplift: 10,
+        defaultExpenseIncrease: 0,
+        defaultManagementFee: 4,
+        defaultVacancyPct: 0,
+        defaultLeadTimeMonths: 0,
+        defaultAnnualRentGrowthPct: 0,
+        defaultAnnualOtherIncomeGrowthPct: 0,
+        defaultAnnualExpenseGrowthPct: 0,
+        defaultAnnualPropertyTaxGrowthPct: 0,
+        defaultRecurringCapexAnnual: 1_200,
+        defaultLoanFeePct: 0,
+      },
+      1_000_000,
+      { occupancyTaxPct: 0 },
+      {
+        details: {
+          omData: {
+            authoritative: {
+              propertyInfo: { totalUnits: 4, unitsResidential: 3, unitsCommercial: 1 },
+              rentRoll: [
+                { unit: "1", annualRent: 100_000, unitCategory: "Residential" },
+                { unit: "2", annualRent: 100_000, unitCategory: "Residential" },
+                { unit: "Store", annualRent: 100_000, unitCategory: "Retail" },
+                {
+                  unit: "4",
+                  annualRent: 100_000,
+                  unitCategory: "Residential",
+                  rentType: "Rent Stabilized",
+                },
+              ],
+            },
+          },
+        },
+      }
+    );
+
+    expect(assumptions.operating.recurringCapexAnnual).toBe(10_000);
+  });
+
+  it("treats the legacy $1.2k deal override as a fallback when unit mix is known", () => {
+    const assumptions = resolveDossierAssumptions(
+      null,
+      1_000_000,
+      {
+        occupancyTaxPct: 0,
+        recurringCapexAnnual: 1_200,
+      },
+      {
+        details: {
+          omData: {
+            authoritative: {
+              propertyInfo: { totalUnits: 4, unitsResidential: 3, unitsCommercial: 1 },
+              rentRoll: [
+                { unit: "1", annualRent: 100_000, unitCategory: "Residential" },
+                { unit: "2", annualRent: 100_000, unitCategory: "Residential" },
+                { unit: "Store", annualRent: 100_000, unitCategory: "Retail" },
+                {
+                  unit: "4",
+                  annualRent: 100_000,
+                  unitCategory: "Residential",
+                  rentType: "Rent Stabilized",
+                },
+              ],
+            },
+          },
+        },
+      }
+    );
+
+    expect(assumptions.operating.recurringCapexAnnual).toBe(10_000);
   });
 
   it("adds vacant free-market residential projected rent into the uplift base", () => {
@@ -685,6 +817,64 @@ describe("underwritingModel", () => {
     ).toBe(4_800);
     expect(recommendedOfferWithUnitRows.irrAtAskingPct ?? 0).toBeLessThan(
       recommendedOfferWithoutUnitRows.irrAtAskingPct ?? 0
+    );
+  });
+
+  it("rebases the auto reserve to modeled eligible units and releases the unused balance at exit", () => {
+    const assumptions = resolveDossierAssumptions(null, 1_000_000, {
+      holdPeriodYears: 2,
+      occupancyTaxPct: 0,
+      managementFeePct: 0,
+      vacancyPct: 0,
+      leadTimeMonths: 0,
+      annualRentGrowthPct: 0,
+      annualExpenseGrowthPct: 0,
+      annualPropertyTaxGrowthPct: 0,
+      exitCapPct: 6,
+      exitClosingCostPct: 2,
+    });
+
+    expect(assumptions.operating.recurringCapexAnnual).toBe(1_200);
+
+    const projection = computeUnderwritingProjection({
+      assumptions,
+      currentGrossRent: 180_000,
+      currentNoi: 180_000,
+      unitRows: [
+        {
+          rowId: "market-1",
+          unitLabel: "Unit 1",
+          underwrittenAnnualRent: 100_000,
+          occupancyPct: 100,
+          includeInUnderwriting: true,
+          isProtected: false,
+          isCommercial: false,
+        },
+        {
+          rowId: "protected-2",
+          unitLabel: "Unit 2",
+          underwrittenAnnualRent: 80_000,
+          occupancyPct: 100,
+          includeInUnderwriting: true,
+          isProtected: true,
+          isCommercial: false,
+        },
+      ],
+    });
+
+    expect(projection.assumptions.operating.recurringCapexAnnual).toBe(5_000);
+    expect(projection.yearly.recurringCapex[1]).toBe(5_000);
+    expect(projection.yearly.recurringCapex[2]).toBe(5_000);
+    expect(projection.yearly.reserveRelease[2]).toBe(10_000);
+    expect(projection.yearly.leveredCashFlow[2]).toBeCloseTo(
+      (projection.yearly.cashFlowAfterFinancing[2] ?? 0) +
+        (projection.yearly.netSaleProceedsToEquity[2] ?? 0) +
+        10_000,
+      2
+    );
+    expect(projection.cashFlows.annualOperatingCashFlows[1]).toBeCloseTo(
+      projection.yearly.cashFlowAfterFinancing[2] ?? 0,
+      2
     );
   });
 });

@@ -133,6 +133,7 @@ describe("buildDossierPdfCoverData", () => {
         totalOperatingExpenses: [0, 138_000, 176_378, 181_669, 187_119, 192_733],
         noi: [0, 289_400, 278_970, 343_974, 354_279, 364_892],
         recurringCapex: [0, 6_000, 6_000, 6_000, 6_000, 6_000],
+        reserveRelease: [0, 0, 0, 0, 0, 30_000],
         cashFlowFromOperations: [0, 283_400, 272_970, 337_974, 348_279, 358_892],
         capRateOnPurchase: [null, 0.072, 0.0697, 0.086, 0.0885, 0.0912],
         debtService: [0, 187_200, 187_200, 187_200, 187_200, 187_200],
