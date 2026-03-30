@@ -2234,7 +2234,7 @@ export function OmCalculationPanel({
                     value: formatRatioPercent(calculation.topLineMetrics.irrPct, 1),
                   },
                   {
-                    label: "Projected CoC",
+                    label: "Avg cash-on-cash",
                     value: formatRatioPercent(calculation.topLineMetrics.averageCashOnCashReturn, 1),
                   },
                   {
@@ -2790,7 +2790,7 @@ export function OmCalculationPanel({
                         "Operating expenses",
                         formatCurrency(calculation.currentFinancials.operatingExpenses)
                       )}
-                      {summaryRow("Current NOI", formatCurrency(calculation.currentFinancials.noi))}
+                      {summaryRow("Extracted current NOI", formatCurrency(calculation.currentFinancials.noi))}
                       {summaryRow(
                         "Expense ratio",
                         formatPercent(calculation.currentFinancials.expenseRatioPct, 1)

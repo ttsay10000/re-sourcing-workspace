@@ -441,7 +441,7 @@ export function buildDossierPdfCoverData(params: {
           { emphasis: true }
         ),
         coverField(
-          "Projected CoC",
+          "Avg cash-on-cash",
           pctLabel(
             ctx.returns.averageCashOnCashReturn != null && Number.isFinite(ctx.returns.averageCashOnCashReturn)
               ? ctx.returns.averageCashOnCashReturn * 100

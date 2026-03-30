@@ -419,7 +419,7 @@ function DealAnalysisPageContent() {
         ? [
             {
               label: "Current NOI",
-              value: formatCurrency(calculation.currentFinancials.noi),
+              value: formatCurrency(calculation.topLineMetrics.currentNoi),
             },
             {
               label: `Projected Y${calculation.topLineMetrics.projectedYearNumber} NOI`,
@@ -433,7 +433,7 @@ function DealAnalysisPageContent() {
                   : "—",
             },
             {
-              label: "Projected CoC",
+              label: "Avg cash-on-cash",
               value:
                 calculation.topLineMetrics.averageCashOnCashReturn != null
                   ? `${(calculation.topLineMetrics.averageCashOnCashReturn * 100).toFixed(1)}%`

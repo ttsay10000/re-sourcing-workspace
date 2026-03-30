@@ -217,9 +217,8 @@ describe("buildDealAnalysisWorkbook", () => {
     expect((assumptions?.getCell("C23").value as ExcelJS.CellFormulaValue).formula).toBe(
       "CurrentFreeMarketResidentialGrossRent+CurrentProtectedResidentialGrossRent+CurrentCommercialGrossRent"
     );
-    expect((assumptions?.getCell("C37").value as ExcelJS.CellFormulaValue).formula).toBe(
-      "RentUpliftPct*(EligibleRevenueSharePct/100)"
-    );
+    expect(assumptions?.getCell("C37").value).toBe(7.5);
+    expect(assumptions?.getCell("C37").font?.color?.argb).toBe("FF5B9BD5");
 
     expect((financing?.getCell("B2").value as ExcelJS.CellFormulaValue).formula).toBe(
       "PurchasePrice*(LtvPct/100)"
@@ -237,8 +236,12 @@ describe("buildDealAnalysisWorkbook", () => {
     expect(cashFlow?.getCell("D17").fill?.fgColor?.argb).toBe("FFFFFFFF");
     const totalInvestmentCostRow = findRowByLabel(cashFlow, "Total investment cost");
     const totalLeveredCashFlowRow = findRowByLabel(cashFlow, "Total levered CF incl. exit");
+    const noiRow = findRowByLabel(cashFlow, "Net operating income (NOI)");
+    const debtServiceRow = findRowByLabel(cashFlow, "Total debt service");
     expect(totalInvestmentCostRow).not.toBeNull();
     expect(totalLeveredCashFlowRow).not.toBeNull();
+    expect(noiRow).not.toBeNull();
+    expect(debtServiceRow).not.toBeNull();
     expect(
       (
         cashFlow?.getCell(`C${totalLeveredCashFlowRow!}`).value as ExcelJS.CellFormulaValue
@@ -252,5 +255,32 @@ describe("buildDealAnalysisWorkbook", () => {
     expect((summary?.getCell("H14").value as ExcelJS.CellFormulaValue).formula).toBe(
       "CalculatedEquityMultiple"
     );
+    const calculatedAverageCashOnCashRow = findRowByLabel(cashFlow, "Calculated average cash-on-cash");
+    expect(calculatedAverageCashOnCashRow).not.toBeNull();
+    expect(
+      (
+        cashFlow?.getCell(`B${calculatedAverageCashOnCashRow!}`).value as ExcelJS.CellFormulaValue
+      ).formula
+    ).toContain(
+      `SUM(OFFSET($D$${noiRow!},0,0,1,HoldPeriodYears))+SUM(OFFSET($D$${debtServiceRow!},0,0,1,HoldPeriodYears))`
+    );
+  });
+
+  it("caches current NOI from the workbook formula basis instead of the raw ctx.currentNoi", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "");
+
+    const ctx = sampleContext();
+    ctx.currentNoi = 70_000;
+
+    const { buffer } = await buildDealAnalysisWorkbook(ctx);
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(buffer);
+
+    const summary = workbook.getWorksheet("Summary");
+    const assumptions = workbook.getWorksheet("Assumptions");
+
+    expect((summary?.getCell("C12").value as ExcelJS.CellFormulaValue).formula).toBe("CurrentNOI");
+    expect((summary?.getCell("C12").value as ExcelJS.CellFormulaValue).result).toBe(80_000);
+    expect((assumptions?.getCell("C26").value as ExcelJS.CellFormulaValue).result).toBe(80_000);
   });
 });

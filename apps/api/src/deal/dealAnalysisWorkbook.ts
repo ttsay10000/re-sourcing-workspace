@@ -133,6 +133,7 @@ const assumptionRows = {
   currentOtherIncome: 24,
   currentExpenses: 25,
   currentNoi: 26,
+  currentNoiAdjustment: 27,
   ltvPct: 29,
   interestRatePct: 30,
   amortizationYears: 31,
@@ -176,6 +177,7 @@ const assumptionNames = {
   currentOtherIncome: "CurrentOtherIncome",
   currentExpenses: "CurrentOperatingExpensesExManagement",
   currentNoi: "CurrentNOI",
+  currentNoiAdjustment: "CurrentNoiCapRateAdjustment",
   ltvPct: "LtvPct",
   interestRatePct: "InterestRatePct",
   amortizationYears: "AmortizationYears",
@@ -746,20 +748,31 @@ function buildAssumptionsSheet(
     source: "Hard coded from OM-derived or reconstructed expense basis",
     hardCoded: true,
   });
+  addRow(assumptionRows.currentNoiAdjustment, {
+    section: "Current Basis",
+    label: "Projected vacant residential rent",
+    value: Math.max(0, num(ctx.conservativeProjectedLeaseUpRent)),
+    valueNumFmt: CURRENCY_FMT,
+    units: "USD",
+    source:
+      "Hard coded add-back used only when the ask-cap / dossier current NOI includes delivered-vacant residential rent",
+    hardCoded: true,
+  });
   addRow(assumptionRows.currentNoi, {
     section: "Current Basis",
     label: "Current NOI",
     value: "",
     valueNumFmt: CURRENCY_FMT,
     units: "USD",
-    source: "Formula = gross rent + other income - current expenses",
-    formula: `${assumptionNames.currentGrossRent}+${assumptionNames.currentOtherIncome}-${assumptionNames.currentExpenses}`,
+    source: "Formula = gross rent + other income - current expenses + projected vacant residential rent",
+    formula: `${assumptionNames.currentGrossRent}+${assumptionNames.currentOtherIncome}-${assumptionNames.currentExpenses}+${assumptionNames.currentNoiAdjustment}`,
     result:
       artifacts.currentRentBreakdown.freeMarketResidential +
       artifacts.currentRentBreakdown.protectedResidential +
       artifacts.currentRentBreakdown.commercial +
       num(ctx.currentOtherIncome) -
-      num(ctx.currentExpensesTotal ?? ctx.operating.currentExpenses),
+      num(ctx.currentExpensesTotal ?? ctx.operating.currentExpenses) +
+      Math.max(0, num(ctx.conservativeProjectedLeaseUpRent)),
   });
 
   addRow(assumptionRows.ltvPct, {
@@ -820,12 +833,12 @@ function buildAssumptionsSheet(
   addRow(assumptionRows.blendedRentUpliftPct, {
     section: "Operating",
     label: "Blended rent uplift",
-    value: "",
+    value: num(ctx.assumptions.operating.blendedRentUpliftPct),
     valueNumFmt: INPUT_PERCENT_FMT,
     units: "%",
-    source: "Formula = rent uplift x eligible revenue share",
-    formula: `${assumptionNames.rentUpliftPct}*(${assumptionNames.eligibleRevenueSharePct}/100)`,
-    result: num(ctx.assumptions.operating.blendedRentUpliftPct),
+    source:
+      "Hard coded from the detailed unit underwriting / blended projected rent path used by the PDF dossier",
+    hardCoded: true,
   });
   addRow(assumptionRows.expenseIncreasePct, {
     section: "Operating",
@@ -1573,7 +1586,7 @@ function buildCashFlowModelSheet(
   setFormulaCell(
     worksheet,
     `B${rows.calculatedAverageCashOnCash}`,
-    `IF(CalculatedInitialEquity=0,0,AVERAGE(OFFSET($D$${rows.cashFlowAfterFinancing},0,0,1,HoldPeriodYears))/CalculatedInitialEquity)`,
+    `IF(OR(CalculatedInitialEquity=0,HoldPeriodYears=0),0,(SUM(OFFSET($D$${rows.noi},0,0,1,HoldPeriodYears))+SUM(OFFSET($D$${rows.debtService},0,0,1,HoldPeriodYears)))/(HoldPeriodYears*CalculatedInitialEquity))`,
     { numFmt: PERCENT_FMT, fill: FORMULA_FILL, result: ctx.returns.averageCashOnCashReturn ?? undefined }
   );
   setSheetCell(worksheet, `A${rows.calculatedEquityMultiple}`, "Calculated equity multiple", {
@@ -1597,7 +1610,8 @@ function buildCashFlowModelSheet(
 }
 
 function summaryMetricDefinitions(
-  ctx: UnderwritingContext
+  ctx: UnderwritingContext,
+  artifacts: WorkbookBuildArtifacts
 ): Record<DealAnalysisSummaryMetricKey, SummaryMetricDefinition> {
   const unleveredReturn = ctx.cashFlows.unleveredCashFlowSeries
     ? computeIrr({
@@ -1672,7 +1686,12 @@ function summaryMetricDefinitions(
     current_noi: {
       label: "Current NOI",
       formula: "CurrentNOI",
-      result: ctx.currentNoi ?? undefined,
+      result:
+        artifacts.currentRentBreakdown.freeMarketResidential +
+        artifacts.currentRentBreakdown.protectedResidential +
+        artifacts.currentRentBreakdown.commercial +
+        num(ctx.currentOtherIncome) -
+        num(ctx.currentExpensesTotal ?? ctx.operating.currentExpenses),
       numFmt: CURRENCY_FMT,
     },
     stabilized_noi: {
@@ -1761,7 +1780,7 @@ function buildSummarySheet(
     ...Array.from({ length: MAX_MODEL_YEARS + 1 }, () => ({ width: 14 })),
   ];
 
-  const definitions = summaryMetricDefinitions(ctx);
+  const definitions = summaryMetricDefinitions(ctx, artifacts);
 
   worksheet.mergeCells("A1:J1");
   setSheetCell(worksheet, "A1", blueprint.workbookTitle, {

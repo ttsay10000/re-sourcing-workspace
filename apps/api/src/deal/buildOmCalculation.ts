@@ -36,6 +36,7 @@ import { resolveProjectedResidentialLeaseUpRentSummary } from "./propertyAssumpt
 import {
   computeRecommendedOffer,
   computeUnderwritingProjection,
+  resolveAssetCapRateNoiBasis,
   resolveDossierAssumptions,
   type DossierAssumptionOverrides,
 } from "./underwritingModel.js";
@@ -469,6 +470,7 @@ export function buildOmCalculationSnapshotFromInputs(params: {
     assumptions,
     detailedModel,
     currentFinancials,
+    resolvedExpenseTotal,
     projection,
     recommendedOffer,
     sensitivities,
@@ -479,9 +481,20 @@ export function buildOmCalculationSnapshotFromInputs(params: {
   const projectedYearRent = projection.yearly.grossRentalIncome[projectedYearNumber] ?? null;
   const projectedYearExpenses = projection.yearly.totalOperatingExpenses[projectedYearNumber] ?? null;
   const projectedYearNoi = projection.yearly.noi[projectedYearNumber] ?? null;
+  const leaseUpRentSummary = resolveProjectedResidentialLeaseUpRentSummary(details);
+  const currentNoiBasis = resolveAssetCapRateNoiBasis({
+    currentNoi: currentFinancials.noi,
+    currentGrossRent: currentFinancials.grossRentalIncome,
+    currentOtherIncome: currentFinancials.otherIncome,
+    currentExpensesTotal: resolvedExpenseTotal ?? projection.operating.currentExpenses,
+    conservativeProjectedLeaseUpRent:
+      leaseUpRentSummary.totalAnnualRent != null && leaseUpRentSummary.totalAnnualRent > 0
+        ? leaseUpRentSummary.totalAnnualRent
+        : null,
+  });
   const currentCapRatePct =
-    modeledPurchasePrice != null && modeledPurchasePrice > 0 && currentFinancials.noi != null
-      ? (currentFinancials.noi / modeledPurchasePrice) * 100
+    modeledPurchasePrice != null && modeledPurchasePrice > 0 && currentNoiBasis != null
+      ? (currentNoiBasis / modeledPurchasePrice) * 100
       : null;
   const stabilizedCapRatePct =
     modeledPurchasePrice != null &&
@@ -490,10 +503,10 @@ export function buildOmCalculationSnapshotFromInputs(params: {
       ? (projection.operating.stabilizedNoi / modeledPurchasePrice) * 100
       : null;
   const stabilizedNoiIncreasePct =
-    currentFinancials.noi != null &&
-    currentFinancials.noi !== 0 &&
+    currentNoiBasis != null &&
+    currentNoiBasis !== 0 &&
     projection.operating.stabilizedNoi != null
-      ? ((projection.operating.stabilizedNoi - currentFinancials.noi) / currentFinancials.noi) * 100
+      ? ((projection.operating.stabilizedNoi - currentNoiBasis) / currentNoiBasis) * 100
       : null;
   const totalCurrentRevenue =
     (currentFinancials.grossRentalIncome ?? 0) + (currentFinancials.otherIncome ?? 0);
@@ -543,8 +556,8 @@ export function buildOmCalculationSnapshotFromInputs(params: {
     topLineMetrics: {
       projectedYearNumber,
       currentRent: currentFinancials.grossRentalIncome,
-      currentExpenses: currentFinancials.operatingExpenses,
-      currentNoi: currentFinancials.noi,
+      currentExpenses: resolvedExpenseTotal ?? currentFinancials.operatingExpenses,
+      currentNoi: currentNoiBasis ?? currentFinancials.noi,
       currentCapRatePct,
       projectedYearRent,
       projectedYearExpenses,
