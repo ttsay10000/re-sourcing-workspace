@@ -10,18 +10,18 @@ const PORTRAIT_WIDTH = 612;
 const PORTRAIT_HEIGHT = 792;
 const LANDSCAPE_WIDTH = 792;
 const LANDSCAPE_HEIGHT = 612;
-const MARGIN = 52;
-const CONTENT_TOP_OFFSET = 12;
-const FOOTER_RESERVE = 56;
-const HERO_HEIGHT = 112;
-const TITLE_FONT_SIZE = 10.5;
-const HERO_ADDRESS_FONT_SIZE = 22;
-const HEADING_KICKER_FONT_SIZE = 8;
-const HEADING_FONT_SIZE = 17;
-const BODY_FONT_SIZE = 10.2;
-const BODY_LINE_GAP = 3;
-const HEADING_SPACING = 16;
-const PARAGRAPH_SPACING = 10;
+const MARGIN = 46;
+const CONTENT_TOP_OFFSET = 8;
+const FOOTER_RESERVE = 48;
+const HERO_HEIGHT = 96;
+const TITLE_FONT_SIZE = 8.6;
+const HERO_ADDRESS_FONT_SIZE = 20;
+const HEADING_KICKER_FONT_SIZE = 6.5;
+const HEADING_FONT_SIZE = 15;
+const BODY_FONT_SIZE = 8.4;
+const BODY_LINE_GAP = 2.2;
+const HEADING_SPACING = 10;
+const PARAGRAPH_SPACING = 7;
 const SECTION_HEADING_COLOR = "#0f172a";
 const BODY_TEXT_COLOR = "#1f2937";
 const MUTED_TEXT_COLOR = "#64748b";
@@ -48,12 +48,16 @@ const COVER_KICKER_TEXT = "#bfdbfe";
 const COVER_SECTION_COLOR = "#111827";
 const COVER_LABEL_COLOR = "#475569";
 const COVER_VALUE_COLOR = "#0f172a";
-const COVER_ADDRESS_FONT_SIZE = 28;
-const COVER_KICKER_FONT_SIZE = 9;
-const COVER_SECTION_FONT_SIZE = 14.5;
-const COVER_LABEL_FONT_SIZE = 9.6;
-const COVER_VALUE_FONT_SIZE = 12.4;
-const COVER_VALUE_STRONG_FONT_SIZE = 14.2;
+const COVER_ADDRESS_FONT_SIZE = 26;
+const COVER_KICKER_FONT_SIZE = 7.4;
+const COVER_SECTION_FONT_SIZE = 12.6;
+const COVER_LABEL_FONT_SIZE = 7.8;
+const COVER_VALUE_FONT_SIZE = 10.4;
+const COVER_VALUE_STRONG_FONT_SIZE = 12.2;
+const PAGE_CHROME_FONT_SIZE = 7;
+const CHIP_LABEL_FONT_SIZE = 6.4;
+const CHIP_VALUE_FONT_SIZE = 7.8;
+const TABLE_TEXT_LINE_GAP = 0.9;
 const COVER_IMAGE_TIMEOUT_MS = 8_000;
 const COVER_IMAGE_MAX_BYTES = 8 * 1024 * 1024;
 
@@ -223,18 +227,18 @@ function drawPageChrome(
 ): void {
   const width = pageWidth(doc);
   const height = pageHeight(doc);
-  const headerY = 22;
-  const topRuleY = 34;
-  const footerRuleY = height - 44;
-  const footerTextY = height - 34;
+  const headerY = 18;
+  const topRuleY = 30;
+  const footerRuleY = height - 36;
+  const footerTextY = height - 28;
   doc.save();
-  doc.fillColor(MUTED_TEXT_COLOR).font("Helvetica-Bold").fontSize(8);
+  doc.fillColor(MUTED_TEXT_COLOR).font("Helvetica-Bold").fontSize(PAGE_CHROME_FONT_SIZE);
   doc.text(meta.title, MARGIN, headerY, {
     width: 140,
     lineBreak: false,
   });
   if (currentSection) {
-    doc.font("Helvetica").fontSize(8);
+    doc.font("Helvetica").fontSize(PAGE_CHROME_FONT_SIZE);
     doc.text(titleCase(currentSection), MARGIN + 150, headerY, {
       width: width - MARGIN * 2 - 220,
       align: "center",
@@ -242,7 +246,7 @@ function drawPageChrome(
     });
   }
   if (meta.address) {
-    doc.font("Helvetica").fontSize(8);
+    doc.font("Helvetica").fontSize(PAGE_CHROME_FONT_SIZE);
     doc.text(meta.address, width - MARGIN - 210, headerY, {
       width: 210,
       align: "right",
@@ -253,7 +257,7 @@ function drawPageChrome(
   doc.moveTo(MARGIN, topRuleY).lineTo(width - MARGIN, topRuleY).stroke();
   doc.strokeColor(RULE_COLOR).lineWidth(0.75);
   doc.moveTo(MARGIN, footerRuleY).lineTo(width - MARGIN, footerRuleY).stroke();
-  doc.fillColor(MUTED_TEXT_COLOR).font("Helvetica").fontSize(8);
+  doc.fillColor(MUTED_TEXT_COLOR).font("Helvetica").fontSize(PAGE_CHROME_FONT_SIZE);
   if (meta.generated) {
     doc.text(`Generated ${meta.generated}`, MARGIN, footerTextY, {
       width: 140,
@@ -336,8 +340,8 @@ function drawGlassPanel(
   height: number
 ): void {
   doc.save();
-  doc.opacity(0.88).roundedRect(x, y, width, height, 26).fill(COVER_PANEL_BG);
-  doc.opacity(0.42).lineWidth(1).roundedRect(x, y, width, height, 26).stroke(COVER_PANEL_BORDER);
+  doc.opacity(0.88).roundedRect(x, y, width, height, 22).fill(COVER_PANEL_BG);
+  doc.opacity(0.42).lineWidth(1).roundedRect(x, y, width, height, 22).stroke(COVER_PANEL_BORDER);
   doc.restore();
 }
 
@@ -369,30 +373,30 @@ function drawCoverSection(
   doc.save();
   doc.fillColor(COVER_SECTION_COLOR).font("Helvetica-Bold").fontSize(COVER_SECTION_FONT_SIZE);
   doc.text(section.title, x, currentY, { width });
-  doc.fillColor("#7c93b2").rect(x, currentY + 24, Math.min(60, width), 2.2).fill();
+  doc.fillColor("#7c93b2").rect(x, currentY + 20, Math.min(52, width), 2).fill();
   doc.restore();
-  currentY += 36;
+  currentY += 30;
 
   section.rows.forEach((row) => {
     doc.font("Helvetica").fontSize(COVER_LABEL_FONT_SIZE);
     const labelHeight = doc.heightOfString(row.label, {
       width: labelWidth,
-      lineGap: 2,
+      lineGap: 1.5,
     });
     doc.font(row.emphasis ? "Helvetica-Bold" : "Helvetica")
       .fontSize(row.emphasis ? COVER_VALUE_STRONG_FONT_SIZE : COVER_VALUE_FONT_SIZE);
     const valueHeight = doc.heightOfString(row.value, {
       width: valueWidth,
       align: "right",
-      lineGap: 2,
+      lineGap: 1.5,
     });
-    const rowHeight = Math.max(labelHeight, valueHeight, 14);
+    const rowHeight = Math.max(labelHeight, valueHeight, 12);
 
     doc.save();
     doc.fillColor(COVER_LABEL_COLOR).font("Helvetica").fontSize(COVER_LABEL_FONT_SIZE);
     doc.text(row.label, x, currentY, {
       width: labelWidth,
-      lineGap: 2.5,
+      lineGap: 1.8,
     });
     doc.fillColor(COVER_VALUE_COLOR)
       .font(row.emphasis ? "Helvetica-Bold" : "Helvetica")
@@ -400,11 +404,11 @@ function drawCoverSection(
     doc.text(row.value, x + labelWidth + 10, currentY, {
       width: valueWidth,
       align: "right",
-      lineGap: 2.5,
+      lineGap: 1.8,
     });
     doc.restore();
 
-    currentY += rowHeight + 14;
+    currentY += rowHeight + 10;
   });
 
   return currentY;
@@ -412,30 +416,30 @@ function drawCoverSection(
 
 function drawCoverAddressBanner(doc: PDFKit.PDFDocument, address: string): number {
   const pageW = pageWidth(doc);
-  const x = 34;
-  const y = 34;
-  const width = Math.min(450, pageW - 132);
+  const x = 30;
+  const y = 30;
+  const width = Math.min(434, pageW - 120);
 
   doc.font("Helvetica").fontSize(COVER_ADDRESS_FONT_SIZE);
   const textHeight = doc.heightOfString(address, {
     width: width - 36,
-    lineGap: 4,
+    lineGap: 3,
   });
-  const height = Math.max(96, textHeight + 46);
+  const height = Math.max(84, textHeight + 40);
 
   doc.save();
-  doc.opacity(0.82).roundedRect(x, y, width, height, 24).fill(COVER_ADDRESS_BG);
-  doc.opacity(0.24).lineWidth(1).roundedRect(x, y, width, height, 24).stroke("#dbeafe");
+  doc.opacity(0.82).roundedRect(x, y, width, height, 20).fill(COVER_ADDRESS_BG);
+  doc.opacity(0.24).lineWidth(1).roundedRect(x, y, width, height, 20).stroke("#dbeafe");
   doc.opacity(1);
   doc.fillColor(COVER_KICKER_TEXT).font("Helvetica-Bold").fontSize(COVER_KICKER_FONT_SIZE);
-  doc.text("DEAL DOSSIER", x + 18, y + 16, {
+  doc.text("DEAL DOSSIER", x + 18, y + 14, {
     width: width - 36,
     lineBreak: false,
   });
   doc.fillColor(COVER_ADDRESS_TEXT).font("Helvetica-Bold").fontSize(COVER_ADDRESS_FONT_SIZE);
-  doc.text(address, x + 18, y + 32, {
+  doc.text(address, x + 18, y + 28, {
     width: width - 36,
-    lineGap: 4,
+    lineGap: 3,
   });
   doc.restore();
 
@@ -452,45 +456,45 @@ function drawStructuredCoverPage(
   drawCoverBackground(doc, coverImage);
 
   const bannerBottom = drawCoverAddressBanner(doc, cover.address);
-  const outerPad = 34;
-  const gap = 16;
-  const leftWidth = 224;
+  const outerPad = 30;
+  const gap = 12;
+  const leftWidth = 216;
   const rightWidth = pageW - outerPad * 2 - gap - leftWidth;
-  const panelTop = bannerBottom + 18;
-  const panelHeight = pageH - panelTop - 34;
+  const panelTop = bannerBottom + 12;
+  const panelHeight = pageH - panelTop - 30;
   const leftX = outerPad;
   const rightX = leftX + leftWidth + gap;
-  const innerPad = 20;
+  const innerPad = 18;
 
   drawGlassPanel(doc, leftX, panelTop, leftWidth, panelHeight);
   drawGlassPanel(doc, rightX, panelTop, rightWidth, panelHeight);
 
   let leftY = panelTop + innerPad;
   leftY = drawCoverSection(doc, cover.propertyInfo, leftX + innerPad, leftY, leftWidth - innerPad * 2, {
-    labelRatio: 0.5,
+    labelRatio: 0.48,
   });
-  drawCoverDivider(doc, leftX + innerPad, leftY + 4, leftWidth - innerPad * 2);
+  drawCoverDivider(doc, leftX + innerPad, leftY + 2, leftWidth - innerPad * 2);
   leftY = drawCoverSection(
     doc,
     cover.acquisitionInfo,
     leftX + innerPad,
-    leftY + 18,
+    leftY + 12,
     leftWidth - innerPad * 2,
-    { labelRatio: 0.52 }
+    { labelRatio: 0.5 }
   );
 
   let rightY = panelTop + innerPad;
   rightY = drawCoverSection(doc, cover.keyFinancials, rightX + innerPad, rightY, rightWidth - innerPad * 2, {
-    labelRatio: 0.55,
+    labelRatio: 0.5,
   });
-  drawCoverDivider(doc, rightX + innerPad, rightY + 2, rightWidth - innerPad * 2);
+  drawCoverDivider(doc, rightX + innerPad, rightY + 1, rightWidth - innerPad * 2);
   drawCoverSection(
     doc,
     cover.expectedReturns,
     rightX + innerPad,
-    rightY + 18,
+    rightY + 12,
     rightWidth - innerPad * 2,
-    { labelRatio: 0.55 }
+    { labelRatio: 0.5 }
   );
 }
 
@@ -521,11 +525,11 @@ function drawChip(
   value: string
 ): void {
   doc.save();
-  doc.roundedRect(x, y, width, 28, 8).fill(CHIP_BG);
-  doc.fillColor(CHIP_TEXT).font("Helvetica-Bold").fontSize(7.5);
-  doc.text(label.toUpperCase(), x + 10, y + 6, { width: width - 20 });
-  doc.font("Helvetica").fontSize(9.5);
-  doc.text(value, x + 10, y + 14, { width: width - 20 });
+  doc.roundedRect(x, y, width, 24, 7).fill(CHIP_BG);
+  doc.fillColor(CHIP_TEXT).font("Helvetica-Bold").fontSize(CHIP_LABEL_FONT_SIZE);
+  doc.text(label.toUpperCase(), x + 9, y + 5, { width: width - 18 });
+  doc.font("Helvetica").fontSize(CHIP_VALUE_FONT_SIZE);
+  doc.text(value, x + 9, y + 12, { width: width - 18 });
   doc.restore();
 }
 
@@ -542,20 +546,20 @@ function drawHero(
   doc.opacity(0.18).fillColor("#38bdf8").circle(x + width - 48, y + 42, 56).fill();
   doc.opacity(1);
   doc.fillColor("#bae6fd").font("Helvetica-Bold").fontSize(TITLE_FONT_SIZE);
-  doc.text(meta.title, x + 20, y + 18, { width: width - 190 });
+  doc.text(meta.title, x + 18, y + 16, { width: width - 180 });
   doc.fillColor("#ffffff").fontSize(HERO_ADDRESS_FONT_SIZE);
-  doc.text(meta.address ?? "Investment Memorandum", x + 20, y + 36, {
-    width: width - 180,
-    lineGap: 2,
+  doc.text(meta.address ?? "Investment Memorandum", x + 18, y + 30, {
+    width: width - 170,
+    lineGap: 1.5,
   });
   doc.strokeColor(HERO_ACCENT).lineWidth(2);
-  doc.moveTo(x + 20, y + HERO_HEIGHT - 18).lineTo(x + 120, y + HERO_HEIGHT - 18).stroke();
-  if (meta.score) drawChip(doc, x + width - 132, y + 18, 114, "Deal Score", meta.score);
+  doc.moveTo(x + 18, y + HERO_HEIGHT - 16).lineTo(x + 108, y + HERO_HEIGHT - 16).stroke();
+  if (meta.score) drawChip(doc, x + width - 124, y + 16, 106, "Deal Score", meta.score);
   if (meta.generated) {
-    drawChip(doc, x + width - 132, y + 54, 114, "Generated", meta.generated);
+    drawChip(doc, x + width - 124, y + 46, 106, "Generated", meta.generated);
   }
   doc.restore();
-  state.y = y + HERO_HEIGHT + 20;
+  state.y = y + HERO_HEIGHT + 16;
 }
 
 function drawSectionHeading(doc: PDFKit.PDFDocument, state: LayoutState, heading: string): void {
@@ -563,26 +567,26 @@ function drawSectionHeading(doc: PDFKit.PDFDocument, state: LayoutState, heading
   const ordinal = extractHeadingOrdinal(heading);
   const displayHeading = titleCase(clean);
   state.currentSection = clean;
-  ensureSpace(doc, state, 52);
+  ensureSpace(doc, state, 42);
   doc.save();
   doc.fillColor(MUTED_TEXT_COLOR).font("Helvetica-Bold").fontSize(HEADING_KICKER_FONT_SIZE);
   doc.text(ordinal ? `SECTION ${ordinal}` : "SECTION", MARGIN, state.y, {
     width: bodyWidth(doc),
     lineBreak: false,
   });
-  state.y += HEADING_KICKER_FONT_SIZE + 6;
+  state.y += HEADING_KICKER_FONT_SIZE + 5;
   doc.fillColor(SECTION_HEADING_COLOR).font("Helvetica-Bold").fontSize(HEADING_FONT_SIZE);
   const headingHeight = doc.heightOfString(displayHeading, {
     width: bodyWidth(doc),
-    lineGap: 1,
+    lineGap: 0.8,
   });
   doc.text(displayHeading, MARGIN, state.y, {
     width: bodyWidth(doc),
-    lineGap: 1,
+    lineGap: 0.8,
   });
-  state.y += headingHeight + 8;
+  state.y += headingHeight + 6;
   doc.strokeColor(HERO_ACCENT).lineWidth(2.2);
-  doc.moveTo(MARGIN, state.y).lineTo(MARGIN + 112, state.y).stroke();
+  doc.moveTo(MARGIN, state.y).lineTo(MARGIN + 96, state.y).stroke();
   doc.restore();
   state.y += HEADING_SPACING;
 }
@@ -600,7 +604,7 @@ function drawParagraph(doc: PDFKit.PDFDocument, state: LayoutState, line: string
   ensureSpace(doc, state, height + PARAGRAPH_SPACING);
   if (bullet) {
     doc.save();
-    doc.fillColor(HERO_ACCENT).circle(MARGIN + 6, state.y + 8, 2.6).fill();
+    doc.fillColor(HERO_ACCENT).circle(MARGIN + 5.5, state.y + 7, 2.2).fill();
     doc.restore();
   }
   doc.fillColor(BODY_TEXT_COLOR).text(text, MARGIN + bulletOffset, state.y, {
@@ -707,8 +711,8 @@ function tableLayout(
   const landscape = !keyValue && colCount >= 6;
   const hasLongValue = keyValue && rows.some((row) => (row[1]?.text.length ?? 0) > 34);
   const tableWidth = bodyWidthForLayout(landscape ? "landscape" : "portrait");
-  const fontSize = keyValue ? 9.7 : landscape ? (colCount >= 7 ? 7.55 : 7.9) : colCount >= 5 ? 8.35 : 8.95;
-  const cellPadding = keyValue ? 6.2 : landscape ? 4.1 : 5.0;
+  const fontSize = keyValue ? 8.7 : landscape ? (colCount >= 7 ? 6.9 : 7.2) : colCount >= 5 ? 7.6 : 8.2;
+  const cellPadding = keyValue ? 5.4 : landscape ? 3.5 : 4.2;
   const columnKinds = Array.from({ length: colCount }, (_, colIndex) =>
     detectColumnKind(rows, colIndex, keyValue)
   );
@@ -732,15 +736,15 @@ function measureTableRowHeight(
 ): number {
   const isHeader = layout.hasHeader && rowIndex === 0;
   const isSectionRow = !isHeader && isSectionBreakRow(row);
-  if (isSectionRow) return layout.fontSize + layout.cellPadding * 2 + 4;
-  let rowHeight = layout.fontSize + layout.cellPadding * 2 + 2;
+  if (isSectionRow) return layout.fontSize + layout.cellPadding * 2 + 3;
+  let rowHeight = layout.fontSize + layout.cellPadding * 2 + 1;
   row.forEach((cell, colIndex) => {
     doc.font(cell.bold || isHeader ? "Helvetica-Bold" : "Helvetica").fontSize(layout.fontSize);
     const renderedText = isHeader ? cell.text.toUpperCase() : cell.text;
     const height = doc.heightOfString(renderedText, {
       width: (layout.widths[colIndex] ?? layout.widths[0] ?? 0) - layout.cellPadding * 2,
       align: tableCellAlign(row, colIndex, layout),
-      lineGap: 1.2,
+      lineGap: TABLE_TEXT_LINE_GAP,
     });
     rowHeight = Math.max(rowHeight, height + layout.cellPadding * 2);
   });
@@ -784,7 +788,7 @@ function drawTableRow(
     const textY = y + Math.max(layout.cellPadding - 0.5, (rowHeight - layout.fontSize) / 2);
     doc.text(row[0]?.text ?? "", MARGIN + layout.cellPadding, textY, {
       width: layout.tableWidth - layout.cellPadding * 2,
-      lineGap: 1.1,
+      lineGap: TABLE_TEXT_LINE_GAP,
     });
     doc.restore();
     return y + rowHeight;
@@ -823,13 +827,13 @@ function drawTableRow(
     const textHeight = doc.heightOfString(renderedText, {
       width: width - layout.cellPadding * 2,
       align,
-      lineGap: 1.2,
+      lineGap: TABLE_TEXT_LINE_GAP,
     });
     const textY = y + Math.max(layout.cellPadding - 0.25, (rowHeight - textHeight) / 2);
     doc.text(renderedText, currentX + layout.cellPadding, textY, {
       width: width - layout.cellPadding * 2,
       align,
-      lineGap: 1.2,
+      lineGap: TABLE_TEXT_LINE_GAP,
     });
     currentX += width;
   });
@@ -893,7 +897,7 @@ function ensureSectionFitsWithTable(
 
   const layout = tableLayout(doc, tableRows);
   const previewRows = layout.keyValue ? tableRows : tableRows.slice(0, Math.min(tableRows.length, 3));
-  const needed = 40 + measureTableHeight(doc, previewRows, layout) + 10;
+  const needed = 32 + measureTableHeight(doc, previewRows, layout) + 8;
   if (state.y + needed > maxY(doc)) addPage(doc, state, layout.landscape ? "landscape" : "portrait");
 }
 
@@ -933,7 +937,7 @@ function drawTable(
     currentY = drawTableRow(doc, row, rowIndex, currentY, rowHeight, layout, { highlightRow });
   });
 
-  state.y = currentY + 12;
+  state.y = currentY + 8;
 }
 
 export function dossierTextToPdf(
@@ -999,7 +1003,7 @@ export function dossierTextToPdf(
           if (!line.trim()) {
             flushFactTable();
             flushTable();
-            state.y += 4;
+            state.y += 2;
             return;
           }
           if (isHeading(line)) {
