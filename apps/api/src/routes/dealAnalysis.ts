@@ -25,6 +25,7 @@ import { resolveOmPropertyAddress } from "../om/resolveOmPropertyAddress.js";
 import {
   parsePropertyDealDossierExpenseModelRows,
   parsePropertyDealDossierUnitModelRows,
+  getPropertyDossierAssumptions,
 } from "../deal/propertyDossierState.js";
 import type { DossierAssumptionOverrides } from "../deal/underwritingModel.js";
 import { getBBLForProperty } from "../enrichment/resolvePropertyBBL.js";
@@ -191,6 +192,17 @@ function mergeManualSourceLinks(
   };
 }
 
+function trimmedString(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+function parsePositiveInteger(value: unknown, fallback: number, max: number): number {
+  if (typeof value !== "string" || value.trim().length === 0) return fallback;
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.min(parsed, max);
+}
+
 function resolveWorkspaceProperty(details: PropertyDetails | null | undefined) {
   const omAnalysis = details?.rentalFinancials?.omAnalysis ?? null;
   return resolveStandalonePropertyInput({
@@ -232,6 +244,7 @@ async function previewMatchedProperty(
 
 function assumptionPatchFromPayload(params: {
   assumptionOverrides: DossierAssumptionOverrides | null;
+  brokerEmailNotes: string | null;
   unitModelRows: PropertyDealDossierUnitModelRow[] | null;
   expenseModelRows: PropertyDealDossierExpenseModelRow[] | null;
 }): Record<string, unknown> | null {
@@ -243,6 +256,7 @@ function assumptionPatchFromPayload(params: {
   }
   patch.investmentProfile = params.assumptionOverrides?.investmentProfile ?? null;
   patch.targetAcquisitionDate = params.assumptionOverrides?.targetAcquisitionDate ?? null;
+  patch.brokerEmailNotes = params.brokerEmailNotes;
   patch.unitModelRows = params.unitModelRows;
   patch.expenseModelRows = params.expenseModelRows;
   const hasMeaningfulValue = Object.entries(patch).some(([key, value]) => {
@@ -252,6 +266,63 @@ function assumptionPatchFromPayload(params: {
   });
   return hasMeaningfulValue ? patch : null;
 }
+
+router.get("/deal-analysis/workspaces", async (req: Request, res: Response) => {
+  try {
+    const limit = parsePositiveInteger(req.query.limit, 8, 24);
+    const pool = getPool();
+    const propertyRepo = new PropertyRepo({ pool });
+    const properties = await propertyRepo.list({ limit: Math.max(limit * 8, 60) });
+    const workspaces = properties
+      .flatMap((property) => {
+        const details = (property.details ?? null) as PropertyDetails | null;
+        const savedAssumptions = getPropertyDossierAssumptions(details);
+        const manualSourceLinks = readManualSourceLinks(details);
+        const omImportedAt = trimmedString(manualSourceLinks.omImportedAt);
+        const assumptionsUpdatedAt = trimmedString(savedAssumptions?.updatedAt);
+        const hasSavedWorkspace =
+          omImportedAt != null ||
+          assumptionsUpdatedAt != null ||
+          savedAssumptions != null;
+        if (!hasSavedWorkspace) return [];
+        const sortTimestamp =
+          [assumptionsUpdatedAt, omImportedAt, trimmedString(property.updatedAt)].find(
+            (value) => value != null
+          ) ?? property.updatedAt;
+        return [
+          {
+            propertyId: property.id,
+            canonicalAddress: property.canonicalAddress,
+            updatedAt: property.updatedAt,
+            omImportedAt,
+            assumptionsUpdatedAt,
+            omFileName: trimmedString(manualSourceLinks.omFileName),
+            hasAuthoritativeOm: details?.omData?.authoritative != null,
+            unitModelRowCount: savedAssumptions?.unitModelRows?.length ?? 0,
+            expenseModelRowCount: savedAssumptions?.expenseModelRows?.length ?? 0,
+            hasBrokerEmailNotes: trimmedString(savedAssumptions?.brokerEmailNotes) != null,
+            dossierStatus:
+              typeof details?.dealDossier?.generation?.status === "string"
+                ? details.dealDossier.generation.status
+                : null,
+            sortTimestamp,
+          },
+        ];
+      })
+      .sort((left, right) => right.sortTimestamp.localeCompare(left.sortTimestamp))
+      .slice(0, limit)
+      .map(({ sortTimestamp: _sortTimestamp, ...workspace }) => workspace);
+
+    res.json({ workspaces });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[deal-analysis workspaces]", err);
+    res.status(503).json({
+      error: "Failed to load saved OM workspaces.",
+      details: message,
+    });
+  }
+});
 
 router.post(
   "/deal-analysis/analyze-upload",
@@ -349,6 +420,7 @@ router.post("/deal-analysis/recalculate", async (req: Request, res: Response) =>
   try {
     const details = parsePropertyDetailsPayload(req.body?.details);
     const assumptionOverrides = parseDossierAssumptionOverridesPayload(req.body?.assumptions);
+    const brokerEmailNotes = optionalTrimmedText(req.body?.brokerEmailNotes);
     const unitModelRows = parsePropertyDealDossierUnitModelRows(req.body?.unitModelRows);
     const expenseModelRows = parsePropertyDealDossierExpenseModelRows(req.body?.expenseModelRows);
     if (details === "invalid") {
@@ -368,12 +440,19 @@ router.post("/deal-analysis/recalculate", async (req: Request, res: Response) =>
       });
       return;
     }
+    if (brokerEmailNotes === "invalid") {
+      res.status(400).json({
+        error: "brokerEmailNotes must be a string under 20,000 characters.",
+      });
+      return;
+    }
     const property = resolveWorkspaceProperty(details);
     const calculation = (
       await buildStandaloneOmCalculation({
         property,
         details,
         assumptionOverrides,
+        brokerEmailNotes,
         unitModelRows,
         expenseModelRows,
       })
@@ -390,6 +469,7 @@ router.post("/deal-analysis/generate-dossier", async (req: Request, res: Respons
   try {
     const details = parsePropertyDetailsPayload(req.body?.details);
     const assumptionOverrides = parseDossierAssumptionOverridesPayload(req.body?.assumptions);
+    const brokerEmailNotes = optionalTrimmedText(req.body?.brokerEmailNotes);
     const unitModelRows = parsePropertyDealDossierUnitModelRows(req.body?.unitModelRows);
     const expenseModelRows = parsePropertyDealDossierExpenseModelRows(req.body?.expenseModelRows);
     if (details === "invalid") {
@@ -409,11 +489,18 @@ router.post("/deal-analysis/generate-dossier", async (req: Request, res: Respons
       });
       return;
     }
+    if (brokerEmailNotes === "invalid") {
+      res.status(400).json({
+        error: "brokerEmailNotes must be a string under 20,000 characters.",
+      });
+      return;
+    }
     const property = resolveWorkspaceProperty(details);
     const dossier = await buildStandaloneDossierPdf({
       property,
       details,
       assumptionOverrides,
+      brokerEmailNotes,
       unitModelRows,
       expenseModelRows,
     });
@@ -431,6 +518,7 @@ router.post("/deal-analysis/generate-dossier-excel", async (req: Request, res: R
   try {
     const details = parsePropertyDetailsPayload(req.body?.details);
     const assumptionOverrides = parseDossierAssumptionOverridesPayload(req.body?.assumptions);
+    const brokerEmailNotes = optionalTrimmedText(req.body?.brokerEmailNotes);
     const unitModelRows = parsePropertyDealDossierUnitModelRows(req.body?.unitModelRows);
     const expenseModelRows = parsePropertyDealDossierExpenseModelRows(req.body?.expenseModelRows);
     if (details === "invalid") {
@@ -450,12 +538,19 @@ router.post("/deal-analysis/generate-dossier-excel", async (req: Request, res: R
       });
       return;
     }
+    if (brokerEmailNotes === "invalid") {
+      res.status(400).json({
+        error: "brokerEmailNotes must be a string under 20,000 characters.",
+      });
+      return;
+    }
 
     const property = resolveWorkspaceProperty(details);
     const { ctx } = await buildStandaloneUnderwritingContext({
       property,
       details,
       assumptionOverrides,
+      brokerEmailNotes,
       unitModelRows,
       expenseModelRows,
     });
@@ -498,6 +593,7 @@ router.post(
       }
       const details = parsePropertyDetailsPayload(req.body?.details);
       const assumptionRecord = parseJsonRecord(req.body?.assumptions);
+      const brokerEmailNotes = optionalTrimmedText(req.body?.brokerEmailNotes);
       const unitModelRowsRaw = parseJsonArray(req.body?.unitModelRows);
       const expenseModelRowsRaw = parseJsonArray(req.body?.expenseModelRows);
       if (details === "invalid") {
@@ -510,6 +606,12 @@ router.post(
       }
       if (unitModelRowsRaw === "invalid" || expenseModelRowsRaw === "invalid") {
         res.status(400).json({ error: "unitModelRows and expenseModelRows must be valid JSON arrays." });
+        return;
+      }
+      if (brokerEmailNotes === "invalid") {
+        res.status(400).json({
+          error: "brokerEmailNotes must be a string under 20,000 characters.",
+        });
         return;
       }
       const assumptionOverrides = parseDossierAssumptionOverridesPayload(assumptionRecord);
@@ -605,6 +707,7 @@ router.post(
         }
         const assumptionsPatch = assumptionPatchFromPayload({
           assumptionOverrides,
+          brokerEmailNotes,
           unitModelRows,
           expenseModelRows,
         });
@@ -641,6 +744,17 @@ router.post(
           contentType: inserted.contentType,
           createdAt: inserted.createdAt,
         });
+      }
+
+      if (uploadedDocuments.length > 0) {
+        const primaryOmDocument = uploadedDocuments[0]!;
+        const propertyRepo = new PropertyRepo({ pool });
+        const manualSourceLinks = mergeManualSourceLinks((await propertyRepo.byId(propertyId))?.details ?? null, {
+          omImportedAt: primaryOmDocument.createdAt,
+          omDocumentId: primaryOmDocument.id,
+          omFileName: primaryOmDocument.fileName,
+        });
+        await propertyRepo.mergeDetails(propertyId, { manualSourceLinks });
       }
 
       const resolvedBbl = await getBBLForProperty(propertyId).catch(() => null);

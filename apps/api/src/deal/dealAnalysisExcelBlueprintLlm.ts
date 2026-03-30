@@ -71,9 +71,9 @@ const ALLOWED_METRIC_KEYS = new Set<DealAnalysisSummaryMetricKey>([
 const FALLBACK_BLUEPRINT: DealAnalysisWorkbookBlueprint = {
   workbookTitle: "Deal Dossier Workbook",
   assumptionsSubtitle:
-    "Blue text marks hard-coded inputs from the current deal analysis. Formula-linked cells update downstream model tabs automatically.",
+    "Blue text marks hard-coded inputs from the current deal analysis. Formula-linked cells roll through financing, cash flow, and summary tabs.",
   summarySubtitle:
-    "This export is built so hard-coded assumptions stay blue and every downstream summary or cash-flow output remains formula-linked.",
+    "This export keeps hard-coded assumptions blue while every downstream summary or cash-flow output stays traceable and formula-linked.",
   cashFlowHeading: "Projected YoY Cash Flow",
   summaryBoxes: [
     {
@@ -266,4 +266,3 @@ export async function buildDealAnalysisWorkbookBlueprint(
     return FALLBACK_BLUEPRINT;
   }
 }
-

@@ -73,7 +73,7 @@ const HARD_CODED_FILL: FillPattern = {
 const FORMULA_FILL: FillPattern = {
   type: "pattern",
   pattern: "solid",
-  fgColor: { argb: COLOR.greenFill },
+  fgColor: { argb: COLOR.white },
 };
 
 const SOFT_FILL: FillPattern = {
@@ -261,6 +261,7 @@ interface WorkbookBuildArtifacts {
     commercial: number;
   };
   expenses: Array<ExpenseRow & { yearlyAmounts?: number[] | undefined }>;
+  aggregateExpenseFallback: boolean;
   cashFlowRows: CashFlowRowMap;
 }
 
@@ -399,6 +400,8 @@ function buildArtifacts(ctx: UnderwritingContext): WorkbookBuildArtifacts {
               annualGrowthPct: ctx.assumptions.operating.annualExpenseGrowthPct ?? 0,
             },
           ];
+  const aggregateExpenseFallback =
+    projectedExpenseRows.length === 0 && normalizedExpenseInputs.expenseRowsExManagement.length === 0;
 
   const currentRentBreakdown =
     ctx.rentBreakdown?.current != null
@@ -448,6 +451,7 @@ function buildArtifacts(ctx: UnderwritingContext): WorkbookBuildArtifacts {
   return {
     currentRentBreakdown,
     expenses,
+    aggregateExpenseFallback,
     cashFlowRows: {
       propertyValue: 6,
       grossRentalIncome: 7,
@@ -1079,6 +1083,8 @@ function buildFinancingModelSheet(
   for (let year = 1; year <= MAX_MODEL_YEARS; year += 1) {
     const row = financingRows.amortizationStart + year - 1;
     const previousRow = row - 1;
+    const annualPeriodsFormula = `MIN(12,MAX(0,$B$8-((A${row}-1)*12)))`;
+    const periodRangeFormula = `ROW(INDIRECT(((A${row}-1)*12+1)&":"&MIN(A${row}*12,$B$8)))`;
     setSheetCell(worksheet, `A${row}`, year, {
       numFmt: INTEGER_FMT,
       fill: SOFT_FILL,
@@ -1093,23 +1099,31 @@ function buildFinancingModelSheet(
     setFormulaCell(
       worksheet,
       `C${row}`,
-      `IF(B${row}=0,0,IF(A${row}<=AmortizationYears,$B$9*12,0))`,
+      `IF(OR(B${row}=0,${annualPeriodsFormula}=0),0,D${row}+E${row})`,
       { numFmt: CURRENCY_FMT, fill: FORMULA_FILL }
     );
-    setFormulaCell(worksheet, `D${row}`, `IF(B${row}=0,0,B${row}-F${row})`, {
-      numFmt: CURRENCY_FMT,
-      fill: FORMULA_FILL,
-    });
-    setFormulaCell(worksheet, `E${row}`, `IF(B${row}=0,0,C${row}-D${row})`, {
-      numFmt: CURRENCY_FMT,
-      fill: FORMULA_FILL,
-    });
     setFormulaCell(
       worksheet,
-      `F${row}`,
-      `IF(B${row}=0,0,IF(A${row}*12>=$B$8,0,IF($B$7=0,MAX(0,$B$2-($B$9*12*A${row})),MAX(0,$B$2*(1+$B$7)^(MIN(A${row}*12,$B$8))-$B$9*(((1+$B$7)^(MIN(A${row}*12,$B$8))-1)/$B$7)))))`,
-      { numFmt: CURRENCY_FMT, fill: FORMULA_FILL }
+      `D${row}`,
+      `IF(OR(B${row}=0,${annualPeriodsFormula}=0),0,IF($B$7=0,MIN(B${row},$B$9*${annualPeriodsFormula}),-SUMPRODUCT(PPMT($B$7,${periodRangeFormula},$B$8,$B$2))))`,
+      {
+        numFmt: CURRENCY_FMT,
+        fill: FORMULA_FILL,
+      }
     );
+    setFormulaCell(
+      worksheet,
+      `E${row}`,
+      `IF(OR(B${row}=0,${annualPeriodsFormula}=0),0,IF($B$7=0,0,-SUMPRODUCT(IPMT($B$7,${periodRangeFormula},$B$8,$B$2))))`,
+      {
+        numFmt: CURRENCY_FMT,
+        fill: FORMULA_FILL,
+      }
+    );
+    setFormulaCell(worksheet, `F${row}`, `MAX(0,B${row}-D${row})`, {
+      numFmt: CURRENCY_FMT,
+      fill: FORMULA_FILL,
+    });
   }
 
   defineName(workbook, "CalculatedLoanAmount", "FinancingModel", "$B$2");
@@ -1124,6 +1138,10 @@ function buildFinancingModelSheet(
 
 function isTaxExpense(lineItem: string): boolean {
   return /tax/i.test(lineItem);
+}
+
+function isOccupancyTaxExpense(lineItem: string): boolean {
+  return /occupancy\s*tax/i.test(lineItem);
 }
 
 function buildCashFlowModelSheet(
@@ -1182,9 +1200,10 @@ function buildCashFlowModelSheet(
   });
   setSheetCell(worksheet, "A7", "Gross rental income", { font: LABEL_FONT });
   setSheetCell(worksheet, "A8", "Free-market residential gross rent", { font: LABEL_FONT });
-  setFormulaCell(worksheet, "B8", "AnnualRentGrowthPct/100", {
+  setFormulaCell(worksheet, "B8", "BlendedRentUpliftPct/100", {
     numFmt: PERCENT_FMT,
     fill: FORMULA_FILL,
+    result: num(ctx.assumptions.operating.blendedRentUpliftPct) / 100,
   });
   setSheetCell(worksheet, "A9", "RS / RC residential gross rent", { font: LABEL_FONT });
   setSheetCell(worksheet, "B9", "Flat", {
@@ -1220,7 +1239,12 @@ function buildCashFlowModelSheet(
   artifacts.expenses.forEach((expense, index) => {
     const row = rows.expenseStart + index;
     setSheetCell(worksheet, `A${row}`, expense.lineItem, { font: LABEL_FONT });
-    if (expense.annualGrowthPct != null && Number.isFinite(expense.annualGrowthPct)) {
+    if (isOccupancyTaxExpense(expense.lineItem)) {
+      setFormulaCell(worksheet, `B${row}`, "OccupancyTaxPct/100", {
+        numFmt: PERCENT_FMT,
+        fill: FORMULA_FILL,
+      });
+    } else if (expense.annualGrowthPct != null && Number.isFinite(expense.annualGrowthPct)) {
       setSheetCell(worksheet, `B${row}`, expense.annualGrowthPct / 100, {
         numFmt: PERCENT_FMT,
         fill: HARD_CODED_FILL,
@@ -1304,7 +1328,7 @@ function buildCashFlowModelSheet(
     setFormulaCell(
       worksheet,
       `${column}${rows.freeMarketResidential}`,
-      `IF(${activeOperatingCondition},0,CurrentFreeMarketResidentialGrossRent*(1+RentUpliftPct/100)*(1+AnnualRentGrowthPct/100)^(${column}$5-1))`,
+      `IF(${activeOperatingCondition},0,CurrentFreeMarketResidentialGrossRent*(1+BlendedRentUpliftPct/100)*(1+AnnualRentGrowthPct/100)^(${column}$5-1))`,
       { numFmt: CURRENCY_FMT, fill: FORMULA_FILL }
     );
     setFormulaCell(
@@ -1355,27 +1379,27 @@ function buildCashFlowModelSheet(
       const growthRef =
         expense.annualGrowthPct != null && Number.isFinite(expense.annualGrowthPct)
           ? `B${row}`
-          : isTaxExpense(expense.lineItem)
+          : isOccupancyTaxExpense(expense.lineItem)
+            ? "OccupancyTaxPct/100"
+            : isTaxExpense(expense.lineItem)
             ? "AnnualPropertyTaxGrowthPct/100"
             : "AnnualExpenseGrowthPct/100";
       const projectedValue =
         year > 0 && Array.isArray(expense.yearlyAmounts)
           ? expense.yearlyAmounts[year - 1] ?? 0
-          : null;
-      if (projectedValue != null) {
-        setSheetCell(worksheet, `${column}${row}`, -Math.abs(projectedValue), {
-          numFmt: CURRENCY_FMT,
-          fill: HARD_CODED_FILL,
-          font: HARD_CODED_FONT,
-        });
-      } else {
-        setFormulaCell(
-          worksheet,
-          `${column}${row}`,
-          `IF(${activeOperatingCondition},0,-(${expense.amount}*(1+ExpenseIncreasePct/100))*((1+${growthRef})^(${column}$5-1)))`,
-          { numFmt: CURRENCY_FMT, fill: FORMULA_FILL }
-        );
-      }
+          : undefined;
+      const baseAmountFormula = artifacts.aggregateExpenseFallback
+        ? `${expense.amount}*(1+ExpenseIncreasePct/100)`
+        : `${expense.amount}`;
+      const expenseFormula = isOccupancyTaxExpense(expense.lineItem)
+        ? `IF(${activeOperatingCondition},0,-MAX(0,${column}${rows.grossRentalIncome}+${column}${rows.vacancy}+${column}${rows.leadTime})*(OccupancyTaxPct/100))`
+        : `IF(${activeOperatingCondition},0,-(${baseAmountFormula})*((1+${growthRef})^(${column}$5-1)))`;
+
+      setFormulaCell(worksheet, `${column}${row}`, expenseFormula, {
+        numFmt: CURRENCY_FMT,
+        fill: FORMULA_FILL,
+        result: projectedValue == null ? undefined : -Math.abs(projectedValue),
+      });
     });
 
     setFormulaCell(
@@ -1483,7 +1507,7 @@ function buildCashFlowModelSheet(
     setFormulaCell(
       worksheet,
       `${column}${rows.leveredCashFlow}`,
-      `${column}${rows.cashFlowAfterFinancing}+${column}${rows.reserveRelease}+${column}${rows.saleValue}+${column}${rows.saleClosingCosts}+${column}${rows.financingFunding}+${column}${rows.financingFees}+${column}${rows.financingPayoff}`,
+      `${column}${rows.cashFlowAfterFinancing}+${column}${rows.totalInvestmentCost}+${column}${rows.reserveRelease}+${column}${rows.saleValue}+${column}${rows.saleClosingCosts}+${column}${rows.financingFunding}+${column}${rows.financingFees}+${column}${rows.financingPayoff}`,
       { numFmt: CURRENCY_FMT, fill: FORMULA_FILL }
     );
   }
@@ -1549,7 +1573,7 @@ function buildCashFlowModelSheet(
   setFormulaCell(
     worksheet,
     `B${rows.calculatedAverageCashOnCash}`,
-    `IF(ABS($C$${rows.leveredCashFlow})=0,0,AVERAGE(OFFSET($D$${rows.cashFlowAfterFinancing},0,0,1,HoldPeriodYears))/ABS($C$${rows.leveredCashFlow}))`,
+    `IF(CalculatedInitialEquity=0,0,AVERAGE(OFFSET($D$${rows.cashFlowAfterFinancing},0,0,1,HoldPeriodYears))/CalculatedInitialEquity)`,
     { numFmt: PERCENT_FMT, fill: FORMULA_FILL, result: ctx.returns.averageCashOnCashReturn ?? undefined }
   );
   setSheetCell(worksheet, `A${rows.calculatedEquityMultiple}`, "Calculated equity multiple", {
@@ -1559,7 +1583,7 @@ function buildCashFlowModelSheet(
   setFormulaCell(
     worksheet,
     `B${rows.calculatedEquityMultiple}`,
-    `IF(ABS($C$${rows.leveredCashFlow})=0,0,SUMPRODUCT((OFFSET($D$${rows.leveredCashFlow},0,0,1,HoldPeriodYears)>0)*OFFSET($D$${rows.leveredCashFlow},0,0,1,HoldPeriodYears))/ABS($C$${rows.leveredCashFlow}))`,
+    `IF(CalculatedInitialEquity=0,0,SUMPRODUCT((OFFSET($D$${rows.leveredCashFlow},0,0,1,HoldPeriodYears)>0)*OFFSET($D$${rows.leveredCashFlow},0,0,1,HoldPeriodYears))/CalculatedInitialEquity)`,
     { numFmt: MULTIPLE_FMT, fill: FORMULA_FILL, result: ctx.returns.equityMultiple ?? undefined }
   );
 
@@ -1800,7 +1824,7 @@ function buildSummarySheet(
   setSheetCell(
     worksheet,
     "A16",
-    "Blue text on the Assumptions tab marks hard-coded inputs. Summary metrics and cash-flow rows below are formula-linked.",
+    "Blue text on the Assumptions tab marks hard-coded inputs. All downstream summary and cash-flow outputs remain formula-linked.",
     {
       fill: SOFT_FILL,
       font: NOTE_FONT,

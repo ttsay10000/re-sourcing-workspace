@@ -3,6 +3,16 @@ import ExcelJS from "exceljs";
 import { buildDealAnalysisWorkbook } from "./dealAnalysisWorkbook.js";
 import type { UnderwritingContext } from "./underwritingContext.js";
 
+function findRowByLabel(worksheet: ExcelJS.Worksheet | undefined, label: string): number | null {
+  if (!worksheet) return null;
+  for (let row = 1; row <= worksheet.rowCount; row += 1) {
+    if (worksheet.getCell(`A${row}`).value === label) {
+      return row;
+    }
+  }
+  return null;
+}
+
 function sampleContext(): UnderwritingContext {
   return {
     propertyId: "property-1",
@@ -214,11 +224,26 @@ describe("buildDealAnalysisWorkbook", () => {
     expect((financing?.getCell("B2").value as ExcelJS.CellFormulaValue).formula).toBe(
       "PurchasePrice*(LtvPct/100)"
     );
+    expect((financing?.getCell("D13").value as ExcelJS.CellFormulaValue).formula).toContain("PPMT");
+    expect((financing?.getCell("E13").value as ExcelJS.CellFormulaValue).formula).toContain("IPMT");
     expect((cashFlow?.getCell("C7").value as ExcelJS.CellFormulaValue).formula).toBe(
       "IF(OR(C$5=0,C$5>HoldPeriodYears),0,C8+C9+C10)"
     );
-    expect(cashFlow?.getCell("D17").value).toBe(-20_800);
-    expect(cashFlow?.getCell("D17").font?.color?.argb).toBe("FF5B9BD5");
+    expect((cashFlow?.getCell("B8").value as ExcelJS.CellFormulaValue).formula).toBe(
+      "BlendedRentUpliftPct/100"
+    );
+    expect((cashFlow?.getCell("D17").value as ExcelJS.CellFormulaValue).formula).toContain("B17");
+    expect((cashFlow?.getCell("D17").value as ExcelJS.CellFormulaValue).result).toBe(-20_800);
+    expect(cashFlow?.getCell("D17").fill?.fgColor?.argb).toBe("FFFFFFFF");
+    const totalInvestmentCostRow = findRowByLabel(cashFlow, "Total investment cost");
+    const totalLeveredCashFlowRow = findRowByLabel(cashFlow, "Total levered CF incl. exit");
+    expect(totalInvestmentCostRow).not.toBeNull();
+    expect(totalLeveredCashFlowRow).not.toBeNull();
+    expect(
+      (
+        cashFlow?.getCell(`C${totalLeveredCashFlowRow!}`).value as ExcelJS.CellFormulaValue
+      ).formula
+    ).toContain(`C${totalInvestmentCostRow!}`);
 
     expect(summary?.views?.[0]?.showGridLines).toBe(false);
     expect(summary?.getCell("B20").numFmt).toBe("0.00%");

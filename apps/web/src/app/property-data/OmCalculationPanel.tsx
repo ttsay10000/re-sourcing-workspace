@@ -1,6 +1,7 @@
 "use client";
 
 import type {
+  PropertyDealDossierAssumptions,
   PropertyDealDossierExpenseTreatment,
   PropertyDealDossierExpenseModelRow,
   PropertyDealDossierUnitModelRow,
@@ -218,6 +219,7 @@ export interface OmCalculationSnapshot {
     commercialUnits: number;
     rentStabilizedUnits: number;
   };
+  savedAssumptions: PropertyDealDossierAssumptions | null;
   assumptions: Record<string, number | null>;
   acquisitionMetadata: {
     investmentProfile: string | null;

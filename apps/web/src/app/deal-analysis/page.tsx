@@ -2,7 +2,8 @@
 
 import type { PropertyDetails } from "@re-sourcing/contracts";
 import Link from "next/link";
-import React, { Suspense, useMemo, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   OM_CALC_NUMERIC_FIELDS,
   OmCalculationPanel,
@@ -71,6 +72,45 @@ interface CreatePropertyResponse {
   } | null;
 }
 
+interface PropertyResponse {
+  id: string;
+  canonicalAddress: string;
+  details: PropertyDetails | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface PropertyDocumentResponse {
+  fileName: string;
+  fileType?: string | null;
+  source?: string | null;
+  sourceType: "inquiry" | "uploaded" | "generated";
+  createdAt?: string | null;
+}
+
+interface PropertyDocumentsResponse {
+  propertyId?: string;
+  documents: PropertyDocumentResponse[];
+}
+
+interface SavedWorkspaceSummary {
+  propertyId: string;
+  canonicalAddress: string;
+  updatedAt: string;
+  omImportedAt: string | null;
+  assumptionsUpdatedAt: string | null;
+  omFileName: string | null;
+  hasAuthoritativeOm: boolean;
+  unitModelRowCount: number;
+  expenseModelRowCount: number;
+  hasBrokerEmailNotes: boolean;
+  dossierStatus: "not_started" | "running" | "completed" | "failed" | null;
+}
+
+interface SavedWorkspacesResponse {
+  workspaces: SavedWorkspaceSummary[];
+}
+
 const pageShellStyle: React.CSSProperties = {
   maxWidth: "1360px",
   margin: "0 auto",
@@ -135,11 +175,85 @@ function formatNumber(value: number | null | undefined): string {
   }).format(value);
 }
 
+function formatDateLabel(value: string | null | undefined): string {
+  if (!value || value.trim().length === 0) return "—";
+  const normalized = value.includes("T") ? value : `${value}T00:00:00`;
+  const parsed = new Date(normalized);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  }).format(parsed);
+}
+
 function formatBytes(value: number | null | undefined): string {
   if (value == null || value <= 0) return "—";
   if (value >= 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MB`;
   if (value >= 1024) return `${(value / 1024).toFixed(1)} KB`;
   return `${value} B`;
+}
+
+function resolveSavedWorkspaceAddress(
+  property: Pick<PropertyResponse, "canonicalAddress" | "details">
+): ResolvedOmAddress | null {
+  const raw = property.details?.omDerivedAddress;
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    const record = raw as Record<string, unknown>;
+    const canonicalAddress =
+      typeof record.canonicalAddress === "string" && record.canonicalAddress.trim().length > 0
+        ? record.canonicalAddress.trim()
+        : property.canonicalAddress;
+    const addressLine =
+      typeof record.addressLine === "string" && record.addressLine.trim().length > 0
+        ? record.addressLine.trim()
+        : canonicalAddress.split(",")[0]?.trim() || canonicalAddress;
+    return {
+      rawAddress:
+        typeof record.rawAddress === "string" && record.rawAddress.trim().length > 0
+          ? record.rawAddress.trim()
+          : canonicalAddress,
+      addressLine,
+      locality:
+        typeof record.locality === "string" && record.locality.trim().length > 0
+          ? record.locality.trim()
+          : null,
+      zip:
+        typeof record.zip === "string" && record.zip.trim().length > 0
+          ? record.zip.trim()
+          : null,
+      canonicalAddress,
+      addressSource:
+        record.addressSource === "packageAddress" ||
+        record.addressSource === "addressLine" ||
+        record.addressSource === "address"
+          ? record.addressSource
+          : "address",
+      canAttemptBblResolution: false,
+    };
+  }
+  if (!property.canonicalAddress.trim()) return null;
+  return {
+    rawAddress: property.canonicalAddress,
+    addressLine: property.canonicalAddress.split(",")[0]?.trim() || property.canonicalAddress,
+    locality: null,
+    zip: null,
+    canonicalAddress: property.canonicalAddress,
+    addressSource: "address",
+    canAttemptBblResolution: false,
+  };
+}
+
+function summarizeUploadedPropertyDocuments(
+  documents: PropertyDocumentResponse[] | null | undefined
+): UploadedDocumentSummary[] {
+  return (documents ?? [])
+    .filter((document) => document.sourceType === "uploaded")
+    .map((document) => ({
+      fileName: document.fileName,
+      mimeType: document.fileType ?? null,
+      sizeBytes: null,
+    }));
 }
 
 function serializeUnitModelRows(rows: OmCalculationUnitModelRow[] | undefined): string {
@@ -215,7 +329,7 @@ function draftFromCalculation(calculation: OmCalculationSnapshot): OmCalculation
     targetIrrPct: calculation.assumptions.targetIrrPct ?? null,
     unitModelRows: calculation.unitModelRows,
     expenseModelRows: calculation.expenseModelRows,
-    brokerEmailNotes: "",
+    brokerEmailNotes: calculation.savedAssumptions?.brokerEmailNotes ?? "",
   };
 }
 
@@ -244,6 +358,9 @@ function downloadBlob(blob: Blob, filename: string) {
 }
 
 function DealAnalysisPageContent() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const propertyId = searchParams.get("property_id")?.trim() || null;
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [workspaceFiles, setWorkspaceFiles] = useState<File[]>([]);
@@ -259,6 +376,10 @@ function DealAnalysisPageContent() {
   const [recalculating, setRecalculating] = useState(false);
   const [dossierDownloading, setDossierDownloading] = useState(false);
   const [excelDownloading, setExcelDownloading] = useState(false);
+  const [savedWorkspaceLoading, setSavedWorkspaceLoading] = useState(false);
+  const [savedWorkspacesLoading, setSavedWorkspacesLoading] = useState(false);
+  const [workspaceSaving, setWorkspaceSaving] = useState(false);
+  const [savedWorkspaces, setSavedWorkspaces] = useState<SavedWorkspaceSummary[]>([]);
   const [propertyCreating, setPropertyCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -280,11 +401,17 @@ function DealAnalysisPageContent() {
   const canAnalyze = pendingFiles.length > 0;
   const canGenerateDossier = workspaceDetails != null;
   const pendingSelectionReplacesWorkspace =
-    workspaceFiles.length > 0 && pendingFiles !== workspaceFiles;
+    workspaceDetails != null && pendingFiles.length > 0 && pendingFiles !== workspaceFiles;
   const formulaFurnishingDefault =
     typeof calculation?.assumptions.furnishingSetupCosts === "number"
       ? calculation.assumptions.furnishingSetupCosts
       : null;
+  const activeSavedWorkspace = savedWorkspaces.find((workspace) => workspace.propertyId === propertyId) ?? null;
+  const savedWorkspaceUpdatedAt =
+    activeSavedWorkspace?.assumptionsUpdatedAt ??
+    activeSavedWorkspace?.omImportedAt ??
+    workspaceDetails?.dealDossier?.assumptions?.updatedAt ??
+    null;
 
   const summaryCards = useMemo(
     () =>
@@ -317,7 +444,126 @@ function DealAnalysisPageContent() {
     [calculation]
   );
 
-  function resetWorkspace() {
+  const loadSavedWorkspaces = useCallback(async () => {
+    setSavedWorkspacesLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/deal-analysis/workspaces?limit=8`);
+      const data = (await res.json().catch(() => ({}))) as Partial<SavedWorkspacesResponse> & {
+        error?: string;
+      };
+      if (!res.ok || data.error) {
+        throw new Error(data.error || "Failed to load saved OM workspaces.");
+      }
+      setSavedWorkspaces(data.workspaces ?? []);
+    } catch {
+      setSavedWorkspaces([]);
+    } finally {
+      setSavedWorkspacesLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadSavedWorkspaces();
+  }, [loadSavedWorkspaces]);
+
+  useEffect(() => {
+    if (!propertyId) return;
+    const activePropertyId = propertyId;
+    const abortController = new AbortController();
+    let cancelled = false;
+
+    async function loadSavedWorkspace() {
+      setSavedWorkspaceLoading(true);
+      setError(null);
+      setNotice(null);
+      setCreateResult(null);
+      try {
+        const [propertyRes, calculationRes, documentsData] = await Promise.all([
+          fetch(`${API_BASE}/api/properties/${encodeURIComponent(activePropertyId)}`, {
+            signal: abortController.signal,
+          }),
+          fetch(`${API_BASE}/api/properties/${encodeURIComponent(activePropertyId)}/om-calculation`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({}),
+            signal: abortController.signal,
+          }),
+          fetch(`${API_BASE}/api/properties/${encodeURIComponent(activePropertyId)}/documents`, {
+            signal: abortController.signal,
+          })
+            .then(async (response) => {
+              if (!response.ok) return { documents: [] } as PropertyDocumentsResponse;
+              return ((await response.json().catch(() => ({}))) ?? {}) as PropertyDocumentsResponse;
+            })
+            .catch(() => ({ documents: [] } as PropertyDocumentsResponse)),
+        ]);
+
+        const propertyData = ((await propertyRes.json().catch(() => ({}))) ?? {}) as
+          | PropertyResponse
+          | { error?: string; details?: string };
+        if (
+          !propertyRes.ok ||
+          ("error" in propertyData && typeof propertyData.error === "string")
+        ) {
+          const failedProperty = propertyData as { error?: string; details?: string };
+          throw new Error(
+            failedProperty.details || failedProperty.error || "Failed to load saved OM workspace."
+          );
+        }
+
+        const calculationData = ((await calculationRes.json().catch(() => ({}))) ?? {}) as
+          | Partial<OmCalculationSnapshot>
+          | { error?: string; details?: string };
+        if (
+          !calculationRes.ok ||
+          ("error" in calculationData && typeof calculationData.error === "string")
+        ) {
+          const failedCalculation = calculationData as { error?: string; details?: string };
+          throw new Error(
+            failedCalculation.details ||
+              failedCalculation.error ||
+              "Failed to rebuild the saved OM workspace."
+          );
+        }
+
+        if (cancelled) return;
+
+        const nextProperty = propertyData as PropertyResponse;
+        const nextCalculation = calculationData as OmCalculationSnapshot;
+        const nextDraft = draftFromCalculation(nextCalculation);
+        setPendingFiles([]);
+        setWorkspaceFiles([]);
+        setUploadedDocuments(summarizeUploadedPropertyDocuments(documentsData.documents));
+        setWorkspaceDetails((nextProperty.details ?? null) as PropertyDetails | null);
+        setWorkspaceProperty((nextCalculation.property ?? null) as WorkspaceProperty | null);
+        setResolvedAddress(resolveSavedWorkspaceAddress(nextProperty));
+        setMatchedProperty({
+          id: nextProperty.id,
+          canonicalAddress: nextProperty.canonicalAddress,
+          matchStrategy: "exact_canonical",
+        });
+        setCalculation(nextCalculation);
+        setDraft(nextDraft);
+        setBaselineDraft(nextDraft);
+        if (fileInputRef.current) fileInputRef.current.value = "";
+        setNotice("Prior OM workspace loaded from the saved property record.");
+      } catch (err) {
+        if (cancelled || abortController.signal.aborted) return;
+        setError(err instanceof Error ? err.message : "Failed to load saved OM workspace.");
+      } finally {
+        if (!cancelled) setSavedWorkspaceLoading(false);
+      }
+    }
+
+    void loadSavedWorkspace();
+    return () => {
+      cancelled = true;
+      abortController.abort();
+      setSavedWorkspaceLoading(false);
+    };
+  }, [propertyId]);
+
+  function clearWorkspaceState() {
     setPendingFiles([]);
     setWorkspaceFiles([]);
     setUploadedDocuments([]);
@@ -332,6 +578,11 @@ function DealAnalysisPageContent() {
     setNotice(null);
     setCreateResult(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
+  }
+
+  function resetWorkspace() {
+    clearWorkspaceState();
+    if (propertyId) router.replace("/deal-analysis");
   }
 
   async function analyzeUploads() {
@@ -365,6 +616,7 @@ function DealAnalysisPageContent() {
       setCalculation(nextCalculation);
       setDraft(nextDraft);
       setBaselineDraft(nextDraft);
+      if (propertyId) router.replace("/deal-analysis");
       setNotice("Uploaded OM PDF(s) analyzed. Adjust assumptions and refresh analysis as needed.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to analyze uploaded OM PDF(s).");
@@ -384,6 +636,7 @@ function DealAnalysisPageContent() {
         body: JSON.stringify({
           details: workspaceDetails,
           assumptions: buildAssumptionsPayload(draft),
+          brokerEmailNotes: draft.brokerEmailNotes.trim() || null,
           unitModelRows: draft.unitModelRows ?? null,
           expenseModelRows: draft.expenseModelRows ?? null,
         }),
@@ -409,6 +662,43 @@ function DealAnalysisPageContent() {
     }
   }
 
+  async function saveWorkspaceToProperty() {
+    if (!propertyId) return;
+    setWorkspaceSaving(true);
+    setError(null);
+    try {
+      const nextDraft: OmCalculationDraft = {
+        ...draft,
+        brokerEmailNotes: draft.brokerEmailNotes.trim(),
+      };
+      const res = await fetch(`${API_BASE}/api/properties/${encodeURIComponent(propertyId)}/dossier-settings`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...buildAssumptionsPayload(nextDraft),
+          brokerEmailNotes: nextDraft.brokerEmailNotes,
+          unitModelRows: nextDraft.unitModelRows ?? [],
+          expenseModelRows: nextDraft.expenseModelRows ?? [],
+        }),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        details?: string;
+      };
+      if (!res.ok || data.error) {
+        throw new Error(data.details || data.error || "Failed to save the OM workspace.");
+      }
+      setDraft(nextDraft);
+      setBaselineDraft(nextDraft);
+      setNotice("Saved the OM workspace back to the property record.");
+      void loadSavedWorkspaces();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save the OM workspace.");
+    } finally {
+      setWorkspaceSaving(false);
+    }
+  }
+
   async function downloadDossier() {
     if (!workspaceDetails) return;
     setDossierDownloading(true);
@@ -420,6 +710,7 @@ function DealAnalysisPageContent() {
         body: JSON.stringify({
           details: workspaceDetails,
           assumptions: buildAssumptionsPayload(draft),
+          brokerEmailNotes: draft.brokerEmailNotes.trim() || null,
           unitModelRows: draft.unitModelRows ?? null,
           expenseModelRows: draft.expenseModelRows ?? null,
         }),
@@ -451,6 +742,7 @@ function DealAnalysisPageContent() {
         body: JSON.stringify({
           details: workspaceDetails,
           assumptions: buildAssumptionsPayload(draft),
+          brokerEmailNotes: draft.brokerEmailNotes.trim() || null,
           unitModelRows: draft.unitModelRows ?? null,
           expenseModelRows: draft.expenseModelRows ?? null,
         }),
@@ -480,6 +772,7 @@ function DealAnalysisPageContent() {
       for (const file of workspaceFiles) formData.append("files", file);
       formData.append("details", JSON.stringify(workspaceDetails));
       formData.append("assumptions", JSON.stringify(buildAssumptionsPayload(draft)));
+      formData.append("brokerEmailNotes", draft.brokerEmailNotes.trim());
       formData.append("unitModelRows", JSON.stringify(draft.unitModelRows ?? []));
       formData.append("expenseModelRows", JSON.stringify(draft.expenseModelRows ?? []));
       const res = await fetch(`${API_BASE}/api/deal-analysis/create-property`, {
@@ -495,6 +788,8 @@ function DealAnalysisPageContent() {
       }
       const result = data as CreatePropertyResponse;
       setCreateResult(result);
+      void loadSavedWorkspaces();
+      router.replace(`/deal-analysis?property_id=${encodeURIComponent(result.propertyId)}`);
       setNotice(
         result.createdProperty
           ? "Property record created from the OM address and sent through enrichment."
@@ -547,9 +842,8 @@ function DealAnalysisPageContent() {
               Deal analysis from uploaded OM PDFs
             </h1>
             <p style={{ margin: "0.55rem 0 0", color: "#475569", lineHeight: 1.65, fontSize: "0.98rem" }}>
-              Upload one or more OM PDFs, pull unit-by-unit rent roll and current expense data through the
-              LLM extraction flow, tighten assumptions in the calculator, generate the deal dossier, and only
-              then decide whether to create a canonical property record from the OM address.
+              Upload one or more OM PDFs for a fresh underwriting workspace, or reopen a prior
+              property-backed OM workspace with its saved assumptions, unit edits, and expense rows.
             </p>
           </div>
           <button
@@ -569,6 +863,156 @@ function DealAnalysisPageContent() {
         </div>
       </div>
 
+      <div style={{ ...cardStyle, padding: "1.15rem" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap" }}>
+          <div>
+            <strong style={{ color: "#0f172a", fontSize: "1rem" }}>Resume prior OM workspace builds</strong>
+            <div style={{ marginTop: "0.3rem", color: "#64748b", fontSize: "0.9rem", lineHeight: 1.55 }}>
+              Prior deal-analysis builds tied to a property record can be reopened here with their saved
+              assumptions and model rows.
+            </div>
+          </div>
+          {propertyId ? (
+            <div style={{ color: "#1d4ed8", fontSize: "0.84rem", fontWeight: 700 }}>
+              {savedWorkspaceLoading ? "Loading saved workspace..." : "Saved workspace loaded"}
+            </div>
+          ) : null}
+        </div>
+
+        <div style={{ marginTop: "0.95rem", display: "grid", gap: "0.75rem" }}>
+          {savedWorkspacesLoading ? (
+            <div style={{ color: "#64748b", fontSize: "0.9rem" }}>Loading recent OM workspaces...</div>
+          ) : savedWorkspaces.length > 0 ? (
+            savedWorkspaces.map((workspace) => {
+              const isActive = workspace.propertyId === propertyId;
+              const lastUpdatedAt =
+                workspace.assumptionsUpdatedAt ?? workspace.omImportedAt ?? workspace.updatedAt;
+              return (
+                <button
+                  key={workspace.propertyId}
+                  type="button"
+                  onClick={() =>
+                    router.replace(`/deal-analysis?property_id=${encodeURIComponent(workspace.propertyId)}`)
+                  }
+                  disabled={savedWorkspaceLoading && isActive}
+                  style={{
+                    display: "grid",
+                    gap: "0.38rem",
+                    padding: "0.95rem 1rem",
+                    borderRadius: "14px",
+                    border: isActive ? "1px solid #93c5fd" : "1px solid #dbe2ea",
+                    background: isActive ? "#eff6ff" : "#fff",
+                    textAlign: "left",
+                    cursor: savedWorkspaceLoading && isActive ? "not-allowed" : "pointer",
+                  }}
+                >
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      gap: "0.8rem",
+                      flexWrap: "wrap",
+                    }}
+                  >
+                    <strong style={{ color: "#0f172a" }}>{workspace.canonicalAddress}</strong>
+                    <span
+                      style={{
+                        color: isActive ? "#1d4ed8" : "#475569",
+                        fontSize: "0.8rem",
+                        fontWeight: 700,
+                      }}
+                    >
+                      {isActive ? "Loaded" : "Open workspace"}
+                    </span>
+                  </div>
+                  <div style={{ color: "#64748b", fontSize: "0.84rem", lineHeight: 1.5 }}>
+                    Last saved {formatDateLabel(lastUpdatedAt)}
+                    {workspace.omFileName ? ` • ${workspace.omFileName}` : ""}
+                  </div>
+                  <div style={{ display: "flex", gap: "0.45rem", flexWrap: "wrap" }}>
+                    {workspace.hasAuthoritativeOm ? (
+                      <span
+                        style={{
+                          padding: "0.2rem 0.5rem",
+                          borderRadius: "999px",
+                          background: "#ecfdf5",
+                          color: "#166534",
+                          fontSize: "0.76rem",
+                          fontWeight: 700,
+                        }}
+                      >
+                        Authoritative OM
+                      </span>
+                    ) : null}
+                    {workspace.unitModelRowCount > 0 ? (
+                      <span
+                        style={{
+                          padding: "0.2rem 0.5rem",
+                          borderRadius: "999px",
+                          background: "#f8fafc",
+                          color: "#334155",
+                          fontSize: "0.76rem",
+                          fontWeight: 700,
+                        }}
+                      >
+                        {workspace.unitModelRowCount} unit rows
+                      </span>
+                    ) : null}
+                    {workspace.expenseModelRowCount > 0 ? (
+                      <span
+                        style={{
+                          padding: "0.2rem 0.5rem",
+                          borderRadius: "999px",
+                          background: "#f8fafc",
+                          color: "#334155",
+                          fontSize: "0.76rem",
+                          fontWeight: 700,
+                        }}
+                      >
+                        {workspace.expenseModelRowCount} expense rows
+                      </span>
+                    ) : null}
+                    {workspace.hasBrokerEmailNotes ? (
+                      <span
+                        style={{
+                          padding: "0.2rem 0.5rem",
+                          borderRadius: "999px",
+                          background: "#fff7ed",
+                          color: "#9a3412",
+                          fontSize: "0.76rem",
+                          fontWeight: 700,
+                        }}
+                      >
+                        Broker notes saved
+                      </span>
+                    ) : null}
+                    {workspace.dossierStatus === "completed" ? (
+                      <span
+                        style={{
+                          padding: "0.2rem 0.5rem",
+                          borderRadius: "999px",
+                          background: "#eef2ff",
+                          color: "#4338ca",
+                          fontSize: "0.76rem",
+                          fontWeight: 700,
+                        }}
+                      >
+                        Dossier ready
+                      </span>
+                    ) : null}
+                  </div>
+                </button>
+              );
+            })
+          ) : (
+            <div style={{ color: "#64748b", fontSize: "0.9rem", lineHeight: 1.55 }}>
+              No saved OM workspaces yet. Analyze uploaded OM PDFs and create the property record once to
+              make that workspace reusable from this page.
+            </div>
+          )}
+        </div>
+      </div>
+
       <div
         style={{
           display: "grid",
@@ -581,7 +1025,8 @@ function DealAnalysisPageContent() {
             <div>
               <strong style={{ color: "#0f172a", fontSize: "1rem" }}>1. Upload OM PDFs</strong>
               <div style={{ marginTop: "0.3rem", color: "#64748b", fontSize: "0.9rem", lineHeight: 1.5 }}>
-                This page is upload-first. There is no property selection step up front.
+                Start from new uploads here, or use the saved workspace list above to pull a prior OM build
+                back into the page.
               </div>
             </div>
             <button
@@ -620,7 +1065,7 @@ function DealAnalysisPageContent() {
               onChange={(event) => {
                 setPendingFiles(Array.from(event.target.files ?? []));
                 setNotice(
-                  workspaceFiles.length > 0
+                  workspaceDetails != null
                     ? "New OM files selected. Analyze uploads to replace the current workspace."
                     : null
                 );
@@ -744,7 +1189,9 @@ function DealAnalysisPageContent() {
                   ))
                 ) : (
                   <div style={{ color: "#64748b", fontSize: "0.86rem" }}>
-                    Analyze the uploaded OM PDFs to populate returns and current-state metrics.
+                    {savedWorkspaceLoading
+                      ? "Loading the saved OM workspace metrics..."
+                      : "Analyze the uploaded OM PDFs or reopen a saved workspace to populate returns and current-state metrics."}
                   </div>
                 )}
               </div>
@@ -783,17 +1230,68 @@ function DealAnalysisPageContent() {
 
       {workspaceDetails ? (
         <>
+          {propertyId ? (
+            <div
+              style={{
+                ...cardStyle,
+                padding: "1rem 1.1rem",
+                display: "flex",
+                justifyContent: "space-between",
+                gap: "1rem",
+                flexWrap: "wrap",
+                alignItems: "center",
+                background: "linear-gradient(180deg, #f8fbff 0%, #ffffff 100%)",
+              }}
+            >
+              <div>
+                <strong style={{ color: "#0f172a", fontSize: "0.98rem" }}>
+                  Property-backed OM workspace
+                </strong>
+                <div style={{ marginTop: "0.28rem", color: "#64748b", fontSize: "0.88rem", lineHeight: 1.55 }}>
+                  Reopened from the saved property record
+                  {savedWorkspaceUpdatedAt ? ` • last saved ${formatDateLabel(savedWorkspaceUpdatedAt)}` : ""}.
+                </div>
+                <div style={{ marginTop: "0.3rem" }}>
+                  <Link
+                    href={`/property-data?property_id=${encodeURIComponent(propertyId)}`}
+                    style={{ color: "#0f62fe", fontWeight: 700, textDecoration: "none", fontSize: "0.86rem" }}
+                  >
+                    Open property record
+                  </Link>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={saveWorkspaceToProperty}
+                disabled={workspaceSaving || !isDirty}
+                style={{
+                  padding: "0.72rem 1rem",
+                  borderRadius: "12px",
+                  border: "1px solid #bfdbfe",
+                  background: workspaceSaving ? "#eff6ff" : "#fff",
+                  color: "#0f172a",
+                  fontWeight: 700,
+                  cursor: workspaceSaving || !isDirty ? "not-allowed" : "pointer",
+                }}
+              >
+                {workspaceSaving ? "Saving workspace..." : "Save workspace to property"}
+              </button>
+            </div>
+          ) : null}
+
           <OmCalculationPanel
             mode="standalone"
             draft={draft}
             calculation={calculation}
             loading={uploading && !calculation}
             running={recalculating}
-            saving={false}
+            saving={workspaceSaving}
             error={null}
             isDirty={isDirty}
             hasAuthoritativeOm={hasAuthoritativeOm}
-            hasBrokerEmailNotes={false}
+            hasBrokerEmailNotes={
+              draft.brokerEmailNotes.trim().length > 0 || baselineDraft.brokerEmailNotes.trim().length > 0
+            }
             formulaFurnishingSetupCosts={formulaFurnishingDefault}
             onDraftNumberChange={updateDraftNumber}
             onDraftTextChange={updateDraftText}
@@ -823,9 +1321,10 @@ function DealAnalysisPageContent() {
             <div>
               <strong style={{ color: "#0f172a", fontSize: "1rem" }}>3. Generate outputs</strong>
               <div style={{ marginTop: "0.35rem", color: "#64748b", lineHeight: 1.6, fontSize: "0.9rem" }}>
-                Generate the deal dossier PDF or Excel workbook from this OM workspace, then optionally
-                create or match a canonical property record from the extracted address and send it through
-                BBL resolution and enrichment.
+                Generate the deal dossier PDF or Excel workbook from this OM workspace.
+                {propertyId
+                  ? " This reopened workspace is already tied to a canonical property record."
+                  : " You can also create or match a canonical property record from the extracted address and send it through BBL resolution and enrichment."}
               </div>
               <div style={{ marginTop: "0.75rem", display: "grid", gap: "0.45rem", fontSize: "0.86rem" }}>
                 <div style={{ color: "#0f172a" }}>
@@ -880,7 +1379,7 @@ function DealAnalysisPageContent() {
               <button
                 type="button"
                 onClick={createPropertyRecord}
-                disabled={!canGenerateDossier || propertyCreating || workspaceFiles.length === 0}
+                disabled={!canGenerateDossier || propertyCreating || workspaceFiles.length === 0 || propertyId != null}
                 style={{
                   padding: "0.85rem 1rem",
                   borderRadius: "12px",
@@ -889,12 +1388,19 @@ function DealAnalysisPageContent() {
                   color: "#0f172a",
                   fontWeight: 700,
                   cursor:
-                    !canGenerateDossier || propertyCreating || workspaceFiles.length === 0
+                    !canGenerateDossier ||
+                    propertyCreating ||
+                    workspaceFiles.length === 0 ||
+                    propertyId != null
                       ? "not-allowed"
                       : "pointer",
                 }}
               >
-                {propertyCreating ? "Creating / matching property..." : "Create property record from OM"}
+                {propertyId
+                  ? "Property record already attached"
+                  : propertyCreating
+                    ? "Creating / matching property..."
+                    : "Create property record from OM"}
               </button>
 
               {createResult ? (
@@ -943,9 +1449,9 @@ function DealAnalysisPageContent() {
             fontSize: "0.92rem",
           }}
         >
-          Analyze uploaded OM PDFs to open the underwriting workspace. The page will then populate current
-          state, unit-by-unit rent uplift and occupancy assumptions, recurring opex, upfront furnishing and
-          onboarding costs, sensitivities, and the deal dossier output.
+          {savedWorkspaceLoading
+            ? "Loading the saved OM workspace..."
+            : "Analyze uploaded OM PDFs or reopen a saved OM workspace to populate current state, unit-by-unit rent uplift and occupancy assumptions, recurring opex, upfront furnishing and onboarding costs, sensitivities, and the deal dossier output."}
         </div>
       ) : null}
     </div>
