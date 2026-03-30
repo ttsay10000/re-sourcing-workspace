@@ -258,6 +258,7 @@ function DealAnalysisPageContent() {
   const [uploading, setUploading] = useState(false);
   const [recalculating, setRecalculating] = useState(false);
   const [dossierDownloading, setDossierDownloading] = useState(false);
+  const [excelDownloading, setExcelDownloading] = useState(false);
   const [propertyCreating, setPropertyCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -436,6 +437,37 @@ function DealAnalysisPageContent() {
       setError(err instanceof Error ? err.message : "Failed to generate deal dossier PDF.");
     } finally {
       setDossierDownloading(false);
+    }
+  }
+
+  async function downloadDossierExcel() {
+    if (!workspaceDetails) return;
+    setExcelDownloading(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/deal-analysis/generate-dossier-excel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          details: workspaceDetails,
+          assumptions: buildAssumptionsPayload(draft),
+          unitModelRows: draft.unitModelRows ?? null,
+          expenseModelRows: draft.expenseModelRows ?? null,
+        }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data?.details || data?.error || "Failed to generate deal dossier Excel.");
+      }
+      const blob = await res.blob();
+      const disposition = res.headers.get("Content-Disposition") || "";
+      const fileNameMatch = disposition.match(/filename="([^"]+)"/i);
+      downloadBlob(blob, fileNameMatch?.[1] || "Deal-Dossier-Workbook.xlsx");
+      setNotice("Deal dossier Excel generated from the current underwriting inputs.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to generate deal dossier Excel.");
+    } finally {
+      setExcelDownloading(false);
     }
   }
 
@@ -791,9 +823,9 @@ function DealAnalysisPageContent() {
             <div>
               <strong style={{ color: "#0f172a", fontSize: "1rem" }}>3. Generate outputs</strong>
               <div style={{ marginTop: "0.35rem", color: "#64748b", lineHeight: 1.6, fontSize: "0.9rem" }}>
-                Generate the deal dossier PDF from this OM workspace, then optionally create or match a
-                canonical property record from the extracted address and send it through BBL resolution and
-                enrichment.
+                Generate the deal dossier PDF or Excel workbook from this OM workspace, then optionally
+                create or match a canonical property record from the extracted address and send it through
+                BBL resolution and enrichment.
               </div>
               <div style={{ marginTop: "0.75rem", display: "grid", gap: "0.45rem", fontSize: "0.86rem" }}>
                 <div style={{ color: "#0f172a" }}>
@@ -826,6 +858,23 @@ function DealAnalysisPageContent() {
                 }}
               >
                 {dossierDownloading ? "Generating deal dossier PDF..." : "Download deal dossier PDF"}
+              </button>
+
+              <button
+                type="button"
+                onClick={downloadDossierExcel}
+                disabled={!canGenerateDossier || excelDownloading}
+                style={{
+                  padding: "0.85rem 1rem",
+                  borderRadius: "12px",
+                  border: "1px solid #8ec5ff",
+                  background: "#eff6ff",
+                  color: "#0f172a",
+                  fontWeight: 700,
+                  cursor: !canGenerateDossier || excelDownloading ? "not-allowed" : "pointer",
+                }}
+              >
+                {excelDownloading ? "Generating deal dossier Excel..." : "Download deal dossier Excel"}
               </button>
 
               <button

@@ -18,6 +18,7 @@ import {
   buildStandaloneDetailsFromOmAnalysis,
   buildStandaloneDossierPdf,
   buildStandaloneOmCalculation,
+  buildStandaloneUnderwritingContext,
   resolveStandalonePropertyInput,
 } from "../deal/standaloneDealAnalysis.js";
 import { resolveOmPropertyAddress } from "../om/resolveOmPropertyAddress.js";
@@ -29,6 +30,7 @@ import type { DossierAssumptionOverrides } from "../deal/underwritingModel.js";
 import { getBBLForProperty } from "../enrichment/resolvePropertyBBL.js";
 import { runEnrichmentForProperty } from "../enrichment/runEnrichment.js";
 import { syncPropertySourcingWorkflow } from "../sourcing/workflow.js";
+import { buildDealAnalysisWorkbook } from "../deal/dealAnalysisWorkbook.js";
 
 const router = Router();
 const uploadMemory = multer({
@@ -422,6 +424,52 @@ router.post("/deal-analysis/generate-dossier", async (req: Request, res: Respons
     const message = err instanceof Error ? err.message : String(err);
     console.error("[deal-analysis generate-dossier]", err);
     res.status(503).json({ error: "Failed to generate deal dossier PDF.", details: message });
+  }
+});
+
+router.post("/deal-analysis/generate-dossier-excel", async (req: Request, res: Response) => {
+  try {
+    const details = parsePropertyDetailsPayload(req.body?.details);
+    const assumptionOverrides = parseDossierAssumptionOverridesPayload(req.body?.assumptions);
+    const unitModelRows = parsePropertyDealDossierUnitModelRows(req.body?.unitModelRows);
+    const expenseModelRows = parsePropertyDealDossierExpenseModelRows(req.body?.expenseModelRows);
+    if (details === "invalid") {
+      res.status(400).json({ error: "details must be a valid object." });
+      return;
+    }
+    if (assumptionOverrides === "invalid") {
+      res.status(400).json({
+        error:
+          "assumptions must be an object containing non-negative numbers, an optional investment profile, and an optional YYYY-MM-DD acquisition date.",
+      });
+      return;
+    }
+    if (unitModelRows === "invalid" || expenseModelRows === "invalid") {
+      res.status(400).json({
+        error: "unitModelRows and expenseModelRows must be arrays of valid table rows.",
+      });
+      return;
+    }
+
+    const property = resolveWorkspaceProperty(details);
+    const { ctx } = await buildStandaloneUnderwritingContext({
+      property,
+      details,
+      assumptionOverrides,
+      unitModelRows,
+      expenseModelRows,
+    });
+    const workbook = await buildDealAnalysisWorkbook(ctx);
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    );
+    res.setHeader("Content-Disposition", `attachment; filename="${workbook.fileName}"`);
+    res.send(workbook.buffer);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[deal-analysis generate-dossier-excel]", err);
+    res.status(503).json({ error: "Failed to generate deal dossier Excel.", details: message });
   }
 });
 
