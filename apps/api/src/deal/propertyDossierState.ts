@@ -30,6 +30,7 @@ const DOSSIER_ASSUMPTION_NUMERIC_KEYS = [
   "annualExpenseGrowthPct",
   "annualPropertyTaxGrowthPct",
   "recurringCapexAnnual",
+  "currentNoi",
   "holdPeriodYears",
   "exitCapPct",
   "exitClosingCostPct",

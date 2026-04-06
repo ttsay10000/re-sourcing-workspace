@@ -36,9 +36,6 @@ import {
   propertyOverviewFromDetails,
   resolveDossierPackageContext,
 } from "./dossierPropertyContext.js";
-import {
-  resolveAssetCapRateNoiBasis,
-} from "./underwritingModel.js";
 import { resolveProjectedResidentialLeaseUpRentSummary } from "./propertyAssumptions.js";
 import type {
   ExpenseRow,
@@ -418,7 +415,7 @@ export async function buildStandaloneUnderwritingContext(params: {
   profile: UserProfile;
   artifacts: ResolvedOmCalculationArtifacts;
 }> {
-  const { profile, artifacts } = await buildStandaloneOmCalculation(params);
+  const { profile, artifacts, calculation } = await buildStandaloneOmCalculation(params);
   const details = artifacts.details;
   const currentGrossRent = artifacts.currentFinancials.grossRentalIncome;
   const currentNoi = artifacts.currentFinancials.noi;
@@ -430,19 +427,8 @@ export async function buildStandaloneUnderwritingContext(params: {
     leaseUpRentSummary.totalAnnualRent != null && leaseUpRentSummary.totalAnnualRent > 0
       ? leaseUpRentSummary.totalAnnualRent
       : null;
-  const assetCapRateNoiBasis = resolveAssetCapRateNoiBasis({
-    currentNoi,
-    currentGrossRent,
-    currentOtherIncome,
-    currentExpensesTotal: artifacts.resolvedExpenseTotal,
-    conservativeProjectedLeaseUpRent,
-  });
-  const assetCapRate =
-    artifacts.projection.assumptions.acquisition.purchasePrice != null &&
-    assetCapRateNoiBasis != null &&
-    assetCapRateNoiBasis >= 0
-      ? (assetCapRateNoiBasis / artifacts.projection.assumptions.acquisition.purchasePrice) * 100
-      : null;
+  const assetCapRateNoiBasis = calculation.topLineMetrics.currentNoi;
+  const assetCapRate = calculation.topLineMetrics.currentCapRatePct;
   const adjustedCapRate =
     artifacts.projection.assumptions.acquisition.purchasePrice != null &&
     artifacts.projection.operating.stabilizedNoi >= 0

@@ -358,6 +358,62 @@ describe("underwritingModel", () => {
     expect(assumptions.holdPeriodYears).toBe(MAX_UNDERWRITING_HOLD_PERIOD_YEARS);
   });
 
+  it("changes the cash-flow horizon and IRR when the hold period changes", () => {
+    const twoYearAssumptions = resolveDossierAssumptions(null, 1_000_000, {
+      holdPeriodYears: 2,
+      occupancyTaxPct: 0,
+      managementFeePct: 4,
+      vacancyPct: 5,
+      leadTimeMonths: 0,
+      annualRentGrowthPct: 3,
+      annualCommercialRentGrowthPct: 3,
+      annualOtherIncomeGrowthPct: 0,
+      annualExpenseGrowthPct: 2,
+      annualPropertyTaxGrowthPct: 2,
+      recurringCapexAnnual: 0,
+      exitCapPct: 6,
+      exitClosingCostPct: 2,
+    });
+    const fiveYearAssumptions = resolveDossierAssumptions(null, 1_000_000, {
+      holdPeriodYears: 5,
+      occupancyTaxPct: 0,
+      managementFeePct: 4,
+      vacancyPct: 5,
+      leadTimeMonths: 0,
+      annualRentGrowthPct: 3,
+      annualCommercialRentGrowthPct: 3,
+      annualOtherIncomeGrowthPct: 0,
+      annualExpenseGrowthPct: 2,
+      annualPropertyTaxGrowthPct: 2,
+      recurringCapexAnnual: 0,
+      exitCapPct: 6,
+      exitClosingCostPct: 2,
+    });
+
+    const twoYearProjection = computeUnderwritingProjection({
+      assumptions: twoYearAssumptions,
+      currentGrossRent: 180_000,
+      currentNoi: 120_000,
+    });
+    const fiveYearProjection = computeUnderwritingProjection({
+      assumptions: fiveYearAssumptions,
+      currentGrossRent: 180_000,
+      currentNoi: 120_000,
+    });
+
+    expect(twoYearProjection.yearly.years).toEqual([0, 1, 2]);
+    expect(fiveYearProjection.yearly.years).toEqual([0, 1, 2, 3, 4, 5]);
+    expect(twoYearProjection.cashFlows.equityCashFlowSeries).toHaveLength(3);
+    expect(fiveYearProjection.cashFlows.equityCashFlowSeries).toHaveLength(6);
+    expect(twoYearProjection.yearly.saleValue[2]).toBeGreaterThan(0);
+    expect(twoYearProjection.yearly.saleValue[1]).toBe(0);
+    expect(fiveYearProjection.yearly.saleValue[5]).toBeGreaterThan(0);
+    expect(fiveYearProjection.yearly.saleValue[2]).toBe(0);
+    expect(
+      Math.abs((twoYearProjection.returns.irr ?? 0) - (fiveYearProjection.returns.irr ?? 0))
+    ).toBeGreaterThan(0.0001);
+  });
+
   it("blends rent uplift and furnishing defaults around protected units", () => {
     const assumptions = resolveDossierAssumptions(
       null,
@@ -629,6 +685,18 @@ describe("underwritingModel", () => {
     });
 
     expect(noiBasis).toBe(159_414);
+  });
+
+  it("prefers a provided current NOI when a manual override is supplied", () => {
+    const noiBasis = resolveAssetCapRateNoiBasis({
+      currentNoi: 65_000,
+      currentGrossRent: 152_400,
+      currentExpensesTotal: 64_986,
+      conservativeProjectedLeaseUpRent: 72_000,
+      preferProvidedCurrentNoi: true,
+    });
+
+    expect(noiBasis).toBe(137_000);
   });
 
   it("maps NYC tax classes to normalized underwriting tax-growth defaults", () => {

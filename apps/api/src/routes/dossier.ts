@@ -116,12 +116,12 @@ router.get("/dossier-assumptions", async (req: Request, res: Response) => {
           annualExpenseGrowthPct: assumptions.operating.annualExpenseGrowthPct,
           annualPropertyTaxGrowthPct: assumptions.operating.annualPropertyTaxGrowthPct,
           recurringCapexAnnual: assumptions.operating.recurringCapexAnnual,
+          currentNoi: propertyAssumptions?.currentNoi ?? null,
           holdPeriodYears: assumptions.holdPeriodYears,
           exitCapPct: assumptions.exit.exitCapPct,
           exitClosingCostPct: assumptions.exit.exitClosingCostPct,
           targetIrrPct: assumptions.targetIrrPct,
           currentGrossRent: currentFinancials.grossRentalIncome,
-          currentNoi: currentFinancials.noi,
         };
         formulaDefaults = {
           renovationCosts: 0,
@@ -167,12 +167,12 @@ router.get("/dossier-assumptions", async (req: Request, res: Response) => {
         annualExpenseGrowthPct: assumptions.operating.annualExpenseGrowthPct,
         annualPropertyTaxGrowthPct: assumptions.operating.annualPropertyTaxGrowthPct,
         recurringCapexAnnual: assumptions.operating.recurringCapexAnnual,
+        currentNoi: null,
         holdPeriodYears: assumptions.holdPeriodYears,
         exitCapPct: assumptions.exit.exitCapPct,
         exitClosingCostPct: assumptions.exit.exitClosingCostPct,
         targetIrrPct: assumptions.targetIrrPct,
         currentGrossRent: null,
-        currentNoi: null,
       };
     }
     res.json({
@@ -263,6 +263,7 @@ function parseAssumptionOverrides(rawAssumptions: unknown): DossierAssumptionOve
         : null,
     recurringCapexAnnual:
       typeof record.recurringCapexAnnual === "number" ? record.recurringCapexAnnual : null,
+    currentNoi: typeof record.currentNoi === "number" ? record.currentNoi : null,
     holdPeriodYears: typeof record.holdPeriodYears === "number" ? record.holdPeriodYears : null,
     exitCapPct: typeof record.exitCapPct === "number" ? record.exitCapPct : null,
     exitClosingCostPct:

@@ -428,21 +428,9 @@ export async function runGenerateDossier(
         "Authoritative OM snapshot or saved broker email notes required before dossier generation and deal scoring."
       );
     }
-    const currentFinancials = resolveCurrentFinancialsFromDetails(details);
-    const currentNoi = currentFinancials.noi;
-    const currentGrossRent = currentFinancials.grossRentalIncome;
-    const currentOtherIncome = currentFinancials.otherIncome;
-    if (
-      !hasAuthoritativeOm &&
-      !(
-        currentGrossRent != null &&
-        (currentNoi != null || currentFinancials.operatingExpenses != null)
-      )
-    ) {
-      throw new Error(
-        "Saved broker email notes did not include enough current financial data. Add gross rent plus NOI or expenses, or build the authoritative OM first."
-      );
-    }
+    const extractedCurrentFinancials = resolveCurrentFinancialsFromDetails(details);
+    const currentGrossRent = extractedCurrentFinancials.grossRentalIncome;
+    const currentOtherIncome = extractedCurrentFinancials.otherIncome;
     const unitCount = unitCountFromDetails(details);
     const rentRollRows = rentRollRowsFromDetails(details, currentGrossRent);
     const { rows: expenseRows, total: extractedExpenseTotal } = expenseRowsFromDetails(details);
@@ -452,6 +440,23 @@ export async function runGenerateDossier(
       propertyAssumptionOverrides,
       assumptionOverrides
     );
+    const overrideCurrentNoi = mergedAssumptionOverrides?.currentNoi;
+    const currentNoiOverride =
+      overrideCurrentNoi != null && Number.isFinite(overrideCurrentNoi)
+        ? overrideCurrentNoi
+        : null;
+    const currentNoi = currentNoiOverride ?? extractedCurrentFinancials.noi;
+    if (
+      !hasAuthoritativeOm &&
+      !(
+        currentGrossRent != null &&
+        (currentNoi != null || extractedCurrentFinancials.operatingExpenses != null)
+      )
+    ) {
+      throw new Error(
+        "Saved broker email notes did not include enough current financial data. Add gross rent plus NOI or expenses, or build the authoritative OM first."
+      );
+    }
 
     await setGenerationState(runningGenerationState(startedAt, "Running underwriting model"));
     const assumptions = resolveDossierAssumptions(
@@ -473,7 +478,7 @@ export async function runGenerateDossier(
     const conservativeProjectedLeaseUpRent = projectedLeaseUpRentSummary.totalAnnualRent;
     const protectedProjectedLeaseUpRent = projectedLeaseUpRentSummary.protectedAnnualRent;
     const resolvedCurrentExpensesTotal =
-      extractedExpenseTotal > 0 ? extractedExpenseTotal : currentFinancials.operatingExpenses;
+      extractedExpenseTotal > 0 ? extractedExpenseTotal : extractedCurrentFinancials.operatingExpenses;
     const projection = computeUnderwritingProjection({
       assumptions,
       currentGrossRent,
@@ -526,6 +531,7 @@ export async function runGenerateDossier(
       currentGrossRent,
       currentOtherIncome,
       currentExpensesTotal: resolvedCurrentExpensesTotal,
+      preferProvidedCurrentNoi: currentNoiOverride != null,
       conservativeProjectedLeaseUpRent,
     });
     const listingActivity = deriveListingActivitySummary({
@@ -739,7 +745,7 @@ export async function runGenerateDossier(
       yearlyCashFlow: projection.yearly,
       propertyMix: projection.assumptions.propertyMix,
       rentBreakdown: buildRentBreakdown({
-        currentFinancials,
+        currentFinancials: extractedCurrentFinancials,
         assumptions,
         projection,
       }),
@@ -807,6 +813,7 @@ export async function runGenerateDossier(
       unitRows: unitModelRowsToProjectionRows(detailedModel.unitModelRows),
       conservativeProjectedLeaseUpRent,
       protectedProjectedLeaseUpRent,
+      preferProvidedCurrentNoi: currentNoiOverride != null,
       baseCalculatedScore: scoringResult.isScoreable ? scoringResult.dealScore : null,
     });
 

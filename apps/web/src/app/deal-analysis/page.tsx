@@ -151,6 +151,7 @@ function emptyDraft(): OmCalculationDraft {
     annualExpenseGrowthPct: null,
     annualPropertyTaxGrowthPct: null,
     recurringCapexAnnual: null,
+    currentNoi: null,
     holdPeriodYears: null,
     exitCapPct: null,
     exitClosingCostPct: null,
@@ -323,6 +324,9 @@ function draftFromCalculation(calculation: OmCalculationSnapshot): OmCalculation
     annualExpenseGrowthPct: calculation.assumptions.annualExpenseGrowthPct ?? null,
     annualPropertyTaxGrowthPct: calculation.assumptions.annualPropertyTaxGrowthPct ?? null,
     recurringCapexAnnual: calculation.assumptions.recurringCapexAnnual ?? null,
+    currentNoi:
+      calculation.savedAssumptions?.currentNoi ??
+      (calculation.currentFinancials.isNoiOverridden ? calculation.currentFinancials.noi : null),
     holdPeriodYears: calculation.assumptions.holdPeriodYears ?? null,
     exitCapPct: calculation.assumptions.exitCapPct ?? null,
     exitClosingCostPct: calculation.assumptions.exitClosingCostPct ?? null,
@@ -429,7 +433,10 @@ function DealAnalysisPageContent() {
               value: formatCurrency(calculation.topLineMetrics.projectedYearNoi),
             },
             {
-              label: "Projected IRR",
+              label:
+                calculation.topLineMetrics.holdPeriodYears != null
+                  ? `Projected ${formatNumber(calculation.topLineMetrics.holdPeriodYears)}-year IRR`
+                  : "Projected IRR",
               value:
                 calculation.topLineMetrics.irrPct != null
                   ? `${(calculation.topLineMetrics.irrPct * 100).toFixed(1)}%`

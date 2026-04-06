@@ -91,7 +91,7 @@ const ENRICHMENT_RATE_LIMIT_DELAY_MS = Number(process.env.ENRICHMENT_RATE_LIMIT_
 const ENABLE_OM_AUTOMATION_V2 = process.env.ENABLE_OM_AUTOMATION_V2 === "1";
 const MANUAL_OM_MAX_BYTES = Number(process.env.MANUAL_OM_MAX_BYTES || 25 * 1024 * 1024);
 const MANUAL_OM_DOWNLOAD_TIMEOUT_MS = Number(process.env.MANUAL_OM_DOWNLOAD_TIMEOUT_MS || 20_000);
-const DOSSIER_ASSUMPTION_NUMERIC_FIELDS = [
+const DOSSIER_ASSUMPTION_NON_NEGATIVE_NUMERIC_FIELDS = [
   "purchasePrice",
   "purchaseClosingCostPct",
   "renovationCosts",
@@ -116,6 +116,15 @@ const DOSSIER_ASSUMPTION_NUMERIC_FIELDS = [
   "exitCapPct",
   "exitClosingCostPct",
   "targetIrrPct",
+] as const satisfies ReadonlyArray<keyof DossierAssumptionOverrides>;
+
+const DOSSIER_ASSUMPTION_SIGNED_NUMERIC_FIELDS = [
+  "currentNoi",
+] as const satisfies ReadonlyArray<keyof DossierAssumptionOverrides>;
+
+const DOSSIER_ASSUMPTION_NUMERIC_FIELDS = [
+  ...DOSSIER_ASSUMPTION_NON_NEGATIVE_NUMERIC_FIELDS,
+  ...DOSSIER_ASSUMPTION_SIGNED_NUMERIC_FIELDS,
 ] as const satisfies ReadonlyArray<keyof DossierAssumptionOverrides>;
 
 function normalizeManualUrl(
@@ -2972,6 +2981,12 @@ function optionalNonNegativeNumber(value: unknown): number | null | "invalid" {
   return value;
 }
 
+function optionalNumber(value: unknown): number | null | "invalid" {
+  if (value == null || value === "") return null;
+  if (typeof value !== "number" || !Number.isFinite(value)) return "invalid";
+  return value;
+}
+
 function optionalTrimmedText(value: unknown, maxLength = 20_000): string | null | "invalid" {
   if (value == null || value === "") return null;
   if (typeof value !== "string") return "invalid";
@@ -2995,8 +3010,13 @@ function parseDossierAssumptionOverridesPayload(
   const record = raw as Record<string, unknown>;
   const overrides: DossierAssumptionOverrides = {};
 
-  for (const key of DOSSIER_ASSUMPTION_NUMERIC_FIELDS) {
+  for (const key of DOSSIER_ASSUMPTION_NON_NEGATIVE_NUMERIC_FIELDS) {
     const parsed = optionalNonNegativeNumber(record[key]);
+    if (parsed === "invalid") return "invalid";
+    overrides[key] = parsed;
+  }
+  for (const key of DOSSIER_ASSUMPTION_SIGNED_NUMERIC_FIELDS) {
+    const parsed = optionalNumber(record[key]);
     if (parsed === "invalid") return "invalid";
     overrides[key] = parsed;
   }
@@ -3021,7 +3041,7 @@ router.post("/properties/:id/om-calculation", async (req: Request, res: Response
     if (assumptionOverrides === "invalid") {
       res.status(400).json({
         error:
-          "assumptions must be an object containing non-negative numbers, an optional investment profile, and an optional YYYY-MM-DD acquisition date.",
+          "assumptions must be an object containing valid numbers, an optional investment profile, and an optional YYYY-MM-DD acquisition date.",
       });
       return;
     }
@@ -3077,7 +3097,7 @@ router.put("/properties/:id/dossier-settings", async (req: Request, res: Respons
     ) {
       res.status(400).json({
         error:
-          "Assumption fields must be non-negative numbers or null with optional investment profile / acquisition date fields, brokerEmailNotes must be a string under 20,000 characters, and table rows must be valid arrays.",
+          "Assumption fields must be valid numbers or null with optional investment profile / acquisition date fields, brokerEmailNotes must be a string under 20,000 characters, and table rows must be valid arrays.",
       });
       return;
     }

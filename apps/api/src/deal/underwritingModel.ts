@@ -64,6 +64,7 @@ export interface DossierAssumptionOverrides {
   annualExpenseGrowthPct?: number | null;
   annualPropertyTaxGrowthPct?: number | null;
   recurringCapexAnnual?: number | null;
+  currentNoi?: number | null;
   holdPeriodYears?: number | null;
   exitCapPct?: number | null;
   exitClosingCostPct?: number | null;
@@ -272,7 +273,13 @@ export function resolveAssetCapRateNoiBasis(input: {
   currentOtherIncome?: number | null;
   currentExpensesTotal?: number | null;
   conservativeProjectedLeaseUpRent?: number | null;
+  preferProvidedCurrentNoi?: boolean;
 }): number | null {
+  const currentNoi =
+    input.currentNoi != null && Number.isFinite(input.currentNoi) ? input.currentNoi : null;
+  if (input.preferProvidedCurrentNoi && currentNoi != null) {
+    return roundCurrency(currentNoi + Math.max(0, safeNumber(input.conservativeProjectedLeaseUpRent)));
+  }
   const currentGrossRent =
     input.currentGrossRent != null && Number.isFinite(input.currentGrossRent)
       ? input.currentGrossRent
@@ -291,8 +298,6 @@ export function resolveAssetCapRateNoiBasis(input: {
         )
       : null;
   if (reconstructedNoi != null) return reconstructedNoi;
-  const currentNoi =
-    input.currentNoi != null && Number.isFinite(input.currentNoi) ? input.currentNoi : null;
   if (currentNoi == null) return null;
   return roundCurrency(currentNoi + Math.max(0, safeNumber(input.conservativeProjectedLeaseUpRent)));
 }

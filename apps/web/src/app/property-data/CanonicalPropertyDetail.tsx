@@ -110,6 +110,7 @@ interface DossierAssumptionsResponse {
     annualExpenseGrowthPct?: number | null;
     annualPropertyTaxGrowthPct?: number | null;
     recurringCapexAnnual?: number | null;
+    currentNoi?: number | null;
     holdPeriodYears?: number | null;
     exitCapPct?: number | null;
     exitClosingCostPct?: number | null;
@@ -543,6 +544,7 @@ function emptyOmCalculationDraft(): OmCalculationDraft {
     annualExpenseGrowthPct: null,
     annualPropertyTaxGrowthPct: null,
     recurringCapexAnnual: null,
+    currentNoi: null,
     holdPeriodYears: null,
     exitCapPct: null,
     exitClosingCostPct: null,
@@ -802,6 +804,7 @@ export function CanonicalPropertyDetail({
       annualExpenseGrowthPct: data.defaults?.annualExpenseGrowthPct ?? null,
       annualPropertyTaxGrowthPct: data.defaults?.annualPropertyTaxGrowthPct ?? null,
       recurringCapexAnnual: data.defaults?.recurringCapexAnnual ?? null,
+      currentNoi: data.defaults?.currentNoi ?? null,
       holdPeriodYears: data.defaults?.holdPeriodYears ?? null,
       exitCapPct: data.defaults?.exitCapPct ?? null,
       exitClosingCostPct: data.defaults?.exitClosingCostPct ?? null,

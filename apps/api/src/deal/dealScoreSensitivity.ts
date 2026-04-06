@@ -24,6 +24,7 @@ interface BuildDealScoreSensitivityInput {
   unitRows?: ProjectedUnitInputRow[] | null;
   conservativeProjectedLeaseUpRent?: number | null;
   protectedProjectedLeaseUpRent?: number | null;
+  preferProvidedCurrentNoi?: boolean;
   baseCalculatedScore: number | null;
 }
 
@@ -86,6 +87,7 @@ function scoreForScenario(
       currentGrossRent: input.currentGrossRent,
       currentOtherIncome: input.currentOtherIncome,
       currentExpensesTotal: input.currentExpensesTotal,
+      preferProvidedCurrentNoi: input.preferProvidedCurrentNoi,
       conservativeProjectedLeaseUpRent: input.conservativeProjectedLeaseUpRent,
     }),
     irrPct: projection.returns.irr ?? null,
@@ -120,6 +122,7 @@ export function buildDealScoreSensitivity(input: BuildDealScoreSensitivityInput)
     unitRows: input.unitRows,
     conservativeProjectedLeaseUpRent: input.conservativeProjectedLeaseUpRent,
     protectedProjectedLeaseUpRent: input.protectedProjectedLeaseUpRent,
+    preferProvidedCurrentNoi: input.preferProvidedCurrentNoi,
   };
 
   const rentUpliftPct = Math.max(0, assumptions.operating.rentUpliftPct - 20);

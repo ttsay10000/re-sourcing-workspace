@@ -39,7 +39,7 @@ const uploadMemory = multer({
   limits: { fileSize: 25 * 1024 * 1024, files: 20 },
 });
 
-const DOSSIER_ASSUMPTION_NUMERIC_FIELDS = [
+const DOSSIER_ASSUMPTION_NON_NEGATIVE_NUMERIC_FIELDS = [
   "purchasePrice",
   "purchaseClosingCostPct",
   "renovationCosts",
@@ -64,6 +64,15 @@ const DOSSIER_ASSUMPTION_NUMERIC_FIELDS = [
   "exitCapPct",
   "exitClosingCostPct",
   "targetIrrPct",
+] as const satisfies ReadonlyArray<keyof DossierAssumptionOverrides>;
+
+const DOSSIER_ASSUMPTION_SIGNED_NUMERIC_FIELDS = [
+  "currentNoi",
+] as const satisfies ReadonlyArray<keyof DossierAssumptionOverrides>;
+
+const DOSSIER_ASSUMPTION_NUMERIC_FIELDS = [
+  ...DOSSIER_ASSUMPTION_NON_NEGATIVE_NUMERIC_FIELDS,
+  ...DOSSIER_ASSUMPTION_SIGNED_NUMERIC_FIELDS,
 ] as const satisfies ReadonlyArray<keyof DossierAssumptionOverrides>;
 
 function handleUploadMulterError(_req: Request, res: Response, next: (err?: unknown) => void) {
@@ -117,6 +126,18 @@ function optionalNonNegativeNumber(value: unknown): number | null | "invalid" {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : "invalid";
 }
 
+function optionalNumber(value: unknown): number | null | "invalid" {
+  if (value == null || value === "") return null;
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : "invalid";
+  }
+  if (typeof value !== "string") return "invalid";
+  const trimmed = value.replace(/[$,%\s,]/g, "").trim();
+  if (!trimmed) return null;
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) ? parsed : "invalid";
+}
+
 function optionalDateString(value: unknown): string | null | "invalid" {
   const parsed = optionalTrimmedText(value, 40);
   if (parsed == null || parsed === "invalid") return parsed;
@@ -130,8 +151,13 @@ function parseDossierAssumptionOverridesPayload(
   if (typeof raw !== "object" || Array.isArray(raw)) return "invalid";
   const record = raw as Record<string, unknown>;
   const overrides: DossierAssumptionOverrides = {};
-  for (const key of DOSSIER_ASSUMPTION_NUMERIC_FIELDS) {
+  for (const key of DOSSIER_ASSUMPTION_NON_NEGATIVE_NUMERIC_FIELDS) {
     const parsed = optionalNonNegativeNumber(record[key]);
+    if (parsed === "invalid") return "invalid";
+    overrides[key] = parsed;
+  }
+  for (const key of DOSSIER_ASSUMPTION_SIGNED_NUMERIC_FIELDS) {
+    const parsed = optionalNumber(record[key]);
     if (parsed === "invalid") return "invalid";
     overrides[key] = parsed;
   }
@@ -430,7 +456,7 @@ router.post("/deal-analysis/recalculate", async (req: Request, res: Response) =>
     if (assumptionOverrides === "invalid") {
       res.status(400).json({
         error:
-          "assumptions must be an object containing non-negative numbers, an optional investment profile, and an optional YYYY-MM-DD acquisition date.",
+          "assumptions must be an object containing valid numbers, an optional investment profile, and an optional YYYY-MM-DD acquisition date.",
       });
       return;
     }
@@ -479,7 +505,7 @@ router.post("/deal-analysis/generate-dossier", async (req: Request, res: Respons
     if (assumptionOverrides === "invalid") {
       res.status(400).json({
         error:
-          "assumptions must be an object containing non-negative numbers, an optional investment profile, and an optional YYYY-MM-DD acquisition date.",
+          "assumptions must be an object containing valid numbers, an optional investment profile, and an optional YYYY-MM-DD acquisition date.",
       });
       return;
     }
@@ -528,7 +554,7 @@ router.post("/deal-analysis/generate-dossier-excel", async (req: Request, res: R
     if (assumptionOverrides === "invalid") {
       res.status(400).json({
         error:
-          "assumptions must be an object containing non-negative numbers, an optional investment profile, and an optional YYYY-MM-DD acquisition date.",
+          "assumptions must be an object containing valid numbers, an optional investment profile, and an optional YYYY-MM-DD acquisition date.",
       });
       return;
     }
@@ -620,7 +646,7 @@ router.post(
       if (assumptionOverrides === "invalid") {
         res.status(400).json({
           error:
-            "assumptions must contain non-negative numbers, an optional investment profile, and an optional YYYY-MM-DD acquisition date.",
+            "assumptions must contain valid numbers, an optional investment profile, and an optional YYYY-MM-DD acquisition date.",
         });
         return;
       }

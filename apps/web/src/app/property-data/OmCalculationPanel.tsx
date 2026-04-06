@@ -29,6 +29,7 @@ export const OM_CALC_NUMERIC_FIELDS = [
   "annualExpenseGrowthPct",
   "annualPropertyTaxGrowthPct",
   "recurringCapexAnnual",
+  "currentNoi",
   "holdPeriodYears",
   "exitCapPct",
   "exitClosingCostPct",
@@ -92,6 +93,7 @@ export interface OmCalculationDraft {
   annualExpenseGrowthPct: number | null;
   annualPropertyTaxGrowthPct: number | null;
   recurringCapexAnnual: number | null;
+  currentNoi: number | null;
   holdPeriodYears: number | null;
   exitCapPct: number | null;
   exitClosingCostPct: number | null;
@@ -232,6 +234,8 @@ export interface OmCalculationSnapshot {
     effectiveGrossIncome: number | null;
     operatingExpenses: number | null;
     noi: number | null;
+    extractedNoi: number | null;
+    isNoiOverridden: boolean;
     expenseRatioPct: number | null;
     currentCapRatePct: number | null;
     rentBasis: string | null;
@@ -383,7 +387,6 @@ const FIELD_GROUPS: Array<{ title: string; fields: FieldConfig[] }> = [
   {
     title: "Exit",
     fields: [
-      { key: "holdPeriodYears", label: "Hold period", step: 1, suffix: "yrs" },
       { key: "exitCapPct", label: "Exit cap", step: 0.1, suffix: "%" },
       { key: "exitClosingCostPct", label: "Exit closing costs", step: 0.1, suffix: "%" },
       { key: "targetIrrPct", label: "Target IRR", step: 0.1, suffix: "%" },
@@ -850,6 +853,12 @@ export function OmCalculationPanel({
           : "Upload an OM/rent roll or save broker notes first";
   const unitModelRows = draft.unitModelRows ?? calculation?.unitModelRows ?? [];
   const expenseModelRows = draft.expenseModelRows ?? calculation?.expenseModelRows ?? [];
+  const pulledCurrentNoi =
+    calculation?.currentFinancials.extractedNoi ?? calculation?.currentFinancials.noi ?? null;
+  const appliedCurrentNoi = calculation?.currentFinancials.noi ?? pulledCurrentNoi;
+  const appliedHoldPeriodYears = calculation?.topLineMetrics.holdPeriodYears ?? null;
+  const hasCurrentNoiOverrideApplied =
+    draft.currentNoi != null || calculation?.currentFinancials.isNoiOverridden === true;
   const hasAggregateExpenseFallbackRow =
     expenseModelRows.length === 1 && expenseModelRows[0]?.lineItem === "Operating expenses";
   const showExpenseFallbackFields = expenseModelRows.length === 0 || hasAggregateExpenseFallbackRow;
@@ -1598,6 +1607,256 @@ export function OmCalculationPanel({
           </div>
           <div
             style={{
+              marginBottom: "0.9rem",
+              padding: "0.85rem 0.95rem",
+              border: "1px solid #dbeafe",
+              borderRadius: "12px",
+              background: "linear-gradient(180deg, #f8fbff 0%, #eff6ff 100%)",
+              display: "grid",
+              gap: "0.7rem",
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap" }}>
+              <div>
+                <div
+                  style={{
+                    fontSize: "0.74rem",
+                    fontWeight: 700,
+                    letterSpacing: "0.08em",
+                    textTransform: "uppercase",
+                    color: "#1d4ed8",
+                  }}
+                >
+                  Current NOI override
+                </div>
+                <div style={{ marginTop: "0.22rem", fontSize: "0.82rem", color: "#475569", lineHeight: 1.5 }}>
+                  If the pulled current NOI is off, replace it here and refresh analysis. Leave blank to
+                  keep using the OM value.
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => onDraftNumberChange("currentNoi", null)}
+                disabled={saving || running || draft.currentNoi == null}
+                style={{
+                  padding: "0.46rem 0.72rem",
+                  borderRadius: "9px",
+                  border: "1px solid #bfdbfe",
+                  background: "#ffffff",
+                  color: "#1d4ed8",
+                  cursor: saving || running || draft.currentNoi == null ? "not-allowed" : "pointer",
+                }}
+              >
+                Use pulled NOI
+              </button>
+            </div>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+                gap: "0.7rem",
+                alignItems: "end",
+              }}
+            >
+              <div
+                style={{
+                  padding: "0.7rem 0.8rem",
+                  borderRadius: "10px",
+                  background: "#ffffff",
+                  border: "1px solid #dbeafe",
+                }}
+              >
+                <div style={{ fontSize: "0.72rem", color: "#64748b", textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 700 }}>
+                  Pulled NOI
+                </div>
+                <div style={{ marginTop: "0.2rem", fontSize: "1rem", fontWeight: 700, color: "#0f172a" }}>
+                  {formatCurrency(pulledCurrentNoi)}
+                </div>
+              </div>
+              <label style={{ display: "grid", gap: "0.35rem" }}>
+                <span style={{ fontSize: "0.77rem", fontWeight: 600, color: "#334155" }}>
+                  Override current NOI
+                </span>
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    border: "1px solid #cbd5e1",
+                    borderRadius: "8px",
+                    background: "#fff",
+                    overflow: "hidden",
+                  }}
+                >
+                  <span
+                    style={{
+                      padding: "0.4rem 0.5rem",
+                      borderRight: "1px solid #e2e8f0",
+                      color: "#64748b",
+                      background: "#f8fafc",
+                      fontSize: "0.8rem",
+                    }}
+                  >
+                    $
+                  </span>
+                  <input
+                    type="number"
+                    step="any"
+                    value={draft.currentNoi == null ? "" : String(draft.currentNoi)}
+                    onChange={(event) =>
+                      onDraftNumberChange(
+                        "currentNoi",
+                        event.target.value === "" ? null : Number(event.target.value)
+                      )
+                    }
+                    placeholder={pulledCurrentNoi == null ? "No NOI pulled yet" : String(pulledCurrentNoi)}
+                    style={{
+                      flex: 1,
+                      minWidth: 0,
+                      padding: "0.4rem 0.55rem",
+                      border: "none",
+                      outline: "none",
+                      fontSize: "0.84rem",
+                      fontVariantNumeric: "tabular-nums",
+                    }}
+                  />
+                </div>
+              </label>
+              <div
+                style={{
+                  padding: "0.7rem 0.8rem",
+                  borderRadius: "10px",
+                  background: hasCurrentNoiOverrideApplied ? "#ffffff" : "#f8fafc",
+                  border: "1px solid #dbeafe",
+                }}
+              >
+                <div style={{ fontSize: "0.72rem", color: "#64748b", textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 700 }}>
+                  Applied in analysis
+                </div>
+                <div style={{ marginTop: "0.2rem", fontSize: "1rem", fontWeight: 700, color: "#0f172a" }}>
+                  {formatCurrency(appliedCurrentNoi)}
+                </div>
+              </div>
+            </div>
+          </div>
+          <div
+            style={{
+              marginBottom: "0.9rem",
+              padding: "0.85rem 0.95rem",
+              border: "1px solid #dbeafe",
+              borderRadius: "12px",
+              background: "linear-gradient(180deg, #ffffff 0%, #f8fbff 100%)",
+              display: "grid",
+              gap: "0.7rem",
+            }}
+          >
+            <div>
+              <div
+                style={{
+                  fontSize: "0.74rem",
+                  fontWeight: 700,
+                  letterSpacing: "0.08em",
+                  textTransform: "uppercase",
+                  color: "#0f766e",
+                }}
+              >
+                Hold period / exit year
+              </div>
+              <div style={{ marginTop: "0.22rem", fontSize: "0.82rem", color: "#475569", lineHeight: 1.5 }}>
+                This drives the sale year, the number of cash-flow columns, recommended-offer math, and the
+                projected IRR.
+              </div>
+            </div>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+                gap: "0.7rem",
+                alignItems: "end",
+              }}
+            >
+              <label style={{ display: "grid", gap: "0.35rem" }}>
+                <span style={{ fontSize: "0.77rem", fontWeight: 600, color: "#334155" }}>
+                  Hold period
+                </span>
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    border: "1px solid #cbd5e1",
+                    borderRadius: "8px",
+                    background: "#fff",
+                    overflow: "hidden",
+                  }}
+                >
+                  <input
+                    type="number"
+                    step={1}
+                    min={1}
+                    value={draft.holdPeriodYears == null ? "" : String(draft.holdPeriodYears)}
+                    onChange={(event) =>
+                      onDraftNumberChange(
+                        "holdPeriodYears",
+                        event.target.value === "" ? null : Number(event.target.value)
+                      )
+                    }
+                    placeholder={appliedHoldPeriodYears == null ? "2" : String(appliedHoldPeriodYears)}
+                    style={{
+                      flex: 1,
+                      minWidth: 0,
+                      padding: "0.4rem 0.55rem",
+                      border: "none",
+                      outline: "none",
+                      fontSize: "0.84rem",
+                      fontVariantNumeric: "tabular-nums",
+                    }}
+                  />
+                  <span
+                    style={{
+                      padding: "0.4rem 0.5rem",
+                      borderLeft: "1px solid #e2e8f0",
+                      color: "#64748b",
+                      background: "#f8fafc",
+                      fontSize: "0.78rem",
+                    }}
+                  >
+                    yrs
+                  </span>
+                </div>
+              </label>
+              <div
+                style={{
+                  padding: "0.7rem 0.8rem",
+                  borderRadius: "10px",
+                  background: "#ffffff",
+                  border: "1px solid #dbeafe",
+                }}
+              >
+                <div style={{ fontSize: "0.72rem", color: "#64748b", textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 700 }}>
+                  Applied in analysis
+                </div>
+                <div style={{ marginTop: "0.2rem", fontSize: "1rem", fontWeight: 700, color: "#0f172a" }}>
+                  {appliedHoldPeriodYears != null ? `${formatNumber(appliedHoldPeriodYears)} years` : "—"}
+                </div>
+              </div>
+              <div
+                style={{
+                  padding: "0.7rem 0.8rem",
+                  borderRadius: "10px",
+                  background: "#ffffff",
+                  border: "1px solid #dbeafe",
+                }}
+              >
+                <div style={{ fontSize: "0.72rem", color: "#64748b", textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 700 }}>
+                  IRR basis
+                </div>
+                <div style={{ marginTop: "0.2rem", fontSize: "1rem", fontWeight: 700, color: "#0f172a" }}>
+                  {appliedHoldPeriodYears != null ? `${formatNumber(appliedHoldPeriodYears)}-year exit` : "Refresh to apply"}
+                </div>
+              </div>
+            </div>
+          </div>
+          <div
+            style={{
               display: "grid",
               gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
               gap: "0.85rem",
@@ -2230,7 +2489,10 @@ export function OmCalculationPanel({
                         : "—",
                   },
                   {
-                    label: "Projected IRR",
+                    label:
+                      calculation.topLineMetrics.holdPeriodYears != null
+                        ? `Projected ${formatNumber(calculation.topLineMetrics.holdPeriodYears)}-year IRR`
+                        : "Projected IRR",
                     value: formatRatioPercent(calculation.topLineMetrics.irrPct, 1),
                   },
                   {
@@ -2790,7 +3052,16 @@ export function OmCalculationPanel({
                         "Operating expenses",
                         formatCurrency(calculation.currentFinancials.operatingExpenses)
                       )}
-                      {summaryRow("Extracted current NOI", formatCurrency(calculation.currentFinancials.noi))}
+                      {summaryRow(
+                        "Extracted current NOI",
+                        formatCurrency(calculation.currentFinancials.extractedNoi)
+                      )}
+                      {calculation.currentFinancials.isNoiOverridden
+                        ? summaryRow(
+                            "Applied NOI override",
+                            formatCurrency(calculation.currentFinancials.noi)
+                          )
+                        : null}
                       {summaryRow(
                         "Expense ratio",
                         formatPercent(calculation.currentFinancials.expenseRatioPct, 1)

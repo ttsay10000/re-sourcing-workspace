@@ -402,6 +402,7 @@ export interface PropertyDealDossierAssumptions {
   annualExpenseGrowthPct?: number | null;
   annualPropertyTaxGrowthPct?: number | null;
   recurringCapexAnnual?: number | null;
+  currentNoi?: number | null;
   holdPeriodYears?: number | null;
   exitCapPct?: number | null;
   exitClosingCostPct?: number | null;

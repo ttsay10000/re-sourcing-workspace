@@ -239,6 +239,8 @@ export interface OmCalculationSnapshot {
     effectiveGrossIncome: number | null;
     operatingExpenses: number | null;
     noi: number | null;
+    extractedNoi: number | null;
+    isNoiOverridden: boolean;
     expenseRatioPct: number | null;
     currentCapRatePct: number | null;
     rentBasis: string | null;
@@ -343,7 +345,9 @@ export interface ResolvedOmCalculationArtifacts {
   savedAssumptions: PropertyDealDossierAssumptions | null;
   assumptions: ReturnType<typeof resolveDossierAssumptions>;
   detailedModel: ReturnType<typeof resolveDetailedCashFlowModel>;
+  extractedCurrentFinancials: ReturnType<typeof resolveCurrentFinancialsFromDetails>;
   currentFinancials: ReturnType<typeof resolveCurrentFinancialsFromDetails>;
+  currentNoiOverridden: boolean;
   resolvedExpenseTotal: number | null;
   projection: ReturnType<typeof computeUnderwritingProjection>;
   recommendedOffer: ReturnType<typeof computeRecommendedOffer>;
@@ -397,9 +401,22 @@ export async function resolveOmCalculationArtifactsFromInputs(params: {
         ? params.expenseModelRows
         : savedAssumptions?.expenseModelRows,
   });
-  const currentFinancials = resolveCurrentFinancialsFromDetails(details);
+  const extractedCurrentFinancials = resolveCurrentFinancialsFromDetails(details);
+  const overrideCurrentNoi = mergedAssumptionOverrides?.currentNoi;
+  const currentNoiOverride =
+    overrideCurrentNoi != null && Number.isFinite(overrideCurrentNoi)
+      ? overrideCurrentNoi
+      : null;
+  const currentNoiOverridden = currentNoiOverride != null;
+  const currentFinancials = currentNoiOverridden
+    ? {
+        ...extractedCurrentFinancials,
+        noi: currentNoiOverride,
+      }
+    : extractedCurrentFinancials;
   const leaseUpRentSummary = resolveProjectedResidentialLeaseUpRentSummary(details);
-  const resolvedExpenseTotal = expenseTotal(details) ?? currentFinancials.operatingExpenses;
+  const resolvedExpenseTotal =
+    expenseTotal(details) ?? extractedCurrentFinancials.operatingExpenses;
   const projection = computeUnderwritingProjection({
     assumptions,
     currentGrossRent: currentFinancials.grossRentalIncome,
@@ -450,7 +467,9 @@ export async function resolveOmCalculationArtifactsFromInputs(params: {
     savedAssumptions,
     assumptions,
     detailedModel,
+    extractedCurrentFinancials,
     currentFinancials,
+    currentNoiOverridden,
     resolvedExpenseTotal,
     projection,
     recommendedOffer,
@@ -469,7 +488,9 @@ export function buildOmCalculationSnapshotFromInputs(params: {
     savedAssumptions,
     assumptions,
     detailedModel,
+    extractedCurrentFinancials,
     currentFinancials,
+    currentNoiOverridden,
     resolvedExpenseTotal,
     projection,
     recommendedOffer,
@@ -487,6 +508,7 @@ export function buildOmCalculationSnapshotFromInputs(params: {
     currentGrossRent: currentFinancials.grossRentalIncome,
     currentOtherIncome: currentFinancials.otherIncome,
     currentExpensesTotal: resolvedExpenseTotal ?? projection.operating.currentExpenses,
+    preferProvidedCurrentNoi: currentNoiOverridden,
     conservativeProjectedLeaseUpRent:
       leaseUpRentSummary.totalAnnualRent != null && leaseUpRentSummary.totalAnnualRent > 0
         ? leaseUpRentSummary.totalAnnualRent
@@ -509,10 +531,10 @@ export function buildOmCalculationSnapshotFromInputs(params: {
       ? ((projection.operating.stabilizedNoi - currentNoiBasis) / currentNoiBasis) * 100
       : null;
   const totalCurrentRevenue =
-    (currentFinancials.grossRentalIncome ?? 0) + (currentFinancials.otherIncome ?? 0);
+    (extractedCurrentFinancials.grossRentalIncome ?? 0) + (extractedCurrentFinancials.otherIncome ?? 0);
   const expenseRatioPct =
-    currentFinancials.operatingExpenses != null && totalCurrentRevenue > 0
-      ? (currentFinancials.operatingExpenses / totalCurrentRevenue) * 100
+    extractedCurrentFinancials.operatingExpenses != null && totalCurrentRevenue > 0
+      ? (extractedCurrentFinancials.operatingExpenses / totalCurrentRevenue) * 100
       : null;
 
   const infoSummary = buildPropertyInfoSummary(details);
@@ -547,6 +569,8 @@ export function buildOmCalculationSnapshotFromInputs(params: {
       effectiveGrossIncome: currentFinancials.effectiveGrossIncome,
       operatingExpenses: currentFinancials.operatingExpenses,
       noi: currentFinancials.noi,
+      extractedNoi: extractedCurrentFinancials.noi,
+      isNoiOverridden: currentNoiOverridden,
       expenseRatioPct,
       currentCapRatePct,
       rentBasis: currentFinancials.rentBasis,

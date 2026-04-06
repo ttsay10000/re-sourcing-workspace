@@ -62,6 +62,233 @@ describe("buildOmCalculationSnapshotFromInputs", () => {
       },
     };
 
+    const baseCurrentFinancials = {
+      grossRentalIncome: 120_000,
+      otherIncome: 0,
+      vacancyLoss: 10_000,
+      effectiveGrossIncome: 110_000,
+      operatingExpenses: 40_000,
+      noi: 70_000,
+      expenseRatioPct: 0.3333,
+      currentCapRatePct: 7,
+      rentBasis: "gross_before_vacancy",
+      assumedLongTermOccupancyPct: null,
+      reportedOccupancyPct: null,
+      reportedVacancyPct: null,
+    };
+
+    const baseArtifacts = {
+      rawDetails: null,
+      details: null,
+      source: {
+        hasAuthoritativeOm: true,
+        hasBrokerFinancialInputs: false,
+        sourceLabel: "Authoritative OM",
+      },
+      savedAssumptions: null,
+      assumptions,
+      detailedModel: {
+        unitModelRows: [],
+        expenseModelRows: [],
+      },
+      extractedCurrentFinancials: baseCurrentFinancials,
+      currentFinancials: baseCurrentFinancials,
+      currentNoiOverridden: false,
+      resolvedExpenseTotal: 40_000,
+      projection: {
+        assumptions,
+        acquisition: {
+          purchaseClosingCosts: 30_000,
+          financingFees: 0,
+          totalProjectCost: 1_030_000,
+          loanAmount: 700_000,
+          equityRequiredForPurchase: 300_000,
+          initialEquityInvested: 330_000,
+          year0CashFlow: -330_000,
+        },
+        financing: {
+          loanAmount: 700_000,
+          financingFees: 0,
+          equityRequiredForPurchase: 300_000,
+          monthlyPayment: 0,
+          annualDebtService: 50_000,
+          remainingLoanBalanceAtExit: 650_000,
+          principalPaydownAtExit: 50_000,
+          amortizationSchedule: [],
+        },
+        operating: {
+          currentExpenses: 40_000,
+          currentOtherIncome: 0,
+          adjustedGrossRent: 140_000,
+          adjustedOperatingExpenses: 40_000,
+          managementFeeAmount: 0,
+          stabilizedNoi: 100_000,
+        },
+        exit: {
+          exitPropertyValue: 2_000_000,
+          saleClosingCosts: 40_000,
+          netSaleProceedsBeforeDebtPayoff: 1_960_000,
+          remainingLoanBalance: 650_000,
+          principalPaydownToDate: 50_000,
+          netProceedsToEquity: 1_310_000,
+        },
+        yearly: {
+          years: [0, 1, 2, 3, 4, 5],
+          endingLabels: ["Y0", "Y1", "Y2", "Y3", "Y4", "Y5"],
+          propertyValue: [1_000_000, 1_000_000, 1_000_000, 1_000_000, 1_000_000, 2_000_000],
+          grossRentalIncome: [0, 140_000, 140_000, 140_000, 140_000, 140_000],
+          freeMarketResidentialGrossRentalIncome: [0, 140_000, 140_000, 140_000, 140_000, 140_000],
+          protectedResidentialGrossRentalIncome: [0, 0, 0, 0, 0, 0],
+          commercialGrossRentalIncome: [0, 0, 0, 0, 0, 0],
+          otherIncome: [0, 0, 0, 0, 0, 0],
+          vacancyLoss: [0, 0, 0, 0, 0, 0],
+          leadTimeLoss: [0, 0, 0, 0, 0, 0],
+          netRentalIncome: [0, 140_000, 140_000, 140_000, 140_000, 140_000],
+          managementFee: [0, 0, 0, 0, 0, 0],
+          expenseLineItems: [],
+          totalOperatingExpenses: [0, 40_000, 40_000, 40_000, 40_000, 40_000],
+          noi: [0, 100_000, 100_000, 100_000, 100_000, 100_000],
+          recurringCapex: [0, 0, 0, 0, 0, 0],
+          reserveRelease: [0, 0, 0, 0, 0, 0],
+          cashFlowFromOperations: [0, 100_000, 100_000, 100_000, 100_000, 100_000],
+          capRateOnPurchase: [null, 0.1, 0.1, 0.1, 0.1, 0.1],
+          debtService: [0, 50_000, 50_000, 50_000, 50_000, 50_000],
+          principalPaid: [0, 0, 0, 0, 0, 0],
+          interestPaid: [0, 0, 0, 0, 0, 0],
+          cashFlowAfterFinancing: [0, 50_000, 50_000, 50_000, 50_000, 50_000],
+          totalInvestmentCost: [-1_030_000, 0, 0, 0, 0, 0],
+          financingFunding: [700_000, 0, 0, 0, 0, 0],
+          financingFees: [0, 0, 0, 0, 0, 0],
+          saleValue: [0, 0, 0, 0, 0, 2_000_000],
+          saleClosingCosts: [0, 0, 0, 0, 0, 40_000],
+          remainingLoanBalance: [700_000, 690_000, 680_000, 670_000, 660_000, 650_000],
+          financingPayoff: [0, 0, 0, 0, 0, 650_000],
+          netSaleProceedsBeforeDebtPayoff: [0, 0, 0, 0, 0, 1_960_000],
+          netSaleProceedsToEquity: [0, 0, 0, 0, 0, 1_310_000],
+          unleveredCashFlow: [-1_030_000, 100_000, 100_000, 100_000, 100_000, 2_060_000],
+          leveredCashFlow: [-330_000, 50_000, 50_000, 50_000, 50_000, 1_360_000],
+        },
+        cashFlows: {
+          annualOperatingCashFlow: 50_000,
+          annualOperatingCashFlows: [50_000, 50_000, 50_000, 50_000, 50_000],
+          annualPrincipalPaydown: 0,
+          annualPrincipalPaydowns: [0, 0, 0, 0, 0],
+          annualEquityGain: 50_000,
+          annualEquityGains: [50_000, 50_000, 50_000, 50_000, 50_000],
+          annualUnleveredCashFlows: [100_000, 100_000, 100_000, 100_000, 100_000],
+          finalYearCashFlow: 1_360_000,
+          unleveredCashFlowSeries: [-1_030_000, 100_000, 100_000, 100_000, 100_000, 2_060_000],
+          equityCashFlowSeries: [-330_000, 50_000, 50_000, 50_000, 50_000, 1_360_000],
+        },
+        returns: {
+          irr: 0.18,
+          equityMultiple: 2.1,
+          year1CashOnCashReturn: 0.05,
+          averageCashOnCashReturn: 0.05,
+          year1EquityYield: 0.05,
+          averageEquityYield: 0.05,
+        },
+      },
+      recommendedOffer: {
+        askingPrice: 1_000_000,
+        targetIrrPct: 15,
+        irrAtAskingPct: 0.18,
+        recommendedOfferLow: 900_000,
+        recommendedOfferHigh: 950_000,
+        discountToAskingPct: 5,
+        targetMetAtAsking: true,
+      },
+      sensitivities: [],
+    } as any;
+
+    const snapshot = buildOmCalculationSnapshotFromInputs({
+      property,
+      artifacts: baseArtifacts,
+    });
+
+    expect(snapshot.currentFinancials.noi).toBe(70_000);
+    expect(snapshot.currentFinancials.extractedNoi).toBe(70_000);
+    expect(snapshot.topLineMetrics.currentExpenses).toBe(40_000);
+    expect(snapshot.topLineMetrics.currentNoi).toBe(80_000);
+    expect(snapshot.topLineMetrics.currentCapRatePct).toBe(8);
+    expect(snapshot.topLineMetrics.stabilizedNoiIncreasePct).toBe(25);
+  });
+
+  it("uses a manual NOI override for the displayed current NOI basis", () => {
+    const property = {
+      id: "property-1",
+      canonicalAddress: "123 Main St, New York, NY",
+      city: "New York",
+      askingPrice: 1_000_000,
+      listedAt: null,
+    };
+    const assumptions = {
+      acquisition: {
+        purchasePrice: 1_000_000,
+        purchaseClosingCostPct: 3,
+        renovationCosts: 0,
+        furnishingSetupCosts: 0,
+        onboardingCosts: 0,
+        investmentProfile: null,
+        targetAcquisitionDate: null,
+      },
+      financing: {
+        ltvPct: 70,
+        interestRatePct: 6,
+        amortizationYears: 30,
+        loanFeePct: 0,
+      },
+      operating: {
+        rentUpliftPct: 0,
+        blendedRentUpliftPct: 0,
+        expenseIncreasePct: 0,
+        managementFeePct: 0,
+        occupancyTaxPct: 0,
+        vacancyPct: 0,
+        leadTimeMonths: 0,
+        annualRentGrowthPct: 0,
+        annualCommercialRentGrowthPct: 0,
+        annualOtherIncomeGrowthPct: 0,
+        annualExpenseGrowthPct: 0,
+        annualPropertyTaxGrowthPct: 0,
+        recurringCapexAnnual: 0,
+      },
+      holdPeriodYears: 5,
+      targetIrrPct: 15,
+      exit: {
+        exitCapPct: 5,
+        exitClosingCostPct: 2,
+      },
+      propertyMix: {
+        totalUnits: 1,
+        residentialUnits: 1,
+        eligibleResidentialUnits: 1,
+        commercialUnits: 0,
+        rentStabilizedUnits: 0,
+        eligibleRevenueSharePct: 1,
+        eligibleUnitSharePct: 1,
+        freeMarketAnnualRent: 120_000,
+        rentStabilizedAnnualRent: 0,
+        commercialAnnualRent: 0,
+        furnishingSetupCostEstimate: 0,
+      },
+    };
+
+    const extractedCurrentFinancials = {
+      grossRentalIncome: 120_000,
+      otherIncome: 0,
+      vacancyLoss: 10_000,
+      effectiveGrossIncome: 110_000,
+      operatingExpenses: 40_000,
+      noi: 70_000,
+      expenseRatioPct: 0.3333,
+      currentCapRatePct: 7,
+      rentBasis: "gross_before_vacancy",
+      assumedLongTermOccupancyPct: null,
+      reportedOccupancyPct: null,
+      reportedVacancyPct: null,
+    };
+
     const snapshot = buildOmCalculationSnapshotFromInputs({
       property,
       artifacts: {
@@ -72,26 +299,20 @@ describe("buildOmCalculationSnapshotFromInputs", () => {
           hasBrokerFinancialInputs: false,
           sourceLabel: "Authoritative OM",
         },
-        savedAssumptions: null,
+        savedAssumptions: {
+          currentNoi: 65_000,
+        },
         assumptions,
         detailedModel: {
           unitModelRows: [],
           expenseModelRows: [],
         },
+        extractedCurrentFinancials,
         currentFinancials: {
-          grossRentalIncome: 120_000,
-          otherIncome: 0,
-          vacancyLoss: 10_000,
-          effectiveGrossIncome: 110_000,
-          operatingExpenses: 40_000,
-          noi: 70_000,
-          expenseRatioPct: 0.3333,
-          currentCapRatePct: 7,
-          rentBasis: "gross_before_vacancy",
-          assumedLongTermOccupancyPct: null,
-          reportedOccupancyPct: null,
-          reportedVacancyPct: null,
+          ...extractedCurrentFinancials,
+          noi: 65_000,
         },
+        currentNoiOverridden: true,
         resolvedExpenseTotal: 40_000,
         projection: {
           assumptions,
@@ -200,10 +421,10 @@ describe("buildOmCalculationSnapshotFromInputs", () => {
       } as any,
     });
 
-    expect(snapshot.currentFinancials.noi).toBe(70_000);
-    expect(snapshot.topLineMetrics.currentExpenses).toBe(40_000);
-    expect(snapshot.topLineMetrics.currentNoi).toBe(80_000);
-    expect(snapshot.topLineMetrics.currentCapRatePct).toBe(8);
-    expect(snapshot.topLineMetrics.stabilizedNoiIncreasePct).toBe(25);
+    expect(snapshot.currentFinancials.noi).toBe(65_000);
+    expect(snapshot.currentFinancials.extractedNoi).toBe(70_000);
+    expect(snapshot.currentFinancials.isNoiOverridden).toBe(true);
+    expect(snapshot.topLineMetrics.currentNoi).toBe(65_000);
+    expect(snapshot.topLineMetrics.currentCapRatePct).toBe(6.5);
   });
 });
