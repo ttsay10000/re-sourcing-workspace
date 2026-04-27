@@ -189,13 +189,42 @@ function isShortText(value: unknown, min = 3, max = 160): value is string {
   return typeof value === "string" && value.trim().length >= min && value.trim().length <= max;
 }
 
+function ensureUnleveredIrrWithLevered(
+  metricKeys: DealAnalysisSummaryMetricKey[]
+): DealAnalysisSummaryMetricKey[] {
+  if (!metricKeys.includes("levered_irr") || metricKeys.includes("unlevered_irr")) {
+    return metricKeys;
+  }
+
+  const leveredIndex = metricKeys.indexOf("levered_irr");
+  const nextMetricKeys = [
+    ...metricKeys.slice(0, leveredIndex + 1),
+    "unlevered_irr" as DealAnalysisSummaryMetricKey,
+    ...metricKeys.slice(leveredIndex + 1),
+  ];
+
+  if (nextMetricKeys.length <= 4) {
+    return nextMetricKeys;
+  }
+
+  for (let index = nextMetricKeys.length - 1; index >= 0; index -= 1) {
+    const metricKey = nextMetricKeys[index];
+    if (metricKey !== "levered_irr" && metricKey !== "unlevered_irr") {
+      nextMetricKeys.splice(index, 1);
+      break;
+    }
+  }
+
+  return nextMetricKeys;
+}
+
 function sanitizeMetricKeys(value: unknown): DealAnalysisSummaryMetricKey[] | null {
   if (!Array.isArray(value)) return null;
   const keys = value
     .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
     .filter((entry): entry is DealAnalysisSummaryMetricKey => ALLOWED_METRIC_KEYS.has(entry as DealAnalysisSummaryMetricKey));
   const unique = Array.from(new Set(keys));
-  return unique.length >= 3 && unique.length <= 4 ? unique : null;
+  return unique.length >= 3 && unique.length <= 4 ? ensureUnleveredIrrWithLevered(unique) : null;
 }
 
 function sanitizeBlueprint(parsed: unknown): DealAnalysisWorkbookBlueprint | null {

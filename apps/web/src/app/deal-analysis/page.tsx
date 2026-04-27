@@ -350,6 +350,26 @@ function buildAssumptionsPayload(draft: OmCalculationDraft): Record<string, numb
   return assumptions;
 }
 
+function normalizeWorkspaceDraft(draft: OmCalculationDraft): OmCalculationDraft {
+  return {
+    ...draft,
+    brokerEmailNotes: draft.brokerEmailNotes.trim(),
+  };
+}
+
+function workspaceSavePayload(draft: OmCalculationDraft) {
+  return {
+    ...buildAssumptionsPayload(draft),
+    brokerEmailNotes: draft.brokerEmailNotes,
+    unitModelRows: draft.unitModelRows ?? [],
+    expenseModelRows: draft.expenseModelRows ?? [],
+  };
+}
+
+function getErrorMessage(err: unknown, fallback: string): string {
+  return err instanceof Error ? err.message : fallback;
+}
+
 function downloadBlob(blob: Blob, filename: string) {
   const url = window.URL.createObjectURL(blob);
   const anchor = document.createElement("a");
@@ -403,7 +423,8 @@ function DealAnalysisPageContent() {
   const metadataDirty =
     draft.investmentProfile.trim() !== baselineDraft.investmentProfile.trim() ||
     draft.targetAcquisitionDate !== baselineDraft.targetAcquisitionDate;
-  const isDirty = numericFieldsDirty || unitRowsDirty || expenseRowsDirty || metadataDirty;
+  const brokerNotesDirty = draft.brokerEmailNotes.trim() !== baselineDraft.brokerEmailNotes.trim();
+  const isDirty = numericFieldsDirty || unitRowsDirty || expenseRowsDirty || metadataDirty || brokerNotesDirty;
   const hasAuthoritativeOm = workspaceDetails?.omData?.authoritative != null;
   const canAnalyze = pendingFiles.length > 0;
   const canGenerateDossier = workspaceDetails != null;
@@ -635,6 +656,24 @@ function DealAnalysisPageContent() {
     }
   }
 
+  async function persistWorkspaceDraft(nextDraft: OmCalculationDraft) {
+    if (!propertyId) {
+      throw new Error("No property workspace is open.");
+    }
+    const res = await fetch(`${API_BASE}/api/properties/${encodeURIComponent(propertyId)}/dossier-settings`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(workspaceSavePayload(nextDraft)),
+    });
+    const data = (await res.json().catch(() => ({}))) as {
+      error?: string;
+      details?: string;
+    };
+    if (!res.ok || data.error) {
+      throw new Error(data.details || data.error || "Failed to save the OM workspace.");
+    }
+  }
+
   async function recalculateAnalysis() {
     if (!workspaceDetails) return;
     setRecalculating(true);
@@ -659,14 +698,41 @@ function DealAnalysisPageContent() {
         throw new Error(data.details || data.error || "Failed to refresh OM analysis.");
       }
       const nextCalculation = data.calculation as OmCalculationSnapshot;
-      const nextDraft = draftFromCalculation(nextCalculation);
+      const nextDraft = normalizeWorkspaceDraft(draftFromCalculation(nextCalculation));
+      let savedToWorkspace = false;
+      let saveError: string | null = null;
+      if (propertyId) {
+        setWorkspaceSaving(true);
+        try {
+          await persistWorkspaceDraft(nextDraft);
+          savedToWorkspace = true;
+        } catch (err) {
+          saveError = getErrorMessage(err, "Failed to save the OM workspace.");
+        } finally {
+          setWorkspaceSaving(false);
+        }
+      }
       setWorkspaceProperty((data.property ?? null) as WorkspaceProperty | null);
       setCalculation(nextCalculation);
       setDraft(nextDraft);
-      setBaselineDraft(nextDraft);
-      setNotice("Analysis refreshed with the latest underwriting edits.");
+      if (!propertyId || savedToWorkspace) {
+        setBaselineDraft(nextDraft);
+      }
+      if (saveError) {
+        setError(`Analysis refreshed, but the workspace could not be saved: ${saveError}`);
+        setNotice(null);
+      } else {
+        setNotice(
+          propertyId
+            ? "Analysis refreshed and saved to this property workspace."
+            : "Analysis refreshed with the latest underwriting edits."
+        );
+      }
+      if (savedToWorkspace) {
+        void loadSavedWorkspaces();
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to refresh OM analysis.");
+      setError(getErrorMessage(err, "Failed to refresh OM analysis."));
     } finally {
       setRecalculating(false);
     }
@@ -677,33 +743,14 @@ function DealAnalysisPageContent() {
     setWorkspaceSaving(true);
     setError(null);
     try {
-      const nextDraft: OmCalculationDraft = {
-        ...draft,
-        brokerEmailNotes: draft.brokerEmailNotes.trim(),
-      };
-      const res = await fetch(`${API_BASE}/api/properties/${encodeURIComponent(propertyId)}/dossier-settings`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ...buildAssumptionsPayload(nextDraft),
-          brokerEmailNotes: nextDraft.brokerEmailNotes,
-          unitModelRows: nextDraft.unitModelRows ?? [],
-          expenseModelRows: nextDraft.expenseModelRows ?? [],
-        }),
-      });
-      const data = (await res.json().catch(() => ({}))) as {
-        error?: string;
-        details?: string;
-      };
-      if (!res.ok || data.error) {
-        throw new Error(data.details || data.error || "Failed to save the OM workspace.");
-      }
+      const nextDraft = normalizeWorkspaceDraft(draft);
+      await persistWorkspaceDraft(nextDraft);
       setDraft(nextDraft);
       setBaselineDraft(nextDraft);
       setNotice("Saved the OM workspace back to the property record.");
       void loadSavedWorkspaces();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save the OM workspace.");
+      setError(getErrorMessage(err, "Failed to save the OM workspace."));
     } finally {
       setWorkspaceSaving(false);
     }
