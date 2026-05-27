@@ -34,6 +34,7 @@ export interface NycsSearchCriteria {
   maxTax?: number;
   amenities?: string;
   types?: string;
+  requestedTypes?: string;
   limit?: number;
   offset?: number;
 }
@@ -146,26 +147,73 @@ async function fetchSales(params: Record<string, string | number> = {}): Promise
 export async function fetchActiveSalesWithCriteria(criteria: NycsSearchCriteria): Promise<{
   listings: ListingNormalized[];
   urls: string[];
+  metadata: Record<string, unknown>;
 }> {
-  const params: Record<string, string | number> = {
+  const baseParams: Record<string, string | number> = {
     areas: criteria.areas.trim() || "all-downtown,all-midtown",
   };
-  if (criteria.minPrice != null) params.minPrice = criteria.minPrice;
-  if (criteria.maxPrice != null) params.maxPrice = criteria.maxPrice;
-  if (criteria.minBeds != null) params.minBeds = criteria.minBeds;
-  if (criteria.maxBeds != null) params.maxBeds = criteria.maxBeds;
-  if (criteria.minBaths != null) params.minBaths = criteria.minBaths;
-  if (criteria.maxHoa != null) params.maxHoa = criteria.maxHoa;
-  if (criteria.maxTax != null) params.maxTax = criteria.maxTax;
-  if (criteria.amenities != null && criteria.amenities.trim()) params.amenities = criteria.amenities.trim();
-  if (criteria.types != null && criteria.types.trim()) params.types = criteria.types.trim();
-  if (criteria.limit != null) params.limit = criteria.limit;
-  if (criteria.offset != null) params.offset = criteria.offset;
+  if (criteria.minPrice != null) baseParams.minPrice = criteria.minPrice;
+  if (criteria.maxPrice != null) baseParams.maxPrice = criteria.maxPrice;
+  if (criteria.minBeds != null) baseParams.minBeds = criteria.minBeds;
+  if (criteria.maxBeds != null) baseParams.maxBeds = criteria.maxBeds;
+  if (criteria.minBaths != null) baseParams.minBaths = criteria.minBaths;
+  if (criteria.maxHoa != null) baseParams.maxHoa = criteria.maxHoa;
+  if (criteria.maxTax != null) baseParams.maxTax = criteria.maxTax;
+  if (criteria.amenities != null && criteria.amenities.trim()) baseParams.amenities = criteria.amenities.trim();
+  if (criteria.types != null && criteria.types.trim()) baseParams.types = criteria.types.trim();
 
-  const raw = await fetchSales(params);
-  const listings = raw.map((r) => mapListing(r, "active"));
+  const requestedLimit = Math.min(Math.max(criteria.limit ?? 100, 1), 500);
+  const pageLimit = Math.min(requestedLimit, 100);
+  const raw: ApiListing[] = [];
+  const pages: Array<Record<string, number>> = [];
+  const seenUrls = new Set<string>();
+
+  if (criteria.offset != null) {
+    const params = { ...baseParams, limit: requestedLimit, offset: criteria.offset };
+    const page = await fetchSales(params);
+    raw.push(...page);
+    pages.push({ offset: criteria.offset, requestedLimit, returned: page.length, uniqueNew: page.length });
+  } else {
+    let offset = 0;
+    for (let pageIndex = 0; pageIndex < 10 && raw.length < requestedLimit; pageIndex++) {
+      const params = { ...baseParams, limit: pageLimit, offset };
+      const page = await fetchSales(params);
+      let uniqueNew = 0;
+      for (const row of page) {
+        const listing = mapListing(row, "active");
+        const key = listing.url && listing.url !== "#" ? listing.url : `${listing.address}:${listing.price}:${listing.externalId}`;
+        if (seenUrls.has(key)) continue;
+        seenUrls.add(key);
+        raw.push(row);
+        uniqueNew++;
+        if (raw.length >= requestedLimit) break;
+      }
+      pages.push({ offset, requestedLimit: pageLimit, returned: page.length, uniqueNew });
+      if (page.length === 0 || uniqueNew === 0) break;
+      offset += page.length;
+    }
+  }
+
+  const listings = raw.slice(0, requestedLimit).map((r) => mapListing(r, "active"));
   const urls = listings.map((l) => l.url).filter((u) => u && u !== "#");
-  return { listings, urls };
+  return {
+    listings,
+    urls,
+    metadata: {
+      criteria: {
+        ...criteria,
+        limit: requestedLimit,
+      },
+      requestParams: {
+        ...baseParams,
+        limit: requestedLimit,
+      },
+      pages,
+      rawListingsReturned: raw.length,
+      urlsReturned: urls.length,
+      uniqueUrlsReturned: new Set(urls).size,
+    },
+  };
 }
 
 /**

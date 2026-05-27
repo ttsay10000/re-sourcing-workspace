@@ -320,6 +320,56 @@ export async function upsertWorkflowStep(
   }
 }
 
+function mapWorkflowBoardRuns(rows: Record<string, unknown>[], stepsByRunId: Map<string, WorkflowBoardStep[]>): WorkflowBoardRun[] {
+  return rows.map((row) => ({
+    id: row.id as string,
+    runNumber: Number(row.run_number ?? 0),
+    runType: row.run_type as string,
+    displayName: row.display_name as string,
+    scopeLabel: (row.scope_label as string) ?? null,
+    triggerSource: (row.trigger_source as string) ?? "manual",
+    totalItems: Number(row.total_items ?? 0),
+    status: (row.status as WorkflowRunStatus) ?? "running",
+    startedAt: toIso(row.started_at) ?? new Date().toISOString(),
+    finishedAt: toIso(row.finished_at),
+    metadata: (row.metadata as Record<string, unknown> | null) ?? null,
+    steps: stepsByRunId.get(row.id as string) ?? [],
+  }));
+}
+
+async function fetchWorkflowSteps(runIds: string[]): Promise<Map<string, WorkflowBoardStep[]>> {
+  const stepsByRunId = new Map<string, WorkflowBoardStep[]>();
+  if (runIds.length === 0) return stepsByRunId;
+  const pool = getPool();
+  const stepResult = await pool.query<Record<string, unknown>>(
+    `SELECT *
+       FROM workflow_run_steps
+      WHERE run_id = ANY($1::uuid[])
+      ORDER BY sort_order ASC, created_at ASC`,
+    [runIds]
+  );
+  for (const row of stepResult.rows) {
+    const runId = row.run_id as string;
+    const list = stepsByRunId.get(runId) ?? [];
+    list.push({
+      key: row.step_key as string,
+      label: row.step_label as string,
+      status: (row.status as WorkflowStepStatus) ?? "pending",
+      totalItems: Number(row.total_items ?? 0),
+      completedItems: Number(row.completed_items ?? 0),
+      failedItems: Number(row.failed_items ?? 0),
+      skippedItems: Number(row.skipped_items ?? 0),
+      lastMessage: (row.last_message as string) ?? null,
+      lastError: (row.last_error as string) ?? null,
+      startedAt: toIso(row.started_at),
+      finishedAt: toIso(row.finished_at),
+      metadata: (row.metadata as Record<string, unknown> | null) ?? null,
+    });
+    stepsByRunId.set(runId, list);
+  }
+  return stepsByRunId;
+}
+
 export async function listWorkflowRuns(limit = 40): Promise<WorkflowBoardRun[]> {
   try {
     const pool = getPool();
@@ -333,50 +383,35 @@ export async function listWorkflowRuns(limit = 40): Promise<WorkflowBoardRun[]> 
     const runs = runResult.rows;
     if (runs.length === 0) return [];
     const runIds = runs.map((row) => row.id as string);
-    const stepResult = await pool.query<Record<string, unknown>>(
-      `SELECT *
-         FROM workflow_run_steps
-        WHERE run_id = ANY($1::uuid[])
-        ORDER BY sort_order ASC, created_at ASC`,
-      [runIds]
-    );
-    const stepsByRunId = new Map<string, WorkflowBoardStep[]>();
-    for (const row of stepResult.rows) {
-      const runId = row.run_id as string;
-      const list = stepsByRunId.get(runId) ?? [];
-      list.push({
-        key: row.step_key as string,
-        label: row.step_label as string,
-        status: (row.status as WorkflowStepStatus) ?? "pending",
-        totalItems: Number(row.total_items ?? 0),
-        completedItems: Number(row.completed_items ?? 0),
-        failedItems: Number(row.failed_items ?? 0),
-        skippedItems: Number(row.skipped_items ?? 0),
-        lastMessage: (row.last_message as string) ?? null,
-        lastError: (row.last_error as string) ?? null,
-        startedAt: toIso(row.started_at),
-        finishedAt: toIso(row.finished_at),
-        metadata: (row.metadata as Record<string, unknown> | null) ?? null,
-      });
-      stepsByRunId.set(runId, list);
-    }
-    return runs.map((row) => ({
-      id: row.id as string,
-      runNumber: Number(row.run_number ?? 0),
-      runType: row.run_type as string,
-      displayName: row.display_name as string,
-      scopeLabel: (row.scope_label as string) ?? null,
-      triggerSource: (row.trigger_source as string) ?? "manual",
-      totalItems: Number(row.total_items ?? 0),
-      status: (row.status as WorkflowRunStatus) ?? "running",
-      startedAt: toIso(row.started_at) ?? new Date().toISOString(),
-      finishedAt: toIso(row.finished_at),
-      metadata: (row.metadata as Record<string, unknown> | null) ?? null,
-      steps: stepsByRunId.get(row.id as string) ?? [],
-    }));
+    const stepsByRunId = await fetchWorkflowSteps(runIds);
+    return mapWorkflowBoardRuns(runs, stepsByRunId);
   } catch (error) {
     if (!isTrackingMissing(error)) {
       console.warn("[workflow-tracker list]", error);
+    }
+    return [];
+  }
+}
+
+export async function listWorkflowRunsByIds(runIds: string[]): Promise<WorkflowBoardRun[]> {
+  try {
+    const uniqueIds = Array.from(new Set(runIds.filter(Boolean)));
+    if (uniqueIds.length === 0) return [];
+    const pool = getPool();
+    const runResult = await pool.query<Record<string, unknown>>(
+      `SELECT *
+         FROM workflow_runs
+        WHERE id = ANY($1::uuid[])
+        ORDER BY started_at DESC`,
+      [uniqueIds]
+    );
+    if (runResult.rows.length === 0) return [];
+    const stepsByRunId = await fetchWorkflowSteps(uniqueIds);
+    const runsById = new Map(mapWorkflowBoardRuns(runResult.rows, stepsByRunId).map((run) => [run.id, run]));
+    return uniqueIds.map((id) => runsById.get(id)).filter((run): run is WorkflowBoardRun => Boolean(run));
+  } catch (error) {
+    if (!isTrackingMissing(error)) {
+      console.warn("[workflow-tracker list-by-ids]", error);
     }
     return [];
   }

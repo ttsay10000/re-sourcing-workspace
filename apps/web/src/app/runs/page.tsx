@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import Link from "next/link";
 import { BOROUGH_TABS, isIncludedByParent, type AreaNode } from "./areas";
 
@@ -119,6 +119,38 @@ interface SavedSearch {
   createdAt: string;
 }
 
+type WorkflowStatus = "pending" | "running" | "completed" | "failed" | "partial";
+
+interface SavedSearchWorkflowStep {
+  key: string;
+  label: string;
+  status: WorkflowStatus;
+  totalItems: number;
+  completedItems: number;
+  failedItems: number;
+  skippedItems: number;
+  lastMessage: string | null;
+  lastError: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+  metadata?: Record<string, unknown> | null;
+}
+
+interface SavedSearchWorkflowRun {
+  id: string;
+  runNumber: number;
+  runType: string;
+  displayName: string;
+  scopeLabel: string | null;
+  triggerSource: string;
+  totalItems: number;
+  status: WorkflowStatus;
+  startedAt: string;
+  finishedAt: string | null;
+  metadata?: Record<string, unknown> | null;
+  steps: SavedSearchWorkflowStep[];
+}
+
 interface SavedSearchRun {
   id: string;
   profileId: string;
@@ -127,6 +159,8 @@ interface SavedSearchRun {
   status: "running" | "completed" | "failed" | "cancelled";
   triggerSource?: string;
   metadata?: Record<string, unknown>;
+  workflowRunId?: string | null;
+  workflowRun?: SavedSearchWorkflowRun | null;
   summary: {
     listingsSeen?: number;
     listingsNew?: number;
@@ -219,6 +253,117 @@ function formatRelativeElapsed(startedAt: string): string {
   const min = Math.floor(sec / 60);
   const s = sec % 60;
   return `${min}m ${s}s`;
+}
+
+function timestampMs(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const parsed = new Date(value).getTime();
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+function formatDurationMs(ms: number | null): string {
+  if (ms == null || !Number.isFinite(ms)) return "-";
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
+}
+
+function durationBetween(startedAt: string | null | undefined, finishedAt: string | null | undefined): number | null {
+  const start = timestampMs(startedAt);
+  if (start == null) return null;
+  const finish = timestampMs(finishedAt) ?? Date.now();
+  return finish - start;
+}
+
+function workflowStatusLabel(status: WorkflowStatus | SavedSearchRun["status"]): string {
+  switch (status) {
+    case "running":
+      return "In progress";
+    case "completed":
+      return "Done";
+    case "failed":
+      return "Failed";
+    case "partial":
+      return "Partial";
+    case "cancelled":
+      return "Cancelled";
+    default:
+      return "Pending";
+  }
+}
+
+function workflowStatusColors(status: WorkflowStatus | SavedSearchRun["status"]) {
+  switch (status) {
+    case "running":
+      return { color: "#1d4ed8", backgroundColor: "#dbeafe", borderColor: "#93c5fd" };
+    case "completed":
+      return { color: "#166534", backgroundColor: "#dcfce7", borderColor: "#86efac" };
+    case "failed":
+    case "cancelled":
+      return { color: "#b91c1c", backgroundColor: "#fee2e2", borderColor: "#fca5a5" };
+    case "partial":
+      return { color: "#9a3412", backgroundColor: "#ffedd5", borderColor: "#fdba74" };
+    default:
+      return { color: "#475569", backgroundColor: "#f8fafc", borderColor: "#cbd5e1" };
+  }
+}
+
+function currentWorkflowStep(workflowRun: SavedSearchWorkflowRun | null | undefined): SavedSearchWorkflowStep | null {
+  if (!workflowRun?.steps?.length) return null;
+  return (
+    workflowRun.steps.find((step) => step.status === "running") ??
+    workflowRun.steps.find((step) => step.status === "pending") ??
+    workflowRun.steps.find((step) => step.status === "failed" || step.status === "partial") ??
+    workflowRun.steps[workflowRun.steps.length - 1] ??
+    null
+  );
+}
+
+function workflowProgressLabel(step: SavedSearchWorkflowStep): string {
+  const processed = step.completedItems + step.failedItems + step.skippedItems;
+  if (step.totalItems > 0) return `${step.completedItems}/${step.totalItems}`;
+  if (processed > 0) return `${processed}`;
+  return "-";
+}
+
+function sourceMetadataForWorkflow(workflowRun: SavedSearchWorkflowRun | null | undefined): Record<string, unknown> | null {
+  const sourceMetadata = workflowRun?.metadata?.sourceMetadata;
+  return sourceMetadata && typeof sourceMetadata === "object" && !Array.isArray(sourceMetadata)
+    ? sourceMetadata as Record<string, unknown>
+    : null;
+}
+
+function summarizeSourceRequest(workflowRun: SavedSearchWorkflowRun | null | undefined): string | null {
+  const metadata = sourceMetadataForWorkflow(workflowRun);
+  const requestParams = metadata?.requestParams;
+  if (!requestParams || typeof requestParams !== "object" || Array.isArray(requestParams)) return null;
+  const params = requestParams as Record<string, unknown>;
+  const parts = [
+    typeof params.areas === "string" ? `areas=${params.areas}` : null,
+    params.minPrice != null ? `minPrice=${params.minPrice}` : null,
+    params.maxPrice != null ? `maxPrice=${params.maxPrice}` : null,
+    typeof params.types === "string" ? `types=${params.types}` : null,
+    params.limit != null ? `limit=${params.limit}` : null,
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join(" | ") : null;
+}
+
+function summarizeSourcePages(workflowRun: SavedSearchWorkflowRun | null | undefined): string | null {
+  const metadata = sourceMetadataForWorkflow(workflowRun);
+  const pages = metadata?.pages;
+  if (!Array.isArray(pages) || pages.length === 0) return null;
+  return pages
+    .map((page) => {
+      if (!page || typeof page !== "object") return null;
+      const row = page as Record<string, unknown>;
+      return `offset ${row.offset ?? 0}: ${row.returned ?? 0} returned, ${row.uniqueNew ?? 0} new`;
+    })
+    .filter(Boolean)
+    .join(" | ");
 }
 
 function parseOptionalNumber(value: string): number | null {
@@ -1764,43 +1909,184 @@ export default function RunsPage() {
                         <div style={{ overflowX: "auto" }}>
                           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.82rem" }}>
                             <thead>
-                              <tr>
-                                <th style={{ textAlign: "left", padding: "0.45rem", borderBottom: "1px solid #e5e7eb" }}>Started</th>
-                                <th style={{ textAlign: "left", padding: "0.45rem", borderBottom: "1px solid #e5e7eb" }}>Status</th>
-                                <th style={{ textAlign: "left", padding: "0.45rem", borderBottom: "1px solid #e5e7eb" }}>Trigger</th>
-                                <th style={{ textAlign: "right", padding: "0.45rem", borderBottom: "1px solid #e5e7eb" }}>Seen</th>
-                                <th style={{ textAlign: "right", padding: "0.45rem", borderBottom: "1px solid #e5e7eb" }}>New</th>
-                                <th style={{ textAlign: "right", padding: "0.45rem", borderBottom: "1px solid #e5e7eb" }}>Updated</th>
+	                              <tr>
+	                                <th style={{ textAlign: "left", padding: "0.45rem", borderBottom: "1px solid #e5e7eb" }}>Started</th>
+	                                <th style={{ textAlign: "left", padding: "0.45rem", borderBottom: "1px solid #e5e7eb" }}>Status</th>
+	                                <th style={{ textAlign: "left", padding: "0.45rem", borderBottom: "1px solid #e5e7eb" }}>Current stage</th>
+	                                <th style={{ textAlign: "left", padding: "0.45rem", borderBottom: "1px solid #e5e7eb" }}>Elapsed</th>
+	                                <th style={{ textAlign: "left", padding: "0.45rem", borderBottom: "1px solid #e5e7eb" }}>Trigger</th>
+	                                <th style={{ textAlign: "right", padding: "0.45rem", borderBottom: "1px solid #e5e7eb" }}>Seen</th>
+	                                <th style={{ textAlign: "right", padding: "0.45rem", borderBottom: "1px solid #e5e7eb" }}>New</th>
+	                                <th style={{ textAlign: "right", padding: "0.45rem", borderBottom: "1px solid #e5e7eb" }}>Updated</th>
                                 <th style={{ textAlign: "left", padding: "0.45rem", borderBottom: "1px solid #e5e7eb" }}>Errors</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {expandedSavedSearchRuns.slice(0, 10).map((run) => (
-                                <tr key={run.id}>
-                                  <td style={{ padding: "0.45rem", borderBottom: "1px solid #f3f4f6" }}>
-                                    <div>{formatDateTime(run.startedAt)}</div>
-                                    <div style={{ fontSize: "0.75rem", color: "#525252" }}>
-                                      {run.finishedAt ? `Finished ${formatDateTime(run.finishedAt)}` : "Still running"}
-                                    </div>
-                                  </td>
-                                  <td style={{ padding: "0.45rem", borderBottom: "1px solid #f3f4f6" }}>{run.status}</td>
-                                  <td style={{ padding: "0.45rem", borderBottom: "1px solid #f3f4f6" }}>{run.triggerSource ?? "-"}</td>
-                                  <td style={{ textAlign: "right", padding: "0.45rem", borderBottom: "1px solid #f3f4f6" }}>
-                                    {run.summary?.listingsSeen ?? 0}
-                                  </td>
-                                  <td style={{ textAlign: "right", padding: "0.45rem", borderBottom: "1px solid #f3f4f6" }}>
-                                    {run.summary?.listingsNew ?? 0}
-                                  </td>
-                                  <td style={{ textAlign: "right", padding: "0.45rem", borderBottom: "1px solid #f3f4f6" }}>
-                                    {run.summary?.listingsUpdated ?? 0}
-                                  </td>
-                                  <td style={{ padding: "0.45rem", borderBottom: "1px solid #f3f4f6" }}>
-                                    {run.summary?.errors?.length ? run.summary.errors[0] : "-"}
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
+	                              </tr>
+	                            </thead>
+	                            <tbody>
+	                              {expandedSavedSearchRuns.slice(0, 10).map((run) => {
+	                                const workflowRun = run.workflowRun ?? null;
+	                                const activeStep = currentWorkflowStep(workflowRun);
+	                                const stageLabel = activeStep?.label ?? (workflowRun ? workflowStatusLabel(workflowRun.status) : "Run summary only");
+	                                const runDuration = formatDurationMs(durationBetween(workflowRun?.startedAt ?? run.startedAt, workflowRun?.finishedAt ?? run.finishedAt));
+	                                const stageDuration = activeStep ? formatDurationMs(durationBetween(activeStep.startedAt, activeStep.finishedAt)) : "-";
+	                                const runStatusStyle = workflowStatusColors(workflowRun?.status ?? run.status);
+	                                const errorText = run.summary?.errors?.length ? run.summary.errors[0] : null;
+	                                const sourceRequest = summarizeSourceRequest(workflowRun);
+	                                const sourcePages = summarizeSourcePages(workflowRun);
+	                                return (
+	                                  <Fragment key={run.id}>
+	                                    <tr>
+	                                      <td style={{ padding: "0.45rem", borderBottom: workflowRun ? "none" : "1px solid #f3f4f6", verticalAlign: "top" }}>
+	                                        <div>{formatDateTime(run.startedAt)}</div>
+	                                        <div style={{ fontSize: "0.75rem", color: "#525252" }}>
+	                                          {run.finishedAt ? `Finished ${formatDateTime(run.finishedAt)}` : "Still running"}
+	                                        </div>
+	                                      </td>
+	                                      <td style={{ padding: "0.45rem", borderBottom: workflowRun ? "none" : "1px solid #f3f4f6", verticalAlign: "top" }}>
+	                                        <span
+	                                          style={{
+	                                            display: "inline-flex",
+	                                            alignItems: "center",
+	                                            border: "1px solid",
+	                                            borderRadius: 999,
+	                                            padding: "0.14rem 0.45rem",
+	                                            fontSize: "0.72rem",
+	                                            fontWeight: 700,
+	                                            ...runStatusStyle,
+	                                          }}
+	                                        >
+	                                          {workflowStatusLabel(workflowRun?.status ?? run.status)}
+	                                        </span>
+	                                        {workflowRun ? (
+	                                          <div style={{ marginTop: "0.25rem", fontSize: "0.72rem", color: "#64748b" }}>Workflow #{workflowRun.runNumber}</div>
+	                                        ) : null}
+	                                      </td>
+	                                      <td style={{ padding: "0.45rem", borderBottom: workflowRun ? "none" : "1px solid #f3f4f6", verticalAlign: "top", minWidth: "10rem" }}>
+	                                        <div style={{ fontWeight: 650, color: "#1f2937" }}>{stageLabel}</div>
+	                                        {activeStep ? (
+	                                          <div style={{ marginTop: "0.2rem", fontSize: "0.72rem", color: "#64748b" }}>
+	                                            {workflowProgressLabel(activeStep)}
+	                                            {activeStep.failedItems > 0 ? ` · ${activeStep.failedItems} failed` : ""}
+	                                          </div>
+	                                        ) : null}
+	                                      </td>
+	                                      <td style={{ padding: "0.45rem", borderBottom: workflowRun ? "none" : "1px solid #f3f4f6", verticalAlign: "top" }}>
+	                                        <div style={{ fontVariantNumeric: "tabular-nums", fontWeight: 650 }}>{runDuration}</div>
+	                                        {activeStep ? <div style={{ fontSize: "0.72rem", color: "#64748b" }}>Stage {stageDuration}</div> : null}
+	                                      </td>
+	                                      <td style={{ padding: "0.45rem", borderBottom: workflowRun ? "none" : "1px solid #f3f4f6", verticalAlign: "top" }}>
+	                                        {run.triggerSource ?? "-"}
+	                                      </td>
+	                                      <td style={{ textAlign: "right", padding: "0.45rem", borderBottom: workflowRun ? "none" : "1px solid #f3f4f6", verticalAlign: "top" }}>
+	                                        {run.summary?.listingsSeen ?? 0}
+	                                      </td>
+	                                      <td style={{ textAlign: "right", padding: "0.45rem", borderBottom: workflowRun ? "none" : "1px solid #f3f4f6", verticalAlign: "top" }}>
+	                                        {run.summary?.listingsNew ?? 0}
+	                                      </td>
+	                                      <td style={{ textAlign: "right", padding: "0.45rem", borderBottom: workflowRun ? "none" : "1px solid #f3f4f6", verticalAlign: "top" }}>
+	                                        {run.summary?.listingsUpdated ?? 0}
+	                                      </td>
+	                                      <td style={{ padding: "0.45rem", borderBottom: workflowRun ? "none" : "1px solid #f3f4f6", verticalAlign: "top", maxWidth: "14rem" }}>
+	                                        <span title={errorText ?? undefined} style={{ color: errorText ? "#b91c1c" : "#64748b" }}>
+	                                          {errorText ?? "-"}
+	                                        </span>
+	                                      </td>
+	                                    </tr>
+	                                    {workflowRun ? (
+	                                      <tr>
+	                                        <td colSpan={9} style={{ padding: "0 0.45rem 0.65rem", borderBottom: "1px solid #f3f4f6" }}>
+	                                          {sourceRequest || sourcePages ? (
+	                                            <div
+	                                              style={{
+	                                                marginBottom: "0.45rem",
+	                                                padding: "0.45rem 0.55rem",
+	                                                border: "1px solid #dbeafe",
+	                                                borderRadius: 6,
+	                                                background: "#eff6ff",
+	                                                color: "#1e3a8a",
+	                                                fontSize: "0.72rem",
+	                                                lineHeight: 1.45,
+	                                              }}
+	                                            >
+	                                              {sourceRequest ? <div><strong>RapidAPI request:</strong> {sourceRequest}</div> : null}
+	                                              {sourcePages ? <div><strong>Pages:</strong> {sourcePages}</div> : null}
+	                                            </div>
+	                                          ) : null}
+	                                          <div
+	                                            style={{
+	                                              display: "grid",
+	                                              gridTemplateColumns: "repeat(auto-fit, minmax(9.5rem, 1fr))",
+	                                              gap: "0.45rem",
+	                                              padding: "0.55rem",
+	                                              border: "1px solid #e2e8f0",
+	                                              borderRadius: 8,
+	                                              background: "#f8fafc",
+	                                            }}
+	                                          >
+	                                            {workflowRun.steps.length === 0 ? (
+	                                              <div style={{ color: "#64748b", fontSize: "0.78rem" }}>No stage records yet.</div>
+	                                            ) : (
+	                                              workflowRun.steps.map((step) => {
+	                                                const note = step.lastError ?? step.lastMessage ?? null;
+	                                                return (
+	                                                  <div
+	                                                    key={`${workflowRun.id}-${step.key}`}
+	                                                    style={{
+	                                                      minHeight: "5.2rem",
+	                                                      padding: "0.5rem",
+	                                                      border: "1px solid #e2e8f0",
+	                                                      borderRadius: 6,
+	                                                      background: "#ffffff",
+	                                                    }}
+	                                                  >
+	                                                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.4rem" }}>
+	                                                      <strong style={{ color: "#334155", fontSize: "0.76rem", lineHeight: 1.25 }}>{step.label}</strong>
+	                                                      <span
+	                                                        style={{
+	                                                          flex: "0 0 auto",
+	                                                          border: "1px solid",
+	                                                          borderRadius: 999,
+	                                                          padding: "0.1rem 0.35rem",
+	                                                          fontSize: "0.66rem",
+	                                                          fontWeight: 700,
+	                                                          ...workflowStatusColors(step.status),
+	                                                        }}
+	                                                      >
+	                                                        {workflowStatusLabel(step.status)}
+	                                                      </span>
+	                                                    </div>
+	                                                    <div style={{ marginTop: "0.35rem", fontVariantNumeric: "tabular-nums", fontWeight: 700, color: "#0f172a" }}>
+	                                                      {workflowProgressLabel(step)} · {formatDurationMs(durationBetween(step.startedAt, step.finishedAt))}
+	                                                    </div>
+	                                                    {note ? (
+	                                                      <div
+	                                                        title={note}
+	                                                        style={{
+	                                                          marginTop: "0.3rem",
+	                                                          color: step.lastError ? "#b91c1c" : "#64748b",
+	                                                          fontSize: "0.7rem",
+	                                                          lineHeight: 1.35,
+	                                                          overflow: "hidden",
+	                                                          display: "-webkit-box",
+	                                                          WebkitBoxOrient: "vertical",
+	                                                          WebkitLineClamp: 2,
+	                                                        }}
+	                                                      >
+	                                                        {note}
+	                                                      </div>
+	                                                    ) : null}
+	                                                  </div>
+	                                                );
+	                                              })
+	                                            )}
+	                                          </div>
+	                                        </td>
+	                                      </tr>
+	                                    ) : null}
+	                                  </Fragment>
+	                                );
+	                              })}
+	                            </tbody>
+	                          </table>
                         </div>
                       )}
                     </div>

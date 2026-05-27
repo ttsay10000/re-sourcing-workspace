@@ -7,7 +7,27 @@ import {
 import { normalizeStreetEasySaleDetails } from "../normalizeStreetEasyListing.js";
 import type { SourceAdapter, SourceAdapterRunBody } from "./types.js";
 
+function splitTypes(types: string | null | undefined): string[] {
+  return (types ?? "")
+    .split(",")
+    .map((type) => type.trim())
+    .filter(Boolean);
+}
+
+function expandStreetEasyApiTypes(types: string | null | undefined): string | undefined {
+  const selected = splitTypes(types);
+  if (selected.length === 0) return undefined;
+  const expanded = new Set(selected);
+  if (selected.includes("multi_family")) {
+    // StreetEasy's native type:M includes two-/three-family townhouse records
+    // that RapidAPI tends to expose under the broader house bucket.
+    expanded.add("house");
+  }
+  return Array.from(expanded).join(",");
+}
+
 export function buildStreetEasyCriteriaFromBody(body: SourceAdapterRunBody): NycsSearchCriteria {
+  const requestedTypes = body.types?.trim() || undefined;
   return {
     areas: body.areas?.trim() || "all-downtown,all-midtown",
     minPrice: body.minPrice != null ? Number(body.minPrice) : undefined,
@@ -18,7 +38,8 @@ export function buildStreetEasyCriteriaFromBody(body: SourceAdapterRunBody): Nyc
     maxHoa: body.maxHoa != null ? Number(body.maxHoa) : undefined,
     maxTax: body.maxTax != null ? Number(body.maxTax) : undefined,
     amenities: body.amenities ?? undefined,
-    types: body.types ?? undefined,
+    requestedTypes,
+    types: expandStreetEasyApiTypes(requestedTypes),
     limit: body.limit != null ? Math.min(Number(body.limit), 500) : 100,
     offset: body.offset != null ? Number(body.offset) : undefined,
   };
@@ -28,6 +49,7 @@ export function buildStreetEasyCriteriaFromSearch(search: SearchProfile): NycsSe
   const areas = search.locationMode === "single"
     ? (search.singleLocationSlug?.trim() || "all-downtown")
     : (search.areaCodes.length > 0 ? search.areaCodes.join(",") : "all-downtown,all-midtown");
+  const requestedTypes = search.propertyTypes.length > 0 ? search.propertyTypes.join(",") : undefined;
   return {
     areas,
     minPrice: search.minPrice ?? undefined,
@@ -38,7 +60,8 @@ export function buildStreetEasyCriteriaFromSearch(search: SearchProfile): NycsSe
     maxHoa: search.maxHoa ?? undefined,
     maxTax: search.maxTax ?? undefined,
     amenities: search.requiredAmenities.length > 0 ? search.requiredAmenities.join(",") : undefined,
-    types: search.propertyTypes.length > 0 ? search.propertyTypes.join(",") : undefined,
+    requestedTypes,
+    types: expandStreetEasyApiTypes(requestedTypes),
     limit: search.resultLimit ?? 100,
   };
 }

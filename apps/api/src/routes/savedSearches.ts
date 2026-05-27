@@ -2,6 +2,7 @@ import { Router, type Request, type Response } from "express";
 import { getPool, ProfileRepo, RunRepo } from "@re-sourcing/db";
 import { buildNextRunAt, startSavedSearchRun } from "../sourcing/savedSearchRunner.js";
 import { listEnabledSavedSearchAdapters, sanitizeSourceToggles } from "../sourcing/adapters/index.js";
+import { listWorkflowRunsByIds } from "../workflow/workflowTracker.js";
 
 const router = Router();
 
@@ -190,7 +191,24 @@ router.get("/saved-searches/:id/runs", async (req: Request, res: Response) => {
     const pool = getPool();
     const runRepo = new RunRepo({ pool });
     const runs = await runRepo.list({ profileId: req.params.id, limit: 50 });
-    res.json({ runs });
+    const workflowRunIds = runs
+      .map((run) => {
+        const metadata = run.metadata && typeof run.metadata === "object" ? (run.metadata as Record<string, unknown>) : null;
+        return typeof metadata?.workflowRunId === "string" ? metadata.workflowRunId : null;
+      })
+      .filter((value): value is string => Boolean(value));
+    const workflows = await listWorkflowRunsByIds(workflowRunIds);
+    const workflowById = new Map(workflows.map((workflow) => [workflow.id, workflow]));
+    const runsWithWorkflow = runs.map((run) => {
+      const metadata = run.metadata && typeof run.metadata === "object" ? (run.metadata as Record<string, unknown>) : null;
+      const workflowRunId = typeof metadata?.workflowRunId === "string" ? metadata.workflowRunId : null;
+      return {
+        ...run,
+        workflowRunId,
+        workflowRun: workflowRunId ? workflowById.get(workflowRunId) ?? null : null,
+      };
+    });
+    res.json({ runs: runsWithWorkflow });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[saved-searches runs]", err);

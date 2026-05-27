@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  buildStreetEasyCriteriaFromBody,
   buildLoopNetSearchUrl,
   extractLoopNetDetailsFromHtml,
   extractLoopNetListingId,
@@ -23,6 +24,20 @@ describe("source adapter registry", () => {
       manual: false,
       loopnet: true,
     });
+  });
+});
+
+describe("StreetEasy adapter", () => {
+  it("expands multifamily searches to include townhouse house records", () => {
+    const criteria = buildStreetEasyCriteriaFromBody({
+      areas: "all-downtown",
+      minPrice: 4000000,
+      types: "multi_family",
+      limit: 100,
+    });
+
+    expect(criteria.requestedTypes).toBe("multi_family");
+    expect(criteria.types).toBe("multi_family,house");
   });
 });
 
