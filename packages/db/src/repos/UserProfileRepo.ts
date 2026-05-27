@@ -1,5 +1,6 @@
 import type { PoolClient } from "pg";
-import type { UserProfile } from "@re-sourcing/contracts";
+import type { DealScoringPreferences, UserProfile } from "@re-sourcing/contracts";
+import { DEFAULT_DEAL_SCORING_PREFERENCES } from "@re-sourcing/contracts";
 import { mapUserProfile } from "../map.js";
 
 export interface UserProfileRepoOptions {
@@ -14,6 +15,9 @@ export interface UpsertUserProfileParams {
   automationPaused?: boolean | null;
   automationPauseReason?: string | null;
   automationPausedAt?: string | null;
+  automationInitialEmailEnabled?: boolean | null;
+  automationReplyEmailEnabled?: boolean | null;
+  automationAmbiguousActionHandlingEnabled?: boolean | null;
   dailyDigestEnabled?: boolean | null;
   dailyDigestTimeLocal?: string | null;
   dailyDigestTimezone?: string | null;
@@ -38,6 +42,7 @@ export interface UpsertUserProfileParams {
   defaultAnnualPropertyTaxGrowthPct?: number | null;
   defaultRecurringCapexAnnual?: number | null;
   defaultLoanFeePct?: number | null;
+  scoringPreferences?: DealScoringPreferences | null;
 }
 
 export class UserProfileRepo {
@@ -81,7 +86,11 @@ export class UserProfileRepo {
          default_annual_expense_growth_pct,
          default_annual_property_tax_growth_pct,
          default_recurring_capex_annual,
-         default_loan_fee_pct
+         default_loan_fee_pct,
+         scoring_preferences,
+         automation_initial_email_enabled,
+         automation_reply_email_enabled,
+         automation_ambiguous_action_handling_enabled
        ) VALUES (
          '', '', '',
          3,
@@ -103,8 +112,14 @@ export class UserProfileRepo {
          0,
          6,
          1200,
-         0.63
+         0.63,
+         $1::jsonb,
+         false,
+         false,
+         false
        ) RETURNING id`
+      ,
+      [JSON.stringify(DEFAULT_DEAL_SCORING_PREFERENCES)]
     );
     return r.rows[0].id as string;
   }
@@ -151,6 +166,10 @@ export class UserProfileRepo {
         default_annual_property_tax_growth_pct = COALESCE($29, default_annual_property_tax_growth_pct),
         default_recurring_capex_annual = COALESCE($30, default_recurring_capex_annual),
         default_loan_fee_pct = COALESCE($31, default_loan_fee_pct),
+        automation_initial_email_enabled = COALESCE($32, automation_initial_email_enabled),
+        automation_reply_email_enabled = COALESCE($33, automation_reply_email_enabled),
+        automation_ambiguous_action_handling_enabled = COALESCE($34, automation_ambiguous_action_handling_enabled),
+        scoring_preferences = COALESCE($35::jsonb, scoring_preferences),
         updated_at = now()
        WHERE id = $1`,
       [
@@ -185,6 +204,10 @@ export class UserProfileRepo {
         params.defaultAnnualPropertyTaxGrowthPct ?? null,
         params.defaultRecurringCapexAnnual ?? null,
         params.defaultLoanFeePct ?? null,
+        params.automationInitialEmailEnabled ?? null,
+        params.automationReplyEmailEnabled ?? null,
+        params.automationAmbiguousActionHandlingEnabled ?? null,
+        params.scoringPreferences != null ? JSON.stringify(params.scoringPreferences) : null,
       ]
     );
     const updated = await this.byId(id);

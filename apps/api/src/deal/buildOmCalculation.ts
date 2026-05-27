@@ -23,6 +23,7 @@ import {
 } from "./brokerDossierNotes.js";
 import {
   getPropertyDossierAssumptions,
+  mergeDossierAssumptionOverrides,
   propertyAssumptionsToOverrides,
 } from "./propertyDossierState.js";
 import {
@@ -42,6 +43,7 @@ import {
 } from "./underwritingModel.js";
 import { buildRentBreakdown as buildSharedRentBreakdown } from "./rentBreakdown.js";
 import { buildSensitivityAnalyses, type SensitivityAnalysis } from "./sensitivityAnalysis.js";
+import { resolveOmAskingPriceFromDetails } from "./omAskingPrice.js";
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value != null && typeof value === "object" && !Array.isArray(value)
@@ -378,10 +380,10 @@ export async function resolveOmCalculationArtifactsFromInputs(params: {
   }
 
   const savedAssumptions = params.savedAssumptions ?? null;
-  const mergedAssumptionOverrides =
-    params.assumptionOverrides != null
-      ? params.assumptionOverrides
-      : propertyAssumptionsToOverrides(savedAssumptions);
+  const mergedAssumptionOverrides = mergeDossierAssumptionOverrides(
+    propertyAssumptionsToOverrides(savedAssumptions),
+    params.assumptionOverrides
+  );
   const assumptions = resolveDossierAssumptions(
     params.profile,
     params.askingPrice ?? null,
@@ -644,10 +646,11 @@ export async function buildOmCalculationSnapshot(params: {
   if (!profile) throw new Error("Profile not available");
 
   const rawDetails = property.details as PropertyDetails | null;
+  const askingPrice = listing?.price ?? resolveOmAskingPriceFromDetails(rawDetails);
   const propertyAssumptions = getPropertyDossierAssumptions(rawDetails);
   const artifacts = await resolveOmCalculationArtifactsFromInputs({
     profile,
-    askingPrice: listing?.price ?? null,
+    askingPrice,
     rawDetails,
     savedAssumptions: propertyAssumptions,
     assumptionOverrides: params.assumptionOverrides,
@@ -661,7 +664,7 @@ export async function buildOmCalculationSnapshot(params: {
       id: property.id,
       canonicalAddress: property.canonicalAddress,
       city: listing?.city ?? null,
-      askingPrice: listing?.price ?? null,
+      askingPrice,
       listedAt: listing?.listedAt ?? null,
     },
     artifacts,

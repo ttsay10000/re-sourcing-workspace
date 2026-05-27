@@ -10,8 +10,6 @@ import {
   MatchRepo,
   PropertySourcingStateRepo,
 } from "@re-sourcing/db";
-import { fetchActiveSalesWithCriteria, fetchSaleDetailsByUrl, type NycsSearchCriteria } from "../nycRealEstateApi.js";
-import { normalizeStreetEasySaleDetails } from "./normalizeStreetEasyListing.js";
 import { enrichBrokers, hasMeaningfulBrokerEnrichment } from "../enrichment/brokerEnrichment.js";
 import { computeDuplicateScores } from "../dedup/addressDedup.js";
 import { normalizeAddressLineForDisplay, getBBLForProperty } from "../enrichment/resolvePropertyBBL.js";
@@ -20,6 +18,7 @@ import { runRentalFlowForProperty } from "../routes/properties.js";
 import { syncPropertySourcingWorkflow } from "./workflow.js";
 import { buildListingChangeSummary } from "./listingChangeSummary.js";
 import { runDailyOutreach, type DailyOutreachInboxSummary } from "./outreachAutomation.js";
+import { listEnabledSavedSearchAdapters, type AnySourceAdapter } from "./adapters/index.js";
 import {
   createWorkflowRun,
   deriveWorkflowStatusFromCounts,
@@ -185,23 +184,13 @@ function isDueByLocalDay(search: SearchProfile, now: Date): boolean {
   return localDateKey(nextRunAt, timezone) <= localDateKey(now, timezone);
 }
 
-function buildCriteria(search: SearchProfile): NycsSearchCriteria {
-  const areas = search.locationMode === "single"
-    ? (search.singleLocationSlug?.trim() || "all-downtown")
-    : (search.areaCodes.length > 0 ? search.areaCodes.join(",") : "all-downtown,all-midtown");
-  return {
-    areas,
-    minPrice: search.minPrice ?? undefined,
-    maxPrice: search.maxPrice ?? undefined,
-    minBeds: search.minBeds ?? undefined,
-    maxBeds: search.maxBeds ?? undefined,
-    minBaths: search.minBaths ?? undefined,
-    maxHoa: search.maxHoa ?? undefined,
-    maxTax: search.maxTax ?? undefined,
-    amenities: search.requiredAmenities.length > 0 ? search.requiredAmenities.join(",") : undefined,
-    types: search.propertyTypes.length > 0 ? search.propertyTypes.join(",") : undefined,
-    limit: search.resultLimit ?? 100,
-  };
+function getSavedSearchAdapter(search: SearchProfile): AnySourceAdapter {
+  const adapters = listEnabledSavedSearchAdapters(search.sourceToggles);
+  const adapter = adapters[0];
+  if (!adapter?.buildSavedSearchCriteria) {
+    throw new Error("No saved-search source adapter enabled. Enable StreetEasy for automated saved-search runs.");
+  }
+  return adapter;
 }
 
 function summarizeInquiryStates(totalItems: number, states: PropertySourcingState[]): InquiryProgressSummary {
@@ -226,7 +215,11 @@ function summarizeInquiryStates(totalItems: number, states: PropertySourcingStat
   };
 }
 
-async function persistListingForRun(runId: string, raw: Record<string, unknown>): Promise<PersistedListingResult> {
+async function persistListingForRun(
+  runId: string,
+  raw: Record<string, unknown>,
+  adapter: AnySourceAdapter
+): Promise<PersistedListingResult> {
   const pool = getPool();
   const client = await pool.connect();
   const errors: string[] = [];
@@ -237,7 +230,7 @@ async function persistListingForRun(runId: string, raw: Record<string, unknown>)
     const propertyRepo = new PropertyRepo({ pool, client });
     const matchRepo = new MatchRepo({ pool, client });
 
-    const normalized = normalizeStreetEasySaleDetails(raw, 0);
+    const normalized = adapter.normalize(raw, 0);
     const existing = await listingRepo.bySourceAndExternalId(normalized.source, normalized.externalId);
     const previousSnapshot = existing
       ? (await snapshotRepo.list({ listingId: existing.id, limit: 1 })).snapshots[0] ?? null
@@ -677,7 +670,8 @@ export async function executeSavedSearchRun(
   if (!search) throw new Error("Saved search not found.");
   if (await runRepo.hasRunningForProfile(search.id)) return;
 
-  const criteria = buildCriteria(search);
+  const adapter = getSavedSearchAdapter(search);
+  const criteria = adapter.buildSavedSearchCriteria!(search);
   const workflowStartedAt = new Date().toISOString();
   const workflowRunId = await createWorkflowRun({
     runType: "saved_search_ingestion",
@@ -688,6 +682,8 @@ export async function executeSavedSearchRun(
     metadata: {
       profileId: search.id,
       searchName: search.name,
+      source: adapter.id,
+      sourceLabel: adapter.displayName,
       scheduleCadence: search.scheduleCadence,
       criteria,
     },
@@ -699,7 +695,7 @@ export async function executeSavedSearchRun(
         failedItems: 0,
         status: "running",
         startedAt: workflowStartedAt,
-        lastMessage: "Fetching StreetEasy sale URLs",
+        lastMessage: `Fetching ${adapter.displayName} sale URLs`,
       },
       {
         stepKey: "canonical",
@@ -746,12 +742,14 @@ export async function executeSavedSearchRun(
     triggerSource: options?.triggerSource ?? "manual",
     metadata: {
       searchName: search.name,
+      source: adapter.id,
+      sourceLabel: adapter.displayName,
       scheduleCadence: search.scheduleCadence,
       criteria,
       workflowRunId,
     },
   });
-  const job = await jobRepo.create(run.id, "streeteasy");
+  const job = await jobRepo.create(run.id, adapter.listingSource);
   await jobRepo.start(job.id);
 
   const errors: string[] = [];
@@ -765,7 +763,13 @@ export async function executeSavedSearchRun(
   let canonicalFailed = 0;
 
   try {
-    const { urls } = await fetchActiveSalesWithCriteria(criteria);
+    const { urls, metadata: sourceMetadata, warnings: sourceWarnings } = await adapter.fetchSearch(criteria, { runKind: "saved_search" });
+    if (sourceWarnings?.length) errors.push(...sourceWarnings.map((warning) => `${adapter.id}:${warning}`));
+    if (sourceMetadata) {
+      await mergeWorkflowRunMetadata(workflowRunId, {
+        sourceMetadata,
+      });
+    }
     await updateWorkflowRun(workflowRunId, {
       totalItems: urls.length,
       scopeLabel: `${urls.length} listing${urls.length === 1 ? "" : "s"}`,
@@ -781,7 +785,7 @@ export async function executeSavedSearchRun(
       lastMessage:
         urls.length === 0
           ? "No listings matched this saved search"
-          : `Fetching details for ${urls.length} listing${urls.length === 1 ? "" : "s"}`,
+          : `Fetching ${adapter.displayName} details for ${urls.length} listing${urls.length === 1 ? "" : "s"}`,
     });
     await upsertWorkflowStep(workflowRunId, {
       stepKey: "canonical",
@@ -800,7 +804,7 @@ export async function executeSavedSearchRun(
     for (let index = 0; index < urls.length; index++) {
       const url = urls[index]!;
       try {
-        const details = await fetchSaleDetailsByUrl(url);
+        const details = await adapter.fetchDetailsByUrl(url, { runKind: "saved_search" });
         rawIngestCompleted++;
         await upsertWorkflowStep(workflowRunId, {
           stepKey: "raw_ingest",
@@ -821,7 +825,7 @@ export async function executeSavedSearchRun(
         });
 
         try {
-          const persisted = await persistListingForRun(run.id, { ...details, _fetchUrl: url });
+          const persisted = await persistListingForRun(run.id, { ...details, _fetchUrl: url }, adapter);
           listingIds.push(persisted.listingId);
           propertyIds.push(persisted.propertyId);
           errors.push(...persisted.errors);

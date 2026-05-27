@@ -23,6 +23,12 @@ const SAVED_SEARCH_TYPE_OPTIONS = [
   { value: "house", label: "House" },
   { value: "multi_family", label: "Multi-family" },
 ] as const;
+const DEFAULT_SCORING_PREFERENCES = {
+  targetIrrPct: 25,
+  goodCashOnCashPct: 2,
+  rentStabilizationDoNotBuy: false,
+  scoringProfileKey: "legacy_v3",
+} as const;
 
 type SearchCadence = "manual" | "daily" | "weekly" | "monthly";
 type ProfileFieldKey = "name" | "email" | "organization";
@@ -117,6 +123,12 @@ interface UserProfile {
   name?: string | null;
   email?: string | null;
   organization?: string | null;
+  automationPaused?: boolean;
+  automationPauseReason?: string | null;
+  automationPausedAt?: string | null;
+  automationInitialEmailEnabled?: boolean;
+  automationReplyEmailEnabled?: boolean;
+  automationAmbiguousActionHandlingEnabled?: boolean;
   defaultPurchaseClosingCostPct?: number | null;
   defaultLtv?: number | null;
   defaultInterestRate?: number | null;
@@ -137,6 +149,12 @@ interface UserProfile {
   defaultAnnualPropertyTaxGrowthPct?: number | null;
   defaultRecurringCapexAnnual?: number | null;
   defaultLoanFeePct?: number | null;
+  scoringPreferences?: {
+    targetIrrPct?: number | null;
+    goodCashOnCashPct?: number | null;
+    rentStabilizationDoNotBuy?: boolean;
+    scoringProfileKey?: string | null;
+  } | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -342,6 +360,7 @@ export default function ProfilePage() {
   const [sitePasswordNotice, setSitePasswordNotice] = useState<string | null>(null);
   const [savedDeals, setSavedDeals] = useState<Array<{ savedDeal: { id: string; propertyId: string; dealStatus: string; createdAt: string }; address: string; price: number | null; units: number | null; dealScore: number | null }>>([]);
   const [savedDealsLoading, setSavedDealsLoading] = useState(false);
+  const [refreshingScoreScope, setRefreshingScoreScope] = useState<"saved" | "all" | null>(null);
   const [savedSearches, setSavedSearches] = useState<SavedSearch[]>([]);
   const [savedSearchesLoading, setSavedSearchesLoading] = useState(true);
   const [savedSearchDraft, setSavedSearchDraft] = useState<SavedSearchDraft>(DEFAULT_SAVED_SEARCH_DRAFT);
@@ -364,6 +383,9 @@ export default function ProfilePage() {
         name: data.name ?? "",
         email: data.email ?? "",
         organization: data.organization ?? "",
+        automationInitialEmailEnabled: data.automationInitialEmailEnabled === true,
+        automationReplyEmailEnabled: data.automationReplyEmailEnabled === true,
+        automationAmbiguousActionHandlingEnabled: data.automationAmbiguousActionHandlingEnabled === true,
         defaultPurchaseClosingCostPct: data.defaultPurchaseClosingCostPct ?? 3,
         defaultLtv: data.defaultLtv ?? 64,
         defaultInterestRate: data.defaultInterestRate ?? 6,
@@ -384,6 +406,16 @@ export default function ProfilePage() {
         defaultAnnualPropertyTaxGrowthPct: data.defaultAnnualPropertyTaxGrowthPct ?? 6,
         defaultRecurringCapexAnnual: data.defaultRecurringCapexAnnual ?? 1200,
         defaultLoanFeePct: data.defaultLoanFeePct ?? 0.63,
+        scoringPreferences: {
+          targetIrrPct: data.scoringPreferences?.targetIrrPct ?? DEFAULT_SCORING_PREFERENCES.targetIrrPct,
+          goodCashOnCashPct:
+            data.scoringPreferences?.goodCashOnCashPct ?? DEFAULT_SCORING_PREFERENCES.goodCashOnCashPct,
+          rentStabilizationDoNotBuy:
+            data.scoringPreferences?.rentStabilizationDoNotBuy ??
+            DEFAULT_SCORING_PREFERENCES.rentStabilizationDoNotBuy,
+          scoringProfileKey:
+            data.scoringPreferences?.scoringProfileKey ?? DEFAULT_SCORING_PREFERENCES.scoringProfileKey,
+        },
       });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load profile");
@@ -415,6 +447,36 @@ export default function ProfilePage() {
       setProfile(data);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to save");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleSaveAutomationSettings = async () => {
+    if (!profile) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/profile`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          automationInitialEmailEnabled: draft.automationInitialEmailEnabled === true,
+          automationReplyEmailEnabled: draft.automationReplyEmailEnabled === true,
+          automationAmbiguousActionHandlingEnabled: draft.automationAmbiguousActionHandlingEnabled === true,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || data?.details || "Failed to save automation settings");
+      setProfile(data);
+      setDraft((prev) => ({
+        ...prev,
+        automationInitialEmailEnabled: data.automationInitialEmailEnabled === true,
+        automationReplyEmailEnabled: data.automationReplyEmailEnabled === true,
+        automationAmbiguousActionHandlingEnabled: data.automationAmbiguousActionHandlingEnabled === true,
+      }));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to save automation settings");
     } finally {
       setSaving(false);
     }
@@ -455,6 +517,7 @@ export default function ProfilePage() {
           defaultRecurringCapexAnnual:
             draft.defaultRecurringCapexAnnual ?? profile.defaultRecurringCapexAnnual,
           defaultLoanFeePct: draft.defaultLoanFeePct ?? profile.defaultLoanFeePct,
+          scoringPreferences: draft.scoringPreferences ?? profile.scoringPreferences ?? DEFAULT_SCORING_PREFERENCES,
         }),
       });
       const data = await res.json();
@@ -556,6 +619,27 @@ export default function ProfilePage() {
       setSavedDeals((prev) => prev.filter((r) => r.savedDeal.propertyId !== propertyId));
     } catch {
       // ignore
+    }
+  };
+
+  const handleRefreshScores = async (scope: "saved" | "all") => {
+    setRefreshingScoreScope(scope);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/dossier/refresh-scores`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ scope }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data?.error) {
+        throw new Error(data?.details || data?.error || "Failed to refresh scores");
+      }
+      await fetchSavedDeals();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to refresh scores");
+    } finally {
+      setRefreshingScoreScope(null);
     }
   };
 
@@ -728,6 +812,64 @@ export default function ProfilePage() {
       <section className="profile-section">
         <div className="profile-section-heading">
           <div>
+            <h2>Email automation</h2>
+            <p>Future broker-email controls. All switches default off, and the server env gate must still allow sending.</p>
+          </div>
+          <button
+            type="button"
+            onClick={handleSaveAutomationSettings}
+            disabled={saving}
+            className="profile-primary-button"
+          >
+            {saving ? "Saving…" : "Save automation"}
+          </button>
+        </div>
+        <div className="profile-form-grid profile-form-grid--compact">
+          <label className="profile-field">
+            <span>Initial emailing</span>
+            <input
+              type="checkbox"
+              checked={draft.automationInitialEmailEnabled === true}
+              onChange={(e) =>
+                setDraft((prev) => ({ ...prev, automationInitialEmailEnabled: e.target.checked }))
+              }
+              style={{ width: "1rem", height: "1rem", marginTop: "0.5rem" }}
+            />
+          </label>
+          <label className="profile-field">
+            <span>Replies</span>
+            <input
+              type="checkbox"
+              checked={draft.automationReplyEmailEnabled === true}
+              onChange={(e) =>
+                setDraft((prev) => ({ ...prev, automationReplyEmailEnabled: e.target.checked }))
+              }
+              style={{ width: "1rem", height: "1rem", marginTop: "0.5rem" }}
+            />
+          </label>
+          <label className="profile-field">
+            <span>Ambiguous actions</span>
+            <input
+              type="checkbox"
+              checked={draft.automationAmbiguousActionHandlingEnabled === true}
+              onChange={(e) =>
+                setDraft((prev) => ({
+                  ...prev,
+                  automationAmbiguousActionHandlingEnabled: e.target.checked,
+                }))
+              }
+              style={{ width: "1rem", height: "1rem", marginTop: "0.5rem" }}
+            />
+          </label>
+        </div>
+        <p className="profile-section-note">
+          Reply automation and ambiguous-action handling are configuration only right now; no automatic replies or promotion paths are enabled.
+        </p>
+      </section>
+
+      <section className="profile-section">
+        <div className="profile-section-heading">
+          <div>
             <h2>Site password</h2>
             <p>Rotate the single shared password that unlocks the entire workspace.</p>
           </div>
@@ -835,6 +977,89 @@ export default function ProfilePage() {
             </section>
           ))}
         </div>
+        <section className="profile-assumption-group" style={{ marginTop: "1rem" }}>
+          <div className="profile-assumption-group-header">
+            <h3>Scoring preferences</h3>
+            <p>Defaults for the overall deal score. Neighborhood context remains presentation-only.</p>
+          </div>
+          <div className="profile-form-grid profile-form-grid--grouped">
+            <label className="profile-field">
+              <span>Target IRR score anchor (%)</span>
+              <input
+                type="number"
+                step="0.1"
+                min={0}
+                max={100}
+                value={draft.scoringPreferences?.targetIrrPct ?? ""}
+                onChange={(e) =>
+                  setDraft((prev) => ({
+                    ...prev,
+                    scoringPreferences: {
+                      ...(prev.scoringPreferences ?? profile?.scoringPreferences ?? DEFAULT_SCORING_PREFERENCES),
+                      targetIrrPct: e.target.value ? Number(e.target.value) : DEFAULT_SCORING_PREFERENCES.targetIrrPct,
+                    },
+                  }))
+                }
+                className="profile-input"
+              />
+            </label>
+            <label className="profile-field">
+              <span>Good cash-on-cash (%)</span>
+              <input
+                type="number"
+                step="0.1"
+                min={0}
+                max={100}
+                value={draft.scoringPreferences?.goodCashOnCashPct ?? ""}
+                onChange={(e) =>
+                  setDraft((prev) => ({
+                    ...prev,
+                    scoringPreferences: {
+                      ...(prev.scoringPreferences ?? profile?.scoringPreferences ?? DEFAULT_SCORING_PREFERENCES),
+                      goodCashOnCashPct: e.target.value ? Number(e.target.value) : DEFAULT_SCORING_PREFERENCES.goodCashOnCashPct,
+                    },
+                  }))
+                }
+                className="profile-input"
+              />
+            </label>
+            <label className="profile-field">
+              <span>Default scoring family</span>
+              <select
+                value={draft.scoringPreferences?.scoringProfileKey ?? DEFAULT_SCORING_PREFERENCES.scoringProfileKey}
+                onChange={(e) =>
+                  setDraft((prev) => ({
+                    ...prev,
+                    scoringPreferences: {
+                      ...(prev.scoringPreferences ?? profile?.scoringPreferences ?? DEFAULT_SCORING_PREFERENCES),
+                      scoringProfileKey: e.target.value,
+                    },
+                  }))
+                }
+                className="profile-input"
+              >
+                <option value="legacy_v3">Legacy deterministic v3</option>
+                <option value="value_add_furnished_monthly_rental">Value-add / furnished monthly rental</option>
+              </select>
+            </label>
+            <label className="profile-field" style={{ justifyContent: "center" }}>
+              <span>Rent stabilization/control do-not-buy</span>
+              <input
+                type="checkbox"
+                checked={draft.scoringPreferences?.rentStabilizationDoNotBuy === true}
+                onChange={(e) =>
+                  setDraft((prev) => ({
+                    ...prev,
+                    scoringPreferences: {
+                      ...(prev.scoringPreferences ?? profile?.scoringPreferences ?? DEFAULT_SCORING_PREFERENCES),
+                      rentStabilizationDoNotBuy: e.target.checked,
+                    },
+                  }))
+                }
+              />
+            </label>
+          </div>
+        </section>
         <div className="profile-assumptions-toolbar">
           <button
             type="button"
@@ -1138,6 +1363,24 @@ export default function ProfilePage() {
             <p className="profile-saved-deals-intro">
               Deals you saved from Property Data. Dossier download still routes through the property view after generation.
             </p>
+          </div>
+          <div className="profile-saved-deals-actions profile-saved-deals-actions--row">
+            <button
+              type="button"
+              onClick={() => { void handleRefreshScores("saved"); }}
+              disabled={refreshingScoreScope != null}
+              className="profile-secondary-button"
+            >
+              {refreshingScoreScope === "saved" ? "Refreshing…" : "Refresh saved scores"}
+            </button>
+            <button
+              type="button"
+              onClick={() => { void handleRefreshScores("all"); }}
+              disabled={refreshingScoreScope != null}
+              className="profile-secondary-button"
+            >
+              {refreshingScoreScope === "all" ? "Refreshing…" : "Refresh all scores"}
+            </button>
           </div>
         </div>
         {savedDealsLoading ? (

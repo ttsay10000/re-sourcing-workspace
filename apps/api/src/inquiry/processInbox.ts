@@ -12,6 +12,7 @@ import {
   InquiryDocumentRepo,
   InquirySendRepo,
   InboxSyncStateRepo,
+  PropertyActionItemRepo,
   type InquiryReplyMatchingSendRow,
 } from "@re-sourcing/db";
 import { listMessages, getMessage, getAttachment, getHeader, getBodyText, getAttachmentParts, parseEmailFromHeader, getThreadMessageIds } from "./gmailClient.js";
@@ -19,6 +20,19 @@ import { parseAddressFromInquirySubject, parseAddressFromSubjectFallback } from 
 import { saveInquiryAttachment } from "./storage.js";
 import { extractEmailSummary } from "./extractEmailSummary.js";
 import { syncPropertySourcingWorkflow } from "../sourcing/workflow.js";
+import {
+  classifyInquiryAttachment,
+  summarizeAttachmentClassification,
+  type ClassifiedInquiryAttachment,
+  type InquiryAttachmentClass,
+} from "./attachmentClassification.js";
+import {
+  dedupePropertyLinks,
+  mergeMessageTargets,
+  type MatchedPropertyLink,
+  type MessageMatchTargets,
+  type ThreadReplyTargets,
+} from "./replyMatching.js";
 
 /** Build map: broker email (normalized) -> property_id. Uses first listing match per email. */
 async function getBrokerEmailToPropertyIdMap(pool: Pool): Promise<Map<string, string | null>> {
@@ -55,57 +69,124 @@ async function getBrokerEmailToPropertyIdMap(pool: Pool): Promise<Map<string, st
 
 interface SavedAttachment {
   id?: string;
+  propertyId: string;
   filePath: string;
   filename: string;
   mimeType?: string | null;
-  buffer?: Buffer;
+  classification: ClassifiedInquiryAttachment;
 }
 
-interface MatchedPropertyLink {
-  propertyId: string;
-  matchSource: string;
+function incrementAttachmentClassification(result: ProcessInboxResult, category: InquiryAttachmentClass): void {
+  result.attachmentsTriaged = (result.attachmentsTriaged ?? 0) + 1;
+  const counts = result.attachmentClassifications ?? {};
+  counts[category] = (counts[category] ?? 0) + 1;
+  result.attachmentClassifications = counts;
 }
 
-interface ThreadReplyTargets {
-  propertyLinks: MatchedPropertyLink[];
-  batchIds: Set<string>;
-}
-
-interface MessageMatchTargets {
-  propertyLinks: MatchedPropertyLink[];
-  matchedBatchId: string | null;
-  processingStatus: string;
-}
-
-function dedupePropertyLinks(propertyLinks: MatchedPropertyLink[]): MatchedPropertyLink[] {
-  const deduped = new Map<string, string>();
-  for (const link of propertyLinks) {
-    const propertyId = link.propertyId?.trim();
-    if (!propertyId || deduped.has(propertyId)) continue;
-    deduped.set(propertyId, link.matchSource?.trim() || "legacy_property");
+function uniqueAttachmentSummaries(savedAttachments: SavedAttachment[]): string[] {
+  const seen = new Set<string>();
+  const summaries: string[] = [];
+  for (const attachment of savedAttachments) {
+    const key = `${attachment.filename.toLowerCase()}|${attachment.classification.category}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    summaries.push(summarizeAttachmentClassification(attachment.filename, attachment.classification));
   }
-  return [...deduped.entries()].map(([propertyId, matchSource]) => ({ propertyId, matchSource }));
+  return summaries;
 }
 
-function buildProcessingStatus(propertyLinks: MatchedPropertyLink[]): string {
-  if (propertyLinks.length > 1) return "batch_matched_multi_property";
-  const source = propertyLinks[0]?.matchSource ?? "";
-  if (source === "batch_thread" || source === "thread_reply") return "thread_matched";
-  return "saved";
+function recordMatchReporting(
+  result: ProcessInboxResult,
+  targets: MessageMatchTargets,
+  phase: "matched" | "saved"
+): void {
+  const hasBatchMatch = targets.matchedBatchIds.length > 0 || targets.matchSources.includes("batch_thread");
+  if (hasBatchMatch) {
+    if (phase === "matched") result.batchMatched = (result.batchMatched ?? 0) + 1;
+    else result.batchSaved = (result.batchSaved ?? 0) + 1;
+  }
+  if (phase === "matched" && targets.propertyLinks.length > 1) {
+    result.multiPropertyMatched = (result.multiPropertyMatched ?? 0) + 1;
+  }
+  if (phase === "matched" && targets.matchedBatchIds.length > 1) {
+    result.multiBatchMatched = (result.multiBatchMatched ?? 0) + 1;
+  }
+  if (phase === "matched" && targets.matchedBatchIds.length > 0) {
+    const merged = new Set([...(result.matchedBatchIds ?? []), ...targets.matchedBatchIds]);
+    result.matchedBatchIds = [...merged].sort();
+  }
 }
 
-function mergeMessageTargets(
-  directLinks: MatchedPropertyLink[],
-  threadTargets?: ThreadReplyTargets | null
-): MessageMatchTargets | null {
-  const propertyLinks = dedupePropertyLinks([...directLinks, ...(threadTargets?.propertyLinks ?? [])]);
-  if (propertyLinks.length === 0) return null;
-  const batchIds = threadTargets ? [...threadTargets.batchIds] : [];
-  return {
-    propertyLinks,
-    matchedBatchId: batchIds.length === 1 ? batchIds[0] ?? null : null,
-    processingStatus: buildProcessingStatus(propertyLinks),
-  };
+async function queueOmReviewActionItems(params: {
+  actionRepo: PropertyActionItemRepo;
+  result: ProcessInboxResult;
+  savedAttachments: SavedAttachment[];
+  inquiryEmailId: string;
+  messageId: string;
+  gmailThreadId?: string | null;
+  matchedBatchId?: string | null;
+  matchedBatchIds: string[];
+  matchSources: string[];
+  subject?: string | null;
+  fromAddress?: string | null;
+  receivedAt?: string | null;
+}): Promise<void> {
+  const byProperty = new Map<string, SavedAttachment[]>();
+  for (const attachment of params.savedAttachments) {
+    if (!attachment.classification.omReviewCandidate) continue;
+    const current = byProperty.get(attachment.propertyId) ?? [];
+    current.push(attachment);
+    byProperty.set(attachment.propertyId, current);
+  }
+
+  for (const [propertyId, attachments] of byProperty) {
+    const documents = attachments.map((attachment) => ({
+      id: attachment.id ?? null,
+      origin: "inquiry_attachment",
+      filename: attachment.filename,
+      mimeType: attachment.mimeType ?? null,
+      filePath: attachment.filePath,
+      classification: attachment.classification.category,
+      classificationLabel: attachment.classification.label,
+      classificationConfidence: attachment.classification.confidence,
+      category: attachment.classification.reviewCategory,
+      reviewRole: attachment.classification.reviewRole,
+    }));
+    await params.actionRepo.upsertOpen(propertyId, "review_om_attachment", {
+      priority: "high",
+      summary:
+        attachments.length === 1
+          ? `Create OM review run from ${attachments[0]?.filename ?? "broker attachment"}`
+          : `Create OM review run from ${attachments.length} broker attachments`,
+      details: {
+        source: "process_inbox_attachment_triage",
+        inquiryEmailId: params.inquiryEmailId,
+        messageId: params.messageId,
+        gmailThreadId: params.gmailThreadId ?? null,
+        matchedBatchId: params.matchedBatchId ?? null,
+        matchedBatchIds: params.matchedBatchIds,
+        matchSources: params.matchSources,
+        subject: params.subject ?? null,
+        fromAddress: params.fromAddress ?? null,
+        receivedAt: params.receivedAt ?? null,
+        attachmentCandidates: documents,
+        omReviewRunHandoff: {
+          service: "ingestAuthoritativeOm",
+          sourceType: "inquiry_attachment",
+          triggerDossier: false,
+          params: {
+            propertyId,
+            sourceType: "inquiry_attachment",
+            documents,
+            triggerDossier: false,
+          },
+        },
+      },
+    });
+    params.result.omReviewActionsQueued = (params.result.omReviewActionsQueued ?? 0) + 1;
+    params.result.omReviewAttachmentCandidates =
+      (params.result.omReviewAttachmentCandidates ?? 0) + attachments.length;
+  }
 }
 
 function parseReceivedAt(dateHeader: string | null): string | null {
@@ -174,9 +255,10 @@ async function saveMatchedAttachments(
 ): Promise<SavedAttachment[]> {
   const savedPaths: SavedAttachment[] = [];
   for (const part of params.attachmentParts) {
+    const classification = classifyInquiryAttachment({ filename: part.filename, mimeType: part.mimeType });
+    incrementAttachmentClassification(result, classification.category);
     try {
       const buffer = await getAttachment(params.messageId, part.attachmentId);
-      let primarySaved: SavedAttachment | null = null;
       for (const link of params.propertyLinks) {
         try {
           const filePath = await saveInquiryAttachment(link.propertyId, params.inquiryEmailId, part.filename, buffer);
@@ -188,16 +270,20 @@ async function saveMatchedAttachments(
             filePath,
             fileContent: buffer,
           });
-          if (!primarySaved) {
-            primarySaved = { id: savedDoc.id, filePath, filename: part.filename, mimeType: part.mimeType, buffer };
-          }
+          savedPaths.push({
+            id: savedDoc.id,
+            propertyId: link.propertyId,
+            filePath,
+            filename: part.filename,
+            mimeType: part.mimeType,
+            classification,
+          });
         } catch (e) {
           result.errors.push(
             `${params.phaseLabel} attachment ${part.filename} (${link.propertyId}): ${e instanceof Error ? e.message : String(e)}`
           );
         }
       }
-      if (primarySaved) savedPaths.push(primarySaved);
     } catch (e) {
       result.errors.push(`${params.phaseLabel} attachment ${part.filename}: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -233,6 +319,7 @@ async function persistMatchedMessage(
   const fromAddress = getHeader(params.msg, "From");
   const receivedAt = parseReceivedAt(getHeader(params.msg, "Date"));
   const bodyText = getBodyText(params.msg);
+  const actionRepo = new PropertyActionItemRepo({ pool: params.pool });
 
   const emailRow = await params.emailRepo.upsert({
     propertyId: primaryPropertyId,
@@ -256,7 +343,7 @@ async function persistMatchedMessage(
   });
 
   try {
-    const emailSummary = await extractEmailSummary(bodyText, savedPaths.map((attachment) => attachment.filename));
+    const emailSummary = await extractEmailSummary(bodyText, uniqueAttachmentSummaries(savedPaths));
     if (emailSummary) {
       await params.emailRepo.updateLlmFields(emailRow.id, {
         bodySummary: emailSummary.summary,
@@ -266,6 +353,25 @@ async function persistMatchedMessage(
     }
   } catch (e) {
     params.result.errors.push(`${params.phaseLabel} email summary: ${e instanceof Error ? e.message : String(e)}`);
+  }
+
+  try {
+    await queueOmReviewActionItems({
+      actionRepo,
+      result: params.result,
+      savedAttachments: savedPaths,
+      inquiryEmailId: emailRow.id,
+      messageId: params.msg.id,
+      gmailThreadId: params.msg.threadId ?? null,
+      matchedBatchId: params.targets.matchedBatchId,
+      matchedBatchIds: params.targets.matchedBatchIds,
+      matchSources: params.targets.matchSources,
+      subject,
+      fromAddress,
+      receivedAt,
+    });
+  } catch (e) {
+    params.result.errors.push(`${params.phaseLabel} OM review action: ${e instanceof Error ? e.message : String(e)}`);
   }
 
   for (const link of params.targets.propertyLinks) {
@@ -285,6 +391,19 @@ export interface ProcessInboxResult {
   /** Count of emails matched and saved via thread (same thread as our sent inquiry; e.g. alternate broker email or teammate). */
   threadMatched?: number;
   threadSaved?: number;
+  /** Count of emails linked to one or more outreach batches through Gmail thread matching. */
+  batchMatched?: number;
+  batchSaved?: number;
+  /** Count of inbound emails linked to multiple properties or multiple batches. */
+  multiPropertyMatched?: number;
+  multiBatchMatched?: number;
+  matchedBatchIds?: string[];
+  /** Attachment triage reporting by classified attachment part, not per property link. */
+  attachmentsTriaged?: number;
+  attachmentClassifications?: Partial<Record<InquiryAttachmentClass, number>>;
+  /** Manual action items queued for operator-run OM review handoff. */
+  omReviewActionsQueued?: number;
+  omReviewAttachmentCandidates?: number;
   errors: string[];
 }
 
@@ -316,6 +435,15 @@ export async function processInbox(options?: { maxMessages?: number }): Promise<
     brokerSaved: 0,
     threadMatched: 0,
     threadSaved: 0,
+    batchMatched: 0,
+    batchSaved: 0,
+    multiPropertyMatched: 0,
+    multiBatchMatched: 0,
+    matchedBatchIds: [],
+    attachmentsTriaged: 0,
+    attachmentClassifications: {},
+    omReviewActionsQueued: 0,
+    omReviewAttachmentCandidates: 0,
     errors: [],
   };
   const maxMessages = options?.maxMessages ?? 50;
@@ -392,6 +520,7 @@ export async function processInbox(options?: { maxMessages?: number }): Promise<
       }
 
       result.matched++;
+      recordMatchReporting(result, targets, "matched");
       const saved = await persistMatchedMessage({
         pool,
         propertyRepo,
@@ -403,7 +532,10 @@ export async function processInbox(options?: { maxMessages?: number }): Promise<
         phaseLabel: "subject",
         primaryProperty: property,
       });
-      if (saved) result.saved++;
+      if (saved) {
+        result.saved++;
+        recordMatchReporting(result, targets, "saved");
+      }
     } catch (e) {
       result.errors.push(`message ${item.id}: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -449,6 +581,7 @@ export async function processInbox(options?: { maxMessages?: number }): Promise<
 
         result.matched++;
         result.brokerMatched = (result.brokerMatched ?? 0) + 1;
+        recordMatchReporting(result, targets, "matched");
 
         const saved = await persistMatchedMessage({
           pool,
@@ -464,6 +597,7 @@ export async function processInbox(options?: { maxMessages?: number }): Promise<
         if (saved) {
           result.saved++;
           result.brokerSaved = (result.brokerSaved ?? 0) + 1;
+          recordMatchReporting(result, targets, "saved");
         }
       } catch (e) {
         result.errors.push(`broker message ${item.id}: ${e instanceof Error ? e.message : String(e)}`);
@@ -502,6 +636,7 @@ export async function processInbox(options?: { maxMessages?: number }): Promise<
 
         result.matched++;
         result.threadMatched = (result.threadMatched ?? 0) + 1;
+        recordMatchReporting(result, targets, "matched");
         const saved = await persistMatchedMessage({
           pool,
           propertyRepo,
@@ -515,6 +650,7 @@ export async function processInbox(options?: { maxMessages?: number }): Promise<
         if (saved) {
           result.saved++;
           result.threadSaved = (result.threadSaved ?? 0) + 1;
+          recordMatchReporting(result, targets, "saved");
         }
       } catch (e) {
         result.errors.push(`thread message ${messageId}: ${e instanceof Error ? e.message : String(e)}`);

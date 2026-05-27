@@ -51,6 +51,82 @@ export interface ListingNormalized {
   extra?: Record<string, unknown> | null;
 }
 
+export type ListingAdapterRunStatus = "completed" | "partial" | "failed";
+
+export interface ListingAdapterWarning {
+  code: string;
+  message: string;
+  externalId?: string | null;
+  details?: Record<string, unknown> | null;
+}
+
+export interface ListingSourceExtraBase {
+  source: ListingSource;
+  sourceListingId?: string | null;
+  sourcePropertyId?: string | null;
+  sourceUpdatedAt?: string | null;
+  listingBrokerNames?: string[] | null;
+  brokerageName?: string | null;
+  propertyType?: string | null;
+  units?: number | null;
+  yearBuilt?: number | null;
+  lotSizeSqft?: number | null;
+  noi?: number | null;
+  capRatePct?: number | null;
+  sourcePayloadVersion?: string | null;
+  rawAttributes?: Record<string, unknown> | null;
+}
+
+export interface LoopNetListingExtra extends ListingSourceExtraBase {
+  source: "loopnet";
+  loopNetListingId?: string | null;
+  loopNetPropertyId?: string | null;
+  saleType?: string | null;
+  buildingClass?: string | null;
+  investmentHighlights?: string[] | null;
+}
+
+export interface MarcusMillichapListingExtra extends ListingSourceExtraBase {
+  source: "marcus_millichap";
+  marcusMillichapListingId?: string | null;
+  officeName?: string | null;
+  assetTypes?: string[] | null;
+  offeringMemorandumUrl?: string | null;
+  marketingPackageUrl?: string | null;
+}
+
+export type ListingSourceExtra =
+  | LoopNetListingExtra
+  | MarcusMillichapListingExtra
+  | (ListingSourceExtraBase & {
+      source: Exclude<ListingSource, "loopnet" | "marcus_millichap">;
+    });
+
+export type ListingNormalizedWithExtra<
+  TExtra extends ListingSourceExtra = ListingSourceExtra,
+> = Omit<ListingNormalized, "source" | "extra"> & {
+  source: TExtra["source"];
+  extra?: TExtra | null;
+};
+
+export interface ListingAdapterRecord<
+  TExtra extends ListingSourceExtra = ListingSourceExtra,
+> {
+  normalized: ListingNormalizedWithExtra<TExtra>;
+  raw?: unknown;
+}
+
+export interface ListingSourceAdapterOutput<
+  TExtra extends ListingSourceExtra = ListingSourceExtra,
+> {
+  source: TExtra["source"];
+  fetchedAt: string;
+  status: ListingAdapterRunStatus;
+  listings: ListingAdapterRecord<TExtra>[];
+  sourceMeta?: Record<string, unknown> | null;
+  warnings?: ListingAdapterWarning[];
+}
+
 /** Single enriched agent entry (firm, email, phone). */
 export interface AgentEnrichmentEntry {
   name: string;

@@ -1,17 +1,24 @@
 /**
  * Model helpers:
  * - General/lightweight enrichment defaults to gpt-4o
- * - High-stakes underwriting / dossier analysis defaults to gpt-5.4
- * Normalize common variants so "5.4" or "gpt-5.4" work.
+ * - High-stakes underwriting / dossier analysis defaults to gpt-5.5
+ * Normalize common variants so "5.5" or "ChatGPT 5.5" work.
  */
 
 const DEFAULT_MODEL = "gpt-4o";
-const DEFAULT_COMPLEX_ANALYSIS_MODEL = "gpt-5.4";
+const DEFAULT_COMPLEX_ANALYSIS_MODEL = "gpt-5.5";
 const DEFAULT_REASONING_EFFORT = "high";
 
-/** Map shorthand to API model id so OPENAI_MODEL=5.4 works. */
+/** Map shorthand/common display names to API model ids so OPENAI_MODEL=5.5 works. */
 const MODEL_ALIASES: Record<string, string> = {
+  "5.5": "gpt-5.5",
+  "gpt 5.5": "gpt-5.5",
+  "chatgpt 5.5": "gpt-5.5",
+  "chatgpt-5.5": "gpt-5.5",
   "5.4": "gpt-5.4",
+  "gpt 5.4": "gpt-5.4",
+  "chatgpt 5.4": "gpt-5.4",
+  "chatgpt-5.4": "gpt-5.4",
   "5.0": "gpt-5",
   "5.1": "gpt-5.1",
   "5.2": "gpt-5.2",
@@ -88,7 +95,7 @@ export function getOmAnalysisReasoningEffort(): "low" | "medium" | "high" {
   return getReasoningEffortFromEnv("OPENAI_OM_REASONING_EFFORT", "OPENAI_COMPLEX_REASONING_EFFORT");
 }
 
-/** Used by deal dossier analysis LLM; defaults to gpt-5.4 unless overridden. */
+/** Used by deal dossier analysis LLM; defaults to gpt-5.5 unless overridden. */
 export function getDossierModel(): string {
   const model = getModelFromEnv("OPENAI_DOSSIER_MODEL", "OPENAI_COMPLEX_ANALYSIS_MODEL");
   if (model) return model;

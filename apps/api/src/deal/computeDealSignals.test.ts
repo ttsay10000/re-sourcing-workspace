@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { computeDealSignals } from "./computeDealSignals.js";
 
+function isoDaysAgo(days: number): string {
+  const date = new Date();
+  date.setUTCHours(12, 0, 0, 0);
+  date.setUTCDate(date.getUTCDate() - days);
+  return date.toISOString().slice(0, 10);
+}
+
 describe("computeDealSignals", () => {
   it("uses the authoritative OM unit count when the rent roll is incomplete", () => {
     const result = computeDealSignals({
@@ -32,11 +39,11 @@ describe("computeDealSignals", () => {
       primaryListing: {
         price: 6_999_000,
         city: "Manhattan",
-        listedAt: "2025-09-25",
+        listedAt: isoDaysAgo(180),
         priceHistory: [
-          { date: "2026-01-13", price: "$6,999,000", event: "Price Decrease" },
-          { date: "2025-12-18", price: "$7,400,000", event: "Price Decrease" },
-          { date: "2025-09-25", price: "$10,000,000", event: "Listed" },
+          { date: isoDaysAgo(20), price: "$6,999,000", event: "Price Decrease" },
+          { date: isoDaysAgo(45), price: "$7,400,000", event: "Price Decrease" },
+          { date: isoDaysAgo(180), price: "$10,000,000", event: "Listed" },
         ],
       },
       details: null,

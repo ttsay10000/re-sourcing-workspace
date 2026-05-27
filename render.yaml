@@ -40,6 +40,16 @@ services:
         sync: false
       - key: OPENAI_API_KEY
         sync: false
+      - key: OPENAI_MODEL
+        sync: false
+      - key: OPENAI_COMPLEX_ANALYSIS_MODEL
+        sync: false
+      - key: OPENAI_DOSSIER_MODEL
+        sync: false
+      - key: OPENAI_DEAL_SCORING_MODEL
+        sync: false
+      - key: OPENAI_OM_MODEL
+        sync: false
       - key: GEMINI_API_KEY
         sync: false
       - key: GEMINI_OM_MODEL

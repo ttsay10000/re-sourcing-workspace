@@ -5,6 +5,7 @@ import { hpdRegistrationModule } from "./hpdRegistration.js";
 import { hpdViolationsModule } from "./hpdViolations.js";
 import { dobComplaintsModule } from "./dobComplaints.js";
 import { housingLitigationsModule } from "./housingLitigations.js";
+import { neighborhoodModule } from "../neighborhood/module.js";
 
 export const ENRICHMENT_MODULES: EnrichmentModule[] = [
   zoningZtlModule,
@@ -15,8 +16,12 @@ export const ENRICHMENT_MODULES: EnrichmentModule[] = [
   housingLitigationsModule,
 ];
 
+const OPTIONAL_ENRICHMENT_MODULES: EnrichmentModule[] = [
+  neighborhoodModule,
+];
+
 export function getEnrichmentModule(name: string): EnrichmentModule | undefined {
-  return ENRICHMENT_MODULES.find((m) => m.name === name);
+  return [...ENRICHMENT_MODULES, ...OPTIONAL_ENRICHMENT_MODULES].find((m) => m.name === name);
 }
 
 export {
@@ -26,4 +31,5 @@ export {
   hpdViolationsModule,
   dobComplaintsModule,
   housingLitigationsModule,
+  neighborhoodModule,
 };

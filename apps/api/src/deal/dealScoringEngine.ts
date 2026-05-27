@@ -1,4 +1,11 @@
 import type { DealRiskProfile, DealScoreBreakdown } from "@re-sourcing/contracts";
+import {
+  resolveDealScoringProfile,
+  type DealScoringProfile,
+  type DealScoringProfileKey,
+  type MaxScoreBand,
+  type MinScoreBand,
+} from "./dealScoringProfiles.js";
 
 export const DEAL_SCORE_VERSION = "v3";
 
@@ -38,6 +45,8 @@ export interface DealScoringInputs {
   daysSinceLatestPriceDecrease?: number | null;
   currentDiscountFromOriginalAskPct?: number | null;
   riskProfile?: DealRiskProfile | null;
+  scoringProfile?: DealScoringProfileKey | DealScoringProfile | null;
+  furnishingSetupCosts?: number | null;
 }
 
 export interface DealScoringResult {
@@ -60,6 +69,8 @@ export interface DealScoringResult {
   riskFlags: string[];
   capReasons: string[];
   scoreVersion: string;
+  scoringProfileKey: DealScoringProfileKey;
+  scoringProfileLabel: string;
 }
 
 export interface FinalDealScoreInputs {
@@ -75,8 +86,6 @@ interface PenaltyResult {
   flags: string[];
 }
 
-const MAX_COMPOSITE_SCORE = 80;
-
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
@@ -90,9 +99,9 @@ function round2(value: number | null | undefined): number | null {
   return Math.round(value * 100) / 100;
 }
 
-function normalizeCompositeScore(rawCompositeScore: number): number {
+function normalizeCompositeScore(rawCompositeScore: number, profile: DealScoringProfile): number {
   if (!Number.isFinite(rawCompositeScore)) return 0;
-  return clamp(Math.round((rawCompositeScore / MAX_COMPOSITE_SCORE) * 100), 0, 100);
+  return clamp(Math.round((rawCompositeScore / profile.maxCompositeScore) * 100), 0, 100);
 }
 
 function assetCapRateAtAsk(inputs: DealScoringInputs): number | null {
@@ -116,76 +125,52 @@ function requiredDiscountPct(inputs: DealScoringInputs): number | null {
   return Math.max(0, ((ask - recommendedOfferHigh) / ask) * 100);
 }
 
-function scoreIrr(irrPctDecimal: number | null | undefined): number {
+function scoreAtLeast(value: number | null, bands: MinScoreBand[]): number {
+  if (value == null) return 0;
+  for (const band of bands) {
+    if (value >= band.min) return band.score;
+  }
+  return 0;
+}
+
+function scoreAtMost(value: number | null, bands: MaxScoreBand[]): number {
+  if (value == null) return 0;
+  for (const band of bands) {
+    if (value <= band.max) return band.score;
+  }
+  return 0;
+}
+
+function scoreIrr(irrPctDecimal: number | null | undefined, profile: DealScoringProfile): number {
   const irrPct = asPct(irrPctDecimal);
-  if (irrPct == null) return 0;
-  if (irrPct >= 25) return 20;
-  if (irrPct >= 20) return 17;
-  if (irrPct >= 15) return 15;
-  if (irrPct >= 12) return 11;
-  if (irrPct >= 8) return 6;
-  if (irrPct >= 0) return 2;
-  return 0;
+  return scoreAtLeast(irrPct, profile.returnScores.irrPct);
 }
 
-function scoreCoc(cocPctDecimal: number | null | undefined): number {
+function scoreCoc(cocPctDecimal: number | null | undefined, profile: DealScoringProfile): number {
   const cocPct = asPct(cocPctDecimal);
-  if (cocPct == null) return 0;
-  if (cocPct >= 10) return 10;
-  if (cocPct >= 8) return 8;
-  if (cocPct >= 6) return 6;
-  if (cocPct >= 4) return 4;
-  if (cocPct >= 2) return 2;
-  if (cocPct >= 0) return 1;
-  return 0;
+  return scoreAtLeast(cocPct, profile.returnScores.cocPct);
 }
 
-function scoreAskCap(assetCapRate: number | null): number {
-  if (assetCapRate == null) return 0;
-  if (assetCapRate >= 7.0) return 15;
-  if (assetCapRate >= 6.5) return 13;
-  if (assetCapRate >= 6.0) return 11;
-  if (assetCapRate >= 5.5) return 9;
-  if (assetCapRate >= 5.0) return 6;
-  if (assetCapRate >= 4.75) return 4;
-  if (assetCapRate >= 4.5) return 3;
-  if (assetCapRate >= 4.0) return 1;
-  return 0;
+function scoreAskCap(assetCapRate: number | null, profile: DealScoringProfile): number {
+  return scoreAtLeast(assetCapRate, profile.returnScores.askCapRatePct);
 }
 
-function scoreAdjustedCap(adjustedCapRate: number | null): number {
-  if (adjustedCapRate == null) return 0;
-  if (adjustedCapRate >= 7.5) return 18;
-  if (adjustedCapRate >= 7.0) return 18;
-  if (adjustedCapRate >= 6.75) return 17;
-  if (adjustedCapRate >= 6.5) return 16;
-  if (adjustedCapRate >= 6.25) return 14;
-  if (adjustedCapRate >= 6.0) return 12;
-  if (adjustedCapRate >= 5.5) return 8;
-  if (adjustedCapRate >= 5.0) return 5;
-  if (adjustedCapRate >= 4.5) return 2;
-  return 0;
+function scoreAdjustedCap(adjustedCapRate: number | null, profile: DealScoringProfile): number {
+  return scoreAtLeast(adjustedCapRate, profile.returnScores.adjustedCapRatePct);
 }
 
-function scoreRequiredDiscount(discountPct: number | null): number {
-  if (discountPct == null) return 0;
-  if (discountPct <= 0) return 8;
-  if (discountPct <= 5) return 8;
-  if (discountPct <= 10) return 7;
-  if (discountPct <= 20) return 6;
-  if (discountPct <= 30) return 5;
-  if (discountPct <= 40) return 2;
-  return 0;
+function scoreRequiredDiscount(discountPct: number | null, profile: DealScoringProfile): number {
+  return scoreAtMost(discountPct, profile.returnScores.requiredDiscountPct);
 }
 
-function scoreStabilizedSpread(assetCapRate: number | null, adjustedCapRate: number | null): number {
+function scoreStabilizedSpread(
+  assetCapRate: number | null,
+  adjustedCapRate: number | null,
+  profile: DealScoringProfile
+): number {
   if (assetCapRate == null || adjustedCapRate == null) return 0;
   const spreadBps = (adjustedCapRate - assetCapRate) * 100;
-  if (spreadBps >= 150) return 4;
-  if (spreadBps >= 100) return 3;
-  if (spreadBps >= 50) return 2;
-  if (spreadBps >= 25) return 1;
-  return 0;
+  return scoreAtLeast(spreadBps, profile.returnScores.stabilizedSpreadBps);
 }
 
 function scoreSmallResidentialOpportunity(
@@ -193,50 +178,91 @@ function scoreSmallResidentialOpportunity(
   assetCapRate: number | null,
   adjustedCapRate: number | null,
   discountPct: number | null,
-  riskProfile: DealRiskProfile
+  riskProfile: DealRiskProfile,
+  profile: DealScoringProfile
 ): number {
+  const config = profile.smallResidentialOpportunity;
   const totalUnits = inputs.totalUnits ?? riskProfile.totalUnits ?? null;
   const irrPct = asPct(inputs.irrPct);
-  if (totalUnits == null || totalUnits > 4) return 0;
-  if ((riskProfile.commercialRevenueSharePct ?? 0) > 0.05) return 0;
-  if ((riskProfile.rentStabilizedRevenueSharePct ?? 0) > 0) return 0;
-  if (adjustedCapRate == null || adjustedCapRate < 6.5) return 0;
-  if (irrPct == null || irrPct < 15) return 0;
+  if (totalUnits == null || totalUnits > config.maxUnits) return 0;
+  if ((riskProfile.commercialRevenueSharePct ?? 0) > config.maxCommercialRevenueSharePct) return 0;
+  if ((riskProfile.rentStabilizedRevenueSharePct ?? 0) > config.maxRentStabilizedRevenueSharePct) return 0;
+  if (adjustedCapRate == null || adjustedCapRate < config.minAdjustedCapRatePct) return 0;
+  if (irrPct == null || irrPct < config.minIrrPct) return 0;
 
-  let score = 10;
-  if (assetCapRate != null && assetCapRate >= 4.75) score += 2;
-  if (discountPct != null && discountPct <= 15) score += 2;
-  if ((inputs.blendedRentUpliftPct ?? 0) <= 75) score += 2;
-  return Math.min(16, score);
+  let score = config.baseScore;
+  if (assetCapRate != null && assetCapRate >= config.askCapRateBonusMinPct) {
+    score += config.askCapRateBonus;
+  }
+  if (discountPct != null && discountPct <= config.discountBonusMaxPct) {
+    score += config.discountBonus;
+  }
+  if ((inputs.blendedRentUpliftPct ?? 0) <= config.rentUpliftBonusMaxPct) {
+    score += config.rentUpliftBonus;
+  }
+  return Math.min(config.maxScore, score);
 }
 
-function hasMeaningfulPriceCut(inputs: DealScoringInputs): boolean {
+function scoreValueAddMultifamilyOpportunity(
+  inputs: DealScoringInputs,
+  adjustedCapRate: number | null,
+  riskProfile: DealRiskProfile,
+  profile: DealScoringProfile
+): number {
+  const config = profile.valueAddMultifamilyOpportunity;
+  if (!config.enabled) return 0;
+  const totalUnits = inputs.totalUnits ?? riskProfile.totalUnits ?? null;
+  const irrPct = asPct(inputs.irrPct);
+  if (totalUnits == null || totalUnits < config.minUnits || totalUnits > config.maxUnits) return 0;
+  if ((riskProfile.commercialRevenueSharePct ?? 0) > config.maxCommercialRevenueSharePct) return 0;
+  if ((riskProfile.rentStabilizedRevenueSharePct ?? 0) > config.maxRentStabilizedRevenueSharePct) return 0;
+  if (adjustedCapRate == null || adjustedCapRate < config.minAdjustedCapRatePct) return 0;
+  if (irrPct == null || irrPct < config.minIrrPct) return 0;
+  if ((inputs.blendedRentUpliftPct ?? 0) < config.minBlendedRentUpliftPct) return 0;
+  if ((riskProfile.unsupportedRentGrowthPct ?? 0) > config.maxUnsupportedRentGrowthPct) return 0;
+
+  let score = config.baseScore;
+  if ((inputs.furnishingSetupCosts ?? 0) >= config.meaningfulFurnishingCostBonusThreshold) {
+    score += config.furnishingCostBonus;
+  }
+  return Math.min(config.maxScore, score);
+}
+
+function hasMeaningfulPriceCut(inputs: DealScoringInputs, profile: DealScoringProfile): boolean {
+  const config = profile.meaningfulPriceCut;
   return (
-    (inputs.latestPriceDecreasePct ?? 0) >= 3 &&
-    (inputs.daysSinceLatestPriceDecrease ?? Number.POSITIVE_INFINITY) <= 90 &&
-    (inputs.currentDiscountFromOriginalAskPct ?? 0) >= 10
+    (inputs.latestPriceDecreasePct ?? 0) >= config.latestDecreaseMinPct &&
+    (inputs.daysSinceLatestPriceDecrease ?? Number.POSITIVE_INFINITY) <= config.daysSinceDecreaseMax &&
+    (inputs.currentDiscountFromOriginalAskPct ?? 0) >= config.currentDiscountFromOriginalAskMinPct
   );
 }
 
-function marketLiquidityScore(inputs: DealScoringInputs, riskProfile: DealRiskProfile): number {
-  let score = 4;
+function marketLiquidityScore(
+  inputs: DealScoringInputs,
+  riskProfile: DealRiskProfile,
+  profile: DealScoringProfile
+): number {
+  const config = profile.marketLiquidity;
+  let score = config.baseScore;
   const totalUnits = inputs.totalUnits ?? riskProfile.totalUnits ?? null;
   if (totalUnits != null) {
-    if (totalUnits >= 20) score += 2;
-    else if (totalUnits >= 10) score += 1;
-    else if (totalUnits < 3) score -= 1;
+    if (totalUnits >= config.largeAssetMinUnits) score += config.largeAssetBonus;
+    else if (totalUnits >= config.midsizeAssetMinUnits) score += config.midsizeAssetBonus;
+    else if (totalUnits < config.smallAssetBelowUnits) score -= config.smallAssetPenalty;
   }
-  if (hasMeaningfulPriceCut(inputs)) score += 1;
-  return clamp(score, 0, 10);
+  if (hasMeaningfulPriceCut(inputs, profile)) score += config.priceCutBonus;
+  return clamp(score, 0, config.maxScore);
 }
 
 function assumptionPenalty(
   inputs: DealScoringInputs,
   riskProfile: DealRiskProfile,
-  assetCapRate: number | null
+  assetCapRate: number | null,
+  profile: DealScoringProfile
 ): PenaltyResult {
   let value = 0;
   const flags: string[] = [];
+  const config = profile.assumptionPenalties;
   const blendedRentUpliftPct = inputs.blendedRentUpliftPct ?? 0;
   const rentRollCoveragePct = riskProfile.rentRollCoveragePct ?? null;
   const vacancyPct = inputs.vacancyPct ?? null;
@@ -248,87 +274,91 @@ function assumptionPenalty(
       ? inputs.adjustedNoi / inputs.noi
       : null;
 
-  if (blendedRentUpliftPct > 80) {
-    value += 3;
-    flags.push(`Very high blended rent uplift (${blendedRentUpliftPct.toFixed(1)}%)`);
-  } else if (blendedRentUpliftPct > 60) {
-    value += 2;
-    flags.push(`Aggressive blended rent uplift (${blendedRentUpliftPct.toFixed(1)}%)`);
-  } else if (blendedRentUpliftPct > 45) {
-    value += 1;
-    flags.push(`Elevated blended rent uplift (${blendedRentUpliftPct.toFixed(1)}%)`);
-  } else if (blendedRentUpliftPct > 30) {
-    value += 1;
-    flags.push(`Meaningful blended rent uplift (${blendedRentUpliftPct.toFixed(1)}%)`);
+  if (blendedRentUpliftPct > config.blendedRentUpliftPct.veryHigh.above) {
+    value += config.blendedRentUpliftPct.veryHigh.penalty;
+    flags.push(`${config.blendedRentUpliftPct.veryHigh.label} (${blendedRentUpliftPct.toFixed(1)}%)`);
+  } else if (blendedRentUpliftPct > config.blendedRentUpliftPct.aggressive.above) {
+    value += config.blendedRentUpliftPct.aggressive.penalty;
+    flags.push(`${config.blendedRentUpliftPct.aggressive.label} (${blendedRentUpliftPct.toFixed(1)}%)`);
+  } else if (blendedRentUpliftPct > config.blendedRentUpliftPct.elevated.above) {
+    value += config.blendedRentUpliftPct.elevated.penalty;
+    flags.push(`${config.blendedRentUpliftPct.elevated.label} (${blendedRentUpliftPct.toFixed(1)}%)`);
+  } else if (blendedRentUpliftPct > config.blendedRentUpliftPct.meaningful.above) {
+    value += config.blendedRentUpliftPct.meaningful.penalty;
+    flags.push(`${config.blendedRentUpliftPct.meaningful.label} (${blendedRentUpliftPct.toFixed(1)}%)`);
   }
 
-  if (rentRollCoveragePct != null && rentRollCoveragePct < 0.75) {
-    value += 2;
-    flags.push(`Rent-roll coverage only ${(rentRollCoveragePct * 100).toFixed(0)}%`);
+  if (rentRollCoveragePct != null && rentRollCoveragePct < config.rentRollCoverage.below) {
+    value += config.rentRollCoverage.penalty;
+    flags.push(`${config.rentRollCoverage.label} ${(rentRollCoveragePct * 100).toFixed(0)}%`);
   }
 
   if (vacancyPct != null) {
-    if (vacancyPct < 3) {
-      value += 2;
-      flags.push(`Vacancy assumption below 3% (${vacancyPct.toFixed(1)}%)`);
-    } else if (vacancyPct < 5) {
-      value += 1;
-      flags.push(`Vacancy assumption below 5% (${vacancyPct.toFixed(1)}%)`);
+    if (vacancyPct < config.vacancyPct.veryLow.below) {
+      value += config.vacancyPct.veryLow.penalty;
+      flags.push(`${config.vacancyPct.veryLow.label} (${vacancyPct.toFixed(1)}%)`);
+    } else if (vacancyPct < config.vacancyPct.low.below) {
+      value += config.vacancyPct.low.penalty;
+      flags.push(`${config.vacancyPct.low.label} (${vacancyPct.toFixed(1)}%)`);
     }
   }
 
   if (adjustedCapRatePct != null && exitCapRatePct != null) {
     const diffBps = (adjustedCapRatePct - exitCapRatePct) * 100;
-    if (diffBps > 150) {
-      value += 1;
+    if (diffBps > config.exitCapSpread.adjustedCapSevereBps) {
+      value += config.exitCapSpread.penalty;
       flags.push(
         `Exit cap ${exitCapRatePct.toFixed(2)}% is over 25 bps below stabilized entry cap ${adjustedCapRatePct.toFixed(2)}%`
       );
-    } else if (diffBps > 25) {
-      value += 1;
+    } else if (diffBps > config.exitCapSpread.adjustedCapAnyBps) {
+      value += config.exitCapSpread.penalty;
       flags.push(
         `Exit cap ${exitCapRatePct.toFixed(2)}% is at/below stabilized entry cap ${adjustedCapRatePct.toFixed(2)}%`
       );
     }
   } else if (assetCapRate != null && exitCapRatePct != null) {
     const diffBps = (assetCapRate - exitCapRatePct) * 100;
-    if (diffBps > 75) {
-      value += 1;
+    if (diffBps > config.exitCapSpread.assetCapBps) {
+      value += config.exitCapSpread.penalty;
       flags.push(`Exit cap ${exitCapRatePct.toFixed(2)}% is tighter than current cap ${assetCapRate.toFixed(2)}%`);
     }
   }
 
-  if ((annualExpenseGrowthPct ?? 100) < 2 && !inputs.hasDetailedExpenseRows) {
-    value += 2;
-    flags.push("Expense growth under 2% without detailed expense rows");
+  if (
+    (annualExpenseGrowthPct ?? 100) < config.minimumAnnualExpenseGrowthPctWithoutRows &&
+    !inputs.hasDetailedExpenseRows
+  ) {
+    value += config.lowExpenseGrowthPenalty;
+    flags.push(config.lowExpenseGrowthLabel);
   }
 
   if (stabilizedToCurrentNoiRatio != null) {
-    if (stabilizedToCurrentNoiRatio > 1.5) {
-      value += 1;
+    if (stabilizedToCurrentNoiRatio > config.stabilizedNoiRatioAbove) {
+      value += config.stabilizedNoiRatioPenalty;
       flags.push(`Stabilized NOI is ${(stabilizedToCurrentNoiRatio * 100).toFixed(0)}% of current NOI`);
     }
   }
 
-  return { value: Math.min(6, value), flags };
+  return { value: Math.min(config.maxPenalty, value), flags };
 }
 
-function structuralPenalty(riskProfile: DealRiskProfile): PenaltyResult {
+function structuralPenalty(riskProfile: DealRiskProfile, profile: DealScoringProfile): PenaltyResult {
   let value = 0;
   const flags: string[] = [];
+  const config = profile.structuralPenalties;
   const totalUnits = riskProfile.totalUnits ?? null;
 
   const rsShare = riskProfile.rentStabilizedRevenueSharePct ?? null;
   if (rsShare != null) {
     const rsPct = rsShare * 100;
-    if (rsPct > 50) {
-      value += 4;
+    if (rsShare > config.rentStabilizedRevenueSharePct.severeAbove) {
+      value += config.rentStabilizedRevenueSharePct.severePenalty;
       flags.push(`Rent-stabilized revenue share ${rsPct.toFixed(1)}%`);
-    } else if (rsPct > 25) {
-      value += 2;
+    } else if (rsShare > config.rentStabilizedRevenueSharePct.elevatedAbove) {
+      value += config.rentStabilizedRevenueSharePct.elevatedPenalty;
       flags.push(`Rent-stabilized revenue share ${rsPct.toFixed(1)}%`);
-    } else if (rsPct > 0) {
-      value += 1;
+    } else if (rsShare > config.rentStabilizedRevenueSharePct.anyAbove) {
+      value += config.rentStabilizedRevenueSharePct.anyPenalty;
       flags.push(`Any rent-stabilized revenue exposure (${rsPct.toFixed(1)}%)`);
     }
   }
@@ -336,29 +366,32 @@ function structuralPenalty(riskProfile: DealRiskProfile): PenaltyResult {
   const commercialShare = riskProfile.commercialRevenueSharePct ?? null;
   if (commercialShare != null) {
     const commercialPct = commercialShare * 100;
-    if (commercialPct > 50) {
-      value += 4;
+    if (commercialShare > config.commercialRevenueSharePct.severeAbove) {
+      value += config.commercialRevenueSharePct.severePenalty;
       flags.push(`Commercial revenue share ${commercialPct.toFixed(1)}%`);
-    } else if (commercialPct >= 30) {
-      value += 2;
+    } else if (commercialShare >= config.commercialRevenueSharePct.elevatedAtLeast) {
+      value += config.commercialRevenueSharePct.elevatedPenalty;
       flags.push(`Commercial revenue share ${commercialPct.toFixed(1)}%`);
-    } else if (commercialPct >= 15) {
-      value += 1;
+    } else if (commercialShare >= config.commercialRevenueSharePct.moderateAtLeast) {
+      value += config.commercialRevenueSharePct.moderatePenalty;
       flags.push(`Commercial revenue share ${commercialPct.toFixed(1)}%`);
     }
   }
 
   const largestUnitShare = riskProfile.largestUnitRevenueSharePct ?? null;
-  if (largestUnitShare != null && (totalUnits ?? Number.POSITIVE_INFINITY) >= 4) {
+  if (
+    largestUnitShare != null &&
+    (totalUnits ?? Number.POSITIVE_INFINITY) >= config.largestUnitRevenueSharePct.appliesWhenTotalUnitsAtLeast
+  ) {
     const largestPct = largestUnitShare * 100;
-    if (largestPct > 45) {
-      value += 3;
+    if (largestUnitShare > config.largestUnitRevenueSharePct.severeAbove) {
+      value += config.largestUnitRevenueSharePct.severePenalty;
       flags.push(`Largest unit contributes ${largestPct.toFixed(1)}% of rent`);
-    } else if (largestPct > 35) {
-      value += 2;
+    } else if (largestUnitShare > config.largestUnitRevenueSharePct.elevatedAbove) {
+      value += config.largestUnitRevenueSharePct.elevatedPenalty;
       flags.push(`Largest unit contributes ${largestPct.toFixed(1)}% of rent`);
-    } else if (largestPct >= 25) {
-      value += 1;
+    } else if (largestUnitShare >= config.largestUnitRevenueSharePct.moderateAtLeast) {
+      value += config.largestUnitRevenueSharePct.moderatePenalty;
       flags.push(`Largest unit contributes ${largestPct.toFixed(1)}% of rent`);
     }
   }
@@ -366,11 +399,11 @@ function structuralPenalty(riskProfile: DealRiskProfile): PenaltyResult {
   const rolloverShare = riskProfile.rollover12moRevenueSharePct ?? null;
   if (rolloverShare != null) {
     const rolloverPct = rolloverShare * 100;
-    if (rolloverPct > 40) {
-      value += 2;
+    if (rolloverShare > config.rollover12moRevenueSharePct.severeAbove) {
+      value += config.rollover12moRevenueSharePct.severePenalty;
       flags.push(`Lease rollover within 12 months is ${rolloverPct.toFixed(1)}% of rent`);
-    } else if (rolloverPct >= 25) {
-      value += 1;
+    } else if (rolloverShare >= config.rollover12moRevenueSharePct.elevatedAtLeast) {
+      value += config.rollover12moRevenueSharePct.elevatedPenalty;
       flags.push(`Lease rollover within 12 months is ${rolloverPct.toFixed(1)}% of rent`);
     }
   }
@@ -378,154 +411,207 @@ function structuralPenalty(riskProfile: DealRiskProfile): PenaltyResult {
   const coverage = riskProfile.rentRollCoveragePct ?? null;
   if (coverage != null) {
     const coveragePct = coverage * 100;
-    if (coveragePct < 50) {
-      value += 2;
+    if (coverage < config.rentRollCoveragePct.severeBelow) {
+      value += config.rentRollCoveragePct.severePenalty;
       flags.push(`Rent-roll coverage only ${coveragePct.toFixed(0)}%`);
-    } else if (coveragePct < 75) {
-      value += 1;
+    } else if (coverage < config.rentRollCoveragePct.elevatedBelow) {
+      value += config.rentRollCoveragePct.elevatedPenalty;
       flags.push(`Rent-roll coverage only ${coveragePct.toFixed(0)}%`);
     }
   }
 
-  if (riskProfile.missingLeaseDataMajority && (totalUnits ?? Number.POSITIVE_INFINITY) >= 4) {
-    value += 1;
+  if (
+    riskProfile.missingLeaseDataMajority &&
+    (totalUnits ?? Number.POSITIVE_INFINITY) >= config.largestUnitRevenueSharePct.appliesWhenTotalUnitsAtLeast
+  ) {
+    value += config.missingLeaseDataMajorityPenalty;
     flags.push("Lease dates missing on more than half of rent-roll rows");
   }
 
   if (riskProfile.smallAssetRiskLevel === "under_5") {
-    if ((totalUnits ?? Number.POSITIVE_INFINITY) >= 3) {
-      value += 1;
+    if ((totalUnits ?? Number.POSITIVE_INFINITY) >= config.smallAssetUnder5AppliesWhenUnitsAtLeast) {
+      value += config.smallAssetPenalty;
       flags.push("Small asset liquidity risk (<5 units)");
     }
   } else if (riskProfile.smallAssetRiskLevel === "5_to_9") {
-    value += 1;
+    value += config.smallAssetPenalty;
     flags.push("Small asset liquidity risk (5-9 units)");
   }
 
-  return { value: Math.min(8, value), flags };
+  return { value: Math.min(config.maxPenalty, value), flags };
 }
 
-function regulatoryPenalty(inputs: DealScoringInputs, riskProfile: DealRiskProfile): PenaltyResult {
+function regulatoryPenalty(
+  inputs: DealScoringInputs,
+  riskProfile: DealRiskProfile,
+  profile: DealScoringProfile
+): PenaltyResult {
   let value = 0;
   const flags: string[] = [];
+  const config = profile.regulatoryPenalties;
 
   if ((inputs.hpdRentImpairingOpen ?? 0) > 0) {
-    value += 5;
+    value += config.hpdRentImpairingOpenPenalty;
     flags.push("Open rent-impairing HPD violations");
   } else {
     const hpdOpen = inputs.hpdOpenCount ?? 0;
-    if (hpdOpen >= 5) {
-      value += 3;
+    if (hpdOpen >= config.hpdOpenSevereAtLeast) {
+      value += config.hpdOpenSeverePenalty;
       flags.push(`${hpdOpen} open HPD violations`);
     } else if (hpdOpen > 0) {
-      value += 1;
+      value += config.hpdOpenAnyPenalty;
       flags.push(`${hpdOpen} open HPD violations`);
     }
   }
 
   const dobRecentOrOpen = Math.max(inputs.dobOpenCount ?? 0, inputs.dobCount30 ?? 0);
-  if (dobRecentOrOpen >= 3) {
-    value += 3;
+  if (dobRecentOrOpen >= config.dobRecentOrOpenSevereAtLeast) {
+    value += config.dobRecentOrOpenSeverePenalty;
     flags.push("Open or very recent DOB complaints");
   } else if (dobRecentOrOpen > 0 || (inputs.dobCount365 ?? 0) > 0) {
-    value += 1;
+    value += config.dobHistoryPenalty;
     flags.push("DOB complaint history");
   }
 
   const litigationPenaltyDriver = Math.max(inputs.litigationOpenCount ?? 0, inputs.litigationTotal ?? 0);
-  if ((inputs.litigationOpenCount ?? 0) > 0 || (inputs.litigationTotalPenalty ?? 0) >= 5_000) {
-    value += 3;
+  if (
+    (inputs.litigationOpenCount ?? 0) > 0 ||
+    (inputs.litigationTotalPenalty ?? 0) >= config.litigationMaterialPenaltyThreshold
+  ) {
+    value += config.litigationMaterialPenalty;
     flags.push("Open housing litigation / penalty exposure");
   } else if (litigationPenaltyDriver > 0 || (inputs.litigationTotalPenalty ?? 0) > 0) {
-    value += 1;
+    value += config.litigationHistoryPenalty;
     flags.push("Housing litigation history");
   }
 
   const taxBurdenPct = riskProfile.taxBurdenPct != null ? riskProfile.taxBurdenPct * 100 : null;
   if (taxBurdenPct != null) {
-    if (taxBurdenPct > 25) {
-      value += 1;
+    if (taxBurdenPct > config.taxBurdenAbovePct) {
+      value += config.taxBurdenPenalty;
       flags.push(`Tax burden ${taxBurdenPct.toFixed(1)}% of EGI`);
     }
   }
 
-  if (riskProfile.explicitRecordMismatch && riskProfile.omDiscrepancyCount >= 2) {
-    value += 1;
+  if (
+    riskProfile.explicitRecordMismatch &&
+    riskProfile.omDiscrepancyCount >= config.explicitMismatchMinDiscrepancies
+  ) {
+    value += config.explicitMismatchPenalty;
     flags.push("Package OM or explicit record mismatch needs verification");
   }
 
-  return { value: Math.min(8, value), flags };
+  return { value: Math.min(config.maxPenalty, value), flags };
 }
 
-function confidenceScore(inputs: DealScoringInputs, riskProfile: DealRiskProfile): number {
-  let value = 1;
+function confidenceScore(
+  inputs: DealScoringInputs,
+  riskProfile: DealRiskProfile,
+  profile: DealScoringProfile
+): number {
+  const config = profile.confidence;
+  let value = config.startingScore;
 
-  if (inputs.noi == null || inputs.grossRentalIncome == null) value -= 0.2;
-  if (!inputs.hasDetailedExpenseRows) value -= 0.1;
+  if (inputs.noi == null || inputs.grossRentalIncome == null) value -= config.missingFinancialsDeduction;
+  if (!inputs.hasDetailedExpenseRows) value -= config.missingDetailedExpenseRowsDeduction;
 
   const coverage = riskProfile.rentRollCoveragePct ?? null;
   if (coverage != null) {
-    if (coverage < 0.5) value -= 0.2;
-    else if (coverage < 0.75) value -= 0.1;
+    if (coverage < config.rentRollCoverageSevereBelow) {
+      value -= config.rentRollCoverageSevereDeduction;
+    } else if (coverage < config.rentRollCoverageElevatedBelow) {
+      value -= config.rentRollCoverageElevatedDeduction;
+    }
   }
 
-  if (riskProfile.rapidOmMismatch) value -= 0.15;
-  if (riskProfile.omDiscrepancyCount >= 2) value -= 0.1;
-  if (riskProfile.missingLeaseDataMajority) value -= 0.1;
-  if (riskProfile.missingOccupancyDataMajority) value -= 0.05;
-  if (riskProfile.isPackageOm) value -= 0.1;
-  if (riskProfile.missingEnrichmentGroup) value -= 0.1;
+  if (riskProfile.rapidOmMismatch) value -= config.rapidOmMismatchDeduction;
+  if (riskProfile.omDiscrepancyCount >= config.omDiscrepancyCountAtLeast) {
+    value -= config.omDiscrepancyDeduction;
+  }
+  if (riskProfile.missingLeaseDataMajority) value -= config.missingLeaseDataMajorityDeduction;
+  if (riskProfile.missingOccupancyDataMajority) value -= config.missingOccupancyDataMajorityDeduction;
+  if (riskProfile.isPackageOm) value -= config.packageOmDeduction;
+  if (riskProfile.missingEnrichmentGroup) value -= config.missingEnrichmentDeduction;
 
-  return clamp(Math.round(value * 100) / 100, 0.1, 1);
+  return clamp(Math.round(value * 100) / 100, config.minScore, 1);
 }
 
-function capScore(inputs: DealScoringInputs, riskProfile: DealRiskProfile, confidence: number, rawScore: number): {
+function capScore(
+  inputs: DealScoringInputs,
+  riskProfile: DealRiskProfile,
+  confidence: number,
+  rawScore: number,
+  profile: DealScoringProfile
+): {
   score: number;
   reasons: string[];
 } {
   let score = rawScore;
   const reasons: string[] = [];
+  const config = profile.caps;
   const irrPct = asPct(inputs.irrPct);
   const requiredDiscount = requiredDiscountPct(inputs);
 
   if (
-    (irrPct != null && irrPct < 0) ||
-    ((inputs.equityMultiple ?? Number.POSITIVE_INFINITY) < 1) ||
-    ((requiredDiscount ?? 0) > 50)
+    (irrPct != null && irrPct < config.financialViability.irrBelowPct) ||
+    ((inputs.equityMultiple ?? Number.POSITIVE_INFINITY) < config.financialViability.equityMultipleBelow) ||
+    ((requiredDiscount ?? 0) > config.financialViability.requiredDiscountAbovePct)
   ) {
-    score = Math.min(score, 35);
-    reasons.push("Financial viability cap");
-  } else if ((irrPct != null && irrPct < 8) || (requiredDiscount ?? 0) > 40) {
-    score = Math.min(score, 50);
-    reasons.push("Weak return / discount cap");
+    score = Math.min(score, config.financialViability.maxScore);
+    reasons.push(config.financialViability.reason);
+  } else if (
+    (irrPct != null && irrPct < config.weakReturnOrDiscount.irrBelowPct) ||
+    (requiredDiscount ?? 0) > config.weakReturnOrDiscount.requiredDiscountAbovePct
+  ) {
+    score = Math.min(score, config.weakReturnOrDiscount.maxScore);
+    reasons.push(config.weakReturnOrDiscount.reason);
   }
 
   if (
-    (((riskProfile.commercialRevenueSharePct ?? 0) > 0.5) && ((riskProfile.largestUnitRevenueSharePct ?? 0) > 0.35)) ||
-    ((riskProfile.commercialRevenueSharePct ?? 0) > 0.6) ||
-    ((riskProfile.rentStabilizedRevenueSharePct ?? 0) > 0.5) ||
-    (((riskProfile.totalUnits ?? Number.POSITIVE_INFINITY) >= 4) && ((riskProfile.largestUnitRevenueSharePct ?? 0) > 0.6))
+    (((riskProfile.commercialRevenueSharePct ?? 0) >
+      config.structuralConcentration.commercialAndLargestUnitCommercialShareAbovePct) &&
+      ((riskProfile.largestUnitRevenueSharePct ?? 0) >
+        config.structuralConcentration.commercialAndLargestUnitLargestShareAbovePct)) ||
+    ((riskProfile.commercialRevenueSharePct ?? 0) > config.structuralConcentration.commercialShareAbovePct) ||
+    ((riskProfile.rentStabilizedRevenueSharePct ?? 0) >
+      config.structuralConcentration.rentStabilizedShareAbovePct) ||
+    (((riskProfile.totalUnits ?? Number.POSITIVE_INFINITY) >=
+      config.structuralConcentration.largestUnitAppliesWhenUnitsAtLeast) &&
+      ((riskProfile.largestUnitRevenueSharePct ?? 0) >
+        config.structuralConcentration.largestUnitShareAbovePct))
   ) {
-    score = Math.min(score, 68);
-    reasons.push("Structural concentration cap");
+    score = Math.min(score, config.structuralConcentration.maxScore);
+    reasons.push(config.structuralConcentration.reason);
   }
 
   if (
     (inputs.hpdRentImpairingOpen ?? 0) > 0 ||
-    confidence < 0.4 ||
-    (riskProfile.rapidOmMismatch && riskProfile.omDiscrepancyCount >= 2)
+    confidence < config.dataOrRegulatory.confidenceBelow ||
+    (riskProfile.rapidOmMismatch &&
+      riskProfile.omDiscrepancyCount >= config.dataOrRegulatory.rapidMismatchDiscrepancyCountAtLeast)
   ) {
-    score = Math.min(score, 60);
-    reasons.push("Data / regulatory cap");
+    score = Math.min(score, config.dataOrRegulatory.maxScore);
+    reasons.push(config.dataOrRegulatory.reason);
   }
-  if (confidence < 0.25) {
-    score = Math.min(score, 50);
-    reasons.push("Very low confidence cap");
+  if (confidence < config.veryLowConfidence.confidenceBelow) {
+    score = Math.min(score, config.veryLowConfidence.maxScore);
+    reasons.push(config.veryLowConfidence.reason);
   }
 
-  if ((inputs.blendedRentUpliftPct ?? 0) > 65 && (riskProfile.rentRollCoveragePct ?? 1) < 0.6) {
-    score = Math.min(score, 65);
-    reasons.push("Unsupported upside cap");
+  if (
+    (inputs.blendedRentUpliftPct ?? 0) > config.unsupportedUpside.blendedRentUpliftAbovePct &&
+    (riskProfile.rentRollCoveragePct ?? 1) < config.unsupportedUpside.rentRollCoverageBelow
+  ) {
+    score = Math.min(score, config.unsupportedUpside.maxScore);
+    reasons.push(config.unsupportedUpside.reason);
+  }
+
+  if (
+    config.rentStabilizationDoNotBuy &&
+    (riskProfile.rentStabilizedRevenueSharePct ?? 0) > 0
+  ) {
+    score = Math.min(score, config.rentStabilizationDoNotBuy.maxScore);
+    reasons.push(config.rentStabilizationDoNotBuy.reason);
   }
 
   return { score, reasons };
@@ -535,24 +621,28 @@ function buildPositiveSignals(
   inputs: DealScoringInputs,
   assetCapRate: number | null,
   adjustedCapRate: number | null,
-  discountPct: number | null
+  discountPct: number | null,
+  profile: DealScoringProfile
 ): string[] {
   const signals: string[] = [];
+  const config = profile.positiveSignals;
   const irrPct = asPct(inputs.irrPct);
   const cocPct = asPct(inputs.cocPct);
-  if (irrPct != null && irrPct >= 20) signals.push(`IRR ${irrPct.toFixed(1)}%`);
-  else if (irrPct != null && irrPct >= 15) signals.push(`IRR ${irrPct.toFixed(1)}%`);
-  if (cocPct != null && cocPct >= 8) signals.push(`Average CoC ${cocPct.toFixed(1)}%`);
-  if (assetCapRate != null && assetCapRate >= 5.5) signals.push(`Ask cap ${assetCapRate.toFixed(2)}%`);
-  if (adjustedCapRate != null && adjustedCapRate >= 6.5) signals.push(`Adjusted cap ${adjustedCapRate.toFixed(2)}%`);
-  if (discountPct != null && discountPct <= 20) {
+  if (irrPct != null && irrPct >= config.irrStrongMinPct) signals.push(`IRR ${irrPct.toFixed(1)}%`);
+  else if (irrPct != null && irrPct >= config.irrGoodMinPct) signals.push(`IRR ${irrPct.toFixed(1)}%`);
+  if (cocPct != null && cocPct >= config.cocMinPct) signals.push(`Average CoC ${cocPct.toFixed(1)}%`);
+  if (assetCapRate != null && assetCapRate >= config.askCapMinPct) signals.push(`Ask cap ${assetCapRate.toFixed(2)}%`);
+  if (adjustedCapRate != null && adjustedCapRate >= config.adjustedCapMinPct) {
+    signals.push(`Adjusted cap ${adjustedCapRate.toFixed(2)}%`);
+  }
+  if (discountPct != null && discountPct <= config.requiredDiscountMaxPct) {
     signals.push(
       discountPct <= 0
         ? "Asking price clears target IRR"
         : `${discountPct.toFixed(1)}% discount clears target IRR`
     );
   }
-  if (hasMeaningfulPriceCut(inputs)) {
+  if (hasMeaningfulPriceCut(inputs, profile)) {
     signals.push(
       `Recent ${Number(inputs.latestPriceDecreasePct ?? 0).toFixed(1)}% price cut with 10%+ discount from original ask`
     );
@@ -561,6 +651,7 @@ function buildPositiveSignals(
 }
 
 export function computeDealScore(inputs: DealScoringInputs): DealScoringResult {
+  const profile = resolveDealScoringProfile(inputs.scoringProfile);
   const assetCapRate = assetCapRateAtAsk(inputs);
   const adjustedCapRate = inputs.adjustedCapRatePct ?? null;
   const discountPct = requiredDiscountPct(inputs);
@@ -581,32 +672,45 @@ export function computeDealScore(inputs: DealScoringInputs): DealScoringResult {
     discountPct != null;
 
   const returnScore =
-    scoreIrr(inputs.irrPct ?? null) +
-    scoreCoc(inputs.cocPct ?? null) +
-    scoreAskCap(assetCapRate) +
-    scoreAdjustedCap(adjustedCapRate) +
-    scoreRequiredDiscount(discountPct) +
-    scoreStabilizedSpread(assetCapRate, adjustedCapRate);
+    scoreIrr(inputs.irrPct ?? null, profile) +
+    scoreCoc(inputs.cocPct ?? null, profile) +
+    scoreAskCap(assetCapRate, profile) +
+    scoreAdjustedCap(adjustedCapRate, profile) +
+    scoreRequiredDiscount(discountPct, profile) +
+    scoreStabilizedSpread(assetCapRate, adjustedCapRate, profile);
   const smallResidentialOpportunityScore = scoreSmallResidentialOpportunity(
     inputs,
     assetCapRate,
     adjustedCapRate,
     discountPct,
-    riskProfile
+    riskProfile,
+    profile
   );
-  const marketScore = marketLiquidityScore(inputs, riskProfile);
-  const assumption = assumptionPenalty(inputs, riskProfile, assetCapRate);
-  const structural = structuralPenalty(riskProfile);
-  const regulatory = regulatoryPenalty(inputs, riskProfile);
-  const confidence = confidenceScore(inputs, riskProfile);
+  const valueAddMultifamilyOpportunityScore = scoreValueAddMultifamilyOpportunity(
+    inputs,
+    adjustedCapRate,
+    riskProfile,
+    profile
+  );
+  const marketScore = marketLiquidityScore(inputs, riskProfile, profile);
+  const assumption = assumptionPenalty(inputs, riskProfile, assetCapRate, profile);
+  const structural = structuralPenalty(riskProfile, profile);
+  const regulatory = regulatoryPenalty(inputs, riskProfile, profile);
+  const confidence = confidenceScore(inputs, riskProfile, profile);
   const totalPenalty = assumption.value + structural.value + regulatory.value;
   const rawCompositeScore = clamp(
-    Math.round(returnScore + smallResidentialOpportunityScore + marketScore - totalPenalty),
+    Math.round(
+      returnScore +
+        smallResidentialOpportunityScore +
+        valueAddMultifamilyOpportunityScore +
+        marketScore -
+        totalPenalty
+    ),
     0,
-    MAX_COMPOSITE_SCORE
+    profile.maxCompositeScore
   );
-  const preCapScore = normalizeCompositeScore(rawCompositeScore);
-  const cap = capScore(inputs, riskProfile, confidence, preCapScore);
+  const preCapScore = normalizeCompositeScore(rawCompositeScore, profile);
+  const cap = capScore(inputs, riskProfile, confidence, preCapScore, profile);
   const dealScore = isScoreable ? clamp(Math.round(cap.score), 0, 100) : 0;
 
   const riskFlags = [...assumption.flags, ...structural.flags, ...regulatory.flags];
@@ -634,7 +738,7 @@ export function computeDealScore(inputs: DealScoringInputs): DealScoringResult {
     locationScore: 0,
     riskScore: clamp(Math.round(100 - (totalPenalty / 35) * 100), 0, 100),
     liquidityScore: marketScore * 10,
-    positiveSignals: buildPositiveSignals(inputs, assetCapRate, adjustedCapRate, discountPct),
+    positiveSignals: buildPositiveSignals(inputs, assetCapRate, adjustedCapRate, discountPct, profile),
     negativeSignals,
     assetCapRate: round2(assetCapRate),
     adjustedCapRate: round2(adjustedCapRate),
@@ -655,7 +759,9 @@ export function computeDealScore(inputs: DealScoringInputs): DealScoringResult {
     },
     riskFlags,
     capReasons: cap.reasons,
-    scoreVersion: DEAL_SCORE_VERSION,
+    scoreVersion: profile.scoreVersion,
+    scoringProfileKey: profile.key,
+    scoringProfileLabel: profile.label,
   };
 }
 

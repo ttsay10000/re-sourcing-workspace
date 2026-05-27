@@ -73,6 +73,60 @@ export interface AffordableHousingSummary {
   lastRefreshedAt?: string | null;
 }
 
+export type PropertyNeighborhoodSource =
+  | "manual"
+  | "nyc_api"
+  | "streeteasy"
+  | "loopnet"
+  | "marcus_millichap"
+  | "census"
+  | "pluto"
+  | "other";
+
+export interface PropertyNeighborhoodIdentity {
+  name: string;
+  normalizedName?: string | null;
+  borough?: string | null;
+  city?: string | null;
+  state?: string | null;
+  county?: string | null;
+  zip?: string | null;
+  source?: PropertyNeighborhoodSource | string | null;
+  sourceId?: string | null;
+  confidence?: number | null;
+}
+
+export interface PropertyNeighborhoodMetrics {
+  medianHouseholdIncome?: number | null;
+  medianRent?: number | null;
+  medianSalePrice?: number | null;
+  medianPricePsf?: number | null;
+  averageCapRatePct?: number | null;
+  walkScore?: number | null;
+  transitScore?: number | null;
+  population?: number | null;
+  sourceAsOf?: string | null;
+  [key: string]: unknown;
+}
+
+export interface PropertyNeighborhoodSourceAttribution {
+  source: PropertyNeighborhoodSource | string;
+  sourceId?: string | null;
+  capturedAt?: string | null;
+  url?: string | null;
+  raw?: Record<string, unknown> | null;
+}
+
+export interface PropertyNeighborhoodContainer {
+  primary?: PropertyNeighborhoodIdentity | null;
+  sourceMatches?: PropertyNeighborhoodIdentity[] | null;
+  metrics?: PropertyNeighborhoodMetrics | null;
+  narrative?: string | null;
+  lastRefreshedAt?: string | null;
+  sources?: PropertyNeighborhoodSourceAttribution[] | null;
+  [key: string]: unknown;
+}
+
 /** One rental unit row from RapidAPI rentals/url or from inquiry/LLM. */
 export interface RentalUnitRow {
   unit?: string | null;
@@ -214,7 +268,20 @@ export type OmIngestionRunStatus =
   | "completed"
   | "promoted"
   | "needs_review"
+  | "rejected"
   | "failed";
+
+export type OmIngestionReviewDecision = "promote" | "reject";
+
+export interface OmIngestionReviewOutcome {
+  decision: OmIngestionReviewDecision;
+  status: Extract<OmIngestionRunStatus, "promoted" | "rejected">;
+  decidedAt: string;
+  decidedBy?: string | null;
+  note?: string | null;
+  reasonCode?: string | null;
+  snapshotId?: string | null;
+}
 
 export type OmIngestionSourceType =
   | "uploaded_document"
@@ -572,6 +639,10 @@ export interface PropertyUploadedDocument {
   category: PropertyDocumentCategory;
   /** Source of the document (e.g. Broker, Listing agent, Email from X). */
   source?: string | null;
+  /** Original source URL when imported from a listing/document link. */
+  sourceUrl?: string | null;
+  /** Source-specific import metadata. */
+  sourceMetadata?: Record<string, unknown> | null;
   createdAt: string;
 }
 
@@ -635,6 +706,7 @@ export interface PropertyDetails {
     housing_litigations_summary?: HousingLitigationsSummary | null;
     affordable_housing_summary?: AffordableHousingSummary | null;
   } | null;
+  neighborhood?: PropertyNeighborhoodContainer | null;
   dealDossier?: PropertyDealDossier | null;
   [key: string]: unknown;
 }
@@ -674,6 +746,24 @@ export interface Document {
 export type DealStatus = "new" | "interesting" | "saved" | "dossier_generated" | "rejected";
 
 /** User profile (single global user) and assumption defaults. */
+export interface DealScoringPreferences {
+  /** IRR % that should anchor the strongest return scoring band. */
+  targetIrrPct?: number | null;
+  /** Cash-on-cash % that should be treated as good for this user's strategy. */
+  goodCashOnCashPct?: number | null;
+  /** When true, any rent-stabilized/control exposure hard-caps the deal score. */
+  rentStabilizationDoNotBuy?: boolean;
+  /** Default scorer family to apply when no deal-specific profile is selected. */
+  scoringProfileKey?: string | null;
+}
+
+export const DEFAULT_DEAL_SCORING_PREFERENCES: Required<DealScoringPreferences> = {
+  targetIrrPct: 25,
+  goodCashOnCashPct: 2,
+  rentStabilizationDoNotBuy: false,
+  scoringProfileKey: "legacy_v3",
+};
+
 export interface UserProfile {
   id: string;
   name?: string | null;
@@ -682,6 +772,9 @@ export interface UserProfile {
   automationPaused?: boolean;
   automationPauseReason?: string | null;
   automationPausedAt?: string | null;
+  automationInitialEmailEnabled?: boolean;
+  automationReplyEmailEnabled?: boolean;
+  automationAmbiguousActionHandlingEnabled?: boolean;
   dailyDigestEnabled?: boolean;
   dailyDigestTimeLocal?: string | null;
   dailyDigestTimezone?: string | null;
@@ -706,6 +799,7 @@ export interface UserProfile {
   defaultAnnualPropertyTaxGrowthPct?: number | null;
   defaultRecurringCapexAnnual?: number | null;
   defaultLoanFeePct?: number | null;
+  scoringPreferences?: DealScoringPreferences | null;
   createdAt: string;
   updatedAt: string;
 }

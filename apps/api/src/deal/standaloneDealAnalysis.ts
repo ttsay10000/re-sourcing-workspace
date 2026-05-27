@@ -43,6 +43,7 @@ import type {
   UnderwritingContext,
 } from "./underwritingContext.js";
 import { resolvePreferredOmRentRoll, resolvePreferredOmUnitCount } from "../om/authoritativeOm.js";
+import { resolveOmAskingPriceFromAnalysis } from "./omAskingPrice.js";
 
 export interface StandaloneUploadedOmDocument {
   fileName: string;
@@ -61,14 +62,6 @@ function toFiniteNumber(value: unknown): number | null {
   if (typeof value === "string") {
     const parsed = Number(value.replace(/[$,%\s,]/g, ""));
     if (Number.isFinite(parsed)) return parsed;
-  }
-  return null;
-}
-
-function firstFiniteNumber(...values: unknown[]): number | null {
-  for (const value of values) {
-    const parsed = toFiniteNumber(value);
-    if (parsed != null) return parsed;
   }
   return null;
 }
@@ -155,20 +148,7 @@ function validationFlagsFromCurrentState(params: {
 export function resolveStandaloneAskingPrice(
   omAnalysis: OmAnalysis | null | undefined
 ): number | null {
-  const propertyInfo = asRecord(omAnalysis?.propertyInfo);
-  const valuationMetrics = asRecord(omAnalysis?.valuationMetrics);
-  const uiFinancialSummary = asRecord(omAnalysis?.uiFinancialSummary);
-  return firstFiniteNumber(
-    propertyInfo?.price,
-    propertyInfo?.askingPrice,
-    propertyInfo?.listedPrice,
-    propertyInfo?.askPrice,
-    valuationMetrics?.price,
-    valuationMetrics?.askingPrice,
-    valuationMetrics?.listedPrice,
-    valuationMetrics?.askPrice,
-    uiFinancialSummary?.askingPrice
-  );
+  return resolveOmAskingPriceFromAnalysis(omAnalysis);
 }
 
 export function buildStandaloneDetailsFromOmAnalysis(params: {

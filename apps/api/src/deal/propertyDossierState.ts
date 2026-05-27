@@ -148,6 +148,9 @@ export function parsePropertyDealDossierUnitModelRows(
 
     const hasMeaningfulValue =
       nextRow.unitLabel != null ||
+      nextRow.building != null ||
+      nextRow.unitCategory != null ||
+      nextRow.tenantName != null ||
       nextRow.currentAnnualRent != null ||
       nextRow.underwrittenAnnualRent != null ||
       nextRow.rentUpliftPct != null ||
@@ -157,7 +160,16 @@ export function parsePropertyDealDossierUnitModelRows(
       nextRow.onboardingOtherCosts != null ||
       nextRow.onboardingFee != null ||
       nextRow.monthlyRecurringOpex != null ||
-      nextRow.monthlyHospitalityExpense != null;
+      nextRow.monthlyHospitalityExpense != null ||
+      nextRow.includeInUnderwriting != null ||
+      nextRow.isProtected != null ||
+      nextRow.isCommercial != null ||
+      nextRow.isRentStabilized != null ||
+      nextRow.beds != null ||
+      nextRow.baths != null ||
+      nextRow.sqft != null ||
+      nextRow.tenantStatus != null ||
+      nextRow.notes != null;
     if (hasMeaningfulValue) rows.push(nextRow);
   }
 
@@ -259,6 +271,16 @@ export function getPropertyDossierAssumptions(
     brokerEmailNotes,
     updatedAt,
   };
+}
+
+export function getRawPropertyDossierAssumptions(
+  details: PropertyDetails | null | undefined
+): Record<string, unknown> | null {
+  const assumptions = details?.dealDossier?.assumptions;
+  if (!assumptions || typeof assumptions !== "object" || Array.isArray(assumptions)) {
+    return null;
+  }
+  return { ...(assumptions as Record<string, unknown>) };
 }
 
 export function getPropertyDossierGeneration(

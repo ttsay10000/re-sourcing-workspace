@@ -27,9 +27,22 @@ const TYPE_OPTIONS: { value: string; label: string }[] = [
 ];
 
 type SearchCadence = "manual" | "daily" | "weekly" | "monthly";
+type SourceAdapterId = "streeteasy" | "loopnet";
+
+const SOURCE_OPTIONS: { value: SourceAdapterId; label: string; savedSearch: boolean }[] = [
+  { value: "streeteasy", label: "StreetEasy", savedSearch: true },
+  { value: "loopnet", label: "LoopNet", savedSearch: false },
+];
+
+const DEFAULT_SOURCE_TOGGLES: Record<SourceAdapterId, boolean> = {
+  streeteasy: true,
+  loopnet: false,
+};
 
 interface RunCriteria {
+  source?: SourceAdapterId | string | null;
   areas: string;
+  location?: string | null;
   minPrice?: number | null;
   maxPrice?: number | null;
   minBeds?: number | null;
@@ -41,21 +54,29 @@ interface RunCriteria {
   types?: string | null;
   limit?: number | null;
   offset?: number | null;
+  manualUrls?: string[] | null;
+  manualUrl?: string | null;
 }
 
 interface RunRow {
   id: string;
   startedAt: string;
+  source?: SourceAdapterId;
+  sourceLabel?: string;
   criteria: RunCriteria;
   step1Status: string;
+  step1Label?: string;
   step1Count: number;
   step1Error: string | null;
   step2Status: string;
+  step2Label?: string;
   step2Count: number;
   step2Total: number;
   step2Error: string | null;
+  sourceMetadata?: Record<string, unknown> | null;
   propertiesCount: number;
   errorsCount: number;
+  warningsCount?: number;
 }
 
 interface SavedSearch {
@@ -77,6 +98,7 @@ interface SavedSearch {
   maxSqft: number | null;
   requiredAmenities: string[];
   propertyTypes: string[];
+  sourceToggles?: Record<string, boolean | undefined>;
   scheduleCadence: SearchCadence;
   timezone: string;
   runTimeLocal: string | null;
@@ -116,7 +138,16 @@ interface SavedSearchRun {
   createdAt: string;
 }
 
+interface LoopNetBrowserCaptureConfig {
+  endpointPath: string;
+  token: string;
+}
+
 interface BuilderFormState {
+  manualRunSource: SourceAdapterId;
+  manualUrls: string;
+  sourceLocation: string;
+  sourceToggles: Record<SourceAdapterId, boolean>;
   searchName: string;
   savedSearchEnabled: boolean;
   selectedAreas: string[];
@@ -141,6 +172,10 @@ interface BuilderFormState {
 }
 
 const DEFAULT_FORM_STATE: BuilderFormState = {
+  manualRunSource: "streeteasy",
+  manualUrls: "",
+  sourceLocation: "New York, NY",
+  sourceToggles: DEFAULT_SOURCE_TOGGLES,
   searchName: "",
   savedSearchEnabled: true,
   selectedAreas: [],
@@ -194,9 +229,20 @@ function parseOptionalNumber(value: string): number | null {
 
 function parseCsvList(value: string): string[] {
   return value
-    .split(",")
+    .split(/[,\n]/)
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function sourceLabel(source: string | null | undefined): string {
+  return SOURCE_OPTIONS.find((option) => option.value === source)?.label ?? "StreetEasy";
+}
+
+function normalizeSourceToggles(value: Record<string, boolean | undefined> | null | undefined): Record<SourceAdapterId, boolean> {
+  return {
+    streeteasy: value?.streeteasy !== false,
+    loopnet: value?.loopnet === true,
+  };
 }
 
 function toTimeInputValue(value: string | null | undefined): string {
@@ -224,6 +270,9 @@ function formatSearchAreas(search: SavedSearch): string {
 
 function formatSearchFilters(search: SavedSearch): string {
   const filters: string[] = [`Areas: ${formatSearchAreas(search)}`];
+  const toggles = normalizeSourceToggles(search.sourceToggles);
+  const enabledSources = SOURCE_OPTIONS.filter((option) => toggles[option.value]).map((option) => option.label);
+  if (enabledSources.length > 0) filters.push(`Sources: ${enabledSources.join(", ")}`);
   if (search.minPrice != null || search.maxPrice != null) {
     filters.push(`Price: ${search.minPrice != null ? `$${search.minPrice.toLocaleString()}` : "any"}-${search.maxPrice != null ? `$${search.maxPrice.toLocaleString()}` : "any"}`);
   }
@@ -242,6 +291,7 @@ function formatSearchFilters(search: SavedSearch): string {
 function buildManualRunBody(form: BuilderFormState): RunCriteria {
   const areas = form.selectedAreas.length > 0 ? form.selectedAreas.join(",") : DEFAULT_AREAS.join(",");
   const body: RunCriteria = {
+    source: form.manualRunSource,
     areas,
     limit: parseOptionalNumber(form.limit) ?? Number(DEFAULT_RESULT_LIMIT),
   };
@@ -261,7 +311,16 @@ function buildManualRunBody(form: BuilderFormState): RunCriteria {
   if (maxTax != null) body.maxTax = maxTax;
   if (form.amenities.trim()) body.amenities = form.amenities.trim();
   if (form.selectedTypes.length > 0) body.types = form.selectedTypes.join(",");
+  if (form.manualRunSource !== "streeteasy") {
+    body.location = form.sourceLocation.trim() || "New York, NY";
+    body.manualUrls = parseCsvList(form.manualUrls);
+  }
   return body;
+}
+
+function buildLoopNetBookmarklet(endpoint: string, token: string): string {
+  const script = `(()=>{const endpoint=${JSON.stringify(endpoint)};const token=${JSON.stringify(token)};try{if(!/loopnet\\.com$/i.test(location.hostname)&&!/\\.loopnet\\.com$/i.test(location.hostname)){alert("Open a LoopNet listing page first.");return;}const metas={};document.querySelectorAll("meta[name],meta[property]").forEach((m)=>{const k=m.getAttribute("property")||m.getAttribute("name");const v=m.getAttribute("content");if(k&&v)metas[k]=v;});const payload={source:"loopnet",captureMode:"bookmarklet",url:location.href,html:document.documentElement.outerHTML,metadata:{documentTitle:document.title,visibleText:(document.body&&document.body.innerText||"").slice(0,60000),images:Array.from(document.images).slice(0,100).map((img)=>img.currentSrc||img.src).filter(Boolean),links:Array.from(document.links).slice(0,200).map((a)=>({href:a.href,text:(a.innerText||a.textContent||"").trim().slice(0,250)})),meta:metas,userAgent:navigator.userAgent}};fetch(endpoint,{method:"POST",headers:{"Content-Type":"application/json","X-LoopNet-Capture-Token":token},body:JSON.stringify(payload)}).then(async(r)=>{const data=await r.json().catch(()=>({}));if(!r.ok)throw new Error(data.error||data.details||"Capture failed");alert("LoopNet captured into Sourcing Agent run "+data.runId);}).catch((e)=>{console.error("[LoopNet capture]",e);alert("LoopNet capture failed: "+(e&&e.message?e.message:e));});}catch(e){console.error("[LoopNet capture]",e);alert("LoopNet capture failed: "+(e&&e.message?e.message:e));}})();`;
+  return `javascript:${script}`;
 }
 
 function buildSavedSearchPayload(form: BuilderFormState) {
@@ -299,7 +358,7 @@ function buildSavedSearchPayload(form: BuilderFormState) {
     maxTax,
     requiredAmenities: parseCsvList(form.amenities),
     propertyTypes: form.selectedTypes,
-    sourceToggles: { streeteasy: true, manual: false },
+    sourceToggles: { ...form.sourceToggles, manual: false },
     scheduleCadence: form.scheduleCadence,
     timezone: form.timezone.trim() || DEFAULT_TIMEZONE,
     runTimeLocal: form.scheduleCadence === "manual" ? null : form.runTimeLocal || "08:00",
@@ -311,17 +370,19 @@ function buildSavedSearchPayload(form: BuilderFormState) {
 }
 
 function step1Label(run: RunRow): string {
-  if (run.step1Status === "running") return "GET Active Sales...";
-  if (run.step1Status === "completed") return `GET Active Sales completed (${run.step1Count} properties)`;
-  if (run.step1Status === "failed") return `GET Active Sales failed${run.step1Error ? `: ${run.step1Error}` : ""}`;
-  return "GET Active Sales pending";
+  const label = run.step1Label || "GET Active Sales";
+  if (run.step1Status === "running") return `${label}...`;
+  if (run.step1Status === "completed") return `${label} completed (${run.step1Count} URL${run.step1Count === 1 ? "" : "s"})`;
+  if (run.step1Status === "failed") return `${label} failed${run.step1Error ? `: ${run.step1Error}` : ""}`;
+  return `${label} pending`;
 }
 
 function step2Label(run: RunRow): string {
-  if (run.step2Status === "running") return `GET Sale Details in progress (${run.step2Count}/${run.step2Total})`;
-  if (run.step2Status === "completed") return `GET Sale Details completed (${run.step2Count} properties)`;
-  if (run.step2Status === "failed") return `GET Sale Details failed${run.step2Error ? `: ${run.step2Error}` : ""}`;
-  return "GET Sale Details pending";
+  const label = run.step2Label || "GET Sale Details";
+  if (run.step2Status === "running") return `${label} in progress (${run.step2Count}/${run.step2Total})`;
+  if (run.step2Status === "completed") return `${label} completed (${run.step2Count} properties)`;
+  if (run.step2Status === "failed") return `${label} failed${run.step2Error ? `: ${run.step2Error}` : ""}`;
+  return `${label} pending`;
 }
 
 export default function RunsPage() {
@@ -343,6 +404,11 @@ export default function RunsPage() {
   const [deletingSavedSearchId, setDeletingSavedSearchId] = useState<string | null>(null);
   const [sendingRunId, setSendingRunId] = useState<string | null>(null);
   const [sendTimerSeconds, setSendTimerSeconds] = useState(0);
+  const [loopNetOperatorSessionId, setLoopNetOperatorSessionId] = useState<string | null>(null);
+  const [loopNetOperatorBusy, setLoopNetOperatorBusy] = useState(false);
+  const [loopNetCapturedHtml, setLoopNetCapturedHtml] = useState("");
+  const [loopNetCaptureConfig, setLoopNetCaptureConfig] = useState<LoopNetBrowserCaptureConfig | null>(null);
+  const [bookmarkletCopied, setBookmarkletCopied] = useState(false);
   const sendTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const fetchRuns = useCallback(async () => {
@@ -386,10 +452,25 @@ export default function RunsPage() {
     }
   }, []);
 
+  const fetchLoopNetCaptureConfig = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/test-agent/loopnet/browser-capture-config`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || data?.details || "Failed to load LoopNet capture config");
+      setLoopNetCaptureConfig({
+        endpointPath: data.endpointPath,
+        token: data.token,
+      });
+    } catch (err) {
+      console.warn("[loopnet capture config]", err);
+    }
+  }, []);
+
   useEffect(() => {
     void fetchRuns();
     void fetchSavedSearches();
-  }, [fetchRuns, fetchSavedSearches]);
+    void fetchLoopNetCaptureConfig();
+  }, [fetchRuns, fetchSavedSearches, fetchLoopNetCaptureConfig]);
 
   useEffect(() => {
     if (sendingRunId) {
@@ -455,6 +536,16 @@ export default function RunsPage() {
     }));
   }, []);
 
+  const toggleSource = useCallback((source: SourceAdapterId) => {
+    setForm((current) => ({
+      ...current,
+      sourceToggles: {
+        ...current.sourceToggles,
+        [source]: !current.sourceToggles[source],
+      },
+    }));
+  }, []);
+
   const resetBuilder = useCallback(() => {
     setEditingSavedSearchId(null);
     setForm(DEFAULT_FORM_STATE);
@@ -464,6 +555,10 @@ export default function RunsPage() {
   const loadSavedSearchIntoForm = useCallback((savedSearch: SavedSearch) => {
     setEditingSavedSearchId(savedSearch.id);
     setForm({
+      manualRunSource: "streeteasy",
+      manualUrls: "",
+      sourceLocation: "New York, NY",
+      sourceToggles: normalizeSourceToggles(savedSearch.sourceToggles),
       searchName: savedSearch.name,
       savedSearchEnabled: savedSearch.enabled,
       selectedAreas:
@@ -546,12 +641,119 @@ export default function RunsPage() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || data?.details || "Failed to start run");
-      setNotice("Manual StreetEasy Agent run started.");
+      setNotice(`Manual ${sourceLabel(form.manualRunSource)} run started.`);
       await fetchRuns();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to start run");
     } finally {
       setStartingManualRun(false);
+    }
+  };
+
+  const getPrimaryLoopNetUrl = useCallback((): string | null => {
+    const firstUrl = parseCsvList(form.manualUrls)[0] ?? null;
+    return firstUrl?.trim() || null;
+  }, [form.manualUrls]);
+
+  const loopNetBookmarklet = loopNetCaptureConfig
+    ? buildLoopNetBookmarklet(`${API_BASE}${loopNetCaptureConfig.endpointPath}`, loopNetCaptureConfig.token)
+    : "";
+
+  const handleCopyLoopNetBookmarklet = async () => {
+    setBookmarkletCopied(false);
+    if (!loopNetBookmarklet) {
+      setError("LoopNet browser capture config is not ready yet.");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(loopNetBookmarklet);
+      setBookmarkletCopied(true);
+      setNotice("LoopNet bookmarklet copied.");
+    } catch {
+      setError("Could not copy the bookmarklet automatically. Select the text and copy it manually.");
+    }
+  };
+
+  const handleStartLoopNetOperator = async () => {
+    setError(null);
+    setNotice(null);
+    const url = getPrimaryLoopNetUrl();
+    if (!url) {
+      setError("Paste a LoopNet listing URL first.");
+      return;
+    }
+    setLoopNetOperatorBusy(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/test-agent/loopnet/operator/start`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || data?.details || "Failed to start LoopNet browser capture");
+      setLoopNetOperatorSessionId(data.session?.id ?? null);
+      setNotice("LoopNet browser opened. Load the listing manually, then click Capture loaded page.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to start LoopNet browser capture");
+    } finally {
+      setLoopNetOperatorBusy(false);
+    }
+  };
+
+  const handleCaptureLoopNetOperator = async () => {
+    setError(null);
+    setNotice(null);
+    if (!loopNetOperatorSessionId) {
+      setError("Start a LoopNet browser capture first.");
+      return;
+    }
+    setLoopNetOperatorBusy(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/test-agent/loopnet/operator/${loopNetOperatorSessionId}/capture`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ close: true }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || data?.details || "Failed to capture LoopNet page");
+      setLoopNetOperatorSessionId(null);
+      setNotice(`LoopNet page captured into manual run ${data.runId}.`);
+      await fetchRuns();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to capture LoopNet page");
+    } finally {
+      setLoopNetOperatorBusy(false);
+    }
+  };
+
+  const handleCaptureLoopNetHtml = async () => {
+    setError(null);
+    setNotice(null);
+    const url = getPrimaryLoopNetUrl();
+    if (!url) {
+      setError("Paste a LoopNet listing URL first.");
+      return;
+    }
+    if (!loopNetCapturedHtml.trim()) {
+      setError("Paste saved LoopNet HTML first.");
+      return;
+    }
+    setLoopNetOperatorBusy(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/test-agent/loopnet/html-capture`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url, html: loopNetCapturedHtml }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || data?.details || "Failed to capture LoopNet HTML");
+      setLoopNetCapturedHtml("");
+      setNotice(`LoopNet saved HTML captured into manual run ${data.runId}.`);
+      await fetchRuns();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to capture LoopNet HTML");
+    } finally {
+      setLoopNetOperatorBusy(false);
     }
   };
 
@@ -690,7 +892,7 @@ export default function RunsPage() {
 
   return (
     <div className="runs-page">
-      <h1 className="page-title">StreetEasy Agent</h1>
+      <h1 className="page-title">Sourcing Agent</h1>
 
       {sendingRunId ? (
         <div
@@ -734,11 +936,11 @@ export default function RunsPage() {
           How it works
         </h2>
         <p style={{ marginBottom: "0.75rem", lineHeight: 1.5 }}>
-          StreetEasy Agent now does two jobs from one surface: one-off manual pulls and persistent automated saved searches.
+          Sourcing Agent now does two jobs from one surface: one-off manual pulls and persistent automated saved searches.
         </p>
         <ol style={{ marginBottom: "0.75rem", paddingLeft: "1.5rem", lineHeight: 1.6 }}>
           <li>
-            <strong>Run once:</strong> uses the existing two-step StreetEasy flow, keeps the run in memory, and still requires{" "}
+            <strong>Run once:</strong> uses the selected source flow, keeps the run in memory, and still requires{" "}
             <strong>Send to property data</strong> after review.
           </li>
           <li>
@@ -827,6 +1029,23 @@ export default function RunsPage() {
           </div>
           <div>
             <label style={{ display: "block", marginBottom: "0.25rem", fontSize: "0.85rem", fontWeight: 600 }}>
+              Run source
+            </label>
+            <select
+              value={form.manualRunSource}
+              onChange={(event) => updateForm("manualRunSource", event.target.value as SourceAdapterId)}
+              className="input-text"
+              style={{ width: "100%" }}
+            >
+              {SOURCE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label style={{ display: "block", marginBottom: "0.25rem", fontSize: "0.85rem", fontWeight: 600 }}>
               Timezone
             </label>
             <input
@@ -908,6 +1127,181 @@ export default function RunsPage() {
             ) : null}
           </div>
         ) : null}
+
+        {form.manualRunSource !== "streeteasy" ? (
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+              gap: "0.75rem 1rem",
+              marginBottom: "1rem",
+              padding: "0.85rem 1rem",
+              border: "1px solid #e5e7eb",
+              borderRadius: 8,
+              background: "#fafafa",
+            }}
+          >
+            {form.manualRunSource === "loopnet" ? (
+              <div>
+                <label style={{ display: "block", marginBottom: "0.25rem", fontSize: "0.85rem", fontWeight: 600 }}>
+                  LoopNet location
+                </label>
+                <input
+                  type="text"
+                  value={form.sourceLocation}
+                  onChange={(event) => updateForm("sourceLocation", event.target.value)}
+                  className="input-text"
+                  placeholder="New York, NY"
+                  style={{ width: "100%" }}
+                />
+              </div>
+            ) : null}
+            <div style={{ gridColumn: "1 / -1" }}>
+              <label style={{ display: "block", marginBottom: "0.25rem", fontSize: "0.85rem", fontWeight: 600 }}>
+                Manual listing URLs
+              </label>
+              <textarea
+                value={form.manualUrls}
+                onChange={(event) => updateForm("manualUrls", event.target.value)}
+                className="input-text"
+                rows={3}
+                placeholder="Paste one URL per line or comma-separated"
+                style={{ width: "100%", resize: "vertical" }}
+              />
+            </div>
+            {form.manualRunSource === "loopnet" ? (
+              <div style={{ gridColumn: "1 / -1", display: "grid", gap: "0.75rem" }}>
+                <div
+                  style={{
+                    border: "1px solid #d1d5db",
+                    borderRadius: 8,
+                    padding: "0.75rem",
+                    background: "#fff",
+                    display: "grid",
+                    gap: "0.6rem",
+                  }}
+                >
+                  <div>
+                    <h3 style={{ fontSize: "0.95rem", marginBottom: "0.25rem" }}>LoopNet browser capture</h3>
+                    <p style={{ color: "#525252", fontSize: "0.8rem", lineHeight: 1.45 }}>
+                      Preferred: Chrome extension or bookmarklet from your normal browser session. Fallbacks: pasted HTML, then local Playwright browser capture.
+                    </p>
+                  </div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", alignItems: "center" }}>
+                    <button
+                      type="button"
+                      className="btn-primary"
+                      disabled={!loopNetBookmarklet}
+                      onClick={handleCopyLoopNetBookmarklet}
+                    >
+                      Copy bookmarklet
+                    </button>
+                    <span style={{ color: bookmarkletCopied ? "#166534" : "#737373", fontSize: "0.8rem" }}>
+                      {bookmarkletCopied ? "Copied" : "Drag or paste into a browser bookmark, then click it on a LoopNet listing."}
+                    </span>
+                  </div>
+                  <div>
+                    <label style={{ display: "block", marginBottom: "0.25rem", fontSize: "0.8rem", fontWeight: 600 }}>
+                      Extension capture token
+                    </label>
+                    <input
+                      value={loopNetCaptureConfig?.token ?? ""}
+                      readOnly
+                      className="input-text"
+                      placeholder="Token loads after capture config is available"
+                      style={{ width: "100%", fontFamily: "monospace", fontSize: "0.75rem" }}
+                      onFocus={(event) => event.currentTarget.select()}
+                    />
+                  </div>
+                  <textarea
+                    value={loopNetBookmarklet}
+                    readOnly
+                    className="input-text"
+                    rows={2}
+                    placeholder="Bookmarklet loads after capture config is available"
+                    style={{ width: "100%", resize: "vertical", fontFamily: "monospace", fontSize: "0.75rem" }}
+                    onFocus={(event) => event.currentTarget.select()}
+                  />
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    disabled={loopNetOperatorBusy}
+                    onClick={handleStartLoopNetOperator}
+                  >
+                    Open browser capture
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-primary"
+                    disabled={loopNetOperatorBusy || !loopNetOperatorSessionId}
+                    onClick={handleCaptureLoopNetOperator}
+                  >
+                    Capture loaded page
+                  </button>
+                </div>
+                <div>
+                  <label style={{ display: "block", marginBottom: "0.25rem", fontSize: "0.85rem", fontWeight: 600 }}>
+                    Saved page HTML
+                  </label>
+                  <textarea
+                    value={loopNetCapturedHtml}
+                    onChange={(event) => setLoopNetCapturedHtml(event.target.value)}
+                    className="input-text"
+                    rows={3}
+                    placeholder="Optional: paste saved LoopNet HTML for the first URL above"
+                    style={{ width: "100%", resize: "vertical" }}
+                  />
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    disabled={loopNetOperatorBusy || !loopNetCapturedHtml.trim()}
+                    onClick={handleCaptureLoopNetHtml}
+                    style={{ marginTop: "0.5rem" }}
+                  >
+                    Capture pasted HTML
+                  </button>
+                </div>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        <div
+          style={{
+            marginBottom: "1rem",
+            padding: "0.85rem 1rem",
+            border: "1px solid #e5e7eb",
+            borderRadius: 8,
+            background: "#fafafa",
+          }}
+        >
+          <h3 style={{ fontSize: "0.95rem", marginBottom: "0.5rem" }}>Saved-search sources</h3>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "0.75rem" }}>
+            {SOURCE_OPTIONS.map((option) => (
+              <label
+                key={option.value}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "0.4rem",
+                  fontSize: "0.85rem",
+                  color: option.savedSearch ? "#171717" : "#525252",
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={form.sourceToggles[option.value]}
+                  disabled={!option.savedSearch}
+                  onChange={() => toggleSource(option.value)}
+                />
+                {option.label}
+                {!option.savedSearch ? " (manual only)" : ""}
+              </label>
+            ))}
+          </div>
+        </div>
 
         <div
           style={{
@@ -1419,7 +1813,7 @@ export default function RunsPage() {
       </div>
 
       <div className="card" style={{ maxWidth: "none" }}>
-        <h2 style={{ fontSize: "1rem", marginBottom: "0.75rem" }}>Manual StreetEasy Agent log</h2>
+        <h2 style={{ fontSize: "1rem", marginBottom: "0.75rem" }}>Manual sourcing run log</h2>
         {runsLoading ? (
           <div>Loading runs...</div>
         ) : runs.length === 0 ? (
@@ -1431,6 +1825,9 @@ export default function RunsPage() {
                 <tr>
                   <th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
                     Started (timer)
+                  </th>
+                  <th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
+                    Source
                   </th>
                   <th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
                     Step 1
@@ -1455,6 +1852,14 @@ export default function RunsPage() {
                         Elapsed: {formatRelativeElapsed(run.startedAt)}
                       </div>
                     </td>
+                    <td style={{ padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
+                      {run.sourceLabel ?? sourceLabel(run.source)}
+                      {run.warningsCount ? (
+                        <div style={{ fontSize: "0.75rem", color: "#a16207" }}>
+                          {run.warningsCount} note{run.warningsCount === 1 ? "" : "s"}
+                        </div>
+                      ) : null}
+                    </td>
                     <td style={{ padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>{step1Label(run)}</td>
                     <td style={{ padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>{step2Label(run)}</td>
                     <td style={{ textAlign: "right", padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
@@ -1466,6 +1871,11 @@ export default function RunsPage() {
                       ) : null}
                     </td>
                     <td style={{ padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
+                      {typeof run.sourceMetadata?.searchUrl === "string" ? (
+                        <a href={run.sourceMetadata.searchUrl} target="_blank" rel="noreferrer" style={{ marginRight: "0.75rem" }}>
+                          Open search
+                        </a>
+                      ) : null}
                       <Link href={`/runs/${run.id}`} style={{ marginRight: "0.75rem" }}>
                         View properties
                       </Link>

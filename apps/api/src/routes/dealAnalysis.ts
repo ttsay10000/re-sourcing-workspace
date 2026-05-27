@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from "express";
 import multer from "multer";
 import type {
+  Property,
   PropertyDealDossierExpenseModelRow,
   PropertyDealDossierUnitModelRow,
   PropertyDetails,
@@ -26,12 +27,15 @@ import {
   parsePropertyDealDossierExpenseModelRows,
   parsePropertyDealDossierUnitModelRows,
   getPropertyDossierAssumptions,
+  getRawPropertyDossierAssumptions,
 } from "../deal/propertyDossierState.js";
 import type { DossierAssumptionOverrides } from "../deal/underwritingModel.js";
+import { resolveOmAskingPriceFromDetails } from "../deal/omAskingPrice.js";
 import { getBBLForProperty } from "../enrichment/resolvePropertyBBL.js";
 import { runEnrichmentForProperty } from "../enrichment/runEnrichment.js";
 import { syncPropertySourcingWorkflow } from "../sourcing/workflow.js";
 import { buildDealAnalysisWorkbook } from "../deal/dealAnalysisWorkbook.js";
+import { promoteReviewedOmDetailsForProperty } from "../om/ingestAuthoritativeOm.js";
 
 const router = Router();
 const uploadMemory = multer({
@@ -237,35 +241,49 @@ function resolveWorkspaceProperty(details: PropertyDetails | null | undefined) {
   });
 }
 
-async function previewMatchedProperty(
-  canonicalAddress: string,
-  addressLine: string
-): Promise<{
-  id: string;
+export type DealAnalysisDraftPropertyMatchStrategy =
+  | "exact_canonical"
+  | "address_line"
+  | "new";
+
+export interface DealAnalysisDraftPropertyRepo {
+  byCanonicalAddress(canonicalAddress: string): Promise<Property | null>;
+  findByAddressFirstLine(addressLine: string): Promise<Property | null>;
+  create(canonicalAddress: string): Promise<Property>;
+}
+
+export async function findOrCreateDealAnalysisDraftProperty(params: {
+  propertyRepo: DealAnalysisDraftPropertyRepo;
   canonicalAddress: string;
-  matchStrategy: "exact_canonical" | "address_line";
-} | null> {
-  try {
-    const pool = getPool();
-    const propertyRepo = new PropertyRepo({ pool });
-    const exact = await propertyRepo.byCanonicalAddress(canonicalAddress);
-    if (exact) {
-      return {
-        id: exact.id,
-        canonicalAddress: exact.canonicalAddress,
-        matchStrategy: "exact_canonical",
-      };
-    }
-    const firstLine = await propertyRepo.findByAddressFirstLine(addressLine);
-    if (!firstLine) return null;
+  addressLine: string;
+}): Promise<{
+  property: Property;
+  createdProperty: boolean;
+  matchStrategy: DealAnalysisDraftPropertyMatchStrategy;
+}> {
+  const exactProperty = await params.propertyRepo.byCanonicalAddress(params.canonicalAddress);
+  if (exactProperty) {
     return {
-      id: firstLine.id,
-      canonicalAddress: firstLine.canonicalAddress,
+      property: exactProperty,
+      createdProperty: false,
+      matchStrategy: "exact_canonical",
+    };
+  }
+
+  const firstLineMatch = await params.propertyRepo.findByAddressFirstLine(params.addressLine);
+  if (firstLineMatch) {
+    return {
+      property: firstLineMatch,
+      createdProperty: false,
       matchStrategy: "address_line",
     };
-  } catch {
-    return null;
   }
+
+  return {
+    property: await params.propertyRepo.create(params.canonicalAddress),
+    createdProperty: true,
+    matchStrategy: "new",
+  };
 }
 
 function assumptionPatchFromPayload(params: {
@@ -273,12 +291,16 @@ function assumptionPatchFromPayload(params: {
   brokerEmailNotes: string | null;
   unitModelRows: PropertyDealDossierUnitModelRow[] | null;
   expenseModelRows: PropertyDealDossierExpenseModelRow[] | null;
+  defaultPurchasePrice?: number | null;
 }): Record<string, unknown> | null {
   const patch: Record<string, unknown> = {
     updatedAt: new Date().toISOString(),
   };
   for (const key of DOSSIER_ASSUMPTION_NUMERIC_FIELDS) {
     patch[key] = params.assumptionOverrides?.[key] ?? null;
+  }
+  if (patch.purchasePrice == null && params.defaultPurchasePrice != null) {
+    patch.purchasePrice = params.defaultPurchasePrice;
   }
   patch.investmentProfile = params.assumptionOverrides?.investmentProfile ?? null;
   patch.targetAcquisitionDate = params.assumptionOverrides?.targetAcquisitionDate ?? null;
@@ -291,6 +313,17 @@ function assumptionPatchFromPayload(params: {
     return value != null;
   });
   return hasMeaningfulValue ? patch : null;
+}
+
+function mergeAssumptionsPatch(
+  details: PropertyDetails | null | undefined,
+  patch: Record<string, unknown>
+): Record<string, unknown> {
+  return {
+    ...(getRawPropertyDossierAssumptions(details) ?? {}),
+    ...(getPropertyDossierAssumptions(details) ?? {}),
+    ...patch,
+  };
 }
 
 router.get("/deal-analysis/workspaces", async (req: Request, res: Response) => {
@@ -309,7 +342,8 @@ router.get("/deal-analysis/workspaces", async (req: Request, res: Response) => {
         const hasSavedWorkspace =
           omImportedAt != null ||
           assumptionsUpdatedAt != null ||
-          savedAssumptions != null;
+          savedAssumptions != null ||
+          details?.omData?.authoritative != null;
         if (!hasSavedWorkspace) return [];
         const sortTimestamp =
           [assumptionsUpdatedAt, omImportedAt, trimmedString(property.updatedAt)].find(
@@ -400,39 +434,228 @@ router.post(
           sizeBytes: file.size,
         })),
       });
-      const property = resolveStandalonePropertyInput({
-        omAnalysis: extracted.omAnalysis,
-        details,
-      });
-      const calculation = (
-        await buildStandaloneOmCalculation({
-          property,
-          details,
-        })
-      ).calculation;
       const resolvedAddress = resolveOmPropertyAddress(
         (extracted.omAnalysis.propertyInfo as Record<string, unknown> | null | undefined) ?? null
       );
-      const matchedProperty =
-        resolvedAddress != null
-          ? await previewMatchedProperty(
-              resolvedAddress.canonicalAddress,
-              resolvedAddress.addressLine
-            )
-          : null;
+      if (!resolvedAddress) {
+        res.status(422).json({
+          error:
+            "The uploaded OM analysis did not return a usable building address, so a draft property workspace could not be created.",
+        });
+        return;
+      }
 
-      res.status(201).json({
+      const pool = getPool();
+      const client = await pool.connect();
+      let propertyId = "";
+      let canonicalAddress = resolvedAddress.canonicalAddress;
+      let createdProperty = false;
+      let matchStrategy: DealAnalysisDraftPropertyMatchStrategy = "new";
+      try {
+        await client.query("BEGIN");
+        const propertyRepo = new PropertyRepo({ pool, client });
+        const draftProperty = await findOrCreateDealAnalysisDraftProperty({
+          propertyRepo,
+          canonicalAddress: resolvedAddress.canonicalAddress,
+          addressLine: resolvedAddress.addressLine,
+        });
+        propertyId = draftProperty.property.id;
+        canonicalAddress = draftProperty.property.canonicalAddress;
+        createdProperty = draftProperty.createdProperty;
+        matchStrategy = draftProperty.matchStrategy;
+        const existingDetails = (draftProperty.property.details ?? null) as PropertyDetails | null;
+        const now = new Date().toISOString();
+        const existingWorkspace =
+          existingDetails?.dealAnalysisWorkspace &&
+          typeof existingDetails.dealAnalysisWorkspace === "object" &&
+          !Array.isArray(existingDetails.dealAnalysisWorkspace)
+            ? (existingDetails.dealAnalysisWorkspace as Record<string, unknown>)
+            : {};
+        const manualSourceLinks = mergeManualSourceLinks(existingDetails, {
+          omImportedAt: now,
+        });
+        await propertyRepo.updateDetails(propertyId, "manualSourceLinks", {
+          ...(manualSourceLinks as Record<string, unknown>),
+        });
+        await propertyRepo.mergeDetails(propertyId, {
+          dealAnalysisWorkspace: {
+            ...existingWorkspace,
+            status: "draft",
+            source: "deal_analysis_upload",
+            createdAt:
+              typeof existingWorkspace.createdAt === "string" ? existingWorkspace.createdAt : now,
+            updatedAt: now,
+            lastUploadedAt: now,
+            uploadedFileNames: files.map(
+              (file) => file.originalname?.trim() || "uploaded-om.pdf"
+            ),
+          },
+          omDerivedAddress: {
+            rawAddress: resolvedAddress.rawAddress,
+            addressLine: resolvedAddress.addressLine,
+            locality: resolvedAddress.locality,
+            zip: resolvedAddress.zip,
+            canonicalAddress: resolvedAddress.canonicalAddress,
+            addressSource: resolvedAddress.addressSource,
+          },
+          ...(details?.taxCode ? { taxCode: details.taxCode } : {}),
+        });
+        const existingAssumptions = getPropertyDossierAssumptions(existingDetails);
+        const omAskingPrice = resolveOmAskingPriceFromDetails(details);
+        if (existingAssumptions?.purchasePrice == null && omAskingPrice != null) {
+          await propertyRepo.updateDetails(
+            propertyId,
+            "dealDossier.assumptions",
+            mergeAssumptionsPatch(existingDetails, {
+              updatedAt: now,
+              purchasePrice: omAskingPrice,
+            })
+          );
+        }
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK").catch(() => {});
+        throw error;
+      } finally {
+        client.release();
+      }
+
+      const uploadedDocRepo = new PropertyUploadedDocumentRepo({ pool });
+      const persistedDocuments = [];
+      for (const file of files) {
+        const docId = randomUUID();
+        const filename = file.originalname?.trim() || "uploaded-om.pdf";
+        const filePath = await saveUploadedDocument(propertyId, docId, filename, file.buffer);
+        const inserted = await uploadedDocRepo.insert({
+          id: docId,
+          propertyId,
+          filename,
+          contentType: file.mimetype || "application/pdf",
+          filePath,
+          category: "OM",
+          source: "Deal analysis upload",
+          sourceMetadata: {
+            sourceType: "deal_analysis_upload",
+            workspaceStatus: "draft",
+          },
+          fileContent: file.buffer,
+        });
+        persistedDocuments.push({
+          id: inserted.id,
+          fileName: inserted.filename,
+          contentType: inserted.contentType,
+          createdAt: inserted.createdAt,
+        });
+      }
+
+      if (persistedDocuments.length > 0) {
+        const primaryOmDocument = persistedDocuments[0]!;
+        const propertyRepo = new PropertyRepo({ pool });
+        const propertyRecord = await propertyRepo.byId(propertyId);
+        const currentDetails = (propertyRecord?.details ?? null) as PropertyDetails | null;
+        const currentWorkspace =
+          currentDetails?.dealAnalysisWorkspace &&
+          typeof currentDetails.dealAnalysisWorkspace === "object" &&
+          !Array.isArray(currentDetails.dealAnalysisWorkspace)
+            ? (currentDetails.dealAnalysisWorkspace as Record<string, unknown>)
+            : {};
+        const manualSourceLinks = mergeManualSourceLinks(currentDetails, {
+          omImportedAt: primaryOmDocument.createdAt,
+          omDocumentId: primaryOmDocument.id,
+          omFileName: primaryOmDocument.fileName,
+        });
+        await propertyRepo.mergeDetails(propertyId, {
+          manualSourceLinks,
+          dealAnalysisWorkspace: {
+            ...currentWorkspace,
+            status: "draft",
+            updatedAt: new Date().toISOString(),
+            uploadedDocumentIds: persistedDocuments.map((document) => document.id),
+            primaryOmDocumentId: primaryOmDocument.id,
+          },
+        });
+      }
+
+      const primaryUploadedDocument = persistedDocuments[0] ?? null;
+      const promotedOm = primaryUploadedDocument
+        ? await promoteReviewedOmDetailsForProperty({
+            propertyId,
+            details,
+            sourceDocumentId: primaryUploadedDocument.id,
+            sourceType: "uploaded_document",
+            sourceMeta: {
+              sourceType: "deal_analysis_upload",
+              workspaceStatus: "draft",
+              documents: persistedDocuments.map((document) => ({
+                id: document.id,
+                filename: document.fileName,
+                contentType: document.contentType ?? null,
+                createdAt: document.createdAt,
+              })),
+              review: {
+                decision: "promoted",
+                reviewedVia: "deal_analysis_analyze_upload",
+              },
+            },
+            pool,
+          })
+        : null;
+      if (promotedOm && !promotedOm.ok) {
+        throw new Error(promotedOm.error ?? "Failed to save reviewed OM extraction to the draft property workspace.");
+      }
+
+      const resolvedBbl = await getBBLForProperty(propertyId).catch(() => null);
+      const enrichmentRun = await runEnrichmentForProperty(propertyId).catch((error) => ({
+        ok: false,
+        results: {},
+        error: error instanceof Error ? error.message : String(error),
+      }));
+      await syncPropertySourcingWorkflow(propertyId, { pool }).catch(() => {});
+      const propertyRepo = new PropertyRepo({ pool });
+      const propertyRecord = await propertyRepo.byId(propertyId);
+      const savedDetails = (propertyRecord?.details ?? details) as PropertyDetails;
+      const savedPropertyInput = resolveWorkspaceProperty(savedDetails);
+      const savedCalculation = (
+        await buildStandaloneOmCalculation({
+          property: savedPropertyInput,
+          details: savedDetails,
+        })
+      ).calculation;
+
+      const matchedProperty = {
+        id: propertyId,
+        canonicalAddress,
+        matchStrategy,
+      };
+
+      res.status(createdProperty ? 201 : 200).json({
         ok: true,
-        property,
+        property: savedPropertyInput,
+        propertyId,
+        canonicalAddress,
+        createdProperty,
+        matchStrategy,
         resolvedAddress,
         matchedProperty,
-        uploadedDocuments: files.map((file) => ({
-          fileName: file.originalname?.trim() || "uploaded-om.pdf",
-          mimeType: file.mimetype || "application/pdf",
-          sizeBytes: file.size,
+        uploadedDocuments: persistedDocuments.map((document, index) => ({
+          id: document.id,
+          fileName: document.fileName,
+          mimeType: document.contentType ?? "application/pdf",
+          sizeBytes: files[index]?.size ?? null,
+          createdAt: document.createdAt,
         })),
-        details,
-        calculation,
+        details: savedDetails,
+        calculation: savedCalculation,
+        omReview: promotedOm,
+        enrichment: {
+          attempted: true,
+          ok: enrichmentRun.ok,
+          bbl: resolvedBbl?.bbl ?? null,
+          bin: resolvedBbl?.bin ?? null,
+          results: "results" in enrichmentRun ? enrichmentRun.results : {},
+          warning: "error" in enrichmentRun ? enrichmentRun.error ?? null : null,
+        },
+        propertyRecord,
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -656,6 +879,10 @@ router.post(
         });
         return;
       }
+      if (!details) {
+        res.status(400).json({ error: "details must include the reviewed OM analysis payload." });
+        return;
+      }
 
       const propertyInfo =
         (details?.omData?.authoritative?.propertyInfo as Record<string, unknown> | null | undefined) ??
@@ -708,26 +935,6 @@ router.post(
             addressSource: resolvedAddress.addressSource,
           },
         });
-        if (details?.omData && typeof details.omData === "object") {
-          const nextOmData = {
-            ...(((existingDetails?.omData as Record<string, unknown> | null | undefined) ?? {}) as Record<
-              string,
-              unknown
-            >),
-            ...((details.omData as Record<string, unknown>) ?? {}),
-          };
-          await propertyRepo.updateDetails(propertyId, "omData", nextOmData);
-        }
-        if (details?.rentalFinancials && typeof details.rentalFinancials === "object") {
-          const nextRentalFinancials = {
-            ...(((existingDetails?.rentalFinancials as Record<string, unknown> | null | undefined) ?? {}) as Record<
-              string,
-              unknown
-            >),
-            ...((details.rentalFinancials as Record<string, unknown>) ?? {}),
-          };
-          await propertyRepo.updateDetails(propertyId, "rentalFinancials", nextRentalFinancials);
-        }
         if (details?.taxCode) {
           await propertyRepo.mergeDetails(propertyId, { taxCode: details.taxCode });
         }
@@ -736,9 +943,14 @@ router.post(
           brokerEmailNotes,
           unitModelRows,
           expenseModelRows,
+          defaultPurchasePrice: resolveOmAskingPriceFromDetails(details),
         });
         if (assumptionsPatch) {
-          await propertyRepo.updateDetails(propertyId, "dealDossier.assumptions", assumptionsPatch);
+          await propertyRepo.updateDetails(
+            propertyId,
+            "dealDossier.assumptions",
+            mergeAssumptionsPatch(existingDetails, assumptionsPatch)
+          );
         }
         await client.query("COMMIT");
       } catch (error) {
@@ -783,6 +995,33 @@ router.post(
         await propertyRepo.mergeDetails(propertyId, { manualSourceLinks });
       }
 
+      const primaryUploadedDocument = uploadedDocuments[0] ?? null;
+      const promotedOm = primaryUploadedDocument
+        ? await promoteReviewedOmDetailsForProperty({
+            propertyId,
+            details,
+            sourceDocumentId: primaryUploadedDocument.id,
+            sourceType: "uploaded_document",
+            sourceMeta: {
+              sourceType: "deal_analysis_upload",
+              documents: uploadedDocuments.map((document) => ({
+                id: document.id,
+                filename: document.fileName,
+                contentType: document.contentType ?? null,
+                createdAt: document.createdAt,
+              })),
+              review: {
+                decision: "promoted",
+                reviewedVia: "deal_analysis_create_property",
+              },
+            },
+            pool,
+          })
+        : null;
+      if (promotedOm && !promotedOm.ok) {
+        throw new Error(promotedOm.error ?? "Failed to save reviewed OM extraction to the property workspace.");
+      }
+
       const resolvedBbl = await getBBLForProperty(propertyId).catch(() => null);
       const enrichmentRun = await runEnrichmentForProperty(propertyId).catch((error) => ({
         ok: false,
@@ -800,6 +1039,7 @@ router.post(
         createdProperty,
         matchStrategy,
         uploadedDocuments,
+        omReview: promotedOm,
         enrichment: {
           attempted: true,
           ok: enrichmentRun.ok,

@@ -1,5 +1,12 @@
-import { describe, expect, it } from "vitest";
-import { buildOutreachBody, extractOutreachAddressesFromMessage, normalizeOutreachAddressKey } from "./outreachAutomation.js";
+import { afterEach, describe, expect, it } from "vitest";
+import { buildOutreachBody, extractOutreachAddressesFromMessage, isAutomatedOutreachEnabled, normalizeOutreachAddressKey } from "./outreachAutomation.js";
+
+const originalEnableAutomatedOutreach = process.env.ENABLE_AUTOMATED_OUTREACH;
+
+afterEach(() => {
+  if (originalEnableAutomatedOutreach == null) delete process.env.ENABLE_AUTOMATED_OUTREACH;
+  else process.env.ENABLE_AUTOMATED_OUTREACH = originalEnableAutomatedOutreach;
+});
 
 describe("extractOutreachAddressesFromMessage", () => {
   it("prefers bullet-listed addresses from the email body", () => {
@@ -45,7 +52,7 @@ describe("buildOutreachBody", () => {
     );
     expect(body).toContain("- 18 Christopher Street, Manhattan, NY, 10014");
     expect(body).toContain(
-      "Would you be able to share the OM, current rent roll, expenses, and/or any available financials?"
+      "Would you be able to share the OM, T-12, current rent roll, expenses, and/or any available financials?"
     );
     expect(body).toContain(
       "If there is a better contact for this property, please feel free to point me in the right direction."
@@ -66,10 +73,26 @@ describe("buildOutreachBody", () => {
     expect(body).toContain("- 18 Christopher Street, Manhattan, NY, 10014");
     expect(body).toContain("- 27 West 9th Street, Manhattan, NY, 10011");
     expect(body).toContain(
-      "Would you be able to share the OMs, current rent rolls, expenses, and/or any available financials for these properties?"
+      "Would you be able to share the OMs, T-12s, current rent rolls, expenses, and/or any available financials for these properties?"
     );
     expect(body).toContain(
       "If there is a better contact for any of these, please feel free to point me in the right direction."
     );
+  });
+});
+
+describe("isAutomatedOutreachEnabled", () => {
+  it("defaults outgoing automation to disabled", () => {
+    delete process.env.ENABLE_AUTOMATED_OUTREACH;
+
+    expect(isAutomatedOutreachEnabled()).toBe(false);
+  });
+
+  it("requires explicit enablement", () => {
+    process.env.ENABLE_AUTOMATED_OUTREACH = "1";
+    expect(isAutomatedOutreachEnabled()).toBe(true);
+
+    process.env.ENABLE_AUTOMATED_OUTREACH = "true";
+    expect(isAutomatedOutreachEnabled()).toBe(true);
   });
 });

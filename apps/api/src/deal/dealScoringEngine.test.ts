@@ -1,7 +1,62 @@
 import { describe, expect, it } from "vitest";
 import { computeDealScore, resolveFinalDealScore } from "./dealScoringEngine.js";
+import { buildDealScoringProfileFromPreferences } from "./dealScoringProfiles.js";
 
 describe("dealScoringEngine", () => {
+  it("applies user scoring preferences for CoC and rent-stabilization hard caps", () => {
+    const scoringProfile = buildDealScoringProfileFromPreferences("legacy_v3", {
+      targetIrrPct: 25,
+      goodCashOnCashPct: 2,
+      rentStabilizationDoNotBuy: true,
+      scoringProfileKey: "legacy_v3",
+    });
+
+    const result = computeDealScore({
+      purchasePrice: 5_000_000,
+      noi: 280_000,
+      grossRentalIncome: 500_000,
+      adjustedCapRatePct: 6.4,
+      adjustedNoi: 320_000,
+      irrPct: 0.22,
+      cocPct: 0.021,
+      equityMultiple: 2,
+      recommendedOfferHigh: 5_000_000,
+      blendedRentUpliftPct: 12,
+      annualExpenseGrowthPct: 3,
+      vacancyPct: 6,
+      exitCapRatePct: 6.75,
+      hasDetailedExpenseRows: true,
+      totalUnits: 12,
+      scoringProfile,
+      riskProfile: {
+        commercialRevenueSharePct: 0,
+        rentStabilizedRevenueSharePct: 0.08,
+        largestUnitRevenueSharePct: 0.1,
+        rollover12moRevenueSharePct: 0.1,
+        rentRollCoveragePct: 1,
+        omDiscrepancyCount: 0,
+        rapidOmMismatch: false,
+        taxBurdenPct: 0.1,
+        unsupportedRentGrowthPct: 0,
+        missingLeaseDataPct: 0,
+        missingOccupancyDataPct: 0,
+        missingLeaseDataMajority: false,
+        missingOccupancyDataMajority: false,
+        smallAssetRiskLevel: "none",
+        isPackageOm: false,
+        missingEnrichmentGroup: false,
+        explicitRecordMismatch: false,
+        totalUnits: 12,
+        usableRentRowsCount: 12,
+        rentRowsCount: 12,
+      },
+    });
+
+    expect(result.scoreBreakdown.returnScore).toBeGreaterThanOrEqual(45);
+    expect(result.dealScore).toBeLessThanOrEqual(35);
+    expect(result.capReasons).toContain("Rent stabilization/control do-not-buy cap");
+  });
+
   it("keeps strong, clean finance-led deals in the target strong range", () => {
     const result = computeDealScore({
       purchasePrice: 4_000_000,
@@ -325,5 +380,110 @@ describe("dealScoringEngine", () => {
     expect(result.confidenceScore).toBeLessThan(0.45);
     expect(result.dealScore).toBeLessThanOrEqual(60);
     expect(result.capReasons).toContain("Data / regulatory cap");
+  });
+
+  it("treats the extracted legacy profile as the default v3 behavior", () => {
+    const inputs = {
+      purchasePrice: 5_000_000,
+      noi: 280_000,
+      grossRentalIncome: 430_000,
+      adjustedCapRatePct: 6.2,
+      adjustedNoi: 310_000,
+      irrPct: 0.18,
+      cocPct: 0.07,
+      equityMultiple: 1.9,
+      recommendedOfferHigh: 5_000_000,
+      blendedRentUpliftPct: 32,
+      annualExpenseGrowthPct: 3,
+      vacancyPct: 6,
+      exitCapRatePct: 6,
+      hasDetailedExpenseRows: true,
+      totalUnits: 12,
+      riskProfile: {
+        commercialRevenueSharePct: 0,
+        rentStabilizedRevenueSharePct: 0,
+        largestUnitRevenueSharePct: 0.09,
+        rollover12moRevenueSharePct: 0.18,
+        rentRollCoveragePct: 1,
+        omDiscrepancyCount: 0,
+        rapidOmMismatch: false,
+        taxBurdenPct: 0.12,
+        unsupportedRentGrowthPct: 0,
+        missingLeaseDataPct: 0,
+        missingOccupancyDataPct: 0,
+        missingLeaseDataMajority: false,
+        missingOccupancyDataMajority: false,
+        smallAssetRiskLevel: "none" as const,
+        isPackageOm: false,
+        missingEnrichmentGroup: false,
+        explicitRecordMismatch: false,
+        totalUnits: 12,
+        usableRentRowsCount: 12,
+        rentRowsCount: 12,
+      },
+    };
+
+    const implicitDefault = computeDealScore(inputs);
+    const explicitDefault = computeDealScore({ ...inputs, scoringProfile: "legacy_v3" });
+
+    expect(explicitDefault.dealScore).toBe(implicitDefault.dealScore);
+    expect(explicitDefault.scoreBreakdown).toEqual(implicitDefault.scoreBreakdown);
+    expect(explicitDefault.scoreVersion).toBe("v3");
+    expect(explicitDefault.scoringProfileKey).toBe("legacy_v3");
+  });
+
+  it("supports an opt-in furnished monthly-rental value-add profile", () => {
+    const inputs = {
+      purchasePrice: 5_000_000,
+      noi: 280_000,
+      grossRentalIncome: 430_000,
+      adjustedCapRatePct: 6.2,
+      adjustedNoi: 310_000,
+      irrPct: 0.18,
+      cocPct: 0.07,
+      equityMultiple: 1.9,
+      recommendedOfferHigh: 5_000_000,
+      blendedRentUpliftPct: 72,
+      annualExpenseGrowthPct: 3,
+      vacancyPct: 7.5,
+      exitCapRatePct: 6,
+      hasDetailedExpenseRows: true,
+      totalUnits: 12,
+      furnishingSetupCosts: 60_000,
+      riskProfile: {
+        commercialRevenueSharePct: 0,
+        rentStabilizedRevenueSharePct: 0,
+        largestUnitRevenueSharePct: 0.09,
+        rollover12moRevenueSharePct: 0.18,
+        rentRollCoveragePct: 1,
+        omDiscrepancyCount: 0,
+        rapidOmMismatch: false,
+        taxBurdenPct: 0.12,
+        unsupportedRentGrowthPct: 0,
+        missingLeaseDataPct: 0,
+        missingOccupancyDataPct: 0,
+        missingLeaseDataMajority: false,
+        missingOccupancyDataMajority: false,
+        smallAssetRiskLevel: "none" as const,
+        isPackageOm: false,
+        missingEnrichmentGroup: false,
+        explicitRecordMismatch: false,
+        totalUnits: 12,
+        usableRentRowsCount: 12,
+        rentRowsCount: 12,
+      },
+    };
+
+    const legacy = computeDealScore(inputs);
+    const strategy = computeDealScore({
+      ...inputs,
+      scoringProfile: "value_add_furnished_monthly_rental",
+    });
+
+    expect(strategy.scoreVersion).toBe("v3:value-add-furnished-monthly-rental");
+    expect(strategy.scoringProfileLabel).toBe("Value-add multifamily / furnished monthly rental");
+    expect(strategy.scoreBreakdown.assumptionPenalty).toBeLessThan(legacy.scoreBreakdown.assumptionPenalty);
+    expect(strategy.dealScore).toBeGreaterThan(legacy.dealScore);
+    expect(strategy.riskFlags).toContain("Elevated furnished-rent uplift (72.0%)");
   });
 });

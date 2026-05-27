@@ -31,11 +31,18 @@ import {
 import { resolveCurrentFinancialsFromDetails } from "../rental/currentFinancials.js";
 import { computeDealSignals } from "./computeDealSignals.js";
 import { buildDealScoreSensitivity } from "./dealScoreSensitivity.js";
+import {
+  buildDealScoringProfileFromPreferences,
+  type DealScoringProfileKey,
+} from "./dealScoringProfiles.js";
 import { buildRentBreakdown } from "./buildOmCalculation.js";
+import { resolveOmAskingPriceFromDetails } from "./omAskingPrice.js";
 import { buildDossierPdfCoverData } from "./dossierPdfCover.js";
 import { buildDossierPdfFileName, buildProFormaFileName } from "./dossierFileName.js";
 import { resolveEffectiveDealScore } from "./effectiveDealScore.js";
 import { buildDossierStructuredText } from "./dossierGenerator.js";
+import { buildDossierTeaserData } from "./dossierTeaser.js";
+import { dossierTeaserToPdf } from "./dossierTeaserToPdf.js";
 import { dossierTextToPdf } from "./dossierToPdf.js";
 import { buildExcelProForma } from "./excelProForma.js";
 import { deleteGeneratedDocumentFile, saveGeneratedDocument } from "./generatedDocStorage.js";
@@ -84,6 +91,8 @@ export interface GenerateDossierResult {
 
 export interface RunGenerateDossierOptions {
   sendEmail?: boolean;
+  dossierFormat?: "teaser" | "workpaper";
+  scoringProfile?: DealScoringProfileKey | null;
 }
 
 function runningGenerationState(
@@ -371,7 +380,7 @@ function scoreCertaintyLabel(value: number | null | undefined): string {
 export async function runGenerateDossier(
   propertyId: string,
   assumptionOverrides?: DossierAssumptionOverrides | null,
-  _options?: RunGenerateDossierOptions
+  options?: RunGenerateDossierOptions
 ): Promise<GenerateDossierResult> {
   const generationStartedAtMs = Date.now();
   const pool = getPool();
@@ -410,14 +419,18 @@ export async function runGenerateDossier(
   try {
     const { matches } = await matchRepo.list({ propertyId, limit: 1 });
     const listing = matches[0] ? await listingRepo.byId(matches[0].listingId) : null;
-    const purchasePrice = listing?.price ?? null;
     const listingCity = listing?.city ?? null;
 
     await profileRepo.ensureDefault();
     const profile = await profileRepo.getDefault();
     if (!profile) throw new Error("Profile not available");
+    const resolvedScoringProfile = buildDealScoringProfileFromPreferences(
+      options?.scoringProfile ?? null,
+      profile.scoringPreferences ?? null
+    );
 
     const rawDetails = property.details as PropertyDetails | null;
+    const purchasePrice = listing?.price ?? resolveOmAskingPriceFromDetails(rawDetails);
     const brokerEmailNotes = getBrokerEmailNotes(rawDetails);
     const brokerNotesExtract = await extractBrokerDossierNotes(brokerEmailNotes);
     const details = mergeBrokerNotesIntoDetails(rawDetails, brokerNotesExtract);
@@ -793,6 +806,8 @@ export async function runGenerateDossier(
       exitCapRatePct: projection.assumptions.exit.exitCapPct,
       rentStabilizedUnitCount: rentStabCount,
       commercialUnitCount: projection.assumptions.propertyMix.commercialUnits,
+      scoringProfile: resolvedScoringProfile,
+      furnishingSetupCosts: projection.assumptions.acquisition.furnishingSetupCosts,
     });
     insertParams.scoreSensitivity = buildDealScoreSensitivity({
       propertyId,
@@ -815,6 +830,8 @@ export async function runGenerateDossier(
       protectedProjectedLeaseUpRent,
       preferProvidedCurrentNoi: currentNoiOverride != null,
       baseCalculatedScore: scoringResult.isScoreable ? scoringResult.dealScore : null,
+      scoringProfile: resolvedScoringProfile,
+      furnishingSetupCosts: projection.assumptions.acquisition.furnishingSetupCosts,
     });
 
     const scoreOverride = await overridesRepo.getActiveByPropertyId(propertyId);
@@ -843,18 +860,36 @@ export async function runGenerateDossier(
     }
 
     const scoredDossierText = buildDossierStructuredText(ctx);
-    const dossierCover = buildDossierPdfCoverData({
-      ctx,
-      details,
-      listing,
-    });
 
     await setGenerationState(runningGenerationState(startedAt, "Rendering PDF and Excel"));
     const renderStartedAtMs = Date.now();
-    const dossierBuffer = await dossierTextToPdf(scoredDossierText, { cover: dossierCover });
+    const dossierFormat = options?.dossierFormat ?? "teaser";
+    const dossierBuffer =
+      dossierFormat === "workpaper"
+        ? await dossierTextToPdf(scoredDossierText, {
+            cover: buildDossierPdfCoverData({
+              ctx,
+              details,
+              listing,
+            }),
+          })
+        : await dossierTeaserToPdf(
+            buildDossierTeaserData({
+              ctx,
+              details,
+              listing,
+              scoringResult,
+              sponsor: {
+                name: profile.name ?? null,
+                email: profile.email ?? null,
+                organization: profile.organization ?? null,
+              },
+            })
+          );
     const excelBuffer = buildExcelProForma(ctx);
     console.info("[runGenerateDossier] Rendered PDF and Excel", {
       propertyId,
+      dossierFormat,
       durationMs: Date.now() - renderStartedAtMs,
       dossierBytes: dossierBuffer.length,
       excelBytes: excelBuffer.length,

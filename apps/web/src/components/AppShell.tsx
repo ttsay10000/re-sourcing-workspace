@@ -6,8 +6,9 @@ import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from
 
 const NAV_LINKS = [
   { href: "/", label: "Home" },
-  { href: "/runs", label: "StreetEasy Agent" },
+  { href: "/runs", label: "Sourcing Agent" },
   { href: "/property-data", label: "Property Data" },
+  { href: "/om-review", label: "OM Review" },
   { href: "/deal-analysis", label: "Deal Analysis" },
   { href: "/sales-metrics", label: "Sales Metrics" },
   { href: "/profile", label: "Profile" },

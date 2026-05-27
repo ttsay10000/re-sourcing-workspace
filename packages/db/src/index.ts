@@ -86,6 +86,7 @@ export { mapOmAuthoritativeSnapshotRecord, mapOmIngestionRun } from "./map.js";
 export { OmIngestionRunRepo } from "./repos/OmIngestionRunRepo.js";
 export type {
   CreateOmIngestionRunParams,
+  MarkOmIngestionRunReviewParams,
   OmIngestionRunRepoOptions,
   UpdateOmIngestionRunParams,
 } from "./repos/OmIngestionRunRepo.js";
@@ -94,3 +95,9 @@ export type {
   OmAuthoritativeSnapshotRepoOptions,
   PromoteOmAuthoritativeSnapshotParams,
 } from "./repos/OmAuthoritativeSnapshotRepo.js";
+export { OmExtractedSnapshotRepo } from "./repos/OmExtractedSnapshotRepo.js";
+export type {
+  OmExtractedSnapshotRecord,
+  OmExtractedSnapshotRepoOptions,
+  UpsertOmExtractedSnapshotParams,
+} from "./repos/OmExtractedSnapshotRepo.js";

@@ -115,10 +115,15 @@ export async function getMessage(messageId: string): Promise<GmailMessage> {
       ? {
           headers: payload.headers as Array<{ name: string; value: string }> | undefined,
           body: payload.body
-            ? { data: payload.body.data ?? undefined, size: payload.body.size ?? undefined }
+            ? {
+                data: payload.body.data ?? undefined,
+                size: payload.body.size ?? undefined,
+                attachmentId: payload.body.attachmentId ?? undefined,
+              }
             : undefined,
           parts: payload.parts as GmailMessagePart[] | undefined,
           mimeType: payload.mimeType ?? undefined,
+          filename: payload.filename ?? undefined,
         }
       : undefined,
   };
@@ -167,29 +172,120 @@ export function parseEmailFromHeader(fromHeader: string | null | undefined): str
   return null;
 }
 
-/** Decode body from message (plain or from first part). Base64url. */
+function decodeBase64Url(data: string): string | null {
+  try {
+    return Buffer.from(data, "base64url").toString("utf-8");
+  } catch {
+    return null;
+  }
+}
+
+const HTML_ENTITIES: Record<string, string> = {
+  amp: "&",
+  gt: ">",
+  lt: "<",
+  nbsp: " ",
+  quot: "\"",
+  apos: "'",
+};
+
+function decodeHtmlEntities(value: string): string {
+  return value.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (match, entity: string) => {
+    const normalized = entity.toLowerCase();
+    if (normalized.startsWith("#x")) {
+      const parsed = Number.parseInt(normalized.slice(2), 16);
+      return Number.isFinite(parsed) ? String.fromCodePoint(parsed) : match;
+    }
+    if (normalized.startsWith("#")) {
+      const parsed = Number.parseInt(normalized.slice(1), 10);
+      return Number.isFinite(parsed) ? String.fromCodePoint(parsed) : match;
+    }
+    return HTML_ENTITIES[normalized] ?? match;
+  });
+}
+
+function normalizeBodyText(value: string): string {
+  return value
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .split("\n")
+    .map((line) => line.replace(/[ \t]+$/g, ""))
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function htmlToText(html: string): string {
+  const withoutHidden = html
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ");
+  const withBreaks = withoutHidden
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(p|div|li|tr|table|h[1-6]|blockquote)>/gi, "\n")
+    .replace(/<li\b[^>]*>/gi, "\n- ");
+  const withoutTags = withBreaks.replace(/<[^>]+>/g, " ");
+  return normalizeBodyText(
+    decodeHtmlEntities(withoutTags)
+      .replace(/[ \t]+\n/g, "\n")
+      .replace(/\n[ \t]+/g, "\n")
+      .replace(/[ \t]{2,}/g, " ")
+  );
+}
+
+interface BodyCandidate {
+  mimeType: string;
+  text: string;
+}
+
+function collectBodyCandidates(part: GmailMessagePart, out: BodyCandidate[]): void {
+  const mimeType = (part.mimeType ?? "").toLowerCase().split(";")[0].trim();
+  const filename = part.filename?.trim() ?? "";
+  const hasChildParts = Boolean(part.parts?.length);
+  const isTextBodyPart = !filename && (mimeType === "text/plain" || mimeType === "text/html");
+  const isLeafBodyWithoutMime = !filename && !hasChildParts && !mimeType;
+
+  if ((isTextBodyPart || isLeafBodyWithoutMime) && part.body?.data) {
+    const decoded = decodeBase64Url(part.body.data);
+    if (decoded != null) {
+      out.push({
+        mimeType: mimeType || "text/plain",
+        text: decoded,
+      });
+    }
+  }
+
+  for (const child of part.parts ?? []) {
+    collectBodyCandidates(child, out);
+  }
+}
+
+/** Decode body from message using recursive MIME traversal. Prefers text/plain, then text/html fallback. */
 export function getBodyText(msg: GmailMessage): string {
   const payload = msg.payload;
   if (!payload) return "";
-  if (payload.body?.data) {
-    try {
-      return Buffer.from(payload.body.data, "base64url").toString("utf-8");
-    } catch {
-      return "";
-    }
-  }
-  const parts = payload.parts;
-  if (parts?.length) {
-    for (const part of parts) {
-      if (part.mimeType === "text/plain" && part.body?.data) {
-        try {
-          return Buffer.from(part.body.data, "base64url").toString("utf-8");
-        } catch {
-          continue;
-        }
-      }
-    }
-  }
+  const candidates: BodyCandidate[] = [];
+  collectBodyCandidates(
+    {
+      mimeType: payload.mimeType,
+      filename: payload.filename,
+      body: payload.body,
+      parts: payload.parts,
+    },
+    candidates
+  );
+
+  const plain = candidates
+    .filter((candidate) => candidate.mimeType === "text/plain")
+    .map((candidate) => normalizeBodyText(candidate.text))
+    .filter(Boolean);
+  if (plain.length > 0) return plain.join("\n\n");
+
+  const html = candidates
+    .filter((candidate) => candidate.mimeType === "text/html")
+    .map((candidate) => htmlToText(candidate.text))
+    .filter(Boolean);
+  if (html.length > 0) return html.join("\n\n");
+
   return "";
 }
 

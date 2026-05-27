@@ -5,15 +5,14 @@ import Link from "next/link";
 export default function AgentTestPage() {
   return (
     <>
-      <h1 className="page-title">StreetEasy Agent</h1>
+      <h1 className="page-title">Sourcing Agent</h1>
       <div className="card" style={{ marginBottom: "1rem" }}>
         <p>
-          The two-step NYC Real Estate API flow (GET Active Sales → GET Sale details by URL) now
-          runs from the <strong>StreetEasy Agent</strong> page.
+          The NYC listing ingestion flow now runs from the <strong>Sourcing Agent</strong> page.
         </p>
         <p style={{ marginTop: "0.75rem" }}>
           <Link href="/runs" className="btn-primary" style={{ display: "inline-block" }}>
-            Go to StreetEasy Agent
+            Go to Sourcing Agent
           </Link>
         </p>
       </div>

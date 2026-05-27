@@ -40,6 +40,7 @@ export type PropertyActionItemType =
   | "review_thread_conflict"
   | "reply_received_no_om"
   | "upload_om_manually"
+  | "review_om_attachment"
   | "confirm_follow_up"
   | "review_parse_failure"
   | "resolve_duplicate";

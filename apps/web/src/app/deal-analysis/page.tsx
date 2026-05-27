@@ -20,9 +20,11 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
 type WorkspaceProperty = OmCalculationSnapshot["property"];
 
 interface UploadedDocumentSummary {
+  id?: string;
   fileName: string;
   mimeType?: string | null;
   sizeBytes?: number | null;
+  createdAt?: string | null;
 }
 
 interface ResolvedOmAddress {
@@ -38,17 +40,22 @@ interface ResolvedOmAddress {
 interface MatchedPropertyPreview {
   id: string;
   canonicalAddress: string;
-  matchStrategy: "exact_canonical" | "address_line";
+  matchStrategy: "exact_canonical" | "address_line" | "new";
 }
 
 interface AnalyzeUploadResponse {
   ok: boolean;
   property: WorkspaceProperty;
+  propertyId?: string;
+  canonicalAddress?: string;
+  createdProperty?: boolean;
+  matchStrategy?: "exact_canonical" | "address_line" | "new";
   resolvedAddress: ResolvedOmAddress | null;
   matchedProperty: MatchedPropertyPreview | null;
   uploadedDocuments: UploadedDocumentSummary[];
   details: PropertyDetails;
   calculation: OmCalculationSnapshot;
+  enrichment?: CreatePropertyResponse["enrichment"];
 }
 
 interface RecalculateResponse {
@@ -638,7 +645,7 @@ function DealAnalysisPageContent() {
       }
       const nextCalculation = data.calculation as OmCalculationSnapshot;
       const nextDraft = draftFromCalculation(nextCalculation);
-      setWorkspaceFiles(pendingFiles);
+      setWorkspaceFiles(data.propertyId ? [] : pendingFiles);
       setUploadedDocuments(data.uploadedDocuments ?? []);
       setWorkspaceDetails((data.details ?? null) as PropertyDetails | null);
       setWorkspaceProperty((data.property ?? null) as WorkspaceProperty | null);
@@ -647,8 +654,31 @@ function DealAnalysisPageContent() {
       setCalculation(nextCalculation);
       setDraft(nextDraft);
       setBaselineDraft(nextDraft);
-      if (propertyId) router.replace("/deal-analysis");
-      setNotice("Uploaded OM PDF(s) analyzed. Adjust assumptions and refresh analysis as needed.");
+      if (data.propertyId) {
+        setPendingFiles([]);
+        if (fileInputRef.current) fileInputRef.current.value = "";
+        const createSummary: CreatePropertyResponse = {
+          ok: true,
+          propertyId: data.propertyId,
+          canonicalAddress: data.canonicalAddress ?? data.matchedProperty?.canonicalAddress ?? data.property?.canonicalAddress ?? "Unknown property",
+          createdProperty: data.createdProperty ?? data.matchStrategy === "new",
+          matchStrategy: data.matchStrategy ?? data.matchedProperty?.matchStrategy ?? "new",
+          enrichment: data.enrichment ?? null,
+        };
+        setCreateResult(createSummary);
+        void loadSavedWorkspaces();
+        router.replace(`/deal-analysis?property_id=${encodeURIComponent(data.propertyId)}`);
+        setNotice(
+          createSummary.createdProperty
+            ? "Draft property workspace created from the uploaded OM and sent through enrichment."
+            : "Existing property workspace matched from the uploaded OM and updated."
+        );
+      } else if (propertyId) {
+        router.replace("/deal-analysis");
+        setNotice("Uploaded OM PDF(s) analyzed. Adjust assumptions and refresh analysis as needed.");
+      } else {
+        setNotice("Uploaded OM PDF(s) analyzed. Adjust assumptions and refresh analysis as needed.");
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to analyze uploaded OM PDF(s).");
     } finally {

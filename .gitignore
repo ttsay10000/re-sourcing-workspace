@@ -21,6 +21,7 @@ out/
 # Debug
 npm-debug.log*
 .pnpm-debug.log*
+tmp/
 
 # Vercel (if used later)
 .vercel

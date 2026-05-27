@@ -1,7 +1,14 @@
 /**
  * Source of listing data. StreetEasy-first; extensible for other sources.
  */
-export type ListingSource = "streeteasy" | "manual" | "zillow" | "nyc_api" | "other";
+export type ListingSource =
+  | "streeteasy"
+  | "manual"
+  | "zillow"
+  | "nyc_api"
+  | "loopnet"
+  | "marcus_millichap"
+  | "other";
 
 /**
  * Lifecycle state for filter governance and pruning.

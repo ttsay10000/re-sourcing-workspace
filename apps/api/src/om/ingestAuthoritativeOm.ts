@@ -13,6 +13,7 @@ import {
   getPool,
   InquiryDocumentRepo,
   OmAuthoritativeSnapshotRepo,
+  OmExtractedSnapshotRepo,
   OmIngestionRunRepo,
   PropertyRepo,
   PropertyUploadedDocumentRepo,
@@ -34,6 +35,8 @@ import {
 } from "../rental/omAnalysisUtils.js";
 import { resolveUploadedDocFilePath } from "../upload/uploadedDocStorage.js";
 import { syncPropertySourcingWorkflow } from "../sourcing/workflow.js";
+import { getPropertyDossierAssumptions } from "../deal/propertyDossierState.js";
+import { resolveOmAskingPriceFromDetails } from "../deal/omAskingPrice.js";
 
 export type AuthoritativeOmSourceType =
   | "uploaded_document"
@@ -65,6 +68,7 @@ export interface IngestAuthoritativeOmParams {
   propertyId: string;
   sourceType: AuthoritativeOmSourceType;
   documents: OmAutomationDocument[];
+  autoPromote?: boolean;
   triggerDossier?: boolean;
   pool?: Pool;
 }
@@ -74,15 +78,46 @@ export interface RefreshAuthoritativeOmResult {
   documentsSkippedNoFile: number;
   runId: string | null;
   snapshotId: string | null;
+  extractedSnapshotId?: string | null;
+  authoritativeSnapshotId?: string | null;
+  status?: "needs_review" | "promoted" | "failed";
+  reviewRequired?: boolean;
   dossierGenerated: boolean;
   error?: string;
 }
 
 export interface RefreshAuthoritativeOmOptions {
+  autoPromote?: boolean;
   triggerDossier?: boolean;
 }
 
+export interface PromoteOmExtractionResult {
+  ok: boolean;
+  propertyId: string;
+  runId: string;
+  snapshotId: string | null;
+  dossierGenerated: boolean;
+  error?: string;
+}
+
+export interface RejectOmExtractionResult {
+  ok: boolean;
+  propertyId: string;
+  runId: string;
+  status: "rejected";
+  reason: string | null;
+  error?: string;
+}
+
 const GEMINI_OM_EXTRACTION_METHOD: OmExtractionMethod = "hybrid";
+
+interface ManualOmConflict {
+  field: string;
+  manualValue?: unknown;
+  omValue?: unknown;
+  severity: "info" | "warning";
+  message: string;
+}
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return value != null && typeof value === "object" && !Array.isArray(value);
@@ -97,9 +132,94 @@ function toFiniteNumber(value: unknown): number | null {
   return null;
 }
 
+function valuesDiffer(left: unknown, right: unknown): boolean {
+  const leftNumber = toFiniteNumber(left);
+  const rightNumber = toFiniteNumber(right);
+  if (leftNumber != null && rightNumber != null) {
+    return Math.abs(leftNumber - rightNumber) > 0.005;
+  }
+  if (left == null || right == null) return false;
+  return String(left).trim() !== String(right).trim();
+}
+
+function buildManualOverrideReviewMetadata(params: {
+  existingDetails: PropertyDetails | null;
+  promotedDetails: PropertyDetails | null;
+  completedAt: string;
+  runId: string;
+}): Record<string, unknown> | null {
+  const savedAssumptions = getPropertyDossierAssumptions(params.existingDetails);
+  if (!savedAssumptions) return null;
+
+  const conflicts: ManualOmConflict[] = [];
+  const preservedFields = Object.entries(savedAssumptions)
+    .filter(([key, value]) => key !== "updatedAt" && value != null)
+    .map(([key]) => key);
+
+  const omAskingPrice = resolveOmAskingPriceFromDetails(params.promotedDetails);
+  if (savedAssumptions.purchasePrice != null && valuesDiffer(savedAssumptions.purchasePrice, omAskingPrice)) {
+    conflicts.push({
+      field: "purchasePrice",
+      manualValue: savedAssumptions.purchasePrice,
+      omValue: omAskingPrice,
+      severity: "warning",
+      message: "Saved purchase price was preserved over the promoted OM asking price.",
+    });
+  }
+
+  const omNoi = params.promotedDetails?.omData?.authoritative?.currentFinancials?.noi ?? null;
+  if (savedAssumptions.currentNoi != null && valuesDiffer(savedAssumptions.currentNoi, omNoi)) {
+    conflicts.push({
+      field: "currentNoi",
+      manualValue: savedAssumptions.currentNoi,
+      omValue: omNoi,
+      severity: "warning",
+      message: "Saved current NOI override was preserved over the promoted OM NOI.",
+    });
+  }
+
+  const omRentRollCount = params.promotedDetails?.omData?.authoritative?.rentRoll?.length ?? 0;
+  if ((savedAssumptions.unitModelRows?.length ?? 0) > 0) {
+    conflicts.push({
+      field: "unitModelRows",
+      manualValue: savedAssumptions.unitModelRows?.length ?? 0,
+      omValue: omRentRollCount,
+      severity: "info",
+      message: "Saved unit-level underwriting rows were preserved; review row mapping against the promoted OM rent roll.",
+    });
+  }
+
+  const omExpenseRowCount =
+    params.promotedDetails?.omData?.authoritative?.expenses?.expensesTable?.length ?? 0;
+  if ((savedAssumptions.expenseModelRows?.length ?? 0) > 0) {
+    conflicts.push({
+      field: "expenseModelRows",
+      manualValue: savedAssumptions.expenseModelRows?.length ?? 0,
+      omValue: omExpenseRowCount,
+      severity: "info",
+      message: "Saved expense underwriting rows were preserved; review them against the promoted OM expense table.",
+    });
+  }
+
+  if (preservedFields.length === 0 && conflicts.length === 0) return null;
+  return {
+    status: conflicts.length > 0 ? "needs_review" : "preserved",
+    runId: params.runId,
+    createdAt: params.completedAt,
+    preservedManualOverrideFields: preservedFields,
+    conflictCount: conflicts.length,
+    conflicts,
+  };
+}
+
 function looksLikeOmStyleFilename(filename: string | null | undefined): boolean {
   if (!filename || typeof filename !== "string") return false;
   return /(offering|memorandum|(^|[^a-z])om([^a-z]|$)|brochure|rent[ _-]?roll|t-?12|operating)/i.test(filename);
+}
+
+function looksLikeFinancialModelSource(doc: OmAutomationDocument): boolean {
+  if ((doc.category ?? "").toLowerCase() !== "financial model") return false;
+  return /(rent|expense|noi|income|cash[ _-]?flow|underwriting|pro[ _-]?forma|financial|model)/i.test(doc.filename);
 }
 
 function scoreDocument(doc: OmAutomationDocument): number {
@@ -110,6 +230,7 @@ function scoreDocument(doc: OmAutomationDocument): number {
   if ((doc.category ?? "").toLowerCase() === "brochure") score += 10;
   if ((doc.category ?? "").toLowerCase() === "rent roll") score += 14;
   if ((doc.category ?? "").toLowerCase() === "t12 / operating summary") score += 8;
+  if ((doc.category ?? "").toLowerCase() === "financial model") score += 4;
   if (filename.includes("rent roll")) score += 14;
   if (filename.includes("offering")) score += 12;
   if (filename.includes("memorandum")) score += 12;
@@ -269,23 +390,73 @@ async function buildDocumentPayloads(
   };
 }
 
-async function insertExtractedSnapshot(
-  pool: Pool,
-  params: { runId: string; propertyId: string; extractionMethod: string | null; snapshot: OmAuthoritativeSnapshot }
-): Promise<void> {
-  await pool.query(
-    `INSERT INTO om_extracted_snapshots (run_id, property_id, extraction_method, snapshot)
-     VALUES ($1, $2, $3, $4::jsonb)
-     ON CONFLICT (run_id) DO UPDATE SET
-       property_id = EXCLUDED.property_id,
-       extraction_method = EXCLUDED.extraction_method,
-       snapshot = EXCLUDED.snapshot,
-       updated_at = now()`,
-    [params.runId, params.propertyId, params.extractionMethod, JSON.stringify(params.snapshot)]
-  );
+function omAnalysisFromAuthoritativeSnapshot(snapshot: OmAuthoritativeSnapshot): OmAnalysis {
+  const sourceMeta = isPlainObject(snapshot.sourceMeta) ? snapshot.sourceMeta : {};
+  const reviewArtifacts = isPlainObject(sourceMeta.reviewArtifacts) ? sourceMeta.reviewArtifacts : {};
+  if (isPlainObject(reviewArtifacts.omAnalysis)) {
+    return reviewArtifacts.omAnalysis as OmAnalysis;
+  }
+  const expenseRows = sanitizeExpenseTableRows(snapshot.expenses?.expensesTable ?? []);
+  const totalExpenses = toFiniteNumber(snapshot.expenses?.totalExpenses);
+  const expenses =
+    isPlainObject(snapshot.expenses) || expenseRows.length > 0 || totalExpenses != null
+      ? {
+          ...(isPlainObject(snapshot.expenses) ? snapshot.expenses : {}),
+          expensesTable: expenseRows.length > 0 ? expenseRows : undefined,
+          totalExpenses: totalExpenses ?? undefined,
+        }
+      : undefined;
+  return {
+    propertyInfo: snapshot.propertyInfo ?? undefined,
+    rentRoll: snapshot.rentRoll ?? undefined,
+    income: snapshot.incomeStatement ?? undefined,
+    expenses,
+    revenueComposition: snapshot.revenueComposition ?? undefined,
+    sourceCoverage: snapshot.coverage ?? undefined,
+    investmentTakeaways: Array.isArray(snapshot.investmentTakeaways)
+      ? snapshot.investmentTakeaways
+      : undefined,
+    reportedDiscrepancies: Array.isArray(snapshot.reportedDiscrepancies)
+      ? snapshot.reportedDiscrepancies
+      : undefined,
+  };
 }
 
-function mergePropertyOmDetails(
+function fromLlmFromAuthoritativeSnapshot(
+  snapshot: OmAuthoritativeSnapshot
+): RentalFinancials["fromLlm"] {
+  const sourceMeta = isPlainObject(snapshot.sourceMeta) ? snapshot.sourceMeta : {};
+  const reviewArtifacts = isPlainObject(sourceMeta.reviewArtifacts) ? sourceMeta.reviewArtifacts : {};
+  return isPlainObject(reviewArtifacts.fromLlm)
+    ? (reviewArtifacts.fromLlm as RentalFinancials["fromLlm"])
+    : null;
+}
+
+export function mergePropertyOmReviewDetails(
+  details: PropertyDetails | null | undefined,
+  params: {
+    runId: string;
+    extractedSnapshotId: string;
+    completedAt: string;
+  }
+): { omData: NonNullable<PropertyDetails["omData"]> } {
+  const existingDetails = details ?? {};
+  const existingOmData = existingDetails.omData ?? {};
+  return {
+    omData: {
+      ...existingOmData,
+      latestRunId: params.runId,
+      status: "needs_review",
+      snapshotVersion: 2,
+      lastProcessedAt: params.completedAt,
+      pendingRunId: params.runId,
+      pendingSnapshotId: params.extractedSnapshotId,
+      pendingExtractedAt: params.completedAt,
+    },
+  };
+}
+
+export function mergePropertyOmDetails(
   details: PropertyDetails | null | undefined,
   snapshot: OmAuthoritativeSnapshot,
   omAnalysis: OmAnalysis,
@@ -303,6 +474,19 @@ function mergePropertyOmDetails(
     runId,
     promotedAt: completedAt,
   };
+  const promotedDetailsForReview: PropertyDetails = {
+    ...existingDetails,
+    omData: {
+      ...existingOmData,
+      authoritative: authoritativeSnapshot,
+    },
+  };
+  const manualOverrideReview = buildManualOverrideReviewMetadata({
+    existingDetails: existingDetails as PropertyDetails,
+    promotedDetails: promotedDetailsForReview,
+    completedAt,
+    runId,
+  });
 
   return {
     omData: {
@@ -313,7 +497,11 @@ function mergePropertyOmDetails(
       status: "promoted",
       snapshotVersion: 2,
       lastProcessedAt: completedAt,
+      pendingRunId: null,
+      pendingSnapshotId: null,
+      pendingExtractedAt: null,
       authoritative: authoritativeSnapshot,
+      ...(manualOverrideReview ? { manualOverrideReview } : {}),
     },
     rentalFinancials: {
       ...existingRentalFinancials,
@@ -370,13 +558,309 @@ export async function listOmAutomationDocumentsForProperty(
   });
 }
 
+async function promoteSnapshotForProperty(params: {
+  propertyId: string;
+  runId: string;
+  sourceDocumentId?: string | null;
+  snapshot: OmAuthoritativeSnapshot;
+  omAnalysis?: OmAnalysis | null;
+  fromLlm?: RentalFinancials["fromLlm"];
+  triggerDossier?: boolean;
+  pool: Pool;
+}): Promise<PromoteOmExtractionResult> {
+  const {
+    propertyId,
+    runId,
+    sourceDocumentId,
+    snapshot,
+    omAnalysis,
+    fromLlm,
+    triggerDossier,
+    pool,
+  } = params;
+  const propertyRepo = new PropertyRepo({ pool });
+  const authoritativeRepo = new OmAuthoritativeSnapshotRepo({ pool });
+  const ingestionRunRepo = new OmIngestionRunRepo({ pool });
+  const property = await propertyRepo.byId(propertyId);
+  if (!property) {
+    return {
+      ok: false,
+      propertyId,
+      runId,
+      snapshotId: null,
+      dossierGenerated: false,
+      error: `Property ${propertyId} not found.`,
+    };
+  }
+
+  const completedAt = new Date().toISOString();
+  const sourceMeta = isPlainObject(snapshot.sourceMeta) ? snapshot.sourceMeta : {};
+  const snapshotForPromotion: OmAuthoritativeSnapshot = {
+    ...snapshot,
+    runId,
+    sourceDocumentId: sourceDocumentId ?? snapshot.sourceDocumentId ?? null,
+    promotedAt: completedAt,
+    sourceMeta: {
+      ...sourceMeta,
+      review: {
+        decision: "promoted",
+        reviewedAt: completedAt,
+      },
+    },
+  };
+  const promoted = await authoritativeRepo.promote({
+    propertyId,
+    runId,
+    sourceDocumentId: sourceDocumentId ?? snapshot.sourceDocumentId ?? null,
+    snapshotVersion: 2,
+    snapshot: snapshotForPromotion,
+  });
+
+  const resolvedOmAnalysis = omAnalysis ?? omAnalysisFromAuthoritativeSnapshot(snapshotForPromotion);
+  const resolvedFromLlm =
+    fromLlm !== undefined ? fromLlm : fromLlmFromAuthoritativeSnapshot(snapshotForPromotion);
+  const mergedDetails = mergePropertyOmDetails(
+    property.details as PropertyDetails | null,
+    snapshotForPromotion,
+    resolvedOmAnalysis,
+    resolvedFromLlm ?? null,
+    promoted.id,
+    runId,
+    completedAt
+  );
+  await propertyRepo.mergeDetails(propertyId, mergedDetails);
+  await ingestionRunRepo.markReview(runId, {
+    status: "promoted",
+    decision: "promoted",
+    reviewedAt: completedAt,
+    completedAt,
+    promotedAt: completedAt,
+  });
+  await syncPropertySourcingWorkflow(propertyId, { pool });
+
+  let dossierGenerated = false;
+  if (triggerDossier) {
+    try {
+      await runGenerateDossier(propertyId, undefined, { sendEmail: false });
+      dossierGenerated = true;
+    } catch (err) {
+      console.error(
+        "[promoteSnapshotForProperty] dossier generation failed",
+        propertyId,
+        err instanceof Error ? err.message : err
+      );
+    }
+  }
+
+  return {
+    ok: true,
+    propertyId,
+    runId,
+    snapshotId: promoted.id,
+    dossierGenerated,
+  };
+}
+
+export async function promoteOmExtractionForProperty(params: {
+  propertyId: string;
+  runId: string;
+  triggerDossier?: boolean;
+  pool?: Pool;
+}): Promise<PromoteOmExtractionResult> {
+  const pool = params.pool ?? getPool();
+  const ingestionRunRepo = new OmIngestionRunRepo({ pool });
+  const extractedRepo = new OmExtractedSnapshotRepo({ pool });
+  const run = await ingestionRunRepo.byId(params.runId);
+  if (!run || run.propertyId !== params.propertyId) {
+    return {
+      ok: false,
+      propertyId: params.propertyId,
+      runId: params.runId,
+      snapshotId: null,
+      dossierGenerated: false,
+      error: "OM review run not found for this property.",
+    };
+  }
+  const extracted = await extractedRepo.getByRunId(params.runId);
+  if (!extracted || extracted.propertyId !== params.propertyId) {
+    return {
+      ok: false,
+      propertyId: params.propertyId,
+      runId: params.runId,
+      snapshotId: null,
+      dossierGenerated: false,
+      error: "No extracted OM snapshot is available for this review run.",
+    };
+  }
+
+  return promoteSnapshotForProperty({
+    propertyId: params.propertyId,
+    runId: params.runId,
+    sourceDocumentId: run.sourceDocumentId ?? extracted.snapshot.sourceDocumentId ?? null,
+    snapshot: extracted.snapshot,
+    triggerDossier: params.triggerDossier ?? false,
+    pool,
+  });
+}
+
+export async function rejectOmExtractionForProperty(params: {
+  propertyId: string;
+  runId: string;
+  reason?: string | null;
+  pool?: Pool;
+}): Promise<RejectOmExtractionResult> {
+  const pool = params.pool ?? getPool();
+  const ingestionRunRepo = new OmIngestionRunRepo({ pool });
+  const propertyRepo = new PropertyRepo({ pool });
+  const run = await ingestionRunRepo.byId(params.runId);
+  if (!run || run.propertyId !== params.propertyId) {
+    return {
+      ok: false,
+      propertyId: params.propertyId,
+      runId: params.runId,
+      status: "rejected",
+      reason: params.reason ?? null,
+      error: "OM review run not found for this property.",
+    };
+  }
+  const reviewedAt = new Date().toISOString();
+  const reason = typeof params.reason === "string" && params.reason.trim().length > 0
+    ? params.reason.trim()
+    : null;
+  await ingestionRunRepo.markReview(params.runId, {
+    status: "rejected",
+    decision: "rejected",
+    reason,
+    reviewedAt,
+    completedAt: reviewedAt,
+    lastError: reason ? `Rejected during OM review: ${reason}` : "Rejected during OM review.",
+  });
+
+  const property = await propertyRepo.byId(params.propertyId);
+  const existingOmData = (property?.details as PropertyDetails | null | undefined)?.omData ?? {};
+  if (property && existingOmData.latestRunId === params.runId) {
+    await propertyRepo.mergeDetails(params.propertyId, {
+      omData: {
+        ...existingOmData,
+        status: "rejected",
+        pendingRunId: null,
+        pendingSnapshotId: null,
+        pendingExtractedAt: null,
+        lastProcessedAt: reviewedAt,
+        lastRejectedRunId: params.runId,
+        lastRejectedAt: reviewedAt,
+        lastRejectedReason: reason,
+      },
+    });
+  }
+  await syncPropertySourcingWorkflow(params.propertyId, { pool });
+
+  return {
+    ok: true,
+    propertyId: params.propertyId,
+    runId: params.runId,
+    status: "rejected",
+    reason,
+  };
+}
+
+export async function promoteReviewedOmDetailsForProperty(params: {
+  propertyId: string;
+  details: PropertyDetails;
+  sourceDocumentId?: string | null;
+  sourceType: AuthoritativeOmSourceType;
+  sourceMeta?: Record<string, unknown> | null;
+  pool?: Pool;
+}): Promise<PromoteOmExtractionResult> {
+  const pool = params.pool ?? getPool();
+  const propertyRepo = new PropertyRepo({ pool });
+  const ingestionRunRepo = new OmIngestionRunRepo({ pool });
+  const extractedRepo = new OmExtractedSnapshotRepo({ pool });
+  const property = await propertyRepo.byId(params.propertyId);
+  if (!property) {
+    return {
+      ok: false,
+      propertyId: params.propertyId,
+      runId: "",
+      snapshotId: null,
+      dossierGenerated: false,
+      error: `Property ${params.propertyId} not found.`,
+    };
+  }
+  const sourceAuthoritative = params.details.omData?.authoritative ?? null;
+  if (!sourceAuthoritative) {
+    return {
+      ok: false,
+      propertyId: params.propertyId,
+      runId: "",
+      snapshotId: null,
+      dossierGenerated: false,
+      error: "Reviewed OM details do not include an authoritative-style snapshot.",
+    };
+  }
+  const omAnalysis =
+    params.details.rentalFinancials?.omAnalysis ??
+    omAnalysisFromAuthoritativeSnapshot(sourceAuthoritative);
+  const fromLlm = params.details.rentalFinancials?.fromLlm ?? null;
+  const startedAt = new Date().toISOString();
+  const reviewedSourceMeta = {
+    ...(isPlainObject(sourceAuthoritative.sourceMeta) ? sourceAuthoritative.sourceMeta : {}),
+    ...(params.sourceMeta ?? {}),
+  };
+  const run = await ingestionRunRepo.create({
+    propertyId: params.propertyId,
+    sourceDocumentId: params.sourceDocumentId ?? sourceAuthoritative.sourceDocumentId ?? null,
+    sourceType: params.sourceType,
+    status: "needs_review",
+    extractionMethod: sourceAuthoritative.extractionMethod ?? GEMINI_OM_EXTRACTION_METHOD,
+    sourceMeta: reviewedSourceMeta,
+    coverage: sourceAuthoritative.coverage ?? null,
+    startedAt,
+    completedAt: startedAt,
+  });
+
+  const sourceSnapshotWithoutId = { ...sourceAuthoritative };
+  delete sourceSnapshotWithoutId.id;
+  const snapshot: OmAuthoritativeSnapshot = {
+    ...sourceSnapshotWithoutId,
+    runId: run.id,
+    sourceDocumentId: params.sourceDocumentId ?? sourceAuthoritative.sourceDocumentId ?? null,
+    extractionMethod: sourceAuthoritative.extractionMethod ?? GEMINI_OM_EXTRACTION_METHOD,
+    sourceMeta: {
+      ...reviewedSourceMeta,
+      reviewArtifacts: {
+        omAnalysis,
+        fromLlm,
+      },
+    },
+    promotedAt: null,
+  };
+  await extractedRepo.upsert({
+    runId: run.id,
+    propertyId: params.propertyId,
+    extractionMethod: snapshot.extractionMethod ?? GEMINI_OM_EXTRACTION_METHOD,
+    snapshot,
+  });
+
+  return promoteSnapshotForProperty({
+    propertyId: params.propertyId,
+    runId: run.id,
+    sourceDocumentId: params.sourceDocumentId ?? sourceAuthoritative.sourceDocumentId ?? null,
+    snapshot,
+    omAnalysis,
+    fromLlm,
+    triggerDossier: false,
+    pool,
+  });
+}
+
 export async function ingestAuthoritativeOm(
   params: IngestAuthoritativeOmParams
 ): Promise<RefreshAuthoritativeOmResult> {
   const pool = params.pool ?? getPool();
   const propertyRepo = new PropertyRepo({ pool });
   const ingestionRunRepo = new OmIngestionRunRepo({ pool });
-  const authoritativeRepo = new OmAuthoritativeSnapshotRepo({ pool });
+  const extractedSnapshotRepo = new OmExtractedSnapshotRepo({ pool });
   const property = await propertyRepo.byId(params.propertyId);
   if (!property) {
     return {
@@ -385,12 +869,13 @@ export async function ingestAuthoritativeOm(
       runId: null,
       snapshotId: null,
       dossierGenerated: false,
+      status: "failed",
       error: `Property ${params.propertyId} not found.`,
     };
   }
 
   const candidateDocuments = [...params.documents]
-    .filter((doc) => looksLikeOmStyleFilename(doc.filename) || doc.category === "OM" || doc.category === "Brochure" || doc.category === "Rent Roll" || doc.category === "T12 / Operating Summary")
+    .filter((doc) => looksLikeOmStyleFilename(doc.filename) || looksLikeFinancialModelSource(doc) || doc.category === "OM" || doc.category === "Brochure" || doc.category === "Rent Roll" || doc.category === "T12 / Operating Summary")
     .sort((left, right) => {
       const scoreDiff = scoreDocument(right) - scoreDocument(left);
       if (scoreDiff !== 0) return scoreDiff;
@@ -406,6 +891,7 @@ export async function ingestAuthoritativeOm(
       runId: null,
       snapshotId: null,
       dossierGenerated: false,
+      status: "failed",
       error: "No OM, brochure, rent roll, or operating statement documents are available for ingestion.",
     };
   }
@@ -466,6 +952,7 @@ export async function ingestAuthoritativeOm(
         runId,
         snapshotId: null,
         dossierGenerated: false,
+        status: "failed",
         error: unreadableFileError ?? "OM ingestion could not read any document bytes from the available files.",
       };
     }
@@ -487,6 +974,7 @@ export async function ingestAuthoritativeOm(
         runId,
         snapshotId: null,
         dossierGenerated: false,
+        status: "failed",
         error,
       };
     }
@@ -517,6 +1005,7 @@ export async function ingestAuthoritativeOm(
         runId,
         snapshotId: null,
         dossierGenerated: false,
+        status: "failed",
         error,
       };
     }
@@ -574,70 +1063,84 @@ export async function ingestAuthoritativeOm(
         sourceType: params.sourceType,
         documents: candidateDocumentSourceMeta,
         parser: sourceMeta.parser,
+        reviewArtifacts: {
+          omAnalysis: sanitizedOmAnalysis,
+          fromLlm: extracted.fromLlm ?? null,
+        },
       },
-      promotedAt: completedAt,
+      promotedAt: null,
     };
     const snapshot: OmAuthoritativeSnapshot = {
       ...snapshotBase,
       validationFlags: buildMissingDataFlags(snapshotBase),
     };
 
-    await insertExtractedSnapshot(pool, {
+    const extractedSnapshot = await extractedSnapshotRepo.upsert({
       runId: run.id,
       propertyId: params.propertyId,
       extractionMethod: GEMINI_OM_EXTRACTION_METHOD,
       snapshot,
     });
-    const promoted = await authoritativeRepo.promote({
-      propertyId: params.propertyId,
-      runId: run.id,
-      sourceDocumentId: candidateDocuments[0]?.id ?? null,
-      snapshotVersion: 2,
-      snapshot,
-    });
+    if (params.autoPromote) {
+      const promoted = await promoteSnapshotForProperty({
+        propertyId: params.propertyId,
+        runId: run.id,
+        sourceDocumentId: candidateDocuments[0]?.id ?? null,
+        snapshot,
+        omAnalysis: sanitizedOmAnalysis,
+        fromLlm: extracted.fromLlm ?? null,
+        triggerDossier: params.triggerDossier !== false,
+        pool,
+      });
+      return {
+        documentsProcessed: preparedDocuments.length,
+        documentsSkippedNoFile: skippedNoFile,
+        runId,
+        snapshotId: promoted.snapshotId,
+        extractedSnapshotId: extractedSnapshot.id,
+        authoritativeSnapshotId: promoted.snapshotId,
+        status: promoted.ok ? "promoted" : "failed",
+        reviewRequired: false,
+        dossierGenerated: promoted.dossierGenerated,
+        error: promoted.error,
+      };
+    }
 
-    const mergedDetails = mergePropertyOmDetails(
-      property.details as PropertyDetails | null,
-      snapshot,
-      sanitizedOmAnalysis,
-      extracted.fromLlm ?? null,
-      promoted.id,
-      run.id,
-      completedAt
+    await propertyRepo.mergeDetails(
+      params.propertyId,
+      mergePropertyOmReviewDetails(property.details as PropertyDetails | null, {
+        runId: run.id,
+        extractedSnapshotId: extractedSnapshot.id,
+        completedAt,
+      })
     );
-    await propertyRepo.mergeDetails(params.propertyId, mergedDetails);
     await ingestionRunRepo.update(run.id, {
-      status: "promoted",
+      status: "needs_review",
       extractionMethod: GEMINI_OM_EXTRACTION_METHOD,
       pageCount: null,
       financialPageCount: null,
       ocrPageCount: null,
       coverage: snapshot.coverage ?? null,
       completedAt,
-      promotedAt: completedAt,
+    });
+    await ingestionRunRepo.markReview(run.id, {
+      status: "needs_review",
+      decision: "needs_review",
+      reviewedAt: completedAt,
+      completedAt,
     });
     await syncPropertySourcingWorkflow(params.propertyId, { pool });
-
-    let dossierGenerated = false;
-    if (params.triggerDossier !== false) {
-      try {
-        await runGenerateDossier(params.propertyId, undefined, { sendEmail: false });
-        dossierGenerated = true;
-      } catch (err) {
-        console.error(
-          "[ingestAuthoritativeOm] dossier generation failed",
-          params.propertyId,
-          err instanceof Error ? err.message : err
-        );
-      }
-    }
 
     return {
       documentsProcessed: preparedDocuments.length,
       documentsSkippedNoFile: skippedNoFile,
       runId,
-      snapshotId: promoted.id,
-      dossierGenerated,
+      snapshotId: null,
+      extractedSnapshotId: extractedSnapshot.id,
+      authoritativeSnapshotId: null,
+      status: "needs_review",
+      reviewRequired: true,
+      dossierGenerated: false,
     };
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
@@ -668,6 +1171,7 @@ export async function ingestAuthoritativeOm(
       documentsSkippedNoFile: 0,
       runId,
       snapshotId: null,
+      status: "failed",
       dossierGenerated: false,
       error,
     };
@@ -685,6 +1189,7 @@ export async function refreshAuthoritativeOmForProperty(
     sourceType: "manual_refresh",
     documents,
     pool,
+    autoPromote: options?.autoPromote ?? false,
     triggerDossier: options?.triggerDossier ?? false,
   });
 }

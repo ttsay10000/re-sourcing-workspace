@@ -43,6 +43,16 @@ export interface UpdateOmIngestionRunParams {
   promotedAt?: string | null;
 }
 
+export interface MarkOmIngestionRunReviewParams {
+  status: OmIngestionRunStatus;
+  decision: "needs_review" | "promoted" | "rejected";
+  reason?: string | null;
+  reviewedAt?: string | null;
+  lastError?: string | null;
+  completedAt?: string | null;
+  promotedAt?: string | null;
+}
+
 export class OmIngestionRunRepo {
   constructor(private options: OmIngestionRunRepoOptions) {}
 
@@ -130,6 +140,38 @@ export class OmIngestionRunRepo {
         params.financialPageCount ?? null,
         params.ocrPageCount ?? null,
         params.coverage != null ? JSON.stringify(params.coverage) : null,
+        params.lastError ?? null,
+        params.completedAt ?? null,
+        params.promotedAt ?? null,
+      ]
+    );
+    return r.rows[0] ? mapOmIngestionRun(r.rows[0]) : null;
+  }
+
+  async markReview(
+    id: string,
+    params: MarkOmIngestionRunReviewParams
+  ): Promise<OmIngestionRun | null> {
+    const reviewedAt = params.reviewedAt ?? new Date().toISOString();
+    const review = {
+      decision: params.decision,
+      reason: params.reason ?? null,
+      reviewedAt,
+    };
+    const r = await this.client.query(
+      `UPDATE om_ingestion_runs
+       SET status = $2,
+           source_meta = COALESCE(source_meta, '{}'::jsonb) || jsonb_build_object('review', $3::jsonb),
+           last_error = COALESCE($4, last_error),
+           completed_at = COALESCE($5::timestamptz, completed_at),
+           promoted_at = COALESCE($6::timestamptz, promoted_at),
+           updated_at = now()
+       WHERE id = $1
+       RETURNING *`,
+      [
+        id,
+        params.status,
+        JSON.stringify(review),
         params.lastError ?? null,
         params.completedAt ?? null,
         params.promotedAt ?? null,

@@ -25,6 +25,7 @@ import type {
   PropertyDocumentCategory,
   Document,
   UserProfile,
+  DealScoringPreferences,
   SavedDeal,
   DealSignalRow,
   DealScoreOverride,
@@ -41,6 +42,7 @@ import type {
   OutreachBatchItem,
 } from "@re-sourcing/contracts";
 import type { ListingSource, ListingLifecycleState, LocationMode, IngestionRunStatus, IngestionJobStatus, MatchStatus } from "@re-sourcing/contracts";
+import { DEFAULT_DEAL_SCORING_PREFERENCES } from "@re-sourcing/contracts";
 
 function toSourceToggles(v: unknown): SourceToggles {
   if (v && typeof v === "object" && !Array.isArray(v)) {
@@ -258,6 +260,8 @@ export function mapPropertyUploadedDocument(row: Record<string, unknown>): Prope
     filePath: row.file_path as string,
     category: (row.category as PropertyDocumentCategory) ?? "Other",
     source: (row.source as string) ?? null,
+    sourceUrl: (row.source_url as string) ?? null,
+    sourceMetadata: (row.source_metadata as Record<string, unknown> | null) ?? null,
     createdAt: toIso(row.created_at),
   };
 }
@@ -275,6 +279,34 @@ export function mapDocument(row: Record<string, unknown>): Document {
   };
 }
 
+function mapDealScoringPreferences(value: unknown): DealScoringPreferences {
+  const record =
+    value != null && typeof value === "object" && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : {};
+  const targetIrrPct =
+    typeof record.targetIrrPct === "number" && Number.isFinite(record.targetIrrPct)
+      ? record.targetIrrPct
+      : DEFAULT_DEAL_SCORING_PREFERENCES.targetIrrPct;
+  const goodCashOnCashPct =
+    typeof record.goodCashOnCashPct === "number" && Number.isFinite(record.goodCashOnCashPct)
+      ? record.goodCashOnCashPct
+      : DEFAULT_DEAL_SCORING_PREFERENCES.goodCashOnCashPct;
+  const scoringProfileKey =
+    typeof record.scoringProfileKey === "string" && record.scoringProfileKey.trim().length > 0
+      ? record.scoringProfileKey.trim()
+      : DEFAULT_DEAL_SCORING_PREFERENCES.scoringProfileKey;
+  return {
+    targetIrrPct,
+    goodCashOnCashPct,
+    rentStabilizationDoNotBuy:
+      typeof record.rentStabilizationDoNotBuy === "boolean"
+        ? record.rentStabilizationDoNotBuy
+        : DEFAULT_DEAL_SCORING_PREFERENCES.rentStabilizationDoNotBuy,
+    scoringProfileKey,
+  };
+}
+
 export function mapUserProfile(row: Record<string, unknown>): UserProfile {
   return {
     id: row.id as string,
@@ -284,6 +316,14 @@ export function mapUserProfile(row: Record<string, unknown>): UserProfile {
     automationPaused: Boolean(row.automation_paused),
     automationPauseReason: (row.automation_pause_reason as string) ?? null,
     automationPausedAt: row.automation_paused_at != null ? toIso(row.automation_paused_at) : null,
+    automationInitialEmailEnabled:
+      row.automation_initial_email_enabled != null ? Boolean(row.automation_initial_email_enabled) : false,
+    automationReplyEmailEnabled:
+      row.automation_reply_email_enabled != null ? Boolean(row.automation_reply_email_enabled) : false,
+    automationAmbiguousActionHandlingEnabled:
+      row.automation_ambiguous_action_handling_enabled != null
+        ? Boolean(row.automation_ambiguous_action_handling_enabled)
+        : false,
     dailyDigestEnabled:
       row.daily_digest_enabled != null ? Boolean(row.daily_digest_enabled) : true,
     dailyDigestTimeLocal: (row.daily_digest_time_local as string) ?? null,
@@ -331,6 +371,7 @@ export function mapUserProfile(row: Record<string, unknown>): UserProfile {
         ? Number(row.default_recurring_capex_annual)
         : null,
     defaultLoanFeePct: row.default_loan_fee_pct != null ? Number(row.default_loan_fee_pct) : null,
+    scoringPreferences: mapDealScoringPreferences(row.scoring_preferences),
     createdAt: toIso(row.created_at),
     updatedAt: toIso(row.updated_at),
   };

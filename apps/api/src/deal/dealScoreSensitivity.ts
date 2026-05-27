@@ -1,5 +1,6 @@
 import type { DealScoreSensitivity, DealScoreSensitivityScenario, PropertyDetails } from "@re-sourcing/contracts";
 import { computeDealSignals, type PropertyListingInput } from "./computeDealSignals.js";
+import type { DealScoringProfile, DealScoringProfileKey } from "./dealScoringProfiles.js";
 import {
   computeBlendedRentUpliftPct,
   computeRecommendedOffer,
@@ -26,6 +27,8 @@ interface BuildDealScoreSensitivityInput {
   protectedProjectedLeaseUpRent?: number | null;
   preferProvidedCurrentNoi?: boolean;
   baseCalculatedScore: number | null;
+  scoringProfile?: DealScoringProfileKey | DealScoringProfile | null;
+  furnishingSetupCosts?: number | null;
 }
 
 function scenarioResult(
@@ -102,6 +105,8 @@ function scoreForScenario(
     exitCapRatePct: assumptions.exit.exitCapPct,
     rentStabilizedUnitCount: assumptions.propertyMix.rentStabilizedUnits,
     commercialUnitCount: assumptions.propertyMix.commercialUnits,
+    scoringProfile: input.scoringProfile ?? null,
+    furnishingSetupCosts: input.furnishingSetupCosts ?? null,
   });
   return scoringResult.isScoreable ? scoringResult.dealScore : null;
 }
@@ -123,6 +128,8 @@ export function buildDealScoreSensitivity(input: BuildDealScoreSensitivityInput)
     conservativeProjectedLeaseUpRent: input.conservativeProjectedLeaseUpRent,
     protectedProjectedLeaseUpRent: input.protectedProjectedLeaseUpRent,
     preferProvidedCurrentNoi: input.preferProvidedCurrentNoi,
+    scoringProfile: input.scoringProfile ?? null,
+    furnishingSetupCosts: input.furnishingSetupCosts ?? null,
   };
 
   const rentUpliftPct = Math.max(0, assumptions.operating.rentUpliftPct - 20);

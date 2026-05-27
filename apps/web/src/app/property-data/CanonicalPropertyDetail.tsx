@@ -21,9 +21,18 @@ import {
   OmCalculationPanel,
   OM_CALC_NUMERIC_FIELDS,
   type OmCalculationDraft,
+  type OmCalculationExpenseModelRow,
   type OmCalculationNumericField,
   type OmCalculationSnapshot,
+  type OmCalculationTextField,
+  type OmCalculationUnitModelRow,
 } from "./OmCalculationPanel";
+import {
+  PropertyDetailWorkspace,
+  type PropertyDetailRailItem,
+  type PropertyDetailTabId,
+  type PropertyDetailTabItem,
+} from "./PropertyDetailWorkspace";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
 
@@ -115,6 +124,8 @@ interface DossierAssumptionsResponse {
     exitCapPct?: number | null;
     exitClosingCostPct?: number | null;
     targetIrrPct?: number | null;
+    unitModelRows?: OmCalculationUnitModelRow[] | null;
+    expenseModelRows?: OmCalculationExpenseModelRow[] | null;
     brokerEmailNotes?: string | null;
   } | null;
   formulaDefaults?: {
@@ -553,6 +564,49 @@ function emptyOmCalculationDraft(): OmCalculationDraft {
   };
 }
 
+function serializeUnitModelRows(rows: OmCalculationUnitModelRow[] | undefined): string {
+  return JSON.stringify(
+    (rows ?? []).map((row) => ({
+      rowId: row.rowId,
+      unitLabel: row.unitLabel,
+      building: row.building ?? null,
+      unitCategory: row.unitCategory ?? null,
+      tenantName: row.tenantName ?? null,
+      currentAnnualRent: row.currentAnnualRent ?? null,
+      underwrittenAnnualRent: row.underwrittenAnnualRent ?? null,
+      rentUpliftPct: row.rentUpliftPct ?? null,
+      occupancyPct: row.occupancyPct ?? null,
+      furnishingCost: row.furnishingCost ?? null,
+      onboardingLaborFee: row.onboardingLaborFee ?? null,
+      onboardingOtherCosts: row.onboardingOtherCosts ?? null,
+      onboardingFee: row.onboardingFee ?? null,
+      monthlyRecurringOpex: row.monthlyRecurringOpex ?? null,
+      monthlyHospitalityExpense: row.monthlyHospitalityExpense ?? null,
+      includeInUnderwriting: row.includeInUnderwriting,
+      isProtected: row.isProtected,
+      isCommercial: row.isCommercial,
+      isRentStabilized: row.isRentStabilized,
+      beds: row.beds ?? null,
+      baths: row.baths ?? null,
+      sqft: row.sqft ?? null,
+      tenantStatus: row.tenantStatus ?? null,
+      notes: row.notes ?? null,
+    }))
+  );
+}
+
+function serializeExpenseModelRows(rows: OmCalculationExpenseModelRow[] | undefined): string {
+  return JSON.stringify(
+    (rows ?? []).map((row) => ({
+      rowId: row.rowId,
+      lineItem: row.lineItem,
+      amount: row.amount ?? null,
+      annualGrowthPct: row.annualGrowthPct ?? null,
+      treatment: row.treatment,
+    }))
+  );
+}
+
 export function CanonicalPropertyDetail({
   property,
   isSaved,
@@ -587,6 +641,7 @@ export function CanonicalPropertyDetail({
     rentalOm: true,
     violationsComplaintsPermits: true,
   });
+  const [activeTab, setActiveTab] = useState<PropertyDetailTabId>("overview");
   const [unifiedRows, setUnifiedRows] = useState<UnifiedEnrichmentRow[]>([]);
   const [unifiedLoading, setUnifiedLoading] = useState(false);
   const [unifiedFetched, setUnifiedFetched] = useState(false);
@@ -644,6 +699,7 @@ export function CanonicalPropertyDetail({
   const [dossierSettingsSaving, setDossierSettingsSaving] = useState(false);
   const [dossierError, setDossierError] = useState<string | null>(null);
   const [dossierGenerating, setDossierGenerating] = useState(false);
+  const [scoreRefreshing, setScoreRefreshing] = useState(false);
   const [omCalculation, setOmCalculation] = useState<OmCalculationSnapshot | null>(null);
   const [omCalculationLoading, setOmCalculationLoading] = useState(true);
   const [omCalculationRunning, setOmCalculationRunning] = useState(false);
@@ -809,6 +865,8 @@ export function CanonicalPropertyDetail({
       exitCapPct: data.defaults?.exitCapPct ?? null,
       exitClosingCostPct: data.defaults?.exitClosingCostPct ?? null,
       targetIrrPct: data.defaults?.targetIrrPct ?? null,
+      unitModelRows: data.defaults?.unitModelRows ?? undefined,
+      expenseModelRows: data.defaults?.expenseModelRows ?? undefined,
       brokerEmailNotes: data.defaults?.brokerEmailNotes ?? "",
     };
     setDossierDraft(nextDraft);
@@ -1270,8 +1328,20 @@ export function CanonicalPropertyDetail({
   const numericDossierFieldsDirty = OM_CALC_NUMERIC_FIELDS.some(
     (field) => (dossierDraft[field] ?? null) !== (savedDossierDraft[field] ?? null)
   );
+  const unitRowsDirty =
+    serializeUnitModelRows(dossierDraft.unitModelRows) !==
+    serializeUnitModelRows(savedDossierDraft.unitModelRows);
+  const expenseRowsDirty =
+    serializeExpenseModelRows(dossierDraft.expenseModelRows) !==
+    serializeExpenseModelRows(savedDossierDraft.expenseModelRows);
+  const dossierMetadataDirty =
+    dossierDraft.investmentProfile.trim() !== savedDossierDraft.investmentProfile.trim() ||
+    dossierDraft.targetAcquisitionDate !== savedDossierDraft.targetAcquisitionDate;
   const isDossierDirty =
     numericDossierFieldsDirty ||
+    unitRowsDirty ||
+    expenseRowsDirty ||
+    dossierMetadataDirty ||
     dossierDraft.brokerEmailNotes.trim() !== savedDossierDraft.brokerEmailNotes.trim();
   const hasSavedBrokerEmailNotes = savedDossierDraft.brokerEmailNotes.trim().length > 0;
   const hasBrokerEmailNotes =
@@ -1280,6 +1350,7 @@ export function CanonicalPropertyDetail({
   const canGenerateDossier = hasAuthoritativeOm || hasBrokerEmailNotes;
   const isDossierBusy =
     dossierGenerating ||
+    scoreRefreshing ||
     authoritativeOmRefreshing ||
     dossierSettingsSaving ||
     dossierJob?.status === "running" ||
@@ -1600,6 +1671,35 @@ export function CanonicalPropertyDetail({
     }
   };
 
+  const handleRefreshDealScore = async () => {
+    if (scoreRefreshing) return;
+    setScoreRefreshing(true);
+    setDossierError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/dossier/refresh-scores`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ scope: "selected", propertyIds: [property.id] }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data?.error) {
+        throw new Error(
+          typeof data?.details === "string"
+            ? data.details
+            : typeof data?.error === "string"
+              ? data.error
+              : "Failed to refresh score"
+        );
+      }
+      await refreshPropertySnapshot();
+      onWorkflowActivity?.();
+    } catch (err) {
+      setDossierError(err instanceof Error ? err.message : "Failed to refresh score");
+    } finally {
+      setScoreRefreshing(false);
+    }
+  };
+
   const handleOmCalculationFieldChange = (
     field: OmCalculationNumericField,
     value: number | null
@@ -1607,6 +1707,30 @@ export function CanonicalPropertyDetail({
     setDossierDraft((prev) => ({
       ...prev,
       [field]: value,
+    }));
+  };
+
+  const handleOmCalculationTextChange = (
+    field: OmCalculationTextField,
+    value: string
+  ) => {
+    setDossierDraft((prev) => ({
+      ...prev,
+      [field]: value,
+    }));
+  };
+
+  const handleOmUnitModelRowsChange = (rows: OmCalculationUnitModelRow[]) => {
+    setDossierDraft((prev) => ({
+      ...prev,
+      unitModelRows: rows,
+    }));
+  };
+
+  const handleOmExpenseModelRowsChange = (rows: OmCalculationExpenseModelRow[]) => {
+    setDossierDraft((prev) => ({
+      ...prev,
+      expenseModelRows: rows,
     }));
   };
 
@@ -1700,14 +1824,6 @@ export function CanonicalPropertyDetail({
   const [galleryIndex, setGalleryIndex] = useState(0);
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
   const [unitGalleryIndices, setUnitGalleryIndices] = useState<Record<number, number>>({});
-  const sectionLinks = [
-    { id: "photos-floorplans", label: "Media", open: !!openSections.photosFloorplans },
-    { id: "details-broker-amenities-price-history", label: "Listing", open: !!openSections.detailsBrokerAmenitiesPriceHistory },
-    { id: "owner", label: "Owner", open: !!openSections.owner },
-    { id: "valuations", label: "Valuations", open: !!openSections.valuations },
-    { id: "rental-om", label: "Rental / OM", open: !!openSections.rentalOm },
-    { id: "violations-complaints-permits", label: "Issues", open: !!openSections.violationsComplaintsPermits },
-  ];
   const sourcingUpdate = getSourcingUpdate(d);
   const sourcingUpdateMeta = getSourcingUpdateMeta(d);
   const overviewItems = [
@@ -1719,10 +1835,65 @@ export function CanonicalPropertyDetail({
     { label: "Inquiry", value: lastInquirySentAt ? formatDateOnly(lastInquirySentAt) : "Not sent" },
   ];
 
-  const jumpToSection = (sectionId: string) => {
-    const node = document.getElementById(`canonical-section-${sectionId}`);
-    if (!node) return;
-    node.scrollIntoView({ behavior: "smooth", block: "start" });
+  const detailTabs: PropertyDetailTabItem[] = [
+    { id: "overview", label: "Overview" },
+    { id: "sources", label: "Sources" },
+    { id: "documents", label: "Documents", badge: unifiedDocuments == null ? null : unifiedDocuments.length },
+    { id: "enrichment", label: "Enrichment" },
+    { id: "omWorkspace", label: "OM Workspace" },
+    { id: "underwriting", label: "Underwriting" },
+    { id: "outreach", label: "Outreach" },
+    { id: "dossierScore", label: "Dossier/Score" },
+    { id: "activity", label: "Activity", badge: unifiedRows.length || null },
+  ];
+
+  const statusRailItems: PropertyDetailRailItem[] = [
+    {
+      label: "OM",
+      value: property.omStatus ?? (hasOmDocument ? "Document on file" : "Not received"),
+      detail: hasAuthoritativeOm ? "Authoritative snapshot" : hasOmDocument ? "Ready to parse" : null,
+      tone: hasAuthoritativeOm || hasOmDocument ? "good" : "warn",
+    },
+    {
+      label: "Outreach",
+      value: lastInquirySentAt ? "Sent" : "Not sent",
+      detail: lastInquirySentAt ? formatDateOnly(lastInquirySentAt) : preferredInquiryRecipient.email || null,
+      tone: lastInquirySentAt ? "good" : preferredInquiryRecipient.email ? "neutral" : "warn",
+    },
+    {
+      label: "Documents",
+      value: unifiedDocuments == null ? "Loading" : String(unifiedDocuments.length),
+      detail: hasOmDocument ? "OM/Brochure present" : null,
+      tone: hasOmDocument ? "good" : "neutral",
+    },
+    {
+      label: "Deal",
+      value: dealScore != null ? `${dealScore}/100` : analysisStatusLabel,
+      detail: scoreOverride ? "Manual score override" : null,
+      tone: dealScore != null ? "good" : "neutral",
+    },
+    {
+      label: "Listing",
+      value: listingForDisplay ? formatPrice(listingForDisplay.price) : primaryListing === "loading" ? "Loading" : "No listing",
+      detail: listingForDisplay?.source ?? null,
+      tone: listingForDisplay ? "good" : "neutral",
+    },
+    {
+      label: "Enrichment",
+      value: bbl != null || bblBase != null ? "BBL ready" : "Needs BBL",
+      detail: sourcingUpdateMeta.label,
+      tone: bbl != null || bblBase != null ? "good" : "warn",
+    },
+  ];
+
+  const selectDetailTab = (tab: PropertyDetailTabId) => {
+    setActiveTab(tab);
+    if (tab === "documents" || tab === "outreach" || tab === "omWorkspace") {
+      setOpenSections((prev) => ({ ...prev, rentalOm: true }));
+    }
+    if ((tab === "enrichment" || tab === "activity") && !unifiedFetched && !unifiedLoading) {
+      fetchUnifiedTable();
+    }
   };
 
   useEffect(() => {
@@ -1730,6 +1901,7 @@ export function CanonicalPropertyDetail({
     if (lastAutoOpenInquiryNonceRef.current === autoOpenInquiryComposerNonce) return;
     lastAutoOpenInquiryNonceRef.current = autoOpenInquiryComposerNonce;
     setOpenSections((prev) => ({ ...prev, rentalOm: true }));
+    setActiveTab("outreach");
     setInquiryDraft(buildInquiryDraft({
       canonicalAddress: property.canonicalAddress,
       recipientName: preferredInquiryRecipient.name,
@@ -1747,10 +1919,42 @@ export function CanonicalPropertyDetail({
   ]);
 
   return (
-    <div className="property-detail-collapsible">
-      {/* Linked listing — single header row, since there should only be one per canonical property */}
-      {primaryListing !== "loading" && listingForDisplay && (
-        <div className="linked-listing-bar">
+    <div className="property-detail-collapsible property-detail-collapsible--workspace">
+      <PropertyDetailWorkspace
+        tabs={detailTabs}
+        activeTab={activeTab}
+        onTabChange={selectDetailTab}
+        railItems={statusRailItems}
+        actions={(
+          <>
+            <button
+              type="button"
+              className="property-detail-rail-button property-detail-rail-button--primary"
+              onClick={() => selectDetailTab("outreach")}
+            >
+              Email broker
+            </button>
+            <button
+              type="button"
+              className="property-detail-rail-button"
+              onClick={() => selectDetailTab("documents")}
+            >
+              Documents
+            </button>
+            <a
+              className="property-detail-rail-button"
+              href={`/deal-analysis?property_id=${encodeURIComponent(property.id)}`}
+            >
+              Deal analysis
+            </a>
+          </>
+        )}
+      >
+      {activeTab === "sources" && (
+        <>
+        {/* Linked listing — single header row, since there should only be one per canonical property */}
+        {primaryListing !== "loading" && listingForDisplay && (
+          <div className="linked-listing-bar">
           <div className="linked-listing-bar-inner">
             <div className="property-metric">
               <div className="property-metric-label">Listing ID</div>
@@ -1813,11 +2017,11 @@ export function CanonicalPropertyDetail({
               </div>
             </div>
           </div>
-        </div>
-      )}
+          </div>
+        )}
 
-      {manualSourceLinks && (
-        <div className="linked-listing-bar" style={{ marginTop: "0.5rem", marginBottom: "0.5rem" }}>
+        {manualSourceLinks && (
+          <div className="linked-listing-bar" style={{ marginTop: "0.5rem", marginBottom: "0.5rem" }}>
           <div className="linked-listing-bar-inner" style={{ flexWrap: "wrap", gap: "0.75rem" }}>
             <div className="property-metric">
               <div className="property-metric-label">Manual add</div>
@@ -1852,9 +2056,18 @@ export function CanonicalPropertyDetail({
               </div>
             ) : null}
           </div>
-        </div>
+          </div>
+        )}
+        {!listingForDisplay && !manualSourceLinks && (
+          <div className="property-detail-tab-empty">
+            No linked listing or manual source links are available for this property yet.
+          </div>
+        )}
+        </>
       )}
 
+      {activeTab === "dossierScore" && (
+      <>
       {/* Deal score — generated after dossier flow persists deal_signals */}
       <div className="linked-listing-bar" style={{ marginTop: "0.5rem", marginBottom: "0.5rem" }}>
         <div className="linked-listing-bar-inner" style={{ flexWrap: "wrap", gap: "0.5rem" }}>
@@ -1943,7 +2156,58 @@ export function CanonicalPropertyDetail({
           )}
         </div>
       </div>
+      </>
+      )}
 
+      {activeTab === "dossierScore" && (
+        <div className="rental-om-panel">
+          <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", flexWrap: "wrap", alignItems: "center" }}>
+            <div>
+              <strong style={{ display: "block", color: "#0f172a" }}>Dossier workflow</strong>
+              <span style={{ display: "block", marginTop: "0.2rem", color: "#64748b", fontSize: "0.8rem" }}>
+                {analysisStatusLabel}
+                {showDossierProgress ? ` · ${activeDossierStageLabel}` : ""}
+              </span>
+            </div>
+            <div style={{ display: "flex", gap: "0.45rem", flexWrap: "wrap" }}>
+              <button
+                type="button"
+                onClick={handleRefreshAuthoritativeOm}
+                disabled={Boolean(authoritativeOmRefreshing || !hasOmDocument)}
+                style={{ padding: "0.4rem 0.65rem", borderRadius: "6px", border: "1px solid #cbd5e1", background: "#fff", color: "#0f172a", cursor: authoritativeOmRefreshing || !hasOmDocument ? "not-allowed" : "pointer", fontSize: "0.78rem", fontWeight: 650 }}
+              >
+                {authoritativeOmRefreshing ? "Refreshing…" : "Refresh OM inputs"}
+              </button>
+              <button
+                type="button"
+                onClick={handleGenerateDossier}
+                disabled={Boolean(isDossierBusy || !canGenerateDossier)}
+                style={{ padding: "0.4rem 0.65rem", borderRadius: "6px", border: "1px solid #0f172a", background: isDossierBusy || !canGenerateDossier ? "#e2e8f0" : "#0f172a", color: isDossierBusy || !canGenerateDossier ? "#64748b" : "#fff", cursor: isDossierBusy || !canGenerateDossier ? "not-allowed" : "pointer", fontSize: "0.78rem", fontWeight: 650 }}
+              >
+                {isDossierBusy ? "Working…" : "Generate dossier"}
+              </button>
+              <button
+                type="button"
+                onClick={handleRefreshDealScore}
+                disabled={Boolean(scoreRefreshing || !dealSignals)}
+                style={{ padding: "0.4rem 0.65rem", borderRadius: "6px", border: "1px solid #cbd5e1", background: "#fff", color: scoreRefreshing || !dealSignals ? "#64748b" : "#0f172a", cursor: scoreRefreshing || !dealSignals ? "not-allowed" : "pointer", fontSize: "0.78rem", fontWeight: 650 }}
+              >
+                {scoreRefreshing ? "Refreshing…" : "Refresh score"}
+              </button>
+            </div>
+          </div>
+          {showDossierProgress && (
+            <div className="dossier-progress-track" style={{ marginTop: "0.7rem" }}>
+              <div className="dossier-progress-fill" style={{ width: `${Math.min(activeDossierProgressPct, 100)}%` }} />
+            </div>
+          )}
+          {dossierError && (
+            <p style={{ margin: "0.6rem 0 0", color: "#b91c1c", fontSize: "0.8rem" }}>{dossierError}</p>
+          )}
+        </div>
+      )}
+
+      {activeTab === "overview" && (
       <div className="property-detail-overview-strip">
         {overviewItems.map((item) => (
           <div key={item.label} className="property-detail-overview-item">
@@ -1952,7 +2216,9 @@ export function CanonicalPropertyDetail({
           </div>
         ))}
       </div>
+      )}
 
+      {(activeTab === "underwriting" || activeTab === "dossierScore") && (
       <div
         style={{
           marginBottom: "1rem",
@@ -2024,8 +2290,36 @@ export function CanonicalPropertyDetail({
           </a>
         </div>
       </div>
+      )}
 
-      {sourcingUpdate && (
+      {activeTab === "underwriting" && (
+        <OmCalculationPanel
+          draft={dossierDraft}
+          calculation={omCalculation}
+          loading={omCalculationLoading}
+          running={omCalculationRunning}
+          saving={dossierSettingsSaving}
+          error={omCalculationError || dossierError}
+          isDirty={isDossierDirty}
+          hasAuthoritativeOm={hasAuthoritativeOm}
+          hasBrokerEmailNotes={hasBrokerEmailNotes}
+          formulaFurnishingSetupCosts={formulaDossierDefaults.furnishingSetupCosts}
+          onDraftNumberChange={handleOmCalculationFieldChange}
+          onDraftTextChange={handleOmCalculationTextChange}
+          onUnitModelRowsChange={handleOmUnitModelRowsChange}
+          onExpenseModelRowsChange={handleOmExpenseModelRowsChange}
+          onRunCalculation={() => { void fetchOmCalculation(dossierDraft); }}
+          onSave={() => { void handleOmCalculationSave(); }}
+          onResetToSaved={handleOmCalculationReset}
+          onApplyFormulaDefault={() => setDossierDraft((prev) => ({
+            ...prev,
+            furnishingSetupCosts: formulaDossierDefaults.furnishingSetupCosts,
+          }))}
+          onClearSaved={() => { void handleClearSavedOmOverrides(); }}
+        />
+      )}
+
+      {(activeTab === "overview" || activeTab === "sources" || activeTab === "activity") && sourcingUpdate && (
         <div
           style={{
             marginBottom: "1rem",
@@ -2060,19 +2354,8 @@ export function CanonicalPropertyDetail({
         </div>
       )}
 
-      <div className="property-detail-jump-row">
-        {sectionLinks.map((section) => (
-          <button
-            key={section.id}
-            type="button"
-            className={`property-detail-jump-pill ${section.open ? "property-detail-jump-pill--open" : ""}`}
-            onClick={() => jumpToSection(section.id)}
-          >
-            {section.label}
-          </button>
-        ))}
-      </div>
-
+      {activeTab === "overview" && (
+      <>
       {/* 1. Photos / floor plans — side by side, same layout as raw listings */}
       <CollapsibleSection
         id="photos-floorplans"
@@ -2369,7 +2652,11 @@ export function CanonicalPropertyDetail({
           )}
         </div>
       </CollapsibleSection>
+      </>
+      )}
 
+      {activeTab === "enrichment" && (
+      <>
       {/* 3. Owner information: Owner module (Phase 1 / PLUTO) + Permit module (permits_summary) + NY DOS entity when business-like */}
       <CollapsibleSection id="owner" title="Owner information" open={!!openSections.owner} onToggle={() => toggle("owner")}>
         <div style={{ fontSize: "0.875rem" }}>
@@ -2460,10 +2747,19 @@ export function CanonicalPropertyDetail({
           )}
         </div>
       </CollapsibleSection>
+      </>
+      )}
 
+      {(activeTab === "documents" || activeTab === "outreach" || activeTab === "omWorkspace") && (
+      <>
       {/* 5. Rental pricing / OM + rental financials (per-unit table, NOI, cap rate) */}
-      <CollapsibleSection id="rental-om" title="Rental pricing / OM" open={!!openSections.rentalOm} onToggle={() => toggle("rentalOm")}>
-        <div className="rental-om-shell" style={{ fontSize: "0.875rem" }}>
+      <CollapsibleSection
+        id="rental-om"
+        title={activeTab === "documents" ? "Documents" : activeTab === "outreach" ? "Outreach" : "OM Workspace"}
+        open={!!openSections.rentalOm}
+        onToggle={() => toggle("rentalOm")}
+      >
+        <div className="rental-om-shell" data-active-tab={activeTab} style={{ fontSize: "0.875rem" }}>
           {/* Request info by email — always first */}
           <div className="rental-om-panel rental-om-panel--inquiry" style={{ marginBottom: "0.75rem" }}>
             <strong style={{ display: "block", marginBottom: "0.35rem", fontSize: "0.9rem", color: "#1a1a1a" }}>Request info by email</strong>
@@ -2649,7 +2945,7 @@ export function CanonicalPropertyDetail({
             </p>
           </div>
           {inquiryEmailModalOpen && (
-            <div style={{ position: "fixed", inset: 0, zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", backgroundColor: "rgba(0,0,0,0.4)" }} onClick={() => setInquiryEmailModalOpen(false)}>
+            <div className="rental-om-modal" style={{ position: "fixed", inset: 0, zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", backgroundColor: "rgba(0,0,0,0.4)" }} onClick={() => setInquiryEmailModalOpen(false)}>
               <div style={{ backgroundColor: "#fff", borderRadius: "8px", padding: "1.25rem", maxWidth: "520px", width: "100%", maxHeight: "90vh", overflow: "auto", boxShadow: "0 4px 20px rgba(0,0,0,0.15)" }} onClick={(e) => e.stopPropagation()}>
                 <p style={{ margin: "0 0 0.75rem", fontWeight: 600 }}>Request OM / rent roll from broker</p>
                 {lastInquirySentAt && (
@@ -2783,7 +3079,7 @@ export function CanonicalPropertyDetail({
             </div>
           )}
           {manualInquiryModalOpen && (
-            <div style={{ position: "fixed", inset: 0, zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", backgroundColor: "rgba(0,0,0,0.4)" }} onClick={() => setManualInquiryModalOpen(false)}>
+            <div className="rental-om-modal" style={{ position: "fixed", inset: 0, zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", backgroundColor: "rgba(0,0,0,0.4)" }} onClick={() => setManualInquiryModalOpen(false)}>
               <div style={{ backgroundColor: "#fff", borderRadius: "8px", padding: "1.25rem", maxWidth: "460px", width: "100%", maxHeight: "90vh", overflow: "auto", boxShadow: "0 4px 20px rgba(0,0,0,0.15)" }} onClick={(e) => e.stopPropagation()}>
                 <p style={{ margin: "0 0 0.75rem", fontWeight: 600 }}>Mark prior inquiry as sent</p>
                 <p style={{ margin: "0 0 1rem", fontSize: "0.875rem", color: "#555" }}>
@@ -3241,7 +3537,11 @@ export function CanonicalPropertyDetail({
           ) : null}
         </div>
       </CollapsibleSection>
+      </>
+      )}
 
+      {(activeTab === "enrichment" || activeTab === "activity") && (
+      <>
       {/* 6. Violations, complaints, permits — one table */}
       <CollapsibleSection
         id="violations-complaints-permits"
@@ -3282,10 +3582,15 @@ export function CanonicalPropertyDetail({
           </div>
         )}
       </CollapsibleSection>
+      </>
+      )}
 
+      {activeTab === "dossierScore" && (
       <div style={{ marginTop: "1.5rem", fontSize: "0.8rem", color: "#64748b" }}>
         Deal dossier generation now runs from the dedicated section above using these property-level costs plus your saved profile defaults.
       </div>
+      )}
+      </PropertyDetailWorkspace>
     </div>
   );
 }

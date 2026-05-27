@@ -15,6 +15,8 @@ export interface InsertPropertyUploadedDocumentParams {
   filePath: string;
   category: PropertyDocumentCategory;
   source?: string | null;
+  sourceUrl?: string | null;
+  sourceMetadata?: Record<string, unknown> | null;
   /** When set, stored in DB so downloads work on ephemeral disks (e.g. Render). */
   fileContent?: Buffer | null;
 }
@@ -44,12 +46,14 @@ export class PropertyUploadedDocumentRepo {
   async insert(params: InsertPropertyUploadedDocumentParams): Promise<PropertyUploadedDocument> {
     const category = normalizeCategory(params.category);
     const source = params.source?.trim() || null;
+    const sourceUrl = params.sourceUrl?.trim() || null;
+    const sourceMetadata = params.sourceMetadata != null ? JSON.stringify(params.sourceMetadata) : null;
     const fileContent = params.fileContent ?? null;
     if (params.id) {
       const r = await this.client.query(
-        `INSERT INTO property_uploaded_documents (id, property_id, filename, content_type, file_path, category, source, file_content)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-         RETURNING id, property_id, filename, content_type, file_path, category, source, created_at`,
+        `INSERT INTO property_uploaded_documents (id, property_id, filename, content_type, file_path, category, source, source_url, source_metadata, file_content)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10)
+         RETURNING id, property_id, filename, content_type, file_path, category, source, source_url, source_metadata, created_at`,
         [
           params.id,
           params.propertyId,
@@ -58,15 +62,17 @@ export class PropertyUploadedDocumentRepo {
           params.filePath,
           category,
           source,
+          sourceUrl,
+          sourceMetadata,
           fileContent,
         ]
       );
       return mapPropertyUploadedDocument(r.rows[0]);
     }
     const r = await this.client.query(
-      `INSERT INTO property_uploaded_documents (property_id, filename, content_type, file_path, category, source, file_content)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
-       RETURNING id, property_id, filename, content_type, file_path, category, source, created_at`,
+      `INSERT INTO property_uploaded_documents (property_id, filename, content_type, file_path, category, source, source_url, source_metadata, file_content)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9)
+       RETURNING id, property_id, filename, content_type, file_path, category, source, source_url, source_metadata, created_at`,
       [
         params.propertyId,
         params.filename,
@@ -74,6 +80,8 @@ export class PropertyUploadedDocumentRepo {
         params.filePath,
         category,
         source,
+        sourceUrl,
+        sourceMetadata,
         fileContent,
       ]
     );
@@ -82,7 +90,7 @@ export class PropertyUploadedDocumentRepo {
 
   async byId(id: string): Promise<PropertyUploadedDocument | null> {
     const r = await this.client.query(
-      "SELECT id, property_id, filename, content_type, file_path, category, source, created_at FROM property_uploaded_documents WHERE id = $1",
+      "SELECT id, property_id, filename, content_type, file_path, category, source, source_url, source_metadata, created_at FROM property_uploaded_documents WHERE id = $1",
       [id]
     );
     return r.rows[0] ? mapPropertyUploadedDocument(r.rows[0]) : null;
@@ -101,7 +109,7 @@ export class PropertyUploadedDocumentRepo {
 
   async listByPropertyId(propertyId: string): Promise<PropertyUploadedDocument[]> {
     const r = await this.client.query(
-      "SELECT id, property_id, filename, content_type, file_path, category, source, created_at FROM property_uploaded_documents WHERE property_id = $1 ORDER BY created_at DESC",
+      "SELECT id, property_id, filename, content_type, file_path, category, source, source_url, source_metadata, created_at FROM property_uploaded_documents WHERE property_id = $1 ORDER BY created_at DESC",
       [propertyId]
     );
     return r.rows.map((row: Record<string, unknown>) => mapPropertyUploadedDocument(row));

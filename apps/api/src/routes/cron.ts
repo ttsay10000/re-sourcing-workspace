@@ -103,6 +103,8 @@ router.post("/cron/process-inbox", async (req: Request, res: Response) => {
       return;
     }
     const result = locked.result;
+    const batchNote = result.batchMatched ? `, ${result.batchMatched} batch/thread matched` : "";
+    const actionNote = result.omReviewActionsQueued ? `, ${result.omReviewActionsQueued} OM review action${result.omReviewActionsQueued === 1 ? "" : "s"} queued` : "";
     await upsertWorkflowStep(workflowRunId, {
       stepKey: "inbox",
       totalItems: result.processed,
@@ -117,7 +119,7 @@ router.post("/cron/process-inbox", async (req: Request, res: Response) => {
           : "completed",
       startedAt: workflowStartedAt,
       finishedAt: new Date().toISOString(),
-      lastMessage: `${result.saved} email${result.saved === 1 ? "" : "s"} saved from ${result.processed} processed`,
+      lastMessage: `${result.saved} email${result.saved === 1 ? "" : "s"} saved from ${result.processed} processed${batchNote}${actionNote}`,
       lastError: result.errors[0] ?? null,
     });
     await mergeWorkflowRunMetadata(workflowRunId, result as unknown as Record<string, unknown>);

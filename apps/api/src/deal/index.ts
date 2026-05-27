@@ -1,4 +1,12 @@
 export { computeDealScore, type DealScoringInputs, type DealScoringResult } from "./dealScoringEngine.js";
+export {
+  DEAL_SCORING_PROFILES,
+  LEGACY_V3_DEAL_SCORING_PROFILE,
+  VALUE_ADD_FURNISHED_MONTHLY_RENTAL_SCORING_PROFILE,
+  resolveDealScoringProfile,
+  type DealScoringProfile,
+  type DealScoringProfileKey,
+} from "./dealScoringProfiles.js";
 export { computeDealSignals, type ComputeDealSignalsInput, type ComputeDealSignalsOutput } from "./computeDealSignals.js";
 export { cityToArea, areaFromCanonicalAddress } from "./cityToArea.js";
 export { computeMortgage, type MortgageInputs, type MortgageResult } from "./mortgageAmortization.js";

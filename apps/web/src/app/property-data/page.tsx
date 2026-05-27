@@ -1928,7 +1928,7 @@ function PropertyDataContent() {
                   <tr>
                     <td colSpan={11} style={{ padding: "2rem", color: "#737373", textAlign: "center" }}>
                       {listings.length === 0
-                        ? "No raw listings yet. Run a flow from StreetEasy Agent, then use \"Send to property data\" for a completed run."
+                        ? "No raw listings yet. Run a flow from Sourcing Agent, then use \"Send to property data\" for a completed run."
                         : "No listings match the current filters."}
                     </td>
                   </tr>

@@ -1,4 +1,5 @@
-import { EventRepo, InquirySendRepo, OutreachBatchRepo, PropertyActionItemRepo, PropertySourcingStateRepo, getPool } from "@re-sourcing/db";
+import { EventRepo, InquirySendRepo, OutreachBatchRepo, PropertyActionItemRepo, PropertySourcingStateRepo, UserProfileRepo, getPool } from "@re-sourcing/db";
+import type { UserProfile } from "@re-sourcing/contracts";
 import { getBodyText, getHeader, getMessage, sendMessage } from "../inquiry/gmailClient.js";
 import { findBrokerPropertyConversationHistory } from "../inquiry/gmailConversationHistory.js";
 import { processInbox, shouldBlockAutomatedOutreachAfterInboxCheck, type ProcessInboxResult } from "../inquiry/processInbox.js";
@@ -30,6 +31,28 @@ export interface DailyOutreachInboxSummary {
   errorCount: number;
   blockedOutreach: boolean;
   lastError: string | null;
+}
+
+function emptyInboxSummary(): DailyOutreachInboxSummary {
+  return {
+    processed: 0,
+    matched: 0,
+    saved: 0,
+    skipped: 0,
+    errorCount: 0,
+    blockedOutreach: false,
+    lastError: null,
+  };
+}
+
+export function isAutomatedOutreachEnabled(): boolean {
+  const raw = process.env.ENABLE_AUTOMATED_OUTREACH;
+  if (raw == null) return false;
+  return raw === "1" || raw.toLowerCase() === "true";
+}
+
+function isInitialOutreachEnabledForProfile(profile: UserProfile | null): boolean {
+  return profile?.automationInitialEmailEnabled === true;
 }
 
 function toInboxSummary(result: ProcessInboxResult): DailyOutreachInboxSummary {
@@ -191,8 +214,8 @@ export function buildOutreachBody(contactName: string | null, addresses: string[
       : "My name is Tyler Tsay, and I'm reaching out on behalf of a client regarding the properties below currently on the market. We are evaluating them and would appreciate the opportunity to review further.";
   const request =
     addresses.length === 1
-      ? "Would you be able to share the OM, current rent roll, expenses, and/or any available financials?"
-      : "Would you be able to share the OMs, current rent rolls, expenses, and/or any available financials for these properties?";
+      ? "Would you be able to share the OM, T-12, current rent roll, expenses, and/or any available financials?"
+      : "Would you be able to share the OMs, T-12s, current rent rolls, expenses, and/or any available financials for these properties?";
   const contactRedirect =
     addresses.length === 1
       ? "If there is a better contact for this property, please feel free to point me in the right direction."
@@ -218,7 +241,27 @@ tyler@stayhaus.co`;
 export async function runDailyOutreach(
   options?: { propertyIds?: string[] }
 ): Promise<{ sent: number; reviewRequired: number; batchIds: string[]; inboxCheck: DailyOutreachInboxSummary }> {
+  if (!isAutomatedOutreachEnabled()) {
+    return {
+      sent: 0,
+      reviewRequired: 0,
+      batchIds: [],
+      inboxCheck: emptyInboxSummary(),
+    };
+  }
+
   const pool = getPool();
+  const profileRepo = new UserProfileRepo({ pool });
+  await profileRepo.ensureDefault();
+  const profile = await profileRepo.getDefault();
+  if (!isInitialOutreachEnabledForProfile(profile)) {
+    return {
+      sent: 0,
+      reviewRequired: 0,
+      batchIds: [],
+      inboxCheck: emptyInboxSummary(),
+    };
+  }
   const inboxCheck = toInboxSummary(await processInbox({ maxMessages: 50 }));
   if (inboxCheck.blockedOutreach) {
     return {

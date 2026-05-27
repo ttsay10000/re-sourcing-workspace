@@ -21,7 +21,7 @@ export interface EmailSummaryExtract {
 
 /**
  * Call LLM to summarize email body and extract: summary, latest receipt date from broker/team, and attachment list.
- * attachmentFilenames: list of PDF attachment names we saved (or []); LLM will list these or "none".
+ * attachmentFilenames: list of attachment names/classifications we saved (or []); LLM will list these or "none".
  */
 export async function extractEmailSummary(
   bodyText: string | null | undefined,
@@ -40,8 +40,8 @@ export async function extractEmailSummary(
 
   const attachmentsNote =
     attachmentFilenames.length > 0
-      ? `Attachments included with this email (saved PDFs): ${attachmentFilenames.join(", ")}`
-      : "No PDF attachments were included with this email.";
+      ? `Attachments included with this email (saved attachments): ${attachmentFilenames.join(", ")}`
+      : "No attachments were included with this email.";
 
   const openai = new OpenAI({ apiKey: key });
 

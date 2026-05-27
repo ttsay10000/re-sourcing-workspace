@@ -8,7 +8,7 @@ import cors from "cors";
 import type { HealthResponse } from "@re-sourcing/contracts";
 import { requireSiteAuth } from "./siteAuth.js";
 import siteAuthRouter from "./routes/siteAuth.js";
-import testAgentRouter from "./routes/testAgent.js";
+import testAgentRouter, { loopNetBrowserCaptureRouter } from "./routes/testAgent.js";
 import listingsRouter from "./routes/listings.js";
 import propertiesRouter from "./routes/properties.js";
 import cronRouter from "./routes/cron.js";
@@ -24,6 +24,10 @@ const version = process.env.npm_package_version || "1.0.0";
 const env = process.env.NODE_ENV || "development";
 
 const app = express();
+
+// Token-gated browser/extension capture endpoint. Mounted before normal site auth/CORS
+// so LoopNet pages and Chrome extensions can POST a user-visible page snapshot locally.
+app.use("/api", express.json({ limit: "15mb" }), loopNetBrowserCaptureRouter);
 
 // CORS: allow web app origin(s)
 const allowedOrigins = process.env.CORS_ORIGIN

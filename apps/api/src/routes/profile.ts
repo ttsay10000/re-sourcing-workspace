@@ -3,7 +3,11 @@
  */
 
 import { Router, type Request, type Response } from "express";
-import type { PropertyDetails } from "@re-sourcing/contracts";
+import {
+  DEFAULT_DEAL_SCORING_PREFERENCES,
+  type DealScoringPreferences,
+  type PropertyDetails,
+} from "@re-sourcing/contracts";
 import {
   getPool,
   UserProfileRepo,
@@ -25,6 +29,31 @@ async function getDefaultUserId(): Promise<string> {
   const pool = getPool();
   const profileRepo = new UserProfileRepo({ pool });
   return profileRepo.ensureDefault();
+}
+
+function parseScoringPreferences(value: unknown): DealScoringPreferences | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const targetIrrPct =
+    typeof record.targetIrrPct === "number" && Number.isFinite(record.targetIrrPct)
+      ? Math.min(100, Math.max(0, record.targetIrrPct))
+      : DEFAULT_DEAL_SCORING_PREFERENCES.targetIrrPct;
+  const goodCashOnCashPct =
+    typeof record.goodCashOnCashPct === "number" && Number.isFinite(record.goodCashOnCashPct)
+      ? Math.min(100, Math.max(0, record.goodCashOnCashPct))
+      : DEFAULT_DEAL_SCORING_PREFERENCES.goodCashOnCashPct;
+  return {
+    targetIrrPct,
+    goodCashOnCashPct,
+    rentStabilizationDoNotBuy:
+      typeof record.rentStabilizationDoNotBuy === "boolean"
+        ? record.rentStabilizationDoNotBuy
+        : DEFAULT_DEAL_SCORING_PREFERENCES.rentStabilizationDoNotBuy,
+    scoringProfileKey:
+      typeof record.scoringProfileKey === "string" && record.scoringProfileKey.trim().length > 0
+        ? record.scoringProfileKey.trim()
+        : DEFAULT_DEAL_SCORING_PREFERENCES.scoringProfileKey,
+  };
 }
 
 /** GET /api/profile - get the single user profile (creates default row if none). */
@@ -64,6 +93,9 @@ router.put("/profile", async (req: Request, res: Response) => {
       automationPaused?: boolean | null;
       automationPauseReason?: string | null;
       automationPausedAt?: string | null;
+      automationInitialEmailEnabled?: boolean | null;
+      automationReplyEmailEnabled?: boolean | null;
+      automationAmbiguousActionHandlingEnabled?: boolean | null;
       dailyDigestEnabled?: boolean | null;
       dailyDigestTimeLocal?: string | null;
       dailyDigestTimezone?: string | null;
@@ -87,6 +119,7 @@ router.put("/profile", async (req: Request, res: Response) => {
       defaultAnnualPropertyTaxGrowthPct?: number | null;
       defaultRecurringCapexAnnual?: number | null;
       defaultLoanFeePct?: number | null;
+      scoringPreferences?: DealScoringPreferences | null;
     } = {};
     if (nextSitePassword) {
       if (nextSitePassword.length < 8) {
@@ -109,6 +142,15 @@ router.put("/profile", async (req: Request, res: Response) => {
       params.automationPausedAt = body.automationPaused ? new Date().toISOString() : null;
     } else if (typeof body.automationPauseReason === "string") {
       params.automationPauseReason = body.automationPauseReason.trim() || null;
+    }
+    if (typeof body.automationInitialEmailEnabled === "boolean") {
+      params.automationInitialEmailEnabled = body.automationInitialEmailEnabled;
+    }
+    if (typeof body.automationReplyEmailEnabled === "boolean") {
+      params.automationReplyEmailEnabled = body.automationReplyEmailEnabled;
+    }
+    if (typeof body.automationAmbiguousActionHandlingEnabled === "boolean") {
+      params.automationAmbiguousActionHandlingEnabled = body.automationAmbiguousActionHandlingEnabled;
     }
     if (typeof body.dailyDigestEnabled === "boolean") {
       params.dailyDigestEnabled = body.dailyDigestEnabled;
@@ -180,6 +222,10 @@ router.put("/profile", async (req: Request, res: Response) => {
     }
     if (typeof body.defaultLoanFeePct === "number" && !Number.isNaN(body.defaultLoanFeePct)) {
       params.defaultLoanFeePct = body.defaultLoanFeePct;
+    }
+    const scoringPreferences = parseScoringPreferences(body.scoringPreferences);
+    if (scoringPreferences) {
+      params.scoringPreferences = scoringPreferences;
     }
     const updated = await repo.update(id, params);
     if (nextSitePassword) {

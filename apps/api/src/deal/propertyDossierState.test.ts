@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   getPropertyDossierAssumptions,
+  getRawPropertyDossierAssumptions,
   getPropertyDossierSummary,
   hasCompletedDealDossier,
   mergeDossierAssumptionOverrides,
@@ -200,6 +201,89 @@ describe("propertyDossierState", () => {
       targetAcquisitionDate: "2026-06-01",
       targetIrrPct: 22,
     });
+  });
+
+  it("exposes raw assumptions so custom underwriting fields can survive persistence merges", () => {
+    const details = {
+      dealDossier: {
+        assumptions: {
+          purchasePrice: 1_250_000,
+          customDebtNote: "Seller financing possible",
+          customRevenueCases: [{ label: "Upside", amount: 42_000 }],
+        },
+      },
+    };
+
+    expect(getPropertyDossierAssumptions(details)?.purchasePrice).toBe(1_250_000);
+    expect(getRawPropertyDossierAssumptions(details)).toEqual({
+      purchasePrice: 1_250_000,
+      customDebtNote: "Seller financing possible",
+      customRevenueCases: [{ label: "Upside", amount: 42_000 }],
+    });
+  });
+
+  it("keeps manual unit row edits even when the edited row has no rent amount", () => {
+    const assumptions = getPropertyDossierAssumptions({
+      dealDossier: {
+        assumptions: {
+          unitModelRows: [
+            {
+              rowId: "manual-vacant-owner-unit",
+              unitLabel: "Owner unit",
+              includeInUnderwriting: false,
+              isProtected: false,
+              isCommercial: false,
+              isRentStabilized: false,
+              beds: 2,
+              baths: 1,
+              sqft: 850,
+              tenantStatus: "Vacant",
+              notes: "Hold out of underwriting while reviewing use.",
+            },
+          ],
+          expenseModelRows: [
+            {
+              rowId: "expense-insurance",
+              lineItem: "Insurance",
+              amount: 0,
+              annualGrowthPct: 4,
+              treatment: "operating",
+            },
+          ],
+          updatedAt: "2026-05-27T00:00:00.000Z",
+        },
+      },
+    });
+
+    expect(assumptions?.unitModelRows).toEqual([
+      {
+        rowId: "manual-vacant-owner-unit",
+        unitLabel: "Owner unit",
+        building: null,
+        unitCategory: null,
+        tenantName: null,
+        currentAnnualRent: null,
+        underwrittenAnnualRent: null,
+        rentUpliftPct: null,
+        occupancyPct: null,
+        furnishingCost: null,
+        onboardingLaborFee: null,
+        onboardingOtherCosts: null,
+        onboardingFee: null,
+        monthlyRecurringOpex: null,
+        monthlyHospitalityExpense: null,
+        includeInUnderwriting: false,
+        isProtected: false,
+        isCommercial: false,
+        isRentStabilized: false,
+        beds: 2,
+        baths: 1,
+        sqft: 850,
+        tenantStatus: "Vacant",
+        notes: "Hold out of underwriting while reviewing use.",
+      },
+    ]);
+    expect(assumptions?.expenseModelRows?.[0]?.amount).toBe(0);
   });
 
   it("extracts persisted dossier summary and completion state", () => {

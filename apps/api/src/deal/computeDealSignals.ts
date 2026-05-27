@@ -28,6 +28,7 @@ import {
   computeDealScore,
   type DealScoringResult,
 } from "./dealScoringEngine.js";
+import type { DealScoringProfile, DealScoringProfileKey } from "./dealScoringProfiles.js";
 import { resolveDossierPackageContext } from "./dossierPropertyContext.js";
 import type { InsertDealSignalsParams } from "@re-sourcing/db";
 
@@ -57,6 +58,8 @@ export interface ComputeDealSignalsInput {
   rentStabilizedUnitCount?: number;
   commercialUnitCount?: number;
   scoreSensitivity?: DealScoreSensitivity | null;
+  scoringProfile?: DealScoringProfileKey | DealScoringProfile | null;
+  furnishingSetupCosts?: number | null;
 }
 
 export interface ComputeDealSignalsOutput {
@@ -270,6 +273,8 @@ function scoringInputFromDetails(
     daysSinceLatestPriceDecrease: daysSinceIsoDate(listingActivity?.latestPriceDecreaseDate ?? null),
     currentDiscountFromOriginalAskPct: listingActivity?.currentDiscountFromOriginalAskPct ?? null,
     riskProfile,
+    scoringProfile: input.scoringProfile ?? null,
+    furnishingSetupCosts: input.furnishingSetupCosts ?? null,
   };
 }
 

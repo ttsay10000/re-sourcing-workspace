@@ -22,7 +22,10 @@ import {
   DealSignalsRepo,
   DealScoreOverridesRepo,
   DocumentRepo,
+  PropertyActionItemRepo,
   RecipientResolutionRepo,
+  OmExtractedSnapshotRepo,
+  OmIngestionRunRepo,
 } from "@re-sourcing/db";
 import {
   deriveListingActivitySummary,
@@ -53,6 +56,7 @@ import { resolveEffectiveDealScore } from "../deal/effectiveDealScore.js";
 import { getPersistedDossierSignals } from "../deal/persistedDossierSignals.js";
 import {
   getPropertyDossierAssumptions,
+  getRawPropertyDossierAssumptions,
   getPropertyDossierSummary,
   hasCompletedDealDossier,
   parsePropertyDealDossierExpenseModelRows,
@@ -80,7 +84,13 @@ import {
   syncRecipientResolution,
 } from "../sourcing/workflow.js";
 import { normalizeStreetEasySaleDetails } from "../sourcing/normalizeStreetEasyListing.js";
-import { refreshAuthoritativeOmForProperty } from "../om/ingestAuthoritativeOm.js";
+import {
+  ingestAuthoritativeOm,
+  promoteOmExtractionForProperty,
+  refreshAuthoritativeOmForProperty,
+  rejectOmExtractionForProperty,
+  type OmAutomationDocument,
+} from "../om/ingestAuthoritativeOm.js";
 import { fetchSaleDetailsByUrl } from "../nycRealEstateApi.js";
 import { extractOmAnalysisFromGeminiPdfOnly } from "../om/extractOmAnalysisFromGeminiPdfOnly.js";
 import { resolveOmPropertyAddress } from "../om/resolveOmPropertyAddress.js";
@@ -303,6 +313,89 @@ async function downloadManualOmDocument(url: string): Promise<{
   }
 }
 
+function detectImportedDocumentCategory(label: string | null | undefined, url: string | null | undefined): PropertyDocumentCategory {
+  const text = `${label ?? ""} ${url ?? ""}`.toLowerCase();
+  if (/rent[ _-]?roll/.test(text)) return "Rent Roll";
+  if (/t-?12|operating|income[ _-]?expense/.test(text)) return "T12 / Operating Summary";
+  if (/model|proforma|pro-forma|xlsx|xls/.test(text)) return "Financial Model";
+  if (/brochure|flyer/.test(text)) return "Brochure";
+  if (/offering|memorandum|\bom\b/.test(text)) return "OM";
+  return "Other";
+}
+
+function loopNetAttachmentRecords(extra: Record<string, unknown> | null | undefined): Array<Record<string, unknown>> {
+  const attachments = extra?.attachments;
+  if (!Array.isArray(attachments)) return [];
+  return attachments.filter((attachment): attachment is Record<string, unknown> => {
+    if (!attachment || typeof attachment !== "object" || Array.isArray(attachment)) return false;
+    const url = attachment.url;
+    const source = attachment.source;
+    const ready =
+      attachment.downloadableWithoutAuth === true ||
+      attachment.handoffStatus === "ready_for_document_import" ||
+      /\.pdf(?:[?#]|$)/i.test(typeof url === "string" ? url : "");
+    return source === "loopnet" && typeof url === "string" && /^https?:\/\//i.test(url) && ready;
+  });
+}
+
+async function importLoopNetPublicDocumentsForProperty(params: {
+  propertyId: string;
+  listingId: string;
+  listingUrl: string;
+  extra: Record<string, unknown> | null | undefined;
+  pool: import("pg").Pool;
+}): Promise<{ imported: number; skipped: number; errors: string[]; documentIds: string[] }> {
+  const attachments = loopNetAttachmentRecords(params.extra);
+  if (attachments.length === 0) return { imported: 0, skipped: 0, errors: [], documentIds: [] };
+  const uploadedDocRepo = new PropertyUploadedDocumentRepo({ pool: params.pool });
+  const existingDocs = await uploadedDocRepo.listByPropertyId(params.propertyId);
+  const existingSourceUrls = new Set(existingDocs.map((doc) => doc.sourceUrl).filter(Boolean));
+  let imported = 0;
+  let skipped = 0;
+  const errors: string[] = [];
+  const documentIds: string[] = [];
+  for (const attachment of attachments) {
+    const url = typeof attachment.url === "string" ? attachment.url.trim() : "";
+    if (!url || existingSourceUrls.has(url)) {
+      skipped++;
+      continue;
+    }
+    try {
+      const downloaded = await downloadManualOmDocument(url);
+      const docId = randomUUID();
+      const filePath = await saveUploadedDocument(params.propertyId, docId, downloaded.filename, downloaded.buffer);
+      const label = typeof attachment.label === "string" ? attachment.label : null;
+      const inserted = await uploadedDocRepo.insert({
+        id: docId,
+        propertyId: params.propertyId,
+        filename: downloaded.filename,
+        contentType: downloaded.contentType,
+        filePath,
+        category: detectImportedDocumentCategory(label, url),
+        source: "loopnet",
+        sourceUrl: downloaded.resolvedUrl || url,
+        sourceMetadata: {
+          source: "loopnet",
+          originalUrl: url,
+          resolvedUrl: downloaded.resolvedUrl,
+          listingId: params.listingId,
+          listingUrl: params.listingUrl,
+          attachment,
+          importedAt: new Date().toISOString(),
+        },
+        fileContent: downloaded.buffer,
+      });
+      existingSourceUrls.add(url);
+      existingSourceUrls.add(downloaded.resolvedUrl);
+      imported++;
+      documentIds.push(inserted.id);
+    } catch (error) {
+      errors.push(`${url}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  return { imported, skipped, errors, documentIds };
+}
+
 function isMissingPropertyScoringSchemaError(err: unknown): boolean {
   if (!err || typeof err !== "object") return false;
   const code = "code" in err ? String((err as { code?: unknown }).code ?? "") : "";
@@ -511,18 +604,79 @@ async function listPropertiesWithListingSummary(pool: import("pg").Pool) {
 
 /**
  * Re-run OM/Brochure financial extraction for a property when it has uploaded OM/Brochure docs.
+ * Successful extraction now lands as an OM review run; promotion is explicit.
  * Uses file on disk when present; otherwise uses file_content from DB (for hosted deployments).
  */
 export async function refreshOmFinancialsForProperty(
   propertyId: string,
   pool: import("pg").Pool
-): Promise<{ documentsProcessed: number; documentsSkippedNoFile: number; error?: string }> {
+): Promise<{
+  documentsProcessed: number;
+  documentsSkippedNoFile: number;
+  runId: string | null;
+  extractedSnapshotId: string | null;
+  authoritativeSnapshotId: string | null;
+  status: "needs_review" | "promoted" | "failed" | null;
+  reviewRequired: boolean;
+  error?: string;
+}> {
   const result = await refreshAuthoritativeOmForProperty(propertyId, pool);
   return {
     documentsProcessed: result.documentsProcessed,
     documentsSkippedNoFile: result.documentsSkippedNoFile,
+    runId: result.runId,
+    extractedSnapshotId: result.extractedSnapshotId ?? null,
+    authoritativeSnapshotId: result.authoritativeSnapshotId ?? result.snapshotId ?? null,
+    status: result.status ?? null,
+    reviewRequired: result.reviewRequired === true,
     error: result.error,
   };
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return value != null && typeof value === "object" && !Array.isArray(value);
+}
+
+function stringOrNull(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function mapReviewActionCandidateToDocument(candidate: unknown): OmAutomationDocument | null {
+  if (!isPlainRecord(candidate)) return null;
+  const id = stringOrNull(candidate.id);
+  const filename = stringOrNull(candidate.filename);
+  if (!id || !filename) return null;
+  return {
+    id,
+    origin: "inquiry_attachment",
+    filename,
+    mimeType: stringOrNull(candidate.mimeType),
+    filePath: stringOrNull(candidate.filePath),
+    category: stringOrNull(candidate.category) ?? stringOrNull(candidate.classificationLabel),
+    source: "Broker email attachment",
+  };
+}
+
+function reviewActionGroupKey(details: Record<string, unknown>, actionId: string): string {
+  const batchIds = Array.isArray(details.matchedBatchIds)
+    ? details.matchedBatchIds.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    : [];
+  if (batchIds.length > 0) return `batch:${batchIds.sort().join(",")}`;
+  const threadId = stringOrNull(details.gmailThreadId);
+  if (threadId) return `thread:${threadId}`;
+  const messageId = stringOrNull(details.messageId);
+  return messageId ? `message:${messageId}` : `action:${actionId}`;
+}
+
+function isAmbiguousReviewAction(details: Record<string, unknown>, groupedCount: number): boolean {
+  const batchIds = Array.isArray(details.matchedBatchIds) ? details.matchedBatchIds : [];
+  const matchSources = Array.isArray(details.matchSources) ? details.matchSources : [];
+  return (
+    groupedCount > 1 ||
+    batchIds.length > 0 ||
+    matchSources.includes("batch_thread") ||
+    stringOrNull(details.matchedBatchId) != null
+  );
 }
 
 /** GET /api/properties - list canonical properties. ?includeListingSummary=1 adds primary listing price, listedAt, city for filter/sort. */
@@ -739,8 +893,9 @@ router.post("/properties/manual-add", async (req: Request, res: Response) => {
           extname(inserted.filename).toLowerCase() === ".pdf";
         if (isPdf) {
           const refreshResult = await refreshOmFinancialsForProperty(propertyId, pool);
-          omImport.authoritativeOmBuilt = refreshResult.documentsProcessed > 0 && !refreshResult.error;
+          omImport.authoritativeOmBuilt = refreshResult.status === "promoted";
           if (refreshResult.error) omImport.warning = refreshResult.error;
+          else if (refreshResult.reviewRequired) omImport.warning = "OM extraction is ready for manual review.";
         } else {
           omImport.warning = "OM document was saved, but authoritative OM build currently expects a PDF.";
         }
@@ -934,8 +1089,9 @@ router.post("/properties/manual-add-from-om", async (req: Request, res: Response
       await syncPropertySourcingWorkflow(propertyId, { pool });
 
       const refreshResult = await refreshOmFinancialsForProperty(propertyId, pool);
-      omImport.authoritativeOmBuilt = refreshResult.documentsProcessed > 0 && !refreshResult.error;
+      omImport.authoritativeOmBuilt = refreshResult.status === "promoted";
       if (refreshResult.error) omImport.warning = refreshResult.error;
+      else if (refreshResult.reviewRequired) omImport.warning = "OM extraction is ready for manual review.";
     } catch (error) {
       omImport.warning = error instanceof Error ? error.message : "Failed to save the OM document.";
     }
@@ -1103,9 +1259,56 @@ router.post("/properties/from-listings", async (req: Request, res: Response) => 
 
       const skipPermitEnrichment = req.query.skipPermitEnrichment === "1" || req.query.skipPermitEnrichment === "true";
       const propertyIds = [...new Set(results.map((r) => r.propertyId))];
+      const loopNetDocumentSummary: {
+        imported: number;
+        skipped: number;
+        failed: number;
+        errors: string[];
+        documentIds: string[];
+        reviewRunIds: string[];
+      } = {
+        imported: 0,
+        skipped: 0,
+        failed: 0,
+        errors: [],
+        documentIds: [],
+        reviewRunIds: [],
+      };
+      const resultByListingId = new Map(results.map((result) => [result.listingId, result]));
+      for (const listing of listings) {
+        if (listing.source !== "loopnet") continue;
+        const result = resultByListingId.get(listing.id);
+        if (!result) continue;
+        try {
+          const imported = await importLoopNetPublicDocumentsForProperty({
+            propertyId: result.propertyId,
+            listingId: listing.id,
+            listingUrl: listing.url,
+            extra: listing.extra,
+            pool,
+          });
+          loopNetDocumentSummary.imported += imported.imported;
+          loopNetDocumentSummary.skipped += imported.skipped;
+          loopNetDocumentSummary.failed += imported.errors.length;
+          loopNetDocumentSummary.errors.push(...imported.errors);
+          loopNetDocumentSummary.documentIds.push(...imported.documentIds);
+          if (imported.imported > 0) {
+            const refreshResult = await refreshOmFinancialsForProperty(result.propertyId, pool);
+            if (refreshResult.runId) loopNetDocumentSummary.reviewRunIds.push(refreshResult.runId);
+            if (refreshResult.error) {
+              loopNetDocumentSummary.failed++;
+              loopNetDocumentSummary.errors.push(`${listing.url}: ${refreshResult.error}`);
+            }
+          }
+        } catch (error) {
+          loopNetDocumentSummary.failed++;
+          loopNetDocumentSummary.errors.push(`${listing.url}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
       await mergeWorkflowRunMetadata(workflowRunId, {
         listingIds: listings.map((listing) => listing.id),
         propertyIds,
+        loopNetDocumentSummary,
       });
       let enrichmentSummary: { ran: boolean; success: number; failed: number; byModule?: Record<string, number> } = {
         ran: false,
@@ -1228,6 +1431,7 @@ router.post("/properties/from-listings", async (req: Request, res: Response) => 
         created: results.length,
         enrichmentSummary,
         rentalFlowSummary,
+        loopNetDocumentSummary,
       });
       await updateWorkflowRun(workflowRunId, {
         status:
@@ -1245,6 +1449,7 @@ router.post("/properties/from-listings", async (req: Request, res: Response) => 
           ? { ran: true, success: enrichmentSummary.success, failed: enrichmentSummary.failed, byModule: enrichmentSummary.byModule }
           : { ran: false },
         rentalFlow: rentalFlowSummary.ran ? rentalFlowSummary : undefined,
+        loopNetDocuments: loopNetDocumentSummary,
       });
     } catch (err) {
       await client.query("ROLLBACK").catch(() => {});
@@ -1471,7 +1676,132 @@ router.post("/properties/run-enrichment", async (req: Request, res: Response) =>
   }
 });
 
-/** POST /api/properties/:id/refresh-om-financials - re-run OM/Brochure LLM extraction for this property using uploaded docs. Only processes docs whose file exists on disk. */
+/** GET /api/properties/om-attachment-review-queue - grouped manual queue for broker attachment review. */
+router.get("/properties/om-attachment-review-queue", async (_req: Request, res: Response) => {
+  try {
+    const pool = getPool();
+    const rows = await pool.query<{
+      id: string;
+      property_id: string;
+      canonical_address: string;
+      action_type: string;
+      priority: string;
+      summary: string | null;
+      details: Record<string, unknown> | null;
+      created_at: Date | string;
+      due_at: Date | string | null;
+      updated_at: Date | string;
+    }>(
+      `SELECT ai.id,
+              ai.property_id,
+              p.canonical_address,
+              ai.action_type,
+              ai.priority,
+              ai.summary,
+              ai.details,
+              ai.created_at,
+              ai.due_at,
+              ai.updated_at
+       FROM property_action_items ai
+       INNER JOIN properties p ON p.id = ai.property_id
+       WHERE ai.status = 'open'
+         AND ai.action_type = 'review_om_attachment'
+       ORDER BY ai.created_at DESC
+       LIMIT 100`
+    );
+    const groups = new Map<string, Array<Record<string, unknown>>>();
+    for (const row of rows.rows) {
+      const details = isPlainRecord(row.details) ? row.details : {};
+      const groupKey = reviewActionGroupKey(details, row.id);
+      const item = {
+        id: row.id,
+        propertyId: row.property_id,
+        canonicalAddress: row.canonical_address,
+        actionType: row.action_type,
+        priority: row.priority,
+        summary: row.summary,
+        details,
+        createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at),
+        dueAt: row.due_at == null ? null : row.due_at instanceof Date ? row.due_at.toISOString() : String(row.due_at),
+        updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at),
+      };
+      groups.set(groupKey, [...(groups.get(groupKey) ?? []), item]);
+    }
+    res.json({
+      groups: [...groups.entries()].map(([groupKey, items]) => ({
+        groupKey,
+        isAmbiguous: items.some((item) => isAmbiguousReviewAction(item.details as Record<string, unknown>, items.length)),
+        items,
+      })),
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[properties om attachment review queue]", err);
+    res.status(503).json({ error: "Failed to load OM attachment review queue.", details: message });
+  }
+});
+
+/** POST /api/properties/:id/action-items/:actionItemId/create-om-review-run - manually create an OM/document review run from queued broker attachments. */
+router.post("/properties/:id/action-items/:actionItemId/create-om-review-run", async (req: Request, res: Response) => {
+  try {
+    const { id: propertyId, actionItemId } = req.params;
+    const pool = getPool();
+    const row = await pool.query<{
+      id: string;
+      property_id: string;
+      action_type: string;
+      status: string;
+      details: Record<string, unknown> | null;
+    }>(
+      `SELECT id, property_id, action_type, status, details
+       FROM property_action_items
+       WHERE id = $1
+       LIMIT 1`,
+      [actionItemId]
+    );
+    const action = row.rows[0];
+    if (!action || action.property_id !== propertyId || action.status !== "open" || action.action_type !== "review_om_attachment") {
+      res.status(404).json({ error: "Open OM attachment review action not found for this property." });
+      return;
+    }
+    const details = isPlainRecord(action.details) ? action.details : {};
+    const candidates = Array.isArray(details.attachmentCandidates) ? details.attachmentCandidates : [];
+    const requestedIds = Array.isArray(req.body?.documentIds)
+      ? new Set(req.body.documentIds.filter((value: unknown): value is string => typeof value === "string" && value.trim().length > 0))
+      : null;
+    const documents = candidates
+      .filter((candidate) => {
+        if (!requestedIds) return true;
+        return isPlainRecord(candidate) && typeof candidate.id === "string" && requestedIds.has(candidate.id);
+      })
+      .map(mapReviewActionCandidateToDocument)
+      .filter((doc): doc is OmAutomationDocument => doc != null);
+
+    if (documents.length === 0) {
+      res.status(400).json({ error: "No usable broker attachment candidates found for this action." });
+      return;
+    }
+
+    const result = await ingestAuthoritativeOm({
+      propertyId,
+      sourceType: "inquiry_attachment",
+      documents,
+      autoPromote: false,
+      triggerDossier: false,
+      pool,
+    });
+    if (!result.error && result.runId) {
+      await new PropertyActionItemRepo({ pool }).resolveById(action.id);
+    }
+    res.json({ ok: !result.error, actionItemId: action.id, propertyId, documents, ...result });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[properties create om review run from action]", err);
+    res.status(503).json({ error: "Failed to create OM review run from action.", details: message });
+  }
+});
+
+/** POST /api/properties/:id/refresh-om-financials - create a reviewable OM extraction run from uploaded/inquiry docs. */
 router.post("/properties/:id/refresh-om-financials", async (req: Request, res: Response) => {
   let workflowRunId: string | null = null;
   const workflowStartedAt = new Date().toISOString();
@@ -1528,11 +1858,16 @@ router.post("/properties/:id/refresh-om-financials", async (req: Request, res: R
       status: "completed",
       startedAt: workflowStartedAt,
       finishedAt: new Date().toISOString(),
-      lastMessage: "OM financials refreshed",
+      lastMessage: result.reviewRequired ? "OM extraction ready for review" : "OM financials refreshed",
     });
     await mergeWorkflowRunMetadata(workflowRunId, {
       documentsProcessed: result.documentsProcessed,
       documentsSkippedNoFile: result.documentsSkippedNoFile,
+      runId: result.runId,
+      extractedSnapshotId: result.extractedSnapshotId,
+      authoritativeSnapshotId: result.authoritativeSnapshotId,
+      status: result.status,
+      reviewRequired: result.reviewRequired,
     });
     await updateWorkflowRun(workflowRunId, {
       status: "completed",
@@ -1542,6 +1877,11 @@ router.post("/properties/:id/refresh-om-financials", async (req: Request, res: R
       ok: true,
       documentsProcessed: result.documentsProcessed,
       documentsSkippedNoFile: result.documentsSkippedNoFile,
+      runId: result.runId,
+      extractedSnapshotId: result.extractedSnapshotId,
+      authoritativeSnapshotId: result.authoritativeSnapshotId,
+      status: result.status,
+      reviewRequired: result.reviewRequired,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -1563,6 +1903,92 @@ router.post("/properties/:id/refresh-om-financials", async (req: Request, res: R
       finishedAt: new Date().toISOString(),
     });
     res.status(503).json({ error: "Failed to refresh OM financials.", details: message });
+  }
+});
+
+/** GET /api/properties/:id/om-review-runs - list extracted OM runs awaiting or past manual review. */
+router.get("/properties/:id/om-review-runs", async (req: Request, res: Response) => {
+  try {
+    const { id: propertyId } = req.params;
+    const pool = getPool();
+    const propertyRepo = new PropertyRepo({ pool });
+    const property = await propertyRepo.byId(propertyId);
+    if (!property) {
+      res.status(404).json({ error: "Property not found", propertyId });
+      return;
+    }
+    const runRepo = new OmIngestionRunRepo({ pool });
+    const extractedRepo = new OmExtractedSnapshotRepo({ pool });
+    const [runs, extractedSnapshots] = await Promise.all([
+      runRepo.listByPropertyId(propertyId, 20),
+      extractedRepo.listByPropertyId(propertyId, 20),
+    ]);
+    const extractedByRunId = new Map(extractedSnapshots.map((snapshot) => [snapshot.runId, snapshot]));
+    res.json({
+      propertyId,
+      omData: (property.details as PropertyDetails | null | undefined)?.omData ?? null,
+      runs: runs.map((run) => {
+        const extracted = extractedByRunId.get(run.id) ?? null;
+        return {
+          ...run,
+          extractedSnapshotId: extracted?.id ?? null,
+          extractedSnapshot: extracted?.snapshot ?? null,
+        };
+      }),
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[properties om review runs]", err);
+    res.status(503).json({ error: "Failed to load OM review runs.", details: message });
+  }
+});
+
+/** POST /api/properties/:id/om-review-runs/:runId/promote - mark a reviewed extraction authoritative. */
+router.post("/properties/:id/om-review-runs/:runId/promote", async (req: Request, res: Response) => {
+  try {
+    const { id: propertyId, runId } = req.params;
+    const result = await promoteOmExtractionForProperty({
+      propertyId,
+      runId,
+      triggerDossier: req.body?.triggerDossier === true,
+      pool: getPool(),
+    });
+    if (!result.ok) {
+      res.status(404).json({ error: result.error ?? "OM review run could not be promoted." });
+      return;
+    }
+    res.json(result);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[properties om review promote]", err);
+    res.status(503).json({ error: "Failed to promote OM review run.", details: message });
+  }
+});
+
+/** POST /api/properties/:id/om-review-runs/:runId/reject - reject an extracted OM candidate without replacing authoritative state. */
+router.post("/properties/:id/om-review-runs/:runId/reject", async (req: Request, res: Response) => {
+  try {
+    const { id: propertyId, runId } = req.params;
+    const reason = optionalTrimmedText(req.body?.reason, 1_000);
+    if (reason === "invalid") {
+      res.status(400).json({ error: "reason must be a string under 1,000 characters." });
+      return;
+    }
+    const result = await rejectOmExtractionForProperty({
+      propertyId,
+      runId,
+      reason,
+      pool: getPool(),
+    });
+    if (!result.ok) {
+      res.status(404).json({ error: result.error ?? "OM review run could not be rejected." });
+      return;
+    }
+    res.json(result);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[properties om review reject]", err);
+    res.status(503).json({ error: "Failed to reject OM review run.", details: message });
   }
 });
 
@@ -1796,8 +2222,11 @@ router.get("/properties/:id/documents", async (req: Request, res: Response) => {
         id: d.id,
         fileName: d.filename,
         fileType: d.contentType ?? null,
-        source: d.category ?? "uploaded",
+        source: d.source ?? d.category ?? "uploaded",
+        category: d.category,
         sourceType: "uploaded" as const,
+        sourceUrl: d.sourceUrl ?? null,
+        sourceMetadata: d.sourceMetadata ?? null,
         createdAt: d.createdAt,
       })),
       ...generatedDocs.map((d) => ({
@@ -3108,8 +3537,10 @@ router.put("/properties/:id/dossier-settings", async (req: Request, res: Respons
       res.status(404).json({ error: "Property not found", propertyId });
       return;
     }
+    const rawExistingAssumptions = getRawPropertyDossierAssumptions(property.details);
     const existingAssumptions = getPropertyDossierAssumptions(property.details);
     const assumptionsPatch: Record<string, unknown> = {
+      ...(rawExistingAssumptions ?? {}),
       ...(existingAssumptions ?? {}),
       updatedAt: new Date().toISOString(),
     };

@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "RE Sourcing LoopNet Capture",
+  "version": "0.1.0",
+  "description": "Send the visible LoopNet listing page to the local RE Sourcing app.",
+  "action": {
+    "default_title": "Send LoopNet listing",
+    "default_popup": "popup.html"
+  },
+  "permissions": ["activeTab", "scripting", "storage"],
+  "host_permissions": [
+    "https://www.loopnet.com/*",
+    "https://*.loopnet.com/*",
+    "http://localhost:4000/*",
+    "http://127.0.0.1:4000/*"
+  ]
+}

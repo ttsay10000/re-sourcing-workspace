@@ -1,16 +1,28 @@
 /**
- * StreetEasy Agent route: two-step NYC Real Estate API flow.
- * POST starts a run (returns runId immediately); backend runs GET Active Sales then GET Sale details per URL.
+ * Source test-agent route: StreetEasy keeps the existing two-step NYC Real Estate API flow.
+ * POST starts a run (returns runId immediately); backend discovers listing URLs then builds source details per URL.
  * Runs are stored in memory with step progress, timer, and properties (raw data lake).
  * Data is NOT auto-populated to property data; user must click "Send to property data" per run.
  */
 
+import { randomBytes } from "crypto";
 import { Router, type Request, type Response } from "express";
-import type { ListingNormalized, PriceHistoryEntry } from "@re-sourcing/contracts";
-import type { NycsSearchCriteria } from "../nycRealEstateApi.js";
-import { fetchActiveSalesWithCriteria, fetchSaleDetailsByUrl } from "../nycRealEstateApi.js";
+import { fetchSaleDetailsByUrl } from "../nycRealEstateApi.js";
 import { enrichBrokers, hasMeaningfulBrokerEnrichment } from "../enrichment/brokerEnrichment.js";
 import { computeDuplicateScores } from "../dedup/addressDedup.js";
+import {
+  getSourceAdapter,
+  resolveSourceAdapterId,
+  type SourceAdapterId,
+  type SourceAdapterRunBody,
+  extractLoopNetDetailsFromHtml,
+  isLoopNetUrl,
+} from "../sourcing/adapters/index.js";
+import {
+  captureLoopNetOperatorSession,
+  closeLoopNetOperatorSession,
+  startLoopNetOperatorCapture,
+} from "../sourcing/adapters/loopNetOperatorCapture.js";
 import {
   createWorkflowRun,
   mergeWorkflowRunMetadata,
@@ -19,6 +31,12 @@ import {
 } from "../workflow/workflowTracker.js";
 
 const router = Router();
+export const loopNetBrowserCaptureRouter = Router();
+
+const LOOPNET_BROWSER_CAPTURE_TOKEN =
+  process.env.LOOPNET_BROWSER_CAPTURE_TOKEN?.trim() || randomBytes(24).toString("base64url");
+const LOOPNET_BROWSER_CAPTURE_MAX_HTML_BYTES = Number(process.env.LOOPNET_BROWSER_CAPTURE_MAX_HTML_BYTES || 12_000_000);
+const LOOPNET_CAPTURE_MODES = new Set(["browser_extension", "bookmarklet", "pasted_html"]);
 
 type StepStatus = "pending" | "running" | "completed" | "failed";
 
@@ -26,14 +44,20 @@ type StepStatus = "pending" | "running" | "completed" | "failed";
 interface StoredTestRun {
   id: string;
   startedAt: string;
+  source: SourceAdapterId;
+  sourceLabel: string;
   criteria: RunRequestBody;
   step1Status: StepStatus;
+  step1Label: string;
   step1Count: number;
   step1Error: string | null;
   step2Status: StepStatus;
+  step2Label: string;
   step2Count: number;
   step2Total: number;
   step2Error: string | null;
+  sourceMetadata: Record<string, unknown> | null;
+  warnings: string[];
   /** Full sale details per URL (raw data lake). */
   properties: Record<string, unknown>[];
   errors: { url?: string; message: string }[];
@@ -41,65 +65,247 @@ interface StoredTestRun {
 
 const testRunsStore: StoredTestRun[] = [];
 
-/** Request body: filters sent from frontend; matches Active Sales Search API params. */
-export interface RunRequestBody {
-  areas: string;
-  minPrice?: number | null;
-  maxPrice?: number | null;
-  minBeds?: number | null;
-  maxBeds?: number | null;
-  minBaths?: number | null;
-  maxHoa?: number | null;
-  maxTax?: number | null;
-  amenities?: string | null;
-  types?: string | null;
-  limit?: number | null;
-  offset?: number | null;
-}
+/** Request body: filters sent from frontend plus optional manual source URL fields. */
+export type RunRequestBody = SourceAdapterRunBody;
 
-function toCriteria(body: RunRequestBody): NycsSearchCriteria {
+function sourceStepLabels(source: SourceAdapterId): { step1Label: string; step2Label: string } {
+  if (source === "loopnet") {
+    return {
+      step1Label: "Prepare LoopNet manual search",
+      step2Label: "Ingest LoopNet listing URLs",
+    };
+  }
   return {
-    areas: body.areas?.trim() || "all-downtown,all-midtown",
-    minPrice: body.minPrice != null ? Number(body.minPrice) : undefined,
-    maxPrice: body.maxPrice != null ? Number(body.maxPrice) : undefined,
-    minBeds: body.minBeds != null ? Number(body.minBeds) : undefined,
-    maxBeds: body.maxBeds != null ? Number(body.maxBeds) : undefined,
-    minBaths: body.minBaths != null ? Number(body.minBaths) : undefined,
-    maxHoa: body.maxHoa != null ? Number(body.maxHoa) : undefined,
-    maxTax: body.maxTax != null ? Number(body.maxTax) : undefined,
-    amenities: body.amenities ?? undefined,
-    types: body.types ?? undefined,
-    limit: body.limit != null ? Math.min(Number(body.limit), 500) : 100,
-    offset: body.offset != null ? Number(body.offset) : undefined,
+    step1Label: "GET Active Sales",
+    step2Label: "GET Sale Details",
   };
 }
 
+function createCapturedLoopNetRun(params: {
+  url: string;
+  raw: Record<string, unknown>;
+  captureMetadata: Record<string, unknown>;
+}): StoredTestRun {
+  const adapter = getSourceAdapter("loopnet");
+  const labels = sourceStepLabels("loopnet");
+  const runId = crypto.randomUUID();
+  const startedAt = new Date().toISOString();
+  const run: StoredTestRun = {
+    id: runId,
+    startedAt,
+    source: "loopnet",
+    sourceLabel: adapter.displayName,
+    criteria: { source: "loopnet", manualUrls: [params.url], manualUrl: params.url },
+    step1Status: "completed",
+    step1Label: labels.step1Label,
+    step1Count: 1,
+    step1Error: null,
+    step2Status: "completed",
+    step2Label: labels.step2Label,
+    step2Count: 1,
+    step2Total: 1,
+    step2Error: null,
+    sourceMetadata: {
+      captureMode: "manual",
+      ...params.captureMetadata,
+    },
+    warnings: [],
+    properties: [{ ...params.raw, _fetchUrl: params.url, _sourceAdapter: "loopnet" }],
+    errors: [],
+  };
+  testRunsStore.unshift(run);
+  return run;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return value != null && typeof value === "object" && !Array.isArray(value);
+}
+
+function trimString(value: unknown, maxLength: number): string | null {
+  return typeof value === "string" && value.trim()
+    ? value.trim().slice(0, maxLength)
+    : null;
+}
+
+function sanitizeLinkMetadata(value: unknown): Array<Record<string, string>> {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 100).flatMap((item) => {
+    if (!isPlainRecord(item)) return [];
+    const href = trimString(item.href ?? item.url, 1_500);
+    if (!href) return [];
+    return [{
+      href,
+      text: trimString(item.text ?? item.label, 250) ?? "",
+    }];
+  });
+}
+
+function sanitizeStringArray(value: unknown, maxItems: number, maxLength: number): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .slice(0, maxItems)
+    .map((item) => trimString(item, maxLength))
+    .filter((item): item is string => Boolean(item));
+}
+
+function sanitizeCaptureMetadata(value: unknown): Record<string, unknown> {
+  const input = isPlainRecord(value) ? value : {};
+  const meta = isPlainRecord(input.meta) ? Object.fromEntries(
+    Object.entries(input.meta)
+      .slice(0, 80)
+      .map(([key, val]) => [key.slice(0, 120), trimString(val, 1_000)])
+      .filter(([, val]) => val != null)
+  ) : {};
+  return {
+    documentTitle: trimString(input.documentTitle ?? input.title, 500),
+    visibleTextPreview: trimString(input.visibleText, 5_000),
+    visibleTextLength: typeof input.visibleText === "string" ? input.visibleText.length : null,
+    imageUrls: sanitizeStringArray(input.images, 80, 1_500),
+    links: sanitizeLinkMetadata(input.links),
+    meta,
+    userAgent: trimString(input.userAgent, 500),
+  };
+}
+
+function normalizeCaptureMode(value: unknown, fallback: "browser_extension" | "bookmarklet" | "pasted_html"): string {
+  const mode = typeof value === "string" ? value.trim() : "";
+  return LOOPNET_CAPTURE_MODES.has(mode) ? mode : fallback;
+}
+
+function buildCapturedLoopNetRunFromPayload(
+  payload: unknown,
+  fallbackCaptureMode: "browser_extension" | "bookmarklet" | "pasted_html"
+): { run: StoredTestRun; raw: Record<string, unknown>; capturedUrl: string; captureMetadata: Record<string, unknown> } {
+  const body = isPlainRecord(payload) ? payload : {};
+  const url = trimString(body.url, 2_000) ?? "";
+  const html = typeof body.html === "string" ? body.html : "";
+  if (!url || !isLoopNetUrl(url)) throw new Error("Body 'url' must be a LoopNet listing URL.");
+  if (!html.trim()) throw new Error("Body 'html' is required.");
+  if (Buffer.byteLength(html, "utf8") > LOOPNET_BROWSER_CAPTURE_MAX_HTML_BYTES) {
+    throw new Error("Captured LoopNet HTML is too large.");
+  }
+  const captureMode = normalizeCaptureMode(body.captureMode, fallbackCaptureMode);
+  const capturedAt = new Date().toISOString();
+  const metadata = sanitizeCaptureMetadata(body.metadata);
+  const raw = {
+    ...extractLoopNetDetailsFromHtml(html, url),
+    _fetchUrl: url,
+    ingestionMode: `${captureMode}_capture`,
+    extractionStatus: "captured",
+    extractionDiagnostics: {
+      captureMode,
+      capturedAt,
+      htmlLength: html.length,
+      metadata,
+      note: "Captured from a user-controlled browser page; no credentials, cookies, CAPTCHA, stealth, proxy, or paywall automation was attempted.",
+    },
+  };
+  const captureMetadata = {
+    captureMode,
+    capturedAt,
+    htmlLength: html.length,
+    metadata,
+  };
+  const run = createCapturedLoopNetRun({ url, raw, captureMetadata });
+  return { run, raw, capturedUrl: url, captureMetadata };
+}
+
+function loopNetCaptureOriginAllowed(origin: string | undefined): boolean {
+  if (!origin) return true;
+  if (origin.startsWith("chrome-extension://") || origin.startsWith("moz-extension://")) return true;
+  try {
+    const parsed = new URL(origin);
+    if (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1") return true;
+    return parsed.hostname === "loopnet.com" || parsed.hostname.endsWith(".loopnet.com");
+  } catch {
+    return false;
+  }
+}
+
+function applyLoopNetBrowserCaptureCors(req: Request, res: Response): boolean {
+  const origin = req.headers.origin;
+  if (!loopNetCaptureOriginAllowed(origin)) return false;
+  if (origin) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Vary", "Origin");
+  }
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-LoopNet-Capture-Token");
+  res.setHeader("Access-Control-Max-Age", "600");
+  return true;
+}
+
+function hasValidLoopNetBrowserCaptureToken(req: Request): boolean {
+  const token = req.header("x-loopnet-capture-token") || "";
+  return token.length > 0 && token === LOOPNET_BROWSER_CAPTURE_TOKEN;
+}
+
+export function getLoopNetBrowserCaptureToken(): string {
+  return LOOPNET_BROWSER_CAPTURE_TOKEN;
+}
+
+loopNetBrowserCaptureRouter.options("/test-agent/loopnet/browser-capture", (req: Request, res: Response) => {
+  if (!applyLoopNetBrowserCaptureCors(req, res)) {
+    res.status(403).end();
+    return;
+  }
+  res.status(204).end();
+});
+
+loopNetBrowserCaptureRouter.post("/test-agent/loopnet/browser-capture", (req: Request, res: Response) => {
+  if (!applyLoopNetBrowserCaptureCors(req, res)) {
+    res.status(403).json({ error: "LoopNet browser capture origin is not allowed." });
+    return;
+  }
+  if (!hasValidLoopNetBrowserCaptureToken(req)) {
+    res.status(401).json({ error: "LoopNet browser capture token required." });
+    return;
+  }
+  try {
+    const { run, raw, capturedUrl, captureMetadata } = buildCapturedLoopNetRunFromPayload(req.body, "browser_extension");
+    res.status(201).json({
+      ok: true,
+      runId: run.id,
+      capturedUrl,
+      propertiesCount: run.properties.length,
+      captureMetadata,
+      raw,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(/LoopNet listing URL|required|too large/i.test(message) ? 400 : 500).json({ error: message });
+  }
+});
+
 /** Run the two-step flow in the background and update the stored run. */
 async function runTwoStepFlow(run: StoredTestRun): Promise<void> {
-  const criteria = toCriteria(run.criteria);
+  const adapter = getSourceAdapter(run.source);
+  const criteria = adapter.buildManualCriteria(run.criteria);
 
-  // Step 1: GET Active Sales
+  // Step 1: discover source listing URLs or validate manually supplied URLs.
   run.step1Status = "running";
   try {
-    const { urls } = await fetchActiveSalesWithCriteria(criteria);
+    const { urls, metadata, warnings } = await adapter.fetchSearch(criteria, { runKind: "manual" });
+    run.sourceMetadata = metadata ?? null;
+    if (warnings?.length) run.warnings.push(...warnings);
     run.step1Count = urls.length;
     run.step1Status = "completed";
     run.step1Error = null;
 
-    // Step 2: GET Sale details by URL for each
+    // Step 2: fetch or construct one raw source payload per URL.
     run.step2Total = urls.length;
     run.step2Status = "running";
     run.step2Error = null;
     for (let i = 0; i < urls.length; i++) {
       try {
-        const details = await fetchSaleDetailsByUrl(urls[i]);
-        run.properties.push({ ...details, _fetchUrl: urls[i] });
+        const details = await adapter.fetchDetailsByUrl(urls[i], { runKind: "manual" });
+        run.properties.push({ ...details, _fetchUrl: urls[i], _sourceAdapter: adapter.id });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         run.errors.push({ url: urls[i], message });
       }
       run.step2Count = i + 1;
-      // Small delay to avoid rate limits
+      // Small delay to avoid rate limits.
       if (i < urls.length - 1) await new Promise((r) => setTimeout(r, 200));
     }
     run.step2Status = "completed";
@@ -115,19 +321,28 @@ async function runTwoStepFlow(run: StoredTestRun): Promise<void> {
 router.post("/test-agent/run", (req: Request, res: Response) => {
   try {
     const body = (req.body || {}) as RunRequestBody;
+    const source = resolveSourceAdapterId(body.source);
+    const adapter = getSourceAdapter(source);
+    const labels = sourceStepLabels(source);
     const runId = crypto.randomUUID();
     const startedAt = new Date().toISOString();
     const run: StoredTestRun = {
       id: runId,
       startedAt,
-      criteria: body,
+      source,
+      sourceLabel: adapter.displayName,
+      criteria: { ...body, source },
       step1Status: "pending",
+      step1Label: labels.step1Label,
       step1Count: 0,
       step1Error: null,
       step2Status: "pending",
+      step2Label: labels.step2Label,
       step2Count: 0,
       step2Total: 0,
       step2Error: null,
+      sourceMetadata: null,
+      warnings: [],
       properties: [],
       errors: [],
     };
@@ -148,21 +363,111 @@ router.post("/test-agent/run", (req: Request, res: Response) => {
   }
 });
 
+router.post("/test-agent/loopnet/operator/start", async (req: Request, res: Response) => {
+  const url = typeof req.body?.url === "string" ? req.body.url.trim() : "";
+  if (!url || !isLoopNetUrl(url)) {
+    res.status(400).json({ error: "Body 'url' must be a LoopNet listing URL." });
+    return;
+  }
+  try {
+    const session = await startLoopNetOperatorCapture(url);
+    res.status(201).json({
+      ok: true,
+      session,
+      message:
+        "A headed browser opened for manual LoopNet capture. Load the listing manually, complete any user-visible checks yourself, then call capture.",
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[loopnet operator start]", err);
+    res.status(503).json({ error: "Failed to start LoopNet operator browser.", details: message });
+  }
+});
+
+router.post("/test-agent/loopnet/operator/:sessionId/capture", async (req: Request, res: Response) => {
+  try {
+    const captured = await captureLoopNetOperatorSession(req.params.sessionId);
+    const run = createCapturedLoopNetRun({
+      url: captured.requestedUrl,
+      raw: captured.raw,
+      captureMetadata: {
+        captureMode: "playwright_operator",
+        capturedUrl: captured.capturedUrl,
+        capturedAt: captured.capturedAt,
+        htmlLength: captured.htmlLength,
+        sessionId: captured.sessionId,
+      },
+    });
+    if (req.body?.close !== false) await closeLoopNetOperatorSession(req.params.sessionId);
+    res.status(201).json({
+      ok: true,
+      runId: run.id,
+      capturedUrl: captured.capturedUrl,
+      propertiesCount: run.properties.length,
+      raw: captured.raw,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[loopnet operator capture]", err);
+    res.status(503).json({ error: "Failed to capture LoopNet operator browser content.", details: message });
+  }
+});
+
+router.delete("/test-agent/loopnet/operator/:sessionId", async (req: Request, res: Response) => {
+  const closed = await closeLoopNetOperatorSession(req.params.sessionId);
+  res.json({ ok: true, closed });
+});
+
+router.get("/test-agent/loopnet/browser-capture-config", (_req: Request, res: Response) => {
+  res.json({
+    endpointPath: "/api/test-agent/loopnet/browser-capture",
+    token: getLoopNetBrowserCaptureToken(),
+    preferredCaptureModes: ["browser_extension", "bookmarklet"],
+    fallbackCaptureModes: ["pasted_html", "playwright_operator"],
+  });
+});
+
+router.post("/test-agent/loopnet/html-capture", (req: Request, res: Response) => {
+  try {
+    const { run, raw, capturedUrl, captureMetadata } = buildCapturedLoopNetRunFromPayload(
+      { ...(isPlainRecord(req.body) ? req.body : {}), captureMode: "pasted_html" },
+      "pasted_html"
+    );
+    res.status(201).json({
+      ok: true,
+      runId: run.id,
+      capturedUrl,
+      propertiesCount: run.properties.length,
+      captureMetadata,
+      raw,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(/LoopNet listing URL|required|too large/i.test(message) ? 400 : 500).json({ error: message });
+  }
+});
+
 /** List test runs (newest first) with step progress and timer. */
 router.get("/test-agent/runs", (_req: Request, res: Response) => {
   const runs = testRunsStore.map((r) => ({
     id: r.id,
     startedAt: r.startedAt,
+    source: r.source,
+    sourceLabel: r.sourceLabel,
     criteria: r.criteria,
     step1Status: r.step1Status,
+    step1Label: r.step1Label,
     step1Count: r.step1Count,
     step1Error: r.step1Error,
     step2Status: r.step2Status,
+    step2Label: r.step2Label,
     step2Count: r.step2Count,
     step2Total: r.step2Total,
     step2Error: r.step2Error,
+    sourceMetadata: r.sourceMetadata,
     propertiesCount: r.properties.length,
     errorsCount: r.errors.length,
+    warningsCount: r.warnings.length,
   }));
   res.json({ runs });
 });
@@ -262,7 +567,7 @@ router.post("/test-agent/test-single-property", async (req: Request, res: Respon
   try {
     const raw = await fetchSaleDetailsByUrl(url);
     const rawWithUrl = { ...raw, _fetchUrl: url } as Record<string, unknown>;
-    const normalized = runPropertyToNormalized(rawWithUrl, 0);
+    const normalized = getSourceAdapter("streeteasy").normalize(rawWithUrl, 0);
 
     const db = await import("@re-sourcing/db");
     const pool = db.getPool();
@@ -370,234 +675,11 @@ router.post("/test-agent/test-single-property", async (req: Request, res: Respon
   }
 });
 
-/** Map one run property (GET sale details + _fetchUrl) to ListingNormalized. */
-function runPropertyToNormalized(raw: Record<string, unknown>, index: number): ListingNormalized {
-  const id = raw.id != null ? String(raw.id) : raw.address != null ? String(raw.address) : `run-${index}`;
-  const address = (raw.address != null ? String(raw.address) : "").trim() || "—";
-  const borough = (raw.borough != null ? String(raw.borough) : "").trim() || "New York";
-  const city = borough.charAt(0).toUpperCase() + borough.slice(1).toLowerCase().replace(/-/g, " ");
-  const zip = (raw.zipcode != null ? String(raw.zipcode) : raw.zip != null ? String(raw.zip) : "").trim() || "";
-  const price = Number(raw.price ?? raw.closedPrice ?? 0) || 0;
-  // Preserve decimals (e.g. 7.5 baths); DB stores NUMERIC(4,1). Only clamp to >= 0.
-  const bedsNum = Number(raw.bedrooms ?? raw.beds ?? 0) || 0;
-  const bathsNum = Number(raw.bathrooms ?? raw.baths ?? 0) || 0;
-  const beds = bedsNum >= 0 ? bedsNum : 0;
-  const baths = bathsNum >= 0 ? bathsNum : 0;
-  // DB sqft is INTEGER; API may return decimals — coerce to whole number or null
-  const sqftRaw = raw.sqft != null ? Number(raw.sqft) : NaN;
-  const sqft =
-    !Number.isNaN(sqftRaw) && sqftRaw >= 0 ? Math.round(sqftRaw) : null;
-  const url = (raw._fetchUrl != null ? String(raw._fetchUrl) : raw.url != null ? String(raw.url) : "").trim() || "#";
-  const listedAt = raw.listedAt != null ? String(raw.listedAt) : null;
-  const images = raw.images;
-  const imageUrls = Array.isArray(images) ? (images as string[]).filter((u): u is string => typeof u === "string") : null;
-  const agentNames = (() => {
-    const arr = raw.agents ?? (raw as Record<string, unknown>).agent_names ?? (raw as Record<string, unknown>).listing_agents;
-    if (Array.isArray(arr) && arr.length > 0) {
-      const names = arr.map((x) => {
-        if (x == null) return "";
-        if (typeof x === "string") return x.trim();
-        if (typeof x === "object" && x !== null) {
-          const o = x as Record<string, unknown>;
-          const n = o.name ?? o.full_name ?? o.agent_name ?? o.displayName;
-          return n != null ? String(n).trim() : "";
-        }
-        return String(x).trim();
-      }).filter(Boolean);
-      if (names.length > 0) return names;
-    }
-    const single =
-      raw.broker_name ?? raw.broker ?? raw.listing_agent ?? raw.agent_name ?? raw.agent
-      ?? (raw as Record<string, unknown>).listing_agent_name;
-    if (single != null && String(single).trim()) return [String(single).trim()];
-    return null;
-  })();
-  const latLon = parseLatLonFromRaw(raw);
-  const { _fetchUrl: _u, ...rest } = raw;
-  const extra = rest as Record<string, unknown>;
-  const { monthlyHoa, monthlyTax } = parseMonthlyHoaTaxFromRaw(raw);
-  if (monthlyHoa != null) extra.monthlyHoa = monthlyHoa;
-  if (monthlyTax != null) extra.monthlyTax = monthlyTax;
-  const { priceHistory, rentalPriceHistory } = parsePriceHistoriesFromRaw(raw);
-  const priceChangeSinceListed = computePriceChangeSinceListed(
-    Number(raw.price ?? raw.closedPrice ?? 0) || 0,
-    priceHistory ?? undefined,
-  );
-  if (priceChangeSinceListed != null) extra.priceChangeSinceListed = priceChangeSinceListed;
-  return {
-    source: "streeteasy",
-    externalId: id,
-    address,
-    city,
-    state: "NY",
-    zip,
-    price,
-    beds,
-    baths,
-    sqft,
-    url,
-    title: address !== "—" ? address : null,
-    description: raw.description != null ? String(raw.description) : null,
-    lat: latLon?.lat ?? null,
-    lon: latLon?.lon ?? null,
-    imageUrls,
-    listedAt,
-    agentNames,
-    priceHistory: priceHistory ?? undefined,
-    rentalPriceHistory: rentalPriceHistory ?? undefined,
-    extra: Object.keys(extra).length ? extra : null,
-  };
-}
-
-/** Parse date string (ISO or locale) to timestamp for ordering; invalid → 0. */
-function parsePriceHistoryDate(dateStr: string): number {
-  const s = String(dateStr).trim();
-  if (!s) return 0;
-  const d = new Date(s);
-  return Number.isFinite(d.getTime()) ? d.getTime() : 0;
-}
-
-/**
- * Compute price change since listed for display (listed price vs current price).
- * Uses the most recent LISTED event in price history (the listing that is active today), or earliest entry if no LISTED. Stored in listing.extra.
- */
-function computePriceChangeSinceListed(
-  currentPrice: number,
-  priceHistory: PriceHistoryEntry[] | undefined | null,
-): { listedPrice: number; currentPrice: number; changeAmount: number; changePercent: number } | null {
-  if (!priceHistory?.length || !Number.isFinite(currentPrice) || currentPrice <= 0) return null;
-  const toNum = (p: string | number): number =>
-    typeof p === "number" && Number.isFinite(p) ? p : typeof p === "string" ? parseFloat(String(p).replace(/[$,]/g, "")) : NaN;
-  const withNums = priceHistory
-    .map((e) => ({ ...e, priceNum: toNum(e.price), dateTs: parsePriceHistoryDate(e.date) }))
-    .filter((e) => Number.isFinite(e.priceNum));
-  if (withNums.length === 0) return null;
-  const listedCandidates = withNums.filter((e) => String(e.event).toUpperCase() === "LISTED");
-  // Most recent Listed = the one that started the current listing (max date); fallback to earliest entry if no Listed.
-  const listedEntry = listedCandidates.length > 0
-    ? listedCandidates.reduce((a, b) => (a.dateTs > b.dateTs ? a : b))
-    : withNums.reduce((a, b) => (a.dateTs < b.dateTs ? a : b));
-  const listedPrice = listedEntry.priceNum;
-  if (!Number.isFinite(listedPrice) || listedPrice <= 0) return null;
-  const changeAmount = currentPrice - listedPrice;
-  const changePercent = (changeAmount / listedPrice) * 100;
-  return { listedPrice, currentPrice, changeAmount, changePercent };
-}
-
-/** Extract sale and rental price history arrays from GET sale details payload (top-level or nested under listing/data). */
-function parsePriceHistoriesFromRaw(raw: Record<string, unknown>): {
-  priceHistory?: PriceHistoryEntry[] | null;
-  rentalPriceHistory?: PriceHistoryEntry[] | null;
-} {
-  const coerceEntries = (value: unknown): PriceHistoryEntry[] | null => {
-    if (!Array.isArray(value)) return null;
-    const out: PriceHistoryEntry[] = [];
-    for (const row of value) {
-      if (!row || typeof row !== "object") continue;
-      const obj = row as Record<string, unknown>;
-      const date =
-        obj.date ?? obj.Date ?? obj.listedDate ?? obj.timestamp
-        ?? obj.listed_date ?? obj.event_date ?? obj.eventDate;
-      const price =
-        obj.price ?? obj.Price ?? obj.amount ?? obj.list_price ?? obj.listPrice
-        ?? obj.sale_price ?? obj.salePrice;
-      const event =
-        obj.event ?? obj.Event ?? obj.type ?? obj.reason ?? obj.description
-        ?? obj.event_type ?? obj.eventType;
-      if (date == null || price == null) continue;
-      out.push({
-        date: String(date),
-        price: typeof price === "number" || typeof price === "string" ? price : String(price),
-        event: event != null ? String(event) : "—",
-      });
-    }
-    return out.length ? out : null;
-  };
-
-  const from = (r: Record<string, unknown>): { sale: unknown; rental: unknown } => ({
-    sale:
-      r.priceHistory ?? r.price_history ?? r.history ?? r.saleHistory ?? r.sale_history
-      ?? r.property_history ?? r.listing_history ?? r.price_changes ?? r.events,
-    rental:
-      r.rentalPriceHistory ?? r.rental_price_history ?? r.rentHistory ?? r.rental_history,
-  });
-
-  /** If API returns price history as a JSON string (e.g. RapidAPI sales/url), parse it. */
-  const ensureArray = (value: unknown): unknown => {
-    if (value == null) return null;
-    if (Array.isArray(value)) return value;
-    if (typeof value === "string") {
-      try {
-        const parsed = JSON.parse(value) as unknown;
-        return Array.isArray(parsed) ? parsed : value;
-      } catch {
-        return value;
-      }
-    }
-    return value;
-  };
-
-  const top = from(raw);
-  let saleHistorySource = top.sale;
-  let rentalHistorySource = top.rental;
-  if (saleHistorySource == null || rentalHistorySource == null) {
-    const listing = raw.listing != null && typeof raw.listing === "object" ? (raw.listing as Record<string, unknown>) : null;
-    const data = raw.data != null && typeof raw.data === "object" ? (raw.data as Record<string, unknown>) : null;
-    if (saleHistorySource == null && listing) saleHistorySource = from(listing).sale;
-    if (saleHistorySource == null && data) saleHistorySource = from(data).sale;
-    if (rentalHistorySource == null && listing) rentalHistorySource = from(listing).rental;
-    if (rentalHistorySource == null && data) rentalHistorySource = from(data).rental;
-  }
-
-  const priceHistory = coerceEntries(ensureArray(saleHistorySource));
-  const rentalPriceHistory = coerceEntries(ensureArray(rentalHistorySource));
-
-  return {
-    priceHistory: priceHistory ?? undefined,
-    rentalPriceHistory: rentalPriceHistory ?? undefined,
-  };
-}
-
-/** Extract monthly HOA and tax from GET sale details (for display and financial calculations). */
-function parseMonthlyHoaTaxFromRaw(raw: Record<string, unknown>): { monthlyHoa?: number; monthlyTax?: number } {
-  const hoaRaw = raw.monthlyHoa ?? raw.monthly_hoa ?? raw.hoa ?? raw.hoa_fee ?? (raw.fees as Record<string, unknown>)?.hoa ?? (raw.fees as Record<string, unknown>)?.monthly_hoa;
-  const taxRaw = raw.monthlyTax ?? raw.monthly_tax ?? raw.tax ?? raw.monthly_taxes ?? (raw.fees as Record<string, unknown>)?.tax ?? (raw.fees as Record<string, unknown>)?.monthly_tax;
-  const toNum = (v: unknown): number | undefined => {
-    if (v == null) return undefined;
-    const n = typeof v === "number" && !Number.isNaN(v) ? v : typeof v === "string" ? parseFloat(String(v).replace(/[$,]/g, "")) : NaN;
-    return !Number.isNaN(n) && n >= 0 ? n : undefined;
-  };
-  return { monthlyHoa: toNum(hoaRaw), monthlyTax: toNum(taxRaw) };
-}
-
-/**
- * Extract latitude and longitude from GET sale details payload (defensive to common key names).
- * These values flow into the run's properties and, when sent to property data, into raw listings (lat/lon columns).
- */
-function parseLatLonFromRaw(raw: Record<string, unknown>): { lat: number; lon: number } | null {
-  const coords = raw.coordinates as Record<string, unknown> | undefined;
-  const loc = raw.location as Record<string, unknown> | undefined;
-  const geo = raw.geo as Record<string, unknown> | undefined;
-  const geom = raw.geometry as Record<string, unknown> | undefined;
-  const geomCoords = Array.isArray(geom?.coordinates) ? (geom!.coordinates as number[]) : null;
-  const latRaw =
-    raw.latitude ?? raw.lat ?? coords?.latitude ?? coords?.lat
-    ?? loc?.lat ?? geo?.lat ?? (geomCoords != null && geomCoords.length >= 2 ? geomCoords[1] : undefined);
-  const lonRaw =
-    raw.longitude ?? raw.lon ?? coords?.longitude ?? coords?.lon
-    ?? loc?.lon ?? geo?.lon ?? (geomCoords != null && geomCoords.length >= 2 ? geomCoords[0] : undefined);
-  const lat = typeof latRaw === "number" && !Number.isNaN(latRaw) ? latRaw : (typeof latRaw === "string" ? parseFloat(latRaw) : NaN);
-  const lon = typeof lonRaw === "number" && !Number.isNaN(lonRaw) ? lonRaw : (typeof lonRaw === "string" ? parseFloat(lonRaw) : NaN);
-  if (Number.isNaN(lat) || Number.isNaN(lon)) return null;
-  if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return null;
-  return { lat, lon };
-}
-
 /**
  * Send this run's properties to property data (listings + snapshots). No auto-populate; user-triggered only.
- * Flow: for new listings run broker LLM enrichment only; price history comes from GET sale details (Step 2).
- * Upsert listing (with enrichment) → create snapshot with full metadata.
- * Lat/lon from GET sale details are included in each run property and are persisted to raw listings (listings.lat, listings.lon).
+ * Flow: for new listings run broker LLM enrichment only; source details carry price history when available.
+ * Upsert listing with enrichment, then create a snapshot with full metadata.
+ * Lat/lon from source details are included in each run property and are persisted to raw listings when available.
  */
 router.post("/test-agent/runs/:id/send-to-property-data", async (req: Request, res: Response) => {
   const run = testRunsStore.find((r) => r.id === req.params.id);
@@ -609,16 +691,21 @@ router.post("/test-agent/runs/:id/send-to-property-data", async (req: Request, r
     res.status(400).json({ error: "Run has no properties to send." });
     return;
   }
+  const adapter = getSourceAdapter(run.source);
   const workflowStartedAt = new Date().toISOString();
   const workflowRunId = await createWorkflowRun({
     runType: "send_to_property_data",
-    displayName: "Send to property data",
+    displayName: `Send ${run.sourceLabel} to property data`,
     scopeLabel: `${run.properties.length} listing${run.properties.length === 1 ? "" : "s"}`,
     triggerSource: "manual",
     totalItems: run.properties.length,
     metadata: {
       testRunId: run.id,
+      source: run.source,
+      sourceLabel: run.sourceLabel,
       criteria: run.criteria,
+      sourceMetadata: run.sourceMetadata,
+      warnings: run.warnings,
     },
     steps: [
       {
@@ -644,7 +731,7 @@ router.post("/test-agent/runs/:id/send-to-property-data", async (req: Request, r
       let listingsUpdated = 0;
       let listingsProcessed = 0;
       for (let i = 0; i < run.properties.length; i++) {
-        const normalized = runPropertyToNormalized(run.properties[i] as Record<string, unknown>, i);
+        const normalized = adapter.normalize(run.properties[i] as Record<string, unknown>, i);
         const existing = await listingRepo.bySourceAndExternalId(normalized.source, normalized.externalId);
 
         if (existing) {
@@ -694,12 +781,17 @@ router.post("/test-agent/runs/:id/send-to-property-data", async (req: Request, r
         try {
           metadata = {
             testRunId: run.id,
+            source: run.source,
+            sourceLabel: run.sourceLabel,
             capturedAt: new Date().toISOString(),
             rawPayload,
-            // Store LLM outputs in snapshot so they're persisted and we have a full record
+            sourceMetadata: run.sourceMetadata,
+            warnings: run.warnings,
+            // Store LLM outputs in snapshot so they're persisted and we have a full record.
             agentEnrichment: normalized.agentEnrichment ?? null,
             priceHistory: normalized.priceHistory ?? null,
             rentalPriceHistory: normalized.rentalPriceHistory ?? null,
+            normalizedListing: normalized as unknown as Record<string, unknown>,
           };
           JSON.stringify(metadata);
         } catch (_ser) {

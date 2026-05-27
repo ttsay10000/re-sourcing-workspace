@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from "express";
 import { getPool, ProfileRepo, RunRepo } from "@re-sourcing/db";
 import { buildNextRunAt, startSavedSearchRun } from "../sourcing/savedSearchRunner.js";
+import { listEnabledSavedSearchAdapters, sanitizeSourceToggles } from "../sourcing/adapters/index.js";
 
 const router = Router();
 
@@ -61,7 +62,7 @@ router.post("/saved-searches", async (req: Request, res: Response) => {
       propertyTypes: Array.isArray(payload.propertyTypes)
         ? payload.propertyTypes.filter((value: unknown): value is string => typeof value === "string")
         : [],
-      sourceToggles: payload.sourceToggles,
+      sourceToggles: sanitizeSourceToggles(payload.sourceToggles),
       scheduleCadence: typeof payload.scheduleCadence === "string" ? payload.scheduleCadence : "manual",
       timezone: typeof payload.timezone === "string" ? payload.timezone : "America/New_York",
       runTimeLocal: typeof payload.runTimeLocal === "string" ? payload.runTimeLocal : null,
@@ -122,7 +123,10 @@ router.put("/saved-searches/:id", async (req: Request, res: Response) => {
       propertyTypes: Array.isArray(payload.propertyTypes)
         ? payload.propertyTypes.filter((value: unknown): value is string => typeof value === "string")
         : existing.propertyTypes,
-      sourceToggles: payload.sourceToggles ?? existing.sourceToggles,
+      sourceToggles:
+        payload.sourceToggles !== undefined
+          ? sanitizeSourceToggles(payload.sourceToggles)
+          : sanitizeSourceToggles(existing.sourceToggles),
       scheduleCadence: typeof payload.scheduleCadence === "string" ? payload.scheduleCadence : existing.scheduleCadence,
       timezone: typeof payload.timezone === "string" ? payload.timezone : existing.timezone,
       runTimeLocal: typeof payload.runTimeLocal === "string" ? payload.runTimeLocal : payload.runTimeLocal === null ? null : existing.runTimeLocal,
@@ -154,6 +158,14 @@ router.post("/saved-searches/:id/run-now", async (req: Request, res: Response) =
     const savedSearch = await repo.byId(req.params.id);
     if (!savedSearch) {
       res.status(404).json({ error: "Saved search not found." });
+      return;
+    }
+    if (listEnabledSavedSearchAdapters(savedSearch.sourceToggles).length === 0) {
+      res.status(400).json({
+        error: "No saved-search source is enabled. Enable StreetEasy for automated saved-search runs.",
+        code: "no_saved_search_source",
+        savedSearchId: savedSearch.id,
+      });
       return;
     }
     if (await runRepo.hasRunningForProfile(savedSearch.id)) {
