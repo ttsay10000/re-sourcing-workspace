@@ -100,6 +100,24 @@ interface PropertyDocumentsResponse {
   documents: PropertyDocumentResponse[];
 }
 
+interface GeneratedDocumentSummary {
+  id: string;
+  fileName: string;
+  storagePath?: string | null;
+}
+
+interface PersistedDossierResponse {
+  ok: boolean;
+  propertyId: string;
+  dossierDoc?: GeneratedDocumentSummary | null;
+  excelDoc?: GeneratedDocumentSummary | null;
+  dealScore?: number | null;
+  dossierFormat?: string | null;
+  scoringProfile?: string | null;
+  error?: string;
+  details?: string;
+}
+
 interface SavedWorkspaceSummary {
   propertyId: string;
   canonicalAddress: string;
@@ -389,6 +407,18 @@ function downloadBlob(blob: Blob, filename: string) {
     anchor.remove();
     window.URL.revokeObjectURL(url);
   }, 1000);
+}
+
+async function downloadPropertyDocument(propertyId: string, document: GeneratedDocumentSummary, fallbackName: string) {
+  const res = await fetch(
+    `${API_BASE}/api/properties/${encodeURIComponent(propertyId)}/documents/${encodeURIComponent(document.id)}/file`
+  );
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data?.details || data?.error || `Failed to download ${fallbackName}.`);
+  }
+  const blob = await res.blob();
+  downloadBlob(blob, document.fileName || fallbackName);
 }
 
 function DealAnalysisPageContent() {
@@ -786,11 +816,96 @@ function DealAnalysisPageContent() {
     }
   }
 
+  async function generatePersistedDossier(downloadKind: "pdf" | "excel") {
+    if (!propertyId) return false;
+    const nextDraft = normalizeWorkspaceDraft(draft);
+    setWorkspaceSaving(true);
+    try {
+      await persistWorkspaceDraft(nextDraft);
+    } finally {
+      setWorkspaceSaving(false);
+    }
+    const res = await fetch(`${API_BASE}/api/dossier/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        propertyId,
+        assumptions: buildAssumptionsPayload(nextDraft),
+        dossierFormat: "teaser",
+      }),
+    });
+    const data = (await res.json().catch(() => ({}))) as PersistedDossierResponse;
+    if (!res.ok || data.error) {
+      throw new Error(data.details || data.error || "Failed to generate saved deal dossier.");
+    }
+    const document = downloadKind === "pdf" ? data.dossierDoc : data.excelDoc;
+    if (!document?.id) {
+      throw new Error(downloadKind === "pdf" ? "Dossier document was not returned." : "Excel document was not returned.");
+    }
+    await downloadPropertyDocument(
+      propertyId,
+      document,
+      downloadKind === "pdf" ? "Deal-Dossier.pdf" : "Deal-Dossier-Workbook.xlsx"
+    );
+    setDraft(nextDraft);
+    setBaselineDraft(nextDraft);
+    void loadSavedWorkspaces();
+    void (async () => {
+      try {
+        const [propertyRes, calculationRes, documentsRes] = await Promise.all([
+          fetch(`${API_BASE}/api/properties/${encodeURIComponent(propertyId)}`),
+          fetch(`${API_BASE}/api/properties/${encodeURIComponent(propertyId)}/om-calculation`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({}),
+          }),
+          fetch(`${API_BASE}/api/properties/${encodeURIComponent(propertyId)}/documents`),
+        ]);
+        if (propertyRes.ok) {
+          const propertyData = (await propertyRes.json().catch(() => null)) as PropertyResponse | null;
+          if (propertyData?.details) {
+            setWorkspaceDetails(propertyData.details as PropertyDetails);
+            setResolvedAddress(resolveSavedWorkspaceAddress(propertyData));
+          }
+        }
+        if (calculationRes.ok) {
+          const calculationData = (await calculationRes.json().catch(() => null)) as OmCalculationSnapshot | null;
+          if (calculationData?.property) {
+            const refreshedDraft = normalizeWorkspaceDraft(draftFromCalculation(calculationData));
+            setWorkspaceProperty((calculationData.property ?? null) as WorkspaceProperty | null);
+            setCalculation(calculationData);
+            setDraft(refreshedDraft);
+            setBaselineDraft(refreshedDraft);
+          }
+        }
+        if (documentsRes.ok) {
+          const documentsData = (await documentsRes.json().catch(() => ({}))) as PropertyDocumentsResponse;
+          setUploadedDocuments(summarizeUploadedPropertyDocuments(documentsData.documents));
+        }
+      } catch {
+        // Generation already succeeded; keep the current workspace visible if refresh fails.
+      }
+    })();
+    setNotice(
+      [
+        downloadKind === "pdf"
+          ? "Saved deal dossier PDF generated and downloaded."
+          : "Saved deal dossier Excel generated and downloaded.",
+        data.dealScore != null ? `Deal score: ${data.dealScore}/100.` : null,
+        "Homepage and property documents now reference the generated dossier package.",
+      ]
+        .filter(Boolean)
+        .join(" ")
+    );
+    return true;
+  }
+
   async function downloadDossier() {
     if (!workspaceDetails) return;
     setDossierDownloading(true);
     setError(null);
     try {
+      if (propertyId && await generatePersistedDossier("pdf")) return;
       const res = await fetch(`${API_BASE}/api/deal-analysis/generate-dossier`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -823,6 +938,7 @@ function DealAnalysisPageContent() {
     setExcelDownloading(true);
     setError(null);
     try {
+      if (propertyId && await generatePersistedDossier("excel")) return;
       const res = await fetch(`${API_BASE}/api/deal-analysis/generate-dossier-excel`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1410,7 +1526,7 @@ function DealAnalysisPageContent() {
               <div style={{ marginTop: "0.35rem", color: "#64748b", lineHeight: 1.6, fontSize: "0.9rem" }}>
                 Generate the deal dossier PDF or Excel workbook from this OM workspace.
                 {propertyId
-                  ? " This reopened workspace is already tied to a canonical property record."
+                  ? " Because this workspace is tied to a canonical property, generation will save the dossier, refresh deal scoring, and make the deal visible from the property record."
                   : " You can also create or match a canonical property record from the extracted address and send it through BBL resolution and enrichment."}
               </div>
               <div style={{ marginTop: "0.75rem", display: "grid", gap: "0.45rem", fontSize: "0.86rem" }}>
@@ -1443,7 +1559,13 @@ function DealAnalysisPageContent() {
                   cursor: !canGenerateDossier || dossierDownloading ? "not-allowed" : "pointer",
                 }}
               >
-                {dossierDownloading ? "Generating deal dossier PDF..." : "Download deal dossier PDF"}
+                {dossierDownloading
+                  ? propertyId
+                    ? "Generating saved deal dossier PDF..."
+                    : "Generating deal dossier PDF..."
+                  : propertyId
+                    ? "Generate saved deal dossier PDF"
+                    : "Download deal dossier PDF"}
               </button>
 
               <button
@@ -1460,7 +1582,13 @@ function DealAnalysisPageContent() {
                   cursor: !canGenerateDossier || excelDownloading ? "not-allowed" : "pointer",
                 }}
               >
-                {excelDownloading ? "Generating deal dossier Excel..." : "Download deal dossier Excel"}
+                {excelDownloading
+                  ? propertyId
+                    ? "Generating saved deal dossier Excel..."
+                    : "Generating deal dossier Excel..."
+                  : propertyId
+                    ? "Generate saved deal dossier Excel"
+                    : "Download deal dossier Excel"}
               </button>
 
               <button

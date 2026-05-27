@@ -52,7 +52,7 @@ export function isAutomatedOutreachEnabled(): boolean {
 }
 
 function isInitialOutreachEnabledForProfile(profile: UserProfile | null): boolean {
-  return profile?.automationInitialEmailEnabled === true;
+  return profile?.automationPaused !== true && profile?.automationInitialEmailEnabled === true;
 }
 
 function toInboxSummary(result: ProcessInboxResult): DailyOutreachInboxSummary {

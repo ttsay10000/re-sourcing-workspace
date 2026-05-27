@@ -383,6 +383,8 @@ export default function ProfilePage() {
         name: data.name ?? "",
         email: data.email ?? "",
         organization: data.organization ?? "",
+        automationPaused: data.automationPaused === true,
+        automationPauseReason: data.automationPauseReason ?? "",
         automationInitialEmailEnabled: data.automationInitialEmailEnabled === true,
         automationReplyEmailEnabled: data.automationReplyEmailEnabled === true,
         automationAmbiguousActionHandlingEnabled: data.automationAmbiguousActionHandlingEnabled === true,
@@ -461,6 +463,13 @@ export default function ProfilePage() {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          automationPaused: draft.automationPaused === true,
+          automationPauseReason:
+            draft.automationPaused === true
+              ? typeof draft.automationPauseReason === "string" && draft.automationPauseReason.trim().length > 0
+                ? draft.automationPauseReason.trim()
+                : "Paused from profile"
+              : null,
           automationInitialEmailEnabled: draft.automationInitialEmailEnabled === true,
           automationReplyEmailEnabled: draft.automationReplyEmailEnabled === true,
           automationAmbiguousActionHandlingEnabled: draft.automationAmbiguousActionHandlingEnabled === true,
@@ -471,6 +480,8 @@ export default function ProfilePage() {
       setProfile(data);
       setDraft((prev) => ({
         ...prev,
+        automationPaused: data.automationPaused === true,
+        automationPauseReason: data.automationPauseReason ?? "",
         automationInitialEmailEnabled: data.automationInitialEmailEnabled === true,
         automationReplyEmailEnabled: data.automationReplyEmailEnabled === true,
         automationAmbiguousActionHandlingEnabled: data.automationAmbiguousActionHandlingEnabled === true,
@@ -813,7 +824,7 @@ export default function ProfilePage() {
         <div className="profile-section-heading">
           <div>
             <h2>Email automation</h2>
-            <p>Future broker-email controls. All switches default off, and the server env gate must still allow sending.</p>
+            <p>Saved-search broker outreach controls. Initial OM requests are off unless you explicitly enable them.</p>
           </div>
           <button
             type="button"
@@ -826,7 +837,26 @@ export default function ProfilePage() {
         </div>
         <div className="profile-form-grid profile-form-grid--compact">
           <label className="profile-field">
-            <span>Initial emailing</span>
+            <span>Pause all scheduled automation</span>
+            <input
+              type="checkbox"
+              checked={draft.automationPaused === true}
+              onChange={(e) =>
+                setDraft((prev) => ({
+                  ...prev,
+                  automationPaused: e.target.checked,
+                  automationPauseReason: e.target.checked
+                    ? (typeof prev.automationPauseReason === "string" && prev.automationPauseReason.trim().length > 0
+                        ? prev.automationPauseReason
+                        : "Paused from profile")
+                    : "",
+                }))
+              }
+              style={{ width: "1rem", height: "1rem", marginTop: "0.5rem" }}
+            />
+          </label>
+          <label className="profile-field">
+            <span>Auto-send initial OM requests</span>
             <input
               type="checkbox"
               checked={draft.automationInitialEmailEnabled === true}
@@ -837,7 +867,7 @@ export default function ProfilePage() {
             />
           </label>
           <label className="profile-field">
-            <span>Replies</span>
+            <span>Auto-send replies</span>
             <input
               type="checkbox"
               checked={draft.automationReplyEmailEnabled === true}
@@ -848,7 +878,7 @@ export default function ProfilePage() {
             />
           </label>
           <label className="profile-field">
-            <span>Ambiguous actions</span>
+            <span>Auto-handle ambiguous actions</span>
             <input
               type="checkbox"
               checked={draft.automationAmbiguousActionHandlingEnabled === true}
@@ -863,7 +893,7 @@ export default function ProfilePage() {
           </label>
         </div>
         <p className="profile-section-note">
-          Reply automation and ambiguous-action handling are configuration only right now; no automatic replies or promotion paths are enabled.
+          Auto-send initial OM requests applies to eligible new properties from saved-search runs. The global server env gate must also be enabled. Pause all scheduled automation stops saved-search cron, inbox processing, and outreach cron. Reply automation and ambiguous-action handling are configuration only right now; no automatic replies or promotion paths are enabled.
         </p>
       </section>
 

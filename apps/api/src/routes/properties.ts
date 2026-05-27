@@ -91,7 +91,7 @@ import {
   rejectOmExtractionForProperty,
   type OmAutomationDocument,
 } from "../om/ingestAuthoritativeOm.js";
-import { fetchSaleDetailsByUrl } from "../nycRealEstateApi.js";
+import { extractStreetEasySaleIdFromUrl, fetchSaleDetailsById, fetchSaleDetailsByUrl, normalizeStreeteasyUrl } from "../nycRealEstateApi.js";
 import { extractOmAnalysisFromGeminiPdfOnly } from "../om/extractOmAnalysisFromGeminiPdfOnly.js";
 import { resolveOmPropertyAddress } from "../om/resolveOmPropertyAddress.js";
 
@@ -156,6 +156,12 @@ function normalizeManualUrl(
   } catch {
     return "invalid";
   }
+}
+
+function normalizeStreetEasySaleId(value: unknown): string | null {
+  if (typeof value !== "string" && typeof value !== "number") return null;
+  const raw = String(value).trim();
+  return /^\d+$/.test(raw) ? raw : null;
 }
 
 function readManualSourceLinks(details: PropertyDetails | null | undefined): PropertyManualSourceLinks {
@@ -719,15 +725,18 @@ router.delete("/properties", async (req: Request, res: Response) => {
   }
 });
 
-/** POST /api/properties/manual-add - create/update a property directly from a StreetEasy URL and optional OM document link. */
+/** POST /api/properties/manual-add - create/update a property directly from a StreetEasy URL/sale ID and optional OM document link. */
 router.post("/properties/manual-add", async (req: Request, res: Response) => {
   const streetEasyUrl = normalizeManualUrl(req.body?.streetEasyUrl ?? req.body?.streeteasyUrl, {
     requireStreetEasyHost: true,
   });
+  const explicitStreetEasySaleId = normalizeStreetEasySaleId(
+    req.body?.streetEasySaleId ?? req.body?.streeteasySaleId ?? req.body?.saleId ?? req.body?.streetEasyId
+  );
   const omUrl = normalizeManualUrl(req.body?.omUrl);
 
-  if (streetEasyUrl == null) {
-    res.status(400).json({ error: "streetEasyUrl is required." });
+  if (streetEasyUrl == null && explicitStreetEasySaleId == null) {
+    res.status(400).json({ error: "streetEasyUrl or streetEasySaleId is required." });
     return;
   }
   if (streetEasyUrl === "invalid") {
@@ -745,10 +754,57 @@ router.post("/properties/manual-add", async (req: Request, res: Response) => {
   let createdProperty = false;
   let createdListing = false;
   let manualSourceLinks: PropertyManualSourceLinks | null = null;
+  let saleDetailsFetch: {
+    method: "id" | "url";
+    saleId: string | null;
+    warning: string | null;
+  } = {
+    method: "url",
+    saleId: explicitStreetEasySaleId,
+    warning: null,
+  };
 
   try {
-    const raw = await fetchSaleDetailsByUrl(streetEasyUrl);
-    const normalized = normalizeStreetEasySaleDetails({ ...raw, _fetchUrl: streetEasyUrl }, 0);
+    const extractedSaleId =
+      explicitStreetEasySaleId ??
+      (typeof streetEasyUrl === "string" ? extractStreetEasySaleIdFromUrl(streetEasyUrl) : null);
+    const normalizedStreetEasyUrl =
+      typeof streetEasyUrl === "string"
+        ? normalizeStreeteasyUrl(streetEasyUrl)
+        : extractedSaleId
+          ? `https://streeteasy.com/sale/${extractedSaleId}`
+          : "";
+    let raw: Record<string, unknown>;
+    if (extractedSaleId) {
+      try {
+        raw = await fetchSaleDetailsById(extractedSaleId);
+        saleDetailsFetch = { method: "id", saleId: extractedSaleId, warning: null };
+      } catch (error) {
+        if (!streetEasyUrl) throw error;
+        raw = await fetchSaleDetailsByUrl(streetEasyUrl);
+        saleDetailsFetch = {
+          method: "url",
+          saleId: extractedSaleId,
+          warning: `Sale ID lookup failed; used URL lookup instead: ${error instanceof Error ? error.message : String(error)}`,
+        };
+      }
+    } else {
+      if (!streetEasyUrl) {
+        res.status(400).json({ error: "StreetEasy URL is required when no sale ID is available." });
+        return;
+      }
+      raw = await fetchSaleDetailsByUrl(streetEasyUrl);
+      saleDetailsFetch = { method: "url", saleId: null, warning: null };
+    }
+    const normalized = normalizeStreetEasySaleDetails(
+      {
+        ...raw,
+        id: raw.id ?? raw.listing_id ?? extractedSaleId ?? undefined,
+        _fetchUrl: normalizedStreetEasyUrl || streetEasyUrl || undefined,
+        _saleDetailsFetch: saleDetailsFetch,
+      },
+      0
+    );
     const addressLine = normalizeAddressLineForDisplay(normalized.address?.trim() ?? "");
     canonicalAddress = [addressLine, normalized.city, normalized.state, normalized.zip].filter(Boolean).join(", ");
     if (!canonicalAddress || addressLine === "—") {
@@ -802,8 +858,9 @@ router.post("/properties/manual-add", async (req: Request, res: Response) => {
         rawPayloadPath: "inline",
         metadata: {
           manualAdd: true,
+          saleDetailsFetch,
           capturedAt: new Date().toISOString(),
-          rawPayload: { ...raw, _fetchUrl: streetEasyUrl },
+          rawPayload: { ...raw, _fetchUrl: normalizedStreetEasyUrl || streetEasyUrl, _saleDetailsFetch: saleDetailsFetch },
           agentEnrichment: normalized.agentEnrichment ?? null,
           priceHistory: normalized.priceHistory ?? null,
           rentalPriceHistory: normalized.rentalPriceHistory ?? null,
@@ -824,7 +881,7 @@ router.post("/properties/manual-add", async (req: Request, res: Response) => {
       propertyId = property.id;
       listingId = listingUpsert.listing.id;
       manualSourceLinks = mergeManualSourceLinks(existingProperty?.details ?? property.details, {
-        streetEasyUrl,
+        streetEasyUrl: normalizedStreetEasyUrl || streetEasyUrl || null,
         omUrl: omUrl ?? null,
         addedAt: new Date().toISOString(),
       });
@@ -879,7 +936,7 @@ router.post("/properties/manual-add", async (req: Request, res: Response) => {
         omImport.resolvedOmUrl = downloaded.resolvedUrl;
         omImport.fileName = inserted.filename;
         manualSourceLinks = mergeManualSourceLinks((await propertyRepo.byId(propertyId))?.details ?? null, {
-          streetEasyUrl,
+          streetEasyUrl: normalizedStreetEasyUrl || streetEasyUrl || null,
           omUrl: downloaded.resolvedUrl,
           omImportedAt: inserted.createdAt,
           omDocumentId: inserted.id,
@@ -914,6 +971,7 @@ router.post("/properties/manual-add", async (req: Request, res: Response) => {
       canonicalAddress,
       createdProperty,
       createdListing,
+      saleDetailsFetch,
       omImport,
       property,
     });
@@ -2644,7 +2702,7 @@ function buildInquiryDraft(input: {
 
 My name is Tyler Tsay, and I'm reaching out on behalf of a client regarding the property at ${addressLine} currently on the market. We are evaluating the building and would appreciate the opportunity to review further.
 
-Would you be able to share the OM, current rent roll, expenses, and/or any available financials?
+Would you be able to share the OM, T-12, current rent roll, expenses, and/or any available financials?
 
 Thanks in advance - looking forward to taking a look.
 

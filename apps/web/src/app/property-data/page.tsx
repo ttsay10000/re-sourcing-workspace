@@ -190,6 +190,11 @@ interface ManualAddResponse {
   canonicalAddress: string;
   createdProperty: boolean;
   createdListing: boolean;
+  saleDetailsFetch?: {
+    method?: "id" | "url";
+    saleId?: string | null;
+    warning?: string | null;
+  } | null;
   omImport?: {
     requested?: boolean;
     imported?: boolean;
@@ -426,7 +431,7 @@ function PropertyDataContent() {
   const [loadingDup, setLoadingDup] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [manualAddModalOpen, setManualAddModalOpen] = useState(false);
-  const [manualAddDraft, setManualAddDraft] = useState({ streetEasyUrl: "", omUrl: "" });
+  const [manualAddDraft, setManualAddDraft] = useState({ streetEasyInput: "", omUrl: "" });
   const [manualAddSubmitting, setManualAddSubmitting] = useState(false);
   const [manualAddError, setManualAddError] = useState<string | null>(null);
   const [manualAddNotice, setManualAddNotice] = useState<DossierNotice | null>(null);
@@ -1204,10 +1209,17 @@ function PropertyDataContent() {
   };
 
   const handleManualAddProperty = async () => {
-    const streetEasyUrl = manualAddDraft.streetEasyUrl.trim();
+    const streetEasyInputs = manualAddDraft.streetEasyInput
+      .split(/[\n,]+/)
+      .map((value) => value.trim())
+      .filter(Boolean);
     const omUrl = manualAddDraft.omUrl.trim();
-    if (!streetEasyUrl) {
-      setManualAddError("StreetEasy URL is required.");
+    if (streetEasyInputs.length === 0) {
+      setManualAddError("At least one StreetEasy URL or sale ID is required.");
+      return;
+    }
+    if (streetEasyInputs.length > 1 && omUrl) {
+      setManualAddError("OM URL can only be used when adding one StreetEasy listing at a time.");
       return;
     }
 
@@ -1215,36 +1227,66 @@ function PropertyDataContent() {
     setManualAddError(null);
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/api/properties/manual-add`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          streetEasyUrl,
-          omUrl: omUrl || null,
-        }),
-      });
-      const data = await res.json().catch(() => ({}));
-      const message =
-        typeof data?.details === "string"
-          ? data.details
-          : typeof data?.error === "string"
-            ? data.error
-            : `Request failed (${res.status})`;
-      if (!res.ok || data?.error) throw new Error(message);
+      const results: ManualAddResponse[] = [];
+      const failures: string[] = [];
+      for (const streetEasyInput of streetEasyInputs) {
+        const isSaleId = /^\d+$/.test(streetEasyInput);
+        const res = await fetch(`${API_BASE}/api/properties/manual-add`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            streetEasyUrl: isSaleId ? null : streetEasyInput,
+            streetEasySaleId: isSaleId ? streetEasyInput : null,
+            omUrl: omUrl || null,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        const message =
+          typeof data?.details === "string"
+            ? data.details
+            : typeof data?.error === "string"
+              ? data.error
+              : `Request failed (${res.status})`;
+        if (!res.ok || data?.error) {
+          failures.push(`${streetEasyInput}: ${message}`);
+          continue;
+        }
+        results.push(data as ManualAddResponse);
+      }
 
-      const payload = data as ManualAddResponse;
-      const omWarning = payload.omImport?.warning?.trim() || "";
+      if (results.length === 0) {
+        throw new Error(failures[0] ?? "Failed to add StreetEasy listings.");
+      }
+
+      const payload = results[results.length - 1]!;
+      const singleOmWarning = results.length === 1 ? payload.omImport?.warning?.trim() || "" : "";
       const omMessage =
-        payload.omImport?.imported && payload.omImport?.fileName
+        results.length === 1 && payload.omImport?.imported && payload.omImport?.fileName
           ? ` OM saved as ${payload.omImport.fileName}.`
-          : payload.omImport?.requested && omWarning
-            ? ` StreetEasy import succeeded, but OM import needs attention: ${omWarning}`
+          : results.length === 1 && payload.omImport?.requested && singleOmWarning
+            ? ` StreetEasy import succeeded, but OM import needs attention: ${singleOmWarning}`
             : "";
+      const idFetchCount = results.filter((result) => result.saleDetailsFetch?.method === "id").length;
+      const fallbackWarnings = results
+        .map((result) => result.saleDetailsFetch?.warning?.trim())
+        .filter((warning): warning is string => Boolean(warning));
+      const batchMessage =
+        results.length === 1
+          ? `Added ${payload.canonicalAddress}.`
+          : `Added ${results.length} StreetEasy listings${idFetchCount > 0 ? ` (${idFetchCount} via sale ID lookup)` : ""}.`;
+      const failureMessage =
+        failures.length > 0
+          ? ` ${failures.length} failed: ${failures.slice(0, 2).join(" | ")}${failures.length > 2 ? " ..." : ""}`
+          : "";
+      const warningMessage =
+        fallbackWarnings.length > 0
+          ? ` ${fallbackWarnings.length} used URL fallback after ID lookup failed.`
+          : "";
       setManualAddNotice({
-        type: payload.omImport?.requested && !payload.omImport?.imported && omWarning ? "error" : "success",
-        message: `Added ${payload.canonicalAddress}.${omMessage}`.trim(),
+        type: failures.length > 0 || (payload.omImport?.requested && !payload.omImport?.imported && singleOmWarning) ? "error" : "success",
+        message: `${batchMessage}${omMessage}${warningMessage}${failureMessage}`.trim(),
       });
-      setManualAddDraft({ streetEasyUrl: "", omUrl: "" });
+      setManualAddDraft({ streetEasyInput: "", omUrl: "" });
       setManualAddModalOpen(false);
       setActiveTab("canonical");
       setExpandedCanonicalId(payload.propertyId);
@@ -2173,10 +2215,10 @@ function PropertyDataContent() {
         >
           <div className="card" style={{ width: "100%", maxWidth: "620px" }}>
             <h2 id="manual-add-title" style={{ margin: 0, marginBottom: "0.75rem", fontSize: "1.15rem" }}>
-              Manual add property
+              Add missed StreetEasy listings
             </h2>
             <p style={{ marginTop: 0, marginBottom: "1rem", color: "#475569", fontSize: "0.92rem", lineHeight: 1.5 }}>
-              Paste a StreetEasy sale URL to create or update the raw listing and canonical property. Add a direct OM document link too and we’ll save it into Documents automatically when it resolves to a downloadable file.
+              Paste StreetEasy sale URLs or numeric sale IDs that were missed by saved search. Numeric IDs and /sale/ URLs use RapidAPI sale-details-by-ID; other StreetEasy URLs fall back to the URL lookup.
             </p>
             <form
               onSubmit={(e) => {
@@ -2186,17 +2228,17 @@ function PropertyDataContent() {
             >
               <label style={{ display: "block", marginBottom: "0.85rem" }}>
                 <span style={{ display: "block", marginBottom: "0.35rem", fontSize: "0.82rem", fontWeight: 600, color: "#0f172a" }}>
-                  StreetEasy URL
+                  StreetEasy URLs or sale IDs
                 </span>
-                <input
-                  type="url"
+                <textarea
                   required
                   autoFocus
                   className="input-text"
-                  placeholder="https://streeteasy.com/sale/..."
-                  value={manualAddDraft.streetEasyUrl}
-                  onChange={(e) => setManualAddDraft((prev) => ({ ...prev, streetEasyUrl: e.target.value }))}
-                  style={{ width: "100%" }}
+                  placeholder={"https://streeteasy.com/sale/1733085\n1733085"}
+                  value={manualAddDraft.streetEasyInput}
+                  onChange={(e) => setManualAddDraft((prev) => ({ ...prev, streetEasyInput: e.target.value }))}
+                  rows={5}
+                  style={{ width: "100%", resize: "vertical" }}
                 />
               </label>
               <label style={{ display: "block", marginBottom: "0.35rem" }}>
@@ -2213,7 +2255,7 @@ function PropertyDataContent() {
                 />
               </label>
               <p style={{ margin: "0 0 1rem", fontSize: "0.8rem", color: "#64748b", lineHeight: 1.5 }}>
-                The OM link works best when it points directly to a PDF or downloadable file rather than an HTML landing page.
+                The OM link works best when it points directly to a PDF or downloadable file, and can only be included with one StreetEasy listing at a time.
               </p>
               {manualAddError && (
                 <p style={{ margin: "0 0 1rem", color: "#b91c1c", fontSize: "0.85rem" }}>
@@ -2236,9 +2278,9 @@ function PropertyDataContent() {
                 <button
                   type="submit"
                   className="btn-primary"
-                  disabled={Boolean(manualAddSubmitting || !manualAddDraft.streetEasyUrl.trim())}
+                  disabled={Boolean(manualAddSubmitting || !manualAddDraft.streetEasyInput.trim())}
                 >
-                  {manualAddSubmitting ? "Adding…" : "Add property"}
+                  {manualAddSubmitting ? "Adding…" : "Run ingestion"}
                 </button>
               </div>
             </form>

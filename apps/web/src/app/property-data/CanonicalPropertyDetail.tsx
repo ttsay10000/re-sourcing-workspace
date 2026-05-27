@@ -15,7 +15,7 @@ import {
   getPropertyDossierGeneration,
   type LocalDossierJobState,
 } from "./dossierState";
-import { buildInquiryDraft } from "./inquiryDraft";
+import { buildInquiryDraft, updateInquiryDraftTourRequest } from "./inquiryDraft";
 import { formatSourcingUpdateChange, getSourcingUpdate, getSourcingUpdateMeta } from "./sourcingUpdate";
 import {
   OmCalculationPanel,
@@ -452,6 +452,20 @@ function formatDateOnly(value: string | null | undefined): string {
   return d.toISOString().slice(0, 10);
 }
 
+function formatTourDateTime(value: string): string | null {
+  if (!value.trim()) return null;
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleString(undefined, {
+    weekday: "long",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
 function daysOnMarket(listedAt: string | null | undefined): number | null {
   if (!listedAt) return null;
   const d = new Date(listedAt);
@@ -653,6 +667,8 @@ export function CanonicalPropertyDetail({
   const [deletingDocId, setDeletingDocId] = useState<string | null>(null);
   const [inquiryEmailModalOpen, setInquiryEmailModalOpen] = useState(false);
   const [inquiryDraft, setInquiryDraft] = useState<{ to: string; subject: string; body: string }>({ to: "", subject: "", body: "" });
+  const [includeTourRequest, setIncludeTourRequest] = useState(false);
+  const [tourDateTime, setTourDateTime] = useState("");
   const [inquirySending, setInquirySending] = useState(false);
   const [inquirySendError, setInquirySendError] = useState<string | null>(null);
   const [inquirySendSuccess, setInquirySendSuccess] = useState<string | null>(null);
@@ -947,6 +963,15 @@ export function CanonicalPropertyDetail({
       });
     return () => { cancelled = true; };
   }, [property.id, inquiryEmailModalOpen, manualInquiryModalOpen, inquiryDraft.to, manualInquiryDraft.to]);
+
+  useEffect(() => {
+    if (!inquiryEmailModalOpen) return;
+    const label = includeTourRequest ? formatTourDateTime(tourDateTime) : null;
+    setInquiryDraft((prev) => ({
+      ...prev,
+      body: updateInquiryDraftTourRequest(prev.body, label),
+    }));
+  }, [includeTourRequest, inquiryEmailModalOpen, tourDateTime]);
 
   const saveScoreOverride = async () => {
     setScoreOverrideError(null);
@@ -1810,6 +1835,8 @@ export function CanonicalPropertyDetail({
     (inquiryGuard?.sameRecipientOtherProperties.length ?? 0) > 0 ||
     (inquiryGuard?.sameBrokerTeamOtherProperties.length ?? 0) > 0
   );
+  const tourDateTimeLabel = formatTourDateTime(tourDateTime);
+  const tourRequestNeedsDateTime = includeTourRequest && !tourDateTimeLabel;
   const extra = listingForDisplay?.extra as Record<string, unknown> | undefined;
   const listingActivity = listingForDisplay
     ? (listingForDisplay.lastActivity ?? deriveListingActivitySummary({
@@ -1907,6 +1934,8 @@ export function CanonicalPropertyDetail({
       recipientName: preferredInquiryRecipient.name,
       to: preferredInquiryRecipient.email,
     }));
+    setIncludeTourRequest(false);
+    setTourDateTime("");
     setInquirySendError(null);
     setInquiryGuard(null);
     setSendAnotherConfirm(false);
@@ -2898,6 +2927,8 @@ export function CanonicalPropertyDetail({
                     recipientName: preferredInquiryRecipient.name,
                     to: preferredInquiryRecipient.email,
                   }));
+                  setIncludeTourRequest(false);
+                  setTourDateTime("");
                   setInquirySendError(null);
                   setInquiryGuard(null);
                   setSendAnotherConfirm(false);
@@ -3008,6 +3039,42 @@ export function CanonicalPropertyDetail({
                     style={{ width: "100%", padding: "0.4rem", fontSize: "0.875rem", border: "1px solid #ccc", borderRadius: "4px" }}
                   />
                 </div>
+                <div
+                  style={{
+                    marginBottom: "0.75rem",
+                    padding: "0.65rem 0.7rem",
+                    border: "1px solid #dbeafe",
+                    borderRadius: "6px",
+                    background: "#eff6ff",
+                  }}
+                >
+                  <label style={{ display: "flex", alignItems: "center", gap: "0.45rem", fontSize: "0.82rem", fontWeight: 600, color: "#1e3a8a", cursor: "pointer" }}>
+                    <input
+                      type="checkbox"
+                      checked={includeTourRequest}
+                      onChange={(e) => setIncludeTourRequest(e.target.checked)}
+                    />
+                    Also ask for a tour if available
+                  </label>
+                  {includeTourRequest && (
+                    <div style={{ marginTop: "0.55rem" }}>
+                      <label style={{ display: "block", fontSize: "0.72rem", marginBottom: "0.25rem", color: "#1e40af" }}>Preferred tour date and time</label>
+                      <input
+                        type="datetime-local"
+                        value={tourDateTime}
+                        onChange={(e) => setTourDateTime(e.target.value)}
+                        style={{ width: "100%", maxWidth: "18rem", padding: "0.4rem", fontSize: "0.875rem", border: "1px solid #93c5fd", borderRadius: "4px" }}
+                      />
+                      <p style={{ margin: "0.35rem 0 0", color: tourRequestNeedsDateTime ? "#b91c1c" : "#1e40af", fontSize: "0.74rem", lineHeight: 1.4 }}>
+                        {tourRequestNeedsDateTime
+                          ? "Choose a date and time to add the tour request to the draft."
+                          : tourDateTimeLabel
+                            ? `Draft includes a polite tour request for ${tourDateTimeLabel}.`
+                            : "The draft will update when you choose a date and time."}
+                      </p>
+                    </div>
+                  )}
+                </div>
                 <div style={{ marginBottom: "1rem" }}>
                   <label style={{ display: "block", fontSize: "0.75rem", marginBottom: "0.25rem", color: "#555" }}>Body (editable)</label>
                   <textarea
@@ -3033,7 +3100,7 @@ export function CanonicalPropertyDetail({
                   <button type="button" onClick={() => { setInquiryEmailModalOpen(false); setInquirySendError(null); }} style={{ padding: "0.4rem 0.75rem", border: "1px solid #ccc", borderRadius: "4px", background: "#fff", cursor: "pointer" }}>Cancel</button>
                   <button
                     type="button"
-                    disabled={Boolean(inquirySending || !inquiryDraft.to?.trim() || (inquiryNeedsOverride && !sendAnotherConfirm))}
+                    disabled={Boolean(inquirySending || !inquiryDraft.to?.trim() || tourRequestNeedsDateTime || (inquiryNeedsOverride && !sendAnotherConfirm))}
                     onClick={async () => {
                       setInquirySendError(null);
                       setInquirySending(true);

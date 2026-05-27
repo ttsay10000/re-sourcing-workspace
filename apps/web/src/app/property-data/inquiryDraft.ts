@@ -14,7 +14,7 @@ export function buildInquiryDraft(input: {
 
 My name is Tyler Tsay, and I'm reaching out on behalf of a client regarding the property at ${addressLine} currently on the market. We are evaluating the building and would appreciate the opportunity to review further.
 
-Would you be able to share the OM, current rent roll, expenses, and/or any available financials?
+Would you be able to share the OM, T-12, current rent roll, expenses, and/or any available financials?
 
 Thanks in advance - looking forward to taking a look.
 
@@ -23,4 +23,22 @@ Tyler Tsay
 617 306 3336
 tyler@stayhaus.co`,
   };
+}
+
+const TOUR_REQUEST_PATTERN =
+  /\n\nIf you have availability, would it be possible to tour the property on [\s\S]*? if another nearby time is easier\./;
+
+export function buildTourRequestParagraph(tourDateTimeLabel: string): string {
+  return `If you have availability, would it be possible to tour the property on ${tourDateTimeLabel}? Happy to work around your schedule if another nearby time is easier.`;
+}
+
+export function updateInquiryDraftTourRequest(body: string, tourDateTimeLabel: string | null): string {
+  const cleaned = body.replace(TOUR_REQUEST_PATTERN, "");
+  if (!tourDateTimeLabel) return cleaned;
+  const paragraph = buildTourRequestParagraph(tourDateTimeLabel);
+  const documentRequest = "Would you be able to share the OM, T-12, current rent roll, expenses, and/or any available financials?";
+  if (cleaned.includes(documentRequest)) {
+    return cleaned.replace(documentRequest, `${documentRequest}\n\n${paragraph}`);
+  }
+  return `${cleaned.trimEnd()}\n\n${paragraph}`;
 }

@@ -941,7 +941,6 @@ export async function runGenerateDossier(
       fileContent: excelBuffer,
     });
 
-    await deleteSupersededGeneratedDocuments([dossierDoc.id, excelDoc.id]);
     console.info("[runGenerateDossier] Persisted dossier outputs", {
       propertyId,
       durationMs: Date.now() - saveStartedAtMs,
@@ -986,6 +985,13 @@ export async function runGenerateDossier(
       dealScore: finalScore,
       dossierDocumentId: dossierDoc.id,
       excelDocumentId: excelDoc.id,
+    });
+    await deleteSupersededGeneratedDocuments([dossierDoc.id, excelDoc.id]).catch((cleanupError) => {
+      console.warn("[runGenerateDossier] Superseded generated document cleanup failed", {
+        propertyId,
+        retainedDocumentIds: [dossierDoc.id, excelDoc.id],
+        error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+      });
     });
     console.info("[runGenerateDossier] Completed", {
       propertyId,

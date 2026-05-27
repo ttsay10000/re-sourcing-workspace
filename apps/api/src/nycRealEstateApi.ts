@@ -15,6 +15,7 @@ import type { ListingNormalized } from "@re-sourcing/contracts";
 
 const SALES_SEARCH_URL = "https://nyc-real-estate-api.p.rapidapi.com/sales/search";
 const SALES_URL_ENDPOINT = "https://nyc-real-estate-api.p.rapidapi.com/sales/url";
+const SALES_ID_ENDPOINT_BASE = "https://nyc-real-estate-api.p.rapidapi.com/sales";
 const HOST = "nyc-real-estate-api.p.rapidapi.com";
 
 /**
@@ -241,13 +242,29 @@ function unwrapSaleDetailsResponse(data: unknown): Record<string, unknown> {
  * Normalize StreetEasy URL so RapidAPI returns 200 (API may 302 when URL has long query string).
  * Keeps path (e.g. /sale/1686201) and drops UTM/other query params.
  */
-function normalizeStreeteasyUrl(url: string): string {
+export function normalizeStreeteasyUrl(url: string): string {
   try {
     const u = new URL(url.trim());
     if (u.hostname !== "streeteasy.com" && !u.hostname.endsWith(".streeteasy.com")) return url;
     return `${u.origin}${u.pathname}`;
   } catch {
     return url;
+  }
+}
+
+export function extractStreetEasySaleIdFromUrl(url: string): string | null {
+  try {
+    const parsed = new URL(url.trim());
+    if (parsed.hostname !== "streeteasy.com" && !parsed.hostname.endsWith(".streeteasy.com")) return null;
+    const salePathMatch = parsed.pathname.match(/\/sale\/(\d+)(?:\/|$)/i);
+    if (salePathMatch?.[1]) return salePathMatch[1];
+    for (const key of ["listing_id", "listingId", "sale_id", "saleId", "id"]) {
+      const value = parsed.searchParams.get(key);
+      if (value && /^\d+$/.test(value.trim())) return value.trim();
+    }
+    return null;
+  } catch {
+    return null;
   }
 }
 
@@ -258,6 +275,24 @@ export async function fetchSaleDetailsByUrl(streeteasyUrl: string): Promise<Reco
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`NYC Real Estate API sale details error ${res.status}: ${text || res.statusText}`);
+  }
+  const data = (await res.json()) as unknown;
+  return unwrapSaleDetailsResponse(data);
+}
+
+export async function fetchSaleDetailsById(saleId: string | number): Promise<Record<string, unknown>> {
+  const id = String(saleId).trim();
+  if (!/^\d+$/.test(id)) throw new Error("StreetEasy sale ID must be numeric.");
+  const res = await fetch(`${SALES_ID_ENDPOINT_BASE}/${encodeURIComponent(id)}`, {
+    headers: {
+      ...headers(),
+      "Content-Type": "application/json",
+    },
+    redirect: "follow",
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`NYC Real Estate API sale details by ID error ${res.status}: ${text || res.statusText}`);
   }
   const data = (await res.json()) as unknown;
   return unwrapSaleDetailsResponse(data);
