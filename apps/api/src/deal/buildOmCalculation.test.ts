@@ -97,6 +97,7 @@ describe("buildOmCalculationSnapshotFromInputs", () => {
       extractedCurrentFinancials: baseCurrentFinancials,
       currentFinancials: baseCurrentFinancials,
       currentNoiOverridden: false,
+      buildingSqftOverride: null,
       resolvedExpenseTotal: 40_000,
       projection: {
         assumptions,
@@ -316,6 +317,7 @@ describe("buildOmCalculationSnapshotFromInputs", () => {
           noi: 65_000,
         },
         currentNoiOverridden: true,
+        buildingSqftOverride: null,
         resolvedExpenseTotal: 40_000,
         projection: {
           assumptions,

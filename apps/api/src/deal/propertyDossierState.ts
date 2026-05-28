@@ -10,6 +10,7 @@ import type {
 import type { DossierAssumptionOverrides } from "./underwritingModel.js";
 
 const DOSSIER_ASSUMPTION_NUMERIC_KEYS = [
+  "buildingSqft",
   "purchasePrice",
   "purchaseClosingCostPct",
   "renovationCosts",

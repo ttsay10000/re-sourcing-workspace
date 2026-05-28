@@ -128,6 +128,11 @@ function shareLabel(value: number | null, total: number | null): string | null {
   return `${((value / total) * 100).toFixed(0)}% of total capitalization`;
 }
 
+function resolveManualBuildingSqft(details: PropertyDetails | null): number | null {
+  const sqft = toFiniteNumber(details?.dealDossier?.assumptions?.buildingSqft);
+  return sqft != null && sqft > 0 ? sqft : null;
+}
+
 function resolveBuildingSqft(
   details: PropertyDetails | null,
   listing: Pick<ListingRow, "sqft" | "extra"> | null | undefined
@@ -135,6 +140,7 @@ function resolveBuildingSqft(
   const propertyInfo = resolvePreferredOmPropertyInfo(details);
   const extra = asRecord(listing?.extra);
   return firstNumber(
+    resolveManualBuildingSqft(details),
     propertyInfo?.buildingSqft,
     propertyInfo?.buildingSquareFeet,
     propertyInfo?.grossSqft,
@@ -165,7 +171,7 @@ function resolveCommercialUnits(details: PropertyDetails | null, ctx: Underwriti
 function resolveAssetSummary(
   details: PropertyDetails | null,
   ctx: UnderwritingContext,
-  listing: Pick<ListingRow, "title" | "sqft" | "extra"> | null | undefined
+  listing: Pick<ListingRow, "title" | "price" | "sqft" | "extra"> | null | undefined
 ): string {
   const propertyInfo = resolvePreferredOmPropertyInfo(details);
   const totalUnits = resolveTotalUnits(details, ctx);
@@ -187,6 +193,10 @@ function resolveAssetSummary(
     totalUnits != null ? `${numberLabel(totalUnits)} units` : null,
     commercialUnits > 0 ? `${numberLabel(commercialUnits)} commercial` : null,
     buildingSqft != null ? `${numberLabel(buildingSqft)} SF` : null,
+    listing?.price != null ? `Ask ${moneyLabel(listing.price)}` : null,
+    listing?.price != null && buildingSqft != null && buildingSqft > 0
+      ? `${moneyLabel(listing.price / buildingSqft)} PSF`
+      : null,
   ]);
   return parts.length > 0 ? `${typeLabel} | ${parts.join(" | ")}` : typeLabel;
 }
@@ -290,18 +300,92 @@ function buildHighlights(ctx: UnderwritingContext, details: PropertyDetails | nu
   return highlights.slice(0, 4);
 }
 
-function buildRisks(ctx: UnderwritingContext, scoringResult: DealScoringResult | null | undefined): string[] {
+function enrichmentSummary(
+  details: PropertyDetails | null,
+  snakeKey: string,
+  camelKey: string
+): Record<string, unknown> | null {
+  const enrichment = asRecord(details?.enrichment);
+  return asRecord(enrichment?.[snakeKey]) ?? asRecord(enrichment?.[camelKey]);
+}
+
+function buildRisks(
+  ctx: UnderwritingContext,
+  scoringResult: DealScoringResult | null | undefined,
+  details: PropertyDetails | null,
+  listing: Pick<ListingRow, "price" | "sqft" | "extra"> | null | undefined
+): string[] {
+  const dob = enrichmentSummary(details, "dob_complaints_summary", "dobComplaintsSummary");
+  const hpd = enrichmentSummary(details, "hpd_violations_summary", "hpdViolationsSummary");
+  const litigation = enrichmentSummary(details, "housing_litigations_summary", "housingLitigationsSummary");
+  const rentUplift = ctx.assumptions.operating.blendedRentUpliftPct ?? ctx.assumptions.operating.rentUpliftPct;
+  const vacancy = ctx.assumptions.operating.vacancyPct;
+  const rentStabilizedUnits = ctx.propertyMix?.rentStabilizedUnits ?? null;
+  const purchasePsf = resolvePricePsf(ctx, details, listing);
+  const listedPsf =
+    listing?.price != null
+      ? (() => {
+          const sqft = resolveBuildingSqft(details, listing);
+          return sqft != null && sqft > 0 ? listing.price / sqft : null;
+        })()
+      : null;
+  const neighborhoodMedianPsf = toFiniteNumber(details?.neighborhood?.metrics?.medianPricePsf);
+  const pricePsfPremiumPct =
+    purchasePsf != null && neighborhoodMedianPsf != null && neighborhoodMedianPsf > 0
+      ? ((purchasePsf - neighborhoodMedianPsf) / neighborhoodMedianPsf) * 100
+      : null;
+  const listedPsfPremiumPct =
+    listedPsf != null && neighborhoodMedianPsf != null && neighborhoodMedianPsf > 0
+      ? ((listedPsf - neighborhoodMedianPsf) / neighborhoodMedianPsf) * 100
+      : null;
+  const negotiatedDiscountPct =
+    listing?.price != null &&
+    ctx.assumptions.acquisition.purchasePrice != null &&
+    listing.price > 0 &&
+    Math.abs(listing.price - ctx.assumptions.acquisition.purchasePrice) > 1
+      ? ((listing.price - ctx.assumptions.acquisition.purchasePrice) / listing.price) * 100
+      : null;
   return uniqueLimited(
     [
       ...(scoringResult?.capReasons ?? []),
       ...(scoringResult?.negativeSignals ?? []),
       ...(ctx.financialFlags ?? []).filter((flag) => /missing|verify|risk|incomplete|mismatch|stabilized|commercial|rent-stabilized/i.test(flag)),
+      rentUplift != null && rentUplift >= 50
+        ? `High blended rent uplift (${pctLabel(rentUplift)}) needs rent-comp and vacancy diligence before relying on the upside case.`
+        : null,
+      vacancy != null && vacancy >= 10
+        ? `Vacancy / lease-up cushion is material at ${pctLabel(vacancy)}; verify achievable gross rents and downtime.`
+        : null,
+      rentStabilizedUnits != null && rentStabilizedUnits > 0
+        ? `${numberLabel(rentStabilizedUnits)} rent-stabilized / controlled unit(s) may limit rent uplift.`
+        : null,
+      toFiniteNumber(dob?.openCount) != null && (toFiniteNumber(dob?.openCount) ?? 0) > 0
+        ? `${numberLabel(toFiniteNumber(dob?.openCount))} open DOB complaint(s) require diligence.`
+        : null,
+      toFiniteNumber(hpd?.openCount) != null && (toFiniteNumber(hpd?.openCount) ?? 0) > 0
+        ? `${numberLabel(toFiniteNumber(hpd?.openCount))} open HPD violation(s) require diligence.`
+        : null,
+      toFiniteNumber(hpd?.rentImpairingOpen) != null && (toFiniteNumber(hpd?.rentImpairingOpen) ?? 0) > 0
+        ? `${numberLabel(toFiniteNumber(hpd?.rentImpairingOpen))} rent-impairing HPD violation(s) are open.`
+        : null,
+      toFiniteNumber(litigation?.openCount) != null && (toFiniteNumber(litigation?.openCount) ?? 0) > 0
+        ? `${numberLabel(toFiniteNumber(litigation?.openCount))} open housing litigation case(s) require diligence.`
+        : null,
+      pricePsfPremiumPct != null && pricePsfPremiumPct >= 20
+        ? `Modeled purchase PSF is ${pctLabel(pricePsfPremiumPct)} above neighborhood median; verify building SF and comp set.`
+        : null,
+      listedPsfPremiumPct != null && listedPsfPremiumPct >= 20
+        ? `Listed PSF is ${pctLabel(listedPsfPremiumPct)} above neighborhood median; negotiate against verified gross SF.`
+        : null,
+      negotiatedDiscountPct != null && negotiatedDiscountPct < 5
+        ? `Modeled purchase price is only ${pctLabel(Math.max(0, negotiatedDiscountPct))} below list; price discipline is thin.`
+        : null,
       ctx.conditionReview?.renovationScope ? `Condition scope: ${ctx.conditionReview.renovationScope}` : null,
       ctx.conditionReview?.coverageMissing?.length
         ? `Photos do not cover: ${ctx.conditionReview.coverageMissing.join(", ")}`
         : null,
     ],
-    6
+    8
   );
 }
 
@@ -358,26 +442,36 @@ function buildReturnScenarios(ctx: UnderwritingContext): DossierTeaserScenario[]
 function buildProvenance(
   ctx: UnderwritingContext,
   details: PropertyDetails | null,
-  listing: Pick<ListingRow, "imageUrls"> | null | undefined,
+  listing: Pick<ListingRow, "imageUrls" | "sqft" | "extra"> | null | undefined,
   scoringResult: DealScoringResult | null | undefined
 ): string[] {
   const neighborhood = details?.neighborhood;
+  const manualBuildingSqft = resolveManualBuildingSqft(details);
+  const buildingSqft = resolveBuildingSqft(details, listing);
+  const sqftSource =
+    manualBuildingSqft != null
+      ? `Building SF uses the saved manual underwriting override (${numberLabel(manualBuildingSqft)} SF).`
+      : buildingSqft != null
+        ? "Building SF uses OM/enrichment/listing fallback data; verify if PSF drives the decision."
+        : "Building SF was unavailable, so PSF metrics are omitted until a manual override or source value is added.";
   return uniqueLimited(
     [
       ctx.currentGrossRent != null || ctx.currentNoi != null
         ? "Current rent, expenses, and NOI are assembled from the authoritative OM snapshot or saved broker notes."
         : "Current financials are incomplete; teaser metrics reflect the available underwriting model only.",
+      sqftSource,
       Array.isArray(listing?.imageUrls) && listing.imageUrls.length > 0
         ? "Hero image uses the primary listing photo URL."
         : "No listing photo was available; the teaser renders with a neutral title panel.",
       ctx.yearlyCashFlow ? "Projected returns and capital stack are sourced from the detailed underwriting model." : null,
+      "Risks read DOB complaints, HPD violations, housing litigation, rent-roll protection flags, and saved underwriting inputs when present.",
       neighborhood?.metrics
         ? `Neighborhood metrics read from property details${firstString(neighborhood.metrics.sourceAsOf) ? `, source as of ${firstString(neighborhood.metrics.sourceAsOf)}` : ""}.`
         : null,
       scoringResult ? `Deal score uses ${scoringResult.scoringProfileLabel} (${scoringResult.scoreVersion}).` : null,
       riskProfileLine(scoringResult?.riskProfile),
     ],
-    6
+    7
   );
 }
 
@@ -453,7 +547,7 @@ export function buildDossierTeaserData(params: {
       { label: "Stabilized gross rent", value: moneyLabel(ctx.operating.adjustedGrossRent), sublabel: ctx.rentBreakdown?.freeMarketResidentialLift != null ? `${moneyLabel(ctx.rentBreakdown.freeMarketResidentialLift)} free-market lift` : null },
       { label: "Neighborhood median PSF", value: moneyLabel(toFiniteNumber(neighborhoodMetrics?.medianPricePsf)), sublabel: firstString(neighborhoodMetrics?.sourceAsOf) },
     ],
-    risks: buildRisks(ctx, scoringResult),
+    risks: buildRisks(ctx, scoringResult, details, listing),
     provenance: buildProvenance(ctx, details, listing, scoringResult),
     sponsor: {
       name: params.sponsor?.name?.trim() || null,

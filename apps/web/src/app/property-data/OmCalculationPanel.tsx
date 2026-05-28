@@ -9,6 +9,7 @@ import type {
 import React from "react";
 
 export const OM_CALC_NUMERIC_FIELDS = [
+  "buildingSqft",
   "purchasePrice",
   "purchaseClosingCostPct",
   "renovationCosts",
@@ -71,6 +72,7 @@ export interface OmCalculationExpenseModelRow extends PropertyDealDossierExpense
 }
 
 export interface OmCalculationDraft {
+  buildingSqft: number | null;
   purchasePrice: number | null;
   purchaseClosingCostPct: number | null;
   renovationCosts: number | null;
@@ -349,6 +351,12 @@ type FieldConfig = {
 };
 
 const FIELD_GROUPS: Array<{ title: string; fields: FieldConfig[] }> = [
+  {
+    title: "Property",
+    fields: [
+      { key: "buildingSqft", label: "Manual building SF", step: 100, suffix: "SF" },
+    ],
+  },
   {
     title: "Acquisition",
     fields: [
@@ -2954,6 +2962,7 @@ export function OmCalculationPanel({
                           calculation.acquisitionMetadata.targetAcquisitionDate ?? draft.targetAcquisitionDate
                         )
                       )}
+                      {summaryRow("Building SF", calculation.propertyInfo.sizeSqft != null ? `${formatNumber(calculation.propertyInfo.sizeSqft)} SF` : "—")}
                       {summaryRow("Modeled purchase price", formatCurrency(calculation.assumptions.purchasePrice))}
                       {summaryRow("Closing costs", formatPercent(calculation.assumptions.purchaseClosingCostPct))}
                       {summaryRow("LTV / rate / amort.", financingTermsLabel)}

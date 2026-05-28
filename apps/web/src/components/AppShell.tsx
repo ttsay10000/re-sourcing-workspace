@@ -8,7 +8,6 @@ const NAV_LINKS = [
   { href: "/", label: "Home" },
   { href: "/runs", label: "Sourcing Agent" },
   { href: "/property-data", label: "Property Data" },
-  { href: "/om-review", label: "OM Review" },
   { href: "/deal-analysis", label: "Deal Analysis" },
   { href: "/sales-metrics", label: "Sales Metrics" },
   { href: "/profile", label: "Profile" },
@@ -190,7 +189,12 @@ export function AppShell({ children }: { children: ReactNode }) {
         <div className="app-header-title">Real Estate Sourcing Flow</div>
         <nav className="app-nav">
           {NAV_LINKS.map(({ href, label }) => {
-            const isActive = href === "/" ? pathname === "/" : pathname.startsWith(href);
+            const isActive =
+              href === "/"
+                ? pathname === "/"
+                : href === "/property-data"
+                  ? pathname.startsWith("/property-data") || pathname.startsWith("/om-review")
+                  : pathname.startsWith(href);
             return (
               <Link
                 key={href}

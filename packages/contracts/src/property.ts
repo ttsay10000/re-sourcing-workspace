@@ -447,6 +447,7 @@ export interface RentalFinancials {
 }
 
 export interface PropertyDealDossierAssumptions {
+  buildingSqft?: number | null;
   purchasePrice?: number | null;
   purchaseClosingCostPct?: number | null;
   renovationCosts?: number | null;

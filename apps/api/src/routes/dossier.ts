@@ -105,6 +105,7 @@ router.get("/dossier-assumptions", async (req: Request, res: Response) => {
           }
         );
         defaults = {
+          buildingSqft: propertyAssumptions?.buildingSqft ?? null,
           purchasePrice: assumptions.acquisition.purchasePrice,
           purchaseClosingCostPct: assumptions.acquisition.purchaseClosingCostPct,
           renovationCosts: assumptions.acquisition.renovationCosts,
@@ -159,6 +160,7 @@ router.get("/dossier-assumptions", async (req: Request, res: Response) => {
     if (!defaults) {
       const assumptions = resolveDossierAssumptions(profile, null);
       defaults = {
+        buildingSqft: null,
         purchasePrice: assumptions.acquisition.purchasePrice,
         purchaseClosingCostPct: assumptions.acquisition.purchaseClosingCostPct,
         renovationCosts: assumptions.acquisition.renovationCosts,
@@ -237,6 +239,7 @@ function parseAssumptionOverrides(rawAssumptions: unknown): DossierAssumptionOve
   if (!rawAssumptions || typeof rawAssumptions !== "object") return null;
   const record = rawAssumptions as Record<string, unknown>;
   const assumptions: DossierAssumptionOverrides = {
+    buildingSqft: typeof record.buildingSqft === "number" ? record.buildingSqft : null,
     purchasePrice: typeof record.purchasePrice === "number" ? record.purchasePrice : null,
     purchaseClosingCostPct:
       typeof record.purchaseClosingCostPct === "number" ? record.purchaseClosingCostPct : null,

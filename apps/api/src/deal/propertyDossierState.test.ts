@@ -13,6 +13,7 @@ describe("propertyDossierState", () => {
     const assumptions = getPropertyDossierAssumptions({
       dealDossier: {
         assumptions: {
+          buildingSqft: 7_800,
           purchasePrice: 4_250_000,
           purchaseClosingCostPct: 2.5,
           renovationCosts: 15_000,
@@ -64,6 +65,7 @@ describe("propertyDossierState", () => {
     });
 
     expect(assumptions).toEqual({
+      buildingSqft: 7_800,
       purchasePrice: 4_250_000,
       purchaseClosingCostPct: 2.5,
       renovationCosts: 15_000,
@@ -149,6 +151,7 @@ describe("propertyDossierState", () => {
       updatedAt: "2026-03-11T00:00:00.000Z",
     });
     expect(propertyAssumptionsToOverrides(assumptions)).toEqual({
+      buildingSqft: 7_800,
       purchasePrice: 4_250_000,
       purchaseClosingCostPct: 2.5,
       renovationCosts: 15_000,

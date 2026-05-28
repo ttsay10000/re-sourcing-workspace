@@ -298,6 +298,8 @@ describe("dossierTeaser", () => {
     expect(teaser.heroImageUrl).toBe("https://example.com/hero.jpg");
     expect(teaser.strategyLabel).toBe("Furnished monthly-rental value-add");
     expect(teaser.assetSummary).toContain("12 units");
+    expect(teaser.assetSummary).toContain("Ask $5,000,000");
+    expect(teaser.assetSummary).toContain("$595 PSF");
     expect(teaser.neighborhoodLabel).toBe("Chelsea");
     expect(teaser.kpis.map((kpi) => kpi.label)).toEqual([
       "Deal Score",
@@ -314,6 +316,48 @@ describe("dossierTeaser", () => {
     expect(teaser.risks).toContain("Elevated furnished-rent uplift (72.0%)");
     expect(teaser.provenance.some((line) => line.includes("value-add-furnished-monthly-rental"))).toBe(true);
     expect(teaser.operatingSnapshot.find((row) => row.label === "Neighborhood median PSF")?.value).toBe("$1,050");
+  });
+
+  it("prefers saved manual building SF and surfaces diligence risks from enrichment and pricing", () => {
+    const ctx = sampleContext();
+    ctx.purchasePrice = 10_000_000;
+    ctx.assumptions.acquisition.purchasePrice = 10_000_000;
+    ctx.propertyMix.rentStabilizedUnits = 2;
+    const details: PropertyDetails = {
+      ...sampleDetails(),
+      dealDossier: {
+        assumptions: {
+          buildingSqft: 7_800,
+        },
+      },
+      enrichment: {
+        dob_complaints_summary: { openCount: 2 },
+        hpd_violations_summary: { openCount: 3, rentImpairingOpen: 1 },
+        housing_litigations_summary: { openCount: 1 },
+      },
+    };
+
+    const teaser = buildDossierTeaserData({
+      ctx,
+      details,
+      listing: {
+        title: "Chelsea multifamily",
+        price: 12_000_000,
+        sqft: 3_150,
+        imageUrls: [],
+        extra: {},
+      },
+      generatedAt: "2026-05-27T12:00:00.000Z",
+    });
+
+    expect(teaser.assetSummary).toContain("7,800 SF");
+    expect(teaser.assetSummary).toContain("Ask $12,000,000");
+    expect(teaser.assetSummary).toContain("$1,538 PSF");
+    expect(teaser.risks.some((risk) => risk.includes("open DOB complaint"))).toBe(true);
+    expect(teaser.risks.some((risk) => risk.includes("open housing litigation"))).toBe(true);
+    expect(teaser.risks.some((risk) => risk.includes("rent-stabilized"))).toBe(true);
+    expect(teaser.risks.some((risk) => risk.includes("Modeled purchase PSF"))).toBe(true);
+    expect(teaser.provenance.some((line) => line.includes("manual underwriting override (7,800 SF)"))).toBe(true);
   });
 
   it("renders the teaser data through the separate PDF path", async () => {

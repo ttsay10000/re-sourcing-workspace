@@ -42,6 +42,7 @@ const NYC_LARGE_CLASS_TWO_UNDERWRITING_TAX_GROWTH_PCT = 4;
 const NYC_CLASS_FOUR_UNDERWRITING_TAX_GROWTH_PCT = 4;
 
 export interface DossierAssumptionOverrides {
+  buildingSqft?: number | null;
   purchasePrice?: number | null;
   purchaseClosingCostPct?: number | null;
   renovationCosts?: number | null;

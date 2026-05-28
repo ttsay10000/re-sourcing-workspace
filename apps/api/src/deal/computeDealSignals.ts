@@ -220,6 +220,7 @@ function riskProfileFromDetails(
 function grossBuildingSqft(details: PropertyDetails | null): number | null {
   const propertyInfo = resolvePreferredOmPropertyInfo(details);
   return (
+    toFiniteNumber(details?.dealDossier?.assumptions?.buildingSqft) ??
     toFiniteNumber(propertyInfo?.buildingSqft) ??
     toFiniteNumber(propertyInfo?.buildingSquareFeet) ??
     toFiniteNumber(propertyInfo?.grossSqft) ??

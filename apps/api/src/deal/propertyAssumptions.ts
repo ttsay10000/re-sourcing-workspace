@@ -470,6 +470,7 @@ export function analyzePropertyForUnderwriting(
     details?.assessedResidentialAreaGross
   );
   const grossBuildingSqft = firstFiniteNumber(
+    details?.dealDossier?.assumptions?.buildingSqft,
     propertyInfo?.buildingSqft,
     propertyInfo?.buildingSquareFeet,
     propertyInfo?.grossSqft,

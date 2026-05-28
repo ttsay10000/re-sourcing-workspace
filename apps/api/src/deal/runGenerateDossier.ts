@@ -377,6 +377,23 @@ function scoreCertaintyLabel(value: number | null | undefined): string {
   return "low";
 }
 
+function applyManualBuildingSqft(
+  details: PropertyDetails | null,
+  buildingSqft: number | null | undefined
+): PropertyDetails | null {
+  if (buildingSqft == null || !Number.isFinite(buildingSqft) || buildingSqft <= 0) return details;
+  return {
+    ...(details ?? {}),
+    dealDossier: {
+      ...(details?.dealDossier ?? {}),
+      assumptions: {
+        ...(details?.dealDossier?.assumptions ?? {}),
+        buildingSqft,
+      },
+    },
+  } as PropertyDetails;
+}
+
 export async function runGenerateDossier(
   propertyId: string,
   assumptionOverrides?: DossierAssumptionOverrides | null,
@@ -433,7 +450,7 @@ export async function runGenerateDossier(
     const purchasePrice = listing?.price ?? resolveOmAskingPriceFromDetails(rawDetails);
     const brokerEmailNotes = getBrokerEmailNotes(rawDetails);
     const brokerNotesExtract = await extractBrokerDossierNotes(brokerEmailNotes);
-    const details = mergeBrokerNotesIntoDetails(rawDetails, brokerNotesExtract);
+    let details = mergeBrokerNotesIntoDetails(rawDetails, brokerNotesExtract);
     const hasAuthoritativeOm = getAuthoritativeOmSnapshot(rawDetails) != null;
     const hasBrokerFinancialInputs = brokerNotesSuppliedFinancialInputs(brokerNotesExtract);
     if (!getAuthoritativeOmSnapshot(details)) {
@@ -453,6 +470,7 @@ export async function runGenerateDossier(
       propertyAssumptionOverrides,
       assumptionOverrides
     );
+    details = applyManualBuildingSqft(details, mergedAssumptionOverrides?.buildingSqft);
     const overrideCurrentNoi = mergedAssumptionOverrides?.currentNoi;
     const currentNoiOverride =
       overrideCurrentNoi != null && Number.isFinite(overrideCurrentNoi)

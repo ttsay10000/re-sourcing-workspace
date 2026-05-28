@@ -1600,6 +1600,29 @@ function PropertyDataContent() {
       </div>
 
       <div className="property-data-tabs-row">
+        <div className="property-data-tabs" aria-label="Property data sections">
+          <button
+            type="button"
+            className={`property-data-tab ${activeTab === "canonical" ? "property-data-tab--active" : ""}`}
+            onClick={() => setActiveTab("canonical")}
+          >
+            Canonical properties
+          </button>
+          <button
+            type="button"
+            className={`property-data-tab ${activeTab === "raw" ? "property-data-tab--active" : ""}`}
+            onClick={() => setActiveTab("raw")}
+          >
+            Raw listings
+          </button>
+          <Link
+            href="/om-review"
+            className="property-data-tab property-data-tab--link"
+            title="Review ambiguous OM, rent roll, T12, or broker-email documents before promotion"
+          >
+            OM review queue
+          </Link>
+        </div>
         <div className="property-data-filters" style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", alignItems: "center" }}>
           <label className="property-data-filter-label" style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}>
             <span style={{ whiteSpace: "nowrap", fontSize: "0.875rem" }}>Sort by</span>

@@ -44,6 +44,7 @@ const uploadMemory = multer({
 });
 
 const DOSSIER_ASSUMPTION_NON_NEGATIVE_NUMERIC_FIELDS = [
+  "buildingSqft",
   "purchasePrice",
   "purchaseClosingCostPct",
   "renovationCosts",

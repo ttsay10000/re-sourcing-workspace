@@ -113,6 +113,7 @@ function resolveBuildingSqft(
   const propertyInfo = resolvePreferredOmPropertyInfo(details);
   const extra = asRecord(listing?.extra);
   return firstNumber(
+    details?.dealDossier?.assumptions?.buildingSqft,
     propertyInfo?.buildingSqft,
     propertyInfo?.buildingSquareFeet,
     propertyInfo?.grossSqft,

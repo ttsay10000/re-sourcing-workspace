@@ -102,6 +102,7 @@ const ENABLE_OM_AUTOMATION_V2 = process.env.ENABLE_OM_AUTOMATION_V2 === "1";
 const MANUAL_OM_MAX_BYTES = Number(process.env.MANUAL_OM_MAX_BYTES || 25 * 1024 * 1024);
 const MANUAL_OM_DOWNLOAD_TIMEOUT_MS = Number(process.env.MANUAL_OM_DOWNLOAD_TIMEOUT_MS || 20_000);
 const DOSSIER_ASSUMPTION_NON_NEGATIVE_NUMERIC_FIELDS = [
+  "buildingSqft",
   "purchasePrice",
   "purchaseClosingCostPct",
   "renovationCosts",

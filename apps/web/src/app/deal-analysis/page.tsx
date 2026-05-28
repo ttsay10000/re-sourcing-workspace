@@ -162,6 +162,7 @@ const cardStyle: React.CSSProperties = {
 function emptyDraft(): OmCalculationDraft {
   return {
     purchasePrice: null,
+    buildingSqft: null,
     purchaseClosingCostPct: null,
     renovationCosts: 0,
     furnishingSetupCosts: null,
@@ -335,6 +336,7 @@ function serializeExpenseModelRows(rows: OmCalculationExpenseModelRow[] | undefi
 function draftFromCalculation(calculation: OmCalculationSnapshot): OmCalculationDraft {
   return {
     purchasePrice: calculation.assumptions.purchasePrice ?? calculation.property.askingPrice ?? null,
+    buildingSqft: calculation.assumptions.buildingSqft ?? calculation.propertyInfo.sizeSqft ?? null,
     purchaseClosingCostPct: calculation.assumptions.purchaseClosingCostPct ?? null,
     renovationCosts: calculation.assumptions.renovationCosts ?? 0,
     furnishingSetupCosts: calculation.assumptions.furnishingSetupCosts ?? null,

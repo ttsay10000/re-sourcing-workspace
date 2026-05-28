@@ -40,6 +40,7 @@ interface PropertySummary {
 }
 
 interface DossierAssumptionsDraft {
+  buildingSqft?: number;
   purchasePrice?: number;
   purchaseClosingCostPct?: number;
   renovationCosts?: number;
@@ -142,6 +143,7 @@ function DossierAssumptionsContent() {
       setMixSummary(data.mixSummary ?? null);
       const defaults = (data.defaults ?? {}) as DossierAssumptionsDraft;
       setDraft({
+        buildingSqft: defaults.buildingSqft ?? undefined,
         purchasePrice: defaults.purchasePrice ?? data.property?.primaryListing?.price ?? undefined,
         purchaseClosingCostPct: defaults.purchaseClosingCostPct ?? undefined,
         renovationCosts: defaults.renovationCosts ?? 0,
@@ -249,6 +251,7 @@ function DossierAssumptionsContent() {
         body: JSON.stringify({
           propertyId,
           assumptions: {
+            buildingSqft: draft.buildingSqft,
             purchasePrice: draft.purchasePrice,
             purchaseClosingCostPct: draft.purchaseClosingCostPct,
             renovationCosts: draft.renovationCosts,
@@ -381,6 +384,15 @@ function DossierAssumptionsContent() {
           These drive Year 0 capital required to buy and prepare the asset.
         </p>
         <div className="dossier-assumptions-grid">
+          <label style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+            <span style={{ fontSize: "0.875rem", fontWeight: 500 }}>Manual building SF</span>
+            <input
+              type="number"
+              value={draft.buildingSqft ?? ""}
+              onChange={(e) => setDraft((p) => ({ ...p, buildingSqft: e.target.value ? Number(e.target.value) : undefined }))}
+              style={inputStyle}
+            />
+          </label>
           <label style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
             <span style={{ fontSize: "0.875rem", fontWeight: 500 }}>Purchase price</span>
             <input

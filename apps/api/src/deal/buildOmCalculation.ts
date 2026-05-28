@@ -131,7 +131,10 @@ function expenseTotal(details: PropertyDetails | null): number | null {
   return resolvePreferredOmExpenseTotal(details);
 }
 
-function buildPropertyInfoSummary(details: PropertyDetails | null) {
+function buildPropertyInfoSummary(
+  details: PropertyDetails | null,
+  buildingSqftOverride: number | null | undefined
+) {
   const propertyInfo = resolvePreferredOmPropertyInfo(details);
   const zoning = asRecord(details?.enrichment?.zoning);
   const assetClass = firstString(
@@ -142,6 +145,7 @@ function buildPropertyInfoSummary(details: PropertyDetails | null) {
     propertyInfo?.assetClassName
   );
   const sizeSqft = firstFiniteNumber(
+    buildingSqftOverride,
     propertyInfo?.buildingSqft,
     propertyInfo?.buildingSquareFeet,
     propertyInfo?.grossSqft,
@@ -172,9 +176,11 @@ function buildPropertyInfoSummary(details: PropertyDetails | null) {
 }
 
 function flattenedAssumptions(
-  assumptions: ReturnType<typeof resolveDossierAssumptions>
+  assumptions: ReturnType<typeof resolveDossierAssumptions>,
+  buildingSqftOverride?: number | null
 ): Record<string, number | null> {
   return {
+    buildingSqft: buildingSqftOverride ?? null,
     purchasePrice: assumptions.acquisition.purchasePrice,
     purchaseClosingCostPct: assumptions.acquisition.purchaseClosingCostPct,
     renovationCosts: assumptions.acquisition.renovationCosts,
@@ -350,6 +356,7 @@ export interface ResolvedOmCalculationArtifacts {
   extractedCurrentFinancials: ReturnType<typeof resolveCurrentFinancialsFromDetails>;
   currentFinancials: ReturnType<typeof resolveCurrentFinancialsFromDetails>;
   currentNoiOverridden: boolean;
+  buildingSqftOverride: number | null;
   resolvedExpenseTotal: number | null;
   projection: ReturnType<typeof computeUnderwritingProjection>;
   recommendedOffer: ReturnType<typeof computeRecommendedOffer>;
@@ -410,6 +417,12 @@ export async function resolveOmCalculationArtifactsFromInputs(params: {
       ? overrideCurrentNoi
       : null;
   const currentNoiOverridden = currentNoiOverride != null;
+  const buildingSqftOverride =
+    mergedAssumptionOverrides?.buildingSqft != null &&
+    Number.isFinite(mergedAssumptionOverrides.buildingSqft) &&
+    mergedAssumptionOverrides.buildingSqft > 0
+      ? mergedAssumptionOverrides.buildingSqft
+      : null;
   const currentFinancials = currentNoiOverridden
     ? {
         ...extractedCurrentFinancials,
@@ -472,6 +485,7 @@ export async function resolveOmCalculationArtifactsFromInputs(params: {
     extractedCurrentFinancials,
     currentFinancials,
     currentNoiOverridden,
+    buildingSqftOverride,
     resolvedExpenseTotal,
     projection,
     recommendedOffer,
@@ -493,6 +507,7 @@ export function buildOmCalculationSnapshotFromInputs(params: {
     extractedCurrentFinancials,
     currentFinancials,
     currentNoiOverridden,
+    buildingSqftOverride,
     resolvedExpenseTotal,
     projection,
     recommendedOffer,
@@ -539,7 +554,7 @@ export function buildOmCalculationSnapshotFromInputs(params: {
       ? (extractedCurrentFinancials.operatingExpenses / totalCurrentRevenue) * 100
       : null;
 
-  const infoSummary = buildPropertyInfoSummary(details);
+  const infoSummary = buildPropertyInfoSummary(details, buildingSqftOverride);
   const rentBreakdown = buildRentBreakdown(artifacts);
 
   return {
@@ -559,7 +574,7 @@ export function buildOmCalculationSnapshotFromInputs(params: {
       rentStabilizedUnits: assumptions.propertyMix.rentStabilizedUnits,
     },
     savedAssumptions,
-    assumptions: flattenedAssumptions(projection.assumptions),
+    assumptions: flattenedAssumptions(projection.assumptions, buildingSqftOverride),
     acquisitionMetadata: {
       investmentProfile: projection.assumptions.acquisition.investmentProfile,
       targetAcquisitionDate: projection.assumptions.acquisition.targetAcquisitionDate,

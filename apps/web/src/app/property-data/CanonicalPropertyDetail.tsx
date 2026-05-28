@@ -97,6 +97,7 @@ interface UnifiedEnrichmentRow {
 
 interface DossierAssumptionsResponse {
   defaults?: {
+    buildingSqft?: number | null;
     purchasePrice?: number | null;
     purchaseClosingCostPct?: number | null;
     renovationCosts?: number | null;
@@ -548,6 +549,7 @@ function CollapsibleSection({
 function emptyOmCalculationDraft(): OmCalculationDraft {
   return {
     purchasePrice: null,
+    buildingSqft: null,
     purchaseClosingCostPct: null,
     renovationCosts: 0,
     furnishingSetupCosts: null,
@@ -865,6 +867,7 @@ export function CanonicalPropertyDetail({
   const hydrateDossierAssumptions = (data: DossierAssumptionsResponse): OmCalculationDraft => {
     const nextDraft: OmCalculationDraft = {
       purchasePrice: data.defaults?.purchasePrice ?? null,
+      buildingSqft: data.defaults?.buildingSqft ?? null,
       purchaseClosingCostPct: data.defaults?.purchaseClosingCostPct ?? null,
       renovationCosts: data.defaults?.renovationCosts ?? 0,
       furnishingSetupCosts: data.defaults?.furnishingSetupCosts ?? null,
@@ -900,6 +903,7 @@ export function CanonicalPropertyDetail({
     setFormulaDossierDefaults({
       ...emptyOmCalculationDraft(),
       renovationCosts: data.formulaDefaults?.renovationCosts ?? 0,
+      buildingSqft: data.defaults?.buildingSqft ?? null,
       furnishingSetupCosts: data.formulaDefaults?.furnishingSetupCosts ?? null,
     });
     setDossierMixSummary(data.mixSummary ?? null);
