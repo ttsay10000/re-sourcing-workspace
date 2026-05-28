@@ -29,6 +29,7 @@ import {
 } from "./OmCalculationPanel";
 import {
   PropertyDetailWorkspace,
+  type PropertyDetailActivityItem,
   type PropertyDetailRailItem,
   type PropertyDetailTabId,
   type PropertyDetailTabItem,
@@ -441,6 +442,14 @@ function documentLooksLikeOm(doc: { fileName?: string | null; source?: string | 
   return /(offering|memorandum|\bom\b|brochure|rent[\s_-]?roll)/i.test(haystack);
 }
 
+function documentIsPdf(doc: { fileName?: string | null; fileType?: string | null }): boolean {
+  return /pdf/i.test(doc.fileType ?? "") || /\.pdf$/i.test(doc.fileName ?? "");
+}
+
+function documentIsImage(doc: { fileName?: string | null; fileType?: string | null }): boolean {
+  return /^image\//i.test(doc.fileType ?? "") || /\.(png|jpe?g|gif|webp)$/i.test(doc.fileName ?? "");
+}
+
 /** Normalize date strings to YYYY-MM-DD (strip time/timezone). */
 function formatDateOnly(value: string | null | undefined): string {
   if (!value || typeof value !== "string") return "—";
@@ -664,6 +673,7 @@ export function CanonicalPropertyDetail({
   const [ownerFromPermits, setOwnerFromPermits] = useState<{ owner_name?: string; owner_business_name?: string } | null>(null);
   type UnifiedDoc = { id: string; fileName: string; fileType?: string | null; source: string; sourceType: "inquiry" | "uploaded" | "generated"; createdAt: string };
   const [unifiedDocuments, setUnifiedDocuments] = useState<UnifiedDoc[] | null>(null);
+  const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [deletingDocId, setDeletingDocId] = useState<string | null>(null);
@@ -950,6 +960,18 @@ export function CanonicalPropertyDetail({
       .catch(() => { if (!cancelled) setUnifiedDocuments([]); });
     return () => { cancelled = true; };
   }, [property.id]);
+
+  useEffect(() => {
+    if (!unifiedDocuments || unifiedDocuments.length === 0) {
+      setSelectedDocumentId(null);
+      return;
+    }
+    setSelectedDocumentId((current) =>
+      current && unifiedDocuments.some((document) => document.id === current)
+        ? current
+        : unifiedDocuments[0]?.id ?? null
+    );
+  }, [unifiedDocuments]);
 
   useEffect(() => {
     if (!inquiryEmailModalOpen && !manualInquiryModalOpen) {
@@ -1927,6 +1949,61 @@ export function CanonicalPropertyDetail({
     },
   ];
 
+  const recentActivityItems: PropertyDetailActivityItem[] = [
+    sourcingUpdate
+      ? {
+          label: `Saved search: ${sourcingUpdateMeta.label}`,
+          detail: sourcingUpdate.lastEvaluatedAt
+            ? `Checked ${formatDateOnly(sourcingUpdate.lastEvaluatedAt)}`
+            : sourcingUpdateMeta.detail,
+          tone: sourcingUpdate.status === "new" ? "good" : sourcingUpdate.status === "updated" ? "warn" : "neutral",
+        }
+      : null,
+    listingActivity?.lastActivityDate
+      ? {
+          label: formatPriceEventLabel(listingActivity.lastActivityEvent),
+          detail: `${formatDateOnly(listingActivity.lastActivityDate)}${listingActivity.lastActivityPrice != null ? ` · ${formatPrice(listingActivity.lastActivityPrice)}` : ""}`,
+          tone: "neutral",
+        }
+      : null,
+    lastInquirySentAt
+      ? { label: "Inquiry sent", detail: formatDateOnly(lastInquirySentAt), tone: "good" }
+      : null,
+    unifiedDocuments != null && unifiedDocuments.length > 0
+      ? {
+          label: "Latest document",
+          detail: `${unifiedDocuments[0]?.fileName ?? "Document"} · ${formatDateOnly(unifiedDocuments[0]?.createdAt)}`,
+          tone: hasOmDocument ? "good" : "neutral",
+        }
+      : null,
+    persistedDossierGeneration?.completedAt
+      ? {
+          label: "Dossier generated",
+          detail: formatDateOnly(persistedDossierGeneration.completedAt),
+          tone: "good",
+        }
+      : persistedDossierGeneration?.status === "running"
+        ? {
+            label: "Dossier running",
+            detail: activeDossierStageLabel,
+            tone: "warn",
+          }
+        : null,
+    ...unifiedRows.slice(0, 2).map((row): PropertyDetailActivityItem => ({
+      label: row.category,
+      detail: `${row.date} · ${row.info}`,
+      tone: /violation|complaint|litigation/i.test(row.category) ? "warn" : "neutral",
+    })),
+  ].filter((item): item is PropertyDetailActivityItem => item != null).slice(0, 6);
+
+  const selectedDocument =
+    unifiedDocuments?.find((document) => document.id === selectedDocumentId) ??
+    unifiedDocuments?.[0] ??
+    null;
+  const selectedDocumentUrl = selectedDocument
+    ? `${API_BASE}/api/properties/${property.id}/documents/${selectedDocument.id}/file`
+    : null;
+
   const selectDetailTab = (tab: PropertyDetailTabId) => {
     setActiveTab(tab);
     if (tab === "documents" || tab === "outreach" || tab === "omWorkspace") {
@@ -2007,6 +2084,7 @@ export function CanonicalPropertyDetail({
         activeTab={activeTab}
         onTabChange={selectDetailTab}
         railItems={statusRailItems}
+        activityItems={recentActivityItems}
         actions={(
           <>
             <button
@@ -2015,13 +2093,6 @@ export function CanonicalPropertyDetail({
               onClick={() => selectDetailTab("outreach")}
             >
               Email broker
-            </button>
-            <button
-              type="button"
-              className="property-detail-rail-button"
-              onClick={() => selectDetailTab("documents")}
-            >
-              Documents
             </button>
             <button
               type="button"
@@ -3563,17 +3634,26 @@ export function CanonicalPropertyDetail({
               ) : unifiedDocuments.length > 0 ? (
                 <div className="rental-om-doc-list">
                   {unifiedDocuments.map((doc) => (
-                    <div key={doc.id} className="rental-om-doc-card">
+                    <div key={doc.id} className={`rental-om-doc-card ${selectedDocument?.id === doc.id ? "rental-om-doc-card--selected" : ""}`}>
                       <div style={{ minWidth: 0 }}>
+                        <button
+                          type="button"
+                          className="rental-om-doc-title-button"
+                          onClick={() => setSelectedDocumentId(doc.id)}
+                        >
+                          {doc.fileName}
+                        </button>
+                        <div style={{ fontSize: "0.75rem", color: "#555", marginTop: "0.15rem" }}>
+                          {doc.source} · {formatDateOnly(doc.createdAt)}
+                        </div>
                         <a
                           href={`${API_BASE}/api/properties/${property.id}/documents/${doc.id}/file`}
                           target="_blank"
                           rel="noopener noreferrer"
-                          style={{ color: "#0066cc", fontWeight: 600, overflowWrap: "anywhere" }}
+                          style={{ display: "inline-block", marginTop: "0.3rem", fontSize: "0.74rem", color: "#475569", fontWeight: 650 }}
                         >
-                          {doc.fileName}
+                          Open file
                         </a>
-                        <div style={{ fontSize: "0.75rem", color: "#555", marginTop: "0.15rem" }}>{doc.source}</div>
                       </div>
                       <button
                         type="button"
@@ -3591,6 +3671,7 @@ export function CanonicalPropertyDetail({
                               throw new Error(typeof data?.details === "string" ? data.details : data?.error ?? "Failed to remove");
                             }
                             setUnifiedDocuments((prev) => (prev ? prev.filter((d) => d.id !== doc.id) : []));
+                            setSelectedDocumentId((current) => (current === doc.id ? null : current));
                           } catch (e) {
                             setUploadError(e instanceof Error ? e.message : "Failed to remove document");
                           } finally {
@@ -3606,6 +3687,47 @@ export function CanonicalPropertyDetail({
                 </div>
               ) : (
                 <p style={{ margin: 0, fontSize: "0.8rem", color: "#737373" }}>No documents yet. Send an inquiry, upload a file, or use the Deal dossier section above to generate the PDF and Excel.</p>
+              )}
+            </div>
+            <div className="rental-om-panel rental-om-document-preview">
+              <strong style={{ display: "block", marginBottom: "0.2rem" }}>Preview</strong>
+              <p style={{ margin: "0 0 0.55rem", fontSize: "0.75rem", color: "#666" }}>
+                Select a document to preview it here.
+              </p>
+              {selectedDocument && selectedDocumentUrl ? (
+                documentIsPdf(selectedDocument) ? (
+                  <iframe
+                    title={`Preview ${selectedDocument.fileName}`}
+                    src={selectedDocumentUrl}
+                    className="rental-om-document-preview-frame"
+                  />
+                ) : documentIsImage(selectedDocument) ? (
+                  <img
+                    src={selectedDocumentUrl}
+                    alt={selectedDocument.fileName}
+                    className="rental-om-document-preview-image"
+                  />
+                ) : (
+                  <div className="rental-om-document-preview-empty">
+                    <div>
+                      <strong style={{ display: "block", color: "#0f172a", marginBottom: "0.25rem" }}>
+                        Preview not available
+                      </strong>
+                      <div style={{ marginBottom: "0.65rem" }}>{selectedDocument.fileName}</div>
+                      <a
+                        href={selectedDocumentUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="property-detail-rail-button"
+                        style={{ width: "auto", minHeight: "2.1rem", display: "inline-flex" }}
+                      >
+                        Open file
+                      </a>
+                    </div>
+                  </div>
+                )
+              ) : (
+                <div className="rental-om-document-preview-empty">No document selected.</div>
               )}
             </div>
             <div className="rental-om-panel rental-om-panel--upload">
@@ -3635,7 +3757,9 @@ export function CanonicalPropertyDetail({
                   });
                   const data = await res.json().catch(() => ({}));
                   if (!res.ok) throw new Error(typeof data?.error === "string" ? data.error : data?.details ?? "Upload failed");
-                  setUnifiedDocuments((prev) => (prev ? [{ id: data.document.id, fileName: data.document.filename, fileType: data.document.contentType ?? null, source: data.document.category ?? "uploaded", sourceType: "uploaded", createdAt: data.document.createdAt }, ...prev] : [{ id: data.document.id, fileName: data.document.filename, fileType: data.document.contentType ?? null, source: data.document.category ?? "uploaded", sourceType: "uploaded", createdAt: data.document.createdAt }]));
+                  const nextDocument = { id: data.document.id, fileName: data.document.filename, fileType: data.document.contentType ?? null, source: data.document.category ?? "uploaded", sourceType: "uploaded" as const, createdAt: data.document.createdAt };
+                  setUnifiedDocuments((prev) => (prev ? [nextDocument, ...prev] : [nextDocument]));
+                  setSelectedDocumentId(nextDocument.id);
                   form.reset();
                   fileInput.value = "";
                 } catch (err) {

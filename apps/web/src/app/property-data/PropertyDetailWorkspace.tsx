@@ -26,11 +26,18 @@ export interface PropertyDetailRailItem {
   tone?: "neutral" | "good" | "warn" | "danger";
 }
 
+export interface PropertyDetailActivityItem {
+  label: string;
+  detail?: string | null;
+  tone?: "neutral" | "good" | "warn" | "danger";
+}
+
 interface PropertyDetailWorkspaceProps {
   tabs: PropertyDetailTabItem[];
   activeTab: PropertyDetailTabId;
   onTabChange: (tab: PropertyDetailTabId) => void;
   railItems: PropertyDetailRailItem[];
+  activityItems?: PropertyDetailActivityItem[];
   actions?: React.ReactNode;
   children: React.ReactNode;
 }
@@ -40,6 +47,7 @@ export function PropertyDetailWorkspace({
   activeTab,
   onTabChange,
   railItems,
+  activityItems = [],
   actions,
   children,
 }: PropertyDetailWorkspaceProps) {
@@ -64,7 +72,12 @@ export function PropertyDetailWorkspace({
       </div>
 
       <div className="property-detail-workspace-grid">
+        <div className="property-detail-workspace-main" role="tabpanel">
+          {children}
+        </div>
+
         <aside className="property-detail-action-rail" aria-label="Property status and actions">
+          <div className="property-detail-rail-heading">Status</div>
           <div className="property-detail-rail-list">
             {railItems.map((item) => (
               <div
@@ -77,12 +90,31 @@ export function PropertyDetailWorkspace({
               </div>
             ))}
           </div>
-          {actions ? <div className="property-detail-rail-actions">{actions}</div> : null}
-        </aside>
 
-        <div className="property-detail-workspace-main" role="tabpanel">
-          {children}
-        </div>
+          {actions ? (
+            <>
+              <div className="property-detail-rail-heading">Quick actions</div>
+              <div className="property-detail-rail-actions">{actions}</div>
+            </>
+          ) : null}
+
+          <div className="property-detail-rail-heading">Recent activity</div>
+          <div className="property-detail-activity-list">
+            {activityItems.length > 0 ? (
+              activityItems.map((item) => (
+                <div
+                  key={`${item.label}-${item.detail ?? ""}`}
+                  className={`property-detail-activity-item property-detail-activity-item--${item.tone ?? "neutral"}`}
+                >
+                  <strong>{item.label}</strong>
+                  {item.detail ? <span>{item.detail}</span> : null}
+                </div>
+              ))
+            ) : (
+              <div className="property-detail-activity-empty">No recent activity yet.</div>
+            )}
+          </div>
+        </aside>
       </div>
     </div>
   );
