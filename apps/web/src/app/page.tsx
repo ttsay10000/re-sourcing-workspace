@@ -682,15 +682,14 @@ export default function HomePage() {
                           <Link href={`/property/${deal.id}`} className="btn-card">
                             View deal
                           </Link>
+                          <Link href={`/deal-analysis?property_id=${encodeURIComponent(deal.id)}`} className="btn-card btn-card--primary">
+                            Open OM workspace
+                          </Link>
                           {dossierUrl ? (
                             <a href={dossierUrl} className="btn-card" target="_blank" rel="noreferrer">
                               Download dossier
                             </a>
-                          ) : (
-                            <Link href={`/deal-analysis?property_id=${encodeURIComponent(deal.id)}`} className="btn-card">
-                              Open deal analysis
-                            </Link>
-                          )}
+                          ) : null}
                         </div>
                       </div>
                     </div>

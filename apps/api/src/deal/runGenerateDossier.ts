@@ -44,7 +44,7 @@ import { buildDossierStructuredText } from "./dossierGenerator.js";
 import { buildDossierTeaserData } from "./dossierTeaser.js";
 import { dossierTeaserToPdf } from "./dossierTeaserToPdf.js";
 import { dossierTextToPdf } from "./dossierToPdf.js";
-import { buildExcelProForma } from "./excelProForma.js";
+import { buildDealAnalysisWorkbook } from "./dealAnalysisWorkbook.js";
 import { deleteGeneratedDocumentFile, saveGeneratedDocument } from "./generatedDocStorage.js";
 import { buildSensitivityAnalyses } from "./sensitivityAnalysis.js";
 import {
@@ -886,7 +886,8 @@ export async function runGenerateDossier(
               },
             })
           );
-    const excelBuffer = buildExcelProForma(ctx);
+    const excelWorkbook = await buildDealAnalysisWorkbook(ctx, { useLlmBlueprint: false });
+    const excelBuffer = excelWorkbook.buffer;
     console.info("[runGenerateDossier] Rendered PDF and Excel", {
       propertyId,
       dossierFormat,

@@ -124,6 +124,10 @@ interface SavedWorkspaceSummary {
   updatedAt: string;
   omImportedAt: string | null;
   assumptionsUpdatedAt: string | null;
+  workspaceUpdatedAt?: string | null;
+  uploadedOmAt?: string | null;
+  uploadedOmFileName?: string | null;
+  uploadedOmCategory?: string | null;
   omFileName: string | null;
   hasAuthoritativeOm: boolean;
   unitModelRowCount: number;
@@ -135,6 +139,9 @@ interface SavedWorkspaceSummary {
 interface SavedWorkspacesResponse {
   workspaces: SavedWorkspaceSummary[];
 }
+
+type WorkspaceFilter = "all" | "uploaded_docs" | "manual_edits" | "dossier_ready" | "needs_dossier";
+type WorkspaceSort = "recent" | "address" | "dossier";
 
 const pageShellStyle: React.CSSProperties = {
   maxWidth: "1360px",
@@ -409,6 +416,26 @@ function downloadBlob(blob: Blob, filename: string) {
   }, 1000);
 }
 
+function getSavedWorkspaceUpdatedAt(workspace: SavedWorkspaceSummary): string | null {
+  return (
+    workspace.assumptionsUpdatedAt ??
+    workspace.workspaceUpdatedAt ??
+    workspace.omImportedAt ??
+    workspace.uploadedOmAt ??
+    workspace.updatedAt ??
+    null
+  );
+}
+
+function hasManualWorkspaceEdits(workspace: SavedWorkspaceSummary): boolean {
+  return (
+    workspace.assumptionsUpdatedAt != null ||
+    workspace.unitModelRowCount > 0 ||
+    workspace.expenseModelRowCount > 0 ||
+    workspace.hasBrokerEmailNotes
+  );
+}
+
 async function downloadPropertyDocument(propertyId: string, document: GeneratedDocumentSummary, fallbackName: string) {
   const res = await fetch(
     `${API_BASE}/api/properties/${encodeURIComponent(propertyId)}/documents/${encodeURIComponent(document.id)}/file`
@@ -444,6 +471,10 @@ function DealAnalysisPageContent() {
   const [savedWorkspacesLoading, setSavedWorkspacesLoading] = useState(false);
   const [workspaceSaving, setWorkspaceSaving] = useState(false);
   const [savedWorkspaces, setSavedWorkspaces] = useState<SavedWorkspaceSummary[]>([]);
+  const [workspaceSearch, setWorkspaceSearch] = useState("");
+  const [workspaceFilter, setWorkspaceFilter] = useState<WorkspaceFilter>("all");
+  const [workspaceSort, setWorkspaceSort] = useState<WorkspaceSort>("recent");
+  const [workspaceResultsOpen, setWorkspaceResultsOpen] = useState(false);
   const [propertyCreating, setPropertyCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -474,9 +505,45 @@ function DealAnalysisPageContent() {
   const activeSavedWorkspace = savedWorkspaces.find((workspace) => workspace.propertyId === propertyId) ?? null;
   const savedWorkspaceUpdatedAt =
     activeSavedWorkspace?.assumptionsUpdatedAt ??
+    activeSavedWorkspace?.workspaceUpdatedAt ??
     activeSavedWorkspace?.omImportedAt ??
+    activeSavedWorkspace?.uploadedOmAt ??
     workspaceDetails?.dealDossier?.assumptions?.updatedAt ??
     null;
+  const filteredSavedWorkspaces = useMemo(() => {
+    const normalizedSearch = workspaceSearch.trim().toLowerCase();
+    return savedWorkspaces
+      .filter((workspace) => {
+        if (workspaceFilter === "uploaded_docs" && workspace.uploadedOmAt == null) return false;
+        if (workspaceFilter === "manual_edits" && !hasManualWorkspaceEdits(workspace)) return false;
+        if (workspaceFilter === "dossier_ready" && workspace.dossierStatus !== "completed") return false;
+        if (workspaceFilter === "needs_dossier" && workspace.dossierStatus === "completed") return false;
+        if (!normalizedSearch) return true;
+        const haystack = [
+          workspace.canonicalAddress,
+          workspace.omFileName,
+          workspace.uploadedOmFileName,
+          workspace.uploadedOmCategory,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        return haystack.includes(normalizedSearch);
+      })
+      .sort((left, right) => {
+        if (workspaceSort === "address") {
+          return left.canonicalAddress.localeCompare(right.canonicalAddress);
+        }
+        if (workspaceSort === "dossier") {
+          const leftDossier = left.dossierStatus === "completed" ? 0 : 1;
+          const rightDossier = right.dossierStatus === "completed" ? 0 : 1;
+          if (leftDossier !== rightDossier) return leftDossier - rightDossier;
+        }
+        return (getSavedWorkspaceUpdatedAt(right) ?? "").localeCompare(
+          getSavedWorkspaceUpdatedAt(left) ?? ""
+        );
+      });
+  }, [savedWorkspaces, workspaceFilter, workspaceSearch, workspaceSort]);
 
   const summaryCards = useMemo(
     () =>
@@ -515,7 +582,7 @@ function DealAnalysisPageContent() {
   const loadSavedWorkspaces = useCallback(async () => {
     setSavedWorkspacesLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/api/deal-analysis/workspaces?limit=8`);
+      const res = await fetch(`${API_BASE}/api/deal-analysis/workspaces?limit=80`);
       const data = (await res.json().catch(() => ({}))) as Partial<SavedWorkspacesResponse> & {
         error?: string;
       };
@@ -651,6 +718,7 @@ function DealAnalysisPageContent() {
   function resetWorkspace() {
     clearWorkspaceState();
     if (propertyId) router.replace("/deal-analysis");
+    setNotice("Fresh OM workspace ready. Upload OM PDFs below to create or match a property-backed workspace.");
   }
 
   async function analyzeUploads() {
@@ -1061,7 +1129,7 @@ function DealAnalysisPageContent() {
               cursor: "pointer",
             }}
           >
-            Start new OM workspace
+            Generate new OM workspace
           </button>
         </div>
       </div>
@@ -1069,10 +1137,10 @@ function DealAnalysisPageContent() {
       <div style={{ ...cardStyle, padding: "1.15rem" }}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap" }}>
           <div>
-            <strong style={{ color: "#0f172a", fontSize: "1rem" }}>Resume prior OM workspace builds</strong>
+            <strong style={{ color: "#0f172a", fontSize: "1rem" }}>OM workspace navigator</strong>
             <div style={{ marginTop: "0.3rem", color: "#64748b", fontSize: "0.9rem", lineHeight: 1.55 }}>
-              Prior deal-analysis builds tied to a property record can be reopened here with their saved
-              assumptions and model rows.
+              One reusable workspace per property with OM-side uploads, authoritative OM data, or saved
+              underwriting edits.
             </div>
           </div>
           {propertyId ? (
@@ -1082,14 +1150,181 @@ function DealAnalysisPageContent() {
           ) : null}
         </div>
 
-        <div style={{ marginTop: "0.95rem", display: "grid", gap: "0.75rem" }}>
+        <div
+          style={{
+            marginTop: "0.95rem",
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+            gap: "0.75rem",
+            alignItems: "end",
+          }}
+        >
+          <label style={{ display: "grid", gap: "0.32rem", color: "#475569", fontSize: "0.78rem", fontWeight: 700 }}>
+            Open workspace
+            <select
+              value={propertyId ?? ""}
+              onChange={(event) => {
+                const nextPropertyId = event.target.value.trim();
+                if (!nextPropertyId) {
+                  resetWorkspace();
+                  return;
+                }
+                router.replace(`/deal-analysis?property_id=${encodeURIComponent(nextPropertyId)}`);
+              }}
+              disabled={savedWorkspacesLoading || filteredSavedWorkspaces.length === 0}
+              style={{
+                minHeight: "42px",
+                border: "1px solid #cbd5e1",
+                borderRadius: "10px",
+                padding: "0.55rem 0.65rem",
+                color: "#0f172a",
+                background: "#fff",
+              }}
+            >
+              <option value="">
+                {savedWorkspacesLoading
+                  ? "Loading OM workspaces..."
+                  : filteredSavedWorkspaces.length === 0
+                    ? "No matching OM workspaces"
+                    : "Choose a property workspace"}
+              </option>
+              {filteredSavedWorkspaces.map((workspace) => (
+                <option key={workspace.propertyId} value={workspace.propertyId}>
+                  {workspace.canonicalAddress} - {formatDateLabel(getSavedWorkspaceUpdatedAt(workspace))}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label style={{ display: "grid", gap: "0.32rem", color: "#475569", fontSize: "0.78rem", fontWeight: 700 }}>
+            Search
+            <input
+              type="search"
+              value={workspaceSearch}
+              onChange={(event) => setWorkspaceSearch(event.target.value)}
+              placeholder="Address or file name"
+              style={{
+                minHeight: "42px",
+                border: "1px solid #cbd5e1",
+                borderRadius: "10px",
+                padding: "0.55rem 0.65rem",
+                color: "#0f172a",
+                background: "#fff",
+              }}
+            />
+          </label>
+
+          <label style={{ display: "grid", gap: "0.32rem", color: "#475569", fontSize: "0.78rem", fontWeight: 700 }}>
+            Sort
+            <select
+              value={workspaceSort}
+              onChange={(event) => setWorkspaceSort(event.target.value as WorkspaceSort)}
+              style={{
+                minHeight: "42px",
+                border: "1px solid #cbd5e1",
+                borderRadius: "10px",
+                padding: "0.55rem 0.65rem",
+                color: "#0f172a",
+                background: "#fff",
+              }}
+            >
+              <option value="recent">Recently updated</option>
+              <option value="address">Address A-Z</option>
+              <option value="dossier">Dossier status</option>
+            </select>
+          </label>
+        </div>
+
+        <div
+          style={{
+            marginTop: "0.75rem",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: "0.75rem",
+            flexWrap: "wrap",
+          }}
+        >
+          <div style={{ display: "flex", gap: "0.45rem", flexWrap: "wrap" }}>
+            {[
+              ["all", "All"],
+              ["uploaded_docs", "Uploaded docs"],
+              ["manual_edits", "Manual edits"],
+              ["dossier_ready", "Dossier ready"],
+              ["needs_dossier", "Needs dossier"],
+            ].map(([value, label]) => {
+              const isActive = workspaceFilter === value;
+              return (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => setWorkspaceFilter(value as WorkspaceFilter)}
+                  style={{
+                    padding: "0.35rem 0.62rem",
+                    borderRadius: "999px",
+                    border: isActive ? "1px solid #2563eb" : "1px solid #dbe2ea",
+                    background: isActive ? "#eff6ff" : "#fff",
+                    color: isActive ? "#1d4ed8" : "#475569",
+                    fontSize: "0.8rem",
+                    fontWeight: 700,
+                    cursor: "pointer",
+                  }}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+          <button
+            type="button"
+            onClick={() => setWorkspaceResultsOpen((open) => !open)}
+            style={{
+              padding: "0.4rem 0.7rem",
+              borderRadius: "10px",
+              border: "1px solid #cbd5e1",
+              background: "#fff",
+              color: "#0f172a",
+              cursor: "pointer",
+              fontSize: "0.82rem",
+              fontWeight: 700,
+            }}
+          >
+            {workspaceResultsOpen ? "Hide matches" : `Show matches (${filteredSavedWorkspaces.length})`}
+          </button>
+        </div>
+
+        {activeSavedWorkspace ? (
+          <div
+            style={{
+              marginTop: "0.85rem",
+              padding: "0.75rem 0.85rem",
+              borderRadius: "12px",
+              border: "1px solid #bfdbfe",
+              background: "#eff6ff",
+              display: "flex",
+              justifyContent: "space-between",
+              gap: "0.75rem",
+              flexWrap: "wrap",
+            }}
+          >
+            <div>
+              <div style={{ color: "#1e3a8a", fontWeight: 800 }}>{activeSavedWorkspace.canonicalAddress}</div>
+              <div style={{ marginTop: "0.25rem", color: "#475569", fontSize: "0.84rem" }}>
+                Last workspace update {formatDateLabel(getSavedWorkspaceUpdatedAt(activeSavedWorkspace))}
+                {activeSavedWorkspace.omFileName ? ` • ${activeSavedWorkspace.omFileName}` : ""}
+              </div>
+            </div>
+            <div style={{ color: "#1d4ed8", fontSize: "0.82rem", fontWeight: 800 }}>Currently open</div>
+          </div>
+        ) : null}
+
+        <div style={{ marginTop: "0.95rem", display: "grid", gap: "0.55rem" }}>
           {savedWorkspacesLoading ? (
             <div style={{ color: "#64748b", fontSize: "0.9rem" }}>Loading recent OM workspaces...</div>
-          ) : savedWorkspaces.length > 0 ? (
-            savedWorkspaces.map((workspace) => {
+          ) : savedWorkspaces.length > 0 && workspaceResultsOpen ? (
+            filteredSavedWorkspaces.slice(0, 12).map((workspace) => {
               const isActive = workspace.propertyId === propertyId;
-              const lastUpdatedAt =
-                workspace.assumptionsUpdatedAt ?? workspace.omImportedAt ?? workspace.updatedAt;
+              const lastUpdatedAt = getSavedWorkspaceUpdatedAt(workspace);
               return (
                 <button
                   key={workspace.propertyId}
@@ -1099,40 +1334,41 @@ function DealAnalysisPageContent() {
                   }
                   disabled={savedWorkspaceLoading && isActive}
                   style={{
-                    display: "grid",
-                    gap: "0.38rem",
-                    padding: "0.95rem 1rem",
-                    borderRadius: "14px",
+                    display: "flex",
+                    justifyContent: "space-between",
+                    gap: "0.75rem",
+                    alignItems: "center",
+                    flexWrap: "wrap",
+                    padding: "0.72rem 0.85rem",
+                    borderRadius: "12px",
                     border: isActive ? "1px solid #93c5fd" : "1px solid #dbe2ea",
                     background: isActive ? "#eff6ff" : "#fff",
                     textAlign: "left",
                     cursor: savedWorkspaceLoading && isActive ? "not-allowed" : "pointer",
                   }}
                 >
-                  <div
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      gap: "0.8rem",
-                      flexWrap: "wrap",
-                    }}
-                  >
+                  <div style={{ minWidth: "260px", flex: "1 1 320px" }}>
                     <strong style={{ color: "#0f172a" }}>{workspace.canonicalAddress}</strong>
-                    <span
-                      style={{
-                        color: isActive ? "#1d4ed8" : "#475569",
-                        fontSize: "0.8rem",
-                        fontWeight: 700,
-                      }}
-                    >
-                      {isActive ? "Loaded" : "Open workspace"}
-                    </span>
-                  </div>
-                  <div style={{ color: "#64748b", fontSize: "0.84rem", lineHeight: 1.5 }}>
-                    Last saved {formatDateLabel(lastUpdatedAt)}
-                    {workspace.omFileName ? ` • ${workspace.omFileName}` : ""}
+                    <div style={{ color: "#64748b", fontSize: "0.84rem", lineHeight: 1.5 }}>
+                      Last update {formatDateLabel(lastUpdatedAt)}
+                      {workspace.omFileName ? ` • ${workspace.omFileName}` : ""}
+                    </div>
                   </div>
                   <div style={{ display: "flex", gap: "0.45rem", flexWrap: "wrap" }}>
+                    {workspace.uploadedOmAt ? (
+                      <span
+                        style={{
+                          padding: "0.2rem 0.5rem",
+                          borderRadius: "999px",
+                          background: "#f0f9ff",
+                          color: "#0369a1",
+                          fontSize: "0.76rem",
+                          fontWeight: 700,
+                        }}
+                      >
+                        Uploaded docs
+                      </span>
+                    ) : null}
                     {workspace.hasAuthoritativeOm ? (
                       <span
                         style={{
@@ -1203,16 +1439,37 @@ function DealAnalysisPageContent() {
                         Dossier ready
                       </span>
                     ) : null}
+                    <span
+                      style={{
+                        color: isActive ? "#1d4ed8" : "#475569",
+                        fontSize: "0.8rem",
+                        fontWeight: 700,
+                        alignSelf: "center",
+                      }}
+                    >
+                      {isActive ? "Loaded" : "Open"}
+                    </span>
                   </div>
                 </button>
               );
             })
+          ) : savedWorkspaces.length > 0 && filteredSavedWorkspaces.length === 0 ? (
+            <div style={{ color: "#64748b", fontSize: "0.9rem", lineHeight: 1.55 }}>
+              No OM workspaces match the current search and filters.
+            </div>
           ) : (
             <div style={{ color: "#64748b", fontSize: "0.9rem", lineHeight: 1.55 }}>
-              No saved OM workspaces yet. Analyze uploaded OM PDFs and create the property record once to
-              make that workspace reusable from this page.
+              {savedWorkspaces.length === 0
+                ? "No saved OM workspaces yet. Analyze uploaded OM PDFs or upload an OM to a property card to make that workspace reusable from this page."
+                : "Use the dropdown, search, or filters above to open a saved OM workspace."}
             </div>
           )}
+          {workspaceResultsOpen && filteredSavedWorkspaces.length > 12 ? (
+            <div style={{ color: "#64748b", fontSize: "0.84rem" }}>
+              Showing 12 of {filteredSavedWorkspaces.length} matching workspaces. Narrow the search to jump
+              directly to a property.
+            </div>
+          ) : null}
         </div>
       </div>
 

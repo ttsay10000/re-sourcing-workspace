@@ -233,6 +233,20 @@ function parsePositiveInteger(value: unknown, fallback: number, max: number): nu
   return Math.min(parsed, max);
 }
 
+interface LatestUploadedWorkspaceDocument {
+  propertyId: string;
+  fileName: string | null;
+  category: string | null;
+  createdAt: string | null;
+}
+
+function readDealAnalysisWorkspaceUpdatedAt(details: PropertyDetails | null | undefined): string | null {
+  const workspace = details?.dealAnalysisWorkspace;
+  if (!workspace || typeof workspace !== "object" || Array.isArray(workspace)) return null;
+  const record = workspace as Record<string, unknown>;
+  return trimmedString(record.updatedAt) ?? trimmedString(record.lastUploadedAt);
+}
+
 function resolveWorkspaceProperty(details: PropertyDetails | null | undefined) {
   const omAnalysis = details?.rentalFinancials?.omAnalysis ?? null;
   return resolveStandalonePropertyInput({
@@ -328,10 +342,61 @@ function mergeAssumptionsPatch(
 
 router.get("/deal-analysis/workspaces", async (req: Request, res: Response) => {
   try {
-    const limit = parsePositiveInteger(req.query.limit, 8, 24);
+    const limit = parsePositiveInteger(req.query.limit, 48, 100);
     const pool = getPool();
     const propertyRepo = new PropertyRepo({ pool });
-    const properties = await propertyRepo.list({ limit: Math.max(limit * 8, 60) });
+    const [recentProperties, latestUploadedDocRows] = await Promise.all([
+      propertyRepo.list({ limit: Math.max(limit * 8, 120) }),
+      pool.query<{
+        property_id: string;
+        filename: string | null;
+        category: string | null;
+        created_at: string | null;
+      }>(
+        `WITH latest_docs AS (
+           SELECT DISTINCT ON (u.property_id)
+             u.property_id::text AS property_id,
+             u.filename,
+             u.category,
+             u.created_at::text AS created_at
+           FROM property_uploaded_documents u
+           WHERE u.category IN ('OM', 'Brochure', 'Rent Roll', 'Financial Model', 'T12 / Operating Summary')
+           ORDER BY u.property_id, u.created_at DESC
+         )
+         SELECT property_id, filename, category, created_at
+         FROM latest_docs
+         ORDER BY created_at DESC
+         LIMIT 250`
+      ),
+    ]);
+    const latestUploadedDocs = latestUploadedDocRows.rows.reduce<Map<string, LatestUploadedWorkspaceDocument>>(
+      (acc, row) => {
+        acc.set(row.property_id, {
+          propertyId: row.property_id,
+          fileName: trimmedString(row.filename),
+          category: trimmedString(row.category),
+          createdAt: trimmedString(row.created_at),
+        });
+        return acc;
+      },
+      new Map()
+    );
+    const propertiesById = new Map<string, Property>();
+    for (const property of recentProperties) {
+      propertiesById.set(property.id, property);
+    }
+    const uploadedOnlyPropertyIds = Array.from(latestUploadedDocs.keys()).filter(
+      (propertyId) => !propertiesById.has(propertyId)
+    );
+    if (uploadedOnlyPropertyIds.length > 0) {
+      const uploadedOnlyProperties = await Promise.all(
+        uploadedOnlyPropertyIds.map((propertyId) => propertyRepo.byId(propertyId))
+      );
+      for (const property of uploadedOnlyProperties) {
+        if (property) propertiesById.set(property.id, property);
+      }
+    }
+    const properties = Array.from(propertiesById.values());
     const workspaces = properties
       .flatMap((property) => {
         const details = (property.details ?? null) as PropertyDetails | null;
@@ -339,14 +404,19 @@ router.get("/deal-analysis/workspaces", async (req: Request, res: Response) => {
         const manualSourceLinks = readManualSourceLinks(details);
         const omImportedAt = trimmedString(manualSourceLinks.omImportedAt);
         const assumptionsUpdatedAt = trimmedString(savedAssumptions?.updatedAt);
+        const workspaceUpdatedAt = readDealAnalysisWorkspaceUpdatedAt(details);
+        const uploadedOmDocument = latestUploadedDocs.get(property.id) ?? null;
+        const uploadedOmAt = uploadedOmDocument?.createdAt ?? null;
         const hasSavedWorkspace =
+          uploadedOmAt != null ||
           omImportedAt != null ||
           assumptionsUpdatedAt != null ||
+          workspaceUpdatedAt != null ||
           savedAssumptions != null ||
           details?.omData?.authoritative != null;
         if (!hasSavedWorkspace) return [];
         const sortTimestamp =
-          [assumptionsUpdatedAt, omImportedAt, trimmedString(property.updatedAt)].find(
+          [assumptionsUpdatedAt, workspaceUpdatedAt, omImportedAt, uploadedOmAt, trimmedString(property.updatedAt)].find(
             (value) => value != null
           ) ?? property.updatedAt;
         return [
@@ -356,7 +426,11 @@ router.get("/deal-analysis/workspaces", async (req: Request, res: Response) => {
             updatedAt: property.updatedAt,
             omImportedAt,
             assumptionsUpdatedAt,
-            omFileName: trimmedString(manualSourceLinks.omFileName),
+            workspaceUpdatedAt,
+            uploadedOmAt,
+            uploadedOmFileName: uploadedOmDocument?.fileName ?? null,
+            uploadedOmCategory: uploadedOmDocument?.category ?? null,
+            omFileName: trimmedString(manualSourceLinks.omFileName) ?? uploadedOmDocument?.fileName ?? null,
             hasAuthoritativeOm: details?.omData?.authoritative != null,
             unitModelRowCount: savedAssumptions?.unitModelRows?.length ?? 0,
             expenseModelRowCount: savedAssumptions?.expenseModelRows?.length ?? 0,

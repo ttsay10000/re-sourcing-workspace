@@ -187,7 +187,7 @@ afterEach(() => {
 });
 
 describe("buildDealAnalysisWorkbook", () => {
-  it("creates a styled workbook with visible analysis tabs and hidden support tabs", async () => {
+  it("creates a styled workbook with visible analysis tabs and auditable model tabs", async () => {
     vi.stubEnv("OPENAI_API_KEY", "");
 
     const { buffer } = await buildDealAnalysisWorkbook(sampleContext());
@@ -196,20 +196,25 @@ describe("buildDealAnalysisWorkbook", () => {
 
     expect(workbook.worksheets.map((sheet) => [sheet.name, sheet.state])).toEqual([
       ["Assumptions", "visible"],
-      ["FinancingModel", "hidden"],
-      ["CashFlowModel", "hidden"],
+      ["FinancingModel", "visible"],
+      ["CashFlowModel", "visible"],
       ["Summary", "visible"],
+      ["Model Guide", "visible"],
     ]);
 
     const assumptions = workbook.getWorksheet("Assumptions");
     const summary = workbook.getWorksheet("Summary");
     const financing = workbook.getWorksheet("FinancingModel");
     const cashFlow = workbook.getWorksheet("CashFlowModel");
+    const modelGuide = workbook.getWorksheet("Model Guide");
 
     expect(assumptions).toBeDefined();
     expect(summary).toBeDefined();
     expect(financing).toBeDefined();
     expect(cashFlow).toBeDefined();
+    expect(modelGuide).toBeDefined();
+    expect(modelGuide?.getCell("A1").value).toBe("Workbook Formula Map");
+    expect(modelGuide?.getCell("A12").value).toContain("saves the current manual underwriting draft");
 
     expect(assumptions?.getCell("A1").value).toBe("Deal Dossier Workbook");
     expect(assumptions?.getCell("C13").value).toBe(1_000_000);

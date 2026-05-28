@@ -1121,6 +1121,12 @@ textarea {
   text-decoration: none;
 }
 
+.btn-card--primary {
+  background: #0f62fe;
+  border-color: #0f62fe;
+  color: #fff;
+}
+
 .dossier-assumptions-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));

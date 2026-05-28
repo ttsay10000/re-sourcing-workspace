@@ -763,6 +763,19 @@ router.post("/properties/manual-add", async (req: Request, res: Response) => {
     saleId: explicitStreetEasySaleId,
     warning: null,
   };
+  let enrichment: {
+    attempted: boolean;
+    ok: boolean;
+    bbl: string | null;
+    bin: string | null;
+    warning: string | null;
+  } = {
+    attempted: false,
+    ok: false,
+    bbl: null,
+    bin: null,
+    warning: null,
+  };
 
   try {
     const extractedSaleId =
@@ -961,6 +974,28 @@ router.post("/properties/manual-add", async (req: Request, res: Response) => {
       }
     }
 
+    try {
+      const appToken = process.env.SOCRATA_APP_TOKEN ?? null;
+      enrichment.attempted = true;
+      const resolvedBbl = await getBBLForProperty(propertyId, { appToken });
+      enrichment.bbl = resolvedBbl?.bbl ?? null;
+      enrichment.bin = resolvedBbl?.bin ?? null;
+      if (!resolvedBbl?.bbl) {
+        enrichment.warning = "Could not resolve BBL; BBL-dependent enrichment modules may be skipped.";
+      }
+      const result = await runEnrichmentForProperty(propertyId, undefined, {
+        appToken,
+        rateLimitDelayMs: ENRICHMENT_RATE_LIMIT_DELAY_MS,
+      });
+      enrichment.ok = result.ok;
+      if (!result.ok && !enrichment.warning) {
+        enrichment.warning = "Enrichment ran, but one or more modules failed.";
+      }
+    } catch (error) {
+      enrichment.attempted = true;
+      enrichment.warning = error instanceof Error ? error.message : "Failed to run enrichment.";
+    }
+
     await syncPropertySourcingWorkflow(propertyId, { pool });
     const property = await propertyRepo.byId(propertyId);
 
@@ -973,6 +1008,7 @@ router.post("/properties/manual-add", async (req: Request, res: Response) => {
       createdListing,
       saleDetailsFetch,
       omImport,
+      enrichment,
       property,
     });
   } catch (err) {

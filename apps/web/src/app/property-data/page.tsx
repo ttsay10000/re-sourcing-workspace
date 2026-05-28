@@ -2,6 +2,7 @@
 
 import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import Link from "next/link";
 import {
   deriveListingActivitySummary,
   describeListingActivity,
@@ -202,6 +203,13 @@ interface ManualAddResponse {
     resolvedOmUrl?: string | null;
     fileName?: string | null;
     authoritativeOmBuilt?: boolean;
+    warning?: string | null;
+  } | null;
+  enrichment?: {
+    attempted?: boolean;
+    ok?: boolean;
+    bbl?: string | null;
+    bin?: string | null;
     warning?: string | null;
   } | null;
 }
@@ -1266,6 +1274,13 @@ function PropertyDataContent() {
           : results.length === 1 && payload.omImport?.requested && singleOmWarning
             ? ` StreetEasy import succeeded, but OM import needs attention: ${singleOmWarning}`
             : "";
+      const enrichmentWarning = results.length === 1 ? payload.enrichment?.warning?.trim() || "" : "";
+      const enrichmentMessage =
+        results.length === 1 && payload.enrichment?.attempted
+          ? payload.enrichment.ok
+            ? ` Enrichment ran${payload.enrichment.bbl ? ` (BBL ${payload.enrichment.bbl})` : ""}.`
+            : ` Enrichment needs attention: ${enrichmentWarning || "one or more modules failed."}`
+          : "";
       const idFetchCount = results.filter((result) => result.saleDetailsFetch?.method === "id").length;
       const fallbackWarnings = results
         .map((result) => result.saleDetailsFetch?.warning?.trim())
@@ -1283,8 +1298,13 @@ function PropertyDataContent() {
           ? ` ${fallbackWarnings.length} used URL fallback after ID lookup failed.`
           : "";
       setManualAddNotice({
-        type: failures.length > 0 || (payload.omImport?.requested && !payload.omImport?.imported && singleOmWarning) ? "error" : "success",
-        message: `${batchMessage}${omMessage}${warningMessage}${failureMessage}`.trim(),
+        type:
+          failures.length > 0 ||
+          (payload.omImport?.requested && !payload.omImport?.imported && singleOmWarning) ||
+          (payload.enrichment?.attempted && !payload.enrichment?.ok)
+            ? "error"
+            : "success",
+        message: `${batchMessage}${omMessage}${enrichmentMessage}${warningMessage}${failureMessage}`.trim(),
       });
       setManualAddDraft({ streetEasyInput: "", omUrl: "" });
       setManualAddModalOpen(false);
@@ -1852,8 +1872,26 @@ function PropertyDataContent() {
                                     {priceReductionSummary}
                                   </div>
                                 ) : null}
-                                {canOpenInquiryComposer ? (
-                                  <div style={{ marginTop: "0.45rem" }}>
+                                <div style={{ marginTop: "0.45rem", display: "flex", gap: "0.45rem", flexWrap: "wrap" }}>
+                                  <Link
+                                    href={`/deal-analysis?property_id=${encodeURIComponent(prop.id)}`}
+                                    onClick={(e) => e.stopPropagation()}
+                                    style={{
+                                      display: "inline-flex",
+                                      alignItems: "center",
+                                      padding: "0.35rem 0.6rem",
+                                      borderRadius: "999px",
+                                      border: "1px solid #bfdbfe",
+                                      background: "#eff6ff",
+                                      color: "#1d4ed8",
+                                      fontSize: "0.75rem",
+                                      fontWeight: 700,
+                                      textDecoration: "none",
+                                    }}
+                                  >
+                                    OM workspace
+                                  </Link>
+                                  {canOpenInquiryComposer ? (
                                     <button
                                       type="button"
                                       onClick={(e) => {
@@ -1875,8 +1913,8 @@ function PropertyDataContent() {
                                     >
                                       Request info / OM
                                     </button>
-                                  </div>
-                                ) : null}
+                                  ) : null}
+                                </div>
                               </td>
                               <td>
                                 <div

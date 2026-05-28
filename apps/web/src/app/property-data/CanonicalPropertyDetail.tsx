@@ -716,6 +716,9 @@ export function CanonicalPropertyDetail({
   const [dossierError, setDossierError] = useState<string | null>(null);
   const [dossierGenerating, setDossierGenerating] = useState(false);
   const [scoreRefreshing, setScoreRefreshing] = useState(false);
+  const [enrichmentRunning, setEnrichmentRunning] = useState(false);
+  const [enrichmentActionNotice, setEnrichmentActionNotice] = useState<string | null>(null);
+  const [enrichmentActionError, setEnrichmentActionError] = useState<string | null>(null);
   const [omCalculation, setOmCalculation] = useState<OmCalculationSnapshot | null>(null);
   const [omCalculationLoading, setOmCalculationLoading] = useState(true);
   const [omCalculationRunning, setOmCalculationRunning] = useState(false);
@@ -774,6 +777,13 @@ export function CanonicalPropertyDetail({
     const data = await res.json().catch(() => ({}));
     if (!res.ok || data?.error) throw new Error((data?.error || data?.details || "Failed to refresh property") as string);
     applyPropertySnapshot(data as Record<string, unknown>);
+  };
+
+  const refreshUnifiedDocuments = async () => {
+    const res = await fetch(`${API_BASE}/api/properties/${property.id}/documents`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data?.error) throw new Error((data?.error || data?.details || "Failed to refresh documents") as string);
+    setUnifiedDocuments(data?.documents ?? []);
   };
 
   const refreshRecipientResolution = async (options?: { keepDraft?: boolean }) => {
@@ -1923,6 +1933,45 @@ export function CanonicalPropertyDetail({
     }
   };
 
+  const runEnrichmentForThisProperty = async () => {
+    if (enrichmentRunning) return;
+    setEnrichmentRunning(true);
+    setEnrichmentActionError(null);
+    setEnrichmentActionNotice("Running enrichment. This may take a minute while NYC Open Data modules refresh.");
+    onWorkflowActivity?.();
+    try {
+      const res = await fetch(`${API_BASE}/api/properties/run-enrichment`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ propertyIds: [property.id] }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data?.error) {
+        throw new Error((data?.details || data?.error || "Failed to run enrichment") as string);
+      }
+      await Promise.all([
+        refreshPropertySnapshot(),
+        refreshUnifiedDocuments().catch(() => undefined),
+        refreshRecipientResolution({ keepDraft: true }).catch(() => undefined),
+      ]);
+      setUnifiedFetched(false);
+      setUnifiedRows([]);
+      onRefreshPropertyData?.();
+      onWorkflowActivity?.();
+      const success = data?.permitEnrichment?.success ?? 0;
+      const failed = data?.permitEnrichment?.failed ?? 0;
+      const processed = data?.omFinancialsRefresh?.documentsProcessed ?? 0;
+      setEnrichmentActionNotice(
+        `Enrichment refreshed. ${success} succeeded, ${failed} failed, ${processed} OM document${processed === 1 ? "" : "s"} refreshed.`
+      );
+    } catch (error) {
+      setEnrichmentActionError(error instanceof Error ? error.message : "Failed to run enrichment.");
+      setEnrichmentActionNotice(null);
+    } finally {
+      setEnrichmentRunning(false);
+    }
+  };
+
   useEffect(() => {
     if (autoOpenInquiryComposerNonce == null) return;
     if (lastAutoOpenInquiryNonceRef.current === autoOpenInquiryComposerNonce) return;
@@ -1970,6 +2019,14 @@ export function CanonicalPropertyDetail({
             >
               Documents
             </button>
+            <button
+              type="button"
+              className="property-detail-rail-button"
+              onClick={runEnrichmentForThisProperty}
+              disabled={enrichmentRunning}
+            >
+              {enrichmentRunning ? "Running enrichment..." : "Run enrichment"}
+            </button>
             <a
               className="property-detail-rail-button"
               href={`/deal-analysis?property_id=${encodeURIComponent(property.id)}`}
@@ -1979,6 +2036,21 @@ export function CanonicalPropertyDetail({
           </>
         )}
       >
+      {(enrichmentActionNotice || enrichmentActionError) && (
+        <div
+          style={{
+            margin: "0 0 0.85rem",
+            padding: "0.6rem 0.75rem",
+            borderRadius: "8px",
+            border: enrichmentActionError ? "1px solid #fecaca" : "1px solid #bfdbfe",
+            background: enrichmentActionError ? "#fef2f2" : "#eff6ff",
+            color: enrichmentActionError ? "#991b1b" : "#1e3a8a",
+            fontSize: "0.86rem",
+          }}
+        >
+          {enrichmentActionError ?? enrichmentActionNotice}
+        </div>
+      )}
       {activeTab === "sources" && (
         <>
         {/* Linked listing — single header row, since there should only be one per canonical property */}

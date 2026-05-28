@@ -3,6 +3,7 @@ import type { CellValue, FillPattern, Font, Borders } from "exceljs";
 import { buildProFormaFileName } from "./dossierFileName.js";
 import {
   buildDealAnalysisWorkbookBlueprint,
+  FALLBACK_BLUEPRINT,
   type DealAnalysisSummaryMetricKey,
   type DealAnalysisWorkbookBlueprint,
 } from "./dealAnalysisExcelBlueprintLlm.js";
@@ -989,7 +990,7 @@ function buildFinancingModelSheet(
   ctx: UnderwritingContext
 ): void {
   const worksheet = workbook.addWorksheet("FinancingModel");
-  worksheet.state = "hidden";
+  worksheet.views = [{ state: "frozen", ySplit: financingRows.amortizationStart - 1, showGridLines: false }];
   worksheet.columns = [
     { width: 24 },
     { width: 16 },
@@ -1163,7 +1164,7 @@ function buildCashFlowModelSheet(
   artifacts: WorkbookBuildArtifacts
 ): void {
   const worksheet = workbook.addWorksheet("CashFlowModel");
-  worksheet.state = "hidden";
+  worksheet.views = [{ state: "frozen", ySplit: 5, xSplit: 2, showGridLines: false }];
   worksheet.columns = [
     { width: 30 },
     { width: 14 },
@@ -1843,7 +1844,7 @@ function buildSummarySheet(
   setSheetCell(
     worksheet,
     "A16",
-    "Blue text on the Assumptions tab marks hard-coded inputs. All downstream summary and cash-flow outputs remain formula-linked.",
+    "Blue text on the Assumptions tab marks hard-coded inputs. FinancingModel and CashFlowModel are visible formula tabs so the workbook can be audited without unhiding support sheets.",
     {
       fill: SOFT_FILL,
       font: NOTE_FONT,
@@ -2020,10 +2021,106 @@ function buildSummarySheet(
   }
 }
 
+function buildModelGuideSheet(workbook: ExcelJS.Workbook): void {
+  const worksheet = workbook.addWorksheet("Model Guide", {
+    views: [{ state: "frozen", ySplit: 4, showGridLines: false }],
+  });
+  worksheet.columns = [
+    { width: 22 },
+    { width: 34 },
+    { width: 64 },
+  ];
+
+  worksheet.mergeCells("A1:C1");
+  setSheetCell(worksheet, "A1", "Workbook Formula Map", {
+    fill: TITLE_FILL,
+    font: TITLE_FONT,
+    alignment: { horizontal: "left", vertical: "middle" },
+  });
+  worksheet.mergeCells("A2:C2");
+  setSheetCell(
+    worksheet,
+    "A2",
+    "This workbook is formula-visible by design: inputs live on Assumptions, financing mechanics live on FinancingModel, operating / exit cash flows live on CashFlowModel, and Summary links to those model outputs.",
+    {
+      fill: SOFT_FILL,
+      font: NOTE_FONT,
+      alignment: { wrapText: true, vertical: "middle" },
+    }
+  );
+  worksheet.getRow(2).height = 42;
+
+  ["Sheet", "Purpose", "Audit notes"].forEach((label, index) => {
+    setSheetCell(worksheet, `${columnLetter(index + 1)}4`, label, {
+      fill: COLUMN_FILL,
+      font: HEADER_FONT,
+      alignment: { horizontal: "center" },
+    });
+  });
+
+  const rows = [
+    [
+      "Summary",
+      "Presentation output",
+      "Uses formulas and named ranges linked to Assumptions, FinancingModel, and CashFlowModel.",
+    ],
+    [
+      "Assumptions",
+      "Editable inputs and source handoff",
+      "Blue values are hard-coded from the current OM workspace / saved underwriting assumptions. Formula cells are white.",
+    ],
+    [
+      "FinancingModel",
+      "Loan sizing and amortization schedule",
+      "Visible support model. Loan amount, fees, payment, debt service, principal, interest, and ending balance are formula-driven.",
+    ],
+    [
+      "CashFlowModel",
+      "Revenue, expenses, NOI, exit, and returns",
+      "Visible support model. Summary metrics link to this sheet through named ranges and direct sheet formulas.",
+    ],
+  ];
+
+  rows.forEach((rowValues, rowIndex) => {
+    const rowNumber = rowIndex + 5;
+    rowValues.forEach((value, colIndex) => {
+      setSheetCell(worksheet, `${columnLetter(colIndex + 1)}${rowNumber}`, value, {
+        fill: colIndex === 0 ? SOFT_FILL : FORMULA_FILL,
+        font: colIndex === 0 ? LABEL_FONT : undefined,
+        alignment: { wrapText: true, vertical: "top" },
+      });
+    });
+    worksheet.getRow(rowNumber).height = 42;
+  });
+
+  worksheet.mergeCells("A11:C11");
+  setSheetCell(worksheet, "A11", "Manual-change freshness", {
+    fill: SECTION_FILL,
+    font: SECTION_FONT,
+    alignment: { horizontal: "left" },
+  });
+  worksheet.mergeCells("A12:C12");
+  setSheetCell(
+    worksheet,
+    "A12",
+    "For property-backed Deal Analysis workspaces, the app saves the current manual underwriting draft before dossier / Excel generation. Batch regeneration should use the saved per-property assumptions already persisted to the property record.",
+    {
+      fill: SOFT_FILL,
+      font: NOTE_FONT,
+      alignment: { wrapText: true, vertical: "top" },
+    }
+  );
+  worksheet.getRow(12).height = 50;
+}
+
 export async function buildDealAnalysisWorkbook(
-  ctx: UnderwritingContext
+  ctx: UnderwritingContext,
+  options: { useLlmBlueprint?: boolean } = {}
 ): Promise<{ buffer: Buffer; fileName: string; blueprint: DealAnalysisWorkbookBlueprint }> {
-  const blueprint = await buildDealAnalysisWorkbookBlueprint(ctx);
+  const blueprint =
+    options.useLlmBlueprint === false
+      ? FALLBACK_BLUEPRINT
+      : await buildDealAnalysisWorkbookBlueprint(ctx);
   const workbook = new ExcelJS.Workbook();
   workbook.creator = "OpenAI / Codex";
   workbook.lastModifiedBy = "OpenAI / Codex";
@@ -2036,6 +2133,7 @@ export async function buildDealAnalysisWorkbook(
   buildFinancingModelSheet(workbook, ctx);
   buildCashFlowModelSheet(workbook, ctx, artifacts);
   buildSummarySheet(workbook, ctx, blueprint, artifacts);
+  buildModelGuideSheet(workbook);
 
   const buffer = await workbook.xlsx.writeBuffer();
   return {
