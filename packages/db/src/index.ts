@@ -64,15 +64,38 @@ export type { SavedDealsRepoOptions } from "./repos/SavedDealsRepo.js";
 export { DealSignalsRepo } from "./repos/DealSignalsRepo.js";
 export type { DealSignalsRepoOptions, InsertDealSignalsParams } from "./repos/DealSignalsRepo.js";
 export { BrokerContactRepo } from "./repos/BrokerContactRepo.js";
-export type { BrokerContactRepoOptions, UpsertBrokerContactParams } from "./repos/BrokerContactRepo.js";
+export type {
+  BrokerContactRepoOptions,
+  SearchBrokerContactsFilters,
+  UpsertBrokerContactParams,
+} from "./repos/BrokerContactRepo.js";
 export { RecipientResolutionRepo } from "./repos/RecipientResolutionRepo.js";
-export type { RecipientResolutionRepoOptions, UpsertRecipientResolutionParams } from "./repos/RecipientResolutionRepo.js";
+export type {
+  PropertyBrokerOverwrite,
+  RecipientResolutionRepoOptions,
+  SetPropertyBrokerOverwriteParams,
+  UpsertRecipientResolutionParams,
+} from "./repos/RecipientResolutionRepo.js";
 export { PropertySourcingStateRepo } from "./repos/PropertySourcingStateRepo.js";
 export type { PropertySourcingStateRepoOptions, UpsertPropertySourcingStateParams } from "./repos/PropertySourcingStateRepo.js";
 export { PropertyOutreachFlagRepo } from "./repos/PropertyOutreachFlagRepo.js";
 export type { PropertyOutreachFlagRepoOptions } from "./repos/PropertyOutreachFlagRepo.js";
 export { PropertyActionItemRepo } from "./repos/PropertyActionItemRepo.js";
 export type { PropertyActionItemRepoOptions } from "./repos/PropertyActionItemRepo.js";
+export { PropertyPipelineEventRepo } from "./repos/PropertyPipelineEventRepo.js";
+export type {
+  CreatePropertyPipelineEventParams,
+  ListPropertyPipelineEventsOptions,
+  PropertyPipelineEvent,
+  PropertyPipelineEventRepoOptions,
+} from "./repos/PropertyPipelineEventRepo.js";
+export { PropertyRejectionRepo } from "./repos/PropertyRejectionRepo.js";
+export type {
+  PropertyRejection,
+  PropertyRejectionRepoOptions,
+  RejectPropertyParams,
+  RestorePropertyRejectionParams,
+} from "./repos/PropertyRejectionRepo.js";
 export { OutreachBatchRepo } from "./repos/OutreachBatchRepo.js";
 export type { OutreachBatchRepoOptions, CreateOutreachBatchParams } from "./repos/OutreachBatchRepo.js";
 export { InboxSyncStateRepo } from "./repos/InboxSyncStateRepo.js";

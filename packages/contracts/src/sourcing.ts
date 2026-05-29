@@ -56,9 +56,13 @@ export type OutreachBatchStatus =
 
 export interface BrokerContact {
   id: string;
-  normalizedEmail: string;
+  normalizedEmail: string | null;
+  sourceKey?: string | null;
   displayName?: string | null;
   firm?: string | null;
+  phone?: string | null;
+  source?: string | null;
+  sourceMetadata?: Record<string, unknown> | null;
   preferredThreadId?: string | null;
   lastOutreachAt?: string | null;
   lastReplyAt?: string | null;
@@ -66,6 +70,8 @@ export interface BrokerContact {
   manualReviewOnly: boolean;
   notes?: string | null;
   activitySummary?: Record<string, unknown> | null;
+  manualOverwrittenAt?: string | null;
+  manualOverwrittenBy?: string | null;
   createdAt: string;
   updatedAt: string;
 }

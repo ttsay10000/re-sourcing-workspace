@@ -1,17 +1,75 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
 
-const NAV_LINKS = [
-  { href: "/", label: "Home" },
-  { href: "/runs", label: "Sourcing Agent" },
-  { href: "/property-data", label: "Property Data" },
-  { href: "/deal-analysis", label: "Deal Analysis" },
-  { href: "/sales-metrics", label: "Sales Metrics" },
-  { href: "/profile", label: "Profile" },
-] as const;
+type NavLink = {
+  href: string;
+  label: string;
+  shortLabel: string;
+  matches: (pathname: string, section: string | null) => boolean;
+};
+
+const NAV_LINKS: NavLink[] = [
+  {
+    href: "/",
+    label: "Home",
+    shortLabel: "H",
+    matches: (pathname: string) => pathname === "/",
+  },
+  {
+    href: "/pipeline",
+    label: "Pipeline",
+    shortLabel: "P",
+    matches: (pathname: string) =>
+      pathname === "/pipeline" ||
+      pathname.startsWith("/pipeline/") ||
+      pathname === "/property-data" ||
+      pathname.startsWith("/property-data/") ||
+      pathname.startsWith("/property/"),
+  },
+  {
+    href: "/crm",
+    label: "Broker CRM",
+    shortLabel: "B",
+    matches: (pathname: string) =>
+      pathname === "/crm" ||
+      pathname.startsWith("/crm/") ||
+      pathname === "/om-review" ||
+      pathname.startsWith("/om-review/"),
+  },
+  {
+    href: "/saved",
+    label: "Saved Deals",
+    shortLabel: "S",
+    matches: (pathname: string, section: string | null) =>
+      pathname === "/saved" ||
+      pathname.startsWith("/saved/") ||
+      ((pathname === "/profile" || pathname.startsWith("/profile/")) && section === "saved-deals"),
+  },
+  {
+    href: "/progress",
+    label: "Deal Progress",
+    shortLabel: "D",
+    matches: (pathname: string) =>
+      pathname === "/progress" ||
+      pathname.startsWith("/progress/") ||
+      pathname === "/deal-analysis" ||
+      pathname.startsWith("/deal-analysis/") ||
+      pathname.startsWith("/dossier-") ||
+      pathname.startsWith("/rental-analysis"),
+  },
+  {
+    href: "/profile",
+    label: "Profile",
+    shortLabel: "U",
+    matches: (pathname: string, section: string | null) =>
+      (pathname === "/profile" || pathname.startsWith("/profile/") || pathname === "/profiles") &&
+      section !== "saved-deals",
+  },
+];
+const ROOT_REDIRECT_PATH = "/pipeline";
 const API_BASE = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000").replace(/\/$/, "");
 
 type AuthStatus = "checking" | "locked" | "unlocking" | "authenticated";
@@ -35,10 +93,14 @@ function isSiteAuthRequest(url: string | null): boolean {
 
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
+  const router = useRouter();
   const [authStatus, setAuthStatus] = useState<AuthStatus>("checking");
   const [authError, setAuthError] = useState<string | null>(null);
   const [password, setPassword] = useState("");
   const [locking, setLocking] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [globalSearch, setGlobalSearch] = useState("");
+  const [currentSection, setCurrentSection] = useState<string | null>(null);
 
   useEffect(() => {
     const originalFetch = window.fetch.bind(window);
@@ -65,6 +127,27 @@ export function AppShell({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 860px)");
+    const syncSidebarState = () => setSidebarCollapsed(media.matches);
+
+    syncSidebarState();
+    media.addEventListener("change", syncSidebarState);
+    return () => media.removeEventListener("change", syncSidebarState);
+  }, []);
+
+  useEffect(() => {
+    const syncUrlState = () => {
+      const params = new URLSearchParams(window.location.search);
+      setGlobalSearch(params.get("q") ?? "");
+      setCurrentSection(params.get("section"));
+    };
+
+    syncUrlState();
+    window.addEventListener("popstate", syncUrlState);
+    return () => window.removeEventListener("popstate", syncUrlState);
+  }, [pathname]);
+
   const checkSiteAuth = useCallback(async () => {
     setAuthError(null);
     try {
@@ -85,6 +168,11 @@ export function AppShell({ children }: { children: ReactNode }) {
   useEffect(() => {
     void checkSiteAuth();
   }, [checkSiteAuth]);
+
+  useEffect(() => {
+    if (authStatus !== "authenticated" || pathname !== "/") return;
+    router.replace(`${ROOT_REDIRECT_PATH}${window.location.search}${window.location.hash}`);
+  }, [authStatus, pathname, router]);
 
   const handleUnlock = useCallback(
     async (event: FormEvent<HTMLFormElement>) => {
@@ -141,6 +229,34 @@ export function AppShell({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const updateGlobalSearch = useCallback(
+    (nextValue: string) => {
+      setGlobalSearch(nextValue);
+
+      const params = new URLSearchParams(window.location.search);
+      if (nextValue.trim()) {
+        params.set("q", nextValue);
+      } else {
+        params.delete("q");
+      }
+
+      const nextQuery = params.toString();
+      const hash = window.location.hash;
+      router.replace(`${pathname}${nextQuery ? `?${nextQuery}` : ""}${hash}`, { scroll: false });
+    },
+    [pathname, router]
+  );
+
+  const clearGlobalSearch = useCallback(() => {
+    updateGlobalSearch("");
+  }, [updateGlobalSearch]);
+
+  const handleNavClick = useCallback((href: string) => {
+    const targetUrl = new URL(href, window.location.origin);
+    setCurrentSection(targetUrl.searchParams.get("section"));
+    setGlobalSearch(targetUrl.searchParams.get("q") ?? "");
+  }, []);
+
   if (authStatus !== "authenticated") {
     return (
       <main className="site-auth-screen">
@@ -148,7 +264,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           <p className="site-auth-eyebrow">Protected workspace</p>
           <h1 className="site-auth-title">Real Estate Sourcing Flow</h1>
           <p className="site-auth-copy">
-            Enter the shared site password to open listings, property data, dossiers, and profile settings.
+            Enter the shared site password to open the pipeline, broker CRM, saved deals, progress, and profile settings.
           </p>
           <form className="site-auth-form" onSubmit={handleUnlock}>
             <label className="profile-field">
@@ -184,50 +300,97 @@ export function AppShell({ children }: { children: ReactNode }) {
   }
 
   return (
-    <div className="app-shell">
-      <header className="app-header">
-        <div className="app-header-title">Real Estate Sourcing Flow</div>
-        <nav className="app-nav">
-          {NAV_LINKS.map(({ href, label }) => {
-            const isActive =
-              href === "/"
-                ? pathname === "/"
-                : href === "/property-data"
-                  ? pathname.startsWith("/property-data") || pathname.startsWith("/om-review")
-                  : pathname.startsWith(href);
+    <div className={`app-shell ${sidebarCollapsed ? "app-shell--sidebar-collapsed" : ""}`}>
+      <aside className="app-sidebar" aria-label="Workspace navigation">
+        <Link href="/" className="app-sidebar-brand" aria-label="Real Estate Sourcing Flow home">
+          <span className="app-sidebar-mark">RE</span>
+          <span className="app-sidebar-brand-text">
+            <span>Sourcing Flow</span>
+            <small>Workspace</small>
+          </span>
+        </Link>
+
+        <nav className="app-nav" aria-label="Primary navigation">
+          {NAV_LINKS.map((navItem) => {
+            const isActive = navItem.matches(pathname, currentSection);
             return (
               <Link
-                key={href}
-                href={href}
+                key={navItem.href}
+                href={navItem.href}
+                aria-label={navItem.label}
+                aria-current={isActive ? "page" : undefined}
+                onClick={() => handleNavClick(navItem.href)}
                 className={`app-nav-link ${isActive ? "app-nav-link--active" : ""}`}
               >
-                {label}
+                <span className="app-nav-short" aria-hidden="true">
+                  {navItem.shortLabel}
+                </span>
+                <span className="app-nav-label">{navItem.label}</span>
               </Link>
             );
           })}
         </nav>
-        <div className="app-header-right">
-          <span className="app-user-profile">Site unlocked</span>
+
+        <div className="app-sidebar-foot">
           <button
             type="button"
-            className="app-header-lock-button"
+            className="app-sidebar-lock-button"
             onClick={handleLock}
             disabled={locking}
           >
             {locking ? "Locking…" : "Lock"}
           </button>
         </div>
-      </header>
-      <main className="app-main">{children}</main>
-      <footer className="app-footer">
-        <nav className="app-footer-nav" aria-label="Footer navigation">
-          {NAV_LINKS.map(({ href, label }) => (
-            <Link key={href} href={href} className="app-footer-link">
-              {label}
+      </aside>
+
+      <div className="app-workspace">
+        <header className="app-topbar">
+          <button
+            type="button"
+            className="app-icon-button app-sidebar-toggle"
+            aria-label={sidebarCollapsed ? "Open sidebar" : "Collapse sidebar"}
+            aria-pressed={!sidebarCollapsed}
+            onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}
+          >
+            <span className="app-sidebar-toggle-lines" aria-hidden="true">
+              <span />
+              <span />
+              <span />
+            </span>
+          </button>
+
+          <div className="app-global-search" role="search">
+            <span className="app-global-search-icon" aria-hidden="true" />
+            <input
+              type="search"
+              value={globalSearch}
+              onChange={(event) => updateGlobalSearch(event.target.value)}
+              placeholder="Search current page"
+              aria-label="Search current page"
+              className="app-global-search-input"
+            />
+            {globalSearch ? (
+              <button
+                type="button"
+                className="app-global-search-clear"
+                onClick={clearGlobalSearch}
+                aria-label="Clear search"
+              >
+                Clear
+              </button>
+            ) : null}
+          </div>
+
+          <div className="app-topbar-actions">
+            <span className="app-session-pill">Site unlocked</span>
+            <Link href="/add-property" className="app-primary-action">
+              Import / Add Property
             </Link>
-          ))}
-        </nav>
-      </footer>
+          </div>
+        </header>
+
+        <main className="app-main">{children}</main>
+      </div>
     </div>
   );
 }

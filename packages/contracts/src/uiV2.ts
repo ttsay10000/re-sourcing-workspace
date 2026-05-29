@@ -45,12 +45,176 @@ export type UiV2PipelineStatus =
 
 export type UiV2StatusChipTone = "neutral" | "info" | "success" | "warning" | "danger";
 
+export type UiV2ActionSurface =
+  | "global_nav"
+  | "pipeline_table"
+  | "property_sheet"
+  | "crm_table"
+  | "import_wizard"
+  | "saved_table"
+  | "progress_table"
+  | "profile";
+
+export type UiV2PropertyActionId =
+  | "open_property"
+  | "edit_status"
+  | "save_deal"
+  | "reject_deal"
+  | "restore_deal"
+  | "email_broker"
+  | "edit_broker"
+  | "add_tag"
+  | "remove_tag"
+  | "upload_om"
+  | "open_docs"
+  | "run_enrichment"
+  | "run_underwriting"
+  | "run_streeteasy_pull"
+  | "schedule_follow_up"
+  | "mark_om_requested"
+  | "mark_om_received"
+  | "move_to_underwriting";
+
+export interface UiV2PropertyAction {
+  id: UiV2PropertyActionId | string;
+  label: string;
+  surface: UiV2ActionSurface;
+  tone?: UiV2StatusChipTone;
+  disabled?: boolean;
+  disabledReason?: string | null;
+  requiresConfirmation?: boolean;
+}
+
 export interface UiV2StatusChip {
   status: UiV2PipelineStatus | PropertyWorkflowState | PropertyDisposition | string;
   label: string;
   tone?: UiV2StatusChipTone;
   editable: boolean;
 }
+
+export interface UiV2PipelineStatusOption {
+  status: UiV2PipelineStatus;
+  label: string;
+  tone: UiV2StatusChipTone;
+  editable: boolean;
+  terminal?: boolean;
+  description?: string;
+  tableActions?: UiV2PropertyActionId[];
+  sheetActions?: UiV2PropertyActionId[];
+}
+
+export const UI_V2_PIPELINE_STATUS_OPTIONS = [
+  {
+    status: "new",
+    label: "Sourced",
+    tone: "neutral",
+    editable: true,
+    description: "Newly sourced and ready for initial screening.",
+    tableActions: ["open_property", "edit_status", "save_deal", "reject_deal"],
+    sheetActions: ["email_broker", "save_deal", "reject_deal", "add_tag"],
+  },
+  {
+    status: "screening",
+    label: "Screening",
+    tone: "info",
+    editable: true,
+    description: "Initial review is in progress.",
+    tableActions: ["open_property", "edit_status", "save_deal", "reject_deal"],
+    sheetActions: ["email_broker", "save_deal", "reject_deal", "add_tag"],
+  },
+  {
+    status: "interesting",
+    label: "Interesting",
+    tone: "warning",
+    editable: true,
+    description: "Worth tracking or moving toward broker outreach.",
+    tableActions: ["open_property", "edit_status", "save_deal", "reject_deal"],
+    sheetActions: ["email_broker", "save_deal", "reject_deal", "add_tag"],
+  },
+  {
+    status: "saved",
+    label: "Saved",
+    tone: "success",
+    editable: true,
+    description: "Saved for active follow-up.",
+    tableActions: ["open_property", "edit_status", "email_broker", "reject_deal"],
+    sheetActions: ["email_broker", "reject_deal", "add_tag"],
+  },
+  {
+    status: "underwriting",
+    label: "Underwriting",
+    tone: "warning",
+    editable: true,
+    description: "Underwriting or deal analysis is active.",
+    tableActions: ["open_property", "edit_status", "run_underwriting", "reject_deal"],
+    sheetActions: ["email_broker", "run_underwriting", "reject_deal", "add_tag"],
+  },
+  {
+    status: "outreach",
+    label: "Outreach",
+    tone: "info",
+    editable: true,
+    description: "Broker outreach is queued, drafted, or underway.",
+    tableActions: ["open_property", "edit_status", "email_broker", "schedule_follow_up"],
+    sheetActions: ["email_broker", "schedule_follow_up", "mark_om_requested", "reject_deal"],
+  },
+  {
+    status: "awaiting_broker",
+    label: "Awaiting Broker",
+    tone: "warning",
+    editable: true,
+    description: "Waiting on a broker response or documents.",
+    tableActions: ["open_property", "edit_status", "email_broker", "schedule_follow_up"],
+    sheetActions: ["email_broker", "schedule_follow_up", "mark_om_received", "reject_deal"],
+  },
+  {
+    status: "om_received",
+    label: "OM Received",
+    tone: "success",
+    editable: true,
+    description: "Offering materials or deal documents have been received.",
+    tableActions: ["open_property", "edit_status", "open_docs", "run_underwriting"],
+    sheetActions: ["open_docs", "upload_om", "run_underwriting", "move_to_underwriting"],
+  },
+  {
+    status: "dossier_generated",
+    label: "Dossier Generated",
+    tone: "success",
+    editable: true,
+    description: "A deal dossier or underwriting package has been generated.",
+    tableActions: ["open_property", "edit_status", "open_docs", "run_underwriting"],
+    sheetActions: ["open_docs", "run_underwriting", "email_broker"],
+  },
+  {
+    status: "offer_review",
+    label: "Offer Review",
+    tone: "warning",
+    editable: true,
+    description: "The deal is being reviewed for LOI, offer, or partner approval.",
+    tableActions: ["open_property", "edit_status", "email_broker"],
+    sheetActions: ["email_broker", "open_docs", "schedule_follow_up"],
+  },
+  {
+    status: "rejected",
+    label: "Rejected",
+    tone: "danger",
+    editable: true,
+    terminal: true,
+    description: "Removed from active pursuit with a structured rejection reason.",
+    tableActions: ["open_property", "restore_deal"],
+    sheetActions: ["restore_deal", "add_tag"],
+  },
+  {
+    status: "archived",
+    label: "Archived",
+    tone: "neutral",
+    editable: true,
+    terminal: true,
+    description: "Hidden from active workflows without a deal rejection.",
+    tableActions: ["open_property", "restore_deal"],
+    sheetActions: ["restore_deal", "add_tag"],
+  },
+] as const satisfies readonly UiV2PipelineStatusOption[];
 
 export type UiV2RejectionReasonCode =
   | "price_too_high"
@@ -76,9 +240,156 @@ export interface UiV2RejectionReason {
   note?: string | null;
 }
 
-export interface UiV2StatusUpdateInput {
-  status: UiV2PipelineStatus;
-  rejection?: UiV2RejectionReason;
+export interface UiV2RejectionReasonOption {
+  code: UiV2RejectionReasonCode;
+  label: string;
+  category:
+    | "pricing"
+    | "financials"
+    | "asset_fit"
+    | "risk"
+    | "execution"
+    | "availability"
+    | "data_quality"
+    | "other";
+  description?: string;
+}
+
+export const UI_V2_REJECTION_REASON_OPTIONS = [
+  {
+    code: "price_too_high",
+    label: "Price too high",
+    category: "pricing",
+    description: "Ask price is too far above target value or replacement basis.",
+  },
+  {
+    code: "low_cap_rate",
+    label: "Low cap rate",
+    category: "financials",
+    description: "Current or stabilized cap rate is below the investment threshold.",
+  },
+  {
+    code: "insufficient_noi",
+    label: "Insufficient NOI",
+    category: "financials",
+    description: "Income profile does not support the requested pricing or target returns.",
+  },
+  {
+    code: "weak_rent_roll",
+    label: "Weak rent roll",
+    category: "financials",
+    description: "Rent roll quality, collections, or unit economics are not compelling.",
+  },
+  {
+    code: "rent_stabilized_exposure",
+    label: "Rent-stabilized exposure",
+    category: "risk",
+    description: "Regulated-unit exposure creates too much execution or upside risk.",
+  },
+  {
+    code: "poor_location",
+    label: "Poor location",
+    category: "asset_fit",
+    description: "Location does not fit the target geography or submarket quality bar.",
+  },
+  {
+    code: "asset_type_mismatch",
+    label: "Asset type mismatch",
+    category: "asset_fit",
+    description: "Property type does not match the target multifamily strategy.",
+  },
+  {
+    code: "too_small",
+    label: "Too small",
+    category: "asset_fit",
+    description: "Deal size, unit count, or equity check is below the target range.",
+  },
+  {
+    code: "too_large",
+    label: "Too large",
+    category: "asset_fit",
+    description: "Deal size, unit count, or equity check is above the target range.",
+  },
+  {
+    code: "deferred_maintenance",
+    label: "Deferred maintenance",
+    category: "risk",
+    description: "Physical condition or capex burden is too high for the opportunity.",
+  },
+  {
+    code: "environmental_or_legal_risk",
+    label: "Environmental/legal risk",
+    category: "risk",
+    description: "Known or suspected environmental, title, zoning, or legal issue.",
+  },
+  {
+    code: "financing_not_viable",
+    label: "Financing not viable",
+    category: "execution",
+    description: "Debt, leverage, DSCR, or liquidity constraints make the deal impractical.",
+  },
+  {
+    code: "broker_unresponsive",
+    label: "Broker unresponsive",
+    category: "execution",
+    description: "Broker or owner did not respond after reasonable follow-up.",
+  },
+  {
+    code: "duplicate",
+    label: "Duplicate",
+    category: "data_quality",
+    description: "Same opportunity is already represented by another property record.",
+  },
+  {
+    code: "already_sold_or_unavailable",
+    label: "Sold/unavailable",
+    category: "availability",
+    description: "Property is sold, unavailable, withdrawn, or no longer actionable.",
+  },
+  {
+    code: "data_quality_issue",
+    label: "Data quality issue",
+    category: "data_quality",
+    description: "Record cannot be trusted without more source data or cleanup.",
+  },
+  {
+    code: "other",
+    label: "Other",
+    category: "other",
+    description: "Use with a note when the reason does not fit a standard category.",
+  },
+] as const satisfies readonly UiV2RejectionReasonOption[];
+
+export type UiV2NonRejectedPipelineStatus = Exclude<UiV2PipelineStatus, "rejected">;
+
+export type UiV2StatusUpdateInput =
+  | {
+      status: UiV2NonRejectedPipelineStatus;
+      rejection?: never;
+      note?: string | null;
+      source?: UiV2ActionSurface | null;
+    }
+  | {
+      status: "rejected";
+      rejection: UiV2RejectionReason;
+      note?: string | null;
+      source?: UiV2ActionSurface | null;
+    };
+
+export interface UiV2SavePropertyInput {
+  note?: string | null;
+  source?: UiV2ActionSurface | null;
+}
+
+export interface UiV2RestorePropertyInput {
+  restoreToStatus?: UiV2NonRejectedPipelineStatus;
+  note?: string | null;
+  source?: UiV2ActionSurface | null;
+}
+
+export interface UiV2TagUpdateInput {
+  tags: string[];
+  source?: UiV2ActionSurface | null;
 }
 
 export interface UiV2PaginationQuery {
@@ -91,10 +402,15 @@ export interface UiV2PipelineQuery extends UiV2PaginationQuery {
   status?: UiV2PipelineStatus | UiV2PipelineStatus[];
   source?: ListingSource | ListingSource[];
   tag?: string | string[];
+  neighborhood?: string | string[];
+  borough?: string | string[];
   hasOm?: boolean;
   hasBrokerContact?: boolean;
+  includeRejected?: boolean;
   minDealScore?: number;
   maxDealScore?: number;
+  minAskingPrice?: number;
+  maxAskingPrice?: number;
   updatedSince?: string;
   sortBy?: UiV2PipelineSortField;
   sortDirection?: UiV2SortDirection;
@@ -121,12 +437,17 @@ export interface UiV2BrokerBlock {
   notes?: string | null;
 }
 
+export type UiV2BrokerOverwriteTarget = "property_sourced_broker" | "crm_contact" | "both";
+
 export interface UiV2BrokerOverwriteInput {
   name?: string | null;
   email?: string | null;
   phone?: string | null;
   firm?: string | null;
   notes?: string | null;
+  overwriteTarget?: UiV2BrokerOverwriteTarget;
+  source?: "property_sheet" | "crm" | "import_review" | "llm_review" | string | null;
+  overwriteSourcedBroker?: boolean;
   overwriteReason?: string | null;
 }
 
@@ -184,6 +505,8 @@ export interface UiV2ActivityTimelineItem {
   title: string;
   body?: string | null;
   actorName?: string | null;
+  actionId?: UiV2PropertyActionId | string | null;
+  surface?: UiV2ActionSurface | null;
   metadata?: Record<string, unknown> | null;
   createdAt: string;
 }
@@ -202,6 +525,7 @@ export interface UiV2PipelineRow {
   borough?: string | null;
   thumbnailUrl?: string | null;
   broker?: UiV2BrokerBlock | null;
+  availableActions?: UiV2PropertyAction[];
   documentStatus?: UiV2DocumentStatus | null;
   enrichmentState?: UiV2EnrichmentState | null;
   underwriting?: UiV2UnderwritingSummary | null;
@@ -245,6 +569,7 @@ export interface UiV2PropertyDetailPayload {
   statusChip: UiV2StatusChip;
   gallery: UiV2ImageAsset[];
   broker: UiV2BrokerBlock | null;
+  availableActions?: UiV2PropertyAction[];
   tags: string[];
   documentStatus: UiV2DocumentStatus;
   enrichmentState: UiV2EnrichmentState;
@@ -263,6 +588,20 @@ export type UiV2ImportJobType =
   | "streeteasy_sale_id"
   | "streeteasy_pull"
   | "saved_search_run";
+
+export type UiV2ImportWizardMode = UiV2ImportJobType;
+
+export interface UiV2StreetEasyPullOptions {
+  includeListingDetails?: boolean;
+  includeBuildingDetails?: boolean;
+  includeSaleHistory?: boolean;
+  includeUnitDetails?: boolean;
+  includeBrokerInfo?: boolean;
+  includeImages?: boolean;
+  includeNearbyComparables?: boolean;
+  createPropertyIfMissing?: boolean;
+  savedSearchId?: string | null;
+}
 
 export interface UiV2ImportJobStatus {
   id: string;
@@ -295,7 +634,13 @@ export interface UiV2ManualEntryImportInput {
   canonicalAddress: string;
   listingUrl?: string | null;
   askingPrice?: number | null;
+  units?: number | null;
+  neighborhood?: string | null;
+  source?: ListingSource | string | null;
+  ownerName?: string | null;
   broker?: UiV2BrokerOverwriteInput | null;
+  notes?: string | null;
+  images?: UiV2ImageAsset[];
   tags?: string[];
 }
 
@@ -310,9 +655,10 @@ export interface UiV2StreetEasySaleIdImportInput {
 }
 
 export interface UiV2StreetEasyPullInput {
-  propertyId: string;
+  propertyId?: string | null;
   saleId?: string | null;
   url?: string | null;
+  options?: UiV2StreetEasyPullOptions;
 }
 
 export interface UiV2SavedSearchRunInput {
@@ -322,7 +668,38 @@ export interface UiV2SavedSearchRunInput {
 export interface UiV2ImportJobPayload {
   job: UiV2ImportJobStatus;
   omRun?: OmIngestionRun | null;
+  property?: UiV2PropertyDetailPayload | null;
 }
+
+export type UiV2ImportJobInput =
+  | {
+      jobType: "om_upload";
+      input: UiV2OmUploadImportInput;
+    }
+  | {
+      jobType: "om_url";
+      input: UiV2OmUrlImportInput;
+    }
+  | {
+      jobType: "manual_entry";
+      input: UiV2ManualEntryImportInput;
+    }
+  | {
+      jobType: "streeteasy_url";
+      input: UiV2StreetEasyUrlImportInput;
+    }
+  | {
+      jobType: "streeteasy_sale_id";
+      input: UiV2StreetEasySaleIdImportInput;
+    }
+  | {
+      jobType: "streeteasy_pull";
+      input: UiV2StreetEasyPullInput;
+    }
+  | {
+      jobType: "saved_search_run";
+      input: UiV2SavedSearchRunInput;
+    };
 
 export interface UiV2CrmContactPayload {
   contact: BrokerContact;

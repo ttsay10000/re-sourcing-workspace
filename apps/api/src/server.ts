@@ -18,6 +18,10 @@ import dealsRouter from "./routes/deals.js";
 import savedSearchesRouter from "./routes/savedSearches.js";
 import salesMetricsRouter from "./routes/salesMetrics.js";
 import dealAnalysisRouter from "./routes/dealAnalysis.js";
+import pipelineV2Router from "./routes/pipelineV2.js";
+import crmV2Router from "./routes/crmV2.js";
+import importV2Router from "./routes/importV2.js";
+import savedProgressV2Router from "./routes/savedProgressV2.js";
 
 const PORT = Number(process.env.PORT) || 4000;
 const version = process.env.npm_package_version || "1.0.0";
@@ -71,6 +75,10 @@ app.use("/api", dealsRouter);
 app.use("/api", savedSearchesRouter);
 app.use("/api", salesMetricsRouter);
 app.use("/api", dealAnalysisRouter);
+app.use("/api", pipelineV2Router);
+app.use("/api", crmV2Router);
+app.use("/api", importV2Router);
+app.use("/api", savedProgressV2Router);
 
 // Optional: read DATABASE_URL for future routes; do not connect at startup
 const databaseUrl = process.env.DATABASE_URL;

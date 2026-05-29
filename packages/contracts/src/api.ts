@@ -34,6 +34,7 @@ import type {
   UiV2BrokerOverwriteInput,
   UiV2CrmListPayload,
   UiV2DealProgressSummary,
+  UiV2ImportJobInput,
   UiV2ImportJobPayload,
   UiV2ManualEntryImportInput,
   UiV2OmUploadImportInput,
@@ -45,13 +46,18 @@ import type {
   UiV2OutreachFollowUpActionPayload,
   UiV2PipelineListPayload,
   UiV2PipelineQuery,
+  UiV2PipelineStatusOption,
   UiV2PropertyDetailPayload,
+  UiV2RejectionReasonOption,
+  UiV2RestorePropertyInput,
+  UiV2SavePropertyInput,
   UiV2SavedDealsPayload,
   UiV2SavedSearchRunInput,
   UiV2StatusUpdateInput,
   UiV2StreetEasyPullInput,
   UiV2StreetEasySaleIdImportInput,
   UiV2StreetEasyUrlImportInput,
+  UiV2TagUpdateInput,
 } from "./uiV2.js";
 
 // ---- Profiles ----
@@ -275,6 +281,11 @@ export interface PropertyOutreachSummaryResponse {
 }
 
 // ---- UI v2 backend contracts ----
+export interface UiV2MetadataResponse {
+  statusOptions: UiV2PipelineStatusOption[];
+  rejectionReasonOptions: UiV2RejectionReasonOption[];
+}
+
 export interface UiV2PipelineListRequest {
   query?: UiV2PipelineQuery;
 }
@@ -293,6 +304,42 @@ export interface UiV2PropertyStatusUpdateRequest {
 }
 
 export interface UiV2PropertyStatusUpdateResponse {
+  property: UiV2PropertyDetailPayload;
+}
+
+export interface UiV2PropertySaveRequest {
+  propertyId: string;
+  body?: UiV2SavePropertyInput;
+}
+
+export interface UiV2PropertySaveResponse {
+  property: UiV2PropertyDetailPayload;
+}
+
+export interface UiV2PropertyRejectRequest {
+  propertyId: string;
+  body: Extract<UiV2StatusUpdateInput, { status: "rejected" }>;
+}
+
+export interface UiV2PropertyRejectResponse {
+  property: UiV2PropertyDetailPayload;
+}
+
+export interface UiV2PropertyRestoreRequest {
+  propertyId: string;
+  body?: UiV2RestorePropertyInput;
+}
+
+export interface UiV2PropertyRestoreResponse {
+  property: UiV2PropertyDetailPayload;
+}
+
+export interface UiV2PropertyTagsUpdateRequest {
+  propertyId: string;
+  body: UiV2TagUpdateInput;
+}
+
+export interface UiV2PropertyTagsUpdateResponse {
   property: UiV2PropertyDetailPayload;
 }
 
@@ -367,6 +414,10 @@ export interface UiV2StreetEasyPullRequest {
 
 export interface UiV2SavedSearchRunRequest {
   body: UiV2SavedSearchRunInput;
+}
+
+export interface UiV2CreateImportJobRequest {
+  body: UiV2ImportJobInput;
 }
 
 export interface UiV2ImportJobResponse {

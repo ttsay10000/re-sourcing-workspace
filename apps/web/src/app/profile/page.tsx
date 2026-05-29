@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import React, { useCallback, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
 const currencyFormatter = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
@@ -159,6 +160,19 @@ interface UserProfile {
   updatedAt: string;
 }
 
+interface ProfileSavedDealRow {
+  savedDeal: {
+    id: string;
+    propertyId: string;
+    dealStatus: string;
+    createdAt: string;
+  };
+  address: string;
+  price: number | null;
+  units: number | null;
+  dealScore: number | null;
+}
+
 interface SavedSearch {
   id: string;
   name: string;
@@ -292,6 +306,15 @@ function formatSavedSearchFilters(search: SavedSearch): string {
   return filters.join(" | ");
 }
 
+function matchesSearchQuery(values: Array<string | number | boolean | null | undefined>, query: string): boolean {
+  if (!query) return true;
+  return values
+    .filter((value) => value != null)
+    .join(" ")
+    .toLowerCase()
+    .includes(query);
+}
+
 function buildSavedSearchDraft(search?: SavedSearch | null): SavedSearchDraft {
   if (!search) return { ...DEFAULT_SAVED_SEARCH_DRAFT };
   return {
@@ -347,6 +370,8 @@ function buildSavedSearchPayload(draft: SavedSearchDraft) {
 }
 
 export default function ProfilePage() {
+  const searchParams = useSearchParams();
+  const globalQuery = (searchParams.get("q") ?? "").trim().toLowerCase();
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -358,7 +383,7 @@ export default function ProfilePage() {
   const [sitePasswordSaving, setSitePasswordSaving] = useState(false);
   const [sitePasswordError, setSitePasswordError] = useState<string | null>(null);
   const [sitePasswordNotice, setSitePasswordNotice] = useState<string | null>(null);
-  const [savedDeals, setSavedDeals] = useState<Array<{ savedDeal: { id: string; propertyId: string; dealStatus: string; createdAt: string }; address: string; price: number | null; units: number | null; dealScore: number | null }>>([]);
+  const [savedDeals, setSavedDeals] = useState<ProfileSavedDealRow[]>([]);
   const [savedDealsLoading, setSavedDealsLoading] = useState(false);
   const [refreshingScoreScope, setRefreshingScoreScope] = useState<"saved" | "all" | null>(null);
   const [savedSearches, setSavedSearches] = useState<SavedSearch[]>([]);
@@ -727,12 +752,12 @@ export default function ProfilePage() {
       const res = await fetch(`${API_BASE}/api/saved-searches/${encodeURIComponent(savedSearchId)}/run-now`, { method: "POST" });
       const data = await res.json();
       if (res.status === 409 || data?.code === "already_running") {
-        setSavedSearchNotice("Saved search is already running. Open Property Data for live workflow tracking while the current run finishes.");
+        setSavedSearchNotice("Saved search is already running. Open Pipeline for live workflow tracking while the current run finishes.");
         await fetchSavedSearches();
         return;
       }
       if (!res.ok) throw new Error(data?.error || data?.details || "Failed to start saved search");
-      setSavedSearchNotice("Saved search started. Open Property Data for live workflow tracking.");
+      setSavedSearchNotice("Saved search started. Open Pipeline for live workflow tracking.");
       await fetchSavedSearches();
     } catch (e) {
       setSavedSearchError(e instanceof Error ? e.message : "Failed to start saved search");
@@ -759,9 +784,48 @@ export default function ProfilePage() {
     }
   };
 
+  const filteredSavedSearches = useMemo(() => {
+    if (!globalQuery) return savedSearches;
+    return savedSearches.filter((search) =>
+      matchesSearchQuery(
+        [
+          search.name,
+          search.enabled ? "enabled" : "paused",
+          formatSavedSearchSchedule(search),
+          formatSavedSearchFilters(search),
+          search.timezone,
+          search.scheduleCadence,
+          search.areaCodes.join(" "),
+          search.singleLocationSlug,
+          search.propertyTypes.join(" "),
+          search.requiredAmenities.join(" "),
+        ],
+        globalQuery
+      )
+    );
+  }, [globalQuery, savedSearches]);
+
+  const filteredSavedDeals = useMemo(() => {
+    if (!globalQuery) return savedDeals;
+    return savedDeals.filter((row) =>
+      matchesSearchQuery(
+        [
+          row.address,
+          row.savedDeal.propertyId,
+          row.savedDeal.dealStatus,
+          row.price,
+          row.units,
+          row.dealScore,
+          row.savedDeal.createdAt,
+        ],
+        globalQuery
+      )
+    );
+  }, [globalQuery, savedDeals]);
+
   if (loading) {
     return (
-      <div className="profile-page" style={{ padding: "1.5rem" }}>
+      <div className="profile-page profile-v2 profile-v2-loading" style={{ padding: "1.5rem" }}>
         <h1 className="page-title">Profile</h1>
         <p>Loading…</p>
       </div>
@@ -769,7 +833,7 @@ export default function ProfilePage() {
   }
 
   return (
-    <div className="profile-page profile-page--holistic">
+    <div className="profile-page profile-page--holistic profile-v2">
       <header className="profile-page-header">
         <div>
           <p className="profile-page-kicker">Profile workspace</p>
@@ -791,8 +855,21 @@ export default function ProfilePage() {
             <span>Saved searches</span>
             <strong>{savedSearches.length}</strong>
           </div>
+          <div className="profile-page-summary-item">
+            <span>Saved deals</span>
+            <strong>{savedDeals.length}</strong>
+          </div>
         </div>
       </header>
+      {globalQuery && (
+        <div className="profile-v2-query">
+          <span>Filtered by global search</span>
+          <strong>{searchParams.get("q")}</strong>
+          <span>
+            {filteredSavedSearches.length} search{filteredSavedSearches.length === 1 ? "" : "es"} · {filteredSavedDeals.length} deal{filteredSavedDeals.length === 1 ? "" : "s"}
+          </span>
+        </div>
+      )}
       {error && <p className="profile-page-error">{error}</p>}
 
       <section className="profile-section profile-identity-section">
@@ -1068,7 +1145,7 @@ export default function ProfilePage() {
                 }
                 className="profile-input"
               >
-                <option value="legacy_v3">Legacy deterministic v3</option>
+                <option value="legacy_v3">Deterministic v3</option>
                 <option value="value_add_furnished_monthly_rental">Value-add / furnished monthly rental</option>
               </select>
             </label>
@@ -1115,7 +1192,7 @@ export default function ProfilePage() {
         </div>
         {savedSearchError && <p className="profile-page-error" style={{ marginTop: 0 }}>{savedSearchError}</p>}
         {savedSearchNotice && <p style={{ marginTop: 0, color: "#166534" }}>{savedSearchNotice}</p>}
-        <div style={{ padding: "1rem", border: "1px solid #e5e7eb", borderRadius: "1rem", background: "#fafaf9", marginBottom: "1rem" }}>
+        <div className="profile-v2-form-panel">
           <div className="profile-section-heading" style={{ marginBottom: "1rem" }}>
             <div>
               <h3 style={{ margin: 0 }}>{editingSavedSearchId ? "Edit saved search" : "Add saved search"}</h3>
@@ -1334,10 +1411,12 @@ export default function ProfilePage() {
         {savedSearchesLoading ? (
           <p>Loading saved searches…</p>
         ) : savedSearches.length === 0 ? (
-          <p style={{ color: "#737373" }}>No saved searches yet. Add one above to start daily automated ingestion.</p>
+          <p style={{ color: "#737373" }}>No saved searches yet.</p>
+        ) : filteredSavedSearches.length === 0 ? (
+          <p style={{ color: "#737373" }}>No saved searches match the current search.</p>
         ) : (
           <div style={{ display: "grid", gap: "1rem" }}>
-            {savedSearches.map((search) => (
+            {filteredSavedSearches.map((search) => (
               <article key={search.id} className="profile-saved-deal-card">
                 <div className="profile-saved-deal-main">
                   <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap", alignItems: "flex-start" }}>
@@ -1391,7 +1470,7 @@ export default function ProfilePage() {
           <div>
             <h2>Saved deals</h2>
             <p className="profile-saved-deals-intro">
-              Deals you saved from Property Data. Dossier download still routes through the property view after generation.
+              Deals you saved from Pipeline. Dossier download still routes through the property view after generation.
             </p>
           </div>
           <div className="profile-saved-deals-actions profile-saved-deals-actions--row">
@@ -1416,10 +1495,12 @@ export default function ProfilePage() {
         {savedDealsLoading ? (
           <p>Loading saved deals…</p>
         ) : savedDeals.length === 0 ? (
-          <p style={{ color: "#737373" }}>No saved deals. Use the star on a property in Property Data to save.</p>
+          <p style={{ color: "#737373" }}>No saved deals. Save a property from Pipeline to see it here.</p>
+        ) : filteredSavedDeals.length === 0 ? (
+          <p style={{ color: "#737373" }}>No saved deals match the current search.</p>
         ) : (
           <div className="profile-saved-deals-grid">
-            {savedDeals.map((row) => (
+            {filteredSavedDeals.map((row) => (
               <article key={row.savedDeal.id} className="profile-saved-deal-card">
                 <div className="profile-saved-deal-main">
                   <h3 className="profile-saved-deal-address">{row.address || "—"}</h3>
@@ -1439,11 +1520,11 @@ export default function ProfilePage() {
                   </div>
                 </div>
                 <div className="profile-saved-deals-actions profile-saved-deals-actions--row">
-                  <Link href={`/property-data?expand=${row.savedDeal.propertyId}`} className="profile-saved-deals-action">
+                  <Link href={`/pipeline?propertyId=${row.savedDeal.propertyId}`} className="profile-saved-deals-action">
                     View property
                   </Link>
-                  <Link href={`/property-data?expand=${row.savedDeal.propertyId}#documents`} className="profile-saved-deals-action">
-                    Download dossier
+                  <Link href={`/pipeline?propertyId=${row.savedDeal.propertyId}`} className="profile-saved-deals-action">
+                    View docs
                   </Link>
                   <button
                     type="button"
@@ -1458,6 +1539,295 @@ export default function ProfilePage() {
           </div>
         )}
       </section>
+
+      <style jsx global>{`
+        .profile-v2.profile-page--holistic {
+          max-width: none;
+          padding: 0;
+          gap: 1rem;
+          color: #17201b;
+        }
+
+        .profile-v2 .profile-page-header {
+          align-items: flex-end;
+          padding: 1rem 0 0.25rem;
+          gap: 1rem;
+        }
+
+        .profile-v2 .profile-page-kicker {
+          margin-bottom: 0.35rem;
+          color: #5c6b62;
+          font-size: 0.74rem;
+          font-weight: 800;
+          letter-spacing: 0.08em;
+        }
+
+        .profile-v2 .profile-page-title {
+          margin: 0;
+          color: #111827;
+          font-size: 2rem;
+          line-height: 1.05;
+          letter-spacing: 0;
+        }
+
+        .profile-v2 .profile-page-intro {
+          max-width: 44rem;
+          margin-top: 0.55rem;
+          color: #5f6b64;
+          font-size: 0.98rem;
+          line-height: 1.45;
+        }
+
+        .profile-v2 .profile-page-summary {
+          grid-template-columns: repeat(4, minmax(7.5rem, 1fr));
+          min-width: min(100%, 34rem);
+          gap: 0.75rem;
+        }
+
+        .profile-v2 .profile-page-summary-item {
+          padding: 0.85rem;
+          border: 1px solid #d8dfda;
+          border-radius: 8px;
+          background: #ffffff;
+          box-shadow: 0 8px 24px rgba(22, 42, 35, 0.06);
+        }
+
+        .profile-v2 .profile-page-summary-item span {
+          margin-bottom: 0.35rem;
+          color: #68746d;
+          font-size: 0.72rem;
+          font-weight: 760;
+          letter-spacing: 0;
+        }
+
+        .profile-v2 .profile-page-summary-item strong {
+          color: #101918;
+          font-size: 1.45rem;
+        }
+
+        .profile-v2-query {
+          display: flex;
+          flex-wrap: wrap;
+          align-items: center;
+          gap: 0.5rem;
+          padding: 0.7rem 0.8rem;
+          border: 1px solid #c7d2fe;
+          border-radius: 8px;
+          background: #eef2ff;
+          color: #26346f;
+          font-size: 0.88rem;
+        }
+
+        .profile-v2-query strong {
+          padding: 0.18rem 0.45rem;
+          border-radius: 999px;
+          background: #ffffff;
+          color: #172554;
+        }
+
+        .profile-v2 .profile-page-error {
+          border-radius: 8px;
+          border-color: #fecaca;
+          background: #fef2f2;
+          color: #991b1b;
+        }
+
+        .profile-v2 .profile-section {
+          padding: 1rem;
+          border: 1px solid #d8dfda;
+          border-radius: 8px;
+          background: #ffffff;
+          box-shadow: 0 14px 40px rgba(22, 42, 35, 0.07);
+        }
+
+        .profile-v2 .profile-section-heading {
+          align-items: center;
+          gap: 1rem;
+          margin-bottom: 1rem;
+        }
+
+        .profile-v2 .profile-section-heading h2 {
+          margin-bottom: 0.25rem;
+          color: #111827;
+          font-size: 1.05rem;
+        }
+
+        .profile-v2 .profile-section-heading p,
+        .profile-v2 .profile-section-note {
+          color: #66746c;
+          font-size: 0.88rem;
+          line-height: 1.45;
+        }
+
+        .profile-v2 .profile-form-grid {
+          gap: 0.8rem;
+        }
+
+        .profile-v2 .profile-field {
+          gap: 0.38rem;
+        }
+
+        .profile-v2 .profile-field span {
+          color: #45524c;
+          font-size: 0.78rem;
+          font-weight: 760;
+        }
+
+        .profile-v2 .profile-input {
+          min-height: 2.45rem;
+          padding: 0.62rem 0.75rem;
+          border: 1px solid #cfd8d2;
+          border-radius: 7px;
+          background: #ffffff;
+          color: #17201b;
+          box-shadow: none;
+        }
+
+        .profile-v2 .profile-input:focus {
+          border-color: #1f3d35;
+          box-shadow: 0 0 0 3px rgba(31, 61, 53, 0.14);
+        }
+
+        .profile-v2 input[type="checkbox"] {
+          accent-color: #1f3d35;
+        }
+
+        .profile-v2 .profile-primary-button,
+        .profile-v2 .profile-secondary-button,
+        .profile-v2 .profile-saved-deals-action {
+          min-height: 2.35rem;
+          border-radius: 7px;
+          font-size: 0.86rem;
+          font-weight: 750;
+        }
+
+        .profile-v2 .profile-primary-button {
+          border-color: #1f3d35;
+          background: #1f3d35;
+          color: #ffffff;
+        }
+
+        .profile-v2 .profile-secondary-button {
+          border-color: #cfd8d2;
+          background: #ffffff;
+          color: #1f3d35;
+        }
+
+        .profile-v2 .profile-section-note--callout,
+        .profile-v2-form-panel {
+          border: 1px solid #d8dfda;
+          border-radius: 8px;
+          background: #fbfcfb;
+        }
+
+        .profile-v2 .profile-section-note--callout {
+          padding: 0.8rem;
+        }
+
+        .profile-v2-form-panel {
+          margin-bottom: 1rem;
+          padding: 1rem;
+        }
+
+        .profile-v2 .profile-assumption-groups {
+          gap: 0.85rem;
+        }
+
+        .profile-v2 .profile-assumption-group {
+          padding: 1rem;
+          border: 1px solid #d8dfda;
+          border-radius: 8px;
+          background: #fbfcfb;
+        }
+
+        .profile-v2 .profile-assumption-group-header h3,
+        .profile-v2 .profile-saved-deal-address {
+          color: #111827;
+        }
+
+        .profile-v2 .profile-assumption-group-header p {
+          color: #66746c;
+          font-size: 0.84rem;
+          line-height: 1.45;
+        }
+
+        .profile-v2 .profile-assumptions-toolbar {
+          margin-top: 1rem;
+          padding-top: 1rem;
+          border-top: 1px solid #e3e8e4;
+        }
+
+        .profile-v2 .profile-saved-deals-grid {
+          grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+          gap: 0.85rem;
+        }
+
+        .profile-v2 .profile-saved-deal-card {
+          padding: 1rem;
+          border: 1px solid #d8dfda;
+          border-radius: 8px;
+          background: #ffffff;
+          box-shadow: 0 8px 24px rgba(22, 42, 35, 0.05);
+        }
+
+        .profile-v2 .profile-saved-deal-stat span {
+          color: #68746d;
+          letter-spacing: 0;
+        }
+
+        .profile-v2 .profile-saved-deals-action {
+          flex: 0 1 auto;
+          border-color: #cfd8d2;
+          background: #ffffff;
+          color: #1f3d35;
+        }
+
+        .profile-v2 .profile-saved-deals-action--danger {
+          border-color: #f3b6b6;
+          background: #fff7f7;
+          color: #a33131;
+        }
+
+        .profile-v2 .profile-saved-deals-actions--row {
+          flex-wrap: wrap;
+        }
+
+        .profile-v2 .profile-saved-deals-score {
+          background: #edf8f1;
+          color: #246047;
+        }
+
+        @media (max-width: 980px) {
+          .profile-v2 .profile-page-header {
+            align-items: flex-start;
+            flex-direction: column;
+          }
+
+          .profile-v2 .profile-page-summary {
+            width: 100%;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .profile-v2 .profile-assumption-groups {
+            grid-template-columns: 1fr;
+          }
+        }
+
+        @media (max-width: 640px) {
+          .profile-v2 .profile-section-heading {
+            align-items: flex-start;
+            flex-direction: column;
+          }
+
+          .profile-v2 .profile-page-summary {
+            grid-template-columns: 1fr;
+          }
+
+          .profile-v2 .profile-saved-deal-stats {
+            grid-template-columns: 1fr;
+          }
+        }
+      `}</style>
     </div>
   );
 }

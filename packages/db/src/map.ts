@@ -435,9 +435,13 @@ export function mapDealSignalRow(row: Record<string, unknown>): DealSignalRow {
 export function mapBrokerContact(row: Record<string, unknown>): BrokerContact {
   return {
     id: row.id as string,
-    normalizedEmail: row.normalized_email as string,
+    normalizedEmail: (row.normalized_email as string) ?? null,
+    sourceKey: (row.source_key as string) ?? null,
     displayName: (row.display_name as string) ?? null,
     firm: (row.firm as string) ?? null,
+    phone: (row.phone as string) ?? null,
+    source: (row.source as string) ?? null,
+    sourceMetadata: toJsonObject(row.source_metadata),
     preferredThreadId: (row.preferred_thread_id as string) ?? null,
     lastOutreachAt: row.last_outreach_at != null ? toIso(row.last_outreach_at) : null,
     lastReplyAt: row.last_reply_at != null ? toIso(row.last_reply_at) : null,
@@ -445,6 +449,8 @@ export function mapBrokerContact(row: Record<string, unknown>): BrokerContact {
     manualReviewOnly: Boolean(row.manual_review_only),
     notes: (row.notes as string) ?? null,
     activitySummary: toJsonObject(row.activity_summary),
+    manualOverwrittenAt: row.manual_overwritten_at != null ? toIso(row.manual_overwritten_at) : null,
+    manualOverwrittenBy: (row.manual_overwritten_by as string) ?? null,
     createdAt: toIso(row.created_at),
     updatedAt: toIso(row.updated_at),
   };
