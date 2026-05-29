@@ -344,7 +344,9 @@ export default function SavedPage() {
                       <td>
                         <div className={styles.actionStack}>
                           <Link href={`/pipeline?propertyId=${encodeURIComponent(row.propertyId)}`}>Open</Link>
-                          <Link href={`/deal-analysis?property_id=${encodeURIComponent(row.propertyId)}`}>Underwrite</Link>
+                          <Link href={`/pipeline?propertyId=${encodeURIComponent(row.propertyId)}&tab=underwriting`}>
+                            Underwrite
+                          </Link>
                           {row.listingUrl ? <a href={row.listingUrl} target="_blank" rel="noreferrer">Listing</a> : null}
                         </div>
                       </td>

@@ -49,6 +49,17 @@ const SHEET_TABS = ["Overview", "Enrichment", "OM / Docs", "Underwriting", "Acti
 type SheetTab = (typeof SHEET_TABS)[number];
 type SortDirection = "asc" | "desc";
 
+function tabFromParam(value: string | null): SheetTab | null {
+  if (!value) return null;
+  const normalized = value.toLowerCase().replace(/[^a-z]/g, "");
+  if (normalized === "overview") return "Overview";
+  if (normalized === "enrichment") return "Enrichment";
+  if (normalized === "om" || normalized === "omdocs" || normalized === "docs") return "OM / Docs";
+  if (normalized === "underwriting") return "Underwriting";
+  if (normalized === "activity") return "Activity";
+  return null;
+}
+
 type PipelineRow = UiV2PipelineRow & {
   gallery?: UiV2ImageAsset[];
   overview?: { gallery?: UiV2ImageAsset[] };
@@ -311,6 +322,7 @@ export default function PipelineClient() {
   const queryString = searchParams.toString();
   const requestedPropertyId =
     searchParams.get("propertyId") ?? searchParams.get("property_id") ?? searchParams.get("expand");
+  const requestedTab = tabFromParam(searchParams.get("tab"));
 
   const [rows, setRows] = useState<PipelineRow[]>([]);
   const [total, setTotal] = useState(0);
@@ -445,10 +457,11 @@ export default function PipelineClient() {
       lastAutoOpenedPropertyId.current = null;
       return;
     }
+    setSheetTab(requestedTab ?? "Overview");
     if (lastAutoOpenedPropertyId.current === requestedPropertyId) return;
     lastAutoOpenedPropertyId.current = requestedPropertyId;
     void loadPropertyDetail(requestedPropertyId);
-  }, [loadPropertyDetail, requestedPropertyId]);
+  }, [loadPropertyDetail, requestedPropertyId, requestedTab]);
 
   const openProperty = useCallback(
     async (row: PipelineRow) => {
@@ -459,6 +472,7 @@ export default function PipelineClient() {
       params.set("propertyId", row.propertyId);
       params.delete("property_id");
       params.delete("expand");
+      params.delete("tab");
       const next = params.toString();
       router.replace(next ? `${PIPELINE_PATH}?${next}` : PIPELINE_PATH);
       await loadPropertyDetail(row.propertyId);
@@ -475,6 +489,7 @@ export default function PipelineClient() {
     params.delete("propertyId");
     params.delete("property_id");
     params.delete("expand");
+    params.delete("tab");
     const next = params.toString();
     router.replace(next ? `${PIPELINE_PATH}?${next}` : PIPELINE_PATH);
   }, [queryString, router]);
