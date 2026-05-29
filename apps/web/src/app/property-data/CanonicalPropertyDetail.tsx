@@ -1900,14 +1900,13 @@ export function CanonicalPropertyDetail({
 
   const detailTabs: PropertyDetailTabItem[] = [
     { id: "overview", label: "Overview" },
-    { id: "sources", label: "Sources" },
     { id: "documents", label: "Documents", badge: unifiedDocuments == null ? null : unifiedDocuments.length },
-    { id: "enrichment", label: "Enrichment" },
-    { id: "omWorkspace", label: "OM Workspace" },
-    { id: "underwriting", label: "Underwriting" },
-    { id: "outreach", label: "Outreach" },
+    { id: "omWorkspace", label: "OM" },
     { id: "dossierScore", label: "Dossier/Score" },
-    { id: "activity", label: "Activity", badge: unifiedRows.length || null },
+    { id: "underwriting", label: "Model" },
+    { id: "enrichment", label: "Enrichment" },
+    { id: "outreach", label: "Outreach" },
+    { id: "sources", label: "Sources" },
   ];
 
   const statusRailItems: PropertyDetailRailItem[] = [
@@ -2106,7 +2105,7 @@ export function CanonicalPropertyDetail({
               className="property-detail-rail-button"
               href={`/deal-analysis?property_id=${encodeURIComponent(property.id)}`}
             >
-              Deal analysis
+              Open deal analysis
             </a>
           </>
         )}

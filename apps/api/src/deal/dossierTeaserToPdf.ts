@@ -1,5 +1,14 @@
 import PDFDocument from "pdfkit";
-import type { DossierTeaserData, DossierTeaserHighlight, DossierTeaserKpi, DossierTeaserRow, DossierTeaserScenario } from "./dossierTeaser.js";
+import type {
+  DossierTeaserCashFlowRow,
+  DossierTeaserData,
+  DossierTeaserHighlight,
+  DossierTeaserKpi,
+  DossierTeaserPhoto,
+  DossierTeaserRentRow,
+  DossierTeaserRow,
+  DossierTeaserScenario,
+} from "./dossierTeaser.js";
 
 const PAGE_WIDTH = 612;
 const PAGE_HEIGHT = 792;
@@ -18,6 +27,11 @@ const RED = "#b42318";
 const WHITE = "#ffffff";
 const IMAGE_TIMEOUT_MS = 7_000;
 const IMAGE_MAX_BYTES = 8 * 1024 * 1024;
+const TOTAL_PAGES = 4;
+
+interface LoadedPhoto extends DossierTeaserPhoto {
+  image: Buffer | null;
+}
 
 function pageBottom(): number {
   return FOOTER_Y - 16;
@@ -63,7 +77,7 @@ function drawFooter(doc: PDFKit.PDFDocument, data: DossierTeaserData, pageNumber
     .fillColor(MUTED)
     .text(sponsor, MARGIN, FOOTER_Y, { width: 180, height: 9, ellipsis: true })
     .text(data.generatedAt.slice(0, 10), PAGE_WIDTH / 2 - 50, FOOTER_Y, { width: 100, align: "center" })
-    .text(`Page ${pageNumber} of 2`, PAGE_WIDTH - MARGIN - 90, FOOTER_Y, { width: 90, align: "right" });
+    .text(`Page ${pageNumber} of ${TOTAL_PAGES}`, PAGE_WIDTH - MARGIN - 90, FOOTER_Y, { width: 90, align: "right" });
 }
 
 function drawSectionTitle(doc: PDFKit.PDFDocument, title: string, x: number, y: number, width: number): number {
@@ -181,6 +195,212 @@ function drawBullets(
   return currentY;
 }
 
+function drawCompactPageHeader(
+  doc: PDFKit.PDFDocument,
+  data: DossierTeaserData,
+  title: string,
+  subtitle?: string
+): void {
+  doc.rect(0, 0, PAGE_WIDTH, PAGE_HEIGHT).fillColor(WHITE).fill();
+  doc.font("Helvetica").fontSize(7.2).fillColor(MUTED).text(data.strategyLabel.toUpperCase(), MARGIN, 30, { width: 230, characterSpacing: 0.3 });
+  doc.font("Helvetica-Bold").fontSize(15).fillColor(NAVY).text(title, MARGIN, 43, { width: 340, height: 18, ellipsis: true });
+  doc.font("Helvetica").fontSize(8).fillColor(MUTED).text(data.address, MARGIN, 64, { width: 340, height: 11, ellipsis: true });
+  if (subtitle) {
+    doc.font("Helvetica-Oblique").fontSize(7).fillColor(MUTED).text(subtitle, MARGIN, 82, { width: PAGE_WIDTH - MARGIN * 2, height: 20, lineGap: 1, ellipsis: true });
+  }
+}
+
+function drawPhotoStrip(
+  doc: PDFKit.PDFDocument,
+  photos: LoadedPhoto[],
+  x: number,
+  y: number,
+  width: number,
+  height: number
+): number {
+  const limited = photos.slice(0, 3);
+  if (limited.length === 0) {
+    doc.roundedRect(x, y, width, height, 5).fillColor(PANEL).fill().strokeColor(RULE).lineWidth(0.6).stroke();
+    doc.font("Helvetica").fontSize(7).fillColor(MUTED).text("No property photos or floor plans were available in the listing capture.", x + 10, y + height / 2 - 5, {
+      width: width - 20,
+      align: "center",
+    });
+    return y + height + 12;
+  }
+  const gap = 8;
+  const cardWidth = (width - gap * (limited.length - 1)) / limited.length;
+  limited.forEach((photo, index) => {
+    const cardX = x + index * (cardWidth + gap);
+    doc.roundedRect(cardX, y, cardWidth, height, 5).fillColor(PANEL).fill().strokeColor(RULE).lineWidth(0.6).stroke();
+    if (photo.image) {
+      try {
+        doc.image(photo.image, cardX + 4, y + 4, { fit: [cardWidth - 8, height - 20], align: "center", valign: "center" });
+      } catch {
+        doc.font("Helvetica").fontSize(6.7).fillColor(MUTED).text("Image unavailable", cardX + 8, y + height / 2 - 5, { width: cardWidth - 16, align: "center" });
+      }
+    } else {
+      doc.font("Helvetica").fontSize(6.7).fillColor(MUTED).text("Image unavailable", cardX + 8, y + height / 2 - 5, { width: cardWidth - 16, align: "center" });
+    }
+    doc.font("Helvetica").fontSize(5.9).fillColor(MUTED).text(photo.label, cardX + 6, y + height - 13, { width: cardWidth - 12, height: 8, ellipsis: true });
+  });
+  return y + height + 12;
+}
+
+function drawRentPlanTable(
+  doc: PDFKit.PDFDocument,
+  rows: DossierTeaserRentRow[],
+  totals: DossierTeaserRentRow,
+  x: number,
+  y: number,
+  width: number
+): number {
+  const columns = [
+    { label: "Floor / unit", width: 92 },
+    { label: "SF / beds / status", width: 128 },
+    { label: "Current", width: 68 },
+    { label: "Uplift", width: 48 },
+    { label: "Final rent", width: 72 },
+    { label: "Unit expenses", width: width - 92 - 128 - 68 - 48 - 72 },
+  ];
+  const headerHeight = 18;
+  doc.roundedRect(x, y, width, headerHeight, 4).fillColor(NAVY).fill();
+  let cursorX = x;
+  columns.forEach((column) => {
+    doc.font("Helvetica-Bold").fontSize(6.2).fillColor(WHITE).text(column.label.toUpperCase(), cursorX + 5, y + 5, { width: column.width - 10, height: 8, ellipsis: true });
+    cursorX += column.width;
+  });
+  let rowY = y + headerHeight;
+  const limitedRows = rows.slice(0, 8);
+  [...limitedRows, totals].forEach((row, index) => {
+    const isTotal = index === limitedRows.length;
+    const rowHeight = isTotal ? 27 : 31;
+    if (index % 2 === 0 || isTotal) {
+      doc.rect(x, rowY, width, rowHeight).fillColor(isTotal ? PANEL_ALT : PANEL).fill();
+    }
+    const values = [row.unitLabel, row.unitDetail, row.currentRent, row.uplift, row.finalRent, row.unitExpenses];
+    cursorX = x;
+    values.forEach((value, colIndex) => {
+      doc
+        .font(isTotal || colIndex === 0 ? "Helvetica-Bold" : "Helvetica")
+        .fontSize(colIndex === 1 ? 5.8 : 6.2)
+        .fillColor(colIndex === 3 && value !== "N/A" ? GREEN : TEXT)
+        .text(value, cursorX + 5, rowY + 6, {
+          width: columns[colIndex].width - 10,
+          height: colIndex === 1 || colIndex === 5 ? rowHeight - 9 : 9,
+          ellipsis: true,
+        });
+      cursorX += columns[colIndex].width;
+    });
+    if (!isTotal && row.notes) {
+      doc.font("Helvetica").fontSize(5.3).fillColor(MUTED).text(row.notes, x + 5, rowY + 20, { width: width - 10, height: 7, ellipsis: true });
+    }
+    rowY += rowHeight;
+  });
+  if (rows.length > limitedRows.length) {
+    doc.font("Helvetica-Oblique").fontSize(6.2).fillColor(MUTED).text(`${rows.length - limitedRows.length} additional unit row(s) are summarized in the total row.`, x + 5, rowY + 3, { width: width - 10 });
+    rowY += 14;
+  }
+  return rowY + 12;
+}
+
+function drawExpenseRollup(
+  doc: PDFKit.PDFDocument,
+  rows: DossierTeaserRow[],
+  subtitle: string,
+  x: number,
+  y: number,
+  width: number
+): number {
+  y = drawSectionTitle(doc, "Operating Expense Rollup", x, y, width);
+  doc.font("Helvetica-Oblique").fontSize(6.7).fillColor(MUTED).text(subtitle, x, y, { width, height: 15, ellipsis: true });
+  const limitedRows = rows.slice(0, 8);
+  const rowWidth = (width - 8) / 2;
+  limitedRows.forEach((row, index) => {
+    const col = index % 2;
+    const rowIndex = Math.floor(index / 2);
+    const rowX = x + col * (rowWidth + 8);
+    const rowY = y + 21 + rowIndex * 27;
+    doc.roundedRect(rowX, rowY, rowWidth, 22, 4).fillColor(PANEL).fill();
+    doc.font("Helvetica").fontSize(6.3).fillColor(MUTED).text(row.label, rowX + 7, rowY + 5, { width: rowWidth * 0.58, height: 8, ellipsis: true });
+    doc.font("Helvetica-Bold").fontSize(6.8).fillColor(NAVY).text(row.value, rowX + rowWidth * 0.62, rowY + 5, { width: rowWidth * 0.34, height: 8, align: "right", ellipsis: true });
+    if (row.sublabel) doc.font("Helvetica").fontSize(5.4).fillColor(MUTED).text(row.sublabel, rowX + 7, rowY + 14, { width: rowWidth - 14, height: 6, ellipsis: true });
+  });
+  return y + 25 + Math.ceil(limitedRows.length / 2) * 27 + 8;
+}
+
+function cashFlowCategoryColor(category: DossierTeaserCashFlowRow["category"]): string {
+  if (category === "metric") return NAVY;
+  if (category === "expense" || category === "debt") return RED;
+  if (category === "noi" || category === "return") return GREEN;
+  if (category === "capital") return MUTED;
+  return BLUE;
+}
+
+function isAccountingTotal(row: DossierTeaserCashFlowRow): boolean {
+  return row.emphasis === "subtotal" || row.emphasis === "total";
+}
+
+function drawCashFlowTable(
+  doc: PDFKit.PDFDocument,
+  rows: DossierTeaserCashFlowRow[],
+  columns: string[],
+  x: number,
+  y: number,
+  width: number
+): number {
+  if (columns.length === 0 || rows.length === 0) {
+    doc.roundedRect(x, y, width, 56, 5).fillColor(PANEL).fill();
+    doc.font("Helvetica").fontSize(7).fillColor(MUTED).text("Cash-flow projection unavailable for this dossier run.", x + 12, y + 22, { width: width - 24, align: "center" });
+    return y + 68;
+  }
+  const labelWidth = 124;
+  const valueWidth = (width - labelWidth) / columns.length;
+  const headerHeight = 18;
+  doc.roundedRect(x, y, width, headerHeight, 4).fillColor(NAVY).fill();
+  doc.font("Helvetica-Bold").fontSize(6).fillColor(WHITE).text("LINE ITEM", x + 6, y + 5, { width: labelWidth - 12 });
+  columns.forEach((column, index) => {
+    doc.font("Helvetica-Bold").fontSize(6).fillColor(WHITE).text(column, x + labelWidth + index * valueWidth, y + 5, { width: valueWidth - 4, align: "right" });
+  });
+  let rowY = y + headerHeight;
+  const dense = rows.length > 26;
+  const rowHeight = dense ? 17 : rows.length > 24 ? 19 : 22;
+  rows.forEach((row, rowIndex) => {
+    const isMetric = row.emphasis === "metric";
+    if (rowIndex % 2 === 0 || isMetric) doc.rect(x, rowY, width, rowHeight).fillColor(isMetric ? PANEL_ALT : PANEL).fill();
+    if (isMetric && rows[rowIndex - 1]?.emphasis !== "metric") {
+      doc.moveTo(x, rowY).lineTo(x + width, rowY).strokeColor(RULE).lineWidth(0.8).stroke();
+    }
+    if (isAccountingTotal(row)) {
+      doc.moveTo(x + labelWidth, rowY + 1).lineTo(x + width, rowY + 1).strokeColor(TEXT).lineWidth(row.emphasis === "total" ? 0.8 : 0.55).stroke();
+    }
+    doc.circle(x + 5, rowY + 8, 1.4).fillColor(cashFlowCategoryColor(row.category)).fill();
+    const labelInset = 11 + Math.max(0, row.indentLevel ?? 0) * 7;
+    const boldRow = row.category === "noi" || row.category === "return" || row.emphasis != null;
+    doc
+      .font(boldRow ? "Helvetica-Bold" : "Helvetica")
+      .fontSize(dense ? 5.3 : 5.8)
+      .fillColor(isMetric ? NAVY : TEXT)
+      .text(row.label, x + labelInset, rowY + 5, { width: labelWidth - labelInset - 4, height: 8, ellipsis: true });
+    row.values.slice(0, columns.length).forEach((cell, index) => {
+      const cellX = x + labelWidth + index * valueWidth;
+      doc
+        .font(boldRow ? "Helvetica-Bold" : "Helvetica")
+        .fontSize(dense ? 5.2 : 5.8)
+        .fillColor(isMetric ? NAVY : TEXT)
+        .text(cell.value, cellX, rowY + 4, { width: valueWidth - 4, align: "right", height: 7, ellipsis: true });
+      if (cell.percentLabel) {
+        doc.font("Helvetica").fontSize(dense ? 4.3 : 4.8).fillColor(MUTED).text(cell.percentLabel, cellX, rowY + 11, { width: valueWidth - 4, align: "right", height: 6, ellipsis: true });
+      }
+    });
+    if (row.emphasis === "total") {
+      doc.moveTo(x + labelWidth, rowY + rowHeight - 3).lineTo(x + width, rowY + rowHeight - 3).strokeColor(TEXT).lineWidth(0.55).stroke();
+      doc.moveTo(x + labelWidth, rowY + rowHeight - 1).lineTo(x + width, rowY + rowHeight - 1).strokeColor(TEXT).lineWidth(0.55).stroke();
+    }
+    rowY += rowHeight;
+  });
+  return rowY + 10;
+}
+
 function drawHero(doc: PDFKit.PDFDocument, data: DossierTeaserData, heroImage: Buffer | null): void {
   doc.rect(0, 0, PAGE_WIDTH, HERO_HEIGHT).fillColor(NAVY).fill();
   if (heroImage) {
@@ -204,6 +424,7 @@ function drawHero(doc: PDFKit.PDFDocument, data: DossierTeaserData, heroImage: B
 }
 
 function drawPageOne(doc: PDFKit.PDFDocument, data: DossierTeaserData, heroImage: Buffer | null): void {
+  doc.rect(0, 0, PAGE_WIDTH, PAGE_HEIGHT).fillColor(WHITE).fill();
   drawHero(doc, data, heroImage);
   let y = drawKpiStrip(doc, data.kpis, HERO_HEIGHT + 18) + 22;
   const leftX = MARGIN;
@@ -245,10 +466,13 @@ function drawPageTwo(doc: PDFKit.PDFDocument, data: DossierTeaserData): void {
   drawRows(doc, data.capitalStack, leftX, leftY, colWidth, { limit: 4 });
 
   let rightY = drawSectionTitle(doc, "Risks And Diligence", rightX, 92, colWidth);
-  rightY = drawBullets(doc, data.risks.length > 0 ? data.risks : ["No material scoring caps or risk flags were produced by the current model."], rightX, rightY, colWidth, { color: RED, limit: 6 });
-  rightY = Math.min(rightY + 10, pageBottom() - 176);
+  rightY = drawBullets(doc, data.risks.length > 0 ? data.risks : ["No material scoring caps or risk flags were produced by the current model."], rightX, rightY, colWidth, { color: RED, limit: 5 });
+  rightY = Math.min(rightY + 6, pageBottom() - 252);
+  rightY = drawSectionTitle(doc, "Mitigants / Open Items", rightX, rightY, colWidth);
+  rightY = drawBullets(doc, data.mitigants.length > 0 ? data.mitigants : ["No separate mitigants were generated by the current model."], rightX, rightY, colWidth, { color: GREEN, limit: 4 });
+  rightY = Math.min(rightY + 8, pageBottom() - 154);
   rightY = drawSectionTitle(doc, "Provenance", rightX, rightY, colWidth);
-  drawBullets(doc, data.provenance, rightX, rightY, colWidth, { color: BLUE, limit: 6 });
+  drawBullets(doc, data.provenance, rightX, rightY, colWidth, { color: BLUE, limit: 4 });
 
   doc.roundedRect(MARGIN, pageBottom() - 60, PAGE_WIDTH - MARGIN * 2, 42, 5).fillColor(PANEL_ALT).fill();
   const sponsorLabel = data.sponsor.organization || data.sponsor.name || "Real Estate Sourcing Flow";
@@ -263,8 +487,51 @@ function drawPageTwo(doc: PDFKit.PDFDocument, data: DossierTeaserData): void {
   drawFooter(doc, data, 2);
 }
 
+function drawPageThree(doc: PDFKit.PDFDocument, data: DossierTeaserData, photos: LoadedPhoto[]): void {
+  doc.addPage({ margin: 0, size: "letter" });
+  drawCompactPageHeader(doc, data, "Rent Plan And Unit Detail", data.rentSummary.subtitle);
+  let y = 112;
+  y = drawSectionTitle(doc, "Current To Final Rent By Floor", MARGIN, y, PAGE_WIDTH - MARGIN * 2);
+  y = drawRentPlanTable(
+    doc,
+    data.rentSummary.rows,
+    data.rentSummary.totals,
+    MARGIN,
+    y,
+    PAGE_WIDTH - MARGIN * 2
+  );
+  const rollupY = Math.min(y, pageBottom() - 210);
+  y = drawExpenseRollup(
+    doc,
+    data.rentSummary.expenseRows,
+    data.rentSummary.expenseSubtitle,
+    MARGIN,
+    rollupY,
+    PAGE_WIDTH - MARGIN * 2
+  );
+  const photoY = Math.min(Math.max(y + 4, pageBottom() - 126), pageBottom() - 126);
+  drawSectionTitle(doc, "Property / Floor Photos", MARGIN, photoY, PAGE_WIDTH - MARGIN * 2);
+  drawPhotoStrip(doc, photos, MARGIN, photoY + 24, PAGE_WIDTH - MARGIN * 2, 82);
+  drawFooter(doc, data, 3);
+}
+
+function drawPageFour(doc: PDFKit.PDFDocument, data: DossierTeaserData): void {
+  doc.addPage({ margin: 0, size: "letter" });
+  drawCompactPageHeader(doc, data, "Detailed Cash Flow", data.cashFlowSummary.subtitle);
+  let y = 112;
+  y = drawSectionTitle(doc, "Annual Projection", MARGIN, y, PAGE_WIDTH - MARGIN * 2);
+  drawCashFlowTable(doc, data.cashFlowSummary.rows, data.cashFlowSummary.columns, MARGIN, y, PAGE_WIDTH - MARGIN * 2);
+  drawFooter(doc, data, 4);
+}
+
 export async function dossierTeaserToPdf(data: DossierTeaserData): Promise<Buffer> {
   const heroImage = await loadImageBuffer(data.heroImageUrl);
+  const loadedPhotos = await Promise.all(
+    data.propertyPhotos.slice(0, 3).map(async (photo) => ({
+      ...photo,
+      image: await loadImageBuffer(photo.url),
+    }))
+  );
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     const doc = new PDFDocument({ autoFirstPage: false, margin: 0, size: "letter" });
@@ -274,6 +541,8 @@ export async function dossierTeaserToPdf(data: DossierTeaserData): Promise<Buffe
     doc.addPage({ margin: 0, size: "letter" });
     drawPageOne(doc, data, heroImage);
     drawPageTwo(doc, data);
+    drawPageThree(doc, data, loadedPhotos);
+    drawPageFour(doc, data);
     doc.end();
   });
 }

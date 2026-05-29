@@ -129,7 +129,20 @@ function sampleContext(): UnderwritingContext {
       leadTimeLoss: [0, 40_000, 0, 0, 0, 0],
       netRentalIncome: [0, 612_500, 689_230, 709_856, 731_100, 752_979],
       managementFee: [0, 28_000, 29_584, 30_472, 31_386, 32_327],
-      expenseLineItems: [],
+      expenseLineItems: [
+        {
+          lineItem: "Taxes",
+          annualGrowthPct: 3,
+          baseAmount: 90_000,
+          yearlyAmounts: [0, 90_000, 92_700, 95_481, 98_345, 101_296],
+        },
+        {
+          lineItem: "Insurance",
+          annualGrowthPct: 3,
+          baseAmount: 14_000,
+          yearlyAmounts: [0, 14_000, 14_420, 14_853, 15_298, 15_757],
+        },
+      ],
       totalOperatingExpenses: [0, 212_000, 220_000, 226_600, 233_398, 240_400],
       noi: [0, 300_500, 310_000, 321_870, 334_316, 347_252],
       recurringCapex: [0, 12_000, 12_000, 12_000, 12_000, 12_000],
@@ -161,6 +174,58 @@ function sampleContext(): UnderwritingContext {
       eligibleRevenueSharePct: 1,
       eligibleUnitSharePct: 1,
     },
+    unitModelRows: [
+      {
+        rowId: "unit-floor-1",
+        unitLabel: "Floor 1",
+        unitCategory: "Residential",
+        currentAnnualRent: 48_000,
+        underwrittenAnnualRent: 72_000,
+        rentUpliftPct: 20,
+        occupancyPct: 92.5,
+        furnishingCost: 13_000,
+        onboardingLaborFee: 2_500,
+        onboardingOtherCosts: 1_500,
+        monthlyRecurringOpex: 300,
+        includeInUnderwriting: true,
+        isProtected: false,
+        isCommercial: false,
+        isRentStabilized: false,
+        isVacantLike: false,
+        modeledAnnualRent: 79_920,
+        defaultProjectedAnnualRent: 72_000,
+        beds: 2,
+        baths: 1,
+        sqft: 900,
+        tenantStatus: "Occupied",
+        notes: "Market-rate residential",
+      },
+      {
+        rowId: "unit-floor-3",
+        unitLabel: "Floor 3",
+        unitCategory: "Residential",
+        currentAnnualRent: null,
+        underwrittenAnnualRent: 84_000,
+        rentUpliftPct: 0,
+        occupancyPct: 0,
+        furnishingCost: 14_500,
+        onboardingLaborFee: 2_500,
+        onboardingOtherCosts: 1_500,
+        monthlyRecurringOpex: 300,
+        includeInUnderwriting: true,
+        isProtected: false,
+        isCommercial: false,
+        isRentStabilized: false,
+        isVacantLike: true,
+        modeledAnnualRent: 0,
+        defaultProjectedAnnualRent: 84_000,
+        beds: 2,
+        baths: 1,
+        sqft: null,
+        tenantStatus: "Vacant",
+        notes: "Past rent TBD",
+      },
+    ],
     recommendedOffer: {
       askingPrice: 5_000_000,
       targetIrrPct: 16,
@@ -212,7 +277,13 @@ function sampleDetails(): PropertyDetails {
           unitsResidential: 12,
           buildingSqft: 8_400,
           propertyType: "Multifamily",
+          zoning: "O5",
+          taxClass: "2B",
         },
+        rentRoll: [
+          { unit: "Floor 1", beds: 2, baths: 1, sqft: 900, annualRent: 48_000 },
+          { unit: "Floor 3", beds: 2, baths: 1, annualRent: 0, tenantStatus: "Vacant" },
+        ],
       },
     },
     neighborhood: {
@@ -231,7 +302,7 @@ function sampleDetails(): PropertyDetails {
 }
 
 describe("dossierTeaser", () => {
-  it("assembles a two-page teaser data model from underwriting, scoring, listing, and neighborhood inputs", () => {
+  it("assembles a teaser data model from underwriting, scoring, listing, and neighborhood inputs", () => {
     const ctx = sampleContext();
     const scoringResult = computeDealScore({
       purchasePrice: 5_000_000,
@@ -312,8 +383,20 @@ describe("dossierTeaser", () => {
     expect(teaser.investmentHighlights.some((item) => item.title === "Neighborhood Marker")).toBe(true);
     expect(teaser.capitalStack.find((row) => row.label === "Upfront CapEx")?.sublabel).toContain("furnishing");
     expect(teaser.returnScenarios.map((scenario) => scenario.label)).toEqual(["Downside", "Base", "Upside"]);
+    expect(teaser.rentSummary.rows[0]?.unitDetail).toContain("900 SF");
+    expect(teaser.rentSummary.rows[1]?.notes).toContain("Past rent TBD");
+    expect(teaser.rentSummary.totals.finalRent).toBe("$14,200");
+    expect(teaser.cashFlowSummary.rows.some((row) => row.label === "Levered cash flow")).toBe(true);
+    expect(teaser.cashFlowSummary.rows.some((row) => row.label === "Taxes")).toBe(true);
+    expect(teaser.cashFlowSummary.rows.find((row) => row.label === "NOI")?.emphasis).toBe("subtotal");
+    expect(teaser.cashFlowSummary.rows.find((row) => row.label === "Levered cash flow")?.emphasis).toBe("total");
+    expect(teaser.cashFlowSummary.rows.some((row) => row.label === "5-year IRR")).toBe(true);
+    expect(teaser.cashFlowSummary.rows.some((row) => row.label === "Cash-on-cash return")).toBe(true);
+    expect(teaser.mitigants.some((line) => line.includes("floor-by-floor vacancy"))).toBe(true);
     expect(teaser.sponsor.organization).toBe("Acme Capital");
     expect(teaser.risks).toContain("Elevated furnished-rent uplift (72.0%)");
+    expect(teaser.risks.some((risk) => risk.includes("O5"))).toBe(true);
+    expect(teaser.risks.some((risk) => risk.includes("Floor 3 current rent is missing"))).toBe(true);
     expect(teaser.provenance.some((line) => line.includes("value-add-furnished-monthly-rental"))).toBe(true);
     expect(teaser.operatingSnapshot.find((row) => row.label === "Neighborhood median PSF")?.value).toBe("$1,050");
   });
@@ -371,6 +454,6 @@ describe("dossierTeaser", () => {
     const pdf = await dossierTeaserToPdf(teaser);
 
     expect(pdf.subarray(0, 4).toString("utf8")).toBe("%PDF");
-    expect(pdf.length).toBeGreaterThan(3_000);
+    expect(pdf.length).toBeGreaterThan(5_000);
   });
 });

@@ -134,6 +134,36 @@ export interface DossierRecommendedOfferContext {
   targetMetAtAsking: boolean;
 }
 
+export interface DossierUnitModelContextRow {
+  rowId: string;
+  unitLabel: string;
+  building?: string | null;
+  unitCategory?: string | null;
+  tenantName?: string | null;
+  currentAnnualRent?: number | null;
+  underwrittenAnnualRent?: number | null;
+  rentUpliftPct?: number | null;
+  occupancyPct?: number | null;
+  furnishingCost?: number | null;
+  onboardingLaborFee?: number | null;
+  onboardingOtherCosts?: number | null;
+  onboardingFee?: number | null;
+  monthlyRecurringOpex?: number | null;
+  monthlyHospitalityExpense?: number | null;
+  includeInUnderwriting?: boolean | null;
+  isProtected?: boolean | null;
+  isCommercial?: boolean | null;
+  isRentStabilized?: boolean | null;
+  isVacantLike?: boolean | null;
+  modeledAnnualRent?: number | null;
+  defaultProjectedAnnualRent?: number | null;
+  beds?: number | null;
+  baths?: number | null;
+  sqft?: number | null;
+  tenantStatus?: string | null;
+  notes?: string | null;
+}
+
 export interface DossierConditionReviewContext {
   source: "images_and_text" | "text_only";
   overallCondition?: string | null;
@@ -279,6 +309,8 @@ export interface UnderwritingContext {
   yearlyCashFlow?: YearlyCashFlowProjectionContext | null;
   /** Optional: protected-unit / convertible-unit mix used for uplift logic. */
   propertyMix?: DossierPropertyMixContext | null;
+  /** Optional: detailed per-unit/floor model rows, including saved manual OM workspace edits. */
+  unitModelRows?: DossierUnitModelContextRow[];
   /** Optional: current vs stabilized gross rent split for free-market residential vs protected/commercial. */
   rentBreakdown?: {
     current: {

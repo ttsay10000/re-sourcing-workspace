@@ -1489,7 +1489,30 @@ function PropertyDataContent() {
 
   return (
     <div className="property-data-layout">
-      <h1 className="page-title">Property Data</h1>
+      <section className="property-data-hero">
+        <div>
+          <p className="property-data-kicker">Property pipeline</p>
+          <h1 className="property-data-title">Property Data</h1>
+          <p className="property-data-intro">
+            {canonicalProperties.length} canonical propert{canonicalProperties.length === 1 ? "y" : "ies"} · {total} raw listing{total === 1 ? "" : "s"}
+          </p>
+        </div>
+        <div className="property-data-hero-actions">
+          <button
+            type="button"
+            className="btn-primary"
+            onClick={() => {
+              setManualAddError(null);
+              setManualAddModalOpen(true);
+            }}
+          >
+            Add missed property
+          </button>
+          <Link href="/runs" className="btn-secondary">
+            Saved searches
+          </Link>
+        </div>
+      </section>
       {sentMessage && (
         <div className="card" style={{ marginBottom: "1rem", padding: "0.75rem 1rem", background: "#f0fdf4", borderColor: "#86efac" }}>
           {decodeURIComponent(sentMessage)}
@@ -1574,10 +1597,7 @@ function PropertyDataContent() {
         </div>
       )}
 
-      <div
-        className="property-data-search-row"
-        style={{ display: "flex", gap: "0.75rem", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap" }}
-      >
+      <div className="property-data-search-row">
         <input
           type="search"
           placeholder="Search by address, property ID, listing ID, or area"
@@ -1585,18 +1605,8 @@ function PropertyDataContent() {
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           aria-label="Search properties"
-          style={{ flex: "1 1 24rem", maxWidth: "32rem" }}
+          style={{ flex: "1 1 24rem" }}
         />
-        <button
-          type="button"
-          className="btn-secondary"
-          onClick={() => {
-            setManualAddError(null);
-            setManualAddModalOpen(true);
-          }}
-        >
-          Manual add property
-        </button>
       </div>
 
       <div className="property-data-tabs-row">
@@ -1620,7 +1630,7 @@ function PropertyDataContent() {
             className="property-data-tab property-data-tab--link"
             title="Review ambiguous OM, rent roll, T12, or broker-email documents before promotion"
           >
-            OM review queue
+            Document review queue
           </Link>
         </div>
         <div className="property-data-filters" style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", alignItems: "center" }}>

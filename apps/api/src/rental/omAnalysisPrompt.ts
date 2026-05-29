@@ -105,6 +105,11 @@ annualTaxes
 price
 unitCountSource
 commercialSummary
+legalUse
+certificateOfOccupancySummary
+o2rStatus
+floorplanAvailability
+unitSqftByFloor
 
 -----------------------------------------------------
 
@@ -357,6 +362,10 @@ openViolations
 openComplaints
 recentPermits
 taxClass
+zoning
+legalUse
+certificateOfOccupancySummary
+o2rStatus
 regulatoryRiskSummary
 
 }
@@ -368,6 +377,9 @@ Examples of risk signals:
 • housing complaints
 • tenant issues
 • tax arrears
+• zoning / legal-use mismatches, including O5 or other office-use signals for a residential underwriting case
+• recent or missing O2R / office-to-residential conversion filings
+• tax class mismatch, including class 2B vs class 4 questions or an unusual tax class for the stated unit count/use
 
 -----------------------------------------------------
 
@@ -486,6 +498,8 @@ Always search for and summarize (when present):
 • Recent work, renovations, permits — any noted renovations, DOB/permits, capital improvements.
 • Violations and complaints — open HPD/DOB violations, housing complaints, work orders; flag clearly as risks with counts or class when available.
 • Tax and regulatory — tax class, abatements, J-51/421a, or other tax-program notes; any tax-code or regulatory risks.
+• Zoning and legal use — zoning district/use group, certificate of occupancy / legal use, O5 or office-use signals, recent O2R filings, and whether the OM/enrichment supports residential vs commercial use.
+• SF / floorplans / past rents — floor-by-floor SF, bed/bath counts, floorplan availability, and any past rents used as benchmarks for vacant floors such as "Floor 3."
 • Rent stabilized units — treat as a major red flag. Include unit(s), current rent, and regulatory constraints when known.
 
 Format: bullet points. Lead with material risks (rent stabilization, violations, tax issues), then positives. Every bullet must be specific to this property's data.
