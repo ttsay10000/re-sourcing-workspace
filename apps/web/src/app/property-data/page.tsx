@@ -418,6 +418,86 @@ function StatusChip({
   );
 }
 
+const PROPERTY_STATUS_OPTIONS = [
+  "new_sourced",
+  "needs_om",
+  "om_requested",
+  "follow_up_needed",
+  "om_received",
+  "underwriting",
+  "saved_watchlist",
+  "loi_sent",
+  "negotiation",
+  "contract_signed",
+  "diligence_escrow",
+  "closed",
+  "rejected_removed",
+];
+
+const DEFAULT_PROPERTY_TAGS = [
+  "property_toured",
+  "high_priority",
+  "follow_up",
+  "broker_relationship",
+  "off_market",
+  "distressed_seller",
+  "below_replacement_cost",
+  "tax_class_advantage",
+  "free_market_focus",
+  "rent_stabilized_risk",
+  "needs_city_data",
+  "needs_rent_roll",
+  "needs_om",
+  "good_mtr_candidate",
+  "rejected",
+  "duplicate",
+  "partner_review_needed",
+];
+
+function labelFromKey(value: string | null | undefined): string {
+  if (!value) return "—";
+  return value
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function getPropertyTags(prop: CanonicalProperty): string[] {
+  const details = prop.details as Record<string, unknown> | null | undefined;
+  const pipeline = details && typeof details.pipeline === "object" && details.pipeline != null
+    ? details.pipeline as Record<string, unknown>
+    : null;
+  const fromProp = Array.isArray(prop.propertyTags) ? prop.propertyTags : [];
+  const fromDetails = Array.isArray(pipeline?.tags) ? pipeline.tags : [];
+  return [...new Set([...fromProp, ...fromDetails].filter((tag): tag is string => typeof tag === "string" && tag.trim().length > 0))];
+}
+
+function getPropertyMissingFields(prop: CanonicalProperty): string[] {
+  const details = prop.details as Record<string, unknown> | null | undefined;
+  const pipeline = details && typeof details.pipeline === "object" && details.pipeline != null
+    ? details.pipeline as Record<string, unknown>
+    : null;
+  const fromProp = Array.isArray(prop.missingFields) ? prop.missingFields : [];
+  const fromDetails = Array.isArray(pipeline?.missingFields) ? pipeline.missingFields : [];
+  return [...new Set([...fromProp, ...fromDetails].filter((field): field is string => typeof field === "string" && field.trim().length > 0))];
+}
+
+function getPropertyPipelineStatus(prop: CanonicalProperty): string {
+  const details = prop.details as Record<string, unknown> | null | undefined;
+  const pipeline = details && typeof details.pipeline === "object" && details.pipeline != null
+    ? details.pipeline as Record<string, unknown>
+    : null;
+  if (typeof prop.pipelineStatus === "string" && prop.pipelineStatus.trim()) return prop.pipelineStatus.trim();
+  if (typeof pipeline?.status === "string" && pipeline.status.trim()) return pipeline.status.trim();
+  return "new_sourced";
+}
+
+function isRejectedProperty(prop: CanonicalProperty): boolean {
+  const tags = getPropertyTags(prop);
+  return getPropertyPipelineStatus(prop) === "rejected_removed" || tags.includes("rejected") || Boolean(prop.rejectedAt);
+}
+
 function PropertyDataContent() {
   const [activeTab, setActiveTab] = useState<TabId>("canonical");
   const [listings, setListings] = useState<ListingRow[]>([]);
@@ -448,6 +528,7 @@ function PropertyDataContent() {
   const [sendingToCanonical, setSendingToCanonical] = useState(false);
   const [rerunningEnrichment, setRerunningEnrichment] = useState(false);
   const [runningRentalFlow, setRunningRentalFlow] = useState(false);
+  const [deletingCanonical, setDeletingCanonical] = useState(false);
   const [bulkInquirySending, setBulkInquirySending] = useState(false);
   const [bulkInquiryResult, setBulkInquiryResult] = useState<BulkInquirySendResponse | null>(null);
   const [expandedCanonicalId, setExpandedCanonicalId] = useState<string | null>(null);
@@ -470,6 +551,9 @@ function PropertyDataContent() {
   const [sortBy, setSortBy] = useState<"price" | "listedAt" | "lastActivity" | "area">("lastActivity");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [areaFilter, setAreaFilter] = useState<string>("");
+  const [statusFilter, setStatusFilter] = useState<string>("");
+  const [tagFilter, setTagFilter] = useState<string>("");
+  const [includeRejected, setIncludeRejected] = useState(false);
   const [minPrice, setMinPrice] = useState<string>("");
   const [maxPrice, setMaxPrice] = useState<string>("");
   const [listedAfter, setListedAfter] = useState<string>("");
@@ -709,6 +793,11 @@ function PropertyDataContent() {
     return Number.isNaN(t) ? null : t;
   };
   const normalizedSearch = searchQuery.trim().toLowerCase();
+  const availablePropertyTags = useMemo(() => {
+    const tags = new Set(DEFAULT_PROPERTY_TAGS);
+    canonicalProperties.forEach((property) => getPropertyTags(property).forEach((tag) => tags.add(tag)));
+    return Array.from(tags).sort((a, b) => labelFromKey(a).localeCompare(labelFromKey(b)));
+  }, [canonicalProperties]);
 
   const filteredSortedListings = useMemo(() => {
     let out = listings.filter((row) => {
@@ -773,6 +862,11 @@ function PropertyDataContent() {
 
   const filteredSortedCanonical = useMemo(() => {
     let out = canonicalProperties.filter((prop) => {
+      const propertyStatus = getPropertyPipelineStatus(prop);
+      const propertyTags = getPropertyTags(prop);
+      if (!includeRejected && isRejectedProperty(prop)) return false;
+      if (statusFilter && propertyStatus !== statusFilter) return false;
+      if (tagFilter && !propertyTags.includes(tagFilter)) return false;
       const area = prop.primaryListing?.city != null
         ? cityToArea(prop.primaryListing.city)
         : cityFromCanonicalAddress(prop.canonicalAddress);
@@ -822,7 +916,7 @@ function PropertyDataContent() {
       return mult * areaA.localeCompare(areaB);
     });
     return out;
-  }, [canonicalProperties, normalizedSearch, areaFilter, minPrice, maxPrice, listedAfter, listedBefore, sortBy, sortDir]);
+  }, [canonicalProperties, normalizedSearch, areaFilter, minPrice, maxPrice, listedAfter, listedBefore, sortBy, sortDir, statusFilter, tagFilter, includeRejected]);
 
   const formatPrice = (n: number) =>
     n != null && !Number.isNaN(n)
@@ -1131,6 +1225,108 @@ function PropertyDataContent() {
       })
       .catch((e) => setError(e instanceof Error ? e.message : "Failed to clear canonical properties"))
       .finally(() => setClearingCanonical(false));
+  };
+
+  const handleDeleteSelectedCanonicalProperties = () => {
+    if (selectedCanonicalIds.size === 0 || deletingCanonical) return;
+    const propertyIds = Array.from(selectedCanonicalIds);
+    const selectedProperties = canonicalProperties.filter((property) => selectedCanonicalIds.has(property.id));
+    const propertyLabel =
+      selectedProperties.length === 1
+        ? selectedProperties[0]?.canonicalAddress ?? "this property"
+        : `${selectedProperties.length} selected canonical properties`;
+    const confirmed = confirm(
+      `Delete ${propertyLabel}? This removes the canonical record, OM workspace links, generated documents, enrichment data, saved-deal links, and match records. Raw listings will remain. This cannot be undone.`
+    );
+    if (!confirmed) return;
+
+    setDeletingCanonical(true);
+    setError(null);
+    Promise.all(
+      propertyIds.map((propertyId) =>
+        fetch(`${API_BASE}/api/properties/${encodeURIComponent(propertyId)}?confirm=1`, { method: "DELETE" })
+          .then(async (r) => {
+            const data = await r.json().catch(() => ({}));
+            if (!r.ok || data?.error) {
+              const detail = typeof data?.details === "string" ? ` — ${data.details}` : "";
+              throw new Error((typeof data?.error === "string" ? data.error : `Delete failed (${r.status})`) + detail);
+            }
+            return data;
+          })
+      )
+    )
+      .then(() => {
+        const deletedIds = new Set(propertyIds);
+        setCanonicalProperties((prev) => prev.filter((property) => !deletedIds.has(property.id)));
+        setSelectedCanonicalIds(new Set());
+        setSavedPropertyIds((prev) => {
+          const next = new Set(prev);
+          deletedIds.forEach((id) => next.delete(id));
+          return next;
+        });
+        setLocalDossierJobs((prev) => {
+          const next = { ...prev };
+          deletedIds.forEach((id) => delete next[id]);
+          return next;
+        });
+        setExpandedCanonicalId((current) => (current && deletedIds.has(current) ? null : current));
+        fetchPipelineStats(true);
+        fetchWorkflowBoard();
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : "Failed to delete canonical property"))
+      .finally(() => setDeletingCanonical(false));
+  };
+
+  const refreshPropertyPipelineUi = () => {
+    fetchCanonicalProperties(true);
+    fetchPipelineStats(true);
+    fetchWorkflowBoard();
+  };
+
+  const handleAddPropertyTag = async (propertyId: string, tag: string) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/properties/${encodeURIComponent(propertyId)}/tags`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tag }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data?.error) throw new Error((data?.details || data?.error || "Failed to add tag") as string);
+      refreshPropertyPipelineUi();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to add property tag");
+    }
+  };
+
+  const handleRejectSelectedCanonicalProperties = () => {
+    if (selectedCanonicalIds.size === 0 || deletingCanonical) return;
+    const propertyIds = Array.from(selectedCanonicalIds);
+    const reason = prompt("Optional rejection reason (examples: too expensive, wrong location, regulatory risk):") ?? "";
+    const confirmed = confirm(`Reject/remove ${propertyIds.length} selected propert${propertyIds.length === 1 ? "y" : "ies"} from the active pipeline? History and documents will be preserved.`);
+    if (!confirmed) return;
+
+    setDeletingCanonical(true);
+    setError(null);
+    Promise.all(
+      propertyIds.map((propertyId) =>
+        fetch(`${API_BASE}/api/properties/${encodeURIComponent(propertyId)}/reject`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ reason }),
+        }).then(async (r) => {
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok || data?.error) throw new Error((data?.details || data?.error || "Reject failed") as string);
+          return data;
+        })
+      )
+    )
+      .then(() => {
+        setSelectedCanonicalIds(new Set());
+        setExpandedCanonicalId((current) => (current && propertyIds.includes(current) ? null : current));
+        refreshPropertyPipelineUi();
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : "Failed to reject selected properties"))
+      .finally(() => setDeletingCanonical(false));
   };
 
   const searchParams = useSearchParams();
@@ -1673,6 +1869,46 @@ function PropertyDataContent() {
               ))}
             </select>
           </label>
+          {activeTab === "canonical" && (
+            <>
+              <label className="property-data-filter-label" style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}>
+                <span style={{ whiteSpace: "nowrap", fontSize: "0.875rem" }}>Stage</span>
+                <select
+                  className="input-text property-data-filter-select"
+                  value={statusFilter}
+                  onChange={(e) => setStatusFilter(e.target.value)}
+                  aria-label="Filter by property stage"
+                >
+                  <option value="">All stages</option>
+                  {PROPERTY_STATUS_OPTIONS.map((status) => (
+                    <option key={status} value={status}>{labelFromKey(status)}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="property-data-filter-label" style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}>
+                <span style={{ whiteSpace: "nowrap", fontSize: "0.875rem" }}>Tag</span>
+                <select
+                  className="input-text property-data-filter-select"
+                  value={tagFilter}
+                  onChange={(e) => setTagFilter(e.target.value)}
+                  aria-label="Filter by property tag"
+                >
+                  <option value="">All tags</option>
+                  {availablePropertyTags.map((tag) => (
+                    <option key={tag} value={tag}>{labelFromKey(tag)}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="property-data-filter-label property-data-filter-checkbox">
+                <input
+                  type="checkbox"
+                  checked={includeRejected}
+                  onChange={(e) => setIncludeRejected(e.target.checked)}
+                />
+                <span>Include rejected</span>
+              </label>
+            </>
+          )}
           <label className="property-data-filter-label" style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}>
             <span style={{ whiteSpace: "nowrap", fontSize: "0.875rem" }}>Min price</span>
             <input
@@ -1816,6 +2052,10 @@ function PropertyDataContent() {
                         const omMeta = omCellMeta(prop);
                         const activeRunMeta = activeRunCellMeta(prop);
                         const sourcingUpdateMeta = getSourcingUpdateMeta(prop.details ?? null);
+                        const pipelineStatus = getPropertyPipelineStatus(prop);
+                        const propertyTags = getPropertyTags(prop);
+                        const missingFields = getPropertyMissingFields(prop);
+                        const hasTouredTag = propertyTags.includes("property_toured");
                         const listingBrokerEmail =
                           prop.listingAgentEnrichment?.find((entry) => typeof entry.email === "string" && entry.email.trim().length > 0)?.email?.trim()
                           ?? null;
@@ -1905,6 +2145,23 @@ function PropertyDataContent() {
                                     {priceReductionSummary}
                                   </div>
                                 ) : null}
+                                <div className="property-data-chip-row" aria-label="Pipeline status, tags, and missing information">
+                                  <span className={`property-mini-chip property-mini-chip--stage ${pipelineStatus === "rejected_removed" ? "property-mini-chip--danger" : ""}`}>
+                                    {labelFromKey(pipelineStatus)}
+                                  </span>
+                                  {propertyTags.slice(0, 3).map((tag) => (
+                                    <span key={tag} className="property-mini-chip property-mini-chip--tag">{labelFromKey(tag)}</span>
+                                  ))}
+                                  {propertyTags.length > 3 ? (
+                                    <span className="property-mini-chip property-mini-chip--muted">+{propertyTags.length - 3} tags</span>
+                                  ) : null}
+                                  {missingFields.slice(0, 3).map((field) => (
+                                    <span key={field} className="property-mini-chip property-mini-chip--missing">{labelFromKey(field)}</span>
+                                  ))}
+                                  {missingFields.length > 3 ? (
+                                    <span className="property-mini-chip property-mini-chip--missing">+{missingFields.length - 3} missing</span>
+                                  ) : null}
+                                </div>
                                 <div style={{ marginTop: "0.45rem", display: "flex", gap: "0.45rem", flexWrap: "wrap" }}>
                                   <Link
                                     href={`/deal-analysis?property_id=${encodeURIComponent(prop.id)}`}
@@ -1924,6 +2181,19 @@ function PropertyDataContent() {
                                   >
                                     OM workspace
                                   </Link>
+                                  {!hasTouredTag ? (
+                                    <button
+                                      type="button"
+                                      className="property-row-pill-button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        void handleAddPropertyTag(prop.id, "property_toured");
+                                      }}
+                                      title="Mark this property as toured"
+                                    >
+                                      Mark toured
+                                    </button>
+                                  ) : null}
                                   {canOpenInquiryComposer ? (
                                     <button
                                       type="button"
@@ -1977,7 +2247,7 @@ function PropertyDataContent() {
                             </tr>
                             {expandedCanonicalId === prop.id && (
                               <tr className="property-data-detail-row">
-                                <td colSpan={8} className="property-data-detail-cell" style={{ padding: "1rem 1rem 1rem 2.5rem", backgroundColor: "#fafafa" }}>
+                                <td colSpan={8} className="property-data-detail-cell">
                                   <CanonicalPropertyDetail
                                     property={prop}
                                     isSaved={savedPropertyIds.has(prop.id)}
@@ -2167,15 +2437,17 @@ function PropertyDataContent() {
               )}
             </>
           )}
-          <button
-            type="button"
-            className="btn-primary"
-            onClick={handleSendToCanonical}
-            disabled={Boolean(activeTab !== "raw" || total === 0 || sendingToCanonical)}
-            title={someSelected ? "Send selected to canonical and run enrichment" : "Create canonical properties from all raw listings and link them"}
-          >
-            {sendingToCanonical ? "Sending…" : someSelected ? `Add ${selectedListingIds.size} to canonical` : "Add to canonical properties"}
-          </button>
+          {activeTab === "raw" ? (
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={handleSendToCanonical}
+              disabled={Boolean(total === 0 || sendingToCanonical)}
+              title={someSelected ? "Send selected to canonical and run enrichment" : "Create canonical properties from all raw listings and link them"}
+            >
+              {sendingToCanonical ? "Sending…" : someSelected ? `Add ${selectedListingIds.size} to canonical` : "Add to canonical properties"}
+            </button>
+          ) : null}
           {activeTab === "canonical" && canonicalProperties.length > 0 && (
             <>
               <button
@@ -2205,26 +2477,52 @@ function PropertyDataContent() {
               >
                 {runningRentalFlow ? "Running…" : someCanonicalSelected ? `Re-run rental flow (${selectedCanonicalIds.size})` : "Re-run rental flow"}
               </button>
+              {someCanonicalSelected ? (
+                <button
+                  type="button"
+                  className="btn-danger-outline"
+                  onClick={handleRejectSelectedCanonicalProperties}
+                  disabled={Boolean(deletingCanonical)}
+                  title="Soft remove selected properties from the active pipeline while preserving their history."
+                >
+                  {deletingCanonical ? "Updating…" : `Reject/remove (${selectedCanonicalIds.size})`}
+                </button>
+              ) : null}
+              {someCanonicalSelected ? (
+                <button
+                  type="button"
+                  className="btn-danger"
+                  onClick={handleDeleteSelectedCanonicalProperties}
+                  disabled={Boolean(deletingCanonical)}
+                  title="Delete selected canonical property records. Raw listings remain."
+                >
+                  {deletingCanonical ? "Deleting…" : `Delete selected (${selectedCanonicalIds.size})`}
+                </button>
+              ) : null}
             </>
           )}
-          <button
-            type="button"
-            className="btn-secondary"
-            onClick={openReviewDup}
-            disabled={Boolean(activeTab !== "raw" || total === 0)}
-            title="Review potential duplicate listings (score ≥ 80)"
-          >
-            Review duplicates
-          </button>
-          <button
-            type="button"
-            className="btn-secondary"
-            onClick={handleClearCanonicalProperties}
-            disabled={Boolean(clearingCanonical || canonicalProperties.length === 0)}
-            title="Remove all canonical properties and their matches/enrichment data. Cannot be undone."
-          >
-            {clearingCanonical ? "Clearing…" : "Clear canonical properties"}
-          </button>
+          {activeTab === "raw" ? (
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={openReviewDup}
+              disabled={Boolean(total === 0)}
+              title="Review potential duplicate listings (score ≥ 80)"
+            >
+              Review duplicates
+            </button>
+          ) : null}
+          {activeTab === "canonical" && !someCanonicalSelected ? (
+            <button
+              type="button"
+              className="btn-danger-outline"
+              onClick={handleClearCanonicalProperties}
+              disabled={Boolean(clearingCanonical || canonicalProperties.length === 0)}
+              title="Remove all canonical properties and their matches/enrichment data. Cannot be undone."
+            >
+              {clearingCanonical ? "Clearing…" : "Clear all canonical"}
+            </button>
+          ) : null}
         </div>
       </div>
 

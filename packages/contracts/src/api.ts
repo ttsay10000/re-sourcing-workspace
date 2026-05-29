@@ -29,6 +29,30 @@ import type {
   HomeActivityItem,
 } from "./sourcing.js";
 import type { ListingLifecycleState } from "./enums.js";
+import type {
+  UiV2BrokerBlock,
+  UiV2BrokerOverwriteInput,
+  UiV2CrmListPayload,
+  UiV2DealProgressSummary,
+  UiV2ImportJobPayload,
+  UiV2ManualEntryImportInput,
+  UiV2OmUploadImportInput,
+  UiV2OmUrlImportInput,
+  UiV2OutreachComposerPayload,
+  UiV2OutreachDraftInput,
+  UiV2OutreachDraftPayload,
+  UiV2OutreachFollowUpActionInput,
+  UiV2OutreachFollowUpActionPayload,
+  UiV2PipelineListPayload,
+  UiV2PipelineQuery,
+  UiV2PropertyDetailPayload,
+  UiV2SavedDealsPayload,
+  UiV2SavedSearchRunInput,
+  UiV2StatusUpdateInput,
+  UiV2StreetEasyPullInput,
+  UiV2StreetEasySaleIdImportInput,
+  UiV2StreetEasyUrlImportInput,
+} from "./uiV2.js";
 
 // ---- Profiles ----
 export interface ProfilesListResponse {
@@ -248,4 +272,119 @@ export interface PropertyRecipientResolutionResponse {
 export interface PropertyOutreachSummaryResponse {
   outreach: PropertyOutreachSummary | null;
   flags?: PropertyOutreachFlag[];
+}
+
+// ---- UI v2 backend contracts ----
+export interface UiV2PipelineListRequest {
+  query?: UiV2PipelineQuery;
+}
+
+export interface UiV2PipelineListResponse {
+  pipeline: UiV2PipelineListPayload;
+}
+
+export interface UiV2PropertyDetailResponse {
+  property: UiV2PropertyDetailPayload | null;
+}
+
+export interface UiV2PropertyStatusUpdateRequest {
+  propertyId: string;
+  body: UiV2StatusUpdateInput;
+}
+
+export interface UiV2PropertyStatusUpdateResponse {
+  property: UiV2PropertyDetailPayload;
+}
+
+export interface UiV2BrokerOverwriteRequest {
+  propertyId: string;
+  body: UiV2BrokerOverwriteInput;
+}
+
+export interface UiV2BrokerOverwriteResponse {
+  broker: UiV2BrokerBlock;
+}
+
+export interface UiV2CrmListRequest {
+  query?: {
+    q?: string;
+    limit?: number;
+    offset?: number;
+  };
+}
+
+export interface UiV2CrmListResponse {
+  crm: UiV2CrmListPayload;
+}
+
+export interface UiV2OutreachComposerRequest {
+  propertyId: string;
+}
+
+export interface UiV2OutreachComposerResponse {
+  composer: UiV2OutreachComposerPayload;
+}
+
+export interface UiV2OutreachDraftRequest {
+  body: UiV2OutreachDraftInput;
+}
+
+export interface UiV2OutreachDraftResponse {
+  draft: UiV2OutreachDraftPayload;
+}
+
+export interface UiV2OutreachFollowUpActionRequest {
+  body: UiV2OutreachFollowUpActionInput;
+}
+
+export interface UiV2OutreachFollowUpActionResponse {
+  followUp: UiV2OutreachFollowUpActionPayload;
+}
+
+export interface UiV2OmUploadImportRequest {
+  body: UiV2OmUploadImportInput;
+}
+
+export interface UiV2OmUrlImportRequest {
+  body: UiV2OmUrlImportInput;
+}
+
+export interface UiV2ManualEntryImportRequest {
+  body: UiV2ManualEntryImportInput;
+}
+
+export interface UiV2StreetEasyUrlImportRequest {
+  body: UiV2StreetEasyUrlImportInput;
+}
+
+export interface UiV2StreetEasySaleIdImportRequest {
+  body: UiV2StreetEasySaleIdImportInput;
+}
+
+export interface UiV2StreetEasyPullRequest {
+  body: UiV2StreetEasyPullInput;
+}
+
+export interface UiV2SavedSearchRunRequest {
+  body: UiV2SavedSearchRunInput;
+}
+
+export interface UiV2ImportJobResponse {
+  importJob: UiV2ImportJobPayload;
+}
+
+export interface UiV2SavedDealsListRequest {
+  query?: {
+    status?: string | string[];
+    limit?: number;
+    offset?: number;
+  };
+}
+
+export interface UiV2SavedDealsListResponse {
+  savedDeals: UiV2SavedDealsPayload;
+}
+
+export interface UiV2DealProgressSummaryResponse {
+  summary: UiV2DealProgressSummary;
 }

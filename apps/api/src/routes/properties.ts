@@ -422,9 +422,289 @@ function isMissingPropertyScoringSchemaError(err: unknown): boolean {
     || normalized.includes("score_version");
 }
 
+type PropertyPipelineStatus =
+  | "new_sourced"
+  | "enrichment_running"
+  | "enrichment_complete"
+  | "needs_om"
+  | "om_requested"
+  | "follow_up_needed"
+  | "om_received"
+  | "underwriting"
+  | "saved_watchlist"
+  | "loi_sent"
+  | "negotiation"
+  | "contract_signed"
+  | "diligence_escrow"
+  | "closed"
+  | "rejected_removed";
+
+type PropertyOmPipelineStatus =
+  | "not_needed_yet"
+  | "needed"
+  | "requested"
+  | "follow_up_needed"
+  | "received"
+  | "reviewed"
+  | "missing_documents";
+
+type PropertyJobStatus = "not_started" | "queued" | "running" | "complete" | "failed" | "needs_manual_review" | "insufficient_data";
+
+type PropertyUnderwritingStatus =
+  | "not_started"
+  | "in_progress"
+  | "complete"
+  | "needs_assumptions"
+  | "needs_rent_roll"
+  | "needs_partner_review";
+
+interface PropertyPipelineState {
+  status: PropertyPipelineStatus;
+  omStatus: PropertyOmPipelineStatus;
+  enrichmentStatus: PropertyJobStatus;
+  rentalFlowStatus: PropertyJobStatus;
+  underwritingStatus: PropertyUnderwritingStatus;
+  dossierStatus: PropertyJobStatus;
+  excelStatus: PropertyJobStatus;
+  tags: string[];
+  missingFields: string[];
+  actionRequired: string[];
+  rejectedAt: string | null;
+  rejectionReason: string | null;
+  source: string | null;
+  sourceLinks: Record<string, unknown>;
+  lastActivityAt: string;
+}
+
+const DEFAULT_PIPELINE_TAGS = [
+  "property_toured",
+  "high_priority",
+  "follow_up",
+  "broker_relationship",
+  "off_market",
+  "distressed_seller",
+  "below_replacement_cost",
+  "tax_class_advantage",
+  "free_market_focus",
+  "rent_stabilized_risk",
+  "needs_city_data",
+  "needs_rent_roll",
+  "needs_om",
+  "good_mtr_candidate",
+  "rejected",
+  "duplicate",
+  "partner_review_needed",
+];
+
+function normalizeTag(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  return normalized || null;
+}
+
+function uniqueStrings(values: unknown[]): string[] {
+  return [...new Set(values.filter((value): value is string => typeof value === "string" && value.trim().length > 0).map((value) => value.trim()))];
+}
+
+function readPropertyPipelineState(details: unknown): PropertyPipelineState {
+  const detailRecord = isPlainRecord(details) ? details : {};
+  const pipeline = isPlainRecord(detailRecord.pipeline) ? detailRecord.pipeline : {};
+  const now = new Date().toISOString();
+  return {
+    status: (typeof pipeline.status === "string" ? pipeline.status : "new_sourced") as PropertyPipelineStatus,
+    omStatus: (typeof pipeline.omStatus === "string" ? pipeline.omStatus : "needed") as PropertyOmPipelineStatus,
+    enrichmentStatus: (typeof pipeline.enrichmentStatus === "string" ? pipeline.enrichmentStatus : "not_started") as PropertyJobStatus,
+    rentalFlowStatus: (typeof pipeline.rentalFlowStatus === "string" ? pipeline.rentalFlowStatus : "not_started") as PropertyJobStatus,
+    underwritingStatus: (typeof pipeline.underwritingStatus === "string" ? pipeline.underwritingStatus : "not_started") as PropertyUnderwritingStatus,
+    dossierStatus: (typeof pipeline.dossierStatus === "string" ? pipeline.dossierStatus : "not_started") as PropertyJobStatus,
+    excelStatus: (typeof pipeline.excelStatus === "string" ? pipeline.excelStatus : "not_started") as PropertyJobStatus,
+    tags: uniqueStrings(Array.isArray(pipeline.tags) ? pipeline.tags : Array.isArray(detailRecord.tags) ? detailRecord.tags : []),
+    missingFields: uniqueStrings(Array.isArray(pipeline.missingFields) ? pipeline.missingFields : []),
+    actionRequired: uniqueStrings(Array.isArray(pipeline.actionRequired) ? pipeline.actionRequired : []),
+    rejectedAt: typeof pipeline.rejectedAt === "string" && pipeline.rejectedAt.trim() ? pipeline.rejectedAt : null,
+    rejectionReason: typeof pipeline.rejectionReason === "string" && pipeline.rejectionReason.trim() ? pipeline.rejectionReason : null,
+    source: typeof pipeline.source === "string" && pipeline.source.trim() ? pipeline.source : null,
+    sourceLinks: isPlainRecord(pipeline.sourceLinks) ? pipeline.sourceLinks : {},
+    lastActivityAt: typeof pipeline.lastActivityAt === "string" && pipeline.lastActivityAt.trim() ? pipeline.lastActivityAt : now,
+  };
+}
+
+function numericFromPath(root: unknown, path: string[]): number | null {
+  let current: unknown = root;
+  for (const part of path) {
+    if (!isPlainRecord(current)) return null;
+    current = current[part];
+  }
+  if (typeof current === "number" && Number.isFinite(current)) return current;
+  if (typeof current === "string" && current.trim()) {
+    const parsed = Number(current.replace(/[$,%\s,]/g, ""));
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function hasAnyRecordValue(root: unknown, paths: string[][]): boolean {
+  return paths.some((path) => {
+    let current: unknown = root;
+    for (const part of path) {
+      if (!isPlainRecord(current)) return false;
+      current = current[part];
+    }
+    if (typeof current === "number") return Number.isFinite(current);
+    if (typeof current === "string") return current.trim().length > 0;
+    if (Array.isArray(current)) return current.length > 0;
+    return current != null;
+  });
+}
+
+function sourceLinksFromDetails(details: Record<string, unknown>, listing: Awaited<ReturnType<typeof getPrimaryListingForProperty>> | null) {
+  const manualSourceLinks = isPlainRecord(details.manualSourceLinks) ? details.manualSourceLinks : {};
+  const links: Record<string, unknown> = { ...manualSourceLinks };
+  if (listing?.url) links.listingUrl = listing.url;
+  return links;
+}
+
+async function refreshPropertyPipelineMetadata(
+  propertyId: string,
+  pool: import("pg").Pool,
+  overrides: Partial<PropertyPipelineState> = {}
+): Promise<PropertyPipelineState | null> {
+  const propertyRepo = new PropertyRepo({ pool });
+  const property = await propertyRepo.byId(propertyId);
+  if (!property) return null;
+
+  const details = isPlainRecord(property.details) ? property.details : {};
+  const existing = readPropertyPipelineState(details);
+  const [uploadedDocs, inquiryDocs, generatedDocs, listing, recipient] = await Promise.all([
+    new PropertyUploadedDocumentRepo({ pool }).listByPropertyId(propertyId).catch(() => []),
+    new InquiryDocumentRepo({ pool }).listByPropertyId(propertyId).catch(() => []),
+    new DocumentRepo({ pool }).listByPropertyId(propertyId).catch(() => []),
+    getPrimaryListingForProperty(propertyId, pool).catch(() => null),
+    new RecipientResolutionRepo({ pool }).get(propertyId).catch(() => null),
+  ]);
+
+  const generatedSources = new Set(generatedDocs.map((doc) => doc.source));
+  const uploadedCategories = new Set(uploadedDocs.map((doc) => doc.category));
+  const inquiryFileNames = inquiryDocs.map((doc) => doc.filename);
+  const hasOmDocument =
+    uploadedCategories.has("OM") ||
+    uploadedCategories.has("Brochure") ||
+    inquiryFileNames.some(looksLikeOmStyleFilename) ||
+    hasAnyRecordValue(details, [["omData", "authoritative"]]);
+  const hasRentRoll =
+    uploadedCategories.has("Rent Roll") ||
+    inquiryFileNames.some((filename) => /rent[ _-]?roll/i.test(filename)) ||
+    hasAnyRecordValue(details, [["omData", "authoritative", "rentRoll"], ["rentalFinancials", "omAnalysis", "rentRoll"]]);
+  const hasT12 =
+    uploadedCategories.has("T12 / Operating Summary") ||
+    inquiryFileNames.some((filename) => /(t-?12|operating|expense|financial)/i.test(filename));
+  const hasBrokerContact =
+    Boolean(recipient?.contactEmail) ||
+    Boolean(listing?.agentEnrichment?.some((agent) => typeof agent.email === "string" && agent.email.trim().length > 0));
+  const hasRentalFlow = hasAnyRecordValue(details, [["rentalFinancials", "lastUpdatedAt"], ["rentalFinancials", "rentalUnits"]]);
+  const hasCityEnrichment =
+    hasAnyRecordValue(details, [["bbl"], ["buildingLotBlock"], ["enrichment"]]) ||
+    Object.keys(isPlainRecord(details.enrichment) ? details.enrichment : {}).length > 0;
+  const hasDossier = hasCompletedDealDossier(property.details as PropertyDetails | null);
+  const hasAssumptions = Boolean(getRawPropertyDossierAssumptions(property.details as PropertyDetails | null));
+  const hasAskingPrice =
+    listing?.price != null ||
+    hasAnyRecordValue(details, [
+      ["askingPrice"],
+      ["purchasePrice"],
+      ["dealDossier", "assumptions", "purchasePrice"],
+      ["omData", "authoritative", "propertyInfo", "askingPrice"],
+    ]);
+  const unitCount =
+    numericFromPath(details, ["unitCount"]) ??
+    numericFromPath(details, ["dealDossier", "assumptions", "unitCount"]) ??
+    numericFromPath(details, ["rentalFinancials", "fromLlm", "unitCount"]);
+  const rentalUnits = isPlainRecord(details.rentalFinancials) && Array.isArray(details.rentalFinancials.rentalUnits)
+    ? details.rentalFinancials.rentalUnits.length
+    : 0;
+  const hasUnitCount = (unitCount != null && unitCount > 0) || rentalUnits > 0;
+  const hasBuildingSqft = hasAnyRecordValue(details, [
+    ["buildingSqft"],
+    ["assessedGrossSqft"],
+    ["assessedResidentialAreaGross"],
+    ["dealDossier", "assumptions", "buildingSqft"],
+    ["omData", "authoritative", "propertyInfo", "buildingSqft"],
+  ]);
+  const hasTaxClass = hasAnyRecordValue(details, [["taxClass"], ["taxCode"], ["enrichment", "taxClass"]]);
+  const lastInquirySentAt = await pool.query<{ sent_at: Date | string }>(
+    "SELECT sent_at FROM property_inquiry_sends WHERE property_id = $1 ORDER BY sent_at DESC NULLS LAST LIMIT 1",
+    [propertyId]
+  ).then((result) => result.rows[0]?.sent_at ?? null).catch(() => null);
+
+  const missingFields = uniqueStrings([
+    hasAskingPrice ? null : "asking_price",
+    hasUnitCount ? null : "unit_count",
+    hasBuildingSqft ? null : "building_sqft",
+    hasBrokerContact ? null : "broker_contact",
+    hasOmDocument ? null : "om",
+    hasRentRoll ? null : "rent_roll",
+    hasT12 ? null : "t12",
+    hasTaxClass ? null : "tax_class",
+    hasCityEnrichment ? null : "city_enrichment",
+    hasRentalFlow ? null : "rental_flow",
+    hasAssumptions ? null : "underwriting_assumptions",
+    hasDossier ? null : "dossier",
+    generatedSources.has("generated_excel") ? null : "excel_export",
+  ]);
+  const rejected = overrides.status === "rejected_removed" || existing.status === "rejected_removed" || existing.rejectedAt != null;
+  const omStatus: PropertyOmPipelineStatus =
+    overrides.omStatus ??
+    (hasOmDocument ? "received" : lastInquirySentAt ? "requested" : "needed");
+  const enrichmentStatus: PropertyJobStatus =
+    overrides.enrichmentStatus ??
+    (hasCityEnrichment ? "complete" : property.canonicalAddress ? "not_started" : "needs_manual_review");
+  const rentalFlowStatus: PropertyJobStatus =
+    overrides.rentalFlowStatus ??
+    (hasRentalFlow ? "complete" : property.canonicalAddress ? "not_started" : "insufficient_data");
+  const dossierStatus: PropertyJobStatus = overrides.dossierStatus ?? (hasDossier ? "complete" : "not_started");
+  const excelStatus: PropertyJobStatus = overrides.excelStatus ?? (generatedSources.has("generated_excel") ? "complete" : "not_started");
+  const underwritingStatus: PropertyUnderwritingStatus =
+    overrides.underwritingStatus ??
+    (hasDossier ? "complete" : hasOmDocument && !hasRentRoll ? "needs_rent_roll" : hasOmDocument && !hasAssumptions ? "needs_assumptions" : hasOmDocument ? "in_progress" : "not_started");
+  const status: PropertyPipelineStatus =
+    overrides.status ??
+    (rejected
+      ? "rejected_removed"
+      : hasDossier
+        ? "saved_watchlist"
+        : hasOmDocument
+          ? "underwriting"
+          : lastInquirySentAt
+            ? "om_requested"
+            : "needs_om");
+  const hasTagOverride = Object.prototype.hasOwnProperty.call(overrides, "tags");
+  const tags = uniqueStrings(hasTagOverride ? (overrides.tags ?? []) : existing.tags ?? []);
+  const next: PropertyPipelineState = {
+    ...existing,
+    status,
+    omStatus,
+    enrichmentStatus,
+    rentalFlowStatus,
+    underwritingStatus,
+    dossierStatus,
+    excelStatus,
+    tags,
+    missingFields,
+    actionRequired: uniqueStrings(overrides.actionRequired ?? missingFields),
+    rejectedAt: overrides.rejectedAt ?? existing.rejectedAt,
+    rejectionReason: overrides.rejectionReason ?? existing.rejectionReason,
+    source: overrides.source ?? existing.source ?? listing?.source ?? null,
+    sourceLinks: { ...sourceLinksFromDetails(details, listing), ...(overrides.sourceLinks ?? {}) },
+    lastActivityAt: overrides.lastActivityAt ?? new Date().toISOString(),
+  };
+  await propertyRepo.mergeDetails(propertyId, { pipeline: next });
+  return next;
+}
+
 function mapPropertyListRows(rows: Array<Record<string, unknown>>) {
   return rows.map((row) => {
     const details = row.details ?? null;
+    const pipeline = readPropertyPipelineState(details);
     const dossierReady = hasCompletedDealDossier(details as PropertyDetails | null);
     const dossierSummary = getPropertyDossierSummary(details as PropertyDetails | null);
     const calculatedDealScore =
@@ -444,6 +724,24 @@ function mapPropertyListRows(rows: Array<Record<string, unknown>>) {
       currentPrice: row.listing_price != null ? Number(row.listing_price) : null,
       priceHistory: (row.listing_price_history as PriceHistoryEntry[] | null) ?? null,
     });
+    const listMissingFields = pipeline.missingFields.length > 0
+      ? pipeline.missingFields
+      : uniqueStrings([
+          row.listing_price != null || hasAnyRecordValue(details, [["askingPrice"], ["purchasePrice"], ["dealDossier", "assumptions", "purchasePrice"]]) ? null : "asking_price",
+          hasAnyRecordValue(details, [["unitCount"], ["rentalFinancials", "rentalUnits"]]) ? null : "unit_count",
+          hasAnyRecordValue(details, [["buildingSqft"], ["assessedGrossSqft"], ["dealDossier", "assumptions", "buildingSqft"]]) ? null : "building_sqft",
+          row.om_status === "OM received" ? null : "om",
+          hasAnyRecordValue(details, [["bbl"], ["buildingLotBlock"], ["enrichment"]]) ? null : "city_enrichment",
+          hasAnyRecordValue(details, [["rentalFinancials", "lastUpdatedAt"], ["rentalFinancials", "rentalUnits"]]) ? null : "rental_flow",
+        ]);
+    const listPipelineStatus: PropertyPipelineStatus =
+      pipeline.status !== "new_sourced"
+        ? pipeline.status
+        : row.om_status === "OM received"
+          ? "underwriting"
+          : lastInquirySentAt
+            ? "om_requested"
+            : "needs_om";
     return {
       id: row.id,
       canonicalAddress: row.canonical_address,
@@ -461,6 +759,18 @@ function mapPropertyListRows(rows: Array<Record<string, unknown>>) {
       recipientContactName: (row.recipient_contact_name as string) ?? null,
       recipientContactEmail: (row.recipient_contact_email as string) ?? null,
       lastInquirySentAt,
+      pipelineStatus: listPipelineStatus,
+      enrichmentStatus: pipeline.enrichmentStatus,
+      rentalFlowStatus: pipeline.rentalFlowStatus,
+      underwritingStatus: pipeline.underwritingStatus,
+      dossierStatus: pipeline.dossierStatus,
+      excelStatus: pipeline.excelStatus,
+      propertyTags: pipeline.tags,
+      defaultTags: DEFAULT_PIPELINE_TAGS,
+      missingFields: listMissingFields,
+      actionRequired: pipeline.actionRequired.length > 0 ? pipeline.actionRequired : listMissingFields,
+      rejectedAt: pipeline.rejectedAt,
+      rejectionReason: pipeline.rejectionReason,
       dealScore:
         dossierReady && row.score_override_score != null
           ? Number(row.score_override_score)
@@ -726,6 +1036,178 @@ router.delete("/properties", async (req: Request, res: Response) => {
   }
 });
 
+/** DELETE /api/properties/:id - delete one canonical property and cascaded workspace/enrichment records. Requires ?confirm=1. */
+router.delete("/properties/:id", async (req: Request, res: Response) => {
+  const confirmed = req.query.confirm === "1";
+  if (!confirmed) {
+    res.status(400).json({
+      error: "Confirmation required. Use ?confirm=1 to delete this canonical property.",
+    });
+    return;
+  }
+
+  const propertyId = req.params.id;
+  try {
+    const pool = getPool();
+    const generatedDocRepo = new DocumentRepo({ pool });
+    const uploadedDocRepo = new PropertyUploadedDocumentRepo({ pool });
+    const inquiryDocRepo = new InquiryDocumentRepo({ pool });
+
+    const [generatedDocs, uploadedDocs, inquiryDocs] = await Promise.all([
+      generatedDocRepo.listByPropertyId(propertyId),
+      uploadedDocRepo.listByPropertyId(propertyId),
+      inquiryDocRepo.listByPropertyId(propertyId),
+    ]);
+
+    const result = await pool.query<{ id: string; canonical_address: string }>(
+      "DELETE FROM properties WHERE id = $1 RETURNING id, canonical_address",
+      [propertyId]
+    );
+
+    const deletedProperty = result.rows[0];
+    if (!deletedProperty) {
+      res.status(404).json({ error: "Canonical property not found." });
+      return;
+    }
+
+    await Promise.allSettled([
+      ...generatedDocs.map((doc) => deleteGeneratedDocumentFile(doc.storagePath)),
+      ...uploadedDocs.map((doc) => deleteUploadedDocumentFile(doc.filePath)),
+      ...inquiryDocs.map((doc) => unlink(resolveInquiryFilePath(doc.filePath)).catch(() => {})),
+    ]);
+
+    res.json({
+      ok: true,
+      deleted: true,
+      propertyId: deletedProperty.id,
+      canonicalAddress: deletedProperty.canonical_address,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[properties delete one]", err);
+    res.status(503).json({ error: "Failed to delete canonical property.", details: message });
+  }
+});
+
+/** POST /api/properties/:id/tags - add a workflow/custom tag to a canonical property. */
+router.post("/properties/:id/tags", async (req: Request, res: Response) => {
+  try {
+    const propertyId = req.params.id;
+    const tag = normalizeTag(req.body?.tag);
+    if (!tag) {
+      res.status(400).json({ error: "tag is required." });
+      return;
+    }
+    const pool = getPool();
+    const propertyRepo = new PropertyRepo({ pool });
+    const property = await propertyRepo.byId(propertyId);
+    if (!property) {
+      res.status(404).json({ error: "Canonical property not found." });
+      return;
+    }
+    const existing = readPropertyPipelineState(property.details);
+    const pipeline = await refreshPropertyPipelineMetadata(propertyId, pool, {
+      tags: uniqueStrings([...existing.tags, tag]),
+    });
+    res.json({ ok: true, propertyId, tag, pipeline });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[properties add tag]", err);
+    res.status(503).json({ error: "Failed to add property tag.", details: message });
+  }
+});
+
+/** DELETE /api/properties/:id/tags/:tag - remove a workflow/custom tag from a canonical property. */
+router.delete("/properties/:id/tags/:tag", async (req: Request, res: Response) => {
+  try {
+    const propertyId = req.params.id;
+    const tag = normalizeTag(req.params.tag);
+    if (!tag) {
+      res.status(400).json({ error: "tag is required." });
+      return;
+    }
+    const pool = getPool();
+    const propertyRepo = new PropertyRepo({ pool });
+    const property = await propertyRepo.byId(propertyId);
+    if (!property) {
+      res.status(404).json({ error: "Canonical property not found." });
+      return;
+    }
+    const existing = readPropertyPipelineState(property.details);
+    const pipeline = await refreshPropertyPipelineMetadata(propertyId, pool, {
+      tags: existing.tags.filter((value) => value !== tag),
+    });
+    res.json({ ok: true, propertyId, tag, pipeline });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[properties remove tag]", err);
+    res.status(503).json({ error: "Failed to remove property tag.", details: message });
+  }
+});
+
+/** POST /api/properties/:id/reject - soft reject/remove a property while preserving its history. */
+router.post("/properties/:id/reject", async (req: Request, res: Response) => {
+  try {
+    const propertyId = req.params.id;
+    const reason = typeof req.body?.reason === "string" && req.body.reason.trim() ? req.body.reason.trim() : null;
+    const pool = getPool();
+    const propertyRepo = new PropertyRepo({ pool });
+    const property = await propertyRepo.byId(propertyId);
+    if (!property) {
+      res.status(404).json({ error: "Canonical property not found." });
+      return;
+    }
+    const existing = readPropertyPipelineState(property.details);
+    const rejectedAt = new Date().toISOString();
+    const pipeline = await refreshPropertyPipelineMetadata(propertyId, pool, {
+      status: "rejected_removed",
+      tags: uniqueStrings([...existing.tags, "rejected"]),
+      rejectedAt,
+      rejectionReason: reason,
+      lastActivityAt: rejectedAt,
+    });
+    res.json({ ok: true, propertyId, pipeline });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[properties reject]", err);
+    res.status(503).json({ error: "Failed to reject property.", details: message });
+  }
+});
+
+/** POST /api/properties/:id/restore - restore a previously rejected property to the active pipeline. */
+router.post("/properties/:id/restore", async (req: Request, res: Response) => {
+  try {
+    const propertyId = req.params.id;
+    const pool = getPool();
+    const propertyRepo = new PropertyRepo({ pool });
+    const property = await propertyRepo.byId(propertyId);
+    if (!property) {
+      res.status(404).json({ error: "Canonical property not found." });
+      return;
+    }
+    const existing = readPropertyPipelineState(property.details);
+    const pipelineWithoutReject = {
+      ...existing,
+      status: "new_sourced" as PropertyPipelineStatus,
+      tags: existing.tags.filter((value) => value !== "rejected"),
+      rejectedAt: null,
+      rejectionReason: null,
+      lastActivityAt: new Date().toISOString(),
+    };
+    await propertyRepo.mergeDetails(propertyId, { pipeline: pipelineWithoutReject });
+    const pipeline = await refreshPropertyPipelineMetadata(propertyId, pool, {
+      tags: pipelineWithoutReject.tags,
+      rejectedAt: null,
+      rejectionReason: null,
+    });
+    res.json({ ok: true, propertyId, pipeline });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[properties restore]", err);
+    res.status(503).json({ error: "Failed to restore property.", details: message });
+  }
+});
+
 /** POST /api/properties/manual-add - create/update a property directly from a StreetEasy URL/sale ID and optional OM document link. */
 router.post("/properties/manual-add", async (req: Request, res: Response) => {
   const streetEasyUrl = normalizeManualUrl(req.body?.streetEasyUrl ?? req.body?.streeteasyUrl, {
@@ -775,6 +1257,19 @@ router.post("/properties/manual-add", async (req: Request, res: Response) => {
     ok: false,
     bbl: null,
     bin: null,
+    warning: null,
+  };
+  let rentalFlow: {
+    attempted: boolean;
+    ok: boolean;
+    rentalUnitsCount: number;
+    hasLlmFinancials: boolean;
+    warning: string | null;
+  } = {
+    attempted: false,
+    ok: false,
+    rentalUnitsCount: 0,
+    hasLlmFinancials: false,
     warning: null,
   };
 
@@ -997,7 +1492,26 @@ router.post("/properties/manual-add", async (req: Request, res: Response) => {
       enrichment.warning = error instanceof Error ? error.message : "Failed to run enrichment.";
     }
 
+    try {
+      rentalFlow.attempted = true;
+      const result = await runRentalFlowForProperty(propertyId, pool);
+      rentalFlow = {
+        attempted: true,
+        ok: !result.error,
+        rentalUnitsCount: result.rentalUnitsCount,
+        hasLlmFinancials: result.hasLlmFinancials,
+        warning: result.error ?? null,
+      };
+    } catch (error) {
+      rentalFlow.attempted = true;
+      rentalFlow.warning = error instanceof Error ? error.message : "Failed to run rental flow.";
+    }
+
     await syncPropertySourcingWorkflow(propertyId, { pool });
+    await refreshPropertyPipelineMetadata(propertyId, pool, {
+      enrichmentStatus: enrichment.attempted ? (enrichment.ok ? "complete" : "failed") : "not_started",
+      rentalFlowStatus: rentalFlow.attempted ? (rentalFlow.ok ? "complete" : "failed") : "not_started",
+    });
     const property = await propertyRepo.byId(propertyId);
 
     res.status(createdProperty ? 201 : 200).json({
@@ -1010,6 +1524,7 @@ router.post("/properties/manual-add", async (req: Request, res: Response) => {
       saleDetailsFetch,
       omImport,
       enrichment,
+      rentalFlow,
       property,
     });
   } catch (err) {
@@ -1158,6 +1673,19 @@ router.post("/properties/manual-add-from-om", async (req: Request, res: Response
       bin: null,
       warning: null,
     };
+    let rentalFlow: {
+      attempted: boolean;
+      ok: boolean;
+      rentalUnitsCount: number;
+      hasLlmFinancials: boolean;
+      warning: string | null;
+    } = {
+      attempted: false,
+      ok: false,
+      rentalUnitsCount: 0,
+      hasLlmFinancials: false,
+      warning: null,
+    };
 
     try {
       const docId = randomUUID();
@@ -1215,7 +1743,26 @@ router.post("/properties/manual-add-from-om", async (req: Request, res: Response
       enrichment.warning = error instanceof Error ? error.message : "Failed to run enrichment.";
     }
 
+    try {
+      rentalFlow.attempted = true;
+      const result = await runRentalFlowForProperty(propertyId, pool);
+      rentalFlow = {
+        attempted: true,
+        ok: !result.error,
+        rentalUnitsCount: result.rentalUnitsCount,
+        hasLlmFinancials: result.hasLlmFinancials,
+        warning: result.error ?? null,
+      };
+    } catch (error) {
+      rentalFlow.attempted = true;
+      rentalFlow.warning = error instanceof Error ? error.message : "Failed to run rental flow.";
+    }
+
     await syncPropertySourcingWorkflow(propertyId, { pool });
+    await refreshPropertyPipelineMetadata(propertyId, pool, {
+      enrichmentStatus: enrichment.attempted ? (enrichment.ok ? "complete" : "failed") : "not_started",
+      rentalFlowStatus: rentalFlow.attempted ? (rentalFlow.ok ? "complete" : "failed") : "not_started",
+    });
     const property = await propertyRepo.byId(propertyId);
 
     res.status(createdProperty ? 201 : 200).json({
@@ -1229,6 +1776,7 @@ router.post("/properties/manual-add-from-om", async (req: Request, res: Response
       omAddress: resolvedOmAddress,
       omImport,
       enrichment,
+      rentalFlow,
       property,
     });
   } catch (err) {
@@ -1497,8 +2045,16 @@ router.post("/properties/from-listings", async (req: Request, res: Response) => 
           try {
             await runRentalFlowForProperty(propertyIds[i]!, pool);
             await syncPropertySourcingWorkflow(propertyIds[i]!, { pool });
+            await refreshPropertyPipelineMetadata(propertyIds[i]!, pool, {
+              enrichmentStatus: skipPermitEnrichment ? "not_started" : enrichmentSummary.failed > 0 ? "needs_manual_review" : "complete",
+              rentalFlowStatus: "complete",
+            });
             rentalFlowSummary.success++;
           } catch {
+            await refreshPropertyPipelineMetadata(propertyIds[i]!, pool, {
+              enrichmentStatus: skipPermitEnrichment ? "not_started" : enrichmentSummary.failed > 0 ? "needs_manual_review" : "complete",
+              rentalFlowStatus: "failed",
+            }).catch(() => null);
             rentalFlowSummary.failed++;
           }
           await upsertWorkflowStep(workflowRunId, {
@@ -1642,6 +2198,9 @@ router.post("/properties/run-enrichment", async (req: Request, res: Response) =>
         rateLimitDelayMs: ENRICHMENT_RATE_LIMIT_DELAY_MS,
       });
       await syncPropertySourcingWorkflow(propertyIds[i]!, { pool: sourcingPool });
+      await refreshPropertyPipelineMetadata(propertyIds[i]!, sourcingPool, {
+        enrichmentStatus: out.ok ? "complete" : "failed",
+      });
       if (out.ok) success++;
       else failed++;
       for (const [name, r] of Object.entries(out.results)) {
@@ -1692,6 +2251,9 @@ router.post("/properties/run-enrichment", async (req: Request, res: Response) =>
       for (const propertyId of propertyIds) {
         try {
           const result = await refreshOmFinancialsForProperty(propertyId, pool);
+          await refreshPropertyPipelineMetadata(propertyId, pool, {
+            underwritingStatus: result.reviewRequired ? "needs_assumptions" : "in_progress",
+          });
           if (result.error) omFailed++;
           else omCompleted++;
           omFinancialsProcessed += result.documentsProcessed;
@@ -1967,6 +2529,9 @@ router.post("/properties/:id/refresh-om-financials", async (req: Request, res: R
     await updateWorkflowRun(workflowRunId, {
       status: "completed",
       finishedAt: new Date().toISOString(),
+    });
+    await refreshPropertyPipelineMetadata(propertyId.trim(), pool, {
+      underwritingStatus: result.reviewRequired ? "needs_assumptions" : "in_progress",
     });
     res.json({
       ok: true,
@@ -2540,6 +3105,7 @@ router.post(
       });
 
       await syncPropertySourcingWorkflow(propertyId, { pool });
+      await refreshPropertyPipelineMetadata(propertyId, pool);
 
       // Upload only persists the document. Authoritative OM promotion is manual now
       // so inbox noise or partial uploads do not replace a stronger dossier-backed state.
@@ -4094,11 +4660,15 @@ router.post("/properties/run-rental-flow", async (req: Request, res: Response) =
       try {
         const result = await runRentalFlowForProperty(propertyId, pool);
         await syncPropertySourcingWorkflow(propertyId, { pool });
+        await refreshPropertyPipelineMetadata(propertyId, pool, {
+          rentalFlowStatus: result.error ? "failed" : "complete",
+        });
         results.push({ propertyId, ...result });
         if (result.error) failed++;
         else completed++;
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
+        await refreshPropertyPipelineMetadata(propertyId, pool, { rentalFlowStatus: "failed" }).catch(() => null);
         results.push({ propertyId, rentalUnitsCount: 0, hasLlmFinancials: false, error: message });
         failed++;
       }

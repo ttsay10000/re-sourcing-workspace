@@ -61,6 +61,18 @@ export interface CanonicalProperty {
   lastInquirySentAt?: string | null;
   /** Deal score 0–100 from latest deal_signals (when listed with includeListingSummary). */
   dealScore?: number | null;
+  pipelineStatus?: string | null;
+  enrichmentStatus?: string | null;
+  rentalFlowStatus?: string | null;
+  underwritingStatus?: string | null;
+  dossierStatus?: string | null;
+  excelStatus?: string | null;
+  propertyTags?: string[] | null;
+  defaultTags?: string[] | null;
+  missingFields?: string[] | null;
+  actionRequired?: string[] | null;
+  rejectedAt?: string | null;
+  rejectionReason?: string | null;
 }
 
 /** Listing row shape returned by GET /api/properties/:id/listing */
@@ -476,6 +488,43 @@ function formatTourDateTime(value: string): string | null {
   });
 }
 
+function labelFromPipelineKey(value: string | null | undefined): string {
+  if (!value) return "—";
+  return value
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function propertyPipeline(property: CanonicalProperty): Record<string, unknown> {
+  const details = property.details as Record<string, unknown> | null | undefined;
+  return details && typeof details.pipeline === "object" && details.pipeline != null
+    ? details.pipeline as Record<string, unknown>
+    : {};
+}
+
+function propertyPipelineTags(property: CanonicalProperty): string[] {
+  const pipeline = propertyPipeline(property);
+  const fromProperty = Array.isArray(property.propertyTags) ? property.propertyTags : [];
+  const fromDetails = Array.isArray(pipeline.tags) ? pipeline.tags : null;
+  return [...new Set((fromDetails ?? fromProperty).filter((tag): tag is string => typeof tag === "string" && tag.trim().length > 0))];
+}
+
+function propertyPipelineMissingFields(property: CanonicalProperty): string[] {
+  const pipeline = propertyPipeline(property);
+  const fromProperty = Array.isArray(property.missingFields) ? property.missingFields : [];
+  const fromDetails = Array.isArray(pipeline.missingFields) ? pipeline.missingFields : null;
+  return [...new Set((fromDetails ?? fromProperty).filter((field): field is string => typeof field === "string" && field.trim().length > 0))];
+}
+
+function propertyPipelineStatus(property: CanonicalProperty): string {
+  const pipeline = propertyPipeline(property);
+  if (typeof property.pipelineStatus === "string" && property.pipelineStatus.trim()) return property.pipelineStatus.trim();
+  if (typeof pipeline.status === "string" && pipeline.status.trim()) return pipeline.status.trim();
+  return "new_sourced";
+}
+
 function daysOnMarket(listedAt: string | null | undefined): number | null {
   if (!listedAt) return null;
   const d = new Date(listedAt);
@@ -731,6 +780,9 @@ export function CanonicalPropertyDetail({
   const [enrichmentRunning, setEnrichmentRunning] = useState(false);
   const [enrichmentActionNotice, setEnrichmentActionNotice] = useState<string | null>(null);
   const [enrichmentActionError, setEnrichmentActionError] = useState<string | null>(null);
+  const [pipelineActionBusy, setPipelineActionBusy] = useState(false);
+  const [pipelineActionNotice, setPipelineActionNotice] = useState<string | null>(null);
+  const [pipelineActionError, setPipelineActionError] = useState<string | null>(null);
   const [omCalculation, setOmCalculation] = useState<OmCalculationSnapshot | null>(null);
   const [omCalculationLoading, setOmCalculationLoading] = useState(true);
   const [omCalculationRunning, setOmCalculationRunning] = useState(false);
@@ -1889,8 +1941,14 @@ export function CanonicalPropertyDetail({
   const [unitGalleryIndices, setUnitGalleryIndices] = useState<Record<number, number>>({});
   const sourcingUpdate = getSourcingUpdate(d);
   const sourcingUpdateMeta = getSourcingUpdateMeta(d);
+  const pipelineProperty = { ...property, details: d };
+  const pipelineTags = propertyPipelineTags(pipelineProperty);
+  const pipelineMissingFields = propertyPipelineMissingFields(pipelineProperty);
+  const currentPipelineStatus = propertyPipelineStatus(pipelineProperty);
+  const isRejected = currentPipelineStatus === "rejected_removed" || pipelineTags.includes("rejected") || Boolean(property.rejectedAt);
   const overviewItems = [
     { label: "Saved search", value: sourcingUpdateMeta.label },
+    { label: "Stage", value: labelFromPipelineKey(currentPipelineStatus) },
     { label: "OM status", value: property.omStatus ?? "—" },
     { label: "Deal score", value: dealScore != null ? `${dealScore}/100` : "Pending" },
     { label: "Documents", value: unifiedDocuments == null ? "…" : String(unifiedDocuments.length) },
@@ -2049,6 +2107,87 @@ export function CanonicalPropertyDetail({
       setEnrichmentActionNotice(null);
     } finally {
       setEnrichmentRunning(false);
+    }
+  };
+
+  const refreshPipelineAfterAction = async () => {
+    await Promise.all([
+      refreshPropertySnapshot(),
+      refreshUnifiedDocuments().catch(() => undefined),
+      refreshRecipientResolution({ keepDraft: true }).catch(() => undefined),
+    ]);
+    onRefreshPropertyData?.();
+    onWorkflowActivity?.();
+  };
+
+  const addPipelineTag = async (tag: string) => {
+    if (pipelineActionBusy) return;
+    setPipelineActionBusy(true);
+    setPipelineActionError(null);
+    setPipelineActionNotice(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/properties/${property.id}/tags`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tag }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data?.error) throw new Error((data?.details || data?.error || "Failed to add tag") as string);
+      await refreshPipelineAfterAction();
+      setPipelineActionNotice(`${labelFromPipelineKey(tag)} tag added.`);
+    } catch (error) {
+      setPipelineActionError(error instanceof Error ? error.message : "Failed to add tag.");
+    } finally {
+      setPipelineActionBusy(false);
+    }
+  };
+
+  const removePipelineTag = async (tag: string) => {
+    if (pipelineActionBusy) return;
+    setPipelineActionBusy(true);
+    setPipelineActionError(null);
+    setPipelineActionNotice(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/properties/${property.id}/tags/${encodeURIComponent(tag)}`, {
+        method: "DELETE",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data?.error) throw new Error((data?.details || data?.error || "Failed to remove tag") as string);
+      await refreshPipelineAfterAction();
+      setPipelineActionNotice(`${labelFromPipelineKey(tag)} tag removed.`);
+    } catch (error) {
+      setPipelineActionError(error instanceof Error ? error.message : "Failed to remove tag.");
+    } finally {
+      setPipelineActionBusy(false);
+    }
+  };
+
+  const rejectOrRestoreProperty = async () => {
+    if (pipelineActionBusy) return;
+    const reason = isRejected
+      ? ""
+      : prompt("Optional rejection reason (examples: too expensive, wrong location, regulatory risk):") ?? "";
+    if (!isRejected) {
+      const confirmed = confirm("Reject/remove this property from the active pipeline? History and documents will be preserved.");
+      if (!confirmed) return;
+    }
+    setPipelineActionBusy(true);
+    setPipelineActionError(null);
+    setPipelineActionNotice(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/properties/${property.id}/${isRejected ? "restore" : "reject"}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data?.error) throw new Error((data?.details || data?.error || "Failed to update property") as string);
+      await refreshPipelineAfterAction();
+      setPipelineActionNotice(isRejected ? "Property restored to the active pipeline." : "Property rejected and hidden from default views.");
+    } catch (error) {
+      setPipelineActionError(error instanceof Error ? error.message : "Failed to update property.");
+    } finally {
+      setPipelineActionBusy(false);
     }
   };
 
@@ -2391,6 +2530,80 @@ export function CanonicalPropertyDetail({
           </div>
         ))}
       </div>
+      )}
+
+      {activeTab === "overview" && (
+        <div className="property-pipeline-panel">
+          <div className="property-pipeline-panel-section">
+            <div className="property-pipeline-panel-title">Tags</div>
+            <div className="property-pipeline-chip-row">
+              {pipelineTags.length === 0 ? (
+                <span className="property-mini-chip property-mini-chip--muted">No tags yet</span>
+              ) : (
+                pipelineTags.map((tag) => (
+                  <button
+                    key={tag}
+                    type="button"
+                    className="property-mini-chip property-mini-chip--tag property-mini-chip--button"
+                    onClick={() => { void removePipelineTag(tag); }}
+                    disabled={pipelineActionBusy}
+                    title={`Remove ${labelFromPipelineKey(tag)} tag`}
+                  >
+                    {labelFromPipelineKey(tag)} ×
+                  </button>
+                ))
+              )}
+              {!pipelineTags.includes("property_toured") ? (
+                <button
+                  type="button"
+                  className="property-mini-chip property-mini-chip--stage property-mini-chip--button"
+                  onClick={() => { void addPipelineTag("property_toured"); }}
+                  disabled={pipelineActionBusy}
+                >
+                  Mark toured
+                </button>
+              ) : null}
+              <button
+                type="button"
+                className="property-mini-chip property-mini-chip--button"
+                onClick={() => {
+                  const tag = prompt("Add custom tag");
+                  if (tag) void addPipelineTag(tag);
+                }}
+                disabled={pipelineActionBusy}
+              >
+                Add tag
+              </button>
+            </div>
+          </div>
+          <div className="property-pipeline-panel-section">
+            <div className="property-pipeline-panel-title">Missing information</div>
+            <div className="property-pipeline-chip-row">
+              {pipelineMissingFields.length === 0 ? (
+                <span className="property-mini-chip property-mini-chip--stage">Complete for now</span>
+              ) : (
+                pipelineMissingFields.slice(0, 10).map((field) => (
+                  <span key={field} className="property-mini-chip property-mini-chip--missing">{labelFromPipelineKey(field)}</span>
+                ))
+              )}
+            </div>
+          </div>
+          <div className="property-pipeline-panel-actions">
+            <button
+              type="button"
+              className={isRejected ? "btn-secondary" : "btn-danger-outline"}
+              onClick={() => { void rejectOrRestoreProperty(); }}
+              disabled={pipelineActionBusy}
+            >
+              {pipelineActionBusy ? "Updating…" : isRejected ? "Restore to pipeline" : "Reject / remove"}
+            </button>
+          </div>
+          {(pipelineActionNotice || pipelineActionError) && (
+            <div className={pipelineActionError ? "property-pipeline-panel-message property-pipeline-panel-message--error" : "property-pipeline-panel-message"}>
+              {pipelineActionError ?? pipelineActionNotice}
+            </div>
+          )}
+        </div>
       )}
 
       {(activeTab === "underwriting" || activeTab === "dossierScore") && (
