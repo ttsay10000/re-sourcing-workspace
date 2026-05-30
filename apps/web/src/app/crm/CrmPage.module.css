@@ -223,7 +223,7 @@
 .emptyCell {
   height: 9rem;
   color: #66756e;
-  text-align: center;
+  text-align: left;
 }
 
 .cellStrong {
