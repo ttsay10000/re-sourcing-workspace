@@ -49,6 +49,28 @@ function titleize(value: string | null | undefined): string {
   return value.replace(/[_-]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
+const AREA_LABELS: Record<string, string> = {
+  fultonseaport: "Fulton Seaport",
+  "fulton-seaport": "Fulton Seaport",
+  "hells-kitchen": "Hell's Kitchen",
+  nomad: "NoMad",
+  noho: "NoHo",
+  "sutton-place": "Sutton Place",
+  soho: "SoHo",
+  tribeca: "TriBeCa",
+};
+
+function areaLabel(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return null;
+  return AREA_LABELS[normalized] ?? titleize(normalized);
+}
+
+function locationSubtitle(row: Pick<UiV2PipelineRow, "neighborhood" | "borough">): string {
+  return [areaLabel(row.neighborhood), areaLabel(row.borough)].filter(Boolean).join(" · ");
+}
+
 function scoreClass(score: number | null | undefined): string {
   if (score == null || Number.isNaN(score)) return styles.scoreMuted;
   if (score >= 50) return styles.scoreGood;
@@ -219,7 +241,7 @@ export default function HomePage() {
                 <tr key={row.propertyId}>
                   <td>
                     <Link href={`/pipeline?propertyId=${encodeURIComponent(row.propertyId)}`}>{rowAddress(row)}</Link>
-                    <small>{[row.neighborhood, row.borough].filter(Boolean).join(" / ")}</small>
+                    <small>{locationSubtitle(row)}</small>
                   </td>
                   <td>{titleize(String(row.source ?? ""))}</td>
                   <td>{formatCurrency(row.askingPrice)}</td>
@@ -261,7 +283,7 @@ export default function HomePage() {
                     {group.rows.slice(0, 4).map((row) => (
                       <Link key={row.propertyId} href={`/pipeline?propertyId=${encodeURIComponent(row.propertyId)}`}>
                         <span>{rowAddress(row)}</span>
-                        <small>{"neighborhood" in row ? row.neighborhood ?? "" : ""}</small>
+                        <small>{"neighborhood" in row ? areaLabel(row.neighborhood) ?? "" : ""}</small>
                       </Link>
                     ))}
                   </div>
