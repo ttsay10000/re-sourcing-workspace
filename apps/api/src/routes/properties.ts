@@ -66,7 +66,7 @@ import { buildOmCalculationSnapshot } from "../deal/buildOmCalculation.js";
 import type { DossierAssumptionOverrides } from "../deal/underwritingModel.js";
 import { resolveGeneratedDocPath, deleteGeneratedDocumentFile } from "../deal/generatedDocStorage.js";
 import { unlink } from "fs/promises";
-import { basename, extname } from "path";
+import { extname } from "path";
 import {
   createWorkflowRun,
   deriveWorkflowStatusFromCounts,
@@ -94,13 +94,18 @@ import {
 import { extractStreetEasySaleIdFromUrl, fetchSaleDetailsById, fetchSaleDetailsByUrl, normalizeStreeteasyUrl } from "../nycRealEstateApi.js";
 import { extractOmAnalysisFromGeminiPdfOnly } from "../om/extractOmAnalysisFromGeminiPdfOnly.js";
 import { resolveOmPropertyAddress } from "../om/resolveOmPropertyAddress.js";
+import {
+  downloadOmDocument,
+  formatByteLimit,
+  resolveOmImportMaxBytes,
+} from "../upload/downloadOmDocument.js";
 
 const router = Router();
 
 const ENRICHMENT_RATE_LIMIT_DELAY_MS = Number(process.env.ENRICHMENT_RATE_LIMIT_DELAY_MS || process.env.PERMITS_RATE_LIMIT_DELAY_MS) || 300;
 const ENABLE_OM_AUTOMATION_V2 = process.env.ENABLE_OM_AUTOMATION_V2 === "1";
-const MANUAL_OM_MAX_BYTES = Number(process.env.MANUAL_OM_MAX_BYTES || 25 * 1024 * 1024);
-const MANUAL_OM_DOWNLOAD_TIMEOUT_MS = Number(process.env.MANUAL_OM_DOWNLOAD_TIMEOUT_MS || 20_000);
+const OM_IMPORT_MAX_BYTES = resolveOmImportMaxBytes();
+const OM_IMPORT_MAX_LABEL = formatByteLimit(OM_IMPORT_MAX_BYTES);
 const DOSSIER_ASSUMPTION_NON_NEGATIVE_NUMERIC_FIELDS = [
   "buildingSqft",
   "purchasePrice",
@@ -224,102 +229,6 @@ function buildPropertyDetailsMergeFromListing(listing: {
   return merge;
 }
 
-function decodeFilename(value: string): string {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
-  }
-}
-
-function fileNameFromContentDisposition(header: string | null): string | null {
-  if (!header) return null;
-  const encodedMatch = header.match(/filename\*\s*=\s*UTF-8''([^;]+)/i);
-  if (encodedMatch?.[1]) return decodeFilename(encodedMatch[1].trim().replace(/^"(.*)"$/, "$1"));
-  const plainMatch = header.match(/filename\s*=\s*"?([^";]+)"?/i);
-  return plainMatch?.[1] ? decodeFilename(plainMatch[1].trim()) : null;
-}
-
-function fileNameFromUrl(url: string): string | null {
-  try {
-    const parsed = new URL(url);
-    const name = basename(parsed.pathname);
-    if (!name || name === "/") return null;
-    return decodeFilename(name);
-  } catch {
-    return null;
-  }
-}
-
-function ensureDownloadedDocumentFilename(filename: string | null, contentType: string | null): string {
-  const trimmed = filename?.trim() || "document";
-  if (contentType?.toLowerCase().includes("pdf") && !/\.pdf$/i.test(trimmed)) {
-    return `${trimmed}.pdf`;
-  }
-  return trimmed;
-}
-
-async function downloadManualOmDocument(url: string): Promise<{
-  buffer: Buffer;
-  contentType: string | null;
-  filename: string;
-  resolvedUrl: string;
-}> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), MANUAL_OM_DOWNLOAD_TIMEOUT_MS);
-  try {
-    const response = await fetch(url, { redirect: "follow", signal: controller.signal });
-    if (!response.ok) {
-      const message = await response.text().catch(() => response.statusText);
-      throw new Error(`OM download failed (${response.status}): ${message || response.statusText}`);
-    }
-
-    const contentLengthHeader = response.headers.get("content-length");
-    const contentLength = contentLengthHeader ? parseInt(contentLengthHeader, 10) : NaN;
-    if (Number.isFinite(contentLength) && contentLength > MANUAL_OM_MAX_BYTES) {
-      throw new Error(`OM file is too large (${contentLength} bytes).`);
-    }
-
-    const buffer = Buffer.from(await response.arrayBuffer());
-    if (buffer.length === 0) {
-      throw new Error("OM link returned an empty file.");
-    }
-    if (buffer.length > MANUAL_OM_MAX_BYTES) {
-      throw new Error(`OM file is too large (${buffer.length} bytes).`);
-    }
-
-    const contentType = response.headers.get("content-type");
-    const preview = buffer.subarray(0, 256).toString("utf8").trimStart().toLowerCase();
-    if (
-      contentType?.toLowerCase().includes("text/html") &&
-      (preview.startsWith("<!doctype html") || preview.startsWith("<html"))
-    ) {
-      throw new Error("OM link returned HTML instead of a downloadable document.");
-    }
-
-    const filename = ensureDownloadedDocumentFilename(
-      fileNameFromContentDisposition(response.headers.get("content-disposition"))
-        ?? fileNameFromUrl(response.url)
-        ?? fileNameFromUrl(url),
-      contentType
-    );
-
-    return {
-      buffer,
-      contentType,
-      filename,
-      resolvedUrl: response.url || url,
-    };
-  } catch (error) {
-    if (error instanceof Error && error.name === "AbortError") {
-      throw new Error("Timed out while downloading the OM document.");
-    }
-    throw error;
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
 function detectImportedDocumentCategory(label: string | null | undefined, url: string | null | undefined): PropertyDocumentCategory {
   const text = `${label ?? ""} ${url ?? ""}`.toLowerCase();
   if (/rent[ _-]?roll/.test(text)) return "Rent Roll";
@@ -368,7 +277,7 @@ async function importLoopNetPublicDocumentsForProperty(params: {
       continue;
     }
     try {
-      const downloaded = await downloadManualOmDocument(url);
+      const downloaded = await downloadOmDocument(url, { maxBytes: OM_IMPORT_MAX_BYTES });
       const docId = randomUUID();
       const filePath = await saveUploadedDocument(params.propertyId, docId, downloaded.filename, downloaded.buffer);
       const label = typeof attachment.label === "string" ? attachment.label : null;
@@ -1428,7 +1337,7 @@ router.post("/properties/manual-add", async (req: Request, res: Response) => {
 
     if (omUrl) {
       try {
-        const downloaded = await downloadManualOmDocument(omUrl);
+        const downloaded = await downloadOmDocument(omUrl, { maxBytes: OM_IMPORT_MAX_BYTES });
         const docId = randomUUID();
         const filePath = await saveUploadedDocument(propertyId, docId, downloaded.filename, downloaded.buffer);
         const inserted = await uploadedDocRepo.insert({
@@ -1558,7 +1467,7 @@ router.post("/properties/manual-add-from-om", async (req: Request, res: Response
   let manualSourceLinks: PropertyManualSourceLinks | null = null;
 
   try {
-    const downloaded = await downloadManualOmDocument(omUrl);
+    const downloaded = await downloadOmDocument(omUrl, { maxBytes: OM_IMPORT_MAX_BYTES });
     const isPdf =
       downloaded.contentType?.toLowerCase().includes("pdf") ||
       extname(downloaded.filename).toLowerCase() === ".pdf";
@@ -2732,7 +2641,7 @@ router.get("/properties/workflow-board", async (_req: Request, res: Response) =>
   });
 });
 
-const uploadMemory = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } }); // 25 MB
+const uploadMemory = multer({ storage: multer.memoryStorage(), limits: { fileSize: OM_IMPORT_MAX_BYTES } });
 
 /** Multer file-size error: return 413 with hint about Render proxy limits. */
 function handleUploadMulterError(_req: Request, res: Response, next: (err?: unknown) => void) {
@@ -2740,8 +2649,8 @@ function handleUploadMulterError(_req: Request, res: Response, next: (err?: unkn
     if (err && typeof err === "object" && "code" in err && (err as { code: string }).code === "LIMIT_FILE_SIZE") {
       res.status(413).json({
         error: "File too large",
-        details: "Max 25 MB per file. On Render, the proxy may reject bodies before that; try a smaller PDF (<10 MB) or compress the file.",
-        maxBytes: 25 * 1024 * 1024,
+        details: `Max ${OM_IMPORT_MAX_LABEL} per file. Compress the PDF if it is over the OM import limit.`,
+        maxBytes: OM_IMPORT_MAX_BYTES,
       });
       return;
     }

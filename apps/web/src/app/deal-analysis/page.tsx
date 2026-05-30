@@ -16,6 +16,8 @@ import {
 } from "../property-data/OmCalculationPanel";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
+const OM_IMPORT_MAX_BYTES = 10 * 1024 * 1024;
+const OM_IMPORT_MAX_FILES = 20;
 
 type WorkspaceProperty = OmCalculationSnapshot["property"];
 
@@ -456,6 +458,7 @@ function DealAnalysisPageContent() {
   const propertyId = searchParams.get("property_id")?.trim() || null;
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [omUrl, setOmUrl] = useState("");
   const [workspaceFiles, setWorkspaceFiles] = useState<File[]>([]);
   const [uploadedDocuments, setUploadedDocuments] = useState<UploadedDocumentSummary[]>([]);
   const [workspaceDetails, setWorkspaceDetails] = useState<PropertyDetails | null>(null);
@@ -466,6 +469,7 @@ function DealAnalysisPageContent() {
   const [draft, setDraft] = useState<OmCalculationDraft>(emptyDraft);
   const [baselineDraft, setBaselineDraft] = useState<OmCalculationDraft>(emptyDraft);
   const [uploading, setUploading] = useState(false);
+  const [linkAnalyzing, setLinkAnalyzing] = useState(false);
   const [recalculating, setRecalculating] = useState(false);
   const [dossierDownloading, setDossierDownloading] = useState(false);
   const [excelDownloading, setExcelDownloading] = useState(false);
@@ -496,7 +500,10 @@ function DealAnalysisPageContent() {
   const brokerNotesDirty = draft.brokerEmailNotes.trim() !== baselineDraft.brokerEmailNotes.trim();
   const isDirty = numericFieldsDirty || unitRowsDirty || expenseRowsDirty || metadataDirty || brokerNotesDirty;
   const hasAuthoritativeOm = workspaceDetails?.omData?.authoritative != null;
-  const canAnalyze = pendingFiles.length > 0;
+  const oversizedPendingFiles = pendingFiles.filter((file) => file.size > OM_IMPORT_MAX_BYTES);
+  const tooManyPendingFiles = pendingFiles.length > OM_IMPORT_MAX_FILES;
+  const canAnalyze = pendingFiles.length > 0 && oversizedPendingFiles.length === 0 && !tooManyPendingFiles;
+  const canAnalyzeLink = omUrl.trim().length > 0;
   const canGenerateDossier = workspaceDetails != null;
   const pendingSelectionReplacesWorkspace =
     workspaceDetails != null && pendingFiles.length > 0 && pendingFiles !== workspaceFiles;
@@ -702,6 +709,7 @@ function DealAnalysisPageContent() {
 
   function clearWorkspaceState() {
     setPendingFiles([]);
+    setOmUrl("");
     setWorkspaceFiles([]);
     setUploadedDocuments([]);
     setWorkspaceDetails(null);
@@ -723,8 +731,64 @@ function DealAnalysisPageContent() {
     setNotice("Fresh OM workspace ready. Upload OM PDFs below to create or match a property-backed workspace.");
   }
 
+  function applyAnalyzedWorkspace(
+    data: Partial<AnalyzeUploadResponse>,
+    sourceFiles: File[],
+    sourceLabel: "uploaded OM" | "OM link"
+  ) {
+    const nextCalculation = data.calculation as OmCalculationSnapshot;
+    const nextDraft = draftFromCalculation(nextCalculation);
+    setWorkspaceFiles(data.propertyId ? [] : sourceFiles);
+    setUploadedDocuments(data.uploadedDocuments ?? []);
+    setWorkspaceDetails((data.details ?? null) as PropertyDetails | null);
+    setWorkspaceProperty((data.property ?? null) as WorkspaceProperty | null);
+    setResolvedAddress((data.resolvedAddress ?? null) as ResolvedOmAddress | null);
+    setMatchedProperty((data.matchedProperty ?? null) as MatchedPropertyPreview | null);
+    setCalculation(nextCalculation);
+    setDraft(nextDraft);
+    setBaselineDraft(nextDraft);
+    if (data.propertyId) {
+      setPendingFiles([]);
+      setOmUrl("");
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      const createSummary: CreatePropertyResponse = {
+        ok: true,
+        propertyId: data.propertyId,
+        canonicalAddress:
+          data.canonicalAddress ??
+          data.matchedProperty?.canonicalAddress ??
+          data.property?.canonicalAddress ??
+          "Unknown property",
+        createdProperty: data.createdProperty ?? data.matchStrategy === "new",
+        matchStrategy: data.matchStrategy ?? data.matchedProperty?.matchStrategy ?? "new",
+        enrichment: data.enrichment ?? null,
+      };
+      setCreateResult(createSummary);
+      void loadSavedWorkspaces();
+      router.replace(`/deal-analysis?property_id=${encodeURIComponent(data.propertyId)}`);
+      setNotice(
+        createSummary.createdProperty
+          ? `Draft property workspace created from the ${sourceLabel} and sent through enrichment.`
+          : `Existing property workspace matched from the ${sourceLabel} and updated.`
+      );
+    } else if (propertyId) {
+      router.replace("/deal-analysis");
+      setNotice(`${sourceLabel === "OM link" ? "OM link" : "Uploaded OM PDF(s)"} analyzed. Adjust assumptions and refresh analysis as needed.`);
+    } else {
+      setNotice(`${sourceLabel === "OM link" ? "OM link" : "Uploaded OM PDF(s)"} analyzed. Adjust assumptions and refresh analysis as needed.`);
+    }
+  }
+
   async function analyzeUploads() {
     if (pendingFiles.length === 0) return;
+    if (tooManyPendingFiles) {
+      setError(`Upload up to ${OM_IMPORT_MAX_FILES} OM PDFs at a time.`);
+      return;
+    }
+    if (oversizedPendingFiles.length > 0) {
+      setError(`Each OM PDF must be ${formatBytes(OM_IMPORT_MAX_BYTES)} or smaller.`);
+      return;
+    }
     setUploading(true);
     setError(null);
     setNotice(null);
@@ -743,46 +807,39 @@ function DealAnalysisPageContent() {
       if (!res.ok || data.error) {
         throw new Error(data.details || data.error || "Failed to analyze uploaded OM PDF(s).");
       }
-      const nextCalculation = data.calculation as OmCalculationSnapshot;
-      const nextDraft = draftFromCalculation(nextCalculation);
-      setWorkspaceFiles(data.propertyId ? [] : pendingFiles);
-      setUploadedDocuments(data.uploadedDocuments ?? []);
-      setWorkspaceDetails((data.details ?? null) as PropertyDetails | null);
-      setWorkspaceProperty((data.property ?? null) as WorkspaceProperty | null);
-      setResolvedAddress((data.resolvedAddress ?? null) as ResolvedOmAddress | null);
-      setMatchedProperty((data.matchedProperty ?? null) as MatchedPropertyPreview | null);
-      setCalculation(nextCalculation);
-      setDraft(nextDraft);
-      setBaselineDraft(nextDraft);
-      if (data.propertyId) {
-        setPendingFiles([]);
-        if (fileInputRef.current) fileInputRef.current.value = "";
-        const createSummary: CreatePropertyResponse = {
-          ok: true,
-          propertyId: data.propertyId,
-          canonicalAddress: data.canonicalAddress ?? data.matchedProperty?.canonicalAddress ?? data.property?.canonicalAddress ?? "Unknown property",
-          createdProperty: data.createdProperty ?? data.matchStrategy === "new",
-          matchStrategy: data.matchStrategy ?? data.matchedProperty?.matchStrategy ?? "new",
-          enrichment: data.enrichment ?? null,
-        };
-        setCreateResult(createSummary);
-        void loadSavedWorkspaces();
-        router.replace(`/deal-analysis?property_id=${encodeURIComponent(data.propertyId)}`);
-        setNotice(
-          createSummary.createdProperty
-            ? "Draft property workspace created from the uploaded OM and sent through enrichment."
-            : "Existing property workspace matched from the uploaded OM and updated."
-        );
-      } else if (propertyId) {
-        router.replace("/deal-analysis");
-        setNotice("Uploaded OM PDF(s) analyzed. Adjust assumptions and refresh analysis as needed.");
-      } else {
-        setNotice("Uploaded OM PDF(s) analyzed. Adjust assumptions and refresh analysis as needed.");
-      }
+      applyAnalyzedWorkspace(data, pendingFiles, "uploaded OM");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to analyze uploaded OM PDF(s).");
     } finally {
       setUploading(false);
+    }
+  }
+
+  async function analyzeOmLink() {
+    const trimmedUrl = omUrl.trim();
+    if (!trimmedUrl) return;
+    setLinkAnalyzing(true);
+    setError(null);
+    setNotice(null);
+    setCreateResult(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/deal-analysis/analyze-link`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ omUrl: trimmedUrl }),
+      });
+      const data = (await res.json().catch(() => ({}))) as Partial<AnalyzeUploadResponse> & {
+        error?: string;
+        details?: string;
+      };
+      if (!res.ok || data.error) {
+        throw new Error(data.details || data.error || "Failed to analyze OM link.");
+      }
+      applyAnalyzedWorkspace(data, [], "OM link");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to analyze OM link.");
+    } finally {
+      setLinkAnalyzing(false);
     }
   }
 
@@ -1485,16 +1542,16 @@ function DealAnalysisPageContent() {
         <div style={{ ...cardStyle, padding: "1.2rem" }}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap" }}>
             <div>
-              <strong style={{ color: "#0f172a", fontSize: "1rem" }}>1. Upload OM PDFs</strong>
+              <strong style={{ color: "#0f172a", fontSize: "1rem" }}>1. Add OM PDFs or link</strong>
               <div style={{ marginTop: "0.3rem", color: "#64748b", fontSize: "0.9rem", lineHeight: 1.5 }}>
-                Start from new uploads here, or use the saved workspace list above to pull a prior OM build
-                back into the page.
+                Start from PDF uploads or a directly downloadable OM link, then pull prior builds back from
+                the saved workspace list above.
               </div>
             </div>
             <button
               type="button"
               onClick={analyzeUploads}
-              disabled={!canAnalyze || uploading}
+              disabled={!canAnalyze || uploading || linkAnalyzing}
               style={{
                 padding: "0.7rem 1rem",
                 borderRadius: "10px",
@@ -1502,7 +1559,7 @@ function DealAnalysisPageContent() {
                 background: "#0f62fe",
                 color: "#fff",
                 fontWeight: 700,
-                cursor: !canAnalyze || uploading ? "not-allowed" : "pointer",
+                cursor: !canAnalyze || uploading || linkAnalyzing ? "not-allowed" : "pointer",
                 opacity: !canAnalyze ? 0.65 : 1,
               }}
             >
@@ -1525,19 +1582,27 @@ function DealAnalysisPageContent() {
               accept="application/pdf,.pdf"
               multiple
               onChange={(event) => {
-                setPendingFiles(Array.from(event.target.files ?? []));
+                const selectedFiles = Array.from(event.target.files ?? []);
+                setPendingFiles(selectedFiles);
                 setNotice(
                   workspaceDetails != null
                     ? "New OM files selected. Analyze uploads to replace the current workspace."
                     : null
                 );
-                setError(null);
+                const oversized = selectedFiles.filter((file) => file.size > OM_IMPORT_MAX_BYTES);
+                if (selectedFiles.length > OM_IMPORT_MAX_FILES) {
+                  setError(`Upload up to ${OM_IMPORT_MAX_FILES} OM PDFs at a time.`);
+                } else if (oversized.length > 0) {
+                  setError(`Each OM PDF must be ${formatBytes(OM_IMPORT_MAX_BYTES)} or smaller.`);
+                } else {
+                  setError(null);
+                }
               }}
               style={{ display: "block", width: "100%" }}
             />
             <div style={{ marginTop: "0.7rem", color: "#64748b", fontSize: "0.84rem", lineHeight: 1.5 }}>
               Upload OM PDFs, rent roll PDFs, or other OM-side PDF supplements. The analysis will combine
-              them into one underwriting workspace.
+              them into one underwriting workspace. Max {formatBytes(OM_IMPORT_MAX_BYTES)} per PDF.
             </div>
             <div style={{ marginTop: "0.9rem", display: "grid", gap: "0.55rem" }}>
               {(pendingFiles.length > 0 ? pendingFiles : []).map((file) => (
@@ -1550,12 +1615,14 @@ function DealAnalysisPageContent() {
                     padding: "0.55rem 0.7rem",
                     borderRadius: "10px",
                     background: "#fff",
-                    border: "1px solid #dbe2ea",
+                    border: file.size > OM_IMPORT_MAX_BYTES ? "1px solid #fca5a5" : "1px solid #dbe2ea",
                     fontSize: "0.86rem",
                   }}
                 >
                   <span style={{ color: "#0f172a", fontWeight: 600 }}>{file.name}</span>
-                  <span style={{ color: "#64748b" }}>{formatBytes(file.size)}</span>
+                  <span style={{ color: file.size > OM_IMPORT_MAX_BYTES ? "#b91c1c" : "#64748b" }}>
+                    {formatBytes(file.size)}
+                  </span>
                 </div>
               ))}
               {pendingFiles.length === 0 ? (
@@ -1570,6 +1637,58 @@ function DealAnalysisPageContent() {
                 current OM workspace.
               </div>
             ) : null}
+          </div>
+          <div
+            style={{
+              marginTop: "1rem",
+              border: "1px solid #dbe2ea",
+              borderRadius: "16px",
+              padding: "1rem",
+              background: "#fff",
+              display: "grid",
+              gap: "0.7rem",
+            }}
+          >
+            <label style={{ display: "grid", gap: "0.35rem", color: "#475569", fontSize: "0.8rem", fontWeight: 700 }}>
+              OM PDF link
+              <input
+                value={omUrl}
+                onChange={(event) => {
+                  setOmUrl(event.target.value);
+                  setError(null);
+                }}
+                placeholder="https://.../offering-memorandum.pdf"
+                style={{
+                  minHeight: "44px",
+                  border: "1px solid #cbd5e1",
+                  borderRadius: "10px",
+                  padding: "0.6rem 0.7rem",
+                  color: "#0f172a",
+                }}
+              />
+            </label>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", flexWrap: "wrap", alignItems: "center" }}>
+              <div style={{ color: "#64748b", fontSize: "0.84rem", lineHeight: 1.5 }}>
+                Link imports use the same OM analysis prompt and save back to the matched property workspace.
+              </div>
+              <button
+                type="button"
+                onClick={analyzeOmLink}
+                disabled={!canAnalyzeLink || uploading || linkAnalyzing}
+                style={{
+                  padding: "0.65rem 0.9rem",
+                  borderRadius: "10px",
+                  border: "1px solid #0f62fe",
+                  background: canAnalyzeLink ? "#fff" : "#f8fafc",
+                  color: "#0f62fe",
+                  fontWeight: 700,
+                  cursor: !canAnalyzeLink || uploading || linkAnalyzing ? "not-allowed" : "pointer",
+                  opacity: !canAnalyzeLink ? 0.65 : 1,
+                }}
+              >
+                {linkAnalyzing ? "Analyzing OM link..." : "Analyze OM link"}
+              </button>
+            </div>
           </div>
         </div>
 

@@ -21,6 +21,7 @@ import type {
   UiV2ImportJobStatus,
   UiV2ImportJobType,
   UiV2ManualEntryImportInput,
+  UiV2OmUrlImportInput,
   UiV2SavedSearchRunInput,
   UiV2StreetEasyPullInput,
   UiV2StreetEasySaleIdImportInput,
@@ -45,6 +46,14 @@ import {
   syncPropertySourcingWorkflow,
 } from "../sourcing/workflow.js";
 import { runRentalFlowForProperty } from "../routes/properties.js";
+import {
+  analyzeAndPersistDealAnalysisOmDocuments,
+} from "../deal/dealAnalysisOmImport.js";
+import {
+  downloadOmDocument,
+  isPdfLikeDownloadedDocument,
+  resolveOmImportMaxBytes,
+} from "../upload/downloadOmDocument.js";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -942,14 +951,66 @@ export async function startSavedSearchImport(input: UiV2SavedSearchRunInput): Pr
   });
 }
 
-export function omUrlPlaceholder(input: { propertyId?: string | null; url?: string | null }): ImportJobRouteResult {
-  return failedImportResponse({
+export async function importOmUrl(input: UiV2OmUrlImportInput): Promise<ImportJobRouteResult> {
+  const omUrl = cleanString(input.url, 2_000);
+  if (!omUrl) throw new Error("url is required.");
+  if (!isHttpUrl(omUrl)) throw new Error("url must be a valid http(s) URL.");
+
+  const pool = getPool();
+  const downloaded = await downloadOmDocument(omUrl, { maxBytes: resolveOmImportMaxBytes() });
+  if (
+    !isPdfLikeDownloadedDocument({
+      contentType: downloaded.contentType,
+      filename: downloaded.filename,
+    })
+  ) {
+    throw new Error("OM URL import requires a PDF document.");
+  }
+
+  const filename = cleanString(input.fileName, 500) ?? downloaded.filename;
+  const result = await analyzeAndPersistDealAnalysisOmDocuments({
+    pool,
+    documents: [
+      {
+        filename,
+        mimeType: downloaded.contentType ?? "application/pdf",
+        buffer: downloaded.buffer,
+        sizeBytes: downloaded.buffer.length,
+      },
+    ],
+    sourceType: "deal_analysis_om_link",
+    sourceLabel: "UI v2 OM URL import",
+    targetPropertyId: input.propertyId ?? null,
+    propertyContext: `OM URL: ${downloaded.resolvedUrl}\nDownloaded file: ${filename}`,
+    sourceMetadata: {
+      sourceType: "ui_v2_om_url",
+      omUrl: downloaded.resolvedUrl,
+      requestedOmUrl: omUrl,
+      targetPropertyId: input.propertyId ?? null,
+    },
+  });
+
+  await createPipelineEvent(pool, {
+    propertyId: result.propertyId,
+    eventType: "import_completed",
+    title: "OM URL imported",
+    body: result.createdProperty
+      ? "Created a property workspace from the OM URL."
+      : "Updated an existing property workspace from the OM URL.",
+    metadata: {
+      jobType: "om_url",
+      omUrl: downloaded.resolvedUrl,
+      requestedOmUrl: omUrl,
+      documentIds: result.uploadedDocuments.map((document) => document.id),
+      createdProperty: result.createdProperty,
+      matchStrategy: result.matchStrategy,
+    },
+  });
+
+  return completedResponse({
     jobType: "om_url",
-    statusCode: 501,
-    propertyId: cleanString(input.propertyId, 120),
-    label: "OM URL import needs service extraction",
-    errorMessage:
-      "UI v2 OM URL import is not wired yet. The existing implementation is coupled to /api/properties/manual-add-from-om and needs a shared OM URL service before this route should process downloads.",
+    propertyId: result.propertyId,
+    label: result.createdProperty ? "OM URL property created" : "OM URL imported",
   });
 }
 

@@ -13,10 +13,8 @@ import {
   PropertyRepo,
   PropertyUploadedDocumentRepo,
 } from "@re-sourcing/db";
-import { extractOmAnalysisFromGeminiPdfOnly } from "../om/extractOmAnalysisFromGeminiPdfOnly.js";
 import { saveUploadedDocument } from "../upload/uploadedDocStorage.js";
 import {
-  buildStandaloneDetailsFromOmAnalysis,
   buildStandaloneDossierPdf,
   buildStandaloneOmCalculation,
   buildStandaloneUnderwritingContext,
@@ -36,11 +34,27 @@ import { runEnrichmentForProperty } from "../enrichment/runEnrichment.js";
 import { syncPropertySourcingWorkflow } from "../sourcing/workflow.js";
 import { buildDealAnalysisWorkbook } from "../deal/dealAnalysisWorkbook.js";
 import { promoteReviewedOmDetailsForProperty } from "../om/ingestAuthoritativeOm.js";
+import {
+  analyzeAndPersistDealAnalysisOmDocuments,
+  DealAnalysisOmImportError,
+  findOrCreateDealAnalysisDraftProperty,
+  type DealAnalysisDraftPropertyMatchStrategy,
+  type DealAnalysisDraftPropertyRepo,
+} from "../deal/dealAnalysisOmImport.js";
+import {
+  downloadOmDocument,
+  formatByteLimit,
+  isPdfLikeDownloadedDocument,
+  resolveOmImportMaxBytes,
+} from "../upload/downloadOmDocument.js";
 
 const router = Router();
+const OM_IMPORT_MAX_BYTES = resolveOmImportMaxBytes();
+const OM_IMPORT_MAX_LABEL = formatByteLimit(OM_IMPORT_MAX_BYTES);
+const DEAL_ANALYSIS_MAX_FILES = 20;
 const uploadMemory = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 25 * 1024 * 1024, files: 20 },
+  limits: { fileSize: OM_IMPORT_MAX_BYTES, files: DEAL_ANALYSIS_MAX_FILES },
 });
 
 const DOSSIER_ASSUMPTION_NON_NEGATIVE_NUMERIC_FIELDS = [
@@ -87,16 +101,16 @@ function handleUploadMulterError(_req: Request, res: Response, next: (err?: unkn
       if (code === "LIMIT_FILE_SIZE") {
         res.status(413).json({
           error: "File too large.",
-          details: "Max 25 MB per OM PDF.",
-          maxBytes: 25 * 1024 * 1024,
+          details: `Max ${OM_IMPORT_MAX_LABEL} per OM PDF.`,
+          maxBytes: OM_IMPORT_MAX_BYTES,
         });
         return;
       }
       if (code === "LIMIT_FILE_COUNT") {
         res.status(413).json({
           error: "Too many files.",
-          details: "Upload up to 20 OM PDFs at a time.",
-          maxFiles: 20,
+          details: `Upload up to ${DEAL_ANALYSIS_MAX_FILES} OM PDFs at a time.`,
+          maxFiles: DEAL_ANALYSIS_MAX_FILES,
         });
         return;
       }
@@ -227,6 +241,32 @@ function trimmedString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
 
+function normalizeOmUrl(value: unknown): string | null | "invalid" {
+  if (value == null || value === "") return null;
+  if (typeof value !== "string") return "invalid";
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  try {
+    const parsed = new URL(trimmed);
+    return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.toString() : "invalid";
+  } catch {
+    return "invalid";
+  }
+}
+
+function sendDealAnalysisOmImportError(res: Response, fallbackError: string, err: unknown): void {
+  const message = err instanceof Error ? err.message : String(err);
+  if (err instanceof DealAnalysisOmImportError) {
+    res.status(err.statusCode).json({ error: fallbackError, details: message });
+    return;
+  }
+  const statusCode =
+    /too large|max \d+ mb/i.test(message) ? 413 :
+    /valid http|requires a PDF|not a PDF|returned HTML|empty file|usable building address|parse/i.test(message) ? 422 :
+    503;
+  res.status(statusCode).json({ error: fallbackError, details: message });
+}
+
 function parsePositiveInteger(value: unknown, fallback: number, max: number): number {
   if (typeof value !== "string" || value.trim().length === 0) return fallback;
   const parsed = Number.parseInt(value, 10);
@@ -256,50 +296,8 @@ function resolveWorkspaceProperty(details: PropertyDetails | null | undefined) {
   });
 }
 
-export type DealAnalysisDraftPropertyMatchStrategy =
-  | "exact_canonical"
-  | "address_line"
-  | "new";
-
-export interface DealAnalysisDraftPropertyRepo {
-  byCanonicalAddress(canonicalAddress: string): Promise<Property | null>;
-  findByAddressFirstLine(addressLine: string): Promise<Property | null>;
-  create(canonicalAddress: string): Promise<Property>;
-}
-
-export async function findOrCreateDealAnalysisDraftProperty(params: {
-  propertyRepo: DealAnalysisDraftPropertyRepo;
-  canonicalAddress: string;
-  addressLine: string;
-}): Promise<{
-  property: Property;
-  createdProperty: boolean;
-  matchStrategy: DealAnalysisDraftPropertyMatchStrategy;
-}> {
-  const exactProperty = await params.propertyRepo.byCanonicalAddress(params.canonicalAddress);
-  if (exactProperty) {
-    return {
-      property: exactProperty,
-      createdProperty: false,
-      matchStrategy: "exact_canonical",
-    };
-  }
-
-  const firstLineMatch = await params.propertyRepo.findByAddressFirstLine(params.addressLine);
-  if (firstLineMatch) {
-    return {
-      property: firstLineMatch,
-      createdProperty: false,
-      matchStrategy: "address_line",
-    };
-  }
-
-  return {
-    property: await params.propertyRepo.create(params.canonicalAddress),
-    createdProperty: true,
-    matchStrategy: "new",
-  };
-}
+export { findOrCreateDealAnalysisDraftProperty };
+export type { DealAnalysisDraftPropertyMatchStrategy, DealAnalysisDraftPropertyRepo };
 
 function assumptionPatchFromPayload(params: {
   assumptionOverrides: DossierAssumptionOverrides | null;
@@ -483,262 +481,76 @@ router.post(
         return;
       }
 
-      const extracted = await extractOmAnalysisFromGeminiPdfOnly({
+      const result = await analyzeAndPersistDealAnalysisOmDocuments({
         documents: files.map((file) => ({
           filename: file.originalname?.trim() || "uploaded-om.pdf",
           mimeType: file.mimetype || "application/pdf",
           buffer: file.buffer,
-        })),
-        propertyContext: files.map((file) => file.originalname?.trim() || "uploaded-om.pdf").join(", "),
-      });
-      if (!extracted.omAnalysis) {
-        res.status(422).json({
-          error: extracted.parseError
-            ? `Failed to parse uploaded OM PDF(s): ${extracted.parseError}`
-            : "The uploaded OM PDF(s) did not return structured property details.",
-        });
-        return;
-      }
-
-      const details = buildStandaloneDetailsFromOmAnalysis({
-        omAnalysis: extracted.omAnalysis,
-        fromLlm: extracted.fromLlm ?? null,
-        uploadedDocuments: files.map((file) => ({
-          fileName: file.originalname?.trim() || "uploaded-om.pdf",
-          mimeType: file.mimetype || "application/pdf",
           sizeBytes: file.size,
         })),
-      });
-      const resolvedAddress = resolveOmPropertyAddress(
-        (extracted.omAnalysis.propertyInfo as Record<string, unknown> | null | undefined) ?? null
-      );
-      if (!resolvedAddress) {
-        res.status(422).json({
-          error:
-            "The uploaded OM analysis did not return a usable building address, so a draft property workspace could not be created.",
-        });
-        return;
-      }
-
-      const pool = getPool();
-      const client = await pool.connect();
-      let propertyId = "";
-      let canonicalAddress = resolvedAddress.canonicalAddress;
-      let createdProperty = false;
-      let matchStrategy: DealAnalysisDraftPropertyMatchStrategy = "new";
-      try {
-        await client.query("BEGIN");
-        const propertyRepo = new PropertyRepo({ pool, client });
-        const draftProperty = await findOrCreateDealAnalysisDraftProperty({
-          propertyRepo,
-          canonicalAddress: resolvedAddress.canonicalAddress,
-          addressLine: resolvedAddress.addressLine,
-        });
-        propertyId = draftProperty.property.id;
-        canonicalAddress = draftProperty.property.canonicalAddress;
-        createdProperty = draftProperty.createdProperty;
-        matchStrategy = draftProperty.matchStrategy;
-        const existingDetails = (draftProperty.property.details ?? null) as PropertyDetails | null;
-        const now = new Date().toISOString();
-        const existingWorkspace =
-          existingDetails?.dealAnalysisWorkspace &&
-          typeof existingDetails.dealAnalysisWorkspace === "object" &&
-          !Array.isArray(existingDetails.dealAnalysisWorkspace)
-            ? (existingDetails.dealAnalysisWorkspace as Record<string, unknown>)
-            : {};
-        const manualSourceLinks = mergeManualSourceLinks(existingDetails, {
-          omImportedAt: now,
-        });
-        await propertyRepo.updateDetails(propertyId, "manualSourceLinks", {
-          ...(manualSourceLinks as Record<string, unknown>),
-        });
-        await propertyRepo.mergeDetails(propertyId, {
-          dealAnalysisWorkspace: {
-            ...existingWorkspace,
-            status: "draft",
-            source: "deal_analysis_upload",
-            createdAt:
-              typeof existingWorkspace.createdAt === "string" ? existingWorkspace.createdAt : now,
-            updatedAt: now,
-            lastUploadedAt: now,
-            uploadedFileNames: files.map(
-              (file) => file.originalname?.trim() || "uploaded-om.pdf"
-            ),
-          },
-          omDerivedAddress: {
-            rawAddress: resolvedAddress.rawAddress,
-            addressLine: resolvedAddress.addressLine,
-            locality: resolvedAddress.locality,
-            zip: resolvedAddress.zip,
-            canonicalAddress: resolvedAddress.canonicalAddress,
-            addressSource: resolvedAddress.addressSource,
-          },
-          ...(details?.taxCode ? { taxCode: details.taxCode } : {}),
-        });
-        const existingAssumptions = getPropertyDossierAssumptions(existingDetails);
-        const omAskingPrice = resolveOmAskingPriceFromDetails(details);
-        if (existingAssumptions?.purchasePrice == null && omAskingPrice != null) {
-          await propertyRepo.updateDetails(
-            propertyId,
-            "dealDossier.assumptions",
-            mergeAssumptionsPatch(existingDetails, {
-              updatedAt: now,
-              purchasePrice: omAskingPrice,
-            })
-          );
-        }
-        await client.query("COMMIT");
-      } catch (error) {
-        await client.query("ROLLBACK").catch(() => {});
-        throw error;
-      } finally {
-        client.release();
-      }
-
-      const uploadedDocRepo = new PropertyUploadedDocumentRepo({ pool });
-      const persistedDocuments = [];
-      for (const file of files) {
-        const docId = randomUUID();
-        const filename = file.originalname?.trim() || "uploaded-om.pdf";
-        const filePath = await saveUploadedDocument(propertyId, docId, filename, file.buffer);
-        const inserted = await uploadedDocRepo.insert({
-          id: docId,
-          propertyId,
-          filename,
-          contentType: file.mimetype || "application/pdf",
-          filePath,
-          category: "OM",
-          source: "Deal analysis upload",
-          sourceMetadata: {
-            sourceType: "deal_analysis_upload",
-            workspaceStatus: "draft",
-          },
-          fileContent: file.buffer,
-        });
-        persistedDocuments.push({
-          id: inserted.id,
-          fileName: inserted.filename,
-          contentType: inserted.contentType,
-          createdAt: inserted.createdAt,
-        });
-      }
-
-      if (persistedDocuments.length > 0) {
-        const primaryOmDocument = persistedDocuments[0]!;
-        const propertyRepo = new PropertyRepo({ pool });
-        const propertyRecord = await propertyRepo.byId(propertyId);
-        const currentDetails = (propertyRecord?.details ?? null) as PropertyDetails | null;
-        const currentWorkspace =
-          currentDetails?.dealAnalysisWorkspace &&
-          typeof currentDetails.dealAnalysisWorkspace === "object" &&
-          !Array.isArray(currentDetails.dealAnalysisWorkspace)
-            ? (currentDetails.dealAnalysisWorkspace as Record<string, unknown>)
-            : {};
-        const manualSourceLinks = mergeManualSourceLinks(currentDetails, {
-          omImportedAt: primaryOmDocument.createdAt,
-          omDocumentId: primaryOmDocument.id,
-          omFileName: primaryOmDocument.fileName,
-        });
-        await propertyRepo.mergeDetails(propertyId, {
-          manualSourceLinks,
-          dealAnalysisWorkspace: {
-            ...currentWorkspace,
-            status: "draft",
-            updatedAt: new Date().toISOString(),
-            uploadedDocumentIds: persistedDocuments.map((document) => document.id),
-            primaryOmDocumentId: primaryOmDocument.id,
-          },
-        });
-      }
-
-      const primaryUploadedDocument = persistedDocuments[0] ?? null;
-      const promotedOm = primaryUploadedDocument
-        ? await promoteReviewedOmDetailsForProperty({
-            propertyId,
-            details,
-            sourceDocumentId: primaryUploadedDocument.id,
-            sourceType: "uploaded_document",
-            sourceMeta: {
-              sourceType: "deal_analysis_upload",
-              workspaceStatus: "draft",
-              documents: persistedDocuments.map((document) => ({
-                id: document.id,
-                filename: document.fileName,
-                contentType: document.contentType ?? null,
-                createdAt: document.createdAt,
-              })),
-              review: {
-                decision: "promoted",
-                reviewedVia: "deal_analysis_analyze_upload",
-              },
-            },
-            pool,
-          })
-        : null;
-      if (promotedOm && !promotedOm.ok) {
-        throw new Error(promotedOm.error ?? "Failed to save reviewed OM extraction to the draft property workspace.");
-      }
-
-      const resolvedBbl = await getBBLForProperty(propertyId).catch(() => null);
-      const enrichmentRun = await runEnrichmentForProperty(propertyId).catch((error) => ({
-        ok: false,
-        results: {},
-        error: error instanceof Error ? error.message : String(error),
-      }));
-      await syncPropertySourcingWorkflow(propertyId, { pool }).catch(() => {});
-      const propertyRepo = new PropertyRepo({ pool });
-      const propertyRecord = await propertyRepo.byId(propertyId);
-      const savedDetails = (propertyRecord?.details ?? details) as PropertyDetails;
-      const savedPropertyInput = resolveWorkspaceProperty(savedDetails);
-      const savedCalculation = (
-        await buildStandaloneOmCalculation({
-          property: savedPropertyInput,
-          details: savedDetails,
-        })
-      ).calculation;
-
-      const matchedProperty = {
-        id: propertyId,
-        canonicalAddress,
-        matchStrategy,
-      };
-
-      res.status(createdProperty ? 201 : 200).json({
-        ok: true,
-        property: savedPropertyInput,
-        propertyId,
-        canonicalAddress,
-        createdProperty,
-        matchStrategy,
-        resolvedAddress,
-        matchedProperty,
-        uploadedDocuments: persistedDocuments.map((document, index) => ({
-          id: document.id,
-          fileName: document.fileName,
-          mimeType: document.contentType ?? "application/pdf",
-          sizeBytes: files[index]?.size ?? null,
-          createdAt: document.createdAt,
-        })),
-        details: savedDetails,
-        calculation: savedCalculation,
-        omReview: promotedOm,
-        enrichment: {
-          attempted: true,
-          ok: enrichmentRun.ok,
-          bbl: resolvedBbl?.bbl ?? null,
-          bin: resolvedBbl?.bin ?? null,
-          results: "results" in enrichmentRun ? enrichmentRun.results : {},
-          warning: "error" in enrichmentRun ? enrichmentRun.error ?? null : null,
+        sourceType: "deal_analysis_upload",
+        sourceLabel: "Deal analysis upload",
+        sourceMetadata: {
+          sourceType: "deal_analysis_upload",
         },
-        propertyRecord,
       });
+      res.status(result.createdProperty ? 201 : 200).json(result);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
       console.error("[deal-analysis analyze-upload]", err);
-      res.status(503).json({ error: "Failed to analyze OM upload.", details: message });
+      sendDealAnalysisOmImportError(res, "Failed to analyze OM upload.", err);
     }
   }
 );
+
+router.post("/deal-analysis/analyze-link", async (req: Request, res: Response) => {
+  const omUrl = normalizeOmUrl(req.body?.omUrl ?? req.body?.url);
+  if (omUrl == null) {
+    res.status(400).json({ error: "omUrl is required." });
+    return;
+  }
+  if (omUrl === "invalid") {
+    res.status(400).json({ error: "omUrl must be a valid http(s) URL." });
+    return;
+  }
+
+  try {
+    const downloaded = await downloadOmDocument(omUrl, { maxBytes: OM_IMPORT_MAX_BYTES });
+    if (
+      !isPdfLikeDownloadedDocument({
+        contentType: downloaded.contentType,
+        filename: downloaded.filename,
+      })
+    ) {
+      res.status(422).json({
+        error: "OM link must point to a PDF document.",
+      });
+      return;
+    }
+
+    const result = await analyzeAndPersistDealAnalysisOmDocuments({
+      documents: [
+        {
+          filename: downloaded.filename,
+          mimeType: downloaded.contentType ?? "application/pdf",
+          buffer: downloaded.buffer,
+          sizeBytes: downloaded.buffer.length,
+        },
+      ],
+      sourceType: "deal_analysis_om_link",
+      sourceLabel: "Deal analysis OM link",
+      propertyContext: `OM URL: ${downloaded.resolvedUrl}\nDownloaded file: ${downloaded.filename}`,
+      sourceMetadata: {
+        sourceType: "deal_analysis_om_link",
+        omUrl: downloaded.resolvedUrl,
+        requestedOmUrl: omUrl,
+      },
+    });
+    res.status(result.createdProperty ? 201 : 200).json(result);
+  } catch (err) {
+    console.error("[deal-analysis analyze-link]", err);
+    sendDealAnalysisOmImportError(res, "Failed to analyze OM link.", err);
+  }
+});
 
 router.post("/deal-analysis/recalculate", async (req: Request, res: Response) => {
   try {

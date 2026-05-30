@@ -673,7 +673,7 @@ export interface UiV2OmUploadImportInput {
 }
 
 export interface UiV2OmUrlImportInput {
-  propertyId: string;
+  propertyId?: string | null;
   url: string;
   fileName?: string | null;
 }

@@ -19,10 +19,10 @@ import type {
 import {
   failedImportResponse,
   importManualEntry,
+  importOmUrl,
   importStreetEasySaleId,
   importStreetEasyUrl,
   omUploadPlaceholder,
-  omUrlPlaceholder,
   runStreetEasyPull,
   startSavedSearchImport,
   type ImportJobRouteResult,
@@ -50,6 +50,8 @@ function sendImportError(
   const statusCode =
     /not found/i.test(message) ? 404 :
     /already running/i.test(message) ? 409 :
+    /too large|max \d+ mb/i.test(message) ? 413 :
+    /requires a PDF|returned HTML|empty file|usable building address|parse/i.test(message) ? 422 :
     /required|valid|numeric|StreetEasy|source is enabled/i.test(message) ? 400 :
     503;
   sendImportResult(
@@ -79,11 +81,10 @@ router.get("/ui-v2/import/capabilities", (_req: Request, res: Response) => {
           "Use the existing deal-analysis PDF upload endpoint until OM upload extraction is shared with UI v2.",
       },
       omUrl: {
-        enabled: false,
-        status: "not_implemented",
+        enabled: true,
+        status: "ready",
         endpoint: "/api/ui-v2/import/om-url",
-        message:
-          "OM URL import is intentionally placeholder-only for now; PDF upload is the real path.",
+        message: "Import a directly downloadable OM PDF URL into the same deal-analysis workspace.",
       },
     },
   });
@@ -151,8 +152,13 @@ router.post(
 
 router.post(
   "/ui-v2/import/om-url",
-  (req: Request<Record<string, never>, unknown, UiV2OmUrlImportRequest["body"]>, res: Response) => {
-    sendImportResult(res, omUrlPlaceholder(req.body));
+  async (req: Request<Record<string, never>, unknown, UiV2OmUrlImportRequest["body"]>, res: Response) => {
+    try {
+      sendImportResult(res, await importOmUrl(req.body ?? {} as UiV2OmUrlImportRequest["body"]));
+    } catch (err) {
+      console.error("[ui-v2 import om-url]", err);
+      sendImportError(res, "om_url", err);
+    }
   }
 );
 
@@ -183,7 +189,7 @@ router.post(
           sendImportResult(res, await startSavedSearchImport(payload.input));
           return;
         case "om_url":
-          sendImportResult(res, omUrlPlaceholder(payload.input));
+          sendImportResult(res, await importOmUrl(payload.input));
           return;
         case "om_upload":
           sendImportResult(res, omUploadPlaceholder(payload.input));

@@ -90,6 +90,12 @@ interface PullFormState {
   createPropertyIfMissing: boolean;
 }
 
+interface OmUrlFormState {
+  url: string;
+  propertyId: string;
+  fileName: string;
+}
+
 const MODE_CARDS: Array<{
   id: ModeId;
   category: ModeCategoryId;
@@ -142,8 +148,8 @@ const MODE_CARDS: Array<{
     id: "om-url",
     category: "documents",
     label: "OM URL",
-    kicker: "Placeholder",
-    description: "Reserved for a future URL extraction service. Disabled in this UI for now.",
+    kicker: "PDF link",
+    description: "Analyze a directly downloadable OM PDF URL and create or update the deal workspace.",
     capabilityKey: "omUrl",
   },
 ];
@@ -218,6 +224,12 @@ const INITIAL_PULL_FORM: PullFormState = {
   includeNearbyComparables: true,
   includeSaleHistory: false,
   createPropertyIfMissing: true,
+};
+
+const INITIAL_OM_URL_FORM: OmUrlFormState = {
+  url: "",
+  propertyId: "",
+  fileName: "",
 };
 
 function buildApiUrl(pathOrUrl: string): string {
@@ -353,6 +365,7 @@ export default function AddPropertyPage() {
   const [manualForm, setManualForm] = useState<ManualFormState>(INITIAL_MANUAL_FORM);
   const [streetEasyForm, setStreetEasyForm] = useState<StreetEasyFormState>(INITIAL_STREETEASY_FORM);
   const [pullForm, setPullForm] = useState<PullFormState>(INITIAL_PULL_FORM);
+  const [omUrlForm, setOmUrlForm] = useState<OmUrlFormState>(INITIAL_OM_URL_FORM);
   const [pullPanelOpen, setPullPanelOpen] = useState(false);
   const [submitting, setSubmitting] = useState<ModeId | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
@@ -484,6 +497,10 @@ export default function AddPropertyPage() {
 
   const updatePullForm = <K extends keyof PullFormState>(key: K, value: PullFormState[K]) => {
     setPullForm((current) => ({ ...current, [key]: value }));
+  };
+
+  const updateOmUrlForm = <K extends keyof OmUrlFormState>(key: K, value: OmUrlFormState[K]) => {
+    setOmUrlForm((current) => ({ ...current, [key]: value }));
   };
 
   const manualBrokerHasAnyValue = Boolean(
@@ -632,6 +649,25 @@ export default function AddPropertyPage() {
     );
   };
 
+  const handleOmUrlSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const url = cleanString(omUrlForm.url);
+    if (!url) {
+      setNotice({ type: "error", title: "OM URL required", message: "Paste a directly downloadable OM PDF URL." });
+      return;
+    }
+    await postImport(
+      "om-url",
+      endpointFor("omUrl"),
+      {
+        url,
+        propertyId: cleanString(omUrlForm.propertyId),
+        fileName: cleanString(omUrlForm.fileName),
+      },
+      "OM URL import"
+    );
+  };
+
   return (
     <div className={styles.page}>
       <section className={styles.headerBand}>
@@ -640,7 +676,7 @@ export default function AddPropertyPage() {
           <h1>Add property</h1>
           <p>
             Bring a property into the sourcing flow from manual details, a StreetEasy listing, a saved search,
-            or the existing OM upload path.
+            or an OM PDF/link.
           </p>
         </div>
         <div className={styles.headerActions}>
@@ -727,8 +763,15 @@ export default function AddPropertyPage() {
                 <p>{notice.message}</p>
               </div>
               {notice.job?.propertyId ? (
-                <Link href={`/pipeline?propertyId=${encodeURIComponent(notice.job.propertyId)}`} className={styles.noticeLink}>
-                  Open property
+                <Link
+                  href={
+                    notice.job.jobType === "om_url"
+                      ? `/deal-analysis?property_id=${encodeURIComponent(notice.job.propertyId)}`
+                      : `/pipeline?propertyId=${encodeURIComponent(notice.job.propertyId)}`
+                  }
+                  className={styles.noticeLink}
+                >
+                  {notice.job.jobType === "om_url" ? "Open analysis" : "Open property"}
                 </Link>
               ) : null}
             </div>
@@ -1109,32 +1152,48 @@ export default function AddPropertyPage() {
             <section className={styles.panel} aria-labelledby="om-url-heading">
               <div className={styles.panelHeader}>
                 <div>
-                  <p className={styles.panelKicker}>OM URL placeholder</p>
-                  <h2 id="om-url-heading">URL extraction is not enabled</h2>
+                  <p className={styles.panelKicker}>OM PDF URL</p>
+                  <h2 id="om-url-heading">Analyze by link</h2>
                 </div>
-                <span className={styles.disabledPill}>Disabled</span>
+                <span className={styles.softPill}>10 MB max</span>
               </div>
-              <div className={styles.formStack}>
-                <Field label="OM URL">
+              <form className={styles.formStack} onSubmit={handleOmUrlSubmit}>
+                <Field label="OM PDF URL" hint="Direct PDF/download links work best. The importer downloads the PDF, analyzes it, and saves it to the matched property.">
                   <input
                     className={styles.input}
-                    placeholder="OM URL import is placeholder-only"
-                    disabled
+                    value={omUrlForm.url}
+                    onChange={(event) => updateOmUrlForm("url", event.target.value)}
+                    placeholder="https://.../offering-memorandum.pdf"
+                    required
                   />
                 </Field>
-                <p className={styles.inlineNote}>
-                  {capabilityFor("omUrl")?.message ??
-                    "OM URL import is intentionally placeholder-only for now. Use the OM PDF upload path instead."}
-                </p>
-                <div className={styles.formActions}>
-                  <button type="button" className={styles.primaryButton} disabled>
-                    OM URL import unavailable
-                  </button>
-                  <Link href="/deal-analysis" className={styles.secondaryLink}>
-                    Use PDF upload
-                  </Link>
+                <div className={styles.twoColumn}>
+                  <Field label="Existing property ID" hint="Optional. Leave blank to create or match from the OM address.">
+                    <input
+                      className={styles.input}
+                      value={omUrlForm.propertyId}
+                      onChange={(event) => updateOmUrlForm("propertyId", event.target.value)}
+                      placeholder="Optional property UUID"
+                    />
+                  </Field>
+                  <Field label="File name" hint="Optional display name for the saved document.">
+                    <input
+                      className={styles.input}
+                      value={omUrlForm.fileName}
+                      onChange={(event) => updateOmUrlForm("fileName", event.target.value)}
+                      placeholder="Offering Memorandum.pdf"
+                    />
+                  </Field>
                 </div>
-              </div>
+                <div className={styles.formActions}>
+                  <button type="submit" className={styles.primaryButton} disabled={!isModeEnabled("om-url") || submitting === "om-url"}>
+                    {submitting === "om-url" ? "Analyzing OM link..." : "Analyze OM URL"}
+                  </button>
+                  <button type="button" className={styles.secondaryButton} onClick={() => setOmUrlForm(INITIAL_OM_URL_FORM)}>
+                    Clear link
+                  </button>
+                </div>
+              </form>
             </section>
           ) : null}
         </main>
@@ -1159,6 +1218,9 @@ export default function AddPropertyPage() {
                     {item.job.propertyId ? (
                       <Link href={`/pipeline?propertyId=${encodeURIComponent(item.job.propertyId)}`}>Open property</Link>
                     ) : null}
+                    {item.job.propertyId && item.job.jobType === "om_url" ? (
+                      <Link href={`/deal-analysis?property_id=${encodeURIComponent(item.job.propertyId)}`}>Open analysis</Link>
+                    ) : null}
                     <span>{new Date(item.at).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}</span>
                   </div>
                 </article>
@@ -1169,8 +1231,8 @@ export default function AddPropertyPage() {
           <div className={styles.supportBox}>
             <h3>Import paths</h3>
             <p>
-              Manual, StreetEasy, and saved-search imports create pipeline properties. OM PDFs route to the current
-              upload workflow. OM URL import remains disabled for now.
+              Manual, StreetEasy, and saved-search imports create pipeline properties. OM PDF uploads and OM URL
+              imports populate the shared deal-analysis workspace.
             </p>
           </div>
         </aside>
