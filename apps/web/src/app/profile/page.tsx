@@ -161,16 +161,19 @@ interface UserProfile {
 }
 
 interface ProfileSavedDealRow {
-  savedDeal: {
+  savedDeal?: {
     id: string;
     propertyId: string;
     dealStatus: string;
     createdAt: string;
   };
-  address: string;
+  propertyId?: string;
+  address?: string;
+  canonicalAddress?: string;
   price: number | null;
   units: number | null;
   dealScore: number | null;
+  imageUrl?: string | null;
 }
 
 interface SavedSearch {
@@ -272,7 +275,8 @@ function formatDateTime(value: string | null | undefined): string {
 
 function formatSavedSearchAreas(search: SavedSearch): string {
   if (search.locationMode === "single" && search.singleLocationSlug) return search.singleLocationSlug;
-  if (search.areaCodes.length > 0) return search.areaCodes.join(", ");
+  const areaCodes = Array.isArray(search.areaCodes) ? search.areaCodes : [];
+  if (areaCodes.length > 0) return areaCodes.join(", ");
   return DEFAULT_SAVED_SEARCH_AREAS.join(", ");
 }
 
@@ -288,6 +292,8 @@ function formatSavedSearchSchedule(search: SavedSearch): string {
 }
 
 function formatSavedSearchFilters(search: SavedSearch): string {
+  const propertyTypes = Array.isArray(search.propertyTypes) ? search.propertyTypes : [];
+  const requiredAmenities = Array.isArray(search.requiredAmenities) ? search.requiredAmenities : [];
   const filters: string[] = [`Areas: ${formatSavedSearchAreas(search)}`];
   if (search.minPrice != null || search.maxPrice != null) {
     filters.push(
@@ -300,10 +306,30 @@ function formatSavedSearchFilters(search: SavedSearch): string {
   if (search.minBaths != null) filters.push(`Min baths: ${search.minBaths}`);
   if (search.maxHoa != null) filters.push(`Max HOA: ${currencyFormatter.format(search.maxHoa)}`);
   if (search.maxTax != null) filters.push(`Max tax: ${currencyFormatter.format(search.maxTax)}`);
-  if (search.propertyTypes.length > 0) filters.push(`Types: ${search.propertyTypes.join(", ")}`);
-  if (search.requiredAmenities.length > 0) filters.push(`Amenities: ${search.requiredAmenities.join(", ")}`);
+  if (propertyTypes.length > 0) filters.push(`Types: ${propertyTypes.join(", ")}`);
+  if (requiredAmenities.length > 0) filters.push(`Amenities: ${requiredAmenities.join(", ")}`);
   if (search.resultLimit != null) filters.push(`Limit: ${search.resultLimit}`);
   return filters.join(" | ");
+}
+
+function profileSavedDealPropertyId(row: ProfileSavedDealRow): string {
+  return row.savedDeal?.propertyId ?? row.propertyId ?? "";
+}
+
+function profileSavedDealId(row: ProfileSavedDealRow): string {
+  return row.savedDeal?.id ?? profileSavedDealPropertyId(row) ?? row.address ?? row.canonicalAddress ?? "saved-deal";
+}
+
+function profileSavedDealAddress(row: ProfileSavedDealRow): string {
+  return row.address ?? row.canonicalAddress ?? "—";
+}
+
+function profileSavedDealStatus(row: ProfileSavedDealRow): string {
+  return row.savedDeal?.dealStatus ?? "saved";
+}
+
+function profileSavedDealCreatedAt(row: ProfileSavedDealRow): string | null {
+  return row.savedDeal?.createdAt ?? null;
 }
 
 function matchesSearchQuery(values: Array<string | number | boolean | null | undefined>, query: string): boolean {
@@ -652,7 +678,7 @@ export default function ProfilePage() {
   const handleUnsave = async (propertyId: string) => {
     try {
       await fetch(`${API_BASE}/api/profile/saved-deals/${encodeURIComponent(propertyId)}`, { method: "DELETE" });
-      setSavedDeals((prev) => prev.filter((r) => r.savedDeal.propertyId !== propertyId));
+      setSavedDeals((prev) => prev.filter((row) => profileSavedDealPropertyId(row) !== propertyId));
     } catch {
       // ignore
     }
@@ -795,10 +821,10 @@ export default function ProfilePage() {
           formatSavedSearchFilters(search),
           search.timezone,
           search.scheduleCadence,
-          search.areaCodes.join(" "),
+          Array.isArray(search.areaCodes) ? search.areaCodes.join(" ") : "",
           search.singleLocationSlug,
-          search.propertyTypes.join(" "),
-          search.requiredAmenities.join(" "),
+          Array.isArray(search.propertyTypes) ? search.propertyTypes.join(" ") : "",
+          Array.isArray(search.requiredAmenities) ? search.requiredAmenities.join(" ") : "",
         ],
         globalQuery
       )
@@ -810,13 +836,14 @@ export default function ProfilePage() {
     return savedDeals.filter((row) =>
       matchesSearchQuery(
         [
-          row.address,
-          row.savedDeal.propertyId,
-          row.savedDeal.dealStatus,
+          profileSavedDealAddress(row),
+          profileSavedDealPropertyId(row),
+          profileSavedDealStatus(row),
           row.price,
           row.units,
           row.dealScore,
-          row.savedDeal.createdAt,
+          row.imageUrl,
+          profileSavedDealCreatedAt(row),
         ],
         globalQuery
       )
@@ -1501,38 +1528,47 @@ export default function ProfilePage() {
         ) : (
           <div className="profile-saved-deals-grid">
             {filteredSavedDeals.map((row) => (
-              <article key={row.savedDeal.id} className="profile-saved-deal-card">
-                <div className="profile-saved-deal-main">
-                  <h3 className="profile-saved-deal-address">{row.address || "—"}</h3>
-                  <div className="profile-saved-deal-stats">
-                    <div className="profile-saved-deal-stat">
-                      <span>Price</span>
-                      <strong>{row.price != null ? currencyFormatter.format(row.price) : "—"}</strong>
-                    </div>
-                    <div className="profile-saved-deal-stat">
-                      <span>Units</span>
-                      <strong>{row.units != null ? String(row.units) : "—"}</strong>
-                    </div>
-                    <div className="profile-saved-deal-stat">
-                      <span>Deal score</span>
-                      <strong>{row.dealScore != null ? <span className="profile-saved-deals-score">{Math.round(row.dealScore)}</span> : "—"}</strong>
+              <article key={profileSavedDealId(row)} className="profile-saved-deal-card">
+                <div className="profile-saved-deal-photo" aria-hidden="true">
+                  {row.imageUrl ? (
+                    <img src={row.imageUrl} alt="" loading="lazy" />
+                  ) : (
+                    <span>{profileSavedDealAddress(row).slice(0, 1).toUpperCase()}</span>
+                  )}
+                </div>
+                <div className="profile-saved-deal-body">
+                  <div className="profile-saved-deal-main">
+                    <h3 className="profile-saved-deal-address">{profileSavedDealAddress(row)}</h3>
+                    <div className="profile-saved-deal-stats">
+                      <div className="profile-saved-deal-stat">
+                        <span>Price</span>
+                        <strong>{row.price != null ? currencyFormatter.format(row.price) : "—"}</strong>
+                      </div>
+                      <div className="profile-saved-deal-stat">
+                        <span>Units</span>
+                        <strong>{row.units != null ? String(row.units) : "—"}</strong>
+                      </div>
+                      <div className="profile-saved-deal-stat">
+                        <span>Deal score</span>
+                        <strong>{row.dealScore != null ? <span className="profile-saved-deals-score">{Math.round(row.dealScore)}</span> : "—"}</strong>
+                      </div>
                     </div>
                   </div>
-                </div>
-                <div className="profile-saved-deals-actions profile-saved-deals-actions--row">
-                  <Link href={`/pipeline?propertyId=${row.savedDeal.propertyId}`} className="profile-saved-deals-action">
-                    View property
-                  </Link>
-                  <Link href={`/pipeline?propertyId=${row.savedDeal.propertyId}`} className="profile-saved-deals-action">
-                    View docs
-                  </Link>
-                  <button
-                    type="button"
-                    onClick={() => handleUnsave(row.savedDeal.propertyId)}
-                    className="profile-saved-deals-action profile-saved-deals-action--danger"
-                  >
-                    Unsave
-                  </button>
+                  <div className="profile-saved-deals-actions profile-saved-deals-actions--row">
+                    <Link href={`/pipeline?propertyId=${profileSavedDealPropertyId(row)}`} className="profile-saved-deals-action">
+                      View property
+                    </Link>
+                    <Link href={`/pipeline?propertyId=${profileSavedDealPropertyId(row)}`} className="profile-saved-deals-action">
+                      View docs
+                    </Link>
+                    <button
+                      type="button"
+                      onClick={() => handleUnsave(profileSavedDealPropertyId(row))}
+                      className="profile-saved-deals-action profile-saved-deals-action--danger"
+                    >
+                      Unsave
+                    </button>
+                  </div>
                 </div>
               </article>
             ))}
@@ -1758,16 +1794,53 @@ export default function ProfilePage() {
         }
 
         .profile-v2 .profile-saved-deals-grid {
-          grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+          grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr));
           gap: 0.85rem;
         }
 
         .profile-v2 .profile-saved-deal-card {
-          padding: 1rem;
+          overflow: hidden;
+          padding: 0;
           border: 1px solid #d8dfda;
           border-radius: 8px;
           background: #ffffff;
           box-shadow: 0 8px 24px rgba(22, 42, 35, 0.05);
+        }
+
+        .profile-v2 .profile-saved-deal-photo {
+          display: grid;
+          width: 100%;
+          aspect-ratio: 16 / 9;
+          place-items: center;
+          overflow: hidden;
+          background: linear-gradient(135deg, #eef4f0, #f8faf8);
+          color: #1f3d35;
+        }
+
+        .profile-v2 .profile-saved-deal-photo img {
+          display: block;
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+        }
+
+        .profile-v2 .profile-saved-deal-photo span {
+          display: grid;
+          width: 3.2rem;
+          height: 3.2rem;
+          place-items: center;
+          border: 1px solid #cfe0d5;
+          border-radius: 999px;
+          background: #ffffff;
+          color: #1f3d35;
+          font-size: 1.45rem;
+          font-weight: 850;
+        }
+
+        .profile-v2 .profile-saved-deal-body {
+          display: grid;
+          gap: 0.9rem;
+          padding: 1rem;
         }
 
         .profile-v2 .profile-saved-deal-stat span {

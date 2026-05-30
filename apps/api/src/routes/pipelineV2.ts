@@ -35,12 +35,17 @@ import type {
   SavedDeal,
   UiV2ActivityTimelineItem,
   UiV2BrokerBlock,
+  UiV2DetailItem,
   UiV2DocumentStatus,
+  UiV2EnrichmentDetailPayload,
+  UiV2EnrichmentModuleDetail,
   UiV2EnrichmentState,
   UiV2ImageAsset,
+  UiV2MarketType,
   UiV2PipelineListPayload,
   UiV2PipelineQuery,
   UiV2PipelineRow,
+  UiV2PropertyDocumentItem,
   UiV2PipelineSortField,
   UiV2PipelineStatus,
   UiV2PropertyDetailPayload,
@@ -249,10 +254,14 @@ interface ParsedPipelineQuery {
   statuses: UiV2PipelineStatus[];
   sources: string[];
   tags: string[];
+  mtrStates: string[];
   neighborhoods: string[];
   boroughs: string[];
+  marketTypes: UiV2MarketType[];
+  enrichmentStatuses: string[];
   hasOm?: boolean;
   hasBrokerContact?: boolean;
+  hasOpenActions?: boolean;
   includeRejected: boolean;
   minDealScore?: number;
   maxDealScore?: number;
@@ -355,6 +364,15 @@ function parseStatus(value: unknown): UiV2PipelineStatus | null {
   return UI_V2_STATUSES.has(normalized as UiV2PipelineStatus) ? (normalized as UiV2PipelineStatus) : null;
 }
 
+function parseMarketType(value: unknown): UiV2MarketType | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_");
+  if (normalized === "on_market" || normalized === "off_market" || normalized === "unknown") {
+    return normalized as UiV2MarketType;
+  }
+  return null;
+}
+
 function parsePipelineQuery(req: Request): ParsedPipelineQuery {
   const sortByRaw = firstQueryValue(req.query.sort) ?? firstQueryValue(req.query.sortBy) ?? "updatedAt";
   const sortBy = (
@@ -362,7 +380,11 @@ function parsePipelineQuery(req: Request): ParsedPipelineQuery {
       "updatedAt",
       "createdAt",
       "canonicalAddress",
+      "source",
+      "marketType",
       "askingPrice",
+      "units",
+      "capRate",
       "dealScore",
       "status",
       "lastActivityAt",
@@ -384,10 +406,21 @@ function parsePipelineQuery(req: Request): ParsedPipelineQuery {
       const normalized = normalizeTag(tag);
       return normalized == null ? [] : [normalized];
     }),
+    mtrStates: listQueryValues(req.query.mtr)
+      .map((value) => value.toLowerCase())
+      .filter((value) => value === "good" || value === "watch" || value === "none"),
     neighborhoods: listQueryValues(req.query.neighborhood).map((value) => value.toLowerCase()),
     boroughs: listQueryValues(req.query.borough).map((value) => value.toLowerCase()),
+    marketTypes: listQueryValues(req.query.marketType ?? req.query.type).flatMap((type) => {
+      const parsed = parseMarketType(type);
+      return parsed == null ? [] : [parsed];
+    }),
+    enrichmentStatuses: listQueryValues(req.query.enrichmentStatus)
+      .map((value) => value.toLowerCase())
+      .filter(Boolean),
     hasOm: parseBooleanQuery(req.query.hasOm),
     hasBrokerContact: parseBooleanQuery(req.query.hasBrokerContact),
+    hasOpenActions: parseBooleanQuery(req.query.hasOpenActions),
     includeRejected: parseBooleanQuery(req.query.includeRejected) === true,
     minDealScore: parseNumberQuery(req.query.minDealScore ?? req.query.min),
     maxDealScore: parseNumberQuery(req.query.maxDealScore ?? req.query.max),
@@ -411,6 +444,7 @@ function queryForResponse(query: ParsedPipelineQuery): UiV2PipelineQuery {
         ? { source: query.sources as ListingSource[] }
         : {}),
     ...(query.tags.length === 1 ? { tag: query.tags[0] } : query.tags.length > 1 ? { tag: query.tags } : {}),
+    ...(query.mtrStates.length === 1 ? { mtr: query.mtrStates[0] } : query.mtrStates.length > 1 ? { mtr: query.mtrStates } : {}),
     ...(query.neighborhoods.length === 1
       ? { neighborhood: query.neighborhoods[0] }
       : query.neighborhoods.length > 1
@@ -421,8 +455,19 @@ function queryForResponse(query: ParsedPipelineQuery): UiV2PipelineQuery {
       : query.boroughs.length > 1
         ? { borough: query.boroughs }
         : {}),
+    ...(query.marketTypes.length === 1
+      ? { marketType: query.marketTypes[0] }
+      : query.marketTypes.length > 1
+        ? { marketType: query.marketTypes }
+        : {}),
+    ...(query.enrichmentStatuses.length === 1
+      ? { enrichmentStatus: query.enrichmentStatuses[0] }
+      : query.enrichmentStatuses.length > 1
+        ? { enrichmentStatus: query.enrichmentStatuses }
+        : {}),
     ...(query.hasOm != null ? { hasOm: query.hasOm } : {}),
     ...(query.hasBrokerContact != null ? { hasBrokerContact: query.hasBrokerContact } : {}),
+    ...(query.hasOpenActions != null ? { hasOpenActions: query.hasOpenActions } : {}),
     includeRejected: query.includeRejected,
     ...(query.minDealScore != null ? { minDealScore: query.minDealScore } : {}),
     ...(query.maxDealScore != null ? { maxDealScore: query.maxDealScore } : {}),
@@ -543,7 +588,7 @@ function statusLabel(status: UiV2PipelineStatus): string {
     interesting: "Interesting",
     saved: "Saved",
     underwriting: "Underwriting",
-    outreach: "Outreach",
+    outreach: "OM Requested",
     awaiting_broker: "Awaiting Broker",
     om_received: "OM Received",
     dossier_generated: "Dossier Generated",
@@ -576,9 +621,12 @@ function deriveUiV2Status(row: PipelineBaseRow): UiV2PipelineStatus {
   const details = row.details;
   const pipeline = readPipelineState(details);
   if (pipeline.status === "rejected_removed" || pipeline.rejectedAt != null) return "rejected";
-  if (pipeline.uiV2Status != null) return pipeline.uiV2Status;
-  if (row.saved_deal_status === "saved") return "saved";
+  const explicitStatus = pipeline.uiV2Status;
+  if (explicitStatus === "archived" || explicitStatus === "offer_review") return explicitStatus;
   if (hasCompletedDealDossier(details)) return "dossier_generated";
+  if (hasOm(row) && explicitStatus !== "underwriting") return "om_received";
+  if (explicitStatus != null) return explicitStatus;
+  if (row.saved_deal_status === "saved") return "saved";
   if (pipeline.status) return mapLegacyStatus(pipeline.status);
   return "new";
 }
@@ -635,6 +683,75 @@ function readStringPath(root: unknown, path: string[]): string | null {
   return stringOrNull(current);
 }
 
+function hasDisplayValue(value: unknown): boolean {
+  if (value == null) return false;
+  if (typeof value === "string") return value.trim().length > 0;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (typeof value === "boolean") return true;
+  if (Array.isArray(value)) return value.length > 0;
+  if (isPlainRecord(value)) return Object.keys(value).length > 0;
+  return true;
+}
+
+function displayValue(value: unknown): string | number | boolean | null {
+  if (!hasDisplayValue(value)) return null;
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return value;
+  if (Array.isArray(value)) return value.map((entry) => displayValue(entry)).filter(hasDisplayValue).join(", ");
+  if (isPlainRecord(value)) {
+    return Object.entries(value)
+      .filter(([, entry]) => hasDisplayValue(entry))
+      .slice(0, 5)
+      .map(([key, entry]) => `${key}: ${String(displayValue(entry))}`)
+      .join(", ");
+  }
+  return String(value);
+}
+
+function formatMoneyValue(value: unknown): string | null {
+  const numberValue = toFiniteNumber(value);
+  if (numberValue == null) return null;
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 0,
+  }).format(numberValue);
+}
+
+function formatPercentValue(value: unknown): string | null {
+  const numberValue = toFiniteNumber(value);
+  if (numberValue == null) return null;
+  return `${numberValue.toFixed(1)}%`;
+}
+
+function detailItem(
+  label: string,
+  value: unknown,
+  options: { href?: string | null; tone?: UiV2StatusChipTone; format?: "money" | "percent" } = {}
+): UiV2DetailItem | null {
+  const formatted =
+    options.format === "money"
+      ? formatMoneyValue(value)
+      : options.format === "percent"
+        ? formatPercentValue(value)
+        : displayValue(value);
+  if (!hasDisplayValue(formatted)) return null;
+  return {
+    label,
+    value: formatted,
+    href: options.href ?? null,
+    tone: options.tone,
+  };
+}
+
+function compactItems(items: Array<UiV2DetailItem | null | undefined>): UiV2DetailItem[] {
+  return items.filter((item): item is UiV2DetailItem => item != null);
+}
+
+function moduleStatus(items: UiV2DetailItem[], fallback?: string | null): UiV2EnrichmentModuleDetail["status"] {
+  if (fallback) return fallback;
+  return items.length > 0 ? "available" : "missing";
+}
+
 function getAskingPrice(row: PipelineBaseRow): number | null {
   const details = row.details;
   const assumptions = getPropertyDossierAssumptions(details);
@@ -657,7 +774,13 @@ function getUnitCount(row: PipelineBaseRow): number | null {
   return (
     resolvePreferredOmUnitCount(details) ??
     readNumericPath(details, ["unitCount"]) ??
+    readNumericPath(details, ["rentalFinancials", "fromLlm", "unitCount"]) ??
+    readNumericPath(details, ["omData", "authoritative", "propertyInfo", "unitCount"]) ??
+    readNumericPath(details, ["omData", "authoritative", "propertyInfo", "units"]) ??
+    readNumericPath(details, ["omData", "authoritative", "propertyInfo", "numberOfUnits"]) ??
     readNumericPath(row.listing_extra, ["units"]) ??
+    readNumericPath(row.listing_extra, ["unitCount"]) ??
+    readNumericPath(row.listing_extra, ["numberOfUnits"]) ??
     rentalUnits
   );
 }
@@ -796,6 +919,184 @@ function buildEnrichmentState(row: PipelineBaseRow): UiV2EnrichmentState {
   };
 }
 
+function buildEnrichmentDetails(row: PipelineBaseRow): UiV2EnrichmentDetailPayload {
+  const details = row.details;
+  const enrichment = isPlainRecord(details?.enrichment) ? details.enrichment : {};
+  const neighborhood = details?.neighborhood ?? null;
+  const rentalFinancials = details?.rentalFinancials ?? null;
+  const fromLlm = isPlainRecord(rentalFinancials?.fromLlm) ? rentalFinancials.fromLlm : {};
+  const omAnalysis = isPlainRecord(rentalFinancials?.omAnalysis) ? rentalFinancials.omAnalysis : {};
+  const authoritativeOm = isPlainRecord(details?.omData?.authoritative) ? details.omData.authoritative : {};
+  const sourceLinks = readPipelineState(details).sourceLinks ?? {};
+  const manualLinks = isPlainRecord(details?.manualSourceLinks) ? details.manualSourceLinks : {};
+  const sourceItems = compactItems([
+    detailItem("Listing", row.listing_url ?? readStringPath(details, ["manualSourceLinks", "streetEasyUrl"]), {
+      href: row.listing_url ?? readStringPath(details, ["manualSourceLinks", "streetEasyUrl"]),
+    }),
+    detailItem("OM source", readStringPath(details, ["manualSourceLinks", "omUrl"]), {
+      href: readStringPath(details, ["manualSourceLinks", "omUrl"]),
+    }),
+    ...Object.entries(sourceLinks)
+      .slice(0, 6)
+      .map(([label, value]) => detailItem(label, value, typeof value === "string" ? { href: value } : {})),
+    ...Object.entries(manualLinks)
+      .filter(([key]) => !["streetEasyUrl", "omUrl"].includes(key))
+      .slice(0, 6)
+      .map(([label, value]) => detailItem(label, value)),
+  ]);
+
+  const modules: UiV2EnrichmentModuleDetail[] = [];
+  const addModule = (
+    key: string,
+    label: string,
+    summaryItems: Array<UiV2DetailItem | null | undefined>,
+    detailItems: Array<UiV2DetailItem | null | undefined> = [],
+    fallbackStatus?: string | null
+  ) => {
+    const summary = compactItems(summaryItems);
+    const detail = compactItems(detailItems);
+    if (summary.length === 0 && detail.length === 0 && !fallbackStatus) return;
+    modules.push({
+      key,
+      label,
+      status: moduleStatus([...summary, ...detail], fallbackStatus),
+      summaryItems: summary,
+      detailItems: detail,
+    });
+  };
+
+  addModule("location", "Location", [
+    detailItem("Neighborhood", neighborhood?.primary?.name),
+    detailItem("Borough", neighborhood?.primary?.borough),
+    detailItem("Zip", neighborhood?.primary?.zip ?? row.listing_zip),
+    detailItem("Source", neighborhood?.primary?.source),
+  ], [
+    detailItem("Median rent", neighborhood?.metrics?.medianRent, { format: "money" }),
+    detailItem("Median sale", neighborhood?.metrics?.medianSalePrice, { format: "money" }),
+    detailItem("Price / sf", neighborhood?.metrics?.medianPricePsf, { format: "money" }),
+    detailItem("Walk score", neighborhood?.metrics?.walkScore),
+    detailItem("Transit score", neighborhood?.metrics?.transitScore),
+    detailItem("Narrative", neighborhood?.narrative),
+  ]);
+  addModule("tax_assessment", "Tax Assessment", [
+    detailItem("Tax class", details?.taxClass ?? details?.taxCode),
+    detailItem("BBL", details?.buildingLotBlock ?? details?.bbl),
+    detailItem("Market value", details?.assessedMarketValue, { format: "money" }),
+    detailItem("Actual value", details?.assessedActualValue, { format: "money" }),
+  ], [
+    detailItem("Tax before total", details?.assessedTaxBeforeTotal, { format: "money" }),
+    detailItem("Gross sqft", details?.assessedGrossSqft),
+    detailItem("Land area", details?.assessedLandArea),
+    detailItem("Residential gross sqft", details?.assessedResidentialAreaGross),
+    detailItem("Office gross sqft", details?.assessedOfficeAreaGross),
+    detailItem("Retail gross sqft", details?.assessedRetailAreaGross),
+    detailItem("Roll date", details?.assessedExtractDate),
+  ]);
+  addModule("owner", "Owner", [
+    detailItem("Owner", details?.ownerInfo ?? details?.ownerValuations),
+    detailItem("Permit owner business", readStringPath(enrichment, ["permits_summary", "owner_business_name"])),
+    detailItem("Permit owner", readStringPath(enrichment, ["permits_summary", "owner_name"])),
+  ]);
+  addModule("zoning", "Zoning", [
+    detailItem("District 1", readStringPath(enrichment, ["zoning", "zoningDistrict1"])),
+    detailItem("District 2", readStringPath(enrichment, ["zoning", "zoningDistrict2"])),
+    detailItem("Special district", readStringPath(enrichment, ["zoning", "specialDistrict1"])),
+  ], [
+    detailItem("Map number", readStringPath(enrichment, ["zoning", "zoningMapNumber"])),
+    detailItem("Map code", readStringPath(enrichment, ["zoning", "zoningMapCode"])),
+    detailItem("Refreshed", readStringPath(enrichment, ["zoning", "lastRefreshedAt"])),
+  ]);
+  addModule("certificate_of_occupancy", "Certificate of Occupancy", [
+    detailItem("Status", readStringPath(enrichment, ["certificateOfOccupancy", "status"])),
+    detailItem("Job type", readStringPath(enrichment, ["certificateOfOccupancy", "jobType"])),
+    detailItem("Dwelling units", readNumericPath(enrichment, ["certificateOfOccupancy", "dwellingUnits"])),
+  ], [
+    detailItem("Filing type", readStringPath(enrichment, ["certificateOfOccupancy", "filingType"])),
+    detailItem("Issued", readStringPath(enrichment, ["certificateOfOccupancy", "issuanceDate"])),
+  ]);
+  addModule("permits", "Permits", [
+    detailItem("Count", readNumericPath(enrichment, ["permits_summary", "count"])),
+    detailItem("Last issued", readStringPath(enrichment, ["permits_summary", "last_issued_date"])),
+  ]);
+  addModule("hpd_registration", "HPD Registration", [
+    detailItem("Registration ID", readStringPath(enrichment, ["hpdRegistration", "registrationId"])),
+    detailItem("Last registration", readStringPath(enrichment, ["hpdRegistration", "lastRegistrationDate"])),
+  ]);
+  addModule("hpd_violations", "HPD Violations", [
+    detailItem("Open", readNumericPath(enrichment, ["hpd_violations_summary", "openCount"])),
+    detailItem("Closed", readNumericPath(enrichment, ["hpd_violations_summary", "closedCount"])),
+    detailItem("Rent impairing", readNumericPath(enrichment, ["hpd_violations_summary", "rentImpairingOpen"])),
+  ], [
+    detailItem("Total", readNumericPath(enrichment, ["hpd_violations_summary", "total"])),
+    detailItem("Most recent", readStringPath(enrichment, ["hpd_violations_summary", "mostRecentApprovedDate"])),
+    detailItem("By class", isPlainRecord(enrichment.hpd_violations_summary) ? enrichment.hpd_violations_summary.byClass : null),
+  ]);
+  addModule("dob_complaints", "DOB Complaints", [
+    detailItem("30 days", readNumericPath(enrichment, ["dob_complaints_summary", "count30"])),
+    detailItem("90 days", readNumericPath(enrichment, ["dob_complaints_summary", "count90"])),
+    detailItem("365 days", readNumericPath(enrichment, ["dob_complaints_summary", "count365"])),
+  ], [
+    detailItem("Open", readNumericPath(enrichment, ["dob_complaints_summary", "openCount"])),
+    detailItem("Closed", readNumericPath(enrichment, ["dob_complaints_summary", "closedCount"])),
+    detailItem("Top categories", isPlainRecord(enrichment.dob_complaints_summary) ? enrichment.dob_complaints_summary.topCategories : null),
+  ]);
+  addModule("housing_litigations", "Housing Litigations", [
+    detailItem("Total", readNumericPath(enrichment, ["housing_litigations_summary", "total"])),
+    detailItem("Open", readNumericPath(enrichment, ["housing_litigations_summary", "openCount"])),
+    detailItem("Penalty", readNumericPath(enrichment, ["housing_litigations_summary", "totalPenalty"]), { format: "money" }),
+  ], [
+    detailItem("Last finding", readStringPath(enrichment, ["housing_litigations_summary", "lastFindingDate"])),
+    detailItem("By case type", isPlainRecord(enrichment.housing_litigations_summary) ? enrichment.housing_litigations_summary.byCaseType : null),
+    detailItem("By status", isPlainRecord(enrichment.housing_litigations_summary) ? enrichment.housing_litigations_summary.byStatus : null),
+  ]);
+  addModule("affordable_housing", "Affordable Housing", [
+    detailItem("Project count", readNumericPath(enrichment, ["affordable_housing_summary", "projectCount"])),
+    detailItem("Total units", readNumericPath(enrichment, ["affordable_housing_summary", "totalUnits"])),
+    detailItem("Latest project", readStringPath(enrichment, ["affordable_housing_summary", "latestProjectName"])),
+  ], [
+    detailItem("Start", readStringPath(enrichment, ["affordable_housing_summary", "latestProjectStartDate"])),
+    detailItem("Completion", readStringPath(enrichment, ["affordable_housing_summary", "latestProjectCompletionDate"])),
+    detailItem("By band", isPlainRecord(enrichment.affordable_housing_summary) ? enrichment.affordable_housing_summary.totalAffordableByBand : null),
+  ]);
+
+  const rentalUnits = Array.isArray(rentalFinancials?.rentalUnits) ? rentalFinancials.rentalUnits : [];
+  const omRentRoll = Array.isArray(omAnalysis.rentRoll) ? omAnalysis.rentRoll : [];
+  const authoritativeRentRoll = Array.isArray(authoritativeOm.rentRoll) ? authoritativeOm.rentRoll : [];
+  const rentalItems = compactItems([
+    detailItem("Rental flow status", readPipelineState(details).rentalFlowStatus),
+    detailItem("Rental source", rentalFinancials?.source),
+    detailItem("Rental units", rentalUnits.length || null),
+    detailItem("OM rent roll rows", authoritativeRentRoll.length || omRentRoll.length || null),
+    detailItem("Gross rent", fromLlm.grossRentTotal, { format: "money" }),
+    detailItem("NOI", fromLlm.noi ?? readNumericPath(authoritativeOm, ["currentFinancials", "noi"]), { format: "money" }),
+    detailItem("Cap rate", fromLlm.capRate, { format: "percent" }),
+    detailItem("Last updated", rentalFinancials?.lastUpdatedAt),
+    detailItem("Data gaps", fromLlm.dataGapSuggestions),
+    detailItem("Rent notes", fromLlm.rentalEstimates),
+  ]);
+  addModule("rental_flow", "Rental Flow", rentalItems.slice(0, 6), rentalItems.slice(6));
+  addModule("om_analysis", "OM Analysis", [
+    detailItem("Status", details?.omData?.status),
+    detailItem("Processed", details?.omData?.lastProcessedAt),
+    detailItem("Income extracted", readNumericPath(authoritativeOm, ["coverage", "incomeStatementExtracted"])),
+    detailItem("Rent roll extracted", readNumericPath(authoritativeOm, ["coverage", "rentRollExtracted"])),
+  ], [
+    detailItem("Current NOI", readNumericPath(authoritativeOm, ["currentFinancials", "noi"]), { format: "money" }),
+    detailItem("Operating expenses", readNumericPath(authoritativeOm, ["currentFinancials", "operatingExpenses"]), { format: "money" }),
+    detailItem("Takeaways", authoritativeOm.investmentTakeaways ?? omAnalysis.investmentTakeaways),
+    detailItem("Validation flags", Array.isArray(authoritativeOm.validationFlags) ? authoritativeOm.validationFlags.length : null),
+  ]);
+  addModule("sourcing_update", "Sourcing Update", [
+    detailItem("Status", details?.sourcingUpdate?.status),
+    detailItem("Last evaluated", details?.sourcingUpdate?.lastEvaluatedAt),
+    detailItem("Summary", details?.sourcingUpdate?.summary),
+  ], (details?.sourcingUpdate?.changes ?? []).slice(0, 8).map((change) =>
+    detailItem(change.label || change.field, change.currentValue ?? change.changeType)
+  ));
+
+  return { modules, sourceItems, rentalItems };
+}
+
 function getCalculatedDealScore(row: PipelineBaseRow): number | null {
   const summary = getPropertyDossierSummary(row.details);
   const calculated = summary?.calculatedDealScore ?? summary?.dealScore ?? toFiniteNumber(row.latest_signal_deal_score);
@@ -811,6 +1112,25 @@ function getCalculatedDealScore(row: PipelineBaseRow): number | null {
       }
     : null;
   return resolveEffectiveDealScore(calculated ?? null, override);
+}
+
+function getCapRate(row: PipelineBaseRow): number | null {
+  const details = row.details;
+  const summary = getPropertyDossierSummary(details);
+  const noi =
+    summary?.adjustedNoi ??
+    summary?.currentNoi ??
+    readNumericPath(details, ["rentalFinancials", "fromLlm", "noi"]) ??
+    readNumericPath(details, ["omData", "authoritative", "currentFinancials", "noi"]) ??
+    toFiniteNumber(row.latest_signal_adjusted_noi) ??
+    toFiniteNumber(row.latest_signal_current_noi);
+  const explicit =
+    readNumericPath(details, ["rentalFinancials", "fromLlm", "capRate"]) ??
+    readNumericPath(details, ["dealDossier", "summary", "capRate"]);
+  if (explicit != null) return explicit;
+  const price = summary?.askingPrice ?? getAskingPrice(row);
+  if (noi == null || price == null || price <= 0) return null;
+  return (noi / price) * 100;
 }
 
 function buildUnderwriting(row: PipelineBaseRow): UiV2UnderwritingSummary | null {
@@ -831,6 +1151,7 @@ function buildUnderwriting(row: PipelineBaseRow): UiV2UnderwritingSummary | null
     askingPrice: summary?.askingPrice ?? assumptions?.purchasePrice ?? getAskingPrice(row),
     recommendedOfferLow: summary?.recommendedOfferLow ?? null,
     recommendedOfferHigh: summary?.recommendedOfferHigh ?? null,
+    capRate: getCapRate(row),
     targetIrrPct: summary?.targetIrrPct ?? assumptions?.targetIrrPct ?? null,
     irrPct: summary?.irrPct ?? toFiniteNumber(row.latest_signal_irr_pct),
     cocPct: summary?.cocPct ?? toFiniteNumber(row.latest_signal_coc_pct),
@@ -913,6 +1234,22 @@ function buildGallery(row: PipelineBaseRow): UiV2ImageAsset[] {
     }));
 }
 
+function deriveMarketType(row: PipelineBaseRow): UiV2MarketType {
+  const pipeline = readPipelineState(row.details);
+  const explicit = parseMarketType(pipeline.marketType);
+  if (explicit) return explicit;
+  const tags = pipeline.tags.map(normalizeTag);
+  if (tags.includes("on_market")) return "on_market";
+  if (tags.includes("off_market")) return "off_market";
+  const source = String(row.listing_source ?? pipeline.source ?? "").toLowerCase();
+  if (source === "streeteasy" || source === "loopnet" || source === "marcus_millichap" || source === "zillow") {
+    return "on_market";
+  }
+  if (source === "manual" || source === "other" || source === "nyc_api") return "off_market";
+  if (row.listing_url) return "on_market";
+  return "unknown";
+}
+
 function buildOverview(row: PipelineBaseRow): UiV2PropertyOverview {
   const addressParts = splitAddress(row.canonical_address);
   return {
@@ -925,6 +1262,7 @@ function buildOverview(row: PipelineBaseRow): UiV2PropertyOverview {
     state: row.listing_state ?? addressParts.state,
     zip: row.listing_zip ?? addressParts.zip,
     source: row.listing_source ?? readPipelineState(row.details).source,
+    marketType: deriveMarketType(row),
     listingUrl: row.listing_url ?? readStringPath(row.details, ["manualSourceLinks", "streetEasyUrl"]),
     askingPrice: getAskingPrice(row),
     units: getUnitCount(row),
@@ -962,6 +1300,7 @@ function buildPipelineRow(row: PipelineBaseRow): UiV2PipelineRow {
     askingPrice: overview.askingPrice,
     units: overview.units,
     buildingSqft: overview.buildingSqft,
+    marketType: overview.marketType,
     neighborhood: overview.neighborhood,
     borough: overview.borough,
     thumbnailUrl: gallery[0]?.thumbnailUrl ?? null,
@@ -1073,6 +1412,45 @@ function buildActivityTimeline(row: PipelineBaseRow, collections: DetailCollecti
   return items.sort((left, right) => right.createdAt.localeCompare(left.createdAt)).slice(0, 50);
 }
 
+function buildDocumentItems(row: PipelineBaseRow, collections: DetailCollections): UiV2PropertyDocumentItem[] {
+  const basePath = `/api/properties/${encodeURIComponent(row.property_id)}/documents`;
+  return [
+    ...collections.uploadedDocs.map((doc) => ({
+      id: doc.id,
+      fileName: doc.filename,
+      fileType: doc.contentType ?? null,
+      source: doc.source ?? doc.category,
+      sourceType: "uploaded" as const,
+      category: doc.category,
+      sourceUrl: doc.sourceUrl ?? null,
+      fileUrl: `${basePath}/${encodeURIComponent(doc.id)}/file`,
+      createdAt: doc.createdAt,
+    })),
+    ...collections.inquiryDocs.map((doc) => ({
+      id: doc.id,
+      fileName: doc.filename,
+      fileType: doc.contentType ?? null,
+      source: "Broker inquiry",
+      sourceType: "inquiry" as const,
+      category: looksLikeOmStyleFilename(doc.filename) ? "OM" : "Other",
+      sourceUrl: null,
+      fileUrl: `${basePath}/${encodeURIComponent(doc.id)}/file`,
+      createdAt: doc.createdAt,
+    })),
+    ...collections.generatedDocs.map((doc) => ({
+      id: doc.id,
+      fileName: doc.fileName,
+      fileType: doc.fileType ?? null,
+      source: doc.source,
+      sourceType: "generated" as const,
+      category: doc.source,
+      sourceUrl: null,
+      fileUrl: `${basePath}/${encodeURIComponent(doc.id)}/file`,
+      createdAt: doc.createdAt,
+    })),
+  ].sort((left, right) => String(right.createdAt ?? "").localeCompare(String(left.createdAt ?? "")));
+}
+
 function buildPropertyDetail(row: PipelineBaseRow, collections: DetailCollections, userId: string): UiV2PropertyDetailPayload {
   return {
     overview: buildOverview(row),
@@ -1081,7 +1459,9 @@ function buildPropertyDetail(row: PipelineBaseRow, collections: DetailCollection
     broker: buildBroker(row),
     tags: readPipelineState(row.details).tags,
     documentStatus: buildDocumentStatus(row, collections),
+    documents: buildDocumentItems(row, collections),
     enrichmentState: buildEnrichmentState(row),
+    enrichmentDetails: buildEnrichmentDetails(row),
     underwriting: buildUnderwriting(row),
     sourcingUpdate: row.details?.sourcingUpdate ?? null,
     activityTimeline: buildActivityTimeline(row, collections),
@@ -1272,18 +1652,35 @@ async function loadDetailCollections(pool: Pool, propertyId: string): Promise<De
   return { actionItems, uploadedDocs, inquiryDocs, generatedDocs, omRuns, pipelineEvents };
 }
 
+function mtrState(row: UiV2PipelineRow): "good" | "watch" | "none" {
+  const normalizedTags = row.tags.flatMap((tag) => {
+    const normalized = normalizeTag(tag);
+    return normalized == null ? [] : [normalized];
+  });
+  if (normalizedTags.includes("good_mtr_candidate")) return "good";
+  if (normalizedTags.some((tag) => tag.includes("mtr"))) return "watch";
+  return "none";
+}
+
 function filterRows(rows: UiV2PipelineRow[], query: ParsedPipelineQuery): UiV2PipelineRow[] {
   const q = query.q?.toLowerCase();
   const updatedSinceMs = query.updatedSince ? Date.parse(query.updatedSince) : Number.NaN;
   return rows.filter((row) => {
     const rowStatus = row.statusChip.status as UiV2PipelineStatus;
-    if (!query.includeRejected && rowStatus === "rejected" && !query.statuses.includes("rejected")) return false;
+    if (
+      !query.includeRejected &&
+      (rowStatus === "rejected" || rowStatus === "archived") &&
+      !query.statuses.includes(rowStatus)
+    ) {
+      return false;
+    }
     if (q) {
       const haystack = [
         row.canonicalAddress,
         row.displayAddress,
         row.source,
         row.statusChip.label,
+        row.marketType,
         row.neighborhood,
         row.borough,
         row.broker?.name,
@@ -1296,10 +1693,19 @@ function filterRows(rows: UiV2PipelineRow[], query: ParsedPipelineQuery): UiV2Pi
     if (query.statuses.length > 0 && !query.statuses.includes(rowStatus)) return false;
     if (query.sources.length > 0 && !query.sources.includes(String(row.source ?? "").toLowerCase())) return false;
     if (query.tags.length > 0 && !query.tags.some((tag) => row.tags.map(normalizeTag).includes(tag))) return false;
+    if (query.mtrStates.length > 0 && !query.mtrStates.includes(mtrState(row))) return false;
     if (query.neighborhoods.length > 0 && !query.neighborhoods.includes(String(row.neighborhood ?? "").toLowerCase())) return false;
     if (query.boroughs.length > 0 && !query.boroughs.includes(String(row.borough ?? "").toLowerCase())) return false;
+    if (query.marketTypes.length > 0 && !query.marketTypes.includes(row.marketType ?? "unknown")) return false;
+    if (
+      query.enrichmentStatuses.length > 0 &&
+      !query.enrichmentStatuses.includes(String(row.enrichmentState?.status ?? "missing").toLowerCase())
+    ) {
+      return false;
+    }
     if (query.hasOm != null && Boolean(row.documentStatus?.hasOm) !== query.hasOm) return false;
     if (query.hasBrokerContact != null && Boolean(row.broker?.email) !== query.hasBrokerContact) return false;
+    if (query.hasOpenActions != null && (Number(row.openActionItemCount ?? 0) > 0) !== query.hasOpenActions) return false;
     const score = row.underwriting?.dealScore ?? null;
     if (query.minDealScore != null && (score == null || score < query.minDealScore)) return false;
     if (query.maxDealScore != null && (score == null || score > query.maxDealScore)) return false;
@@ -1316,8 +1722,16 @@ function sortValue(row: UiV2PipelineRow, sortBy: UiV2PipelineSortField): string 
       return Date.parse(row.createdAt);
     case "canonicalAddress":
       return row.canonicalAddress.toLowerCase();
+    case "source":
+      return String(row.source ?? "").toLowerCase();
+    case "marketType":
+      return row.marketType ?? "unknown";
     case "askingPrice":
       return row.askingPrice ?? null;
+    case "units":
+      return row.units ?? null;
+    case "capRate":
+      return row.underwriting?.capRate ?? null;
     case "dealScore":
       return row.underwriting?.dealScore ?? null;
     case "status":
@@ -1351,8 +1765,15 @@ function buildPipelinePayload(baseRows: PipelineBaseRow[], query: ParsedPipeline
   const mappedRows = baseRows.map(buildPipelineRow);
   const filtered = filterRows(mappedRows, query);
   const sorted = sortRows(filtered, query);
+  const rows =
+    query.statuses.length > 0
+      ? sorted
+      : [
+          ...sorted.filter((row) => row.statusChip.status !== "rejected" && row.statusChip.status !== "archived"),
+          ...sorted.filter((row) => row.statusChip.status === "rejected" || row.statusChip.status === "archived"),
+        ];
   return {
-    rows: sorted.slice(query.offset, query.offset + query.limit),
+    rows: rows.slice(query.offset, query.offset + query.limit),
     total: filtered.length,
     limit: query.limit,
     offset: query.offset,

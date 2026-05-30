@@ -18,11 +18,17 @@ import type {
 
 export type UiV2SortDirection = "asc" | "desc";
 
+export type UiV2MarketType = "on_market" | "off_market" | "unknown";
+
 export type UiV2PipelineSortField =
   | "updatedAt"
   | "createdAt"
   | "canonicalAddress"
+  | "source"
+  | "marketType"
   | "askingPrice"
+  | "units"
+  | "capRate"
   | "dealScore"
   | "status"
   | "lastActivityAt"
@@ -151,7 +157,7 @@ export const UI_V2_PIPELINE_STATUS_OPTIONS = [
   },
   {
     status: "outreach",
-    label: "Outreach",
+    label: "OM Requested",
     tone: "info",
     editable: true,
     description: "Broker outreach is queued, drafted, or underway.",
@@ -402,10 +408,14 @@ export interface UiV2PipelineQuery extends UiV2PaginationQuery {
   status?: UiV2PipelineStatus | UiV2PipelineStatus[];
   source?: ListingSource | ListingSource[];
   tag?: string | string[];
+  mtr?: string | string[];
   neighborhood?: string | string[];
   borough?: string | string[];
+  marketType?: UiV2MarketType | UiV2MarketType[];
+  enrichmentStatus?: string | string[];
   hasOm?: boolean;
   hasBrokerContact?: boolean;
+  hasOpenActions?: boolean;
   includeRejected?: boolean;
   minDealScore?: number;
   maxDealScore?: number;
@@ -460,6 +470,18 @@ export interface UiV2DocumentStatus {
   lastUpdatedAt?: string | null;
 }
 
+export interface UiV2PropertyDocumentItem {
+  id: string;
+  fileName: string;
+  fileType?: string | null;
+  source?: string | null;
+  sourceType: "inquiry" | "uploaded" | "generated";
+  category?: PropertyDocumentCategory | string | null;
+  sourceUrl?: string | null;
+  fileUrl: string;
+  createdAt?: string | null;
+}
+
 export interface UiV2EnrichmentState {
   status: "not_started" | "queued" | "running" | "partial" | "complete" | "failed";
   completedKeys?: string[];
@@ -469,12 +491,34 @@ export interface UiV2EnrichmentState {
   errorMessage?: string | null;
 }
 
+export interface UiV2DetailItem {
+  label: string;
+  value?: string | number | boolean | null;
+  href?: string | null;
+  tone?: UiV2StatusChipTone;
+}
+
+export interface UiV2EnrichmentModuleDetail {
+  key: string;
+  label: string;
+  status?: UiV2EnrichmentState["status"] | "available" | "missing" | "review" | string | null;
+  summaryItems?: UiV2DetailItem[];
+  detailItems?: UiV2DetailItem[];
+}
+
+export interface UiV2EnrichmentDetailPayload {
+  modules: UiV2EnrichmentModuleDetail[];
+  sourceItems?: UiV2DetailItem[];
+  rentalItems?: UiV2DetailItem[];
+}
+
 export interface UiV2UnderwritingSummary {
   generationStatus?: PropertyDealDossierGenerationStatus | null;
   dealScore?: number | null;
   askingPrice?: number | null;
   recommendedOfferLow?: number | null;
   recommendedOfferHigh?: number | null;
+  capRate?: number | null;
   targetIrrPct?: number | null;
   irrPct?: number | null;
   cocPct?: number | null;
@@ -521,6 +565,7 @@ export interface UiV2PipelineRow {
   askingPrice?: number | null;
   units?: number | null;
   buildingSqft?: number | null;
+  marketType?: UiV2MarketType | null;
   neighborhood?: string | null;
   borough?: string | null;
   thumbnailUrl?: string | null;
@@ -553,6 +598,7 @@ export interface UiV2PropertyOverview {
   state?: string | null;
   zip?: string | null;
   source?: ListingSource | string | null;
+  marketType?: UiV2MarketType | null;
   listingUrl?: string | null;
   askingPrice?: number | null;
   units?: number | null;
@@ -572,7 +618,9 @@ export interface UiV2PropertyDetailPayload {
   availableActions?: UiV2PropertyAction[];
   tags: string[];
   documentStatus: UiV2DocumentStatus;
+  documents?: UiV2PropertyDocumentItem[];
   enrichmentState: UiV2EnrichmentState;
+  enrichmentDetails?: UiV2EnrichmentDetailPayload | null;
   underwriting: UiV2UnderwritingSummary | null;
   sourcingUpdate?: PropertySourcingUpdate | null;
   activityTimeline: UiV2ActivityTimelineItem[];
@@ -636,6 +684,7 @@ export interface UiV2ManualEntryImportInput {
   askingPrice?: number | null;
   units?: number | null;
   neighborhood?: string | null;
+  marketType?: UiV2MarketType | null;
   source?: ListingSource | string | null;
   ownerName?: string | null;
   broker?: UiV2BrokerOverwriteInput | null;
@@ -701,9 +750,16 @@ export type UiV2ImportJobInput =
       input: UiV2SavedSearchRunInput;
     };
 
+export interface UiV2CrmRelatedProperty {
+  propertyId: string;
+  canonicalAddress?: string | null;
+  displayAddress?: string | null;
+}
+
 export interface UiV2CrmContactPayload {
   contact: BrokerContact;
   relatedPropertyIds?: string[];
+  relatedProperties?: UiV2CrmRelatedProperty[];
   openActionItemCount?: number;
   lastActivityAt?: string | null;
 }
@@ -727,6 +783,23 @@ export interface UiV2OutreachComposerPayload {
   warnings?: string[];
 }
 
+export interface UiV2OutreachTemplatePayload {
+  id: string;
+  name: string;
+  subject: string;
+  body: string;
+  createdBy?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface UiV2OutreachTemplateInput {
+  id?: string | null;
+  name: string;
+  subject: string;
+  body: string;
+}
+
 export interface UiV2OutreachDraftInput {
   propertyId: string;
   contactId?: string | null;
@@ -734,6 +807,9 @@ export interface UiV2OutreachDraftInput {
   subject: string;
   body: string;
   followUpAt?: string | null;
+  templateId?: string | null;
+  templateName?: string | null;
+  force?: boolean;
 }
 
 export interface UiV2OutreachDraftPayload {
@@ -745,8 +821,18 @@ export interface UiV2OutreachDraftPayload {
   body: string;
   status: UiV2OutreachDraftStatus;
   followUpAt?: string | null;
+  templateId?: string | null;
+  templateName?: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface UiV2OutreachSendNowPayload {
+  draft: UiV2OutreachDraftPayload;
+  batchId: string;
+  messageId: string;
+  threadId?: string | null;
+  sentAt: string;
 }
 
 export interface UiV2OutreachFollowUpActionInput {

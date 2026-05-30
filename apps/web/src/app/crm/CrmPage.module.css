@@ -1,8 +1,9 @@
 .page {
   min-height: calc(100vh - 9rem);
+  width: min(100%, 1640px);
+  margin: 0 auto;
   color: #17211c;
-  font-family:
-    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: inherit;
 }
 
 .header {
@@ -44,6 +45,7 @@
 .searchInput,
 .formGrid input,
 .formGrid textarea,
+.stackForm select,
 .stackForm input,
 .stackForm textarea {
   width: 100%;
@@ -61,6 +63,7 @@
 .searchInput:focus,
 .formGrid input:focus,
 .formGrid textarea:focus,
+.stackForm select:focus,
 .stackForm input:focus,
 .stackForm textarea:focus {
   border-color: #397760;
@@ -137,7 +140,7 @@
 
 .table {
   width: 100%;
-  min-width: 1120px;
+  min-width: 60rem;
   border-collapse: collapse;
   font-size: 0.86rem;
 }
@@ -563,6 +566,17 @@
   gap: 0.7rem;
 }
 
+.templateToolbar {
+  display: grid;
+  grid-template-columns: minmax(10rem, 1fr) minmax(10rem, 1fr) auto auto;
+  align-items: end;
+  gap: 0.55rem;
+  border: 1px solid #e0e7e3;
+  border-radius: 8px;
+  background: #f7faf8;
+  padding: 0.65rem;
+}
+
 .formGrid label,
 .stackForm label {
   display: grid;
@@ -615,7 +629,8 @@
 
   .metrics,
   .detailGrid,
-  .formGrid {
+  .formGrid,
+  .templateToolbar {
     grid-template-columns: 1fr;
   }
 

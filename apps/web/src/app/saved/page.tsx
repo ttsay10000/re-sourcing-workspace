@@ -91,6 +91,27 @@ function labelFromKey(value: string | null | undefined): string {
     .join(" ");
 }
 
+function normalizeTag(value: string): string {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_");
+}
+
+function tagClass(tag: string): string {
+  const normalized = normalizeTag(tag);
+  if (["high_priority", "mtr_candidate", "tax_advantage", "below_replacement"].includes(normalized)) {
+    return `${styles.tagChip} ${styles.tagOpportunity}`;
+  }
+  if (["broker_relationship", "follow_up", "partner_review", "toured"].includes(normalized)) {
+    return `${styles.tagChip} ${styles.tagRelationship}`;
+  }
+  if (["needs_om", "needs_rent_roll", "needs_city_data", "om_requested"].includes(normalized)) {
+    return `${styles.tagChip} ${styles.tagAction}`;
+  }
+  if (["distressed_seller", "rent_stab_risk", "duplicate", "rejected"].includes(normalized)) {
+    return `${styles.tagChip} ${styles.tagRisk}`;
+  }
+  return `${styles.tagChip} ${styles.tagNeutral}`;
+}
+
 function statusClass(status: string | null | undefined): string {
   if (status === "rejected") return `${styles.statusPill} ${styles.statusDanger}`;
   if (status === "saved" || status === "om_received" || status === "dossier_generated") {
@@ -301,9 +322,9 @@ export default function SavedPage() {
                             {row.tags && row.tags.length > 0 ? (
                               <div className={styles.tags}>
                                 {row.tags.slice(0, 3).map((tag) => (
-                                  <span key={tag}>{labelFromKey(tag)}</span>
+                                  <span className={tagClass(tag)} key={tag}>{labelFromKey(tag)}</span>
                                 ))}
-                                {row.tags.length > 3 ? <span>+{row.tags.length - 3}</span> : null}
+                                {row.tags.length > 3 ? <span className={styles.tagChip}>+{row.tags.length - 3}</span> : null}
                               </div>
                             ) : null}
                           </div>

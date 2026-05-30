@@ -69,7 +69,6 @@ const NAV_LINKS: NavLink[] = [
       section !== "saved-deals",
   },
 ];
-const ROOT_REDIRECT_PATH = "/pipeline";
 const API_BASE = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000").replace(/\/$/, "");
 
 type AuthStatus = "checking" | "locked" | "unlocking" | "authenticated";
@@ -168,11 +167,6 @@ export function AppShell({ children }: { children: ReactNode }) {
   useEffect(() => {
     void checkSiteAuth();
   }, [checkSiteAuth]);
-
-  useEffect(() => {
-    if (authStatus !== "authenticated" || pathname !== "/") return;
-    router.replace(`${ROOT_REDIRECT_PATH}${window.location.search}${window.location.hash}`);
-  }, [authStatus, pathname, router]);
 
   const handleUnlock = useCallback(
     async (event: FormEvent<HTMLFormElement>) => {
@@ -303,10 +297,10 @@ export function AppShell({ children }: { children: ReactNode }) {
     <div className={`app-shell ${sidebarCollapsed ? "app-shell--sidebar-collapsed" : ""}`}>
       <aside className="app-sidebar" aria-label="Workspace navigation">
         <Link href="/" className="app-sidebar-brand" aria-label="Real Estate Sourcing Flow home">
-          <span className="app-sidebar-mark">RE</span>
+          <span className="app-sidebar-mark">SO</span>
           <span className="app-sidebar-brand-text">
-            <span>Sourcing Flow</span>
-            <small>Workspace</small>
+            <span>Sourcing OS</span>
+            <small>Manhattan MF</small>
           </span>
         </Link>
 

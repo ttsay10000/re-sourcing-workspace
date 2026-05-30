@@ -56,6 +56,23 @@ function parseScoringPreferences(value: unknown): DealScoringPreferences | null 
   };
 }
 
+function extractImageUrl(value: unknown): string | null {
+  if (typeof value === "string" && /^https?:\/\//i.test(value.trim())) return value.trim();
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  return extractImageUrl(record.url) ?? extractImageUrl(record.src) ?? extractImageUrl(record.href);
+}
+
+function getFirstListingImage(listing: { imageUrls?: string[] | null; extra?: unknown } | null): string | null {
+  const listingImage = listing?.imageUrls?.map(extractImageUrl).find((url): url is string => Boolean(url));
+  if (listingImage) return listingImage;
+  const extra = listing?.extra;
+  if (!extra || typeof extra !== "object" || Array.isArray(extra)) return null;
+  const extraImages = (extra as Record<string, unknown>).images;
+  if (!Array.isArray(extraImages)) return null;
+  return extraImages.map(extractImageUrl).find((url): url is string => Boolean(url)) ?? null;
+}
+
 /** GET /api/profile - get the single user profile (creates default row if none). */
 router.get("/profile", async (_req: Request, res: Response) => {
   try {
@@ -277,6 +294,7 @@ router.get("/profile/saved-deals", async (_req: Request, res: Response) => {
       price: number | null;
       units: number | null;
       dealScore: number | null;
+      imageUrl: string | null;
     }> = [];
     for (const row of saved) {
       const property = await propertyRepo.byId(row.propertyId);
@@ -304,6 +322,7 @@ router.get("/profile/saved-deals", async (_req: Request, res: Response) => {
         price,
         units,
         dealScore: dossierReady ? resolveEffectiveDealScore(calculatedDealScore, scoreOverride) : null,
+        imageUrl: getFirstListingImage(listing),
       });
     }
     res.json({ savedDeals: results });

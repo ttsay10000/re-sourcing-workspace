@@ -126,6 +126,12 @@ function sourceFromManualInput(value: unknown): ListingSource {
   return source && LISTING_SOURCES.has(source as ListingSource) ? (source as ListingSource) : "manual";
 }
 
+function marketTypeFromManualInput(value: unknown): "on_market" | "off_market" | "unknown" | null {
+  const marketType = cleanString(value, 80);
+  if (marketType === "on_market" || marketType === "off_market" || marketType === "unknown") return marketType;
+  return null;
+}
+
 function isHttpUrl(value: string): boolean {
   try {
     const parsed = new URL(value);
@@ -336,6 +342,7 @@ function buildDetailsMerge(params: {
   const pipeline = isRecord(detailRecord.pipeline) ? detailRecord.pipeline : {};
   const existingTags = Array.isArray(pipeline.tags) ? pipeline.tags.map((tag) => normalizeTag(tag)) : [];
   const inputTags = params.manualInput?.tags?.map((tag) => normalizeTag(tag)) ?? [];
+  const marketType = marketTypeFromManualInput(params.manualInput?.marketType);
   const sourceLinks = {
     ...(isRecord(pipeline.sourceLinks) ? pipeline.sourceLinks : {}),
     ...(params.sourceUrl ? { listingUrl: params.sourceUrl } : {}),
@@ -352,8 +359,9 @@ function buildDetailsMerge(params: {
       status: typeof pipeline.status === "string" ? pipeline.status : "new_sourced",
       uiV2Status: typeof pipeline.uiV2Status === "string" ? pipeline.uiV2Status : "new",
       source: params.sourceLabel,
+      ...(marketType ? { marketType } : {}),
       sourceLinks,
-      tags: uniqueStrings([...existingTags, ...inputTags]),
+      tags: uniqueStrings([...existingTags, ...inputTags, marketType]),
       lastActivityAt: now,
     },
     importV2: {

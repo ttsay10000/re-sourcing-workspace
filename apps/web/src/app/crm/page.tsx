@@ -8,16 +8,19 @@ import type {
   UiV2BrokerBlock,
   UiV2CrmContactPayload,
   UiV2CrmListPayload,
+  UiV2CrmRelatedProperty,
   UiV2OutreachComposerPayload,
   UiV2OutreachDraftPayload,
   UiV2OutreachFollowUpActionPayload,
+  UiV2OutreachSendNowPayload,
+  UiV2OutreachTemplatePayload,
   UiV2PropertyDetailPayload,
 } from "@re-sourcing/contracts";
 import styles from "./CrmPage.module.css";
 
 const API_BASE = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000").replace(/\/$/, "");
 const CRM_LIMIT = 100;
-const PROPERTY_LABEL_PREFETCH_LIMIT = 36;
+const PROPERTY_LABEL_PREFETCH_LIMIT = 200;
 
 type NoticeType = "success" | "error" | "info";
 
@@ -69,6 +72,14 @@ interface FollowUpResponse {
   followUp: UiV2OutreachFollowUpActionPayload;
 }
 
+interface OutreachTemplatesResponse {
+  templates: UiV2OutreachTemplatePayload[];
+}
+
+interface OutreachTemplateResponse {
+  template: UiV2OutreachTemplatePayload;
+}
+
 type PanelState =
   | { type: "contact"; contactPayload: UiV2CrmContactPayload; notice?: Notice }
   | {
@@ -93,11 +104,20 @@ interface DraftFormState {
   subject: string;
   body: string;
   followUpAt: string;
+  templateId: string;
+  templateName: string;
 }
 
 interface FollowUpFormState {
   followUpAt: string;
   note: string;
+}
+
+interface RelatedPropertyItem {
+  propertyId: string;
+  label: string;
+  canonicalAddress?: string | null;
+  displayAddress?: string | null;
 }
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
@@ -129,6 +149,26 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
 function compactPropertyId(propertyId: string): string {
   if (propertyId.length <= 10) return propertyId;
   return `${propertyId.slice(0, 6)}...${propertyId.slice(-4)}`;
+}
+
+function shortPropertyAddress(value: string | null | undefined): string | null {
+  const firstLine = value?.split(",")[0]?.trim();
+  if (!firstLine) return null;
+  return firstLine
+    .replace(/\bWest (?=\d)/gi, "W ")
+    .replace(/\bEast (?=\d)/gi, "E ")
+    .replace(/\bNorth (?=\d)/gi, "N ")
+    .replace(/\bSouth (?=\d)/gi, "S ")
+    .replace(/\bStreet\b/gi, "St")
+    .replace(/\bAvenue\b/gi, "Ave")
+    .replace(/\bBoulevard\b/gi, "Blvd")
+    .replace(/\bPlace\b/gi, "Pl")
+    .replace(/\bRoad\b/gi, "Rd")
+    .replace(/\s+/g, " ");
+}
+
+function propertyLabelFromRelated(property: UiV2CrmRelatedProperty | undefined, fallbackId: string): string {
+  return shortPropertyAddress(property?.displayAddress) ?? shortPropertyAddress(property?.canonicalAddress) ?? compactPropertyId(fallbackId);
 }
 
 function displayBrokerName(contact: BrokerContact | null | undefined, fallback = "Unnamed broker"): string {
@@ -242,9 +282,42 @@ function dateTimeLocalToIso(value: string): string | null {
   return Number.isNaN(date.getTime()) ? value : date.toISOString();
 }
 
+function emptyDraftForm(): DraftFormState {
+  return {
+    toAddress: "",
+    subject: "",
+    body: "",
+    followUpAt: "",
+    templateId: "",
+    templateName: "",
+  };
+}
+
+function firstName(value: string | null | undefined): string {
+  return value?.trim().split(/\s+/)[0] ?? "";
+}
+
+function renderTemplateText(
+  value: string,
+  context: { address?: string | null; brokerName?: string | null; firm?: string | null }
+): string {
+  const replacements: Record<string, string> = {
+    address: context.address || "the property",
+    broker_name: context.brokerName || "",
+    broker_first_name: firstName(context.brokerName) || "there",
+    firm: context.firm || "",
+  };
+  return value.replace(/\{\{\s*(address|broker_name|broker_first_name|firm)\s*\}\}/gi, (_match, key: string) => {
+    return replacements[key.toLowerCase()] ?? "";
+  });
+}
+
 function uniquePropertyIds(contacts: UiV2CrmContactPayload[]): string[] {
   const seen = new Set<string>();
   for (const payload of contacts) {
+    for (const property of payload.relatedProperties ?? []) {
+      if (property.propertyId) seen.add(property.propertyId);
+    }
     for (const propertyId of payload.relatedPropertyIds ?? []) {
       if (propertyId) seen.add(propertyId);
     }
@@ -253,7 +326,168 @@ function uniquePropertyIds(contacts: UiV2CrmContactPayload[]): string[] {
 }
 
 function firstRelatedProperty(payload: UiV2CrmContactPayload): string | null {
+  const propertyFromPayload = payload.relatedProperties?.find((property) => Boolean(property.propertyId))?.propertyId;
+  if (propertyFromPayload) return propertyFromPayload;
   return payload.relatedPropertyIds?.find(Boolean) ?? null;
+}
+
+function relatedPropertyItems(
+  payload: UiV2CrmContactPayload,
+  propertyLabels: Record<string, string>
+): RelatedPropertyItem[] {
+  const byId = new Map<string, RelatedPropertyItem>();
+  for (const property of payload.relatedProperties ?? []) {
+    if (!property.propertyId) continue;
+    byId.set(property.propertyId, {
+      propertyId: property.propertyId,
+      canonicalAddress: property.canonicalAddress,
+      displayAddress: property.displayAddress,
+      label: propertyLabelFromRelated(property, property.propertyId),
+    });
+  }
+  for (const propertyId of payload.relatedPropertyIds ?? []) {
+    if (!propertyId || byId.has(propertyId)) continue;
+    byId.set(propertyId, {
+      propertyId,
+      label: shortPropertyAddress(propertyLabels[propertyId]) ?? propertyLabels[propertyId] ?? compactPropertyId(propertyId),
+    });
+  }
+  return [...byId.values()];
+}
+
+function normalizeCrmContactPayload(value: unknown): UiV2CrmContactPayload | null {
+  const record = readRecord(value);
+  const contactRecord = readRecord(record.contact ?? value);
+  const id = String(contactRecord.id ?? record.id ?? "");
+  if (!id) return null;
+  const now = new Date().toISOString();
+  const relatedProperties = Array.isArray(record.relatedProperties)
+    ? record.relatedProperties
+        .map((property) => {
+          const propertyRecord = readRecord(property);
+          const propertyId = String(propertyRecord.propertyId ?? propertyRecord.id ?? "");
+          if (!propertyId) return null;
+          const label = typeof propertyRecord.label === "string" ? propertyRecord.label : null;
+          return {
+            propertyId,
+            canonicalAddress: typeof propertyRecord.canonicalAddress === "string" ? propertyRecord.canonicalAddress : label,
+            displayAddress: typeof propertyRecord.displayAddress === "string" ? propertyRecord.displayAddress : label,
+          };
+        })
+        .filter(Boolean) as UiV2CrmRelatedProperty[]
+    : [];
+  const contact: BrokerContact = {
+    id,
+    normalizedEmail: typeof contactRecord.normalizedEmail === "string"
+      ? contactRecord.normalizedEmail
+      : typeof contactRecord.email === "string"
+        ? contactRecord.email.toLowerCase()
+        : null,
+    sourceKey: typeof contactRecord.sourceKey === "string" ? contactRecord.sourceKey : null,
+    displayName: typeof contactRecord.displayName === "string"
+      ? contactRecord.displayName
+      : typeof contactRecord.name === "string"
+        ? contactRecord.name
+        : null,
+    firm: typeof contactRecord.firm === "string" ? contactRecord.firm : null,
+    phone: typeof contactRecord.phone === "string" ? contactRecord.phone : null,
+    source: typeof contactRecord.source === "string" ? contactRecord.source : typeof record.source === "string" ? record.source : null,
+    sourceMetadata: readRecord(contactRecord.sourceMetadata),
+    preferredThreadId: typeof contactRecord.preferredThreadId === "string" ? contactRecord.preferredThreadId : null,
+    lastOutreachAt: typeof contactRecord.lastOutreachAt === "string" ? contactRecord.lastOutreachAt : null,
+    lastReplyAt: typeof contactRecord.lastReplyAt === "string" ? contactRecord.lastReplyAt : null,
+    doNotContactUntil: typeof contactRecord.doNotContactUntil === "string" ? contactRecord.doNotContactUntil : null,
+    manualReviewOnly: contactRecord.manualReviewOnly === true,
+    notes: typeof contactRecord.notes === "string" ? contactRecord.notes : null,
+    activitySummary: readRecord(contactRecord.activitySummary),
+    manualOverwrittenAt: typeof contactRecord.manualOverwrittenAt === "string" ? contactRecord.manualOverwrittenAt : null,
+    manualOverwrittenBy: typeof contactRecord.manualOverwrittenBy === "string" ? contactRecord.manualOverwrittenBy : null,
+    createdAt: typeof contactRecord.createdAt === "string" ? contactRecord.createdAt : now,
+    updatedAt: typeof contactRecord.updatedAt === "string" ? contactRecord.updatedAt : now,
+  };
+  return {
+    contact,
+    relatedPropertyIds: Array.isArray(record.relatedPropertyIds) ? record.relatedPropertyIds.map(String) : relatedProperties.map((property) => property.propertyId),
+    relatedProperties,
+    openActionItemCount: Number(record.openActionItemCount ?? record.openActionCount ?? 0),
+    lastActivityAt: typeof record.lastActivityAt === "string" ? record.lastActivityAt : null,
+  };
+}
+
+function normalizeCrmListPayload(payload: unknown): UiV2CrmListPayload {
+  const root = readRecord(payload);
+  const crm = readRecord(root.crm ?? payload);
+  const contacts = Array.isArray(crm.contacts)
+    ? crm.contacts.map(normalizeCrmContactPayload).filter(Boolean) as UiV2CrmContactPayload[]
+    : [];
+  const summary = readRecord(crm.summary);
+  return {
+    contacts,
+    total: Number(crm.total ?? summary.contacts ?? contacts.length),
+    limit: Number(crm.limit ?? CRM_LIMIT),
+    offset: Number(crm.offset ?? 0),
+  };
+}
+
+function normalizePropertyBrokerPayload(
+  payload: unknown,
+  detail: UiV2PropertyDetailPayload | null
+): PropertyBrokerPayload {
+  const record = readRecord(payload);
+  const propertyRecord = readRecord(record.property);
+  const brokerRecord = readRecord(record.broker ?? propertyRecord.broker ?? detail?.broker);
+  const broker = Object.keys(brokerRecord).length > 0
+    ? {
+        contactId: typeof brokerRecord.contactId === "string" ? brokerRecord.contactId : null,
+        name: typeof brokerRecord.name === "string" ? brokerRecord.name : null,
+        email: typeof brokerRecord.email === "string" ? brokerRecord.email : null,
+        phone: typeof brokerRecord.phone === "string" ? brokerRecord.phone : null,
+        firm: typeof brokerRecord.firm === "string" ? brokerRecord.firm : null,
+        source: typeof brokerRecord.source === "string" ? brokerRecord.source : null,
+        overwrittenAt: typeof brokerRecord.overwrittenAt === "string" ? brokerRecord.overwrittenAt : null,
+        overwrittenBy: typeof brokerRecord.overwrittenBy === "string" ? brokerRecord.overwrittenBy : null,
+        notes: typeof brokerRecord.notes === "string" ? brokerRecord.notes : null,
+      }
+    : null;
+  return {
+    broker,
+    candidates: Array.isArray(record.candidates) ? record.candidates as BrokerCandidate[] : [],
+    resolution: record.resolution ? readRecord(record.resolution) as unknown as RecipientResolution : null,
+    contact: record.contact ? readRecord(record.contact) as unknown as BrokerContact : null,
+    listingAgents: Array.isArray(record.listingAgents) ? record.listingAgents as BrokerCandidate[] : [],
+    manualOverride: Object.keys(readRecord(record.manualOverride)).length > 0 ? readRecord(record.manualOverride) : null,
+    openActionItemCount: Number(record.openActionItemCount ?? readRecord(propertyRecord.flow).openActionItemCount ?? 0),
+    lastActivityAt: typeof record.lastActivityAt === "string" ? record.lastActivityAt : null,
+  };
+}
+
+function normalizeComposerPayload(
+  payload: unknown,
+  fallbackBroker?: UiV2BrokerBlock | null
+): UiV2OutreachComposerPayload {
+  const root = readRecord(payload);
+  const composer = readRecord(root.composer ?? payload);
+  const broker = readRecord(composer.broker ?? fallbackBroker);
+  const normalizedBroker = Object.keys(broker).length > 0
+    ? {
+        contactId: typeof broker.contactId === "string" ? broker.contactId : null,
+        name: typeof broker.name === "string" ? broker.name : null,
+        email: typeof broker.email === "string" ? broker.email : null,
+        phone: typeof broker.phone === "string" ? broker.phone : null,
+        firm: typeof broker.firm === "string" ? broker.firm : null,
+        source: typeof broker.source === "string" ? broker.source : null,
+        notes: typeof broker.notes === "string" ? broker.notes : null,
+      }
+    : null;
+  return {
+    propertyId: typeof composer.propertyId === "string" ? composer.propertyId : "",
+    broker: normalizedBroker,
+    suggestedRecipients: Array.isArray(composer.suggestedRecipients) ? composer.suggestedRecipients as UiV2CrmContactPayload[] : [],
+    subject: typeof composer.subject === "string" ? composer.subject : "",
+    body: typeof composer.body === "string" ? composer.body : "",
+    followUpAt: typeof composer.followUpAt === "string" ? composer.followUpAt : null,
+    warnings: Array.isArray(composer.warnings) ? composer.warnings.map(String) : [],
+  };
 }
 
 function classNames(...values: Array<string | false | null | undefined>): string {
@@ -280,9 +514,14 @@ function CrmPageContent() {
   const [brokerForm, setBrokerForm] = useState<BrokerFormState>(brokerToForm(null));
   const [savingBroker, setSavingBroker] = useState(false);
   const [composer, setComposer] = useState<UiV2OutreachComposerPayload | null>(null);
-  const [draftForm, setDraftForm] = useState<DraftFormState>({ toAddress: "", subject: "", body: "", followUpAt: "" });
+  const [draftForm, setDraftForm] = useState<DraftFormState>(emptyDraftForm());
   const [loadingComposer, setLoadingComposer] = useState(false);
   const [savingDraft, setSavingDraft] = useState(false);
+  const [sendingDraft, setSendingDraft] = useState(false);
+  const [templates, setTemplates] = useState<UiV2OutreachTemplatePayload[]>([]);
+  const [loadingTemplates, setLoadingTemplates] = useState(false);
+  const [savingTemplate, setSavingTemplate] = useState(false);
+  const [deletingTemplate, setDeletingTemplate] = useState(false);
   const [followUpForm, setFollowUpForm] = useState<FollowUpFormState>({
     followUpAt: defaultFollowUpLocal(),
     note: "",
@@ -301,8 +540,9 @@ function CrmPageContent() {
       setError(null);
       try {
         const data = await apiFetch<CrmResponse>(`/api/ui-v2/crm?${params.toString()}`, { signal });
-        setContacts(data.crm.contacts ?? []);
-        setTotal(Number(data.crm.total ?? 0));
+        const crm = normalizeCrmListPayload(data);
+        setContacts(crm.contacts);
+        setTotal(Number(crm.total ?? 0));
       } catch (err) {
         if (err instanceof DOMException && err.name === "AbortError") return;
         setError(err instanceof Error ? err.message : "Failed to load CRM contacts.");
@@ -321,6 +561,19 @@ function CrmPageContent() {
     return () => controller.abort();
   }, [loadCrm]);
 
+  useEffect(() => {
+    const labelsFromPayload: Record<string, string> = {};
+    for (const payload of contacts) {
+      for (const property of payload.relatedProperties ?? []) {
+        if (!property.propertyId) continue;
+        labelsFromPayload[property.propertyId] = propertyLabelFromRelated(property, property.propertyId);
+      }
+    }
+    if (Object.keys(labelsFromPayload).length > 0) {
+      setPropertyLabels((prev) => ({ ...prev, ...labelsFromPayload }));
+    }
+  }, [contacts]);
+
   const visiblePropertyIds = useMemo(
     () => uniquePropertyIds(contacts).slice(0, PROPERTY_LABEL_PREFETCH_LIMIT),
     [contacts]
@@ -335,7 +588,10 @@ function CrmPageContent() {
         const data = await apiFetch<PropertyDetailResponse>(`/api/ui-v2/properties/${encodeURIComponent(propertyId)}`);
         return {
           propertyId,
-          label: data.property?.overview.displayAddress ?? data.property?.overview.canonicalAddress ?? compactPropertyId(propertyId),
+          label:
+            shortPropertyAddress(data.property?.overview.displayAddress) ??
+            shortPropertyAddress(data.property?.overview.canonicalAddress) ??
+            compactPropertyId(propertyId),
         };
       })
     ).then((results) => {
@@ -377,6 +633,22 @@ function CrmPageContent() {
     setPanel((current) => (current ? { ...current, notice } : current));
   }, []);
 
+  const loadTemplates = useCallback(async () => {
+    setLoadingTemplates(true);
+    try {
+      const data = await apiFetch<OutreachTemplatesResponse>("/api/ui-v2/outreach-templates");
+      setTemplates(data.templates ?? []);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load saved outreach drafts.");
+    } finally {
+      setLoadingTemplates(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadTemplates();
+  }, [loadTemplates]);
+
   const openContactPanel = useCallback((contactPayload: UiV2CrmContactPayload, notice?: Notice) => {
     setComposer(null);
     setPropertyDetail(null);
@@ -387,7 +659,7 @@ function CrmPageContent() {
   const openPropertyPanel = useCallback(
     (propertyId: string, contactPayload?: UiV2CrmContactPayload, notice?: Notice, options?: { composer?: boolean; followUp?: boolean }) => {
       setComposer(null);
-      setDraftForm({ toAddress: "", subject: "", body: "", followUpAt: "" });
+      setDraftForm(emptyDraftForm());
       setPropertyDetail(null);
       setPropertyBroker(null);
       setPropertyError(null);
@@ -404,6 +676,12 @@ function CrmPageContent() {
   );
 
   const activePropertyId = panel?.type === "property" ? panel.propertyId : null;
+  const activePropertyLabel = activePropertyId
+    ? propertyDetail?.overview.displayAddress ??
+      propertyDetail?.overview.canonicalAddress ??
+      propertyLabels[activePropertyId] ??
+      compactPropertyId(activePropertyId)
+    : "";
 
   useEffect(() => {
     if (!activePropertyId) return;
@@ -425,11 +703,12 @@ function CrmPageContent() {
       .then(([detailResponse, brokerResponse]) => {
         if (controller.signal.aborted) return;
         setPropertyDetail(detailResponse.property);
-        setPropertyBroker(brokerResponse);
-        setBrokerForm(brokerToForm(brokerResponse.broker));
+        const normalizedBroker = normalizePropertyBrokerPayload(brokerResponse, detailResponse.property);
+        setPropertyBroker(normalizedBroker);
+        setBrokerForm(brokerToForm(normalizedBroker.broker));
         const label =
-          detailResponse.property?.overview.displayAddress ??
-          detailResponse.property?.overview.canonicalAddress ??
+          shortPropertyAddress(detailResponse.property?.overview.displayAddress) ??
+          shortPropertyAddress(detailResponse.property?.overview.canonicalAddress) ??
           compactPropertyId(activePropertyId);
         setPropertyLabels((prev) => ({ ...prev, [activePropertyId]: label }));
       })
@@ -452,7 +731,8 @@ function CrmPageContent() {
         const data = await apiFetch<OutreachComposerResponse>(
           `/api/ui-v2/properties/${encodeURIComponent(propertyId)}/outreach-composer`
         );
-        const toAddress = data.composer.broker?.email ?? "";
+        const composerPayload = normalizeComposerPayload(data, propertyBroker?.broker);
+        const toAddress = composerPayload.broker?.email ?? "";
         if (!toAddress) {
           setPanelNotice({
             type: "info",
@@ -460,12 +740,14 @@ function CrmPageContent() {
           });
           return;
         }
-        setComposer(data.composer);
+        setComposer(composerPayload);
         setDraftForm({
           toAddress,
-          subject: data.composer.subject,
-          body: data.composer.body,
-          followUpAt: data.composer.followUpAt ? toDateTimeLocal(new Date(data.composer.followUpAt)) : "",
+          subject: composerPayload.subject,
+          body: composerPayload.body,
+          followUpAt: composerPayload.followUpAt ? toDateTimeLocal(new Date(composerPayload.followUpAt)) : "",
+          templateId: "",
+          templateName: "",
         });
       } catch (err) {
         setPanelNotice({
@@ -476,7 +758,7 @@ function CrmPageContent() {
         setLoadingComposer(false);
       }
     },
-    [setPanelNotice]
+    [propertyBroker?.broker, setPanelNotice]
   );
 
   useEffect(() => {
@@ -544,6 +826,98 @@ function CrmPageContent() {
     [activePropertyId, brokerForm, loadCrm, setPanelNotice]
   );
 
+  const templateContext = useMemo(
+    () => ({
+      address:
+        activePropertyLabel ||
+        propertyDetail?.overview.displayAddress ||
+        propertyDetail?.overview.canonicalAddress ||
+        null,
+      brokerName: propertyBroker?.broker?.name ?? brokerForm.name,
+      firm: propertyBroker?.broker?.firm ?? brokerForm.firm,
+    }),
+    [activePropertyLabel, brokerForm.firm, brokerForm.name, propertyBroker, propertyDetail]
+  );
+
+  const applyTemplate = useCallback(
+    (templateId: string) => {
+      const template = templates.find((item) => item.id === templateId);
+      if (!template) {
+        setDraftForm((prev) => ({ ...prev, templateId: "", templateName: "" }));
+        return;
+      }
+      setDraftForm((prev) => ({
+        ...prev,
+        templateId: template.id,
+        templateName: template.name,
+        subject: renderTemplateText(template.subject, templateContext),
+        body: renderTemplateText(template.body, templateContext),
+      }));
+    },
+    [templateContext, templates]
+  );
+
+  const handleSaveTemplate = useCallback(async () => {
+    const name = draftForm.templateName.trim();
+    if (!name) {
+      setPanelNotice({ type: "info", message: "Name this reusable draft before saving it globally." });
+      return;
+    }
+    setSavingTemplate(true);
+    try {
+      const data = await apiFetch<OutreachTemplateResponse>("/api/ui-v2/outreach-templates", {
+        method: "POST",
+        body: JSON.stringify({
+          id: draftForm.templateId || null,
+          name,
+          subject: draftForm.subject.trim(),
+          body: draftForm.body.trim(),
+          actorName: "crm",
+        }),
+      });
+      setTemplates((current) => {
+        const others = current.filter((template) => template.id !== data.template.id);
+        return [...others, data.template].sort((left, right) => left.name.localeCompare(right.name));
+      });
+      setDraftForm((prev) => ({
+        ...prev,
+        templateId: data.template.id,
+        templateName: data.template.name,
+      }));
+      setPanelNotice({ type: "success", message: "Reusable broker email draft saved globally." });
+    } catch (err) {
+      setPanelNotice({
+        type: "error",
+        message: err instanceof Error ? err.message : "Failed to save reusable draft.",
+      });
+    } finally {
+      setSavingTemplate(false);
+    }
+  }, [draftForm.body, draftForm.subject, draftForm.templateId, draftForm.templateName, setPanelNotice]);
+
+  const handleDeleteTemplate = useCallback(async () => {
+    const templateId = draftForm.templateId;
+    if (!templateId) return;
+    const templateName = draftForm.templateName || templates.find((template) => template.id === templateId)?.name || "this draft";
+    if (!window.confirm(`Remove "${templateName}" from global broker drafts?`)) return;
+    setDeletingTemplate(true);
+    try {
+      await apiFetch<{ ok: boolean }>(`/api/ui-v2/outreach-templates/${encodeURIComponent(templateId)}`, {
+        method: "DELETE",
+      });
+      setTemplates((current) => current.filter((template) => template.id !== templateId));
+      setDraftForm((prev) => ({ ...prev, templateId: "", templateName: "" }));
+      setPanelNotice({ type: "success", message: "Reusable draft removed." });
+    } catch (err) {
+      setPanelNotice({
+        type: "error",
+        message: err instanceof Error ? err.message : "Failed to remove reusable draft.",
+      });
+    } finally {
+      setDeletingTemplate(false);
+    }
+  }, [draftForm.templateId, draftForm.templateName, setPanelNotice, templates]);
+
   const handleSaveDraft = useCallback(
     async (event: FormEvent<HTMLFormElement>) => {
       event.preventDefault();
@@ -559,6 +933,8 @@ function CrmPageContent() {
             subject: draftForm.subject.trim(),
             body: draftForm.body.trim(),
             followUpAt: dateTimeLocalToIso(draftForm.followUpAt),
+            templateId: draftForm.templateId || null,
+            templateName: draftForm.templateName.trim() || null,
           }),
         });
         setPanelNotice({
@@ -577,6 +953,55 @@ function CrmPageContent() {
     },
     [activePropertyId, draftForm, loadCrm, propertyBroker, setPanelNotice]
   );
+
+  const handleSendDraftNow = useCallback(async () => {
+    if (!activePropertyId) return;
+    const toAddress = draftForm.toAddress.trim();
+    if (!toAddress || !draftForm.subject.trim() || !draftForm.body.trim()) {
+      setPanelNotice({ type: "info", message: "Add a recipient, subject, and body before sending." });
+      return;
+    }
+    if (!window.confirm(`Send this broker email now to ${toAddress}?`)) return;
+    const send = (force = false) =>
+      apiFetch<UiV2OutreachSendNowPayload>("/api/ui-v2/outreach-send-now", {
+        method: "POST",
+        body: JSON.stringify({
+          propertyId: activePropertyId,
+          contactId: propertyBroker?.broker?.contactId ?? propertyBroker?.contact?.id ?? null,
+          toAddress,
+          subject: draftForm.subject.trim(),
+          body: draftForm.body.trim(),
+          followUpAt: dateTimeLocalToIso(draftForm.followUpAt),
+          templateId: draftForm.templateId || null,
+          templateName: draftForm.templateName.trim() || null,
+          force,
+        }),
+      });
+
+    setSendingDraft(true);
+    try {
+      let data: UiV2OutreachSendNowPayload;
+      try {
+        data = await send(false);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Failed to send broker email.";
+        if (!message.includes("Use force") || !window.confirm(`${message} Send anyway?`)) throw err;
+        data = await send(true);
+      }
+      setPanelNotice({
+        type: "success",
+        message: `Email sent and logged at ${formatDateTime(data.sentAt)}.`,
+      });
+      await loadCrm();
+    } catch (err) {
+      setPanelNotice({
+        type: "error",
+        message: err instanceof Error ? err.message : "Failed to send broker email.",
+      });
+    } finally {
+      setSendingDraft(false);
+    }
+  }, [activePropertyId, draftForm, loadCrm, propertyBroker, setPanelNotice]);
 
   const handleScheduleFollowUp = useCallback(
     async (event: FormEvent<HTMLFormElement>) => {
@@ -655,13 +1080,6 @@ function CrmPageContent() {
     setPropertyBroker(null);
     setPropertyError(null);
   }, []);
-
-  const activePropertyLabel = activePropertyId
-    ? propertyDetail?.overview.displayAddress ??
-      propertyDetail?.overview.canonicalAddress ??
-      propertyLabels[activePropertyId] ??
-      compactPropertyId(activePropertyId)
-    : "";
 
   return (
     <div className={styles.page}>
@@ -752,7 +1170,7 @@ function CrmPageContent() {
                 contacts.map((payload) => {
                   const { contact } = payload;
                   const flags = contactFlags(contact);
-                  const related = payload.relatedPropertyIds ?? [];
+                  const related = relatedPropertyItems(payload, propertyLabels);
                   return (
                     <tr key={contact.id}>
                       <td>
@@ -776,13 +1194,13 @@ function CrmPageContent() {
                         <div className={styles.propertyChips}>
                           {related.slice(0, 3).map((propertyId) => (
                             <button
-                              key={propertyId}
+                              key={propertyId.propertyId}
                               className={styles.propertyChip}
                               type="button"
-                              title={propertyId}
-                              onClick={() => openPropertyPanel(propertyId, payload)}
+                              title={propertyId.canonicalAddress ?? propertyId.propertyId}
+                              onClick={() => openPropertyPanel(propertyId.propertyId, payload)}
                             >
-                              {propertyLabels[propertyId] ?? compactPropertyId(propertyId)}
+                              {propertyId.label}
                             </button>
                           ))}
                           {related.length > 3 ? <span className={styles.moreChip}>+{related.length - 3}</span> : null}
@@ -860,8 +1278,17 @@ function CrmPageContent() {
                 setDraftForm={setDraftForm}
                 loadingComposer={loadingComposer}
                 savingDraft={savingDraft}
+                sendingDraft={sendingDraft}
+                templates={templates}
+                loadingTemplates={loadingTemplates}
+                savingTemplate={savingTemplate}
+                deletingTemplate={deletingTemplate}
                 onLoadComposer={() => void loadComposer(panel.propertyId)}
                 onSaveDraft={handleSaveDraft}
+                onSendDraftNow={handleSendDraftNow}
+                onApplyTemplate={applyTemplate}
+                onSaveTemplate={() => void handleSaveTemplate()}
+                onDeleteTemplate={() => void handleDeleteTemplate()}
                 followUpForm={followUpForm}
                 setFollowUpForm={setFollowUpForm}
                 savingFollowUp={savingFollowUp}
@@ -892,6 +1319,7 @@ function ContactPanel({
 }) {
   const { contact } = payload;
   const flags = contactFlags(contact);
+  const related = relatedPropertyItems(payload, propertyLabels);
 
   return (
     <div className={styles.panelBody}>
@@ -947,13 +1375,18 @@ function ContactPanel({
       <section className={styles.panelSection}>
         <h3>Related properties</h3>
         <div className={styles.panelList}>
-          {(payload.relatedPropertyIds ?? []).map((propertyId) => (
-            <button key={propertyId} className={styles.panelListItem} type="button" onClick={() => onOpenProperty(propertyId)}>
-              <span>{propertyLabels[propertyId] ?? compactPropertyId(propertyId)}</span>
-              <small>{propertyId}</small>
+          {related.map((property) => (
+            <button
+              key={property.propertyId}
+              className={styles.panelListItem}
+              type="button"
+              onClick={() => onOpenProperty(property.propertyId)}
+            >
+              <span>{property.label}</span>
+              <small>{property.canonicalAddress ?? property.propertyId}</small>
             </button>
           ))}
-          {(payload.relatedPropertyIds ?? []).length === 0 ? <p className={styles.emptyNote}>No linked properties.</p> : null}
+          {related.length === 0 ? <p className={styles.emptyNote}>No linked properties.</p> : null}
         </div>
       </section>
 
@@ -984,8 +1417,17 @@ function PropertyPanel({
   setDraftForm,
   loadingComposer,
   savingDraft,
+  sendingDraft,
+  templates,
+  loadingTemplates,
+  savingTemplate,
+  deletingTemplate,
   onLoadComposer,
   onSaveDraft,
+  onSendDraftNow,
+  onApplyTemplate,
+  onSaveTemplate,
+  onDeleteTemplate,
   followUpForm,
   setFollowUpForm,
   savingFollowUp,
@@ -1007,8 +1449,17 @@ function PropertyPanel({
   setDraftForm: (value: DraftFormState | ((prev: DraftFormState) => DraftFormState)) => void;
   loadingComposer: boolean;
   savingDraft: boolean;
+  sendingDraft: boolean;
+  templates: UiV2OutreachTemplatePayload[];
+  loadingTemplates: boolean;
+  savingTemplate: boolean;
+  deletingTemplate: boolean;
   onLoadComposer: () => void;
   onSaveDraft: (event: FormEvent<HTMLFormElement>) => void;
+  onSendDraftNow: () => void;
+  onApplyTemplate: (templateId: string) => void;
+  onSaveTemplate: () => void;
+  onDeleteTemplate: () => void;
   followUpForm: FollowUpFormState;
   setFollowUpForm: (value: FollowUpFormState | ((prev: FollowUpFormState) => FollowUpFormState)) => void;
   savingFollowUp: boolean;
@@ -1108,6 +1559,42 @@ function PropertyPanel({
             ) : null}
             {composer ? (
               <form className={styles.stackForm} onSubmit={onSaveDraft}>
+                <div className={styles.templateToolbar}>
+                  <label>
+                    <span>Saved draft</span>
+                    <select
+                      value={draftForm.templateId}
+                      onChange={(event) => onApplyTemplate(event.target.value)}
+                      disabled={loadingTemplates}
+                    >
+                      <option value="">{loadingTemplates ? "Loading drafts..." : "Generated copy"}</option>
+                      {templates.map((template) => (
+                        <option key={template.id} value={template.id}>
+                          {template.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    <span>Draft name</span>
+                    <input
+                      value={draftForm.templateName}
+                      onChange={(event) => setDraftForm((prev) => ({ ...prev, templateName: event.target.value }))}
+                      placeholder="Name reusable draft"
+                    />
+                  </label>
+                  <button className={styles.secondaryButton} type="button" onClick={onSaveTemplate} disabled={savingTemplate}>
+                    {savingTemplate ? "Saving..." : "Save reusable"}
+                  </button>
+                  <button
+                    className={styles.secondaryButton}
+                    type="button"
+                    onClick={onDeleteTemplate}
+                    disabled={!draftForm.templateId || deletingTemplate}
+                  >
+                    {deletingTemplate ? "Removing..." : "Remove"}
+                  </button>
+                </div>
                 <label>
                   <span>To</span>
                   <input
@@ -1138,9 +1625,14 @@ function PropertyPanel({
                     onChange={(event) => setDraftForm((prev) => ({ ...prev, followUpAt: event.target.value }))}
                   />
                 </label>
-                <button className={styles.primaryButton} type="submit" disabled={savingDraft}>
-                  {savingDraft ? "Saving..." : "Save draft for review"}
-                </button>
+                <div className={styles.formActions}>
+                  <button className={styles.primaryButton} type="button" onClick={onSendDraftNow} disabled={sendingDraft}>
+                    {sendingDraft ? "Sending..." : "Send now"}
+                  </button>
+                  <button className={styles.secondaryButton} type="submit" disabled={savingDraft}>
+                    {savingDraft ? "Saving..." : "Save draft for review"}
+                  </button>
+                </div>
               </form>
             ) : null}
           </section>

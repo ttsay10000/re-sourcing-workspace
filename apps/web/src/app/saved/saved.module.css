@@ -1,6 +1,8 @@
 .page {
   display: grid;
   gap: 1rem;
+  width: min(100%, 1640px);
+  margin: 0 auto;
   color: #17201b;
 }
 
@@ -187,7 +189,7 @@
 
 .table {
   width: 100%;
-  min-width: 62rem;
+  min-width: 58rem;
   border-collapse: collapse;
 }
 
@@ -218,7 +220,7 @@
   display: grid;
   grid-template-columns: 3.25rem minmax(0, 1fr);
   gap: 0.7rem;
-  min-width: 18rem;
+  min-width: 16rem;
 }
 
 .thumbnail,
@@ -275,14 +277,45 @@
   margin-top: 0.1rem;
 }
 
-.tags span {
+.tagChip {
   padding: 0.2rem 0.45rem;
   border: 1px solid #d8dfda;
-  border-radius: 999px;
+  border-radius: 6px;
   background: #fbfcfb;
   color: #45524c;
-  font-size: 0.73rem;
-  font-weight: 700;
+  font-size: 0.68rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.tagOpportunity {
+  border-color: #b9d9c2;
+  background: #eef8f1;
+  color: #246047;
+}
+
+.tagRelationship {
+  border-color: #b9d5e2;
+  background: #ecf7fb;
+  color: #174f68;
+}
+
+.tagAction {
+  border-color: #ecd29a;
+  background: #fff8e7;
+  color: #7a521c;
+}
+
+.tagRisk {
+  border-color: #edc6c0;
+  background: #fff1ee;
+  color: #983429;
+}
+
+.tagNeutral {
+  border-color: #d8dfda;
+  background: #fbfcfb;
+  color: #45524c;
 }
 
 .statusStack,
@@ -360,6 +393,15 @@
 }
 
 .actionStack a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: fit-content;
+  min-height: 1.7rem;
+  padding: 0.24rem 0.55rem;
+  border: 1px solid #cfd8d2;
+  border-radius: 999px;
+  background: #ffffff;
   color: #1f3d35;
   font-size: 0.85rem;
   font-weight: 760;
@@ -367,7 +409,8 @@
 }
 
 .actionStack a:hover {
-  text-decoration: underline;
+  border-color: #9bb9ab;
+  background: #f7fbf8;
 }
 
 @media (max-width: 980px) {

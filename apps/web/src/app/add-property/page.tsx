@@ -55,6 +55,7 @@ interface ManualFormState {
   askingPrice: string;
   units: string;
   neighborhood: string;
+  marketType: "on_market" | "off_market" | "unknown";
   ownerName: string;
   brokerName: string;
   brokerFirm: string;
@@ -127,7 +128,7 @@ const MODE_CARDS: Array<{
     id: "om-upload",
     label: "OM PDF upload",
     kicker: "Handoff",
-    description: "Use the current OM PDF upload flow until UI v2 owns the shared PDF extractor.",
+    description: "Upload offering memoranda through the current PDF analysis workflow.",
     capabilityKey: "omUpload",
   },
   {
@@ -155,6 +156,7 @@ const INITIAL_MANUAL_FORM: ManualFormState = {
   askingPrice: "",
   units: "",
   neighborhood: "",
+  marketType: "off_market",
   ownerName: "",
   brokerName: "",
   brokerFirm: "",
@@ -495,6 +497,7 @@ export default function AddPropertyPage() {
         askingPrice: numberOrNull(manualForm.askingPrice),
         units: numberOrNull(manualForm.units),
         neighborhood: cleanString(manualForm.neighborhood),
+        marketType: manualForm.marketType,
         source: "manual",
         ownerName: cleanString(manualForm.ownerName),
         broker,
@@ -504,7 +507,7 @@ export default function AddPropertyPage() {
           source: "manual",
           order: index + 1,
         })),
-        tags: splitList(manualForm.tags),
+        tags: [...new Set([...splitList(manualForm.tags), manualForm.marketType])],
       },
       "Manual property import"
     );
@@ -603,10 +606,10 @@ export default function AddPropertyPage() {
     <div className={styles.page}>
       <section className={styles.headerBand}>
         <div className={styles.headerCopy}>
-          <p className={styles.eyebrow}>UI v2 import</p>
+          <p className={styles.eyebrow}>Property intake</p>
           <h1>Add property</h1>
           <p>
-            Bring a property into the v2 sourcing flow from manual details, a StreetEasy listing, a saved search,
+            Bring a property into the sourcing flow from manual details, a StreetEasy listing, a saved search,
             or the existing OM upload path.
           </p>
         </div>
@@ -693,7 +696,6 @@ export default function AddPropertyPage() {
                   <p className={styles.panelKicker}>Manual property entry</p>
                   <h2 id="manual-heading">Add the property yourself</h2>
                 </div>
-                <span className={styles.endpointPill}>{endpointFor("manualEntry")}</span>
               </div>
               <form className={styles.formStack} onSubmit={handleManualSubmit}>
                 <div className={styles.twoColumn}>
@@ -742,6 +744,17 @@ export default function AddPropertyPage() {
                       onChange={(event) => updateManualForm("neighborhood", event.target.value)}
                       placeholder="Chelsea"
                     />
+                  </Field>
+                  <Field label="Type" compact>
+                    <select
+                      className={styles.input}
+                      value={manualForm.marketType}
+                      onChange={(event) => updateManualForm("marketType", event.target.value as ManualFormState["marketType"])}
+                    >
+                      <option value="off_market">Off market</option>
+                      <option value="on_market">On market</option>
+                      <option value="unknown">Unknown</option>
+                    </select>
                   </Field>
                   <Field label="Owner" compact>
                     <input
@@ -863,9 +876,6 @@ export default function AddPropertyPage() {
                   <p className={styles.panelKicker}>StreetEasy import</p>
                   <h2 id="streeteasy-heading">Import by URL or sale ID</h2>
                 </div>
-                <span className={styles.endpointPill}>
-                  {streetEasyForm.importBy === "url" ? endpointFor("streetEasyUrl") : endpointFor("streetEasySaleId")}
-                </span>
               </div>
               <form className={styles.formStack} onSubmit={handleStreetEasySubmit}>
                 <div className={styles.segmentedControl} role="tablist" aria-label="StreetEasy import type">
@@ -947,7 +957,6 @@ export default function AddPropertyPage() {
                   <p className={styles.panelKicker}>Full StreetEasy pull</p>
                   <h2 id="pull-heading">Use the side-window importer</h2>
                 </div>
-                <span className={styles.endpointPill}>{endpointFor("streetEasyPull")}</span>
               </div>
               <div className={styles.actionSplit}>
                 <div>
@@ -975,7 +984,6 @@ export default function AddPropertyPage() {
                   <p className={styles.panelKicker}>Saved-search run</p>
                   <h2 id="saved-search-heading">Run a saved search now</h2>
                 </div>
-                <span className={styles.endpointPill}>{endpointFor("savedSearchRun")}</span>
               </div>
               <form className={styles.formStack} onSubmit={handleSavedSearchRun}>
                 <Field label="Saved search">
@@ -1042,13 +1050,9 @@ export default function AddPropertyPage() {
               </div>
               <div className={styles.handoffPanel}>
                 <p>
-                  UI v2 hands OM PDFs to the current upload flow today. That path can parse the OM and attach
-                  underwriting context while the shared v2 extractor is still being built.
+                  OM PDFs use the current upload flow today. That path can parse the OM and attach
+                  underwriting context while the shared extractor is still being built.
                 </p>
-                <div className={styles.handoffDetails}>
-                  <span>Current endpoint</span>
-                  <code>{capabilityFor("omUpload")?.legacyEndpoint ?? "/api/deal-analysis/analyze-upload"}</code>
-                </div>
                 <Link href="/deal-analysis" className={styles.primaryLink}>
                   Open OM PDF upload
                 </Link>
@@ -1069,7 +1073,7 @@ export default function AddPropertyPage() {
                 <Field label="OM URL">
                   <input
                     className={styles.input}
-                    placeholder="OM URL import is placeholder-only in UI v2"
+                    placeholder="OM URL import is placeholder-only"
                     disabled
                   />
                 </Field>
@@ -1118,10 +1122,10 @@ export default function AddPropertyPage() {
           )}
 
           <div className={styles.supportBox}>
-            <h3>Routing notes</h3>
+            <h3>Import paths</h3>
             <p>
-              Manual and StreetEasy imports post to UI v2 import endpoints. OM URL stays disabled; OM PDFs route to
-              the current OM PDF upload workflow for now.
+              Manual, StreetEasy, and saved-search imports create pipeline properties. OM PDFs route to the current
+              upload workflow. OM URL import remains disabled for now.
             </p>
           </div>
         </aside>

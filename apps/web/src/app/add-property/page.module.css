@@ -1,5 +1,5 @@
 .page {
-  width: min(100%, 1360px);
+  width: min(100%, 1640px);
   margin: 0 auto;
   display: flex;
   flex-direction: column;
@@ -150,13 +150,14 @@
 
 .workspaceGrid {
   display: grid;
-  grid-template-columns: minmax(15rem, 18rem) minmax(0, 1fr) minmax(18rem, 22rem);
-  align-items: start;
+  grid-template-columns: 1fr;
+  align-items: stretch;
   gap: 1rem;
 }
 
 .modeRail {
   display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
   gap: 0.7rem;
 }
 
@@ -164,7 +165,7 @@
   display: grid;
   gap: 0.38rem;
   width: 100%;
-  min-height: 7.4rem;
+  min-height: 6rem;
   padding: 1rem;
   text-align: left;
   color: #20231f;
@@ -329,7 +330,7 @@
 
 .fourColumn {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
   gap: 0.85rem;
 }
 
@@ -549,8 +550,8 @@
   flex-direction: column;
   gap: 1rem;
   padding: 1rem;
-  position: sticky;
-  top: 1rem;
+  position: static;
+  top: auto;
 }
 
 .resultHeader {
@@ -758,14 +759,13 @@
   line-height: 1.35;
 }
 
-@media (max-width: 1180px) {
+@media (max-width: 1420px) {
   .workspaceGrid {
-    grid-template-columns: minmax(13rem, 16rem) minmax(0, 1fr);
+    grid-template-columns: 1fr;
   }
 
   .resultPanel {
     position: static;
-    grid-column: 1 / -1;
   }
 }
 
