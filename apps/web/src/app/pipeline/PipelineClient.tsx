@@ -179,6 +179,14 @@ interface OutreachTemplateResponse {
   template: UiV2OutreachTemplatePayload;
 }
 
+interface DossierGenerateResponse {
+  ok?: boolean;
+  propertyId?: string;
+  dealScore?: number | null;
+  error?: string;
+  details?: string;
+}
+
 interface BrokerFormState {
   name: string;
   email: string;
@@ -881,6 +889,7 @@ export default function PipelineClient() {
     if (selectedIds.length === 0) return;
     setBusyAction("bulk:refresh");
     setNotice(null);
+    setError(null);
     try {
       const propertyIds = [...selectedIds];
       const enrichmentResponse = await fetch(`${API_BASE}/api/properties/run-enrichment`, {
@@ -911,6 +920,71 @@ export default function PipelineClient() {
       setTotal(response.pipeline.total);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to refresh selected properties.");
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function rerunSelectedDossiers() {
+    if (selectedIds.length === 0) return;
+    const propertyIds = [...selectedIds];
+    const addressById = new Map(
+      rows.map((row) => [row.propertyId, row.displayAddress ?? row.canonicalAddress ?? row.propertyId])
+    );
+    let completed = 0;
+    const failures: Array<{ propertyId: string; address: string; message: string }> = [];
+    setBusyAction("bulk:dossier");
+    setNotice(`Rerunning dossier generation for ${propertyIds.length} propert${propertyIds.length === 1 ? "y" : "ies"}...`);
+    setError(null);
+    try {
+      for (let index = 0; index < propertyIds.length; index++) {
+        const propertyId = propertyIds[index]!;
+        setNotice(
+          `Rerunning dossiers ${index + 1} of ${propertyIds.length}: ${
+            addressById.get(propertyId) ?? "selected property"
+          }`
+        );
+        try {
+          const response = await fetch(`${API_BASE}/api/dossier/generate`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ propertyId }),
+          });
+          const payload = (await response.json().catch(() => ({}))) as DossierGenerateResponse;
+          if (!response.ok) {
+            throw new Error(payload.details || payload.error || `Request failed with ${response.status}`);
+          }
+          completed++;
+        } catch (err) {
+          failures.push({
+            propertyId,
+            address: addressById.get(propertyId) ?? propertyId,
+            message: err instanceof Error ? err.message : "Failed to generate dossier.",
+          });
+        }
+      }
+
+      const response = await apiFetch<PipelineResponse>(
+        `${API_BASE}/api/ui-v2/pipeline?${buildPipelineQueryString(queryString)}`
+      );
+      setRows(response.pipeline.rows as PipelineRow[]);
+      setTotal(response.pipeline.total);
+      if (selectedId) await loadPropertyDetail(selectedId).catch(() => null);
+
+      setNotice(
+        failures.length === 0
+          ? `Dossier generation completed for ${completed} propert${completed === 1 ? "y" : "ies"}.`
+          : `Dossier generation completed for ${completed} of ${propertyIds.length} selected properties.`
+      );
+      if (failures.length > 0) {
+        setError(
+          `${failures.length} dossier rerun${failures.length === 1 ? "" : "s"} failed. First issue: ${
+            failures[0]!.address
+          } - ${failures[0]!.message}`
+        );
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to rerun dossier generation.");
     } finally {
       setBusyAction(null);
     }
@@ -1737,15 +1811,24 @@ export default function PipelineClient() {
           <button
             className={styles.secondaryButton}
             type="button"
-            disabled={selectedIds.length === 0 || busyAction === "bulk:refresh"}
+            disabled={selectedIds.length === 0 || busyAction?.startsWith("bulk:")}
             onClick={refreshSelectedEnrichment}
           >
-            Refresh enrichment + rental
+            {busyAction === "bulk:refresh" ? "Refreshing..." : "Refresh enrichment + rental"}
+          </button>
+          <button
+            className={styles.secondaryButton}
+            type="button"
+            title="Regenerate the selected properties' deal dossier PDFs and Excel workbooks using saved assumptions."
+            disabled={selectedIds.length === 0 || busyAction?.startsWith("bulk:")}
+            onClick={rerunSelectedDossiers}
+          >
+            {busyAction === "bulk:dossier" ? "Rerunning dossiers..." : "Rerun dossiers"}
           </button>
           <button
             className={styles.primaryButton}
             type="button"
-            disabled={selectedIds.length === 0 || busyAction?.includes(":composer")}
+            disabled={selectedIds.length === 0 || busyAction?.startsWith("bulk:") || busyAction?.includes(":composer")}
             onClick={queueSelectedEmails}
           >
             Queue broker emails
