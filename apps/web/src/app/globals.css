@@ -65,8 +65,11 @@ a {
   background: rgba(23, 114, 107, 0.08);
 }
 
-button {
+button,
+a[class*="button"],
+a[class*="Button"] {
   line-height: 1;
+  white-space: nowrap;
 }
 
 h1,
@@ -921,27 +924,39 @@ h2,
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.profile-saved-deals-actions::-webkit-scrollbar {
+  display: none;
 }
 
 .profile-saved-deals-actions--row {
   flex-wrap: nowrap;
 }
 
+.profile-saved-deals-actions--row > * {
+  flex: 0 0 auto;
+}
+
 .profile-saved-deals-action {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  flex: 1 1 0;
-  min-height: 2rem;
-  padding: 0.35rem 0.7rem;
-  font-size: 0.85rem;
+  flex: 0 0 auto;
+  min-height: 1.95rem;
+  padding: 0.34rem 0.58rem;
+  font-size: 0.8rem;
   line-height: 1;
   color: #1f3d35;
   text-decoration: none;
   background: #f7fbf8;
   border: 1px solid #cfd8d2;
   border-radius: 7px;
+  white-space: nowrap;
   transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
 
@@ -991,17 +1006,12 @@ h2,
     align-items: stretch;
   }
 
-  .profile-primary-button,
-  .profile-secondary-button {
-    width: 100%;
-  }
-
   .profile-saved-deal-stats {
     grid-template-columns: 1fr;
   }
 
   .profile-saved-deals-actions--row {
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
   }
 
   .profile-assumption-groups {
@@ -4493,6 +4503,7 @@ body * {
   font-size: 0.88rem;
   font-weight: 700;
   text-decoration: none;
+  white-space: nowrap;
 }
 
 .btn-primary,

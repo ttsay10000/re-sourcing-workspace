@@ -1731,10 +1731,11 @@ export default function ProfilePage() {
         .profile-v2 .profile-primary-button,
         .profile-v2 .profile-secondary-button,
         .profile-v2 .profile-saved-deals-action {
-          min-height: 2.35rem;
+          min-height: 2.1rem;
           border-radius: 7px;
-          font-size: 0.86rem;
+          font-size: 0.82rem;
           font-weight: 750;
+          white-space: nowrap;
         }
 
         .profile-v2 .profile-primary-button {
@@ -1849,10 +1850,11 @@ export default function ProfilePage() {
         }
 
         .profile-v2 .profile-saved-deals-action {
-          flex: 0 1 auto;
+          flex: 0 0 auto;
           border-color: #cfd8d2;
           background: #ffffff;
           color: #1f3d35;
+          padding: 0.42rem 0.58rem;
         }
 
         .profile-v2 .profile-saved-deals-action--danger {
@@ -1862,7 +1864,8 @@ export default function ProfilePage() {
         }
 
         .profile-v2 .profile-saved-deals-actions--row {
-          flex-wrap: wrap;
+          flex-wrap: nowrap;
+          overflow-x: auto;
         }
 
         .profile-v2 .profile-saved-deals-score {
