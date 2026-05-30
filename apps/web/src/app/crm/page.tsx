@@ -175,6 +175,17 @@ function displayBrokerName(contact: BrokerContact | null | undefined, fallback =
   return contact?.displayName?.trim() || contact?.normalizedEmail || contact?.sourceKey || fallback;
 }
 
+function displayBrokerFirm(contact: BrokerContact | null | undefined): string | null {
+  const metadata = readRecord(contact?.sourceMetadata);
+  return (
+    contact?.firm?.trim()
+    || (typeof metadata.firm === "string" ? metadata.firm.trim() : "")
+    || (typeof metadata.brokerageName === "string" ? metadata.brokerageName.trim() : "")
+    || (typeof metadata.brokerage === "string" ? metadata.brokerage.trim() : "")
+    || null
+  );
+}
+
 function displayBrokerBlockName(broker: UiV2BrokerBlock | null | undefined): string {
   return broker?.name?.trim() || broker?.email || "Property broker";
 }
@@ -1144,8 +1155,7 @@ function CrmPageContent() {
             <thead>
               <tr>
                 <th>Broker</th>
-                <th>Firm</th>
-                <th>Email / phone</th>
+                <th>Contact</th>
                 <th>Related properties</th>
                 <th>Last activity</th>
                 <th>Open actions</th>
@@ -1156,13 +1166,13 @@ function CrmPageContent() {
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={8} className={styles.emptyCell}>
+                  <td colSpan={7} className={styles.emptyCell}>
                     Loading contacts...
                   </td>
                 </tr>
               ) : contacts.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className={styles.emptyCell}>
+                  <td colSpan={7} className={styles.emptyCell}>
                     No broker contacts match this search.
                   </td>
                 </tr>
@@ -1171,23 +1181,28 @@ function CrmPageContent() {
                   const { contact } = payload;
                   const flags = contactFlags(contact);
                   const related = relatedPropertyItems(payload, propertyLabels);
+                  const contactItems = [contact.normalizedEmail, contact.phone].filter((value): value is string => Boolean(value));
+                  const firmLabel = displayBrokerFirm(contact);
                   return (
                     <tr key={contact.id}>
-                      <td>
-                        <button className={styles.linkButton} type="button" onClick={() => openContactPanel(payload)}>
+                      <td className={styles.brokerCell}>
+                        <button
+                          className={styles.linkButton}
+                          type="button"
+                          title={displayBrokerName(contact)}
+                          onClick={() => openContactPanel(payload)}
+                        >
                           {displayBrokerName(contact)}
                         </button>
-                        <div className={styles.subtleLine}>{contact.source ?? "crm contact"}</div>
+                        <div className={styles.subtleLine}>{firmLabel || contact.source || "Broker contact"}</div>
                       </td>
                       <td>
-                        <span className={styles.cellStrong}>{contact.firm || "-"}</span>
-                      </td>
-                      <td>
-                        <div className={styles.contactLines}>
-                          <span className={contact.normalizedEmail ? undefined : styles.missingText}>
-                            {contact.normalizedEmail || "Email needed"}
-                          </span>
-                          <span>{contact.phone || "-"}</span>
+                        <div className={styles.contactLine}>
+                          {contactItems.length > 0 ? (
+                            contactItems.map((item) => <span key={item}>{item}</span>)
+                          ) : (
+                            <span className={styles.missingText}>Email needed</span>
+                          )}
                         </div>
                       </td>
                       <td>
@@ -1208,8 +1223,10 @@ function CrmPageContent() {
                         </div>
                       </td>
                       <td>
-                        <span className={styles.cellStrong}>{contactLastActivityLabel(payload)}</span>
-                        <div className={styles.subtleLine}>{formatDateTime(contactActivityAt(payload))}</div>
+                        <div className={styles.activityLine}>
+                          <span className={styles.cellStrong}>{contactLastActivityLabel(payload)}</span>
+                          {contactActivityAt(payload) ? <span>{formatDateTime(contactActivityAt(payload))}</span> : null}
+                        </div>
                       </td>
                       <td>
                         <span className={payload.openActionItemCount ? styles.actionCountHot : styles.actionCount}>

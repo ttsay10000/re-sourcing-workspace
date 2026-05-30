@@ -56,9 +56,12 @@ interface SavedProgressBaseRow {
   listing_id: string | null;
   listing_source: string | null;
   listing_price: number | string | null;
+  listing_beds: number | string | null;
+  listing_baths: number | string | null;
   listing_sqft: number | string | null;
   listing_url: string | null;
   listing_title: string | null;
+  listing_description: string | null;
   listing_image_urls: string[] | null;
   listing_extra: JsonRecord | null;
   latest_signal_deal_score: number | string | null;
@@ -90,8 +93,11 @@ interface SavedDealV2Row {
   source: string | null;
   price: number | null;
   units: number | null;
+  beds: number | null;
+  baths: number | null;
   sqft: number | null;
   pricePerUnit: number | null;
+  pricePerSqft: number | null;
   capRate: number | null;
   rentUpside: number | null;
   irrPct: number | null;
@@ -186,6 +192,40 @@ function stringOrNull(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+function readNumericPath(root: unknown, path: string[]): number | null {
+  let current: unknown = root;
+  for (const key of path) {
+    if (!isJsonRecord(current)) return null;
+    current = current[key];
+  }
+  return toNumber(current);
+}
+
+function readStringPath(root: unknown, path: string[]): string | null {
+  let current: unknown = root;
+  for (const key of path) {
+    if (!isJsonRecord(current)) return null;
+    current = current[key];
+  }
+  return stringOrNull(current);
+}
+
+function readFirstNumericPath(root: unknown, paths: string[][]): number | null {
+  for (const path of paths) {
+    const value = readNumericPath(root, path);
+    if (value != null) return value;
+  }
+  return null;
+}
+
+function readFirstStringPath(root: unknown, paths: string[][]): string | null {
+  for (const path of paths) {
+    const value = readStringPath(root, path);
+    if (value != null) return value;
+  }
+  return null;
+}
+
 function clampLimit(value: unknown): number {
   const parsed = typeof value === "string" ? Number(value) : typeof value === "number" ? value : DEFAULT_LIMIT;
   if (!Number.isFinite(parsed)) return DEFAULT_LIMIT;
@@ -215,16 +255,120 @@ function readTags(details: JsonRecord | null): string[] {
   return Array.from(new Set(source.map((tag) => String(tag).trim()).filter(Boolean)));
 }
 
-function readLocation(details: JsonRecord | null): { neighborhood: string | null; borough: string | null } {
+function readLocation(details: JsonRecord | null, listingExtra: JsonRecord | null): { neighborhood: string | null; borough: string | null } {
   const overview = isJsonRecord(details?.propertyOverview) ? details.propertyOverview : {};
   const location = isJsonRecord(details?.location) ? details.location : {};
+  const primaryNeighborhood = isJsonRecord(details?.neighborhood) && isJsonRecord(details.neighborhood.primary)
+    ? details.neighborhood.primary
+    : {};
   return {
     neighborhood:
       stringOrNull(overview.neighborhood)
       ?? stringOrNull(location.neighborhood)
+      ?? stringOrNull(primaryNeighborhood.name)
+      ?? readFirstStringPath(listingExtra, [["neighborhood"], ["neighborhoodName"], ["neighborhood_name"], ["area"], ["area_name"]])
       ?? stringOrNull(details?.neighborhood),
-    borough: stringOrNull(overview.borough) ?? stringOrNull(location.borough) ?? stringOrNull(details?.borough),
+    borough:
+      stringOrNull(overview.borough)
+      ?? stringOrNull(location.borough)
+      ?? stringOrNull(primaryNeighborhood.borough)
+      ?? readFirstStringPath(listingExtra, [["borough"], ["boroughName"], ["county"]])
+      ?? stringOrNull(details?.borough),
   };
+}
+
+function inferUnitCountFromText(...values: unknown[]): number | null {
+  const text = values.filter((value): value is string => typeof value === "string").join(" ").toLowerCase();
+  if (!text.trim()) return null;
+  const wordToNumber: Record<string, number> = {
+    one: 1,
+    two: 2,
+    three: 3,
+    four: 4,
+    five: 5,
+    six: 6,
+    seven: 7,
+    eight: 8,
+    nine: 9,
+    ten: 10,
+    eleven: 11,
+    twelve: 12,
+  };
+  const familyMatch = /\b(\d{1,3}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)[-\s]+family\b/.exec(text);
+  const unitMatch = /\b(\d{1,3})\s+(?:residential\s+)?units?\b/.exec(text);
+  const raw = familyMatch?.[1] ?? unitMatch?.[1] ?? null;
+  if (!raw) return null;
+  const parsed = /^\d+$/.test(raw) ? Number(raw) : wordToNumber[raw];
+  return parsed != null && parsed > 0 ? parsed : null;
+}
+
+function resolveSavedUnits(row: SavedProgressBaseRow): number | null {
+  return (
+    resolvePreferredOmUnitCount(row.details as never) ??
+    readFirstNumericPath(row.details, [
+      ["unitCount"],
+      ["units"],
+      ["numberOfUnits"],
+      ["totalUnits"],
+      ["building", "units"],
+      ["property", "units"],
+      ["rentalFinancials", "fromLlm", "unitCount"],
+      ["rentalFinancials", "fromLlm", "units"],
+      ["omData", "authoritative", "propertyInfo", "unitCount"],
+      ["omData", "authoritative", "propertyInfo", "units"],
+      ["omData", "authoritative", "propertyInfo", "numberOfUnits"],
+    ]) ??
+    readFirstNumericPath(row.listing_extra, [
+      ["units"],
+      ["unitCount"],
+      ["unit_count"],
+      ["totalUnits"],
+      ["total_units"],
+      ["numberOfUnits"],
+      ["number_of_units"],
+      ["num_units"],
+      ["building_units"],
+    ]) ??
+    inferUnitCountFromText(row.listing_description, row.listing_title, row.listing_extra?.description, row.listing_extra?.propertyType)
+  );
+}
+
+function resolveSavedSqft(row: SavedProgressBaseRow): number | null {
+  return (
+    readFirstNumericPath(row.details, [
+      ["buildingSqft"],
+      ["buildingSqftTotal"],
+      ["squareFeet"],
+      ["sqft"],
+      ["grossSqft"],
+      ["assessedGrossSqft"],
+      ["assessedResidentialAreaGross"],
+      ["building", "sqft"],
+      ["building", "squareFeet"],
+      ["omData", "authoritative", "propertyInfo", "buildingSqft"],
+      ["omData", "authoritative", "propertyInfo", "squareFeet"],
+      ["omData", "authoritative", "propertyInfo", "sqft"],
+    ]) ??
+    toNumber(row.listing_sqft) ??
+    readFirstNumericPath(row.listing_extra, [
+      ["sqft"],
+      ["squareFeet"],
+      ["square_feet"],
+      ["sqft_feet"],
+      ["grossSqft"],
+      ["gross_square_feet"],
+      ["buildingSize"],
+      ["building_size"],
+    ])
+  );
+}
+
+function resolveSavedBeds(row: SavedProgressBaseRow): number | null {
+  return toNumber(row.listing_beds) ?? readFirstNumericPath(row.listing_extra, [["beds"], ["bedrooms"], ["bedroom_count"]]);
+}
+
+function resolveSavedBaths(row: SavedProgressBaseRow): number | null {
+  return toNumber(row.listing_baths) ?? readFirstNumericPath(row.listing_extra, [["baths"], ["bathrooms"], ["bathroom_count"]]);
 }
 
 function readFirstImageUrl(row: SavedProgressBaseRow): string | null {
@@ -336,9 +480,12 @@ function mapSavedDeal(row: SavedProgressBaseRow): SavedDeal {
 
 function mapSavedRow(row: SavedProgressBaseRow): SavedDealV2Row {
   const details = row.details;
-  const units = resolvePreferredOmUnitCount(details as never);
+  const units = resolveSavedUnits(row);
+  const sqft = resolveSavedSqft(row);
+  const beds = resolveSavedBeds(row);
+  const baths = resolveSavedBaths(row);
   const price = toNumber(row.listing_price);
-  const location = readLocation(details);
+  const location = readLocation(details, row.listing_extra);
   const documentCount = toInteger(row.uploaded_doc_count) + toInteger(row.inquiry_doc_count) + toInteger(row.generated_doc_count);
   return {
     savedDeal: mapSavedDeal(row),
@@ -348,8 +495,11 @@ function mapSavedRow(row: SavedProgressBaseRow): SavedDealV2Row {
     source: row.listing_source,
     price,
     units,
-    sqft: toNumber(row.listing_sqft),
+    beds,
+    baths,
+    sqft,
     pricePerUnit: price != null && units != null && units > 0 ? Math.round(price / units) : null,
+    pricePerSqft: price != null && sqft != null && sqft > 0 ? Math.round(price / sqft) : null,
     capRate: toNumber(row.latest_signal_adjusted_cap_rate) ?? toNumber(row.latest_signal_asset_cap_rate),
     rentUpside: toNumber(row.latest_signal_rent_upside),
     irrPct: toNumber(row.latest_signal_irr_pct),
@@ -453,9 +603,12 @@ function baseSelectSql(hasRejections: boolean, savedOnly: boolean): string {
        l.id AS listing_id,
        l.source AS listing_source,
        l.price AS listing_price,
+       l.beds AS listing_beds,
+       l.baths AS listing_baths,
        l.sqft AS listing_sqft,
        l.url AS listing_url,
        l.title AS listing_title,
+       l.description AS listing_description,
        l.image_urls AS listing_image_urls,
        l.extra AS listing_extra,
        ds.deal_score AS latest_signal_deal_score,

@@ -20,8 +20,11 @@ type SavedDealRow = {
   source?: string | null;
   price?: number | null;
   units?: number | null;
+  beds?: number | null;
+  baths?: number | null;
   sqft?: number | null;
   pricePerUnit?: number | null;
+  pricePerSqft?: number | null;
   capRate?: number | null;
   rentUpside?: number | null;
   irrPct?: number | null;
@@ -65,9 +68,39 @@ function formatCurrency(value: number | null | undefined): string {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(value);
 }
 
+function formatPerCurrency(value: number | null | undefined): string {
+  if (value == null || Number.isNaN(value)) return "—";
+  if (Math.abs(value) >= 1_000_000) return `$${(value / 1_000_000).toFixed(1)}M`;
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(value);
+}
+
 function formatNumber(value: number | null | undefined, suffix = ""): string {
   if (value == null || Number.isNaN(value)) return "—";
   return `${Number.isInteger(value) ? value.toFixed(0) : value.toFixed(1)}${suffix}`;
+}
+
+function formatWholeNumber(value: number | null | undefined): string {
+  if (value == null || Number.isNaN(value)) return "—";
+  return Math.round(value).toLocaleString("en-US");
+}
+
+function availableFacts(row: SavedDealRow): string[] {
+  return [
+    row.units != null ? `${formatWholeNumber(row.units)} units` : null,
+    row.beds != null || row.baths != null
+      ? `${row.beds != null ? formatNumber(row.beds) : "—"} bed / ${row.baths != null ? formatNumber(row.baths) : "—"} bath`
+      : null,
+    row.sqft != null ? `${formatWholeNumber(row.sqft)} SF` : null,
+  ].filter((value): value is string => Boolean(value));
+}
+
+function availableEconomics(row: SavedDealRow): string[] {
+  return [
+    row.pricePerUnit != null ? `${formatPerCurrency(row.pricePerUnit)} / unit` : null,
+    row.pricePerSqft != null ? `${formatPerCurrency(row.pricePerSqft)} / SF` : null,
+    row.capRate != null ? `Cap ${formatPercent(row.capRate)}` : null,
+    row.rentUpside != null ? `Upside ${formatPercent(row.rentUpside)}` : null,
+  ].filter((value): value is string => Boolean(value));
 }
 
 function formatPercent(value: number | null | undefined): string {
@@ -303,6 +336,8 @@ export default function SavedPage() {
                 {filteredRows.map((row) => {
                   const rejected = isRejected(row);
                   const rejectionLabel = row.rejection?.reasonLabel || labelFromKey(row.rejection?.reasonCode);
+                  const facts = availableFacts(row);
+                  const economics = availableEconomics(row);
                   return (
                     <tr key={`${row.savedDeal?.id ?? row.propertyId}-${row.propertyId}`} className={rejected ? styles.rejectedRow : undefined}>
                       <td>
@@ -351,8 +386,14 @@ export default function SavedPage() {
                       <td>
                         <div className={styles.stack}>
                           <span>{formatCurrency(row.price)}</span>
-                          <small>{formatNumber(row.units)} units · {formatCurrency(row.pricePerUnit)} / unit</small>
-                          <small>Cap {formatPercent(row.capRate)} · Upside {formatPercent(row.rentUpside)}</small>
+                          {facts.length > 0 ? (
+                            <div className={styles.factLine}>
+                              {facts.map((fact) => <small key={fact}>{fact}</small>)}
+                            </div>
+                          ) : (
+                            <small>No source facts yet</small>
+                          )}
+                          {economics.length > 0 ? <small>{economics.join(" · ")}</small> : null}
                         </div>
                       </td>
                       <td>
