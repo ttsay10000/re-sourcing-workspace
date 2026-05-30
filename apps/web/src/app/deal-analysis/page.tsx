@@ -146,19 +146,54 @@ type WorkspaceFilter = "all" | "uploaded_docs" | "manual_edits" | "dossier_ready
 type WorkspaceSort = "recent" | "address" | "dossier";
 
 const pageShellStyle: React.CSSProperties = {
-  maxWidth: "1360px",
+  width: "min(100%, 1640px)",
   margin: "0 auto",
-  padding: "1.5rem",
+  padding: "1.2rem 1.5rem 1.5rem",
   display: "flex",
   flexDirection: "column",
   gap: "1rem",
+  color: "#161616",
 };
 
 const cardStyle: React.CSSProperties = {
-  border: "1px solid #dbe2ea",
-  borderRadius: "18px",
+  border: "1px solid rgba(38, 47, 44, 0.12)",
+  borderRadius: "8px",
+  background: "rgba(255, 255, 255, 0.84)",
+  boxShadow: "0 12px 32px rgba(31, 43, 37, 0.06)",
+};
+
+const inputStyle: React.CSSProperties = {
+  minHeight: "2.7rem",
+  border: "1px solid rgba(42, 52, 47, 0.18)",
+  borderRadius: "6px",
+  padding: "0.58rem 0.72rem",
+  color: "#151814",
   background: "#ffffff",
-  boxShadow: "0 14px 34px rgba(15, 23, 42, 0.06)",
+  fontSize: "0.92rem",
+};
+
+const primaryButtonStyle: React.CSSProperties = {
+  minHeight: "2.45rem",
+  padding: "0.62rem 0.95rem",
+  borderRadius: "6px",
+  border: "1px solid #173f36",
+  background: "#173f36",
+  color: "#ffffff",
+  fontSize: "0.92rem",
+  fontWeight: 750,
+  cursor: "pointer",
+};
+
+const secondaryButtonStyle: React.CSSProperties = {
+  minHeight: "2.45rem",
+  padding: "0.62rem 0.95rem",
+  borderRadius: "6px",
+  border: "1px solid rgba(23, 63, 54, 0.22)",
+  background: "#ffffff",
+  color: "#173f36",
+  fontSize: "0.92rem",
+  fontWeight: 750,
+  cursor: "pointer",
 };
 
 function emptyDraft(): OmCalculationDraft {
@@ -1153,9 +1188,9 @@ function DealAnalysisPageContent() {
       <div
         style={{
           ...cardStyle,
-          padding: "1.35rem",
+          padding: "1.35rem 1.5rem",
           background:
-            "radial-gradient(circle at top right, rgba(14, 165, 233, 0.12), transparent 34%), linear-gradient(180deg, #f8fcff 0%, #ffffff 100%)",
+            "linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(238, 246, 243, 0.92)), #ffffff",
         }}
       >
         <div
@@ -1168,10 +1203,28 @@ function DealAnalysisPageContent() {
           }}
         >
           <div style={{ maxWidth: "820px" }}>
-            <h1 style={{ margin: 0, fontSize: "1.55rem", color: "#0f172a" }}>
-              Deal analysis from uploaded OM PDFs
+            <div
+              style={{
+                color: "#2f6f52",
+                fontSize: "0.72rem",
+                fontWeight: 850,
+                letterSpacing: "0.08em",
+                textTransform: "uppercase",
+              }}
+            >
+              OM workspace
+            </div>
+            <h1
+              style={{
+                margin: "0.2rem 0 0",
+                fontSize: "clamp(2.15rem, 3vw, 2.9rem)",
+                lineHeight: 1.04,
+                color: "#10140f",
+              }}
+            >
+              OM deal analysis
             </h1>
-            <p style={{ margin: "0.55rem 0 0", color: "#475569", lineHeight: 1.65, fontSize: "0.98rem" }}>
+            <p style={{ margin: "0.55rem 0 0", color: "#5d635d", lineHeight: 1.45, fontSize: "0.95rem" }}>
               Upload one or more OM PDFs for a fresh underwriting workspace, or reopen a prior
               property-backed OM workspace with its saved assumptions, unit edits, and expense rows.
             </p>
@@ -1180,12 +1233,8 @@ function DealAnalysisPageContent() {
             type="button"
             onClick={resetWorkspace}
             style={{
-              padding: "0.65rem 0.95rem",
-              borderRadius: "10px",
-              border: "1px solid #cbd5e1",
-              background: "#fff",
-              color: "#0f172a",
-              cursor: "pointer",
+              ...secondaryButtonStyle,
+              alignSelf: "center",
             }}
           >
             Generate new OM workspace
@@ -1196,14 +1245,14 @@ function DealAnalysisPageContent() {
       <div style={{ ...cardStyle, padding: "1.15rem" }}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap" }}>
           <div>
-            <strong style={{ color: "#0f172a", fontSize: "1rem" }}>OM workspace navigator</strong>
-            <div style={{ marginTop: "0.3rem", color: "#64748b", fontSize: "0.9rem", lineHeight: 1.55 }}>
+            <strong style={{ color: "#18231e", fontSize: "1rem" }}>OM workspace navigator</strong>
+            <div style={{ marginTop: "0.3rem", color: "#68736d", fontSize: "0.9rem", lineHeight: 1.5 }}>
               One reusable workspace per property with OM-side uploads, authoritative OM data, or saved
               underwriting edits.
             </div>
           </div>
           {propertyId ? (
-            <div style={{ color: "#1d4ed8", fontSize: "0.84rem", fontWeight: 700 }}>
+            <div style={{ color: "#2f6f52", fontSize: "0.84rem", fontWeight: 800 }}>
               {savedWorkspaceLoading ? "Loading saved workspace..." : "Saved workspace loaded"}
             </div>
           ) : null}
@@ -1218,7 +1267,7 @@ function DealAnalysisPageContent() {
             alignItems: "end",
           }}
         >
-          <label style={{ display: "grid", gap: "0.32rem", color: "#475569", fontSize: "0.78rem", fontWeight: 700 }}>
+          <label style={{ display: "grid", gap: "0.32rem", color: "#303832", fontSize: "0.78rem", fontWeight: 800 }}>
             Open workspace
             <select
               value={propertyId ?? ""}
@@ -1231,14 +1280,7 @@ function DealAnalysisPageContent() {
                 router.replace(`/deal-analysis?property_id=${encodeURIComponent(nextPropertyId)}`);
               }}
               disabled={savedWorkspacesLoading || filteredSavedWorkspaces.length === 0}
-              style={{
-                minHeight: "42px",
-                border: "1px solid #cbd5e1",
-                borderRadius: "10px",
-                padding: "0.55rem 0.65rem",
-                color: "#0f172a",
-                background: "#fff",
-              }}
+              style={inputStyle}
             >
               <option value="">
                 {savedWorkspacesLoading
@@ -1255,37 +1297,23 @@ function DealAnalysisPageContent() {
             </select>
           </label>
 
-          <label style={{ display: "grid", gap: "0.32rem", color: "#475569", fontSize: "0.78rem", fontWeight: 700 }}>
+          <label style={{ display: "grid", gap: "0.32rem", color: "#303832", fontSize: "0.78rem", fontWeight: 800 }}>
             Search
             <input
               type="search"
               value={workspaceSearch}
               onChange={(event) => setWorkspaceSearch(event.target.value)}
               placeholder="Address or file name"
-              style={{
-                minHeight: "42px",
-                border: "1px solid #cbd5e1",
-                borderRadius: "10px",
-                padding: "0.55rem 0.65rem",
-                color: "#0f172a",
-                background: "#fff",
-              }}
+              style={inputStyle}
             />
           </label>
 
-          <label style={{ display: "grid", gap: "0.32rem", color: "#475569", fontSize: "0.78rem", fontWeight: 700 }}>
+          <label style={{ display: "grid", gap: "0.32rem", color: "#303832", fontSize: "0.78rem", fontWeight: 800 }}>
             Sort
             <select
               value={workspaceSort}
               onChange={(event) => setWorkspaceSort(event.target.value as WorkspaceSort)}
-              style={{
-                minHeight: "42px",
-                border: "1px solid #cbd5e1",
-                borderRadius: "10px",
-                padding: "0.55rem 0.65rem",
-                color: "#0f172a",
-                background: "#fff",
-              }}
+              style={inputStyle}
             >
               <option value="recent">Recently updated</option>
               <option value="address">Address A-Z</option>
@@ -1321,11 +1349,11 @@ function DealAnalysisPageContent() {
                   style={{
                     padding: "0.35rem 0.62rem",
                     borderRadius: "999px",
-                    border: isActive ? "1px solid #2563eb" : "1px solid #dbe2ea",
-                    background: isActive ? "#eff6ff" : "#fff",
-                    color: isActive ? "#1d4ed8" : "#475569",
+                    border: isActive ? "1px solid rgba(47, 111, 82, 0.48)" : "1px solid rgba(38, 47, 44, 0.12)",
+                    background: isActive ? "#edf8f1" : "#fff",
+                    color: isActive ? "#1c5d3f" : "#47534d",
                     fontSize: "0.8rem",
-                    fontWeight: 700,
+                    fontWeight: 800,
                     cursor: "pointer",
                   }}
                 >
@@ -1338,14 +1366,10 @@ function DealAnalysisPageContent() {
             type="button"
             onClick={() => setWorkspaceResultsOpen((open) => !open)}
             style={{
-              padding: "0.4rem 0.7rem",
-              borderRadius: "10px",
-              border: "1px solid #cbd5e1",
-              background: "#fff",
-              color: "#0f172a",
-              cursor: "pointer",
+              ...secondaryButtonStyle,
+              minHeight: "2rem",
+              padding: "0.38rem 0.7rem",
               fontSize: "0.82rem",
-              fontWeight: 700,
             }}
           >
             {workspaceResultsOpen ? "Hide matches" : `Show matches (${filteredSavedWorkspaces.length})`}
@@ -1357,9 +1381,9 @@ function DealAnalysisPageContent() {
             style={{
               marginTop: "0.85rem",
               padding: "0.75rem 0.85rem",
-              borderRadius: "12px",
-              border: "1px solid #bfdbfe",
-              background: "#eff6ff",
+              borderRadius: "8px",
+              border: "1px solid rgba(47, 111, 82, 0.22)",
+              background: "#edf8f1",
               display: "flex",
               justifyContent: "space-between",
               gap: "0.75rem",
@@ -1367,19 +1391,19 @@ function DealAnalysisPageContent() {
             }}
           >
             <div>
-              <div style={{ color: "#1e3a8a", fontWeight: 800 }}>{activeSavedWorkspace.canonicalAddress}</div>
-              <div style={{ marginTop: "0.25rem", color: "#475569", fontSize: "0.84rem" }}>
+              <div style={{ color: "#173f36", fontWeight: 850 }}>{activeSavedWorkspace.canonicalAddress}</div>
+              <div style={{ marginTop: "0.25rem", color: "#5d635d", fontSize: "0.84rem" }}>
                 Last workspace update {formatDateLabel(getSavedWorkspaceUpdatedAt(activeSavedWorkspace))}
                 {activeSavedWorkspace.omFileName ? ` • ${activeSavedWorkspace.omFileName}` : ""}
               </div>
             </div>
-            <div style={{ color: "#1d4ed8", fontSize: "0.82rem", fontWeight: 800 }}>Currently open</div>
+            <div style={{ color: "#2f6f52", fontSize: "0.82rem", fontWeight: 850 }}>Currently open</div>
           </div>
         ) : null}
 
         <div style={{ marginTop: "0.95rem", display: "grid", gap: "0.55rem" }}>
           {savedWorkspacesLoading ? (
-            <div style={{ color: "#64748b", fontSize: "0.9rem" }}>Loading recent OM workspaces...</div>
+            <div style={{ color: "#68736d", fontSize: "0.9rem" }}>Loading recent OM workspaces...</div>
           ) : savedWorkspaces.length > 0 && workspaceResultsOpen ? (
             filteredSavedWorkspaces.slice(0, 12).map((workspace) => {
               const isActive = workspace.propertyId === propertyId;
@@ -1399,16 +1423,16 @@ function DealAnalysisPageContent() {
                     alignItems: "center",
                     flexWrap: "wrap",
                     padding: "0.72rem 0.85rem",
-                    borderRadius: "12px",
-                    border: isActive ? "1px solid #93c5fd" : "1px solid #dbe2ea",
-                    background: isActive ? "#eff6ff" : "#fff",
+                    borderRadius: "8px",
+                    border: isActive ? "1px solid rgba(47, 111, 82, 0.48)" : "1px solid rgba(38, 47, 44, 0.12)",
+                    background: isActive ? "#edf8f1" : "#fff",
                     textAlign: "left",
                     cursor: savedWorkspaceLoading && isActive ? "not-allowed" : "pointer",
                   }}
                 >
                   <div style={{ minWidth: "260px", flex: "1 1 320px" }}>
-                    <strong style={{ color: "#0f172a" }}>{workspace.canonicalAddress}</strong>
-                    <div style={{ color: "#64748b", fontSize: "0.84rem", lineHeight: 1.5 }}>
+                    <strong style={{ color: "#18231e" }}>{workspace.canonicalAddress}</strong>
+                    <div style={{ color: "#68736d", fontSize: "0.84rem", lineHeight: 1.5 }}>
                       Last update {formatDateLabel(lastUpdatedAt)}
                       {workspace.omFileName ? ` • ${workspace.omFileName}` : ""}
                     </div>
@@ -1419,8 +1443,8 @@ function DealAnalysisPageContent() {
                         style={{
                           padding: "0.2rem 0.5rem",
                           borderRadius: "999px",
-                          background: "#f0f9ff",
-                          color: "#0369a1",
+                          background: "#edf8f1",
+                          color: "#1c5d3f",
                           fontSize: "0.76rem",
                           fontWeight: 700,
                         }}
@@ -1447,8 +1471,8 @@ function DealAnalysisPageContent() {
                         style={{
                           padding: "0.2rem 0.5rem",
                           borderRadius: "999px",
-                          background: "#f8fafc",
-                          color: "#334155",
+                          background: "#f2f6f4",
+                          color: "#40524a",
                           fontSize: "0.76rem",
                           fontWeight: 700,
                         }}
@@ -1461,8 +1485,8 @@ function DealAnalysisPageContent() {
                         style={{
                           padding: "0.2rem 0.5rem",
                           borderRadius: "999px",
-                          background: "#f8fafc",
-                          color: "#334155",
+                          background: "#f2f6f4",
+                          color: "#40524a",
                           fontSize: "0.76rem",
                           fontWeight: 700,
                         }}
@@ -1489,8 +1513,8 @@ function DealAnalysisPageContent() {
                         style={{
                           padding: "0.2rem 0.5rem",
                           borderRadius: "999px",
-                          background: "#eef2ff",
-                          color: "#4338ca",
+                          background: "#edf8f1",
+                          color: "#1c5d3f",
                           fontSize: "0.76rem",
                           fontWeight: 700,
                         }}
@@ -1500,9 +1524,9 @@ function DealAnalysisPageContent() {
                     ) : null}
                     <span
                       style={{
-                        color: isActive ? "#1d4ed8" : "#475569",
+                        color: isActive ? "#2f6f52" : "#47534d",
                         fontSize: "0.8rem",
-                        fontWeight: 700,
+                        fontWeight: 800,
                         alignSelf: "center",
                       }}
                     >
@@ -1513,18 +1537,18 @@ function DealAnalysisPageContent() {
               );
             })
           ) : savedWorkspaces.length > 0 && filteredSavedWorkspaces.length === 0 ? (
-            <div style={{ color: "#64748b", fontSize: "0.9rem", lineHeight: 1.55 }}>
+            <div style={{ color: "#68736d", fontSize: "0.9rem", lineHeight: 1.55 }}>
               No OM workspaces match the current search and filters.
             </div>
           ) : (
-            <div style={{ color: "#64748b", fontSize: "0.9rem", lineHeight: 1.55 }}>
+            <div style={{ color: "#68736d", fontSize: "0.9rem", lineHeight: 1.55 }}>
               {savedWorkspaces.length === 0
                 ? "No saved OM workspaces yet. Analyze uploaded OM PDFs or upload an OM to a property card to make that workspace reusable from this page."
                 : "Use the dropdown, search, or filters above to open a saved OM workspace."}
             </div>
           )}
           {workspaceResultsOpen && filteredSavedWorkspaces.length > 12 ? (
-            <div style={{ color: "#64748b", fontSize: "0.84rem" }}>
+            <div style={{ color: "#68736d", fontSize: "0.84rem" }}>
               Showing 12 of {filteredSavedWorkspaces.length} matching workspaces. Narrow the search to jump
               directly to a property.
             </div>
@@ -1542,8 +1566,8 @@ function DealAnalysisPageContent() {
         <div style={{ ...cardStyle, padding: "1.2rem" }}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap" }}>
             <div>
-              <strong style={{ color: "#0f172a", fontSize: "1rem" }}>1. Add OM PDFs or link</strong>
-              <div style={{ marginTop: "0.3rem", color: "#64748b", fontSize: "0.9rem", lineHeight: 1.5 }}>
+              <strong style={{ color: "#18231e", fontSize: "1rem" }}>1. Add OM PDFs or link</strong>
+              <div style={{ marginTop: "0.3rem", color: "#68736d", fontSize: "0.9rem", lineHeight: 1.5 }}>
                 Start from PDF uploads or a directly downloadable OM link, then pull prior builds back from
                 the saved workspace list above.
               </div>
@@ -1553,12 +1577,7 @@ function DealAnalysisPageContent() {
               onClick={analyzeUploads}
               disabled={!canAnalyze || uploading || linkAnalyzing}
               style={{
-                padding: "0.7rem 1rem",
-                borderRadius: "10px",
-                border: "none",
-                background: "#0f62fe",
-                color: "#fff",
-                fontWeight: 700,
+                ...primaryButtonStyle,
                 cursor: !canAnalyze || uploading || linkAnalyzing ? "not-allowed" : "pointer",
                 opacity: !canAnalyze ? 0.65 : 1,
               }}
@@ -1570,10 +1589,10 @@ function DealAnalysisPageContent() {
           <div
             style={{
               marginTop: "1rem",
-              border: "1px dashed #93c5fd",
-              borderRadius: "16px",
+              border: "1px dashed rgba(47, 111, 82, 0.34)",
+              borderRadius: "8px",
               padding: "1rem",
-              background: "#f8fbff",
+              background: "#f7fbf8",
             }}
           >
             <input
@@ -1600,7 +1619,7 @@ function DealAnalysisPageContent() {
               }}
               style={{ display: "block", width: "100%" }}
             />
-            <div style={{ marginTop: "0.7rem", color: "#64748b", fontSize: "0.84rem", lineHeight: 1.5 }}>
+            <div style={{ marginTop: "0.7rem", color: "#68736d", fontSize: "0.84rem", lineHeight: 1.5 }}>
               Upload OM PDFs, rent roll PDFs, or other OM-side PDF supplements. The analysis will combine
               them into one underwriting workspace. Max {formatBytes(OM_IMPORT_MAX_BYTES)} per PDF.
             </div>
@@ -1613,20 +1632,20 @@ function DealAnalysisPageContent() {
                     justifyContent: "space-between",
                     gap: "0.75rem",
                     padding: "0.55rem 0.7rem",
-                    borderRadius: "10px",
+                    borderRadius: "6px",
                     background: "#fff",
-                    border: file.size > OM_IMPORT_MAX_BYTES ? "1px solid #fca5a5" : "1px solid #dbe2ea",
+                    border: file.size > OM_IMPORT_MAX_BYTES ? "1px solid #fca5a5" : "1px solid rgba(38, 47, 44, 0.12)",
                     fontSize: "0.86rem",
                   }}
                 >
-                  <span style={{ color: "#0f172a", fontWeight: 600 }}>{file.name}</span>
-                  <span style={{ color: file.size > OM_IMPORT_MAX_BYTES ? "#b91c1c" : "#64748b" }}>
+                  <span style={{ color: "#18231e", fontWeight: 700 }}>{file.name}</span>
+                  <span style={{ color: file.size > OM_IMPORT_MAX_BYTES ? "#b91c1c" : "#68736d" }}>
                     {formatBytes(file.size)}
                   </span>
                 </div>
               ))}
               {pendingFiles.length === 0 ? (
-                <div style={{ color: "#64748b", fontSize: "0.86rem" }}>
+                <div style={{ color: "#68736d", fontSize: "0.86rem" }}>
                   No files selected yet.
                 </div>
               ) : null}
@@ -1641,15 +1660,15 @@ function DealAnalysisPageContent() {
           <div
             style={{
               marginTop: "1rem",
-              border: "1px solid #dbe2ea",
-              borderRadius: "16px",
+              border: "1px solid rgba(38, 47, 44, 0.12)",
+              borderRadius: "8px",
               padding: "1rem",
-              background: "#fff",
+              background: "#ffffff",
               display: "grid",
               gap: "0.7rem",
             }}
           >
-            <label style={{ display: "grid", gap: "0.35rem", color: "#475569", fontSize: "0.8rem", fontWeight: 700 }}>
+            <label style={{ display: "grid", gap: "0.35rem", color: "#303832", fontSize: "0.8rem", fontWeight: 800 }}>
               OM PDF link
               <input
                 value={omUrl}
@@ -1658,17 +1677,11 @@ function DealAnalysisPageContent() {
                   setError(null);
                 }}
                 placeholder="https://.../offering-memorandum.pdf"
-                style={{
-                  minHeight: "44px",
-                  border: "1px solid #cbd5e1",
-                  borderRadius: "10px",
-                  padding: "0.6rem 0.7rem",
-                  color: "#0f172a",
-                }}
+                style={inputStyle}
               />
             </label>
             <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", flexWrap: "wrap", alignItems: "center" }}>
-              <div style={{ color: "#64748b", fontSize: "0.84rem", lineHeight: 1.5 }}>
+              <div style={{ color: "#68736d", fontSize: "0.84rem", lineHeight: 1.5 }}>
                 Link imports use the same OM analysis prompt and save back to the matched property workspace.
               </div>
               <button
@@ -1676,12 +1689,8 @@ function DealAnalysisPageContent() {
                 onClick={analyzeOmLink}
                 disabled={!canAnalyzeLink || uploading || linkAnalyzing}
                 style={{
-                  padding: "0.65rem 0.9rem",
-                  borderRadius: "10px",
-                  border: "1px solid #0f62fe",
-                  background: canAnalyzeLink ? "#fff" : "#f8fafc",
-                  color: "#0f62fe",
-                  fontWeight: 700,
+                  ...secondaryButtonStyle,
+                  background: canAnalyzeLink ? "#fff" : "#f2f6f4",
                   cursor: !canAnalyzeLink || uploading || linkAnalyzing ? "not-allowed" : "pointer",
                   opacity: !canAnalyzeLink ? 0.65 : 1,
                 }}
@@ -1693,8 +1702,8 @@ function DealAnalysisPageContent() {
         </div>
 
         <div style={{ ...cardStyle, padding: "1.2rem" }}>
-          <strong style={{ color: "#0f172a", fontSize: "1rem" }}>2. Analysis workspace</strong>
-          <div style={{ marginTop: "0.3rem", color: "#64748b", fontSize: "0.9rem", lineHeight: 1.55 }}>
+          <strong style={{ color: "#18231e", fontSize: "1rem" }}>2. Analysis workspace</strong>
+          <div style={{ marginTop: "0.3rem", color: "#68736d", fontSize: "0.9rem", lineHeight: 1.55 }}>
             Once the OM is parsed, this page will populate current state, unit-level rows, sensitivities,
             assumptions, and the deal dossier PDF.
           </div>
@@ -1703,15 +1712,15 @@ function DealAnalysisPageContent() {
             <div
               style={{
                 padding: "0.8rem 0.9rem",
-                borderRadius: "12px",
-                background: "#f8fafc",
-                border: "1px solid #e2e8f0",
+                borderRadius: "8px",
+                background: "#f7fbf8",
+                border: "1px solid rgba(38, 47, 44, 0.12)",
               }}
             >
-              <div style={{ fontSize: "0.78rem", color: "#64748b", textTransform: "uppercase", letterSpacing: "0.08em" }}>
+              <div style={{ fontSize: "0.72rem", color: "#65736b", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 850 }}>
                 Extracted address
               </div>
-              <div style={{ marginTop: "0.2rem", fontWeight: 700, color: "#0f172a" }}>
+              <div style={{ marginTop: "0.2rem", fontWeight: 800, color: "#18231e" }}>
                 {resolvedAddress?.canonicalAddress ?? workspaceProperty?.canonicalAddress ?? "Waiting on OM analysis"}
               </div>
             </div>
@@ -1719,19 +1728,19 @@ function DealAnalysisPageContent() {
             <div
               style={{
                 padding: "0.8rem 0.9rem",
-                borderRadius: "12px",
-                background: "#f8fafc",
-                border: "1px solid #e2e8f0",
+                borderRadius: "8px",
+                background: "#f7fbf8",
+                border: "1px solid rgba(38, 47, 44, 0.12)",
               }}
             >
-              <div style={{ fontSize: "0.78rem", color: "#64748b", textTransform: "uppercase", letterSpacing: "0.08em" }}>
+              <div style={{ fontSize: "0.72rem", color: "#65736b", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 850 }}>
                 Canonical property match
               </div>
-              <div style={{ marginTop: "0.2rem", color: "#0f172a", lineHeight: 1.5 }}>
+              <div style={{ marginTop: "0.2rem", color: "#18231e", lineHeight: 1.5 }}>
                 {matchedProperty ? (
                   <>
                     <strong>{matchedProperty.canonicalAddress}</strong>
-                    <div style={{ fontSize: "0.84rem", color: "#64748b" }}>
+                    <div style={{ fontSize: "0.84rem", color: "#68736d" }}>
                       Match strategy: {matchedProperty.matchStrategy === "exact_canonical" ? "Exact canonical" : "Address line"}
                     </div>
                   </>
@@ -1744,12 +1753,12 @@ function DealAnalysisPageContent() {
             <div
               style={{
                 padding: "0.8rem 0.9rem",
-                borderRadius: "12px",
-                background: "#f8fafc",
-                border: "1px solid #e2e8f0",
+                borderRadius: "8px",
+                background: "#f7fbf8",
+                border: "1px solid rgba(38, 47, 44, 0.12)",
               }}
             >
-              <div style={{ fontSize: "0.78rem", color: "#64748b", textTransform: "uppercase", letterSpacing: "0.08em" }}>
+              <div style={{ fontSize: "0.72rem", color: "#65736b", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 850 }}>
                 Current outputs
               </div>
               <div style={{ marginTop: "0.45rem", display: "grid", gap: "0.35rem" }}>
@@ -1764,12 +1773,12 @@ function DealAnalysisPageContent() {
                         fontSize: "0.86rem",
                       }}
                     >
-                      <span style={{ color: "#64748b" }}>{row.label}</span>
-                      <strong style={{ color: "#0f172a" }}>{row.value}</strong>
+                      <span style={{ color: "#68736d" }}>{row.label}</span>
+                      <strong style={{ color: "#18231e" }}>{row.value}</strong>
                     </div>
                   ))
                 ) : (
-                  <div style={{ color: "#64748b", fontSize: "0.86rem" }}>
+                  <div style={{ color: "#68736d", fontSize: "0.86rem" }}>
                     {savedWorkspaceLoading
                       ? "Loading the saved OM workspace metrics..."
                       : "Analyze the uploaded OM PDFs or reopen a saved workspace to populate returns and current-state metrics."}
@@ -1785,10 +1794,11 @@ function DealAnalysisPageContent() {
         <div
           style={{
             padding: "0.9rem 1rem",
-            borderRadius: "14px",
-            border: "1px solid #bfdbfe",
-            background: "#eff6ff",
-            color: "#1d4ed8",
+            borderRadius: "8px",
+            border: "1px solid rgba(47, 111, 82, 0.22)",
+            background: "#edf8f1",
+            color: "#1c5d3f",
+            fontWeight: 700,
           }}
         >
           {notice}
@@ -1821,21 +1831,21 @@ function DealAnalysisPageContent() {
                 gap: "1rem",
                 flexWrap: "wrap",
                 alignItems: "center",
-                background: "linear-gradient(180deg, #f8fbff 0%, #ffffff 100%)",
+                background: "linear-gradient(180deg, #f7fbf8 0%, #ffffff 100%)",
               }}
             >
               <div>
-                <strong style={{ color: "#0f172a", fontSize: "0.98rem" }}>
+                <strong style={{ color: "#18231e", fontSize: "0.98rem" }}>
                   Property-backed OM workspace
                 </strong>
-                <div style={{ marginTop: "0.28rem", color: "#64748b", fontSize: "0.88rem", lineHeight: 1.55 }}>
+                <div style={{ marginTop: "0.28rem", color: "#68736d", fontSize: "0.88rem", lineHeight: 1.55 }}>
                   Reopened from the saved property record
                   {savedWorkspaceUpdatedAt ? ` • last saved ${formatDateLabel(savedWorkspaceUpdatedAt)}` : ""}.
                 </div>
                 <div style={{ marginTop: "0.3rem" }}>
                   <Link
                     href={`/property-data?property_id=${encodeURIComponent(propertyId)}`}
-                    style={{ color: "#0f62fe", fontWeight: 700, textDecoration: "none", fontSize: "0.86rem" }}
+                    style={{ color: "#173f36", fontWeight: 800, textDecoration: "none", fontSize: "0.86rem" }}
                   >
                     Open property record
                   </Link>
@@ -1846,12 +1856,8 @@ function DealAnalysisPageContent() {
                 onClick={saveWorkspaceToProperty}
                 disabled={workspaceSaving || !isDirty}
                 style={{
-                  padding: "0.72rem 1rem",
-                  borderRadius: "12px",
-                  border: "1px solid #bfdbfe",
-                  background: workspaceSaving ? "#eff6ff" : "#fff",
-                  color: "#0f172a",
-                  fontWeight: 700,
+                  ...secondaryButtonStyle,
+                  background: workspaceSaving ? "#edf8f1" : "#fff",
                   cursor: workspaceSaving || !isDirty ? "not-allowed" : "pointer",
                 }}
               >
@@ -1900,21 +1906,21 @@ function DealAnalysisPageContent() {
             }}
           >
             <div>
-              <strong style={{ color: "#0f172a", fontSize: "1rem" }}>3. Generate outputs</strong>
-              <div style={{ marginTop: "0.35rem", color: "#64748b", lineHeight: 1.6, fontSize: "0.9rem" }}>
+              <strong style={{ color: "#18231e", fontSize: "1rem" }}>3. Generate outputs</strong>
+              <div style={{ marginTop: "0.35rem", color: "#68736d", lineHeight: 1.55, fontSize: "0.9rem" }}>
                 Generate the deal dossier PDF or Excel workbook from this OM workspace.
                 {propertyId
                   ? " Because this workspace is tied to a canonical property, generation will save the dossier, refresh deal scoring, and make the deal visible from the property record."
                   : " You can also create or match a canonical property record from the extracted address and send it through BBL resolution and enrichment."}
               </div>
               <div style={{ marginTop: "0.75rem", display: "grid", gap: "0.45rem", fontSize: "0.86rem" }}>
-                <div style={{ color: "#0f172a" }}>
+                <div style={{ color: "#18231e" }}>
                   Uploaded OM docs: <strong>{uploadedDocuments.length || workspaceFiles.length}</strong>
                 </div>
-                <div style={{ color: "#0f172a" }}>
+                <div style={{ color: "#18231e" }}>
                   Workspace address: <strong>{resolvedAddress?.canonicalAddress ?? workspaceProperty?.canonicalAddress ?? "—"}</strong>
                 </div>
-                <div style={{ color: "#64748b" }}>
+                <div style={{ color: "#68736d" }}>
                   {isDirty
                     ? "The PDF and property-create step will use your current edits. Refresh analysis if you also want the on-screen metrics updated first."
                     : "The on-screen metrics are in sync with the latest underwriting inputs."}
@@ -1928,12 +1934,7 @@ function DealAnalysisPageContent() {
                 onClick={downloadDossier}
                 disabled={!canGenerateDossier || dossierDownloading}
                 style={{
-                  padding: "0.85rem 1rem",
-                  borderRadius: "12px",
-                  border: "none",
-                  background: "#0f62fe",
-                  color: "#fff",
-                  fontWeight: 700,
+                  ...primaryButtonStyle,
                   cursor: !canGenerateDossier || dossierDownloading ? "not-allowed" : "pointer",
                 }}
               >
@@ -1951,12 +1952,8 @@ function DealAnalysisPageContent() {
                 onClick={downloadDossierExcel}
                 disabled={!canGenerateDossier || excelDownloading}
                 style={{
-                  padding: "0.85rem 1rem",
-                  borderRadius: "12px",
-                  border: "1px solid #8ec5ff",
-                  background: "#eff6ff",
-                  color: "#0f172a",
-                  fontWeight: 700,
+                  ...secondaryButtonStyle,
+                  background: "#edf8f1",
                   cursor: !canGenerateDossier || excelDownloading ? "not-allowed" : "pointer",
                 }}
               >
@@ -1974,12 +1971,7 @@ function DealAnalysisPageContent() {
                 onClick={createPropertyRecord}
                 disabled={!canGenerateDossier || propertyCreating || workspaceFiles.length === 0 || propertyId != null}
                 style={{
-                  padding: "0.85rem 1rem",
-                  borderRadius: "12px",
-                  border: "1px solid #cbd5e1",
-                  background: "#fff",
-                  color: "#0f172a",
-                  fontWeight: 700,
+                  ...secondaryButtonStyle,
                   cursor:
                     !canGenerateDossier ||
                     propertyCreating ||
@@ -2000,27 +1992,27 @@ function DealAnalysisPageContent() {
                 <div
                   style={{
                     padding: "0.85rem 0.95rem",
-                    borderRadius: "12px",
-                    border: "1px solid #dbe2ea",
-                    background: "#f8fafc",
+                    borderRadius: "8px",
+                    border: "1px solid rgba(38, 47, 44, 0.12)",
+                    background: "#f7fbf8",
                     fontSize: "0.86rem",
                     lineHeight: 1.55,
                   }}
                 >
-                  <div style={{ color: "#0f172a", fontWeight: 700 }}>{createResult.canonicalAddress}</div>
-                  <div style={{ marginTop: "0.22rem", color: "#64748b" }}>
+                  <div style={{ color: "#18231e", fontWeight: 800 }}>{createResult.canonicalAddress}</div>
+                  <div style={{ marginTop: "0.22rem", color: "#68736d" }}>
                     {createResult.createdProperty ? "New property created" : "Existing property matched"} via{" "}
                     {createResult.matchStrategy}.
                   </div>
                   {createResult.enrichment?.bbl ? (
-                    <div style={{ marginTop: "0.22rem", color: "#64748b" }}>
+                    <div style={{ marginTop: "0.22rem", color: "#68736d" }}>
                       BBL: {createResult.enrichment.bbl}
                     </div>
                   ) : null}
                   <div style={{ marginTop: "0.45rem" }}>
                     <Link
                       href={`/property-data?property_id=${encodeURIComponent(createResult.propertyId)}`}
-                      style={{ color: "#0f62fe", fontWeight: 700, textDecoration: "none" }}
+                      style={{ color: "#173f36", fontWeight: 800, textDecoration: "none" }}
                     >
                       Open property record
                     </Link>
@@ -2037,7 +2029,7 @@ function DealAnalysisPageContent() {
           style={{
             ...cardStyle,
             padding: "1.1rem",
-            color: "#64748b",
+            color: "#68736d",
             lineHeight: 1.6,
             fontSize: "0.92rem",
           }}

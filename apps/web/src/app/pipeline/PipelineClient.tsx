@@ -32,8 +32,12 @@ import {
   type UiV2PropertyDetailPayload,
   type UiV2RejectionReasonCode,
   type UiV2DetailItem,
+  type UiV2EnrichmentDetailPayload,
   type UiV2EnrichmentState,
   type UiV2EnrichmentModuleDetail,
+  type UiV2ListingFactsPayload,
+  type UiV2OmAnalysisPayload,
+  type UiV2RentalFlowPayload,
   type UiV2StatusChipTone,
 } from "@re-sourcing/contracts";
 import styles from "./PipelinePage.module.css";
@@ -58,6 +62,8 @@ const SORT_OPTIONS: Array<{ value: UiV2PipelineSortField; label: string }> = [
 
 const SOURCE_LABELS: Record<string, string> = {
   streeteasy: "StreetEasy",
+  nyc_api: "StreetEasy",
+  rapidapi: "RapidAPI",
   loopnet: "LoopNet",
   manual: "Manual",
   other: "Other",
@@ -314,6 +320,26 @@ function titleize(value: string | null | undefined): string {
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
+const AREA_LABELS: Record<string, string> = {
+  noho: "NoHo",
+  soho: "SoHo",
+  nomad: "NoMad",
+  fidi: "FiDi",
+  tribeca: "TriBeCa",
+  dumbo: "DUMBO",
+};
+
+function areaLabel(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const normalized = value.trim().toLowerCase().replace(/\s+/g, "-");
+  if (!normalized) return null;
+  return AREA_LABELS[normalized] ?? titleize(normalized);
+}
+
+function locationSubtitle(row: PipelineRow): string {
+  return [areaLabel(row.neighborhood), areaLabel(row.borough)].filter(Boolean).join(" · ") || "-";
+}
+
 function sourceLabel(value: string | null | undefined): string {
   if (!value) return "-";
   const normalized = value.toLowerCase();
@@ -512,6 +538,10 @@ function normalizePropertyDetail(property: FlexiblePropertyDetail | null | undef
           modules: modules.map((module) => normalizeEnrichmentModule(module as Partial<UiV2EnrichmentModuleDetail> & Record<string, unknown>)),
           sourceItems: Array.isArray(rawEnrichmentDetails.sourceItems) ? rawEnrichmentDetails.sourceItems : [],
           rentalItems: Array.isArray(rawEnrichmentDetails.rentalItems) ? rawEnrichmentDetails.rentalItems : [],
+          listingFacts: rawEnrichmentDetails.listingFacts ?? null,
+          rentalFlow: rawEnrichmentDetails.rentalFlow ?? null,
+          omAnalysis: rawEnrichmentDetails.omAnalysis ?? null,
+          sourcingUpdate: rawEnrichmentDetails.sourcingUpdate ?? property.sourcingUpdate ?? null,
         }
       : { modules: [] },
     activityTimeline: Array.isArray(property.activityTimeline) ? property.activityTimeline : [],
@@ -1687,6 +1717,7 @@ export default function PipelineClient() {
   const sheetMarketType = selectedProperty?.overview.marketType ?? selectedRow?.marketType ?? "unknown";
   const sheetDocuments = selectedProperty?.documents ?? [];
   const sheetEnrichmentModules = selectedProperty?.enrichmentDetails?.modules ?? [];
+  const sheetListingFacts = selectedProperty?.enrichmentDetails?.listingFacts ?? null;
   const terminalStatus = selectedRow?.statusChip.status === "rejected" || selectedRow?.statusChip.status === "archived";
   const sheetUnderwriting = selectedProperty?.underwriting ?? selectedRow?.underwriting ?? null;
 
@@ -1907,11 +1938,7 @@ export default function PipelineClient() {
                       {row.thumbnailUrl ? <img src={row.thumbnailUrl} alt="" className={styles.thumb} /> : <div className={styles.thumbBlank} />}
                       <div>
                         <strong>{row.displayAddress ?? row.canonicalAddress}</strong>
-                        <span>{[row.neighborhood, row.borough].filter(Boolean).join(" / ") || "-"}</span>
-                        <div className={styles.locationTags}>
-                          {row.neighborhood ? <small>{row.neighborhood}</small> : null}
-                          {row.borough ? <small>{row.borough}</small> : null}
-                        </div>
+                        <span>{locationSubtitle(row)}</span>
                       </div>
                     </div>
                   </td>
@@ -2194,6 +2221,17 @@ export default function PipelineClient() {
                         <dd>{formatNumber(selectedProperty?.overview.buildingSqft ?? selectedRow?.buildingSqft)}</dd>
                       </div>
                       <div>
+                        <dt>Beds / Baths</dt>
+                        <dd>
+                          {formatNumber(sheetListingFacts?.bedrooms ?? selectedProperty?.overview.beds)} /{" "}
+                          {formatNumber(sheetListingFacts?.bathrooms ?? selectedProperty?.overview.baths)}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>Listing status</dt>
+                        <dd>{titleize(sheetListingFacts?.status)}</dd>
+                      </div>
+                      <div>
                         <dt>Score</dt>
                         <dd>
                           <span className={`${styles.scoreBadge} ${scoreTone(selectedProperty?.underwriting?.dealScore ?? selectedRow?.underwriting?.dealScore)}`}>
@@ -2275,7 +2313,7 @@ export default function PipelineClient() {
                         </a>
                       ) : null}
                     </div>
-                    <PropertyDataPanel modules={sheetEnrichmentModules} />
+                    <PropertyDataPanel details={selectedProperty?.enrichmentDetails ?? null} modules={sheetEnrichmentModules} />
                   </section>
 
                   <section className={styles.overviewSection}>
@@ -2457,7 +2495,7 @@ export default function PipelineClient() {
                   <h3>Activity</h3>
                   <div className={styles.timeline}>
                     {(selectedProperty?.activityTimeline ?? []).map((item) => (
-                      <article key={item.id}>
+                      <article key={item.id} className={activityClass(item)}>
                         <time>{formatDate(item.createdAt)}</time>
                         <div>
                           <strong>{item.title}</strong>
@@ -2671,6 +2709,83 @@ function KeyList({ title, values }: { title: string; values: string[] }) {
   );
 }
 
+type RentalUnitItem = NonNullable<NonNullable<UiV2RentalFlowPayload["rentalUnits"]>[number]>;
+type RentRollItem = NonNullable<NonNullable<UiV2OmAnalysisPayload["rentRoll"]>[number]>;
+
+const PROPERTY_DETAIL_MODULES = ["location", "tax_assessment", "owner", "zoning", "certificate_of_occupancy"] as const;
+const REGULATORY_MODULES = [
+  "permits",
+  "hpd_registration",
+  "hpd_violations",
+  "dob_complaints",
+  "housing_litigations",
+  "affordable_housing",
+] as const;
+
+function moduleToneClass(status: string | null | undefined): string {
+  const normalized = String(status ?? "").toLowerCase();
+  if (normalized === "missing" || normalized === "failed") return styles.toneWarning;
+  if (normalized === "review" || normalized === "partial") return styles.toneInfo;
+  return styles.toneSuccess;
+}
+
+function moduleItems(module: UiV2EnrichmentModuleDetail | null | undefined): UiV2DetailItem[] {
+  return module ? [...(module.summaryItems ?? []), ...(module.detailItems ?? [])] : [];
+}
+
+function moduleItemValue(module: UiV2EnrichmentModuleDetail | null | undefined, labels: string[]): string | null {
+  const wanted = labels.map((label) => label.toLowerCase());
+  const item = moduleItems(module).find((candidate) => wanted.includes(candidate.label.toLowerCase()));
+  const value = item ? displayDetailValue(item) : null;
+  return value && value !== "-" ? value : null;
+}
+
+function compactModuleLine(module: UiV2EnrichmentModuleDetail): string {
+  const items = moduleItems(module)
+    .map((item) => `${titleize(item.label)} ${displayDetailValue(item)}`)
+    .filter((item) => !item.endsWith(" -"))
+    .slice(0, 3);
+  return items.length > 0 ? items.join(" · ") : "No source fields populated yet";
+}
+
+function moduleUpdatedAt(module: UiV2EnrichmentModuleDetail): string | null {
+  return (
+    moduleItemValue(module, ["Last updated", "Refreshed", "Processed", "Last refreshed", "Last evaluated", "Updated"]) ??
+    null
+  );
+}
+
+function factsFromListing(facts: UiV2ListingFactsPayload | null | undefined): UiV2DetailItem[] {
+  if (!facts) return [];
+  const bedsBaths =
+    facts.bedrooms != null || facts.bathrooms != null
+      ? `${formatNumber(facts.bedrooms)} bd / ${formatNumber(facts.bathrooms)} ba`
+      : null;
+  return [
+    { label: "Listing status", value: titleize(facts.status) },
+    { label: "Property type", value: titleize(facts.propertyType) },
+    { label: "Beds / baths", value: bedsBaths },
+    { label: "Sqft", value: formatNumber(facts.sqft) },
+    { label: "$ / sf", value: formatCurrency(facts.ppsqft, false) },
+    { label: "Days on market", value: formatNumber(facts.daysOnMarket) },
+    { label: "Listed", value: formatDate(facts.listedAt) },
+    { label: "Built", value: facts.builtIn ?? null },
+    { label: "Monthly HOA", value: formatCurrency(facts.monthlyHoa, false) },
+    { label: "Monthly tax", value: formatCurrency(facts.monthlyTax, false) },
+  ].filter((item) => item.value != null && item.value !== "-");
+}
+
+function statusBadgeLabel(status: string | null | undefined): string {
+  return titleize(status ?? "available");
+}
+
+function activityClass(item: { type?: string | null; title?: string | null; metadata?: Record<string, unknown> | null }): string | undefined {
+  const tone = item.metadata?.tone;
+  if (tone === "danger" || /unavailable|rejected|failed/i.test(`${item.title ?? ""} ${item.type ?? ""}`)) return styles.timelineDanger;
+  if (/listing|sourcing/i.test(`${item.title ?? ""} ${item.type ?? ""}`)) return styles.timelineInfo;
+  return undefined;
+}
+
 function EnrichmentModuleGrid({
   modules,
   compact = false,
@@ -2687,47 +2802,240 @@ function EnrichmentModuleGrid({
       {visibleModules.map((module) => (
         <article key={module.key} className={styles.moduleRow}>
           <div className={styles.moduleHeader}>
-            <strong>{module.label}</strong>
-            <span className={`${styles.tinyChip} ${module.status === "missing" ? styles.toneWarning : styles.toneSuccess}`}>
-              {titleize(module.status)}
+            <div>
+              <strong>{module.label}</strong>
+              <p>{compactModuleLine(module)}</p>
+            </div>
+            <span className={`${styles.tinyChip} ${moduleToneClass(module.status)}`}>
+              {statusBadgeLabel(module.status)}
             </span>
           </div>
-          <DetailItems items={module.summaryItems ?? []} />
-          {!compact && module.detailItems && module.detailItems.length > 0 ? (
-            <div className={styles.moduleDetails}>
-              <DetailItems items={module.detailItems} />
-            </div>
-          ) : null}
+          <small>{moduleUpdatedAt(module) ? `Updated ${moduleUpdatedAt(module)}` : `${moduleItems(module).length} fields pulled`}</small>
         </article>
       ))}
     </div>
   );
 }
 
-function PropertyDataPanel({ modules }: { modules: UiV2EnrichmentModuleDetail[] }) {
-  const visibleModules = modules
-    .map((module) => ({
-      ...module,
-      items: [...(module.summaryItems ?? []), ...(module.detailItems ?? [])],
-    }))
-    .filter((module) => module.items.length > 0)
-    .slice(0, 12);
-  if (visibleModules.length === 0) {
+function DataModuleRow({ module }: { module: UiV2EnrichmentModuleDetail }) {
+  const items = moduleItems(module).slice(0, 6);
+  return (
+    <article className={styles.dataModuleRow}>
+      <div className={styles.dataModuleHeader}>
+        <strong>{module.label}</strong>
+        <span className={`${styles.tinyChip} ${moduleToneClass(module.status)}`}>{statusBadgeLabel(module.status)}</span>
+      </div>
+      <DetailItems items={items} />
+    </article>
+  );
+}
+
+function RentalUnitTable({ units }: { units: RentalUnitItem[] }) {
+  if (units.length === 0) {
+    return <div className={styles.emptyState}>No unit-level rental rows are available yet.</div>;
+  }
+  return (
+    <div className={styles.dataTableShell}>
+      <table className={styles.miniTable}>
+        <thead>
+          <tr>
+            <th>Unit</th>
+            <th>Layout</th>
+            <th>Rent</th>
+            <th>Status</th>
+            <th>Last rented</th>
+          </tr>
+        </thead>
+        <tbody>
+          {units.map((unit, index) => {
+            const photo = Array.isArray(unit.images) ? unit.images[0] : null;
+            const unitLabel = unit.unit ?? `Unit ${index + 1}`;
+            return (
+              <tr key={`${unitLabel}:${index}`}>
+                <td>
+                  <div className={styles.unitCell}>
+                    {photo ? <img src={photo} alt="" className={styles.unitPhoto} /> : <div className={styles.unitPhotoBlank}>{index + 1}</div>}
+                    <div>
+                      {unit.streeteasyUrl ? (
+                        <a href={unit.streeteasyUrl} target="_blank" rel="noreferrer">
+                          {unitLabel}
+                        </a>
+                      ) : (
+                        <strong>{unitLabel}</strong>
+                      )}
+                      <span>{sourceLabel(unit.source ?? "rapidapi")}</span>
+                    </div>
+                  </div>
+                </td>
+                <td>
+                  {[unit.beds != null ? `${formatNumber(unit.beds)} bd` : null, unit.baths != null ? `${formatNumber(unit.baths)} ba` : null, unit.sqft != null ? `${formatNumber(unit.sqft)} sf` : null]
+                    .filter(Boolean)
+                    .join(" · ") || "-"}
+                </td>
+                <td>{formatCurrency(unit.rentalPrice, false)}</td>
+                <td>{titleize(unit.status)}</td>
+                <td>{formatDate(unit.lastRentedDate ?? unit.listedDate)}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function RentRollTable({ rows }: { rows: RentRollItem[] }) {
+  if (rows.length === 0) return null;
+  return (
+    <div className={styles.dataTableShell}>
+      <table className={styles.miniTable}>
+        <thead>
+          <tr>
+            <th>Unit</th>
+            <th>Type</th>
+            <th>Rent</th>
+            <th>Size</th>
+            <th>Tenant/status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.slice(0, 80).map((row, index) => (
+            <tr key={`${row.unit ?? row.tenantName ?? "row"}:${index}`}>
+              <td>{row.unit ?? row.building ?? `Row ${index + 1}`}</td>
+              <td>{row.unitCategory ?? row.rentType ?? "-"}</td>
+              <td>{formatCurrency(row.monthlyTotalRent ?? row.monthlyRent ?? row.monthlyBaseRent, false)}</td>
+              <td>
+                {[row.beds != null ? `${formatNumber(row.beds)} bd` : null, row.baths != null ? `${formatNumber(row.baths)} ba` : null, row.sqft != null ? `${formatNumber(row.sqft)} sf` : null]
+                  .filter(Boolean)
+                  .join(" · ") || "-"}
+              </td>
+              <td>{[row.tenantName, typeof row.occupied === "boolean" ? (row.occupied ? "Occupied" : "Vacant") : row.occupied, row.tenantStatus].filter(Boolean).join(" · ") || "-"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function RentalFlowPanel({ flow }: { flow?: UiV2RentalFlowPayload | null }) {
+  if (!flow) return null;
+  const units = flow.rentalUnits ?? [];
+  return (
+    <section className={styles.propertyDataSection}>
+      <div className={styles.propertyDataHeader}>
+        <div>
+          <h4>Rental Flow</h4>
+          <p>{flow.lastUpdatedAt ? `Updated ${formatDate(flow.lastUpdatedAt)}` : "StreetEasy rental-history probe and listing LLM extraction"}</p>
+        </div>
+        <span className={`${styles.tinyChip} ${units.length > 0 ? styles.toneSuccess : styles.toneWarning}`}>
+          {units.length > 0 ? `${units.length} units` : "Needs data"}
+        </span>
+      </div>
+      <dl className={styles.propertyFactGrid}>
+        <div><dt>Source</dt><dd>{sourceLabel(flow.source ?? null)}</dd></div>
+        <div><dt>Gross rent</dt><dd>{formatCurrency(flow.grossRent, false)}</dd></div>
+        <div><dt>NOI</dt><dd>{formatCurrency(flow.noi, false)}</dd></div>
+        <div><dt>Cap rate</dt><dd>{formatPercent(flow.capRate)}</dd></div>
+      </dl>
+      {flow.dataGaps ? <p className={styles.dataNote}>{flow.dataGaps}</p> : null}
+      <RentalUnitTable units={units} />
+      {flow.omRentRoll?.length ? (
+        <>
+          <h5 className={styles.subsectionTitle}>OM rent roll</h5>
+          <RentRollTable rows={flow.omRentRoll} />
+        </>
+      ) : null}
+    </section>
+  );
+}
+
+function OmAnalysisPanel({ analysis }: { analysis?: UiV2OmAnalysisPayload | null }) {
+  if (!analysis) return null;
+  const takeaways = analysis.takeaways ?? [];
+  const rentRoll = analysis.rentRoll ?? [];
+  return (
+    <section className={styles.propertyDataSection}>
+      <div className={styles.propertyDataHeader}>
+        <div>
+          <h4>OM Analysis</h4>
+          <p>{analysis.processedAt ? `Processed ${formatDate(analysis.processedAt)}` : "Promoted OM financials and rent-roll extraction"}</p>
+        </div>
+        <span className={`${styles.tinyChip} ${analysis.status === "failed" ? styles.toneWarning : styles.toneSuccess}`}>
+          {statusBadgeLabel(analysis.status)}
+        </span>
+      </div>
+      <dl className={styles.propertyFactGrid}>
+        <div><dt>Current NOI</dt><dd>{formatCurrency(analysis.currentNoi, false)}</dd></div>
+        <div><dt>Operating expenses</dt><dd>{formatCurrency(analysis.operatingExpenses, false)}</dd></div>
+        <div><dt>Rent roll rows</dt><dd>{formatNumber(rentRoll.length)}</dd></div>
+        <div><dt>Validation flags</dt><dd>{formatNumber(analysis.validationFlags?.length ?? null)}</dd></div>
+      </dl>
+      {takeaways.length > 0 ? (
+        <ul className={styles.takeawayList}>
+          {takeaways.slice(0, 6).map((takeaway) => (
+            <li key={takeaway}>{takeaway}</li>
+          ))}
+        </ul>
+      ) : null}
+      <RentRollTable rows={rentRoll} />
+    </section>
+  );
+}
+
+function PropertyDataPanel({ details, modules }: { details?: UiV2EnrichmentDetailPayload | null; modules: UiV2EnrichmentModuleDetail[] }) {
+  const byKey = new Map(modules.map((module) => [module.key, module]));
+  const propertyModules = PROPERTY_DETAIL_MODULES.flatMap((key) => {
+    const module = byKey.get(key);
+    return module && moduleItems(module).length > 0 ? [module] : [];
+  });
+  const regulatoryModules = REGULATORY_MODULES.flatMap((key) => {
+    const module = byKey.get(key);
+    return module && moduleItems(module).length > 0 ? [module] : [];
+  });
+  const listingFacts = details?.listingFacts ?? null;
+  const factItems = factsFromListing(listingFacts);
+  if (modules.length === 0 && factItems.length === 0 && !details?.rentalFlow && !details?.omAnalysis) {
     return <div className={styles.emptyState}>No enrichment details are available yet.</div>;
   }
   return (
     <div className={styles.propertyDataPanel}>
-      {visibleModules.map((module) => (
-        <section key={module.key} className={styles.propertyDataSection}>
-          <div className={styles.propertyDataHeader}>
-            <h4>{module.label}</h4>
-            <span className={`${styles.tinyChip} ${module.status === "missing" ? styles.toneWarning : styles.toneSuccess}`}>
-              {titleize(module.status)}
-            </span>
+      <section className={styles.propertyDataSection}>
+        <div className={styles.propertyDataHeader}>
+          <div>
+            <h4>Property Details</h4>
+            <p>Source facts plus city and tax identifiers in one place</p>
           </div>
-          <DetailItems items={module.items} />
+          {listingFacts?.unitCountSource === "inferred" ? <span className={`${styles.tinyChip} ${styles.toneWarning}`}>Units estimated</span> : null}
+        </div>
+        {factItems.length > 0 ? <DetailItems items={factItems} /> : null}
+        {propertyModules.length > 0 ? (
+          <div className={styles.dataModuleList}>
+            {propertyModules.map((module) => (
+              <DataModuleRow key={module.key} module={module} />
+            ))}
+          </div>
+        ) : null}
+      </section>
+
+      {regulatoryModules.length > 0 ? (
+        <section className={styles.propertyDataSection}>
+          <div className={styles.propertyDataHeader}>
+            <div>
+              <h4>Regulatory Records</h4>
+              <p>Permits, HPD, DOB complaints, litigation, and affordability checks</p>
+            </div>
+          </div>
+          <div className={styles.dataModuleList}>
+            {regulatoryModules.map((module) => (
+              <DataModuleRow key={module.key} module={module} />
+            ))}
+          </div>
         </section>
-      ))}
+      ) : null}
+
+      <RentalFlowPanel flow={details?.rentalFlow} />
+      <OmAnalysisPanel analysis={details?.omAnalysis} />
     </div>
   );
 }

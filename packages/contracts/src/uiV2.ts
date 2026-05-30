@@ -6,6 +6,8 @@ import type {
   PropertyDealDossierSummary,
   PropertyDocumentCategory,
   PropertySourcingUpdate,
+  RentalUnitRow,
+  OmRentRollRow,
   SavedDeal,
 } from "./property.js";
 import type {
@@ -506,10 +508,55 @@ export interface UiV2EnrichmentModuleDetail {
   detailItems?: UiV2DetailItem[];
 }
 
+export interface UiV2ListingFactsPayload {
+  status?: string | null;
+  propertyType?: string | null;
+  bedrooms?: number | null;
+  bathrooms?: number | null;
+  sqft?: number | null;
+  ppsqft?: number | null;
+  daysOnMarket?: number | null;
+  listedAt?: string | null;
+  closedAt?: string | null;
+  monthlyHoa?: number | null;
+  monthlyTax?: number | null;
+  builtIn?: number | null;
+  amenities?: string[] | null;
+  units?: number | null;
+  unitCountSource?: "source" | "om" | "rental_flow" | "inferred" | "unknown" | string | null;
+}
+
+export interface UiV2RentalFlowPayload {
+  source?: string | null;
+  lastUpdatedAt?: string | null;
+  rentalUnits?: RentalUnitRow[] | null;
+  omRentRoll?: OmRentRollRow[] | null;
+  grossRent?: number | null;
+  noi?: number | null;
+  capRate?: number | null;
+  dataGaps?: string | null;
+  rentNotes?: string | null;
+}
+
+export interface UiV2OmAnalysisPayload {
+  status?: string | null;
+  processedAt?: string | null;
+  currentNoi?: number | null;
+  operatingExpenses?: number | null;
+  rentRoll?: OmRentRollRow[] | null;
+  takeaways?: string[] | null;
+  validationFlags?: unknown[] | null;
+  coverage?: Record<string, unknown> | null;
+}
+
 export interface UiV2EnrichmentDetailPayload {
   modules: UiV2EnrichmentModuleDetail[];
   sourceItems?: UiV2DetailItem[];
   rentalItems?: UiV2DetailItem[];
+  listingFacts?: UiV2ListingFactsPayload | null;
+  rentalFlow?: UiV2RentalFlowPayload | null;
+  omAnalysis?: UiV2OmAnalysisPayload | null;
+  sourcingUpdate?: PropertySourcingUpdate | null;
 }
 
 export interface UiV2UnderwritingSummary {

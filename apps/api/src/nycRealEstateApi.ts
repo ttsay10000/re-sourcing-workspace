@@ -96,6 +96,17 @@ function mapListing(raw: ApiListing, sourceLabel: "active" | "past"): ListingNor
   const sqft = raw.square_feet ?? raw.sqft ?? raw.sqft_feet;
   const numSqft = typeof sqft === "number" ? sqft : typeof sqft === "string" ? Number(sqft) : null;
   const url = (raw.url ?? raw.link ?? raw.listing_url ?? "").trim() || "#";
+  const images = Array.isArray(raw.images)
+    ? (raw.images as unknown[]).filter((image): image is string => typeof image === "string" && image.trim().length > 0)
+    : null;
+  const agents = Array.isArray(raw.agents)
+    ? (raw.agents as unknown[])
+        .map((agent) => (typeof agent === "string" ? agent.trim() : ""))
+        .filter(Boolean)
+    : null;
+  const latitude = Number(raw.latitude ?? raw.lat);
+  const longitude = Number(raw.longitude ?? raw.lon);
+  const listedAt = raw.listedAt ?? raw.listed_at;
 
   return {
     source: "nyc_api",
@@ -110,12 +121,30 @@ function mapListing(raw: ApiListing, sourceLabel: "active" | "past"): ListingNor
     sqft: numSqft && !Number.isNaN(numSqft) ? numSqft : null,
     url,
     title: (raw.title ?? address) || null,
-    description: null,
-    lat: null,
-    lon: null,
-    imageUrls: null,
-    listedAt: null,
-    extra: { apiSegment: sourceLabel },
+    description: typeof raw.description === "string" ? raw.description : null,
+    lat: Number.isFinite(latitude) ? latitude : null,
+    lon: Number.isFinite(longitude) ? longitude : null,
+    imageUrls: images && images.length > 0 ? images : null,
+    listedAt: listedAt != null ? String(listedAt) : null,
+    agentNames: agents && agents.length > 0 ? agents : null,
+    extra: {
+      apiSegment: sourceLabel,
+      status: raw.status ?? null,
+      borough: raw.borough ?? null,
+      neighborhood: raw.neighborhood ?? raw.neighborhood_name ?? null,
+      zipcode: raw.zipcode ?? raw.zip_code ?? raw.zip ?? null,
+      propertyType: raw.propertyType ?? raw.property_type ?? null,
+      ppsqft: raw.ppsqft ?? raw.price_per_sqft ?? null,
+      daysOnMarket: raw.daysOnMarket ?? raw.days_on_market ?? null,
+      monthlyHoa: raw.monthlyHoa ?? raw.monthly_hoa ?? null,
+      monthlyTax: raw.monthlyTax ?? raw.monthly_tax ?? null,
+      builtIn: raw.builtIn ?? raw.built_in ?? null,
+      amenities: raw.amenities ?? null,
+      building: raw.building ?? null,
+      floorplans: raw.floorplans ?? null,
+      closedAt: raw.closedAt ?? raw.closed_at ?? null,
+      closedPrice: raw.closed_price ?? raw.closedPrice ?? null,
+    },
   };
 }
 

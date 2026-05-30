@@ -7,6 +7,7 @@
 
 import { Router, type Request, type Response } from "express";
 import type { Pool } from "pg";
+import { deriveListingActivitySummary, describeListingActivity } from "@re-sourcing/contracts";
 import {
   DocumentRepo,
   getPool,
@@ -24,6 +25,7 @@ import type { PropertyPipelineEvent } from "@re-sourcing/db";
 import type {
   AgentEnrichmentEntry,
   Document,
+  PriceHistoryEntry,
   ListingSource,
   OmIngestionRun,
   Property,
@@ -41,7 +43,9 @@ import type {
   UiV2EnrichmentModuleDetail,
   UiV2EnrichmentState,
   UiV2ImageAsset,
+  UiV2ListingFactsPayload,
   UiV2MarketType,
+  UiV2OmAnalysisPayload,
   UiV2PipelineListPayload,
   UiV2PipelineQuery,
   UiV2PipelineRow,
@@ -54,6 +58,7 @@ import type {
   UiV2RejectionReasonCode,
   UiV2StatusChip,
   UiV2StatusChipTone,
+  UiV2RentalFlowPayload,
   UiV2UnderwritingSummary,
 } from "@re-sourcing/contracts";
 import {
@@ -184,6 +189,11 @@ interface PipelineBaseRow {
   listing_title: string | null;
   listing_description: string | null;
   listing_image_urls: string[] | null;
+  listing_listed_at: Date | string | null;
+  listing_price_history: PriceHistoryEntry[] | null;
+  listing_rental_price_history: PriceHistoryEntry[] | null;
+  listing_lifecycle_state: string | null;
+  listing_last_seen_at: Date | string | null;
   listing_agent_names: string[] | null;
   listing_agent_enrichment: AgentEnrichmentEntry[] | null;
   listing_extra: Record<string, unknown> | null;
@@ -1055,6 +1065,160 @@ function buildEnrichmentState(row: PipelineBaseRow): UiV2EnrichmentState {
   };
 }
 
+function coerceStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((entry) => (typeof entry === "string" ? entry.trim() : null))
+    .filter((entry): entry is string => Boolean(entry));
+}
+
+function coerceRecordList<T extends Record<string, unknown>>(value: unknown): T[] {
+  return Array.isArray(value) ? value.filter((entry): entry is T => isPlainRecord(entry)) : [];
+}
+
+function sourceUnitCount(row: PipelineBaseRow): number | null {
+  return readFirstNumericPath(row.listing_extra, [
+    ["units"],
+    ["unitCount"],
+    ["unit_count"],
+    ["totalUnits"],
+    ["total_units"],
+    ["numberOfUnits"],
+    ["number_of_units"],
+    ["num_units"],
+    ["building_units"],
+    ["building", "units"],
+    ["property", "units"],
+  ]);
+}
+
+function listingStatus(row: PipelineBaseRow): string | null {
+  const fromExtra = readFirstStringPath(row.listing_extra, [
+    ["status"],
+    ["listingStatus"],
+    ["listing_status"],
+    ["saleStatus"],
+    ["sale_status"],
+  ]);
+  if (fromExtra) return fromExtra;
+  return row.listing_lifecycle_state === "missing" ? "missing" : null;
+}
+
+function isUnavailableListingStatus(status: string | null | undefined): boolean {
+  const normalized = String(status ?? "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+  return [
+    "temporary_off_market",
+    "off_market",
+    "in_contract",
+    "contract_signed",
+    "pending",
+    "sold",
+    "closed",
+    "delisted",
+    "withdrawn",
+    "missing",
+    "unavailable",
+  ].includes(normalized);
+}
+
+function buildListingFacts(row: PipelineBaseRow): UiV2ListingFactsPayload | null {
+  const details = row.details;
+  const rentalFinancials = details?.rentalFinancials;
+  const rentalUnits = isPlainRecord(rentalFinancials) && Array.isArray(rentalFinancials.rentalUnits)
+    ? rentalFinancials.rentalUnits.length
+    : null;
+  const unitsFromOm = resolvePreferredOmUnitCount(details);
+  const unitsFromSource = sourceUnitCount(row);
+  const units = getUnitCount(row);
+  const unitCountSource =
+    unitsFromSource != null
+      ? "source"
+      : unitsFromOm != null
+        ? "om"
+        : rentalUnits != null && rentalUnits > 0
+          ? "rental_flow"
+          : units != null
+            ? "inferred"
+            : null;
+  const amenities = coerceStringList(isPlainRecord(row.listing_extra) ? row.listing_extra.amenities : null);
+  const facts: UiV2ListingFactsPayload = {
+    status: listingStatus(row),
+    propertyType: readFirstStringPath(row.listing_extra, [["propertyType"], ["property_type"], ["type"], ["building", "type"]]),
+    bedrooms: toFiniteNumber(row.listing_beds),
+    bathrooms: toFiniteNumber(row.listing_baths),
+    sqft: toFiniteNumber(row.listing_sqft) ?? readFirstNumericPath(row.listing_extra, [["sqft"], ["squareFeet"], ["square_feet"]]),
+    ppsqft: readFirstNumericPath(row.listing_extra, [["ppsqft"], ["pricePerSqft"], ["price_per_sqft"]]),
+    daysOnMarket: readFirstNumericPath(row.listing_extra, [["daysOnMarket"], ["days_on_market"], ["dom"]]),
+    listedAt: optionalIso(row.listing_listed_at) ?? readFirstStringPath(row.listing_extra, [["listedAt"], ["listed_at"]]),
+    closedAt: readFirstStringPath(row.listing_extra, [["closedAt"], ["closed_at"]]),
+    monthlyHoa: readFirstNumericPath(row.listing_extra, [["monthlyHoa"], ["monthly_hoa"], ["hoa"]]),
+    monthlyTax: readFirstNumericPath(row.listing_extra, [["monthlyTax"], ["monthly_tax"], ["tax"]]),
+    builtIn: readFirstNumericPath(row.listing_extra, [["builtIn"], ["built_in"], ["yearBuilt"], ["year_built"]]),
+    amenities: amenities.length > 0 ? amenities : null,
+    units,
+    unitCountSource,
+  };
+  return Object.values(facts).some((value) => hasDisplayValue(value)) ? facts : null;
+}
+
+function buildRentalFlowPayload(
+  rentalFinancials: Record<string, unknown> | null,
+  fromLlm: Record<string, unknown>,
+  authoritativeRentRoll: Record<string, unknown>[],
+  omRentRoll: Record<string, unknown>[]
+): UiV2RentalFlowPayload | null {
+  const rentalUnits = coerceRecordList(isPlainRecord(rentalFinancials) ? rentalFinancials.rentalUnits : null);
+  const payload: UiV2RentalFlowPayload = {
+    source: readStringPath(rentalFinancials, ["source"]),
+    lastUpdatedAt: readStringPath(rentalFinancials, ["lastUpdatedAt"]),
+    rentalUnits,
+    omRentRoll: authoritativeRentRoll.length > 0 ? authoritativeRentRoll : omRentRoll,
+    grossRent: readNumericPath(fromLlm, ["grossRentTotal"]),
+    noi: readNumericPath(fromLlm, ["noi"]),
+    capRate: readNumericPath(fromLlm, ["capRate"]),
+    dataGaps: readStringPath(fromLlm, ["dataGapSuggestions"]),
+    rentNotes: readStringPath(fromLlm, ["rentalEstimates"]),
+  };
+  return Object.values(payload).some((value) => hasDisplayValue(value)) ? payload : null;
+}
+
+function normalizeTakeaways(value: unknown): string[] | null {
+  if (Array.isArray(value)) {
+    const list = value
+      .map((entry) => (typeof entry === "string" ? entry.trim() : null))
+      .filter((entry): entry is string => Boolean(entry));
+    return list.length > 0 ? list : null;
+  }
+  if (typeof value !== "string" || !value.trim()) return null;
+  const parts = value
+    .split(/\n+|(?:^|[.;])\s*(?=[A-Z][A-Za-z /-]+:)/g)
+    .map((part) => part.replace(/^[,.;\s]+|[,.;\s]+$/g, "").trim())
+    .filter(Boolean);
+  return parts.length > 0 ? parts.slice(0, 8) : [value.trim()];
+}
+
+function buildOmAnalysisPayload(
+  details: PropertyDetails | null | undefined,
+  authoritativeOm: Record<string, unknown>,
+  omAnalysis: Record<string, unknown>
+): UiV2OmAnalysisPayload | null {
+  const rentRoll = coerceRecordList(authoritativeOm.rentRoll).length > 0
+    ? coerceRecordList(authoritativeOm.rentRoll)
+    : coerceRecordList(omAnalysis.rentRoll);
+  const validationFlags = Array.isArray(authoritativeOm.validationFlags) ? authoritativeOm.validationFlags : null;
+  const payload: UiV2OmAnalysisPayload = {
+    status: readStringPath(details, ["omData", "status"]),
+    processedAt: readStringPath(details, ["omData", "lastProcessedAt"]),
+    currentNoi: readNumericPath(authoritativeOm, ["currentFinancials", "noi"]),
+    operatingExpenses: readNumericPath(authoritativeOm, ["currentFinancials", "operatingExpenses"]),
+    rentRoll,
+    takeaways: normalizeTakeaways(authoritativeOm.investmentTakeaways ?? omAnalysis.investmentTakeaways),
+    validationFlags,
+    coverage: isPlainRecord(authoritativeOm.coverage) ? authoritativeOm.coverage : isPlainRecord(omAnalysis.sourceCoverage) ? omAnalysis.sourceCoverage : null,
+  };
+  return Object.values(payload).some((value) => hasDisplayValue(value)) ? payload : null;
+}
+
 function buildEnrichmentDetails(row: PipelineBaseRow): UiV2EnrichmentDetailPayload {
   const details = row.details;
   const enrichment = isPlainRecord(details?.enrichment) ? details.enrichment : {};
@@ -1234,7 +1398,20 @@ function buildEnrichmentDetails(row: PipelineBaseRow): UiV2EnrichmentDetailPaylo
     detailItem(change.label || change.field, change.currentValue ?? change.changeType)
   ));
 
-  return { modules, sourceItems, rentalItems };
+  return {
+    modules,
+    sourceItems,
+    rentalItems,
+    listingFacts: buildListingFacts(row),
+    rentalFlow: buildRentalFlowPayload(
+      isPlainRecord(rentalFinancials) ? rentalFinancials : null,
+      fromLlm,
+      coerceRecordList(authoritativeRentRoll),
+      coerceRecordList(omRentRoll)
+    ),
+    omAnalysis: buildOmAnalysisPayload(details, authoritativeOm, omAnalysis),
+    sourcingUpdate: details?.sourcingUpdate ?? null,
+  };
 }
 
 function getCalculatedDealScore(row: PipelineBaseRow): number | null {
@@ -1430,13 +1607,18 @@ function buildPipelineRow(row: PipelineBaseRow): UiV2PipelineRow {
   const overview = buildOverview(row);
   const gallery = buildGallery(row);
   const pipeline = readPipelineState(row.details);
+  const status = listingStatus(row);
+  const tags = uniqueStrings([
+    ...pipeline.tags,
+    isUnavailableListingStatus(status) ? "listing_unavailable" : null,
+  ]);
   return {
     propertyId: row.property_id,
     canonicalAddress: row.canonical_address,
     displayAddress: overview.displayAddress,
     source: overview.source,
     statusChip: buildStatusChip(row),
-    tags: pipeline.tags,
+    tags,
     askingPrice: overview.askingPrice,
     units: overview.units,
     buildingSqft: overview.buildingSqft,
@@ -1467,6 +1649,49 @@ function buildActivityTimeline(row: PipelineBaseRow, collections: DetailCollecti
     createdAt: event.createdAt,
   }));
   const pipeline = readPipelineState(row.details);
+  const activity = deriveListingActivitySummary({
+    listedAt: optionalIso(row.listing_listed_at),
+    currentPrice: getAskingPrice(row),
+    priceHistory: Array.isArray(row.listing_price_history) ? row.listing_price_history : null,
+  });
+  const activityBody = describeListingActivity(activity);
+  if (activityBody && activity?.lastActivityDate) {
+    items.push({
+      id: `${row.property_id}:listing-activity:${activity.lastActivityDate}`,
+      propertyId: row.property_id,
+      type: "listing_seen",
+      title: "Listing activity",
+      body: activityBody,
+      metadata: {
+        latestPriceChangePercent: activity.latestPriceChangePercent,
+        totalPriceDrops: activity.totalPriceDrops,
+      },
+      createdAt: `${activity.lastActivityDate}T12:00:00.000Z`,
+    });
+  }
+  const currentListingStatus = listingStatus(row);
+  if (isUnavailableListingStatus(currentListingStatus)) {
+    items.push({
+      id: `${row.property_id}:listing-unavailable:${currentListingStatus ?? "unknown"}`,
+      propertyId: row.property_id,
+      type: "listing_status",
+      title: "Listing unavailable",
+      body: currentListingStatus ? `StreetEasy status: ${currentListingStatus}` : "Listing is not currently active.",
+      metadata: { tone: "danger", rejectionReason: "already_sold_or_unavailable" },
+      createdAt: optionalIso(row.listing_last_seen_at) ?? toIso(row.property_updated_at),
+    });
+  }
+  if (row.details?.sourcingUpdate?.status === "updated" && row.details.sourcingUpdate.lastEvaluatedAt) {
+    items.push({
+      id: `${row.property_id}:sourcing-update:${row.details.sourcingUpdate.lastEvaluatedAt}`,
+      propertyId: row.property_id,
+      type: "listing_activity",
+      title: "Sourcing update",
+      body: row.details.sourcingUpdate.summary ?? null,
+      metadata: { changes: row.details.sourcingUpdate.changes ?? [] },
+      createdAt: row.details.sourcingUpdate.lastEvaluatedAt,
+    });
+  }
   items.push({
     id: `${row.property_id}:created`,
     propertyId: row.property_id,
@@ -1636,6 +1861,11 @@ async function fetchPipelineRows(pool: Pool, userId: string): Promise<PipelineBa
        l.title AS listing_title,
        l.description AS listing_description,
        l.image_urls AS listing_image_urls,
+       l.listed_at AS listing_listed_at,
+       l.price_history AS listing_price_history,
+       l.rental_price_history AS listing_rental_price_history,
+       l.lifecycle_state AS listing_lifecycle_state,
+       l.last_seen_at AS listing_last_seen_at,
        l.agent_names AS listing_agent_names,
        l.agent_enrichment AS listing_agent_enrichment,
        l.extra AS listing_extra,
