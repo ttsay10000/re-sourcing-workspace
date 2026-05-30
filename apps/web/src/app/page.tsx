@@ -71,6 +71,7 @@ export default function HomePage() {
   const [progressRows, setProgressRows] = useState<HomeProgressRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [openAttentionGroups, setOpenAttentionGroups] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     let ignore = false;
@@ -142,10 +143,10 @@ export default function HomePage() {
     const missingDocs = pipelineRows.filter((row) => !row.documentStatus?.hasOm).slice(0, 5);
     const missingBroker = pipelineRows.filter((row) => !row.broker?.email).slice(0, 5);
     return [
-      { label: "Missing enrichment", count: missingEnrichment.length, rows: missingEnrichment },
-      { label: "Missing rental flow", count: pipelineRows.filter((row) => row.openActionItemCount).length, rows: progressRows.slice(0, 5) },
-      { label: "Missing broker contact", count: missingBroker.length, rows: missingBroker },
-      { label: "Needs OM request", count: missingDocs.length, rows: missingDocs },
+      { label: "Missing enrichment", icon: "!", tone: "warning", count: missingEnrichment.length, rows: missingEnrichment },
+      { label: "Missing rental flow", icon: "R", tone: "neutral", count: pipelineRows.filter((row) => row.openActionItemCount).length, rows: progressRows.slice(0, 5) },
+      { label: "Missing broker contact", icon: "@", tone: "danger", count: missingBroker.length, rows: missingBroker },
+      { label: "Needs OM request", icon: "OM", tone: "warning", count: missingDocs.length, rows: missingDocs },
     ];
   }, [pipelineRows, progressRows]);
 
@@ -240,20 +241,34 @@ export default function HomePage() {
             </div>
             <Link href="/progress">View all</Link>
           </div>
-          {attentionItems.map((group) => (
-            <section key={group.label} className={styles.attentionGroup}>
-              <div>
-                <strong>{group.label}</strong>
-                <span>{group.count}</span>
-              </div>
-              {group.rows.slice(0, 4).map((row) => (
-                <Link key={row.propertyId} href={`/pipeline?propertyId=${encodeURIComponent(row.propertyId)}`}>
-                  <span>{rowAddress(row)}</span>
-                  <small>{"neighborhood" in row ? row.neighborhood ?? "" : ""}</small>
-                </Link>
-              ))}
-            </section>
-          ))}
+          {attentionItems.map((group) => {
+            const isOpen = openAttentionGroups[group.label] !== false;
+            return (
+              <section key={group.label} className={styles.attentionGroup}>
+                <button
+                  className={styles.attentionToggle}
+                  type="button"
+                  aria-expanded={isOpen}
+                  onClick={() => setOpenAttentionGroups((current) => ({ ...current, [group.label]: !isOpen }))}
+                >
+                  <span className={`${styles.attentionIcon} ${styles[`attentionTone${titleize(group.tone)}`]}`}>{group.icon}</span>
+                  <strong>{group.label}</strong>
+                  <span>{group.count}</span>
+                  <i>{isOpen ? "-" : "+"}</i>
+                </button>
+                {isOpen ? (
+                  <div className={styles.attentionRows}>
+                    {group.rows.slice(0, 4).map((row) => (
+                      <Link key={row.propertyId} href={`/pipeline?propertyId=${encodeURIComponent(row.propertyId)}`}>
+                        <span>{rowAddress(row)}</span>
+                        <small>{"neighborhood" in row ? row.neighborhood ?? "" : ""}</small>
+                      </Link>
+                    ))}
+                  </div>
+                ) : null}
+              </section>
+            );
+          })}
         </aside>
       </div>
     </main>

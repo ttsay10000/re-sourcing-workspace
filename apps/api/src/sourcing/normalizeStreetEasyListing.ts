@@ -10,7 +10,37 @@ export function normalizeStreetEasySaleDetails(raw: Record<string, unknown>, ind
   const price = Number(raw.price ?? raw.closedPrice ?? 0) || 0;
   const bedsNum = Number(raw.bedrooms ?? raw.beds ?? 0) || 0;
   const bathsNum = Number(raw.bathrooms ?? raw.baths ?? 0) || 0;
-  const sqftRaw = raw.sqft != null ? Number(raw.sqft) : NaN;
+  const sqftRaw = firstNumber(
+    raw.sqft,
+    raw.square_feet,
+    raw.sqft_feet,
+    raw.squareFeet,
+    raw.gross_square_feet,
+    raw.grossSqft,
+    raw.building_size,
+    raw.buildingSize
+  );
+  const units =
+    firstNumber(
+      raw.units,
+      raw.unitCount,
+      raw.unit_count,
+      raw.totalUnits,
+      raw.total_units,
+      raw.numberOfUnits,
+      raw.number_of_units,
+      raw.num_units,
+      raw.building_units
+    ) ?? inferUnitCountFromText(raw.description, raw.title, raw.propertyType, raw.address);
+  const neighborhood = firstString(
+    raw.neighborhood,
+    raw.neighborhoodName,
+    raw.neighborhood_name,
+    raw.area,
+    raw.area_name,
+    isRecord(raw.location) ? raw.location.neighborhood : null,
+    isRecord(raw.address_components) ? raw.address_components.neighborhood : null
+  );
   const url = (raw._fetchUrl != null ? String(raw._fetchUrl) : raw.url != null ? String(raw.url) : "").trim() || "#";
   const listedAt = raw.listedAt != null ? String(raw.listedAt) : null;
   const images = raw.images;
@@ -22,6 +52,19 @@ export function normalizeStreetEasySaleDetails(raw: Record<string, unknown>, ind
   const { monthlyHoa, monthlyTax } = parseMonthlyHoaTaxFromRaw(raw);
   if (monthlyHoa != null) extra.monthlyHoa = monthlyHoa;
   if (monthlyTax != null) extra.monthlyTax = monthlyTax;
+  if (sqftRaw != null) {
+    extra.sqft = sqftRaw;
+    extra.squareFeet = sqftRaw;
+  }
+  if (units != null) {
+    extra.units = units;
+    extra.unitCount = units;
+  }
+  if (neighborhood) {
+    extra.neighborhood = neighborhood;
+    extra.neighborhoodName = neighborhood;
+  }
+  if (borough) extra.borough = borough;
   const { priceHistory, rentalPriceHistory } = parsePriceHistoriesFromRaw(raw);
   const priceChangeSinceListed = computePriceChangeSinceListed(price, priceHistory ?? undefined);
   if (priceChangeSinceListed != null) extra.priceChangeSinceListed = priceChangeSinceListed;
@@ -36,7 +79,7 @@ export function normalizeStreetEasySaleDetails(raw: Record<string, unknown>, ind
     price,
     beds: bedsNum >= 0 ? bedsNum : 0,
     baths: bathsNum >= 0 ? bathsNum : 0,
-    sqft: !Number.isNaN(sqftRaw) && sqftRaw >= 0 ? Math.round(sqftRaw) : null,
+    sqft: sqftRaw != null && sqftRaw >= 0 ? Math.round(sqftRaw) : null,
     url,
     title: address !== "—" ? address : null,
     description: raw.description != null ? String(raw.description) : null,
@@ -49,6 +92,55 @@ export function normalizeStreetEasySaleDetails(raw: Record<string, unknown>, ind
     rentalPriceHistory: rentalPriceHistory ?? undefined,
     extra: Object.keys(extra).length > 0 ? extra : null,
   };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value != null && typeof value === "object" && !Array.isArray(value);
+}
+
+function firstNumber(...values: unknown[]): number | null {
+  for (const value of values) {
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "string" && value.trim()) {
+      const parsed = Number(value.replace(/[$,%\s,]/g, ""));
+      if (Number.isFinite(parsed)) return parsed;
+    }
+  }
+  return null;
+}
+
+function firstString(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value !== "string") continue;
+    const trimmed = value.trim();
+    if (trimmed) return trimmed;
+  }
+  return null;
+}
+
+function inferUnitCountFromText(...values: unknown[]): number | null {
+  const text = values.filter((value): value is string => typeof value === "string").join(" ").toLowerCase();
+  if (!text.trim()) return null;
+  const wordToNumber: Record<string, number> = {
+    one: 1,
+    two: 2,
+    three: 3,
+    four: 4,
+    five: 5,
+    six: 6,
+    seven: 7,
+    eight: 8,
+    nine: 9,
+    ten: 10,
+    eleven: 11,
+    twelve: 12,
+  };
+  const familyMatch = /\b(\d{1,3}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)[-\s]+family\b/.exec(text);
+  const unitMatch = /\b(\d{1,3})\s+(?:residential\s+)?units?\b/.exec(text);
+  const raw = familyMatch?.[1] ?? unitMatch?.[1] ?? null;
+  if (!raw) return null;
+  const parsed = /^\d+$/.test(raw) ? Number(raw) : wordToNumber[raw];
+  return parsed != null && parsed > 0 ? parsed : null;
 }
 
 function parseAgentNames(raw: Record<string, unknown>): string[] | null {

@@ -102,6 +102,14 @@
 
 .actionGroup {
   flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.32rem;
+}
+
+.actionGroup .linkButton,
+.actionGroup .dangerLinkButton {
+  flex: 0 0 auto;
+  min-width: 3.15rem;
 }
 
 .primaryButton,
@@ -240,7 +248,7 @@
 
 .pipelineTable {
   width: 100%;
-  min-width: 1280px;
+  min-width: 1380px;
   border-collapse: collapse;
   table-layout: fixed;
   font-size: 0.74rem;
@@ -255,7 +263,7 @@
 }
 
 .colSource {
-  width: 6.4rem;
+  width: 7.4rem;
 }
 
 .colType {
@@ -263,7 +271,7 @@
 }
 
 .colAsk {
-  width: 5.5rem;
+  width: 6.1rem;
 }
 
 .colUnit,
@@ -294,7 +302,7 @@
 }
 
 .colAction {
-  width: 8.8rem;
+  width: 10.6rem;
 }
 
 .pipelineTable th {
@@ -505,7 +513,8 @@
 }
 
 .pipelineTable tbody tr:hover {
-  background: #f7faf8;
+  background: #f2f8f5;
+  box-shadow: inset 3px 0 0 rgba(23, 114, 107, 0.35);
 }
 
 .selectedRow,
@@ -530,6 +539,14 @@
   gap: 0.55rem;
   align-items: center;
   min-width: 0;
+  border-radius: 7px;
+  padding: 0.25rem;
+  margin: -0.25rem;
+  transition: background 150ms ease;
+}
+
+.pipelineTable tbody tr:hover .addressWrap {
+  background: rgba(23, 114, 107, 0.08);
 }
 
 .addressWrap strong,
@@ -1096,8 +1113,14 @@
   overflow-wrap: anywhere;
 }
 
-.overviewSection .metricGrid,
-.overviewSection .inlineDetailList,
+.overviewSection .metricGrid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.overviewSection .inlineDetailList {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .overviewSection .moduleGridCompact {
   grid-template-columns: 1fr;
 }
@@ -1277,7 +1300,50 @@
 }
 
 .moduleItems a:hover {
-  text-decoration: underline;
+  background: #edf6ef;
+  border-radius: 5px;
+  color: #123f55;
+  text-decoration: none;
+}
+
+.propertyDataPanel {
+  display: grid;
+  overflow: hidden;
+  border: 1px solid #d7e1dc;
+  border-radius: 8px;
+  background: linear-gradient(180deg, #fbfdfb 0%, #ffffff 100%);
+}
+
+.propertyDataSection {
+  display: grid;
+  gap: 0.55rem;
+  padding: 0.85rem 0.9rem;
+  border-top: 1px solid #e4ebe7;
+}
+
+.propertyDataSection:first-child {
+  border-top: 0;
+}
+
+.propertyDataSection:hover {
+  background: #f5faf7;
+}
+
+.propertyDataHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.propertyDataHeader h4 {
+  margin: 0;
+  color: #1b2831;
+  font-size: 0.92rem;
+}
+
+.propertyDataSection .moduleItems {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .moduleDetails {
@@ -1454,7 +1520,8 @@
   .moduleGrid,
   .moduleGridCompact,
   .highlightGrid,
-  .inlineDetailList {
+  .inlineDetailList,
+  .propertyDataSection .moduleItems {
     grid-template-columns: 1fr;
   }
 

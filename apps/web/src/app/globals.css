@@ -53,6 +53,18 @@ a {
   color: inherit;
 }
 
+.app-main a:not([class*="Button"]):not([class*="button"]) {
+  transition:
+    background 150ms ease,
+    color 150ms ease,
+    border-color 150ms ease;
+}
+
+.app-main a:not([class*="Button"]):not([class*="button"]):hover {
+  border-radius: 6px;
+  background: rgba(23, 114, 107, 0.08);
+}
+
 button {
   line-height: 1;
 }

@@ -655,14 +655,52 @@ function splitAddress(canonicalAddress: string): { displayAddress: string; city?
   };
 }
 
-function neighborhoodName(details: PropertyDetails | null | undefined): string | null {
+function neighborhoodName(details: PropertyDetails | null | undefined, listingExtra?: Record<string, unknown> | null): string | null {
   const primary = details?.neighborhood?.primary;
-  return primary?.name ?? null;
+  return (
+    primary?.name ??
+    readFirstStringPath(details, [
+      ["neighborhoodName"],
+      ["neighborhood", "name"],
+      ["location", "neighborhood"],
+      ["address", "neighborhood"],
+      ["streetEasy", "neighborhood"],
+      ["rapidApi", "neighborhood"],
+      ["sourceFacts", "neighborhood"],
+    ]) ??
+    readFirstStringPath(listingExtra, [
+      ["neighborhood"],
+      ["neighborhoodName"],
+      ["neighborhood_name"],
+      ["area"],
+      ["area_name"],
+      ["location", "neighborhood"],
+      ["address_components", "neighborhood"],
+    ])
+  );
 }
 
-function boroughName(details: PropertyDetails | null | undefined): string | null {
+function boroughName(details: PropertyDetails | null | undefined, listingExtra?: Record<string, unknown> | null): string | null {
   const primary = details?.neighborhood?.primary;
-  return primary?.borough ?? null;
+  return (
+    primary?.borough ??
+    readFirstStringPath(details, [
+      ["borough"],
+      ["boroughName"],
+      ["location", "borough"],
+      ["address", "borough"],
+      ["streetEasy", "borough"],
+      ["rapidApi", "borough"],
+      ["sourceFacts", "borough"],
+    ]) ??
+    readFirstStringPath(listingExtra, [
+      ["borough"],
+      ["boroughName"],
+      ["county"],
+      ["location", "borough"],
+      ["address_components", "borough"],
+    ])
+  );
 }
 
 function readNumericPath(root: unknown, path: string[]): number | null {
@@ -681,6 +719,22 @@ function readStringPath(root: unknown, path: string[]): string | null {
     current = current[part];
   }
   return stringOrNull(current);
+}
+
+function readFirstNumericPath(root: unknown, paths: string[][]): number | null {
+  for (const path of paths) {
+    const value = readNumericPath(root, path);
+    if (value != null) return value;
+  }
+  return null;
+}
+
+function readFirstStringPath(root: unknown, paths: string[][]): string | null {
+  for (const path of paths) {
+    const value = readStringPath(root, path);
+    if (value != null) return value;
+  }
+  return null;
 }
 
 function hasDisplayValue(value: unknown): boolean {
@@ -773,42 +827,124 @@ function getUnitCount(row: PipelineBaseRow): number | null {
     : null;
   return (
     resolvePreferredOmUnitCount(details) ??
-    readNumericPath(details, ["unitCount"]) ??
-    readNumericPath(details, ["rentalFinancials", "fromLlm", "unitCount"]) ??
-    readNumericPath(details, ["omData", "authoritative", "propertyInfo", "unitCount"]) ??
-    readNumericPath(details, ["omData", "authoritative", "propertyInfo", "units"]) ??
-    readNumericPath(details, ["omData", "authoritative", "propertyInfo", "numberOfUnits"]) ??
-    readNumericPath(row.listing_extra, ["units"]) ??
-    readNumericPath(row.listing_extra, ["unitCount"]) ??
-    readNumericPath(row.listing_extra, ["numberOfUnits"]) ??
+    readFirstNumericPath(details, [
+      ["unitCount"],
+      ["units"],
+      ["numberOfUnits"],
+      ["number_of_units"],
+      ["totalUnits"],
+      ["total_units"],
+      ["building", "units"],
+      ["building", "unitCount"],
+      ["property", "units"],
+      ["rentalFinancials", "fromLlm", "unitCount"],
+      ["rentalFinancials", "fromLlm", "units"],
+      ["omData", "authoritative", "propertyInfo", "unitCount"],
+      ["omData", "authoritative", "propertyInfo", "units"],
+      ["omData", "authoritative", "propertyInfo", "numberOfUnits"],
+    ]) ??
+    readFirstNumericPath(row.listing_extra, [
+      ["units"],
+      ["unitCount"],
+      ["unit_count"],
+      ["totalUnits"],
+      ["total_units"],
+      ["numberOfUnits"],
+      ["number_of_units"],
+      ["num_units"],
+      ["building_units"],
+      ["building", "units"],
+      ["property", "units"],
+    ]) ??
+    inferUnitCountFromText(row.listing_description, row.listing_title, row.listing_extra?.description, row.listing_extra?.propertyType) ??
     rentalUnits
   );
 }
 
+function inferUnitCountFromText(...values: unknown[]): number | null {
+  const text = values.filter((value): value is string => typeof value === "string").join(" ").toLowerCase();
+  if (!text.trim()) return null;
+  const wordToNumber: Record<string, number> = {
+    one: 1,
+    two: 2,
+    three: 3,
+    four: 4,
+    five: 5,
+    six: 6,
+    seven: 7,
+    eight: 8,
+    nine: 9,
+    ten: 10,
+    eleven: 11,
+    twelve: 12,
+  };
+  const familyMatch = /\b(\d{1,3}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)[-\s]+family\b/.exec(text);
+  const unitMatch = /\b(\d{1,3})\s+(?:residential\s+)?units?\b/.exec(text);
+  const raw = familyMatch?.[1] ?? unitMatch?.[1] ?? null;
+  if (!raw) return null;
+  const parsed = /^\d+$/.test(raw) ? Number(raw) : wordToNumber[raw];
+  return parsed != null && parsed > 0 ? parsed : null;
+}
+
 function getBuildingSqft(row: PipelineBaseRow): number | null {
   return (
-    readNumericPath(row.details, ["buildingSqft"]) ??
-    readNumericPath(row.details, ["assessedGrossSqft"]) ??
-    readNumericPath(row.details, ["assessedResidentialAreaGross"]) ??
-    readNumericPath(row.details, ["dealDossier", "assumptions", "buildingSqft"]) ??
-    readNumericPath(row.details, ["omData", "authoritative", "propertyInfo", "buildingSqft"]) ??
-    toFiniteNumber(row.listing_sqft)
+    readFirstNumericPath(row.details, [
+      ["buildingSqft"],
+      ["buildingSqftTotal"],
+      ["squareFeet"],
+      ["square_feet"],
+      ["sqft"],
+      ["grossSqft"],
+      ["gross_square_feet"],
+      ["assessedGrossSqft"],
+      ["assessedResidentialAreaGross"],
+      ["building", "sqft"],
+      ["building", "squareFeet"],
+      ["building", "grossSqft"],
+      ["property", "sqft"],
+      ["dealDossier", "assumptions", "buildingSqft"],
+      ["omData", "authoritative", "propertyInfo", "buildingSqft"],
+      ["omData", "authoritative", "propertyInfo", "squareFeet"],
+      ["omData", "authoritative", "propertyInfo", "sqft"],
+    ]) ??
+    toFiniteNumber(row.listing_sqft) ??
+    readFirstNumericPath(row.listing_extra, [
+      ["sqft"],
+      ["squareFeet"],
+      ["square_feet"],
+      ["sqft_feet"],
+      ["grossSqft"],
+      ["gross_square_feet"],
+      ["buildingSize"],
+      ["building_size"],
+      ["building", "sqft"],
+      ["property", "sqft"],
+    ])
   );
 }
 
 function getYearBuilt(row: PipelineBaseRow): number | null {
   return (
-    readNumericPath(row.details, ["yearBuilt"]) ??
-    readNumericPath(row.details, ["omData", "authoritative", "propertyInfo", "yearBuilt"]) ??
-    readNumericPath(row.listing_extra, ["yearBuilt"])
+    readFirstNumericPath(row.details, [
+      ["yearBuilt"],
+      ["year_built"],
+      ["building", "yearBuilt"],
+      ["omData", "authoritative", "propertyInfo", "yearBuilt"],
+    ]) ??
+    readFirstNumericPath(row.listing_extra, [["yearBuilt"], ["year_built"], ["built"], ["builtIn"]])
   );
 }
 
 function getLotSqft(row: PipelineBaseRow): number | null {
   return (
-    readNumericPath(row.details, ["lotSqft"]) ??
-    readNumericPath(row.details, ["assessedLandArea"]) ??
-    readNumericPath(row.listing_extra, ["lotSizeSqft"])
+    readFirstNumericPath(row.details, [
+      ["lotSqft"],
+      ["lotSizeSqft"],
+      ["lot_size_sqft"],
+      ["assessedLandArea"],
+      ["omData", "authoritative", "propertyInfo", "lotSqft"],
+    ]) ??
+    readFirstNumericPath(row.listing_extra, [["lotSqft"], ["lotSizeSqft"], ["lot_size_sqft"], ["lot_size"]])
   );
 }
 
@@ -923,6 +1059,8 @@ function buildEnrichmentDetails(row: PipelineBaseRow): UiV2EnrichmentDetailPaylo
   const details = row.details;
   const enrichment = isPlainRecord(details?.enrichment) ? details.enrichment : {};
   const neighborhood = details?.neighborhood ?? null;
+  const resolvedNeighborhood = neighborhoodName(details, row.listing_extra);
+  const resolvedBorough = boroughName(details, row.listing_extra);
   const rentalFinancials = details?.rentalFinancials ?? null;
   const fromLlm = isPlainRecord(rentalFinancials?.fromLlm) ? rentalFinancials.fromLlm : {};
   const omAnalysis = isPlainRecord(rentalFinancials?.omAnalysis) ? rentalFinancials.omAnalysis : {};
@@ -966,10 +1104,12 @@ function buildEnrichmentDetails(row: PipelineBaseRow): UiV2EnrichmentDetailPaylo
   };
 
   addModule("location", "Location", [
-    detailItem("Neighborhood", neighborhood?.primary?.name),
-    detailItem("Borough", neighborhood?.primary?.borough),
+    detailItem("Neighborhood", resolvedNeighborhood),
+    detailItem("Borough", resolvedBorough),
     detailItem("Zip", neighborhood?.primary?.zip ?? row.listing_zip),
     detailItem("Source", neighborhood?.primary?.source),
+    detailItem("Units", getUnitCount(row)),
+    detailItem("Building sqft", getBuildingSqft(row)),
   ], [
     detailItem("Median rent", neighborhood?.metrics?.medianRent, { format: "money" }),
     detailItem("Median sale", neighborhood?.metrics?.medianSalePrice, { format: "money" }),
@@ -1256,8 +1396,8 @@ function buildOverview(row: PipelineBaseRow): UiV2PropertyOverview {
     propertyId: row.property_id,
     canonicalAddress: row.canonical_address,
     displayAddress: addressParts.displayAddress,
-    neighborhood: neighborhoodName(row.details),
-    borough: boroughName(row.details),
+    neighborhood: neighborhoodName(row.details, row.listing_extra),
+    borough: boroughName(row.details, row.listing_extra),
     city: row.listing_city ?? addressParts.city,
     state: row.listing_state ?? addressParts.state,
     zip: row.listing_zip ?? addressParts.zip,

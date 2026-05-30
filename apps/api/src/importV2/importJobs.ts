@@ -383,15 +383,46 @@ function buildDetailsMerge(params: {
     const bin = cleanString(extra.bin ?? extra.BIN ?? extra.building_identification_number, 20);
     const monthlyHoa = cleanNumber(extra.monthlyHoa ?? extra.monthly_hoa ?? extra.hoa);
     const monthlyTax = cleanNumber(extra.monthlyTax ?? extra.monthly_tax ?? extra.tax);
-    const units = cleanNumber(extra.units);
-    const neighborhood = cleanString(extra.neighborhood, 250);
+    const units = cleanNumber(extra.units ?? extra.unitCount ?? extra.unit_count ?? extra.totalUnits ?? extra.total_units ?? extra.numberOfUnits ?? extra.number_of_units);
+    const sqft = cleanNumber(
+      params.normalized.sqft ??
+        extra.sqft ??
+        extra.squareFeet ??
+        extra.square_feet ??
+        extra.sqft_feet ??
+        extra.grossSqft ??
+        extra.gross_square_feet ??
+        extra.buildingSize ??
+        extra.building_size
+    );
+    const lotSqft = cleanNumber(extra.lotSqft ?? extra.lot_size_sqft ?? extra.lotSizeSqft ?? extra.lot_size);
+    const yearBuilt = cleanNumber(extra.yearBuilt ?? extra.year_built ?? extra.built);
+    const neighborhood = cleanString(extra.neighborhood ?? extra.neighborhoodName ?? extra.neighborhood_name ?? extra.area ?? extra.area_name, 250);
+    const borough = cleanString(extra.borough ?? extra.boroughName ?? extra.county, 120);
     const ownerName = cleanString(extra.ownerName, 500);
     if (bbl && /^\d{10}$/.test(bbl)) merge.bbl = bbl;
     if (bin) merge.bin = bin;
     if (monthlyHoa != null && monthlyHoa >= 0) merge.monthlyHoa = monthlyHoa;
     if (monthlyTax != null && monthlyTax >= 0) merge.monthlyTax = monthlyTax;
     if (units != null && units >= 0) merge.unitCount = units;
+    if (sqft != null && sqft >= 0) merge.buildingSqft = sqft;
+    if (lotSqft != null && lotSqft >= 0) merge.lotSqft = lotSqft;
+    if (yearBuilt != null && yearBuilt >= 0) merge.yearBuilt = yearBuilt;
     if (neighborhood) merge.neighborhoodName = neighborhood;
+    if (neighborhood || borough || params.normalized.zip) {
+      const existingNeighborhood = isRecord(detailRecord.neighborhood) ? detailRecord.neighborhood : {};
+      const existingPrimary = isRecord(existingNeighborhood.primary) ? existingNeighborhood.primary : {};
+      merge.neighborhood = {
+        ...existingNeighborhood,
+        primary: {
+          ...existingPrimary,
+          ...(neighborhood ? { name: neighborhood } : {}),
+          ...(borough ? { borough } : {}),
+          ...(params.normalized.zip ? { zip: params.normalized.zip } : {}),
+          source: params.normalized.source,
+        },
+      };
+    }
     if (ownerName) {
       merge.ownerName = ownerName;
       merge.ownerInfo = ownerName;

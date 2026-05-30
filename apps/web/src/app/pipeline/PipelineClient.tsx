@@ -1128,7 +1128,8 @@ export default function PipelineClient() {
       setSheetTab("Overview");
       setBrokerEditOpen(true);
       setBrokerForm(brokerFormFromBlock(broker));
-      setNotice("Add a broker email before creating outreach.");
+      setNotice(null);
+      setError("Broker email is required before outreach. Add it in the Broker section, then click Email again.");
       return;
     }
     if (surface === "pipeline_table") setSheetTab("Overview");
@@ -2191,7 +2192,7 @@ export default function PipelineClient() {
                         </a>
                       ) : null}
                     </div>
-                    <EnrichmentModuleGrid modules={sheetEnrichmentModules} compact />
+                    <PropertyDataPanel modules={sheetEnrichmentModules} />
                   </section>
 
                   <section className={styles.overviewSection}>
@@ -2615,6 +2616,34 @@ function EnrichmentModuleGrid({
             </div>
           ) : null}
         </article>
+      ))}
+    </div>
+  );
+}
+
+function PropertyDataPanel({ modules }: { modules: UiV2EnrichmentModuleDetail[] }) {
+  const visibleModules = modules
+    .map((module) => ({
+      ...module,
+      items: [...(module.summaryItems ?? []), ...(module.detailItems ?? [])],
+    }))
+    .filter((module) => module.items.length > 0)
+    .slice(0, 12);
+  if (visibleModules.length === 0) {
+    return <div className={styles.emptyState}>No enrichment details are available yet.</div>;
+  }
+  return (
+    <div className={styles.propertyDataPanel}>
+      {visibleModules.map((module) => (
+        <section key={module.key} className={styles.propertyDataSection}>
+          <div className={styles.propertyDataHeader}>
+            <h4>{module.label}</h4>
+            <span className={`${styles.tinyChip} ${module.status === "missing" ? styles.toneWarning : styles.toneSuccess}`}>
+              {titleize(module.status)}
+            </span>
+          </div>
+          <DetailItems items={module.items} />
+        </section>
       ))}
     </div>
   );
