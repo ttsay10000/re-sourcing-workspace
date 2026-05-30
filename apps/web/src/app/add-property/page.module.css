@@ -8,11 +8,12 @@
 }
 
 .headerBand {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   justify-content: space-between;
-  align-items: flex-end;
-  gap: 1.5rem;
-  padding: 1.35rem;
+  align-items: center;
+  gap: 1.25rem;
+  padding: 1.35rem 1.5rem;
   border: 1px solid rgba(46, 87, 96, 0.18);
   border-radius: 8px;
   background:
@@ -22,30 +23,33 @@
 }
 
 .headerCopy {
+  display: grid;
+  gap: 0.5rem;
   max-width: 54rem;
 }
 
 .headerCopy h1 {
   margin: 0;
-  font-size: clamp(2rem, 4vw, 3.2rem);
-  line-height: 1;
+  font-size: clamp(2.15rem, 3vw, 2.9rem);
+  line-height: 1.04;
   letter-spacing: 0;
+  text-wrap: balance;
 }
 
 .headerCopy p {
-  margin: 0.65rem 0 0;
+  margin: 0;
   max-width: 44rem;
   color: #5d635d;
-  line-height: 1.55;
-  font-size: 1rem;
+  line-height: 1.45;
+  font-size: 0.95rem;
 }
 
 .eyebrow,
 .panelKicker {
-  margin: 0 0 0.35rem;
+  margin: 0;
   color: #2f6f52;
-  font-size: 0.78rem;
-  font-weight: 700;
+  font-size: 0.72rem;
+  font-weight: 850;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
@@ -56,7 +60,7 @@
   display: flex;
   align-items: center;
   gap: 0.75rem;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
 }
 
 .primaryLink,
@@ -157,61 +161,157 @@
 
 .modeRail {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
-  gap: 0.7rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.85rem;
+}
+
+.modeGroup {
+  display: grid;
+  gap: 0.65rem;
+  min-width: 0;
+  padding: 0.75rem;
+  border: 1px solid rgba(38, 47, 44, 0.12);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(248, 251, 249, 0.84)),
+    #ffffff;
+  box-shadow: 0 10px 28px rgba(31, 43, 37, 0.04);
+}
+
+.modeGroupHeader {
+  display: grid;
+  gap: 0.18rem;
+  padding: 0.1rem 0.12rem 0.55rem;
+  border-bottom: 1px solid rgba(38, 47, 44, 0.1);
+}
+
+.modeGroupHeader h2 {
+  margin: 0;
+  color: #18231e;
+  font-family: var(--font-ui);
+  font-size: 0.98rem;
+  font-weight: 850;
+  line-height: 1.15;
+}
+
+.modeGroupHeader p {
+  margin: 0;
+  color: #68736d;
+  font-size: 0.76rem;
+  line-height: 1.35;
+}
+
+.modeGroupCards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.6rem;
 }
 
 .modeButton {
+  position: relative;
   display: grid;
-  gap: 0.38rem;
+  align-content: start;
+  gap: 0.32rem;
   width: 100%;
-  min-height: 6rem;
-  padding: 1rem;
+  min-height: 8.1rem;
+  overflow: hidden;
+  padding: 0.82rem 0.88rem 0.78rem;
   text-align: left;
   color: #20231f;
   border: 1px solid rgba(38, 47, 44, 0.12);
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.74);
+  background: rgba(255, 255, 255, 0.8);
   cursor: pointer;
+  white-space: normal;
+  transition:
+    border-color 150ms ease,
+    background 150ms ease,
+    box-shadow 150ms ease,
+    transform 150ms ease;
+}
+
+.modeButton::before {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: transparent;
+  content: "";
+  transition: background 150ms ease;
 }
 
 .modeButton:hover {
-  border-color: rgba(28, 86, 68, 0.34);
+  border-color: rgba(28, 86, 68, 0.42);
   background: #ffffff;
+  box-shadow: 0 14px 32px rgba(26, 44, 36, 0.08);
+  transform: translateY(-1px);
+}
+
+.modeButton:hover::before {
+  background: rgba(47, 111, 82, 0.46);
 }
 
 .modeButtonActive {
   border-color: rgba(23, 63, 54, 0.62);
-  background: #ffffff;
-  box-shadow: inset 3px 0 0 #2f6f52;
+  background:
+    linear-gradient(180deg, rgba(242, 250, 245, 0.92), rgba(255, 255, 255, 0.96)),
+    #ffffff;
+  box-shadow: 0 16px 36px rgba(20, 63, 52, 0.11);
+}
+
+.modeButtonActive::before {
+  background: #2f6f52;
 }
 
 .modeKicker {
-  color: #69736d;
-  font-size: 0.74rem;
+  color: #65736b;
+  font-size: 0.66rem;
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
 .modeTitle {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-  font-size: 1.02rem;
+  display: block;
+  color: #18231e;
+  font-size: 0.98rem;
   font-weight: 800;
+  line-height: 1.18;
 }
 
 .modeDescription {
   color: #666b66;
-  line-height: 1.45;
-  font-size: 0.88rem;
+  line-height: 1.38;
+  font-size: 0.78rem;
+}
+
+.modeStatus {
+  display: inline-flex;
+  align-items: center;
+  align-self: end;
+  width: fit-content;
+  min-height: 1.4rem;
+  margin-top: 0.18rem;
+  padding: 0.18rem 0.48rem;
+  gap: 0.32rem;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 850;
+  white-space: nowrap;
+}
+
+.modeStatusOn {
+  color: #1c5d3f;
+  background: #edf8f1;
+}
+
+.modeStatusOff {
+  color: #6f6558;
+  background: #f3f1ec;
 }
 
 .modeDot {
-  width: 0.55rem;
-  height: 0.55rem;
+  width: 0.42rem;
+  height: 0.42rem;
   flex: 0 0 auto;
   border-radius: 999px;
 }
@@ -764,6 +864,14 @@
     grid-template-columns: 1fr;
   }
 
+  .modeRail {
+    grid-template-columns: 1fr;
+  }
+
+  .modeGroupCards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .resultPanel {
     position: static;
   }
@@ -781,18 +889,22 @@
     align-items: stretch;
   }
 
+  .headerBand {
+    grid-template-columns: 1fr;
+  }
+
+  .headerActions {
+    justify-content: flex-start;
+  }
+
   .workspaceGrid,
   .twoColumn,
   .fourColumn {
     grid-template-columns: 1fr;
   }
 
-  .modeRail {
+  .modeGroupCards {
     grid-template-columns: 1fr;
-  }
-
-  .modeButton {
-    min-height: auto;
   }
 
   .panelHeader,

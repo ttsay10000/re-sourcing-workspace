@@ -14,6 +14,7 @@ import styles from "./page.module.css";
 const API_BASE = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000").replace(/\/$/, "");
 
 type ModeId = "manual" | "streeteasy" | "pull" | "saved-search" | "om-upload" | "om-url";
+type ModeCategoryId = "quick" | "market" | "documents";
 type CapabilityKey =
   | "manualEntry"
   | "streetEasyUrl"
@@ -91,6 +92,7 @@ interface PullFormState {
 
 const MODE_CARDS: Array<{
   id: ModeId;
+  category: ModeCategoryId;
   label: string;
   kicker: string;
   description: string;
@@ -98,45 +100,73 @@ const MODE_CARDS: Array<{
 }> = [
   {
     id: "manual",
+    category: "quick",
     label: "Manual entry",
     kicker: "Fast add",
-    description: "Create or update a property from a clean address, optional broker details, notes, tags, and images.",
+    description: "Create from address, broker details, notes, tags, and optional images.",
     capabilityKey: "manualEntry",
   },
   {
     id: "streeteasy",
+    category: "quick",
     label: "StreetEasy import",
     kicker: "URL or sale ID",
-    description: "Pull a single StreetEasy sale listing directly into Pipeline.",
+    description: "Pull one live listing into Pipeline from a URL or sale ID.",
     capabilityKey: ["streetEasyUrl", "streetEasySaleId"],
   },
   {
     id: "pull",
+    category: "market",
     label: "Full StreetEasy pull",
     kicker: "Side window",
-    description: "Run the richer StreetEasy pull with broker, image, building, unit, and comp toggles.",
+    description: "Open the richer flow with broker, image, building, unit, and comp toggles.",
     capabilityKey: "streetEasyPull",
   },
   {
     id: "saved-search",
+    category: "market",
     label: "Saved-search run",
     kicker: "Automation",
-    description: "Start a configured saved search and let the ingestion pipeline create sourced properties.",
+    description: "Run configured search criteria and create sourced properties automatically.",
     capabilityKey: "savedSearchRun",
   },
   {
     id: "om-upload",
+    category: "documents",
     label: "OM PDF upload",
     kicker: "Handoff",
-    description: "Upload offering memoranda through the current PDF analysis workflow.",
+    description: "Send offering memoranda into the current PDF analysis workflow.",
     capabilityKey: "omUpload",
   },
   {
     id: "om-url",
+    category: "documents",
     label: "OM URL",
     kicker: "Placeholder",
     description: "Reserved for a future URL extraction service. Disabled in this UI for now.",
     capabilityKey: "omUrl",
+  },
+];
+
+const MODE_GROUPS: Array<{
+  id: ModeCategoryId;
+  title: string;
+  description: string;
+}> = [
+  {
+    id: "quick",
+    title: "Quick capture",
+    description: "Use when you have a property or listing in hand.",
+  },
+  {
+    id: "market",
+    title: "Market sourcing",
+    description: "Run StreetEasy flows or saved searches with more automation.",
+  },
+  {
+    id: "documents",
+    title: "Document intake",
+    description: "Route OM files and future document sources into analysis.",
   },
 ];
 
@@ -650,26 +680,41 @@ export default function AddPropertyPage() {
 
       <div className={styles.workspaceGrid}>
         <aside className={styles.modeRail} aria-label="Import modes">
-          {MODE_CARDS.map((mode) => {
-            const enabled = isModeEnabled(mode.id);
-            const isActive = activeMode === mode.id;
+          {MODE_GROUPS.map((group) => {
+            const modes = MODE_CARDS.filter((mode) => mode.category === group.id);
             return (
-              <button
-                type="button"
-                key={mode.id}
-                onClick={() => {
-                  setActiveMode(mode.id);
-                  if (mode.id === "pull") setPullPanelOpen(true);
-                }}
-                className={`${styles.modeButton} ${isActive ? styles.modeButtonActive : ""}`}
-              >
-                <span className={styles.modeKicker}>{mode.kicker}</span>
-                <span className={styles.modeTitle}>
-                  {mode.label}
-                  <span className={`${styles.modeDot} ${enabled ? styles.modeDotOn : styles.modeDotOff}`} />
-                </span>
-                <span className={styles.modeDescription}>{mode.description}</span>
-              </button>
+              <section key={group.id} className={styles.modeGroup}>
+                <div className={styles.modeGroupHeader}>
+                  <h2>{group.title}</h2>
+                  <p>{group.description}</p>
+                </div>
+                <div className={styles.modeGroupCards}>
+                  {modes.map((mode) => {
+                    const enabled = isModeEnabled(mode.id);
+                    const isActive = activeMode === mode.id;
+                    return (
+                      <button
+                        type="button"
+                        key={mode.id}
+                        aria-pressed={isActive}
+                        onClick={() => {
+                          setActiveMode(mode.id);
+                          if (mode.id === "pull") setPullPanelOpen(true);
+                        }}
+                        className={`${styles.modeButton} ${isActive ? styles.modeButtonActive : ""}`}
+                      >
+                        <span className={styles.modeKicker}>{mode.kicker}</span>
+                        <span className={styles.modeTitle}>{mode.label}</span>
+                        <span className={styles.modeDescription}>{mode.description}</span>
+                        <span className={`${styles.modeStatus} ${enabled ? styles.modeStatusOn : styles.modeStatusOff}`}>
+                          <span className={`${styles.modeDot} ${enabled ? styles.modeDotOn : styles.modeDotOff}`} />
+                          {enabled ? "Ready" : capabilitiesLoading ? "Checking" : "Unavailable"}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </section>
             );
           })}
         </aside>
