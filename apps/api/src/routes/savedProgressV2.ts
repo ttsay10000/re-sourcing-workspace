@@ -181,6 +181,11 @@ function toNumber(value: unknown): number | null {
   return null;
 }
 
+function toPositiveNumber(value: unknown): number | null {
+  const parsed = toNumber(value);
+  return parsed != null && parsed > 0 ? parsed : null;
+}
+
 function toInteger(value: unknown): number {
   const parsed = toNumber(value);
   return parsed == null ? 0 : Math.trunc(parsed);
@@ -213,6 +218,14 @@ function readStringPath(root: unknown, path: string[]): string | null {
 function readFirstNumericPath(root: unknown, paths: string[][]): number | null {
   for (const path of paths) {
     const value = readNumericPath(root, path);
+    if (value != null) return value;
+  }
+  return null;
+}
+
+function readFirstPositiveNumericPath(root: unknown, paths: string[][]): number | null {
+  for (const path of paths) {
+    const value = toPositiveNumber(readNumericPath(root, path));
     if (value != null) return value;
   }
   return null;
@@ -294,8 +307,9 @@ function inferUnitCountFromText(...values: unknown[]): number | null {
     eleven: 11,
     twelve: 12,
   };
-  const familyMatch = /\b(\d{1,3}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)[-\s]+family\b/.exec(text);
-  const unitMatch = /\b(\d{1,3})\s+(?:residential\s+)?units?\b/.exec(text);
+  const numberToken = "\\d{1,3}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve";
+  const familyMatch = new RegExp(`\\b(?:set\\s+up\\s+as\\s+|configured\\s+as\\s+|legal\\s+)?(${numberToken})[-\\s]+family\\b`).exec(text);
+  const unitMatch = new RegExp(`\\b(${numberToken})\\s+(?:residential\\s+|rental\\s+|dwelling\\s+|apartment\\s+|floor\\s+|full[-\\s]+floor\\s+)?(?:units?|apartments?|residences?|dwellings?)\\b`).exec(text);
   const raw = familyMatch?.[1] ?? unitMatch?.[1] ?? null;
   if (!raw) return null;
   const parsed = /^\d+$/.test(raw) ? Number(raw) : wordToNumber[raw];
@@ -305,7 +319,7 @@ function inferUnitCountFromText(...values: unknown[]): number | null {
 function resolveSavedUnits(row: SavedProgressBaseRow): number | null {
   return (
     resolvePreferredOmUnitCount(row.details as never) ??
-    readFirstNumericPath(row.details, [
+    readFirstPositiveNumericPath(row.details, [
       ["unitCount"],
       ["units"],
       ["numberOfUnits"],
@@ -318,7 +332,7 @@ function resolveSavedUnits(row: SavedProgressBaseRow): number | null {
       ["omData", "authoritative", "propertyInfo", "units"],
       ["omData", "authoritative", "propertyInfo", "numberOfUnits"],
     ]) ??
-    readFirstNumericPath(row.listing_extra, [
+    readFirstPositiveNumericPath(row.listing_extra, [
       ["units"],
       ["unitCount"],
       ["unit_count"],
@@ -335,30 +349,44 @@ function resolveSavedUnits(row: SavedProgressBaseRow): number | null {
 
 function resolveSavedSqft(row: SavedProgressBaseRow): number | null {
   return (
-    readFirstNumericPath(row.details, [
+    readFirstPositiveNumericPath(row.details, [
       ["buildingSqft"],
       ["buildingSqftTotal"],
       ["squareFeet"],
+      ["square_feet"],
       ["sqft"],
       ["grossSqft"],
+      ["gross_square_feet"],
       ["assessedGrossSqft"],
       ["assessedResidentialAreaGross"],
       ["building", "sqft"],
       ["building", "squareFeet"],
+      ["building", "square_feet"],
+      ["building", "grossSqft"],
+      ["property", "sqft"],
+      ["property", "squareFeet"],
       ["omData", "authoritative", "propertyInfo", "buildingSqft"],
       ["omData", "authoritative", "propertyInfo", "squareFeet"],
       ["omData", "authoritative", "propertyInfo", "sqft"],
     ]) ??
-    toNumber(row.listing_sqft) ??
-    readFirstNumericPath(row.listing_extra, [
+    toPositiveNumber(row.listing_sqft) ??
+    readFirstPositiveNumericPath(row.listing_extra, [
       ["sqft"],
       ["squareFeet"],
       ["square_feet"],
       ["sqft_feet"],
       ["grossSqft"],
       ["gross_square_feet"],
+      ["buildingSqft"],
+      ["building_sqft"],
       ["buildingSize"],
       ["building_size"],
+      ["building", "sqft"],
+      ["building", "squareFeet"],
+      ["building", "square_feet"],
+      ["building", "grossSqft"],
+      ["property", "sqft"],
+      ["property", "squareFeet"],
     ])
   );
 }

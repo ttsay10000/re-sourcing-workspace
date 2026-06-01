@@ -68,6 +68,44 @@ interface ApiListing {
   [key: string]: unknown;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value != null && typeof value === "object" && !Array.isArray(value);
+}
+
+function firstNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value.replace(/[$,%\s,]/g, ""));
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+}
+
+function firstPositiveNumber(...values: unknown[]): number | null {
+  for (const value of values) {
+    const parsed = firstNumber(value);
+    if (parsed != null && parsed > 0) return parsed;
+  }
+  return null;
+}
+
+function readPath(root: unknown, path: string[]): unknown {
+  let current: unknown = root;
+  for (const key of path) {
+    if (!isRecord(current)) return null;
+    current = current[key];
+  }
+  return current;
+}
+
+function firstPositiveNumberFromPaths(root: unknown, paths: string[][]): number | null {
+  for (const path of paths) {
+    const value = firstNumber(readPath(root, path));
+    if (value != null && value > 0) return value;
+  }
+  return null;
+}
+
 function getApiKey(): string {
   const key = process.env.RAPIDAPI_KEY;
   if (!key) {
@@ -93,8 +131,35 @@ function mapListing(raw: ApiListing, sourceLabel: "active" | "past"): ListingNor
   const price = Number(raw.price ?? raw.list_price) || 0;
   const beds = Number(raw.bedrooms ?? raw.beds) || 0;
   const baths = Number(raw.bathrooms ?? raw.baths) || 0;
-  const sqft = raw.square_feet ?? raw.sqft ?? raw.sqft_feet;
-  const numSqft = typeof sqft === "number" ? sqft : typeof sqft === "string" ? Number(sqft) : null;
+  const numSqft = firstPositiveNumber(
+    raw.square_feet,
+    raw.sqft,
+    raw.sqft_feet,
+    raw.squareFeet,
+    raw.gross_square_feet,
+    raw.grossSqft,
+    raw.building_sqft,
+    raw.buildingSqft,
+    raw.building_size,
+    raw.buildingSize,
+    firstPositiveNumberFromPaths(raw, [
+      ["building", "sqft"],
+      ["building", "squareFeet"],
+      ["building", "square_feet"],
+      ["building", "grossSqft"],
+      ["property", "sqft"],
+      ["property", "squareFeet"],
+    ])
+  );
+  const sourcePricePerSqft = firstPositiveNumber(
+    raw.ppsqft,
+    raw.pricePerSqft,
+    raw.price_per_sqft,
+    raw.price_per_square_foot,
+    raw.psf,
+    raw.price_psf
+  );
+  const pricePerSqft = sourcePricePerSqft ?? (price > 0 && numSqft != null ? Math.round(price / numSqft) : null);
   const url = (raw.url ?? raw.link ?? raw.listing_url ?? "").trim() || "#";
   const images = Array.isArray(raw.images)
     ? (raw.images as unknown[]).filter((image): image is string => typeof image === "string" && image.trim().length > 0)
@@ -118,7 +183,7 @@ function mapListing(raw: ApiListing, sourceLabel: "active" | "past"): ListingNor
     price,
     beds,
     baths,
-    sqft: numSqft && !Number.isNaN(numSqft) ? numSqft : null,
+    sqft: numSqft != null ? Math.round(numSqft) : null,
     url,
     title: (raw.title ?? address) || null,
     description: typeof raw.description === "string" ? raw.description : null,
@@ -134,7 +199,10 @@ function mapListing(raw: ApiListing, sourceLabel: "active" | "past"): ListingNor
       neighborhood: raw.neighborhood ?? raw.neighborhood_name ?? null,
       zipcode: raw.zipcode ?? raw.zip_code ?? raw.zip ?? null,
       propertyType: raw.propertyType ?? raw.property_type ?? null,
-      ppsqft: raw.ppsqft ?? raw.price_per_sqft ?? null,
+      sqft: numSqft != null ? Math.round(numSqft) : null,
+      squareFeet: numSqft != null ? Math.round(numSqft) : null,
+      ppsqft: pricePerSqft,
+      pricePerSqft,
       daysOnMarket: raw.daysOnMarket ?? raw.days_on_market ?? null,
       monthlyHoa: raw.monthlyHoa ?? raw.monthly_hoa ?? null,
       monthlyTax: raw.monthlyTax ?? raw.monthly_tax ?? null,

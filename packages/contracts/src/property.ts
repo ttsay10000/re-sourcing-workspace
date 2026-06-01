@@ -185,6 +185,8 @@ export interface RentalNumberPerUnit {
 
 /** LLM-extracted financials (from listing description, OM, or email/attachments); merged without overwriting API data. */
 export interface RentalFinancialsFromLlm {
+  /** Actual residential apartment/unit count inferred from listing text or OM context; not bedrooms. */
+  unitCount?: number | null;
   noi?: number | null;
   capRate?: number | null;
   grossRentTotal?: number | null;

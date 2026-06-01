@@ -24,7 +24,12 @@ function parseJsonObject(content: string | null | undefined): Record<string, unk
 }
 
 function toNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value.replace(/[$,%\s,]/g, ""));
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return undefined;
 }
 
 export async function extractRentalFinancialsFromListing(
@@ -46,6 +51,7 @@ Return a JSON object with these keys (use null for missing):
 - capRate: number
 - grossRentTotal: number
 - totalExpenses: number
+- unitCount: number (actual residential apartment/unit count only; infer from phrases like "three full-floor residences", "8 unit townhouse", "set up as 3 family"; do not use bedrooms or bathrooms as unit count)
 - expensesTable: array of { "lineItem": string, "amount": number }
 - rentalEstimates: string
 - rentalNumbersPerUnit: array of { "unit": string, "monthlyRent": number (optional), "annualRent": number (optional), "rent": number (optional), "beds": number (optional), "baths": number (optional), "sqft": number (optional), "note": string (optional) }
@@ -72,10 +78,12 @@ ${text.slice(0, 15000)}`;
     const capRate = toNumber(parsed.capRate);
     const grossRentTotal = toNumber(parsed.grossRentTotal);
     const totalExpenses = toNumber(parsed.totalExpenses);
+    const unitCount = toNumber(parsed.unitCount);
     if (noi != null) result.noi = noi;
     if (capRate != null) result.capRate = capRate;
     if (grossRentTotal != null) result.grossRentTotal = grossRentTotal;
     if (totalExpenses != null) result.totalExpenses = totalExpenses;
+    if (unitCount != null && unitCount > 0) result.unitCount = Math.round(unitCount);
     if (Array.isArray(parsed.expensesTable) && parsed.expensesTable.length > 0) {
       result.expensesTable = (parsed.expensesTable as Array<{ lineItem?: unknown; amount?: unknown }>)
         .map((entry) => ({

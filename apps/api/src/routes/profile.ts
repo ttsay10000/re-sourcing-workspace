@@ -73,6 +73,89 @@ function getFirstListingImage(listing: { imageUrls?: string[] | null; extra?: un
   return extraImages.map(extractImageUrl).find((url): url is string => Boolean(url)) ?? null;
 }
 
+function isJsonRecord(value: unknown): value is Record<string, unknown> {
+  return value != null && typeof value === "object" && !Array.isArray(value);
+}
+
+function toFiniteNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value.replace(/[$,%\s,]/g, ""));
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+}
+
+function toPositiveNumber(value: unknown): number | null {
+  const parsed = toFiniteNumber(value);
+  return parsed != null && parsed > 0 ? parsed : null;
+}
+
+function readNumericPath(root: unknown, path: string[]): number | null {
+  let current: unknown = root;
+  for (const key of path) {
+    if (!isJsonRecord(current)) return null;
+    current = current[key];
+  }
+  return toFiniteNumber(current);
+}
+
+function readFirstPositiveNumericPath(root: unknown, paths: string[][]): number | null {
+  for (const path of paths) {
+    const value = toPositiveNumber(readNumericPath(root, path));
+    if (value != null) return value;
+  }
+  return null;
+}
+
+function resolveProfileBuildingSqft(
+  details: PropertyDetails,
+  listing: { sqft?: number | string | null; extra?: unknown } | null
+): number | null {
+  return (
+    readFirstPositiveNumericPath(details, [
+      ["buildingSqft"],
+      ["buildingSqftTotal"],
+      ["squareFeet"],
+      ["square_feet"],
+      ["sqft"],
+      ["grossSqft"],
+      ["gross_square_feet"],
+      ["assessedGrossSqft"],
+      ["assessedResidentialAreaGross"],
+      ["building", "sqft"],
+      ["building", "squareFeet"],
+      ["building", "square_feet"],
+      ["building", "grossSqft"],
+      ["property", "sqft"],
+      ["property", "squareFeet"],
+      ["dealDossier", "assumptions", "buildingSqft"],
+      ["omData", "authoritative", "propertyInfo", "buildingSqft"],
+      ["omData", "authoritative", "propertyInfo", "squareFeet"],
+      ["omData", "authoritative", "propertyInfo", "sqft"],
+    ]) ??
+    toPositiveNumber(listing?.sqft) ??
+    readFirstPositiveNumericPath(listing?.extra, [
+      ["sqft"],
+      ["squareFeet"],
+      ["square_feet"],
+      ["sqft_feet"],
+      ["grossSqft"],
+      ["gross_square_feet"],
+      ["buildingSqft"],
+      ["building_sqft"],
+      ["buildingSize"],
+      ["building_size"],
+      ["building", "sqft"],
+      ["building", "squareFeet"],
+      ["building", "square_feet"],
+      ["building", "grossSqft"],
+      ["property", "sqft"],
+      ["property", "squareFeet"],
+    ])
+  );
+}
+
 /** GET /api/profile - get the single user profile (creates default row if none). */
 router.get("/profile", async (_req: Request, res: Response) => {
   try {
@@ -293,6 +376,8 @@ router.get("/profile/saved-deals", async (_req: Request, res: Response) => {
       address: string;
       price: number | null;
       units: number | null;
+      buildingSqft: number | null;
+      pricePerSqft: number | null;
       dealScore: number | null;
       imageUrl: string | null;
     }> = [];
@@ -305,6 +390,10 @@ router.get("/profile/saved-deals", async (_req: Request, res: Response) => {
       const details = (property?.details ?? {}) as PropertyDetails;
       const rentalUnits = (details.rentalFinancials as Record<string, unknown> | undefined)?.rentalUnits as unknown[] | undefined;
       const units = resolvePreferredOmUnitCount(details) ?? rentalUnits?.length ?? null;
+      const buildingSqft = resolveProfileBuildingSqft(details, listing);
+      const pricePerSqft = price != null && buildingSqft != null && price > 0 && buildingSqft > 0
+        ? Math.round(price / buildingSqft)
+        : null;
       const [latestSignal, scoreOverride] = await Promise.all([
         signalsRepo.getLatestByPropertyId(row.propertyId),
         overridesRepo.getActiveByPropertyId(row.propertyId),
@@ -321,6 +410,8 @@ router.get("/profile/saved-deals", async (_req: Request, res: Response) => {
         address,
         price,
         units,
+        buildingSqft,
+        pricePerSqft,
         dealScore: dossierReady ? resolveEffectiveDealScore(calculatedDealScore, scoreOverride) : null,
         imageUrl: getFirstListingImage(listing),
       });

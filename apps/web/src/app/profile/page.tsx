@@ -172,6 +172,8 @@ interface ProfileSavedDealRow {
   canonicalAddress?: string;
   price: number | null;
   units: number | null;
+  buildingSqft?: number | null;
+  pricePerSqft?: number | null;
   dealScore: number | null;
   imageUrl?: string | null;
 }
@@ -1591,6 +1593,10 @@ export default function ProfilePage() {
                       <div className="profile-saved-deal-stat">
                         <span>Units</span>
                         <strong>{row.units != null ? String(row.units) : "—"}</strong>
+                      </div>
+                      <div className="profile-saved-deal-stat">
+                        <span>$/SF</span>
+                        <strong>{row.pricePerSqft != null ? currencyFormatter.format(row.pricePerSqft) : "—"}</strong>
                       </div>
                       <div className="profile-saved-deal-stat">
                         <span>Deal score</span>

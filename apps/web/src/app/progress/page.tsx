@@ -145,6 +145,12 @@ function formatNumber(value: number | null | undefined): string {
   return Number.isInteger(value) ? value.toFixed(0) : value.toFixed(1);
 }
 
+function formatUnitLabel(value: number | null | undefined): string | null {
+  const formatted = formatNumber(value);
+  if (formatted === "—") return null;
+  return `${formatted} ${formatted === "1" ? "unit" : "units"}`;
+}
+
 function formatDate(value: string | null | undefined): string {
   if (!value) return "—";
   const date = new Date(value);
@@ -644,7 +650,7 @@ function SavedDealMiniSection({
               <div>
                 <strong>{row.displayAddress || row.canonicalAddress || row.propertyId}</strong>
                 <span>
-                  {[row.source ? labelFromKey(row.source) : null, formatNumber(row.units) === "—" ? null : `${formatNumber(row.units)}u`]
+                  {[row.source ? labelFromKey(row.source) : null, formatUnitLabel(row.units)]
                     .filter(Boolean)
                     .join(" · ") || "No context"}
                 </span>

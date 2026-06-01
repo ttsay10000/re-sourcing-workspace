@@ -50,6 +50,7 @@ const SORT_OPTIONS: Array<{ value: UiV2PipelineSortField; label: string }> = [
   { value: "lastActivityAt", label: "Activity" },
   { value: "dealScore", label: "Score" },
   { value: "askingPrice", label: "Ask" },
+  { value: "pricePerSqft", label: "$/SF" },
   { value: "units", label: "Units" },
   { value: "capRate", label: "Cap" },
   { value: "canonicalAddress", label: "Address" },
@@ -111,7 +112,7 @@ function tabFromParam(value: string | null): SheetTab | null {
 
 type PipelineRow = UiV2PipelineRow & {
   gallery?: UiV2ImageAsset[];
-  overview?: { gallery?: UiV2ImageAsset[] };
+  overview?: { gallery?: UiV2ImageAsset[]; listingUrl?: string | null };
 };
 
 type FlexiblePropertyDetail = UiV2PropertyDetailPayload & {
@@ -133,6 +134,7 @@ type PipelineHeaderMenuId =
   | "source"
   | "marketType"
   | "askingPrice"
+  | "pricePerSqft"
   | "units"
   | "capRate"
   | "mtr"
@@ -149,6 +151,7 @@ const COLUMN_SORT_FIELDS: Partial<Record<PipelineHeaderMenuId, UiV2PipelineSortF
   source: "source",
   marketType: "marketType",
   askingPrice: "askingPrice",
+  pricePerSqft: "pricePerSqft",
   units: "units",
   capRate: "capRate",
   dealScore: "dealScore",
@@ -572,6 +575,7 @@ function rowFromProperty(row: PipelineRow, property: FlexiblePropertyDetail): Pi
     askingPrice: property.overview.askingPrice,
     units: property.overview.units,
     buildingSqft: property.overview.buildingSqft,
+    pricePerSqft: property.overview.pricePerSqft,
     marketType: property.overview.marketType ?? row.marketType,
     neighborhood: property.overview.neighborhood,
     borough: property.overview.borough,
@@ -656,6 +660,7 @@ export default function PipelineClient() {
   const [templates, setTemplates] = useState<UiV2OutreachTemplatePayload[]>([]);
   const [loadingTemplates, setLoadingTemplates] = useState(false);
   const [galleryIndex, setGalleryIndex] = useState(0);
+  const [galleryExpanded, setGalleryExpanded] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [emailQueue, setEmailQueue] = useState<string[]>([]);
   const [headerMenu, setHeaderMenu] = useState<PipelineHeaderMenuId | null>(null);
@@ -842,6 +847,7 @@ export default function PipelineClient() {
 
   useEffect(() => {
     setGalleryIndex(0);
+    setGalleryExpanded(false);
   }, [selectedId]);
 
   const openProperty = useCallback(
@@ -865,6 +871,7 @@ export default function PipelineClient() {
     setSelectedId(null);
     setSelectedProperty(null);
     setBrokerEditOpen(false);
+    setGalleryExpanded(false);
     setNewTag("");
     const params = new URLSearchParams(queryString);
     params.delete("propertyId");
@@ -1711,6 +1718,10 @@ export default function PipelineClient() {
   const sheetGallery = extractGallery(selectedProperty, selectedRow);
   const activeGalleryIndex = sheetGallery.length > 0 ? Math.min(galleryIndex, sheetGallery.length - 1) : 0;
   const activeGalleryImage = sheetGallery[activeGalleryIndex] ?? null;
+  const hiddenGalleryCount = Math.max(0, sheetGallery.length - 6);
+  const galleryThumbs = galleryExpanded ? sheetGallery : sheetGallery.slice(0, 6);
+  const rawListingUrl = selectedProperty?.overview.listingUrl ?? selectedRow?.overview?.listingUrl ?? null;
+  const listingUrl = rawListingUrl && /^https?:\/\//i.test(rawListingUrl) ? rawListingUrl : null;
   const sheetBroker = selectedProperty?.broker ?? selectedRow?.broker ?? null;
   const sheetStatus = selectedProperty?.statusChip ?? selectedRow?.statusChip ?? null;
   const sheetTags = selectedProperty?.tags ?? selectedRow?.tags ?? [];
@@ -1875,6 +1886,7 @@ export default function PipelineClient() {
             <col className={styles.colSource} />
             <col className={styles.colType} />
             <col className={styles.colAsk} />
+            <col className={styles.colPsf} />
             <col className={styles.colUnit} />
             <col className={styles.colCap} />
             <col className={styles.colMtr} />
@@ -1900,7 +1912,8 @@ export default function PipelineClient() {
               <th>{renderHeader("source", "Source")}</th>
               <th>{renderHeader("marketType", "Type")}</th>
               <th>{renderHeader("askingPrice", "Ask")}</th>
-              <th>{renderHeader("units", "Unit")}</th>
+              <th>{renderHeader("pricePerSqft", "$/SF")}</th>
+              <th>{renderHeader("units", "Units")}</th>
               <th>{renderHeader("capRate", "Cap")}</th>
               <th>{renderHeader("mtr", "MTR")}</th>
               <th>{renderHeader("dealScore", "Score")}</th>
@@ -1967,6 +1980,7 @@ export default function PipelineClient() {
                     </select>
                   </td>
                   <td className={styles.numericCell}>{formatCurrency(row.askingPrice)}</td>
+                  <td className={styles.numericCell}>{formatCurrency(row.pricePerSqft, false)}</td>
                   <td className={styles.numericCell}>{formatNumber(row.units)}</td>
                   <td className={styles.numericCell}>{formatPercent(calculateCapRate(row))}</td>
                   <td>
@@ -2090,6 +2104,11 @@ export default function PipelineClient() {
                 <span className={styles.kicker}>{sourceLabel(String(selectedProperty?.overview.source ?? selectedRow?.source ?? "Pipeline"))}</span>
                 <h2>{selectedProperty?.overview.displayAddress ?? selectedRow?.displayAddress ?? selectedRow?.canonicalAddress ?? "Property"}</h2>
                 <p>{[selectedProperty?.overview.neighborhood ?? selectedRow?.neighborhood, selectedProperty?.overview.borough ?? selectedRow?.borough, marketTypeLabel(sheetMarketType)].filter(Boolean).map(titleize).join(" · ")}</p>
+                {listingUrl ? (
+                  <a className={styles.sourceLinkButton} href={listingUrl} target="_blank" rel="noreferrer">
+                    Open source listing
+                  </a>
+                ) : null}
               </div>
               <button className={styles.closeButton} type="button" onClick={closeSheet} aria-label="Close property sheet">
                 ×
@@ -2110,21 +2129,46 @@ export default function PipelineClient() {
                       {activeGalleryIndex + 1} / {sheetGallery.length}
                     </span>
                   </button>
-                  <div className={styles.galleryRail} aria-label="Property photos">
-                    {sheetGallery.slice(0, 6).map((image, index) => (
-                      <button
-                        key={image.id ?? image.url}
-                        className={cx(styles.galleryThumbButton, index === activeGalleryIndex && styles.galleryThumbButtonActive)}
-                        type="button"
-                        onClick={() => setGalleryIndex(index)}
-                        aria-label={`Show property photo ${index + 1}`}
-                      >
-                        <img src={image.thumbnailUrl ?? image.url} alt="" />
-                        {index === 5 && sheetGallery.length > 6 ? (
-                          <span className={styles.galleryMore}>+{sheetGallery.length - 6}</span>
-                        ) : null}
-                      </button>
-                    ))}
+                  <div className={styles.galleryRailPanel}>
+                    {hiddenGalleryCount > 0 ? (
+                      <div className={styles.galleryRailHeader}>
+                        <span>{galleryExpanded ? `${sheetGallery.length} photos` : `Showing 6 of ${sheetGallery.length}`}</span>
+                        <button
+                          type="button"
+                          onClick={() => setGalleryExpanded((expanded) => !expanded)}
+                          aria-expanded={galleryExpanded}
+                        >
+                          {galleryExpanded ? "Collapse" : "Show all"}
+                        </button>
+                      </div>
+                    ) : null}
+                    <div className={cx(styles.galleryRail, galleryExpanded && styles.galleryRailExpanded)} aria-label="Property photos">
+                      {galleryThumbs.map((image, index) => {
+                        const actualIndex = index;
+                        const isMoreTile = !galleryExpanded && hiddenGalleryCount > 0 && index === 5;
+                        return (
+                          <button
+                            key={image.id ?? image.url}
+                            className={cx(styles.galleryThumbButton, actualIndex === activeGalleryIndex && styles.galleryThumbButtonActive)}
+                            type="button"
+                            onClick={() => {
+                              if (isMoreTile) {
+                                setGalleryExpanded(true);
+                                setGalleryIndex(Math.min(6, sheetGallery.length - 1));
+                                return;
+                              }
+                              setGalleryIndex(actualIndex);
+                            }}
+                            aria-label={isMoreTile ? `Show ${hiddenGalleryCount} more property photos` : `Show property photo ${actualIndex + 1}`}
+                          >
+                            <img src={image.thumbnailUrl ?? image.url} alt="" />
+                            {isMoreTile ? (
+                              <span className={styles.galleryMore}>+{hiddenGalleryCount}</span>
+                            ) : null}
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
                 </>
               ) : (
@@ -2240,6 +2284,10 @@ export default function PipelineClient() {
                       <div>
                         <dt>Sqft</dt>
                         <dd>{formatNumber(selectedProperty?.overview.buildingSqft ?? selectedRow?.buildingSqft)}</dd>
+                      </div>
+                      <div>
+                        <dt>$/SF</dt>
+                        <dd>{formatCurrency(selectedProperty?.overview.pricePerSqft ?? selectedRow?.pricePerSqft, false)}</dd>
                       </div>
                       <div>
                         <dt>Beds / Baths</dt>
@@ -2867,8 +2915,8 @@ function factsFromListing(facts: UiV2ListingFactsPayload | null | undefined): Ui
     { label: "Listing status", value: titleize(facts.status) },
     { label: "Property type", value: titleize(facts.propertyType) },
     { label: "Beds / baths", value: bedsBaths },
-    { label: "Sqft", value: formatNumber(facts.sqft) },
-    { label: "$ / sf", value: formatCurrency(facts.ppsqft, false) },
+    { label: "Building SF", value: formatNumber(facts.sqft) },
+    { label: "$/SF", value: formatCurrency(facts.ppsqft, false) },
     { label: "Days on market", value: formatNumber(facts.daysOnMarket) },
     { label: "Listed", value: formatDate(facts.listedAt) },
     { label: "Built", value: facts.builtIn ?? null },

@@ -29,6 +29,7 @@ export type UiV2PipelineSortField =
   | "source"
   | "marketType"
   | "askingPrice"
+  | "pricePerSqft"
   | "units"
   | "capRate"
   | "dealScore"
@@ -612,6 +613,7 @@ export interface UiV2PipelineRow {
   askingPrice?: number | null;
   units?: number | null;
   buildingSqft?: number | null;
+  pricePerSqft?: number | null;
   marketType?: UiV2MarketType | null;
   neighborhood?: string | null;
   borough?: string | null;
@@ -652,6 +654,7 @@ export interface UiV2PropertyOverview {
   beds?: number | null;
   baths?: number | null;
   buildingSqft?: number | null;
+  pricePerSqft?: number | null;
   lotSqft?: number | null;
   yearBuilt?: number | null;
   description?: string | null;

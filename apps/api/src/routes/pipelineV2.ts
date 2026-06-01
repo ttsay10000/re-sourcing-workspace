@@ -310,6 +310,11 @@ function toFiniteNumber(value: unknown): number | null {
   return null;
 }
 
+function toPositiveNumber(value: unknown): number | null {
+  const parsed = toFiniteNumber(value);
+  return parsed != null && parsed > 0 ? parsed : null;
+}
+
 function stringOrNull(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
@@ -393,6 +398,7 @@ function parsePipelineQuery(req: Request): ParsedPipelineQuery {
       "source",
       "marketType",
       "askingPrice",
+      "pricePerSqft",
       "units",
       "capRate",
       "dealScore",
@@ -739,6 +745,14 @@ function readFirstNumericPath(root: unknown, paths: string[][]): number | null {
   return null;
 }
 
+function readFirstPositiveNumericPath(root: unknown, paths: string[][]): number | null {
+  for (const path of paths) {
+    const value = toPositiveNumber(readNumericPath(root, path));
+    if (value != null) return value;
+  }
+  return null;
+}
+
 function readFirstStringPath(root: unknown, paths: string[][]): string | null {
   for (const path of paths) {
     const value = readStringPath(root, path);
@@ -837,7 +851,7 @@ function getUnitCount(row: PipelineBaseRow): number | null {
     : null;
   return (
     resolvePreferredOmUnitCount(details) ??
-    readFirstNumericPath(details, [
+    readFirstPositiveNumericPath(details, [
       ["unitCount"],
       ["units"],
       ["numberOfUnits"],
@@ -853,7 +867,7 @@ function getUnitCount(row: PipelineBaseRow): number | null {
       ["omData", "authoritative", "propertyInfo", "units"],
       ["omData", "authoritative", "propertyInfo", "numberOfUnits"],
     ]) ??
-    readFirstNumericPath(row.listing_extra, [
+    readFirstPositiveNumericPath(row.listing_extra, [
       ["units"],
       ["unitCount"],
       ["unit_count"],
@@ -888,8 +902,9 @@ function inferUnitCountFromText(...values: unknown[]): number | null {
     eleven: 11,
     twelve: 12,
   };
-  const familyMatch = /\b(\d{1,3}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)[-\s]+family\b/.exec(text);
-  const unitMatch = /\b(\d{1,3})\s+(?:residential\s+)?units?\b/.exec(text);
+  const numberToken = "\\d{1,3}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve";
+  const familyMatch = new RegExp(`\\b(?:set\\s+up\\s+as\\s+|configured\\s+as\\s+|legal\\s+)?(${numberToken})[-\\s]+family\\b`).exec(text);
+  const unitMatch = new RegExp(`\\b(${numberToken})\\s+(?:residential\\s+|rental\\s+|dwelling\\s+|apartment\\s+|floor\\s+|full[-\\s]+floor\\s+)?(?:units?|apartments?|residences?|dwellings?)\\b`).exec(text);
   const raw = familyMatch?.[1] ?? unitMatch?.[1] ?? null;
   if (!raw) return null;
   const parsed = /^\d+$/.test(raw) ? Number(raw) : wordToNumber[raw];
@@ -898,7 +913,7 @@ function inferUnitCountFromText(...values: unknown[]): number | null {
 
 function getBuildingSqft(row: PipelineBaseRow): number | null {
   return (
-    readFirstNumericPath(row.details, [
+    readFirstPositiveNumericPath(row.details, [
       ["buildingSqft"],
       ["buildingSqftTotal"],
       ["squareFeet"],
@@ -917,20 +932,42 @@ function getBuildingSqft(row: PipelineBaseRow): number | null {
       ["omData", "authoritative", "propertyInfo", "squareFeet"],
       ["omData", "authoritative", "propertyInfo", "sqft"],
     ]) ??
-    toFiniteNumber(row.listing_sqft) ??
-    readFirstNumericPath(row.listing_extra, [
+    toPositiveNumber(row.listing_sqft) ??
+    readFirstPositiveNumericPath(row.listing_extra, [
       ["sqft"],
       ["squareFeet"],
       ["square_feet"],
       ["sqft_feet"],
       ["grossSqft"],
       ["gross_square_feet"],
+      ["buildingSqft"],
+      ["building_sqft"],
       ["buildingSize"],
       ["building_size"],
       ["building", "sqft"],
+      ["building", "squareFeet"],
+      ["building", "square_feet"],
+      ["building", "grossSqft"],
       ["property", "sqft"],
+      ["property", "squareFeet"],
     ])
   );
+}
+
+function getPricePerSqft(row: PipelineBaseRow): number | null {
+  const sourcePricePerSqft = readFirstPositiveNumericPath(row.listing_extra, [
+    ["ppsqft"],
+    ["pricePerSqft"],
+    ["price_per_sqft"],
+    ["price_per_square_foot"],
+    ["psf"],
+    ["price_psf"],
+  ]);
+  if (sourcePricePerSqft != null) return Math.round(sourcePricePerSqft);
+  const price = getAskingPrice(row);
+  const sqft = getBuildingSqft(row);
+  if (price == null || sqft == null || price <= 0 || sqft <= 0) return null;
+  return Math.round(price / sqft);
 }
 
 function getYearBuilt(row: PipelineBaseRow): number | null {
@@ -1077,7 +1114,7 @@ function coerceRecordList<T extends Record<string, unknown>>(value: unknown): T[
 }
 
 function sourceUnitCount(row: PipelineBaseRow): number | null {
-  return readFirstNumericPath(row.listing_extra, [
+  return readFirstPositiveNumericPath(row.listing_extra, [
     ["units"],
     ["unitCount"],
     ["unit_count"],
@@ -1130,6 +1167,8 @@ function buildListingFacts(row: PipelineBaseRow): UiV2ListingFactsPayload | null
   const unitsFromOm = resolvePreferredOmUnitCount(details);
   const unitsFromSource = sourceUnitCount(row);
   const units = getUnitCount(row);
+  const buildingSqft = getBuildingSqft(row);
+  const pricePerSqft = getPricePerSqft(row);
   const unitCountSource =
     unitsFromSource != null
       ? "source"
@@ -1146,8 +1185,8 @@ function buildListingFacts(row: PipelineBaseRow): UiV2ListingFactsPayload | null
     propertyType: readFirstStringPath(row.listing_extra, [["propertyType"], ["property_type"], ["type"], ["building", "type"]]),
     bedrooms: toFiniteNumber(row.listing_beds),
     bathrooms: toFiniteNumber(row.listing_baths),
-    sqft: toFiniteNumber(row.listing_sqft) ?? readFirstNumericPath(row.listing_extra, [["sqft"], ["squareFeet"], ["square_feet"]]),
-    ppsqft: readFirstNumericPath(row.listing_extra, [["ppsqft"], ["pricePerSqft"], ["price_per_sqft"]]),
+    sqft: buildingSqft,
+    ppsqft: pricePerSqft,
     daysOnMarket: readFirstNumericPath(row.listing_extra, [["daysOnMarket"], ["days_on_market"], ["dom"]]),
     listedAt: optionalIso(row.listing_listed_at) ?? readFirstStringPath(row.listing_extra, [["listedAt"], ["listed_at"]]),
     closedAt: readFirstStringPath(row.listing_extra, [["closedAt"], ["closed_at"]]),
@@ -1586,6 +1625,7 @@ function buildOverview(row: PipelineBaseRow): UiV2PropertyOverview {
     beds: toFiniteNumber(row.listing_beds),
     baths: toFiniteNumber(row.listing_baths),
     buildingSqft: getBuildingSqft(row),
+    pricePerSqft: getPricePerSqft(row),
     lotSqft: getLotSqft(row),
     yearBuilt: getYearBuilt(row),
     description: row.listing_description ?? readStringPath(row.details, ["description"]),
@@ -1622,6 +1662,7 @@ function buildPipelineRow(row: PipelineBaseRow): UiV2PipelineRow {
     askingPrice: overview.askingPrice,
     units: overview.units,
     buildingSqft: overview.buildingSqft,
+    pricePerSqft: overview.pricePerSqft,
     marketType: overview.marketType,
     neighborhood: overview.neighborhood,
     borough: overview.borough,
@@ -2098,6 +2139,8 @@ function sortValue(row: UiV2PipelineRow, sortBy: UiV2PipelineSortField): string 
       return row.marketType ?? "unknown";
     case "askingPrice":
       return row.askingPrice ?? null;
+    case "pricePerSqft":
+      return row.pricePerSqft ?? null;
     case "units":
       return row.units ?? null;
     case "capRate":

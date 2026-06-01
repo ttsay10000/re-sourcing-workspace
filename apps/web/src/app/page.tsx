@@ -99,6 +99,12 @@ function rowAddress(row: UiV2PipelineRow | HomeProgressRow): string {
   return row.displayAddress ?? row.canonicalAddress ?? "Property";
 }
 
+function unitLabel(units: number | null | undefined): string | null {
+  if (units == null || !Number.isFinite(units) || units <= 0) return null;
+  const rounded = Math.round(units);
+  return `${rounded} ${rounded === 1 ? "unit" : "units"}`;
+}
+
 export default function HomePage() {
   const searchParams = useSearchParams();
   const query = (searchParams.get("q") ?? "").trim().toLowerCase();
@@ -280,6 +286,7 @@ export default function HomePage() {
                 <th>Source</th>
                 <th>Ask</th>
                 <th>$/Unit</th>
+                <th>$/SF</th>
                 <th>Cap</th>
                 <th>Score</th>
                 <th>Status</th>
@@ -289,15 +296,17 @@ export default function HomePage() {
             <tbody>
               {dealsInProgress.map((row) => {
                 const score = rowScore(row);
+                const subtitle = [locationSubtitle(row), unitLabel(row.units)].filter(Boolean).join(" · ");
                 return (
                   <tr key={row.propertyId}>
                     <td>
                       <Link href={`/pipeline?propertyId=${encodeURIComponent(row.propertyId)}`}>{rowAddress(row)}</Link>
-                      <small>{locationSubtitle(row)}{row.units ? ` · ${row.units}u` : ""}</small>
+                      {subtitle ? <small>{subtitle}</small> : null}
                     </td>
                     <td style={{ textTransform: "uppercase", fontSize: "0.76rem", color: "var(--app-muted)" }}>{String(row.source ?? "").replace(/_/g, " ")}</td>
                     <td className={styles.numCol}>{formatCurrency(row.askingPrice)}</td>
                     <td className={styles.numCol}>{row.askingPrice && row.units ? formatCurrency(row.askingPrice / row.units) : "—"}</td>
+                    <td className={styles.numCol}>{formatCurrency(row.pricePerSqft)}</td>
                     <td className={styles.numCol}>—</td>
                     <td>
                       <span className={`${styles.scorePill} ${scoreClass(score)}`}>

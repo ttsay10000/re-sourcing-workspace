@@ -10,18 +10,35 @@ export function normalizeStreetEasySaleDetails(raw: Record<string, unknown>, ind
   const price = Number(raw.price ?? raw.closedPrice ?? 0) || 0;
   const bedsNum = Number(raw.bedrooms ?? raw.beds ?? 0) || 0;
   const bathsNum = Number(raw.bathrooms ?? raw.baths ?? 0) || 0;
-  const sqftRaw = firstNumber(
+  const sqftRaw = firstPositiveNumber(
     raw.sqft,
     raw.square_feet,
     raw.sqft_feet,
     raw.squareFeet,
     raw.gross_square_feet,
     raw.grossSqft,
+    raw.building_sqft,
+    raw.buildingSqft,
     raw.building_size,
-    raw.buildingSize
+    raw.buildingSize,
+    raw.floorArea,
+    raw.floor_area,
+    firstPositiveNumberFromPaths(raw, [
+      ["building", "sqft"],
+      ["building", "squareFeet"],
+      ["building", "square_feet"],
+      ["building", "grossSqft"],
+      ["building", "gross_square_feet"],
+      ["building", "size"],
+      ["property", "sqft"],
+      ["property", "squareFeet"],
+      ["property", "square_feet"],
+      ["listing", "sqft"],
+      ["listing", "squareFeet"],
+    ])
   );
   const units =
-    firstNumber(
+    firstPositiveNumber(
       raw.units,
       raw.unitCount,
       raw.unit_count,
@@ -50,11 +67,30 @@ export function normalizeStreetEasySaleDetails(raw: Record<string, unknown>, ind
   const { _fetchUrl: _unusedFetchUrl, ...rest } = raw;
   const extra = rest as Record<string, unknown>;
   const { monthlyHoa, monthlyTax } = parseMonthlyHoaTaxFromRaw(raw);
+  const sourcePricePerSqft = firstPositiveNumber(
+    raw.ppsqft,
+    raw.pricePerSqft,
+    raw.price_per_sqft,
+    raw.price_per_square_foot,
+    raw.psf,
+    raw.price_psf,
+    firstPositiveNumberFromPaths(raw, [
+      ["listing", "ppsqft"],
+      ["listing", "pricePerSqft"],
+      ["listing", "price_per_sqft"],
+      ["property", "ppsqft"],
+    ])
+  );
+  const computedPricePerSqft = sourcePricePerSqft ?? (price > 0 && sqftRaw != null ? Math.round(price / sqftRaw) : null);
   if (monthlyHoa != null) extra.monthlyHoa = monthlyHoa;
   if (monthlyTax != null) extra.monthlyTax = monthlyTax;
   if (sqftRaw != null) {
-    extra.sqft = sqftRaw;
-    extra.squareFeet = sqftRaw;
+    extra.sqft = Math.round(sqftRaw);
+    extra.squareFeet = Math.round(sqftRaw);
+  }
+  if (computedPricePerSqft != null) {
+    extra.ppsqft = computedPricePerSqft;
+    extra.pricePerSqft = computedPricePerSqft;
   }
   if (units != null) {
     extra.units = units;
@@ -79,7 +115,7 @@ export function normalizeStreetEasySaleDetails(raw: Record<string, unknown>, ind
     price,
     beds: bedsNum >= 0 ? bedsNum : 0,
     baths: bathsNum >= 0 ? bathsNum : 0,
-    sqft: sqftRaw != null && sqftRaw >= 0 ? Math.round(sqftRaw) : null,
+    sqft: sqftRaw != null ? Math.round(sqftRaw) : null,
     url,
     title: address !== "—" ? address : null,
     description: raw.description != null ? String(raw.description) : null,
@@ -105,6 +141,31 @@ function firstNumber(...values: unknown[]): number | null {
       const parsed = Number(value.replace(/[$,%\s,]/g, ""));
       if (Number.isFinite(parsed)) return parsed;
     }
+  }
+  return null;
+}
+
+function firstPositiveNumber(...values: unknown[]): number | null {
+  for (const value of values) {
+    const parsed = firstNumber(value);
+    if (parsed != null && parsed > 0) return parsed;
+  }
+  return null;
+}
+
+function readPath(root: unknown, path: string[]): unknown {
+  let current: unknown = root;
+  for (const key of path) {
+    if (!isRecord(current)) return null;
+    current = current[key];
+  }
+  return current;
+}
+
+function firstPositiveNumberFromPaths(root: unknown, paths: string[][]): number | null {
+  for (const path of paths) {
+    const value = firstNumber(readPath(root, path));
+    if (value != null && value > 0) return value;
   }
   return null;
 }
@@ -135,8 +196,9 @@ function inferUnitCountFromText(...values: unknown[]): number | null {
     eleven: 11,
     twelve: 12,
   };
-  const familyMatch = /\b(\d{1,3}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)[-\s]+family\b/.exec(text);
-  const unitMatch = /\b(\d{1,3})\s+(?:residential\s+)?units?\b/.exec(text);
+  const numberToken = "\\d{1,3}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve";
+  const familyMatch = new RegExp(`\\b(?:set\\s+up\\s+as\\s+|configured\\s+as\\s+|legal\\s+)?(${numberToken})[-\\s]+family\\b`).exec(text);
+  const unitMatch = new RegExp(`\\b(${numberToken})\\s+(?:residential\\s+|rental\\s+|dwelling\\s+|apartment\\s+|floor\\s+|full[-\\s]+floor\\s+)?(?:units?|apartments?|residences?|dwellings?)\\b`).exec(text);
   const raw = familyMatch?.[1] ?? unitMatch?.[1] ?? null;
   if (!raw) return null;
   const parsed = /^\d+$/.test(raw) ? Number(raw) : wordToNumber[raw];
