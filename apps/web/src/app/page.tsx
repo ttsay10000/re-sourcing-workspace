@@ -29,12 +29,15 @@ type HomeProgressRow = {
 
 const SNAPSHOT_STAGES = [
   { key: "new", label: "Sourced" },
+  { key: "needs_om", label: "Needs OM" },
   { key: "outreach", label: "OM Requested" },
   { key: "om_received", label: "OM Received" },
   { key: "underwriting", label: "Underwriting" },
-  { key: "offer_review", label: "Offer Review" },
-  { key: "archived", label: "Closed / Archived" },
-  { key: "rejected", label: "Rejected" },
+  { key: "loi_sent", label: "LOI Sent" },
+  { key: "negotiation", label: "Negotiation" },
+  { key: "contract_signed", label: "Contract Signed" },
+  { key: "diligence", label: "Diligence" },
+  { key: "archived", label: "Closed" },
 ];
 
 function formatCurrency(value: number | null | undefined): string {
@@ -68,7 +71,18 @@ function areaLabel(value: string | null | undefined): string | null {
 }
 
 function locationSubtitle(row: Pick<UiV2PipelineRow, "neighborhood" | "borough">): string {
-  return [areaLabel(row.neighborhood), areaLabel(row.borough)].filter(Boolean).join(" · ");
+  const seen = new Set<string>();
+  const parts = [row.neighborhood, row.borough]
+    .flatMap((value) => String(value ?? "").split(/[·/,]/g))
+    .map((value) => areaLabel(value))
+    .filter((value): value is string => Boolean(value))
+    .filter((value) => {
+      const key = value.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  return parts.join(" · ");
 }
 
 function scoreClass(score: number | null | undefined): string {
@@ -172,42 +186,76 @@ export default function HomePage() {
     ];
   }, [pipelineRows, progressRows]);
 
+  const statusTone = (status: string) => {
+    if (["archived", "closed"].includes(status)) return "green";
+    if (status === "rejected") return "red";
+    if (["offer_review", "loi_sent"].includes(status)) return "blue";
+    if (["underwriting", "om_received"].includes(status)) return "amber";
+    return "neutral";
+  };
+
+  const statusPillTone = (label: string) => {
+    const l = label.toLowerCase();
+    if (l.includes("underwriting")) return styles.statusPillPurple;
+    if (l.includes("saved") || l.includes("sourced")) return styles.statusPillGreen;
+    if (l.includes("om received")) return styles.statusPillBlue;
+    if (l.includes("outreach") || l.includes("awaiting")) return styles.statusPillAmber;
+    if (l.includes("reject")) return styles.statusPillRed;
+    return "";
+  };
+
   return (
     <main className={styles.page}>
       <header className={styles.header}>
-        <div>
-          <p className={styles.eyebrow}>Workspace</p>
-          <h1>Home</h1>
-          <p>{loading ? "Refreshing dashboard..." : `${pipelineTotal} properties loaded into the sourcing workspace`}</p>
+        <div className={styles.headerCopy}>
+          <h1>Acquisitions dashboard</h1>
+          <p>Manhattan multifamily &amp; mixed-use · {loading ? "loading…" : `${pipelineTotal} active properties`}</p>
         </div>
-        <div className={styles.headerActions}>
-          <Link href="/pipeline" className={styles.secondaryButton}>Full Pipeline</Link>
-          <Link href="/add-property" className={styles.primaryButton}>Add Property</Link>
+        <div className={styles.headerMeta}>
+          <div>Last refresh · {new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}</div>
+          <div>Source: StreetEasy · broker network · city data</div>
         </div>
       </header>
 
       {error ? <div className={styles.error}>{error}</div> : null}
-      {query ? <div className={styles.notice}>Home filtered by global search: <strong>{searchParams.get("q")}</strong></div> : null}
+      {query ? <div className={styles.notice}>Filtered by: <strong>{searchParams.get("q")}</strong></div> : null}
 
-      <section className={styles.statusCards} aria-label="Deal status cards">
-        {[
-          { label: "LOIs Sent", value: counts.get("offer_review") ?? 0, tone: "green" },
-          { label: "Negotiation", value: progressRows.filter((row) => row.status === "offer_review").length, tone: "neutral" },
-          { label: "Contract / Diligence", value: counts.get("dossier_generated") ?? 0, tone: "neutral" },
-          { label: "Closed", value: counts.get("archived") ?? 0, tone: "green" },
-          { label: "Rejected / Removed", value: counts.get("rejected") ?? 0, tone: "red" },
-        ].map((card) => (
-          <article key={card.label} className={`${styles.statusCard} ${styles[card.tone]}`}>
-            <span>{card.label}</span>
-            <strong>{card.value}</strong>
-          </article>
-        ))}
+      <section aria-label="Pipeline status overview">
+        <div className={styles.statusCards}>
+          {[
+            { label: "Total Sourced", value: pipelineTotal, tone: "neutral" },
+            { label: "Active Pipeline", value: pipelineRows.filter((r) => !["rejected","archived"].includes(String(r.statusChip.status))).length, tone: "neutral" },
+            { label: "Needs OM", value: pipelineRows.filter((r) => !r.documentStatus?.hasOm).length, tone: "amber" },
+            { label: "OM Requested", value: counts.get("outreach") ?? 0, tone: "neutral" },
+            { label: "OM Received", value: counts.get("om_received") ?? 0, tone: "green" },
+            { label: "Underwriting", value: counts.get("underwriting") ?? 0, tone: "blue" },
+          ].map((card) => (
+            <article key={card.label} className={`${styles.statusCard} ${styles[card.tone]}`}>
+              <span>{card.label}</span>
+              <strong>{card.value}</strong>
+            </article>
+          ))}
+        </div>
+        <div className={styles.statusCardsSecondary} style={{ marginTop: "0.65rem" }}>
+          {[
+            { label: "LOIs Sent", value: counts.get("offer_review") ?? 0, tone: "neutral" },
+            { label: "Negotiation", value: counts.get("negotiation") ?? 0, tone: "neutral" },
+            { label: "Contract / Diligence", value: counts.get("dossier_generated") ?? 0, tone: "neutral" },
+            { label: "Closed", value: counts.get("archived") ?? 0, tone: "green" },
+            { label: "Rejected / Removed", value: counts.get("rejected") ?? 0, tone: "red" },
+          ].map((card) => (
+            <article key={card.label} className={`${styles.statusCard} ${styles[card.tone]}`}>
+              <span>{card.label}</span>
+              <strong>{card.value}</strong>
+            </article>
+          ))}
+        </div>
       </section>
 
       <section className={styles.snapshot}>
         <div className={styles.panelHeader}>
-          <h2>Pipeline Snapshot</h2>
-          <Link href="/pipeline">Full pipeline</Link>
+          <h2>Pipeline snapshot</h2>
+          <Link href="/pipeline">Full pipeline →</Link>
         </div>
         <div className={styles.stageStrip}>
           {SNAPSHOT_STAGES.map((stage) => (
@@ -222,8 +270,8 @@ export default function HomePage() {
       <div className={styles.dashboardGrid}>
         <section className={styles.dealsPanel}>
           <div className={styles.panelHeader}>
-            <h2>Deals In Progress</h2>
-            <span>{dealsInProgress.length} visible deals</span>
+            <h2>Deals in progress</h2>
+            <span>{dealsInProgress.length} active deals</span>
           </div>
           <table className={styles.dealsTable}>
             <thead>
@@ -231,25 +279,43 @@ export default function HomePage() {
                 <th>Address</th>
                 <th>Source</th>
                 <th>Ask</th>
+                <th>$/Unit</th>
+                <th>Cap</th>
                 <th>Score</th>
                 <th>Status</th>
                 <th>OM</th>
               </tr>
             </thead>
             <tbody>
-              {dealsInProgress.map((row) => (
-                <tr key={row.propertyId}>
-                  <td>
-                    <Link href={`/pipeline?propertyId=${encodeURIComponent(row.propertyId)}`}>{rowAddress(row)}</Link>
-                    <small>{locationSubtitle(row)}</small>
-                  </td>
-                  <td>{titleize(String(row.source ?? ""))}</td>
-                  <td>{formatCurrency(row.askingPrice)}</td>
-                  <td><span className={`${styles.scorePill} ${scoreClass(rowScore(row))}`}>{rowScore(row) == null ? "-" : `${Math.round(rowScore(row)!)} / 100`}</span></td>
-                  <td>{row.statusChip.label}</td>
-                  <td>{titleize(row.documentStatus?.omStatus ?? (row.documentStatus?.hasOm ? "available" : "missing"))}</td>
-                </tr>
-              ))}
+              {dealsInProgress.map((row) => {
+                const score = rowScore(row);
+                return (
+                  <tr key={row.propertyId}>
+                    <td>
+                      <Link href={`/pipeline?propertyId=${encodeURIComponent(row.propertyId)}`}>{rowAddress(row)}</Link>
+                      <small>{locationSubtitle(row)}{row.units ? ` · ${row.units}u` : ""}</small>
+                    </td>
+                    <td style={{ textTransform: "uppercase", fontSize: "0.76rem", color: "var(--app-muted)" }}>{String(row.source ?? "").replace(/_/g, " ")}</td>
+                    <td className={styles.numCol}>{formatCurrency(row.askingPrice)}</td>
+                    <td className={styles.numCol}>{row.askingPrice && row.units ? formatCurrency(row.askingPrice / row.units) : "—"}</td>
+                    <td className={styles.numCol}>—</td>
+                    <td>
+                      <span className={`${styles.scorePill} ${scoreClass(score)}`}>
+                        <strong>{score == null ? "—" : Math.round(score)}</strong>
+                        <em> /100</em>
+                      </span>
+                    </td>
+                    <td>
+                      <span className={`${styles.statusPill} ${statusPillTone(row.statusChip.label)}`}>
+                        {row.statusChip.label}
+                      </span>
+                    </td>
+                    <td style={{ color: "var(--app-muted)", fontSize: "0.82rem" }}>
+                      {titleize(row.documentStatus?.omStatus ?? (row.documentStatus?.hasOm ? "received" : "—"))}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
           {dealsInProgress.length === 0 ? <div className={styles.empty}>No active deals match the current view.</div> : null}
@@ -258,8 +324,8 @@ export default function HomePage() {
         <aside className={styles.attentionPanel}>
           <div className={styles.panelHeader}>
             <div>
-              <h2>Needs Attention</h2>
-              <span>{attentionItems.reduce((sum, item) => sum + item.count, 0)} items across {attentionItems.length} categories</span>
+              <h2>Needs attention</h2>
+              <p>{attentionItems.reduce((sum, item) => sum + item.count, 0)} items across {attentionItems.length} categories</p>
             </div>
             <Link href="/progress">View all</Link>
           </div>
@@ -273,10 +339,10 @@ export default function HomePage() {
                   aria-expanded={isOpen}
                   onClick={() => setOpenAttentionGroups((current) => ({ ...current, [group.label]: !isOpen }))}
                 >
-                  <span className={`${styles.attentionIcon} ${styles[`attentionTone${titleize(group.tone)}`]}`}>{group.icon}</span>
+                  <span className={`${styles.attentionIcon} ${styles[`attentionTone${titleize(group.tone)}`]}`} aria-hidden="true">{group.icon}</span>
                   <strong>{group.label}</strong>
                   <span>{group.count}</span>
-                  <i>{isOpen ? "-" : "+"}</i>
+                  <i aria-hidden="true">{isOpen ? "−" : "+"}</i>
                 </button>
                 {isOpen ? (
                   <div className={styles.attentionRows}>

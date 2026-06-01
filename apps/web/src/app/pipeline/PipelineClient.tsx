@@ -336,8 +336,8 @@ function areaLabel(value: string | null | undefined): string | null {
   return AREA_LABELS[normalized] ?? titleize(normalized);
 }
 
-function locationSubtitle(row: PipelineRow): string {
-  return [areaLabel(row.neighborhood), areaLabel(row.borough)].filter(Boolean).join(" · ") || "-";
+function locationLabels(row: PipelineRow): string[] {
+  return [areaLabel(row.neighborhood), areaLabel(row.borough)].filter((value): value is string => Boolean(value));
 }
 
 function sourceLabel(value: string | null | undefined): string {
@@ -355,7 +355,7 @@ function normalizeTag(tag: string): string {
 }
 
 function tagLabel(tag: string): string {
-  return normalizeTag(tag).replace(/_/g, " ");
+  return titleize(normalizeTag(tag).replace(/_/g, " "));
 }
 
 function tagToneClass(tag: string): string {
@@ -1919,6 +1919,7 @@ export default function PipelineClient() {
               const isTerminal = status === "rejected" || status === "archived";
               const isChecked = selectedIdSet.has(row.propertyId);
               const score = row.underwriting?.dealScore ?? null;
+              const rowLocationLabels = locationLabels(row);
               return (
                 <tr
                   key={row.propertyId}
@@ -1938,7 +1939,15 @@ export default function PipelineClient() {
                       {row.thumbnailUrl ? <img src={row.thumbnailUrl} alt="" className={styles.thumb} /> : <div className={styles.thumbBlank} />}
                       <div>
                         <strong>{row.displayAddress ?? row.canonicalAddress}</strong>
-                        <span>{locationSubtitle(row)}</span>
+                        {rowLocationLabels.length ? (
+                          <div className={styles.locationTags}>
+                            {rowLocationLabels.map((label) => (
+                              <small key={label}>{label}</small>
+                            ))}
+                          </div>
+                        ) : (
+                          <span>No location tagged</span>
+                        )}
                       </div>
                     </div>
                   </td>
@@ -2013,43 +2022,55 @@ export default function PipelineClient() {
                       >
                         Email
                       </button>
-                      {isTerminal ? (
-                        <button
-                          className={styles.linkButton}
-                          type="button"
-                          disabled={busyAction === `${row.propertyId}:restore`}
-                          onClick={() => restoreDeal(row.propertyId, "pipeline_table")}
-                        >
-                          Restore
-                        </button>
-                      ) : (
-                        <>
+                      <details className={styles.rowActionMenu}>
+                        <summary>More</summary>
+                        <div>
                           <button
                             className={styles.linkButton}
                             type="button"
-                            disabled={status === "saved" || busyAction === `${row.propertyId}:save`}
-                            onClick={() => saveDeal(row.propertyId, "pipeline_table")}
+                            onClick={() => openProperty(row)}
                           >
-                            Save
+                            Open
                           </button>
-                          <button
-                            className={styles.dangerLinkButton}
-                            type="button"
-                            disabled={busyAction === `${row.propertyId}:reject`}
-                            onClick={() =>
-                              setRejectState({
-                                propertyId: row.propertyId,
-                                address: row.displayAddress ?? row.canonicalAddress,
-                                surface: "pipeline_table",
-                                reasonCode: "",
-                                note: "",
-                              })
-                            }
-                          >
-                            Reject
-                          </button>
-                        </>
-                      )}
+                          {isTerminal ? (
+                            <button
+                              className={styles.linkButton}
+                              type="button"
+                              disabled={busyAction === `${row.propertyId}:restore`}
+                              onClick={() => restoreDeal(row.propertyId, "pipeline_table")}
+                            >
+                              Restore
+                            </button>
+                          ) : (
+                            <>
+                              <button
+                                className={styles.linkButton}
+                                type="button"
+                                disabled={status === "saved" || busyAction === `${row.propertyId}:save`}
+                                onClick={() => saveDeal(row.propertyId, "pipeline_table")}
+                              >
+                                Save
+                              </button>
+                              <button
+                                className={styles.dangerLinkButton}
+                                type="button"
+                                disabled={busyAction === `${row.propertyId}:reject`}
+                                onClick={() =>
+                                  setRejectState({
+                                    propertyId: row.propertyId,
+                                    address: row.displayAddress ?? row.canonicalAddress,
+                                    surface: "pipeline_table",
+                                    reasonCode: "",
+                                    note: "",
+                                  })
+                                }
+                              >
+                                Reject
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </details>
                     </div>
                   </td>
                 </tr>
@@ -2068,10 +2089,10 @@ export default function PipelineClient() {
               <div>
                 <span className={styles.kicker}>{sourceLabel(String(selectedProperty?.overview.source ?? selectedRow?.source ?? "Pipeline"))}</span>
                 <h2>{selectedProperty?.overview.displayAddress ?? selectedRow?.displayAddress ?? selectedRow?.canonicalAddress ?? "Property"}</h2>
-                <p>{[selectedProperty?.overview.neighborhood ?? selectedRow?.neighborhood, selectedProperty?.overview.borough ?? selectedRow?.borough, marketTypeLabel(sheetMarketType)].filter(Boolean).join(" / ")}</p>
+                <p>{[selectedProperty?.overview.neighborhood ?? selectedRow?.neighborhood, selectedProperty?.overview.borough ?? selectedRow?.borough, marketTypeLabel(sheetMarketType)].filter(Boolean).map(titleize).join(" · ")}</p>
               </div>
               <button className={styles.closeButton} type="button" onClick={closeSheet} aria-label="Close property sheet">
-                x
+                ×
               </button>
             </div>
 
@@ -2355,27 +2376,11 @@ export default function PipelineClient() {
 
               {sheetTab === "Enrichment" ? (
                 <section className={styles.sheetPanel}>
-                  <h3>Enrichment</h3>
-                  <dl className={styles.detailList}>
-                    <div>
-                      <dt>Status</dt>
-                      <dd>{titleize(selectedProperty?.enrichmentState.status ?? selectedRow?.enrichmentState?.status)}</dd>
-                    </div>
-                    <div>
-                      <dt>Last refreshed</dt>
-                      <dd>{formatDate(selectedProperty?.enrichmentState.lastRefreshedAt ?? selectedRow?.enrichmentState?.lastRefreshedAt)}</dd>
-                    </div>
-                    <div>
-                      <dt>Error</dt>
-                      <dd>{selectedProperty?.enrichmentState.errorMessage ?? selectedRow?.enrichmentState?.errorMessage ?? "-"}</dd>
-                    </div>
-                  </dl>
-                  <div className={styles.keyColumns}>
-                    <KeyList title="Completed" values={selectedProperty?.enrichmentState.completedKeys ?? selectedRow?.enrichmentState?.completedKeys ?? []} />
-                    <KeyList title="Pending" values={selectedProperty?.enrichmentState.pendingKeys ?? selectedRow?.enrichmentState?.pendingKeys ?? []} />
-                    <KeyList title="Failed" values={selectedProperty?.enrichmentState.failedKeys ?? selectedRow?.enrichmentState?.failedKeys ?? []} />
-                  </div>
-                  <EnrichmentModuleGrid modules={sheetEnrichmentModules} />
+                  <h3>Enrichment summary</h3>
+                  <EnrichmentReport
+                    modules={sheetEnrichmentModules}
+                    state={selectedProperty?.enrichmentState ?? selectedRow?.enrichmentState ?? null}
+                  />
                 </section>
               ) : null}
 
@@ -2705,6 +2710,103 @@ function KeyList({ title, values }: { title: string; values: string[] }) {
       ) : (
         <span className={styles.subtle}>-</span>
       )}
+    </div>
+  );
+}
+
+function EnrichmentReport({
+  modules,
+  state,
+}: {
+  modules: UiV2EnrichmentModuleDetail[];
+  state: UiV2EnrichmentState | null;
+}) {
+  const completed = state?.completedKeys ?? [];
+  const pending = state?.pendingKeys ?? [];
+  const failed = state?.failedKeys ?? [];
+  const visibleModules = modules.length > 0 ? modules : [];
+  const modulesWithData = visibleModules.filter((module) => moduleItems(module).some((item) => displayDetailValue(item) !== "-")).length;
+  const status = titleize(state?.status ?? (visibleModules.length > 0 ? "available" : "not started"));
+  const lastRefreshed = formatDate(state?.lastRefreshedAt);
+
+  if (visibleModules.length === 0 && completed.length === 0 && pending.length === 0 && failed.length === 0) {
+    return <div className={styles.emptyState}>No enrichment details are available yet.</div>;
+  }
+
+  return (
+    <div className={styles.enrichmentReport}>
+      <div className={styles.enrichmentLead}>
+        <div>
+          <strong>{status}</strong>
+          <span>{lastRefreshed !== "-" ? `Last refreshed ${lastRefreshed}` : "Refresh this property to pull city, rental, and sourcing data."}</span>
+        </div>
+        <span className={`${styles.tinyChip} ${moduleToneClass(state?.status)}`}>
+          {modulesWithData} of {Math.max(visibleModules.length, modulesWithData)} modules with data
+        </span>
+      </div>
+      {state?.errorMessage ? <p className={styles.enrichmentError}>{state.errorMessage}</p> : null}
+      <div className={styles.enrichmentKeyRows}>
+        <EnrichmentKeyRow label="Completed" values={completed} tone="success" />
+        <EnrichmentKeyRow label="Pending" values={pending} tone="info" />
+        <EnrichmentKeyRow label="Failed" values={failed} tone="warning" />
+      </div>
+      <ul className={styles.enrichmentSections}>
+        {visibleModules.map((module) => {
+          const items = moduleItems(module)
+            .filter((item) => displayDetailValue(item) !== "-")
+            .slice(0, 6);
+          const updatedAt = moduleUpdatedAt(module);
+          return (
+            <li key={module.key}>
+              <div className={styles.enrichmentSectionHeader}>
+                <strong>{module.label}</strong>
+                <span className={`${styles.tinyChip} ${moduleToneClass(module.status)}`}>{statusBadgeLabel(module.status)}</span>
+              </div>
+              {items.length > 0 ? (
+                <ul className={styles.enrichmentBullets}>
+                  {items.map((item) => (
+                    <li key={`${module.key}:${item.label}`}>
+                      <span>{titleize(item.label)}</span>
+                      <strong>{displayDetailValue(item)}</strong>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p>No source fields populated yet.</p>
+              )}
+              <small>{updatedAt ? `Updated ${updatedAt}` : `${moduleItems(module).length} fields checked`}</small>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+function EnrichmentKeyRow({
+  label,
+  values,
+  tone,
+}: {
+  label: string;
+  values: string[];
+  tone: "success" | "info" | "warning";
+}) {
+  const toneClass = tone === "success" ? styles.toneSuccess : tone === "info" ? styles.toneInfo : styles.toneWarning;
+  return (
+    <div className={styles.enrichmentKeyRow}>
+      <span>{label}</span>
+      <div>
+        {values.length > 0 ? (
+          values.map((value) => (
+            <span className={`${styles.tinyChip} ${toneClass}`} key={value}>
+              {titleize(value)}
+            </span>
+          ))
+        ) : (
+          <span className={styles.subtle}>None</span>
+        )}
+      </div>
     </div>
   );
 }

@@ -474,6 +474,288 @@ function formatDateOnly(value: string | null | undefined): string {
   return d.toISOString().slice(0, 10);
 }
 
+function formatReadableToken(value: unknown): string {
+  if (value == null) return "—";
+  const raw = String(value).trim();
+  if (!raw) return "—";
+  return raw
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .toLowerCase()
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function formatNumberValue(value: unknown): string {
+  if (value == null || value === "") return "—";
+  const n = typeof value === "number" ? value : Number(String(value).replace(/,/g, ""));
+  if (!Number.isFinite(n)) return String(value);
+  return n.toLocaleString();
+}
+
+function formatMoneyValue(value: unknown): string {
+  if (value == null || value === "") return "—";
+  const n = typeof value === "number" ? value : Number(String(value).replace(/[$,\s]/g, ""));
+  if (!Number.isFinite(n)) return String(value);
+  return formatPrice(n);
+}
+
+function compactText(value: unknown): string | null {
+  if (value == null) return null;
+  const raw = String(value).trim();
+  return raw.length > 0 ? raw : null;
+}
+
+function splitTakeawayText(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value
+      .flatMap((entry) => splitTakeawayText(entry))
+      .filter((entry, index, arr) => arr.indexOf(entry) === index);
+  }
+  const raw = compactText(value);
+  if (!raw) return [];
+  return raw
+    .replace(/\s+/g, " ")
+    .split(/(?:\n+|(?:^|\s)(?:[•*-]|\d+\.)\s+|(?<=\.)\s+(?=[A-Z][A-Za-z ]{2,24}:))/)
+    .map((entry) => entry.trim().replace(/^[-•*\d.]+\s*/, ""))
+    .filter((entry) => entry.length > 0)
+    .slice(0, 8);
+}
+
+function joinedSummary(parts: Array<string | null | undefined>): string {
+  return parts.filter((part): part is string => Boolean(part && part.trim())).join(" · ") || "—";
+}
+
+type V3FactItem = {
+  label: string;
+  value: React.ReactNode;
+  detail?: React.ReactNode;
+  tone?: "neutral" | "good" | "warn" | "danger";
+};
+
+function V3ReportPanel({
+  title,
+  subtitle,
+  children,
+  actions,
+}: {
+  title: string;
+  subtitle?: string;
+  children: React.ReactNode;
+  actions?: React.ReactNode;
+}) {
+  return (
+    <section
+      style={{
+        border: "1px solid rgba(38, 47, 44, 0.14)",
+        borderRadius: "10px",
+        background: "#fff",
+        boxShadow: "0 10px 26px rgba(31, 43, 37, 0.05)",
+        overflow: "hidden",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "flex-start",
+          justifyContent: "space-between",
+          gap: "1rem",
+          padding: "0.95rem 1rem",
+          borderBottom: "1px solid rgba(38, 47, 44, 0.1)",
+          background: "linear-gradient(180deg, #fbfaf6 0%, #ffffff 100%)",
+        }}
+      >
+        <div>
+          <h3 style={{ margin: 0, fontSize: "1.05rem", lineHeight: 1.25, color: "#111827" }}>{title}</h3>
+          {subtitle ? (
+            <p style={{ margin: "0.28rem 0 0", color: "#64706a", fontSize: "0.86rem", lineHeight: 1.45 }}>
+              {subtitle}
+            </p>
+          ) : null}
+        </div>
+        {actions ? <div style={{ flexShrink: 0 }}>{actions}</div> : null}
+      </div>
+      <div style={{ padding: "1rem", display: "grid", gap: "1rem" }}>{children}</div>
+    </section>
+  );
+}
+
+function V3ReportSection({
+  title,
+  children,
+  subtitle,
+}: {
+  title: string;
+  children: React.ReactNode;
+  subtitle?: string;
+}) {
+  return (
+    <section style={{ display: "grid", gap: "0.55rem" }}>
+      <div>
+        <h4 style={{ margin: 0, color: "#172117", fontSize: "0.92rem", lineHeight: 1.3 }}>{title}</h4>
+        {subtitle ? (
+          <p style={{ margin: "0.2rem 0 0", color: "#6b756f", fontSize: "0.8rem", lineHeight: 1.45 }}>
+            {subtitle}
+          </p>
+        ) : null}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function V3FactList({ items }: { items: V3FactItem[] }) {
+  return (
+    <dl
+      style={{
+        display: "grid",
+        gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))",
+        gap: "0.7rem 1rem",
+        margin: 0,
+      }}
+    >
+      {items.map((item) => (
+        <div key={item.label} style={{ minWidth: 0 }}>
+          <dt
+            style={{
+              color: "#6b7280",
+              fontSize: "0.72rem",
+              fontWeight: 700,
+              lineHeight: 1.35,
+              textTransform: "uppercase",
+              letterSpacing: 0,
+            }}
+          >
+            {item.label}
+          </dt>
+          <dd
+            style={{
+              margin: "0.15rem 0 0",
+              color:
+                item.tone === "good"
+                  ? "#166534"
+                  : item.tone === "warn"
+                    ? "#92400e"
+                    : item.tone === "danger"
+                      ? "#991b1b"
+                      : "#111827",
+              fontSize: "0.95rem",
+              fontWeight: 650,
+              lineHeight: 1.35,
+              overflowWrap: "anywhere",
+            }}
+          >
+            {item.value}
+          </dd>
+          {item.detail ? (
+            <div style={{ marginTop: "0.12rem", color: "#64748b", fontSize: "0.76rem", lineHeight: 1.35 }}>
+              {item.detail}
+            </div>
+          ) : null}
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+function V3Bullets({ items }: { items: string[] }) {
+  if (items.length === 0) {
+    return <p style={{ margin: 0, color: "#7a847d", fontSize: "0.86rem" }}>No summary available yet.</p>;
+  }
+  return (
+    <ul style={{ margin: 0, paddingLeft: "1.05rem", color: "#26342e", fontSize: "0.88rem", lineHeight: 1.55 }}>
+      {items.map((item, index) => (
+        <li key={`${item}-${index}`}>{item}</li>
+      ))}
+    </ul>
+  );
+}
+
+function V3RecordsTable({
+  columns,
+  rows,
+  emptyText,
+}: {
+  columns: Array<{ key: string; label: string; width?: string; align?: "left" | "right" | "center" }>;
+  rows: Array<Record<string, React.ReactNode>>;
+  emptyText: string;
+}) {
+  if (rows.length === 0) {
+    return (
+      <div
+        style={{
+          border: "1px dashed rgba(38, 47, 44, 0.18)",
+          borderRadius: "8px",
+          padding: "0.8rem",
+          color: "#7a847d",
+          fontSize: "0.86rem",
+          background: "#fbfaf6",
+        }}
+      >
+        {emptyText}
+      </div>
+    );
+  }
+  return (
+    <div
+      style={{
+        maxHeight: "380px",
+        overflow: "auto",
+        border: "1px solid rgba(38, 47, 44, 0.12)",
+        borderRadius: "8px",
+        background: "#fff",
+      }}
+    >
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.84rem", minWidth: "720px" }}>
+        <thead>
+          <tr style={{ background: "#f5f2eb", borderBottom: "1px solid rgba(38, 47, 44, 0.12)" }}>
+            {columns.map((column) => (
+              <th
+                key={column.key}
+                style={{
+                  position: "sticky",
+                  top: 0,
+                  zIndex: 1,
+                  width: column.width,
+                  padding: "0.55rem 0.65rem",
+                  textAlign: column.align ?? "left",
+                  color: "#59645f",
+                  fontSize: "0.72rem",
+                  fontWeight: 800,
+                  textTransform: "uppercase",
+                  letterSpacing: 0,
+                  background: "#f5f2eb",
+                }}
+              >
+                {column.label}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, rowIndex) => (
+            <tr key={rowIndex} style={{ borderBottom: "1px solid rgba(38, 47, 44, 0.08)" }}>
+              {columns.map((column) => (
+                <td
+                  key={column.key}
+                  style={{
+                    padding: "0.58rem 0.65rem",
+                    textAlign: column.align ?? "left",
+                    color: "#1f2933",
+                    verticalAlign: "middle",
+                    overflowWrap: "anywhere",
+                  }}
+                >
+                  {row[column.key] ?? "—"}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function formatTourDateTime(value: string): string | null {
   if (!value.trim()) return null;
   const d = new Date(value);
@@ -1936,9 +2218,174 @@ export function CanonicalPropertyDetail({
   const listingActivitySummary = describeListingActivity(listingActivity);
   const photoUrls = (listingForDisplay?.imageUrls?.length ? listingForDisplay.imageUrls : Array.isArray(extra?.images) ? (extra!.images as string[]).filter((u): u is string => typeof u === "string") : []) ?? [];
   const floorplanUrls = (Array.isArray(extra?.floorplans) ? (extra.floorplans as string[]).filter((u): u is string => typeof u === "string") : []) ?? [];
+  const co = enrichment?.certificateOfOccupancy as Record<string, unknown> | undefined;
+  const coJobNumber = co?.jobNumber ?? co?.job_number;
+  const coStatus = co?.status ?? co?.c_of_o_status;
+  const coDate = co?.issuanceDate ?? co?.issuance_date ?? co?.c_of_o_issuance_date;
+  const coJobType = co?.jobType ?? co?.job_type;
+  const zoning = enrichment?.zoning as Record<string, unknown> | undefined;
+  const zoningDistrict1 = zoning?.zoningDistrict1 ?? zoning?.zoning_district_1;
+  const zoningDistrict2 = zoning?.zoningDistrict2 ?? zoning?.zoning_district_2;
+  const zoningMap = zoning?.zoningMapNumber ?? zoning?.zoning_map_number ?? zoning?.zoningMapCode ?? zoning?.zoning_map_code;
+  const hpdRegistration = enrichment?.hpdRegistration as Record<string, unknown> | undefined;
+  const hpdRegistrationId = hpdRegistration?.registrationId ?? hpdRegistration?.registration_id;
+  const hpdRegistrationDate = hpdRegistration?.lastRegistrationDate ?? hpdRegistration?.last_registration_date;
+  const listingNeighborhood = extra?.neighborhood ?? d?.neighborhood ?? d?.neighborhoodName ?? null;
+  const listingBorough = extra?.borough ?? d?.borough ?? null;
+  const listingZip = extra?.zipcode ?? extra?.zipCode ?? listingForDisplay?.zip ?? d?.zipcode ?? d?.zip ?? null;
+  const listingBuilt = extra?.builtIn ?? extra?.built_in ?? extra?.yearBuilt;
+  const listingPropertyType = extra?.propertyType ?? extra?.property_type ?? extra?.type ?? "";
+  const propertyBasics: V3FactItem[] = [
+    { label: "Ask", value: listingForDisplay ? formatPrice(listingForDisplay.price) : "—" },
+    { label: "Beds / Baths", value: `${listingForDisplay?.beds ?? "—"} / ${listingForDisplay?.baths ?? "—"}` },
+    { label: "Sqft", value: listingForDisplay?.sqft != null ? formatNumberValue(listingForDisplay.sqft) : "—" },
+    { label: "Type", value: formatPropertyType(listingPropertyType) },
+    { label: "Built", value: listingBuilt != null ? String(listingBuilt) : "—" },
+    { label: "Listed", value: listingForDisplay ? formatListedDate(listingForDisplay.listedAt) : "—", detail: daysOnMarket(listingForDisplay?.listedAt) != null ? `${daysOnMarket(listingForDisplay?.listedAt)} days on market` : null },
+  ];
+  const locationFacts: V3FactItem[] = [
+    { label: "Neighborhood", value: formatReadableToken(listingNeighborhood) },
+    { label: "Borough", value: formatReadableToken(listingBorough) },
+    { label: "ZIP", value: listingZip != null ? String(listingZip) : "—" },
+    { label: "BBL", value: bbl != null ? String(bbl) : "—" },
+    { label: "Base BBL", value: bblBase != null ? String(bblBase) : "—" },
+    {
+      label: "Map",
+      value:
+        lat != null && lon != null ? (
+          <a className="initial-info-geo-link" href={`https://www.google.com/maps?q=${lat},${lon}`} target="_blank" rel="noopener noreferrer">
+            {String(lat)}, {String(lon)}
+          </a>
+        ) : "—",
+    },
+  ];
+  const zoningTaxFacts: V3FactItem[] = [
+    { label: "Tax code", value: d?.taxCode != null && String(d.taxCode).trim() !== "" ? String(d.taxCode) : "—" },
+    { label: "2010 census block", value: d?.censusBlock2010 != null && String(d.censusBlock2010).trim() !== "" ? String(d.censusBlock2010) : "—" },
+    { label: "Zoning district", value: [zoningDistrict1, zoningDistrict2].filter(Boolean).map(String).join(", ") || "—" },
+    { label: "Zoning map", value: zoningMap != null && String(zoningMap).trim() !== "" ? String(zoningMap) : "—" },
+    { label: "CO status", value: coStatus != null && String(coStatus).trim() !== "" ? String(coStatus) : "—" },
+    { label: "CO job", value: coJobNumber != null && String(coJobNumber).trim() !== "" ? String(coJobNumber) : "—", detail: coDate ? `Issued ${formatDateOnly(coDate as string)}` : null },
+    { label: "HPD registration", value: hpdRegistrationId != null && String(hpdRegistrationId).trim() !== "" ? String(hpdRegistrationId) : "—", detail: hpdRegistrationDate ? `Last filed ${formatDateOnly(hpdRegistrationDate as string)}` : null },
+    { label: "CO job type", value: coJobType != null && String(coJobType).trim() !== "" ? String(coJobType) : "—" },
+  ];
+  const assessmentFacts: V3FactItem[] = [
+    { label: "Market value", value: formatMoneyValue(assessedMarketValue) },
+    { label: "Actual assessed", value: formatMoneyValue(assessedActualValue) },
+    { label: "Tax before total", value: formatMoneyValue(assessedTaxBeforeTotal) },
+    { label: "Gross sqft", value: formatNumberValue(assessedGrossSqft) },
+    { label: "Land area", value: formatNumberValue(assessedLandArea) },
+    { label: "Residential gross", value: formatNumberValue(assessedResidentialAreaGross) },
+    { label: "Office gross", value: formatNumberValue(assessedOfficeAreaGross) },
+    { label: "Retail gross", value: formatNumberValue(assessedRetailAreaGross) },
+  ];
+  const brokerFacts: V3FactItem[] =
+    listingForDisplay?.agentEnrichment?.length
+      ? listingForDisplay.agentEnrichment.slice(0, 4).map((agent, index) => ({
+          label: index === 0 ? "Primary broker" : `Broker ${index + 1}`,
+          value: agent.name,
+          detail: joinedSummary([agent.firm ?? null, agent.email ?? null, agent.phone ?? null]),
+          tone: agent.email ? "neutral" : "warn",
+        }))
+      : listingForDisplay?.agentNames?.length
+        ? [{ label: "Broker / agent", value: listingForDisplay.agentNames.join(", "), detail: "Email not sourced", tone: "warn" }]
+        : [{ label: "Broker / agent", value: "—", detail: "No broker contact sourced yet", tone: "warn" }];
+  const priceHistoryRows: Array<Record<string, React.ReactNode>> =
+    listingForDisplay?.priceHistory?.slice(0, 12).map((entry) => ({
+      date: formatPriceHistoryDate(entry.date),
+      price: formatPriceCompact(entry.price),
+      event: formatPriceEventLabel(entry.event),
+    })) ?? [];
+  const rentalReviewRows: Array<Record<string, React.ReactNode>> = displayRentalCards.map((card, i) => {
+    const mediaRow = card.mediaRow;
+    const financialRow = card.financialRow as Record<string, unknown> | null;
+    const unitImages = (mediaRow?.images ?? []).filter((u): u is string => typeof u === "string");
+    const unitLabel =
+      (typeof financialRow?.unit === "string" && financialRow.unit.trim()) ||
+      (typeof mediaRow?.unit === "string" && mediaRow.unit.trim()) ||
+      String(i + 1);
+    const displaySqft = (typeof financialRow?.sqft === "number" ? financialRow.sqft : null) ?? mediaRow?.sqft ?? null;
+    const displayBeds = (typeof financialRow?.beds === "number" ? financialRow.beds : null) ?? mediaRow?.beds ?? null;
+    const displayBaths = (typeof financialRow?.baths === "number" ? financialRow.baths : null) ?? mediaRow?.baths ?? null;
+    const displayMonthlyRent =
+      typeof financialRow?.monthlyRent === "number" ? financialRow.monthlyRent : mediaRow?.rentalPrice ?? null;
+    const displayAnnualRent =
+      typeof financialRow?.annualRent === "number"
+        ? financialRow.annualRent
+        : typeof financialRow?.monthlyRent === "number"
+          ? Number(financialRow.monthlyRent) * 12
+          : null;
+    const displayLastRented =
+      typeof financialRow?.lastRentedDate === "string" ? financialRow.lastRentedDate : mediaRow?.lastRentedDate ?? mediaRow?.listedDate ?? null;
+    const source = financialRow ? "OM" : mediaRow?.source ?? rentalFinancials?.source ?? "Rental pull";
+    const note = [
+      typeof financialRow?.rentType === "string" ? financialRow.rentType : null,
+      typeof financialRow?.tenantStatus === "string" ? financialRow.tenantStatus : null,
+      typeof financialRow?.notes === "string" ? financialRow.notes : null,
+      mediaRow?.status ?? null,
+    ].filter(Boolean).join("; ");
+    return {
+      image: unitImages[0] ? (
+        <a href={unitImages[0]} target="_blank" rel="noopener noreferrer">
+          <img src={unitImages[0]} alt="" style={{ width: "64px", height: "46px", objectFit: "cover", borderRadius: "6px", display: "block" }} />
+        </a>
+      ) : (
+        <span style={{ color: "#94a3b8" }}>No photo</span>
+      ),
+      unit: (
+        <span>
+          <strong>{unitLabel}</strong>
+          {mediaRow?.streeteasyUrl ? (
+            <a href={mediaRow.streeteasyUrl} target="_blank" rel="noopener noreferrer" style={{ display: "block", color: "#1f4f46", fontSize: "0.76rem", marginTop: "0.1rem" }}>
+              Source listing
+            </a>
+          ) : null}
+        </span>
+      ),
+      mix: `${displayBeds ?? "—"} bd / ${displayBaths ?? "—"} ba`,
+      sqft: displaySqft != null ? formatNumberValue(displaySqft) : "—",
+      rent: displayMonthlyRent != null ? formatPrice(displayMonthlyRent) : "—",
+      annual: displayAnnualRent != null ? formatPrice(displayAnnualRent) : "—",
+      date: displayLastRented ? formatDateOnly(displayLastRented) : "—",
+      source,
+      notes: note || "—",
+    };
+  });
+  const rentalSummaryFacts: V3FactItem[] = [
+    { label: "Rental source", value: rentalFinancials?.source ?? "—" },
+    { label: "Rental units", value: rentalUnits.length ? String(rentalUnits.length) : "—" },
+    { label: "OM rent roll rows", value: omRentRoll.length ? String(omRentRoll.length) : "—" },
+    { label: "Gross rent", value: formatMoneyValue(rentalFinancials?.fromLlm?.grossRentTotal ?? authoritativeSummary?.grossRent) },
+    { label: "NOI", value: formatMoneyValue(rentalFinancials?.fromLlm?.noi ?? authoritativeSummary?.noi) },
+    { label: "Cap rate", value: rentalFinancials?.fromLlm?.capRate != null ? `${Number(rentalFinancials.fromLlm.capRate).toFixed(2)}%` : "—" },
+    { label: "Last updated", value: rentalFinancials?.lastUpdatedAt ? formatDateOnly(rentalFinancials.lastUpdatedAt) : "—" },
+  ];
+  const omAnalysis = rentalFinancials?.omAnalysis ?? null;
+  const omTakeaways = [
+    ...splitTakeawayText(omAnalysis?.investmentTakeaways),
+    ...splitTakeawayText(omAnalysis?.dossierMemo?.investmentHighlights),
+    ...splitTakeawayText(rentalFinancials?.fromLlm?.keyTakeaways),
+    ...splitTakeawayText(rentalFinancials?.fromLlm?.dataGapSuggestions),
+  ].filter((entry, index, arr) => arr.indexOf(entry) === index).slice(0, 7);
+  const omMetricFacts: V3FactItem[] = [
+    { label: "Current NOI", value: formatMoneyValue(authoritativeSummary?.noi ?? rentalFinancials?.fromLlm?.noi) },
+    { label: "Gross rent", value: formatMoneyValue(authoritativeSummary?.grossRent ?? rentalFinancials?.fromLlm?.grossRentTotal) },
+    { label: "Expenses", value: formatMoneyValue(authoritativeSummary?._expenses ?? rentalFinancials?.fromLlm?.totalExpenses) },
+    { label: "Effective gross income", value: formatMoneyValue(authoritativeSummary?.effectiveGrossIncome) },
+    { label: "Validation flags", value: String(authoritativeValidationMessages.length) },
+    { label: "Expense rows", value: displayedExpenseTable.length ? String(displayedExpenseTable.length) : "—" },
+  ];
+  const expenseRows: Array<Record<string, React.ReactNode>> = displayedExpenseTable.map((row) => ({
+    item: row.lineItem ?? "—",
+    amount: formatMoneyValue(row.amount),
+  }));
+  const unifiedRecordRows: Array<Record<string, React.ReactNode>> = unifiedRows.map((row) => ({
+    date: row.date,
+    category: row.category,
+    info: row.info,
+  }));
   const [galleryIndex, setGalleryIndex] = useState(0);
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
-  const [unitGalleryIndices, setUnitGalleryIndices] = useState<Record<number, number>>({});
   const sourcingUpdate = getSourcingUpdate(d);
   const sourcingUpdateMeta = getSourcingUpdateMeta(d);
   const pipelineProperty = { ...property, details: d };
@@ -2802,226 +3249,84 @@ export function CanonicalPropertyDetail({
         open={!!openSections.detailsBrokerAmenitiesPriceHistory}
         onToggle={() => toggle("detailsBrokerAmenitiesPriceHistory")}
       >
-        <div className="initial-info-grid">
-          <div className="initial-info-card initial-info-card--details">
-            <h4 className="initial-info-subtitle">Details</h4>
-            {listingForDisplay && (
-              <>
-                <div className="initial-info-price">{formatPrice(listingForDisplay.price)}</div>
-                <div className="initial-info-listing-meta">
-                  <span>Listed {formatListedDate(listingForDisplay.listedAt)}</span>
-                  {daysOnMarket(listingForDisplay.listedAt) != null && (
-                    <span> · {daysOnMarket(listingForDisplay.listedAt)} days on market</span>
-                  )}
-                </div>
-                {listingActivity?.lastActivityDate && (
-                  <div className="initial-info-listing-meta" title={listingActivitySummary ?? undefined}>
-                    <span>
-                      Last activity {formatListedDate(listingActivity.lastActivityDate)} · {formatPriceEventLabel(listingActivity.lastActivityEvent)}
-                    </span>
-                    {listingActivity.lastActivityPrice != null && (
-                      <span> · {formatPrice(listingActivity.lastActivityPrice)}</span>
-                    )}
-                  </div>
-                )}
-                {(extra?.priceChangeSinceListed as { listedPrice: number; currentPrice: number; changeAmount: number; changePercent: number } | undefined) && (() => {
-                  const p = extra!.priceChangeSinceListed as { listedPrice: number; currentPrice: number; changeAmount: number; changePercent: number };
-                  const isDecrease = p.changeAmount < 0;
-                  const isIncrease = p.changeAmount > 0;
-                  return (
-                    <div className="initial-info-price-change">
-                      <span>Listed at {formatPrice(p.listedPrice)}</span>
-                      {p.changeAmount === 0 ? (
-                        <span> — No change</span>
-                      ) : (
-                        <span className={isDecrease ? "initial-info-price-change--down" : "initial-info-price-change--up"}>
-                          {" → "}{isDecrease ? "−" : "+"}{formatPrice(Math.abs(p.changeAmount))} ({isDecrease ? "" : "+"}{p.changePercent.toFixed(1)}%)
-                        </span>
-                      )}
-                    </div>
-                  );
-                })()}
-                <div className="initial-info-stat-grid">
-                  <div className="initial-info-stat-card">
-                    <span>Beds</span>
-                    <strong>{listingForDisplay.beds ?? "—"}</strong>
-                  </div>
-                  <div className="initial-info-stat-card">
-                    <span>Baths</span>
-                    <strong>{listingForDisplay.baths ?? "—"}</strong>
-                  </div>
-                  <div className="initial-info-stat-card">
-                    <span>Sqft</span>
-                    <strong>{listingForDisplay.sqft != null ? Number(listingForDisplay.sqft).toLocaleString() : "—"}</strong>
-                  </div>
-                  <div className="initial-info-stat-card">
-                    <span>Type</span>
-                    <strong>{formatPropertyType(extra?.propertyType ?? extra?.property_type ?? extra?.type ?? "")}</strong>
-                  </div>
-                  <div className="initial-info-stat-card">
-                    <span>HOA</span>
-                    <strong>{(monthlyHoa == null || monthlyHoa === 0) ? "NA" : formatPrice(typeof monthlyHoa === "number" ? monthlyHoa : null)}</strong>
-                  </div>
-                  <div className="initial-info-stat-card">
-                    <span>Tax</span>
-                    <strong>{(monthlyTax == null || monthlyTax === 0) ? "NA" : formatPrice(typeof monthlyTax === "number" ? monthlyTax : null)}</strong>
-                  </div>
-                </div>
-                <dl className="initial-info-dl">
-                  <div className="initial-info-dl-row"><dt>Beds / Baths</dt><dd>{listingForDisplay.beds ?? "—"} / {listingForDisplay.baths ?? "—"}</dd></div>
-                  <div className="initial-info-dl-row"><dt>Sqft</dt><dd>{listingForDisplay.sqft ?? "—"}</dd></div>
-                  <div className="initial-info-dl-row"><dt>Property type</dt><dd>{formatPropertyType(extra?.propertyType ?? extra?.property_type ?? extra?.type ?? "")}</dd></div>
-                  {(extra?.builtIn ?? extra?.built_in ?? extra?.yearBuilt) != null && <div className="initial-info-dl-row"><dt>Built</dt><dd>{String(extra?.builtIn ?? extra?.built_in ?? extra?.yearBuilt)}</dd></div>}
-                  {(monthlyHoa != null || monthlyTax != null) && (
-                    <div className="initial-info-dl-row">
-                      <dt>HOA / Tax</dt>
-                      <dd>
-                        {(monthlyHoa == null || monthlyHoa === 0) ? "NA" : formatPrice(typeof monthlyHoa === "number" ? monthlyHoa : null)} / {(monthlyTax == null || monthlyTax === 0) ? "NA" : formatPrice(typeof monthlyTax === "number" ? monthlyTax : null)}
-                      </dd>
-                    </div>
-                  )}
-                </dl>
-              </>
+        <V3ReportPanel
+          title="Property details"
+          subtitle="Listing facts, location identifiers, zoning, tax, assessment, broker, and source context in one readable view."
+        >
+          {!listingForDisplay && primaryListing === "loading" ? (
+            <p className="initial-info-empty">Loading listing…</p>
+          ) : null}
+          {!listingForDisplay && primaryListing !== "loading" ? (
+            <p className="initial-info-empty">No linked listing. Add a source listing or manual details to populate this section.</p>
+          ) : null}
+
+          <V3ReportSection title="Listing basics">
+            <V3FactList items={propertyBasics} />
+            {listingActivity?.lastActivityDate || extra?.priceChangeSinceListed ? (
+              <V3Bullets
+                items={[
+                  listingActivity?.lastActivityDate
+                    ? `Last activity: ${formatListedDate(listingActivity.lastActivityDate)} · ${formatPriceEventLabel(listingActivity.lastActivityEvent)}${listingActivity.lastActivityPrice != null ? ` · ${formatPrice(listingActivity.lastActivityPrice)}` : ""}`
+                    : "",
+                  (() => {
+                    const p = extra?.priceChangeSinceListed as { listedPrice: number; currentPrice: number; changeAmount: number; changePercent: number } | undefined;
+                    if (!p) return "";
+                    if (p.changeAmount === 0) return `Listed at ${formatPrice(p.listedPrice)} with no price change.`;
+                    const isDecrease = p.changeAmount < 0;
+                    return `Listed at ${formatPrice(p.listedPrice)}; ${isDecrease ? "down" : "up"} ${formatPrice(Math.abs(p.changeAmount))} (${isDecrease ? "" : "+"}${p.changePercent.toFixed(1)}%).`;
+                  })(),
+                ].filter((item): item is string => Boolean(item))}
+              />
+            ) : null}
+          </V3ReportSection>
+
+          <V3ReportSection title="Location, zoning, and tax">
+            <V3FactList items={[...locationFacts, ...zoningTaxFacts]} />
+            {!enrichment?.certificateOfOccupancy && !enrichment?.zoning && !enrichment?.hpdRegistration && (d?.taxCode == null || String(d.taxCode).trim() === "") ? (
+              <p className="initial-info-empty">Run enrichment to populate certificate of occupancy, zoning, tax code, and HPD registration.</p>
+            ) : null}
+          </V3ReportSection>
+
+          <V3ReportSection title="Assessment and building area">
+            <V3FactList items={assessmentFacts} />
+          </V3ReportSection>
+
+          <V3ReportSection title="Broker / agent">
+            <V3FactList items={brokerFacts} />
+          </V3ReportSection>
+
+          <V3ReportSection title="Amenities and listing notes">
+            {listingForDisplay && Array.isArray(extra?.amenities) && (extra!.amenities as string[]).length > 0 ? (
+              <ul className="initial-info-amenities-pills">
+                {(extra!.amenities as string[]).map((a, i) => (
+                  <li key={i}>{formatReadableToken(a)}</li>
+                ))}
+              </ul>
+            ) : (
+              <p className="initial-info-empty">No amenities sourced from the linked listing yet.</p>
             )}
-            {!listingForDisplay && primaryListing === "loading" && <p className="initial-info-empty">Loading listing…</p>}
-            {!listingForDisplay && primaryListing !== "loading" && <p className="initial-info-empty">No linked listing.</p>}
-            <h4 className="initial-info-subtitle">Geospatial data</h4>
-            <div className="initial-info-geo initial-info-data-grid">
-              {bbl != null && <dl className="initial-info-dl"><div className="initial-info-dl-row"><dt>BBL (tax)</dt><dd>{String(bbl)}</dd></div></dl>}
-              {bblBase != null && <dl className="initial-info-dl"><div className="initial-info-dl-row"><dt>BBL (base)</dt><dd>{String(bblBase)}</dd></div></dl>}
-              {(lat != null && lon != null) && (
-                <dl className="initial-info-dl">
-                  <div className="initial-info-dl-row">
-                    <dt>Location</dt>
-                    <dd>
-                      <a className="initial-info-geo-link" href={`https://www.google.com/maps?q=${lat},${lon}`} target="_blank" rel="noopener noreferrer">{String(lat)}, {String(lon)}</a>
-                    </dd>
-                  </div>
-                </dl>
-              )}
-              {bbl == null && bblBase == null && lat == null && lon == null && <p className="initial-info-empty">—</p>}
-            </div>
-            <h4 className="initial-info-subtitle">Enriched data</h4>
-            <div className="initial-info-geo initial-info-data-grid">
-              <dl className="initial-info-dl">
-                <div className="initial-info-dl-row"><dt>Tax code</dt><dd>{d?.taxCode != null && String(d.taxCode).trim() !== "" ? String(d.taxCode) : "—"}</dd></div>
-                <div className="initial-info-dl-row"><dt>2010 Census Block</dt><dd>{d?.censusBlock2010 != null && String(d.censusBlock2010).trim() !== "" ? String(d.censusBlock2010) : "—"}</dd></div>
-                {(() => {
-                  const co = enrichment?.certificateOfOccupancy as Record<string, unknown> | undefined;
-                  const coJobNumber = co?.jobNumber ?? co?.job_number;
-                  const coStatus = co?.status ?? co?.c_of_o_status;
-                  const coDate = co?.issuanceDate ?? co?.issuance_date ?? co?.c_of_o_issuance_date;
-                  const coJobType = co?.jobType ?? co?.job_type;
-                  const hasCo = co != null && (coJobNumber != null || coStatus != null || coDate != null || coJobType != null);
-                  return (
-                    <>
-                      <div className="initial-info-dl-row"><dt>CO ID (job number)</dt><dd>{coJobNumber != null && String(coJobNumber).trim() !== "" ? String(coJobNumber) : "—"}</dd></div>
-                      <div className="initial-info-dl-row"><dt>CO issuance date</dt><dd>{formatDateOnly(coDate as string | null | undefined) ?? "—"}</dd></div>
-                      <div className="initial-info-dl-row"><dt>Certificate of occupancy</dt><dd>{coStatus != null && String(coStatus).trim() !== "" ? String(coStatus) : "—"}</dd></div>
-                      <div className="initial-info-dl-row"><dt>CO job type</dt><dd>{coJobType != null && String(coJobType).trim() !== "" ? String(coJobType) : "—"}</dd></div>
-                      {!hasCo && (
-                        <p className="initial-info-empty" style={{ marginTop: "0.25rem", fontSize: "0.8rem" }}>From certificate_of_occupancy enrichment (BBL). Run enrichment to populate.</p>
-                      )}
-                    </>
-                  );
-                })()}
-                {(() => {
-                  const z = enrichment?.zoning as Record<string, unknown> | undefined;
-                  const zd1 = z?.zoningDistrict1 ?? z?.zoning_district_1;
-                  const zd2 = z?.zoningDistrict2 ?? z?.zoning_district_2;
-                  const zMap = z?.zoningMapNumber ?? z?.zoning_map_number ?? z?.zoningMapCode ?? z?.zoning_map_code;
-                  const hasZoning = z != null && (zd1 != null || zd2 != null || zMap != null);
-                  return (
-                    <>
-                      <div className="initial-info-dl-row"><dt>Zoning district</dt><dd>{[zd1, zd2].filter(Boolean).map(String).join(", ") || "—"}</dd></div>
-                      <div className="initial-info-dl-row"><dt>Zoning map</dt><dd>{zMap != null && String(zMap).trim() !== "" ? String(zMap) : "—"}</dd></div>
-                      {!hasZoning && (
-                        <p className="initial-info-empty" style={{ marginTop: "0.25rem", fontSize: "0.8rem" }}>From zoning_ztl enrichment (BBL). Run enrichment to populate.</p>
-                      )}
-                    </>
-                  );
-                })()}
-                {(() => {
-                  const hpd = enrichment?.hpdRegistration as Record<string, unknown> | undefined;
-                  const hpdId = hpd?.registrationId ?? hpd?.registration_id;
-                  const hpdDate = hpd?.lastRegistrationDate ?? hpd?.last_registration_date;
-                  const hasHpd = hpd != null && (hpdId != null || hpdDate != null);
-                  return (
-                    <>
-                      <div className="initial-info-dl-row"><dt>HPD Registration ID</dt><dd>{hpdId != null && String(hpdId).trim() !== "" ? String(hpdId) : "—"}</dd></div>
-                      <div className="initial-info-dl-row"><dt>HPD Last Registration Date</dt><dd>{formatDateOnly(hpdDate as string | null | undefined) ?? "—"}</dd></div>
-                      {!hasHpd && (
-                        <p className="initial-info-empty" style={{ marginTop: "0.25rem", fontSize: "0.8rem" }}>From hpd_registration enrichment (BBL). Run enrichment to populate.</p>
-                      )}
-                    </>
-                  );
-                })()}
-              </dl>
-              {!enrichment?.certificateOfOccupancy && !enrichment?.zoning && !enrichment?.hpdRegistration && (d?.taxCode == null || String(d.taxCode).trim() === "") && (
-                <p className="initial-info-empty">Run enrichment to populate tax code, certificate of occupancy, zoning, and HPD registration.</p>
-              )}
-            </div>
-          </div>
-          <div className="initial-info-right-col">
-            <div className="initial-info-card">
-              <h4 className="initial-info-subtitle">Broker / Agent</h4>
-              {listingForDisplay?.agentEnrichment?.length ? (
-                <ul className="initial-info-broker-list">
-                  {listingForDisplay.agentEnrichment.map((e, i) => (
-                    <li key={i}>
-                      <span className="initial-info-broker-name">{e.name}</span>
-                      <span className="initial-info-broker-meta">
-                        {e.firm && <span>{e.firm}</span>}
-                        <span className={!e.email && !e.phone ? "initial-info-broker-contact-missing" : ""}>
-                          {e.firm && " · "}
-                          Email: {e.email ?? "—"} · Phone: {e.phone ?? "—"}
-                        </span>
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              ) : listingForDisplay?.agentNames?.length ? (
-                <p style={{ margin: 0, color: "#0f172a", fontSize: "0.875rem" }}>{listingForDisplay.agentNames.join(", ")}</p>
-              ) : (
-                <p className="initial-info-empty">—</p>
-              )}
-            </div>
-            <div className="initial-info-card">
-              <h4 className="initial-info-subtitle">Amenities</h4>
-              {listingForDisplay && Array.isArray(extra?.amenities) && (extra!.amenities as string[]).length > 0 ? (
-                <ul className="initial-info-amenities-pills">
-                  {(extra!.amenities as string[]).map((a, i) => (
-                    <li key={i}>{String(a).replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())}</li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="initial-info-empty">From linked listing when available.</p>
-              )}
-            </div>
-            {(listingForDisplay?.priceHistory?.length ?? 0) > 0 && (
-              <div className="initial-info-card initial-info-card--price-history">
-                <h4 className="initial-info-subtitle">Price history</h4>
-                <div className="initial-info-price-history-list">
-                  {listingForDisplay!.priceHistory!.map((r, i) => (
-                    <div key={i} className="initial-info-price-history-row">
-                      <span className="initial-info-price-history-date">{formatPriceHistoryDate(r.date)}</span>
-                      <span className="initial-info-price-history-sep">·</span>
-                      <span className="initial-info-price-history-price">{formatPriceCompact(r.price)}</span>
-                      <span className="initial-info-price-history-sep">·</span>
-                      <span className="initial-info-price-history-event">{formatPriceEventLabel(r.event)}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-          {listingForDisplay?.description && (
-            <div className="initial-info-card initial-info-card--description">
-              <h4 className="initial-info-subtitle">Description</h4>
+          </V3ReportSection>
+
+          {priceHistoryRows.length > 0 ? (
+            <V3ReportSection title="Price history">
+              <V3RecordsTable
+                columns={[
+                  { key: "date", label: "Date", width: "9rem" },
+                  { key: "price", label: "Price", width: "9rem", align: "right" },
+                  { key: "event", label: "Event" },
+                ]}
+                rows={priceHistoryRows}
+                emptyText="No price history rows sourced."
+              />
+            </V3ReportSection>
+          ) : null}
+
+          {listingForDisplay?.description ? (
+            <V3ReportSection title="Description">
               <div className="initial-info-description-wrap property-card-description-wrap">
                 <p
                   className={`property-card-description ${descriptionExpanded ? "property-card-description--expanded" : ""}`}
-                  style={{ whiteSpace: "pre-wrap" }}
+                  style={{ whiteSpace: "pre-wrap", color: "#34413b", lineHeight: 1.55, margin: 0 }}
                 >
                   {listingForDisplay.description}
                 </p>
@@ -3036,105 +3341,86 @@ export function CanonicalPropertyDetail({
                   {descriptionExpanded ? "Collapse" : "Expand"}
                 </button>
               </div>
-            </div>
-          )}
-        </div>
+            </V3ReportSection>
+          ) : null}
+        </V3ReportPanel>
       </CollapsibleSection>
       </>
       )}
 
       {activeTab === "enrichment" && (
       <>
-      {/* 3. Owner information: Owner module (Phase 1 / PLUTO) + Permit module (permits_summary) + NY DOS entity when business-like */}
-      <CollapsibleSection id="owner" title="Owner information" open={!!openSections.owner} onToggle={() => toggle("owner")}>
-        <div style={{ fontSize: "0.875rem" }}>
-          <div style={{ marginBottom: "0.75rem" }}>
-            <strong style={{ display: "block", marginBottom: "0.25rem" }}>Owner module: name, business</strong>
-            <div><strong>Name:</strong> {ownerModuleName != null && String(ownerModuleName).trim() !== "" ? String(ownerModuleName).trim() : "—"}</div>
-            <div><strong>Business:</strong> {ownerModuleBusiness != null && String(ownerModuleBusiness).trim() !== "" ? String(ownerModuleBusiness).trim() : "—"}</div>
-          </div>
-          <div style={{ marginBottom: "0.75rem" }}>
-            <strong style={{ display: "block", marginBottom: "0.25rem" }}>Permit module: name, business</strong>
-            <div><strong>Name:</strong> {ps?.owner_name != null && String(ps.owner_name).trim() !== "" ? String(ps.owner_name).trim() : "—"}</div>
-            <div><strong>Business:</strong> {ps?.owner_business_name != null && String(ps.owner_business_name).trim() !== "" ? String(ps.owner_business_name).trim() : "—"}</div>
-          </div>
-          {ownerValuations != null && String(ownerValuations).trim() !== "" && (
-            <div style={{ marginBottom: "0.75rem" }}>
-              <strong style={{ display: "block", marginBottom: "0.25rem" }}>Owner (Valuations module)</strong>
-              <div>{String(ownerValuations).trim()}</div>
-            </div>
-          )}
-          {/* NY DOS entity details when owner name looks like LLC, Corp, etc. */}
-          <div style={{ marginTop: "0.75rem", paddingTop: "0.75rem", borderTop: "1px solid #e5e5e5" }}>
-            <strong style={{ display: "block", marginBottom: "0.35rem" }}>NY DOS entity details</strong>
-            {!dosEntityQueryName && dosEntity === "n/a" && (
-              <p style={{ margin: 0, color: "#737373" }}>N/A — Owner name does not appear to be a corporation, LLC, or similar entity.</p>
-            )}
-            {dosEntityQueryName && dosEntityLoading && (
-              <p style={{ margin: 0, color: "#737373" }}>Loading…</p>
-            )}
-            {dosEntityQueryName && !dosEntityLoading && dosEntity === "n/a" && (
-              <p style={{ margin: 0, color: "#737373" }}>No matching entity found in NY DOS for &quot;{dosEntityQueryName}&quot;.</p>
-            )}
-            {dosEntityQueryName && !dosEntityLoading && dosEntity !== null && dosEntity !== "n/a" && (
-              <ul style={{ margin: "0.25rem 0 0", paddingLeft: "1.25rem" }}>
-                <li><strong>Filing date:</strong> {dosEntity.filingDate ?? "N/A"}</li>
-                <li>
-                  <strong>DOS process:</strong> {dosEntity.dosProcessName ?? "N/A"}
-                  {dosEntity.dosProcessAddress && (
-                    <ul style={{ margin: "0.15rem 0 0", paddingLeft: "1rem" }}>
-                      <li>{dosEntity.dosProcessAddress}</li>
-                    </ul>
-                  )}
-                </li>
-                <li>
-                  <strong>CEO:</strong> {dosEntity.ceoName ?? "N/A"}
-                  {dosEntity.ceoAddress && (
-                    <ul style={{ margin: "0.15rem 0 0", paddingLeft: "1rem" }}>
-                      <li>{dosEntity.ceoAddress}</li>
-                    </ul>
-                  )}
-                </li>
-                <li>
-                  <strong>Registered agent:</strong> {dosEntity.registeredAgentName ?? "N/A"}
-                  {dosEntity.registeredAgentAddress && (
-                    <ul style={{ margin: "0.15rem 0 0", paddingLeft: "1rem" }}>
-                      <li>{dosEntity.registeredAgentAddress}</li>
-                    </ul>
-                  )}
-                </li>
-              </ul>
-            )}
-          </div>
-        </div>
-      </CollapsibleSection>
+      <V3ReportPanel
+        title="Enrichment summary"
+        subtitle="Owner, assessment, zoning, and NYC record checks are grouped as a single property intelligence report."
+      >
+        <V3ReportSection title="Owner and entity">
+          <V3FactList
+            items={[
+              { label: "Owner name", value: ownerModuleName != null && String(ownerModuleName).trim() !== "" ? String(ownerModuleName).trim() : "—" },
+              { label: "Owner business", value: ownerModuleBusiness != null && String(ownerModuleBusiness).trim() !== "" ? String(ownerModuleBusiness).trim() : "—" },
+              { label: "Permit owner", value: ps?.owner_name != null && String(ps.owner_name).trim() !== "" ? String(ps.owner_name).trim() : "—" },
+              { label: "Permit business", value: ps?.owner_business_name != null && String(ps.owner_business_name).trim() !== "" ? String(ps.owner_business_name).trim() : "—" },
+              { label: "Valuation owner", value: ownerValuations != null && String(ownerValuations).trim() !== "" ? String(ownerValuations).trim() : "—" },
+            ]}
+          />
+          {dosEntityQueryName && dosEntityLoading ? (
+            <p className="initial-info-empty">Loading NY DOS entity details…</p>
+          ) : null}
+          {!dosEntityQueryName && dosEntity === "n/a" ? (
+            <p className="initial-info-empty">NY DOS lookup not required because the owner does not appear to be a corporation, LLC, or similar entity.</p>
+          ) : null}
+          {dosEntityQueryName && !dosEntityLoading && dosEntity === "n/a" ? (
+            <p className="initial-info-empty">No matching NY DOS entity found for &quot;{dosEntityQueryName}&quot;.</p>
+          ) : null}
+          {dosEntityQueryName && !dosEntityLoading && dosEntity !== null && dosEntity !== "n/a" ? (
+            <V3Bullets
+              items={[
+                `Filing date: ${dosEntity.filingDate ?? "N/A"}`,
+                `DOS process: ${joinedSummary([dosEntity.dosProcessName, dosEntity.dosProcessAddress])}`,
+                `CEO: ${joinedSummary([dosEntity.ceoName, dosEntity.ceoAddress])}`,
+                `Registered agent: ${joinedSummary([dosEntity.registeredAgentName, dosEntity.registeredAgentAddress])}`,
+              ]}
+            />
+          ) : null}
+        </V3ReportSection>
 
-      {/* 4. Valuations (assessment): market value, assessed value, tax before total, sqft/area, dates */}
-      <CollapsibleSection id="valuations" title="Valuations (assessment)" open={!!openSections.valuations} onToggle={() => toggle("valuations")}>
-        <div style={{ fontSize: "0.875rem" }}>
-          <ul style={{ margin: "0 0 0.5rem", paddingLeft: "1.25rem" }}>
-            <li><strong>Market value:</strong> {assessedMarketValue != null ? `$${Number(assessedMarketValue).toLocaleString()}` : "—"}</li>
-            <li><strong>Actual assessed:</strong> {assessedActualValue != null ? `$${Number(assessedActualValue).toLocaleString()}` : "—"}</li>
-            <li><strong>Tax before total:</strong> {assessedTaxBeforeTotal != null ? `$${Number(assessedTaxBeforeTotal).toLocaleString()}` : "—"}</li>
-          </ul>
-          <strong style={{ display: "block", marginBottom: "0.25rem" }}>Area</strong>
-          <ul style={{ margin: "0 0 0.5rem", paddingLeft: "1.25rem" }}>
-            <li><strong>Gross sqft:</strong> {assessedGrossSqft != null ? Number(assessedGrossSqft).toLocaleString() : "—"}</li>
-            <li><strong>Land area:</strong> {assessedLandArea != null ? Number(assessedLandArea).toLocaleString() : "—"}</li>
-            <li><strong>Residential area gross:</strong> {assessedResidentialAreaGross != null ? Number(assessedResidentialAreaGross).toLocaleString() : "—"}</li>
-            <li><strong>Office area gross:</strong> {assessedOfficeAreaGross != null ? Number(assessedOfficeAreaGross).toLocaleString() : "—"}</li>
-            <li><strong>Retail area gross:</strong> {assessedRetailAreaGross != null ? Number(assessedRetailAreaGross).toLocaleString() : "—"}</li>
-          </ul>
-          <strong style={{ display: "block", marginBottom: "0.25rem" }}>Dates</strong>
-          <ul style={{ margin: 0, paddingLeft: "1.25rem" }}>
-            <li><strong>Appt date:</strong> {assessedApptDate != null && String(assessedApptDate).trim() !== "" ? formatDateOnly(assessedApptDate) ?? String(assessedApptDate) : "—"}</li>
-            <li><strong>Extract date:</strong> {assessedExtractDate != null && String(assessedExtractDate).trim() !== "" ? formatDateOnly(assessedExtractDate) ?? String(assessedExtractDate) : "—"}</li>
-          </ul>
-          {assessedMarketValue == null && assessedActualValue == null && assessedTaxBeforeTotal == null && assessedGrossSqft == null && assessedLandArea == null && assessedResidentialAreaGross == null && assessedOfficeAreaGross == null && assessedRetailAreaGross == null && (assessedApptDate == null || String(assessedApptDate).trim() === "") && (assessedExtractDate == null || String(assessedExtractDate).trim() === "") && (
-            <p className="initial-info-empty" style={{ marginTop: "0.25rem", fontSize: "0.8rem" }}>From valuations enrichment (BBL). Run enrichment to populate.</p>
+        <V3ReportSection title="Assessment and building area">
+          <V3FactList
+            items={[
+              ...assessmentFacts,
+              { label: "Appt date", value: assessedApptDate != null && String(assessedApptDate).trim() !== "" ? formatDateOnly(assessedApptDate) : "—" },
+              { label: "Extract date", value: assessedExtractDate != null && String(assessedExtractDate).trim() !== "" ? formatDateOnly(assessedExtractDate) : "—" },
+            ]}
+          />
+          {assessmentFacts.every((item) => item.value === "—") && (assessedApptDate == null || String(assessedApptDate).trim() === "") && (assessedExtractDate == null || String(assessedExtractDate).trim() === "") ? (
+            <p className="initial-info-empty">From valuations enrichment by BBL. Run enrichment to populate.</p>
+          ) : null}
+        </V3ReportSection>
+
+        <V3ReportSection title="Zoning, tax, and registration">
+          <V3FactList items={[...locationFacts, ...zoningTaxFacts]} />
+        </V3ReportSection>
+
+        <V3ReportSection
+          title="Permits, complaints, violations, and litigation"
+          subtitle="Row-level city records are kept in one scrollable table instead of scattered cards."
+        >
+          {unifiedLoading ? (
+            <p className="initial-info-empty">Loading city records…</p>
+          ) : (
+            <V3RecordsTable
+              columns={[
+                { key: "date", label: "Date", width: "8rem" },
+                { key: "category", label: "Type", width: "10rem" },
+                { key: "info", label: "Record details" },
+              ]}
+              rows={unifiedRecordRows}
+              emptyText="No permit, violation, complaint, or litigation rows are on file yet. Open enrichment after running city data enrichment to populate this table."
+            />
           )}
-        </div>
-      </CollapsibleSection>
+        </V3ReportSection>
+      </V3ReportPanel>
       </>
       )}
 
@@ -3595,247 +3881,113 @@ export function CanonicalPropertyDetail({
               </div>
             </div>
           )}
-          {displayRentalCards.length > 0 && (
-            <div className="rental-om-panel">
-              <strong style={{ display: "block", marginBottom: "0.2rem", fontSize: "0.95rem", color: "#1a1a1a" }}>{rentalUnitsHeading}</strong>
-              <p style={{ margin: "0 0 0.45rem", fontSize: "0.75rem", color: "#64748b" }}>{rentalUnitsCopy}</p>
-              <div style={{ display: "flex", flexDirection: "column", gap: "0.6rem", maxHeight: "520px", overflowY: "auto" }}>
-                {displayRentalCards.map((card, i) => {
-                  const mediaRow = card.mediaRow;
-                  const financialRow = card.financialRow as Record<string, unknown> | null;
-                  const unitImages = (mediaRow?.images ?? []).filter((u): u is string => typeof u === "string");
-                  const idx = unitGalleryIndices[i] ?? 0;
-                  const setIdx = (n: number) => setUnitGalleryIndices((prev) => ({ ...prev, [i]: n }));
-                  const bulletStyle = { margin: "0.2rem 0", fontSize: "0.85rem", color: "#404040" };
-                  const referenceStyle = { display: "block", marginTop: "0.1rem", fontSize: "0.74rem", color: "#7a7a7a", fontStyle: "italic" } as const;
-                  const unitLabel =
-                    (typeof financialRow?.unit === "string" && financialRow.unit.trim()) ||
-                    (typeof mediaRow?.unit === "string" && mediaRow.unit.trim()) ||
-                    String(i + 1);
-                  const omSqft = typeof financialRow?.sqft === "number" ? financialRow.sqft : null;
-                  const omBeds = typeof financialRow?.beds === "number" ? financialRow.beds : null;
-                  const omBaths = typeof financialRow?.baths === "number" ? financialRow.baths : null;
-                  const displaySqft = omSqft ?? mediaRow?.sqft;
-                  const displayBeds = omBeds ?? mediaRow?.beds;
-                  const displayBaths = omBaths ?? mediaRow?.baths;
-                  const displayMonthlyRent =
-                    typeof financialRow?.monthlyRent === "number" ? financialRow.monthlyRent : mediaRow?.rentalPrice;
-                  const displayAnnualRent =
-                    typeof financialRow?.annualRent === "number"
-                      ? financialRow.annualRent
-                      : typeof financialRow?.monthlyRent === "number"
-                        ? Number(financialRow.monthlyRent) * 12
-                        : null;
-                  const displayLastRented =
-                    typeof financialRow?.lastRentedDate === "string" ? financialRow.lastRentedDate : mediaRow?.lastRentedDate;
-                  const cardNote = [
-                    typeof financialRow?.unitCategory === "string" ? financialRow.unitCategory : null,
-                    typeof financialRow?.tenantName === "string" ? financialRow.tenantName : null,
-                    typeof financialRow?.rentType === "string" ? financialRow.rentType : null,
-                    typeof financialRow?.tenantStatus === "string" ? financialRow.tenantStatus : null,
-                    typeof financialRow?.notes === "string" ? financialRow.notes : null,
-                  ].filter(Boolean).join("; ");
-                  return (
-                    <div key={`${unitLabel}-${i}`} style={{ border: "1px solid #e5e5e5", borderRadius: "8px", overflow: "hidden", backgroundColor: "#fafafa", display: "flex", flexDirection: "row", alignItems: "stretch", minHeight: "120px", boxShadow: "0 1px 3px rgba(0,0,0,0.06)", flexWrap: "wrap" }}>
-                      <div style={{ flex: 1, display: "flex", flexDirection: "column", padding: "0.65rem 0.75rem 0.75rem", justifyContent: "flex-start", gap: "0.35rem", minWidth: 0, borderRight: "1px solid #eee" }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.2rem", flexWrap: "wrap" }}>
-                          <strong style={{ fontSize: "0.95rem", color: "#1a1a1a" }}>Unit {unitLabel}</strong>
-                          {mediaRow?.streeteasyUrl && (
-                            <a href={mediaRow.streeteasyUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: "0.8rem", color: "#0066cc" }}>View on Streeteasy</a>
-                          )}
-                          {financialRow && (
-                            <span style={{ padding: "0.1rem 0.45rem", borderRadius: "999px", background: "#ecfdf5", color: "#166534", fontSize: "0.72rem", fontWeight: 600 }}>
-                              OM values
-                            </span>
-                          )}
-                        </div>
-                        <div style={{ display: "flex", flexDirection: "row", flexWrap: "wrap", gap: "0.75rem 2rem", fontSize: "0.85rem" }}>
-                          <ul style={{ margin: 0, paddingLeft: "1.1rem", listStyle: "disc", flexShrink: 0 }}>
-                            <li style={bulletStyle}>
-                              Sq ft: {displaySqft != null && displaySqft > 0 ? String(displaySqft) : "—"}
-                              {financialRow && mediaRow?.sqft != null && mediaRow.sqft !== displaySqft ? <span style={referenceStyle}>StreetEasy: {String(mediaRow.sqft)}</span> : null}
-                            </li>
-                            <li style={bulletStyle}>
-                              Beds: {displayBeds != null ? String(displayBeds) : "—"}
-                              {financialRow && mediaRow?.beds != null && mediaRow.beds !== displayBeds ? <span style={referenceStyle}>StreetEasy: {String(mediaRow.beds)}</span> : null}
-                            </li>
-                            <li style={bulletStyle}>
-                              Baths: {displayBaths != null ? String(displayBaths) : "—"}
-                              {financialRow && mediaRow?.baths != null && mediaRow.baths !== displayBaths ? <span style={referenceStyle}>StreetEasy: {String(mediaRow.baths)}</span> : null}
-                            </li>
-                          </ul>
-                          <ul style={{ margin: 0, paddingLeft: "1.1rem", listStyle: "disc", flexShrink: 0 }}>
-                            <li style={bulletStyle}>
-                              Monthly rent: {displayMonthlyRent != null ? formatPrice(displayMonthlyRent) : "—"}
-                              {financialRow && mediaRow?.rentalPrice != null && mediaRow.rentalPrice !== displayMonthlyRent ? <span style={referenceStyle}>StreetEasy latest: {formatPrice(mediaRow.rentalPrice)}</span> : null}
-                            </li>
-                            <li style={bulletStyle}>
-                              Annual rent: {displayAnnualRent != null ? formatPrice(displayAnnualRent) : "—"}
-                            </li>
-                            <li style={bulletStyle}>
-                              Last rented: {displayLastRented ? formatDateOnly(displayLastRented) : "—"}
-                              {financialRow && mediaRow?.lastRentedDate && mediaRow.lastRentedDate !== displayLastRented ? <span style={referenceStyle}>StreetEasy: {formatDateOnly(mediaRow.lastRentedDate)}</span> : null}
-                            </li>
-                          </ul>
-                        </div>
-                        {(cardNote || mediaRow?.listedDate) && (
-                          <div style={{ fontSize: "0.78rem", color: "#5b5b5b", lineHeight: 1.45, overflowWrap: "anywhere" }}>
-                            {cardNote ? cardNote : `Last listed: ${formatDateOnly(mediaRow?.listedDate ?? null)}`}
-                          </div>
-                        )}
-                      </div>
-                      <div style={{ flexShrink: 0, display: "flex", flexDirection: "row", padding: "0.35rem", gap: "0.35rem" }}>
-                        {unitImages.length > 0 ? (
-                          <>
-                            <a href={unitImages[idx]} target="_blank" rel="noopener noreferrer" style={{ flexShrink: 0, display: "block", maxHeight: "140px", maxWidth: "220px" }}>
-                              <img src={unitImages[idx]} alt="" style={{ maxHeight: "140px", maxWidth: "220px", width: "auto", height: "auto", objectFit: "contain", display: "block" }} />
-                            </a>
-                            <div style={{ display: "flex", flexDirection: "column", flexWrap: "wrap", gap: "0.25rem", maxHeight: "140px", alignContent: "flex-start" }}>
-                              {unitImages.map((src, j) => (
-                                <button key={j} type="button" onClick={() => setIdx(j)} className={`property-card-gallery-thumb-wrap ${j === idx ? "property-card-gallery-thumb-wrap--active" : ""}`} style={{ flexShrink: 0 }}>
-                                  <img src={src} alt="" loading="lazy" className="property-card-gallery-thumb" />
-                                </button>
-                              ))}
-                            </div>
-                          </>
-                        ) : (
-                          <div style={{ minWidth: "120px", minHeight: "80px", display: "flex", alignItems: "center", justifyContent: "center", color: "#888", fontSize: "0.85rem" }}>No photo</div>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
+          {(displayRentalCards.length > 0 || rentalFinancials?.fromLlm || rentalFinancials?.source) && (
+            <V3ReportPanel
+              title="Rental review"
+              subtitle={rentalUnitsCopy}
+            >
+              <V3ReportSection title="Rental summary">
+                <V3FactList items={rentalSummaryFacts} />
+              </V3ReportSection>
+              <V3ReportSection
+                title={rentalUnitsHeading}
+                subtitle="Unit media, unit mix, size, rent, dates, and source are shown as rows so rental history is scannable."
+              >
+                <V3RecordsTable
+                  columns={[
+                    { key: "image", label: "Photo", width: "5.5rem" },
+                    { key: "unit", label: "Unit", width: "9rem" },
+                    { key: "mix", label: "Beds / Baths", width: "8rem", align: "center" },
+                    { key: "sqft", label: "Sqft", width: "7rem", align: "right" },
+                    { key: "rent", label: "Last rent", width: "8rem", align: "right" },
+                    { key: "annual", label: "Annual", width: "8rem", align: "right" },
+                    { key: "date", label: "Date", width: "8rem" },
+                    { key: "source", label: "Source", width: "8rem" },
+                    { key: "notes", label: "Notes" },
+                  ]}
+                  rows={rentalReviewRows}
+                  emptyText="No unit-level rental rows are available yet. Re-run rental flow or upload an OM/rent roll to populate the table."
+                />
+              </V3ReportSection>
+              <V3ReportSection title="Rental notes">
+                <V3Bullets
+                  items={[
+                    ...splitTakeawayText(rentalFinancials?.fromLlm?.rentalEstimates),
+                    ...splitTakeawayText(rentalFinancials?.fromLlm?.dataGapSuggestions),
+                  ]}
+                />
+              </V3ReportSection>
+            </V3ReportPanel>
           )}
           {rentRollComparison && !rentRollComparison.comparable && rentalUnits.length > 0 && omRentRoll.length > 0 && (
             <p style={{ margin: "0.5rem 0", padding: "0.35rem 0.5rem", backgroundColor: "#fef3c7", borderRadius: "4px", fontSize: "0.8rem", color: "#92400e" }}>
               <strong>RapidAPI rent roll likely incomplete — comparison disabled.</strong> Only compare when total units and total bedrooms match (RapidAPI: {rentRollComparison.totalUnitsRapid} units, {rentRollComparison.totalBedsRapid} beds; OM: {rentRollComparison.totalUnitsOm} units, {rentRollComparison.totalBedsOm} beds).
             </p>
           )}
-          {hasDisplayedOmPanel ? (
-            <div className="rental-om-panel">
-              <strong style={{ display: "block", marginBottom: "0.35rem", fontSize: "0.95rem", color: "#1a1a1a" }}>{financialsHeading}</strong>
-              <p style={{ margin: "0 0 0.5rem", fontSize: "0.75rem", color: "#64748b" }}>{financialsCopy}</p>
-              {hasAuthoritativeOm && authoritativeValidationMessages.length > 0 && (
-                <div style={{ marginBottom: "0.6rem", padding: "0.45rem 0.55rem", backgroundColor: "#fefce8", borderRadius: "6px", fontSize: "0.8rem" }}>
-                  <strong style={{ display: "block", marginBottom: "0.2rem" }}>Validation flags</strong>
-                  <ul style={{ margin: 0, paddingLeft: "1.1rem", lineHeight: 1.45 }}>
-                    {authoritativeValidationMessages.slice(0, 4).map((message, index) => (
-                      <li key={index}>{message}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-              {hasAuthoritativeOm && authoritativeSummary && Object.values(authoritativeSummary).some((value) => value != null) && (
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))", gap: "0.5rem 1rem", marginBottom: "0.75rem", fontSize: "0.8rem" }}>
-                  {(() => {
-                    const summary = authoritativeSummary as Record<string, unknown>;
-                    const order: string[] = ["grossRent", "otherIncome", "effectiveGrossIncome", "_expenses", "noi"];
-                    const labels: Record<string, string> = {
-                      grossRent: "Gross rent",
-                      otherIncome: "Other income",
-                      effectiveGrossIncome: "EGI",
-                      _expenses: "Expenses",
-                      noi: "NOI",
-                    };
-                    return order.map((key) => {
-                      const raw = summary[key];
-                      if (raw == null) return null;
-                      const num = typeof raw === "number" ? raw : (typeof raw === "string" ? Number(raw.replace(/[$,%\s]/g, "")) : NaN);
-                      const display = !Number.isNaN(num) ? formatPrice(num) : String(raw);
-                      return (
-                        <div key={key} style={{ padding: "0.25rem 0.5rem", backgroundColor: "#f8fafc", borderRadius: "4px" }}>
-                          <span style={{ color: "#64748b", display: "block", fontSize: "0.7rem" }}>{labels[key] ?? key}</span>
-                          <span style={{ fontWeight: 600 }}>{display}</span>
-                        </div>
-                      );
-                    });
-                  })()}
-                </div>
-              )}
-              {omRentRoll.length > 0 && displayRentalCards.length === 0 && (
-                <div style={{ marginBottom: "0.6rem" }}>
-                  <span style={{ display: "block", fontSize: "0.75rem", color: "#666", marginBottom: "0.25rem" }}>Rent roll</span>
-                  <div style={{ overflowX: "auto", border: "1px solid #e2e8f0", borderRadius: "8px" }}>
-                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.8rem", tableLayout: "auto" }}>
-                      <thead>
-                        <tr style={{ borderBottom: "2px solid #e2e8f0", backgroundColor: "#f8fafc" }}>
-                          <th style={{ textAlign: "center", padding: "0.4rem 0.5rem", fontWeight: 600 }}>Unit</th>
-                          <th style={{ textAlign: "center", padding: "0.4rem 0.5rem", fontWeight: 600 }}>Monthly</th>
-                          <th style={{ textAlign: "center", padding: "0.4rem 0.5rem", fontWeight: 600 }}>Annual</th>
-                          {omRentRoll.some((u) => u.beds != null) && <th style={{ textAlign: "center", padding: "0.4rem 0.5rem", fontWeight: 600 }}>Beds</th>}
-                          {omRentRoll.some((u) => u.baths != null) && <th style={{ textAlign: "center", padding: "0.4rem 0.5rem", fontWeight: 600 }}>Baths</th>}
-                          {omRentRoll.some((u) => u.sqft != null) && <th style={{ textAlign: "center", padding: "0.4rem 0.5rem", fontWeight: 600 }}>Sq ft</th>}
-                          {omRentRoll.some((u) => (u as { occupied?: boolean | string }).occupied != null) && <th style={{ textAlign: "center", padding: "0.4rem 0.5rem", fontWeight: 600 }}>Occupied</th>}
-                          {omRentRoll.some((u) => (u as { lastRentedDate?: string }).lastRentedDate != null) && <th style={{ textAlign: "center", padding: "0.4rem 0.5rem", fontWeight: 600 }}>Last rented</th>}
-                          {omRentRoll.some((u) => (u as { dateVacant?: string }).dateVacant != null) && <th style={{ textAlign: "center", padding: "0.4rem 0.5rem", fontWeight: 600 }}>Date vacant</th>}
-                          {(omRentRoll.some((u) => u.notes) || omRentRoll.some((u) => u.rentType)) && <th style={{ textAlign: "left", padding: "0.4rem 0.5rem", fontWeight: 600, minWidth: "220px" }}>Note</th>}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {omRentRoll.map((u, idx) => (
-                          <tr key={idx} style={{ borderBottom: "1px solid #eee" }}>
-                            <td style={{ textAlign: "center", padding: "0.4rem 0.5rem" }}>{u.unit ?? "—"}</td>
-                            <td style={{ textAlign: "center", padding: "0.4rem 0.5rem" }}>{u.monthlyRent != null ? formatPrice(u.monthlyRent) : "—"}</td>
-                            <td style={{ textAlign: "center", padding: "0.4rem 0.5rem" }}>{u.annualRent != null ? formatPrice(u.annualRent) : u.monthlyRent != null ? formatPrice(u.monthlyRent * 12) : "—"}</td>
-                            {omRentRoll.some((x) => x.beds != null) && <td style={{ textAlign: "center", padding: "0.4rem 0.5rem" }}>{u.beds != null ? String(u.beds) : "—"}</td>}
-                            {omRentRoll.some((x) => x.baths != null) && <td style={{ textAlign: "center", padding: "0.4rem 0.5rem" }}>{u.baths != null ? String(u.baths) : "—"}</td>}
-                            {omRentRoll.some((x) => x.sqft != null) && <td style={{ textAlign: "center", padding: "0.4rem 0.5rem" }}>{u.sqft != null ? u.sqft.toLocaleString() : "—"}</td>}
-                            {omRentRoll.some((x) => (x as { occupied?: boolean | string }).occupied != null) && <td style={{ textAlign: "center", padding: "0.4rem 0.5rem", fontSize: "0.75rem" }}>{(u as { occupied?: boolean | string }).occupied === true ? "Yes" : (u as { occupied?: boolean | string }).occupied === false ? "No" : String((u as { occupied?: boolean | string }).occupied ?? "—")}</td>}
-                            {omRentRoll.some((x) => (x as { lastRentedDate?: string }).lastRentedDate != null) && <td style={{ textAlign: "center", padding: "0.4rem 0.5rem", fontSize: "0.75rem" }}>{(u as { lastRentedDate?: string }).lastRentedDate ?? "—"}</td>}
-                            {omRentRoll.some((x) => (x as { dateVacant?: string }).dateVacant != null) && <td style={{ textAlign: "center", padding: "0.4rem 0.5rem", fontSize: "0.75rem" }}>{(u as { dateVacant?: string }).dateVacant ?? "—"}</td>}
-                            {omRentRoll.some((x) => x.notes || x.rentType) && (
-                              <td style={{ textAlign: "left", padding: "0.4rem 0.5rem", fontSize: "0.75rem", color: "#555", minWidth: "220px", whiteSpace: "normal", overflowWrap: "anywhere" }}>{[u.rentType, u.tenantStatus, u.notes].filter(Boolean).join("; ") || "—"}</td>
-                            )}
-                          </tr>
-                        ))}
-                        <tr style={{ borderTop: "2px solid #e2e8f0", backgroundColor: "#f8fafc", fontWeight: 600 }}>
-                          <td style={{ textAlign: "center", padding: "0.4rem 0.5rem" }}>Total rent roll</td>
-                          <td style={{ textAlign: "center", padding: "0.4rem 0.5rem" }}>{formatPrice(omRentRoll.reduce((s, u) => s + (u.monthlyRent ?? 0), 0))}</td>
-                          <td style={{ textAlign: "center", padding: "0.4rem 0.5rem" }}>{formatPrice(omRentRoll.reduce((s, u) => s + (u.annualRent ?? (u.monthlyRent ?? 0) * 12), 0))}</td>
-                          {(omRentRoll.some((x) => x.beds != null) || omRentRoll.some((x) => x.baths != null) || omRentRoll.some((x) => x.sqft != null) || omRentRoll.some((x) => (x as { occupied?: unknown }).occupied != null) || omRentRoll.some((x) => (x as { lastRentedDate?: unknown }).lastRentedDate != null) || omRentRoll.some((x) => (x as { dateVacant?: unknown }).dateVacant != null) || omRentRoll.some((x) => x.notes || x.rentType)) && (
-                            <td colSpan={[omRentRoll.some((x) => x.beds != null), omRentRoll.some((x) => x.baths != null), omRentRoll.some((x) => x.sqft != null), omRentRoll.some((x) => (x as { occupied?: unknown }).occupied != null), omRentRoll.some((x) => (x as { lastRentedDate?: unknown }).lastRentedDate != null), omRentRoll.some((x) => (x as { dateVacant?: unknown }).dateVacant != null), omRentRoll.some((x) => x.notes || x.rentType)].filter(Boolean).length} style={{ textAlign: "center", padding: "0.4rem 0.5rem" }} />
-                          )}
-                        </tr>
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              )}
-              {displayedExpenseTable.length > 0 && (
-                <div style={{ marginBottom: "0.6rem" }}>
-                  <span style={{ display: "block", fontSize: "0.75rem", color: "#666", marginBottom: "0.25rem" }}>Expenses</span>
-                  <div style={{ overflowX: "auto", border: "1px solid #e2e8f0", borderRadius: "8px" }}>
-                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.8rem" }}>
-                      <thead>
-                        <tr style={{ borderBottom: "2px solid #e2e8f0", backgroundColor: "#f8fafc" }}>
-                          <th style={{ textAlign: "left", padding: "0.4rem 0.5rem", fontWeight: 600 }}>Line item</th>
-                          <th style={{ textAlign: "right", padding: "0.4rem 0.5rem", fontWeight: 600 }}>Amount</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {displayedExpenseTable.map((row, idx) => (
-                          <tr key={idx} style={{ borderBottom: "1px solid #eee" }}>
-                            <td style={{ padding: "0.4rem 0.5rem" }}>{row.lineItem ?? "—"}</td>
-                            <td style={{ textAlign: "right", padding: "0.4rem 0.5rem" }}>{formatPrice(row.amount ?? null)}</td>
-                          </tr>
-                        ))}
-                        <tr style={{ borderTop: "2px solid #e2e8f0", backgroundColor: "#f8fafc", fontWeight: 600 }}>
-                          <td style={{ padding: "0.4rem 0.5rem" }}>Total expenses</td>
-                          <td style={{ textAlign: "right", padding: "0.4rem 0.5rem" }}>{formatPrice(displayedExpenseTotal)}</td>
-                        </tr>
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              )}
-            </div>
+          {hasDisplayedOmPanel || omTakeaways.length > 0 ? (
+            <V3ReportPanel title="OM analysis" subtitle={financialsCopy}>
+              <V3ReportSection title="Investor takeaways">
+                <V3Bullets items={omTakeaways} />
+              </V3ReportSection>
+
+              <V3ReportSection title="Key metrics">
+                <V3FactList items={omMetricFacts} />
+              </V3ReportSection>
+
+              {hasAuthoritativeOm && authoritativeValidationMessages.length > 0 ? (
+                <V3ReportSection title="Validation flags">
+                  <V3Bullets items={authoritativeValidationMessages.slice(0, 8)} />
+                </V3ReportSection>
+              ) : null}
+
+              {omRentRoll.length > 0 && displayRentalCards.length === 0 ? (
+                <V3ReportSection title="OM rent roll">
+                  <V3RecordsTable
+                    columns={[
+                      { key: "unit", label: "Unit", width: "8rem" },
+                      { key: "monthly", label: "Monthly", width: "8rem", align: "right" },
+                      { key: "annual", label: "Annual", width: "8rem", align: "right" },
+                      { key: "mix", label: "Beds / Baths", width: "8rem", align: "center" },
+                      { key: "sqft", label: "Sqft", width: "7rem", align: "right" },
+                      { key: "status", label: "Status", width: "10rem" },
+                      { key: "notes", label: "Notes" },
+                    ]}
+                    rows={omRentRoll.map((unit) => ({
+                      unit: unit.unit ?? "—",
+                      monthly: unit.monthlyRent != null ? formatPrice(unit.monthlyRent) : "—",
+                      annual: unit.annualRent != null ? formatPrice(unit.annualRent) : unit.monthlyRent != null ? formatPrice(unit.monthlyRent * 12) : "—",
+                      mix: `${unit.beds ?? "—"} / ${unit.baths ?? "—"}`,
+                      sqft: unit.sqft != null ? unit.sqft.toLocaleString() : "—",
+                      status: joinedSummary([unit.rentType ?? null, unit.tenantStatus ?? null]),
+                      notes: unit.notes ?? "—",
+                    }))}
+                    emptyText="No OM rent roll rows are available."
+                  />
+                </V3ReportSection>
+              ) : null}
+
+              {expenseRows.length > 0 ? (
+                <V3ReportSection title="Expense table">
+                  <V3RecordsTable
+                    columns={[
+                      { key: "item", label: "Line item" },
+                      { key: "amount", label: "Amount", width: "10rem", align: "right" },
+                    ]}
+                    rows={[
+                      ...expenseRows,
+                      { item: <strong>Total expenses</strong>, amount: <strong>{formatPrice(displayedExpenseTotal)}</strong> },
+                    ]}
+                    emptyText="No expense rows are available."
+                  />
+                </V3ReportSection>
+              ) : null}
+            </V3ReportPanel>
           ) : (
-            <div className="rental-om-panel">
-              <strong style={{ display: "block", marginBottom: "0.2rem", fontSize: "0.9rem", color: "#1a1a1a" }}>{financialsHeading}</strong>
-              <p style={{ margin: 0, fontSize: "0.8rem", color: "#64748b", lineHeight: 1.45 }}>{financialsCopy}</p>
-            </div>
+            <V3ReportPanel title={financialsHeading} subtitle={financialsCopy}>
+              <p style={{ margin: 0, color: "#64748b", fontSize: "0.86rem" }}>
+                Upload or promote an OM snapshot to populate investor takeaways, key metrics, rent roll rows, and expense tables.
+              </p>
+            </V3ReportPanel>
           )}
           <div className="rental-om-doc-grid">
             <div className="rental-om-panel rental-om-panel--documents">
@@ -4019,7 +4171,7 @@ export function CanonicalPropertyDetail({
       </>
       )}
 
-      {(activeTab === "enrichment" || activeTab === "activity") && (
+      {activeTab === "activity" && (
       <>
       {/* 6. Violations, complaints, permits — one table */}
       <CollapsibleSection

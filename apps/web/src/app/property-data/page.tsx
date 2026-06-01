@@ -2392,6 +2392,7 @@ function PropertyDataContent() {
         </div>
       </div>
 
+      {((activeTab === "canonical" && expandedCanonicalId) || (activeTab === "raw" && selectedId)) ? null : (
       <div className="property-data-bottom-bar">
         <span className="property-data-bottom-label">
           {activeTab === "raw"
@@ -2525,6 +2526,7 @@ function PropertyDataContent() {
           ) : null}
         </div>
       </div>
+      )}
 
       {reviewDupOpen && (
         <div role="dialog" aria-modal="true" aria-labelledby="review-dup-title" style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}>

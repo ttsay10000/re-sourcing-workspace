@@ -154,8 +154,15 @@ function formatDate(value: string | null | undefined): string {
 
 function labelFromKey(value: string | null | undefined): string {
   if (!value) return "Unknown";
-  return value
+  const normalized = value.trim().toLowerCase();
+  const specialLabels: Record<string, string> = {
+    loopnet: "LoopNet",
+    streeteasy: "StreetEasy",
+  };
+  if (specialLabels[normalized]) return specialLabels[normalized];
+  return normalized
     .split("_")
+    .flatMap((part) => part.split("-"))
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
@@ -275,6 +282,13 @@ function statusClass(status: string | null | undefined): string {
   }
   if (status === "outreach" || status === "screening") return `${styles.statusPill} ${styles.statusInfo}`;
   return `${styles.statusPill} ${styles.statusNeutral}`;
+}
+
+function scoreClass(score: number | null | undefined): string {
+  if (score == null || Number.isNaN(score)) return `${styles.scorePill} ${styles.scoreEmpty}`;
+  if (score >= 70) return `${styles.scorePill} ${styles.scoreStrong}`;
+  if (score >= 50) return `${styles.scorePill} ${styles.scoreWatch}`;
+  return `${styles.scorePill} ${styles.scoreWeak}`;
 }
 
 function rowStatus(row: SavedDealRow): string {
@@ -564,7 +578,11 @@ export default function ProgressPage() {
                             </div>
                           </td>
                           <td><span className={statusClass(row.status)}>{labelFromKey(row.status)}</span></td>
-                          <td className={styles.score}>{row.dealScore == null ? "—" : Math.round(row.dealScore)}</td>
+                          <td>
+                            <span className={scoreClass(row.dealScore)}>
+                              {row.dealScore == null ? "—" : `${Math.round(row.dealScore)} / 100`}
+                            </span>
+                          </td>
                           <td>
                             <div className={styles.stack}>
                               <span>{formatCurrency(row.price)}</span>
@@ -633,7 +651,9 @@ function SavedDealMiniSection({
               </div>
               <div className={styles.miniMeta}>
                 <span className={statusClass(rowStatus(row))}>{labelFromKey(rowStatus(row))}</span>
-                <small>{row.dealScore == null ? "—" : `${Math.round(row.dealScore)} / 100`}</small>
+                <small className={scoreClass(row.dealScore)}>
+                  {row.dealScore == null ? "—" : `${Math.round(row.dealScore)} / 100`}
+                </small>
               </div>
             </Link>
           ))}

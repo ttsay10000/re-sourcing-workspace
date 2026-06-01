@@ -172,22 +172,22 @@ function propertyLabelFromRelated(property: UiV2CrmRelatedProperty | undefined, 
 }
 
 function displayBrokerName(contact: BrokerContact | null | undefined, fallback = "Unnamed broker"): string {
-  return contact?.displayName?.trim() || contact?.normalizedEmail || contact?.sourceKey || fallback;
+  return cleanDisplayText(contact?.displayName) || cleanDisplayText(contact?.normalizedEmail) || cleanDisplayText(contact?.sourceKey) || fallback;
 }
 
 function displayBrokerFirm(contact: BrokerContact | null | undefined): string | null {
   const metadata = readRecord(contact?.sourceMetadata);
   return (
-    contact?.firm?.trim()
-    || (typeof metadata.firm === "string" ? metadata.firm.trim() : "")
-    || (typeof metadata.brokerageName === "string" ? metadata.brokerageName.trim() : "")
-    || (typeof metadata.brokerage === "string" ? metadata.brokerage.trim() : "")
+    cleanDisplayText(contact?.firm)
+    || (typeof metadata.firm === "string" ? cleanDisplayText(metadata.firm) : null)
+    || (typeof metadata.brokerageName === "string" ? cleanDisplayText(metadata.brokerageName) : null)
+    || (typeof metadata.brokerage === "string" ? cleanDisplayText(metadata.brokerage) : null)
     || null
   );
 }
 
 function displayBrokerBlockName(broker: UiV2BrokerBlock | null | undefined): string {
-  return broker?.name?.trim() || broker?.email || "Property broker";
+  return cleanDisplayText(broker?.name) || cleanDisplayText(broker?.email) || "Property broker";
 }
 
 function formatDate(value: string | null | undefined): string {
@@ -226,6 +226,12 @@ function readRecord(value: unknown): Record<string, unknown> {
   return value != null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
+function cleanDisplayText(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed || trimmed === "-" || trimmed.toLowerCase() === "n/a" || trimmed.toLowerCase() === "none") return null;
+  return trimmed;
+}
+
 function readBool(record: Record<string, unknown>, key: string): boolean {
   return record[key] === true || record[key] === "true";
 }
@@ -234,7 +240,7 @@ function contactNeedsEmail(contact: BrokerContact): boolean {
   const sourceMetadata = readRecord(contact.sourceMetadata);
   const activitySummary = readRecord(contact.activitySummary);
   return (
-    !contact.normalizedEmail ||
+    !cleanDisplayText(contact.normalizedEmail) ||
     readBool(sourceMetadata, "needsEmail") ||
     readBool(activitySummary, "needsEmail") ||
     readBool(activitySummary, "missingEmail")
@@ -743,7 +749,7 @@ function CrmPageContent() {
           `/api/ui-v2/properties/${encodeURIComponent(propertyId)}/outreach-composer`
         );
         const composerPayload = normalizeComposerPayload(data, propertyBroker?.broker);
-        const toAddress = composerPayload.broker?.email ?? "";
+        const toAddress = cleanDisplayText(composerPayload.broker?.email) ?? "";
         if (!toAddress) {
           setPanelNotice({
             type: "info",
@@ -774,7 +780,7 @@ function CrmPageContent() {
 
   useEffect(() => {
     if (panel?.type === "property" && panel.openComposer && propertyBroker) {
-      if (!propertyBroker.broker?.email) {
+      if (!cleanDisplayText(propertyBroker.broker?.email)) {
         setPanel((current) =>
           current?.type === "property"
             ? {
@@ -1158,7 +1164,7 @@ function CrmPageContent() {
                 <th>Contact</th>
                 <th>Related properties</th>
                 <th>Last activity</th>
-                <th>Open actions</th>
+                <th>Open</th>
                 <th>Flags</th>
                 <th>Actions</th>
               </tr>
@@ -1181,8 +1187,12 @@ function CrmPageContent() {
                   const { contact } = payload;
                   const flags = contactFlags(contact);
                   const related = relatedPropertyItems(payload, propertyLabels);
-                  const contactItems = [contact.normalizedEmail, contact.phone].filter((value): value is string => Boolean(value));
+                  const email = cleanDisplayText(contact.normalizedEmail);
+                  const phone = cleanDisplayText(contact.phone);
                   const firmLabel = displayBrokerFirm(contact);
+                  const brokerSubline = [firmLabel, cleanDisplayText(contact.source)]
+                    .filter((value): value is string => Boolean(value))
+                    .join(" · ") || "Broker contact";
                   return (
                     <tr key={contact.id}>
                       <td className={styles.brokerCell}>
@@ -1194,15 +1204,15 @@ function CrmPageContent() {
                         >
                           {displayBrokerName(contact)}
                         </button>
-                        <div className={styles.subtleLine}>{firmLabel || contact.source || "Broker contact"}</div>
+                        <div className={styles.subtleLine}>{brokerSubline}</div>
                       </td>
                       <td>
                         <div className={styles.contactLine}>
-                          {contactItems.length > 0 ? (
-                            contactItems.map((item) => <span key={item}>{item}</span>)
-                          ) : (
+                          {email ? <span className={styles.contactItem}>{email}</span> : null}
+                          {phone ? <span className={styles.contactItem}>{phone}</span> : null}
+                          {!email && !phone ? (
                             <span className={styles.missingText}>Email needed</span>
-                          )}
+                          ) : null}
                         </div>
                       </td>
                       <td>
@@ -1337,12 +1347,14 @@ function ContactPanel({
   const { contact } = payload;
   const flags = contactFlags(contact);
   const related = relatedPropertyItems(payload, propertyLabels);
+  const firmLabel = displayBrokerFirm(contact);
+  const sourceLabel = cleanDisplayText(contact.source);
 
   return (
     <div className={styles.panelBody}>
       <p className={styles.eyebrow}>Contact</p>
       <h2 className={styles.panelTitle}>{displayBrokerName(contact)}</h2>
-      <p className={styles.panelMeta}>{contact.firm || "No firm"} | {contact.source || "crm"}</p>
+      <p className={styles.panelMeta}>{[firmLabel, sourceLabel || "crm"].filter(Boolean).join(" · ")}</p>
       {notice ? <div className={classNames(styles.notice, styles[`notice_${notice.type}`])}>{notice.message}</div> : null}
 
       <div className={styles.panelActions}>
@@ -1359,13 +1371,15 @@ function ContactPanel({
         <dl className={styles.detailGrid}>
           <div>
             <dt>Email</dt>
-            <dd className={contact.normalizedEmail ? undefined : styles.missingText}>
-              {contact.normalizedEmail || "Needs email"}
+            <dd className={cleanDisplayText(contact.normalizedEmail) ? undefined : styles.missingText}>
+              {cleanDisplayText(contact.normalizedEmail) || "Needs email"}
             </dd>
           </div>
           <div>
             <dt>Phone</dt>
-            <dd>{contact.phone || "-"}</dd>
+            <dd className={cleanDisplayText(contact.phone) ? undefined : styles.mutedValue}>
+              {cleanDisplayText(contact.phone) || "No phone"}
+            </dd>
           </div>
           <div>
             <dt>Last outreach</dt>
@@ -1483,7 +1497,10 @@ function PropertyPanel({
   onScheduleFollowUp: (event: FormEvent<HTMLFormElement>) => void;
 }) {
   const broker = propertyBroker?.broker ?? null;
-  const missingEmail = !broker?.email;
+  const brokerFirm = cleanDisplayText(broker?.firm);
+  const brokerEmail = cleanDisplayText(broker?.email);
+  const brokerPhone = cleanDisplayText(broker?.phone);
+  const missingEmail = !brokerEmail;
 
   return (
     <div className={styles.panelBody}>
@@ -1502,7 +1519,9 @@ function PropertyPanel({
             <div className={styles.brokerSummary}>
               <div>
                 <strong>{displayBrokerBlockName(broker)}</strong>
-                <span>{broker?.firm || "No firm"}</span>
+                <span>
+                  {[brokerFirm, brokerEmail, brokerPhone].filter(Boolean).join(" · ") || "No firm or contact details yet"}
+                </span>
               </div>
               <div className={styles.flagWrap}>
                 <span className={classNames(styles.flag, missingEmail ? styles.flag_danger : styles.flag_success)}>

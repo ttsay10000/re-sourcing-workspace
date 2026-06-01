@@ -1952,13 +1952,17 @@ router.post("/properties/from-listings", async (req: Request, res: Response) => 
         for (let i = 0; i < propertyIds.length; i++) {
           if (i > 0) await new Promise((r) => setTimeout(r, ENRICHMENT_RATE_LIMIT_DELAY_MS));
           try {
-            await runRentalFlowForProperty(propertyIds[i]!, pool);
+            const rentalResult = await runRentalFlowForProperty(propertyIds[i]!, pool);
             await syncPropertySourcingWorkflow(propertyIds[i]!, { pool });
             await refreshPropertyPipelineMetadata(propertyIds[i]!, pool, {
               enrichmentStatus: skipPermitEnrichment ? "not_started" : enrichmentSummary.failed > 0 ? "needs_manual_review" : "complete",
-              rentalFlowStatus: "complete",
+              rentalFlowStatus: rentalResult.error ? "failed" : "complete",
             });
-            rentalFlowSummary.success++;
+            if (rentalResult.error) {
+              rentalFlowSummary.failed++;
+            } else {
+              rentalFlowSummary.success++;
+            }
           } catch {
             await refreshPropertyPipelineMetadata(propertyIds[i]!, pool, {
               enrichmentStatus: skipPermitEnrichment ? "not_started" : enrichmentSummary.failed > 0 ? "needs_manual_review" : "complete",
@@ -4475,10 +4479,12 @@ export async function runRentalFlowForProperty(
   }
   const existing = (property.details?.rentalFinancials ?? null) as RentalFinancials | null;
   let apiResult: Partial<RentalFinancials> = {};
+  let apiError: string | null = null;
   try {
     apiResult = await runRentalApiStep(property.canonicalAddress);
   } catch (e) {
-    console.warn(`[runRentalFlowForProperty] ${propertyId} RapidAPI step failed:`, e instanceof Error ? e.message : e);
+    apiError = e instanceof Error ? e.message : String(e);
+    console.warn(`[runRentalFlowForProperty] ${propertyId} RapidAPI step failed:`, apiError);
   }
   const rentalUnits = (apiResult.rentalUnits && apiResult.rentalUnits.length > 0)
     ? apiResult.rentalUnits
@@ -4520,11 +4526,14 @@ export async function runRentalFlowForProperty(
     omAnalysis: existing?.omAnalysis ?? undefined,
     source: apiResult.rentalUnits?.length ? "rapidapi" : (finalFromLlm ? "llm" : existing?.source ?? undefined),
     lastUpdatedAt: new Date().toISOString(),
+    rentalFlowStatus: apiError ? "failed" : apiResult.rentalUnits?.length ? "complete" : "no_matches",
+    rentalFlowError: apiError,
   };
   await propertyRepo.mergeDetails(propertyId, { rentalFinancials });
   return {
     rentalUnitsCount: rentalUnits?.length ?? 0,
     hasLlmFinancials: !!finalFromLlm && Object.keys(finalFromLlm).length > 0,
+    error: apiError ?? undefined,
   };
 }
 

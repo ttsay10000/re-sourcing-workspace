@@ -482,8 +482,13 @@ async function runCanonicalFollowUp(
     }
 
     try {
-      await runRentalFlowForProperty(propertyId, pool);
-      rentalSuccess++;
+      const rentalResult = await runRentalFlowForProperty(propertyId, pool);
+      if (rentalResult.error) {
+        rentalFailed++;
+        errors.push(`${propertyId}: rental-flow:${rentalResult.error}`);
+      } else {
+        rentalSuccess++;
+      }
     } catch (err) {
       rentalFailed++;
       errors.push(`${propertyId}: rental-flow:${err instanceof Error ? err.message : String(err)}`);

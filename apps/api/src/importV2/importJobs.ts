@@ -735,7 +735,10 @@ async function maybeRunStreetEasyPullFollowUps(
   }
   if (input.options?.includeUnitDetails) {
     try {
-      await runRentalFlowForProperty(propertyId, pool);
+      const rentalResult = await runRentalFlowForProperty(propertyId, pool);
+      if (rentalResult.error) {
+        warnings.push(`Rental/unit flow failed: ${rentalResult.error}`);
+      }
     } catch (err) {
       warnings.push(`Rental/unit flow failed: ${err instanceof Error ? err.message : String(err)}`);
     }

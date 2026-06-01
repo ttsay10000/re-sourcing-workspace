@@ -103,6 +103,7 @@ const MODE_CARDS: Array<{
   kicker: string;
   description: string;
   capabilityKey: CapabilityKey | CapabilityKey[];
+  placeholderDisabled?: boolean;
 }> = [
   {
     id: "manual",
@@ -148,9 +149,10 @@ const MODE_CARDS: Array<{
     id: "om-url",
     category: "documents",
     label: "OM URL",
-    kicker: "PDF link",
-    description: "Analyze a directly downloadable OM PDF URL and create or update the deal workspace.",
+    kicker: "Placeholder",
+    description: "Reserved for a future URL extraction service. Use OM PDF upload for now.",
     capabilityKey: "omUrl",
+    placeholderDisabled: true,
   },
 ];
 
@@ -438,6 +440,8 @@ export default function AddPropertyPage() {
       if (!capabilities || capabilitiesLoading) return false;
       const card = MODE_CARDS.find((item) => item.id === mode);
       if (!card) return false;
+      if (card.placeholderDisabled) return false;
+      if (mode === "om-upload") return true;
       const keys = Array.isArray(card.capabilityKey) ? card.capabilityKey : [card.capabilityKey];
       return keys.some((key) => isCapabilityEnabled(key));
     },
@@ -676,7 +680,7 @@ export default function AddPropertyPage() {
           <h1>Add property</h1>
           <p>
             Bring a property into the sourcing flow from manual details, a StreetEasy listing, a saved search,
-            or an OM PDF/link.
+            or the OM PDF upload path.
           </p>
         </div>
         <div className={styles.headerActions}>
@@ -733,7 +737,9 @@ export default function AddPropertyPage() {
                         type="button"
                         key={mode.id}
                         aria-pressed={isActive}
+                        aria-disabled={mode.placeholderDisabled || undefined}
                         onClick={() => {
+                          if (mode.placeholderDisabled) return;
                           setActiveMode(mode.id);
                           if (mode.id === "pull") setPullPanelOpen(true);
                         }}
@@ -1231,8 +1237,8 @@ export default function AddPropertyPage() {
           <div className={styles.supportBox}>
             <h3>Import paths</h3>
             <p>
-              Manual, StreetEasy, and saved-search imports create pipeline properties. OM PDF uploads and OM URL
-              imports populate the shared deal-analysis workspace.
+              Manual, StreetEasy, and saved-search imports create pipeline properties. OM PDF uploads populate
+              the shared deal-analysis workspace; OM URL import is reserved for a future document extractor.
             </p>
           </div>
         </aside>

@@ -273,6 +273,14 @@ function formatDateTime(value: string | null | undefined): string {
   return Number.isNaN(parsed.getTime()) ? "Never" : parsed.toLocaleString();
 }
 
+function formatShortDate(value: string | null | undefined): string {
+  if (!value) return "—";
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime())
+    ? "—"
+    : parsed.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+}
+
 function formatSavedSearchAreas(search: SavedSearch): string {
   if (search.locationMode === "single" && search.singleLocationSlug) return search.singleLocationSlug;
   const areaCodes = Array.isArray(search.areaCodes) ? search.areaCodes : [];
@@ -330,6 +338,34 @@ function profileSavedDealStatus(row: ProfileSavedDealRow): string {
 
 function profileSavedDealCreatedAt(row: ProfileSavedDealRow): string | null {
   return row.savedDeal?.createdAt ?? null;
+}
+
+function labelFromKey(value: string | null | undefined): string {
+  if (!value) return "Unknown";
+  return value
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function profileSavedDealScoreClass(score: number | null | undefined): string {
+  if (score == null || Number.isNaN(score)) return "profile-saved-deals-score profile-saved-deals-score--empty";
+  if (score >= 70) return "profile-saved-deals-score profile-saved-deals-score--strong";
+  if (score >= 50) return "profile-saved-deals-score profile-saved-deals-score--watch";
+  return "profile-saved-deals-score profile-saved-deals-score--weak";
+}
+
+function profileSavedDealStatusClass(status: string | null | undefined): string {
+  if (status === "rejected") return "profile-mini-status profile-mini-status--danger";
+  if (status === "saved" || status === "om_received" || status === "dossier_generated") {
+    return "profile-mini-status profile-mini-status--success";
+  }
+  if (status === "underwriting" || status === "offer_review" || status === "awaiting_broker") {
+    return "profile-mini-status profile-mini-status--warning";
+  }
+  if (status === "outreach" || status === "screening") return "profile-mini-status profile-mini-status--info";
+  return "profile-mini-status profile-mini-status--neutral";
 }
 
 function matchesSearchQuery(values: Array<string | number | boolean | null | undefined>, query: string): boolean {
@@ -1539,6 +1575,14 @@ export default function ProfilePage() {
                 <div className="profile-saved-deal-body">
                   <div className="profile-saved-deal-main">
                     <h3 className="profile-saved-deal-address">{profileSavedDealAddress(row)}</h3>
+                    <div className="profile-saved-deal-meta">
+                      <span className={profileSavedDealStatusClass(profileSavedDealStatus(row))}>
+                        {labelFromKey(profileSavedDealStatus(row))}
+                      </span>
+                      {profileSavedDealCreatedAt(row) ? (
+                        <small>Saved {formatShortDate(profileSavedDealCreatedAt(row))}</small>
+                      ) : null}
+                    </div>
                     <div className="profile-saved-deal-stats">
                       <div className="profile-saved-deal-stat">
                         <span>Price</span>
@@ -1550,7 +1594,11 @@ export default function ProfilePage() {
                       </div>
                       <div className="profile-saved-deal-stat">
                         <span>Deal score</span>
-                        <strong>{row.dealScore != null ? <span className="profile-saved-deals-score">{Math.round(row.dealScore)}</span> : "—"}</strong>
+                        <strong>
+                          <span className={profileSavedDealScoreClass(row.dealScore)}>
+                            {row.dealScore != null ? `${Math.round(row.dealScore)} / 100` : "—"}
+                          </span>
+                        </strong>
                       </div>
                     </div>
                   </div>
@@ -1731,7 +1779,8 @@ export default function ProfilePage() {
         .profile-v2 .profile-primary-button,
         .profile-v2 .profile-secondary-button,
         .profile-v2 .profile-saved-deals-action {
-          min-height: 2.1rem;
+          min-height: 1.95rem;
+          padding: 0.4rem 0.62rem;
           border-radius: 7px;
           font-size: 0.82rem;
           font-weight: 750;
@@ -1795,7 +1844,7 @@ export default function ProfilePage() {
         }
 
         .profile-v2 .profile-saved-deals-grid {
-          grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr));
+          grid-template-columns: repeat(auto-fit, minmax(22rem, 1fr));
           gap: 0.85rem;
         }
 
@@ -1806,6 +1855,16 @@ export default function ProfilePage() {
           border-radius: 8px;
           background: #ffffff;
           box-shadow: 0 8px 24px rgba(22, 42, 35, 0.05);
+          transition:
+            border-color 150ms ease,
+            box-shadow 150ms ease,
+            transform 150ms ease;
+        }
+
+        .profile-v2 .profile-saved-deal-card:hover {
+          border-color: #b7cbc1;
+          box-shadow: 0 12px 30px rgba(22, 42, 35, 0.08);
+          transform: translateY(-1px);
         }
 
         .profile-v2 .profile-saved-deal-photo {
@@ -1816,6 +1875,10 @@ export default function ProfilePage() {
           overflow: hidden;
           background: linear-gradient(135deg, #eef4f0, #f8faf8);
           color: #1f3d35;
+        }
+
+        .profile-v2 .profile-saved-deals-grid .profile-saved-deal-photo {
+          aspect-ratio: 5 / 3;
         }
 
         .profile-v2 .profile-saved-deal-photo img {
@@ -1840,8 +1903,66 @@ export default function ProfilePage() {
 
         .profile-v2 .profile-saved-deal-body {
           display: grid;
-          gap: 0.9rem;
-          padding: 1rem;
+          gap: 0.75rem;
+          padding: 0.9rem;
+        }
+
+        .profile-v2 .profile-saved-deal-main {
+          gap: 0.65rem;
+        }
+
+        .profile-v2 .profile-saved-deal-meta {
+          display: flex;
+          align-items: center;
+          gap: 0.45rem;
+          flex-wrap: wrap;
+        }
+
+        .profile-v2 .profile-saved-deal-meta small {
+          color: #68746d;
+          font-size: 0.78rem;
+          font-weight: 650;
+        }
+
+        .profile-v2 .profile-mini-status {
+          display: inline-flex;
+          align-items: center;
+          min-height: 1.35rem;
+          padding: 0.16rem 0.48rem;
+          border-radius: 999px;
+          font-size: 0.72rem;
+          font-weight: 800;
+          line-height: 1;
+        }
+
+        .profile-v2 .profile-mini-status--neutral {
+          border: 1px solid var(--app-line);
+          background: var(--app-surface-strong);
+          color: var(--app-ink-secondary);
+        }
+
+        .profile-v2 .profile-mini-status--info {
+          border: 1px solid var(--app-blue-border);
+          background: var(--app-blue-soft);
+          color: var(--app-blue);
+        }
+
+        .profile-v2 .profile-mini-status--success {
+          border: 1px solid var(--app-green-border);
+          background: var(--app-green-soft);
+          color: var(--app-green);
+        }
+
+        .profile-v2 .profile-mini-status--warning {
+          border: 1px solid var(--app-amber-border);
+          background: var(--app-amber-soft);
+          color: var(--app-amber);
+        }
+
+        .profile-v2 .profile-mini-status--danger {
+          border: 1px solid var(--app-red-border);
+          background: var(--app-red-soft);
+          color: var(--app-red);
         }
 
         .profile-v2 .profile-saved-deal-stat span {
@@ -1854,7 +1975,7 @@ export default function ProfilePage() {
           border-color: #cfd8d2;
           background: #ffffff;
           color: #1f3d35;
-          padding: 0.42rem 0.58rem;
+          padding: 0.34rem 0.52rem;
         }
 
         .profile-v2 .profile-saved-deals-action--danger {
@@ -1866,11 +1987,40 @@ export default function ProfilePage() {
         .profile-v2 .profile-saved-deals-actions--row {
           flex-wrap: nowrap;
           overflow-x: auto;
+          gap: 0.4rem;
         }
 
         .profile-v2 .profile-saved-deals-score {
-          background: #edf8f1;
-          color: #246047;
+          min-width: 4.75rem;
+          border: 1px solid var(--app-line);
+          background: var(--app-surface-strong);
+          color: var(--app-muted);
+          font-size: 0.76rem;
+          font-weight: 850;
+        }
+
+        .profile-v2 .profile-saved-deals-score--strong {
+          border-color: var(--app-green-border);
+          background: var(--app-green-soft);
+          color: #166534;
+        }
+
+        .profile-v2 .profile-saved-deals-score--watch {
+          border-color: var(--app-amber-border);
+          background: var(--app-amber-soft);
+          color: #92400e;
+        }
+
+        .profile-v2 .profile-saved-deals-score--weak {
+          border-color: var(--app-red-border);
+          background: var(--app-red-soft);
+          color: #991b1b;
+        }
+
+        .profile-v2 .profile-saved-deals-score--empty {
+          border-color: var(--app-line);
+          background: var(--app-surface-strong);
+          color: var(--app-muted);
         }
 
         @media (max-width: 980px) {

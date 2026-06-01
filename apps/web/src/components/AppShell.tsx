@@ -305,6 +305,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         </Link>
 
         <nav className="app-nav" aria-label="Primary navigation">
+          <span className="app-nav-section-label" aria-hidden="true">Workspace</span>
           {NAV_LINKS.map((navItem) => {
             const isActive = navItem.matches(pathname, currentSection);
             return (
@@ -377,8 +378,11 @@ export function AppShell({ children }: { children: ReactNode }) {
 
           <div className="app-topbar-actions">
             <span className="app-session-pill">Site unlocked</span>
+            <Link href="/add-property" className="app-import-link">
+              Import
+            </Link>
             <Link href="/add-property" className="app-primary-action">
-              Import / Add Property
+              Add property
             </Link>
           </div>
         </header>

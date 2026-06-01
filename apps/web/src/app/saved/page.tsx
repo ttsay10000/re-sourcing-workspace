@@ -119,9 +119,52 @@ function labelFromKey(value: string | null | undefined): string {
   if (!value) return "Unknown";
   return value
     .split("_")
+    .flatMap((part) => part.split("-"))
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
+}
+
+const AREA_LABELS: Record<string, string> = {
+  fultonseaport: "Fulton Seaport",
+  "fulton-seaport": "Fulton Seaport",
+  "hells-kitchen": "Hell's Kitchen",
+  nomad: "NoMad",
+  noho: "NoHo",
+  "sutton-place": "Sutton Place",
+  soho: "SoHo",
+  tribeca: "TriBeCa",
+};
+
+const SOURCE_LABELS: Record<string, string> = {
+  loopnet: "LoopNet",
+  manual: "Manual",
+  other: "Other",
+  streeteasy: "StreetEasy",
+};
+
+function areaLabel(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return null;
+  return AREA_LABELS[normalized] ?? labelFromKey(normalized);
+}
+
+function locationLine(row: Pick<SavedDealRow, "neighborhood" | "borough" | "source">): string {
+  const seen = new Set<string>();
+  const locationParts = [row.neighborhood, row.borough]
+    .flatMap((value) => String(value ?? "").split(/[·/,]/g))
+    .map((value) => areaLabel(value))
+    .filter((value): value is string => Boolean(value))
+    .filter((value) => {
+      const key = value.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  const sourceKey = row.source?.trim().toLowerCase();
+  const source = sourceKey ? SOURCE_LABELS[sourceKey] ?? labelFromKey(sourceKey) : null;
+  return [...locationParts, source].filter(Boolean).join(" · ") || "No market context";
 }
 
 function normalizeTag(value: string): string {
@@ -155,6 +198,13 @@ function statusClass(status: string | null | undefined): string {
   }
   if (status === "outreach" || status === "screening") return `${styles.statusPill} ${styles.statusInfo}`;
   return `${styles.statusPill} ${styles.statusNeutral}`;
+}
+
+function scoreClass(score: number | null | undefined): string {
+  if (score == null || Number.isNaN(score)) return `${styles.scorePill} ${styles.scoreEmpty}`;
+  if (score >= 70) return `${styles.scorePill} ${styles.scoreStrong}`;
+  if (score >= 50) return `${styles.scorePill} ${styles.scoreWatch}`;
+  return `${styles.scorePill} ${styles.scoreWeak}`;
 }
 
 function isRejected(row: SavedDealRow): boolean {
@@ -335,6 +385,7 @@ export default function SavedPage() {
               <tbody>
                 {filteredRows.map((row) => {
                   const rejected = isRejected(row);
+                  const displayStatus = rejected ? "rejected" : row.status || row.savedDeal?.dealStatus || "saved";
                   const rejectionLabel = row.rejection?.reasonLabel || labelFromKey(row.rejection?.reasonCode);
                   const facts = availableFacts(row);
                   const economics = availableEconomics(row);
@@ -351,9 +402,7 @@ export default function SavedPage() {
                             <Link href={`/pipeline?propertyId=${encodeURIComponent(row.propertyId)}`} className={styles.addressLink}>
                               {row.displayAddress || row.canonicalAddress || row.propertyId}
                             </Link>
-                            <span>
-                              {[row.neighborhood, row.borough, row.source ? labelFromKey(row.source) : null].filter(Boolean).join(" · ") || "No market context"}
-                            </span>
+                            <span>{locationLine(row)}</span>
                             {row.tags && row.tags.length > 0 ? (
                               <div className={styles.tags}>
                                 {row.tags.slice(0, 3).map((tag) => (
@@ -367,7 +416,7 @@ export default function SavedPage() {
                       </td>
                       <td>
                         <div className={styles.statusStack}>
-                          <span className={statusClass(rejected ? "rejected" : row.status)}>{labelFromKey(rejected ? "rejected" : row.status)}</span>
+                          <span className={statusClass(displayStatus)}>{labelFromKey(displayStatus)}</span>
                           {rejected ? (
                             <div className={styles.rejectionBlock}>
                               <strong>{rejectionLabel}</strong>
@@ -378,10 +427,9 @@ export default function SavedPage() {
                         </div>
                       </td>
                       <td>
-                        <div className={styles.scoreCell}>
-                          <strong>{row.dealScore == null ? "—" : Math.round(row.dealScore)}</strong>
-                          <span>Deal score</span>
-                        </div>
+                        <span className={scoreClass(row.dealScore)}>
+                          {row.dealScore == null ? "—" : `${Math.round(row.dealScore)} / 100`}
+                        </span>
                       </td>
                       <td>
                         <div className={styles.stack}>
