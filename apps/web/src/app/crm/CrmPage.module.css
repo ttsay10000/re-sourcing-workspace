@@ -154,7 +154,7 @@
 
 .table {
   width: 100%;
-  min-width: 72rem;
+  min-width: 94rem;
   border-collapse: collapse;
   font-size: 0.86rem;
   table-layout: fixed;
@@ -191,37 +191,37 @@
 
 .table th:nth-child(1),
 .table td:nth-child(1) {
-  width: 11.5rem;
+  width: 16rem;
 }
 
 .table th:nth-child(2),
 .table td:nth-child(2) {
-  width: 15rem;
+  width: 19rem;
 }
 
 .table th:nth-child(3),
 .table td:nth-child(3) {
-  width: 16rem;
+  width: 22rem;
 }
 
 .table th:nth-child(4),
 .table td:nth-child(4) {
-  width: 10.5rem;
+  width: 14rem;
 }
 
 .table th:nth-child(5),
 .table td:nth-child(5) {
-  width: 4rem;
+  width: 5rem;
 }
 
 .table th:nth-child(6),
 .table td:nth-child(6) {
-  width: 6rem;
+  width: 9rem;
 }
 
 .table th:nth-child(7),
 .table td:nth-child(7) {
-  width: 9rem;
+  width: 12rem;
 }
 
 .emptyCell {
@@ -250,7 +250,7 @@
 .brokerCell .subtleLine {
   display: block;
   overflow: hidden;
-  max-width: 14rem;
+  max-width: 100%;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -268,7 +268,7 @@
 .contactItem {
   display: inline-block;
   overflow: hidden;
-  max-width: 14rem;
+  max-width: 17rem;
   text-overflow: ellipsis;
   vertical-align: bottom;
 }
@@ -352,7 +352,7 @@
 }
 
 .propertyChip {
-  max-width: 12rem;
+  max-width: 13.5rem;
   overflow: hidden;
   border: 1px solid var(--app-line-strong);
   background: var(--app-surface-raised);
@@ -385,7 +385,7 @@
 .flag {
   display: inline-flex;
   align-items: center;
-  max-width: 5.5rem;
+  max-width: 8rem;
   min-height: 1.55rem;
   overflow: hidden;
   border: 1px solid transparent;

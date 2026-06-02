@@ -204,6 +204,19 @@ interface BrokerFormState {
   notes: string;
 }
 
+interface SourceFactsFormState {
+  askingPrice: string;
+  units: string;
+  buildingSqft: string;
+  bedrooms: string;
+  bathrooms: string;
+  neighborhood: string;
+  borough: string;
+  listingStatus: string;
+  propertyType: string;
+  yearBuilt: string;
+}
+
 interface RejectState {
   propertyId: string;
   address: string;
@@ -562,6 +575,45 @@ function brokerFormFromBlock(broker: UiV2BrokerBlock | null | undefined): Broker
   };
 }
 
+function formValue(value: string | number | null | undefined): string {
+  if (value == null) return "";
+  return String(value);
+}
+
+function sourceFactsFormFromProperty(
+  property: FlexiblePropertyDetail | null | undefined,
+  row?: PipelineRow | null
+): SourceFactsFormState {
+  const listingFacts = property?.enrichmentDetails?.listingFacts ?? null;
+  return {
+    askingPrice: formValue(property?.overview.askingPrice ?? row?.askingPrice),
+    units: formValue(property?.overview.units ?? row?.units),
+    buildingSqft: formValue(property?.overview.buildingSqft ?? row?.buildingSqft),
+    bedrooms: formValue(listingFacts?.bedrooms ?? property?.overview.beds),
+    bathrooms: formValue(listingFacts?.bathrooms ?? property?.overview.baths),
+    neighborhood: formValue(property?.overview.neighborhood ?? row?.neighborhood),
+    borough: formValue(property?.overview.borough ?? row?.borough),
+    listingStatus: formValue(listingFacts?.status),
+    propertyType: formValue(listingFacts?.propertyType),
+    yearBuilt: formValue(property?.overview.yearBuilt ?? listingFacts?.builtIn),
+  };
+}
+
+function sourceFactsPayload(form: SourceFactsFormState): SourceFactsFormState {
+  return {
+    askingPrice: form.askingPrice.trim(),
+    units: form.units.trim(),
+    buildingSqft: form.buildingSqft.trim(),
+    bedrooms: form.bedrooms.trim(),
+    bathrooms: form.bathrooms.trim(),
+    neighborhood: form.neighborhood.trim(),
+    borough: form.borough.trim(),
+    listingStatus: form.listingStatus.trim(),
+    propertyType: form.propertyType.trim(),
+    yearBuilt: form.yearBuilt.trim(),
+  };
+}
+
 function rowFromProperty(row: PipelineRow, property: FlexiblePropertyDetail): PipelineRow {
   const gallery = extractGallery(property, row);
   const latestActivity = property.activityTimeline[0]?.createdAt ?? row.lastActivityAt ?? null;
@@ -654,6 +706,8 @@ export default function PipelineClient() {
   const [searchDraft, setSearchDraft] = useState(searchParams.get("q") ?? "");
   const [brokerEditOpen, setBrokerEditOpen] = useState(false);
   const [brokerForm, setBrokerForm] = useState<BrokerFormState>(brokerFormFromBlock(null));
+  const [sourceFactsEditOpen, setSourceFactsEditOpen] = useState(false);
+  const [sourceFactsForm, setSourceFactsForm] = useState<SourceFactsFormState>(sourceFactsFormFromProperty(null));
   const [newTag, setNewTag] = useState("");
   const [rejectState, setRejectState] = useState<RejectState | null>(null);
   const [composer, setComposer] = useState<ComposerState | null>(null);
@@ -822,6 +876,7 @@ export default function PipelineClient() {
         const property = normalizePropertyDetail(response.property);
         setSelectedProperty(property);
         setBrokerForm(brokerFormFromBlock(property?.broker));
+        setSourceFactsForm(sourceFactsFormFromProperty(property));
         if (property) applyProperty(property);
         return property;
       } catch (err) {
@@ -854,6 +909,7 @@ export default function PipelineClient() {
     async (row: PipelineRow) => {
       setSheetTab("Overview");
       setBrokerEditOpen(false);
+      setSourceFactsEditOpen(false);
       setNotice(null);
       const params = new URLSearchParams(queryString);
       params.set("propertyId", row.propertyId);
@@ -871,6 +927,7 @@ export default function PipelineClient() {
     setSelectedId(null);
     setSelectedProperty(null);
     setBrokerEditOpen(false);
+    setSourceFactsEditOpen(false);
     setGalleryExpanded(false);
     setNewTag("");
     const params = new URLSearchParams(queryString);
@@ -1149,6 +1206,37 @@ export default function PipelineClient() {
     } finally {
       setBusyAction(null);
     }
+  }
+
+  async function saveSourceFacts(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedId) return;
+    setBusyAction(`${selectedId}:source-facts`);
+    setNotice(null);
+    try {
+      const response = await apiFetch<PropertyResponse>(`${API_BASE}/api/ui-v2/properties/${selectedId}/source-facts`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          facts: sourceFactsPayload(sourceFactsForm),
+          actorName: "ui-v2",
+          source: "property_sheet",
+        }),
+      });
+      const property = normalizePropertyDetail(response.property);
+      setSelectedProperty(property);
+      setSourceFactsForm(sourceFactsFormFromProperty(property));
+      applyProperty(property);
+      setSourceFactsEditOpen(false);
+      setNotice("Property data updated.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update property data.");
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  function updateSourceFactsField(field: keyof SourceFactsFormState, value: string) {
+    setSourceFactsForm((current) => ({ ...current, [field]: value }));
   }
 
   async function addTag(event: FormEvent<HTMLFormElement>) {
@@ -1706,9 +1794,19 @@ export default function PipelineClient() {
           type="button"
           onClick={(event) => toggleHeaderMenu(column, event)}
         >
-          <span>{label}</span>
-          {isSorted ? <small>{filterValues.sortDirection.toUpperCase()}</small> : null}
-          {active && !isSorted ? <i aria-hidden="true" /> : null}
+          <span className={styles.headerLabel}>{label}</span>
+          {isSorted ? (
+            <span
+              className={cx(
+                styles.headerState,
+                styles.headerStateSorted,
+                filterValues.sortDirection === "asc" ? styles.headerStateAsc : styles.headerStateDesc
+              )}
+              title={`Sorted ${filterValues.sortDirection === "asc" ? "ascending" : "descending"}`}
+              aria-hidden="true"
+            />
+          ) : null}
+          {active && !isSorted ? <span className={cx(styles.headerState, styles.headerStateFiltered)} title="Filtered" aria-hidden="true" /> : null}
         </button>
         {headerMenu === column ? renderColumnMenu(column) : null}
       </div>
@@ -1886,8 +1984,8 @@ export default function PipelineClient() {
             <col className={styles.colSource} />
             <col className={styles.colType} />
             <col className={styles.colAsk} />
-            <col className={styles.colPsf} />
             <col className={styles.colUnit} />
+            <col className={styles.colPsf} />
             <col className={styles.colCap} />
             <col className={styles.colMtr} />
             <col className={styles.colScore} />
@@ -1912,8 +2010,8 @@ export default function PipelineClient() {
               <th>{renderHeader("source", "Source")}</th>
               <th>{renderHeader("marketType", "Type")}</th>
               <th>{renderHeader("askingPrice", "Ask")}</th>
-              <th>{renderHeader("pricePerSqft", "$/SF")}</th>
               <th>{renderHeader("units", "Units")}</th>
+              <th>{renderHeader("pricePerSqft", "$/SF")}</th>
               <th>{renderHeader("capRate", "Cap")}</th>
               <th>{renderHeader("mtr", "MTR")}</th>
               <th>{renderHeader("dealScore", "Score")}</th>
@@ -1980,8 +2078,8 @@ export default function PipelineClient() {
                     </select>
                   </td>
                   <td className={styles.numericCell}>{formatCurrency(row.askingPrice)}</td>
-                  <td className={styles.numericCell}>{formatCurrency(row.pricePerSqft, false)}</td>
                   <td className={styles.numericCell}>{formatNumber(row.units)}</td>
+                  <td className={styles.numericCell}>{formatCurrency(row.pricePerSqft, false)}</td>
                   <td className={styles.numericCell}>{formatPercent(calculateCapRate(row))}</td>
                   <td>
                     <span className={`${styles.tinyChip} ${mtrLabel(row.tags) === "Good" ? styles.toneSuccess : styles.toneNeutral}`}>
@@ -2252,26 +2350,39 @@ export default function PipelineClient() {
             <div className={styles.sheetBody}>
               {detailLoading && !selectedProperty ? <div className={styles.loadingState}>Loading property...</div> : null}
 
-              {sheetTab === "Overview" ? (
-                <div className={styles.overviewStack}>
-                  <section className={styles.overviewSection}>
-                    <div className={styles.sectionHeading}>
-                      <h3>Deal Snapshot</h3>
-                      <Link
-                        className={styles.iconLink}
-                        href={`/dossier-assumptions?property_id=${encodeURIComponent(selectedId)}`}
-                      >
-                        Edit Assumptions
-                      </Link>
-                    </div>
-                    <dl className={styles.metricGrid}>
-                      <div>
-                        <dt>Ask</dt>
-                        <dd>{formatCurrency(selectedProperty?.overview.askingPrice ?? selectedRow?.askingPrice, false)}</dd>
+	              {sheetTab === "Overview" ? (
+	                <div className={styles.overviewStack}>
+	                  <section className={styles.overviewSection}>
+	                    <div className={styles.sectionHeading}>
+	                      <h3>Deal Snapshot</h3>
+	                      <div className={styles.documentActions}>
+	                        <button
+	                          className={styles.iconLink}
+	                          type="button"
+	                          onClick={() => setSourceFactsEditOpen((open) => !open)}
+	                        >
+	                          {sourceFactsEditOpen ? "Close edit" : "Edit data"}
+	                        </button>
+	                        <Link
+	                          className={styles.iconLink}
+	                          href={`/deal-analysis?property_id=${encodeURIComponent(selectedId)}`}
+	                        >
+	                          Open OM Workspace
+	                        </Link>
+	                      </div>
+	                    </div>
+	                    <dl className={styles.metricGrid}>
+	                      <div>
+	                        <dt>Ask</dt>
+	                        <dd>{formatCurrency(selectedProperty?.overview.askingPrice ?? selectedRow?.askingPrice, false)}</dd>
                       </div>
                       <div>
                         <dt>Units</dt>
                         <dd>{formatNumber(selectedProperty?.overview.units ?? selectedRow?.units)}</dd>
+                      </div>
+                      <div>
+                        <dt>$/SF</dt>
+                        <dd>{formatCurrency(selectedProperty?.overview.pricePerSqft ?? selectedRow?.pricePerSqft, false)}</dd>
                       </div>
                       <div>
                         <dt>Cap</dt>
@@ -2284,10 +2395,6 @@ export default function PipelineClient() {
                       <div>
                         <dt>Sqft</dt>
                         <dd>{formatNumber(selectedProperty?.overview.buildingSqft ?? selectedRow?.buildingSqft)}</dd>
-                      </div>
-                      <div>
-                        <dt>$/SF</dt>
-                        <dd>{formatCurrency(selectedProperty?.overview.pricePerSqft ?? selectedRow?.pricePerSqft, false)}</dd>
                       </div>
                       <div>
                         <dt>Beds / Baths</dt>
@@ -2304,13 +2411,115 @@ export default function PipelineClient() {
                         <dt>Score</dt>
                         <dd>
                           <span className={`${styles.scoreBadge} ${scoreTone(selectedProperty?.underwriting?.dealScore ?? selectedRow?.underwriting?.dealScore)}`}>
-                            {scoreLabel(selectedProperty?.underwriting?.dealScore ?? selectedRow?.underwriting?.dealScore)}
-                          </span>
-                        </dd>
-                      </div>
-                    </dl>
-                    {selectedProperty?.overview.description ? <p className={styles.description}>{selectedProperty.overview.description}</p> : null}
-                  </section>
+	                            {scoreLabel(selectedProperty?.underwriting?.dealScore ?? selectedRow?.underwriting?.dealScore)}
+	                          </span>
+	                        </dd>
+	                      </div>
+	                    </dl>
+	                    {sourceFactsEditOpen ? (
+	                      <form className={styles.sourceFactsForm} onSubmit={saveSourceFacts}>
+	                        <label>
+	                          Asking price
+	                          <input
+	                            inputMode="numeric"
+	                            value={sourceFactsForm.askingPrice}
+	                            onChange={(event) => updateSourceFactsField("askingPrice", event.target.value)}
+	                            placeholder="14000000"
+	                          />
+	                        </label>
+	                        <label>
+	                          Units
+	                          <input
+	                            inputMode="numeric"
+	                            value={sourceFactsForm.units}
+	                            onChange={(event) => updateSourceFactsField("units", event.target.value)}
+	                            placeholder="6"
+	                          />
+	                        </label>
+	                        <label>
+	                          Building SF
+	                          <input
+	                            inputMode="numeric"
+	                            value={sourceFactsForm.buildingSqft}
+	                            onChange={(event) => updateSourceFactsField("buildingSqft", event.target.value)}
+	                            placeholder="7178"
+	                          />
+	                        </label>
+	                        <label>
+	                          Beds
+	                          <input
+	                            inputMode="decimal"
+	                            value={sourceFactsForm.bedrooms}
+	                            onChange={(event) => updateSourceFactsField("bedrooms", event.target.value)}
+	                          />
+	                        </label>
+	                        <label>
+	                          Baths
+	                          <input
+	                            inputMode="decimal"
+	                            value={sourceFactsForm.bathrooms}
+	                            onChange={(event) => updateSourceFactsField("bathrooms", event.target.value)}
+	                          />
+	                        </label>
+	                        <label>
+	                          Year built
+	                          <input
+	                            inputMode="numeric"
+	                            value={sourceFactsForm.yearBuilt}
+	                            onChange={(event) => updateSourceFactsField("yearBuilt", event.target.value)}
+	                          />
+	                        </label>
+	                        <label>
+	                          Neighborhood
+	                          <input
+	                            value={sourceFactsForm.neighborhood}
+	                            onChange={(event) => updateSourceFactsField("neighborhood", event.target.value)}
+	                            placeholder="NoHo"
+	                          />
+	                        </label>
+	                        <label>
+	                          Borough
+	                          <input
+	                            value={sourceFactsForm.borough}
+	                            onChange={(event) => updateSourceFactsField("borough", event.target.value)}
+	                            placeholder="Manhattan"
+	                          />
+	                        </label>
+	                        <label>
+	                          Listing status
+	                          <input
+	                            value={sourceFactsForm.listingStatus}
+	                            onChange={(event) => updateSourceFactsField("listingStatus", event.target.value)}
+	                            placeholder="Open"
+	                          />
+	                        </label>
+	                        <label>
+	                          Property type
+	                          <input
+	                            value={sourceFactsForm.propertyType}
+	                            onChange={(event) => updateSourceFactsField("propertyType", event.target.value)}
+	                            placeholder="Multi Family"
+	                          />
+	                        </label>
+	                        <div className={styles.sourceFactsFormActions}>
+	                          <button
+	                            className={styles.secondaryButton}
+	                            type="button"
+	                            onClick={() => {
+	                              setSourceFactsForm(sourceFactsFormFromProperty(selectedProperty, selectedRow));
+	                              setSourceFactsEditOpen(false);
+	                            }}
+	                          >
+	                            Cancel
+	                          </button>
+	                          <button className={styles.primaryButton} type="submit" disabled={busyAction === `${selectedId}:source-facts`}>
+	                            {busyAction === `${selectedId}:source-facts` ? "Saving..." : "Save property data"}
+	                          </button>
+	                        </div>
+	                      </form>
+	                    ) : null}
+	                    {selectedProperty?.overview.description ? <p className={styles.description}>{selectedProperty.overview.description}</p> : null}
+	                  </section>
 
                   <section className={styles.highlightSection}>
                     <div className={styles.sectionHeading}>
@@ -2491,17 +2700,17 @@ export default function PipelineClient() {
 
               {sheetTab === "Underwriting" ? (
                 <section className={styles.sheetPanel}>
-                  <div className={styles.sectionHeading}>
-                    <h3>Underwriting</h3>
-                    <div className={styles.documentActions}>
-                      <Link className={styles.iconLink} href={`/dossier-assumptions?property_id=${encodeURIComponent(selectedId)}`}>
-                        Edit Assumptions
-                      </Link>
-                      <Link className={styles.iconLink} href={`/deal-analysis?property_id=${encodeURIComponent(selectedId)}`}>
-                        Deal Analysis
-                      </Link>
-                    </div>
-                  </div>
+	                  <div className={styles.sectionHeading}>
+	                    <h3>Underwriting</h3>
+	                    <div className={styles.documentActions}>
+	                      <Link className={styles.iconLink} href={`/deal-analysis?property_id=${encodeURIComponent(selectedId)}`}>
+	                        Edit Assumptions
+	                      </Link>
+	                      <Link className={styles.iconLink} href={`/dossier-assumptions?property_id=${encodeURIComponent(selectedId)}`}>
+	                        Override Dossier Fields
+	                      </Link>
+	                    </div>
+	                  </div>
                   <dl className={styles.metricGrid}>
                     <div>
                       <dt>Deal score</dt>

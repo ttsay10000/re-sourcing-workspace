@@ -24,6 +24,7 @@ type ProgressRow = {
   source?: string | null;
   price?: number | null;
   units?: number | null;
+  pricePerSqft?: number | null;
   dealScore?: number | null;
   status?: string | null;
   savedDealStatus?: string | null;
@@ -53,6 +54,7 @@ type SavedDealRow = {
   source?: string | null;
   price?: number | null;
   units?: number | null;
+  pricePerSqft?: number | null;
   dealScore?: number | null;
   status?: string | null;
   tags?: string[];
@@ -593,6 +595,7 @@ export default function ProgressPage() {
                             <div className={styles.stack}>
                               <span>{formatCurrency(row.price)}</span>
                               <small>{formatNumber(row.units)} units</small>
+                              <small>{formatCurrency(row.pricePerSqft)} / SF</small>
                             </div>
                           </td>
                           <td>
@@ -650,7 +653,11 @@ function SavedDealMiniSection({
               <div>
                 <strong>{row.displayAddress || row.canonicalAddress || row.propertyId}</strong>
                 <span>
-                  {[row.source ? labelFromKey(row.source) : null, formatUnitLabel(row.units)]
+                  {[
+                    row.source ? labelFromKey(row.source) : null,
+                    formatUnitLabel(row.units),
+                    row.pricePerSqft != null ? `${formatCurrency(row.pricePerSqft)} / SF` : null,
+                  ]
                     .filter(Boolean)
                     .join(" · ") || "No context"}
                 </span>

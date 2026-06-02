@@ -453,11 +453,20 @@ export default function SavedPage() {
                       </td>
                       <td>
                         <div className={styles.actionStack}>
-                          <Link href={`/pipeline?propertyId=${encodeURIComponent(row.propertyId)}`}>Open</Link>
-                          <Link href={`/pipeline?propertyId=${encodeURIComponent(row.propertyId)}&tab=underwriting`}>
+                          <Link href={`/pipeline?propertyId=${encodeURIComponent(row.propertyId)}`} className={styles.actionPrimary}>
+                            Open
+                          </Link>
+                          <Link
+                            href={`/pipeline?propertyId=${encodeURIComponent(row.propertyId)}&tab=underwriting`}
+                            className={styles.actionSecondary}
+                          >
                             Underwrite
                           </Link>
-                          {row.listingUrl ? <a href={row.listingUrl} target="_blank" rel="noreferrer">Listing</a> : null}
+                          {row.listingUrl ? (
+                            <a href={row.listingUrl} target="_blank" rel="noreferrer" className={styles.actionGhost}>
+                              Listing
+                            </a>
+                          ) : null}
                         </div>
                       </td>
                     </tr>

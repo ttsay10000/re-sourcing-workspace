@@ -68,6 +68,7 @@ import {
   hasCompletedDealDossier,
 } from "../deal/propertyDossierState.js";
 import { resolveEffectiveDealScore } from "../deal/effectiveDealScore.js";
+import { resolveOmAskingPriceFromDetails } from "../deal/omAskingPrice.js";
 import { resolvePreferredOmUnitCount } from "../om/authoritativeOm.js";
 
 const router = Router();
@@ -674,6 +675,13 @@ function splitAddress(canonicalAddress: string): { displayAddress: string; city?
 function neighborhoodName(details: PropertyDetails | null | undefined, listingExtra?: Record<string, unknown> | null): string | null {
   const primary = details?.neighborhood?.primary;
   return (
+    readFirstStringPath(details, [
+      ["manualSourceFacts", "neighborhood"],
+      ["manualSourceFacts", "neighborhoodName"],
+      ["omData", "authoritative", "propertyInfo", "neighborhood"],
+      ["omData", "authoritative", "propertyInfo", "submarket"],
+      ["rentalFinancials", "omAnalysis", "propertyInfo", "neighborhood"],
+    ]) ??
     primary?.name ??
     readFirstStringPath(details, [
       ["neighborhoodName"],
@@ -699,6 +707,12 @@ function neighborhoodName(details: PropertyDetails | null | undefined, listingEx
 function boroughName(details: PropertyDetails | null | undefined, listingExtra?: Record<string, unknown> | null): string | null {
   const primary = details?.neighborhood?.primary;
   return (
+    readFirstStringPath(details, [
+      ["manualSourceFacts", "borough"],
+      ["manualSourceFacts", "boroughName"],
+      ["omData", "authoritative", "propertyInfo", "borough"],
+      ["rentalFinancials", "omAnalysis", "propertyInfo", "borough"],
+    ]) ??
     primary?.borough ??
     readFirstStringPath(details, [
       ["borough"],
@@ -835,12 +849,47 @@ function getAskingPrice(row: PipelineBaseRow): number | null {
   const assumptions = getPropertyDossierAssumptions(details);
   const summary = getPropertyDossierSummary(details);
   return (
+    readFirstPositiveNumericPath(details, [
+      ["manualSourceFacts", "askingPrice"],
+      ["manualSourceFacts", "listedPrice"],
+      ["manualSourceFacts", "listingPrice"],
+      ["manualSourceFacts", "askPrice"],
+    ]) ??
+    resolveOmAskingPriceFromDetails(details) ??
     summary?.askingPrice ??
+    readFirstPositiveNumericPath(details, [
+      ["omData", "authoritative", "propertyInfo", "askingPrice"],
+      ["omData", "authoritative", "propertyInfo", "listedPrice"],
+      ["omData", "authoritative", "propertyInfo", "listingPrice"],
+      ["omData", "authoritative", "uiFinancialSummary", "askingPrice"],
+      ["omData", "authoritative", "valuationMetrics", "askingPrice"],
+      ["rentalFinancials", "omAnalysis", "propertyInfo", "askingPrice"],
+      ["rentalFinancials", "omAnalysis", "valuationMetrics", "askingPrice"],
+    ]) ??
+    toPositiveNumber(row.listing_price) ??
+    readFirstPositiveNumericPath(row.listing_extra, [
+      ["price"],
+      ["askingPrice"],
+      ["asking_price"],
+      ["listedPrice"],
+      ["listed_price"],
+      ["askPrice"],
+      ["ask_price"],
+    ]) ??
+    readFirstPositiveNumericPath(details, [
+      ["askingPrice"],
+      ["asking_price"],
+      ["listingPrice"],
+      ["listing_price"],
+      ["listedPrice"],
+      ["listed_price"],
+      ["askPrice"],
+      ["ask_price"],
+      ["sourceFacts", "askingPrice"],
+      ["sourceFacts", "listedPrice"],
+    ]) ??
     assumptions?.purchasePrice ??
-    toFiniteNumber(row.listing_price) ??
-    readNumericPath(details, ["askingPrice"]) ??
-    readNumericPath(details, ["purchasePrice"]) ??
-    readNumericPath(details, ["omData", "authoritative", "propertyInfo", "askingPrice"])
+    null
   );
 }
 
@@ -850,8 +899,21 @@ function getUnitCount(row: PipelineBaseRow): number | null {
     ? details.rentalFinancials.rentalUnits.length
     : null;
   return (
+    readFirstPositiveNumericPath(details, [
+      ["manualSourceFacts", "units"],
+      ["manualSourceFacts", "unitCount"],
+      ["manualSourceFacts", "numberOfUnits"],
+      ["manualSourceFacts", "number_of_units"],
+      ["manualSourceFacts", "totalUnits"],
+    ]) ??
     resolvePreferredOmUnitCount(details) ??
     readFirstPositiveNumericPath(details, [
+      ["omData", "authoritative", "propertyInfo", "unitCount"],
+      ["omData", "authoritative", "propertyInfo", "units"],
+      ["omData", "authoritative", "propertyInfo", "numberOfUnits"],
+      ["omData", "authoritative", "propertyInfo", "totalUnits"],
+      ["rentalFinancials", "omAnalysis", "propertyInfo", "unitCount"],
+      ["rentalFinancials", "omAnalysis", "propertyInfo", "units"],
       ["unitCount"],
       ["units"],
       ["numberOfUnits"],
@@ -863,9 +925,6 @@ function getUnitCount(row: PipelineBaseRow): number | null {
       ["property", "units"],
       ["rentalFinancials", "fromLlm", "unitCount"],
       ["rentalFinancials", "fromLlm", "units"],
-      ["omData", "authoritative", "propertyInfo", "unitCount"],
-      ["omData", "authoritative", "propertyInfo", "units"],
-      ["omData", "authoritative", "propertyInfo", "numberOfUnits"],
     ]) ??
     readFirstPositiveNumericPath(row.listing_extra, [
       ["units"],
@@ -914,6 +973,16 @@ function inferUnitCountFromText(...values: unknown[]): number | null {
 function getBuildingSqft(row: PipelineBaseRow): number | null {
   return (
     readFirstPositiveNumericPath(row.details, [
+      ["manualSourceFacts", "buildingSqft"],
+      ["manualSourceFacts", "sqft"],
+      ["manualSourceFacts", "squareFeet"],
+      ["dealDossier", "assumptions", "buildingSqft"],
+      ["omData", "authoritative", "propertyInfo", "buildingSqft"],
+      ["omData", "authoritative", "propertyInfo", "squareFeet"],
+      ["omData", "authoritative", "propertyInfo", "sqft"],
+      ["rentalFinancials", "omAnalysis", "propertyInfo", "buildingSqft"],
+      ["rentalFinancials", "omAnalysis", "propertyInfo", "squareFeet"],
+      ["rentalFinancials", "omAnalysis", "propertyInfo", "sqft"],
       ["buildingSqft"],
       ["buildingSqftTotal"],
       ["squareFeet"],
@@ -921,16 +990,17 @@ function getBuildingSqft(row: PipelineBaseRow): number | null {
       ["sqft"],
       ["grossSqft"],
       ["gross_square_feet"],
-      ["assessedGrossSqft"],
-      ["assessedResidentialAreaGross"],
       ["building", "sqft"],
       ["building", "squareFeet"],
       ["building", "grossSqft"],
       ["property", "sqft"],
-      ["dealDossier", "assumptions", "buildingSqft"],
-      ["omData", "authoritative", "propertyInfo", "buildingSqft"],
-      ["omData", "authoritative", "propertyInfo", "squareFeet"],
-      ["omData", "authoritative", "propertyInfo", "sqft"],
+      ["property", "squareFeet"],
+      ["sourceFacts", "sqft"],
+      ["sourceFacts", "squareFeet"],
+      ["sourceFacts", "buildingSqft"],
+      ["listingFacts", "sqft"],
+      ["listingFacts", "squareFeet"],
+      ["listingFacts", "buildingSqft"],
     ]) ??
     toPositiveNumber(row.listing_sqft) ??
     readFirstPositiveNumericPath(row.listing_extra, [
@@ -950,33 +1020,56 @@ function getBuildingSqft(row: PipelineBaseRow): number | null {
       ["building", "grossSqft"],
       ["property", "sqft"],
       ["property", "squareFeet"],
+    ]) ??
+    readFirstPositiveNumericPath(row.details, [
+      ["dealDossier", "assumptions", "buildingSqft"],
+      ["assessedGrossSqft"],
+      ["assessedResidentialAreaGross"],
     ])
   );
 }
 
 function getPricePerSqft(row: PipelineBaseRow): number | null {
-  const sourcePricePerSqft = readFirstPositiveNumericPath(row.listing_extra, [
-    ["ppsqft"],
-    ["pricePerSqft"],
-    ["price_per_sqft"],
-    ["price_per_square_foot"],
-    ["psf"],
-    ["price_psf"],
-  ]);
-  if (sourcePricePerSqft != null) return Math.round(sourcePricePerSqft);
   const price = getAskingPrice(row);
   const sqft = getBuildingSqft(row);
-  if (price == null || sqft == null || price <= 0 || sqft <= 0) return null;
-  return Math.round(price / sqft);
+  if (price != null && sqft != null && price > 0 && sqft > 0) return Math.round(price / sqft);
+  const sourcePricePerSqft = readFirstPositiveNumericPath(row.details, [
+      ["manualSourceFacts", "pricePerSqft"],
+      ["manualSourceFacts", "pricePsf"],
+      ["pricePerSqft"],
+      ["price_per_sqft"],
+      ["omData", "authoritative", "valuationMetrics", "pricePerSqft"],
+      ["omData", "authoritative", "valuationMetrics", "pricePsf"],
+      ["omData", "authoritative", "uiFinancialSummary", "pricePerSqft"],
+      ["omData", "authoritative", "propertyInfo", "pricePerSqft"],
+      ["rentalFinancials", "omAnalysis", "valuationMetrics", "pricePerSqft"],
+      ["rentalFinancials", "omAnalysis", "valuationMetrics", "pricePsf"],
+      ["sourceFacts", "pricePerSqft"],
+      ["listingFacts", "ppsqft"],
+      ["listingFacts", "pricePerSqft"],
+    ]) ??
+    readFirstPositiveNumericPath(row.listing_extra, [
+      ["ppsqft"],
+      ["pricePerSqft"],
+      ["price_per_sqft"],
+      ["price_per_square_foot"],
+      ["psf"],
+      ["price_psf"],
+    ]);
+  if (sourcePricePerSqft != null) return Math.round(sourcePricePerSqft);
+  return null;
 }
 
 function getYearBuilt(row: PipelineBaseRow): number | null {
   return (
     readFirstNumericPath(row.details, [
+      ["manualSourceFacts", "yearBuilt"],
+      ["manualSourceFacts", "builtIn"],
+      ["omData", "authoritative", "propertyInfo", "yearBuilt"],
+      ["omData", "authoritative", "propertyInfo", "builtIn"],
       ["yearBuilt"],
       ["year_built"],
       ["building", "yearBuilt"],
-      ["omData", "authoritative", "propertyInfo", "yearBuilt"],
     ]) ??
     readFirstNumericPath(row.listing_extra, [["yearBuilt"], ["year_built"], ["built"], ["builtIn"]])
   );
@@ -1130,6 +1223,17 @@ function sourceUnitCount(row: PipelineBaseRow): number | null {
 }
 
 function listingStatus(row: PipelineBaseRow): string | null {
+  const fromManual = readFirstStringPath(row.details, [
+    ["manualSourceFacts", "listingStatus"],
+    ["manualSourceFacts", "status"],
+  ]);
+  if (fromManual) return fromManual;
+  const fromOm = readFirstStringPath(row.details, [
+    ["omData", "authoritative", "propertyInfo", "listingStatus"],
+    ["omData", "authoritative", "propertyInfo", "status"],
+    ["rentalFinancials", "omAnalysis", "propertyInfo", "listingStatus"],
+  ]);
+  if (fromOm) return fromOm;
   const fromExtra = readFirstStringPath(row.listing_extra, [
     ["status"],
     ["listingStatus"],
@@ -1164,16 +1268,23 @@ function buildListingFacts(row: PipelineBaseRow): UiV2ListingFactsPayload | null
   const rentalUnits = isPlainRecord(rentalFinancials) && Array.isArray(rentalFinancials.rentalUnits)
     ? rentalFinancials.rentalUnits.length
     : null;
+  const unitsFromManual = readFirstPositiveNumericPath(details, [
+    ["manualSourceFacts", "units"],
+    ["manualSourceFacts", "unitCount"],
+    ["manualSourceFacts", "numberOfUnits"],
+  ]);
   const unitsFromOm = resolvePreferredOmUnitCount(details);
   const unitsFromSource = sourceUnitCount(row);
   const units = getUnitCount(row);
   const buildingSqft = getBuildingSqft(row);
   const pricePerSqft = getPricePerSqft(row);
   const unitCountSource =
-    unitsFromSource != null
-      ? "source"
+    unitsFromManual != null
+      ? "manual"
       : unitsFromOm != null
         ? "om"
+        : unitsFromSource != null
+      ? "source"
         : rentalUnits != null && rentalUnits > 0
           ? "rental_flow"
           : units != null
@@ -1182,17 +1293,31 @@ function buildListingFacts(row: PipelineBaseRow): UiV2ListingFactsPayload | null
   const amenities = coerceStringList(isPlainRecord(row.listing_extra) ? row.listing_extra.amenities : null);
   const facts: UiV2ListingFactsPayload = {
     status: listingStatus(row),
-    propertyType: readFirstStringPath(row.listing_extra, [["propertyType"], ["property_type"], ["type"], ["building", "type"]]),
-    bedrooms: toFiniteNumber(row.listing_beds),
-    bathrooms: toFiniteNumber(row.listing_baths),
+    propertyType: readFirstStringPath(details, [
+      ["manualSourceFacts", "propertyType"],
+      ["omData", "authoritative", "propertyInfo", "propertyType"],
+      ["rentalFinancials", "omAnalysis", "propertyInfo", "propertyType"],
+    ]) ?? readFirstStringPath(row.listing_extra, [["propertyType"], ["property_type"], ["type"], ["building", "type"]]),
+    bedrooms: readFirstNumericPath(details, [
+      ["manualSourceFacts", "bedrooms"],
+      ["manualSourceFacts", "beds"],
+      ["omData", "authoritative", "propertyInfo", "bedrooms"],
+      ["omData", "authoritative", "propertyInfo", "beds"],
+    ]) ?? toFiniteNumber(row.listing_beds),
+    bathrooms: readFirstNumericPath(details, [
+      ["manualSourceFacts", "bathrooms"],
+      ["manualSourceFacts", "baths"],
+      ["omData", "authoritative", "propertyInfo", "bathrooms"],
+      ["omData", "authoritative", "propertyInfo", "baths"],
+    ]) ?? toFiniteNumber(row.listing_baths),
     sqft: buildingSqft,
     ppsqft: pricePerSqft,
-    daysOnMarket: readFirstNumericPath(row.listing_extra, [["daysOnMarket"], ["days_on_market"], ["dom"]]),
+    daysOnMarket: readFirstNumericPath(details, [["manualSourceFacts", "daysOnMarket"]]) ?? readFirstNumericPath(row.listing_extra, [["daysOnMarket"], ["days_on_market"], ["dom"]]),
     listedAt: optionalIso(row.listing_listed_at) ?? readFirstStringPath(row.listing_extra, [["listedAt"], ["listed_at"]]),
     closedAt: readFirstStringPath(row.listing_extra, [["closedAt"], ["closed_at"]]),
-    monthlyHoa: readFirstNumericPath(row.listing_extra, [["monthlyHoa"], ["monthly_hoa"], ["hoa"]]),
-    monthlyTax: readFirstNumericPath(row.listing_extra, [["monthlyTax"], ["monthly_tax"], ["tax"]]),
-    builtIn: readFirstNumericPath(row.listing_extra, [["builtIn"], ["built_in"], ["yearBuilt"], ["year_built"]]),
+    monthlyHoa: readFirstNumericPath(details, [["manualSourceFacts", "monthlyHoa"]]) ?? readFirstNumericPath(row.listing_extra, [["monthlyHoa"], ["monthly_hoa"], ["hoa"]]),
+    monthlyTax: readFirstNumericPath(details, [["manualSourceFacts", "monthlyTax"]]) ?? readFirstNumericPath(row.listing_extra, [["monthlyTax"], ["monthly_tax"], ["tax"]]),
+    builtIn: getYearBuilt(row),
     amenities: amenities.length > 0 ? amenities : null,
     units,
     unitCountSource,
@@ -1473,18 +1598,27 @@ function getCalculatedDealScore(row: PipelineBaseRow): number | null {
 function getCapRate(row: PipelineBaseRow): number | null {
   const details = row.details;
   const summary = getPropertyDossierSummary(details);
-  const noi =
-    summary?.adjustedNoi ??
-    summary?.currentNoi ??
-    readNumericPath(details, ["rentalFinancials", "fromLlm", "noi"]) ??
-    readNumericPath(details, ["omData", "authoritative", "currentFinancials", "noi"]) ??
-    toFiniteNumber(row.latest_signal_adjusted_noi) ??
-    toFiniteNumber(row.latest_signal_current_noi);
   const explicit =
-    readNumericPath(details, ["rentalFinancials", "fromLlm", "capRate"]) ??
-    readNumericPath(details, ["dealDossier", "summary", "capRate"]);
+    readFirstNumericPath(details, [
+      ["omData", "authoritative", "valuationMetrics", "capRate"],
+      ["omData", "authoritative", "valuationMetrics", "currentCapRate"],
+      ["omData", "authoritative", "uiFinancialSummary", "capRate"],
+      ["rentalFinancials", "omAnalysis", "valuationMetrics", "capRate"],
+      ["rentalFinancials", "omAnalysis", "valuationMetrics", "currentCapRate"],
+      ["rentalFinancials", "fromLlm", "capRate"],
+    ]);
   if (explicit != null) return explicit;
-  const price = summary?.askingPrice ?? getAskingPrice(row);
+  const noi =
+    readNumericPath(details, ["omData", "authoritative", "currentFinancials", "noi"]) ??
+    readNumericPath(details, ["omData", "authoritative", "currentFinancials", "netOperatingIncome"]) ??
+    readNumericPath(details, ["rentalFinancials", "omAnalysis", "currentFinancials", "noi"]) ??
+    readNumericPath(details, ["rentalFinancials", "omAnalysis", "currentFinancials", "netOperatingIncome"]) ??
+    readNumericPath(details, ["rentalFinancials", "fromLlm", "noi"]) ??
+    summary?.currentNoi ??
+    toFiniteNumber(row.latest_signal_current_noi) ??
+    summary?.adjustedNoi ??
+    toFiniteNumber(row.latest_signal_adjusted_noi);
+  const price = getAskingPrice(row);
   if (noi == null || price == null || price <= 0) return null;
   return (noi / price) * 100;
 }
@@ -1504,7 +1638,7 @@ function buildUnderwriting(row: PipelineBaseRow): UiV2UnderwritingSummary | null
   return {
     generationStatus: generation?.status ?? null,
     dealScore: getCalculatedDealScore(row),
-    askingPrice: summary?.askingPrice ?? assumptions?.purchasePrice ?? getAskingPrice(row),
+    askingPrice: getAskingPrice(row),
     recommendedOfferLow: summary?.recommendedOfferLow ?? null,
     recommendedOfferHigh: summary?.recommendedOfferHigh ?? null,
     capRate: getCapRate(row),
@@ -1622,8 +1756,18 @@ function buildOverview(row: PipelineBaseRow): UiV2PropertyOverview {
     listingUrl: row.listing_url ?? readStringPath(row.details, ["manualSourceLinks", "streetEasyUrl"]),
     askingPrice: getAskingPrice(row),
     units: getUnitCount(row),
-    beds: toFiniteNumber(row.listing_beds),
-    baths: toFiniteNumber(row.listing_baths),
+    beds: readFirstNumericPath(row.details, [
+      ["manualSourceFacts", "bedrooms"],
+      ["manualSourceFacts", "beds"],
+      ["omData", "authoritative", "propertyInfo", "bedrooms"],
+      ["omData", "authoritative", "propertyInfo", "beds"],
+    ]) ?? toFiniteNumber(row.listing_beds),
+    baths: readFirstNumericPath(row.details, [
+      ["manualSourceFacts", "bathrooms"],
+      ["manualSourceFacts", "baths"],
+      ["omData", "authoritative", "propertyInfo", "bathrooms"],
+      ["omData", "authoritative", "propertyInfo", "baths"],
+    ]) ?? toFiniteNumber(row.listing_baths),
     buildingSqft: getBuildingSqft(row),
     pricePerSqft: getPricePerSqft(row),
     lotSqft: getLotSqft(row),
@@ -2216,6 +2360,76 @@ async function updatePipelineState(
   return propertyRepo.byId(propertyId);
 }
 
+const MANUAL_SOURCE_FACT_NUMERIC_ALIASES: Record<string, string> = {
+  askingPrice: "askingPrice",
+  listedPrice: "askingPrice",
+  listingPrice: "askingPrice",
+  askPrice: "askingPrice",
+  units: "units",
+  unitCount: "units",
+  numberOfUnits: "units",
+  totalUnits: "units",
+  buildingSqft: "buildingSqft",
+  sqft: "buildingSqft",
+  squareFeet: "buildingSqft",
+  grossSqft: "buildingSqft",
+  bedrooms: "bedrooms",
+  beds: "bedrooms",
+  bathrooms: "bathrooms",
+  baths: "bathrooms",
+  yearBuilt: "yearBuilt",
+  builtIn: "yearBuilt",
+  monthlyHoa: "monthlyHoa",
+  monthlyTax: "monthlyTax",
+  daysOnMarket: "daysOnMarket",
+  pricePerSqft: "pricePerSqft",
+  pricePsf: "pricePerSqft",
+};
+
+const MANUAL_SOURCE_FACT_STRING_ALIASES: Record<string, string> = {
+  neighborhood: "neighborhood",
+  neighborhoodName: "neighborhood",
+  borough: "borough",
+  boroughName: "borough",
+  listingStatus: "listingStatus",
+  status: "listingStatus",
+  propertyType: "propertyType",
+};
+
+function cleanManualString(value: unknown): string | null {
+  if (value == null) return null;
+  const text = String(value).trim();
+  return text ? text : null;
+}
+
+function cleanManualNumber(value: unknown): number | null {
+  if (value == null) return null;
+  if (typeof value === "string" && value.trim() === "") return null;
+  const parsed = toFiniteNumber(value);
+  return parsed != null && parsed > 0 ? parsed : null;
+}
+
+function extractManualSourceFactsPatch(body: unknown): { patch: Record<string, unknown>; invalidFields: string[] } {
+  const source = isPlainRecord(body) && isPlainRecord(body.facts) ? body.facts : isPlainRecord(body) ? body : {};
+  const patch: Record<string, unknown> = {};
+  const invalidFields: string[] = [];
+  for (const [rawKey, rawValue] of Object.entries(source)) {
+    const numericKey = MANUAL_SOURCE_FACT_NUMERIC_ALIASES[rawKey];
+    if (numericKey) {
+      const value = cleanManualNumber(rawValue);
+      const isBlank = rawValue == null || (typeof rawValue === "string" && rawValue.trim() === "");
+      if (value == null && !isBlank) invalidFields.push(rawKey);
+      patch[numericKey] = value;
+      continue;
+    }
+    const stringKey = MANUAL_SOURCE_FACT_STRING_ALIASES[rawKey];
+    if (stringKey) {
+      patch[stringKey] = cleanManualString(rawValue);
+    }
+  }
+  return { patch, invalidFields };
+}
+
 async function loadDetailForProperty(pool: Pool, userId: string, propertyId: string): Promise<UiV2PropertyDetailPayload | null> {
   const row = await fetchPipelineRowById(pool, userId, propertyId);
   if (!row) return null;
@@ -2345,6 +2559,75 @@ router.get("/ui-v2/properties/:id", async (req: Request, res: Response) => {
 
 router.patch("/ui-v2/properties/:id/status", handleStatusUpdate);
 router.post("/ui-v2/properties/:id/status", handleStatusUpdate);
+
+async function handleSourceFactsUpdate(req: Request, res: Response): Promise<void> {
+  try {
+    const propertyId = req.params.id;
+    if (!propertyId) {
+      res.status(400).json({ error: "property id required." });
+      return;
+    }
+    const { patch, invalidFields } = extractManualSourceFactsPatch(req.body);
+    if (invalidFields.length > 0) {
+      res.status(400).json({
+        error: "Some property data fields are invalid.",
+        invalidFields,
+      });
+      return;
+    }
+    if (Object.keys(patch).length === 0) {
+      res.status(400).json({ error: "At least one property data field is required." });
+      return;
+    }
+
+    const pool = getPool();
+    const propertyRepo = new PropertyRepo({ pool });
+    const property = await propertyRepo.byId(propertyId);
+    if (!property) {
+      res.status(404).json({ error: "Property not found.", propertyId });
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const body = isPlainRecord(req.body) ? req.body : {};
+    const actorName = stringOrNull(body.actorName) ?? "ui-v2";
+    const existingManual = isPlainRecord(property.details?.manualSourceFacts)
+      ? property.details.manualSourceFacts
+      : {};
+    const nextManualSourceFacts = {
+      ...existingManual,
+      ...patch,
+      updatedAt: now,
+      updatedBy: actorName,
+      source: stringOrNull(body.source) ?? "property_sheet",
+    };
+
+    await propertyRepo.mergeDetails(propertyId, { manualSourceFacts: nextManualSourceFacts });
+    await updatePipelineState(pool, propertyId, { lastActivityAt: now });
+    await new PropertyPipelineEventRepo({ pool }).create({
+      propertyId,
+      eventType: "source_facts_updated",
+      actor: actorName,
+      source: "ui-v2",
+      title: "Property data updated",
+      metadata: {
+        changedFields: Object.keys(patch),
+        manualSourceFacts: patch,
+      },
+    });
+
+    const userId = await getDefaultUserId(pool);
+    const detail = await loadDetailForProperty(pool, userId, propertyId);
+    res.json({ property: detail } satisfies { property: UiV2PropertyDetailPayload | null });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[pipelineV2 source facts]", err);
+    res.status(503).json({ error: "Failed to update property data.", details: message });
+  }
+}
+
+router.patch("/ui-v2/properties/:id/source-facts", handleSourceFactsUpdate);
+router.post("/ui-v2/properties/:id/source-facts", handleSourceFactsUpdate);
 
 function tagsFromBody(body: unknown): string[] {
   if (!isPlainRecord(body)) return [];

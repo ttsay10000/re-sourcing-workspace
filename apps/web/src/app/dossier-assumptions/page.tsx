@@ -36,7 +36,7 @@ interface AssumptionsProfile {
 interface PropertySummary {
   id: string;
   canonicalAddress: string;
-  primaryListing: { price: number | null; city: string | null } | null;
+  primaryListing: { price: number | null; city: string | null; sqft?: number | null } | null;
 }
 
 interface DossierAssumptionsDraft {
@@ -143,7 +143,7 @@ function DossierAssumptionsContent() {
       setMixSummary(data.mixSummary ?? null);
       const defaults = (data.defaults ?? {}) as DossierAssumptionsDraft;
       setDraft({
-        buildingSqft: defaults.buildingSqft ?? undefined,
+        buildingSqft: defaults.buildingSqft ?? data.property?.primaryListing?.sqft ?? undefined,
         purchasePrice: defaults.purchasePrice ?? data.property?.primaryListing?.price ?? undefined,
         purchaseClosingCostPct: defaults.purchaseClosingCostPct ?? undefined,
         renovationCosts: defaults.renovationCosts ?? 0,
@@ -369,6 +369,26 @@ function DossierAssumptionsContent() {
           )}
         </p>
       )}
+      {propertyId && (
+        <p style={{ marginTop: "-0.5rem", marginBottom: "1rem" }}>
+          <Link
+            href={`/deal-analysis?property_id=${encodeURIComponent(propertyId)}`}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              border: "1px solid #cfd8d3",
+              borderRadius: "999px",
+              color: "#164b3f",
+              fontSize: "0.875rem",
+              fontWeight: 600,
+              padding: "0.45rem 0.75rem",
+              textDecoration: "none",
+            }}
+          >
+            Open OM workspace
+          </Link>
+        </p>
+      )}
       {!propertyId && (
         <p style={{ fontSize: "0.875rem", color: "#666", marginBottom: "1rem" }}>
           Add <code>?property_id=...</code> to preload assumptions for a specific property, or use your profile defaults below.
@@ -385,13 +405,16 @@ function DossierAssumptionsContent() {
         </p>
         <div className="dossier-assumptions-grid">
           <label style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
-            <span style={{ fontSize: "0.875rem", fontWeight: 500 }}>Manual building SF</span>
+            <span style={{ fontSize: "0.875rem", fontWeight: 500 }}>Building SF override</span>
             <input
               type="number"
               value={draft.buildingSqft ?? ""}
               onChange={(e) => setDraft((p) => ({ ...p, buildingSqft: e.target.value ? Number(e.target.value) : undefined }))}
               style={inputStyle}
             />
+            <span style={{ color: "#666", fontSize: "0.75rem" }}>
+              Preloads from listing or OM square footage when available; edit only when the source value is wrong.
+            </span>
           </label>
           <label style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
             <span style={{ fontSize: "0.875rem", fontWeight: 500 }}>Purchase price</span>

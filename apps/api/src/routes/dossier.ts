@@ -47,6 +47,83 @@ const MISSING_DOSSIER_SOURCE_ERROR =
 const MISSING_DOSSIER_SOURCE_DETAILS =
   "Generate dossier requires either a promoted authoritative OM snapshot or saved broker email notes with rent/expense inputs.";
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value != null && typeof value === "object" && !Array.isArray(value);
+}
+
+function toPositiveNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value.replace(/[$,%\s,]/g, ""));
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  }
+  return null;
+}
+
+function readNumericPath(root: unknown, path: string[]): number | null {
+  let current: unknown = root;
+  for (const part of path) {
+    if (!isRecord(current)) return null;
+    current = current[part];
+  }
+  return toPositiveNumber(current);
+}
+
+function readFirstPositiveNumericPath(root: unknown, paths: string[][]): number | null {
+  for (const path of paths) {
+    const value = readNumericPath(root, path);
+    if (value != null) return value;
+  }
+  return null;
+}
+
+function resolveSourceBuildingSqft(
+  details: PropertyDetails | null | undefined,
+  listing: { sqft?: unknown; extra?: unknown } | null | undefined
+): number | null {
+  return (
+    readFirstPositiveNumericPath(details, [
+      ["buildingSqft"],
+      ["buildingSqftTotal"],
+      ["squareFeet"],
+      ["square_feet"],
+      ["sqft"],
+      ["grossSqft"],
+      ["gross_square_feet"],
+      ["sourceFacts", "buildingSqft"],
+      ["sourceFacts", "squareFeet"],
+      ["sourceFacts", "sqft"],
+      ["listingFacts", "buildingSqft"],
+      ["listingFacts", "squareFeet"],
+      ["listingFacts", "sqft"],
+      ["omData", "authoritative", "propertyInfo", "buildingSqft"],
+      ["omData", "authoritative", "propertyInfo", "squareFeet"],
+      ["omData", "authoritative", "propertyInfo", "sqft"],
+      ["rentalFinancials", "omAnalysis", "propertyInfo", "buildingSqft"],
+      ["rentalFinancials", "omAnalysis", "propertyInfo", "squareFeet"],
+      ["rentalFinancials", "omAnalysis", "propertyInfo", "sqft"],
+    ]) ??
+    toPositiveNumber(listing?.sqft) ??
+    readFirstPositiveNumericPath(listing?.extra, [
+      ["sqft"],
+      ["squareFeet"],
+      ["square_feet"],
+      ["grossSqft"],
+      ["gross_square_feet"],
+      ["buildingSqft"],
+      ["building_sqft"],
+      ["building", "sqft"],
+      ["building", "squareFeet"],
+      ["property", "sqft"],
+      ["property", "squareFeet"],
+    ]) ??
+    readFirstPositiveNumericPath(details, [
+      ["assessedGrossSqft"],
+      ["assessedResidentialAreaGross"],
+    ])
+  );
+}
+
 async function getDefaultUserId(): Promise<string> {
   const pool = getPool();
   const profileRepo = new UserProfileRepo({ pool });
@@ -69,7 +146,7 @@ router.get("/dossier-assumptions", async (req: Request, res: Response) => {
       | {
           id: string;
           canonicalAddress: string;
-          primaryListing: { price: number | null; city: string | null } | null;
+          primaryListing: { price: number | null; city: string | null; sqft: number | null } | null;
         }
       | null = null;
     let defaults: Record<string, unknown> | null = null;
@@ -87,12 +164,13 @@ router.get("/dossier-assumptions", async (req: Request, res: Response) => {
           id: prop.id,
           canonicalAddress: prop.canonicalAddress,
           primaryListing: listing
-            ? { price: listing.price ?? null, city: listing.city ?? null }
+            ? { price: listing.price ?? null, city: listing.city ?? null, sqft: listing.sqft ?? null }
             : null,
         };
         const details = (prop.details ?? null) as PropertyDetails | null;
         const currentFinancials = resolveCurrentFinancialsFromDetails(details);
         const propertyAssumptions = getPropertyDossierAssumptions(details);
+        const sourceBuildingSqft = resolveSourceBuildingSqft(details, listing);
         const formulaAssumptions = resolveDossierAssumptions(profile, listing?.price ?? null, null, {
           details,
         });
@@ -105,7 +183,7 @@ router.get("/dossier-assumptions", async (req: Request, res: Response) => {
           }
         );
         defaults = {
-          buildingSqft: propertyAssumptions?.buildingSqft ?? null,
+          buildingSqft: propertyAssumptions?.buildingSqft ?? sourceBuildingSqft,
           purchasePrice: assumptions.acquisition.purchasePrice,
           purchaseClosingCostPct: assumptions.acquisition.purchaseClosingCostPct,
           renovationCosts: assumptions.acquisition.renovationCosts,
