@@ -786,21 +786,21 @@ function BrokerCompsDetailPanel({
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [lastLoadedAt, setLastLoadedAt] = useState<string | null>(null);
   const activeSurface = readBrokerCompSurface(livePayload, surface);
-  const reviewedComps = activeSurface.comparables.filter((row) => row.reviewStatus === "accepted" || row.reviewStatus === "edited").length;
-  const unresolvedFlags = activeSurface.missingDataFlags.filter((flag) => !flag.resolved);
 
   const loadBrokerComps = React.useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const response = await fetch(`${API_BASE}${reviewEndpoint}`);
+      const response = await fetch(`${API_BASE}${reviewEndpoint}?limit=20&refresh=${Date.now()}`, { cache: "no-store" });
       const payload = await response.json().catch(() => null);
       if (!response.ok) {
         const message = payload && typeof payload === "object" && "error" in payload ? String((payload as { error?: unknown }).error) : `Failed to load broker comps (${response.status})`;
         throw new Error(message);
       }
       setLivePayload(payload);
+      setLastLoadedAt(new Date().toISOString());
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load broker comps.");
     } finally {
@@ -915,12 +915,6 @@ function BrokerCompsDetailPanel({
       </span>
     );
   };
-  const renderCapSpread = (compCapRatePct: number | null): React.ReactNode => {
-    if (subject.capRatePct == null || compCapRatePct == null || !Number.isFinite(subject.capRatePct) || !Number.isFinite(compCapRatePct)) return "—";
-    const diff = subject.capRatePct - compCapRatePct;
-    const tone = diff >= 0 ? "#166534" : "#991b1b";
-    return <span style={{ color: tone, fontWeight: 700 }}>{diff > 0 ? "+" : ""}{Math.round(diff * 100)} bps</span>;
-  };
   const renderRentSpread = (subjectRentPsf: number | null, compRentPsf: number | null): React.ReactNode => {
     const delta = comparisonDelta(subjectRentPsf, compRentPsf);
     if (delta.diff == null || delta.pct == null) return "—";
@@ -947,60 +941,75 @@ function BrokerCompsDetailPanel({
   );
   const hasBedroomRentComps = activeSurface.bedroomBreakdowns.some((row) => row.avgRentPerSqft != null || row.avgRentMonthly != null);
 
-  const workflowFacts: V3FactItem[] = [
-    { label: "Packages", value: loading ? "…" : formatNumberValue(activeSurface.packages.length) },
-    { label: "Projects", value: formatNumberValue(activeSurface.comparables.filter((row) => row.itemType === "pricing_comp").length) },
-    { label: "Bedroom rows", value: formatNumberValue(activeSurface.bedroomBreakdowns.length) },
-    { label: "Subject units", value: formatNumberValue(activeSurface.subjectUnitPricingRows.length) },
+  const pricingCompRows = activeSurface.comparables.filter((row) => row.itemType === "pricing_comp");
+  const averageNumber = (values: Array<number | null | undefined>): number | null => {
+    const clean = values.filter((value): value is number => value != null && Number.isFinite(value));
+    if (clean.length === 0) return null;
+    return clean.reduce((sum, value) => sum + value, 0) / clean.length;
+  };
+  const weightedAverageNumber = (rows: Array<{ value: number | null; weight: number | null }>): number | null => {
+    const totals = rows.reduce<{ value: number; weight: number }>(
+      (acc, row) => {
+        const value = row.value;
+        if (value == null || !Number.isFinite(value)) return acc;
+        const weight = row.weight != null && Number.isFinite(row.weight) && row.weight > 0 ? row.weight : 1;
+        acc.value += value * weight;
+        acc.weight += weight;
+        return acc;
+      },
+      { value: 0, weight: 0 }
+    );
+    return totals.weight > 0 ? totals.value / totals.weight : null;
+  };
+  const priceRangeLabel = (low: number | null, high: number | null, fallback?: string | null): string => {
+    if (fallback) return fallback;
+    if (low != null && high != null) return `${formatWholeMoney(low)} - ${formatWholeMoney(high)}`;
+    if (low != null) return formatWholeMoney(low);
+    if (high != null) return formatWholeMoney(high);
+    return "—";
+  };
+  const sourcePackage = activeSurface.packages.find((pkg) => pkg.packageType !== "broker_opinion") ?? activeSurface.packages[0] ?? null;
+  const packageProjectedSelloutFromRows = activeSurface.subjectUnitPricingRows.reduce((sum, row) => sum + (row.price ?? 0), 0);
+  const packageProjectedSellout =
+    packageProjectedSelloutFromRows > 0
+      ? packageProjectedSelloutFromRows
+      : activeSurface.pricingOpinions.find((opinion) => opinion.sourceType === "package" && opinion.amount != null)?.amount ?? null;
+  const packageVsListing = packageProjectedSellout != null && subject.price != null ? packageProjectedSellout - subject.price : null;
+  const packageVsListingPct = packageProjectedSellout != null && subject.price != null && subject.price > 0 ? ((packageVsListing ?? 0) / subject.price) * 100 : null;
+  const averageProjectPpsf = averageNumber(pricingCompRows.map(compPpsfForProject));
+  const pricingFacts: V3FactItem[] = [
+    { label: "Listing price", value: formatWholeMoney(subject.price) },
+    { label: "Package sellout", value: formatWholeMoney(packageProjectedSellout), detail: "Projected pricing from comp package" },
+    {
+      label: "Package vs listing",
+      value: packageVsListing == null ? "—" : formatSignedMoney(packageVsListing),
+      detail: packageVsListingPct == null ? null : formatSignedPercent(packageVsListingPct),
+      tone: packageVsListing == null ? "neutral" : packageVsListing > 0 ? "warn" : "good",
+    },
     { label: "Subject $/SF", value: formatPpsf(subjectOverallPpsf), detail: subjectPpsfSource },
+    { label: "Avg comp $/SF", value: formatPpsf(averageProjectPpsf) },
     { label: "Avg project spread", value: formatSignedPercent(projectSpreadPct), tone: projectSpreadPct == null ? "neutral" : projectSpreadPct <= 0 ? "good" : "warn" },
     { label: "Avg bedroom spread", value: formatSignedPercent(bedroomSpreadPct), tone: bedroomSpreadPct == null ? "neutral" : bedroomSpreadPct <= 0 ? "good" : "warn" },
-    { label: "Subject cap", value: subject.capRatePct != null ? `${Number(subject.capRatePct).toFixed(2)}%` : "—" },
-    { label: "Reviewed comps", value: `${reviewedComps}/${activeSurface.comparables.length || 0}` },
-    { label: "Missing flags", value: formatNumberValue(unresolvedFlags.length), tone: unresolvedFlags.length > 0 ? "warn" : "good" },
-    { label: "Updated", value: formatDateOnly(activeSurface.updatedAt) },
+    { label: "Loaded", value: formatDateOnly(lastLoadedAt ?? activeSurface.updatedAt), detail: sourcePackage ? sourcePackage.label : null },
   ];
-  const pricingFacts: V3FactItem[] = activeSurface.pricingOpinions.slice(0, 8).map((opinion, index) => ({
-    label: formatReadableToken(opinion.sourceType ?? `Pricing opinion ${index + 1}`),
-    value: formatWholeMoney(opinion.amount),
-    detail: joinedSummary([
-      opinion.source ?? null,
-      opinion.note ?? null,
-      opinion.observedAt ? `Observed ${formatDateOnly(opinion.observedAt)}` : null,
-    ]),
+  const buildingRows = pricingCompRows.map((row) => ({
+    property: (
+      <div style={{ display: "grid", gap: "0.12rem" }}>
+        <strong>{row.propertyName ?? row.address ?? "Unlabeled comp"}</strong>
+        {row.address ? <span style={{ color: "#64748b", fontSize: "0.78rem" }}>{row.address}</span> : null}
+      </div>
+    ),
+    neighborhood: row.neighborhood ?? "—",
+    year: formatNumberValue(row.yearCompleted),
+    floors: formatNumberValue(row.floors),
+    units: formatNumberValue(row.units),
+    salesBegan: row.salesBegan ?? "—",
+    sold: formatPercentValue(row.percentSoldPct),
+    avgSize: formatSqftValue(row.averageUnitSqft),
+    askPpsf: formatPpsf(row.askingPpsf ?? row.pricePerSqft),
+    soldPpsf: formatPpsf(row.soldPpsf),
+    range: priceRangeLabel(row.priceRangeLow, row.priceRangeHigh, row.priceRange),
   }));
-  const packageRows = activeSurface.packages.map((pkg) => ({
-    package: pkg.label,
-    type: formatReadableToken(pkg.packageType),
-    status: formatReadableToken(pkg.status),
-    items: `${pkg.reviewedItemCount}/${pkg.itemCount}`,
-    updated: formatDateOnly(pkg.updatedAt ?? pkg.createdAt),
-  }));
-  const projectRows = activeSurface.comparables
-    .filter((row) => row.itemType === "pricing_comp")
-    .map((row) => {
-      const compPpsf = compPpsfForProject(row);
-      return {
-        project: (
-          <div style={{ display: "grid", gap: "0.12rem" }}>
-            <strong>{row.propertyName ?? row.address ?? "Unlabeled comp"}</strong>
-            {row.propertyName && row.address ? <span style={{ color: "#64748b", fontSize: "0.78rem" }}>{row.address}</span> : null}
-          </div>
-        ),
-        neighborhood: row.neighborhood ?? "—",
-        units: formatNumberValue(row.units),
-        sold: formatPercentValue(row.percentSoldPct),
-        avgSize: formatSqftValue(row.averageUnitSqft),
-        askPpsf: formatPpsf(row.askingPpsf ?? row.pricePerSqft),
-        soldPpsf: formatPpsf(row.soldPpsf),
-        subjectPpsf: formatPpsf(subjectOverallPpsf),
-        psfSpread: renderPpsfSpread(subjectOverallPpsf, compPpsf),
-        cap: row.capRatePct != null ? `${Number(row.capRatePct).toFixed(2)}%` : "—",
-        capSpread: renderCapSpread(row.capRatePct),
-        priceRange: row.priceRange ?? joinedSummary([formatWholeMoney(row.priceRangeLow), formatWholeMoney(row.priceRangeHigh)]),
-        beds: row.bedroomTypes.length > 0 ? row.bedroomTypes.join(", ") : "—",
-      };
-    });
   const bedroomRows = [...activeSurface.bedroomBreakdowns]
     .sort((left, right) => {
       const bedDelta = (left.bedrooms ?? 99) - (right.bedrooms ?? 99);
@@ -1013,40 +1022,76 @@ function BrokerCompsDetailPanel({
       const compRentPsf = row.avgRentPerSqft ?? (row.avgRentMonthly != null && row.avgSizeSqft != null && row.avgSizeSqft > 0 ? row.avgRentMonthly / row.avgSizeSqft : null);
       const subjectRentPsf = row.bedrooms != null ? subject.rentPsfByBedroom[String(row.bedrooms)] ?? null : null;
       return {
-        bed: row.bedroomType ?? "—",
-        project: (
+        address: (
           <div style={{ display: "grid", gap: "0.12rem" }}>
             <strong>{row.propertyName ?? row.address ?? "Unlabeled comp"}</strong>
-            {row.propertyName && row.address ? <span style={{ color: "#64748b", fontSize: "0.78rem" }}>{row.address}</span> : null}
+            {row.address ? <span style={{ color: "#64748b", fontSize: "0.78rem" }}>{row.address}</span> : null}
           </div>
         ),
-        neighborhood: row.neighborhood ?? "—",
-        count: formatNumberValue(row.count),
-        sold: formatPercentValue(row.percentSoldPct),
+        bedBath: joinedSummary([row.bedroomType ?? (row.bedrooms != null ? `${row.bedrooms} Bed` : null), row.bathrooms != null ? `${row.bathrooms} Bath` : null]),
+        offered: formatNumberValue(row.count),
         avgSize: formatSqftValue(row.avgSizeSqft),
         askPpsf: formatPpsf(row.avgAskingPpsf),
         soldPpsf: formatPpsf(row.avgSoldPpsf),
+        avgCc: row.avgCommonChargesMonthly != null ? `${formatWholeMoney(row.avgCommonChargesMonthly)}/mo` : "—",
         subjectPpsf: formatPpsf(subjectBedroomValue),
         psfSpread: renderPpsfSpread(subjectBedroomValue, compPpsf),
         rentPsf: compRentPsf != null ? formatMoneyValue(compRentPsf) : "—",
         rentSpread: renderRentSpread(subjectRentPsf, compRentPsf),
-        cc: formatWholeMoney(row.avgCommonChargesMonthly),
-        range: row.priceRange ?? joinedSummary([formatWholeMoney(row.priceRangeLow), formatWholeMoney(row.priceRangeHigh)]),
+        range: priceRangeLabel(row.priceRangeLow, row.priceRangeHigh, row.priceRange),
+      };
+    });
+  const bedroomSummaryGroups = new Map<string, { bedrooms: number | null; label: string; rows: typeof activeSurface.bedroomBreakdowns }>();
+  for (const row of activeSurface.bedroomBreakdowns) {
+    const key = row.bedrooms != null ? String(row.bedrooms) : row.bedroomType ?? "unknown";
+    const label = row.bedroomType ?? (row.bedrooms != null ? `${row.bedrooms} Bed` : "Unknown");
+    const existing = bedroomSummaryGroups.get(key);
+    if (existing) existing.rows.push(row);
+    else bedroomSummaryGroups.set(key, { bedrooms: row.bedrooms, label, rows: [row] });
+  }
+  const bedroomSummaryRows = [...bedroomSummaryGroups.values()]
+    .sort((left, right) => (left.bedrooms ?? 99) - (right.bedrooms ?? 99))
+    .map((group) => {
+      const subjectBedroomRows = group.bedrooms != null
+        ? activeSurface.subjectUnitPricingRows.filter((row) => row.bedrooms === group.bedrooms)
+        : [];
+      const subjectBedroomValue = group.bedrooms != null ? subjectBedroomPpsf.get(group.bedrooms) ?? subjectOverallPpsf : subjectOverallPpsf;
+      const compAskPpsf = weightedAverageNumber(group.rows.map((row) => ({ value: row.avgAskingPpsf, weight: row.count })));
+      const compSoldPpsf = weightedAverageNumber(group.rows.map((row) => ({ value: row.avgSoldPpsf, weight: row.count })));
+      const compPpsf = compSoldPpsf ?? compAskPpsf;
+      const subjectAvgSize = subjectBedroomRows.length > 0 ? averageNumber(subjectBedroomRows.map((row) => row.interiorSqft)) : null;
+      const avgCc = weightedAverageNumber(group.rows.map((row) => ({ value: row.avgCommonChargesMonthly, weight: row.count })));
+      return {
+        bed: group.label,
+        compRows: formatNumberValue(group.rows.length),
+        offered: formatNumberValue(group.rows.reduce((sum, row) => sum + (row.count ?? 0), 0) || null),
+        compAvgSize: formatSqftValue(weightedAverageNumber(group.rows.map((row) => ({ value: row.avgSizeSqft, weight: row.count })))),
+        subjectAvgSize: formatSqftValue(subjectAvgSize),
+        compAskPpsf: formatPpsf(compAskPpsf),
+        compSoldPpsf: formatPpsf(compSoldPpsf),
+        subjectPpsf: formatPpsf(subjectBedroomValue),
+        psfSpread: renderPpsfSpread(subjectBedroomValue, compPpsf),
+        avgCc: avgCc != null ? `${formatWholeMoney(avgCc)}/mo` : "—",
       };
     });
   const subjectRows = activeSurface.subjectUnitPricingRows.map((row) => ({
     unit: row.unitLabel ?? "—",
-    beds: row.bedrooms != null ? `${row.bedrooms}` : "—",
-    baths: row.bathrooms != null ? `${row.bathrooms}` : "—",
+    bedBath: joinedSummary([
+      row.bedrooms != null ? `${row.bedrooms} Bed` : null,
+      row.bathrooms != null ? `${row.bathrooms} Bath` : null,
+    ]),
     intSf: formatSqftValue(row.interiorSqft),
     extSf: formatSqftValue(row.exteriorSqft),
     price: formatWholeMoney(row.price),
     ppsf: formatPpsf(row.ppsf),
     notes: row.notes ?? "—",
   }));
-  const flagBullets = unresolvedFlags.length > 0
-    ? unresolvedFlags.map((flag) => joinedSummary([flag.label ?? flag.field, flag.message ?? null, flag.source ?? null]))
-    : ["No unresolved broker comp data flags."];
+  const extractionNotes = [
+    activeSurface.summary,
+    activeSurface.missingDataFlags.length > 0
+      ? `${activeSurface.missingDataFlags.length} missing-data field${activeSurface.missingDataFlags.length === 1 ? "" : "s"} were flagged by the extractor.`
+      : null,
+  ].filter((entry): entry is string => Boolean(entry && entry.trim()));
 
   return (
     <div style={{ display: "grid", gap: "1rem" }}>
@@ -1069,7 +1114,7 @@ function BrokerCompsDetailPanel({
               title={`GET ${reviewEndpoint}`}
               style={{ minHeight: "2rem", border: "1px solid #cbd5e1", borderRadius: "8px", padding: "0.35rem 0.7rem", background: "#f8fafc", color: "#334155", fontSize: "0.78rem", fontWeight: 700 }}
             >
-              {loading ? "Refreshing…" : "Refresh"}
+              {loading ? "Refreshing…" : "Refresh extract"}
             </button>
             <button
               type="submit"
@@ -1077,28 +1122,66 @@ function BrokerCompsDetailPanel({
               title={`POST ${uploadEndpoint}`}
               style={{ minHeight: "2rem", border: "1px solid #1f6b4d", borderRadius: "8px", padding: "0.35rem 0.7rem", background: selectedFile && !uploading ? "#1f6b4d" : "#f8fafc", color: selectedFile && !uploading ? "#fff" : "#64748b", fontSize: "0.78rem", fontWeight: 700 }}
             >
-              {uploading ? "Uploading…" : "Upload"}
+              {uploading ? "Replacing…" : "Replace extract"}
             </button>
           </form>
         )}
       >
-        <V3ReportSection title="Comp Snapshot">
-          <V3FactList items={workflowFacts} />
+        <V3ReportSection title="Pricing Check">
+          <V3FactList items={pricingFacts} />
           {error ? <p style={{ margin: 0, color: "#991b1b", fontSize: "0.86rem" }}>{error}</p> : null}
           {!activeSurface.hasData ? (
             <p style={{ margin: 0, color: "#64748b", fontSize: "0.86rem" }}>
               No broker comp package has been uploaded or extracted yet.
             </p>
           ) : null}
-          {activeSurface.summary ? <V3Bullets items={splitTakeawayText(activeSurface.summary)} /> : null}
+          {extractionNotes.length > 0 ? <V3Bullets items={extractionNotes.flatMap(splitTakeawayText).slice(0, 4)} /> : null}
         </V3ReportSection>
 
-        <V3ReportSection title="Subject Pricing" subtitle="Projected pricing rows extracted from the subject package when available.">
+        <V3ReportSection title="Building Level Comps">
+          <V3RecordsTable
+            columns={[
+              { key: "property", label: "Property" },
+              { key: "neighborhood", label: "Neighborhood", width: "9rem" },
+              { key: "year", label: "Year", width: "5rem", align: "right" },
+              { key: "floors", label: "Floors", width: "5rem", align: "right" },
+              { key: "units", label: "Units", width: "5rem", align: "right" },
+              { key: "salesBegan", label: "Sales Began", width: "8rem" },
+              { key: "sold", label: "% Sold", width: "6rem", align: "right" },
+              { key: "avgSize", label: "Avg Unit SF", width: "8rem", align: "right" },
+              { key: "askPpsf", label: "Ask $/SF", width: "8rem", align: "right" },
+              { key: "soldPpsf", label: "Sold $/SF", width: "8rem", align: "right" },
+              { key: "range", label: "Price Range", width: "11rem", align: "right" },
+            ]}
+            rows={buildingRows}
+            emptyText="No building-level comp rows are available yet."
+          />
+        </V3ReportSection>
+
+        <V3ReportSection title="Bedroom Summary">
+          <V3RecordsTable
+            columns={[
+              { key: "bed", label: "Type", width: "6rem" },
+              { key: "compRows", label: "Projects", width: "6rem", align: "right" },
+              { key: "offered", label: "Offered", width: "6rem", align: "right" },
+              { key: "compAvgSize", label: "Comp Avg SF", width: "8rem", align: "right" },
+              { key: "subjectAvgSize", label: "Deal Avg SF", width: "8rem", align: "right" },
+              { key: "compAskPpsf", label: "Comp Ask $/SF", width: "9rem", align: "right" },
+              { key: "compSoldPpsf", label: "Comp Sold $/SF", width: "9rem", align: "right" },
+              { key: "subjectPpsf", label: "Deal $/SF", width: "8rem", align: "right" },
+              { key: "psfSpread", label: "$/SF Δ", width: "10rem", align: "right" },
+              { key: "avgCc", label: "Avg CC", width: "8rem", align: "right" },
+            ]}
+            rows={bedroomSummaryRows}
+            emptyText="No bedroom summary rows are available yet."
+          />
+        </V3ReportSection>
+
+        <V3ReportSection title="Subject Unit Pricing">
           <V3RecordsTable
             columns={[
               { key: "unit", label: "Unit", width: "9rem" },
-              { key: "beds", label: "Bed", width: "5rem", align: "right" },
-              { key: "baths", label: "Bath", width: "5rem", align: "right" },
+              { key: "bedBath", label: "Bed / Bath", width: "8rem" },
               { key: "intSf", label: "Int SF", width: "7rem", align: "right" },
               { key: "extSf", label: "Ext SF", width: "7rem", align: "right" },
               { key: "price", label: "Price", width: "9rem", align: "right" },
@@ -1110,40 +1193,17 @@ function BrokerCompsDetailPanel({
           />
         </V3ReportSection>
 
-        <V3ReportSection title="Project Comps">
+        <V3ReportSection title="Unit Type Comps">
           <V3RecordsTable
             columns={[
-              { key: "project", label: "Project" },
-              { key: "neighborhood", label: "Neighborhood", width: "9rem" },
-              { key: "units", label: "Units", width: "5rem", align: "right" },
-              { key: "sold", label: "% Sold", width: "6rem", align: "right" },
-              { key: "avgSize", label: "Avg Unit", width: "8rem", align: "right" },
+              { key: "address", label: "Address" },
+              { key: "bedBath", label: "Bed / Bath", width: "8rem" },
+              { key: "offered", label: "Offered", width: "6rem", align: "right" },
+              { key: "avgSize", label: "Avg SF", width: "8rem", align: "right" },
               { key: "askPpsf", label: "Ask $/SF", width: "8rem", align: "right" },
               { key: "soldPpsf", label: "Sold $/SF", width: "8rem", align: "right" },
-              { key: "subjectPpsf", label: "Subject $/SF", width: "9rem", align: "right" },
-              { key: "psfSpread", label: "$/SF Δ", width: "10rem", align: "right" },
-              { key: "cap", label: "Cap", width: "6rem", align: "right" },
-              { key: "capSpread", label: "Cap Δ", width: "7rem", align: "right" },
-              { key: "priceRange", label: "Range", width: "11rem", align: "right" },
-              { key: "beds", label: "Beds", width: "10rem" },
-            ]}
-            rows={projectRows}
-            emptyText="No project-level comp rows are available yet."
-          />
-        </V3ReportSection>
-
-        <V3ReportSection title="Bedroom Mix Comps">
-          <V3RecordsTable
-            columns={[
-              { key: "bed", label: "Bed", width: "5rem" },
-              { key: "project", label: "Project" },
-              { key: "neighborhood", label: "Neighborhood", width: "9rem" },
-              { key: "count", label: "Count", width: "5rem", align: "right" },
-              { key: "sold", label: "% Sold", width: "6rem", align: "right" },
-              { key: "avgSize", label: "Avg Size", width: "8rem", align: "right" },
-              { key: "askPpsf", label: "Ask $/SF", width: "8rem", align: "right" },
-              { key: "soldPpsf", label: "Sold $/SF", width: "8rem", align: "right" },
-              { key: "subjectPpsf", label: "Subject $/SF", width: "9rem", align: "right" },
+              { key: "avgCc", label: "Avg CC", width: "8rem", align: "right" },
+              { key: "subjectPpsf", label: "Deal $/SF", width: "8rem", align: "right" },
               { key: "psfSpread", label: "$/SF Δ", width: "10rem", align: "right" },
               ...(hasBedroomRentComps
                 ? [
@@ -1151,35 +1211,10 @@ function BrokerCompsDetailPanel({
                     { key: "rentSpread", label: "Rent Δ", width: "9rem", align: "right" as const },
                   ]
                 : []),
-              { key: "cc", label: "Avg CC", width: "8rem", align: "right" },
               { key: "range", label: "Range", width: "11rem", align: "right" },
             ]}
             rows={bedroomRows}
             emptyText="No bedroom-level comp rows are available yet."
-          />
-        </V3ReportSection>
-
-        {pricingFacts.length > 0 ? (
-          <V3ReportSection title="Pricing Signals">
-            <V3FactList items={pricingFacts} />
-          </V3ReportSection>
-        ) : null}
-
-        <V3ReportSection title="Data Flags">
-          <V3Bullets items={flagBullets} />
-        </V3ReportSection>
-
-        <V3ReportSection title="Packages">
-          <V3RecordsTable
-            columns={[
-              { key: "package", label: "Package" },
-              { key: "type", label: "Type", width: "10rem" },
-              { key: "status", label: "Status", width: "8rem" },
-              { key: "items", label: "Reviewed", width: "7rem", align: "right" },
-              { key: "updated", label: "Updated", width: "8rem" },
-            ]}
-            rows={packageRows}
-            emptyText="No broker comp packages are available yet."
           />
         </V3ReportSection>
       </V3ReportPanel>

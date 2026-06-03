@@ -58,6 +58,7 @@ export interface CreateBrokerCompPackageInput {
   sourceDocumentId: string;
   packageType: BrokerCompPackageType;
   status: BrokerCompPackageStatus;
+  replaceExistingForProperty?: boolean;
   rawPayload?: Record<string, unknown> | null;
   normalizedPayload?: Record<string, unknown> | null;
   sourceName?: string | null;
@@ -134,6 +135,13 @@ export async function createBrokerCompPackage(
   try {
     await client.query("BEGIN");
     const repo = new BrokerCompPackageRepo({ pool, client });
+    if (input.replaceExistingForProperty) {
+      const replacedPackages = await repo.deleteExtractedPackagesForProperty(input.propertyId);
+      const documentRepo = new PropertyUploadedDocumentRepo({ pool, client });
+      for (const documentId of new Set(replacedPackages.flatMap((pkg) => (pkg.sourceDocumentId ? [pkg.sourceDocumentId] : [])))) {
+        if (documentId !== input.sourceDocumentId) await documentRepo.delete(documentId);
+      }
+    }
     const brokerCompPackage = await repo.createPackage({
       propertyId: input.propertyId,
       sourceDocumentId: input.sourceDocumentId,

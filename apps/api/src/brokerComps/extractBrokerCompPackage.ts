@@ -394,7 +394,7 @@ function buildPages(metadata: ExtractedTextMetadata, filename: string): BrokerCo
         imageHeavy: page.textChars < 80 && pageType !== "cover",
       },
       confidence,
-      reviewStatus: "pending",
+      reviewStatus: "accepted",
     };
   });
 }
@@ -416,7 +416,7 @@ export async function extractBrokerCompPackageDraft(buffer: Buffer, filename: st
         normalizedPayload: compProfile.normalized,
         pageRefs: [{ pageNumber, label: page.pageRef ?? null }],
         confidence: 0.72,
-        reviewStatus: "pending",
+        reviewStatus: "accepted",
       });
 
       const bedroomBreakdown = Array.isArray(compProfile.normalized.bedroomBreakdown)
@@ -446,7 +446,7 @@ export async function extractBrokerCompPackageDraft(buffer: Buffer, filename: st
           },
           pageRefs: [{ pageNumber, label: `${page.pageRef ?? `Page ${pageNumber}`} / Bedroom row ${index + 1}` }],
           confidence: 0.74,
-          reviewStatus: "pending",
+          reviewStatus: "accepted",
         });
       }
     }
@@ -459,7 +459,7 @@ export async function extractBrokerCompPackageDraft(buffer: Buffer, filename: st
         normalizedPayload: projected.normalized,
         pageRefs: [{ pageNumber, label: page.pageRef ?? null }],
         confidence: 0.58,
-        reviewStatus: "pending",
+        reviewStatus: "accepted",
       });
     }
   }
@@ -472,7 +472,7 @@ export async function extractBrokerCompPackageDraft(buffer: Buffer, filename: st
       normalizedPayload: pricingOpinion.normalized,
       pageRefs: [{ pageNumber: 1, label: "Page 1" }],
       confidence: 0.55,
-      reviewStatus: "pending",
+      reviewStatus: "accepted",
     });
   }
 
@@ -503,7 +503,7 @@ export async function extractBrokerCompPackageDraft(buffer: Buffer, filename: st
       },
       pageRefs: [{ pageNumber: 1, label: "Page 1" }],
       confidence: 0.25,
-      reviewStatus: "pending",
+      reviewStatus: "accepted",
     });
   }
 

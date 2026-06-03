@@ -496,7 +496,8 @@ router.post(
         propertyId: propertyId.value ?? "",
         sourceDocumentId: document.id,
         packageType,
-        status: draft.extractedItems.length > 0 ? "needs_review" : "uploaded",
+        status: draft.extractedItems.length > 0 ? "approved" : "uploaded",
+        replaceExistingForProperty: true,
         rawPayload: {
           filename,
           contentType: file.mimetype || null,

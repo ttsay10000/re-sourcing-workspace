@@ -11,6 +11,12 @@ export interface BrokerCompComparableRow {
   propertyName: string | null;
   address: string | null;
   neighborhood: string | null;
+  developer: string | null;
+  architect: string | null;
+  designer: string | null;
+  yearCompleted: number | null;
+  floors: number | null;
+  salesBegan: string | null;
   itemType: string;
   price: number | null;
   priceRange: string | null;
@@ -41,6 +47,7 @@ export interface BrokerCompBedroomBreakdownRow {
   neighborhood: string | null;
   bedroomType: string | null;
   bedrooms: number | null;
+  bathrooms: number | null;
   count: number | null;
   avgSizeSqft: number | null;
   avgAskingPpsf: number | null;
@@ -196,8 +203,9 @@ export function readBrokerCompSurface(...sources: unknown[]): BrokerCompUiSurfac
 
   for (const source of sources) visit(source);
 
-  const allItems = [...packages.flatMap((entry) => entry.items), ...looseItems];
-  const packageRows = packages.map(packageRow);
+  const currentPackages = selectCurrentPackages(packages);
+  const allItems = [...currentPackages.flatMap((entry) => entry.items), ...looseItems];
+  const packageRows = currentPackages.map(packageRow);
   const comparables = dedupeComparables(allItems.map(comparableRow).filter((row): row is BrokerCompComparableRow => row != null));
   const bedroomBreakdowns = dedupeBedroomBreakdowns(allItems.flatMap(bedroomBreakdownRowsFromItem));
   const subjectUnitPricingRows = dedupeSubjectUnitPricingRows(allItems.flatMap(subjectUnitPricingRowsFromItem));
@@ -219,8 +227,11 @@ export function readBrokerCompSurface(...sources: unknown[]): BrokerCompUiSurfac
     pricingOpinions: allPricingOpinions,
     missingDataFlags: allMissingFlags,
     summary,
-    status: status ?? packageRows[0]?.status ?? null,
-    updatedAt,
+    status: packageRows[0]?.status ?? status ?? null,
+    updatedAt: currentPackages.reduce<string | null>(
+      (latest, payload) => latestDate(latest, payload.package.updatedAt ?? payload.package.createdAt ?? null),
+      updatedAt
+    ),
     hasData:
       packageRows.length > 0 ||
       comparables.length > 0 ||
@@ -231,6 +242,27 @@ export function readBrokerCompSurface(...sources: unknown[]): BrokerCompUiSurfac
       Boolean(summary) ||
       reviewedItems > 0,
   };
+}
+
+function packageTimestamp(payload: BrokerCompPackageReviewPayload): number {
+  const raw = payload.package.updatedAt || payload.package.createdAt || "";
+  const parsed = new Date(raw).getTime();
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function isPricingOpinionPackage(payload: BrokerCompPackageReviewPayload): boolean {
+  const packageType = payload.package.packageType;
+  return packageType === "broker_opinion" || payload.items.every((item) => item.itemType === "pricing_opinion");
+}
+
+function selectCurrentPackages(packages: BrokerCompPackageReviewPayload[]): BrokerCompPackageReviewPayload[] {
+  if (packages.length <= 1) return packages;
+  const sorted = [...packages].sort((left, right) => packageTimestamp(right) - packageTimestamp(left));
+  const extractedPackages = sorted.filter((payload) => !isPricingOpinionPackage(payload));
+  const latestExtracted = extractedPackages[0] ? [extractedPackages[0]] : [];
+  const opinionPackages = sorted.filter(isPricingOpinionPackage).slice(0, 5);
+  const selected = [...latestExtracted, ...opinionPackages];
+  return selected.length > 0 ? selected.sort((left, right) => packageTimestamp(right) - packageTimestamp(left)) : [sorted[0]];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -399,6 +431,12 @@ function comparableRow(item: BrokerCompExtractedItem): BrokerCompComparableRow |
     propertyName: stringValue(data.propertyName) ?? stringValue(data.projectName),
     address: stringValue(data.address) ?? stringValue(data.propertyAddress) ?? stringValue(data.compAddress),
     neighborhood: stringValue(data.neighborhood) ?? stringValue(data.submarket),
+    developer: stringValue(data.developer),
+    architect: stringValue(data.architect),
+    designer: stringValue(data.designer),
+    yearCompleted: numberValue(data.yearCompleted ?? data.yearBuilt),
+    floors: numberValue(data.floors ?? data.floorCount),
+    salesBegan: stringValue(data.salesBegan ?? data.salesStartDate),
     itemType: item.itemType,
     price: numberValue(data.salePrice ?? data.price ?? data.askingPrice ?? data.value),
     priceRange: stringValue(data.priceRange ?? data.range),
@@ -443,6 +481,7 @@ function bedroomBreakdownRowsFromItem(item: BrokerCompExtractedItem): BrokerComp
     neighborhood: stringValue(row.neighborhood) ?? parent.neighborhood,
     bedroomType: stringValue(row.bedroomType ?? row.unitType),
     bedrooms: numberValue(row.bedrooms),
+    bathrooms: numberValue(row.bathrooms ?? row.baths),
     count: numberValue(row.count ?? row.units),
     avgSizeSqft: numberValue(row.avgSizeSqft ?? row.averageSizeSqft ?? row.avgSize),
     avgAskingPpsf: numberValue(row.avgAskingPpsf ?? row.averageAskingPpsf ?? row.askingPpsf),

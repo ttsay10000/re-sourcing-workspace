@@ -397,7 +397,7 @@ function itemsFromParsedJson(parsed: JsonRecord): BrokerCompExtractedItemInput[]
         },
         pageRefs: [{ pageNumber, label: `Page ${pageNumber}` }],
         confidence: 0.82,
-        reviewStatus: "pending",
+        reviewStatus: "accepted",
         selectionDecision: "watch",
         includeInDossier: false,
       });
@@ -413,7 +413,7 @@ function itemsFromParsedJson(parsed: JsonRecord): BrokerCompExtractedItemInput[]
       normalizedPayload: normalized,
       pageRefs,
       confidence: 0.82,
-      reviewStatus: "pending",
+      reviewStatus: "accepted",
     });
 
     const bedroomBreakdown = recordArray(normalized.bedroomBreakdown);
@@ -436,7 +436,7 @@ function itemsFromParsedJson(parsed: JsonRecord): BrokerCompExtractedItemInput[]
         },
         pageRefs: [{ ...pageRefs[0], label: `${pageRefs[0]?.label ?? "Page"} / Bedroom row ${index + 1}` }],
         confidence: 0.84,
-        reviewStatus: "pending",
+        reviewStatus: "accepted",
       });
     }
   }
@@ -456,7 +456,7 @@ function itemsFromParsedJson(parsed: JsonRecord): BrokerCompExtractedItemInput[]
       },
       pageRefs,
       confidence: 0.75,
-      reviewStatus: "pending",
+      reviewStatus: "accepted",
       selectionDecision: "watch",
       includeInDossier: false,
     });
@@ -476,7 +476,7 @@ function itemsFromParsedJson(parsed: JsonRecord): BrokerCompExtractedItemInput[]
       },
       pageRefs: [{ pageNumber: 1, label: "Package" }],
       confidence: 0.7,
-      reviewStatus: "pending",
+      reviewStatus: "accepted",
       selectionDecision: "watch",
       includeInDossier: false,
     });

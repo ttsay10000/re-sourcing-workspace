@@ -330,6 +330,20 @@ export class BrokerCompPackageRepo {
     return result.rows.map((row: Record<string, unknown>) => mapPackage(row));
   }
 
+  async deleteExtractedPackagesForProperty(propertyId: string): Promise<Array<{ id: string; sourceDocumentId: string | null }>> {
+    const result = await this.client.query(
+      `DELETE FROM broker_comp_packages
+       WHERE property_id = $1
+         AND package_type <> 'broker_opinion'
+       RETURNING id, source_document_id`,
+      [propertyId]
+    );
+    return result.rows.map((row: Record<string, unknown>) => ({
+      id: String(row.id),
+      sourceDocumentId: row.source_document_id == null ? null : String(row.source_document_id),
+    }));
+  }
+
   async updatePackageStatus(
     id: string,
     status: BrokerCompPackageStatus,
