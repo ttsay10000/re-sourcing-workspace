@@ -11,7 +11,7 @@
   align-items: flex-end;
   justify-content: space-between;
   gap: 1rem;
-  padding: 1rem 0 0.25rem;
+  padding: 0.25rem 0 0;
 }
 
 .eyebrow {
@@ -26,16 +26,18 @@
 .title {
   margin: 0;
   color: var(--app-ink);
-  font-size: 2rem;
+  font-family: var(--font-ui);
+  font-size: 1.8rem;
+  font-weight: 760;
   line-height: 1.05;
   letter-spacing: 0;
 }
 
 .subtitle {
   max-width: 44rem;
-  margin: 0.55rem 0 0;
+  margin: 0.42rem 0 0;
   color: var(--app-ink-secondary);
-  font-size: 0.98rem;
+  font-size: 0.9rem;
   line-height: 1.45;
 }
 
@@ -52,10 +54,10 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 2.35rem;
-  padding: 0.58rem 0.85rem;
+  min-height: 2.1rem;
+  padding: 0.48rem 0.76rem;
   border-radius: 7px;
-  font-size: 0.86rem;
+  font-size: 0.82rem;
   font-weight: 750;
   text-decoration: none;
   cursor: pointer;
@@ -102,14 +104,14 @@
 .metrics {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 0.75rem;
+  gap: 0.65rem;
 }
 
 .metric {
   display: grid;
-  gap: 0.35rem;
+  gap: 0.28rem;
   min-width: 0;
-  padding: 0.85rem;
+  padding: 0.72rem 0.8rem;
   border: 1px solid var(--app-line);
   border-radius: 8px;
   background: var(--app-surface);
@@ -128,14 +130,14 @@
 
 .metric span {
   color: var(--app-muted);
-  font-size: 0.75rem;
+  font-size: 0.7rem;
   font-weight: 760;
   text-transform: uppercase;
 }
 
 .metric strong {
   color: var(--app-ink);
-  font-size: 1.5rem;
+  font-size: 1.35rem;
   line-height: 1;
 }
 
@@ -158,21 +160,23 @@
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
-  padding: 0.95rem 1rem;
+  padding: 0.78rem 0.85rem;
 }
 
 .boardHeader h2,
 .sectionHeader h3 {
   margin: 0;
   color: var(--app-ink);
-  font-size: 1.05rem;
+  font-family: var(--font-ui);
+  font-size: 0.95rem;
+  font-weight: 760;
 }
 
 .boardHeader p,
 .sectionHeader p {
   margin: 0.22rem 0 0;
   color: var(--app-muted);
-  font-size: 0.86rem;
+  font-size: 0.8rem;
 }
 
 .savedFlowPanel {
@@ -188,7 +192,7 @@
 }
 
 .savedFlowHeader {
-  padding: 0.95rem 1rem;
+  padding: 0.78rem 0.85rem;
   border-bottom: 1px solid var(--app-line);
   background: var(--app-surface-raised);
 }
@@ -197,21 +201,23 @@
 .miniSectionHeader h3 {
   margin: 0;
   color: var(--app-ink);
-  font-size: 1.05rem;
+  font-family: var(--font-ui);
+  font-size: 0.95rem;
+  font-weight: 760;
 }
 
 .savedFlowHeader p,
 .miniSectionHeader p {
   margin: 0.22rem 0 0;
   color: var(--app-muted);
-  font-size: 0.86rem;
+  font-size: 0.8rem;
 }
 
 .flowSections,
 .tagSections {
   display: grid;
-  gap: 0.75rem;
-  padding: 0.85rem;
+  gap: 0.65rem;
+  padding: 0.75rem;
 }
 
 .flowSections {
@@ -238,16 +244,21 @@
   box-shadow: var(--app-shadow);
 }
 
+.miniSectionDropTarget {
+  border-color: var(--app-accent-teal);
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--app-accent-teal) 32%, transparent);
+}
+
 .miniSectionHeader {
-  padding: 0.75rem 0.8rem;
+  padding: 0.65rem 0.7rem;
   border-bottom: 1px solid var(--app-line-subtle);
   background: var(--app-surface-raised);
 }
 
 .miniSectionHeader span {
   display: inline-grid;
-  min-width: 2rem;
-  height: 2rem;
+  min-width: 1.75rem;
+  height: 1.75rem;
   place-items: center;
   border: 1px solid var(--app-green-border);
   border-radius: 999px;
@@ -263,12 +274,12 @@
 .miniRow {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 0.75rem;
+  gap: 0.65rem;
   align-items: center;
-  padding: 0.68rem 0.8rem;
+  padding: 0.58rem 0.7rem;
   border-bottom: 1px solid var(--app-line-subtle);
   color: var(--app-ink);
-  text-decoration: none;
+  cursor: grab;
 }
 
 .miniRow:last-child {
@@ -279,21 +290,42 @@
   background: var(--app-accent-teal-soft);
 }
 
+.miniRowBusy {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.miniRowLink {
+  display: block;
+  min-width: 0;
+  color: inherit;
+  text-decoration: none;
+}
+
+.miniRowLink:hover strong {
+  color: var(--app-accent-teal);
+}
+
 .miniRow strong,
-.miniRow span {
+.miniRow span,
+.miniRowLink strong,
+.miniRowLink span {
   display: block;
 }
 
-.miniRow strong {
+.miniRow strong,
+.miniRowLink strong {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-size: 0.88rem;
 }
 
-.miniRow span {
+.miniRow span,
+.miniRowLink span {
   margin-top: 0.18rem;
   color: var(--app-muted);
-  font-size: 0.8rem;
+  font-size: 0.76rem;
 }
 
 .tagLine {
@@ -352,6 +384,23 @@
   display: grid;
   justify-items: end;
   gap: 0.25rem;
+}
+
+.stageSelect {
+  width: 8.8rem;
+  max-width: 100%;
+  min-height: 1.6rem;
+  border: 1px solid var(--app-line);
+  border-radius: 6px;
+  background: var(--app-surface);
+  color: var(--app-ink-secondary);
+  font-size: 0.72rem;
+  font-weight: 760;
+}
+
+.stageSelect:disabled {
+  cursor: wait;
+  opacity: 0.65;
 }
 
 .moreRows {
@@ -425,7 +474,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
-  padding: 0.9rem 1rem;
+  padding: 0.72rem 0.82rem;
   border-bottom: 1px solid var(--app-line);
   background: var(--app-surface-raised);
 }
@@ -433,11 +482,11 @@
 .sectionCount,
 .sectionCountDanger {
   display: inline-grid;
-  min-width: 2.2rem;
-  height: 2.2rem;
+  min-width: 1.9rem;
+  height: 1.9rem;
   place-items: center;
   border-radius: 999px;
-  font-size: 0.95rem;
+  font-size: 0.84rem;
   font-weight: 850;
 }
 
@@ -465,7 +514,7 @@
 
 .table th,
 .table td {
-  padding: 0.68rem 0.72rem;
+  padding: 0.56rem 0.62rem;
   border-bottom: 1px solid var(--app-line-subtle);
   text-align: left;
   vertical-align: top;
@@ -473,7 +522,7 @@
 
 .table th {
   color: var(--app-muted);
-  font-size: 0.7rem;
+  font-size: 0.68rem;
   font-weight: 850;
   text-transform: uppercase;
 }
@@ -502,6 +551,7 @@
 .propertyCell a {
   color: var(--app-ink);
   font-weight: 800;
+  font-size: 0.86rem;
   text-decoration: none;
   border-radius: 6px;
   padding: 0.08rem 0.14rem;
@@ -517,11 +567,12 @@
 .propertyCell span,
 .stack small {
   color: var(--app-muted);
-  font-size: 0.81rem;
+  font-size: 0.76rem;
 }
 
 .stack span {
   color: var(--app-ink);
+  font-size: 0.86rem;
   font-weight: 760;
 }
 
@@ -529,10 +580,10 @@
   display: inline-flex;
   width: fit-content;
   align-items: center;
-  min-height: 1.55rem;
-  padding: 0.25rem 0.55rem;
+  min-height: 1.42rem;
+  padding: 0.2rem 0.48rem;
   border-radius: 999px;
-  font-size: 0.74rem;
+  font-size: 0.7rem;
   font-weight: 850;
 }
 
@@ -570,11 +621,11 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 4.75rem;
-  min-height: 1.55rem;
-  padding: 0.18rem 0.55rem;
+  min-width: 4.35rem;
+  min-height: 1.42rem;
+  padding: 0.16rem 0.5rem;
   border-radius: 999px;
-  font-size: 0.76rem;
+  font-size: 0.7rem;
   font-weight: 850;
   font-variant-numeric: tabular-nums;
 }

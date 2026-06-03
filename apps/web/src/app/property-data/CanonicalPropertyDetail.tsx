@@ -16,6 +16,12 @@ import {
   type LocalDossierJobState,
 } from "./dossierState";
 import { buildInquiryDraft, updateInquiryDraftTourRequest } from "./inquiryDraft";
+import {
+  plannedBrokerCompReviewEndpoint,
+  plannedBrokerCompUploadEndpoint,
+  readBrokerCompSurface,
+  type BrokerCompUiSurface,
+} from "./brokerComps";
 import { formatSourcingUpdateChange, getSourcingUpdate, getSourcingUpdateMeta } from "./sourcingUpdate";
 import {
   OmCalculationPanel,
@@ -752,6 +758,132 @@ function V3RecordsTable({
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+function BrokerCompsDetailPanel({ propertyId, surface }: { propertyId: string; surface: BrokerCompUiSurface }) {
+  const uploadEndpoint = plannedBrokerCompUploadEndpoint(propertyId);
+  const reviewEndpoint = plannedBrokerCompReviewEndpoint(propertyId);
+  const reviewedComps = surface.comparables.filter((row) => row.reviewStatus === "accepted" || row.reviewStatus === "edited").length;
+  const unresolvedFlags = surface.missingDataFlags.filter((flag) => !flag.resolved);
+  const workflowFacts: V3FactItem[] = [
+    { label: "Packages", value: formatNumberValue(surface.packages.length) },
+    { label: "Extracted comps", value: formatNumberValue(surface.comparables.length) },
+    { label: "Reviewed comps", value: `${reviewedComps}/${surface.comparables.length || 0}` },
+    { label: "Pricing opinions", value: formatNumberValue(surface.pricingOpinions.length) },
+    { label: "Missing flags", value: formatNumberValue(unresolvedFlags.length), tone: unresolvedFlags.length > 0 ? "warn" : "good" },
+    { label: "Updated", value: formatDateOnly(surface.updatedAt) },
+  ];
+  const pricingFacts: V3FactItem[] = surface.pricingOpinions.slice(0, 8).map((opinion, index) => ({
+    label: formatReadableToken(opinion.sourceType ?? `Pricing opinion ${index + 1}`),
+    value: formatMoneyValue(opinion.amount),
+    detail: joinedSummary([
+      opinion.source ?? null,
+      opinion.note ?? null,
+      opinion.observedAt ? `Observed ${formatDateOnly(opinion.observedAt)}` : null,
+    ]),
+  }));
+  const packageRows = surface.packages.map((pkg) => ({
+    package: pkg.label,
+    type: formatReadableToken(pkg.packageType),
+    status: formatReadableToken(pkg.status),
+    items: `${pkg.reviewedItemCount}/${pkg.itemCount}`,
+    updated: formatDateOnly(pkg.updatedAt ?? pkg.createdAt),
+  }));
+  const compRows = surface.comparables.map((row) => ({
+    address: row.address ?? "Unlabeled comp",
+    type: formatReadableToken(row.itemType),
+    price: formatMoneyValue(row.price),
+    unit: formatMoneyValue(row.pricePerUnit),
+    sqft: formatMoneyValue(row.pricePerSqft),
+    cap: row.capRatePct != null ? `${Number(row.capRatePct).toFixed(2)}%` : "—",
+    review: joinedSummary([formatReadableToken(row.reviewStatus), formatReadableToken(row.selectionDecision)]),
+    notes: row.notes ?? "—",
+  }));
+  const flagBullets = unresolvedFlags.length > 0
+    ? unresolvedFlags.map((flag) => joinedSummary([flag.label ?? flag.field, flag.message ?? null, flag.source ?? null]))
+    : ["No unresolved broker comp data flags."];
+
+  return (
+    <div style={{ display: "grid", gap: "1rem" }}>
+      <V3ReportPanel
+        title="Market / comps"
+        subtitle="Broker comp packages, extracted comparables, and market pricing signals are kept separate from underwriting outputs."
+        actions={(
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "0.45rem", justifyContent: "flex-end" }}>
+            <button
+              type="button"
+              disabled
+              title={`Planned endpoint: POST ${uploadEndpoint}`}
+              style={{ minHeight: "2rem", border: "1px solid #cbd5e1", borderRadius: "8px", padding: "0.35rem 0.7rem", background: "#f8fafc", color: "#64748b", fontSize: "0.78rem", fontWeight: 700 }}
+            >
+              Upload comp package
+            </button>
+            <button
+              type="button"
+              disabled
+              title={`Planned endpoint: GET ${reviewEndpoint}`}
+              style={{ minHeight: "2rem", border: "1px solid #cbd5e1", borderRadius: "8px", padding: "0.35rem 0.7rem", background: "#f8fafc", color: "#64748b", fontSize: "0.78rem", fontWeight: 700 }}
+            >
+              Review extraction
+            </button>
+          </div>
+        )}
+      >
+        <V3ReportSection title="Workflow summary">
+          <V3FactList items={workflowFacts} />
+          {!surface.hasData ? (
+            <p style={{ margin: 0, color: "#64748b", fontSize: "0.86rem" }}>
+              No broker comp package summary is available yet. Planned integrations: POST {uploadEndpoint} and GET {reviewEndpoint}.
+            </p>
+          ) : null}
+          {surface.summary ? <V3Bullets items={splitTakeawayText(surface.summary)} /> : null}
+        </V3ReportSection>
+
+        <V3ReportSection title="Broker pricing opinions" subtitle="Whisper price and broker guidance, not model output.">
+          {pricingFacts.length > 0 ? (
+            <V3FactList items={pricingFacts} />
+          ) : (
+            <p style={{ margin: 0, color: "#64748b", fontSize: "0.86rem" }}>No broker pricing opinions have been extracted yet.</p>
+          )}
+        </V3ReportSection>
+
+        <V3ReportSection title="Missing data flags">
+          <V3Bullets items={flagBullets} />
+        </V3ReportSection>
+
+        <V3ReportSection title="Package summaries">
+          <V3RecordsTable
+            columns={[
+              { key: "package", label: "Package" },
+              { key: "type", label: "Type", width: "10rem" },
+              { key: "status", label: "Status", width: "8rem" },
+              { key: "items", label: "Reviewed", width: "7rem", align: "right" },
+              { key: "updated", label: "Updated", width: "8rem" },
+            ]}
+            rows={packageRows}
+            emptyText="No broker comp packages are available yet."
+          />
+        </V3ReportSection>
+
+        <V3ReportSection title="Extracted and reviewed comps">
+          <V3RecordsTable
+            columns={[
+              { key: "address", label: "Comp" },
+              { key: "type", label: "Type", width: "9rem" },
+              { key: "price", label: "Price", width: "8rem", align: "right" },
+              { key: "unit", label: "$/Unit", width: "8rem", align: "right" },
+              { key: "sqft", label: "$/SF", width: "8rem", align: "right" },
+              { key: "cap", label: "Cap", width: "6rem", align: "right" },
+              { key: "review", label: "Review", width: "10rem" },
+              { key: "notes", label: "Notes" },
+            ]}
+            rows={compRows}
+            emptyText="No extracted comps are available yet."
+          />
+        </V3ReportSection>
+      </V3ReportPanel>
     </div>
   );
 }
@@ -1536,6 +1668,7 @@ export function CanonicalPropertyDetail({
   const toggle = (key: string) => setOpenSections((p) => ({ ...p, [key]: !p[key] }));
 
   const d = (detailsFromApi != null && typeof detailsFromApi === "object" ? detailsFromApi : property.details) as Record<string, unknown> | null | undefined;
+  const brokerCompSurface = readBrokerCompSurface(d);
   const persistedDossierAssumptions = getPropertyDossierAssumptions(d);
   const persistedDossierGeneration = getPropertyDossierGeneration(d);
   const enrichment = d?.enrichment as Record<string, unknown> | undefined;
@@ -2407,6 +2540,7 @@ export function CanonicalPropertyDetail({
     { id: "overview", label: "Overview" },
     { id: "documents", label: "Documents", badge: unifiedDocuments == null ? null : unifiedDocuments.length },
     { id: "omWorkspace", label: "OM" },
+    { id: "marketComps", label: "Market / Comps", badge: brokerCompSurface.hasData ? brokerCompSurface.comparables.length : null },
     { id: "dossierScore", label: "Dossier/Score" },
     { id: "underwriting", label: "Model" },
     { id: "enrichment", label: "Enrichment" },
@@ -2432,6 +2566,12 @@ export function CanonicalPropertyDetail({
       value: unifiedDocuments == null ? "Loading" : String(unifiedDocuments.length),
       detail: hasOmDocument ? "OM/Brochure present" : null,
       tone: hasOmDocument ? "good" : "neutral",
+    },
+    {
+      label: "Comps",
+      value: brokerCompSurface.hasData ? `${brokerCompSurface.comparables.length} extracted` : "Not started",
+      detail: brokerCompSurface.pricingOpinions.length > 0 ? `${brokerCompSurface.pricingOpinions.length} pricing opinion${brokerCompSurface.pricingOpinions.length === 1 ? "" : "s"}` : null,
+      tone: brokerCompSurface.hasData ? "good" : "neutral",
     },
     {
       label: "Deal",
@@ -3422,6 +3562,10 @@ export function CanonicalPropertyDetail({
         </V3ReportSection>
       </V3ReportPanel>
       </>
+      )}
+
+      {activeTab === "marketComps" && (
+        <BrokerCompsDetailPanel propertyId={property.id} surface={brokerCompSurface} />
       )}
 
       {(activeTab === "documents" || activeTab === "outreach" || activeTab === "omWorkspace") && (

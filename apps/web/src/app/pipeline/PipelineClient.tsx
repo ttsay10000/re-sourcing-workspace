@@ -40,6 +40,12 @@ import {
   type UiV2RentalFlowPayload,
   type UiV2StatusChipTone,
 } from "@re-sourcing/contracts";
+import {
+  plannedBrokerCompReviewEndpoint,
+  plannedBrokerCompUploadEndpoint,
+  readBrokerCompSurface,
+  type BrokerCompUiSurface,
+} from "../property-data/brokerComps";
 import styles from "./PipelinePage.module.css";
 
 const API_BASE = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000").replace(/\/$/, "");
@@ -94,7 +100,7 @@ const COMMON_PIPELINE_TAGS = [
   "duplicate",
 ] as const;
 
-const SHEET_TABS = ["Overview", "Enrichment", "OM / Docs", "Underwriting", "Activity"] as const;
+const SHEET_TABS = ["Overview", "Enrichment", "OM / Docs", "Market / Comps", "Underwriting", "Activity"] as const;
 
 type SheetTab = (typeof SHEET_TABS)[number];
 type SortDirection = "asc" | "desc";
@@ -105,6 +111,7 @@ function tabFromParam(value: string | null): SheetTab | null {
   if (normalized === "overview") return "Overview";
   if (normalized === "enrichment") return "Enrichment";
   if (normalized === "om" || normalized === "omdocs" || normalized === "docs") return "OM / Docs";
+  if (normalized === "market" || normalized === "marketcomps" || normalized === "comps") return "Market / Comps";
   if (normalized === "underwriting") return "Underwriting";
   if (normalized === "activity") return "Activity";
   return null;
@@ -194,6 +201,17 @@ interface DossierGenerateResponse {
   dealScore?: number | null;
   error?: string;
   details?: string;
+}
+
+interface BrokerCompPackagesResponse {
+  propertyId?: string;
+  packages?: unknown[];
+  packageDetails?: unknown[];
+  package?: unknown;
+  extractedItems?: unknown[];
+  pages?: unknown[];
+  promotedItems?: unknown[];
+  document?: unknown;
 }
 
 interface BrokerFormState {
@@ -718,6 +736,11 @@ export default function PipelineClient() {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [emailQueue, setEmailQueue] = useState<string[]>([]);
   const [headerMenu, setHeaderMenu] = useState<PipelineHeaderMenuId | null>(null);
+  const [brokerCompPayloads, setBrokerCompPayloads] = useState<Record<string, unknown>>({});
+  const [brokerCompLoading, setBrokerCompLoading] = useState<Record<string, boolean>>({});
+  const [brokerCompUploading, setBrokerCompUploading] = useState<Record<string, boolean>>({});
+  const [brokerCompOpinionSaving, setBrokerCompOpinionSaving] = useState<Record<string, boolean>>({});
+  const [brokerCompError, setBrokerCompError] = useState<Record<string, string | null>>({});
   const lastAutoOpenedPropertyId = useRef<string | null>(null);
 
   const selectedRow = useMemo(
@@ -889,6 +912,135 @@ export default function PipelineClient() {
     [applyProperty]
   );
 
+  const loadBrokerComps = useCallback(async (propertyId: string): Promise<void> => {
+    setBrokerCompLoading((current) => ({ ...current, [propertyId]: true }));
+    setBrokerCompError((current) => ({ ...current, [propertyId]: null }));
+    try {
+      const response = await apiFetch<BrokerCompPackagesResponse>(
+        `${API_BASE}/api/properties/${encodeURIComponent(propertyId)}/broker-comp-packages?includeDetails=true`
+      );
+      setBrokerCompPayloads((current) => ({ ...current, [propertyId]: response }));
+    } catch (err) {
+      setBrokerCompError((current) => ({
+        ...current,
+        [propertyId]: err instanceof Error ? err.message : "Failed to load broker comps.",
+      }));
+    } finally {
+      setBrokerCompLoading((current) => ({ ...current, [propertyId]: false }));
+    }
+  }, []);
+
+  const uploadBrokerCompPackage = useCallback(
+    async (propertyId: string, file: File): Promise<void> => {
+      setBrokerCompUploading((current) => ({ ...current, [propertyId]: true }));
+      setBrokerCompError((current) => ({ ...current, [propertyId]: null }));
+      try {
+        const form = new FormData();
+        form.append("file", file);
+        form.append("category", "Broker Comp Package");
+        const response = await fetch(`${API_BASE}${plannedBrokerCompUploadEndpoint(propertyId)}`, {
+          method: "POST",
+          body: form,
+        });
+        const payload = await response.json().catch(() => null);
+        if (!response.ok) {
+          const message = isRecord(payload) && typeof payload.error === "string" ? payload.error : `Upload failed with ${response.status}`;
+          throw new Error(message);
+        }
+        setBrokerCompPayloads((current) => ({ ...current, [propertyId]: payload }));
+        await loadBrokerComps(propertyId);
+        setNotice(`Broker comp package uploaded: ${file.name}`);
+        if (selectedId === propertyId) await loadPropertyDetail(propertyId);
+      } catch (err) {
+        setBrokerCompError((current) => ({
+          ...current,
+          [propertyId]: err instanceof Error ? err.message : "Failed to upload broker comp package.",
+        }));
+      } finally {
+        setBrokerCompUploading((current) => ({ ...current, [propertyId]: false }));
+      }
+    },
+    [loadBrokerComps, loadPropertyDetail, selectedId]
+  );
+
+  const reviewBrokerCompItem = useCallback(
+    async (propertyId: string, packageId: string, itemId: string, reviewStatus: "approved" | "rejected"): Promise<void> => {
+      setBrokerCompError((current) => ({ ...current, [propertyId]: null }));
+      try {
+        const response = await apiFetch<BrokerCompPackagesResponse>(
+          `${API_BASE}/api/properties/${encodeURIComponent(propertyId)}/broker-comp-packages/${encodeURIComponent(packageId)}/items/${encodeURIComponent(itemId)}/review`,
+          {
+            method: "PATCH",
+            body: JSON.stringify({ reviewStatus }),
+          }
+        );
+        setBrokerCompPayloads((current) => ({ ...current, [propertyId]: response }));
+        await loadBrokerComps(propertyId);
+      } catch (err) {
+        setBrokerCompError((current) => ({
+          ...current,
+          [propertyId]: err instanceof Error ? err.message : "Failed to update broker comp review.",
+        }));
+      }
+    },
+    [loadBrokerComps]
+  );
+
+  const addBrokerCompPricingOpinion = useCallback(
+    async (propertyId: string, input: { amount: number; note: string; listedPrice?: number | null }): Promise<void> => {
+      setBrokerCompOpinionSaving((current) => ({ ...current, [propertyId]: true }));
+      setBrokerCompError((current) => ({ ...current, [propertyId]: null }));
+      try {
+        const response = await apiFetch<BrokerCompPackagesResponse>(
+          `${API_BASE}/api/properties/${encodeURIComponent(propertyId)}/broker-comp-pricing-opinions`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              amount: input.amount,
+              note: input.note,
+              listedPrice: input.listedPrice ?? null,
+              source: "User",
+            }),
+          }
+        );
+        setBrokerCompPayloads((current) => ({ ...current, [propertyId]: response }));
+        await loadBrokerComps(propertyId);
+        setNotice("Whisper price saved as a market signal.");
+      } catch (err) {
+        setBrokerCompError((current) => ({
+          ...current,
+          [propertyId]: err instanceof Error ? err.message : "Failed to save whisper price.",
+        }));
+      } finally {
+        setBrokerCompOpinionSaving((current) => ({ ...current, [propertyId]: false }));
+      }
+    },
+    [loadBrokerComps]
+  );
+
+  const promoteBrokerCompPackage = useCallback(
+    async (propertyId: string, packageId: string): Promise<void> => {
+      setBrokerCompError((current) => ({ ...current, [propertyId]: null }));
+      try {
+        await apiFetch<unknown>(
+          `${API_BASE}/api/properties/${encodeURIComponent(propertyId)}/broker-comp-packages/${encodeURIComponent(packageId)}/promote`,
+          {
+            method: "POST",
+            body: JSON.stringify({}),
+          }
+        );
+        await loadBrokerComps(propertyId);
+        setNotice("Approved broker comp items promoted for analysis.");
+      } catch (err) {
+        setBrokerCompError((current) => ({
+          ...current,
+          [propertyId]: err instanceof Error ? err.message : "Failed to promote broker comp package.",
+        }));
+      }
+    },
+    [loadBrokerComps]
+  );
+
   useEffect(() => {
     if (!requestedPropertyId) {
       lastAutoOpenedPropertyId.current = null;
@@ -899,6 +1051,11 @@ export default function PipelineClient() {
     lastAutoOpenedPropertyId.current = requestedPropertyId;
     void loadPropertyDetail(requestedPropertyId);
   }, [loadPropertyDetail, requestedPropertyId, requestedTab]);
+
+  useEffect(() => {
+    if (!selectedId || sheetTab !== "Market / Comps") return;
+    void loadBrokerComps(selectedId);
+  }, [loadBrokerComps, selectedId, sheetTab]);
 
   useEffect(() => {
     setGalleryIndex(0);
@@ -1829,6 +1986,13 @@ export default function PipelineClient() {
   const sheetListingFacts = selectedProperty?.enrichmentDetails?.listingFacts ?? null;
   const terminalStatus = selectedRow?.statusChip.status === "rejected" || selectedRow?.statusChip.status === "archived";
   const sheetUnderwriting = selectedProperty?.underwriting ?? selectedRow?.underwriting ?? null;
+  const liveBrokerCompPayload = selectedId ? brokerCompPayloads[selectedId] : null;
+  const sheetBrokerComps = readBrokerCompSurface(liveBrokerCompPayload, selectedProperty?.brokerComps, selectedRow?.brokerComps);
+  const sheetBrokerCompLoading = selectedId ? brokerCompLoading[selectedId] === true : false;
+  const sheetBrokerCompUploading = selectedId ? brokerCompUploading[selectedId] === true : false;
+  const sheetBrokerCompOpinionSaving = selectedId ? brokerCompOpinionSaving[selectedId] === true : false;
+  const sheetBrokerCompError = selectedId ? brokerCompError[selectedId] ?? null : null;
+  const sheetListedPrice = selectedProperty?.overview.askingPrice ?? selectedRow?.askingPrice ?? null;
 
   return (
     <main className={styles.page}>
@@ -2698,6 +2862,25 @@ export default function PipelineClient() {
                 </section>
               ) : null}
 
+              {sheetTab === "Market / Comps" ? (
+                <BrokerCompsSheetPanel
+                  propertyId={selectedId}
+                  surface={sheetBrokerComps}
+                  loading={sheetBrokerCompLoading}
+                  uploading={sheetBrokerCompUploading}
+                  savingOpinion={sheetBrokerCompOpinionSaving}
+                  error={sheetBrokerCompError}
+                  listedPrice={sheetListedPrice}
+                  onRefresh={() => selectedId ? loadBrokerComps(selectedId) : undefined}
+                  onUpload={(file) => selectedId ? uploadBrokerCompPackage(selectedId, file) : undefined}
+                  onAddPricingOpinion={(input) => selectedId ? addBrokerCompPricingOpinion(selectedId, input) : undefined}
+                  onReview={(packageId, itemId, reviewStatus) =>
+                    selectedId ? reviewBrokerCompItem(selectedId, packageId, itemId, reviewStatus) : undefined
+                  }
+                  onPromote={(packageId) => selectedId ? promoteBrokerCompPackage(selectedId, packageId) : undefined}
+                />
+              ) : null}
+
               {sheetTab === "Underwriting" ? (
                 <section className={styles.sheetPanel}>
 	                  <div className={styles.sectionHeading}>
@@ -3338,6 +3521,304 @@ function OmAnalysisPanel({ analysis }: { analysis?: UiV2OmAnalysisPayload | null
         </ul>
       ) : null}
       <RentRollTable rows={rentRoll} />
+    </section>
+  );
+}
+
+function BrokerCompsSheetPanel({
+  propertyId,
+  surface,
+  loading,
+  uploading,
+  savingOpinion,
+  error,
+  listedPrice,
+  onRefresh,
+  onUpload,
+  onAddPricingOpinion,
+  onReview,
+  onPromote,
+}: {
+  propertyId: string;
+  surface: BrokerCompUiSurface;
+  loading: boolean;
+  uploading: boolean;
+  savingOpinion: boolean;
+  error: string | null;
+  listedPrice: number | null;
+  onRefresh: () => void | Promise<void> | undefined;
+  onUpload: (file: File) => void | Promise<void> | undefined;
+  onAddPricingOpinion: (input: { amount: number; note: string; listedPrice?: number | null }) => void | Promise<void> | undefined;
+  onReview: (packageId: string, itemId: string, reviewStatus: "approved" | "rejected") => void | Promise<void> | undefined;
+  onPromote: (packageId: string) => void | Promise<void> | undefined;
+}) {
+  const uploadEndpoint = plannedBrokerCompUploadEndpoint(propertyId);
+  const reviewEndpoint = plannedBrokerCompReviewEndpoint(propertyId);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [whisperAmount, setWhisperAmount] = useState("");
+  const [whisperNote, setWhisperNote] = useState("");
+  const reviewedComps = surface.comparables.filter((row) =>
+    row.reviewStatus === "accepted" ||
+    row.reviewStatus === "edited" ||
+    row.reviewStatus === "approved" ||
+    row.reviewStatus === "promoted"
+  ).length;
+
+  async function submitUpload(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedFile || uploading) return;
+    await onUpload(selectedFile);
+    setSelectedFile(null);
+  }
+
+  async function submitPricingOpinion(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const amount = Number(whisperAmount.replace(/[$,\s]/g, ""));
+    if (!Number.isFinite(amount) || amount <= 0 || savingOpinion) return;
+    await onAddPricingOpinion({ amount, note: whisperNote, listedPrice });
+    setWhisperAmount("");
+    setWhisperNote("");
+  }
+
+  const whisperNumeric = Number(whisperAmount.replace(/[$,\s]/g, ""));
+  const whisperDiscount =
+    listedPrice != null && Number.isFinite(whisperNumeric) && whisperNumeric > 0
+      ? ((listedPrice - whisperNumeric) / listedPrice) * 100
+      : null;
+
+  return (
+    <section className={styles.sheetPanel}>
+      <div className={styles.sectionHeading}>
+        <div>
+          <h3>Market / Comps</h3>
+          <span>Broker package intelligence kept separate from underwriting</span>
+        </div>
+        <form className={styles.documentActions} onSubmit={submitUpload}>
+          <input
+            aria-label="Broker comp package file"
+            type="file"
+            accept=".pdf,.xlsx,.xls,.csv,.txt"
+            onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)}
+          />
+          <button className={styles.secondaryButton} type="submit" disabled={!selectedFile || uploading} title={`POST ${uploadEndpoint}`}>
+            {uploading ? "Uploading..." : "Upload comp package"}
+          </button>
+          <button
+            className={styles.secondaryButton}
+            type="button"
+            disabled={loading}
+            onClick={() => void onRefresh()}
+            title={`GET ${reviewEndpoint}`}
+          >
+            {loading ? "Refreshing..." : "Refresh extraction"}
+          </button>
+        </form>
+      </div>
+
+      {error ? <p className={styles.dataNote}>{error}</p> : null}
+
+      <section className={styles.propertyDataSection}>
+        <div className={styles.propertyDataHeader}>
+          <div>
+            <h4>Whisper price / market opinion</h4>
+            <p>Saved as broker/user color only; underwriting offer assumptions stay separate</p>
+          </div>
+        </div>
+        <form className={styles.documentActions} onSubmit={submitPricingOpinion}>
+          <input
+            aria-label="Whisper price"
+            inputMode="decimal"
+            placeholder="Whisper price"
+            value={whisperAmount}
+            onChange={(event) => setWhisperAmount(event.target.value)}
+          />
+          <input
+            aria-label="Whisper price note"
+            placeholder="Note or source"
+            value={whisperNote}
+            onChange={(event) => setWhisperNote(event.target.value)}
+          />
+          <button className={styles.secondaryButton} type="submit" disabled={savingOpinion || !Number.isFinite(whisperNumeric) || whisperNumeric <= 0}>
+            {savingOpinion ? "Saving..." : "Save opinion"}
+          </button>
+        </form>
+        {whisperDiscount != null ? (
+          <p className={styles.dataNote}>
+            {formatCurrency(whisperNumeric, false)} is {formatPercent(whisperDiscount)} below listed price {formatCurrency(listedPrice, false)}.
+          </p>
+        ) : null}
+      </section>
+
+      <dl className={styles.metricGrid}>
+        <div>
+          <dt>Packages</dt>
+          <dd>{formatNumber(surface.packages.length)}</dd>
+        </div>
+        <div>
+          <dt>Extracted comps</dt>
+          <dd>{formatNumber(surface.comparables.length)}</dd>
+        </div>
+        <div>
+          <dt>Reviewed comps</dt>
+          <dd>{formatNumber(reviewedComps)}</dd>
+        </div>
+        <div>
+          <dt>Pricing signals</dt>
+          <dd>{formatNumber(surface.pricingOpinions.length)}</dd>
+        </div>
+        <div>
+          <dt>Flags</dt>
+          <dd>{formatNumber(surface.missingDataFlags.filter((flag) => !flag.resolved).length)}</dd>
+        </div>
+        <div>
+          <dt>Updated</dt>
+          <dd>{formatDate(surface.updatedAt)}</dd>
+        </div>
+      </dl>
+
+      {!surface.hasData ? (
+        <div className={styles.emptyState}>
+          {loading ? "Loading broker comp packages..." : "No broker comp package has been uploaded or extracted yet."}
+        </div>
+      ) : null}
+
+      {surface.summary ? <p className={styles.dataNote}>{surface.summary}</p> : null}
+
+      {surface.pricingOpinions.length > 0 ? (
+        <section className={styles.propertyDataSection}>
+          <div className={styles.propertyDataHeader}>
+            <div>
+              <h4>Broker pricing opinions</h4>
+              <p>Whisper prices and broker guidance, not underwriting outputs</p>
+            </div>
+          </div>
+          <dl className={styles.propertyFactGrid}>
+            {surface.pricingOpinions.slice(0, 6).map((opinion, index) => (
+              <div key={`${opinion.source ?? "pricing"}:${opinion.amount ?? index}:${index}`}>
+                <dt>{titleize(opinion.sourceType ?? "broker opinion")}</dt>
+                <dd>{formatCurrency(opinion.amount, false)}</dd>
+                <small>{[opinion.source, opinion.note, formatDate(opinion.observedAt)].filter((value) => value && value !== "-").join(" / ")}</small>
+              </div>
+            ))}
+          </dl>
+        </section>
+      ) : null}
+
+      {surface.missingDataFlags.length > 0 ? (
+        <section className={styles.propertyDataSection}>
+          <div className={styles.propertyDataHeader}>
+            <div>
+              <h4>Missing data flags</h4>
+              <p>Fields that need analyst or broker review before relying on comps</p>
+            </div>
+          </div>
+          <div className={styles.sheetTags}>
+            {surface.missingDataFlags.slice(0, 12).map((flag) => (
+              <span className={cx(styles.tagChip, flag.resolved ? styles.toneSuccess : styles.toneWarning)} key={`${flag.field}:${flag.message ?? ""}`}>
+                {flag.label ?? tagLabel(flag.field)}
+                {flag.message ? ` - ${flag.message}` : ""}
+              </span>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      {surface.packages.length > 0 ? (
+        <section className={styles.propertyDataSection}>
+          <div className={styles.propertyDataHeader}>
+            <div>
+              <h4>Package summaries</h4>
+              <p>Broker files and extraction review progress</p>
+            </div>
+            <span className={`${styles.tinyChip} ${surface.status === "failed" ? styles.toneWarning : styles.toneSuccess}`}>
+              {statusBadgeLabel(surface.status)}
+            </span>
+          </div>
+          <div className={styles.dataModuleList}>
+            {surface.packages.slice(0, 6).map((pkg) => (
+              <article key={pkg.id} className={styles.dataModuleRow}>
+                <div className={styles.dataModuleHeader}>
+                  <strong>{pkg.label}</strong>
+                  <span className={`${styles.tinyChip} ${moduleToneClass(pkg.status)}`}>{statusBadgeLabel(pkg.status)}</span>
+                </div>
+                <DetailItems
+                  items={[
+                    { label: "Type", value: titleize(pkg.packageType) },
+                    { label: "Items", value: `${pkg.reviewedItemCount}/${pkg.itemCount} reviewed` },
+                    { label: "Updated", value: formatDate(pkg.updatedAt ?? pkg.createdAt) },
+                  ]}
+                />
+                {pkg.reviewedItemCount > 0 ? (
+                  <div className={styles.documentActions}>
+                    <button className={styles.secondaryButton} type="button" onClick={() => void onPromote(pkg.id)}>
+                      Promote approved
+                    </button>
+                  </div>
+                ) : null}
+              </article>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      <section className={styles.propertyDataSection}>
+        <div className={styles.propertyDataHeader}>
+          <div>
+            <h4>Extracted and reviewed comps</h4>
+            <p>Comparable rows from broker packages and analyst review decisions</p>
+          </div>
+        </div>
+        {surface.comparables.length > 0 ? (
+          <div className={styles.dataTableShell}>
+            <table className={styles.miniTable}>
+              <thead>
+                <tr>
+                  <th>Comp</th>
+                  <th>Type</th>
+                  <th>Price</th>
+                  <th>$/Unit</th>
+                  <th>$/SF</th>
+                  <th>Cap</th>
+                  <th>Review</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {surface.comparables.slice(0, 40).map((row) => (
+                  <tr key={row.id}>
+                    <td>
+                      <strong>{row.address ?? "Unlabeled comp"}</strong>
+                      <span>{[row.saleDate ? formatDate(row.saleDate) : null, row.source].filter(Boolean).join(" / ")}</span>
+                    </td>
+                    <td>{titleize(row.itemType)}</td>
+                    <td>{formatCurrency(row.price, false)}</td>
+                    <td>{formatCurrency(row.pricePerUnit, false)}</td>
+                    <td>{formatCurrency(row.pricePerSqft, false)}</td>
+                    <td>{formatPercent(row.capRatePct)}</td>
+                    <td>{[statusBadgeLabel(row.reviewStatus), titleize(row.selectionDecision)].filter((value) => value !== "-").join(" / ") || "-"}</td>
+                    <td>
+                      {row.packageId ? (
+                        <div className={styles.documentActions}>
+                          <button className={styles.secondaryButton} type="button" onClick={() => void onReview(row.packageId ?? "", row.id, "approved")}>
+                            Approve
+                          </button>
+                          <button className={styles.secondaryButton} type="button" onClick={() => void onReview(row.packageId ?? "", row.id, "rejected")}>
+                            Reject
+                          </button>
+                        </div>
+                      ) : (
+                        "-"
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className={styles.emptyState}>No extracted comps are available yet.</div>
+        )}
+      </section>
     </section>
   );
 }

@@ -14,6 +14,7 @@ const SITE_AUTH_COOKIE_NAME = "re_sourcing_site_session";
 const SITE_AUTH_SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 30;
 const PASSWORD_HASH_PREFIX = "scrypt";
 const PASSWORD_KEY_LENGTH = 64;
+const SITE_AUTH_REQUIRED_VALUES = new Set(["1", "true", "yes", "on"]);
 
 type SessionVerificationResult =
   | {
@@ -203,7 +204,17 @@ export function clearSiteAuthSessionCookie(res: Response): void {
   res.clearCookie(SITE_AUTH_COOKIE_NAME, getClearCookieOptions());
 }
 
+export function isSiteAuthRequired(): boolean {
+  const rawValue = process.env.SITE_AUTH_REQUIRED?.trim().toLowerCase();
+  return rawValue ? SITE_AUTH_REQUIRED_VALUES.has(rawValue) : false;
+}
+
 export function requireSiteAuth(req: Request, res: Response, next: NextFunction): void {
+  if (!isSiteAuthRequired()) {
+    next();
+    return;
+  }
+
   const token = readSiteAuthSessionToken(req);
   if (!token) {
     clearSiteAuthSessionCookie(res);

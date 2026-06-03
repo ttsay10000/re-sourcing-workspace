@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState, type DragEvent } from "react";
+import type { UiV2PipelineStatus } from "@re-sourcing/contracts";
 import styles from "./progress.module.css";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
@@ -86,6 +87,22 @@ type SavedDealSection = {
   label: string;
   description?: string;
   rows: SavedDealRow[];
+  targetStatus?: UiV2PipelineStatus;
+  moveLabel?: string;
+};
+
+type SavedStatusGroup = {
+  id: string;
+  label: string;
+  description: string;
+  statuses: string[];
+  targetStatus?: UiV2PipelineStatus;
+  moveLabel?: string;
+};
+
+type MovableSavedStatusGroup = SavedStatusGroup & {
+  targetStatus: UiV2PipelineStatus;
+  moveLabel: string;
 };
 
 const SECTION_ORDER: ProgressSection[] = [
@@ -97,43 +114,70 @@ const SECTION_ORDER: ProgressSection[] = [
   { id: "rejected", label: "Rejected", count: 0, rows: [] },
 ];
 
-const SAVED_STATUS_GROUPS: Array<{
-  id: string;
-  label: string;
-  description: string;
-  statuses: string[];
-}> = [
+const SAVED_STATUS_GROUPS: SavedStatusGroup[] = [
   {
     id: "watchlist",
     label: "Watchlist",
     description: "Saved and early-review deals.",
     statuses: ["saved", "interesting", "screening", "new"],
+    targetStatus: "saved",
+    moveLabel: "Watchlist",
   },
   {
     id: "underwriting",
     label: "Underwriting",
     description: "Deals in underwriting or dossier work.",
     statuses: ["underwriting", "dossier_generated"],
+    targetStatus: "underwriting",
+    moveLabel: "Underwriting",
+  },
+  {
+    id: "outreach",
+    label: "Outreach",
+    description: "Manual broker outreach has been started.",
+    statuses: ["outreach"],
+    targetStatus: "outreach",
+    moveLabel: "Outreach",
+  },
+  {
+    id: "awaiting_broker",
+    label: "Awaiting Broker",
+    description: "Follow-up is needed after outreach.",
+    statuses: ["awaiting_broker"],
+    targetStatus: "awaiting_broker",
+    moveLabel: "Awaiting Broker",
+  },
+  {
+    id: "contract_diligence",
+    label: "OM Received",
+    description: "OM has been received and review can continue.",
+    statuses: ["om_received"],
+    targetStatus: "om_received",
+    moveLabel: "OM Received",
   },
   {
     id: "loi_negotiation",
     label: "LOI / Negotiation",
-    description: "Broker outreach, LOI, and offer-review stages.",
-    statuses: ["outreach", "awaiting_broker", "offer_review"],
-  },
-  {
-    id: "contract_diligence",
-    label: "Contract / Diligence",
-    description: "OM received and deeper diligence stages.",
-    statuses: ["om_received"],
+    description: "Only deals manually moved to offer review.",
+    statuses: ["offer_review"],
+    targetStatus: "offer_review",
+    moveLabel: "LOI / Negotiation",
   },
   {
     id: "rejected_removed",
     label: "Rejected / Removed",
-    description: "Rejected or archived saved deals.",
+    description: "Rejected deals and archived records.",
     statuses: ["rejected", "archived"],
+    targetStatus: "archived",
+    moveLabel: "Archived",
   },
 ];
+
+const MOVE_STAGE_OPTIONS = SAVED_STATUS_GROUPS
+  .filter((group): group is MovableSavedStatusGroup =>
+    Boolean(group.targetStatus && group.moveLabel)
+  )
+  .filter((group) => group.targetStatus !== "rejected");
 
 function formatCurrency(value: number | null | undefined): string {
   if (value == null || Number.isNaN(value)) return "—";
@@ -303,12 +347,33 @@ function rowStatus(row: SavedDealRow): string {
   return row.status || row.savedDeal?.dealStatus || "saved";
 }
 
+function moveStatusForRow(row: SavedDealRow): UiV2PipelineStatus {
+  const status = rowStatus(row);
+  if (status === "dossier_generated") return "underwriting";
+  if (status === "interesting" || status === "screening" || status === "new") return "saved";
+  if (status === "rejected") return "archived";
+  return MOVE_STAGE_OPTIONS.some((option) => option.targetStatus === status)
+    ? (status as UiV2PipelineStatus)
+    : "saved";
+}
+
+function moveLabelForStatus(status: UiV2PipelineStatus): string {
+  return MOVE_STAGE_OPTIONS.find((option) => option.targetStatus === status)?.moveLabel ?? labelFromKey(status);
+}
+
 function buildSavedStatusSections(rows: SavedDealRow[]): SavedDealSection[] {
   const claimed = new Set<string>();
   const sections = SAVED_STATUS_GROUPS.map((group) => {
     const matches = rows.filter((row) => group.statuses.includes(rowStatus(row)));
     matches.forEach((row) => claimed.add(row.propertyId));
-    return { id: group.id, label: group.label, description: group.description, rows: matches };
+    return {
+      id: group.id,
+      label: group.label,
+      description: group.description,
+      rows: matches,
+      targetStatus: group.targetStatus,
+      moveLabel: group.moveLabel,
+    };
   });
   const otherRows = rows.filter((row) => !claimed.has(row.propertyId));
   return otherRows.length > 0
@@ -336,7 +401,7 @@ function buildSavedTagSections(rows: SavedDealRow[]): SavedDealSection[] {
     }));
 }
 
-export default function ProgressPage() {
+function ProgressPageContent() {
   const searchParams = useSearchParams();
   const query = (searchParams.get("q") ?? "").trim().toLowerCase();
   const [summary, setSummary] = useState<Summary | null>(null);
@@ -346,6 +411,9 @@ export default function ProgressPage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [stageMoveBusy, setStageMoveBusy] = useState<string | null>(null);
+  const [draggedDeal, setDraggedDeal] = useState<SavedDealRow | null>(null);
+  const [dragOverSectionId, setDragOverSectionId] = useState<string | null>(null);
 
   const loadProgress = useCallback(async (mode: "initial" | "refresh" = "initial") => {
     if (mode === "initial") setLoading(true);
@@ -379,6 +447,48 @@ export default function ProgressPage() {
   useEffect(() => {
     void loadProgress();
   }, [loadProgress]);
+
+  const moveSavedDeal = useCallback(
+    async (row: SavedDealRow, nextStatus: UiV2PipelineStatus) => {
+      const currentStatus = moveStatusForRow(row);
+      if (currentStatus === nextStatus) return;
+      const address = row.displayAddress || row.canonicalAddress || "this property";
+      const nextLabel = moveLabelForStatus(nextStatus);
+      if (!window.confirm(`Move ${address} to ${nextLabel}?`)) return;
+      setStageMoveBusy(row.propertyId);
+      setError(null);
+      try {
+        const response = await fetch(`${API_BASE}/api/ui-v2/properties/${row.propertyId}/status`, {
+          method: "PATCH",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status: nextStatus, source: "progress_table" }),
+        });
+        const data = (await response.json().catch(() => ({}))) as { error?: string; details?: string };
+        if (!response.ok) throw new Error(data.error || data.details || "Failed to move deal stage.");
+        setSavedDealRows((current) =>
+          current.map((deal) => (deal.propertyId === row.propertyId ? { ...deal, status: nextStatus } : deal))
+        );
+        await loadProgress("refresh");
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to move deal stage.");
+      } finally {
+        setStageMoveBusy(null);
+      }
+    },
+    [loadProgress]
+  );
+
+  const dropSavedDeal = useCallback(
+    (section: SavedDealSection) => {
+      const row = draggedDeal;
+      setDraggedDeal(null);
+      setDragOverSectionId(null);
+      if (!row || !section.targetStatus) return;
+      void moveSavedDeal(row, section.targetStatus);
+    },
+    [draggedDeal, moveSavedDeal]
+  );
 
   const filteredSections = useMemo(() => {
     if (!query) return sections;
@@ -470,7 +580,26 @@ export default function ProgressPage() {
         </div>
         <div className={styles.flowSections}>
           {savedStatusSections.map((section) => (
-            <SavedDealMiniSection key={section.id} section={section} loading={loading} />
+            <SavedDealMiniSection
+              key={section.id}
+              section={section}
+              loading={loading}
+              enableMoves
+              movingPropertyId={stageMoveBusy}
+              dragOver={dragOverSectionId === section.id}
+              onMove={moveSavedDeal}
+              onDragStartDeal={setDraggedDeal}
+              onDragEndDeal={() => {
+                setDraggedDeal(null);
+                setDragOverSectionId(null);
+              }}
+              onDragOverSection={(event) => {
+                if (!section.targetStatus || draggedDeal == null) return;
+                event.preventDefault();
+                setDragOverSectionId(section.id);
+              }}
+              onDropOnSection={() => dropSavedDeal(section)}
+            />
           ))}
         </div>
       </section>
@@ -619,18 +748,53 @@ export default function ProgressPage() {
   );
 }
 
+export default function ProgressPage() {
+  return (
+    <Suspense fallback={<div className={styles.page}>Loading progress...</div>}>
+      <ProgressPageContent />
+    </Suspense>
+  );
+}
+
 function SavedDealMiniSection({
   section,
   loading,
   compact = false,
+  enableMoves = false,
+  movingPropertyId = null,
+  dragOver = false,
+  onMove,
+  onDragStartDeal,
+  onDragEndDeal,
+  onDragOverSection,
+  onDropOnSection,
 }: {
   section: SavedDealSection;
   loading: boolean;
   compact?: boolean;
+  enableMoves?: boolean;
+  movingPropertyId?: string | null;
+  dragOver?: boolean;
+  onMove?: (row: SavedDealRow, nextStatus: UiV2PipelineStatus) => void | Promise<void>;
+  onDragStartDeal?: (row: SavedDealRow) => void;
+  onDragEndDeal?: () => void;
+  onDragOverSection?: (event: DragEvent<HTMLElement>) => void;
+  onDropOnSection?: () => void;
 }) {
   const visibleRows = compact ? section.rows.slice(0, 5) : section.rows;
   return (
-    <section className={styles.miniSection}>
+    <section
+      className={`${styles.miniSection} ${dragOver ? styles.miniSectionDropTarget : ""}`}
+      onDragOver={enableMoves ? onDragOverSection : undefined}
+      onDrop={
+        enableMoves
+          ? (event) => {
+              event.preventDefault();
+              onDropOnSection?.();
+            }
+          : undefined
+      }
+    >
       <div className={styles.miniSectionHeader}>
         <div>
           <h3>{section.label}</h3>
@@ -645,30 +809,59 @@ function SavedDealMiniSection({
       ) : (
         <div className={styles.miniRows}>
           {visibleRows.map((row) => (
-            <Link
+            <article
               key={`${section.id}-${row.propertyId}`}
-              href={`/pipeline?propertyId=${encodeURIComponent(row.propertyId)}`}
-              className={styles.miniRow}
+              className={`${styles.miniRow} ${movingPropertyId === row.propertyId ? styles.miniRowBusy : ""}`}
+              draggable={enableMoves && !compact}
+              onDragStart={
+                enableMoves
+                  ? (event) => {
+                      event.dataTransfer.effectAllowed = "move";
+                      event.dataTransfer.setData("text/plain", row.propertyId);
+                      onDragStartDeal?.(row);
+                    }
+                  : undefined
+              }
+              onDragEnd={enableMoves ? onDragEndDeal : undefined}
             >
               <div>
-                <strong>{row.displayAddress || row.canonicalAddress || row.propertyId}</strong>
-                <span>
-                  {[
-                    row.source ? labelFromKey(row.source) : null,
-                    formatUnitLabel(row.units),
-                    row.pricePerSqft != null ? `${formatCurrency(row.pricePerSqft)} / SF` : null,
-                  ]
-                    .filter(Boolean)
-                    .join(" · ") || "No context"}
-                </span>
+                <Link href={`/pipeline?propertyId=${encodeURIComponent(row.propertyId)}`} className={styles.miniRowLink}>
+                  <strong>{row.displayAddress || row.canonicalAddress || row.propertyId}</strong>
+                  <span>
+                    {[
+                      row.source ? labelFromKey(row.source) : null,
+                      formatUnitLabel(row.units),
+                      row.pricePerSqft != null ? `${formatCurrency(row.pricePerSqft)} / SF` : null,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ") || "No context"}
+                  </span>
+                </Link>
               </div>
               <div className={styles.miniMeta}>
                 <span className={statusClass(rowStatus(row))}>{labelFromKey(rowStatus(row))}</span>
                 <small className={scoreClass(row.dealScore)}>
                   {row.dealScore == null ? "—" : `${Math.round(row.dealScore)} / 100`}
                 </small>
+                {enableMoves ? (
+                  <select
+                    className={styles.stageSelect}
+                    aria-label={`Move ${row.displayAddress || row.canonicalAddress || "property"} to stage`}
+                    value={moveStatusForRow(row)}
+                    disabled={movingPropertyId === row.propertyId}
+                    onChange={(event) => {
+                      void onMove?.(row, event.target.value as UiV2PipelineStatus);
+                    }}
+                  >
+                    {MOVE_STAGE_OPTIONS.map((option) => (
+                      <option key={option.targetStatus} value={option.targetStatus}>
+                        {option.moveLabel}
+                      </option>
+                    ))}
+                  </select>
+                ) : null}
               </div>
-            </Link>
+            </article>
           ))}
           {compact && section.rows.length > visibleRows.length ? (
             <div className={styles.moreRows}>+{section.rows.length - visibleRows.length} more</div>

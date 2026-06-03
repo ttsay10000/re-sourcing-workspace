@@ -8,6 +8,7 @@ export type PropertyDetailTabId =
   | "documents"
   | "enrichment"
   | "omWorkspace"
+  | "marketComps"
   | "underwriting"
   | "outreach"
   | "dossierScore"

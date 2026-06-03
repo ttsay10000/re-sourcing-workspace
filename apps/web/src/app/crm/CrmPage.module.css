@@ -10,8 +10,8 @@
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
-  gap: var(--space-5);
-  margin-bottom: var(--space-4);
+  gap: var(--space-4);
+  margin-bottom: 0.8rem;
 }
 
 .eyebrow {
@@ -25,16 +25,16 @@
 .title {
   margin: 0;
   color: var(--app-ink);
-  font-family: var(--font-display);
-  font-size: clamp(2.15rem, 3vw, 3.15rem);
-  font-weight: 700;
-  line-height: 1.1;
+  font-family: var(--font-ui);
+  font-size: 1.8rem;
+  font-weight: 760;
+  line-height: 1.05;
 }
 
 .searchWrap {
   display: grid;
   gap: 0.35rem;
-  width: min(30rem, 48vw);
+  width: min(28rem, 46vw);
 }
 
 .searchLabel {
@@ -55,9 +55,9 @@
   background: var(--app-surface);
   color: var(--app-ink);
   font: inherit;
-  font-size: 0.9rem;
+  font-size: 0.86rem;
   line-height: 1.3;
-  padding: 0.58rem 0.7rem;
+  padding: 0.5rem 0.65rem;
   outline: none;
 }
 
@@ -75,7 +75,7 @@
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 0.65rem;
-  margin-bottom: 1rem;
+  margin-bottom: 0.8rem;
 }
 
 .metric {
@@ -83,11 +83,11 @@
   align-items: baseline;
   justify-content: space-between;
   gap: 0.75rem;
-  min-height: 3.4rem;
+  min-height: 3rem;
   border: 1px solid var(--app-line);
   border-radius: var(--radius-md);
   background: var(--app-surface);
-  padding: 0.7rem 0.85rem;
+  padding: 0.62rem 0.78rem;
   transition:
     border-color 150ms ease,
     box-shadow 150ms ease,
@@ -102,14 +102,14 @@
 
 .metricValue {
   color: var(--app-ink);
-  font-size: 1.45rem;
+  font-size: 1.3rem;
   font-weight: 760;
   font-variant-numeric: tabular-nums;
 }
 
 .metricLabel {
   color: var(--app-ink-secondary);
-  font-size: 0.78rem;
+  font-size: 0.7rem;
   font-weight: 700;
   text-transform: uppercase;
 }
@@ -129,7 +129,7 @@
   gap: 1rem;
   border-bottom: 1px solid var(--app-line);
   background: var(--app-surface-raised);
-  padding: 0.7rem 0.85rem;
+  padding: 0.62rem 0.75rem;
 }
 
 .tableHeader div {
@@ -140,12 +140,12 @@
 
 .tableHeader strong {
   color: var(--app-ink);
-  font-size: 0.95rem;
+  font-size: 0.9rem;
 }
 
 .tableHeader span {
   color: var(--app-muted);
-  font-size: 0.83rem;
+  font-size: 0.78rem;
 }
 
 .tableScroll {
@@ -156,7 +156,7 @@
   width: 100%;
   min-width: 94rem;
   border-collapse: collapse;
-  font-size: 0.86rem;
+  font-size: 0.82rem;
   table-layout: fixed;
 }
 
@@ -167,9 +167,9 @@
   border-bottom: 1px solid var(--app-line);
   background: var(--app-surface-strong);
   color: var(--app-ink-secondary);
-  font-size: 0.72rem;
+  font-size: 0.68rem;
   font-weight: 780;
-  padding: 0.58rem 0.72rem;
+  padding: 0.5rem 0.64rem;
   text-align: left;
   text-transform: uppercase;
 }
@@ -177,7 +177,7 @@
 .table td {
   border-bottom: 1px solid var(--app-line-subtle);
   color: var(--app-ink);
-  padding: 0.68rem 0.72rem;
+  padding: 0.56rem 0.64rem;
   vertical-align: middle;
 }
 
@@ -237,7 +237,7 @@
 
 .subtleLine {
   color: var(--app-muted);
-  font-size: 0.78rem;
+  font-size: 0.74rem;
   line-height: 1.35;
   margin-top: 0.18rem;
 }
@@ -358,9 +358,9 @@
   background: var(--app-surface-raised);
   color: var(--app-accent-teal);
   cursor: pointer;
-  font-size: 0.78rem;
+  font-size: 0.72rem;
   font-weight: 720;
-  padding: 0.28rem 0.45rem;
+  padding: 0.22rem 0.4rem;
   text-overflow: ellipsis;
   white-space: nowrap;
   transition:
@@ -377,7 +377,7 @@
 .moreChip {
   background: var(--app-surface-strong);
   color: var(--app-ink-secondary);
-  font-size: 0.78rem;
+  font-size: 0.72rem;
   font-weight: 760;
   padding: 0.31rem 0.45rem;
 }
@@ -386,12 +386,12 @@
   display: inline-flex;
   align-items: center;
   max-width: 8rem;
-  min-height: 1.55rem;
+  min-height: 1.42rem;
   overflow: hidden;
   border: 1px solid transparent;
-  font-size: 0.72rem;
+  font-size: 0.68rem;
   font-weight: 780;
-  padding: 0.18rem 0.42rem;
+  padding: 0.15rem 0.38rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -424,10 +424,10 @@
 .actionCountHot {
   display: inline-grid;
   place-items: center;
-  min-width: 2rem;
-  height: 1.65rem;
+  min-width: 1.75rem;
+  height: 1.45rem;
   border-radius: 999px;
-  font-size: 0.8rem;
+  font-size: 0.72rem;
   font-weight: 780;
 }
 
@@ -446,11 +446,11 @@
 .primaryButton {
   border: 1px solid var(--app-line-strong);
   cursor: pointer;
-  font-size: 0.82rem;
+  font-size: 0.78rem;
   font-weight: 760;
   line-height: 1.15;
-  min-height: 1.92rem;
-  padding: 0.38rem 0.55rem;
+  min-height: 1.75rem;
+  padding: 0.3rem 0.5rem;
   white-space: nowrap;
   transition:
     background 150ms ease,

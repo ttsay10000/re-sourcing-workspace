@@ -2,13 +2,17 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 
-type NavLink = {
+type NavChildLink = {
   href: string;
   label: string;
   shortLabel: string;
   matches: (pathname: string, section: string | null) => boolean;
+};
+
+type NavLink = NavChildLink & {
+  children?: NavChildLink[];
 };
 
 const NAV_LINKS: NavLink[] = [
@@ -59,6 +63,20 @@ const NAV_LINKS: NavLink[] = [
       pathname.startsWith("/deal-analysis/") ||
       pathname.startsWith("/dossier-") ||
       pathname.startsWith("/rental-analysis"),
+    children: [
+      {
+        href: "/progress",
+        label: "Progress Board",
+        shortLabel: "B",
+        matches: (pathname: string) => pathname === "/progress" || pathname.startsWith("/progress/"),
+      },
+      {
+        href: "/deal-analysis",
+        label: "OM Workspace",
+        shortLabel: "O",
+        matches: (pathname: string) => pathname === "/deal-analysis" || pathname.startsWith("/deal-analysis/"),
+      },
+    ],
   },
   {
     href: "/profile",
@@ -70,8 +88,6 @@ const NAV_LINKS: NavLink[] = [
   },
 ];
 const API_BASE = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000").replace(/\/$/, "");
-
-type AuthStatus = "checking" | "locked" | "unlocking" | "authenticated";
 
 function resolveRequestUrl(input: RequestInfo | URL): string | null {
   if (typeof input === "string") return input;
@@ -85,18 +101,9 @@ function isApiRequest(url: string | null): boolean {
   return url === API_BASE || url.startsWith(`${API_BASE}/`);
 }
 
-function isSiteAuthRequest(url: string | null): boolean {
-  if (!url) return false;
-  return url === `${API_BASE}/api/site-auth/status` || url === `${API_BASE}/api/site-auth/session`;
-}
-
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
-  const [authStatus, setAuthStatus] = useState<AuthStatus>("checking");
-  const [authError, setAuthError] = useState<string | null>(null);
-  const [password, setPassword] = useState("");
-  const [locking, setLocking] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [globalSearch, setGlobalSearch] = useState("");
   const [currentSection, setCurrentSection] = useState<string | null>(null);
@@ -108,17 +115,10 @@ export function AppShell({ children }: { children: ReactNode }) {
       const requestUrl = resolveRequestUrl(input);
       if (!isApiRequest(requestUrl)) return originalFetch(input, init);
 
-      const response = await originalFetch(input, {
+      return originalFetch(input, {
         ...(init ?? {}),
         credentials: "include",
       });
-
-      if (response.status === 401 && !isSiteAuthRequest(requestUrl)) {
-        setAuthError("Your unlock session expired. Enter the shared site password again.");
-        setAuthStatus("locked");
-      }
-
-      return response;
     };
 
     return () => {
@@ -146,82 +146,6 @@ export function AppShell({ children }: { children: ReactNode }) {
     window.addEventListener("popstate", syncUrlState);
     return () => window.removeEventListener("popstate", syncUrlState);
   }, [pathname]);
-
-  const checkSiteAuth = useCallback(async () => {
-    setAuthError(null);
-    try {
-      const response = await fetch(`${API_BASE}/api/site-auth/status`, { credentials: "include" });
-      if (!response.ok) {
-        setAuthStatus("locked");
-        return;
-      }
-
-      setAuthStatus("authenticated");
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to reach the API";
-      setAuthError(message === "Failed to fetch" ? `Cannot reach API at ${API_BASE}.` : message);
-      setAuthStatus("locked");
-    }
-  }, []);
-
-  useEffect(() => {
-    void checkSiteAuth();
-  }, [checkSiteAuth]);
-
-  const handleUnlock = useCallback(
-    async (event: FormEvent<HTMLFormElement>) => {
-      event.preventDefault();
-
-      if (!password.trim()) {
-        setAuthError("Enter the shared site password to continue.");
-        setAuthStatus("locked");
-        return;
-      }
-
-      setAuthStatus("unlocking");
-      setAuthError(null);
-
-      try {
-        const response = await fetch(`${API_BASE}/api/site-auth/session`, {
-          method: "POST",
-          credentials: "include",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ password }),
-        });
-        const data = await response.json().catch(() => null);
-        if (!response.ok) {
-          setAuthError(data?.error || data?.details || "Incorrect password.");
-          setAuthStatus("locked");
-          return;
-        }
-
-        setPassword("");
-        setAuthStatus("authenticated");
-      } catch (err) {
-        const message = err instanceof Error ? err.message : "Failed to unlock the site";
-        setAuthError(message === "Failed to fetch" ? `Cannot reach API at ${API_BASE}.` : message);
-        setAuthStatus("locked");
-      }
-    },
-    [password]
-  );
-
-  const handleLock = useCallback(async () => {
-    setLocking(true);
-    try {
-      await fetch(`${API_BASE}/api/site-auth/session`, {
-        method: "DELETE",
-        credentials: "include",
-      });
-    } catch {
-      // Keep the UI responsive even if the API call fails.
-    } finally {
-      setPassword("");
-      setAuthError(null);
-      setAuthStatus("locked");
-      setLocking(false);
-    }
-  }, []);
 
   const updateGlobalSearch = useCallback(
     (nextValue: string) => {
@@ -251,48 +175,6 @@ export function AppShell({ children }: { children: ReactNode }) {
     setGlobalSearch(targetUrl.searchParams.get("q") ?? "");
   }, []);
 
-  if (authStatus !== "authenticated") {
-    return (
-      <main className="site-auth-screen">
-        <section className="site-auth-card">
-          <p className="site-auth-eyebrow">Protected workspace</p>
-          <h1 className="site-auth-title">Real Estate Sourcing Flow</h1>
-          <p className="site-auth-copy">
-            Enter the shared site password to open the pipeline, broker CRM, saved deals, progress, and profile settings.
-          </p>
-          <form className="site-auth-form" onSubmit={handleUnlock}>
-            <label className="profile-field">
-              <span>Site password</span>
-              <input
-                type="password"
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                className="profile-input site-auth-input"
-                autoComplete="current-password"
-                autoFocus
-              />
-            </label>
-            {authError && <p className="site-auth-error">{authError}</p>}
-            <div className="site-auth-actions">
-              <button
-                type="submit"
-                className="profile-primary-button"
-                disabled={authStatus === "checking" || authStatus === "unlocking"}
-              >
-                {authStatus === "checking"
-                  ? "Checking access…"
-                  : authStatus === "unlocking"
-                    ? "Unlocking…"
-                    : "Unlock site"}
-              </button>
-              <span className="site-auth-note">This is a single shared password for the whole workspace.</span>
-            </div>
-          </form>
-        </section>
-      </main>
-    );
-  }
-
   return (
     <div className={`app-shell ${sidebarCollapsed ? "app-shell--sidebar-collapsed" : ""}`}>
       <aside className="app-sidebar" aria-label="Workspace navigation">
@@ -308,34 +190,48 @@ export function AppShell({ children }: { children: ReactNode }) {
           <span className="app-nav-section-label" aria-hidden="true">Workspace</span>
           {NAV_LINKS.map((navItem) => {
             const isActive = navItem.matches(pathname, currentSection);
+            const childIsActive = navItem.children?.some((child) => child.matches(pathname, currentSection)) ?? false;
             return (
-              <Link
+              <div
                 key={navItem.href}
-                href={navItem.href}
-                aria-label={navItem.label}
-                aria-current={isActive ? "page" : undefined}
-                onClick={() => handleNavClick(navItem.href)}
-                className={`app-nav-link ${isActive ? "app-nav-link--active" : ""}`}
+                className={`app-nav-group ${isActive ? "app-nav-group--active" : ""}`}
               >
-                <span className="app-nav-short" aria-hidden="true">
-                  {navItem.shortLabel}
-                </span>
-                <span className="app-nav-label">{navItem.label}</span>
-              </Link>
+                <Link
+                  href={navItem.href}
+                  aria-label={navItem.label}
+                  aria-current={isActive && !childIsActive ? "page" : undefined}
+                  onClick={() => handleNavClick(navItem.href)}
+                  className={`app-nav-link ${isActive ? "app-nav-link--active" : ""}`}
+                >
+                  <span className="app-nav-short" aria-hidden="true">
+                    {navItem.shortLabel}
+                  </span>
+                  <span className="app-nav-label">{navItem.label}</span>
+                </Link>
+                {navItem.children && isActive ? (
+                  <div className="app-nav-children" aria-label={`${navItem.label} pages`}>
+                    {navItem.children.map((child) => {
+                      const isChildActive = child.matches(pathname, currentSection);
+                      return (
+                        <Link
+                          key={child.href}
+                          href={child.href}
+                          aria-current={isChildActive ? "page" : undefined}
+                          onClick={() => handleNavClick(child.href)}
+                          className={`app-nav-sublink ${isChildActive ? "app-nav-sublink--active" : ""}`}
+                        >
+                          <span className="app-nav-sublink-dot" aria-hidden="true" />
+                          <span className="app-nav-sublink-label">{child.label}</span>
+                        </Link>
+                      );
+                    })}
+                  </div>
+                ) : null}
+              </div>
             );
           })}
         </nav>
 
-        <div className="app-sidebar-foot">
-          <button
-            type="button"
-            className="app-sidebar-lock-button"
-            onClick={handleLock}
-            disabled={locking}
-          >
-            {locking ? "Locking…" : "Lock"}
-          </button>
-        </div>
       </aside>
 
       <div className="app-workspace">
@@ -377,7 +273,6 @@ export function AppShell({ children }: { children: ReactNode }) {
           </div>
 
           <div className="app-topbar-actions">
-            <span className="app-session-pill">Site unlocked</span>
             <Link href="/add-property" className="app-import-link">
               Import
             </Link>

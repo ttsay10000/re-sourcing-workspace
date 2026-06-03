@@ -630,6 +630,11 @@ export type PropertyDocumentCategory =
   | "Rent Roll"
   | "Financial Model"
   | "T12 / Operating Summary"
+  | "Broker Comp Package"
+  | "Sale Comp Package"
+  | "Rent Comp Package"
+  | "Expense Comp Package"
+  | "Market Analysis"
   | "Other";
 
 /** User-uploaded document row (OM, brochure, rent roll, etc.). */
@@ -647,6 +652,149 @@ export interface PropertyUploadedDocument {
   /** Source-specific import metadata. */
   sourceMetadata?: Record<string, unknown> | null;
   createdAt: string;
+}
+
+export type BrokerCompPackageStatus =
+  | "uploaded"
+  | "classified"
+  | "extracted"
+  | "needs_review"
+  | "approved"
+  | "failed";
+
+export type BrokerCompPackageType =
+  | "market_analysis"
+  | "pricing_sellout"
+  | "sale_comps"
+  | "operating_comps"
+  | "rent_comps"
+  | "expense_comps"
+  | "broker_opinion"
+  | "other";
+
+export type BrokerCompPageType =
+  | "cover"
+  | "subject_summary"
+  | "pipeline"
+  | "proximity_map"
+  | "comp_profile"
+  | "sale_comp_grid"
+  | "operating_comp_grid"
+  | "rent_roll_grid"
+  | "expense_grid"
+  | "projected_pricing"
+  | "broker_opinion"
+  | "disclaimer"
+  | "other";
+
+export type BrokerCompExtractionMethod = "text" | "ocr" | "vision" | "spreadsheet" | "manual";
+
+export type BrokerCompItemType =
+  | "sale_comp"
+  | "operating_snapshot"
+  | "rent_roll_row"
+  | "expense_row"
+  | "pricing_comp"
+  | "unit_breakdown_row"
+  | "subject_projected_pricing"
+  | "pricing_opinion"
+  | "subject_fact"
+  | "broker_note";
+
+export type BrokerCompReviewStatus = "pending" | "edited" | "accepted" | "rejected";
+
+export type BrokerCompSelectionDecision =
+  | "include"
+  | "exclude"
+  | "watch"
+  | "duplicate"
+  | "not_comparable";
+
+export interface BrokerCompPageRef {
+  pageNumber: number;
+  label?: string | null;
+}
+
+export interface BrokerCompPackage {
+  id: string;
+  propertyId: string;
+  sourceDocumentId?: string | null;
+  sourceDocumentType?: "uploaded" | "inquiry" | "generated" | string | null;
+  packageType: BrokerCompPackageType;
+  status: BrokerCompPackageStatus;
+  sourceName?: string | null;
+  sourceMeta?: Record<string, unknown> | null;
+  pageCount?: number | null;
+  parserVersion?: string | null;
+  lastError?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BrokerCompPackagePage {
+  id: string;
+  packageId: string;
+  pageNumber: number;
+  pageType: BrokerCompPageType;
+  extractionMethod?: BrokerCompExtractionMethod | null;
+  confidence?: number | null;
+  rawTextExcerpt?: string | null;
+  regions?: Record<string, unknown> | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BrokerCompExtractedItem {
+  id: string;
+  packageId: string;
+  propertyId: string;
+  itemType: BrokerCompItemType;
+  rawPayload: Record<string, unknown>;
+  normalizedPayload: Record<string, unknown>;
+  pageRefs: BrokerCompPageRef[];
+  confidence?: number | null;
+  reviewStatus: BrokerCompReviewStatus;
+  selectionDecision?: BrokerCompSelectionDecision | null;
+  includeInDossier: boolean;
+  analystNote?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BrokerCompPricingOpinion {
+  amount: number | null;
+  source?: string | null;
+  sourceType?: "user" | "broker" | "package" | string | null;
+  confidence?: number | null;
+  note?: string | null;
+  observedAt?: string | null;
+}
+
+export interface BrokerCompDataFlag {
+  field: string;
+  label?: string | null;
+  severity?: "info" | "warning" | "error" | string | null;
+  message?: string | null;
+  source?: string | null;
+  resolved?: boolean | null;
+  [key: string]: unknown;
+}
+
+export interface BrokerCompPackageReviewPayload {
+  package: BrokerCompPackage;
+  pages: BrokerCompPackagePage[];
+  items: BrokerCompExtractedItem[];
+}
+
+export interface BrokerCompMarketSummary {
+  status?: BrokerCompPackageStatus | string | null;
+  summary?: string | null;
+  updatedAt?: string | null;
+  packages?: BrokerCompPackageReviewPayload[] | null;
+  items?: BrokerCompExtractedItem[] | null;
+  pricingOpinions?: BrokerCompPricingOpinion[] | null;
+  missingDataFlags?: BrokerCompDataFlag[] | null;
+  [key: string]: unknown;
 }
 
 export interface PropertyManualSourceLinks {
@@ -679,6 +827,13 @@ export interface PropertyDetails {
   monthlyTax?: number | null;
   /** Original manual source links used to seed this property into Property Data. */
   manualSourceLinks?: PropertyManualSourceLinks | null;
+  /** Broker comp package summaries, extracted comps, and broker pricing opinions. */
+  marketComps?: BrokerCompMarketSummary | BrokerCompPackageReviewPayload | BrokerCompPackageReviewPayload[] | null;
+  brokerComps?: BrokerCompMarketSummary | BrokerCompPackageReviewPayload | BrokerCompPackageReviewPayload[] | null;
+  brokerCompPackage?: BrokerCompPackageReviewPayload | null;
+  brokerCompPackages?: BrokerCompPackageReviewPayload[] | null;
+  brokerCompPricingOpinions?: BrokerCompPricingOpinion[] | null;
+  brokerCompMissingDataFlags?: BrokerCompDataFlag[] | null;
   /** Current market value total from valuations (curmkttot). */
   assessedMarketValue?: number | null;
   /** Current actual/assessed total from valuations (curacttot). */

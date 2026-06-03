@@ -122,7 +122,7 @@ async function markOmRequestedFromOutreach(
     eventType: "status_changed",
     actor,
     source,
-    title: "Status changed to OM Requested",
+    title: "Status changed to Outreach",
     metadata: {
       status: "outreach",
       previousStatus: currentUiStatus || null,
@@ -413,7 +413,7 @@ function buildOutreachDraftText(params: {
 
 My name is Tyler Tsay, and I'm reaching out on behalf of a client regarding the property at ${addressLine}. We are evaluating the building and would appreciate the opportunity to review further.
 
-Would you be able to share the OM, T-12, current rent roll, expenses, and/or any available financials?
+Would you be able to share the OM, T-12/operating statement, current rent roll, and expense detail? If available, we would also appreciate any broker comp package or market analysis, sale/rent comps, NOI/cap-rate support, and whisper pricing color.
 
 Thanks in advance - looking forward to taking a look.
 

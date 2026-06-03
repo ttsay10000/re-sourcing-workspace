@@ -413,14 +413,14 @@ const EXPENSE_TREATMENT_OPTIONS: Array<{
 
 const tableCellStyle: React.CSSProperties = {
   padding: "0.4rem 0.5rem",
-  borderBottom: "1px solid #e2e8f0",
+  borderBottom: "1px solid var(--app-line-subtle)",
   verticalAlign: "top",
 };
 
 const sectionCardStyle: React.CSSProperties = {
-  border: "1px solid #dbe2ea",
-  borderRadius: "14px",
-  background: "#fff",
+  border: "1px solid var(--app-line)",
+  borderRadius: "8px",
+  background: "var(--app-surface)",
   overflow: "hidden",
 };
 
@@ -691,10 +691,10 @@ function tableInputStyle(width = "100%"): React.CSSProperties {
     width,
     minWidth: 0,
     padding: "0.32rem 0.42rem",
-    border: "1px solid #cbd5e1",
-    borderRadius: "7px",
+    border: "1px solid var(--app-line-strong)",
+    borderRadius: "6px",
     fontSize: "0.76rem",
-    background: "#fff",
+    background: "var(--app-surface)",
   };
 }
 
@@ -1368,9 +1368,10 @@ export function OmCalculationPanel({
         flexDirection: "column",
         gap: "1rem",
         padding: "1rem",
-        border: "1px solid #dbeafe",
-        borderRadius: "16px",
-        background: "linear-gradient(180deg, #f8fbff 0%, #ffffff 100%)",
+        border: "1px solid var(--app-line)",
+        borderRadius: "8px",
+        background: "var(--app-surface)",
+        boxShadow: "var(--app-shadow)",
       }}
     >
       <div
@@ -1383,8 +1384,8 @@ export function OmCalculationPanel({
         }}
       >
         <div style={{ maxWidth: "820px" }}>
-          <h3 style={{ margin: 0, fontSize: "1.08rem", color: "#0f172a" }}>OM analysis workspace</h3>
-          <p style={{ margin: "0.35rem 0 0", fontSize: "0.9rem", color: "#475569", lineHeight: 1.55 }}>
+          <h3 style={{ margin: 0, fontSize: "1.05rem", color: "var(--app-ink)" }}>OM analysis workspace</h3>
+          <p style={{ margin: "0.35rem 0 0", fontSize: "0.9rem", color: "var(--app-ink-secondary)", lineHeight: 1.55 }}>
             Work from the uploaded OM the way you would in a live underwrite: tighten the assumptions in a
             compact calculator, adjust unit and expense rows directly, then review the live deal overview,
             cash flow statement, sensitivities, and supporting assumptions that feed the dossier.
@@ -1432,12 +1433,12 @@ export function OmCalculationPanel({
             onClick={onRunCalculation}
             disabled={running || !canCalculate}
             style={{
-              padding: "0.6rem 0.95rem",
-              borderRadius: "10px",
-              border: "none",
-              background: "#0066cc",
+              padding: "0.58rem 0.85rem",
+              borderRadius: "6px",
+              border: "1px solid var(--app-accent)",
+              background: "var(--app-accent)",
               color: "#fff",
-              fontWeight: 600,
+              fontWeight: 750,
               cursor: running || !canCalculate ? "not-allowed" : "pointer",
               opacity: !canCalculate ? 0.65 : 1,
             }}
@@ -1457,12 +1458,12 @@ export function OmCalculationPanel({
                 onClick={onSave}
                 disabled={saving || running || !isDirty}
                 style={{
-                  padding: "0.6rem 0.95rem",
-                  borderRadius: "10px",
-                  border: "1px solid #cbd5e1",
-                  background: "#fff",
-                  color: "#0f172a",
-                  fontWeight: 600,
+                  padding: "0.58rem 0.85rem",
+                  borderRadius: "6px",
+                  border: "1px solid var(--app-line-strong)",
+                  background: "var(--app-surface)",
+                  color: "var(--app-accent)",
+                  fontWeight: 750,
                   cursor: saving || running || !isDirty ? "not-allowed" : "pointer",
                 }}
               >
@@ -1473,11 +1474,11 @@ export function OmCalculationPanel({
                 onClick={onResetToSaved}
                 disabled={saving || running || !isDirty}
                 style={{
-                  padding: "0.6rem 0.95rem",
-                  borderRadius: "10px",
-                  border: "1px solid #cbd5e1",
-                  background: "#f8fafc",
-                  color: "#334155",
+                  padding: "0.58rem 0.85rem",
+                  borderRadius: "6px",
+                  border: "1px solid var(--app-line-strong)",
+                  background: "var(--app-surface-raised)",
+                  color: "var(--app-ink-secondary)",
                   cursor: saving || running || !isDirty ? "not-allowed" : "pointer",
                 }}
               >
@@ -1488,11 +1489,11 @@ export function OmCalculationPanel({
                 onClick={onClearSaved}
                 disabled={saving || running}
                 style={{
-                  padding: "0.6rem 0.95rem",
-                  borderRadius: "10px",
-                  border: "1px solid #fecaca",
-                  background: "#fff1f2",
-                  color: "#b91c1c",
+                  padding: "0.58rem 0.85rem",
+                  borderRadius: "6px",
+                  border: "1px solid var(--app-red-border)",
+                  background: "var(--app-red-soft)",
+                  color: "var(--app-red)",
                   cursor: saving || running ? "not-allowed" : "pointer",
                 }}
               >
@@ -1507,10 +1508,10 @@ export function OmCalculationPanel({
         <div
           style={{
             padding: "0.85rem 1rem",
-            borderRadius: "12px",
-            border: "1px solid #cbd5e1",
-            background: "#f8fafc",
-            color: "#334155",
+            borderRadius: "8px",
+            border: "1px solid var(--app-line)",
+            background: "var(--app-surface-raised)",
+            color: "var(--app-ink-secondary)",
             fontSize: "0.92rem",
           }}
         >
@@ -1524,10 +1525,10 @@ export function OmCalculationPanel({
         <div
           style={{
             padding: "0.85rem 1rem",
-            borderRadius: "12px",
-            border: "1px solid #fecaca",
-            background: "#fff1f2",
-            color: "#b91c1c",
+            borderRadius: "8px",
+            border: "1px solid var(--app-red-border)",
+            background: "var(--app-red-soft)",
+            color: "var(--app-red)",
             fontSize: "0.92rem",
           }}
         >
@@ -1539,7 +1540,7 @@ export function OmCalculationPanel({
         <div
           style={{
             padding: "0.9rem 1rem",
-            borderBottom: "1px solid #e2e8f0",
+            borderBottom: "1px solid var(--app-line)",
             display: "flex",
             justifyContent: "space-between",
             gap: "1rem",
@@ -1548,8 +1549,8 @@ export function OmCalculationPanel({
           }}
         >
           <div style={{ maxWidth: "720px" }}>
-            <strong style={{ color: "#0f172a" }}>Assumptions calculator</strong>
-            <div style={{ marginTop: "0.24rem", fontSize: "0.82rem", color: "#64748b", lineHeight: 1.5 }}>
+            <strong style={{ color: "var(--app-ink)" }}>Assumptions calculator</strong>
+            <div style={{ marginTop: "0.24rem", fontSize: "0.82rem", color: "var(--app-muted)", lineHeight: 1.5 }}>
               All of the core underwriting inputs live here in a tighter calculator layout so it is easier to
               key in and iterate quickly during OM review.
             </div>
@@ -1560,17 +1561,17 @@ export function OmCalculationPanel({
               onClick={onApplyFormulaDefault}
               disabled={saving || running}
               style={{
-                padding: "0.5rem 0.8rem",
-                borderRadius: "9px",
-                border: "1px solid #cbd5e1",
-                background: "#eff6ff",
-                color: "#1d4ed8",
+                padding: "0.48rem 0.72rem",
+                borderRadius: "6px",
+                border: "1px solid var(--app-line-strong)",
+                background: "var(--app-surface-raised)",
+                color: "var(--app-accent)",
                 cursor: saving || running ? "not-allowed" : "pointer",
               }}
             >
               Use formula FF&E default
             </button>
-            <div style={{ fontSize: "0.78rem", color: "#64748b" }}>
+            <div style={{ fontSize: "0.78rem", color: "var(--app-muted)" }}>
               Formula FF&E default: {formatCurrency(formulaFurnishingSetupCosts ?? 0)}
             </div>
           </div>

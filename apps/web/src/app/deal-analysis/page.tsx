@@ -148,50 +148,50 @@ type WorkspaceSort = "recent" | "address" | "dossier";
 const pageShellStyle: React.CSSProperties = {
   width: "min(100%, 1640px)",
   margin: "0 auto",
-  padding: "1.2rem 1.5rem 1.5rem",
+  padding: "0",
   display: "flex",
   flexDirection: "column",
   gap: "1rem",
-  color: "#161616",
+  color: "var(--app-ink)",
 };
 
 const cardStyle: React.CSSProperties = {
-  border: "1px solid rgba(38, 47, 44, 0.12)",
+  border: "1px solid var(--app-line)",
   borderRadius: "8px",
-  background: "rgba(255, 255, 255, 0.84)",
-  boxShadow: "0 12px 32px rgba(31, 43, 37, 0.06)",
+  background: "var(--app-surface)",
+  boxShadow: "var(--app-shadow)",
 };
 
 const inputStyle: React.CSSProperties = {
-  minHeight: "2.7rem",
-  border: "1px solid rgba(42, 52, 47, 0.18)",
+  minHeight: "2.45rem",
+  border: "1px solid var(--app-line-strong)",
   borderRadius: "6px",
-  padding: "0.58rem 0.72rem",
-  color: "#151814",
-  background: "#ffffff",
-  fontSize: "0.92rem",
+  padding: "0.52rem 0.68rem",
+  color: "var(--app-ink)",
+  background: "var(--app-surface)",
+  fontSize: "0.88rem",
 };
 
 const primaryButtonStyle: React.CSSProperties = {
-  minHeight: "2.45rem",
-  padding: "0.62rem 0.95rem",
+  minHeight: "2.35rem",
+  padding: "0.58rem 0.85rem",
   borderRadius: "6px",
-  border: "1px solid #173f36",
-  background: "#173f36",
+  border: "1px solid var(--app-accent)",
+  background: "var(--app-accent)",
   color: "#ffffff",
-  fontSize: "0.92rem",
+  fontSize: "0.86rem",
   fontWeight: 750,
   cursor: "pointer",
 };
 
 const secondaryButtonStyle: React.CSSProperties = {
-  minHeight: "2.45rem",
-  padding: "0.62rem 0.95rem",
+  minHeight: "2.35rem",
+  padding: "0.58rem 0.85rem",
   borderRadius: "6px",
-  border: "1px solid rgba(23, 63, 54, 0.22)",
-  background: "#ffffff",
-  color: "#173f36",
-  fontSize: "0.92rem",
+  border: "1px solid var(--app-line-strong)",
+  background: "var(--app-surface)",
+  color: "var(--app-accent)",
+  fontSize: "0.86rem",
   fontWeight: 750,
   cursor: "pointer",
 };
@@ -1187,59 +1187,51 @@ function DealAnalysisPageContent() {
     <div style={pageShellStyle}>
       <div
         style={{
-          ...cardStyle,
-          padding: "1.35rem 1.5rem",
-          background:
-            "linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(238, 246, 243, 0.92)), #ffffff",
+          display: "flex",
+          justifyContent: "space-between",
+          gap: "1rem",
+          flexWrap: "wrap",
+          alignItems: "flex-end",
+          padding: "0.35rem 0 0.15rem",
         }}
       >
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            gap: "1rem",
-            flexWrap: "wrap",
-            alignItems: "flex-start",
-          }}
-        >
-          <div style={{ maxWidth: "820px" }}>
-            <div
-              style={{
-                color: "#2f6f52",
-                fontSize: "0.72rem",
-                fontWeight: 850,
-                letterSpacing: "0.08em",
-                textTransform: "uppercase",
-              }}
-            >
-              OM workspace
-            </div>
-            <h1
-              style={{
-                margin: "0.2rem 0 0",
-                fontSize: "clamp(2.15rem, 3vw, 2.9rem)",
-                lineHeight: 1.04,
-                color: "#10140f",
-              }}
-            >
-              OM deal analysis
-            </h1>
-            <p style={{ margin: "0.55rem 0 0", color: "#5d635d", lineHeight: 1.45, fontSize: "0.95rem" }}>
-              Upload one or more OM PDFs for a fresh underwriting workspace, or reopen a prior
-              property-backed OM workspace with its saved assumptions, unit edits, and expense rows.
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={resetWorkspace}
+        <div style={{ maxWidth: "760px" }}>
+          <div
             style={{
-              ...secondaryButtonStyle,
-              alignSelf: "center",
+              color: "var(--app-muted)",
+              fontSize: "0.72rem",
+              fontWeight: 800,
+              textTransform: "uppercase",
             }}
           >
-            Generate new OM workspace
-          </button>
+            Deal Progress
+          </div>
+          <h1
+            style={{
+              margin: "0.18rem 0 0",
+              fontFamily: "var(--font-ui)",
+              fontSize: "2rem",
+              lineHeight: 1.06,
+              color: "var(--app-ink)",
+            }}
+          >
+            OM Workspace Analysis
+          </h1>
+          <p style={{ margin: "0.45rem 0 0", color: "var(--app-ink-secondary)", lineHeight: 1.45, fontSize: "0.95rem" }}>
+            Open saved property-backed OM workspaces, parse new OM PDFs, and keep underwriting edits in sync
+            with dossier outputs.
+          </p>
         </div>
+        <button
+          type="button"
+          onClick={resetWorkspace}
+          style={{
+            ...secondaryButtonStyle,
+            alignSelf: "center",
+          }}
+        >
+          New OM workspace
+        </button>
       </div>
 
       <div style={{ ...cardStyle, padding: "1.15rem" }}>
@@ -1579,7 +1571,10 @@ function DealAnalysisPageContent() {
               style={{
                 ...primaryButtonStyle,
                 cursor: !canAnalyze || uploading || linkAnalyzing ? "not-allowed" : "pointer",
-                opacity: !canAnalyze ? 0.65 : 1,
+                border: canAnalyze ? primaryButtonStyle.border : "1px solid var(--app-line)",
+                background: canAnalyze ? primaryButtonStyle.background : "var(--app-surface-strong)",
+                color: canAnalyze ? "#ffffff" : "var(--app-muted)",
+                opacity: uploading || linkAnalyzing ? 0.65 : 1,
               }}
             >
               {uploading ? "Analyzing uploaded PDFs..." : "Analyze uploaded OM PDFs"}

@@ -10,6 +10,7 @@ import type { Pool } from "pg";
 import { deriveListingActivitySummary, describeListingActivity } from "@re-sourcing/contracts";
 import {
   DocumentRepo,
+  BrokerCompPackageRepo,
   getPool,
   InquiryDocumentRepo,
   OmIngestionRunRepo,
@@ -22,11 +23,13 @@ import {
   UserProfileRepo,
 } from "@re-sourcing/db";
 import type { PropertyPipelineEvent } from "@re-sourcing/db";
+import type { BrokerCompPackageDetails } from "@re-sourcing/db";
 import type {
   AgentEnrichmentEntry,
   Document,
   PriceHistoryEntry,
   ListingSource,
+  BrokerCompMarketSummary,
   OmIngestionRun,
   Property,
   PropertyActionItem,
@@ -65,7 +68,6 @@ import {
   getPropertyDossierAssumptions,
   getPropertyDossierGeneration,
   getPropertyDossierSummary,
-  hasCompletedDealDossier,
 } from "../deal/propertyDossierState.js";
 import { resolveEffectiveDealScore } from "../deal/effectiveDealScore.js";
 import { resolveOmAskingPriceFromDetails } from "../deal/omAskingPrice.js";
@@ -258,6 +260,7 @@ interface DetailCollections {
   generatedDocs: Document[];
   omRuns: OmIngestionRun[];
   pipelineEvents: PropertyPipelineEvent[];
+  brokerCompDetails: BrokerCompPackageDetails[];
 }
 
 interface ParsedPipelineQuery {
@@ -605,7 +608,7 @@ function statusLabel(status: UiV2PipelineStatus): string {
     interesting: "Interesting",
     saved: "Saved",
     underwriting: "Underwriting",
-    outreach: "OM Requested",
+    outreach: "Outreach",
     awaiting_broker: "Awaiting Broker",
     om_received: "OM Received",
     dossier_generated: "Dossier Generated",
@@ -639,10 +642,9 @@ function deriveUiV2Status(row: PipelineBaseRow): UiV2PipelineStatus {
   const pipeline = readPipelineState(details);
   if (pipeline.status === "rejected_removed" || pipeline.rejectedAt != null) return "rejected";
   const explicitStatus = pipeline.uiV2Status;
-  if (explicitStatus === "archived" || explicitStatus === "offer_review") return explicitStatus;
-  if (hasCompletedDealDossier(details)) return "dossier_generated";
-  if (hasOm(row) && explicitStatus !== "underwriting") return "om_received";
   if (explicitStatus != null) return explicitStatus;
+  if (row.saved_deal_status === "dossier_generated") return "dossier_generated";
+  if (row.saved_deal_status === "rejected") return "rejected";
   if (row.saved_deal_status === "saved") return "saved";
   if (pipeline.status) return mapLegacyStatus(pipeline.status);
   return "new";
@@ -1121,7 +1123,7 @@ function latestDocUpdatedAt(row: PipelineBaseRow): string | null {
   return dates.sort().at(-1) ?? null;
 }
 
-function normalizeOmStatus(value: unknown, hasOmDocument: boolean): UiV2DocumentStatus["omStatus"] {
+function normalizeOmStatus(value: unknown, hasOmDocument: boolean, hasOmRequest: boolean): UiV2DocumentStatus["omStatus"] {
   const validStatuses = new Set([
     "queued",
     "processing",
@@ -1138,6 +1140,7 @@ function normalizeOmStatus(value: unknown, hasOmDocument: boolean): UiV2Document
   if (typeof value === "string" && validStatuses.has(value)) {
     return value as UiV2DocumentStatus["omStatus"];
   }
+  if (hasOmRequest && !hasOmDocument) return "requested";
   return hasOmDocument ? "available" : "missing";
 }
 
@@ -1157,10 +1160,12 @@ function buildDocumentStatus(row: PipelineBaseRow, collections?: DetailCollectio
       collections.omRuns.some((run) => run.status === "completed" || run.status === "promoted")
     : hasOm(row);
   const pipeline = readPipelineState(row.details);
+  const latestRequestAt = optionalIso(row.latest_inquiry_sent_at);
   return {
     hasOm: hasOmDocument,
-    omStatus: normalizeOmStatus(row.latest_om_status ?? pipeline.omStatus, hasOmDocument),
+    omStatus: normalizeOmStatus(row.latest_om_status ?? pipeline.omStatus, hasOmDocument, latestRequestAt != null),
     latestOmRunId: row.latest_om_run_id,
+    latestRequestAt,
     documentCount,
     categories,
     lastUpdatedAt: latestDocUpdatedAt(row),
@@ -2001,6 +2006,24 @@ function buildDocumentItems(row: PipelineBaseRow, collections: DetailCollections
   ].sort((left, right) => String(right.createdAt ?? "").localeCompare(String(left.createdAt ?? "")));
 }
 
+function buildBrokerCompMarketSummary(collections: DetailCollections): BrokerCompMarketSummary | null {
+  if (collections.brokerCompDetails.length === 0) return null;
+  const latestPackage = [...collections.brokerCompDetails]
+    .map((detail) => detail.package)
+    .sort((left, right) => String(right.updatedAt ?? right.createdAt).localeCompare(String(left.updatedAt ?? left.createdAt)))[0];
+  const itemCount = collections.brokerCompDetails.reduce((sum, detail) => sum + detail.items.length, 0);
+  const approvedCount = collections.brokerCompDetails.reduce(
+    (sum, detail) => sum + detail.items.filter((item) => item.reviewStatus === "accepted" || item.includeInDossier).length,
+    0
+  );
+  return {
+    status: latestPackage?.status ?? "ready_for_review",
+    summary: `${collections.brokerCompDetails.length} broker comp package${collections.brokerCompDetails.length === 1 ? "" : "s"} / ${itemCount} extracted item${itemCount === 1 ? "" : "s"} / ${approvedCount} approved`,
+    updatedAt: latestPackage?.updatedAt ?? latestPackage?.createdAt ?? null,
+    packages: collections.brokerCompDetails as unknown as NonNullable<BrokerCompMarketSummary["packages"]>,
+  };
+}
+
 function buildPropertyDetail(row: PipelineBaseRow, collections: DetailCollections, userId: string): UiV2PropertyDetailPayload {
   return {
     overview: buildOverview(row),
@@ -2013,6 +2036,7 @@ function buildPropertyDetail(row: PipelineBaseRow, collections: DetailCollection
     enrichmentState: buildEnrichmentState(row),
     enrichmentDetails: buildEnrichmentDetails(row),
     underwriting: buildUnderwriting(row),
+    brokerComps: buildBrokerCompMarketSummary(collections),
     sourcingUpdate: row.details?.sourcingUpdate ?? null,
     activityTimeline: buildActivityTimeline(row, collections),
     actionItems: collections.actionItems,
@@ -2196,15 +2220,24 @@ async function fetchPipelineRowById(pool: Pool, userId: string, propertyId: stri
 }
 
 async function loadDetailCollections(pool: Pool, propertyId: string): Promise<DetailCollections> {
-  const [actionItems, uploadedDocs, inquiryDocs, generatedDocs, omRuns, pipelineEvents] = await Promise.all([
+  const brokerCompRepo = new BrokerCompPackageRepo({ pool });
+  const brokerCompDetailsPromise = brokerCompRepo
+    .listPackagesByPropertyId(propertyId, 20)
+    .then(async (packages) => {
+      const details = await Promise.all(packages.map((pkg) => brokerCompRepo.getPackageDetails(pkg.id)));
+      return details.filter((detail): detail is BrokerCompPackageDetails => detail != null);
+    })
+    .catch(() => []);
+  const [actionItems, uploadedDocs, inquiryDocs, generatedDocs, omRuns, pipelineEvents, brokerCompDetails] = await Promise.all([
     new PropertyActionItemRepo({ pool }).listOpenByPropertyId(propertyId).catch(() => []),
     new PropertyUploadedDocumentRepo({ pool }).listByPropertyId(propertyId).catch(() => []),
     new InquiryDocumentRepo({ pool }).listByPropertyId(propertyId).catch(() => []),
     new DocumentRepo({ pool }).listByPropertyId(propertyId).catch(() => []),
     new OmIngestionRunRepo({ pool }).listByPropertyId(propertyId, 20).catch(() => []),
     new PropertyPipelineEventRepo({ pool }).listByPropertyId(propertyId, { limit: 50 }).catch(() => []),
+    brokerCompDetailsPromise,
   ]);
-  return { actionItems, uploadedDocs, inquiryDocs, generatedDocs, omRuns, pipelineEvents };
+  return { actionItems, uploadedDocs, inquiryDocs, generatedDocs, omRuns, pipelineEvents, brokerCompDetails };
 }
 
 function mtrState(row: UiV2PipelineRow): "good" | "watch" | "none" {

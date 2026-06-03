@@ -231,6 +231,10 @@ function buildPropertyDetailsMergeFromListing(listing: {
 
 function detectImportedDocumentCategory(label: string | null | undefined, url: string | null | undefined): PropertyDocumentCategory {
   const text = `${label ?? ""} ${url ?? ""}`.toLowerCase();
+  if (/market[ _-]?analysis|comp(arable)?s?[ _-]?(package|set|book)?|broker[ _-]?comp/.test(text)) return "Broker Comp Package";
+  if (/sale[ _-]?comp|cap[ _-]?rate[ _-]?comp|noi[ _-]?comp|whisper/.test(text)) return "Sale Comp Package";
+  if (/rent[ _-]?comp|lease[ _-]?comp/.test(text)) return "Rent Comp Package";
+  if (/expense[ _-]?comp|opex[ _-]?comp/.test(text)) return "Expense Comp Package";
   if (/rent[ _-]?roll/.test(text)) return "Rent Roll";
   if (/t-?12|operating|income[ _-]?expense/.test(text)) return "T12 / Operating Summary";
   if (/model|proforma|pro-forma|xlsx|xls/.test(text)) return "Financial Model";
@@ -575,17 +579,14 @@ async function refreshPropertyPipelineMetadata(
   const underwritingStatus: PropertyUnderwritingStatus =
     overrides.underwritingStatus ??
     (hasDossier ? "complete" : hasOmDocument && !hasRentRoll ? "needs_rent_roll" : hasOmDocument && !hasAssumptions ? "needs_assumptions" : hasOmDocument ? "in_progress" : "not_started");
+  const inferredInitialStatus: PropertyPipelineStatus = hasCityEnrichment ? "enrichment_complete" : "new_sourced";
   const status: PropertyPipelineStatus =
     overrides.status ??
     (rejected
       ? "rejected_removed"
-      : hasDossier
-        ? "saved_watchlist"
-        : hasOmDocument
-          ? "underwriting"
-          : lastInquirySentAt
-            ? "om_requested"
-            : "needs_om");
+      : existing.status && existing.status !== "new_sourced"
+        ? existing.status
+        : inferredInitialStatus);
   const hasTagOverride = Object.prototype.hasOwnProperty.call(overrides, "tags");
   const tags = uniqueStrings(hasTagOverride ? (overrides.tags ?? []) : existing.tags ?? []);
   const next: PropertyPipelineState = {
@@ -2668,6 +2669,11 @@ const VALID_UPLOAD_CATEGORIES: PropertyDocumentCategory[] = [
   "Rent Roll",
   "Financial Model",
   "T12 / Operating Summary",
+  "Broker Comp Package",
+  "Sale Comp Package",
+  "Rent Comp Package",
+  "Expense Comp Package",
+  "Market Analysis",
   "Other",
 ];
 
@@ -3218,7 +3224,7 @@ function buildInquiryDraft(input: {
 
 My name is Tyler Tsay, and I'm reaching out on behalf of a client regarding the property at ${addressLine} currently on the market. We are evaluating the building and would appreciate the opportunity to review further.
 
-Would you be able to share the OM, T-12, current rent roll, expenses, and/or any available financials?
+Would you be able to share the OM, T-12/operating statement, current rent roll, and expense detail? If available, we would also appreciate any broker comp package or market analysis, sale/rent comps, NOI/cap-rate support, and whisper pricing color.
 
 Thanks in advance - looking forward to taking a look.
 

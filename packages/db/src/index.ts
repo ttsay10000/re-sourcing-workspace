@@ -45,6 +45,21 @@ export { InquirySendRepo } from "./repos/InquirySendRepo.js";
 export type { InquirySendRepoOptions, InquiryReplyMatchingSendRow } from "./repos/InquirySendRepo.js";
 export { PropertyUploadedDocumentRepo } from "./repos/PropertyUploadedDocumentRepo.js";
 export type { PropertyUploadedDocumentRepoOptions, InsertPropertyUploadedDocumentParams } from "./repos/PropertyUploadedDocumentRepo.js";
+export { BrokerCompPackageRepo, BrokerCompPackageRepo as BrokerCompRepo } from "./repos/BrokerCompPackageRepo.js";
+export type {
+  BrokerCompExtractedItemRecord,
+  BrokerCompPackageDetailItem,
+  BrokerCompPackageDetails,
+  BrokerCompPackagePageRecord,
+  BrokerCompPackageRecord,
+  BrokerCompPackageRepoOptions,
+  BrokerCompPromotedItem,
+  CreateBrokerCompExtractedItemParams,
+  CreateBrokerCompPackageParams,
+  PromoteBrokerCompItemParams,
+  UpdateBrokerCompExtractedItemParams,
+  UpsertBrokerCompPackagePageParams,
+} from "./repos/BrokerCompPackageRepo.js";
 export { mapDocument, mapUserProfile, mapSavedDeal, mapDealSignalRow, mapDealScoreOverride } from "./map.js";
 export {
   mapBrokerContact,

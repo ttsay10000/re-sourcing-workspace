@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import styles from "./saved.module.css";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
@@ -246,7 +246,7 @@ function normalizeRows(data: SavedDealsResponse): SavedDealRow[] {
     }));
 }
 
-export default function SavedPage() {
+function SavedPageContent() {
   const searchParams = useSearchParams();
   const query = (searchParams.get("q") ?? "").trim().toLowerCase();
   const [rows, setRows] = useState<SavedDealRow[]>([]);
@@ -478,5 +478,13 @@ export default function SavedPage() {
         )}
       </section>
     </div>
+  );
+}
+
+export default function SavedPage() {
+  return (
+    <Suspense fallback={<div className={styles.page}>Loading saved deals...</div>}>
+      <SavedPageContent />
+    </Suspense>
   );
 }

@@ -16,7 +16,7 @@ import type {
 } from "@re-sourcing/contracts";
 import { getPool, UserProfileRepo } from "@re-sourcing/db";
 import { resolveEffectiveDealScore } from "../deal/effectiveDealScore.js";
-import { getPropertyDossierSummary, hasCompletedDealDossier } from "../deal/propertyDossierState.js";
+import { getPropertyDossierSummary } from "../deal/propertyDossierState.js";
 import { resolvePreferredOmUnitCount } from "../om/authoritativeOm.js";
 
 const router = Router();
@@ -449,7 +449,9 @@ function deriveStatus(row: SavedProgressBaseRow): UiV2PipelineStatus {
   }
   const uiStatus = stringOrNull(pipeline.uiV2Status);
   if (uiStatus != null && UI_V2_STATUSES.has(uiStatus as UiV2PipelineStatus)) return uiStatus as UiV2PipelineStatus;
-  if (hasCompletedDealDossier(details as never)) return "dossier_generated";
+  if (row.saved_deal_status === "dossier_generated") return "dossier_generated";
+  if (row.saved_deal_status === "rejected") return "rejected";
+  if (row.saved_deal_status === "saved") return "saved";
   return mapLegacyStatus(stringOrNull(pipeline.status));
 }
 

@@ -1,12 +1,34 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   createSiteAuthSessionToken,
   hashSitePassword,
+  isSiteAuthRequired,
   verifySiteAuthSessionToken,
   verifySitePasswordHash,
 } from "./siteAuth.js";
 
 describe("siteAuth", () => {
+  const originalSiteAuthRequired = process.env.SITE_AUTH_REQUIRED;
+
+  afterEach(() => {
+    if (originalSiteAuthRequired === undefined) {
+      delete process.env.SITE_AUTH_REQUIRED;
+    } else {
+      process.env.SITE_AUTH_REQUIRED = originalSiteAuthRequired;
+    }
+  });
+
+  it("leaves site auth disabled unless it is explicitly required", () => {
+    delete process.env.SITE_AUTH_REQUIRED;
+    expect(isSiteAuthRequired()).toBe(false);
+
+    process.env.SITE_AUTH_REQUIRED = "true";
+    expect(isSiteAuthRequired()).toBe(true);
+
+    process.env.SITE_AUTH_REQUIRED = "false";
+    expect(isSiteAuthRequired()).toBe(false);
+  });
+
   it("hashes and verifies shared passwords", async () => {
     const hash = await hashSitePassword("Whatagloriousday!1");
 

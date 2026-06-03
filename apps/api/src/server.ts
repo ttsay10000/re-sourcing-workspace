@@ -22,6 +22,7 @@ import pipelineV2Router from "./routes/pipelineV2.js";
 import crmV2Router from "./routes/crmV2.js";
 import importV2Router from "./routes/importV2.js";
 import savedProgressV2Router from "./routes/savedProgressV2.js";
+import brokerCompsRouter from "./routes/brokerComps.js";
 
 const PORT = Number(process.env.PORT) || 4000;
 const version = process.env.npm_package_version || "1.0.0";
@@ -75,6 +76,7 @@ app.use("/api", dealsRouter);
 app.use("/api", savedSearchesRouter);
 app.use("/api", salesMetricsRouter);
 app.use("/api", dealAnalysisRouter);
+app.use("/api", brokerCompsRouter);
 app.use("/api", pipelineV2Router);
 app.use("/api", crmV2Router);
 app.use("/api", importV2Router);

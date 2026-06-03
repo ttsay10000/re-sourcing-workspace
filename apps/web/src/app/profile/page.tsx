@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
 const currencyFormatter = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
@@ -433,7 +433,7 @@ function buildSavedSearchPayload(draft: SavedSearchDraft) {
   };
 }
 
-export default function ProfilePage() {
+function ProfilePageContent() {
   const searchParams = useSearchParams();
   const globalQuery = (searchParams.get("q") ?? "").trim().toLowerCase();
   const [profile, setProfile] = useState<UserProfile | null>(null);
@@ -441,12 +441,6 @@ export default function ProfilePage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState<Partial<UserProfile>>({});
-  const [currentSitePassword, setCurrentSitePassword] = useState("");
-  const [nextSitePassword, setNextSitePassword] = useState("");
-  const [confirmSitePassword, setConfirmSitePassword] = useState("");
-  const [sitePasswordSaving, setSitePasswordSaving] = useState(false);
-  const [sitePasswordError, setSitePasswordError] = useState<string | null>(null);
-  const [sitePasswordNotice, setSitePasswordNotice] = useState<string | null>(null);
   const [savedDeals, setSavedDeals] = useState<ProfileSavedDealRow[]>([]);
   const [savedDealsLoading, setSavedDealsLoading] = useState(false);
   const [refreshingScoreScope, setRefreshingScoreScope] = useState<"saved" | "all" | null>(null);
@@ -627,51 +621,6 @@ export default function ProfilePage() {
       setError(e instanceof Error ? e.message : "Failed to save");
     } finally {
       setSaving(false);
-    }
-  };
-
-  const handleChangeSitePassword = async () => {
-    setSitePasswordError(null);
-    setSitePasswordNotice(null);
-
-    if (!currentSitePassword.trim()) {
-      setSitePasswordError("Enter the current site password.");
-      return;
-    }
-    if (!nextSitePassword.trim()) {
-      setSitePasswordError("Enter a new site password.");
-      return;
-    }
-    if (nextSitePassword.trim().length < 8) {
-      setSitePasswordError("New password must be at least 8 characters.");
-      return;
-    }
-    if (nextSitePassword !== confirmSitePassword) {
-      setSitePasswordError("New password and confirmation do not match.");
-      return;
-    }
-
-    setSitePasswordSaving(true);
-    try {
-      const res = await fetch(`${API_BASE}/api/profile`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          currentSitePassword,
-          newSitePassword: nextSitePassword,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error || data?.details || "Failed to update site password");
-      setProfile(data);
-      setCurrentSitePassword("");
-      setNextSitePassword("");
-      setConfirmSitePassword("");
-      setSitePasswordNotice("Site password updated. Use the new password the next time you unlock the workspace.");
-    } catch (e) {
-      setSitePasswordError(e instanceof Error ? e.message : "Failed to update site password");
-    } finally {
-      setSitePasswordSaving(false);
     }
   };
 
@@ -1037,72 +986,6 @@ export default function ProfilePage() {
         <p className="profile-section-note">
           Auto-send initial OM requests applies to eligible new properties from saved-search runs. The global server env gate must also be enabled. Pause all scheduled automation stops saved-search cron, inbox processing, and outreach cron. Reply automation and ambiguous-action handling are configuration only right now; no automatic replies or promotion paths are enabled.
         </p>
-      </section>
-
-      <section className="profile-section">
-        <div className="profile-section-heading">
-          <div>
-            <h2>Site password</h2>
-            <p>Rotate the single shared password that unlocks the entire workspace.</p>
-          </div>
-          <button
-            type="button"
-            onClick={handleChangeSitePassword}
-            disabled={sitePasswordSaving}
-            className="profile-primary-button"
-          >
-            {sitePasswordSaving ? "Updating…" : "Update password"}
-          </button>
-        </div>
-        <p className="profile-section-note">
-          This changes the global unlock password for the whole site. You will need the current shared password to rotate it.
-        </p>
-        {sitePasswordError && <p className="profile-page-error">{sitePasswordError}</p>}
-        {sitePasswordNotice && <p style={{ margin: 0, color: "#166534" }}>{sitePasswordNotice}</p>}
-        <div className="profile-form-grid profile-form-grid--compact">
-          <label className="profile-field">
-            <span>Current password</span>
-            <input
-              type="password"
-              value={currentSitePassword}
-              onChange={(e) => {
-                setCurrentSitePassword(e.target.value);
-                setSitePasswordError(null);
-                setSitePasswordNotice(null);
-              }}
-              className="profile-input"
-              autoComplete="current-password"
-            />
-          </label>
-          <label className="profile-field">
-            <span>New password</span>
-            <input
-              type="password"
-              value={nextSitePassword}
-              onChange={(e) => {
-                setNextSitePassword(e.target.value);
-                setSitePasswordError(null);
-                setSitePasswordNotice(null);
-              }}
-              className="profile-input"
-              autoComplete="new-password"
-            />
-          </label>
-          <label className="profile-field">
-            <span>Confirm new password</span>
-            <input
-              type="password"
-              value={confirmSitePassword}
-              onChange={(e) => {
-                setConfirmSitePassword(e.target.value);
-                setSitePasswordError(null);
-                setSitePasswordNotice(null);
-              }}
-              className="profile-input"
-              autoComplete="new-password"
-            />
-          </label>
-        </div>
       </section>
 
       <section className="profile-section">
@@ -2061,5 +1944,13 @@ export default function ProfilePage() {
         }
       `}</style>
     </div>
+  );
+}
+
+export default function ProfilePage() {
+  return (
+    <Suspense fallback={<div className="profile-page--holistic">Loading profile...</div>}>
+      <ProfilePageContent />
+    </Suspense>
   );
 }

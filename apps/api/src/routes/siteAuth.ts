@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from "express";
 import {
   clearSiteAuthSessionCookie,
+  isSiteAuthRequired,
   readSiteAuthSessionToken,
   setSiteAuthSessionCookie,
   verifyDefaultSitePassword,
@@ -10,28 +11,39 @@ import {
 const router = Router();
 
 router.get("/site-auth/status", (req: Request, res: Response) => {
+  if (!isSiteAuthRequired()) {
+    res.json({ authenticated: true, authRequired: false });
+    return;
+  }
+
   const token = readSiteAuthSessionToken(req);
   if (!token) {
     clearSiteAuthSessionCookie(res);
-    res.status(401).json({ authenticated: false });
+    res.status(401).json({ authenticated: false, authRequired: true });
     return;
   }
 
   const verification = verifySiteAuthSessionToken(token);
   if (!verification.valid) {
     clearSiteAuthSessionCookie(res);
-    res.status(401).json({ authenticated: false });
+    res.status(401).json({ authenticated: false, authRequired: true });
     return;
   }
 
   res.json({
     authenticated: true,
+    authRequired: true,
     expiresAt: new Date(verification.expiresAtMs).toISOString(),
   });
 });
 
 router.post("/site-auth/session", async (req: Request, res: Response) => {
   try {
+    if (!isSiteAuthRequired()) {
+      res.json({ authenticated: true, authRequired: false });
+      return;
+    }
+
     const password = typeof req.body?.password === "string" ? req.body.password : "";
     const verification = await verifyDefaultSitePassword(password);
     if (!verification.ok || !verification.profileId) {
@@ -50,8 +62,12 @@ router.post("/site-auth/session", async (req: Request, res: Response) => {
 });
 
 router.delete("/site-auth/session", (_req: Request, res: Response) => {
+  const authRequired = isSiteAuthRequired();
   clearSiteAuthSessionCookie(res);
-  res.json({ authenticated: false });
+  res.json({
+    authenticated: !authRequired,
+    authRequired,
+  });
 });
 
 export default router;

@@ -1,5 +1,6 @@
 import type { IngestionJobStatus, IngestionRunStatus, ListingSource } from "./enums.js";
 import type {
+  BrokerCompMarketSummary,
   OmIngestionRun,
   OmIngestionRunStatus,
   PropertyDealDossierGenerationStatus,
@@ -160,7 +161,7 @@ export const UI_V2_PIPELINE_STATUS_OPTIONS = [
   },
   {
     status: "outreach",
-    label: "OM Requested",
+    label: "Outreach",
     tone: "info",
     editable: true,
     description: "Broker outreach is queued, drafted, or underway.",
@@ -468,6 +469,7 @@ export interface UiV2DocumentStatus {
   hasOm: boolean;
   omStatus?: OmIngestionRunStatus | "not_requested" | "requested" | "available" | "missing" | null;
   latestOmRunId?: string | null;
+  latestRequestAt?: string | null;
   documentCount?: number;
   categories?: PropertyDocumentCategory[];
   lastUpdatedAt?: string | null;
@@ -623,6 +625,7 @@ export interface UiV2PipelineRow {
   documentStatus?: UiV2DocumentStatus | null;
   enrichmentState?: UiV2EnrichmentState | null;
   underwriting?: UiV2UnderwritingSummary | null;
+  brokerComps?: BrokerCompMarketSummary | null;
   openActionItemCount?: number;
   lastActivityAt?: string | null;
   createdAt: string;
@@ -672,6 +675,7 @@ export interface UiV2PropertyDetailPayload {
   enrichmentState: UiV2EnrichmentState;
   enrichmentDetails?: UiV2EnrichmentDetailPayload | null;
   underwriting: UiV2UnderwritingSummary | null;
+  brokerComps?: BrokerCompMarketSummary | null;
   sourcingUpdate?: PropertySourcingUpdate | null;
   activityTimeline: UiV2ActivityTimelineItem[];
   actionItems: PropertyActionItem[];

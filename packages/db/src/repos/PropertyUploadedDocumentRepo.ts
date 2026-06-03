@@ -27,6 +27,11 @@ const VALID_CATEGORIES: PropertyDocumentCategory[] = [
   "Rent Roll",
   "Financial Model",
   "T12 / Operating Summary",
+  "Broker Comp Package",
+  "Sale Comp Package",
+  "Rent Comp Package",
+  "Expense Comp Package",
+  "Market Analysis",
   "Other",
 ];
 

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import type { UiV2PipelineListPayload, UiV2PipelineRow } from "@re-sourcing/contracts";
 import styles from "./home.module.css";
 
@@ -27,18 +27,39 @@ type HomeProgressRow = {
   omStatus?: string | null;
 };
 
-const SNAPSHOT_STAGES = [
+const SNAPSHOT_STAGES: Array<{ key: string; label: string; href?: string; hrefStatus?: string }> = [
   { key: "new", label: "Sourced" },
-  { key: "needs_om", label: "Needs OM" },
-  { key: "outreach", label: "OM Requested" },
-  { key: "om_received", label: "OM Received" },
-  { key: "underwriting", label: "Underwriting" },
+  { key: "needs_om_request", label: "Needs Request", href: "/pipeline?hasOm=false" },
+  { key: "om_requested", label: "OM Requested", hrefStatus: "outreach" },
+  { key: "om_received", label: "OM Received", href: "/pipeline?hasOm=true" },
+  { key: "underwriting_phase", label: "Underwriting", hrefStatus: "underwriting,dossier_generated" },
   { key: "loi_sent", label: "LOI Sent" },
   { key: "negotiation", label: "Negotiation" },
   { key: "contract_signed", label: "Contract Signed" },
   { key: "diligence", label: "Diligence" },
   { key: "archived", label: "Closed" },
 ];
+
+const CLOSED_STATUSES = new Set(["rejected", "archived"]);
+const UNDERWRITING_PHASE_STATUSES = new Set(["underwriting", "dossier_generated"]);
+const OM_RECEIVED_STATUSES = new Set(["available", "completed", "promoted"]);
+
+function pipelineStatus(row: UiV2PipelineRow): string {
+  return String(row.statusChip.status);
+}
+
+function isClosedRow(row: UiV2PipelineRow): boolean {
+  return CLOSED_STATUSES.has(pipelineStatus(row));
+}
+
+function hasOmForDashboard(row: UiV2PipelineRow): boolean {
+  const omStatus = row.documentStatus?.omStatus ?? null;
+  return row.documentStatus?.hasOm === true || (omStatus != null && OM_RECEIVED_STATUSES.has(String(omStatus)));
+}
+
+function hasRequestedOm(row: UiV2PipelineRow): boolean {
+  return Boolean(row.documentStatus?.latestRequestAt) || row.documentStatus?.omStatus === "requested";
+}
 
 function formatCurrency(value: number | null | undefined): string {
   if (value == null || Number.isNaN(value)) return "-";
@@ -105,7 +126,7 @@ function unitLabel(units: number | null | undefined): string | null {
   return `${rounded} ${rounded === 1 ? "unit" : "units"}`;
 }
 
-export default function HomePage() {
+function HomePageContent() {
   const searchParams = useSearchParams();
   const query = (searchParams.get("q") ?? "").trim().toLowerCase();
   const [pipelineRows, setPipelineRows] = useState<UiV2PipelineRow[]>([]);
@@ -169,11 +190,41 @@ export default function HomePage() {
   const counts = useMemo(() => {
     const byStatus = new Map<string, number>();
     for (const row of pipelineRows) {
-      const status = String(row.statusChip.status);
+      const status = pipelineStatus(row);
       byStatus.set(status, (byStatus.get(status) ?? 0) + 1);
     }
     return byStatus;
   }, [pipelineRows]);
+
+  const dashboardCounts = useMemo(() => {
+    const activeRows = pipelineRows.filter((row) => !isClosedRow(row));
+    const omReceived = pipelineRows.filter(hasOmForDashboard).length;
+    const omRequested = activeRows.filter((row) => !hasOmForDashboard(row) && hasRequestedOm(row)).length;
+    const needsOmRequest = activeRows.filter((row) => !hasOmForDashboard(row) && !hasRequestedOm(row)).length;
+    const underwriting = activeRows.filter((row) => UNDERWRITING_PHASE_STATUSES.has(pipelineStatus(row))).length;
+    return {
+      activePipeline: activeRows.length,
+      needsOmRequest,
+      omRequested,
+      omReceived,
+      underwriting,
+    };
+  }, [pipelineRows]);
+
+  const snapshotCount = (key: string): number => {
+    switch (key) {
+      case "needs_om_request":
+        return dashboardCounts.needsOmRequest;
+      case "om_requested":
+        return dashboardCounts.omRequested;
+      case "om_received":
+        return dashboardCounts.omReceived;
+      case "underwriting_phase":
+        return dashboardCounts.underwriting;
+      default:
+        return counts.get(key) ?? 0;
+    }
+  };
 
   const dealsInProgress = useMemo(() => {
     const statuses = new Set(["saved", "underwriting", "outreach", "awaiting_broker", "om_received", "dossier_generated", "offer_review"]);
@@ -230,11 +281,11 @@ export default function HomePage() {
         <div className={styles.statusCards}>
           {[
             { label: "Total Sourced", value: pipelineTotal, tone: "neutral" },
-            { label: "Active Pipeline", value: pipelineRows.filter((r) => !["rejected","archived"].includes(String(r.statusChip.status))).length, tone: "neutral" },
-            { label: "Needs OM", value: pipelineRows.filter((r) => !r.documentStatus?.hasOm).length, tone: "amber" },
-            { label: "OM Requested", value: counts.get("outreach") ?? 0, tone: "neutral" },
-            { label: "OM Received", value: counts.get("om_received") ?? 0, tone: "green" },
-            { label: "Underwriting", value: counts.get("underwriting") ?? 0, tone: "blue" },
+            { label: "Active Pipeline", value: dashboardCounts.activePipeline, tone: "neutral" },
+            { label: "Needs OM Request", value: dashboardCounts.needsOmRequest, tone: "amber" },
+            { label: "OM Requested", value: dashboardCounts.omRequested, tone: "neutral" },
+            { label: "OM Received", value: dashboardCounts.omReceived, tone: "green" },
+            { label: "Underwriting", value: dashboardCounts.underwriting, tone: "blue" },
           ].map((card) => (
             <article key={card.label} className={`${styles.statusCard} ${styles[card.tone]}`}>
               <span>{card.label}</span>
@@ -246,7 +297,7 @@ export default function HomePage() {
           {[
             { label: "LOIs Sent", value: counts.get("offer_review") ?? 0, tone: "neutral" },
             { label: "Negotiation", value: counts.get("negotiation") ?? 0, tone: "neutral" },
-            { label: "Contract / Diligence", value: counts.get("dossier_generated") ?? 0, tone: "neutral" },
+            { label: "Dossier Generated", value: counts.get("dossier_generated") ?? 0, tone: "neutral" },
             { label: "Closed", value: counts.get("archived") ?? 0, tone: "green" },
             { label: "Rejected / Removed", value: counts.get("rejected") ?? 0, tone: "red" },
           ].map((card) => (
@@ -265,8 +316,8 @@ export default function HomePage() {
         </div>
         <div className={styles.stageStrip}>
           {SNAPSHOT_STAGES.map((stage) => (
-            <Link key={stage.key} href={`/pipeline?status=${stage.key}`} className={styles.stageCell}>
-              <strong>{counts.get(stage.key) ?? 0}</strong>
+            <Link key={stage.key} href={stage.href ?? `/pipeline?status=${stage.hrefStatus ?? stage.key}`} className={styles.stageCell}>
+              <strong>{snapshotCount(stage.key)}</strong>
               <span>{stage.label}</span>
             </Link>
           ))}
@@ -369,5 +420,13 @@ export default function HomePage() {
         </aside>
       </div>
     </main>
+  );
+}
+
+export default function HomePage() {
+  return (
+    <Suspense fallback={<main className={styles.page}>Loading dashboard...</main>}>
+      <HomePageContent />
+    </Suspense>
   );
 }
