@@ -190,10 +190,16 @@ function tagClass(tag: string): string {
 
 function statusClass(status: string | null | undefined): string {
   if (status === "rejected") return `${styles.statusPill} ${styles.statusDanger}`;
-  if (status === "saved" || status === "om_received" || status === "dossier_generated") {
+  if (
+    status === "saved" ||
+    status === "om_received" ||
+    status === "dossier_generated" ||
+    status === "contract_signed" ||
+    status === "deal_closed"
+  ) {
     return `${styles.statusPill} ${styles.statusSuccess}`;
   }
-  if (status === "underwriting" || status === "offer_review" || status === "awaiting_broker") {
+  if (status === "underwriting" || status === "offer_review" || status === "negotiation" || status === "awaiting_broker") {
     return `${styles.statusPill} ${styles.statusWarning}`;
   }
   if (status === "outreach" || status === "screening") return `${styles.statusPill} ${styles.statusInfo}`;

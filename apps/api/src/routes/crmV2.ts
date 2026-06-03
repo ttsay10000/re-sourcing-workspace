@@ -105,7 +105,19 @@ async function markOmRequestedFromOutreach(
       ? (details.pipeline as JsonRecord)
       : {};
   const currentUiStatus = normalizeTag(existingPipeline.uiV2Status);
-  if (["rejected", "archived", "om_received", "dossier_generated", "offer_review", "underwriting"].includes(currentUiStatus)) {
+  if (
+    [
+      "rejected",
+      "archived",
+      "om_received",
+      "dossier_generated",
+      "offer_review",
+      "negotiation",
+      "contract_signed",
+      "deal_closed",
+      "underwriting",
+    ].includes(currentUiStatus)
+  ) {
     return;
   }
   const now = new Date().toISOString();

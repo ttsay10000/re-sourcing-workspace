@@ -1985,7 +1985,10 @@ export default function PipelineClient() {
   const sheetDocuments = selectedProperty?.documents ?? [];
   const sheetEnrichmentModules = selectedProperty?.enrichmentDetails?.modules ?? [];
   const sheetListingFacts = selectedProperty?.enrichmentDetails?.listingFacts ?? null;
-  const terminalStatus = selectedRow?.statusChip.status === "rejected" || selectedRow?.statusChip.status === "archived";
+  const terminalStatus =
+    selectedRow?.statusChip.status === "rejected" ||
+    selectedRow?.statusChip.status === "archived" ||
+    selectedRow?.statusChip.status === "deal_closed";
   const sheetUnderwriting = selectedProperty?.underwriting ?? selectedRow?.underwriting ?? null;
   const liveBrokerCompPayload = selectedId ? brokerCompPayloads[selectedId] : null;
   const sheetBrokerComps = readBrokerCompSurface(liveBrokerCompPayload, selectedProperty?.brokerComps, selectedRow?.brokerComps);
@@ -2193,7 +2196,7 @@ export default function PipelineClient() {
             {rows.map((row) => {
               const status = String(row.statusChip.status) as UiV2PipelineStatus;
               const isSelected = row.propertyId === selectedId;
-              const isTerminal = status === "rejected" || status === "archived";
+              const isTerminal = status === "rejected" || status === "archived" || status === "deal_closed";
               const isChecked = selectedIdSet.has(row.propertyId);
               const score = row.underwriting?.dealScore ?? null;
               const rowLocationLabels = locationLabels(row);

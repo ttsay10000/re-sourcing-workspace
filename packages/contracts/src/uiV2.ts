@@ -50,6 +50,9 @@ export type UiV2PipelineStatus =
   | "om_received"
   | "dossier_generated"
   | "offer_review"
+  | "negotiation"
+  | "contract_signed"
+  | "deal_closed"
   | "rejected"
   | "archived";
 
@@ -197,12 +200,40 @@ export const UI_V2_PIPELINE_STATUS_OPTIONS = [
   },
   {
     status: "offer_review",
-    label: "Offer Review",
+    label: "LOI Offered",
     tone: "warning",
     editable: true,
-    description: "The deal is being reviewed for LOI, offer, or partner approval.",
+    description: "An LOI has been offered or is ready for partner approval.",
     tableActions: ["open_property", "edit_status", "email_broker"],
     sheetActions: ["email_broker", "open_docs", "schedule_follow_up"],
+  },
+  {
+    status: "negotiation",
+    label: "Negotiation",
+    tone: "warning",
+    editable: true,
+    description: "The deal is in pricing, terms, or counterparty negotiation.",
+    tableActions: ["open_property", "edit_status", "email_broker", "schedule_follow_up"],
+    sheetActions: ["email_broker", "open_docs", "schedule_follow_up"],
+  },
+  {
+    status: "contract_signed",
+    label: "Contract Signed / Diligence",
+    tone: "success",
+    editable: true,
+    description: "Contract is signed and diligence or escrow work is active.",
+    tableActions: ["open_property", "edit_status", "open_docs", "schedule_follow_up"],
+    sheetActions: ["open_docs", "schedule_follow_up", "email_broker"],
+  },
+  {
+    status: "deal_closed",
+    label: "Deal Closed",
+    tone: "success",
+    editable: true,
+    terminal: true,
+    description: "The deal has closed.",
+    tableActions: ["open_property", "edit_status", "open_docs"],
+    sheetActions: ["open_docs"],
   },
   {
     status: "rejected",

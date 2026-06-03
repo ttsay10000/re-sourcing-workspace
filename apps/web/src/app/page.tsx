@@ -227,7 +227,17 @@ function HomePageContent() {
   };
 
   const dealsInProgress = useMemo(() => {
-    const statuses = new Set(["saved", "underwriting", "outreach", "awaiting_broker", "om_received", "dossier_generated", "offer_review"]);
+    const statuses = new Set([
+      "saved",
+      "underwriting",
+      "outreach",
+      "awaiting_broker",
+      "om_received",
+      "dossier_generated",
+      "offer_review",
+      "negotiation",
+      "contract_signed",
+    ]);
     return filteredPipeline.filter((row) => statuses.has(String(row.statusChip.status))).slice(0, 8);
   }, [filteredPipeline]);
 
@@ -244,9 +254,9 @@ function HomePageContent() {
   }, [pipelineRows, progressRows]);
 
   const statusTone = (status: string) => {
-    if (["archived", "closed"].includes(status)) return "green";
+    if (["archived", "closed", "deal_closed", "contract_signed"].includes(status)) return "green";
     if (status === "rejected") return "red";
-    if (["offer_review", "loi_sent"].includes(status)) return "blue";
+    if (["offer_review", "loi_sent", "negotiation"].includes(status)) return "blue";
     if (["underwriting", "om_received"].includes(status)) return "amber";
     return "neutral";
   };
@@ -295,10 +305,11 @@ function HomePageContent() {
         </div>
         <div className={styles.statusCardsSecondary} style={{ marginTop: "0.65rem" }}>
           {[
-            { label: "LOIs Sent", value: counts.get("offer_review") ?? 0, tone: "neutral" },
+            { label: "LOI Offered", value: counts.get("offer_review") ?? 0, tone: "neutral" },
             { label: "Negotiation", value: counts.get("negotiation") ?? 0, tone: "neutral" },
+            { label: "Contract Signed", value: counts.get("contract_signed") ?? 0, tone: "green" },
             { label: "Dossier Generated", value: counts.get("dossier_generated") ?? 0, tone: "neutral" },
-            { label: "Closed", value: counts.get("archived") ?? 0, tone: "green" },
+            { label: "Closed", value: (counts.get("deal_closed") ?? 0) + (counts.get("archived") ?? 0), tone: "green" },
             { label: "Rejected / Removed", value: counts.get("rejected") ?? 0, tone: "red" },
           ].map((card) => (
             <article key={card.label} className={`${styles.statusCard} ${styles[card.tone]}`}>

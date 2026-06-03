@@ -37,6 +37,9 @@ const UI_V2_STATUSES = new Set<UiV2PipelineStatus>([
   "om_received",
   "dossier_generated",
   "offer_review",
+  "negotiation",
+  "contract_signed",
+  "deal_closed",
   "rejected",
   "archived",
 ]);
@@ -428,12 +431,14 @@ function mapLegacyStatus(status: string | null): UiV2PipelineStatus {
     case "saved_watchlist":
       return "saved";
     case "loi_sent":
+      return "offer_review";
     case "negotiation":
+      return "negotiation";
     case "contract_signed":
     case "diligence_escrow":
-      return "offer_review";
+      return "contract_signed";
     case "closed":
-      return "archived";
+      return "deal_closed";
     case "rejected_removed":
       return "rejected";
     default:

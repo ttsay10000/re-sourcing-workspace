@@ -89,6 +89,9 @@ const UI_V2_STATUSES = new Set<UiV2PipelineStatus>([
   "om_received",
   "dossier_generated",
   "offer_review",
+  "negotiation",
+  "contract_signed",
+  "deal_closed",
   "rejected",
   "archived",
 ]);
@@ -574,10 +577,10 @@ function mapLegacyStatus(status: string): UiV2PipelineStatus {
     underwriting: "underwriting",
     saved_watchlist: "saved",
     loi_sent: "offer_review",
-    negotiation: "offer_review",
-    contract_signed: "offer_review",
-    diligence_escrow: "offer_review",
-    closed: "archived",
+    negotiation: "negotiation",
+    contract_signed: "contract_signed",
+    diligence_escrow: "contract_signed",
+    closed: "deal_closed",
     rejected_removed: "rejected",
   };
   return status in mapping ? mapping[status as LegacyPipelineStatus] : "new";
@@ -595,6 +598,9 @@ function legacyStatusFromUiV2Status(status: UiV2PipelineStatus): LegacyPipelineS
     om_received: "om_received",
     dossier_generated: "underwriting",
     offer_review: "loi_sent",
+    negotiation: "negotiation",
+    contract_signed: "contract_signed",
+    deal_closed: "closed",
     rejected: "rejected_removed",
     archived: "closed",
   };
@@ -612,7 +618,10 @@ function statusLabel(status: UiV2PipelineStatus): string {
     awaiting_broker: "Awaiting Broker",
     om_received: "OM Received",
     dossier_generated: "Dossier Generated",
-    offer_review: "Offer Review",
+    offer_review: "LOI Offered",
+    negotiation: "Negotiation",
+    contract_signed: "Contract Signed / Diligence",
+    deal_closed: "Deal Closed",
     rejected: "Rejected",
     archived: "Archived",
   };
@@ -631,6 +640,9 @@ function statusTone(status: UiV2PipelineStatus): UiV2StatusChipTone {
     om_received: "success",
     dossier_generated: "success",
     offer_review: "warning",
+    negotiation: "warning",
+    contract_signed: "success",
+    deal_closed: "success",
     rejected: "danger",
     archived: "neutral",
   };
@@ -2257,7 +2269,7 @@ function filterRows(rows: UiV2PipelineRow[], query: ParsedPipelineQuery): UiV2Pi
     const rowStatus = row.statusChip.status as UiV2PipelineStatus;
     if (
       !query.includeRejected &&
-      (rowStatus === "rejected" || rowStatus === "archived") &&
+      (rowStatus === "rejected" || rowStatus === "archived" || rowStatus === "deal_closed") &&
       !query.statuses.includes(rowStatus)
     ) {
       return false;
@@ -2359,8 +2371,16 @@ function buildPipelinePayload(baseRows: PipelineBaseRow[], query: ParsedPipeline
     query.statuses.length > 0
       ? sorted
       : [
-          ...sorted.filter((row) => row.statusChip.status !== "rejected" && row.statusChip.status !== "archived"),
-          ...sorted.filter((row) => row.statusChip.status === "rejected" || row.statusChip.status === "archived"),
+          ...sorted.filter((row) =>
+            row.statusChip.status !== "rejected" &&
+            row.statusChip.status !== "archived" &&
+            row.statusChip.status !== "deal_closed"
+          ),
+          ...sorted.filter((row) =>
+            row.statusChip.status === "rejected" ||
+            row.statusChip.status === "archived" ||
+            row.statusChip.status === "deal_closed"
+          ),
         ];
   return {
     rows: rows.slice(query.offset, query.offset + query.limit),

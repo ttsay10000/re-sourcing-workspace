@@ -360,10 +360,16 @@ function profileSavedDealScoreClass(score: number | null | undefined): string {
 
 function profileSavedDealStatusClass(status: string | null | undefined): string {
   if (status === "rejected") return "profile-mini-status profile-mini-status--danger";
-  if (status === "saved" || status === "om_received" || status === "dossier_generated") {
+  if (
+    status === "saved" ||
+    status === "om_received" ||
+    status === "dossier_generated" ||
+    status === "contract_signed" ||
+    status === "deal_closed"
+  ) {
     return "profile-mini-status profile-mini-status--success";
   }
-  if (status === "underwriting" || status === "offer_review" || status === "awaiting_broker") {
+  if (status === "underwriting" || status === "offer_review" || status === "negotiation" || status === "awaiting_broker") {
     return "profile-mini-status profile-mini-status--warning";
   }
   if (status === "outreach" || status === "screening") return "profile-mini-status profile-mini-status--info";

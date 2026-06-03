@@ -7,6 +7,7 @@ import type { UiV2PipelineStatus } from "@re-sourcing/contracts";
 import styles from "./progress.module.css";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
+const BULK_STAGE_MOVE_ID = "__bulk_stage_move__";
 
 type Summary = {
   savedCount?: number;
@@ -124,52 +125,52 @@ const SAVED_STATUS_GROUPS: SavedStatusGroup[] = [
     moveLabel: "Watchlist",
   },
   {
+    id: "om_requested",
+    label: "OM Requested",
+    description: "Materials requested; waiting on broker response.",
+    statuses: ["outreach", "awaiting_broker"],
+    targetStatus: "awaiting_broker",
+    moveLabel: "OM Requested",
+  },
+  {
     id: "underwriting",
     label: "Underwriting",
-    description: "Deals in underwriting or dossier work.",
-    statuses: ["underwriting", "dossier_generated"],
+    description: "OM is in hand or deal analysis is active.",
+    statuses: ["underwriting", "om_received", "dossier_generated"],
     targetStatus: "underwriting",
     moveLabel: "Underwriting",
   },
   {
-    id: "outreach",
-    label: "Outreach",
-    description: "Manual broker outreach has been started.",
-    statuses: ["outreach"],
-    targetStatus: "outreach",
-    moveLabel: "Outreach",
-  },
-  {
-    id: "awaiting_broker",
-    label: "Awaiting Broker",
-    description: "Follow-up is needed after outreach.",
-    statuses: ["awaiting_broker"],
-    targetStatus: "awaiting_broker",
-    moveLabel: "Awaiting Broker",
-  },
-  {
-    id: "contract_diligence",
-    label: "OM Received",
-    description: "OM has been received and review can continue.",
-    statuses: ["om_received"],
-    targetStatus: "om_received",
-    moveLabel: "OM Received",
-  },
-  {
-    id: "loi_negotiation",
-    label: "LOI / Negotiation",
-    description: "Only deals manually moved to offer review.",
+    id: "loi_offered",
+    label: "LOI Offered",
+    description: "Offer has been sent or is ready to track.",
     statuses: ["offer_review"],
     targetStatus: "offer_review",
-    moveLabel: "LOI / Negotiation",
+    moveLabel: "LOI Offered",
   },
   {
-    id: "rejected_removed",
-    label: "Rejected / Removed",
-    description: "Rejected deals and archived records.",
-    statuses: ["rejected", "archived"],
-    targetStatus: "archived",
-    moveLabel: "Archived",
+    id: "negotiation",
+    label: "Negotiation",
+    description: "Pricing, terms, and counterparty negotiation.",
+    statuses: ["negotiation"],
+    targetStatus: "negotiation",
+    moveLabel: "Negotiation",
+  },
+  {
+    id: "contract_signed",
+    label: "Contract Signed/Diligence",
+    description: "Contract signed with diligence underway.",
+    statuses: ["contract_signed"],
+    targetStatus: "contract_signed",
+    moveLabel: "Contract Signed/Diligence",
+  },
+  {
+    id: "deal_closed",
+    label: "Deal Closed",
+    description: "Closed deals and archived active pursuits.",
+    statuses: ["deal_closed", "archived"],
+    targetStatus: "deal_closed",
+    moveLabel: "Deal Closed",
   },
 ];
 
@@ -208,7 +209,13 @@ function labelFromKey(value: string | null | undefined): string {
   if (!value) return "Unknown";
   const normalized = value.trim().toLowerCase();
   const specialLabels: Record<string, string> = {
+    awaiting_broker: "OM Requested",
+    contract_signed: "Contract Signed",
+    deal_closed: "Deal Closed",
+    dossier_generated: "Dossier Generated",
     loopnet: "LoopNet",
+    offer_review: "LOI Offered",
+    om_received: "OM Received",
     streeteasy: "StreetEasy",
   };
   if (specialLabels[normalized]) return specialLabels[normalized];
@@ -326,10 +333,16 @@ function searchableSavedDealText(row: SavedDealRow): string {
 
 function statusClass(status: string | null | undefined): string {
   if (status === "rejected") return `${styles.statusPill} ${styles.statusDanger}`;
-  if (status === "saved" || status === "om_received" || status === "dossier_generated") {
+  if (
+    status === "saved" ||
+    status === "om_received" ||
+    status === "dossier_generated" ||
+    status === "contract_signed" ||
+    status === "deal_closed"
+  ) {
     return `${styles.statusPill} ${styles.statusSuccess}`;
   }
-  if (status === "underwriting" || status === "offer_review" || status === "awaiting_broker") {
+  if (status === "underwriting" || status === "offer_review" || status === "negotiation" || status === "awaiting_broker") {
     return `${styles.statusPill} ${styles.statusWarning}`;
   }
   if (status === "outreach" || status === "screening") return `${styles.statusPill} ${styles.statusInfo}`;
@@ -349,9 +362,11 @@ function rowStatus(row: SavedDealRow): string {
 
 function moveStatusForRow(row: SavedDealRow): UiV2PipelineStatus {
   const status = rowStatus(row);
-  if (status === "dossier_generated") return "underwriting";
+  if (status === "dossier_generated" || status === "om_received") return "underwriting";
+  if (status === "outreach") return "awaiting_broker";
   if (status === "interesting" || status === "screening" || status === "new") return "saved";
-  if (status === "rejected") return "archived";
+  if (status === "archived") return "deal_closed";
+  if (status === "rejected") return "saved";
   return MOVE_STAGE_OPTIONS.some((option) => option.targetStatus === status)
     ? (status as UiV2PipelineStatus)
     : "saved";
@@ -401,6 +416,17 @@ function buildSavedTagSections(rows: SavedDealRow[]): SavedDealSection[] {
     }));
 }
 
+async function patchSavedDealStatus(propertyId: string, nextStatus: UiV2PipelineStatus): Promise<void> {
+  const response = await fetch(`${API_BASE}/api/ui-v2/properties/${propertyId}/status`, {
+    method: "PATCH",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ status: nextStatus, source: "progress_table" }),
+  });
+  const data = (await response.json().catch(() => ({}))) as { error?: string; details?: string };
+  if (!response.ok) throw new Error(data.error || data.details || "Failed to move deal stage.");
+}
+
 function ProgressPageContent() {
   const searchParams = useSearchParams();
   const query = (searchParams.get("q") ?? "").trim().toLowerCase();
@@ -412,6 +438,8 @@ function ProgressPageContent() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [stageMoveBusy, setStageMoveBusy] = useState<string | null>(null);
+  const [bulkTargetStatus, setBulkTargetStatus] = useState<UiV2PipelineStatus>("awaiting_broker");
+  const [selectedDealIds, setSelectedDealIds] = useState<Set<string>>(() => new Set());
   const [draggedDeal, setDraggedDeal] = useState<SavedDealRow | null>(null);
   const [dragOverSectionId, setDragOverSectionId] = useState<string | null>(null);
 
@@ -448,30 +476,47 @@ function ProgressPageContent() {
     void loadProgress();
   }, [loadProgress]);
 
-  const moveSavedDeal = useCallback(
-    async (row: SavedDealRow, nextStatus: UiV2PipelineStatus) => {
-      const currentStatus = moveStatusForRow(row);
-      if (currentStatus === nextStatus) return;
-      const address = row.displayAddress || row.canonicalAddress || "this property";
-      const nextLabel = moveLabelForStatus(nextStatus);
-      if (!window.confirm(`Move ${address} to ${nextLabel}?`)) return;
-      setStageMoveBusy(row.propertyId);
+  const moveSavedDeals = useCallback(
+    async (rows: SavedDealRow[], nextStatus: UiV2PipelineStatus, options?: { clearSelection?: boolean }) => {
+      const uniqueRows = [...new Map(rows.map((row) => [row.propertyId, row])).values()];
+      const rowsToMove = uniqueRows.filter((row) => moveStatusForRow(row) !== nextStatus);
+      if (rowsToMove.length === 0) return;
+      setStageMoveBusy(rowsToMove.length === 1 ? rowsToMove[0].propertyId : BULK_STAGE_MOVE_ID);
       setError(null);
       try {
-        const response = await fetch(`${API_BASE}/api/ui-v2/properties/${row.propertyId}/status`, {
-          method: "PATCH",
-          credentials: "include",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ status: nextStatus, source: "progress_table" }),
-        });
-        const data = (await response.json().catch(() => ({}))) as { error?: string; details?: string };
-        if (!response.ok) throw new Error(data.error || data.details || "Failed to move deal stage.");
-        setSavedDealRows((current) =>
-          current.map((deal) => (deal.propertyId === row.propertyId ? { ...deal, status: nextStatus } : deal))
+        const results = await Promise.all(
+          rowsToMove.map(async (row) => {
+            try {
+              await patchSavedDealStatus(row.propertyId, nextStatus);
+              return { propertyId: row.propertyId, ok: true as const };
+            } catch (err) {
+              return {
+                propertyId: row.propertyId,
+                ok: false as const,
+                message: err instanceof Error ? err.message : "Failed to move deal stage.",
+              };
+            }
+          })
         );
-        await loadProgress("refresh");
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to move deal stage.");
+        const movedIds = new Set(results.filter((result) => result.ok).map((result) => result.propertyId));
+        if (movedIds.size > 0) {
+          setSavedDealRows((current) =>
+            current.map((deal) => (movedIds.has(deal.propertyId) ? { ...deal, status: nextStatus } : deal))
+          );
+          if (options?.clearSelection) {
+            setSelectedDealIds((current) => {
+              const next = new Set(current);
+              movedIds.forEach((propertyId) => next.delete(propertyId));
+              return next;
+            });
+          }
+          await loadProgress("refresh");
+        }
+        const failures = results.filter((result) => !result.ok);
+        if (failures.length > 0) {
+          const label = moveLabelForStatus(nextStatus);
+          setError(`${failures.length} of ${rowsToMove.length} selected deal${rowsToMove.length === 1 ? "" : "s"} could not move to ${label}.`);
+        }
       } finally {
         setStageMoveBusy(null);
       }
@@ -485,9 +530,11 @@ function ProgressPageContent() {
       setDraggedDeal(null);
       setDragOverSectionId(null);
       if (!row || !section.targetStatus) return;
-      void moveSavedDeal(row, section.targetStatus);
+      const movingSelection = selectedDealIds.has(row.propertyId);
+      const rowsToMove = movingSelection ? savedDealRows.filter((deal) => selectedDealIds.has(deal.propertyId)) : [row];
+      void moveSavedDeals(rowsToMove, section.targetStatus, { clearSelection: movingSelection });
     },
-    [draggedDeal, moveSavedDeal]
+    [draggedDeal, moveSavedDeals, savedDealRows, selectedDealIds]
   );
 
   const filteredSections = useMemo(() => {
@@ -503,8 +550,53 @@ function ProgressPageContent() {
     return savedDealRows.filter((row) => searchableSavedDealText(row).includes(query));
   }, [query, savedDealRows]);
 
+  useEffect(() => {
+    setSelectedDealIds((current) => {
+      if (current.size === 0) return current;
+      const validIds = new Set(savedDealRows.map((row) => row.propertyId));
+      const next = new Set([...current].filter((propertyId) => validIds.has(propertyId)));
+      return next.size === current.size ? current : next;
+    });
+  }, [savedDealRows]);
+
+  const selectedSavedDeals = useMemo(
+    () => savedDealRows.filter((row) => selectedDealIds.has(row.propertyId)),
+    [savedDealRows, selectedDealIds]
+  );
+  const visibleSavedDealIds = useMemo(() => filteredSavedDealRows.map((row) => row.propertyId), [filteredSavedDealRows]);
+  const allVisibleSelected =
+    visibleSavedDealIds.length > 0 && visibleSavedDealIds.every((propertyId) => selectedDealIds.has(propertyId));
+  const someVisibleSelected =
+    visibleSavedDealIds.length > 0 && visibleSavedDealIds.some((propertyId) => selectedDealIds.has(propertyId));
+  const bulkMoveBusy = stageMoveBusy === BULK_STAGE_MOVE_ID;
+
+  const toggleSavedDealSelected = useCallback((propertyId: string, selected: boolean) => {
+    setSelectedDealIds((current) => {
+      const next = new Set(current);
+      if (selected) next.add(propertyId);
+      else next.delete(propertyId);
+      return next;
+    });
+  }, []);
+
+  const toggleVisibleSavedDeals = useCallback(() => {
+    setSelectedDealIds((current) => {
+      const next = new Set(current);
+      if (visibleSavedDealIds.every((propertyId) => next.has(propertyId))) {
+        visibleSavedDealIds.forEach((propertyId) => next.delete(propertyId));
+      } else {
+        visibleSavedDealIds.forEach((propertyId) => next.add(propertyId));
+      }
+      return next;
+    });
+  }, [visibleSavedDealIds]);
+
   const savedStatusSections = useMemo(() => buildSavedStatusSections(filteredSavedDealRows), [filteredSavedDealRows]);
   const savedTagSections = useMemo(() => buildSavedTagSections(filteredSavedDealRows), [filteredSavedDealRows]);
+  const savedStageCounts = useMemo(
+    () => new Map(savedStatusSections.map((section) => [section.id, section.rows.length])),
+    [savedStatusSections]
+  );
 
   const visibleRowCount = useMemo(
     () => filteredSections.reduce((sum, section) => sum + (section.rows?.length ?? 0), 0),
@@ -526,7 +618,7 @@ function ProgressPageContent() {
           <p className={styles.eyebrow}>Deal movement</p>
           <h1 className={styles.title}>Progress</h1>
           <p className={styles.subtitle}>
-            Follow saved properties from review into underwriting, outreach, broker follow-up, OM receipt, and rejection.
+            Move saved properties from watchlist through OM request, underwriting, LOI, negotiation, diligence, and close.
           </p>
         </div>
         <div className={styles.headerActions}>
@@ -544,30 +636,12 @@ function ProgressPageContent() {
       ) : null}
 
       <section className={styles.metrics} aria-label="Deal progress summary">
-        <article className={styles.metric}>
-          <span>Saved</span>
-          <strong>{summary?.savedCount ?? 0}</strong>
-        </article>
-        <article className={styles.metric}>
-          <span>Underwriting</span>
-          <strong>{summary?.underwritingCount ?? 0}</strong>
-        </article>
-        <article className={styles.metric}>
-          <span>Outreach</span>
-          <strong>{summary?.outreachCount ?? 0}</strong>
-        </article>
-        <article className={styles.metric}>
-          <span>Awaiting Broker</span>
-          <strong>{summary?.awaitingBrokerCount ?? 0}</strong>
-        </article>
-        <article className={styles.metric}>
-          <span>OM Received</span>
-          <strong>{summary?.omReceivedCount ?? 0}</strong>
-        </article>
-        <article className={`${styles.metric} ${(summary?.rejectedCount ?? 0) > 0 ? styles.metricDanger : ""}`}>
-          <span>Rejected</span>
-          <strong>{summary?.rejectedCount ?? 0}</strong>
-        </article>
+        {SAVED_STATUS_GROUPS.map((group) => (
+          <article className={styles.metric} key={group.id}>
+            <span>{group.label}</span>
+            <strong>{savedStageCounts.get(group.id) ?? 0}</strong>
+          </article>
+        ))}
       </section>
 
       <section className={styles.savedFlowPanel} aria-label="Saved deals by status">
@@ -578,6 +652,50 @@ function ProgressPageContent() {
           </div>
           <Link href="/saved" className={styles.secondaryLink}>Open Saved Deals</Link>
         </div>
+        <div className={styles.bulkToolbar} aria-label="Bulk stage controls">
+          <label className={styles.bulkCheck}>
+            <input
+              type="checkbox"
+              checked={allVisibleSelected}
+              aria-checked={allVisibleSelected ? "true" : someVisibleSelected ? "mixed" : "false"}
+              disabled={filteredSavedDealRows.length === 0 || bulkMoveBusy}
+              onChange={toggleVisibleSavedDeals}
+            />
+            <span>{allVisibleSelected ? "Unselect visible" : "Select visible"}</span>
+          </label>
+          <strong>{selectedSavedDeals.length} selected</strong>
+          <div className={styles.bulkControls}>
+            <select
+              className={styles.bulkStageSelect}
+              aria-label="Stage for selected deals"
+              value={bulkTargetStatus}
+              disabled={bulkMoveBusy}
+              onChange={(event) => setBulkTargetStatus(event.target.value as UiV2PipelineStatus)}
+            >
+              {MOVE_STAGE_OPTIONS.map((option) => (
+                <option key={option.targetStatus} value={option.targetStatus}>
+                  {option.moveLabel}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className={styles.bulkMoveButton}
+              disabled={selectedSavedDeals.length === 0 || bulkMoveBusy}
+              onClick={() => void moveSavedDeals(selectedSavedDeals, bulkTargetStatus, { clearSelection: true })}
+            >
+              {bulkMoveBusy ? "Moving..." : "Move selected"}
+            </button>
+            <button
+              type="button"
+              className={styles.bulkClearButton}
+              disabled={selectedSavedDeals.length === 0 || bulkMoveBusy}
+              onClick={() => setSelectedDealIds(new Set())}
+            >
+              Clear
+            </button>
+          </div>
+        </div>
         <div className={styles.flowSections}>
           {savedStatusSections.map((section) => (
             <SavedDealMiniSection
@@ -586,8 +704,10 @@ function ProgressPageContent() {
               loading={loading}
               enableMoves
               movingPropertyId={stageMoveBusy}
+              selectedDealIds={selectedDealIds}
+              bulkMoving={bulkMoveBusy}
               dragOver={dragOverSectionId === section.id}
-              onMove={moveSavedDeal}
+              onToggleSelected={toggleSavedDealSelected}
               onDragStartDeal={setDraggedDeal}
               onDragEndDeal={() => {
                 setDraggedDeal(null);
@@ -762,8 +882,10 @@ function SavedDealMiniSection({
   compact = false,
   enableMoves = false,
   movingPropertyId = null,
+  selectedDealIds,
+  bulkMoving = false,
   dragOver = false,
-  onMove,
+  onToggleSelected,
   onDragStartDeal,
   onDragEndDeal,
   onDragOverSection,
@@ -774,8 +896,10 @@ function SavedDealMiniSection({
   compact?: boolean;
   enableMoves?: boolean;
   movingPropertyId?: string | null;
+  selectedDealIds?: Set<string>;
+  bulkMoving?: boolean;
   dragOver?: boolean;
-  onMove?: (row: SavedDealRow, nextStatus: UiV2PipelineStatus) => void | Promise<void>;
+  onToggleSelected?: (propertyId: string, selected: boolean) => void;
   onDragStartDeal?: (row: SavedDealRow) => void;
   onDragEndDeal?: () => void;
   onDragOverSection?: (event: DragEvent<HTMLElement>) => void;
@@ -808,23 +932,37 @@ function SavedDealMiniSection({
         <div className={styles.emptyState}>No saved deals in this section.</div>
       ) : (
         <div className={styles.miniRows}>
-          {visibleRows.map((row) => (
-            <article
-              key={`${section.id}-${row.propertyId}`}
-              className={`${styles.miniRow} ${movingPropertyId === row.propertyId ? styles.miniRowBusy : ""}`}
-              draggable={enableMoves && !compact}
-              onDragStart={
-                enableMoves
-                  ? (event) => {
-                      event.dataTransfer.effectAllowed = "move";
-                      event.dataTransfer.setData("text/plain", row.propertyId);
-                      onDragStartDeal?.(row);
-                    }
-                  : undefined
-              }
-              onDragEnd={enableMoves ? onDragEndDeal : undefined}
-            >
-              <div>
+          {visibleRows.map((row) => {
+            const selected = selectedDealIds?.has(row.propertyId) ?? false;
+            const busy = bulkMoving || movingPropertyId === row.propertyId;
+            return (
+              <article
+                key={`${section.id}-${row.propertyId}`}
+                className={`${styles.miniRow} ${selected ? styles.miniRowSelected : ""} ${busy ? styles.miniRowBusy : ""}`}
+                draggable={enableMoves && !compact && !busy}
+                aria-selected={selected}
+                onDragStart={
+                  enableMoves
+                    ? (event) => {
+                        event.dataTransfer.effectAllowed = "move";
+                        event.dataTransfer.setData("text/plain", row.propertyId);
+                        onDragStartDeal?.(row);
+                      }
+                    : undefined
+                }
+                onDragEnd={enableMoves ? onDragEndDeal : undefined}
+              >
+                {enableMoves ? (
+                  <input
+                    type="checkbox"
+                    className={styles.miniSelect}
+                    aria-label={`Select ${row.displayAddress || row.canonicalAddress || "property"}`}
+                    checked={selected}
+                    disabled={busy}
+                    onChange={(event) => onToggleSelected?.(row.propertyId, event.target.checked)}
+                    onClick={(event) => event.stopPropagation()}
+                  />
+                ) : null}
                 <Link href={`/pipeline?propertyId=${encodeURIComponent(row.propertyId)}`} className={styles.miniRowLink}>
                   <strong>{row.displayAddress || row.canonicalAddress || row.propertyId}</strong>
                   <span>
@@ -834,35 +972,18 @@ function SavedDealMiniSection({
                       row.pricePerSqft != null ? `${formatCurrency(row.pricePerSqft)} / SF` : null,
                     ]
                       .filter(Boolean)
-                      .join(" · ") || "No context"}
+                      .join(" / ") || "No context"}
                   </span>
                 </Link>
-              </div>
-              <div className={styles.miniMeta}>
-                <span className={statusClass(rowStatus(row))}>{labelFromKey(rowStatus(row))}</span>
-                <small className={scoreClass(row.dealScore)}>
-                  {row.dealScore == null ? "—" : `${Math.round(row.dealScore)} / 100`}
-                </small>
-                {enableMoves ? (
-                  <select
-                    className={styles.stageSelect}
-                    aria-label={`Move ${row.displayAddress || row.canonicalAddress || "property"} to stage`}
-                    value={moveStatusForRow(row)}
-                    disabled={movingPropertyId === row.propertyId}
-                    onChange={(event) => {
-                      void onMove?.(row, event.target.value as UiV2PipelineStatus);
-                    }}
-                  >
-                    {MOVE_STAGE_OPTIONS.map((option) => (
-                      <option key={option.targetStatus} value={option.targetStatus}>
-                        {option.moveLabel}
-                      </option>
-                    ))}
-                  </select>
-                ) : null}
-              </div>
-            </article>
-          ))}
+                <div className={styles.miniMeta}>
+                  <span className={statusClass(rowStatus(row))}>{labelFromKey(rowStatus(row))}</span>
+                  <small className={scoreClass(row.dealScore)}>
+                    {row.dealScore == null ? "—" : Math.round(row.dealScore)}
+                  </small>
+                </div>
+              </article>
+            );
+          })}
           {compact && section.rows.length > visibleRows.length ? (
             <div className={styles.moreRows}>+{section.rows.length - visibleRows.length} more</div>
           ) : null}
