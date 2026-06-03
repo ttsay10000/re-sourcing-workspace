@@ -764,6 +764,7 @@ function V3RecordsTable({
 
 interface BrokerCompSubjectBaseline {
   price: number | null;
+  priceSource?: string | null;
   sqft: number | null;
   pricePerSqft: number | null;
   capRatePct: number | null;
@@ -888,7 +889,7 @@ function BrokerCompsDetailPanel({
   };
   const subjectPackagePpsf = weightedPpsf(activeSurface.subjectUnitPricingRows);
   const subjectOverallPpsf = subjectPackagePpsf ?? subject.pricePerSqft;
-  const subjectPpsfSource = subjectPackagePpsf != null ? "Projected package" : subject.pricePerSqft != null ? "Listing ask" : null;
+  const subjectPpsfSource = subjectPackagePpsf != null ? "Projected package" : subject.pricePerSqft != null ? subject.priceSource ?? "Deal baseline" : null;
   const subjectBedroomPpsf = new Map<number, number>();
   for (const bedroom of [...new Set(activeSurface.subjectUnitPricingRows.map((row) => row.bedrooms).filter((value): value is number => value != null))]) {
     const ppsf = weightedPpsf(activeSurface.subjectUnitPricingRows.filter((row) => row.bedrooms === bedroom));
@@ -976,15 +977,31 @@ function BrokerCompsDetailPanel({
       : activeSurface.pricingOpinions.find((opinion) => opinion.sourceType === "package" && opinion.amount != null)?.amount ?? null;
   const packageVsListing = packageProjectedSellout != null && subject.price != null ? packageProjectedSellout - subject.price : null;
   const packageVsListingPct = packageProjectedSellout != null && subject.price != null && subject.price > 0 ? ((packageVsListing ?? 0) / subject.price) * 100 : null;
+  const brokerPriceSignal =
+    activeSurface.pricingOpinions.find((opinion) => opinion.sourceType !== "package" && opinion.amount != null) ??
+    activeSurface.pricingOpinions.find((opinion) => opinion.amount != null) ??
+    null;
+  const brokerSignalVsListing =
+    brokerPriceSignal?.amount != null && subject.price != null ? brokerPriceSignal.amount - subject.price : null;
+  const brokerSignalVsListingPct =
+    brokerPriceSignal?.amount != null && subject.price != null && subject.price > 0 ? ((brokerSignalVsListing ?? 0) / subject.price) * 100 : null;
   const averageProjectPpsf = averageNumber(pricingCompRows.map(compPpsfForProject));
   const pricingFacts: V3FactItem[] = [
-    { label: "Listing price", value: formatWholeMoney(subject.price) },
+    { label: "Deal price", value: formatWholeMoney(subject.price), detail: subject.priceSource ?? null },
     { label: "Package sellout", value: formatWholeMoney(packageProjectedSellout), detail: "Projected pricing from comp package" },
     {
-      label: "Package vs listing",
+      label: "Package vs deal",
       value: packageVsListing == null ? "—" : formatSignedMoney(packageVsListing),
       detail: packageVsListingPct == null ? null : formatSignedPercent(packageVsListingPct),
       tone: packageVsListing == null ? "neutral" : packageVsListing > 0 ? "warn" : "good",
+    },
+    {
+      label: "Broker/user price",
+      value: formatWholeMoney(brokerPriceSignal?.amount),
+      detail: brokerSignalVsListingPct == null
+        ? brokerPriceSignal?.source ?? null
+        : `${formatSignedPercent(brokerSignalVsListingPct)} vs deal${brokerPriceSignal?.source ? ` · ${brokerPriceSignal.source}` : ""}`,
+      tone: brokerSignalVsListing == null ? "neutral" : brokerSignalVsListing > 0 ? "warn" : "good",
     },
     { label: "Subject $/SF", value: formatPpsf(subjectOverallPpsf), detail: subjectPpsfSource },
     { label: "Avg comp $/SF", value: formatPpsf(averageProjectPpsf) },
@@ -2031,6 +2048,7 @@ export function CanonicalPropertyDetail({
         expensesTable?: Array<{ lineItem?: string | null; amount?: number | null }> | null;
         totalExpenses?: number | null;
       } | null;
+      propertyInfo?: Record<string, unknown> | null;
       validationFlags?: Array<{
         severity?: string | null;
         message?: string | null;
@@ -2638,6 +2656,30 @@ export function CanonicalPropertyDetail({
     listingForDisplay?.price != null && listingForDisplay?.sqft != null && listingForDisplay.sqft > 0
       ? listingForDisplay.price / listingForDisplay.sqft
       : null;
+  const omUiFinancialSummary = rentalFinancials?.omAnalysis?.uiFinancialSummary ?? null;
+  const authoritativePropertyInfo = authoritativeOm?.propertyInfo ?? null;
+  const dealBaselinePrice =
+    listingForDisplay?.price ??
+    numericValue(omUiFinancialSummary?.price) ??
+    numericValue(authoritativePropertyInfo?.price) ??
+    numericValue(persistedDossierAssumptions?.purchasePrice);
+  const dealBaselineSqft =
+    listingForDisplay?.sqft ??
+    numericValue(authoritativePropertyInfo?.buildingSqft) ??
+    formulaDossierDefaults.buildingSqft ??
+    dossierDraft.buildingSqft;
+  const dealBaselinePpsf =
+    listingPricePerSqft ??
+    numericValue(omUiFinancialSummary?.pricePerSqft) ??
+    (dealBaselinePrice != null && dealBaselineSqft != null && dealBaselineSqft > 0 ? dealBaselinePrice / dealBaselineSqft : null);
+  const dealBaselinePriceSource =
+    listingForDisplay?.price != null
+      ? "Primary listing"
+      : numericValue(omUiFinancialSummary?.price) != null || numericValue(authoritativePropertyInfo?.price) != null
+        ? "OM / underwriting"
+        : persistedDossierAssumptions?.purchasePrice != null
+          ? "Dossier assumptions"
+          : null;
   const subjectRentPsfTotals = omRentRoll.reduce<Record<string, { monthlyRent: number; sqft: number }>>((acc, row) => {
     const beds = numericValue(row.beds ?? (row as Record<string, unknown>).bedrooms);
     const sqft = numericValue(row.sqft);
@@ -2660,9 +2702,10 @@ export function CanonicalPropertyDetail({
     numericValue(rentalFinancials?.fromLlm?.capRate) ??
     numericValue(rentalFinancials?.omAnalysis?.uiFinancialSummary?.capRate);
   const brokerCompSubjectBaseline: BrokerCompSubjectBaseline = {
-    price: listingForDisplay?.price ?? null,
-    sqft: listingForDisplay?.sqft ?? null,
-    pricePerSqft: listingPricePerSqft,
+    price: dealBaselinePrice,
+    priceSource: dealBaselinePriceSource,
+    sqft: dealBaselineSqft,
+    pricePerSqft: dealBaselinePpsf,
     capRatePct: subjectCapRatePct,
     rentPsfByBedroom: subjectRentPsfByBedroom,
   };

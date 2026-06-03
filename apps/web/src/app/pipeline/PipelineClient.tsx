@@ -917,7 +917,8 @@ export default function PipelineClient() {
     setBrokerCompError((current) => ({ ...current, [propertyId]: null }));
     try {
       const response = await apiFetch<BrokerCompPackagesResponse>(
-        `${API_BASE}/api/properties/${encodeURIComponent(propertyId)}/broker-comp-packages?includeDetails=true`
+        `${API_BASE}${plannedBrokerCompReviewEndpoint(propertyId)}?limit=20&refresh=${Date.now()}`,
+        { cache: "no-store" }
       );
       setBrokerCompPayloads((current) => ({ ...current, [propertyId]: response }));
     } catch (err) {
@@ -1993,6 +1994,7 @@ export default function PipelineClient() {
   const sheetBrokerCompOpinionSaving = selectedId ? brokerCompOpinionSaving[selectedId] === true : false;
   const sheetBrokerCompError = selectedId ? brokerCompError[selectedId] ?? null : null;
   const sheetListedPrice = selectedProperty?.overview.askingPrice ?? selectedRow?.askingPrice ?? null;
+  const sheetListedPpsf = selectedProperty?.overview.pricePerSqft ?? selectedRow?.pricePerSqft ?? null;
 
   return (
     <main className={styles.page}>
@@ -2871,13 +2873,10 @@ export default function PipelineClient() {
                   savingOpinion={sheetBrokerCompOpinionSaving}
                   error={sheetBrokerCompError}
                   listedPrice={sheetListedPrice}
+                  listedPpsf={sheetListedPpsf}
                   onRefresh={() => selectedId ? loadBrokerComps(selectedId) : undefined}
                   onUpload={(file) => selectedId ? uploadBrokerCompPackage(selectedId, file) : undefined}
                   onAddPricingOpinion={(input) => selectedId ? addBrokerCompPricingOpinion(selectedId, input) : undefined}
-                  onReview={(packageId, itemId, reviewStatus) =>
-                    selectedId ? reviewBrokerCompItem(selectedId, packageId, itemId, reviewStatus) : undefined
-                  }
-                  onPromote={(packageId) => selectedId ? promoteBrokerCompPackage(selectedId, packageId) : undefined}
                 />
               ) : null}
 
@@ -3533,11 +3532,10 @@ function BrokerCompsSheetPanel({
   savingOpinion,
   error,
   listedPrice,
+  listedPpsf,
   onRefresh,
   onUpload,
   onAddPricingOpinion,
-  onReview,
-  onPromote,
 }: {
   propertyId: string;
   surface: BrokerCompUiSurface;
@@ -3546,23 +3544,16 @@ function BrokerCompsSheetPanel({
   savingOpinion: boolean;
   error: string | null;
   listedPrice: number | null;
+  listedPpsf: number | null;
   onRefresh: () => void | Promise<void> | undefined;
   onUpload: (file: File) => void | Promise<void> | undefined;
   onAddPricingOpinion: (input: { amount: number; note: string; listedPrice?: number | null }) => void | Promise<void> | undefined;
-  onReview: (packageId: string, itemId: string, reviewStatus: "approved" | "rejected") => void | Promise<void> | undefined;
-  onPromote: (packageId: string) => void | Promise<void> | undefined;
 }) {
   const uploadEndpoint = plannedBrokerCompUploadEndpoint(propertyId);
   const reviewEndpoint = plannedBrokerCompReviewEndpoint(propertyId);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [whisperAmount, setWhisperAmount] = useState("");
   const [whisperNote, setWhisperNote] = useState("");
-  const reviewedComps = surface.comparables.filter((row) =>
-    row.reviewStatus === "accepted" ||
-    row.reviewStatus === "edited" ||
-    row.reviewStatus === "approved" ||
-    row.reviewStatus === "promoted"
-  ).length;
 
   async function submitUpload(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -3586,6 +3577,135 @@ function BrokerCompsSheetPanel({
       ? ((listedPrice - whisperNumeric) / listedPrice) * 100
       : null;
 
+  const formatSqft = (value: number | null | undefined): string => {
+    const formatted = formatNumber(value);
+    return formatted === "-" ? formatted : `${formatted} SF`;
+  };
+  const formatPpsf = (value: number | null | undefined): string => formatCurrency(value, false);
+  const formatMonthlyCurrency = (value: number | null | undefined): string => {
+    const formatted = formatCurrency(value, false);
+    return formatted === "-" ? formatted : `${formatted}/mo`;
+  };
+  const formatSignedMoney = (value: number | null | undefined): string => {
+    if (value == null || !Number.isFinite(value)) return "-";
+    const sign = value > 0 ? "+" : value < 0 ? "-" : "";
+    return `${sign}${formatCurrency(Math.abs(value), false)}`;
+  };
+  const formatSignedPercent = (value: number | null | undefined): string => {
+    if (value == null || !Number.isFinite(value)) return "-";
+    const sign = value > 0 ? "+" : "";
+    return `${sign}${value.toFixed(Math.abs(value) >= 10 ? 0 : 1)}%`;
+  };
+  const averageNumber = (values: Array<number | null | undefined>): number | null => {
+    const clean = values.filter((value): value is number => value != null && Number.isFinite(value));
+    if (clean.length === 0) return null;
+    return clean.reduce((sum, value) => sum + value, 0) / clean.length;
+  };
+  const weightedAverageNumber = (rows: Array<{ value: number | null; weight: number | null }>): number | null => {
+    const totals = rows.reduce<{ value: number; weight: number }>(
+      (acc, row) => {
+        const value = row.value;
+        if (value == null || !Number.isFinite(value)) return acc;
+        const weight = row.weight != null && Number.isFinite(row.weight) && row.weight > 0 ? row.weight : 1;
+        acc.value += value * weight;
+        acc.weight += weight;
+        return acc;
+      },
+      { value: 0, weight: 0 }
+    );
+    return totals.weight > 0 ? totals.value / totals.weight : null;
+  };
+  const weightedPpsf = (rows: Array<{ price: number | null; interiorSqft: number | null; ppsf: number | null }>): number | null => {
+    const totals = rows.reduce(
+      (acc, row) => {
+        if (row.price != null && row.interiorSqft != null && row.price > 0 && row.interiorSqft > 0) {
+          acc.price += row.price;
+          acc.sqft += row.interiorSqft;
+        }
+        if (row.ppsf != null && row.ppsf > 0) {
+          acc.ppsfSum += row.ppsf;
+          acc.ppsfCount += 1;
+        }
+        return acc;
+      },
+      { price: 0, sqft: 0, ppsfSum: 0, ppsfCount: 0 }
+    );
+    if (totals.price > 0 && totals.sqft > 0) return totals.price / totals.sqft;
+    return totals.ppsfCount > 0 ? totals.ppsfSum / totals.ppsfCount : null;
+  };
+  const compPpsfForProject = (row: { soldPpsf: number | null; askingPpsf: number | null; pricePerSqft: number | null }): number | null =>
+    row.soldPpsf ?? row.askingPpsf ?? row.pricePerSqft;
+  const compPpsfForBedroom = (row: { avgSoldPpsf: number | null; avgAskingPpsf: number | null }): number | null =>
+    row.avgSoldPpsf ?? row.avgAskingPpsf;
+  const priceRangeLabel = (low: number | null, high: number | null, fallback?: string | null): string => {
+    if (fallback) return fallback;
+    if (low != null && high != null) return `${formatCurrency(low, false)} - ${formatCurrency(high, false)}`;
+    if (low != null) return formatCurrency(low, false);
+    if (high != null) return formatCurrency(high, false);
+    return "-";
+  };
+  const renderPpsfSpread = (subjectValue: number | null, compValue: number | null) => {
+    if (subjectValue == null || compValue == null || !Number.isFinite(subjectValue) || !Number.isFinite(compValue) || compValue <= 0) return "-";
+    const diff = subjectValue - compValue;
+    const pct = (diff / compValue) * 100;
+    return `${formatSignedMoney(diff)} (${formatSignedPercent(pct)})`;
+  };
+
+  const pricingCompRows = surface.comparables.filter((row) => row.itemType === "pricing_comp");
+  const subjectPackagePpsf = weightedPpsf(surface.subjectUnitPricingRows);
+  const subjectOverallPpsf = subjectPackagePpsf ?? listedPpsf;
+  const packageProjectedSelloutFromRows = surface.subjectUnitPricingRows.reduce((sum, row) => sum + (row.price ?? 0), 0);
+  const packageProjectedSellout =
+    packageProjectedSelloutFromRows > 0
+      ? packageProjectedSelloutFromRows
+      : surface.pricingOpinions.find((opinion) => opinion.sourceType === "package" && opinion.amount != null)?.amount ?? null;
+  const packageVsListing = packageProjectedSellout != null && listedPrice != null ? packageProjectedSellout - listedPrice : null;
+  const packageVsListingPct = packageProjectedSellout != null && listedPrice != null && listedPrice > 0 ? ((packageVsListing ?? 0) / listedPrice) * 100 : null;
+  const averageProjectPpsf = averageNumber(pricingCompRows.map(compPpsfForProject));
+
+  const subjectBedroomPpsf = new Map<number, number>();
+  for (const bedroom of [...new Set(surface.subjectUnitPricingRows.map((row) => row.bedrooms).filter((value): value is number => value != null))]) {
+    const ppsf = weightedPpsf(surface.subjectUnitPricingRows.filter((row) => row.bedrooms === bedroom));
+    if (ppsf != null) subjectBedroomPpsf.set(bedroom, ppsf);
+  }
+
+  const bedroomSummaryGroups = new Map<string, { bedrooms: number | null; label: string; rows: typeof surface.bedroomBreakdowns }>();
+  for (const row of surface.bedroomBreakdowns) {
+    const key = row.bedrooms != null ? String(row.bedrooms) : row.bedroomType ?? "unknown";
+    const label = row.bedroomType ?? (row.bedrooms != null ? `${row.bedrooms} Bed` : "Unknown");
+    const existing = bedroomSummaryGroups.get(key);
+    if (existing) existing.rows.push(row);
+    else bedroomSummaryGroups.set(key, { bedrooms: row.bedrooms, label, rows: [row] });
+  }
+  const bedroomSummaryRows = [...bedroomSummaryGroups.values()]
+    .sort((left, right) => (left.bedrooms ?? 99) - (right.bedrooms ?? 99))
+    .map((group) => {
+      const subjectBedroomRows = group.bedrooms != null ? surface.subjectUnitPricingRows.filter((row) => row.bedrooms === group.bedrooms) : [];
+      const subjectBedroomValue = group.bedrooms != null ? subjectBedroomPpsf.get(group.bedrooms) ?? subjectOverallPpsf : subjectOverallPpsf;
+      const compAskPpsf = weightedAverageNumber(group.rows.map((row) => ({ value: row.avgAskingPpsf, weight: row.count })));
+      const compSoldPpsf = weightedAverageNumber(group.rows.map((row) => ({ value: row.avgSoldPpsf, weight: row.count })));
+      const compPpsf = compSoldPpsf ?? compAskPpsf;
+      return {
+        label: group.label,
+        projectCount: group.rows.length,
+        offered: group.rows.reduce((sum, row) => sum + (row.count ?? 0), 0) || null,
+        compAvgSize: weightedAverageNumber(group.rows.map((row) => ({ value: row.avgSizeSqft, weight: row.count }))),
+        dealAvgSize: subjectBedroomRows.length > 0 ? averageNumber(subjectBedroomRows.map((row) => row.interiorSqft)) : null,
+        compAskPpsf,
+        compSoldPpsf,
+        dealPpsf: subjectBedroomValue,
+        psfSpread: renderPpsfSpread(subjectBedroomValue, compPpsf),
+        avgCc: weightedAverageNumber(group.rows.map((row) => ({ value: row.avgCommonChargesMonthly, weight: row.count }))),
+      };
+    });
+
+  const extractionNotes = [
+    surface.summary,
+    surface.missingDataFlags.length > 0
+      ? `${surface.missingDataFlags.length} missing-data field${surface.missingDataFlags.length === 1 ? "" : "s"} flagged by the extractor.`
+      : null,
+  ].filter((note): note is string => Boolean(note && note.trim()));
+
   return (
     <section className={styles.sheetPanel}>
       <div className={styles.sectionHeading}>
@@ -3601,7 +3721,7 @@ function BrokerCompsSheetPanel({
             onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)}
           />
           <button className={styles.secondaryButton} type="submit" disabled={!selectedFile || uploading} title={`POST ${uploadEndpoint}`}>
-            {uploading ? "Uploading..." : "Upload comp package"}
+            {uploading ? "Replacing..." : "Replace extract"}
           </button>
           <button
             className={styles.secondaryButton}
@@ -3620,15 +3740,42 @@ function BrokerCompsSheetPanel({
       <section className={styles.propertyDataSection}>
         <div className={styles.propertyDataHeader}>
           <div>
-            <h4>Whisper price / market opinion</h4>
-            <p>Saved as broker/user color only; underwriting offer assumptions stay separate</p>
+            <h4>Pricing check</h4>
+            <p>Deal ask versus package projected sellout and comp $/SF</p>
           </div>
         </div>
+        <dl className={styles.propertyFactGrid}>
+          <div>
+            <dt>Listing price</dt>
+            <dd>{formatCurrency(listedPrice, false)}</dd>
+          </div>
+          <div>
+            <dt>Package sellout</dt>
+            <dd>{formatCurrency(packageProjectedSellout, false)}</dd>
+          </div>
+          <div>
+            <dt>Package vs listing</dt>
+            <dd>{formatSignedMoney(packageVsListing)}</dd>
+            <small>{formatSignedPercent(packageVsListingPct)}</small>
+          </div>
+          <div>
+            <dt>Deal $/SF</dt>
+            <dd>{formatPpsf(subjectOverallPpsf)}</dd>
+          </div>
+          <div>
+            <dt>Avg comp $/SF</dt>
+            <dd>{formatPpsf(averageProjectPpsf)}</dd>
+          </div>
+          <div>
+            <dt>Updated</dt>
+            <dd>{formatDate(surface.updatedAt)}</dd>
+          </div>
+        </dl>
         <form className={styles.documentActions} onSubmit={submitPricingOpinion}>
           <input
             aria-label="Whisper price"
             inputMode="decimal"
-            placeholder="Whisper price"
+            placeholder="Manual price signal"
             value={whisperAmount}
             onChange={(event) => setWhisperAmount(event.target.value)}
           />
@@ -3639,7 +3786,7 @@ function BrokerCompsSheetPanel({
             onChange={(event) => setWhisperNote(event.target.value)}
           />
           <button className={styles.secondaryButton} type="submit" disabled={savingOpinion || !Number.isFinite(whisperNumeric) || whisperNumeric <= 0}>
-            {savingOpinion ? "Saving..." : "Save opinion"}
+            {savingOpinion ? "Saving..." : "Save signal"}
           </button>
         </form>
         {whisperDiscount != null ? (
@@ -3647,34 +3794,8 @@ function BrokerCompsSheetPanel({
             {formatCurrency(whisperNumeric, false)} is {formatPercent(whisperDiscount)} below listed price {formatCurrency(listedPrice, false)}.
           </p>
         ) : null}
+        {extractionNotes.length > 0 ? <p className={styles.dataNote}>{extractionNotes.slice(0, 2).join(" ")}</p> : null}
       </section>
-
-      <dl className={styles.metricGrid}>
-        <div>
-          <dt>Packages</dt>
-          <dd>{formatNumber(surface.packages.length)}</dd>
-        </div>
-        <div>
-          <dt>Extracted comps</dt>
-          <dd>{formatNumber(surface.comparables.length)}</dd>
-        </div>
-        <div>
-          <dt>Reviewed comps</dt>
-          <dd>{formatNumber(reviewedComps)}</dd>
-        </div>
-        <div>
-          <dt>Pricing signals</dt>
-          <dd>{formatNumber(surface.pricingOpinions.length)}</dd>
-        </div>
-        <div>
-          <dt>Flags</dt>
-          <dd>{formatNumber(surface.missingDataFlags.filter((flag) => !flag.resolved).length)}</dd>
-        </div>
-        <div>
-          <dt>Updated</dt>
-          <dd>{formatDate(surface.updatedAt)}</dd>
-        </div>
-      </dl>
 
       {!surface.hasData ? (
         <div className={styles.emptyState}>
@@ -3682,81 +3803,140 @@ function BrokerCompsSheetPanel({
         </div>
       ) : null}
 
-      {surface.summary ? <p className={styles.dataNote}>{surface.summary}</p> : null}
+      <section className={styles.propertyDataSection}>
+        <div className={styles.propertyDataHeader}>
+          <div>
+            <h4>Building level comps</h4>
+            <p>Core project facts from the current broker market analysis package</p>
+          </div>
+        </div>
+        {pricingCompRows.length > 0 ? (
+          <div className={styles.dataTableShell}>
+            <table className={styles.miniTable}>
+              <thead>
+                <tr>
+                  <th>Property</th>
+                  <th>Neighborhood</th>
+                  <th>Year</th>
+                  <th>Floors</th>
+                  <th>Units</th>
+                  <th>Sales began</th>
+                  <th>% sold</th>
+                  <th>Avg unit</th>
+                  <th>Ask $/SF</th>
+                  <th>Sold $/SF</th>
+                  <th>Range</th>
+                </tr>
+              </thead>
+              <tbody>
+                {pricingCompRows.slice(0, 40).map((row) => (
+                  <tr key={row.id}>
+                    <td>
+                      <strong>{row.propertyName ?? row.address ?? "Unlabeled comp"}</strong>
+                      <span>{row.address ?? ""}</span>
+                    </td>
+                    <td>{row.neighborhood ?? "-"}</td>
+                    <td>{formatNumber(row.yearCompleted)}</td>
+                    <td>{formatNumber(row.floors)}</td>
+                    <td>{formatNumber(row.units)}</td>
+                    <td>{row.salesBegan ?? "-"}</td>
+                    <td>{formatPercent(row.percentSoldPct)}</td>
+                    <td>{formatSqft(row.averageUnitSqft)}</td>
+                    <td>{formatPpsf(row.askingPpsf ?? row.pricePerSqft)}</td>
+                    <td>{formatPpsf(row.soldPpsf)}</td>
+                    <td>{priceRangeLabel(row.priceRangeLow, row.priceRangeHigh, row.priceRange)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className={styles.emptyState}>No building-level comp rows are available yet.</div>
+        )}
+      </section>
 
-      {surface.pricingOpinions.length > 0 ? (
+      <section className={styles.propertyDataSection}>
+        <div className={styles.propertyDataHeader}>
+          <div>
+            <h4>Bedroom summary</h4>
+            <p>Averages by bedroom type compared against deal/package unit pricing</p>
+          </div>
+        </div>
+        {bedroomSummaryRows.length > 0 ? (
+          <div className={styles.dataTableShell}>
+            <table className={styles.miniTable}>
+              <thead>
+                <tr>
+                  <th>Type</th>
+                  <th>Projects</th>
+                  <th>Offered</th>
+                  <th>Comp avg SF</th>
+                  <th>Deal avg SF</th>
+                  <th>Comp ask $/SF</th>
+                  <th>Comp sold $/SF</th>
+                  <th>Deal $/SF</th>
+                  <th>$/SF delta</th>
+                  <th>Avg CC</th>
+                </tr>
+              </thead>
+              <tbody>
+                {bedroomSummaryRows.map((row) => (
+                  <tr key={row.label}>
+                    <td><strong>{row.label}</strong></td>
+                    <td>{formatNumber(row.projectCount)}</td>
+                    <td>{formatNumber(row.offered)}</td>
+                    <td>{formatSqft(row.compAvgSize)}</td>
+                    <td>{formatSqft(row.dealAvgSize)}</td>
+                    <td>{formatPpsf(row.compAskPpsf)}</td>
+                    <td>{formatPpsf(row.compSoldPpsf)}</td>
+                    <td>{formatPpsf(row.dealPpsf)}</td>
+                    <td>{row.psfSpread}</td>
+                    <td>{formatMonthlyCurrency(row.avgCc)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className={styles.emptyState}>No bedroom summary rows are available yet.</div>
+        )}
+      </section>
+
+      {surface.subjectUnitPricingRows.length > 0 ? (
         <section className={styles.propertyDataSection}>
           <div className={styles.propertyDataHeader}>
             <div>
-              <h4>Broker pricing opinions</h4>
-              <p>Whisper prices and broker guidance, not underwriting outputs</p>
+              <h4>Subject unit pricing</h4>
+              <p>Projected pricing rows extracted from the subject package</p>
             </div>
           </div>
-          <dl className={styles.propertyFactGrid}>
-            {surface.pricingOpinions.slice(0, 6).map((opinion, index) => (
-              <div key={`${opinion.source ?? "pricing"}:${opinion.amount ?? index}:${index}`}>
-                <dt>{titleize(opinion.sourceType ?? "broker opinion")}</dt>
-                <dd>{formatCurrency(opinion.amount, false)}</dd>
-                <small>{[opinion.source, opinion.note, formatDate(opinion.observedAt)].filter((value) => value && value !== "-").join(" / ")}</small>
-              </div>
-            ))}
-          </dl>
-        </section>
-      ) : null}
-
-      {surface.missingDataFlags.length > 0 ? (
-        <section className={styles.propertyDataSection}>
-          <div className={styles.propertyDataHeader}>
-            <div>
-              <h4>Missing data flags</h4>
-              <p>Fields that need analyst or broker review before relying on comps</p>
-            </div>
-          </div>
-          <div className={styles.sheetTags}>
-            {surface.missingDataFlags.slice(0, 12).map((flag) => (
-              <span className={cx(styles.tagChip, flag.resolved ? styles.toneSuccess : styles.toneWarning)} key={`${flag.field}:${flag.message ?? ""}`}>
-                {flag.label ?? tagLabel(flag.field)}
-                {flag.message ? ` - ${flag.message}` : ""}
-              </span>
-            ))}
-          </div>
-        </section>
-      ) : null}
-
-      {surface.packages.length > 0 ? (
-        <section className={styles.propertyDataSection}>
-          <div className={styles.propertyDataHeader}>
-            <div>
-              <h4>Package summaries</h4>
-              <p>Broker files and extraction review progress</p>
-            </div>
-            <span className={`${styles.tinyChip} ${surface.status === "failed" ? styles.toneWarning : styles.toneSuccess}`}>
-              {statusBadgeLabel(surface.status)}
-            </span>
-          </div>
-          <div className={styles.dataModuleList}>
-            {surface.packages.slice(0, 6).map((pkg) => (
-              <article key={pkg.id} className={styles.dataModuleRow}>
-                <div className={styles.dataModuleHeader}>
-                  <strong>{pkg.label}</strong>
-                  <span className={`${styles.tinyChip} ${moduleToneClass(pkg.status)}`}>{statusBadgeLabel(pkg.status)}</span>
-                </div>
-                <DetailItems
-                  items={[
-                    { label: "Type", value: titleize(pkg.packageType) },
-                    { label: "Items", value: `${pkg.reviewedItemCount}/${pkg.itemCount} reviewed` },
-                    { label: "Updated", value: formatDate(pkg.updatedAt ?? pkg.createdAt) },
-                  ]}
-                />
-                {pkg.reviewedItemCount > 0 ? (
-                  <div className={styles.documentActions}>
-                    <button className={styles.secondaryButton} type="button" onClick={() => void onPromote(pkg.id)}>
-                      Promote approved
-                    </button>
-                  </div>
-                ) : null}
-              </article>
-            ))}
+          <div className={styles.dataTableShell}>
+            <table className={styles.miniTable}>
+              <thead>
+                <tr>
+                  <th>Unit</th>
+                  <th>Bed / bath</th>
+                  <th>Int SF</th>
+                  <th>Ext SF</th>
+                  <th>Price</th>
+                  <th>$/SF</th>
+                  <th>Notes</th>
+                </tr>
+              </thead>
+              <tbody>
+                {surface.subjectUnitPricingRows.map((row) => (
+                  <tr key={row.id}>
+                    <td><strong>{row.unitLabel ?? "-"}</strong></td>
+                    <td>{[row.bedrooms != null ? `${row.bedrooms} Bed` : null, row.bathrooms != null ? `${row.bathrooms} Bath` : null].filter(Boolean).join(" / ") || "-"}</td>
+                    <td>{formatSqft(row.interiorSqft)}</td>
+                    <td>{formatSqft(row.exteriorSqft)}</td>
+                    <td>{formatCurrency(row.price, false)}</td>
+                    <td>{formatPpsf(row.ppsf)}</td>
+                    <td>{row.notes ?? "-"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </section>
       ) : null}
@@ -3764,59 +3944,57 @@ function BrokerCompsSheetPanel({
       <section className={styles.propertyDataSection}>
         <div className={styles.propertyDataHeader}>
           <div>
-            <h4>Extracted and reviewed comps</h4>
-            <p>Comparable rows from broker packages and analyst review decisions</p>
+            <h4>Unit type comps</h4>
+            <p>Per-building bedroom rows with offered count, size, $/SF, range, and average CC</p>
           </div>
         </div>
-        {surface.comparables.length > 0 ? (
+        {surface.bedroomBreakdowns.length > 0 ? (
           <div className={styles.dataTableShell}>
             <table className={styles.miniTable}>
               <thead>
                 <tr>
-                  <th>Comp</th>
-                  <th>Type</th>
-                  <th>Price</th>
-                  <th>$/Unit</th>
-                  <th>$/SF</th>
-                  <th>Cap</th>
-                  <th>Review</th>
-                  <th>Actions</th>
+                  <th>Address</th>
+                  <th>Bed / bath</th>
+                  <th>Offered</th>
+                  <th>Avg SF</th>
+                  <th>Ask $/SF</th>
+                  <th>Sold $/SF</th>
+                  <th>Avg CC</th>
+                  <th>Deal $/SF</th>
+                  <th>$/SF delta</th>
+                  <th>Range</th>
                 </tr>
               </thead>
               <tbody>
-                {surface.comparables.slice(0, 40).map((row) => (
-                  <tr key={row.id}>
-                    <td>
-                      <strong>{row.address ?? "Unlabeled comp"}</strong>
-                      <span>{[row.saleDate ? formatDate(row.saleDate) : null, row.source].filter(Boolean).join(" / ")}</span>
-                    </td>
-                    <td>{titleize(row.itemType)}</td>
-                    <td>{formatCurrency(row.price, false)}</td>
-                    <td>{formatCurrency(row.pricePerUnit, false)}</td>
-                    <td>{formatCurrency(row.pricePerSqft, false)}</td>
-                    <td>{formatPercent(row.capRatePct)}</td>
-                    <td>{[statusBadgeLabel(row.reviewStatus), titleize(row.selectionDecision)].filter((value) => value !== "-").join(" / ") || "-"}</td>
-                    <td>
-                      {row.packageId ? (
-                        <div className={styles.documentActions}>
-                          <button className={styles.secondaryButton} type="button" onClick={() => void onReview(row.packageId ?? "", row.id, "approved")}>
-                            Approve
-                          </button>
-                          <button className={styles.secondaryButton} type="button" onClick={() => void onReview(row.packageId ?? "", row.id, "rejected")}>
-                            Reject
-                          </button>
-                        </div>
-                      ) : (
-                        "-"
-                      )}
-                    </td>
-                  </tr>
-                ))}
+                {[...surface.bedroomBreakdowns]
+                  .sort((left, right) => (left.bedrooms ?? 99) - (right.bedrooms ?? 99) || (left.address ?? "").localeCompare(right.address ?? ""))
+                  .slice(0, 60)
+                  .map((row) => {
+                    const dealPpsf = row.bedrooms != null ? subjectBedroomPpsf.get(row.bedrooms) ?? subjectOverallPpsf : subjectOverallPpsf;
+                    const compPpsf = compPpsfForBedroom(row);
+                    return (
+                      <tr key={row.id}>
+                        <td>
+                          <strong>{row.propertyName ?? row.address ?? "Unlabeled comp"}</strong>
+                          <span>{row.address ?? ""}</span>
+                        </td>
+                        <td>{[row.bedroomType ?? (row.bedrooms != null ? `${row.bedrooms} Bed` : null), row.bathrooms != null ? `${row.bathrooms} Bath` : null].filter(Boolean).join(" / ") || "-"}</td>
+                        <td>{formatNumber(row.count)}</td>
+                        <td>{formatSqft(row.avgSizeSqft)}</td>
+                        <td>{formatPpsf(row.avgAskingPpsf)}</td>
+                        <td>{formatPpsf(row.avgSoldPpsf)}</td>
+                        <td>{formatMonthlyCurrency(row.avgCommonChargesMonthly)}</td>
+                        <td>{formatPpsf(dealPpsf)}</td>
+                        <td>{renderPpsfSpread(dealPpsf, compPpsf)}</td>
+                        <td>{priceRangeLabel(row.priceRangeLow, row.priceRangeHigh, row.priceRange)}</td>
+                      </tr>
+                    );
+                  })}
               </tbody>
             </table>
           </div>
         ) : (
-          <div className={styles.emptyState}>No extracted comps are available yet.</div>
+          <div className={styles.emptyState}>No unit-type comp rows are available yet.</div>
         )}
       </section>
     </section>

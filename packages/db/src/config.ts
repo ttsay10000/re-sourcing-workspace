@@ -14,9 +14,23 @@ function getUrl(): string {
   return u;
 }
 
+function shouldUseSsl(): boolean {
+  const explicit = process.env.DATABASE_SSL ?? process.env.PGSSLMODE;
+  if (explicit) {
+    const normalized = explicit.trim().toLowerCase();
+    if (["0", "false", "disable", "disabled", "no"].includes(normalized)) return false;
+    if (["1", "true", "require", "required", "yes"].includes(normalized)) return true;
+  }
+  const url = process.env.DATABASE_URL ?? "";
+  return /render\.com/i.test(url) || /[?&]sslmode=require/i.test(url);
+}
+
 export const dbConfig = {
   get connectionString(): string {
     return getUrl();
+  },
+  get ssl(): { rejectUnauthorized: false } | undefined {
+    return shouldUseSsl() ? { rejectUnauthorized: false } : undefined;
   },
   max: 20,
   idleTimeoutMillis: 30000,
