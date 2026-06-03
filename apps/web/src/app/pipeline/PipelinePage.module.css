@@ -375,9 +375,12 @@
 }
 
 .colUnit,
-.colCap,
 .colMtr {
   width: 4.4rem;
+}
+
+.colYoc {
+  width: 5.5rem;
 }
 
 .colScore {
@@ -402,7 +405,7 @@
 }
 
 .colAction {
-  width: 10rem;
+  width: 8.6rem;
 }
 
 .pipelineTable th {
@@ -733,6 +736,26 @@
   font-variant-numeric: tabular-nums;
 }
 
+.yocCell strong,
+.yocCell span {
+  display: block;
+}
+
+.yocCell strong {
+  color: #173f34;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.yocCell span {
+  margin-top: 0.06rem;
+  color: #6d7a73;
+  font-size: 0.56rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
 .scoreCell {
   min-width: 5.4rem;
 }
@@ -966,11 +989,18 @@
 }
 
 .propertySheet {
-  width: min(56rem, 96vw);
+  width: min(58rem, 96vw);
   height: 100%;
   overflow: auto;
   background: var(--app-surface, #ffffff);
   box-shadow: -4px 0 24px rgba(0, 0, 0, 0.1);
+  transition: width 180ms ease, box-shadow 180ms ease;
+  will-change: width;
+}
+
+.propertySheetFullscreen {
+  width: min(92rem, calc(100vw - 2rem));
+  box-shadow: -10px 0 44px rgba(9, 19, 29, 0.18);
 }
 
 .sheetHeader,
@@ -987,9 +1017,9 @@
 .modalHeader h2 {
   margin: 0.25rem 0 0;
   color: var(--app-ink, #18181b);
-  font-family: var(--font-display);
-  font-size: 1.55rem;
-  font-weight: 400;
+  font-family: inherit;
+  font-size: 1.36rem;
+  font-weight: 750;
   line-height: 1.1;
   letter-spacing: 0;
 }
@@ -998,6 +1028,84 @@
   margin: 0.3rem 0 0;
   color: var(--app-muted, #71717a);
   font-size: 0.84rem;
+}
+
+.sheetWindowActions {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-shrink: 0;
+}
+
+.sheetUtilityButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 2.1rem;
+  border: 1px solid #d4ded8;
+  border-radius: 999px;
+  padding: 0.3rem 0.7rem;
+  background: #ffffff;
+  color: #26343d;
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  cursor: pointer;
+  transition: background 140ms ease, border-color 140ms ease, color 140ms ease;
+}
+
+.sheetUtilityButton:hover {
+  border-color: #b8c9c0;
+  background: #f6faf8;
+  color: #122a32;
+}
+
+.sheetScreeningBar {
+  display: grid;
+  grid-template-columns: 1.1fr repeat(4, minmax(0, 1fr));
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0.8rem 1.25rem;
+  border-bottom: 1px solid #dfe6e2;
+  background: #fbfcfb;
+}
+
+.sheetScreeningBar div {
+  min-width: 0;
+  border: 1px solid #e0e7e3;
+  border-radius: 8px;
+  padding: 0.62rem 0.72rem;
+  background: #ffffff;
+}
+
+.sheetScreeningBar .screeningMetricPrimary {
+  border-color: #bad7ca;
+  background: #f2faf5;
+}
+
+.sheetScreeningBar dt {
+  color: #65737c;
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.sheetScreeningBar dd {
+  margin: 0.18rem 0 0;
+  color: #18242d;
+  font-family: inherit;
+  font-size: 1.08rem;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+}
+
+.sheetScreeningBar small {
+  display: block;
+  margin-top: 0.12rem;
+  color: #77827b;
+  font-size: 0.68rem;
+  line-height: 1.2;
 }
 
 .sourceLinkButton {
@@ -1027,9 +1135,9 @@
   display: grid;
   grid-template-columns: minmax(0, 1.55fr) minmax(13rem, 0.8fr);
   gap: 0.55rem;
-  padding: 0.75rem 1rem;
+  padding: 0.75rem 1.25rem;
   border-bottom: 1px solid #dce3de;
-  background: #eef2ef;
+  background: #f3f6f4;
 }
 
 .galleryHero,
@@ -1144,13 +1252,29 @@
 .galleryEmpty {
   display: grid;
   grid-column: 1 / -1;
-  min-height: 11rem;
+  align-content: center;
+  justify-items: center;
+  min-height: 9.5rem;
   place-items: center;
-  border: 1px dashed #cbd6d1;
+  border: 1px dashed #cfd9d4;
   border-radius: 8px;
-  background: #f7faf8;
+  padding: 1.4rem;
+  background: repeating-linear-gradient(135deg, #fbfdfc 0, #fbfdfc 10px, #f7faf8 10px, #f7faf8 20px);
   color: #697580;
+  text-align: center;
+}
+
+.galleryEmpty strong {
+  color: #33424b;
   font-size: 0.9rem;
+}
+
+.galleryEmpty span {
+  max-width: 28rem;
+  margin-top: 0.25rem;
+  color: #6b7881;
+  font-size: 0.76rem;
+  line-height: 1.35;
 }
 
 .sheetActions {
@@ -1225,8 +1349,8 @@
 .highlightSection {
   border-top: 1px solid var(--app-line, #e4e4e7);
   padding: 1rem;
-  border-radius: 10px;
-  background: var(--app-surface-raised, #fafaf9);
+  border-radius: 8px;
+  background: #fbfcfb;
   border: 1px solid var(--app-line, #e4e4e7);
 }
 
@@ -1294,9 +1418,9 @@
 .highlightGrid strong {
   margin-top: 0.25rem;
   color: var(--app-ink, #18181b);
-  font-family: var(--font-display);
-  font-size: 1.1rem;
-  font-weight: 400;
+  font-family: inherit;
+  font-size: 1rem;
+  font-weight: 750;
   font-variant-numeric: tabular-nums;
 }
 
@@ -1388,9 +1512,9 @@
 .detailList dd {
   margin: 0.18rem 0 0;
   color: var(--app-ink, #18181b);
-  font-family: var(--font-display);
-  font-size: 1.05rem;
-  font-weight: 400;
+  font-family: inherit;
+  font-size: 0.98rem;
+  font-weight: 700;
   font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
 }
@@ -1826,37 +1950,74 @@
 }
 
 .dataTableShell {
-  max-height: 18rem;
+  max-height: 20rem;
   overflow: auto;
   border: 1px solid #e1e8e4;
-  border-radius: 7px;
+  border-radius: 8px;
   background: #fff;
+}
+
+.propertySheetFullscreen .dataTableShell {
+  max-height: 30rem;
 }
 
 .miniTable {
   width: 100%;
   min-width: 36rem;
   border-collapse: collapse;
-  font-size: 0.75rem;
+  font-size: 0.76rem;
 }
 
 .miniTable th,
 .miniTable td {
-  padding: 0.5rem 0.6rem;
+  padding: 0.55rem 0.65rem;
   border-bottom: 1px solid #edf1ee;
   vertical-align: middle;
   text-align: left;
+  line-height: 1.25;
 }
 
 .miniTable th {
   position: sticky;
   top: 0;
   z-index: 1;
-  background: #f2f6f3;
+  background: #f7faf8;
   color: #5d6973;
   font-size: 0.62rem;
+  font-weight: 800;
   text-transform: uppercase;
   letter-spacing: 0.05em;
+}
+
+.miniTable tbody tr:nth-child(even) {
+  background: #fcfdfc;
+}
+
+.miniTable tbody tr:hover {
+  background: #f4faf7;
+}
+
+.miniTable td {
+  color: #24313a;
+  font-variant-numeric: tabular-nums;
+}
+
+.miniTable td strong,
+.miniTable td span {
+  display: block;
+}
+
+.miniTable td strong {
+  color: #14232b;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.miniTable td span {
+  margin-top: 0.1rem;
+  color: #67747d;
+  font-size: 0.68rem;
+  line-height: 1.2;
 }
 
 .unitCell {
@@ -2145,11 +2306,12 @@
   .moduleGridCompact,
   .highlightGrid,
   .inlineDetailList,
-  .sourceFactsForm,
-  .propertyDataSection .moduleItems,
-  .propertyFactGrid {
-    grid-template-columns: 1fr;
-  }
+	  .sourceFactsForm,
+	  .sheetScreeningBar,
+	  .propertyDataSection .moduleItems,
+	  .propertyFactGrid {
+	    grid-template-columns: 1fr;
+	  }
 
   .templateToolbar {
     grid-template-columns: 1fr;
@@ -2186,9 +2348,18 @@
     grid-column: 1 / -1;
   }
 
-  .propertySheet {
-    width: 100vw;
-  }
+	  .propertySheet {
+	    width: 100vw;
+	  }
+
+	  .propertySheetFullscreen {
+	    width: 100vw;
+	  }
+
+	  .sheetWindowActions {
+	    align-items: flex-end;
+	    flex-direction: column-reverse;
+	  }
 
   .propertyGallery {
     grid-template-columns: 1fr;

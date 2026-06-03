@@ -33,6 +33,7 @@ export type UiV2PipelineSortField =
   | "pricePerSqft"
   | "units"
   | "capRate"
+  | "yocPct"
   | "dealScore"
   | "status"
   | "lastActivityAt"
@@ -600,6 +601,10 @@ export interface UiV2UnderwritingSummary {
   recommendedOfferLow?: number | null;
   recommendedOfferHigh?: number | null;
   capRate?: number | null;
+  yocPct?: number | null;
+  yocBasis?: "adjusted_noi" | "current_noi" | "unknown" | null;
+  marketCapRatePct?: number | null;
+  yocSpreadPct?: number | null;
   targetIrrPct?: number | null;
   irrPct?: number | null;
   cocPct?: number | null;

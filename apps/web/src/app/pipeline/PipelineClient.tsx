@@ -58,7 +58,7 @@ const SORT_OPTIONS: Array<{ value: UiV2PipelineSortField; label: string }> = [
   { value: "askingPrice", label: "Ask" },
   { value: "pricePerSqft", label: "$/SF" },
   { value: "units", label: "Units" },
-  { value: "capRate", label: "Cap" },
+  { value: "yocPct", label: "YoC" },
   { value: "canonicalAddress", label: "Address" },
   { value: "source", label: "Source" },
   { value: "marketType", label: "Type" },
@@ -122,6 +122,9 @@ type PipelineRow = UiV2PipelineRow & {
   overview?: { gallery?: UiV2ImageAsset[]; listingUrl?: string | null };
 };
 
+type PipelineUnderwriting = NonNullable<UiV2PipelineRow["underwriting"]>;
+type YoCBasis = NonNullable<PipelineUnderwriting["yocBasis"]>;
+
 type FlexiblePropertyDetail = UiV2PropertyDetailPayload & {
   gallery?: UiV2ImageAsset[];
   overview: UiV2PropertyDetailPayload["overview"] & { gallery?: UiV2ImageAsset[] };
@@ -143,7 +146,7 @@ type PipelineHeaderMenuId =
   | "askingPrice"
   | "pricePerSqft"
   | "units"
-  | "capRate"
+  | "yocPct"
   | "mtr"
   | "dealScore"
   | "status"
@@ -160,7 +163,7 @@ const COLUMN_SORT_FIELDS: Partial<Record<PipelineHeaderMenuId, UiV2PipelineSortF
   askingPrice: "askingPrice",
   pricePerSqft: "pricePerSqft",
   units: "units",
-  capRate: "capRate",
+  yocPct: "yocPct",
   dealScore: "dealScore",
   status: "status",
   om: "omStatus",
@@ -432,12 +435,25 @@ function statusLabel(status: string): string {
   return UI_V2_PIPELINE_STATUS_OPTIONS.find((option) => option.status === status)?.label ?? titleize(status);
 }
 
-function calculateCapRate(row: Pick<UiV2PipelineRow, "underwriting" | "askingPrice">): number | null {
-  if (row.underwriting?.capRate != null) return row.underwriting.capRate;
-  const noi = row.underwriting?.adjustedNoi ?? row.underwriting?.currentNoi ?? null;
+function calculateYoC(row: Pick<UiV2PipelineRow, "underwriting" | "askingPrice">): { value: number | null; basis: YoCBasis } {
+  if (row.underwriting?.yocPct != null) {
+    return { value: row.underwriting.yocPct, basis: row.underwriting.yocBasis ?? "unknown" };
+  }
   const price = row.underwriting?.askingPrice ?? row.askingPrice ?? null;
-  if (noi == null || price == null || price <= 0) return null;
-  return (noi / price) * 100;
+  if (price == null || price <= 0) return { value: null, basis: "unknown" };
+  if (row.underwriting?.adjustedNoi != null) {
+    return { value: (row.underwriting.adjustedNoi / price) * 100, basis: "adjusted_noi" };
+  }
+  if (row.underwriting?.currentNoi != null) {
+    return { value: (row.underwriting.currentNoi / price) * 100, basis: "current_noi" };
+  }
+  return { value: null, basis: "unknown" };
+}
+
+function yocBasisLabel(basis: YoCBasis | null | undefined): string {
+  if (basis === "adjusted_noi") return "MTR NOI";
+  if (basis === "current_noi") return "Current NOI";
+  return "Pending";
 }
 
 function mtrLabel(tags: string[]): string {
@@ -733,6 +749,7 @@ export default function PipelineClient() {
   const [loadingTemplates, setLoadingTemplates] = useState(false);
   const [galleryIndex, setGalleryIndex] = useState(0);
   const [galleryExpanded, setGalleryExpanded] = useState(false);
+  const [sheetFullscreen, setSheetFullscreen] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [emailQueue, setEmailQueue] = useState<string[]>([]);
   const [headerMenu, setHeaderMenu] = useState<PipelineHeaderMenuId | null>(null);
@@ -1066,6 +1083,7 @@ export default function PipelineClient() {
   const openProperty = useCallback(
     async (row: PipelineRow) => {
       setSheetTab("Overview");
+      setSheetFullscreen(false);
       setBrokerEditOpen(false);
       setSourceFactsEditOpen(false);
       setNotice(null);
@@ -1086,6 +1104,7 @@ export default function PipelineClient() {
     setSelectedProperty(null);
     setBrokerEditOpen(false);
     setSourceFactsEditOpen(false);
+    setSheetFullscreen(false);
     setGalleryExpanded(false);
     setNewTag("");
     const params = new URLSearchParams(queryString);
@@ -1984,7 +2003,6 @@ export default function PipelineClient() {
   const sheetMarketType = selectedProperty?.overview.marketType ?? selectedRow?.marketType ?? "unknown";
   const sheetDocuments = selectedProperty?.documents ?? [];
   const sheetEnrichmentModules = selectedProperty?.enrichmentDetails?.modules ?? [];
-  const sheetListingFacts = selectedProperty?.enrichmentDetails?.listingFacts ?? null;
   const terminalStatus =
     selectedRow?.statusChip.status === "rejected" ||
     selectedRow?.statusChip.status === "archived" ||
@@ -1998,6 +2016,18 @@ export default function PipelineClient() {
   const sheetBrokerCompError = selectedId ? brokerCompError[selectedId] ?? null : null;
   const sheetListedPrice = selectedProperty?.overview.askingPrice ?? selectedRow?.askingPrice ?? null;
   const sheetListedPpsf = selectedProperty?.overview.pricePerSqft ?? selectedRow?.pricePerSqft ?? null;
+  const selectedRowYoC = selectedRow ? calculateYoC(selectedRow) : ({ value: null, basis: "unknown" } as const);
+  const sheetYoC = sheetUnderwriting?.yocPct ?? selectedRowYoC.value;
+  const sheetYoCBasis = sheetUnderwriting?.yocBasis ?? selectedRowYoC.basis;
+  const sheetMarketCapRate = sheetUnderwriting?.marketCapRatePct ?? null;
+  const sheetYoCSpread =
+    sheetUnderwriting?.yocSpreadPct ?? (sheetYoC != null && sheetMarketCapRate != null ? sheetYoC - sheetMarketCapRate : null);
+  const sheetCurrentNoi = sheetUnderwriting?.currentNoi ?? null;
+  const sheetAdjustedNoi = sheetUnderwriting?.adjustedNoi ?? null;
+  const sheetNoiUpliftPct =
+    sheetCurrentNoi != null && sheetAdjustedNoi != null && sheetCurrentNoi !== 0
+      ? ((sheetAdjustedNoi - sheetCurrentNoi) / Math.abs(sheetCurrentNoi)) * 100
+      : null;
 
   return (
     <main className={styles.page}>
@@ -2153,9 +2183,9 @@ export default function PipelineClient() {
             <col className={styles.colSource} />
             <col className={styles.colType} />
             <col className={styles.colAsk} />
+            <col className={styles.colYoc} />
             <col className={styles.colUnit} />
             <col className={styles.colPsf} />
-            <col className={styles.colCap} />
             <col className={styles.colMtr} />
             <col className={styles.colScore} />
             <col className={styles.colStatus} />
@@ -2179,9 +2209,9 @@ export default function PipelineClient() {
               <th>{renderHeader("source", "Source")}</th>
               <th>{renderHeader("marketType", "Type")}</th>
               <th>{renderHeader("askingPrice", "Ask")}</th>
+              <th>{renderHeader("yocPct", "YoC")}</th>
               <th>{renderHeader("units", "Units")}</th>
               <th>{renderHeader("pricePerSqft", "$/SF")}</th>
-              <th>{renderHeader("capRate", "Cap")}</th>
               <th>{renderHeader("mtr", "MTR")}</th>
               <th>{renderHeader("dealScore", "Score")}</th>
               <th>{renderHeader("status", "Status")}</th>
@@ -2199,6 +2229,7 @@ export default function PipelineClient() {
               const isTerminal = status === "rejected" || status === "archived" || status === "deal_closed";
               const isChecked = selectedIdSet.has(row.propertyId);
               const score = row.underwriting?.dealScore ?? null;
+              const rowYoC = calculateYoC(row);
               const rowLocationLabels = locationLabels(row);
               return (
                 <tr
@@ -2247,9 +2278,12 @@ export default function PipelineClient() {
                     </select>
                   </td>
                   <td className={styles.numericCell}>{formatCurrency(row.askingPrice)}</td>
+                  <td className={cx(styles.numericCell, styles.yocCell)}>
+                    <strong>{formatPercent(rowYoC.value)}</strong>
+                    <span>{yocBasisLabel(rowYoC.basis)}</span>
+                  </td>
                   <td className={styles.numericCell}>{formatNumber(row.units)}</td>
                   <td className={styles.numericCell}>{formatCurrency(row.pricePerSqft, false)}</td>
-                  <td className={styles.numericCell}>{formatPercent(calculateCapRate(row))}</td>
                   <td>
                     <span className={`${styles.tinyChip} ${mtrLabel(row.tags) === "Good" ? styles.toneSuccess : styles.toneNeutral}`}>
                       {mtrLabel(row.tags)}
@@ -2365,7 +2399,7 @@ export default function PipelineClient() {
 
       {selectedId ? (
         <div className={styles.sheetOverlay} onClick={closeSheet}>
-          <aside className={styles.propertySheet} onClick={(event) => event.stopPropagation()}>
+          <aside className={cx(styles.propertySheet, sheetFullscreen && styles.propertySheetFullscreen)} onClick={(event) => event.stopPropagation()}>
             <div className={styles.sheetHeader}>
               <div>
                 <span className={styles.kicker}>{sourceLabel(String(selectedProperty?.overview.source ?? selectedRow?.source ?? "Pipeline"))}</span>
@@ -2377,10 +2411,48 @@ export default function PipelineClient() {
                   </a>
                 ) : null}
               </div>
-              <button className={styles.closeButton} type="button" onClick={closeSheet} aria-label="Close property sheet">
-                ×
-              </button>
+              <div className={styles.sheetWindowActions}>
+                <button
+                  className={styles.sheetUtilityButton}
+                  type="button"
+                  onClick={() => setSheetFullscreen((fullscreen) => !fullscreen)}
+                  aria-pressed={sheetFullscreen}
+                >
+                  {sheetFullscreen ? "Compact" : "Full screen"}
+                </button>
+                <button className={styles.closeButton} type="button" onClick={closeSheet} aria-label="Close property sheet">
+                  ×
+                </button>
+              </div>
             </div>
+
+            <dl className={styles.sheetScreeningBar} aria-label="Screening yield summary">
+              <div className={styles.screeningMetricPrimary}>
+                <dt>YoC</dt>
+                <dd>{formatPercent(sheetYoC)}</dd>
+                <small>{yocBasisLabel(sheetYoCBasis)}</small>
+              </div>
+              <div>
+                <dt>Ask</dt>
+                <dd>{formatCurrency(sheetListedPrice, false)}</dd>
+                <small>{formatCurrency(sheetListedPpsf, false)} / SF</small>
+              </div>
+              <div>
+                <dt>MTR NOI</dt>
+                <dd>{formatCurrency(sheetAdjustedNoi, false)}</dd>
+                <small>Adjusted NOI</small>
+              </div>
+              <div>
+                <dt>Market cap</dt>
+                <dd>{formatPercent(sheetMarketCapRate)}</dd>
+                <small>Broker data pending</small>
+              </div>
+              <div>
+                <dt>YoC spread</dt>
+                <dd>{formatPercent(sheetYoCSpread)}</dd>
+                <small>YoC less market cap</small>
+              </div>
+            </dl>
 
             <div className={styles.propertyGallery}>
               {activeGalleryImage ? (
@@ -2439,7 +2511,10 @@ export default function PipelineClient() {
                   </div>
                 </>
               ) : (
-                <div className={styles.galleryEmpty}>No property photos yet</div>
+                <div className={styles.galleryEmpty}>
+                  <strong>No property photos yet</strong>
+                  <span>Listing, OM, and broker media will appear here once linked.</span>
+                </div>
               )}
             </div>
 
@@ -2553,10 +2628,10 @@ export default function PipelineClient() {
                         <dt>$/SF</dt>
                         <dd>{formatCurrency(selectedProperty?.overview.pricePerSqft ?? selectedRow?.pricePerSqft, false)}</dd>
                       </div>
-                      <div>
-                        <dt>Cap</dt>
-                        <dd>{formatPercent(selectedProperty?.underwriting?.capRate ?? (selectedRow ? calculateCapRate(selectedRow) : null))}</dd>
-                      </div>
+	                      <div>
+	                        <dt>YoC</dt>
+	                        <dd>{formatPercent(sheetYoC)}</dd>
+	                      </div>
                       <div>
                         <dt>Type</dt>
                         <dd>{marketTypeLabel(sheetMarketType)}</dd>
@@ -2565,17 +2640,14 @@ export default function PipelineClient() {
                         <dt>Sqft</dt>
                         <dd>{formatNumber(selectedProperty?.overview.buildingSqft ?? selectedRow?.buildingSqft)}</dd>
                       </div>
-                      <div>
-                        <dt>Beds / Baths</dt>
-                        <dd>
-                          {formatNumber(sheetListingFacts?.bedrooms ?? selectedProperty?.overview.beds)} /{" "}
-                          {formatNumber(sheetListingFacts?.bathrooms ?? selectedProperty?.overview.baths)}
-                        </dd>
-                      </div>
-                      <div>
-                        <dt>Listing status</dt>
-                        <dd>{titleize(sheetListingFacts?.status)}</dd>
-                      </div>
+	                      <div>
+	                        <dt>Market cap</dt>
+	                        <dd>{formatPercent(sheetMarketCapRate)}</dd>
+	                      </div>
+	                      <div>
+	                        <dt>YoC spread</dt>
+	                        <dd>{formatPercent(sheetYoCSpread)}</dd>
+	                      </div>
                       <div>
                         <dt>Score</dt>
                         <dd>
@@ -2690,38 +2762,38 @@ export default function PipelineClient() {
 	                    {selectedProperty?.overview.description ? <p className={styles.description}>{selectedProperty.overview.description}</p> : null}
 	                  </section>
 
-                  <section className={styles.highlightSection}>
-                    <div className={styles.sectionHeading}>
-                      <h3>Investment Highlights</h3>
-                      <span>{sheetUnderwriting?.generationStatus ? titleize(sheetUnderwriting.generationStatus) : "Live inputs"}</span>
-                    </div>
-                    <div className={styles.highlightGrid}>
-                      <div>
-                        <span>Deal score</span>
-                        <strong className={scoreTone(sheetUnderwriting?.dealScore)}>{scoreLabel(sheetUnderwriting?.dealScore)}</strong>
-                      </div>
-                      <div>
-                        <span>Cap rate</span>
-                        <strong>{formatPercent(sheetUnderwriting?.capRate ?? (selectedRow ? calculateCapRate(selectedRow) : null))}</strong>
-                      </div>
-                      <div>
-                        <span>IRR</span>
-                        <strong>{formatPercent(sheetUnderwriting?.irrPct ?? sheetUnderwriting?.targetIrrPct)}</strong>
-                      </div>
-                      <div>
-                        <span>Cash on cash</span>
-                        <strong>{formatPercent(sheetUnderwriting?.cocPct)}</strong>
-                      </div>
-                      <div>
-                        <span>Current NOI</span>
-                        <strong>{formatCurrency(sheetUnderwriting?.currentNoi, false)}</strong>
-                      </div>
-                      <div>
-                        <span>Adjusted NOI</span>
-                        <strong>{formatCurrency(sheetUnderwriting?.adjustedNoi, false)}</strong>
-                      </div>
-                    </div>
-                  </section>
+	                  <section className={styles.highlightSection}>
+	                    <div className={styles.sectionHeading}>
+	                      <h3>Screening Highlights</h3>
+	                      <span>{sheetUnderwriting?.generationStatus ? titleize(sheetUnderwriting.generationStatus) : "Live inputs"}</span>
+	                    </div>
+	                    <div className={styles.highlightGrid}>
+	                      <div>
+	                        <span>Yield on cost</span>
+	                        <strong>{formatPercent(sheetYoC)}</strong>
+	                      </div>
+	                      <div>
+	                        <span>Ask price</span>
+	                        <strong>{formatCurrency(sheetListedPrice, false)}</strong>
+	                      </div>
+	                      <div>
+	                        <span>Current NOI</span>
+	                        <strong>{formatCurrency(sheetCurrentNoi, false)}</strong>
+	                      </div>
+	                      <div>
+	                        <span>MTR NOI</span>
+	                        <strong>{formatCurrency(sheetAdjustedNoi, false)}</strong>
+	                      </div>
+	                      <div>
+	                        <span>Market cap</span>
+	                        <strong>{formatPercent(sheetMarketCapRate)}</strong>
+	                      </div>
+	                      <div>
+	                        <span>YoC spread</span>
+	                        <strong>{formatPercent(sheetYoCSpread)}</strong>
+	                      </div>
+	                    </div>
+	                  </section>
 
                   <section className={styles.overviewSection}>
                     <div className={styles.sectionHeading}>
@@ -2896,37 +2968,45 @@ export default function PipelineClient() {
 	                      </Link>
 	                    </div>
 	                  </div>
-                  <dl className={styles.metricGrid}>
-                    <div>
-                      <dt>Deal score</dt>
-                      <dd>
-                        <span className={`${styles.scoreBadge} ${scoreTone(selectedProperty?.underwriting?.dealScore ?? selectedRow?.underwriting?.dealScore)}`}>
-                          {scoreLabel(selectedProperty?.underwriting?.dealScore ?? selectedRow?.underwriting?.dealScore)}
-                        </span>
-                      </dd>
-                    </div>
-                    <div>
-                      <dt>Cap</dt>
-                      <dd>{formatPercent(selectedProperty?.underwriting?.capRate ?? selectedRow?.underwriting?.capRate)}</dd>
-                    </div>
-                    <div>
-                      <dt>IRR</dt>
-                      <dd>{formatPercent(selectedProperty?.underwriting?.irrPct ?? selectedRow?.underwriting?.irrPct)}</dd>
-                    </div>
-                    <div>
-                      <dt>CoC</dt>
-                      <dd>{formatPercent(selectedProperty?.underwriting?.cocPct ?? selectedRow?.underwriting?.cocPct)}</dd>
-                    </div>
-                    <div>
-                      <dt>Current NOI</dt>
-                      <dd>{formatCurrency(selectedProperty?.underwriting?.currentNoi ?? selectedRow?.underwriting?.currentNoi, false)}</dd>
-                    </div>
-                    <div>
-                      <dt>Adjusted NOI</dt>
-                      <dd>{formatCurrency(selectedProperty?.underwriting?.adjustedNoi ?? selectedRow?.underwriting?.adjustedNoi, false)}</dd>
-                    </div>
-                    <div>
-                      <dt>Generation</dt>
+	                  <dl className={styles.metricGrid}>
+	                    <div>
+	                      <dt>YoC</dt>
+	                      <dd>{formatPercent(sheetYoC)}</dd>
+	                    </div>
+	                    <div>
+	                      <dt>Market cap</dt>
+	                      <dd>{formatPercent(sheetMarketCapRate)}</dd>
+	                    </div>
+	                    <div>
+	                      <dt>YoC spread</dt>
+	                      <dd>{formatPercent(sheetYoCSpread)}</dd>
+	                    </div>
+	                    <div>
+	                      <dt>NOI uplift</dt>
+	                      <dd>{formatPercent(sheetNoiUpliftPct)}</dd>
+	                    </div>
+	                    <div>
+	                      <dt>Current NOI</dt>
+	                      <dd>{formatCurrency(sheetCurrentNoi, false)}</dd>
+	                    </div>
+	                    <div>
+	                      <dt>MTR NOI</dt>
+	                      <dd>{formatCurrency(sheetAdjustedNoi, false)}</dd>
+	                    </div>
+	                    <div>
+	                      <dt>Unlevered IRR</dt>
+	                      <dd>{formatPercent(selectedProperty?.underwriting?.irrPct ?? selectedRow?.underwriting?.irrPct)}</dd>
+	                    </div>
+	                    <div>
+	                      <dt>Deal score</dt>
+	                      <dd>
+	                        <span className={`${styles.scoreBadge} ${scoreTone(selectedProperty?.underwriting?.dealScore ?? selectedRow?.underwriting?.dealScore)}`}>
+	                          {scoreLabel(selectedProperty?.underwriting?.dealScore ?? selectedRow?.underwriting?.dealScore)}
+	                        </span>
+	                      </dd>
+	                    </div>
+	                    <div>
+	                      <dt>Generation</dt>
                       <dd>{titleize(selectedProperty?.underwriting?.generationStatus ?? selectedRow?.underwriting?.generationStatus)}</dd>
                     </div>
                   </dl>

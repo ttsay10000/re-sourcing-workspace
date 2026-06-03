@@ -243,6 +243,9 @@ interface PipelineBaseRow {
   latest_signal_coc_pct: number | string | null;
   latest_signal_current_noi: number | string | null;
   latest_signal_adjusted_noi: number | string | null;
+  latest_signal_asset_cap_rate: number | string | null;
+  latest_signal_adjusted_cap_rate: number | string | null;
+  latest_signal_yield_spread: number | string | null;
   override_score: number | string | null;
   open_action_item_count: number | string | null;
   latest_inquiry_sent_at: Date | string | null;
@@ -408,6 +411,7 @@ function parsePipelineQuery(req: Request): ParsedPipelineQuery {
       "pricePerSqft",
       "units",
       "capRate",
+      "yocPct",
       "dealScore",
       "status",
       "lastActivityAt",
@@ -1640,16 +1644,54 @@ function getCapRate(row: PipelineBaseRow): number | null {
   return (noi / price) * 100;
 }
 
+function getCurrentNoi(row: PipelineBaseRow): number | null {
+  const details = row.details;
+  const summary = getPropertyDossierSummary(details);
+  return (
+    summary?.currentNoi ??
+    readNumericPath(details, ["omData", "authoritative", "currentFinancials", "noi"]) ??
+    readNumericPath(details, ["omData", "authoritative", "currentFinancials", "netOperatingIncome"]) ??
+    readNumericPath(details, ["rentalFinancials", "omAnalysis", "currentFinancials", "noi"]) ??
+    readNumericPath(details, ["rentalFinancials", "omAnalysis", "currentFinancials", "netOperatingIncome"]) ??
+    readNumericPath(details, ["rentalFinancials", "fromLlm", "noi"]) ??
+    toFiniteNumber(row.latest_signal_current_noi)
+  );
+}
+
+function getAdjustedNoi(row: PipelineBaseRow): number | null {
+  const details = row.details;
+  const summary = getPropertyDossierSummary(details);
+  return summary?.adjustedNoi ?? summary?.stabilizedNoi ?? toFiniteNumber(row.latest_signal_adjusted_noi);
+}
+
+function getYoC(row: PipelineBaseRow): {
+  basis: NonNullable<UiV2UnderwritingSummary["yocBasis"]>;
+  value: number | null;
+} {
+  const price = getAskingPrice(row);
+  if (price == null || price <= 0) return { basis: "unknown", value: null };
+
+  const adjustedNoi = getAdjustedNoi(row);
+  if (adjustedNoi != null) return { basis: "adjusted_noi", value: (adjustedNoi / price) * 100 };
+
+  const currentNoi = getCurrentNoi(row);
+  if (currentNoi != null) return { basis: "current_noi", value: (currentNoi / price) * 100 };
+
+  return { basis: "unknown", value: null };
+}
+
 function buildUnderwriting(row: PipelineBaseRow): UiV2UnderwritingSummary | null {
   const details = row.details;
   const summary = getPropertyDossierSummary(details);
   const assumptions = getPropertyDossierAssumptions(details);
   const generation = getPropertyDossierGeneration(details);
+  const yoc = getYoC(row);
   const hasAnyUnderwriting =
     summary != null ||
     assumptions != null ||
     generation != null ||
     row.latest_signal_deal_score != null ||
+    yoc.value != null ||
     row.override_score != null;
   if (!hasAnyUnderwriting) return null;
   return {
@@ -1659,11 +1701,15 @@ function buildUnderwriting(row: PipelineBaseRow): UiV2UnderwritingSummary | null
     recommendedOfferLow: summary?.recommendedOfferLow ?? null,
     recommendedOfferHigh: summary?.recommendedOfferHigh ?? null,
     capRate: getCapRate(row),
+    yocPct: yoc.value,
+    yocBasis: yoc.basis,
+    marketCapRatePct: null,
+    yocSpreadPct: null,
     targetIrrPct: summary?.targetIrrPct ?? assumptions?.targetIrrPct ?? null,
     irrPct: summary?.irrPct ?? toFiniteNumber(row.latest_signal_irr_pct),
     cocPct: summary?.cocPct ?? toFiniteNumber(row.latest_signal_coc_pct),
-    currentNoi: summary?.currentNoi ?? toFiniteNumber(row.latest_signal_current_noi),
-    adjustedNoi: summary?.adjustedNoi ?? toFiniteNumber(row.latest_signal_adjusted_noi),
+    currentNoi: getCurrentNoi(row),
+    adjustedNoi: getAdjustedNoi(row),
     summary,
   };
 }
@@ -2130,6 +2176,9 @@ async function fetchPipelineRows(pool: Pool, userId: string): Promise<PipelineBa
        ds.coc_pct AS latest_signal_coc_pct,
        ds.current_noi AS latest_signal_current_noi,
        ds.adjusted_noi AS latest_signal_adjusted_noi,
+       ds.asset_cap_rate AS latest_signal_asset_cap_rate,
+       ds.adjusted_cap_rate AS latest_signal_adjusted_cap_rate,
+       ds.yield_spread AS latest_signal_yield_spread,
        dso.score AS override_score,
        COALESCE(ai.open_action_item_count, 0) AS open_action_item_count,
        pis.sent_at AS latest_inquiry_sent_at,
@@ -2334,6 +2383,8 @@ function sortValue(row: UiV2PipelineRow, sortBy: UiV2PipelineSortField): string 
       return row.units ?? null;
     case "capRate":
       return row.underwriting?.capRate ?? null;
+    case "yocPct":
+      return row.underwriting?.yocPct ?? null;
     case "dealScore":
       return row.underwriting?.dealScore ?? null;
     case "status":
