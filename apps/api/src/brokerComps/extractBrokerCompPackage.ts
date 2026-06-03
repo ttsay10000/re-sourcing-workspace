@@ -7,10 +7,28 @@ import {
   extractTextMetadataFromBuffer,
   type ExtractedTextMetadata,
 } from "../upload/extractTextFromUploadedFile.js";
+import { extractBrokerCompPackageFromGeminiPdf } from "./extractBrokerCompPackageFromGemini.js";
 
 const PARSER_VERSION = "broker-comp-mvp-v1";
 
 type JsonRecord = Record<string, unknown>;
+
+const PROFILE_LABELS = [
+  "ADDRESS",
+  "NEIGHBORHOOD",
+  "DEVELOPER",
+  "ARCHITECT",
+  "DESIGNER",
+  "YEAR COMPLETED",
+  "# OF FLOORS",
+  "# OF UNITS",
+  "SALES BEGAN",
+  "PERCENT SOLD",
+  "AVG. UNIT SF",
+  "ASKING PPSF",
+  "SOLD PPSF",
+  "PRICE RANGE",
+] as const;
 
 export interface BrokerCompExtractionDraft {
   packageType: BrokerCompPackageType;
@@ -26,18 +44,47 @@ function cleanText(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
+function compactNumericText(value: string | null | undefined): string {
+  if (!value) return "";
+  return value
+    .replace(/\s+/g, " ")
+    .replace(/\$\s+/g, "$")
+    .replace(/(\d)\s*,\s*(\d)/g, "$1,$2")
+    .replace(/(\d)\s*\.\s*(\d)/g, "$1.$2")
+    .replace(/(\d)\s+(?=\d)/g, "$1")
+    .replace(/\s+SF\b/gi, " SF")
+    .replace(/\s*\/\s*MO\b/gi, "/MO")
+    .replace(/\s*-\s*/g, "-")
+    .trim();
+}
+
 function normalizeNumber(value: string | null | undefined): number | null {
   if (!value) return null;
-  const parsed = Number(value.replace(/[$,%\s,]/g, ""));
+  const parsed = Number(compactNumericText(value).replace(/[$,%\s,]/g, "").replace(/[^\d.-]/g, ""));
   return Number.isFinite(parsed) ? parsed : null;
 }
 
 function normalizeMoney(value: string | null | undefined): number | null {
   if (!value) return null;
-  const trimmed = value.trim().toLowerCase();
-  const multiplier = trimmed.includes("m") ? 1_000_000 : trimmed.includes("k") ? 1_000 : 1;
-  const parsed = normalizeNumber(trimmed.replace(/[mk]/g, ""));
+  const trimmed = compactNumericText(value).toLowerCase().replace(/\/mo(?:nth)?\b/g, "");
+  const multiplier = /\d(?:\.\d+)?m\b/.test(trimmed) ? 1_000_000 : /\d(?:\.\d+)?k\b/.test(trimmed) ? 1_000 : 1;
+  const parsed = normalizeNumber(trimmed.replace(/[mk]\b/g, ""));
   return parsed == null ? null : parsed * multiplier;
+}
+
+function parseMoneyRange(value: string | null | undefined): { low: number | null; high: number | null; label: string | null } {
+  const label = compactNumericText(value);
+  if (!label || label === "-") return { low: null, high: null, label: null };
+  const parts = label.split("-").map((part) => part.trim()).filter(Boolean);
+  if (parts.length === 0) return { low: null, high: null, label };
+  if (parts.length === 1) {
+    const amount = normalizeMoney(parts[0]);
+    return { low: amount, high: amount, label };
+  }
+  const low = normalizeMoney(parts[0]);
+  const inheritedSuffix = parts[0]?.match(/[mk]\b/i)?.[0] ?? "";
+  const high = normalizeMoney(/[mk]\b/i.test(parts[1] ?? "") ? parts[1] : `${parts[1]}${inheritedSuffix}`);
+  return { low, high, label };
 }
 
 function inferPackageType(filename: string, text: string): BrokerCompPackageType {
@@ -68,16 +115,104 @@ function classifyPage(textSample: string, pageNumber: number): { pageType: Broke
   return { pageType: "other", confidence: textSample.trim().length > 0 ? 0.35 : 0.15 };
 }
 
-function lineValue(lines: string[], label: string): string | null {
-  const normalizedLabel = label.replace(/:$/, "").toUpperCase();
-  const exactIndex = lines.findIndex((line) => line.replace(/\s+/g, " ").trim().replace(/:$/, "").toUpperCase() === normalizedLabel);
-  if (exactIndex >= 0 && exactIndex > 0) return lines[exactIndex - 1] ?? null;
-  const inline = lines.find((line) => line.toUpperCase().startsWith(normalizedLabel));
-  if (inline) {
-    const [, value] = inline.split(/:\s*/);
-    return value?.trim() || null;
+function normalizedLabel(value: string): string {
+  return cleanText(value)
+    .replace(/:$/, "")
+    .replace(/\s+/g, " ")
+    .toUpperCase();
+}
+
+function findLabelIndex(lines: string[], label: string): number {
+  const target = normalizedLabel(label);
+  return lines.findIndex((line) => normalizedLabel(line) === target);
+}
+
+function normalizeUnitType(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const compact = cleanText(value).toUpperCase();
+  const bedMatch = compact.match(/^(\d+)\s*BED(?:ROOM)?S?$/i);
+  if (bedMatch?.[1]) return `${bedMatch[1]} BED`;
+  if (/^STUDIO$/i.test(compact)) return "STUDIO";
+  if (/^PENTHOUSE$/i.test(compact)) return "PENTHOUSE";
+  if (/^TOWN\s*HOME$|^TOWNHOME$/i.test(compact)) return "TOWNHOME";
+  return compact || null;
+}
+
+function bedroomsFromUnitType(value: string | null | undefined): number | null {
+  const normalized = normalizeUnitType(value);
+  if (!normalized) return null;
+  if (normalized === "STUDIO") return 0;
+  const match = normalized.match(/^(\d+)\s*BED$/i);
+  return match?.[1] ? Number(match[1]) : null;
+}
+
+function extractProfileValueMap(lines: string[]): Record<(typeof PROFILE_LABELS)[number], string | null> | null {
+  const labelStart = findLabelIndex(lines, "ADDRESS");
+  if (labelStart < 0) return null;
+  const valuesStart = labelStart - PROFILE_LABELS.length;
+  if (valuesStart < 1) return null;
+  const values = lines.slice(valuesStart, labelStart);
+  const result = {} as Record<(typeof PROFILE_LABELS)[number], string | null>;
+  PROFILE_LABELS.forEach((label, index) => {
+    result[label] = values[index] ? cleanText(values[index]) : null;
+  });
+  return result;
+}
+
+function valuesBetweenLabels(lines: string[], startLabel: string, endLabel: string): string[] {
+  const start = findLabelIndex(lines, startLabel);
+  const end = findLabelIndex(lines, endLabel);
+  if (start < 0 || end < 0 || end <= start) return [];
+  return lines.slice(start + 1, end).map(compactNumericText).filter(Boolean);
+}
+
+function parseUnitTypeAndCountSegment(lines: string[]): { unitTypes: string[]; counts: Array<number | null> } {
+  const unitTypes: string[] = [];
+  const counts: Array<number | null> = [];
+  for (const rawLine of lines) {
+    const line = compactNumericText(rawLine);
+    const inline = line.match(/^((?:\d+\s*BED(?:ROOM)?S?)|STUDIO|PENTHOUSE|TOWN\s*HOME|TOWNHOME)\s*(\d+)?$/i);
+    if (inline?.[1]) {
+      const unitType = normalizeUnitType(inline[1]);
+      if (unitType) unitTypes.push(unitType);
+      if (inline[2]) counts.push(normalizeNumber(inline[2]));
+      continue;
+    }
+    if (/^\d+$/.test(line)) counts.push(normalizeNumber(line));
   }
-  return null;
+  return { unitTypes, counts };
+}
+
+function parseBedroomBreakdown(lines: string[]): JsonRecord[] {
+  const unitTypeIndex = findLabelIndex(lines, "UNIT TYPE");
+  const countIndex = findLabelIndex(lines, "COUNT");
+  if (unitTypeIndex < 0 || countIndex < 0 || countIndex <= unitTypeIndex) return [];
+
+  const { unitTypes, counts } = parseUnitTypeAndCountSegment(lines.slice(unitTypeIndex + 1, countIndex));
+  if (unitTypes.length === 0) return [];
+
+  const sizes = valuesBetweenLabels(lines, "COUNT", "AVG. SIZE");
+  const askingPpsf = valuesBetweenLabels(lines, "AVG. SIZE", "AVG. ASKING PPSF");
+  const soldPpsf = valuesBetweenLabels(lines, "AVG. ASKING PPSF", "AVG. SOLD PPSF");
+  const averageCc = valuesBetweenLabels(lines, "AVG. SOLD PPSF", "AVG. CC");
+  const ranges = valuesBetweenLabels(lines, "AVG. CC", "RANGE");
+
+  return unitTypes.map((unitType, index) => {
+    const priceRange = parseMoneyRange(ranges[index]);
+    return {
+      unitType,
+      bedroomType: unitType,
+      bedrooms: bedroomsFromUnitType(unitType),
+      count: counts[index] ?? null,
+      avgSizeSqft: normalizeNumber(sizes[index]),
+      avgAskingPpsf: normalizeMoney(askingPpsf[index]),
+      avgSoldPpsf: normalizeMoney(soldPpsf[index]),
+      avgCommonChargesMonthly: normalizeMoney(averageCc[index]),
+      priceRange: priceRange.label,
+      priceRangeLow: priceRange.low,
+      priceRangeHigh: priceRange.high,
+    };
+  });
 }
 
 function missingDataFlags(fields: string[], source: string): JsonRecord[] {
@@ -91,35 +226,105 @@ function missingDataFlags(fields: string[], source: string): JsonRecord[] {
   }));
 }
 
+function stringValue(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function normalizedPayload(item: BrokerCompExtractedItemInput): JsonRecord {
+  return item.normalizedPayload && typeof item.normalizedPayload === "object" && !Array.isArray(item.normalizedPayload)
+    ? item.normalizedPayload
+    : {};
+}
+
+function extractedItemDedupeKey(item: BrokerCompExtractedItemInput): string | null {
+  const data = normalizedPayload(item);
+  if (item.itemType === "subject_projected_pricing") return "subject_projected_pricing";
+  if (item.itemType === "pricing_comp") {
+    const address = stringValue(data.address ?? data.propertyAddress);
+    return address ? `pricing_comp:${address.toLowerCase()}` : null;
+  }
+  if (item.itemType === "unit_breakdown_row") {
+    const address = stringValue(data.address ?? data.propertyAddress);
+    const bedroomType = stringValue(data.bedroomType ?? data.unitType);
+    return address && bedroomType ? `unit_breakdown_row:${address.toLowerCase()}:${bedroomType.toLowerCase()}` : null;
+  }
+  if (item.itemType === "pricing_opinion") {
+    const amount = data.amount ?? data.price;
+    const note = stringValue(data.note ?? data.source);
+    return amount != null ? `pricing_opinion:${amount}:${note ?? ""}` : null;
+  }
+  return null;
+}
+
+function mergeExtractedItems(
+  primaryItems: BrokerCompExtractedItemInput[],
+  supplementalItems: BrokerCompExtractedItemInput[]
+): BrokerCompExtractedItemInput[] {
+  const merged = [...primaryItems];
+  const seen = new Set<string>();
+  for (const item of primaryItems) {
+    const key = extractedItemDedupeKey(item);
+    if (key) seen.add(key);
+  }
+  for (const item of supplementalItems) {
+    const key = extractedItemDedupeKey(item);
+    if (key && seen.has(key)) continue;
+    if (key) seen.add(key);
+    merged.push(item);
+  }
+  return merged;
+}
+
 function extractCompProfile(pageNumber: number, textSample: string): { raw: JsonRecord; normalized: JsonRecord } | null {
   if (!/unit breakdown|asking ppsf|sold ppsf|developer:/i.test(textSample)) return null;
   const lines = textSample
     .split(/\n+/)
     .map((line) => cleanText(line))
     .filter(Boolean);
-  const askingPpsf = normalizeMoney(lineValue(lines, "ASKING PPSF:"));
-  const soldPpsf = normalizeMoney(lineValue(lines, "SOLD PPSF:"));
+  const values = extractProfileValueMap(lines);
+  if (!values) return null;
+  const priceRange = parseMoneyRange(values["PRICE RANGE"]);
+  const askingPpsf = normalizeMoney(values["ASKING PPSF"]);
+  const soldPpsf = normalizeMoney(values["SOLD PPSF"]);
+  const averageUnitSqft = normalizeNumber(values["AVG. UNIT SF"]);
+  const bedroomBreakdown = parseBedroomBreakdown(lines);
+  const percentSoldPct = normalizeNumber(values["PERCENT SOLD"]);
+  const pricePerSqft = soldPpsf ?? askingPpsf;
   const missing = [
     soldPpsf == null ? "soldPpsf" : null,
+    bedroomBreakdown.length === 0 ? "bedroomBreakdown" : null,
+    priceRange.low == null && priceRange.high == null ? "priceRange" : null,
     "noi",
     "capRate",
-    "rentRoll",
-    "expenses",
   ].filter((field): field is string => Boolean(field));
   return {
     raw: { textSample, pageNumber },
     normalized: {
       propertyName: lines[0] && !/^\d/.test(lines[0]) ? lines[0] : null,
-      address: lineValue(lines, "ADDRESS:"),
-      neighborhood: lineValue(lines, "NEIGHBORHOOD:"),
-      developer: lineValue(lines, "DEVELOPER:"),
-      yearCompleted: normalizeNumber(lineValue(lines, "YEAR COMPLETED:")),
-      units: normalizeNumber(lineValue(lines, "# OF UNITS:")),
-      averageUnitSf: normalizeNumber(lineValue(lines, "AVG. UNIT SF")),
+      address: values.ADDRESS,
+      neighborhood: values.NEIGHBORHOOD,
+      developer: values.DEVELOPER,
+      architect: values.ARCHITECT,
+      designer: values.DESIGNER,
+      yearCompleted: normalizeNumber(values["YEAR COMPLETED"]),
+      floors: normalizeNumber(values["# OF FLOORS"]),
+      units: normalizeNumber(values["# OF UNITS"]),
+      salesBegan: values["SALES BEGAN"],
+      percentSoldPct,
+      averageUnitSf: averageUnitSqft,
+      averageUnitSqft,
       askingPpsf,
       soldPpsf,
-      pricePerSqft: soldPpsf ?? askingPpsf,
-      priceRange: lineValue(lines, "PRICE RANGE:"),
+      pricePerSqft,
+      averageAskingUnitPrice:
+        averageUnitSqft != null && askingPpsf != null
+          ? Math.round(averageUnitSqft * askingPpsf)
+          : null,
+      priceRange: priceRange.label,
+      priceRangeLow: priceRange.low,
+      priceRangeHigh: priceRange.high,
+      bedroomTypes: bedroomBreakdown.map((row) => row.bedroomType).filter(Boolean),
+      bedroomBreakdown,
       packageFlavor: "pricing_sellout",
       missingFields: missing,
       missingDataFlags: missingDataFlags(missing, "broker_comp_profile"),
@@ -128,7 +333,7 @@ function extractCompProfile(pageNumber: number, textSample: string): { raw: Json
 }
 
 function extractProjectedPricing(pageNumber: number, textSample: string): { raw: JsonRecord; normalized: JsonRecord } | null {
-  if (!/projected pricing|sellout|ppsf/i.test(textSample)) return null;
+  if (!/projected pricing|projected sellout|total projected sellout|sellout/i.test(textSample)) return null;
   const totalMatch =
     textSample.match(/total\s+projected\s+sellout\D{0,20}(\$?\s*\d[\d,.]*(?:\s*[mk])?)/i) ??
     textSample.match(/sellout\D{0,20}(\$?\s*\d[\d,.]*(?:\s*[mk])?)/i);
@@ -136,13 +341,15 @@ function extractProjectedPricing(pageNumber: number, textSample: string): { raw:
     textSample.match(/average\s+ppsf\D{0,20}(\$?\s*\d[\d,.]*)/i) ??
     textSample.match(/avg\.?\s+ppsf\D{0,20}(\$?\s*\d[\d,.]*)/i);
   const projectedSellout = normalizeMoney(totalMatch?.[1]);
+  const pricePerSqft = normalizeMoney(avgPpsfMatch?.[1]);
+  if (projectedSellout == null && pricePerSqft == null) return null;
   return {
     raw: { textSample, pageNumber },
     normalized: {
       amount: projectedSellout,
       price: projectedSellout,
       projectedSellout,
-      pricePerSqft: normalizeMoney(avgPpsfMatch?.[1]),
+      pricePerSqft,
       sourceType: "package",
       packageFlavor: "pricing_sellout",
       note: "Projected pricing page detected. Review against source page before treating this as a market signal.",
@@ -196,7 +403,7 @@ export async function extractBrokerCompPackageDraft(buffer: Buffer, filename: st
   const metadata = await extractTextMetadataFromBuffer(buffer, filename);
   const packageType = inferPackageType(filename, metadata.text);
   const pages = buildPages(metadata, filename);
-  const extractedItems: BrokerCompExtractedItemInput[] = [];
+  let extractedItems: BrokerCompExtractedItemInput[] = [];
 
   for (const page of pages) {
     const pageNumber = page.pageNumber;
@@ -211,6 +418,37 @@ export async function extractBrokerCompPackageDraft(buffer: Buffer, filename: st
         confidence: 0.72,
         reviewStatus: "pending",
       });
+
+      const bedroomBreakdown = Array.isArray(compProfile.normalized.bedroomBreakdown)
+        ? compProfile.normalized.bedroomBreakdown
+        : [];
+      for (const [index, row] of bedroomBreakdown.entries()) {
+        if (!row || typeof row !== "object" || Array.isArray(row)) continue;
+        extractedItems.push({
+          itemType: "unit_breakdown_row",
+          rawPayload: {
+            ...row,
+            pageNumber,
+            sourceProperty: compProfile.normalized.propertyName ?? compProfile.normalized.address ?? null,
+          },
+          normalizedPayload: {
+            ...row,
+            propertyName: compProfile.normalized.propertyName ?? null,
+            address: compProfile.normalized.address ?? null,
+            neighborhood: compProfile.normalized.neighborhood ?? null,
+            units: compProfile.normalized.units ?? null,
+            percentSoldPct: compProfile.normalized.percentSoldPct ?? null,
+            compAskingPpsf: compProfile.normalized.askingPpsf ?? null,
+            compSoldPpsf: compProfile.normalized.soldPpsf ?? null,
+            compAverageUnitSqft: compProfile.normalized.averageUnitSqft ?? compProfile.normalized.averageUnitSf ?? null,
+            packageFlavor: "pricing_sellout",
+            sourceType: "broker_comp_profile",
+          },
+          pageRefs: [{ pageNumber, label: `${page.pageRef ?? `Page ${pageNumber}`} / Bedroom row ${index + 1}` }],
+          confidence: 0.74,
+          reviewStatus: "pending",
+        });
+      }
     }
 
     const projected = extractProjectedPricing(pageNumber, textSample);
@@ -238,6 +476,22 @@ export async function extractBrokerCompPackageDraft(buffer: Buffer, filename: st
     });
   }
 
+  const geminiExtraction = await extractBrokerCompPackageFromGeminiPdf({
+    buffer,
+    filename,
+    textPreview: metadata.text,
+    pageCount: metadata.pageCount ?? pages.length,
+  }).catch((error) => {
+    console.warn("[extractBrokerCompPackageDraft] Gemini broker comp extraction failed.", {
+      filename,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  });
+  if (geminiExtraction?.extractedItems.length) {
+    extractedItems = mergeExtractedItems(extractedItems, geminiExtraction.extractedItems);
+  }
+
   if (extractedItems.length === 0 && metadata.text.trim()) {
     extractedItems.push({
       itemType: "broker_note",
@@ -263,7 +517,17 @@ export async function extractBrokerCompPackageDraft(buffer: Buffer, filename: st
       textChars: metadata.text.length,
       pageCount: metadata.pageCount ?? pages.length,
       extractedItemCount: extractedItems.length,
-      extractionMode: filename.toLowerCase().match(/\.(xls|xlsx|csv)$/) ? "spreadsheet" : "text",
+      extractionMode: geminiExtraction ? "hybrid_gemini_text" : filename.toLowerCase().match(/\.(xls|xlsx|csv)$/) ? "spreadsheet" : "text",
+      gemini: geminiExtraction
+        ? {
+            provider: "gemini",
+            model: geminiExtraction.model,
+            finishReason: geminiExtraction.finishReason,
+            itemCount: geminiExtraction.extractedItems.length,
+            summary: geminiExtraction.summary,
+            ...(geminiExtraction.packageMeta ?? {}),
+          }
+        : null,
     },
     textChars: metadata.text.length,
     pageCount: metadata.pageCount ?? pages.length,

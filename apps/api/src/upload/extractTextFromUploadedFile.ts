@@ -68,12 +68,17 @@ async function extractPdfTextMetadata(buffer: Buffer): Promise<ExtractedTextMeta
         else pageText += itemText;
         lastY = itemY;
       }
-      const normalized = pageText.replace(/\s+/g, " ").trim();
+      const normalizedPageText = pageText
+        .split(/\n+/)
+        .map((line) => line.replace(/\s+/g, " ").trim())
+        .filter(Boolean)
+        .join("\n");
+      const normalized = normalizedPageText.replace(/\s+/g, " ").trim();
       pages.push({
         pageNumber: pages.length + 1,
         textChars: normalized.length,
         textItems: textContent.items.length,
-        textSample: normalized.slice(0, 500),
+        textSample: normalizedPageText.slice(0, 12_000),
       });
       return pageText;
     },

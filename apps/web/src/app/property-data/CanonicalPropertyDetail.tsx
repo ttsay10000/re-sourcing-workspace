@@ -762,43 +762,286 @@ function V3RecordsTable({
   );
 }
 
-function BrokerCompsDetailPanel({ propertyId, surface }: { propertyId: string; surface: BrokerCompUiSurface }) {
+interface BrokerCompSubjectBaseline {
+  price: number | null;
+  sqft: number | null;
+  pricePerSqft: number | null;
+  capRatePct: number | null;
+  rentPsfByBedroom: Record<string, number>;
+}
+
+function BrokerCompsDetailPanel({
+  propertyId,
+  surface,
+  subject,
+}: {
+  propertyId: string;
+  surface: BrokerCompUiSurface;
+  subject: BrokerCompSubjectBaseline;
+}) {
   const uploadEndpoint = plannedBrokerCompUploadEndpoint(propertyId);
   const reviewEndpoint = plannedBrokerCompReviewEndpoint(propertyId);
-  const reviewedComps = surface.comparables.filter((row) => row.reviewStatus === "accepted" || row.reviewStatus === "edited").length;
-  const unresolvedFlags = surface.missingDataFlags.filter((flag) => !flag.resolved);
+  const [livePayload, setLivePayload] = useState<unknown | null>(null);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const activeSurface = readBrokerCompSurface(livePayload, surface);
+  const reviewedComps = activeSurface.comparables.filter((row) => row.reviewStatus === "accepted" || row.reviewStatus === "edited").length;
+  const unresolvedFlags = activeSurface.missingDataFlags.filter((flag) => !flag.resolved);
+
+  const loadBrokerComps = React.useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const response = await fetch(`${API_BASE}${reviewEndpoint}`);
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        const message = payload && typeof payload === "object" && "error" in payload ? String((payload as { error?: unknown }).error) : `Failed to load broker comps (${response.status})`;
+        throw new Error(message);
+      }
+      setLivePayload(payload);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load broker comps.");
+    } finally {
+      setLoading(false);
+    }
+  }, [reviewEndpoint]);
+
+  useEffect(() => {
+    setLivePayload(null);
+    setSelectedFile(null);
+    void loadBrokerComps();
+  }, [loadBrokerComps]);
+
+  async function uploadSelectedPackage(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedFile || uploading) return;
+    setUploading(true);
+    setError(null);
+    try {
+      const form = new FormData();
+      form.append("file", selectedFile);
+      form.append("category", "Broker Comp Package");
+      const response = await fetch(`${API_BASE}${uploadEndpoint}`, { method: "POST", body: form });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        const message = payload && typeof payload === "object" && "error" in payload ? String((payload as { error?: unknown }).error) : `Upload failed (${response.status})`;
+        throw new Error(message);
+      }
+      setLivePayload(payload);
+      setSelectedFile(null);
+      await loadBrokerComps();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to upload broker comp package.");
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  const formatWholeMoney = (value: unknown): string => {
+    if (value == null || value === "") return "—";
+    const n = typeof value === "number" ? value : Number(String(value).replace(/[$,\s]/g, ""));
+    if (!Number.isFinite(n)) return String(value);
+    return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(n);
+  };
+  const formatPpsf = (value: unknown): string => {
+    const money = formatWholeMoney(value);
+    return money === "—" ? money : money;
+  };
+  const formatPercentValue = (value: unknown): string => {
+    if (value == null || value === "") return "—";
+    const n = typeof value === "number" ? value : Number(String(value).replace(/[,%\s]/g, ""));
+    return Number.isFinite(n) ? `${n.toFixed(n % 1 === 0 ? 0 : 1)}%` : String(value);
+  };
+  const formatSqftValue = (value: unknown): string => {
+    const formatted = formatNumberValue(value);
+    return formatted === "—" ? formatted : `${formatted} SF`;
+  };
+  const formatSignedPercent = (value: number | null): string => {
+    if (value == null || !Number.isFinite(value)) return "—";
+    const sign = value > 0 ? "+" : "";
+    return `${sign}${value.toFixed(Math.abs(value) >= 10 ? 0 : 1)}%`;
+  };
+  const formatSignedMoney = (value: number | null): string => {
+    if (value == null || !Number.isFinite(value)) return "—";
+    const sign = value > 0 ? "+" : value < 0 ? "-" : "";
+    return `${sign}${formatWholeMoney(Math.abs(value))}`;
+  };
+  const weightedPpsf = (rows: Array<{ price: number | null; interiorSqft: number | null; ppsf: number | null }>): number | null => {
+    const totals = rows.reduce(
+      (acc, row) => {
+        if (row.price != null && row.interiorSqft != null && row.price > 0 && row.interiorSqft > 0) {
+          acc.price += row.price;
+          acc.sqft += row.interiorSqft;
+        }
+        if (row.ppsf != null && row.ppsf > 0) {
+          acc.ppsfSum += row.ppsf;
+          acc.ppsfCount += 1;
+        }
+        return acc;
+      },
+      { price: 0, sqft: 0, ppsfSum: 0, ppsfCount: 0 }
+    );
+    if (totals.price > 0 && totals.sqft > 0) return totals.price / totals.sqft;
+    return totals.ppsfCount > 0 ? totals.ppsfSum / totals.ppsfCount : null;
+  };
+  const subjectPackagePpsf = weightedPpsf(activeSurface.subjectUnitPricingRows);
+  const subjectOverallPpsf = subjectPackagePpsf ?? subject.pricePerSqft;
+  const subjectPpsfSource = subjectPackagePpsf != null ? "Projected package" : subject.pricePerSqft != null ? "Listing ask" : null;
+  const subjectBedroomPpsf = new Map<number, number>();
+  for (const bedroom of [...new Set(activeSurface.subjectUnitPricingRows.map((row) => row.bedrooms).filter((value): value is number => value != null))]) {
+    const ppsf = weightedPpsf(activeSurface.subjectUnitPricingRows.filter((row) => row.bedrooms === bedroom));
+    if (ppsf != null) subjectBedroomPpsf.set(bedroom, ppsf);
+  }
+  const compPpsfForProject = (row: { soldPpsf: number | null; askingPpsf: number | null; pricePerSqft: number | null }): number | null =>
+    row.soldPpsf ?? row.askingPpsf ?? row.pricePerSqft;
+  const compPpsfForBedroom = (row: { avgSoldPpsf: number | null; avgAskingPpsf: number | null }): number | null =>
+    row.avgSoldPpsf ?? row.avgAskingPpsf;
+  const comparisonDelta = (subjectValue: number | null, compValue: number | null): { diff: number | null; pct: number | null } => {
+    if (subjectValue == null || compValue == null || !Number.isFinite(subjectValue) || !Number.isFinite(compValue) || compValue <= 0) {
+      return { diff: null, pct: null };
+    }
+    const diff = subjectValue - compValue;
+    return { diff, pct: (diff / compValue) * 100 };
+  };
+  const renderPpsfSpread = (subjectValue: number | null, compValue: number | null): React.ReactNode => {
+    const delta = comparisonDelta(subjectValue, compValue);
+    if (delta.diff == null || delta.pct == null) return "—";
+    const tone = delta.diff <= 0 ? "#166534" : "#991b1b";
+    return (
+      <span style={{ color: tone, fontWeight: 700 }}>
+        {formatSignedMoney(delta.diff)} <span style={{ color: "#64748b", fontWeight: 600 }}>({formatSignedPercent(delta.pct)})</span>
+      </span>
+    );
+  };
+  const renderCapSpread = (compCapRatePct: number | null): React.ReactNode => {
+    if (subject.capRatePct == null || compCapRatePct == null || !Number.isFinite(subject.capRatePct) || !Number.isFinite(compCapRatePct)) return "—";
+    const diff = subject.capRatePct - compCapRatePct;
+    const tone = diff >= 0 ? "#166534" : "#991b1b";
+    return <span style={{ color: tone, fontWeight: 700 }}>{diff > 0 ? "+" : ""}{Math.round(diff * 100)} bps</span>;
+  };
+  const renderRentSpread = (subjectRentPsf: number | null, compRentPsf: number | null): React.ReactNode => {
+    const delta = comparisonDelta(subjectRentPsf, compRentPsf);
+    if (delta.diff == null || delta.pct == null) return "—";
+    const tone = delta.diff <= 0 ? "#166534" : "#991b1b";
+    return <span style={{ color: tone, fontWeight: 700 }}>{formatSignedMoney(delta.diff)} ({formatSignedPercent(delta.pct)})</span>;
+  };
+  const averageSpreadPct = (pairs: Array<{ subjectValue: number | null; compValue: number | null }>): number | null => {
+    const spreads = pairs
+      .map((pair) => comparisonDelta(pair.subjectValue, pair.compValue).pct)
+      .filter((value): value is number => value != null && Number.isFinite(value));
+    if (spreads.length === 0) return null;
+    return spreads.reduce((sum, value) => sum + value, 0) / spreads.length;
+  };
+  const projectSpreadPct = averageSpreadPct(
+    activeSurface.comparables
+      .filter((row) => row.itemType === "pricing_comp")
+      .map((row) => ({ subjectValue: subjectOverallPpsf, compValue: compPpsfForProject(row) }))
+  );
+  const bedroomSpreadPct = averageSpreadPct(
+    activeSurface.bedroomBreakdowns.map((row) => ({
+      subjectValue: row.bedrooms != null ? subjectBedroomPpsf.get(row.bedrooms) ?? subjectOverallPpsf : subjectOverallPpsf,
+      compValue: compPpsfForBedroom(row),
+    }))
+  );
+  const hasBedroomRentComps = activeSurface.bedroomBreakdowns.some((row) => row.avgRentPerSqft != null || row.avgRentMonthly != null);
+
   const workflowFacts: V3FactItem[] = [
-    { label: "Packages", value: formatNumberValue(surface.packages.length) },
-    { label: "Extracted comps", value: formatNumberValue(surface.comparables.length) },
-    { label: "Reviewed comps", value: `${reviewedComps}/${surface.comparables.length || 0}` },
-    { label: "Pricing opinions", value: formatNumberValue(surface.pricingOpinions.length) },
+    { label: "Packages", value: loading ? "…" : formatNumberValue(activeSurface.packages.length) },
+    { label: "Projects", value: formatNumberValue(activeSurface.comparables.filter((row) => row.itemType === "pricing_comp").length) },
+    { label: "Bedroom rows", value: formatNumberValue(activeSurface.bedroomBreakdowns.length) },
+    { label: "Subject units", value: formatNumberValue(activeSurface.subjectUnitPricingRows.length) },
+    { label: "Subject $/SF", value: formatPpsf(subjectOverallPpsf), detail: subjectPpsfSource },
+    { label: "Avg project spread", value: formatSignedPercent(projectSpreadPct), tone: projectSpreadPct == null ? "neutral" : projectSpreadPct <= 0 ? "good" : "warn" },
+    { label: "Avg bedroom spread", value: formatSignedPercent(bedroomSpreadPct), tone: bedroomSpreadPct == null ? "neutral" : bedroomSpreadPct <= 0 ? "good" : "warn" },
+    { label: "Subject cap", value: subject.capRatePct != null ? `${Number(subject.capRatePct).toFixed(2)}%` : "—" },
+    { label: "Reviewed comps", value: `${reviewedComps}/${activeSurface.comparables.length || 0}` },
     { label: "Missing flags", value: formatNumberValue(unresolvedFlags.length), tone: unresolvedFlags.length > 0 ? "warn" : "good" },
-    { label: "Updated", value: formatDateOnly(surface.updatedAt) },
+    { label: "Updated", value: formatDateOnly(activeSurface.updatedAt) },
   ];
-  const pricingFacts: V3FactItem[] = surface.pricingOpinions.slice(0, 8).map((opinion, index) => ({
+  const pricingFacts: V3FactItem[] = activeSurface.pricingOpinions.slice(0, 8).map((opinion, index) => ({
     label: formatReadableToken(opinion.sourceType ?? `Pricing opinion ${index + 1}`),
-    value: formatMoneyValue(opinion.amount),
+    value: formatWholeMoney(opinion.amount),
     detail: joinedSummary([
       opinion.source ?? null,
       opinion.note ?? null,
       opinion.observedAt ? `Observed ${formatDateOnly(opinion.observedAt)}` : null,
     ]),
   }));
-  const packageRows = surface.packages.map((pkg) => ({
+  const packageRows = activeSurface.packages.map((pkg) => ({
     package: pkg.label,
     type: formatReadableToken(pkg.packageType),
     status: formatReadableToken(pkg.status),
     items: `${pkg.reviewedItemCount}/${pkg.itemCount}`,
     updated: formatDateOnly(pkg.updatedAt ?? pkg.createdAt),
   }));
-  const compRows = surface.comparables.map((row) => ({
-    address: row.address ?? "Unlabeled comp",
-    type: formatReadableToken(row.itemType),
-    price: formatMoneyValue(row.price),
-    unit: formatMoneyValue(row.pricePerUnit),
-    sqft: formatMoneyValue(row.pricePerSqft),
-    cap: row.capRatePct != null ? `${Number(row.capRatePct).toFixed(2)}%` : "—",
-    review: joinedSummary([formatReadableToken(row.reviewStatus), formatReadableToken(row.selectionDecision)]),
+  const projectRows = activeSurface.comparables
+    .filter((row) => row.itemType === "pricing_comp")
+    .map((row) => {
+      const compPpsf = compPpsfForProject(row);
+      return {
+        project: (
+          <div style={{ display: "grid", gap: "0.12rem" }}>
+            <strong>{row.propertyName ?? row.address ?? "Unlabeled comp"}</strong>
+            {row.propertyName && row.address ? <span style={{ color: "#64748b", fontSize: "0.78rem" }}>{row.address}</span> : null}
+          </div>
+        ),
+        neighborhood: row.neighborhood ?? "—",
+        units: formatNumberValue(row.units),
+        sold: formatPercentValue(row.percentSoldPct),
+        avgSize: formatSqftValue(row.averageUnitSqft),
+        askPpsf: formatPpsf(row.askingPpsf ?? row.pricePerSqft),
+        soldPpsf: formatPpsf(row.soldPpsf),
+        subjectPpsf: formatPpsf(subjectOverallPpsf),
+        psfSpread: renderPpsfSpread(subjectOverallPpsf, compPpsf),
+        cap: row.capRatePct != null ? `${Number(row.capRatePct).toFixed(2)}%` : "—",
+        capSpread: renderCapSpread(row.capRatePct),
+        priceRange: row.priceRange ?? joinedSummary([formatWholeMoney(row.priceRangeLow), formatWholeMoney(row.priceRangeHigh)]),
+        beds: row.bedroomTypes.length > 0 ? row.bedroomTypes.join(", ") : "—",
+      };
+    });
+  const bedroomRows = [...activeSurface.bedroomBreakdowns]
+    .sort((left, right) => {
+      const bedDelta = (left.bedrooms ?? 99) - (right.bedrooms ?? 99);
+      if (bedDelta !== 0) return bedDelta;
+      return (left.address ?? "").localeCompare(right.address ?? "");
+    })
+    .map((row) => {
+      const subjectBedroomValue = row.bedrooms != null ? subjectBedroomPpsf.get(row.bedrooms) ?? subjectOverallPpsf : subjectOverallPpsf;
+      const compPpsf = compPpsfForBedroom(row);
+      const compRentPsf = row.avgRentPerSqft ?? (row.avgRentMonthly != null && row.avgSizeSqft != null && row.avgSizeSqft > 0 ? row.avgRentMonthly / row.avgSizeSqft : null);
+      const subjectRentPsf = row.bedrooms != null ? subject.rentPsfByBedroom[String(row.bedrooms)] ?? null : null;
+      return {
+        bed: row.bedroomType ?? "—",
+        project: (
+          <div style={{ display: "grid", gap: "0.12rem" }}>
+            <strong>{row.propertyName ?? row.address ?? "Unlabeled comp"}</strong>
+            {row.propertyName && row.address ? <span style={{ color: "#64748b", fontSize: "0.78rem" }}>{row.address}</span> : null}
+          </div>
+        ),
+        neighborhood: row.neighborhood ?? "—",
+        count: formatNumberValue(row.count),
+        sold: formatPercentValue(row.percentSoldPct),
+        avgSize: formatSqftValue(row.avgSizeSqft),
+        askPpsf: formatPpsf(row.avgAskingPpsf),
+        soldPpsf: formatPpsf(row.avgSoldPpsf),
+        subjectPpsf: formatPpsf(subjectBedroomValue),
+        psfSpread: renderPpsfSpread(subjectBedroomValue, compPpsf),
+        rentPsf: compRentPsf != null ? formatMoneyValue(compRentPsf) : "—",
+        rentSpread: renderRentSpread(subjectRentPsf, compRentPsf),
+        cc: formatWholeMoney(row.avgCommonChargesMonthly),
+        range: row.priceRange ?? joinedSummary([formatWholeMoney(row.priceRangeLow), formatWholeMoney(row.priceRangeHigh)]),
+      };
+    });
+  const subjectRows = activeSurface.subjectUnitPricingRows.map((row) => ({
+    unit: row.unitLabel ?? "—",
+    beds: row.bedrooms != null ? `${row.bedrooms}` : "—",
+    baths: row.bathrooms != null ? `${row.bathrooms}` : "—",
+    intSf: formatSqftValue(row.interiorSqft),
+    extSf: formatSqftValue(row.exteriorSqft),
+    price: formatWholeMoney(row.price),
+    ppsf: formatPpsf(row.ppsf),
     notes: row.notes ?? "—",
   }));
   const flagBullets = unresolvedFlags.length > 0
@@ -809,51 +1052,124 @@ function BrokerCompsDetailPanel({ propertyId, surface }: { propertyId: string; s
     <div style={{ display: "grid", gap: "1rem" }}>
       <V3ReportPanel
         title="Market / comps"
-        subtitle="Broker comp packages, extracted comparables, and market pricing signals are kept separate from underwriting outputs."
+        subtitle="Broker market analysis, project comps, bedroom mix, and pricing signals."
         actions={(
-          <div style={{ display: "flex", flexWrap: "wrap", gap: "0.45rem", justifyContent: "flex-end" }}>
+          <form onSubmit={uploadSelectedPackage} style={{ display: "flex", flexWrap: "wrap", gap: "0.45rem", justifyContent: "flex-end", alignItems: "center" }}>
+            <input
+              aria-label="Broker comp package"
+              type="file"
+              accept=".pdf,.xlsx,.xls,.csv,.txt"
+              onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)}
+              style={{ maxWidth: "15rem", fontSize: "0.78rem" }}
+            />
             <button
               type="button"
-              disabled
-              title={`Planned endpoint: POST ${uploadEndpoint}`}
-              style={{ minHeight: "2rem", border: "1px solid #cbd5e1", borderRadius: "8px", padding: "0.35rem 0.7rem", background: "#f8fafc", color: "#64748b", fontSize: "0.78rem", fontWeight: 700 }}
+              disabled={loading}
+              onClick={() => void loadBrokerComps()}
+              title={`GET ${reviewEndpoint}`}
+              style={{ minHeight: "2rem", border: "1px solid #cbd5e1", borderRadius: "8px", padding: "0.35rem 0.7rem", background: "#f8fafc", color: "#334155", fontSize: "0.78rem", fontWeight: 700 }}
             >
-              Upload comp package
+              {loading ? "Refreshing…" : "Refresh"}
             </button>
             <button
-              type="button"
-              disabled
-              title={`Planned endpoint: GET ${reviewEndpoint}`}
-              style={{ minHeight: "2rem", border: "1px solid #cbd5e1", borderRadius: "8px", padding: "0.35rem 0.7rem", background: "#f8fafc", color: "#64748b", fontSize: "0.78rem", fontWeight: 700 }}
+              type="submit"
+              disabled={!selectedFile || uploading}
+              title={`POST ${uploadEndpoint}`}
+              style={{ minHeight: "2rem", border: "1px solid #1f6b4d", borderRadius: "8px", padding: "0.35rem 0.7rem", background: selectedFile && !uploading ? "#1f6b4d" : "#f8fafc", color: selectedFile && !uploading ? "#fff" : "#64748b", fontSize: "0.78rem", fontWeight: 700 }}
             >
-              Review extraction
+              {uploading ? "Uploading…" : "Upload"}
             </button>
-          </div>
+          </form>
         )}
       >
-        <V3ReportSection title="Workflow summary">
+        <V3ReportSection title="Comp Snapshot">
           <V3FactList items={workflowFacts} />
-          {!surface.hasData ? (
+          {error ? <p style={{ margin: 0, color: "#991b1b", fontSize: "0.86rem" }}>{error}</p> : null}
+          {!activeSurface.hasData ? (
             <p style={{ margin: 0, color: "#64748b", fontSize: "0.86rem" }}>
-              No broker comp package summary is available yet. Planned integrations: POST {uploadEndpoint} and GET {reviewEndpoint}.
+              No broker comp package has been uploaded or extracted yet.
             </p>
           ) : null}
-          {surface.summary ? <V3Bullets items={splitTakeawayText(surface.summary)} /> : null}
+          {activeSurface.summary ? <V3Bullets items={splitTakeawayText(activeSurface.summary)} /> : null}
         </V3ReportSection>
 
-        <V3ReportSection title="Broker pricing opinions" subtitle="Whisper price and broker guidance, not model output.">
-          {pricingFacts.length > 0 ? (
+        <V3ReportSection title="Subject Pricing" subtitle="Projected pricing rows extracted from the subject package when available.">
+          <V3RecordsTable
+            columns={[
+              { key: "unit", label: "Unit", width: "9rem" },
+              { key: "beds", label: "Bed", width: "5rem", align: "right" },
+              { key: "baths", label: "Bath", width: "5rem", align: "right" },
+              { key: "intSf", label: "Int SF", width: "7rem", align: "right" },
+              { key: "extSf", label: "Ext SF", width: "7rem", align: "right" },
+              { key: "price", label: "Price", width: "9rem", align: "right" },
+              { key: "ppsf", label: "PPSF", width: "7rem", align: "right" },
+              { key: "notes", label: "Notes" },
+            ]}
+            rows={subjectRows}
+            emptyText="No subject projected-pricing rows are available yet."
+          />
+        </V3ReportSection>
+
+        <V3ReportSection title="Project Comps">
+          <V3RecordsTable
+            columns={[
+              { key: "project", label: "Project" },
+              { key: "neighborhood", label: "Neighborhood", width: "9rem" },
+              { key: "units", label: "Units", width: "5rem", align: "right" },
+              { key: "sold", label: "% Sold", width: "6rem", align: "right" },
+              { key: "avgSize", label: "Avg Unit", width: "8rem", align: "right" },
+              { key: "askPpsf", label: "Ask $/SF", width: "8rem", align: "right" },
+              { key: "soldPpsf", label: "Sold $/SF", width: "8rem", align: "right" },
+              { key: "subjectPpsf", label: "Subject $/SF", width: "9rem", align: "right" },
+              { key: "psfSpread", label: "$/SF Δ", width: "10rem", align: "right" },
+              { key: "cap", label: "Cap", width: "6rem", align: "right" },
+              { key: "capSpread", label: "Cap Δ", width: "7rem", align: "right" },
+              { key: "priceRange", label: "Range", width: "11rem", align: "right" },
+              { key: "beds", label: "Beds", width: "10rem" },
+            ]}
+            rows={projectRows}
+            emptyText="No project-level comp rows are available yet."
+          />
+        </V3ReportSection>
+
+        <V3ReportSection title="Bedroom Mix Comps">
+          <V3RecordsTable
+            columns={[
+              { key: "bed", label: "Bed", width: "5rem" },
+              { key: "project", label: "Project" },
+              { key: "neighborhood", label: "Neighborhood", width: "9rem" },
+              { key: "count", label: "Count", width: "5rem", align: "right" },
+              { key: "sold", label: "% Sold", width: "6rem", align: "right" },
+              { key: "avgSize", label: "Avg Size", width: "8rem", align: "right" },
+              { key: "askPpsf", label: "Ask $/SF", width: "8rem", align: "right" },
+              { key: "soldPpsf", label: "Sold $/SF", width: "8rem", align: "right" },
+              { key: "subjectPpsf", label: "Subject $/SF", width: "9rem", align: "right" },
+              { key: "psfSpread", label: "$/SF Δ", width: "10rem", align: "right" },
+              ...(hasBedroomRentComps
+                ? [
+                    { key: "rentPsf", label: "Rent $/SF", width: "8rem", align: "right" as const },
+                    { key: "rentSpread", label: "Rent Δ", width: "9rem", align: "right" as const },
+                  ]
+                : []),
+              { key: "cc", label: "Avg CC", width: "8rem", align: "right" },
+              { key: "range", label: "Range", width: "11rem", align: "right" },
+            ]}
+            rows={bedroomRows}
+            emptyText="No bedroom-level comp rows are available yet."
+          />
+        </V3ReportSection>
+
+        {pricingFacts.length > 0 ? (
+          <V3ReportSection title="Pricing Signals">
             <V3FactList items={pricingFacts} />
-          ) : (
-            <p style={{ margin: 0, color: "#64748b", fontSize: "0.86rem" }}>No broker pricing opinions have been extracted yet.</p>
-          )}
-        </V3ReportSection>
+          </V3ReportSection>
+        ) : null}
 
-        <V3ReportSection title="Missing data flags">
+        <V3ReportSection title="Data Flags">
           <V3Bullets items={flagBullets} />
         </V3ReportSection>
 
-        <V3ReportSection title="Package summaries">
+        <V3ReportSection title="Packages">
           <V3RecordsTable
             columns={[
               { key: "package", label: "Package" },
@@ -864,23 +1180,6 @@ function BrokerCompsDetailPanel({ propertyId, surface }: { propertyId: string; s
             ]}
             rows={packageRows}
             emptyText="No broker comp packages are available yet."
-          />
-        </V3ReportSection>
-
-        <V3ReportSection title="Extracted and reviewed comps">
-          <V3RecordsTable
-            columns={[
-              { key: "address", label: "Comp" },
-              { key: "type", label: "Type", width: "9rem" },
-              { key: "price", label: "Price", width: "8rem", align: "right" },
-              { key: "unit", label: "$/Unit", width: "8rem", align: "right" },
-              { key: "sqft", label: "$/SF", width: "8rem", align: "right" },
-              { key: "cap", label: "Cap", width: "6rem", align: "right" },
-              { key: "review", label: "Review", width: "10rem" },
-              { key: "notes", label: "Notes" },
-            ]}
-            rows={compRows}
-            emptyText="No extracted comps are available yet."
           />
         </V3ReportSection>
       </V3ReportPanel>
@@ -2300,6 +2599,38 @@ export function CanonicalPropertyDetail({
 
   const hasListing = primaryListing && primaryListing !== "loading";
   const listingForDisplay = hasListing ? primaryListing : null;
+  const listingPricePerSqft =
+    listingForDisplay?.price != null && listingForDisplay?.sqft != null && listingForDisplay.sqft > 0
+      ? listingForDisplay.price / listingForDisplay.sqft
+      : null;
+  const subjectRentPsfTotals = omRentRoll.reduce<Record<string, { monthlyRent: number; sqft: number }>>((acc, row) => {
+    const beds = numericValue(row.beds ?? (row as Record<string, unknown>).bedrooms);
+    const sqft = numericValue(row.sqft);
+    const annualRent = numericValue(row.annualRent);
+    const monthlyRent = numericValue(row.monthlyRent) ?? (annualRent != null ? annualRent / 12 : null);
+    if (beds == null || sqft == null || sqft <= 0 || monthlyRent == null || monthlyRent <= 0) return acc;
+    const key = String(beds);
+    const current = acc[key] ?? { monthlyRent: 0, sqft: 0 };
+    current.monthlyRent += monthlyRent;
+    current.sqft += sqft;
+    acc[key] = current;
+    return acc;
+  }, {});
+  const subjectRentPsfByBedroom = Object.fromEntries(
+    Object.entries(subjectRentPsfTotals)
+      .filter(([, value]) => value.sqft > 0)
+      .map(([bedroom, value]) => [bedroom, value.monthlyRent / value.sqft])
+  );
+  const subjectCapRatePct =
+    numericValue(rentalFinancials?.fromLlm?.capRate) ??
+    numericValue(rentalFinancials?.omAnalysis?.uiFinancialSummary?.capRate);
+  const brokerCompSubjectBaseline: BrokerCompSubjectBaseline = {
+    price: listingForDisplay?.price ?? null,
+    sqft: listingForDisplay?.sqft ?? null,
+    pricePerSqft: listingPricePerSqft,
+    capRatePct: subjectCapRatePct,
+    rentPsfByBedroom: subjectRentPsfByBedroom,
+  };
   const listingAgents = listingForDisplay?.agentEnrichment ?? [];
   const listingAgentSource = listingAgents.length > 0 ? listingAgents : (property.listingAgentEnrichment ?? []);
   const brokerEmailOptionMap = new Map<string, BrokerEmailOption>();
@@ -3565,7 +3896,7 @@ export function CanonicalPropertyDetail({
       )}
 
       {activeTab === "marketComps" && (
-        <BrokerCompsDetailPanel propertyId={property.id} surface={brokerCompSurface} />
+        <BrokerCompsDetailPanel propertyId={property.id} surface={brokerCompSurface} subject={brokerCompSubjectBaseline} />
       )}
 
       {(activeTab === "documents" || activeTab === "outreach" || activeTab === "omWorkspace") && (

@@ -8,19 +8,67 @@ import type {
 export interface BrokerCompComparableRow {
   id: string;
   packageId: string | null;
+  propertyName: string | null;
   address: string | null;
+  neighborhood: string | null;
   itemType: string;
   price: number | null;
+  priceRange: string | null;
+  priceRangeLow: number | null;
+  priceRangeHigh: number | null;
   pricePerUnit: number | null;
   pricePerSqft: number | null;
+  askingPpsf: number | null;
+  soldPpsf: number | null;
   capRatePct: number | null;
   units: number | null;
   buildingSqft: number | null;
+  averageUnitSqft: number | null;
+  percentSoldPct: number | null;
+  bedroomTypes: string[];
   saleDate: string | null;
   source: string | null;
   reviewStatus: string | null;
   selectionDecision: string | null;
   notes: string | null;
+}
+
+export interface BrokerCompBedroomBreakdownRow {
+  id: string;
+  packageId: string | null;
+  propertyName: string | null;
+  address: string | null;
+  neighborhood: string | null;
+  bedroomType: string | null;
+  bedrooms: number | null;
+  count: number | null;
+  avgSizeSqft: number | null;
+  avgAskingPpsf: number | null;
+  avgSoldPpsf: number | null;
+  avgCommonChargesMonthly: number | null;
+  avgRentMonthly: number | null;
+  avgRentPerSqft: number | null;
+  priceRange: string | null;
+  priceRangeLow: number | null;
+  priceRangeHigh: number | null;
+  units: number | null;
+  percentSoldPct: number | null;
+  reviewStatus: string | null;
+  selectionDecision: string | null;
+}
+
+export interface BrokerCompSubjectUnitPricingRow {
+  id: string;
+  packageId: string | null;
+  unitLabel: string | null;
+  bedrooms: number | null;
+  bathrooms: number | null;
+  interiorSqft: number | null;
+  exteriorSqft: number | null;
+  price: number | null;
+  ppsf: number | null;
+  notes: string | null;
+  reviewStatus: string | null;
 }
 
 export interface BrokerCompPackageRow {
@@ -38,6 +86,8 @@ export interface BrokerCompPackageRow {
 export interface BrokerCompUiSurface {
   packages: BrokerCompPackageRow[];
   comparables: BrokerCompComparableRow[];
+  bedroomBreakdowns: BrokerCompBedroomBreakdownRow[];
+  subjectUnitPricingRows: BrokerCompSubjectUnitPricingRow[];
   pricingOpinions: BrokerCompPricingOpinion[];
   missingDataFlags: BrokerCompDataFlag[];
   summary: string | null;
@@ -149,6 +199,8 @@ export function readBrokerCompSurface(...sources: unknown[]): BrokerCompUiSurfac
   const allItems = [...packages.flatMap((entry) => entry.items), ...looseItems];
   const packageRows = packages.map(packageRow);
   const comparables = dedupeComparables(allItems.map(comparableRow).filter((row): row is BrokerCompComparableRow => row != null));
+  const bedroomBreakdowns = dedupeBedroomBreakdowns(allItems.flatMap(bedroomBreakdownRowsFromItem));
+  const subjectUnitPricingRows = dedupeSubjectUnitPricingRows(allItems.flatMap(subjectUnitPricingRowsFromItem));
   const allPricingOpinions = dedupePricingOpinions([
     ...pricingOpinions,
     ...allItems.flatMap((item) => pricingOpinionFromItem(item)),
@@ -162,6 +214,8 @@ export function readBrokerCompSurface(...sources: unknown[]): BrokerCompUiSurfac
   return {
     packages: packageRows,
     comparables,
+    bedroomBreakdowns,
+    subjectUnitPricingRows,
     pricingOpinions: allPricingOpinions,
     missingDataFlags: allMissingFlags,
     summary,
@@ -170,6 +224,8 @@ export function readBrokerCompSurface(...sources: unknown[]): BrokerCompUiSurfac
     hasData:
       packageRows.length > 0 ||
       comparables.length > 0 ||
+      bedroomBreakdowns.length > 0 ||
+      subjectUnitPricingRows.length > 0 ||
       allPricingOpinions.length > 0 ||
       allMissingFlags.length > 0 ||
       Boolean(summary) ||
@@ -218,7 +274,7 @@ function stringValue(value: unknown): string | null {
 function numberValue(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value !== "string") return null;
-  const parsed = Number(value.replace(/[$,%\s,]/g, ""));
+  const parsed = Number(value.replace(/[$,%\s,]/g, "").replace(/[^\d.-]/g, ""));
   return Number.isFinite(parsed) ? parsed : null;
 }
 
@@ -322,6 +378,16 @@ function packageRow(payload: BrokerCompPackageReviewPayload): BrokerCompPackageR
   };
 }
 
+function recordArray(value: unknown): Record<string, unknown>[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => (isRecord(entry) ? [entry] : []));
+}
+
+function stringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => (typeof entry === "string" && entry.trim() ? [entry.trim()] : []));
+}
+
 function comparableRow(item: BrokerCompExtractedItem): BrokerCompComparableRow | null {
   if (!["sale_comp", "operating_snapshot", "pricing_comp", "subject_projected_pricing"].includes(item.itemType)) {
     return null;
@@ -330,20 +396,95 @@ function comparableRow(item: BrokerCompExtractedItem): BrokerCompComparableRow |
   return {
     id: item.id,
     packageId: item.packageId ?? null,
+    propertyName: stringValue(data.propertyName) ?? stringValue(data.projectName),
     address: stringValue(data.address) ?? stringValue(data.propertyAddress) ?? stringValue(data.compAddress),
+    neighborhood: stringValue(data.neighborhood) ?? stringValue(data.submarket),
     itemType: item.itemType,
     price: numberValue(data.salePrice ?? data.price ?? data.askingPrice ?? data.value),
+    priceRange: stringValue(data.priceRange ?? data.range),
+    priceRangeLow: numberValue(data.priceRangeLow ?? data.lowPrice),
+    priceRangeHigh: numberValue(data.priceRangeHigh ?? data.highPrice),
     pricePerUnit: numberValue(data.pricePerUnit ?? data.ppu),
     pricePerSqft: numberValue(data.pricePerSqft ?? data.pricePsf ?? data.ppsf),
+    askingPpsf: numberValue(data.askingPpsf ?? data.avgAskingPpsf ?? data.averageAskingPpsf),
+    soldPpsf: numberValue(data.soldPpsf ?? data.avgSoldPpsf ?? data.averageSoldPpsf),
     capRatePct: numberValue(data.capRatePct ?? data.capRate),
     units: numberValue(data.units ?? data.unitCount),
     buildingSqft: numberValue(data.buildingSqft ?? data.sqft ?? data.squareFeet),
+    averageUnitSqft: numberValue(data.averageUnitSqft ?? data.averageUnitSf ?? data.avgUnitSqft ?? data.avgUnitSf),
+    percentSoldPct: numberValue(data.percentSoldPct ?? data.percentSold),
+    bedroomTypes: stringArray(data.bedroomTypes),
     saleDate: stringValue(data.saleDate) ?? stringValue(data.closedAt) ?? stringValue(data.date),
     source: stringValue(data.source) ?? stringValue(data.sourceName),
     reviewStatus: item.reviewStatus ?? null,
     selectionDecision: item.selectionDecision ?? null,
     notes: item.analystNote ?? stringValue(data.notes) ?? stringValue(data.note),
   };
+}
+
+function bedroomBreakdownRowsFromItem(item: BrokerCompExtractedItem): BrokerCompBedroomBreakdownRow[] {
+  const data = item.normalizedPayload ?? {};
+  const parent = {
+    packageId: item.packageId ?? null,
+    propertyName: stringValue(data.propertyName) ?? stringValue(data.projectName),
+    address: stringValue(data.address) ?? stringValue(data.propertyAddress) ?? stringValue(data.compAddress),
+    neighborhood: stringValue(data.neighborhood) ?? stringValue(data.submarket),
+    units: numberValue(data.units ?? data.unitCount),
+    percentSoldPct: numberValue(data.percentSoldPct ?? data.percentSold),
+    reviewStatus: item.reviewStatus ?? null,
+    selectionDecision: item.selectionDecision ?? null,
+  };
+
+  const buildRow = (row: Record<string, unknown>, suffix: string): BrokerCompBedroomBreakdownRow => ({
+    id: `${item.id}:${suffix}`,
+    packageId: parent.packageId,
+    propertyName: stringValue(row.propertyName) ?? parent.propertyName,
+    address: stringValue(row.address) ?? parent.address,
+    neighborhood: stringValue(row.neighborhood) ?? parent.neighborhood,
+    bedroomType: stringValue(row.bedroomType ?? row.unitType),
+    bedrooms: numberValue(row.bedrooms),
+    count: numberValue(row.count ?? row.units),
+    avgSizeSqft: numberValue(row.avgSizeSqft ?? row.averageSizeSqft ?? row.avgSize),
+    avgAskingPpsf: numberValue(row.avgAskingPpsf ?? row.averageAskingPpsf ?? row.askingPpsf),
+    avgSoldPpsf: numberValue(row.avgSoldPpsf ?? row.averageSoldPpsf ?? row.soldPpsf),
+    avgCommonChargesMonthly: numberValue(row.avgCommonChargesMonthly ?? row.averageCommonChargesMonthly ?? row.avgCc ?? row.commonCharges),
+    avgRentMonthly: numberValue(row.avgRentMonthly ?? row.averageRentMonthly ?? row.monthlyRent ?? row.rentMonthly),
+    avgRentPerSqft: numberValue(row.avgRentPerSqft ?? row.averageRentPerSqft ?? row.rentPerSqft ?? row.rentPsf),
+    priceRange: stringValue(row.priceRange ?? row.range),
+    priceRangeLow: numberValue(row.priceRangeLow ?? row.lowPrice),
+    priceRangeHigh: numberValue(row.priceRangeHigh ?? row.highPrice),
+    units: numberValue(row.projectUnits ?? row.totalUnits) ?? parent.units,
+    percentSoldPct: numberValue(row.percentSoldPct ?? row.percentSold) ?? parent.percentSoldPct,
+    reviewStatus: parent.reviewStatus,
+    selectionDecision: parent.selectionDecision,
+  });
+
+  if (item.itemType === "unit_breakdown_row") {
+    return [buildRow(data, "row")];
+  }
+  if (item.itemType === "pricing_comp") {
+    return recordArray(data.bedroomBreakdown ?? data.unitBreakdown ?? data.bedroomMix)
+      .map((row, index) => buildRow(row, `nested-${index}`));
+  }
+  return [];
+}
+
+function subjectUnitPricingRowsFromItem(item: BrokerCompExtractedItem): BrokerCompSubjectUnitPricingRow[] {
+  if (item.itemType !== "subject_projected_pricing") return [];
+  const data = item.normalizedPayload ?? {};
+  return recordArray(data.unitPricingRows ?? data.units ?? data.projectedPricingRows).map((row, index) => ({
+    id: `${item.id}:subject-unit-${index}`,
+    packageId: item.packageId ?? null,
+    unitLabel: stringValue(row.unitLabel ?? row.unit ?? row.name),
+    bedrooms: numberValue(row.bedrooms ?? row.bed ?? row.beds),
+    bathrooms: numberValue(row.bathrooms ?? row.bath ?? row.baths),
+    interiorSqft: numberValue(row.interiorSqft ?? row.intSqft ?? row.intSf ?? row.internalSqft),
+    exteriorSqft: numberValue(row.exteriorSqft ?? row.extSqft ?? row.extSf ?? row.outdoorSqft),
+    price: numberValue(row.price),
+    ppsf: numberValue(row.ppsf ?? row.pricePerSqft ?? row.pricePsf),
+    notes: stringValue(row.notes ?? row.note),
+    reviewStatus: item.reviewStatus ?? null,
+  }));
 }
 
 function pricingOpinionFromItem(item: BrokerCompExtractedItem): BrokerCompPricingOpinion[] {
@@ -365,6 +506,26 @@ function dedupeComparables(rows: BrokerCompComparableRow[]): BrokerCompComparabl
   const seen = new Set<string>();
   return rows.filter((row) => {
     const key = [row.address, row.price, row.saleDate, row.itemType].join("|");
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function dedupeBedroomBreakdowns(rows: BrokerCompBedroomBreakdownRow[]): BrokerCompBedroomBreakdownRow[] {
+  const seen = new Set<string>();
+  return rows.filter((row) => {
+    const key = [row.address, row.bedroomType, row.count, row.avgAskingPpsf, row.avgSoldPpsf, row.priceRange].join("|");
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function dedupeSubjectUnitPricingRows(rows: BrokerCompSubjectUnitPricingRow[]): BrokerCompSubjectUnitPricingRow[] {
+  const seen = new Set<string>();
+  return rows.filter((row) => {
+    const key = [row.unitLabel, row.bedrooms, row.bathrooms, row.interiorSqft, row.price, row.ppsf].join("|");
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
