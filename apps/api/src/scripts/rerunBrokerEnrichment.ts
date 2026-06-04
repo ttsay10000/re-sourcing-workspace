@@ -20,7 +20,12 @@ config({ path: resolve(process.cwd(), ".env") });
 
 import { closePool, getPool, ListingRepo, MatchRepo } from "@re-sourcing/db";
 import type { ListingNormalized } from "@re-sourcing/contracts";
-import { enrichBrokers, hasMeaningfulBrokerEnrichment } from "../enrichment/brokerEnrichment.js";
+import {
+  brokerLookupContextFromListing,
+  enrichBrokers,
+  hasMeaningfulBrokerEnrichment,
+  mergeBrokerEnrichment,
+} from "../enrichment/brokerEnrichment.js";
 import { syncPropertySourcingWorkflow } from "../sourcing/workflow.js";
 
 interface ScriptOptions {
@@ -124,8 +129,10 @@ async function main(): Promise<number> {
         continue;
       }
 
-      const propertyContext = [listing.address, listing.city, listing.zip].filter(Boolean).join(", ") || undefined;
-      const agentEnrichment = await enrichBrokers(listing.agentNames, propertyContext);
+      const normalized = toListingNormalized(listing);
+      const context = brokerLookupContextFromListing(normalized);
+      const lookedUp = await enrichBrokers(listing.agentNames, context);
+      const agentEnrichment = mergeBrokerEnrichment(listing.agentNames, listing.agentEnrichment, lookedUp, context);
 
       if (!hasMeaningfulBrokerEnrichment(agentEnrichment)) {
         skipped++;
@@ -142,7 +149,6 @@ async function main(): Promise<number> {
 
       console.log(`[rerunBrokerEnrichment] ${options.dryRun ? "Would update" : "Updating"} listing ${listing.externalId}`);
       if (!options.dryRun) {
-        const normalized = toListingNormalized(listing);
         normalized.agentEnrichment = agentEnrichment;
         await listingRepo.upsert(normalized, { uploadedRunId: listing.uploadedRunId ?? null });
 

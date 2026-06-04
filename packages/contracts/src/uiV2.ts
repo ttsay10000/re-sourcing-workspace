@@ -26,8 +26,10 @@ export type UiV2MarketType = "on_market" | "off_market" | "unknown";
 export type UiV2PipelineSortField =
   | "updatedAt"
   | "createdAt"
+  | "listedAt"
   | "canonicalAddress"
   | "source"
+  | "propertyType"
   | "marketType"
   | "askingPrice"
   | "buildingSqft"
@@ -168,19 +170,19 @@ export const UI_V2_PIPELINE_STATUS_OPTIONS = [
   },
   {
     status: "outreach",
-    label: "Outreach",
+    label: "OM Requested",
     tone: "info",
     editable: true,
-    description: "Broker outreach is queued, drafted, or underway.",
+    description: "The broker has been asked for the OM or related deal materials.",
     tableActions: ["open_property", "edit_status", "email_broker", "schedule_follow_up"],
     sheetActions: ["email_broker", "schedule_follow_up", "mark_om_requested", "reject_deal"],
   },
   {
     status: "awaiting_broker",
-    label: "Awaiting Broker",
+    label: "OM Requested",
     tone: "warning",
     editable: true,
-    description: "Waiting on a broker response or documents.",
+    description: "Waiting on the broker to send the OM, rent roll, T-12, or related documents.",
     tableActions: ["open_property", "edit_status", "email_broker", "schedule_follow_up"],
     sheetActions: ["email_broker", "schedule_follow_up", "mark_om_received", "reject_deal"],
   },
@@ -204,10 +206,10 @@ export const UI_V2_PIPELINE_STATUS_OPTIONS = [
   },
   {
     status: "offer_review",
-    label: "LOI Offered",
+    label: "LOI Sent",
     tone: "warning",
     editable: true,
-    description: "An LOI has been offered or is ready for partner approval.",
+    description: "An LOI has been sent or is ready for partner approval.",
     tableActions: ["open_property", "edit_status", "email_broker"],
     sheetActions: ["email_broker", "open_docs", "schedule_follow_up"],
   },
@@ -222,7 +224,7 @@ export const UI_V2_PIPELINE_STATUS_OPTIONS = [
   },
   {
     status: "contract_signed",
-    label: "Contract Signed / Diligence",
+    label: "Contract Signed",
     tone: "success",
     editable: true,
     description: "Contract is signed and diligence or escrow work is active.",
@@ -231,7 +233,7 @@ export const UI_V2_PIPELINE_STATUS_OPTIONS = [
   },
   {
     status: "deal_closed",
-    label: "Deal Closed",
+    label: "Closed",
     tone: "success",
     editable: true,
     terminal: true,
@@ -671,8 +673,22 @@ export interface UiV2PipelineRow {
   brokerComps?: BrokerCompMarketSummary | null;
   openActionItemCount?: number;
   lastActivityAt?: string | null;
+  newness?: UiV2PipelineNewness | null;
+  listedAt?: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export type UiV2PipelineNewnessReason =
+  | "saved_search_run"
+  | "saved_search_upload"
+  | "manual_import"
+  | "property_added";
+
+export interface UiV2PipelineNewness {
+  isNew: boolean;
+  reason: UiV2PipelineNewnessReason;
+  occurredAt?: string | null;
 }
 
 export interface UiV2PipelineListPayload {

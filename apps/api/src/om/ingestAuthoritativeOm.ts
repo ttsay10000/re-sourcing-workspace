@@ -34,6 +34,7 @@ import {
   sanitizeOmRentRollRows,
 } from "../rental/omAnalysisUtils.js";
 import { resolveUploadedDocFilePath } from "../upload/uploadedDocStorage.js";
+import { extractTextFromBuffer } from "../upload/extractTextFromUploadedFile.js";
 import { syncPropertySourcingWorkflow } from "../sourcing/workflow.js";
 import { getPropertyDossierAssumptions } from "../deal/propertyDossierState.js";
 import { resolveOmAskingPriceFromDetails } from "../deal/omAskingPrice.js";
@@ -526,7 +527,18 @@ export async function listOmAutomationDocumentsForProperty(
   ]);
 
   const uploaded = uploadedDocs
-    .filter((doc) => doc.category === "OM" || doc.category === "Brochure" || doc.category === "Rent Roll" || doc.category === "T12 / Operating Summary")
+    .filter((doc) =>
+      doc.category === "OM" ||
+      doc.category === "Brochure" ||
+      doc.category === "Rent Roll" ||
+      doc.category === "T12 / Operating Summary" ||
+      looksLikeFinancialModelSource({
+        id: doc.id,
+        origin: "uploaded_document",
+        filename: doc.filename,
+        category: doc.category,
+      })
+    )
     .map<OmAutomationDocument>((doc) => ({
       id: doc.id,
       origin: "uploaded_document",
@@ -914,15 +926,34 @@ export async function ingestAuthoritativeOm(
         mimeType: doc.mimeType ?? "application/pdf",
         buffer: doc.buffer,
       }));
+    const nonPdfTextContext = (
+      await Promise.all(
+        preparedDocuments
+          .filter((doc) => !isPdfLikeOmInputDocument(doc))
+          .map(async (doc) => {
+            const text = await extractTextFromBuffer(doc.buffer, doc.filename);
+            if (!text.trim()) return null;
+            return [
+              `Document: ${doc.filename}`,
+              `Category: ${doc.category ?? "Unclassified"}`,
+              `Source: ${doc.source ?? doc.origin}`,
+              text.slice(0, 24_000),
+            ].join("\n");
+          })
+      )
+    )
+      .filter((section): section is string => Boolean(section))
+      .join("\n\n---\n\n");
     const geminiModel = resolveGeminiOmModel();
     const sourceMeta = {
       documents: candidateDocumentSourceMeta,
       parser: {
         provider: "gemini",
-        mode: "pdf_only",
+        mode: nonPdfTextContext ? "pdf_plus_text_context" : "pdf_only",
         model: geminiModel,
         documentCount: geminiDocuments.length,
         documentFilenames: geminiDocuments.map((doc) => doc.filename),
+        textContextDocumentCount: preparedDocuments.filter((doc) => !isPdfLikeOmInputDocument(doc)).length,
       },
     };
     const unreadableFileError =
@@ -956,8 +987,8 @@ export async function ingestAuthoritativeOm(
         error: unreadableFileError ?? "OM ingestion could not read any document bytes from the available files.",
       };
     }
-    if (geminiDocuments.length === 0) {
-      const error = "Authoritative OM ingestion requires at least one readable PDF document for Gemini parsing.";
+    if (geminiDocuments.length === 0 && !nonPdfTextContext) {
+      const error = "Authoritative OM ingestion requires at least one readable PDF document or extractable spreadsheet/text document for Gemini parsing.";
       await ingestionRunRepo.update(run.id, {
         status: "failed",
         extractionMethod: GEMINI_OM_EXTRACTION_METHOD,
@@ -981,8 +1012,15 @@ export async function ingestAuthoritativeOm(
 
     const extracted = await extractOmAnalysisFromGeminiPdfOnly({
       documents: geminiDocuments,
-      propertyContext: property.canonicalAddress ?? property.id,
-      enrichmentContext: null,
+      propertyContext: [
+        property.canonicalAddress ?? property.id,
+        candidateDocumentSourceMeta.length > 0
+          ? `Candidate documents:\n${candidateDocumentSourceMeta
+              .map((doc) => `- ${doc.filename} (${doc.category ?? "unclassified"}, ${doc.origin})`)
+              .join("\n")}`
+          : null,
+      ].filter(Boolean).join("\n\n"),
+      enrichmentContext: nonPdfTextContext || null,
       model: geminiModel,
     });
     if (!extracted.omAnalysis) {

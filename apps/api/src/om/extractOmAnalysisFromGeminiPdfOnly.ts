@@ -150,17 +150,27 @@ function buildPdfOnlyOmPrompt(params: {
 
   const prefix = contextSections.length > 0 ? `${contextSections.join("\n\n")}\n\n` : "";
 
+  const sourceMode =
+    params.filenames.length > 0
+      ? `CRITICAL PDF PACKAGE MODE:
+- Inspect the attached PDF file(s) directly and use any additional extracted text context as supporting source material.
+- Review every PDF page, including image-based rent rolls, screenshots, graphics, and scanned financial tables.`
+      : `CRITICAL TEXT PACKAGE MODE:
+- No readable PDF file is attached for this run. Use the provided document text/spreadsheet context as the source package.
+- Treat workbook sheets, delimited rows, and extracted text as authoritative source material when they contain rent roll, T-12, expense, or OM data.`;
+
   return `${OM_ANALYSIS_PROMPT_PREFIX}
 
-${prefix}CRITICAL PDF-ONLY MODE:
-- No extracted PDF text is provided. You must inspect the attached PDF file(s) directly.
-- Review the entire PDF page by page, including image-based rent rolls, screenshots, graphics, and scanned financial tables.
+${prefix}${sourceMode}
+- The source package may contain an OM, rent roll, T-12/operating statement, expense backup, marketing brochure, financial model, or a combination of these.
+- Classify each source document by its contents before extracting data. Use the OM for property/valuation narrative, rent roll documents for unit rows, and T-12/expense documents for current income and expense lines.
 - Preserve exact current figures shown in the document. Prefer CURRENT over PRO FORMA when both appear.
 - Return one JSON object only.
 
 GEMINI RESPONSE RULES:
 - Keep these keys at the TOP LEVEL only: propertyInfo, rentRoll, income, expenses, revenueComposition, financialMetrics, valuationMetrics, underwritingMetrics, nycRegulatorySummary, furnishedModel, reportedDiscrepancies, sourceCoverage, investmentTakeaways, recommendedOfferAnalysis, uiFinancialSummary, dossierMemo, noiReported.
-- sourceCoverage may contain ONLY coverage diagnostics. Do not place uiFinancialSummary, investmentTakeaways, recommendedOfferAnalysis, or dossierMemo inside sourceCoverage.
+- sourceCoverage may contain ONLY coverage diagnostics and documentClassifications. Do not place uiFinancialSummary, investmentTakeaways, recommendedOfferAnalysis, or dossierMemo inside sourceCoverage.
+- sourceCoverage.documentClassifications should be an array of { filename, documentType, confidence, relevantSections } when filenames or source labels are available.
 - noiReported must be the CURRENT in-place NOI if the OM explicitly states NOI. If the OM does not explicitly state NOI, set noiReported to null and still compute uiFinancialSummary.noi from current income and expenses.
 - uiFinancialSummary must contain current grossRent, noi, capRate, expenseRatio, and breakEvenOccupancy whenever they can be derived from the OM.
 - propertyInfo.totalUnits must be the selected unit count after reconciliation. rentRoll must still include every rent-bearing row, even if one tenant leases multiple spaces and rentRoll rows exceed totalUnits.
@@ -272,6 +282,23 @@ function buildStructuredOutputSchema() {
       expensesExtracted: nullableBoolean,
       currentFinancialsExtracted: nullableBoolean,
       unitCountExtracted: nullableBoolean,
+      documentClassifications: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            filename: {
+              type: ["string", "null"],
+            },
+            documentType: {
+              type: ["string", "null"],
+            },
+            confidence: nullableNumber,
+            relevantSections: stringArray,
+          },
+        },
+      },
     },
   } as const;
   const strictUiFinancialSummary = {
@@ -603,8 +630,8 @@ export async function extractOmAnalysisFromGeminiPdfOnly(
     console.warn("[extractOmAnalysisFromGeminiPdfOnly] GEMINI_API_KEY missing or invalid; skipping Gemini call.");
     return emptyResult(model);
   }
-  if (pdfDocuments.length === 0) {
-    console.warn("[extractOmAnalysisFromGeminiPdfOnly] No readable PDF documents were provided.");
+  if (pdfDocuments.length === 0 && !params.enrichmentContext?.trim()) {
+    console.warn("[extractOmAnalysisFromGeminiPdfOnly] No readable PDF documents or text context were provided.");
     return emptyResult(model);
   }
 

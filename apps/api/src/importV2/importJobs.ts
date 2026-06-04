@@ -34,10 +34,16 @@ import {
   normalizeStreeteasyUrl,
 } from "../nycRealEstateApi.js";
 import { computeDuplicateScores } from "../dedup/addressDedup.js";
-import { enrichBrokers, hasMeaningfulBrokerEnrichment } from "../enrichment/brokerEnrichment.js";
+import {
+  brokerLookupContextFromListing,
+  enrichBrokers,
+  hasMeaningfulBrokerEnrichment,
+  mergeBrokerEnrichment,
+} from "../enrichment/brokerEnrichment.js";
 import { getBBLForProperty, normalizeAddressLineForDisplay } from "../enrichment/resolvePropertyBBL.js";
 import { runEnrichmentForProperty } from "../enrichment/runEnrichment.js";
 import { normalizeStreetEasySaleDetails } from "../sourcing/normalizeStreetEasyListing.js";
+import { withRefreshPriceHistory } from "../sourcing/priceHistoryRefresh.js";
 import { listEnabledSavedSearchAdapters } from "../sourcing/adapters/index.js";
 import { startSavedSearchRun } from "../sourcing/savedSearchRunner.js";
 import {
@@ -482,21 +488,33 @@ async function persistListingAsProperty(params: PersistListingParams): Promise<P
     const snapshotRepo = new SnapshotRepo({ pool, client });
 
     const existingListing = await listingRepo.bySourceAndExternalId(normalized.source, normalized.externalId);
+    const previousSnapshot = existingListing
+      ? (await snapshotRepo.list({ listingId: existingListing.id, limit: 1 })).snapshots[0] ?? null
+      : null;
     if (existingListing) {
-      normalized.priceHistory = normalized.priceHistory ?? existingListing.priceHistory ?? null;
+      Object.assign(normalized, withRefreshPriceHistory({ normalized, existing: existingListing, previousSnapshot }));
       normalized.rentalPriceHistory = normalized.rentalPriceHistory ?? existingListing.rentalPriceHistory ?? null;
       if (params.includeImages === false) normalized.imageUrls = existingListing.imageUrls ?? null;
     }
 
+    const sourceAgentEnrichment = normalized.agentEnrichment ?? null;
     const shouldRunBrokerLlm = params.includeBrokerInfo !== false && (normalized.agentNames?.length ?? 0) > 0;
     if (shouldRunBrokerLlm) {
       try {
-        const context = [normalized.address, normalized.city, normalized.zip].filter(Boolean).join(", ") || undefined;
+        const context = brokerLookupContextFromListing(normalized);
         const agentEnrichment = await enrichBrokers(normalized.agentNames ?? [], context);
-        if (hasMeaningfulBrokerEnrichment(agentEnrichment)) normalized.agentEnrichment = agentEnrichment;
+        const mergedAgentEnrichment = mergeBrokerEnrichment(
+          normalized.agentNames ?? [],
+          sourceAgentEnrichment,
+          agentEnrichment,
+          context
+        );
+        if (hasMeaningfulBrokerEnrichment(mergedAgentEnrichment)) normalized.agentEnrichment = mergedAgentEnrichment;
         else if (existingListing?.agentEnrichment?.length) normalized.agentEnrichment = existingListing.agentEnrichment;
+        else if (hasMeaningfulBrokerEnrichment(sourceAgentEnrichment)) normalized.agentEnrichment = sourceAgentEnrichment;
       } catch (err) {
         if (existingListing?.agentEnrichment?.length) normalized.agentEnrichment = existingListing.agentEnrichment;
+        else if (hasMeaningfulBrokerEnrichment(sourceAgentEnrichment)) normalized.agentEnrichment = sourceAgentEnrichment;
         warnings.push(`Broker enrichment failed: ${err instanceof Error ? err.message : String(err)}`);
       }
     } else if (existingListing?.agentEnrichment?.length) {
@@ -789,8 +807,8 @@ async function maybeRunStreetEasyPullFollowUps(
   warnings: string[]
 ): Promise<void> {
   await runStreetEasyImportFollowUps(propertyId, warnings, {
-    includeEnrichment: Boolean(input.options?.includeBuildingDetails || input.options?.includeNearbyComparables),
-    includeRentalFlow: Boolean(input.options?.includeUnitDetails),
+    includeEnrichment: input.options?.includeBuildingDetails !== false || input.options?.includeNearbyComparables === true,
+    includeRentalFlow: input.options?.includeUnitDetails !== false,
   });
 }
 
@@ -843,12 +861,10 @@ export async function importStreetEasyUrl(input: UiV2StreetEasyUrlImportInput): 
     title: "StreetEasy URL import started",
     metadata: { jobType: "streeteasy_url", url: prepared.url, saleId: prepared.saleId },
   });
-  if (result.createdProperty) {
-    await runStreetEasyImportFollowUps(result.property.id, result.warnings, {
-      includeEnrichment: true,
-      includeRentalFlow: true,
-    });
-  }
+  await runStreetEasyImportFollowUps(result.property.id, result.warnings, {
+    includeEnrichment: true,
+    includeRentalFlow: true,
+  });
   await createPipelineEvent(pool, {
     propertyId: result.property.id,
     eventType: "import_completed",
@@ -890,6 +906,10 @@ export async function importStreetEasySaleId(input: UiV2StreetEasySaleIdImportIn
     eventType: "import_started",
     title: "StreetEasy sale ID import started",
     metadata: { jobType: "streeteasy_sale_id", saleId: prepared.saleId },
+  });
+  await runStreetEasyImportFollowUps(result.property.id, result.warnings, {
+    includeEnrichment: true,
+    includeRentalFlow: true,
   });
   await createPipelineEvent(pool, {
     propertyId: result.property.id,

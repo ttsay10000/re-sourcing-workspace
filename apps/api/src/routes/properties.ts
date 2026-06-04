@@ -51,7 +51,12 @@ import { suggestRentalDataGaps } from "../rental/suggestRentalDataGaps.js";
 import { getRentRollComparison } from "../rental/rentRollComparison.js";
 import { fetchNyDosEntityByName } from "../enrichment/nyDosEntity.js";
 import { fetchAcrisDocumentsByOwnerName } from "../enrichment/acrisDocuments.js";
-import { enrichBrokers, hasMeaningfulBrokerEnrichment } from "../enrichment/brokerEnrichment.js";
+import {
+  brokerLookupContextFromListing,
+  enrichBrokers,
+  hasMeaningfulBrokerEnrichment,
+  mergeBrokerEnrichment,
+} from "../enrichment/brokerEnrichment.js";
 import { resolveEffectiveDealScore } from "../deal/effectiveDealScore.js";
 import { getPersistedDossierSignals } from "../deal/persistedDossierSignals.js";
 import {
@@ -84,6 +89,7 @@ import {
   syncRecipientResolution,
 } from "../sourcing/workflow.js";
 import { normalizeStreetEasySaleDetails } from "../sourcing/normalizeStreetEasyListing.js";
+import { withRefreshPriceHistory } from "../sourcing/priceHistoryRefresh.js";
 import {
   ingestAuthoritativeOm,
   promoteOmExtractionForProperty,
@@ -314,6 +320,117 @@ async function importLoopNetPublicDocumentsForProperty(params: {
     }
   }
   return { imported, skipped, errors, documentIds };
+}
+
+async function refreshStreetEasyListingForProperty(
+  propertyId: string,
+  pool: import("pg").Pool
+): Promise<{ attempted: boolean; ok: boolean; priceChanged: boolean; error?: string }> {
+  const listing = await getPrimaryListingForProperty(propertyId, pool);
+  const listingUrl = listing?.url?.trim() ?? "";
+  const saleId = listingUrl ? extractStreetEasySaleIdFromUrl(listingUrl) : null;
+  const isStreetEasyListing =
+    listing?.source === "streeteasy" ||
+    listing?.source === "nyc_api" ||
+    (listingUrl ? extractStreetEasySaleIdFromUrl(listingUrl) != null || /streeteasy\.com/i.test(listingUrl) : false);
+  if (!listing || !isStreetEasyListing || (!listingUrl && !saleId)) {
+    return { attempted: false, ok: false, priceChanged: false };
+  }
+
+  try {
+    const normalizedUrl = listingUrl ? normalizeStreeteasyUrl(listingUrl) : saleId ? `https://streeteasy.com/sale/${saleId}` : "";
+    let raw: Record<string, unknown>;
+    if (saleId) {
+      try {
+        raw = await fetchSaleDetailsById(saleId);
+      } catch (error) {
+        if (!listingUrl) throw error;
+        raw = await fetchSaleDetailsByUrl(listingUrl);
+      }
+    } else {
+      raw = await fetchSaleDetailsByUrl(listingUrl);
+    }
+
+    const normalized = normalizeStreetEasySaleDetails(
+      {
+        ...raw,
+        id: raw.id ?? raw.listing_id ?? saleId ?? listing.externalId,
+        _fetchUrl: normalizedUrl || listingUrl,
+      },
+      0
+    );
+    const oldPrice = Number(listing.price);
+    const newPrice = Number(normalized.price);
+    const priceChanged = Number.isFinite(oldPrice) && Number.isFinite(newPrice) && Math.abs(oldPrice - newPrice) >= 1;
+
+    const listingRepo = new ListingRepo({ pool });
+    const snapshotRepo = new SnapshotRepo({ pool });
+    const propertyRepo = new PropertyRepo({ pool });
+    const matchRepo = new MatchRepo({ pool });
+    const previousSnapshot = (await snapshotRepo.list({ listingId: listing.id, limit: 1 })).snapshots[0] ?? null;
+    Object.assign(normalized, withRefreshPriceHistory({ normalized, existing: listing, previousSnapshot }));
+    normalized.rentalPriceHistory = normalized.rentalPriceHistory ?? listing.rentalPriceHistory ?? null;
+
+    const sourceAgentEnrichment = normalized.agentEnrichment ?? null;
+    if (Array.isArray(normalized.agentNames) && normalized.agentNames.length > 0) {
+      try {
+        const context = brokerLookupContextFromListing(normalized);
+        const lookedUp = await enrichBrokers(normalized.agentNames, context);
+        const merged = mergeBrokerEnrichment(normalized.agentNames, sourceAgentEnrichment, lookedUp, context);
+        if (hasMeaningfulBrokerEnrichment(merged)) normalized.agentEnrichment = merged;
+        else if (hasMeaningfulBrokerEnrichment(sourceAgentEnrichment)) normalized.agentEnrichment = sourceAgentEnrichment;
+        else if (listing.agentEnrichment?.length) normalized.agentEnrichment = listing.agentEnrichment;
+      } catch {
+        if (listing.agentEnrichment?.length) normalized.agentEnrichment = listing.agentEnrichment;
+        else if (hasMeaningfulBrokerEnrichment(sourceAgentEnrichment)) normalized.agentEnrichment = sourceAgentEnrichment;
+      }
+    } else if (listing.agentEnrichment?.length) {
+      normalized.agentEnrichment = listing.agentEnrichment;
+    }
+
+    const upserted = await listingRepo.upsert(normalized, { uploadedRunId: null });
+    if (upserted.listing.id !== listing.id) {
+      await matchRepo.create({
+        listingId: upserted.listing.id,
+        propertyId,
+        confidence: 1,
+        reasons: {
+          addressMatch: true,
+          normalizedAddressDistance: 0,
+          other: ["street_easy_refresh"],
+        },
+      });
+    }
+    await snapshotRepo.create({
+      listingId: upserted.listing.id,
+      runId: null,
+      rawPayloadPath: "inline",
+      metadata: {
+        refreshSource: "street_easy_selected_refresh",
+        propertyId,
+        capturedAt: new Date().toISOString(),
+        rawPayload: { ...raw, _fetchUrl: normalizedUrl || listingUrl },
+        agentEnrichment: normalized.agentEnrichment ?? null,
+        priceHistory: normalized.priceHistory ?? null,
+        rentalPriceHistory: normalized.rentalPriceHistory ?? null,
+        normalizedListing: normalized as unknown as Record<string, unknown>,
+        priceChanged,
+        previousPrice: Number.isFinite(oldPrice) ? oldPrice : null,
+        currentPrice: Number.isFinite(newPrice) ? newPrice : null,
+      },
+    });
+    const detailsMerge = buildPropertyDetailsMergeFromListing(normalized);
+    if (Object.keys(detailsMerge).length > 0) await propertyRepo.mergeDetails(propertyId, detailsMerge);
+    await refreshPropertyPipelineMetadata(propertyId, pool);
+    return { attempted: true, ok: true, priceChanged };
+  } catch (error) {
+    return {
+      attempted: true,
+      ok: false,
+      priceChanged: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
 }
 
 function isMissingPropertyScoringSchemaError(err: unknown): boolean {
@@ -836,7 +953,11 @@ async function listPropertiesWithListingSummary(pool: import("pg").Pool) {
  */
 export async function refreshOmFinancialsForProperty(
   propertyId: string,
-  pool: import("pg").Pool
+  pool: import("pg").Pool,
+  options?: {
+    autoPromote?: boolean;
+    triggerDossier?: boolean;
+  }
 ): Promise<{
   documentsProcessed: number;
   documentsSkippedNoFile: number;
@@ -847,7 +968,7 @@ export async function refreshOmFinancialsForProperty(
   reviewRequired: boolean;
   error?: string;
 }> {
-  const result = await refreshAuthoritativeOmForProperty(propertyId, pool);
+  const result = await refreshAuthoritativeOmForProperty(propertyId, pool, options);
   return {
     documentsProcessed: result.documentsProcessed,
     documentsSkippedNoFile: result.documentsSkippedNoFile,
@@ -1241,25 +1362,33 @@ router.post("/properties/manual-add", async (req: Request, res: Response) => {
       const snapshotRepo = new SnapshotRepo({ pool, client });
 
       const existingListing = await listingRepo.bySourceAndExternalId(normalized.source, normalized.externalId);
+      const previousSnapshot = existingListing
+        ? (await snapshotRepo.list({ listingId: existingListing.id, limit: 1 })).snapshots[0] ?? null
+        : null;
       if (existingListing) {
-        normalized.agentEnrichment = existingListing.agentEnrichment ?? null;
-        normalized.priceHistory = normalized.priceHistory ?? existingListing.priceHistory ?? null;
+        Object.assign(normalized, withRefreshPriceHistory({ normalized, existing: existingListing, previousSnapshot }));
         normalized.rentalPriceHistory = normalized.rentalPriceHistory ?? existingListing.rentalPriceHistory ?? null;
       }
 
+      const sourceAgentEnrichment = normalized.agentEnrichment ?? null;
       if (Array.isArray(normalized.agentNames) && normalized.agentNames.length > 0) {
-        const propertyContext = [normalized.address, normalized.city, normalized.zip].filter(Boolean).join(", ") || undefined;
         try {
-          const agentEnrichment = await enrichBrokers(normalized.agentNames, propertyContext);
-          if (hasMeaningfulBrokerEnrichment(agentEnrichment)) {
-            normalized.agentEnrichment = agentEnrichment;
-          }
+          const context = brokerLookupContextFromListing(normalized);
+          const agentEnrichment = await enrichBrokers(normalized.agentNames, context);
+          const merged = mergeBrokerEnrichment(normalized.agentNames, sourceAgentEnrichment, agentEnrichment, context);
+          if (hasMeaningfulBrokerEnrichment(merged)) normalized.agentEnrichment = merged;
+          else if (existingListing?.agentEnrichment?.length) normalized.agentEnrichment = existingListing.agentEnrichment;
+          else if (hasMeaningfulBrokerEnrichment(sourceAgentEnrichment)) normalized.agentEnrichment = sourceAgentEnrichment;
         } catch (error) {
+          if (existingListing?.agentEnrichment?.length) normalized.agentEnrichment = existingListing.agentEnrichment;
+          else if (hasMeaningfulBrokerEnrichment(sourceAgentEnrichment)) normalized.agentEnrichment = sourceAgentEnrichment;
           console.warn(
             `[properties manual-add] broker enrichment failed for ${normalized.externalId}:`,
             error instanceof Error ? error.message : error
           );
         }
+      } else if (existingListing?.agentEnrichment?.length) {
+        normalized.agentEnrichment = existingListing.agentEnrichment;
       }
 
       const existingProperty = await propertyRepo.byCanonicalAddress(canonicalAddress);
@@ -2068,15 +2197,19 @@ router.post("/properties/run-enrichment", async (req: Request, res: Response) =>
       enrichmentStepKeys.map((stepKey) => [stepKey, { completed: 0, failed: 0, skipped: 0 }])
     ) as Record<string, { completed: number; failed: number; skipped: number }>;
     const workflowSteps: WorkflowRunStepSeed[] = [
+      {
+        stepKey: "streeteasy_refresh",
+        totalItems: propertyIds.length,
+        status: "running",
+        startedAt: workflowStartedAt,
+        lastMessage: `Refreshing StreetEasy asks for ${propertyIds.length} propert${propertyIds.length === 1 ? "y" : "ies"}`,
+      },
       ...enrichmentStepKeys.map((stepKey, index): WorkflowRunStepSeed => ({
         stepKey,
         totalItems: propertyIds.length,
-        status: index === 0 ? "running" : "pending",
-        startedAt: index === 0 ? workflowStartedAt : null,
-        lastMessage:
-          index === 0
-            ? `Starting enrichment for ${propertyIds.length} propert${propertyIds.length === 1 ? "y" : "ies"}`
-            : null,
+        status: "pending",
+        startedAt: null,
+        lastMessage: index === 0 ? "Waiting for StreetEasy refresh" : null,
       })),
       {
         stepKey: "om_financials",
@@ -2097,6 +2230,45 @@ router.post("/properties/run-enrichment", async (req: Request, res: Response) =>
 
     const appToken = process.env.SOCRATA_APP_TOKEN ?? null;
     const sourcingPool = getPool();
+    const streetEasyRefresh = { attempted: 0, success: 0, failed: 0, skipped: 0, priceChanged: 0, errors: [] as string[] };
+    for (let i = 0; i < propertyIds.length; i++) {
+      if (i > 0) await new Promise((r) => setTimeout(r, ENRICHMENT_RATE_LIMIT_DELAY_MS));
+      const propertyId = propertyIds[i]!;
+      const result = await refreshStreetEasyListingForProperty(propertyId, sourcingPool);
+      if (!result.attempted) streetEasyRefresh.skipped++;
+      else if (result.ok) {
+        streetEasyRefresh.attempted++;
+        streetEasyRefresh.success++;
+        if (result.priceChanged) streetEasyRefresh.priceChanged++;
+      } else {
+        streetEasyRefresh.attempted++;
+        streetEasyRefresh.failed++;
+        if (result.error) streetEasyRefresh.errors.push(`${propertyId}: ${result.error}`);
+      }
+      await upsertWorkflowStep(workflowRunId, {
+        stepKey: "streeteasy_refresh",
+        totalItems: propertyIds.length,
+        completedItems: streetEasyRefresh.success,
+        failedItems: streetEasyRefresh.failed,
+        skippedItems: streetEasyRefresh.skipped,
+        status: deriveWorkflowStatusFromCounts({
+          totalItems: propertyIds.length,
+          completedItems: streetEasyRefresh.success,
+          failedItems: streetEasyRefresh.failed,
+          skippedItems: streetEasyRefresh.skipped,
+        }),
+        startedAt: workflowStartedAt,
+        finishedAt:
+          streetEasyRefresh.success + streetEasyRefresh.failed + streetEasyRefresh.skipped >= propertyIds.length
+            ? new Date().toISOString()
+            : null,
+        lastMessage:
+          streetEasyRefresh.priceChanged > 0
+            ? `${streetEasyRefresh.priceChanged} ask change${streetEasyRefresh.priceChanged === 1 ? "" : "s"} found`
+            : `${streetEasyRefresh.success}/${propertyIds.length} StreetEasy refreshes completed`,
+        lastError: result.ok || !result.error ? null : result.error,
+      });
+    }
     // Pre-pass: resolve and persist BBL for every property so CO and other BBL-dependent modules run for all.
     for (let i = 0; i < propertyIds.length; i++) {
       if (i > 0) await new Promise((r) => setTimeout(r, ENRICHMENT_RATE_LIMIT_DELAY_MS));
@@ -2206,6 +2378,7 @@ router.post("/properties/run-enrichment", async (req: Request, res: Response) =>
 
     await mergeWorkflowRunMetadata(workflowRunId, {
       propertyIds,
+      streetEasyRefresh,
       permitEnrichment: {
         ran: true,
         success,
@@ -2218,12 +2391,13 @@ router.post("/properties/run-enrichment", async (req: Request, res: Response) =>
       },
     });
     await updateWorkflowRun(workflowRunId, {
-      status: failed > 0 || omFailed > 0 ? "partial" : "completed",
+      status: failed > 0 || omFailed > 0 || streetEasyRefresh.failed > 0 ? "partial" : "completed",
       finishedAt: new Date().toISOString(),
     });
 
     res.json({
       ok: true,
+      streetEasyRefresh,
       permitEnrichment: {
         ran: true,
         success,
@@ -2683,6 +2857,43 @@ function parseUploadCategory(cat: unknown): PropertyDocumentCategory {
   return "Other";
 }
 
+function classifyUploadCategory(file: { originalname?: string; mimetype?: string }, requestedCategory: unknown): PropertyDocumentCategory {
+  const requested = typeof requestedCategory === "string" ? requestedCategory.trim() : "";
+  if (requested && requested.toLowerCase() !== "auto" && VALID_UPLOAD_CATEGORIES.includes(requested as PropertyDocumentCategory)) {
+    return requested as PropertyDocumentCategory;
+  }
+  return detectImportedDocumentCategory(file.originalname ?? "document", file.originalname ?? file.mimetype ?? "");
+}
+
+function isOmIngestionCategory(category: PropertyDocumentCategory): boolean {
+  return (
+    category === "OM" ||
+    category === "Brochure" ||
+    category === "Rent Roll" ||
+    category === "T12 / Operating Summary" ||
+    category === "Financial Model"
+  );
+}
+
+type UploadMemoryFile = {
+  buffer: Buffer;
+  originalname?: string;
+  mimetype?: string;
+  size?: number;
+};
+
+function uploadedFilesFromRequest(req: Request): UploadMemoryFile[] {
+  const requestWithFiles = req as Request & {
+    file?: UploadMemoryFile;
+    files?: UploadMemoryFile[] | Record<string, UploadMemoryFile[]>;
+  };
+  if (Array.isArray(requestWithFiles.files)) return requestWithFiles.files;
+  if (requestWithFiles.files && typeof requestWithFiles.files === "object") {
+    return Object.values(requestWithFiles.files).flat();
+  }
+  return requestWithFiles.file ? [requestWithFiles.file] : [];
+}
+
 /** GET /api/properties/ny-dos-entity?name=... - NY DOS entity details for a business name (LLC, Corp, etc.). Returns N/A when name does not look like a business entity. */
 router.get("/properties/ny-dos-entity", async (req: Request, res: Response) => {
   try {
@@ -2984,6 +3195,116 @@ router.get("/properties/:id/documents/:docId/file", async (req: Request, res: Re
     if (!res.headersSent) res.status(503).json({ error: "Failed to serve file.", details: message });
   }
 });
+
+/** POST /api/properties/:id/documents/upload-batch - upload one or more documents and refresh OM package data. */
+router.post(
+  "/properties/:id/documents/upload-batch",
+  (req, res, next) => {
+    uploadMemory.fields([
+      { name: "files", maxCount: 20 },
+      { name: "file", maxCount: 20 },
+    ])(req, res, handleUploadMulterError(req, res, next));
+  },
+  async (req: Request, res: Response) => {
+    try {
+      const { id: propertyId } = req.params;
+      const pool = getPool();
+      const propertyRepo = new PropertyRepo({ pool });
+      const docRepo = new PropertyUploadedDocumentRepo({ pool });
+      const property = await propertyRepo.byId(propertyId);
+      if (!property) {
+        res.status(404).json({ error: "Property not found", propertyId });
+        return;
+      }
+
+      const files = uploadedFilesFromRequest(req).filter((file) => file.buffer?.length > 0);
+      if (files.length === 0) {
+        res.status(400).json({ error: "Missing files. Send multipart/form-data with field 'files'." });
+        return;
+      }
+
+      const source = typeof req.body?.source === "string" ? req.body.source.trim() || "Pipeline document upload" : "Pipeline document upload";
+      const uploadedAt = new Date().toISOString();
+      const documents: Array<Awaited<ReturnType<PropertyUploadedDocumentRepo["insert"]>>> = [];
+      for (const file of files) {
+        const category = classifyUploadCategory(file, req.body?.category);
+        const docId = randomUUID();
+        const filename = file.originalname?.trim() || "document";
+        const filePath = await saveUploadedDocument(propertyId, docId, filename, file.buffer);
+        const inserted = await docRepo.insert({
+          id: docId,
+          propertyId,
+          filename,
+          contentType: file.mimetype || null,
+          filePath,
+          category,
+          source,
+          sourceMetadata: {
+            uploadedVia: "property_documents_batch",
+            uploadedAt,
+            classificationMethod:
+              typeof req.body?.category === "string" && req.body.category.trim() && req.body.category.trim().toLowerCase() !== "auto"
+                ? "user_selected"
+                : "filename_auto",
+            originalFileName: filename,
+            sizeBytes: file.size ?? file.buffer.length,
+          },
+          fileContent: file.buffer,
+        });
+        documents.push(inserted);
+      }
+
+      const shouldRefreshOm = documents.some((document) => isOmIngestionCategory(document.category));
+      const omRefresh = shouldRefreshOm
+        ? await refreshOmFinancialsForProperty(propertyId, pool, {
+            autoPromote: true,
+            triggerDossier: false,
+          }).catch((error) => ({
+            documentsProcessed: 0,
+            documentsSkippedNoFile: 0,
+            runId: null,
+            extractedSnapshotId: null,
+            authoritativeSnapshotId: null,
+            status: "failed" as const,
+            reviewRequired: false,
+            error: error instanceof Error ? error.message : String(error),
+          }))
+        : null;
+
+      let rentalFlow: { rentalUnitsCount: number; hasLlmFinancials: boolean; error?: string } | null = null;
+      if (shouldRefreshOm && omRefresh?.status !== "failed") {
+        rentalFlow = await runRentalFlowForProperty(propertyId, pool).catch((error) => ({
+          rentalUnitsCount: 0,
+          hasLlmFinancials: false,
+          error: error instanceof Error ? error.message : String(error),
+        }));
+      }
+
+      await syncPropertySourcingWorkflow(propertyId, { pool }).catch(() => {});
+      await refreshPropertyPipelineMetadata(propertyId, pool, {
+        ...(omRefresh ? { underwritingStatus: omRefresh.reviewRequired ? "needs_assumptions" : "in_progress" } : {}),
+        ...(rentalFlow ? { rentalFlowStatus: rentalFlow.error ? "failed" : "complete" } : {}),
+      }).catch(() => {});
+
+      res.status(201).json({
+        propertyId,
+        documents,
+        classifiedDocuments: documents.map((document) => ({
+          id: document.id,
+          filename: document.filename,
+          category: document.category,
+          contentType: document.contentType ?? null,
+        })),
+        omRefresh,
+        rentalFlow,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error("[properties documents upload batch]", err);
+      res.status(503).json({ error: "Failed to upload documents.", details: message });
+    }
+  }
+);
 
 /** POST /api/properties/:id/documents/upload - upload a document (multipart: file + category). */
 router.post(
@@ -4553,6 +4874,7 @@ router.post("/properties/run-rental-flow", async (req: Request, res: Response) =
     const propertyIds = Array.isArray(req.body?.propertyIds) && req.body.propertyIds.length > 0
       ? (req.body.propertyIds as string[]).filter((id: unknown) => typeof id === "string" && id.trim().length > 0)
       : (await propertyRepo.list({ limit: 200 })).map((p) => p.id);
+    const shouldRefreshStreetEasy = req.body?.refreshStreetEasy !== false;
     workflowRunId = await createWorkflowRun({
       runType: "rerun_rental_flow",
       displayName: "Re-run rental flow",
@@ -4561,11 +4883,26 @@ router.post("/properties/run-rental-flow", async (req: Request, res: Response) =
       totalItems: propertyIds.length,
       metadata: { propertyIds },
       steps: [
+        ...(shouldRefreshStreetEasy
+          ? [
+              {
+                stepKey: "streeteasy_refresh",
+                totalItems: propertyIds.length,
+                status: propertyIds.length === 0 ? "completed" : "running",
+                startedAt: workflowStartedAt,
+                finishedAt: propertyIds.length === 0 ? workflowStartedAt : null,
+                lastMessage:
+                  propertyIds.length === 0
+                    ? "No properties selected"
+                    : `Refreshing StreetEasy asks for ${propertyIds.length} propert${propertyIds.length === 1 ? "y" : "ies"}`,
+              } satisfies WorkflowRunStepSeed,
+            ]
+          : []),
         {
           stepKey: "rental_flow",
           totalItems: propertyIds.length,
-          status: propertyIds.length === 0 ? "completed" : "running",
-          startedAt: workflowStartedAt,
+          status: propertyIds.length === 0 ? "completed" : shouldRefreshStreetEasy ? "pending" : "running",
+          startedAt: shouldRefreshStreetEasy ? null : workflowStartedAt,
           finishedAt: propertyIds.length === 0 ? workflowStartedAt : null,
           lastMessage:
             propertyIds.length === 0
@@ -4575,25 +4912,82 @@ router.post("/properties/run-rental-flow", async (req: Request, res: Response) =
       ],
     });
 
-    const results: { propertyId: string; rentalUnitsCount: number; hasLlmFinancials: boolean; error?: string }[] = [];
+    const results: { propertyId: string; rentalUnitsCount: number; hasLlmFinancials: boolean; enrichmentStatus?: PropertyJobStatus; error?: string }[] = [];
     const delayMs = ENRICHMENT_RATE_LIMIT_DELAY_MS;
+    const appToken = process.env.SOCRATA_APP_TOKEN ?? null;
     let completed = 0;
     let failed = 0;
+    const streetEasyRefresh = { attempted: 0, success: 0, failed: 0, skipped: 0, priceChanged: 0, errors: [] as string[] };
+
+    if (shouldRefreshStreetEasy) {
+      for (const propertyId of propertyIds) {
+        const result = await refreshStreetEasyListingForProperty(propertyId, pool);
+        if (!result.attempted) streetEasyRefresh.skipped++;
+        else if (result.ok) {
+          streetEasyRefresh.attempted++;
+          streetEasyRefresh.success++;
+          if (result.priceChanged) streetEasyRefresh.priceChanged++;
+        } else {
+          streetEasyRefresh.attempted++;
+          streetEasyRefresh.failed++;
+          if (result.error) streetEasyRefresh.errors.push(`${propertyId}: ${result.error}`);
+        }
+        await upsertWorkflowStep(workflowRunId, {
+          stepKey: "streeteasy_refresh",
+          totalItems: propertyIds.length,
+          completedItems: streetEasyRefresh.success,
+          failedItems: streetEasyRefresh.failed,
+          skippedItems: streetEasyRefresh.skipped,
+          status: deriveWorkflowStatusFromCounts({
+            totalItems: propertyIds.length,
+            completedItems: streetEasyRefresh.success,
+            failedItems: streetEasyRefresh.failed,
+            skippedItems: streetEasyRefresh.skipped,
+          }),
+          startedAt: workflowStartedAt,
+          finishedAt:
+            streetEasyRefresh.success + streetEasyRefresh.failed + streetEasyRefresh.skipped >= propertyIds.length
+              ? new Date().toISOString()
+              : null,
+          lastMessage:
+            streetEasyRefresh.priceChanged > 0
+              ? `${streetEasyRefresh.priceChanged} ask change${streetEasyRefresh.priceChanged === 1 ? "" : "s"} found`
+              : `${streetEasyRefresh.success}/${propertyIds.length} StreetEasy refreshes completed`,
+          lastError: result.ok || !result.error ? null : result.error,
+        });
+        if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
+      }
+    }
 
     for (const propertyId of propertyIds) {
+      let enrichmentStatus: PropertyJobStatus | undefined;
+      try {
+        await getBBLForProperty(propertyId, { appToken });
+        const enrichment = await runEnrichmentForProperty(propertyId, undefined, {
+          appToken,
+          rateLimitDelayMs: ENRICHMENT_RATE_LIMIT_DELAY_MS,
+        });
+        enrichmentStatus = enrichment.ok ? "complete" : "failed";
+      } catch {
+        enrichmentStatus = "failed";
+      }
       try {
         const result = await runRentalFlowForProperty(propertyId, pool);
         await syncPropertySourcingWorkflow(propertyId, { pool });
         await refreshPropertyPipelineMetadata(propertyId, pool, {
+          ...(enrichmentStatus ? { enrichmentStatus } : {}),
           rentalFlowStatus: result.error ? "failed" : "complete",
         });
-        results.push({ propertyId, ...result });
+        results.push({ propertyId, ...result, enrichmentStatus });
         if (result.error) failed++;
         else completed++;
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        await refreshPropertyPipelineMetadata(propertyId, pool, { rentalFlowStatus: "failed" }).catch(() => null);
-        results.push({ propertyId, rentalUnitsCount: 0, hasLlmFinancials: false, error: message });
+        await refreshPropertyPipelineMetadata(propertyId, pool, {
+          ...(enrichmentStatus ? { enrichmentStatus } : {}),
+          rentalFlowStatus: "failed",
+        }).catch(() => null);
+        results.push({ propertyId, rentalUnitsCount: 0, hasLlmFinancials: false, enrichmentStatus, error: message });
         failed++;
       }
       await upsertWorkflowStep(workflowRunId, {
@@ -4613,13 +5007,13 @@ router.post("/properties/run-rental-flow", async (req: Request, res: Response) =
       if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
     }
 
-    await mergeWorkflowRunMetadata(workflowRunId, { propertyIds, results });
+    await mergeWorkflowRunMetadata(workflowRunId, { propertyIds, results, streetEasyRefresh });
     await updateWorkflowRun(workflowRunId, {
-      status: failed > 0 ? "partial" : "completed",
+      status: failed > 0 || streetEasyRefresh.failed > 0 ? "partial" : "completed",
       finishedAt: new Date().toISOString(),
     });
 
-    res.json({ ok: true, results });
+    res.json({ ok: true, results, streetEasyRefresh });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[properties run-rental-flow]", err);

@@ -128,11 +128,14 @@
 }
 
 .statusCard {
+  display: block;
   border: 1px solid var(--app-line, #e4e4e7);
   border-top: 2.5px solid var(--app-line-strong, #d4d4d8);
   border-radius: 8px;
   padding: 0.9rem 1rem;
   background: var(--app-surface, #ffffff);
+  color: inherit;
+  text-decoration: none;
   transition: box-shadow 140ms ease;
 }
 
@@ -177,6 +180,56 @@
 
 .neutral {
   border-top-color: var(--app-line-strong, #d4d4d8);
+}
+
+.terminalCounter {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 0.65rem;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid var(--app-line, #e4e4e7);
+  border-radius: 8px;
+  background: var(--app-surface, #ffffff);
+}
+
+.terminalCounter strong {
+  color: var(--app-ink, #18181b);
+  font-size: 1.15rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.terminalCounter span {
+  color: var(--app-muted, #71717a);
+  font-size: 0.82rem;
+}
+
+.segmentedControl {
+  display: inline-flex;
+  gap: 0.15rem;
+  padding: 0.18rem;
+  border: 1px solid var(--app-line, #e4e4e7);
+  border-radius: 8px;
+  background: var(--app-surface-strong, #f4f4f3);
+}
+
+.segmentedControl button {
+  min-height: 1.75rem;
+  border: 0;
+  border-radius: 6px;
+  padding: 0.25rem 0.65rem;
+  background: transparent;
+  color: var(--app-ink-secondary, #52525b);
+  font-size: 0.78rem;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.segmentedControl .segmentActive {
+  background: var(--app-surface, #ffffff);
+  color: var(--app-ink, #18181b);
+  box-shadow: var(--app-shadow);
 }
 
 /* ─── Panel shell ─────────────────────────────────────────────── */
@@ -303,6 +356,119 @@
 }
 
 /* ─── Deals table ─────────────────────────────────────────────── */
+
+.savedStageList {
+  display: grid;
+}
+
+.savedStage {
+  display: grid;
+  gap: 0.55rem;
+  padding: 0.85rem 1rem;
+  border-bottom: 1px solid var(--app-line-subtle, #f4f4f5);
+}
+
+.savedStage:last-child {
+  border-bottom: 0;
+}
+
+.savedStageHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.savedStageHeader h3 {
+  margin: 0;
+  color: var(--app-ink, #18181b);
+  font-size: 0.93rem;
+  font-weight: 700;
+}
+
+.savedStageHeader span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.75rem;
+  height: 1.35rem;
+  border: 1px solid var(--app-line, #e4e4e7);
+  border-radius: 999px;
+  color: var(--app-ink-secondary, #52525b);
+  font-size: 0.75rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.savedDealRows {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.savedDealRow {
+  display: grid;
+  grid-template-columns: 2.55rem minmax(12rem, 1fr) minmax(4.6rem, 0.35fr) minmax(4.2rem, auto) minmax(4.7rem, auto);
+  align-items: center;
+  gap: 0.65rem;
+  border-radius: 7px;
+  padding: 0.38rem 0.42rem;
+  color: inherit;
+  text-decoration: none;
+  transition: background 140ms ease;
+}
+
+.savedDealRow:hover {
+  background: var(--app-surface-raised, #fafaf9);
+}
+
+.savedDealRow img,
+.thumbnailFallback {
+  width: 2.4rem;
+  height: 2.4rem;
+  border: 1px solid var(--app-line, #e4e4e7);
+  border-radius: 7px;
+}
+
+.savedDealRow img {
+  object-fit: cover;
+}
+
+.thumbnailFallback {
+  display: grid;
+  place-items: center;
+  background: var(--app-surface-strong, #f4f4f3);
+  color: var(--app-muted, #71717a);
+  font-size: 0.86rem;
+  font-weight: 750;
+}
+
+.savedDealRow strong {
+  display: block;
+  color: var(--app-ink, #18181b);
+  font-size: 0.88rem;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.savedDealRow small {
+  color: var(--app-muted, #71717a);
+  font-size: 0.76rem;
+}
+
+.savedDealRow > em {
+  color: var(--app-ink-secondary, #52525b);
+  font-size: 0.83rem;
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+  text-align: right;
+}
+
+.emptyStage {
+  padding: 0.45rem 0;
+  color: var(--app-muted, #71717a);
+  font-size: 0.82rem;
+}
 
 .dealsTable {
   width: 100%;
@@ -586,5 +752,21 @@
   .header {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .terminalCounter {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .savedDealRow {
+    grid-template-columns: 2.55rem minmax(0, 1fr);
+  }
+
+  .savedDealRow > em,
+  .savedDealRow > small,
+  .savedDealRow > .scorePill {
+    grid-column: 2;
+    text-align: left;
   }
 }

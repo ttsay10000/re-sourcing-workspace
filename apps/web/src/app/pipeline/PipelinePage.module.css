@@ -344,7 +344,7 @@
 
 .pipelineTable {
   width: 100%;
-  min-width: 2000px;
+  min-width: 2080px;
   border-collapse: collapse;
   table-layout: fixed;
   font-size: 0.74rem;
@@ -360,6 +360,10 @@
 
 .colSource {
   width: 6.8rem;
+}
+
+.colPropertyType {
+  width: 8.2rem;
 }
 
 .colType {
@@ -382,8 +386,7 @@
   width: 5.6rem;
 }
 
-.colUnit,
-.colMtr {
+.colUnit {
   width: 4.4rem;
 }
 
@@ -750,6 +753,14 @@
   white-space: nowrap;
 }
 
+.propertyTypeCell {
+  overflow: hidden;
+  color: #34444d;
+  font-weight: 750;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .dateCell strong {
   display: inline-block;
   color: #22323a;
@@ -1037,7 +1048,9 @@
 }
 
 .propertySheetFullscreen {
-  width: min(92rem, calc(100vw - 2rem));
+  width: 100vw;
+  max-width: none;
+  height: 100dvh;
   box-shadow: -10px 0 44px rgba(9, 19, 29, 0.18);
 }
 
@@ -1865,8 +1878,30 @@
 .moduleItems {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.45rem 0.65rem;
+  gap: 0.55rem 0.75rem;
   margin: 0;
+}
+
+.moduleItems div {
+  min-width: 0;
+}
+
+.moduleItems dt {
+  color: #65727c;
+  font-size: 0.64rem;
+  font-weight: 760;
+  letter-spacing: 0.035em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.moduleItems dd {
+  margin: 0.13rem 0 0;
+  color: #18242d;
+  font-size: 0.86rem;
+  font-weight: 700;
+  line-height: 1.28;
+  overflow-wrap: anywhere;
 }
 
 .moduleItems a {
@@ -1892,8 +1927,8 @@
 
 .propertyDataSection {
   display: grid;
-  gap: 0.7rem;
-  padding: 0.95rem 1rem;
+  gap: 0.82rem;
+  padding: 1rem 1.05rem;
   border-top: 1px solid #e4ebe7;
 }
 
@@ -1915,7 +1950,9 @@
 .propertyDataHeader h4 {
   margin: 0;
   color: #1b2831;
-  font-size: 0.92rem;
+  font-size: 0.94rem;
+  font-weight: 760;
+  line-height: 1.25;
 }
 
 .propertyDataSection .moduleItems {
@@ -1925,7 +1962,7 @@
 .propertyFactGrid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 0.55rem;
+  gap: 0.6rem;
   margin: 0;
 }
 
@@ -1939,17 +1976,18 @@
 
 .propertyFactGrid dt {
   color: #65727c;
-  font-size: 0.62rem;
-  font-weight: 800;
+  font-size: 0.64rem;
+  font-weight: 760;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.035em;
 }
 
 .propertyFactGrid dd {
-  margin: 0.12rem 0 0;
+  margin: 0.14rem 0 0;
   color: #18242d;
-  font-size: 0.9rem;
-  font-weight: 800;
+  font-size: 0.88rem;
+  font-weight: 720;
+  line-height: 1.26;
   overflow-wrap: anywhere;
 }
 
@@ -1963,11 +2001,11 @@
 
 .dataModuleRow {
   display: grid;
-  gap: 0.45rem;
+  gap: 0.55rem;
   min-width: 0;
   border: 1px solid #e1e8e4;
   border-radius: 7px;
-  padding: 0.65rem;
+  padding: 0.72rem;
   background: #fff;
 }
 
@@ -1984,7 +2022,9 @@
 
 .dataModuleHeader strong {
   color: #1d2b34;
-  font-size: 0.84rem;
+  font-size: 0.86rem;
+  font-weight: 760;
+  line-height: 1.25;
 }
 
 .dataTableShell {
@@ -2144,6 +2184,47 @@
   display: grid;
   gap: 0.55rem;
   margin-top: 0.85rem;
+}
+
+.documentUploadPanel {
+  display: grid;
+  grid-template-columns: minmax(16rem, 1fr) auto;
+  align-items: end;
+  gap: 0.55rem;
+  margin-top: 0.85rem;
+  border: 1px solid #dfe7e2;
+  border-radius: 7px;
+  padding: 0.7rem;
+  background: #fbfcfb;
+}
+
+.documentUploadPanel label {
+  display: grid;
+  gap: 0.28rem;
+  min-width: 0;
+}
+
+.documentUploadPanel label span {
+  color: #5f6f77;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.documentUploadPanel input[type="file"] {
+  width: 100%;
+  min-width: 0;
+  font-size: 0.78rem;
+}
+
+.documentUploadPanel small,
+.documentUploadPanel p {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: #687480;
+  font-size: 0.76rem;
+  overflow-wrap: anywhere;
 }
 
 .documentRow {
@@ -2398,6 +2479,10 @@
 	    align-items: flex-end;
 	    flex-direction: column-reverse;
 	  }
+
+  .documentUploadPanel {
+    grid-template-columns: 1fr;
+  }
 
   .propertyGallery {
     grid-template-columns: 1fr;

@@ -50,6 +50,7 @@ import type {
   UiV2MarketType,
   UiV2OmAnalysisPayload,
   UiV2PipelineListPayload,
+  UiV2PipelineNewness,
   UiV2PipelineQuery,
   UiV2PipelineRow,
   UiV2PropertyDocumentItem,
@@ -77,6 +78,7 @@ const router = Router();
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 500;
+const MANUAL_NEWNESS_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 const UI_V2_STATUSES = new Set<UiV2PipelineStatus>([
   "new",
@@ -196,6 +198,8 @@ interface PipelineBaseRow {
   listing_description: string | null;
   listing_image_urls: string[] | null;
   listing_listed_at: Date | string | null;
+  listing_uploaded_at: Date | string | null;
+  listing_uploaded_run_id: string | null;
   listing_price_history: PriceHistoryEntry[] | null;
   listing_rental_price_history: PriceHistoryEntry[] | null;
   listing_lifecycle_state: string | null;
@@ -257,6 +261,7 @@ interface PipelineBaseRow {
   saved_deal_id: string | null;
   saved_deal_status: string | null;
   saved_deal_created_at: Date | string | null;
+  latest_sourcing_run_id: string | null;
 }
 
 interface DetailCollections {
@@ -405,8 +410,10 @@ function parsePipelineQuery(req: Request): ParsedPipelineQuery {
     [
       "updatedAt",
       "createdAt",
+      "listedAt",
       "canonicalAddress",
       "source",
+      "propertyType",
       "marketType",
       "askingPrice",
       "buildingSqft",
@@ -628,14 +635,14 @@ function statusLabel(status: UiV2PipelineStatus): string {
     interesting: "Interesting",
     saved: "Saved",
     underwriting: "Underwriting",
-    outreach: "Outreach",
-    awaiting_broker: "Awaiting Broker",
+    outreach: "OM Requested",
+    awaiting_broker: "OM Requested",
     om_received: "OM Received",
     dossier_generated: "Dossier Generated",
-    offer_review: "LOI Offered",
+    offer_review: "LOI Sent",
     negotiation: "Negotiation",
-    contract_signed: "Contract Signed / Diligence",
-    deal_closed: "Deal Closed",
+    contract_signed: "Contract Signed",
+    deal_closed: "Closed",
     rejected: "Rejected",
     archived: "Archived",
   };
@@ -1340,7 +1347,7 @@ function buildListingFacts(row: PipelineBaseRow): UiV2ListingFactsPayload | null
     sqft: buildingSqft,
     ppsqft: pricePerSqft,
     daysOnMarket: readFirstNumericPath(details, [["manualSourceFacts", "daysOnMarket"]]) ?? readFirstNumericPath(row.listing_extra, [["daysOnMarket"], ["days_on_market"], ["dom"]]),
-    listedAt: optionalIso(row.listing_listed_at) ?? readFirstStringPath(row.listing_extra, [["listedAt"], ["listed_at"]]),
+    listedAt: getListedAt(row),
     closedAt: readFirstStringPath(row.listing_extra, [["closedAt"], ["closed_at"]]),
     monthlyHoa: readFirstNumericPath(details, [["manualSourceFacts", "monthlyHoa"]]) ?? readFirstNumericPath(row.listing_extra, [["monthlyHoa"], ["monthly_hoa"], ["hoa"]]),
     monthlyTax: readFirstNumericPath(details, [["manualSourceFacts", "monthlyTax"]]) ?? readFirstNumericPath(row.listing_extra, [["monthlyTax"], ["monthly_tax"], ["tax"]]),
@@ -1350,6 +1357,10 @@ function buildListingFacts(row: PipelineBaseRow): UiV2ListingFactsPayload | null
     unitCountSource,
   };
   return Object.values(facts).some((value) => hasDisplayValue(value)) ? facts : null;
+}
+
+function getListedAt(row: PipelineBaseRow): string | null {
+  return optionalIso(row.listing_listed_at) ?? readFirstStringPath(row.listing_extra, [["listedAt"], ["listed_at"]]);
 }
 
 function getPropertyType(row: PipelineBaseRow): string | null {
@@ -1894,9 +1905,70 @@ function buildPipelineRow(row: PipelineBaseRow): UiV2PipelineRow {
     underwriting: buildUnderwriting(row),
     openActionItemCount: Number(row.open_action_item_count ?? 0),
     lastActivityAt: pipeline.lastActivityAt ?? optionalIso(row.property_updated_at),
+    newness: buildPipelineNewness(row),
+    listedAt: getListedAt(row),
     createdAt: toIso(row.property_created_at),
     updatedAt: toIso(row.property_updated_at),
   };
+}
+
+function isWithinManualNewnessWindow(value: string | null): boolean {
+  if (!value) return false;
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) return false;
+  const ageMs = Date.now() - parsed;
+  return ageMs >= 0 && ageMs <= MANUAL_NEWNESS_WINDOW_MS;
+}
+
+function isManualOrImportedPipelineRow(row: PipelineBaseRow): boolean {
+  const pipeline = readPipelineState(row.details);
+  const source = String(row.listing_source ?? pipeline.source ?? "").trim().toLowerCase();
+  const jobType = readStringPath(row.details, ["importV2", "jobType"]);
+  const manualAddedAt = readStringPath(row.details, ["manualSourceLinks", "addedAt"]);
+  return Boolean(jobType || manualAddedAt || source === "manual" || row.listing_id == null);
+}
+
+function buildPipelineNewness(row: PipelineBaseRow): UiV2PipelineNewness | null {
+  const sourcingUpdate = row.details?.sourcingUpdate ?? null;
+  const sourcingRunId = stringOrNull(sourcingUpdate?.lastRunId);
+  if (sourcingRunId) {
+    const latestRunId = stringOrNull(row.latest_sourcing_run_id);
+    const isLatestRun = latestRunId == null || latestRunId === sourcingRunId;
+    if (sourcingUpdate?.status === "new" && isLatestRun) {
+      return {
+        isNew: true,
+        reason: "saved_search_run",
+        occurredAt:
+          stringOrNull(sourcingUpdate.lastEvaluatedAt) ??
+          optionalIso(row.listing_uploaded_at) ??
+          optionalIso(row.property_created_at),
+      };
+    }
+    return null;
+  }
+
+  const uploadedRunId = stringOrNull(row.listing_uploaded_run_id);
+  if (uploadedRunId) {
+    const uploadedAt = optionalIso(row.listing_uploaded_at);
+    return isWithinManualNewnessWindow(uploadedAt)
+      ? { isNew: true, reason: "saved_search_upload", occurredAt: uploadedAt }
+      : null;
+  }
+
+  const manualAddedAt = readFirstStringPath(row.details, [
+    ["importV2", "importedAt"],
+    ["manualSourceLinks", "addedAt"],
+  ]);
+  const occurredAt = manualAddedAt ?? optionalIso(row.property_created_at);
+  if (isManualOrImportedPipelineRow(row) && isWithinManualNewnessWindow(occurredAt)) {
+    return {
+      isNew: true,
+      reason: readStringPath(row.details, ["importV2", "jobType"]) ? "manual_import" : "property_added",
+      occurredAt,
+    };
+  }
+
+  return null;
 }
 
 function buildActivityTimeline(row: PipelineBaseRow, collections: DetailCollections): UiV2ActivityTimelineItem[] {
@@ -2143,6 +2215,8 @@ async function fetchPipelineRows(pool: Pool, userId: string): Promise<PipelineBa
        l.description AS listing_description,
        l.image_urls AS listing_image_urls,
        l.listed_at AS listing_listed_at,
+       l.uploaded_at AS listing_uploaded_at,
+       l.uploaded_run_id AS listing_uploaded_run_id,
        l.price_history AS listing_price_history,
        l.rental_price_history AS listing_rental_price_history,
        l.lifecycle_state AS listing_lifecycle_state,
@@ -2203,7 +2277,8 @@ async function fetchPipelineRows(pool: Pool, userId: string): Promise<PipelineBa
        es.enrichment_last_error,
        sd.id AS saved_deal_id,
        sd.deal_status AS saved_deal_status,
-       sd.created_at AS saved_deal_created_at
+       sd.created_at AS saved_deal_created_at,
+       latest_sourcing_run.id::text AS latest_sourcing_run_id
      FROM properties p
      LEFT JOIN LATERAL (
        SELECT l.*
@@ -2283,6 +2358,15 @@ async function fetchPipelineRows(pool: Pool, userId: string): Promise<PipelineBa
        WHERE property_id = p.id
      ) es ON true
      LEFT JOIN saved_deals sd ON sd.property_id = p.id AND sd.user_id = $1
+     LEFT JOIN ingestion_runs sourcing_run ON sourcing_run.id::text = p.details->'sourcingUpdate'->>'lastRunId'
+     LEFT JOIN LATERAL (
+       SELECT id
+       FROM ingestion_runs
+       WHERE profile_id = sourcing_run.profile_id
+         AND status <> 'running'
+       ORDER BY started_at DESC
+       LIMIT 1
+     ) latest_sourcing_run ON true
      ORDER BY p.updated_at DESC`,
     [userId]
   );
@@ -2385,10 +2469,14 @@ function sortValue(row: UiV2PipelineRow, sortBy: UiV2PipelineSortField): string 
   switch (sortBy) {
     case "createdAt":
       return Date.parse(row.createdAt);
+    case "listedAt":
+      return row.listedAt ? Date.parse(row.listedAt) : null;
     case "canonicalAddress":
       return row.canonicalAddress.toLowerCase();
     case "source":
       return String(row.source ?? "").toLowerCase();
+    case "propertyType":
+      return String(row.propertyType ?? "").toLowerCase();
     case "marketType":
       return row.marketType ?? "unknown";
     case "askingPrice":

@@ -10,13 +10,19 @@ import {
   MatchRepo,
   PropertySourcingStateRepo,
 } from "@re-sourcing/db";
-import { enrichBrokers, hasMeaningfulBrokerEnrichment } from "../enrichment/brokerEnrichment.js";
+import {
+  brokerLookupContextFromListing,
+  enrichBrokers,
+  hasMeaningfulBrokerEnrichment,
+  mergeBrokerEnrichment,
+} from "../enrichment/brokerEnrichment.js";
 import { computeDuplicateScores } from "../dedup/addressDedup.js";
 import { normalizeAddressLineForDisplay, getBBLForProperty } from "../enrichment/resolvePropertyBBL.js";
 import { runEnrichmentForProperty } from "../enrichment/runEnrichment.js";
 import { runRentalFlowForProperty } from "../routes/properties.js";
 import { syncPropertySourcingWorkflow } from "./workflow.js";
 import { buildListingChangeSummary } from "./listingChangeSummary.js";
+import { withRefreshPriceHistory } from "./priceHistoryRefresh.js";
 import { runDailyOutreach, type DailyOutreachInboxSummary } from "./outreachAutomation.js";
 import { listEnabledSavedSearchAdapters, type AnySourceAdapter } from "./adapters/index.js";
 import {
@@ -236,19 +242,23 @@ async function persistListingForRun(
       ? (await snapshotRepo.list({ listingId: existing.id, limit: 1 })).snapshots[0] ?? null
       : null;
     if (existing) {
-      normalized.priceHistory = normalized.priceHistory ?? existing.priceHistory ?? null;
+      Object.assign(normalized, withRefreshPriceHistory({ normalized, existing, previousSnapshot }));
       normalized.rentalPriceHistory = normalized.rentalPriceHistory ?? existing.rentalPriceHistory ?? null;
     }
 
+    const sourceAgentEnrichment = normalized.agentEnrichment ?? null;
     const agentNames = normalized.agentNames ?? [];
     if (agentNames.length > 0) {
       try {
-        const context = [normalized.address, normalized.city, normalized.zip].filter(Boolean).join(", ");
+        const context = brokerLookupContextFromListing(normalized);
         const agentEnrichment = await enrichBrokers(agentNames, context || undefined);
-        if (hasMeaningfulBrokerEnrichment(agentEnrichment)) normalized.agentEnrichment = agentEnrichment;
+        const mergedAgentEnrichment = mergeBrokerEnrichment(agentNames, sourceAgentEnrichment, agentEnrichment, context);
+        if (hasMeaningfulBrokerEnrichment(mergedAgentEnrichment)) normalized.agentEnrichment = mergedAgentEnrichment;
         else if (existing?.agentEnrichment?.length) normalized.agentEnrichment = existing.agentEnrichment;
+        else if (hasMeaningfulBrokerEnrichment(sourceAgentEnrichment)) normalized.agentEnrichment = sourceAgentEnrichment;
       } catch (err) {
         if (existing?.agentEnrichment?.length) normalized.agentEnrichment = existing.agentEnrichment;
+        else if (hasMeaningfulBrokerEnrichment(sourceAgentEnrichment)) normalized.agentEnrichment = sourceAgentEnrichment;
         errors.push(`broker-enrichment:${normalized.externalId}:${err instanceof Error ? err.message : String(err)}`);
       }
     } else if (existing?.agentEnrichment) {

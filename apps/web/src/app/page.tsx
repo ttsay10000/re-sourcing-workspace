@@ -9,11 +9,47 @@ import styles from "./home.module.css";
 const API_BASE = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000").replace(/\/$/, "");
 
 type PipelineResponse = { pipeline?: UiV2PipelineListPayload; error?: string; details?: string };
+type SavedDealsResponse = {
+  savedDeals?: {
+    rows?: SavedDealRow[];
+    total?: number;
+  };
+  error?: string;
+  details?: string;
+};
 type ProgressResponse = {
   summary?: Record<string, number | null | undefined>;
   sections?: Array<{ id: string; label?: string; count?: number; rows?: HomeProgressRow[] }>;
   error?: string;
   details?: string;
+};
+type SavedDealRow = {
+  savedDeal?: {
+    id?: string;
+    propertyId?: string;
+    dealStatus?: string;
+    createdAt?: string;
+  };
+  propertyId: string;
+  canonicalAddress?: string | null;
+  displayAddress?: string | null;
+  source?: string | null;
+  price?: number | null;
+  units?: number | null;
+  pricePerUnit?: number | null;
+  pricePerSqft?: number | null;
+  capRate?: number | null;
+  dealScore?: number | null;
+  status?: string | null;
+  omStatus?: string | null;
+  documentCount?: number | null;
+  openActionItemCount?: number | null;
+  neighborhood?: string | null;
+  borough?: string | null;
+  firstImageUrl?: string | null;
+  listingUrl?: string | null;
+  rejection?: { reasonLabel?: string | null; reasonCode?: string | null; note?: string | null } | null;
+  updatedAt?: string | null;
 };
 type HomeProgressRow = {
   propertyId: string;
@@ -27,39 +63,17 @@ type HomeProgressRow = {
   omStatus?: string | null;
 };
 
-const SNAPSHOT_STAGES: Array<{ key: string; label: string; href?: string; hrefStatus?: string }> = [
-  { key: "new", label: "Sourced" },
-  { key: "needs_om_request", label: "Needs Request", href: "/pipeline?hasOm=false" },
-  { key: "om_requested", label: "OM Requested", hrefStatus: "outreach" },
-  { key: "om_received", label: "OM Received", href: "/pipeline?hasOm=true" },
-  { key: "underwriting_phase", label: "Underwriting", hrefStatus: "underwriting,dossier_generated" },
-  { key: "loi_sent", label: "LOI Sent" },
-  { key: "negotiation", label: "Negotiation" },
-  { key: "contract_signed", label: "Contract Signed" },
-  { key: "diligence", label: "Diligence" },
-  { key: "archived", label: "Closed" },
-];
+const SAVED_STAGE_GROUPS = [
+  { key: "contract_signed", label: "Contract Signed", statuses: ["contract_signed"] },
+  { key: "negotiation", label: "Negotiation", statuses: ["negotiation"] },
+  { key: "loi_sent", label: "LOI Sent", statuses: ["offer_review"] },
+  { key: "underwriting", label: "Underwriting", statuses: ["underwriting", "om_received", "dossier_generated"] },
+  { key: "om_requested", label: "OM Requested", statuses: ["outreach", "awaiting_broker"] },
+  { key: "sourced", label: "Sourced", statuses: ["new", "screening", "interesting", "saved"] },
+] as const;
 
-const CLOSED_STATUSES = new Set(["rejected", "archived"]);
-const UNDERWRITING_PHASE_STATUSES = new Set(["underwriting", "dossier_generated"]);
-const OM_RECEIVED_STATUSES = new Set(["available", "completed", "promoted"]);
-
-function pipelineStatus(row: UiV2PipelineRow): string {
-  return String(row.statusChip.status);
-}
-
-function isClosedRow(row: UiV2PipelineRow): boolean {
-  return CLOSED_STATUSES.has(pipelineStatus(row));
-}
-
-function hasOmForDashboard(row: UiV2PipelineRow): boolean {
-  const omStatus = row.documentStatus?.omStatus ?? null;
-  return row.documentStatus?.hasOm === true || (omStatus != null && OM_RECEIVED_STATUSES.has(String(omStatus)));
-}
-
-function hasRequestedOm(row: UiV2PipelineRow): boolean {
-  return Boolean(row.documentStatus?.latestRequestAt) || row.documentStatus?.omStatus === "requested";
-}
+const CLOSED_STATUSES = new Set(["deal_closed", "archived", "closed"]);
+const REJECTED_STATUSES = new Set(["rejected"]);
 
 function formatCurrency(value: number | null | undefined): string {
   if (value == null || Number.isNaN(value)) return "-";
@@ -70,7 +84,13 @@ function formatCurrency(value: number | null | undefined): string {
 
 function titleize(value: string | null | undefined): string {
   if (!value) return "-";
-  return value.replace(/[_-]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+  return value
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase())
+    .replace(/\bOm\b/g, "OM")
+    .replace(/\bNoi\b/g, "NOI")
+    .replace(/\bPsf\b/g, "PSF")
+    .replace(/\bSf\b/g, "SF");
 }
 
 const AREA_LABELS: Record<string, string> = {
@@ -112,11 +132,11 @@ function scoreClass(score: number | null | undefined): string {
   return styles.scoreBad;
 }
 
-function rowScore(row: UiV2PipelineRow | HomeProgressRow): number | null {
+function rowScore(row: UiV2PipelineRow | HomeProgressRow | SavedDealRow): number | null {
   return "statusChip" in row ? row.underwriting?.dealScore ?? null : row.dealScore ?? null;
 }
 
-function rowAddress(row: UiV2PipelineRow | HomeProgressRow): string {
+function rowAddress(row: UiV2PipelineRow | HomeProgressRow | SavedDealRow): string {
   return row.displayAddress ?? row.canonicalAddress ?? "Property";
 }
 
@@ -130,10 +150,12 @@ function HomePageContent() {
   const searchParams = useSearchParams();
   const query = (searchParams.get("q") ?? "").trim().toLowerCase();
   const [pipelineRows, setPipelineRows] = useState<UiV2PipelineRow[]>([]);
+  const [savedRows, setSavedRows] = useState<SavedDealRow[]>([]);
   const [pipelineTotal, setPipelineTotal] = useState(0);
   const [progressRows, setProgressRows] = useState<HomeProgressRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [terminalCounter, setTerminalCounter] = useState<"closed" | "rejected">("closed");
   const [openAttentionGroups, setOpenAttentionGroups] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
@@ -142,17 +164,21 @@ function HomePageContent() {
       setLoading(true);
       setError(null);
       try {
-        const [pipelineResponse, progressResponse] = await Promise.all([
+        const [pipelineResponse, progressResponse, savedResponse] = await Promise.all([
           fetch(`${API_BASE}/api/ui-v2/pipeline?limit=250&includeRejected=true`, { credentials: "include" }),
           fetch(`${API_BASE}/api/ui-v2/deal-progress`, { credentials: "include" }),
+          fetch(`${API_BASE}/api/ui-v2/saved-deals?limit=250`, { credentials: "include" }),
         ]);
         const pipelineData = (await pipelineResponse.json().catch(() => ({}))) as PipelineResponse;
         const progressData = (await progressResponse.json().catch(() => ({}))) as ProgressResponse;
+        const savedData = (await savedResponse.json().catch(() => ({}))) as SavedDealsResponse;
         if (!pipelineResponse.ok) throw new Error(pipelineData.error || pipelineData.details || "Failed to load pipeline.");
         if (!progressResponse.ok) throw new Error(progressData.error || progressData.details || "Failed to load progress.");
+        if (!savedResponse.ok) throw new Error(savedData.error || savedData.details || "Failed to load saved deals.");
         if (ignore) return;
         setPipelineRows(pipelineData.pipeline?.rows ?? []);
         setPipelineTotal(pipelineData.pipeline?.total ?? 0);
+        setSavedRows(savedData.savedDeals?.rows ?? []);
         setProgressRows((progressData.sections ?? []).flatMap((section) => section.rows ?? []));
       } catch (err) {
         if (!ignore) setError(err instanceof Error ? err.message : "Failed to load home dashboard.");
@@ -166,80 +192,60 @@ function HomePageContent() {
     };
   }, []);
 
-  const filteredPipeline = useMemo(() => {
-    if (!query) return pipelineRows;
-    return pipelineRows.filter((row) =>
+  const filteredSavedRows = useMemo(() => {
+    if (!query) return savedRows;
+    return savedRows.filter((row) =>
       [
+        row.propertyId,
         row.canonicalAddress,
         row.displayAddress,
         row.source,
         row.neighborhood,
         row.borough,
-        row.statusChip.label,
-        row.broker?.name,
-        row.broker?.email,
-        ...(row.tags ?? []),
+        row.status,
+        row.savedDeal?.dealStatus,
+        row.omStatus,
+        row.rejection?.reasonCode,
+        row.rejection?.reasonLabel,
+        row.rejection?.note,
       ]
         .filter(Boolean)
         .join(" ")
         .toLowerCase()
         .includes(query)
     );
-  }, [pipelineRows, query]);
+  }, [query, savedRows]);
 
-  const counts = useMemo(() => {
-    const byStatus = new Map<string, number>();
-    for (const row of pipelineRows) {
-      const status = pipelineStatus(row);
-      byStatus.set(status, (byStatus.get(status) ?? 0) + 1);
+  const savedStageGroups = useMemo(() => {
+    const assigned = new Set<string>();
+    const rowsForStatusGroup = (statuses: readonly string[]) =>
+      filteredSavedRows.filter((row) => {
+        if (assigned.has(row.propertyId)) return false;
+        const status = String(row.status ?? row.savedDeal?.dealStatus ?? "saved");
+        if (!statuses.includes(status)) return false;
+        assigned.add(row.propertyId);
+        return true;
+      });
+    const groups = SAVED_STAGE_GROUPS.map((stage) => ({
+      ...stage,
+      rows: rowsForStatusGroup(stage.statuses),
+    }));
+    const unassigned = filteredSavedRows.filter((row) => {
+      const status = String(row.status ?? row.savedDeal?.dealStatus ?? "saved");
+      return !assigned.has(row.propertyId) && !CLOSED_STATUSES.has(status) && !REJECTED_STATUSES.has(status) && !row.rejection;
+    });
+    if (unassigned.length > 0) {
+      const sourced = groups.find((group) => group.key === "sourced");
+      if (sourced) sourced.rows = [...sourced.rows, ...unassigned];
     }
-    return byStatus;
-  }, [pipelineRows]);
+    return groups;
+  }, [filteredSavedRows]);
 
-  const dashboardCounts = useMemo(() => {
-    const activeRows = pipelineRows.filter((row) => !isClosedRow(row));
-    const omReceived = pipelineRows.filter(hasOmForDashboard).length;
-    const omRequested = activeRows.filter((row) => !hasOmForDashboard(row) && hasRequestedOm(row)).length;
-    const needsOmRequest = activeRows.filter((row) => !hasOmForDashboard(row) && !hasRequestedOm(row)).length;
-    const underwriting = activeRows.filter((row) => UNDERWRITING_PHASE_STATUSES.has(pipelineStatus(row))).length;
-    return {
-      activePipeline: activeRows.length,
-      needsOmRequest,
-      omRequested,
-      omReceived,
-      underwriting,
-    };
-  }, [pipelineRows]);
-
-  const snapshotCount = (key: string): number => {
-    switch (key) {
-      case "needs_om_request":
-        return dashboardCounts.needsOmRequest;
-      case "om_requested":
-        return dashboardCounts.omRequested;
-      case "om_received":
-        return dashboardCounts.omReceived;
-      case "underwriting_phase":
-        return dashboardCounts.underwriting;
-      default:
-        return counts.get(key) ?? 0;
-    }
-  };
-
-  const dealsInProgress = useMemo(() => {
-    const statuses = new Set([
-      "saved",
-      "underwriting",
-      "outreach",
-      "awaiting_broker",
-      "om_received",
-      "dossier_generated",
-      "offer_review",
-      "negotiation",
-      "contract_signed",
-    ]);
-    return filteredPipeline.filter((row) => statuses.has(String(row.statusChip.status))).slice(0, 8);
-  }, [filteredPipeline]);
+  const terminalSavedCounts = useMemo(() => {
+    const closed = filteredSavedRows.filter((row) => CLOSED_STATUSES.has(String(row.status ?? row.savedDeal?.dealStatus ?? ""))).length;
+    const rejected = filteredSavedRows.filter((row) => REJECTED_STATUSES.has(String(row.status ?? row.savedDeal?.dealStatus ?? "")) || row.rejection != null).length;
+    return { closed, rejected };
+  }, [filteredSavedRows]);
 
   const attentionItems = useMemo(() => {
     const missingEnrichment = pipelineRows.filter((row) => row.enrichmentState?.status !== "complete").slice(0, 5);
@@ -253,30 +259,15 @@ function HomePageContent() {
     ];
   }, [pipelineRows, progressRows]);
 
-  const statusTone = (status: string) => {
-    if (["archived", "closed", "deal_closed", "contract_signed"].includes(status)) return "green";
-    if (status === "rejected") return "red";
-    if (["offer_review", "loi_sent", "negotiation"].includes(status)) return "blue";
-    if (["underwriting", "om_received"].includes(status)) return "amber";
-    return "neutral";
-  };
-
-  const statusPillTone = (label: string) => {
-    const l = label.toLowerCase();
-    if (l.includes("underwriting")) return styles.statusPillPurple;
-    if (l.includes("saved") || l.includes("sourced")) return styles.statusPillGreen;
-    if (l.includes("om received")) return styles.statusPillBlue;
-    if (l.includes("outreach") || l.includes("awaiting")) return styles.statusPillAmber;
-    if (l.includes("reject")) return styles.statusPillRed;
-    return "";
-  };
-
   return (
     <main className={styles.page}>
       <header className={styles.header}>
         <div className={styles.headerCopy}>
           <h1>Acquisitions dashboard</h1>
-          <p>Manhattan multifamily &amp; mixed-use · {loading ? "loading…" : `${pipelineTotal} active properties`}</p>
+          <p>
+            Manhattan multifamily &amp; mixed-use ·{" "}
+            {loading ? "loading…" : `${filteredSavedRows.length} saved deals · ${pipelineTotal} sourced properties`}
+          </p>
         </div>
         <div className={styles.headerMeta}>
           <div>Last refresh · {new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}</div>
@@ -287,109 +278,78 @@ function HomePageContent() {
       {error ? <div className={styles.error}>{error}</div> : null}
       {query ? <div className={styles.notice}>Filtered by: <strong>{searchParams.get("q")}</strong></div> : null}
 
-      <section aria-label="Pipeline status overview">
+      <section aria-label="Saved deal status overview">
         <div className={styles.statusCards}>
-          {[
-            { label: "Total Sourced", value: pipelineTotal, tone: "neutral" },
-            { label: "Active Pipeline", value: dashboardCounts.activePipeline, tone: "neutral" },
-            { label: "Needs OM Request", value: dashboardCounts.needsOmRequest, tone: "amber" },
-            { label: "OM Requested", value: dashboardCounts.omRequested, tone: "neutral" },
-            { label: "OM Received", value: dashboardCounts.omReceived, tone: "green" },
-            { label: "Underwriting", value: dashboardCounts.underwriting, tone: "blue" },
-          ].map((card) => (
-            <article key={card.label} className={`${styles.statusCard} ${styles[card.tone]}`}>
-              <span>{card.label}</span>
-              <strong>{card.value}</strong>
-            </article>
-          ))}
-        </div>
-        <div className={styles.statusCardsSecondary} style={{ marginTop: "0.65rem" }}>
-          {[
-            { label: "LOI Offered", value: counts.get("offer_review") ?? 0, tone: "neutral" },
-            { label: "Negotiation", value: counts.get("negotiation") ?? 0, tone: "neutral" },
-            { label: "Contract Signed", value: counts.get("contract_signed") ?? 0, tone: "green" },
-            { label: "Dossier Generated", value: counts.get("dossier_generated") ?? 0, tone: "neutral" },
-            { label: "Closed", value: (counts.get("deal_closed") ?? 0) + (counts.get("archived") ?? 0), tone: "green" },
-            { label: "Rejected / Removed", value: counts.get("rejected") ?? 0, tone: "red" },
-          ].map((card) => (
-            <article key={card.label} className={`${styles.statusCard} ${styles[card.tone]}`}>
-              <span>{card.label}</span>
-              <strong>{card.value}</strong>
-            </article>
-          ))}
-        </div>
-      </section>
-
-      <section className={styles.snapshot}>
-        <div className={styles.panelHeader}>
-          <h2>Pipeline snapshot</h2>
-          <Link href="/pipeline">Full pipeline →</Link>
-        </div>
-        <div className={styles.stageStrip}>
-          {SNAPSHOT_STAGES.map((stage) => (
-            <Link key={stage.key} href={stage.href ?? `/pipeline?status=${stage.hrefStatus ?? stage.key}`} className={styles.stageCell}>
-              <strong>{snapshotCount(stage.key)}</strong>
-              <span>{stage.label}</span>
+          {savedStageGroups.map((group) => (
+            <Link key={group.key} href="/saved" className={`${styles.statusCard} ${group.key === "contract_signed" ? styles.green : group.key === "underwriting" ? styles.blue : styles.neutral}`}>
+              <span>{group.label}</span>
+              <strong>{group.rows.length}</strong>
             </Link>
           ))}
+        </div>
+        <div className={styles.terminalCounter}>
+          <div className={styles.segmentedControl} aria-label="Closed or rejected counter">
+            <button
+              type="button"
+              className={terminalCounter === "closed" ? styles.segmentActive : undefined}
+              onClick={() => setTerminalCounter("closed")}
+            >
+              Closed
+            </button>
+            <button
+              type="button"
+              className={terminalCounter === "rejected" ? styles.segmentActive : undefined}
+              onClick={() => setTerminalCounter("rejected")}
+            >
+              Rejected
+            </button>
+          </div>
+          <strong>{terminalCounter === "closed" ? terminalSavedCounts.closed : terminalSavedCounts.rejected}</strong>
+          <span>{terminalCounter === "closed" ? "saved deals closed" : "saved deals rejected"}</span>
         </div>
       </section>
 
       <div className={styles.dashboardGrid}>
         <section className={styles.dealsPanel}>
           <div className={styles.panelHeader}>
-            <h2>Deals in progress</h2>
-            <span>{dealsInProgress.length} active deals</span>
+            <h2>Saved Deals By Status</h2>
+            <span>{filteredSavedRows.length} saved deal{filteredSavedRows.length === 1 ? "" : "s"}</span>
           </div>
-          <table className={styles.dealsTable}>
-            <thead>
-              <tr>
-                <th>Address</th>
-                <th>Source</th>
-                <th>Ask</th>
-                <th>$/Unit</th>
-                <th>$/SF</th>
-                <th>Cap</th>
-                <th>Score</th>
-                <th>Status</th>
-                <th>OM</th>
-              </tr>
-            </thead>
-            <tbody>
-              {dealsInProgress.map((row) => {
-                const score = rowScore(row);
-                const subtitle = [locationSubtitle(row), unitLabel(row.units)].filter(Boolean).join(" · ");
-                return (
-                  <tr key={row.propertyId}>
-                    <td>
-                      <Link href={`/pipeline?propertyId=${encodeURIComponent(row.propertyId)}`}>{rowAddress(row)}</Link>
-                      {subtitle ? <small>{subtitle}</small> : null}
-                    </td>
-                    <td style={{ textTransform: "uppercase", fontSize: "0.76rem", color: "var(--app-muted)" }}>{String(row.source ?? "").replace(/_/g, " ")}</td>
-                    <td className={styles.numCol}>{formatCurrency(row.askingPrice)}</td>
-                    <td className={styles.numCol}>{row.askingPrice && row.units ? formatCurrency(row.askingPrice / row.units) : "—"}</td>
-                    <td className={styles.numCol}>{formatCurrency(row.pricePerSqft)}</td>
-                    <td className={styles.numCol}>—</td>
-                    <td>
-                      <span className={`${styles.scorePill} ${scoreClass(score)}`}>
-                        <strong>{score == null ? "—" : Math.round(score)}</strong>
-                        <em> /100</em>
-                      </span>
-                    </td>
-                    <td>
-                      <span className={`${styles.statusPill} ${statusPillTone(row.statusChip.label)}`}>
-                        {row.statusChip.label}
-                      </span>
-                    </td>
-                    <td style={{ color: "var(--app-muted)", fontSize: "0.82rem" }}>
-                      {titleize(row.documentStatus?.omStatus ?? (row.documentStatus?.hasOm ? "received" : "—"))}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          {dealsInProgress.length === 0 ? <div className={styles.empty}>No active deals match the current view.</div> : null}
+          <div className={styles.savedStageList}>
+            {savedStageGroups.map((group) => (
+              <section key={group.key} className={styles.savedStage}>
+                <div className={styles.savedStageHeader}>
+                  <h3>{group.label}</h3>
+                  <span>{group.rows.length}</span>
+                </div>
+                {group.rows.length > 0 ? (
+                  <div className={styles.savedDealRows}>
+                    {group.rows.slice(0, 8).map((row) => {
+                      const score = rowScore(row);
+                      const subtitle = [locationSubtitle(row), unitLabel(row.units)].filter(Boolean).join(" · ");
+                      return (
+                        <Link key={row.propertyId} href={`/pipeline?propertyId=${encodeURIComponent(row.propertyId)}`} className={styles.savedDealRow}>
+                          {row.firstImageUrl ? <img src={row.firstImageUrl} alt="" /> : <span className={styles.thumbnailFallback}>{rowAddress(row).charAt(0)}</span>}
+                          <span>
+                            <strong>{rowAddress(row)}</strong>
+                            <small>{subtitle || titleize(row.source)}</small>
+                          </span>
+                          <em>{formatCurrency(row.price)}</em>
+                          <span className={`${styles.scorePill} ${scoreClass(score)}`}>
+                            <strong>{score == null ? "—" : Math.round(score)}</strong>
+                            <em> /100</em>
+                          </span>
+                          <small>{titleize(row.omStatus ?? "no_om")}</small>
+                        </Link>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className={styles.emptyStage}>No saved deals in this stage.</div>
+                )}
+              </section>
+            ))}
+          </div>
         </section>
 
         <aside className={styles.attentionPanel}>

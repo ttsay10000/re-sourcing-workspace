@@ -50,7 +50,6 @@ import styles from "./PipelinePage.module.css";
 
 const API_BASE = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000").replace(/\/$/, "");
 const PIPELINE_PATH = "/pipeline";
-const NEW_PROPERTY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 const SORT_OPTIONS: Array<{ value: UiV2PipelineSortField; label: string }> = [
   { value: "updatedAt", label: "Updated" },
@@ -67,6 +66,7 @@ const SORT_OPTIONS: Array<{ value: UiV2PipelineSortField; label: string }> = [
   { value: "marketType", label: "Type" },
   { value: "status", label: "Status" },
   { value: "omStatus", label: "OM" },
+  { value: "listedAt", label: "Date Listed" },
   { value: "createdAt", label: "Date Added" },
 ];
 
@@ -142,8 +142,10 @@ const EMPTY_ENRICHMENT_STATE: UiV2EnrichmentState = {
 type PipelineHeaderMenuId =
   | "address"
   | "source"
+  | "propertyType"
   | "marketType"
   | "askingPrice"
+  | "listedAt"
   | "createdAt"
   | "updatedAt"
   | "buildingSqft"
@@ -151,7 +153,6 @@ type PipelineHeaderMenuId =
   | "units"
   | "ltrYocPct"
   | "mtrYocPct"
-  | "mtr"
   | "dealScore"
   | "status"
   | "om"
@@ -163,8 +164,10 @@ type PipelineHeaderMenuId =
 const COLUMN_SORT_FIELDS: Partial<Record<PipelineHeaderMenuId, UiV2PipelineSortField>> = {
   address: "canonicalAddress",
   source: "source",
+  propertyType: "propertyType",
   marketType: "marketType",
   askingPrice: "askingPrice",
+  listedAt: "listedAt",
   createdAt: "createdAt",
   updatedAt: "updatedAt",
   buildingSqft: "buildingSqft",
@@ -324,14 +327,6 @@ function formatDate(value: string | null | undefined): string {
   return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-function isNewPipelineRow(value: string | null | undefined): boolean {
-  if (!value) return false;
-  const createdMs = Date.parse(value);
-  if (!Number.isFinite(createdMs)) return false;
-  const ageMs = Date.now() - createdMs;
-  return ageMs >= 0 && ageMs <= NEW_PROPERTY_WINDOW_MS;
-}
-
 function toDateTimeLocal(date: Date): string {
   const pad = (value: number) => String(value).padStart(2, "0");
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(
@@ -370,7 +365,13 @@ function titleize(value: string | null | undefined): string {
     .replace(/[_-]+/g, " ")
     .replace(/\s+/g, " ")
     .trim()
-    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+    .replace(/\b\w/g, (letter) => letter.toUpperCase())
+    .replace(/\bOm\b/g, "OM")
+    .replace(/\bNoi\b/g, "NOI")
+    .replace(/\bPsf\b/g, "PSF")
+    .replace(/\bSf\b/g, "SF")
+    .replace(/\bBbl\b/g, "BBL")
+    .replace(/\bNy\b/g, "NY");
 }
 
 const AREA_LABELS: Record<string, string> = {
@@ -462,13 +463,6 @@ function calculateYieldOnCost(row: Pick<UiV2PipelineRow, "underwriting" | "askin
   return (noi / price) * 100;
 }
 
-function mtrLabel(tags: string[]): string {
-  const normalized = tags.map(normalizeTag);
-  if (normalized.includes("good_mtr_candidate")) return "Good";
-  if (normalized.some((tag) => tag.includes("mtr"))) return "Watch";
-  return "-";
-}
-
 function flowLabel(row: UiV2PipelineRow): string {
   const count = row.openActionItemCount ?? 0;
   if (count > 0) return `${count} open`;
@@ -478,6 +472,15 @@ function flowLabel(row: UiV2PipelineRow): string {
 function omLabel(row: UiV2PipelineRow): string {
   if (!row.documentStatus?.hasOm) return "Missing";
   return titleize(row.documentStatus.omStatus ?? "available");
+}
+
+function newBadgeTitle(row: UiV2PipelineRow): string {
+  const at = row.newness?.occurredAt ? formatDate(row.newness.occurredAt) : formatDate(row.createdAt);
+  const suffix = at !== "-" ? ` (${at})` : "";
+  if (row.newness?.reason === "saved_search_run") return `New from latest saved search run${suffix}`;
+  if (row.newness?.reason === "saved_search_upload") return `New from saved search upload${suffix}`;
+  if (row.newness?.reason === "manual_import") return `New manual/imported property${suffix}`;
+  return `New property${suffix}`;
 }
 
 function scoreTone(score: number | null | undefined): string {
@@ -501,7 +504,31 @@ function documentUrl(document: UiV2PropertyDocumentItem): string {
 function displayDetailValue(item: UiV2DetailItem): string {
   if (item.value == null || item.value === "") return "-";
   if (typeof item.value === "boolean") return item.value ? "Yes" : "No";
-  return String(item.value);
+  if (typeof item.value === "number") return String(item.value);
+  const raw = String(item.value).trim();
+  if (!raw) return "-";
+  const label = item.label.toLowerCase();
+  if (
+    (label.includes("date") || label.includes("refreshed") || label.includes("updated") || label.includes("listed")) &&
+    Number.isFinite(Date.parse(raw))
+  ) {
+    return formatDate(raw);
+  }
+  if (label.includes("source")) return sourceLabel(raw);
+  if (
+    label.includes("neighborhood") ||
+    label.includes("borough") ||
+    label.includes("status") ||
+    label.includes("property type") ||
+    label === "type" ||
+    label.includes("market") ||
+    label.includes("class") ||
+    label.includes("use")
+  ) {
+    return titleize(raw);
+  }
+  if (/^[a-z][a-z0-9 _/-]*$/.test(raw) && !/[/.@]/.test(raw)) return titleize(raw);
+  return raw;
 }
 
 function extractGallery(property: FlexiblePropertyDetail | null, row?: PipelineRow | null): UiV2ImageAsset[] {
@@ -764,6 +791,9 @@ export default function PipelineClient() {
   const [brokerCompUploading, setBrokerCompUploading] = useState<Record<string, boolean>>({});
   const [brokerCompOpinionSaving, setBrokerCompOpinionSaving] = useState<Record<string, boolean>>({});
   const [brokerCompError, setBrokerCompError] = useState<Record<string, string | null>>({});
+  const [documentUploadFiles, setDocumentUploadFiles] = useState<File[]>([]);
+  const [documentUploading, setDocumentUploading] = useState(false);
+  const [documentUploadError, setDocumentUploadError] = useState<string | null>(null);
   const lastAutoOpenedPropertyId = useRef<string | null>(null);
 
   const selectedRow = useMemo(
@@ -992,6 +1022,42 @@ export default function PipelineClient() {
     [loadBrokerComps, loadPropertyDetail, selectedId]
   );
 
+  const uploadPropertyDocuments = useCallback(
+    async (propertyId: string, files: File[]): Promise<void> => {
+      if (files.length === 0 || documentUploading) return;
+      setDocumentUploading(true);
+      setDocumentUploadError(null);
+      setNotice(null);
+      try {
+        const form = new FormData();
+        for (const file of files) form.append("files", file);
+        form.append("category", "auto");
+        form.append("source", "Pipeline document upload");
+        const response = await fetch(`${API_BASE}/api/properties/${encodeURIComponent(propertyId)}/documents/upload-batch`, {
+          method: "POST",
+          body: form,
+        });
+        const payload = await response.json().catch(() => null);
+        if (!response.ok) {
+          const message = isRecord(payload) && typeof payload.error === "string" ? payload.error : `Upload failed with ${response.status}`;
+          throw new Error(message);
+        }
+        const classified = Array.isArray(payload?.classifiedDocuments) ? payload.classifiedDocuments : [];
+        const omStatus = typeof payload?.omRefresh?.status === "string" ? titleize(payload.omRefresh.status) : null;
+        setDocumentUploadFiles([]);
+        setNotice(
+          `${files.length} document${files.length === 1 ? "" : "s"} uploaded${classified.length ? ` and classified` : ""}${omStatus ? `; OM extraction ${omStatus}` : ""}.`
+        );
+        await loadPropertyDetail(propertyId);
+      } catch (err) {
+        setDocumentUploadError(err instanceof Error ? err.message : "Failed to upload documents.");
+      } finally {
+        setDocumentUploading(false);
+      }
+    },
+    [documentUploading, loadPropertyDetail]
+  );
+
   const reviewBrokerCompItem = useCallback(
     async (propertyId: string, packageId: string, itemId: string, reviewStatus: "approved" | "rejected"): Promise<void> => {
       setBrokerCompError((current) => ({ ...current, [propertyId]: null }));
@@ -1089,6 +1155,8 @@ export default function PipelineClient() {
   useEffect(() => {
     setGalleryIndex(0);
     setGalleryExpanded(false);
+    setDocumentUploadFiles([]);
+    setDocumentUploadError(null);
   }, [selectedId]);
 
   const openProperty = useCallback(
@@ -1188,13 +1256,18 @@ export default function PipelineClient() {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ propertyIds }),
+        body: JSON.stringify({ propertyIds, refreshStreetEasy: false }),
       });
       const rentalPayload = await rentalResponse.json().catch(() => ({}));
       if (!rentalResponse.ok) {
         throw new Error(rentalPayload.error || rentalPayload.details || "Enrichment refreshed, but rental flow failed.");
       }
-      setNotice(`Refresh started for ${propertyIds.length} propert${propertyIds.length === 1 ? "y" : "ies"}.`);
+      const priceChanged = Number(enrichmentPayload?.streetEasyRefresh?.priceChanged ?? 0);
+      setNotice(
+        `Refresh completed for ${propertyIds.length} propert${propertyIds.length === 1 ? "y" : "ies"}${
+          priceChanged > 0 ? `; ${priceChanged} ask change${priceChanged === 1 ? "" : "s"} found` : ""
+        }.`
+      );
       const response = await apiFetch<PipelineResponse>(
         `${API_BASE}/api/ui-v2/pipeline?${buildPipelineQueryString(queryString)}`
       );
@@ -1741,14 +1814,14 @@ export default function PipelineClient() {
         return Boolean(filterValues.q);
       case "source":
         return Boolean(filterValues.source);
+      case "propertyType":
+        return Boolean(filterValues.propertyType);
       case "marketType":
         return Boolean(filterValues.marketType);
       case "askingPrice":
         return Boolean(filterValues.minAskingPrice || filterValues.maxAskingPrice);
       case "dealScore":
         return Boolean(filterValues.minDealScore || filterValues.maxDealScore);
-      case "mtr":
-        return Boolean(filterValues.mtr);
       case "status":
         return Boolean(filterValues.status);
       case "om":
@@ -1776,8 +1849,8 @@ export default function PipelineClient() {
   function renderSortControls(column: PipelineHeaderMenuId) {
     const sort = COLUMN_SORT_FIELDS[column];
     if (!sort) return null;
-    const ascLabel = ["address", "source", "marketType", "status", "om"].includes(column) ? "A to Z" : "Low to high";
-    const descLabel = ["address", "source", "marketType", "status", "om"].includes(column) ? "Z to A" : "High to low";
+    const ascLabel = ["address", "source", "propertyType", "marketType", "status", "om"].includes(column) ? "A to Z" : "Low to high";
+    const descLabel = ["address", "source", "propertyType", "marketType", "status", "om"].includes(column) ? "Z to A" : "High to low";
     return (
       <div className={styles.columnMenuGroup}>
         <span>Sort</span>
@@ -1829,11 +1902,24 @@ export default function PipelineClient() {
             </select>
           </label>
         ) : null}
+        {column === "propertyType" ? (
+          <label>
+            <span>Filter property type</span>
+            <select value={filterValues.propertyType} onChange={onFilterChange("propertyType")}>
+              <option value="">All property types</option>
+              {propertyTypeOptions.map((propertyType) => (
+                <option key={propertyType} value={propertyType}>
+                  {titleize(propertyType)}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
         {column === "marketType" ? (
           <label>
-            <span>Filter type</span>
+            <span>Filter market</span>
             <select value={filterValues.marketType} onChange={onFilterChange("marketType")}>
-              <option value="">All types</option>
+              <option value="">All markets</option>
               {MARKET_TYPE_OPTIONS.map((option) => (
                 <option key={option.value} value={option.value}>
                   {option.label}
@@ -1904,17 +1990,6 @@ export default function PipelineClient() {
               />
             </label>
           </div>
-        ) : null}
-        {column === "mtr" ? (
-          <label>
-            <span>Filter MTR</span>
-            <select value={filterValues.mtr} onChange={onFilterChange("mtr")}>
-              <option value="">All MTR states</option>
-              <option value="good">Good candidates</option>
-              <option value="watch">Watchlist</option>
-              <option value="none">No MTR tag</option>
-            </select>
-          </label>
         ) : null}
         {column === "om" ? (
           <label>
@@ -2100,9 +2175,9 @@ export default function PipelineClient() {
           </select>
         </label>
         <label>
-          <span>Type</span>
+          <span>Market</span>
           <select value={filterValues.marketType} onChange={onFilterChange("marketType")}>
-            <option value="">All types</option>
+            <option value="">All markets</option>
             {MARKET_TYPE_OPTIONS.map((option) => (
               <option key={option.value} value={option.value}>
                 {option.label}
@@ -2176,7 +2251,7 @@ export default function PipelineClient() {
             disabled={selectedIds.length === 0 || busyAction?.startsWith("bulk:")}
             onClick={refreshSelectedEnrichment}
           >
-            {busyAction === "bulk:refresh" ? "Refreshing..." : "Refresh enrichment + rental"}
+            {busyAction === "bulk:refresh" ? "Refreshing..." : "Refresh latest + rental"}
           </button>
           <button
             className={styles.secondaryButton}
@@ -2204,7 +2279,9 @@ export default function PipelineClient() {
             <col className={styles.colSelect} />
             <col className={styles.colAddress} />
             <col className={styles.colSource} />
+            <col className={styles.colPropertyType} />
             <col className={styles.colType} />
+            <col className={styles.colDate} />
             <col className={styles.colDate} />
             <col className={styles.colDate} />
             <col className={styles.colAsk} />
@@ -2213,7 +2290,6 @@ export default function PipelineClient() {
             <col className={styles.colUnit} />
             <col className={styles.colSqft} />
             <col className={styles.colPsf} />
-            <col className={styles.colMtr} />
             <col className={styles.colScore} />
             <col className={styles.colStatus} />
             <col className={styles.colOm} />
@@ -2234,7 +2310,9 @@ export default function PipelineClient() {
               </th>
               <th>{renderHeader("address", "Address")}</th>
               <th>{renderHeader("source", "Source")}</th>
-              <th>{renderHeader("marketType", "Type")}</th>
+              <th>{renderHeader("propertyType", "Property Type")}</th>
+              <th>{renderHeader("marketType", "Market")}</th>
+              <th>{renderHeader("listedAt", "Date Listed")}</th>
               <th>{renderHeader("createdAt", "Date Added")}</th>
               <th>{renderHeader("updatedAt", "Updated")}</th>
               <th>{renderHeader("askingPrice", "Ask")}</th>
@@ -2243,7 +2321,6 @@ export default function PipelineClient() {
               <th>{renderHeader("units", "Units")}</th>
               <th>{renderHeader("buildingSqft", "SF")}</th>
               <th>{renderHeader("pricePerSqft", "$/SF")}</th>
-              <th>{renderHeader("mtr", "MTR")}</th>
               <th>{renderHeader("dealScore", "Score")}</th>
               <th>{renderHeader("status", "Status")}</th>
               <th>{renderHeader("om", "OM")}</th>
@@ -2262,7 +2339,7 @@ export default function PipelineClient() {
               const score = row.underwriting?.dealScore ?? null;
               const rowLtrYoc = calculateYieldOnCost(row, "ltr");
               const rowMtrYoc = calculateYieldOnCost(row, "mtr");
-              const rowIsNew = isNewPipelineRow(row.createdAt);
+              const rowIsNew = row.newness?.isNew === true;
               const rowLocationLabels = locationLabels(row);
               return (
                 <tr
@@ -2296,6 +2373,7 @@ export default function PipelineClient() {
                     </div>
                   </td>
                   <td>{sourceLabel(String(row.source ?? ""))}</td>
+                  <td className={styles.propertyTypeCell}>{titleize(row.propertyType)}</td>
                   <td onClick={stopRowClick}>
                     <select
                       className={styles.typeSelect}
@@ -2310,9 +2388,10 @@ export default function PipelineClient() {
                       ))}
                     </select>
                   </td>
+                  <td className={styles.dateCell}>{formatDate(row.listedAt)}</td>
                   <td className={styles.dateCell}>
                     <strong>{formatDate(row.createdAt)}</strong>
-                    {rowIsNew ? <span className={styles.newBadge}>New</span> : null}
+                    {rowIsNew ? <span className={styles.newBadge} title={newBadgeTitle(row)}>New</span> : null}
                   </td>
                   <td className={styles.dateCell}>{formatDate(row.updatedAt)}</td>
                   <td className={styles.numericCell}>{formatCurrency(row.askingPrice)}</td>
@@ -2325,11 +2404,6 @@ export default function PipelineClient() {
                   <td className={styles.numericCell}>{formatNumber(row.units)}</td>
                   <td className={styles.numericCell}>{formatNumber(row.buildingSqft)}</td>
                   <td className={styles.numericCell}>{formatCurrency(row.pricePerSqft, false)}</td>
-                  <td>
-                    <span className={`${styles.tinyChip} ${mtrLabel(row.tags) === "Good" ? styles.toneSuccess : styles.toneNeutral}`}>
-                      {mtrLabel(row.tags)}
-                    </span>
-                  </td>
                   <td className={styles.scoreCell}>
                     <span className={`${styles.scoreBadge} ${scoreTone(score)}`}>
                       {scoreLabel(score)}
@@ -2964,6 +3038,30 @@ export default function PipelineClient() {
                       </span>
                     ))}
                   </div>
+                  <form
+                    className={styles.documentUploadPanel}
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      if (selectedId) void uploadPropertyDocuments(selectedId, documentUploadFiles);
+                    }}
+                  >
+                    <label>
+                      <span>Upload OMs / related docs</span>
+                      <input
+                        type="file"
+                        multiple
+                        accept=".pdf,.txt,.csv,.xls,.xlsx"
+                        onChange={(event) => setDocumentUploadFiles(Array.from(event.target.files ?? []))}
+                      />
+                    </label>
+                    <button className={styles.secondaryButton} type="submit" disabled={documentUploadFiles.length === 0 || documentUploading}>
+                      {documentUploading ? "Reading..." : `Upload${documentUploadFiles.length ? ` ${documentUploadFiles.length}` : ""}`}
+                    </button>
+                    {documentUploadFiles.length > 0 ? (
+                      <small>{documentUploadFiles.map((file) => file.name).join(" / ")}</small>
+                    ) : null}
+                    {documentUploadError ? <p className={styles.dataNote}>{documentUploadError}</p> : null}
+                  </form>
                   <div className={styles.documentList}>
                     {sheetDocuments.length > 0 ? (
                       sheetDocuments.map((document) => (

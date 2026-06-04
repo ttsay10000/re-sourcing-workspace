@@ -1,4 +1,4 @@
-import type { ListingNormalized, PriceHistoryEntry } from "@re-sourcing/contracts";
+import type { AgentEnrichmentEntry, ListingNormalized, PriceHistoryEntry } from "@re-sourcing/contracts";
 
 /** Map one StreetEasy sale-details payload to ListingNormalized. */
 export function normalizeStreetEasySaleDetails(raw: Record<string, unknown>, index: number): ListingNormalized {
@@ -63,7 +63,8 @@ export function normalizeStreetEasySaleDetails(raw: Record<string, unknown>, ind
   const images = raw.images;
   const imageUrls = Array.isArray(images) ? (images as string[]).filter((u): u is string => typeof u === "string") : null;
   const latLon = parseLatLonFromRaw(raw);
-  const agentNames = parseAgentNames(raw);
+  const agentFacts = parseAgentFacts(raw);
+  const agentNames = agentFacts.names;
   const { _fetchUrl: _unusedFetchUrl, ...rest } = raw;
   const extra = rest as Record<string, unknown>;
   const { monthlyHoa, monthlyTax } = parseMonthlyHoaTaxFromRaw(raw);
@@ -101,6 +102,9 @@ export function normalizeStreetEasySaleDetails(raw: Record<string, unknown>, ind
     extra.neighborhoodName = neighborhood;
   }
   if (borough) extra.borough = borough;
+  if (agentFacts.brokerageName) extra.brokerageName = agentFacts.brokerageName;
+  if (agentFacts.names?.length) extra.listingBrokerNames = agentFacts.names;
+  if (agentFacts.entries?.length) extra.sourceAgentFacts = agentFacts.entries;
   const { priceHistory, rentalPriceHistory } = parsePriceHistoriesFromRaw(raw);
   const priceChangeSinceListed = computePriceChangeSinceListed(price, priceHistory ?? undefined);
   if (priceChangeSinceListed != null) extra.priceChangeSinceListed = priceChangeSinceListed;
@@ -124,6 +128,7 @@ export function normalizeStreetEasySaleDetails(raw: Record<string, unknown>, ind
     imageUrls,
     listedAt,
     agentNames,
+    agentEnrichment: agentFacts.entries ?? undefined,
     priceHistory: priceHistory ?? undefined,
     rentalPriceHistory: rentalPriceHistory ?? undefined,
     extra: Object.keys(extra).length > 0 ? extra : null,
@@ -205,31 +210,144 @@ function inferUnitCountFromText(...values: unknown[]): number | null {
   return parsed != null && parsed > 0 ? parsed : null;
 }
 
-function parseAgentNames(raw: Record<string, unknown>): string[] | null {
-  const arr = raw.agents ?? raw.agent_names ?? raw.listing_agents;
-  if (Array.isArray(arr) && arr.length > 0) {
-    const names = arr
-      .map((item) => {
-        if (item == null) return "";
-        if (typeof item === "string") return item.trim();
-        if (typeof item === "object") {
-          const obj = item as Record<string, unknown>;
-          const name = obj.name ?? obj.full_name ?? obj.agent_name ?? obj.displayName;
-          return name != null ? String(name).trim() : "";
-        }
-        return String(item).trim();
-      })
-      .filter(Boolean);
-    return names.length > 0 ? names : null;
+function parseAgentFacts(raw: Record<string, unknown>): {
+  names: string[] | null;
+  brokerageName: string | null;
+  entries: AgentEnrichmentEntry[] | null;
+} {
+  const brokerageName = firstString(
+    raw.brokerageName,
+    raw.brokerage_name,
+    raw.agencyName,
+    raw.agency_name,
+    raw.agency,
+    raw.firm,
+    raw.company,
+    raw.officeName,
+    raw.office_name,
+    raw.listing_office,
+    raw.listingOffice,
+    isRecord(raw.brokerage) ? raw.brokerage.name : null,
+    isRecord(raw.agency) ? raw.agency.name : null,
+    isRecord(raw.office) ? raw.office.name : null
+  );
+  const arrayCandidates = [
+    raw.agents,
+    raw.agent_names,
+    raw.listing_agents,
+    raw.listingAgents,
+    raw.brokers,
+    raw.listing_brokers,
+    raw.listingBrokers,
+    raw.sales_agents,
+    raw.salesAgents,
+  ];
+  const entries: AgentEnrichmentEntry[] = [];
+  const names: string[] = [];
+  const pushEntry = (entry: AgentEnrichmentEntry | null) => {
+    if (!entry?.name) return;
+    if (!names.some((name) => name.toLowerCase() === entry.name.toLowerCase())) names.push(entry.name);
+    const hasFacts = Boolean(entry.firm || entry.email || entry.phone);
+    if (!hasFacts) return;
+    const existingIndex = entries.findIndex((existing) => existing.name.toLowerCase() === entry.name.toLowerCase());
+    if (existingIndex >= 0) {
+      entries[existingIndex] = {
+        name: entries[existingIndex]!.name,
+        firm: entries[existingIndex]!.firm ?? entry.firm ?? null,
+        email: entries[existingIndex]!.email ?? entry.email ?? null,
+        phone: entries[existingIndex]!.phone ?? entry.phone ?? null,
+      };
+    } else {
+      entries.push(entry);
+    }
+  };
+
+  for (const candidate of arrayCandidates) {
+    if (!Array.isArray(candidate)) continue;
+    for (const item of candidate) pushEntry(agentEntryFromRaw(item, brokerageName));
   }
-  const single =
-    raw.broker_name ??
-    raw.broker ??
-    raw.listing_agent ??
-    raw.agent_name ??
-    raw.agent ??
-    raw.listing_agent_name;
-  return single != null && String(single).trim() ? [String(single).trim()] : null;
+
+  const singleName = firstString(
+    raw.broker_name,
+    raw.brokerName,
+    raw.listing_agent,
+    raw.listingAgent,
+    raw.agent_name,
+    raw.agentName,
+    raw.agent,
+    raw.broker,
+    raw.listing_agent_name,
+    raw.listingAgentName
+  );
+  if (singleName) {
+    pushEntry({
+      name: singleName,
+      firm: brokerageName,
+      email: cleanEmail(raw.broker_email ?? raw.agent_email ?? raw.email),
+      phone: firstString(raw.broker_phone, raw.agent_phone, raw.phone),
+    });
+  }
+
+  return {
+    names: names.length > 0 ? names : null,
+    brokerageName,
+    entries: entries.length > 0 ? entries : brokerageName && names.length > 0
+      ? names.map((name) => ({ name, firm: brokerageName, email: null, phone: null }))
+      : null,
+  };
+}
+
+function agentEntryFromRaw(item: unknown, fallbackFirm: string | null): AgentEnrichmentEntry | null {
+  if (item == null) return null;
+  if (typeof item === "string") {
+    const name = item.trim();
+    return name ? { name, firm: fallbackFirm, email: null, phone: null } : null;
+  }
+  if (typeof item !== "object" || Array.isArray(item)) {
+    const name = String(item).trim();
+    return name ? { name, firm: fallbackFirm, email: null, phone: null } : null;
+  }
+  const obj = item as Record<string, unknown>;
+  const name = firstString(
+    obj.name,
+    obj.full_name,
+    obj.fullName,
+    obj.agent_name,
+    obj.agentName,
+    obj.displayName,
+    obj.display_name,
+    obj.broker_name,
+    obj.brokerName
+  );
+  if (!name) return null;
+  const firm = firstString(
+    obj.firm,
+    obj.company,
+    obj.companyName,
+    obj.company_name,
+    obj.agency,
+    obj.agencyName,
+    obj.agency_name,
+    obj.brokerage,
+    obj.brokerageName,
+    obj.brokerage_name,
+    obj.office,
+    obj.officeName,
+    obj.office_name,
+    fallbackFirm
+  );
+  return {
+    name,
+    firm,
+    email: cleanEmail(obj.email ?? obj.emailAddress ?? obj.email_address),
+    phone: firstString(obj.phone, obj.phoneNumber, obj.phone_number, obj.mobile, obj.cell),
+  };
+}
+
+function cleanEmail(value: unknown): string | null {
+  const email = firstString(value)?.toLowerCase() ?? null;
+  if (!email) return null;
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : null;
 }
 
 function parsePriceHistoryDate(dateStr: string): number {

@@ -769,8 +769,8 @@ function buildProgressSections(rows: ProgressPropertyRow[]): ProgressSection[] {
   const sectionLabels: Record<ProgressSection["id"], string> = {
     saved: "Saved Deals",
     underwriting: "Underwriting",
-    outreach: "Outreach",
-    awaiting_broker: "Awaiting Broker",
+    outreach: "OM Requested",
+    awaiting_broker: "OM Requested",
     om_received: "OM Received",
     rejected: "Rejected",
   };

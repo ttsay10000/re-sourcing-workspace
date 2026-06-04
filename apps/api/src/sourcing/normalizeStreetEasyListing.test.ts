@@ -44,4 +44,37 @@ describe("normalizeStreetEasySaleDetails", () => {
     expect(normalized.extra?.ppsqft).toBe(2_078);
     expect(normalized.extra?.pricePerSqft).toBe(2_078);
   });
+
+  it("preserves StreetEasy listing-time broker and agency facts", () => {
+    const normalized = normalizeStreetEasySaleDetails(
+      {
+        id: "1999001",
+        address: "11 West 11th Street",
+        borough: "manhattan",
+        price: 6_750_000,
+        brokerageName: "Example Realty",
+        listing_agents: [
+          {
+            name: "Jane Broker",
+            brokerageName: "Example Realty",
+            email: "jane@example-realty.com",
+            phone: "212-555-0100",
+          },
+        ],
+      },
+      0
+    );
+
+    expect(normalized.agentNames).toEqual(["Jane Broker"]);
+    expect(normalized.agentEnrichment).toEqual([
+      {
+        name: "Jane Broker",
+        firm: "Example Realty",
+        email: "jane@example-realty.com",
+        phone: "212-555-0100",
+      },
+    ]);
+    expect(normalized.extra?.brokerageName).toBe("Example Realty");
+    expect(normalized.extra?.listingBrokerNames).toEqual(["Jane Broker"]);
+  });
 });
