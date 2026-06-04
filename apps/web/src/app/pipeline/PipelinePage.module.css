@@ -344,7 +344,7 @@
 
 .pipelineTable {
   width: 100%;
-  min-width: 1640px;
+  min-width: 2000px;
   border-collapse: collapse;
   table-layout: fixed;
   font-size: 0.74rem;
@@ -368,6 +368,14 @@
 
 .colAsk {
   width: 6.1rem;
+}
+
+.colDate {
+  width: 6rem;
+}
+
+.colSqft {
+  width: 5.4rem;
 }
 
 .colPsf {
@@ -731,9 +739,39 @@
 }
 
 .numericCell,
-.scoreCell {
+.scoreCell,
+.dateCell {
   text-align: right;
   font-variant-numeric: tabular-nums;
+}
+
+.dateCell {
+  color: #3f4e58;
+  white-space: nowrap;
+}
+
+.dateCell strong {
+  display: inline-block;
+  color: #22323a;
+  font-size: 0.73rem;
+  font-weight: 800;
+}
+
+.newBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 0.28rem;
+  border: 1px solid #b9d9c8;
+  border-radius: 999px;
+  padding: 0.04rem 0.28rem;
+  background: #eefaf2;
+  color: #19633f;
+  font-size: 0.54rem;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  vertical-align: middle;
 }
 
 .yocCell strong,
@@ -1062,7 +1100,7 @@
 
 .sheetScreeningBar {
   display: grid;
-  grid-template-columns: 1.1fr repeat(4, minmax(0, 1fr));
+  grid-template-columns: 1.1fr repeat(5, minmax(0, 1fr));
   gap: 0.5rem;
   margin: 0;
   padding: 0.8rem 1.25rem;

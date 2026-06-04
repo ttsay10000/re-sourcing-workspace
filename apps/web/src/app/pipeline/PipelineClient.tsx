@@ -50,21 +50,24 @@ import styles from "./PipelinePage.module.css";
 
 const API_BASE = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000").replace(/\/$/, "");
 const PIPELINE_PATH = "/pipeline";
+const NEW_PROPERTY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 const SORT_OPTIONS: Array<{ value: UiV2PipelineSortField; label: string }> = [
   { value: "updatedAt", label: "Updated" },
   { value: "lastActivityAt", label: "Activity" },
   { value: "dealScore", label: "Score" },
   { value: "askingPrice", label: "Ask" },
+  { value: "buildingSqft", label: "SF" },
   { value: "pricePerSqft", label: "$/SF" },
   { value: "units", label: "Units" },
-  { value: "yocPct", label: "YoC" },
+  { value: "mtrYocPct", label: "YoC MTR" },
+  { value: "ltrYocPct", label: "YoC LTR" },
   { value: "canonicalAddress", label: "Address" },
   { value: "source", label: "Source" },
   { value: "marketType", label: "Type" },
   { value: "status", label: "Status" },
   { value: "omStatus", label: "OM" },
-  { value: "createdAt", label: "Created" },
+  { value: "createdAt", label: "Date Added" },
 ];
 
 const SOURCE_LABELS: Record<string, string> = {
@@ -122,9 +125,6 @@ type PipelineRow = UiV2PipelineRow & {
   overview?: { gallery?: UiV2ImageAsset[]; listingUrl?: string | null };
 };
 
-type PipelineUnderwriting = NonNullable<UiV2PipelineRow["underwriting"]>;
-type YoCBasis = NonNullable<PipelineUnderwriting["yocBasis"]>;
-
 type FlexiblePropertyDetail = UiV2PropertyDetailPayload & {
   gallery?: UiV2ImageAsset[];
   overview: UiV2PropertyDetailPayload["overview"] & { gallery?: UiV2ImageAsset[] };
@@ -144,9 +144,13 @@ type PipelineHeaderMenuId =
   | "source"
   | "marketType"
   | "askingPrice"
+  | "createdAt"
+  | "updatedAt"
+  | "buildingSqft"
   | "pricePerSqft"
   | "units"
-  | "yocPct"
+  | "ltrYocPct"
+  | "mtrYocPct"
   | "mtr"
   | "dealScore"
   | "status"
@@ -161,9 +165,13 @@ const COLUMN_SORT_FIELDS: Partial<Record<PipelineHeaderMenuId, UiV2PipelineSortF
   source: "source",
   marketType: "marketType",
   askingPrice: "askingPrice",
+  createdAt: "createdAt",
+  updatedAt: "updatedAt",
+  buildingSqft: "buildingSqft",
   pricePerSqft: "pricePerSqft",
   units: "units",
-  yocPct: "yocPct",
+  ltrYocPct: "ltrYocPct",
+  mtrYocPct: "mtrYocPct",
   dealScore: "dealScore",
   status: "status",
   om: "omStatus",
@@ -316,6 +324,14 @@ function formatDate(value: string | null | undefined): string {
   return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
+function isNewPipelineRow(value: string | null | undefined): boolean {
+  if (!value) return false;
+  const createdMs = Date.parse(value);
+  if (!Number.isFinite(createdMs)) return false;
+  const ageMs = Date.now() - createdMs;
+  return ageMs >= 0 && ageMs <= NEW_PROPERTY_WINDOW_MS;
+}
+
 function toDateTimeLocal(date: Date): string {
   const pad = (value: number) => String(value).padStart(2, "0");
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(
@@ -435,25 +451,15 @@ function statusLabel(status: string): string {
   return UI_V2_PIPELINE_STATUS_OPTIONS.find((option) => option.status === status)?.label ?? titleize(status);
 }
 
-function calculateYoC(row: Pick<UiV2PipelineRow, "underwriting" | "askingPrice">): { value: number | null; basis: YoCBasis } {
-  if (row.underwriting?.yocPct != null) {
-    return { value: row.underwriting.yocPct, basis: row.underwriting.yocBasis ?? "unknown" };
-  }
+function calculateYieldOnCost(row: Pick<UiV2PipelineRow, "underwriting" | "askingPrice">, basis: "ltr" | "mtr"): number | null {
+  if (basis === "ltr" && row.underwriting?.ltrYocPct != null) return row.underwriting.ltrYocPct;
+  if (basis === "mtr" && row.underwriting?.mtrYocPct != null) return row.underwriting.mtrYocPct;
+  if (basis === "mtr" && row.underwriting?.yocPct != null) return row.underwriting.yocPct;
   const price = row.underwriting?.askingPrice ?? row.askingPrice ?? null;
-  if (price == null || price <= 0) return { value: null, basis: "unknown" };
-  if (row.underwriting?.adjustedNoi != null) {
-    return { value: (row.underwriting.adjustedNoi / price) * 100, basis: "adjusted_noi" };
-  }
-  if (row.underwriting?.currentNoi != null) {
-    return { value: (row.underwriting.currentNoi / price) * 100, basis: "current_noi" };
-  }
-  return { value: null, basis: "unknown" };
-}
-
-function yocBasisLabel(basis: YoCBasis | null | undefined): string {
-  if (basis === "adjusted_noi") return "MTR NOI";
-  if (basis === "current_noi") return "Current NOI";
-  return "Pending";
+  if (price == null || price <= 0) return null;
+  const noi = basis === "ltr" ? row.underwriting?.currentNoi : row.underwriting?.adjustedNoi;
+  if (noi == null) return null;
+  return (noi / price) * 100;
 }
 
 function mtrLabel(tags: string[]): string {
@@ -776,6 +782,7 @@ export default function PipelineClient() {
       q: searchParams.get("q") ?? "",
       status: searchParams.get("status") ?? "",
       source: searchParams.get("source") ?? "",
+      propertyType: searchParams.get("propertyType") ?? "",
       neighborhood: searchParams.get("neighborhood") ?? "",
       marketType: searchParams.get("marketType") ?? searchParams.get("type") ?? "",
       tag: searchParams.get("tag") ?? "",
@@ -798,6 +805,10 @@ export default function PipelineClient() {
   const sourceOptions = useMemo(
     () => uniqueSorted(["streeteasy", "loopnet", "manual", "other", filterValues.source]),
     [rows, filterValues.source]
+  );
+  const propertyTypeOptions = useMemo(
+    () => uniqueSorted(rows.map((row) => row.propertyType), filterValues.propertyType),
+    [rows, filterValues.propertyType]
   );
   const neighborhoodOptions = useMemo(
     () => uniqueSorted(rows.map((row) => row.neighborhood), filterValues.neighborhood),
@@ -2016,12 +2027,13 @@ export default function PipelineClient() {
   const sheetBrokerCompError = selectedId ? brokerCompError[selectedId] ?? null : null;
   const sheetListedPrice = selectedProperty?.overview.askingPrice ?? selectedRow?.askingPrice ?? null;
   const sheetListedPpsf = selectedProperty?.overview.pricePerSqft ?? selectedRow?.pricePerSqft ?? null;
-  const selectedRowYoC = selectedRow ? calculateYoC(selectedRow) : ({ value: null, basis: "unknown" } as const);
-  const sheetYoC = sheetUnderwriting?.yocPct ?? selectedRowYoC.value;
-  const sheetYoCBasis = sheetUnderwriting?.yocBasis ?? selectedRowYoC.basis;
+  const selectedRowLtrYoc = selectedRow ? calculateYieldOnCost(selectedRow, "ltr") : null;
+  const selectedRowMtrYoc = selectedRow ? calculateYieldOnCost(selectedRow, "mtr") : null;
+  const sheetLtrYoc = sheetUnderwriting?.ltrYocPct ?? selectedRowLtrYoc;
+  const sheetMtrYoc = sheetUnderwriting?.mtrYocPct ?? sheetUnderwriting?.yocPct ?? selectedRowMtrYoc;
   const sheetMarketCapRate = sheetUnderwriting?.marketCapRatePct ?? null;
   const sheetYoCSpread =
-    sheetUnderwriting?.yocSpreadPct ?? (sheetYoC != null && sheetMarketCapRate != null ? sheetYoC - sheetMarketCapRate : null);
+    sheetUnderwriting?.yocSpreadPct ?? (sheetMtrYoc != null && sheetMarketCapRate != null ? sheetMtrYoc - sheetMarketCapRate : null);
   const sheetCurrentNoi = sheetUnderwriting?.currentNoi ?? null;
   const sheetAdjustedNoi = sheetUnderwriting?.adjustedNoi ?? null;
   const sheetNoiUpliftPct =
@@ -2072,6 +2084,17 @@ export default function PipelineClient() {
             {sourceOptions.map((source) => (
               <option key={source} value={source}>
                 {sourceLabel(source)}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>Property type</span>
+          <select value={filterValues.propertyType} onChange={onFilterChange("propertyType")}>
+            <option value="">All property types</option>
+            {propertyTypeOptions.map((propertyType) => (
+              <option key={propertyType} value={propertyType}>
+                {titleize(propertyType)}
               </option>
             ))}
           </select>
@@ -2182,9 +2205,13 @@ export default function PipelineClient() {
             <col className={styles.colAddress} />
             <col className={styles.colSource} />
             <col className={styles.colType} />
+            <col className={styles.colDate} />
+            <col className={styles.colDate} />
             <col className={styles.colAsk} />
             <col className={styles.colYoc} />
+            <col className={styles.colYoc} />
             <col className={styles.colUnit} />
+            <col className={styles.colSqft} />
             <col className={styles.colPsf} />
             <col className={styles.colMtr} />
             <col className={styles.colScore} />
@@ -2208,9 +2235,13 @@ export default function PipelineClient() {
               <th>{renderHeader("address", "Address")}</th>
               <th>{renderHeader("source", "Source")}</th>
               <th>{renderHeader("marketType", "Type")}</th>
+              <th>{renderHeader("createdAt", "Date Added")}</th>
+              <th>{renderHeader("updatedAt", "Updated")}</th>
               <th>{renderHeader("askingPrice", "Ask")}</th>
-              <th>{renderHeader("yocPct", "YoC")}</th>
+              <th>{renderHeader("ltrYocPct", "YoC LTR")}</th>
+              <th>{renderHeader("mtrYocPct", "YoC MTR")}</th>
               <th>{renderHeader("units", "Units")}</th>
+              <th>{renderHeader("buildingSqft", "SF")}</th>
               <th>{renderHeader("pricePerSqft", "$/SF")}</th>
               <th>{renderHeader("mtr", "MTR")}</th>
               <th>{renderHeader("dealScore", "Score")}</th>
@@ -2229,7 +2260,9 @@ export default function PipelineClient() {
               const isTerminal = status === "rejected" || status === "archived" || status === "deal_closed";
               const isChecked = selectedIdSet.has(row.propertyId);
               const score = row.underwriting?.dealScore ?? null;
-              const rowYoC = calculateYoC(row);
+              const rowLtrYoc = calculateYieldOnCost(row, "ltr");
+              const rowMtrYoc = calculateYieldOnCost(row, "mtr");
+              const rowIsNew = isNewPipelineRow(row.createdAt);
               const rowLocationLabels = locationLabels(row);
               return (
                 <tr
@@ -2277,12 +2310,20 @@ export default function PipelineClient() {
                       ))}
                     </select>
                   </td>
+                  <td className={styles.dateCell}>
+                    <strong>{formatDate(row.createdAt)}</strong>
+                    {rowIsNew ? <span className={styles.newBadge}>New</span> : null}
+                  </td>
+                  <td className={styles.dateCell}>{formatDate(row.updatedAt)}</td>
                   <td className={styles.numericCell}>{formatCurrency(row.askingPrice)}</td>
                   <td className={cx(styles.numericCell, styles.yocCell)}>
-                    <strong>{formatPercent(rowYoC.value)}</strong>
-                    <span>{yocBasisLabel(rowYoC.basis)}</span>
+                    <strong>{formatPercent(rowLtrYoc)}</strong>
+                  </td>
+                  <td className={cx(styles.numericCell, styles.yocCell)}>
+                    <strong>{formatPercent(rowMtrYoc)}</strong>
                   </td>
                   <td className={styles.numericCell}>{formatNumber(row.units)}</td>
+                  <td className={styles.numericCell}>{formatNumber(row.buildingSqft)}</td>
                   <td className={styles.numericCell}>{formatCurrency(row.pricePerSqft, false)}</td>
                   <td>
                     <span className={`${styles.tinyChip} ${mtrLabel(row.tags) === "Good" ? styles.toneSuccess : styles.toneNeutral}`}>
@@ -2428,9 +2469,14 @@ export default function PipelineClient() {
 
             <dl className={styles.sheetScreeningBar} aria-label="Screening yield summary">
               <div className={styles.screeningMetricPrimary}>
-                <dt>YoC</dt>
-                <dd>{formatPercent(sheetYoC)}</dd>
-                <small>{yocBasisLabel(sheetYoCBasis)}</small>
+                <dt>YoC MTR</dt>
+                <dd>{formatPercent(sheetMtrYoc)}</dd>
+                <small>Adjusted NOI</small>
+              </div>
+              <div>
+                <dt>YoC LTR</dt>
+                <dd>{formatPercent(sheetLtrYoc)}</dd>
+                <small>Current NOI</small>
               </div>
               <div>
                 <dt>Ask</dt>
@@ -2448,9 +2494,9 @@ export default function PipelineClient() {
                 <small>Broker data pending</small>
               </div>
               <div>
-                <dt>YoC spread</dt>
+                <dt>MTR spread</dt>
                 <dd>{formatPercent(sheetYoCSpread)}</dd>
-                <small>YoC less market cap</small>
+                <small>YoC MTR less market cap</small>
               </div>
             </dl>
 
@@ -2629,8 +2675,12 @@ export default function PipelineClient() {
                         <dd>{formatCurrency(selectedProperty?.overview.pricePerSqft ?? selectedRow?.pricePerSqft, false)}</dd>
                       </div>
 	                      <div>
-	                        <dt>YoC</dt>
-	                        <dd>{formatPercent(sheetYoC)}</dd>
+	                        <dt>YoC LTR</dt>
+	                        <dd>{formatPercent(sheetLtrYoc)}</dd>
+	                      </div>
+	                      <div>
+	                        <dt>YoC MTR</dt>
+	                        <dd>{formatPercent(sheetMtrYoc)}</dd>
 	                      </div>
                       <div>
                         <dt>Type</dt>
@@ -2645,7 +2695,7 @@ export default function PipelineClient() {
 	                        <dd>{formatPercent(sheetMarketCapRate)}</dd>
 	                      </div>
 	                      <div>
-	                        <dt>YoC spread</dt>
+	                        <dt>MTR spread</dt>
 	                        <dd>{formatPercent(sheetYoCSpread)}</dd>
 	                      </div>
                       <div>
@@ -2769,8 +2819,12 @@ export default function PipelineClient() {
 	                    </div>
 	                    <div className={styles.highlightGrid}>
 	                      <div>
-	                        <span>Yield on cost</span>
-	                        <strong>{formatPercent(sheetYoC)}</strong>
+	                        <span>YoC MTR</span>
+	                        <strong>{formatPercent(sheetMtrYoc)}</strong>
+	                      </div>
+	                      <div>
+	                        <span>YoC LTR</span>
+	                        <strong>{formatPercent(sheetLtrYoc)}</strong>
 	                      </div>
 	                      <div>
 	                        <span>Ask price</span>
@@ -2789,7 +2843,7 @@ export default function PipelineClient() {
 	                        <strong>{formatPercent(sheetMarketCapRate)}</strong>
 	                      </div>
 	                      <div>
-	                        <span>YoC spread</span>
+	                        <span>MTR spread</span>
 	                        <strong>{formatPercent(sheetYoCSpread)}</strong>
 	                      </div>
 	                    </div>
@@ -2970,15 +3024,19 @@ export default function PipelineClient() {
 	                  </div>
 	                  <dl className={styles.metricGrid}>
 	                    <div>
-	                      <dt>YoC</dt>
-	                      <dd>{formatPercent(sheetYoC)}</dd>
+	                      <dt>YoC LTR</dt>
+	                      <dd>{formatPercent(sheetLtrYoc)}</dd>
+	                    </div>
+	                    <div>
+	                      <dt>YoC MTR</dt>
+	                      <dd>{formatPercent(sheetMtrYoc)}</dd>
 	                    </div>
 	                    <div>
 	                      <dt>Market cap</dt>
 	                      <dd>{formatPercent(sheetMarketCapRate)}</dd>
 	                    </div>
 	                    <div>
-	                      <dt>YoC spread</dt>
+	                      <dt>MTR spread</dt>
 	                      <dd>{formatPercent(sheetYoCSpread)}</dd>
 	                    </div>
 	                    <div>

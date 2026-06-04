@@ -83,6 +83,8 @@ interface PersistListingResult {
   warnings: string[];
 }
 
+type PipelineJobStatus = "not_started" | "complete" | "failed";
+
 const LISTING_SOURCES = new Set<ListingSource>([
   "streeteasy",
   "manual",
@@ -640,6 +642,72 @@ async function persistManualEntry(input: UiV2ManualEntryImportInput): Promise<Pe
   };
 }
 
+async function updatePipelineJobStatuses(
+  propertyId: string,
+  pool: Pool,
+  statuses: { enrichmentStatus?: PipelineJobStatus; rentalFlowStatus?: PipelineJobStatus }
+): Promise<void> {
+  const propertyRepo = new PropertyRepo({ pool });
+  const property = await propertyRepo.byId(propertyId);
+  if (!property) return;
+  const details = isRecord(property.details) ? property.details : {};
+  const pipeline = isRecord(details.pipeline) ? details.pipeline : {};
+  await propertyRepo.mergeDetails(propertyId, {
+    pipeline: {
+      ...pipeline,
+      ...statuses,
+      lastActivityAt: nowIso(),
+    },
+  });
+}
+
+async function runStreetEasyImportFollowUps(
+  propertyId: string,
+  warnings: string[],
+  options: { includeEnrichment: boolean; includeRentalFlow: boolean }
+): Promise<void> {
+  const pool = getPool();
+  const statuses: { enrichmentStatus?: PipelineJobStatus; rentalFlowStatus?: PipelineJobStatus } = {};
+
+  if (options.includeEnrichment) {
+    try {
+      const appToken = process.env.SOCRATA_APP_TOKEN ?? null;
+      await getBBLForProperty(propertyId, { appToken });
+      const result = await runEnrichmentForProperty(propertyId, undefined, {
+        appToken,
+        rateLimitDelayMs: Number(process.env.ENRICHMENT_RATE_LIMIT_DELAY_MS || process.env.PERMITS_RATE_LIMIT_DELAY_MS) || 300,
+      });
+      statuses.enrichmentStatus = result.ok ? "complete" : "failed";
+      if (!result.ok) warnings.push("City/building enrichment ran, but one or more modules failed.");
+    } catch (err) {
+      statuses.enrichmentStatus = "failed";
+      warnings.push(`City/building enrichment failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  if (options.includeRentalFlow) {
+    try {
+      const rentalResult = await runRentalFlowForProperty(propertyId, pool);
+      statuses.rentalFlowStatus = rentalResult.error ? "failed" : "complete";
+      if (rentalResult.error) {
+        warnings.push(`Rental/unit flow failed: ${rentalResult.error}`);
+      }
+    } catch (err) {
+      statuses.rentalFlowStatus = "failed";
+      warnings.push(`Rental/unit flow failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  if (statuses.enrichmentStatus || statuses.rentalFlowStatus) {
+    await updatePipelineJobStatuses(propertyId, pool, statuses).catch((err) => {
+      warnings.push(`Pipeline follow-up status update failed: ${err instanceof Error ? err.message : String(err)}`);
+    });
+    await syncPropertySourcingWorkflow(propertyId, { pool }).catch((err) => {
+      warnings.push(`Sourcing workflow sync failed after follow-ups: ${err instanceof Error ? err.message : String(err)}`);
+    });
+  }
+}
+
 async function streetEasyListingFromUrl(input: UiV2StreetEasyUrlImportInput): Promise<{
   normalized: ListingNormalized;
   rawPayload: JsonRecord;
@@ -720,29 +788,10 @@ async function maybeRunStreetEasyPullFollowUps(
   input: UiV2StreetEasyPullInput,
   warnings: string[]
 ): Promise<void> {
-  const pool = getPool();
-  if (input.options?.includeBuildingDetails || input.options?.includeNearbyComparables) {
-    try {
-      const appToken = process.env.SOCRATA_APP_TOKEN ?? null;
-      await getBBLForProperty(propertyId, { appToken });
-      await runEnrichmentForProperty(propertyId, undefined, {
-        appToken,
-        rateLimitDelayMs: Number(process.env.ENRICHMENT_RATE_LIMIT_DELAY_MS || process.env.PERMITS_RATE_LIMIT_DELAY_MS) || 300,
-      });
-    } catch (err) {
-      warnings.push(`City/building enrichment failed: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
-  if (input.options?.includeUnitDetails) {
-    try {
-      const rentalResult = await runRentalFlowForProperty(propertyId, pool);
-      if (rentalResult.error) {
-        warnings.push(`Rental/unit flow failed: ${rentalResult.error}`);
-      }
-    } catch (err) {
-      warnings.push(`Rental/unit flow failed: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
+  await runStreetEasyImportFollowUps(propertyId, warnings, {
+    includeEnrichment: Boolean(input.options?.includeBuildingDetails || input.options?.includeNearbyComparables),
+    includeRentalFlow: Boolean(input.options?.includeUnitDetails),
+  });
 }
 
 export async function importManualEntry(input: UiV2ManualEntryImportInput): Promise<ImportJobRouteResult> {
@@ -794,6 +843,12 @@ export async function importStreetEasyUrl(input: UiV2StreetEasyUrlImportInput): 
     title: "StreetEasy URL import started",
     metadata: { jobType: "streeteasy_url", url: prepared.url, saleId: prepared.saleId },
   });
+  if (result.createdProperty) {
+    await runStreetEasyImportFollowUps(result.property.id, result.warnings, {
+      includeEnrichment: true,
+      includeRentalFlow: true,
+    });
+  }
   await createPipelineEvent(pool, {
     propertyId: result.property.id,
     eventType: "import_completed",

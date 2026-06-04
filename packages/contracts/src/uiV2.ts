@@ -30,9 +30,12 @@ export type UiV2PipelineSortField =
   | "source"
   | "marketType"
   | "askingPrice"
+  | "buildingSqft"
   | "pricePerSqft"
   | "units"
   | "capRate"
+  | "ltrYocPct"
+  | "mtrYocPct"
   | "yocPct"
   | "dealScore"
   | "status"
@@ -445,6 +448,7 @@ export interface UiV2PipelineQuery extends UiV2PaginationQuery {
   source?: ListingSource | ListingSource[];
   tag?: string | string[];
   mtr?: string | string[];
+  propertyType?: string | string[];
   neighborhood?: string | string[];
   borough?: string | string[];
   marketType?: UiV2MarketType | UiV2MarketType[];
@@ -601,6 +605,8 @@ export interface UiV2UnderwritingSummary {
   recommendedOfferLow?: number | null;
   recommendedOfferHigh?: number | null;
   capRate?: number | null;
+  ltrYocPct?: number | null;
+  mtrYocPct?: number | null;
   yocPct?: number | null;
   yocBasis?: "adjusted_noi" | "current_noi" | "unknown" | null;
   marketCapRatePct?: number | null;
@@ -652,6 +658,7 @@ export interface UiV2PipelineRow {
   units?: number | null;
   buildingSqft?: number | null;
   pricePerSqft?: number | null;
+  propertyType?: string | null;
   marketType?: UiV2MarketType | null;
   neighborhood?: string | null;
   borough?: string | null;
@@ -686,6 +693,7 @@ export interface UiV2PropertyOverview {
   state?: string | null;
   zip?: string | null;
   source?: ListingSource | string | null;
+  propertyType?: string | null;
   marketType?: UiV2MarketType | null;
   listingUrl?: string | null;
   askingPrice?: number | null;

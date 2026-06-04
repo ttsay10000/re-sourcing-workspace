@@ -275,6 +275,7 @@ interface ParsedPipelineQuery {
   sources: string[];
   tags: string[];
   mtrStates: string[];
+  propertyTypes: string[];
   neighborhoods: string[];
   boroughs: string[];
   marketTypes: UiV2MarketType[];
@@ -408,9 +409,12 @@ function parsePipelineQuery(req: Request): ParsedPipelineQuery {
       "source",
       "marketType",
       "askingPrice",
+      "buildingSqft",
       "pricePerSqft",
       "units",
       "capRate",
+      "ltrYocPct",
+      "mtrYocPct",
       "yocPct",
       "dealScore",
       "status",
@@ -436,6 +440,7 @@ function parsePipelineQuery(req: Request): ParsedPipelineQuery {
     mtrStates: listQueryValues(req.query.mtr)
       .map((value) => value.toLowerCase())
       .filter((value) => value === "good" || value === "watch" || value === "none"),
+    propertyTypes: listQueryValues(req.query.propertyType).map((value) => value.toLowerCase()),
     neighborhoods: listQueryValues(req.query.neighborhood).map((value) => value.toLowerCase()),
     boroughs: listQueryValues(req.query.borough).map((value) => value.toLowerCase()),
     marketTypes: listQueryValues(req.query.marketType ?? req.query.type).flatMap((type) => {
@@ -472,6 +477,11 @@ function queryForResponse(query: ParsedPipelineQuery): UiV2PipelineQuery {
         : {}),
     ...(query.tags.length === 1 ? { tag: query.tags[0] } : query.tags.length > 1 ? { tag: query.tags } : {}),
     ...(query.mtrStates.length === 1 ? { mtr: query.mtrStates[0] } : query.mtrStates.length > 1 ? { mtr: query.mtrStates } : {}),
+    ...(query.propertyTypes.length === 1
+      ? { propertyType: query.propertyTypes[0] }
+      : query.propertyTypes.length > 1
+        ? { propertyType: query.propertyTypes }
+        : {}),
     ...(query.neighborhoods.length === 1
       ? { neighborhood: query.neighborhoods[0] }
       : query.neighborhoods.length > 1
@@ -1314,11 +1324,7 @@ function buildListingFacts(row: PipelineBaseRow): UiV2ListingFactsPayload | null
   const amenities = coerceStringList(isPlainRecord(row.listing_extra) ? row.listing_extra.amenities : null);
   const facts: UiV2ListingFactsPayload = {
     status: listingStatus(row),
-    propertyType: readFirstStringPath(details, [
-      ["manualSourceFacts", "propertyType"],
-      ["omData", "authoritative", "propertyInfo", "propertyType"],
-      ["rentalFinancials", "omAnalysis", "propertyInfo", "propertyType"],
-    ]) ?? readFirstStringPath(row.listing_extra, [["propertyType"], ["property_type"], ["type"], ["building", "type"]]),
+    propertyType: getPropertyType(row),
     bedrooms: readFirstNumericPath(details, [
       ["manualSourceFacts", "bedrooms"],
       ["manualSourceFacts", "beds"],
@@ -1344,6 +1350,16 @@ function buildListingFacts(row: PipelineBaseRow): UiV2ListingFactsPayload | null
     unitCountSource,
   };
   return Object.values(facts).some((value) => hasDisplayValue(value)) ? facts : null;
+}
+
+function getPropertyType(row: PipelineBaseRow): string | null {
+  return (
+    readFirstStringPath(row.details, [
+      ["manualSourceFacts", "propertyType"],
+      ["omData", "authoritative", "propertyInfo", "propertyType"],
+      ["rentalFinancials", "omAnalysis", "propertyInfo", "propertyType"],
+    ]) ?? readFirstStringPath(row.listing_extra, [["propertyType"], ["property_type"], ["type"], ["building", "type"]])
+  );
 }
 
 function buildRentalFlowPayload(
@@ -1664,20 +1680,10 @@ function getAdjustedNoi(row: PipelineBaseRow): number | null {
   return summary?.adjustedNoi ?? summary?.stabilizedNoi ?? toFiniteNumber(row.latest_signal_adjusted_noi);
 }
 
-function getYoC(row: PipelineBaseRow): {
-  basis: NonNullable<UiV2UnderwritingSummary["yocBasis"]>;
-  value: number | null;
-} {
+function getNoiYieldOnCost(row: PipelineBaseRow, noi: number | null, fallbackPct: number | string | null): number | null {
   const price = getAskingPrice(row);
-  if (price == null || price <= 0) return { basis: "unknown", value: null };
-
-  const adjustedNoi = getAdjustedNoi(row);
-  if (adjustedNoi != null) return { basis: "adjusted_noi", value: (adjustedNoi / price) * 100 };
-
-  const currentNoi = getCurrentNoi(row);
-  if (currentNoi != null) return { basis: "current_noi", value: (currentNoi / price) * 100 };
-
-  return { basis: "unknown", value: null };
+  if (price != null && price > 0 && noi != null) return (noi / price) * 100;
+  return toFiniteNumber(fallbackPct);
 }
 
 function buildUnderwriting(row: PipelineBaseRow): UiV2UnderwritingSummary | null {
@@ -1685,13 +1691,17 @@ function buildUnderwriting(row: PipelineBaseRow): UiV2UnderwritingSummary | null
   const summary = getPropertyDossierSummary(details);
   const assumptions = getPropertyDossierAssumptions(details);
   const generation = getPropertyDossierGeneration(details);
-  const yoc = getYoC(row);
+  const currentNoi = getCurrentNoi(row);
+  const adjustedNoi = getAdjustedNoi(row);
+  const ltrYocPct = getNoiYieldOnCost(row, currentNoi, row.latest_signal_asset_cap_rate);
+  const mtrYocPct = getNoiYieldOnCost(row, adjustedNoi, row.latest_signal_adjusted_cap_rate);
   const hasAnyUnderwriting =
     summary != null ||
     assumptions != null ||
     generation != null ||
     row.latest_signal_deal_score != null ||
-    yoc.value != null ||
+    ltrYocPct != null ||
+    mtrYocPct != null ||
     row.override_score != null;
   if (!hasAnyUnderwriting) return null;
   return {
@@ -1701,15 +1711,17 @@ function buildUnderwriting(row: PipelineBaseRow): UiV2UnderwritingSummary | null
     recommendedOfferLow: summary?.recommendedOfferLow ?? null,
     recommendedOfferHigh: summary?.recommendedOfferHigh ?? null,
     capRate: getCapRate(row),
-    yocPct: yoc.value,
-    yocBasis: yoc.basis,
+    ltrYocPct,
+    mtrYocPct,
+    yocPct: mtrYocPct,
+    yocBasis: mtrYocPct != null ? "adjusted_noi" : ltrYocPct != null ? "current_noi" : "unknown",
     marketCapRatePct: null,
     yocSpreadPct: null,
     targetIrrPct: summary?.targetIrrPct ?? assumptions?.targetIrrPct ?? null,
     irrPct: summary?.irrPct ?? toFiniteNumber(row.latest_signal_irr_pct),
     cocPct: summary?.cocPct ?? toFiniteNumber(row.latest_signal_coc_pct),
-    currentNoi: getCurrentNoi(row),
-    adjustedNoi: getAdjustedNoi(row),
+    currentNoi,
+    adjustedNoi,
     summary,
   };
 }
@@ -1815,6 +1827,7 @@ function buildOverview(row: PipelineBaseRow): UiV2PropertyOverview {
     state: row.listing_state ?? addressParts.state,
     zip: row.listing_zip ?? addressParts.zip,
     source: row.listing_source ?? readPipelineState(row.details).source,
+    propertyType: getPropertyType(row),
     marketType: deriveMarketType(row),
     listingUrl: row.listing_url ?? readStringPath(row.details, ["manualSourceLinks", "streetEasyUrl"]),
     askingPrice: getAskingPrice(row),
@@ -1870,6 +1883,7 @@ function buildPipelineRow(row: PipelineBaseRow): UiV2PipelineRow {
     units: overview.units,
     buildingSqft: overview.buildingSqft,
     pricePerSqft: overview.pricePerSqft,
+    propertyType: overview.propertyType,
     marketType: overview.marketType,
     neighborhood: overview.neighborhood,
     borough: overview.borough,
@@ -2329,6 +2343,7 @@ function filterRows(rows: UiV2PipelineRow[], query: ParsedPipelineQuery): UiV2Pi
         row.displayAddress,
         row.source,
         row.statusChip.label,
+        row.propertyType,
         row.marketType,
         row.neighborhood,
         row.borough,
@@ -2343,6 +2358,7 @@ function filterRows(rows: UiV2PipelineRow[], query: ParsedPipelineQuery): UiV2Pi
     if (query.sources.length > 0 && !query.sources.includes(String(row.source ?? "").toLowerCase())) return false;
     if (query.tags.length > 0 && !query.tags.some((tag) => row.tags.map(normalizeTag).includes(tag))) return false;
     if (query.mtrStates.length > 0 && !query.mtrStates.includes(mtrState(row))) return false;
+    if (query.propertyTypes.length > 0 && !query.propertyTypes.includes(String(row.propertyType ?? "").toLowerCase())) return false;
     if (query.neighborhoods.length > 0 && !query.neighborhoods.includes(String(row.neighborhood ?? "").toLowerCase())) return false;
     if (query.boroughs.length > 0 && !query.boroughs.includes(String(row.borough ?? "").toLowerCase())) return false;
     if (query.marketTypes.length > 0 && !query.marketTypes.includes(row.marketType ?? "unknown")) return false;
@@ -2377,12 +2393,18 @@ function sortValue(row: UiV2PipelineRow, sortBy: UiV2PipelineSortField): string 
       return row.marketType ?? "unknown";
     case "askingPrice":
       return row.askingPrice ?? null;
+    case "buildingSqft":
+      return row.buildingSqft ?? null;
     case "pricePerSqft":
       return row.pricePerSqft ?? null;
     case "units":
       return row.units ?? null;
     case "capRate":
       return row.underwriting?.capRate ?? null;
+    case "ltrYocPct":
+      return row.underwriting?.ltrYocPct ?? null;
+    case "mtrYocPct":
+      return row.underwriting?.mtrYocPct ?? row.underwriting?.yocPct ?? null;
     case "yocPct":
       return row.underwriting?.yocPct ?? null;
     case "dealScore":
