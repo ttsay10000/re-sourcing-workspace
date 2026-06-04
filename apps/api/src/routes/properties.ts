@@ -26,6 +26,8 @@ import {
   RecipientResolutionRepo,
   OmExtractedSnapshotRepo,
   OmIngestionRunRepo,
+  SavedDealsRepo,
+  UserProfileRepo,
 } from "@re-sourcing/db";
 import {
   deriveListingActivitySummary,
@@ -2875,6 +2877,12 @@ function isOmIngestionCategory(category: PropertyDocumentCategory): boolean {
   );
 }
 
+async function autoSavePropertyWithUnderwritingDocument(propertyId: string, pool: import("pg").Pool): Promise<boolean> {
+  const userId = await new UserProfileRepo({ pool }).ensureDefault();
+  await new SavedDealsRepo({ pool }).save(userId, propertyId, "saved");
+  return true;
+}
+
 type UploadMemoryFile = {
   buffer: Buffer;
   originalname?: string;
@@ -3255,6 +3263,15 @@ router.post(
       }
 
       const shouldRefreshOm = documents.some((document) => isOmIngestionCategory(document.category));
+      const autoSaved = shouldRefreshOm
+        ? await autoSavePropertyWithUnderwritingDocument(propertyId, pool).catch((error) => {
+            console.warn("[properties documents upload batch] failed to auto-save OM-backed property", {
+              propertyId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+            return false;
+          })
+        : false;
       const omRefresh = shouldRefreshOm
         ? await refreshOmFinancialsForProperty(propertyId, pool, {
             autoPromote: true,
@@ -3297,6 +3314,7 @@ router.post(
         })),
         omRefresh,
         rentalFlow,
+        autoSaved,
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -3344,12 +3362,22 @@ router.post(
         fileContent: file.buffer,
       });
 
+      const autoSaved = isOmIngestionCategory(inserted.category)
+        ? await autoSavePropertyWithUnderwritingDocument(propertyId, pool).catch((error) => {
+            console.warn("[properties documents upload] failed to auto-save OM-backed property", {
+              propertyId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+            return false;
+          })
+        : false;
+
       await syncPropertySourcingWorkflow(propertyId, { pool });
       await refreshPropertyPipelineMetadata(propertyId, pool);
 
       // Upload only persists the document. Authoritative OM promotion is manual now
       // so inbox noise or partial uploads do not replace a stronger dossier-backed state.
-      res.status(201).json({ propertyId, document: inserted });
+      res.status(201).json({ propertyId, document: inserted, autoSaved });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error("[properties documents upload]", err);

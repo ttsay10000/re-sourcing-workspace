@@ -251,6 +251,7 @@ interface SourceFactsFormState {
 
 interface RejectState {
   propertyId: string;
+  propertyIds?: string[];
   address: string;
   surface: UiV2ActionSurface;
   reasonCode: UiV2RejectionReasonCode | "";
@@ -806,6 +807,14 @@ export default function PipelineClient() {
     () => rows.filter((row) => selectedIdSet.has(row.propertyId)),
     [rows, selectedIdSet]
   );
+  const selectedRejectableRows = useMemo(
+    () =>
+      selectedRows.filter((row) => {
+        const status = String(row.statusChip.status);
+        return status !== "rejected" && status !== "archived" && status !== "deal_closed";
+      }),
+    [selectedRows]
+  );
 
   const filterValues = useMemo(
     () => ({
@@ -1352,6 +1361,25 @@ export default function PipelineClient() {
     await emailBroker(propertyIds[0]!, "pipeline_table");
   }
 
+  function openBulkRejectModal() {
+    if (selectedRejectableRows.length === 0) {
+      setError("Select at least one active property to reject.");
+      return;
+    }
+    setError(null);
+    setRejectState({
+      propertyId: selectedRejectableRows[0]!.propertyId,
+      propertyIds: selectedRejectableRows.map((row) => row.propertyId),
+      address:
+        selectedRejectableRows.length === 1
+          ? selectedRejectableRows[0]!.displayAddress ?? selectedRejectableRows[0]!.canonicalAddress
+          : `${selectedRejectableRows.length} selected properties`,
+      surface: "pipeline_table",
+      reasonCode: "",
+      note: "",
+    });
+  }
+
   async function updateStatus(propertyId: string, status: UiV2PipelineStatus, surface: UiV2ActionSurface) {
     const row = rows.find((item) => item.propertyId === propertyId);
     if (status === "rejected") {
@@ -1419,20 +1447,57 @@ export default function PipelineClient() {
     event.preventDefault();
     if (!rejectState?.reasonCode) return;
     const { propertyId, surface, reasonCode, note } = rejectState;
-    setBusyAction(`${propertyId}:reject`);
+    const propertyIds = rejectState.propertyIds?.length ? rejectState.propertyIds : [propertyId];
+    const isBulkReject = propertyIds.length > 1;
+    setBusyAction(isBulkReject ? "bulk:reject" : `${propertyId}:reject`);
     setNotice(null);
+    setError(null);
     try {
-      const response = await apiFetch<PropertyResponse>(`${API_BASE}/api/ui-v2/properties/${propertyId}/reject`, {
-        method: "POST",
-        body: JSON.stringify({
-          status: "rejected",
-          rejection: { reasonCode, note: note.trim() || null },
-          source: surface,
-        }),
-      });
-      applyProperty(response.property);
+      const failures: Array<{ propertyId: string; message: string }> = [];
+      for (const id of propertyIds) {
+        try {
+          const response = await apiFetch<PropertyResponse>(`${API_BASE}/api/ui-v2/properties/${encodeURIComponent(id)}/reject`, {
+            method: "POST",
+            body: JSON.stringify({
+              status: "rejected",
+              rejection: { reasonCode, note: note.trim() || null },
+              source: surface,
+            }),
+          });
+          if (!isBulkReject) applyProperty(response.property);
+        } catch (err) {
+          failures.push({ propertyId: id, message: err instanceof Error ? err.message : "Failed to reject property." });
+        }
+      }
+
+      if (isBulkReject) {
+        const response = await apiFetch<PipelineResponse>(
+          `${API_BASE}/api/ui-v2/pipeline?${buildPipelineQueryString(queryString)}`
+        );
+        setRows(response.pipeline.rows as PipelineRow[]);
+        setTotal(response.pipeline.total);
+        const rejectedSet = new Set(propertyIds);
+        setSelectedIds((current) => current.filter((id) => !rejectedSet.has(id)));
+        if (!filterValues.includeRejected && selectedId && rejectedSet.has(selectedId)) {
+          setSelectedId(null);
+          setSelectedProperty(null);
+        } else if (selectedId) {
+          await loadPropertyDetail(selectedId).catch(() => null);
+        }
+      }
+
+      const completed = propertyIds.length - failures.length;
       setRejectState(null);
-      setNotice("Property rejected.");
+      setNotice(
+        isBulkReject
+          ? `${completed} propert${completed === 1 ? "y" : "ies"} rejected.`
+          : "Property rejected."
+      );
+      if (failures.length > 0) {
+        setError(
+          `${failures.length} rejection${failures.length === 1 ? "" : "s"} failed. First issue: ${failures[0]!.message}`
+        );
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to reject property.");
     } finally {
@@ -2269,6 +2334,14 @@ export default function PipelineClient() {
             onClick={queueSelectedEmails}
           >
             Queue broker emails
+          </button>
+          <button
+            className={styles.dangerButton}
+            type="button"
+            disabled={selectedRejectableRows.length === 0 || busyAction?.startsWith("bulk:")}
+            onClick={openBulkRejectModal}
+          >
+            Reject selected
           </button>
         </div>
       </div>
@@ -3209,7 +3282,9 @@ export default function PipelineClient() {
           <form className={styles.modal} onSubmit={submitReject}>
             <div className={styles.modalHeader}>
               <div>
-                <span className={styles.kicker}>Reject property</span>
+                <span className={styles.kicker}>
+                  {rejectState.propertyIds && rejectState.propertyIds.length > 1 ? "Reject selected" : "Reject property"}
+                </span>
                 <h2>{rejectState.address}</h2>
               </div>
               <button className={styles.closeButton} type="button" onClick={() => setRejectState(null)} aria-label="Close rejection modal">
@@ -3246,8 +3321,20 @@ export default function PipelineClient() {
               <button className={styles.ghostButton} type="button" onClick={() => setRejectState(null)}>
                 Cancel
               </button>
-              <button className={styles.dangerButton} type="submit" disabled={!rejectState.reasonCode || busyAction === `${rejectState.propertyId}:reject`}>
-                Reject
+              <button
+                className={styles.dangerButton}
+                type="submit"
+                disabled={
+                  !rejectState.reasonCode ||
+                  busyAction === `${rejectState.propertyId}:reject` ||
+                  busyAction === "bulk:reject"
+                }
+              >
+                {busyAction === "bulk:reject"
+                  ? "Rejecting..."
+                  : rejectState.propertyIds && rejectState.propertyIds.length > 1
+                    ? `Reject ${rejectState.propertyIds.length}`
+                    : "Reject"}
               </button>
             </div>
           </form>

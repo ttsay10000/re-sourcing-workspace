@@ -16,7 +16,8 @@ import type {
 } from "@re-sourcing/contracts";
 import { getPool, UserProfileRepo } from "@re-sourcing/db";
 import { resolveEffectiveDealScore } from "../deal/effectiveDealScore.js";
-import { getPropertyDossierSummary } from "../deal/propertyDossierState.js";
+import { resolveOmAskingPriceFromDetails } from "../deal/omAskingPrice.js";
+import { getPropertyDossierSummary, hasCompletedDealDossier } from "../deal/propertyDossierState.js";
 import { resolvePreferredOmUnitCount } from "../om/authoritativeOm.js";
 
 const router = Router();
@@ -70,6 +71,8 @@ interface SavedProgressBaseRow {
   latest_signal_deal_score: number | string | null;
   latest_signal_asset_cap_rate: number | string | null;
   latest_signal_adjusted_cap_rate: number | string | null;
+  latest_signal_current_noi: number | string | null;
+  latest_signal_adjusted_noi: number | string | null;
   latest_signal_rent_upside: number | string | null;
   latest_signal_irr_pct: number | string | null;
   latest_signal_coc_pct: number | string | null;
@@ -78,8 +81,11 @@ interface SavedProgressBaseRow {
   latest_om_status: string | null;
   latest_om_completed_at: Date | string | null;
   uploaded_doc_count: number | string | null;
+  uploaded_categories: string[] | null;
   inquiry_doc_count: number | string | null;
+  inquiry_filenames: string[] | null;
   generated_doc_count: number | string | null;
+  broker_comp_package_count: number | string | null;
   open_action_item_count: number | string | null;
   latest_inquiry_sent_at: Date | string | null;
   rejection_reason_code?: string | null;
@@ -106,6 +112,11 @@ interface SavedDealV2Row {
   irrPct: number | null;
   cocPct: number | null;
   dealScore: number | null;
+  ltrYocPct: number | null;
+  mtrYocPct: number | null;
+  hasOm: boolean;
+  hasComps: boolean;
+  hasDossier: boolean;
   status: UiV2PipelineStatus;
   tags: string[];
   neighborhood: string | null;
@@ -466,6 +477,134 @@ function deriveOmStatus(row: SavedProgressBaseRow): string {
   return "none";
 }
 
+function hasUnderwritingDocumentCategory(row: SavedProgressBaseRow): boolean {
+  const categories = Array.isArray(row.uploaded_categories) ? row.uploaded_categories : [];
+  return categories.some((category) =>
+    [
+      "OM",
+      "Brochure",
+      "Rent Roll",
+      "Financial Model",
+      "T12 / Operating Summary",
+    ].includes(String(category))
+  );
+}
+
+function hasComparablePackage(row: SavedProgressBaseRow): boolean {
+  const categories = Array.isArray(row.uploaded_categories) ? row.uploaded_categories : [];
+  return (
+    toInteger(row.broker_comp_package_count) > 0 ||
+    categories.some((category) =>
+      [
+        "Broker Comp Package",
+        "Sale Comp Package",
+        "Rent Comp Package",
+        "Expense Comp Package",
+        "Market Analysis",
+      ].includes(String(category))
+    )
+  );
+}
+
+function hasUnderwritingInquiryFilename(row: SavedProgressBaseRow): boolean {
+  const filenames = Array.isArray(row.inquiry_filenames) ? row.inquiry_filenames : [];
+  return filenames.some((filename) =>
+    /(offering|memorandum|(^|[^a-z])om([^a-z]|$)|brochure|rent[ _-]?roll|t-?12|operating|income[ _-]?expense|financial[ _-]?model|proforma|pro-forma)/i.test(
+      String(filename)
+    )
+  );
+}
+
+function hasOmEvidence(row: SavedProgressBaseRow): boolean {
+  const omStatus = String(row.latest_om_status ?? "").trim().toLowerCase();
+  if (["received", "needs_review", "promoted", "complete", "completed"].includes(omStatus)) return true;
+  return (
+    hasUnderwritingDocumentCategory(row) ||
+    hasUnderwritingInquiryFilename(row) ||
+    readFirstPositiveNumericPath(row.details, [
+      ["omData", "authoritative", "propertyInfo", "askingPrice"],
+      ["omData", "authoritative", "uiFinancialSummary", "askingPrice"],
+      ["rentalFinancials", "omAnalysis", "propertyInfo", "askingPrice"],
+    ]) != null
+  );
+}
+
+function getSavedAskingPrice(row: SavedProgressBaseRow): number | null {
+  const details = row.details;
+  const summary = getPropertyDossierSummary(details as never);
+  return (
+    readFirstPositiveNumericPath(details, [
+      ["manualSourceFacts", "askingPrice"],
+      ["manualSourceFacts", "listedPrice"],
+      ["manualSourceFacts", "listingPrice"],
+      ["manualSourceFacts", "askPrice"],
+    ]) ??
+    resolveOmAskingPriceFromDetails(details as never) ??
+    summary?.askingPrice ??
+    readFirstPositiveNumericPath(details, [
+      ["omData", "authoritative", "propertyInfo", "askingPrice"],
+      ["omData", "authoritative", "propertyInfo", "listedPrice"],
+      ["omData", "authoritative", "propertyInfo", "listingPrice"],
+      ["omData", "authoritative", "uiFinancialSummary", "askingPrice"],
+      ["omData", "authoritative", "valuationMetrics", "askingPrice"],
+      ["rentalFinancials", "omAnalysis", "propertyInfo", "askingPrice"],
+      ["rentalFinancials", "omAnalysis", "valuationMetrics", "askingPrice"],
+    ]) ??
+    toPositiveNumber(row.listing_price) ??
+    readFirstPositiveNumericPath(row.listing_extra, [
+      ["price"],
+      ["askingPrice"],
+      ["asking_price"],
+      ["listedPrice"],
+      ["listed_price"],
+      ["askPrice"],
+      ["ask_price"],
+    ]) ??
+    readFirstPositiveNumericPath(details, [
+      ["askingPrice"],
+      ["asking_price"],
+      ["listingPrice"],
+      ["listing_price"],
+      ["listedPrice"],
+      ["listed_price"],
+    ])
+  );
+}
+
+function getSavedCurrentNoi(row: SavedProgressBaseRow): number | null {
+  const details = row.details;
+  const summary = getPropertyDossierSummary(details as never);
+  return (
+    summary?.currentNoi ??
+    readNumericPath(details, ["omData", "authoritative", "currentFinancials", "noi"]) ??
+    readNumericPath(details, ["omData", "authoritative", "currentFinancials", "netOperatingIncome"]) ??
+    readNumericPath(details, ["rentalFinancials", "omAnalysis", "currentFinancials", "noi"]) ??
+    readNumericPath(details, ["rentalFinancials", "omAnalysis", "currentFinancials", "netOperatingIncome"]) ??
+    readNumericPath(details, ["rentalFinancials", "fromLlm", "noi"]) ??
+    toNumber(row.latest_signal_current_noi)
+  );
+}
+
+function getSavedAdjustedNoi(row: SavedProgressBaseRow): number | null {
+  const details = row.details;
+  const summary = getPropertyDossierSummary(details as never);
+  return summary?.adjustedNoi ?? summary?.stabilizedNoi ?? toNumber(row.latest_signal_adjusted_noi);
+}
+
+function getNoiYieldOnCost(row: SavedProgressBaseRow, noi: number | null, fallbackPct: number | string | null): number | null {
+  const price = getSavedAskingPrice(row);
+  if (price != null && price > 0 && noi != null) return (noi / price) * 100;
+  return toNumber(fallbackPct);
+}
+
+function hasUnderwritingWorkup(row: SavedProgressBaseRow): boolean {
+  return (
+    hasCompletedDealDossier(row.details as never) ||
+    toInteger(row.generated_doc_count) > 0 ||
+    toNumber(row.latest_signal_deal_score) != null
+  );
+}
+
 function resolveDealScore(row: SavedProgressBaseRow): number | null {
   const details = row.details;
   const dossierSummary = getPropertyDossierSummary(details as never);
@@ -519,7 +658,9 @@ function mapSavedRow(row: SavedProgressBaseRow): SavedDealV2Row {
   const sqft = resolveSavedSqft(row);
   const beds = resolveSavedBeds(row);
   const baths = resolveSavedBaths(row);
-  const price = toNumber(row.listing_price);
+  const price = toNumber(row.listing_price) ?? getSavedAskingPrice(row);
+  const currentNoi = getSavedCurrentNoi(row);
+  const adjustedNoi = getSavedAdjustedNoi(row);
   const location = readLocation(details, row.listing_extra);
   const documentCount = toInteger(row.uploaded_doc_count) + toInteger(row.inquiry_doc_count) + toInteger(row.generated_doc_count);
   return {
@@ -540,6 +681,11 @@ function mapSavedRow(row: SavedProgressBaseRow): SavedDealV2Row {
     irrPct: toNumber(row.latest_signal_irr_pct),
     cocPct: toNumber(row.latest_signal_coc_pct),
     dealScore: resolveDealScore(row),
+    ltrYocPct: getNoiYieldOnCost(row, currentNoi, row.latest_signal_asset_cap_rate),
+    mtrYocPct: getNoiYieldOnCost(row, adjustedNoi, row.latest_signal_adjusted_cap_rate),
+    hasOm: hasOmEvidence(row),
+    hasComps: hasComparablePackage(row),
+    hasDossier: hasUnderwritingWorkup(row),
     status: deriveStatus(row),
     tags: readTags(details),
     neighborhood: location.neighborhood,
@@ -649,6 +795,8 @@ function baseSelectSql(hasRejections: boolean, savedOnly: boolean): string {
        ds.deal_score AS latest_signal_deal_score,
        ds.asset_cap_rate AS latest_signal_asset_cap_rate,
        ds.adjusted_cap_rate AS latest_signal_adjusted_cap_rate,
+       ds.current_noi AS latest_signal_current_noi,
+       ds.adjusted_noi AS latest_signal_adjusted_noi,
        ds.rent_upside AS latest_signal_rent_upside,
        ds.irr_pct AS latest_signal_irr_pct,
        ds.coc_pct AS latest_signal_coc_pct,
@@ -657,8 +805,11 @@ function baseSelectSql(hasRejections: boolean, savedOnly: boolean): string {
        om.status AS latest_om_status,
        om.completed_at AS latest_om_completed_at,
        COALESCE(ud.uploaded_doc_count, 0) AS uploaded_doc_count,
+       COALESCE(ud.uploaded_categories, ARRAY[]::text[]) AS uploaded_categories,
        COALESCE(idoc.inquiry_doc_count, 0) AS inquiry_doc_count,
+       COALESCE(idoc.inquiry_filenames, ARRAY[]::text[]) AS inquiry_filenames,
        COALESCE(gdoc.generated_doc_count, 0) AS generated_doc_count,
+       COALESCE(bcp.broker_comp_package_count, 0) AS broker_comp_package_count,
        COALESCE(ai.open_action_item_count, 0) AS open_action_item_count,
        pis.sent_at AS latest_inquiry_sent_at,
        ${rejectionSelect(hasRejections)}
@@ -693,12 +844,16 @@ function baseSelectSql(hasRejections: boolean, savedOnly: boolean): string {
        LIMIT 1
      ) om ON true
      LEFT JOIN LATERAL (
-       SELECT COUNT(*)::int AS uploaded_doc_count
+       SELECT
+         COUNT(*)::int AS uploaded_doc_count,
+         ARRAY_REMOVE(ARRAY_AGG(DISTINCT category), NULL) AS uploaded_categories
        FROM property_uploaded_documents
        WHERE property_id = p.id
      ) ud ON true
      LEFT JOIN LATERAL (
-       SELECT COUNT(*)::int AS inquiry_doc_count
+       SELECT
+         COUNT(*)::int AS inquiry_doc_count,
+         ARRAY_REMOVE(ARRAY_AGG(filename), NULL) AS inquiry_filenames
        FROM property_inquiry_documents
        WHERE property_id = p.id
      ) idoc ON true
@@ -707,6 +862,11 @@ function baseSelectSql(hasRejections: boolean, savedOnly: boolean): string {
        FROM documents
        WHERE property_id = p.id
      ) gdoc ON true
+     LEFT JOIN LATERAL (
+       SELECT COUNT(*)::int AS broker_comp_package_count
+       FROM broker_comp_packages
+       WHERE property_id = p.id
+     ) bcp ON true
      LEFT JOIN LATERAL (
        SELECT COUNT(*)::int AS open_action_item_count
        FROM property_action_items

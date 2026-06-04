@@ -40,6 +40,11 @@ type SavedDealRow = {
   pricePerSqft?: number | null;
   capRate?: number | null;
   dealScore?: number | null;
+  ltrYocPct?: number | null;
+  mtrYocPct?: number | null;
+  hasOm?: boolean | null;
+  hasComps?: boolean | null;
+  hasDossier?: boolean | null;
   status?: string | null;
   omStatus?: string | null;
   documentCount?: number | null;
@@ -64,14 +69,18 @@ type HomeProgressRow = {
 };
 
 const SAVED_STAGE_GROUPS = [
-  { key: "contract_signed", label: "Contract Signed", statuses: ["contract_signed"] },
-  { key: "negotiation", label: "Negotiation", statuses: ["negotiation"] },
-  { key: "loi_sent", label: "LOI Sent", statuses: ["offer_review"] },
-  { key: "underwriting", label: "Underwriting", statuses: ["underwriting", "om_received", "dossier_generated"] },
-  { key: "om_requested", label: "OM Requested", statuses: ["outreach", "awaiting_broker"] },
   { key: "sourced", label: "Sourced", statuses: ["new", "screening", "interesting", "saved"] },
+  { key: "om_requested", label: "OM Requested", statuses: ["outreach", "awaiting_broker"] },
+  { key: "underwriting", label: "Underwriting", statuses: ["underwriting", "om_received", "dossier_generated"] },
+  { key: "loi_sent", label: "LOI Sent", statuses: ["offer_review"] },
+  { key: "negotiation", label: "Negotiation", statuses: ["negotiation"] },
+  { key: "contract_signed", label: "Contract Signed", statuses: ["contract_signed"] },
 ] as const;
 
+type SavedStageKey = (typeof SAVED_STAGE_GROUPS)[number]["key"];
+
+const WORKLIST_STAGE_KEYS = new Set<SavedStageKey>(["underwriting", "loi_sent", "negotiation", "contract_signed"]);
+const LATER_STAGE_STATUSES = new Set(["offer_review", "negotiation", "contract_signed"]);
 const CLOSED_STATUSES = new Set(["deal_closed", "archived", "closed"]);
 const REJECTED_STATUSES = new Set(["rejected"]);
 
@@ -80,6 +89,11 @@ function formatCurrency(value: number | null | undefined): string {
   if (Math.abs(value) >= 1_000_000) return `$${(value / 1_000_000).toFixed(1)}M`;
   if (Math.abs(value) >= 1_000) return `$${(value / 1_000).toFixed(0)}K`;
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(value);
+}
+
+function formatPercent(value: number | null | undefined): string {
+  if (value == null || Number.isNaN(value)) return "-";
+  return `${value.toFixed(1)}%`;
 }
 
 function titleize(value: string | null | undefined): string {
@@ -144,6 +158,31 @@ function unitLabel(units: number | null | undefined): string | null {
   if (units == null || !Number.isFinite(units) || units <= 0) return null;
   const rounded = Math.round(units);
   return `${rounded} ${rounded === 1 ? "unit" : "units"}`;
+}
+
+function normalizedSavedStatus(row: SavedDealRow): string {
+  return String(row.status ?? row.savedDeal?.dealStatus ?? "saved");
+}
+
+function rowHasOm(row: SavedDealRow): boolean {
+  if (row.hasOm != null) return row.hasOm;
+  const status = String(row.omStatus ?? "").trim().toLowerCase();
+  return ["received", "needs_review", "promoted", "complete", "completed"].includes(status);
+}
+
+function rowHasComps(row: SavedDealRow): boolean {
+  return row.hasComps === true;
+}
+
+function rowHasDossier(row: SavedDealRow): boolean {
+  return row.hasDossier === true || normalizedSavedStatus(row) === "dossier_generated";
+}
+
+function savedStageKeyForRow(row: SavedDealRow): SavedStageKey | null {
+  const status = normalizedSavedStatus(row);
+  if (CLOSED_STATUSES.has(status) || REJECTED_STATUSES.has(status) || row.rejection) return null;
+  if (rowHasOm(row) && !LATER_STAGE_STATUSES.has(status)) return "underwriting";
+  return SAVED_STAGE_GROUPS.find((stage) => (stage.statuses as readonly string[]).includes(status))?.key ?? "sourced";
 }
 
 function HomePageContent() {
@@ -217,33 +256,24 @@ function HomePageContent() {
   }, [query, savedRows]);
 
   const savedStageGroups = useMemo(() => {
-    const assigned = new Set<string>();
-    const rowsForStatusGroup = (statuses: readonly string[]) =>
-      filteredSavedRows.filter((row) => {
-        if (assigned.has(row.propertyId)) return false;
-        const status = String(row.status ?? row.savedDeal?.dealStatus ?? "saved");
-        if (!statuses.includes(status)) return false;
-        assigned.add(row.propertyId);
-        return true;
-      });
-    const groups = SAVED_STAGE_GROUPS.map((stage) => ({
+    return SAVED_STAGE_GROUPS.map((stage) => ({
       ...stage,
-      rows: rowsForStatusGroup(stage.statuses),
+      rows: filteredSavedRows.filter((row) => savedStageKeyForRow(row) === stage.key),
     }));
-    const unassigned = filteredSavedRows.filter((row) => {
-      const status = String(row.status ?? row.savedDeal?.dealStatus ?? "saved");
-      return !assigned.has(row.propertyId) && !CLOSED_STATUSES.has(status) && !REJECTED_STATUSES.has(status) && !row.rejection;
-    });
-    if (unassigned.length > 0) {
-      const sourced = groups.find((group) => group.key === "sourced");
-      if (sourced) sourced.rows = [...sourced.rows, ...unassigned];
-    }
-    return groups;
   }, [filteredSavedRows]);
 
+  const worklistStageGroups = useMemo(
+    () => savedStageGroups.filter((group) => WORKLIST_STAGE_KEYS.has(group.key)),
+    [savedStageGroups]
+  );
+  const worklistCount = useMemo(
+    () => worklistStageGroups.reduce((sum, group) => sum + group.rows.length, 0),
+    [worklistStageGroups]
+  );
+
   const terminalSavedCounts = useMemo(() => {
-    const closed = filteredSavedRows.filter((row) => CLOSED_STATUSES.has(String(row.status ?? row.savedDeal?.dealStatus ?? ""))).length;
-    const rejected = filteredSavedRows.filter((row) => REJECTED_STATUSES.has(String(row.status ?? row.savedDeal?.dealStatus ?? "")) || row.rejection != null).length;
+    const closed = filteredSavedRows.filter((row) => CLOSED_STATUSES.has(normalizedSavedStatus(row))).length;
+    const rejected = filteredSavedRows.filter((row) => REJECTED_STATUSES.has(normalizedSavedStatus(row)) || row.rejection != null).length;
     return { closed, rejected };
   }, [filteredSavedRows]);
 
@@ -279,9 +309,9 @@ function HomePageContent() {
       {query ? <div className={styles.notice}>Filtered by: <strong>{searchParams.get("q")}</strong></div> : null}
 
       <section aria-label="Saved deal status overview">
-        <div className={styles.statusCards}>
+        <div className={styles.stageStrip}>
           {savedStageGroups.map((group) => (
-            <Link key={group.key} href="/saved" className={`${styles.statusCard} ${group.key === "contract_signed" ? styles.green : group.key === "underwriting" ? styles.blue : styles.neutral}`}>
+            <Link key={group.key} href="/saved" className={styles.stageCell}>
               <span>{group.label}</span>
               <strong>{group.rows.length}</strong>
             </Link>
@@ -312,11 +342,11 @@ function HomePageContent() {
       <div className={styles.dashboardGrid}>
         <section className={styles.dealsPanel}>
           <div className={styles.panelHeader}>
-            <h2>Saved Deals By Status</h2>
-            <span>{filteredSavedRows.length} saved deal{filteredSavedRows.length === 1 ? "" : "s"}</span>
+            <h2>Saved Deal Flow</h2>
+            <span>{worklistCount} underwriting+ deal{worklistCount === 1 ? "" : "s"}</span>
           </div>
           <div className={styles.savedStageList}>
-            {savedStageGroups.map((group) => (
+            {worklistStageGroups.map((group) => (
               <section key={group.key} className={styles.savedStage}>
                 <div className={styles.savedStageHeader}>
                   <h3>{group.label}</h3>
@@ -324,22 +354,45 @@ function HomePageContent() {
                 </div>
                 {group.rows.length > 0 ? (
                   <div className={styles.savedDealRows}>
-                    {group.rows.slice(0, 8).map((row) => {
+                    <div className={styles.savedDealHeaderRow} aria-hidden="true">
+                      <span>Deal</span>
+                      <span>Listed</span>
+                      <span>YoC LTR</span>
+                      <span>YoC MTR</span>
+                      <span>Score</span>
+                      <span>Workup</span>
+                    </div>
+                    {group.rows.map((row) => {
                       const score = rowScore(row);
                       const subtitle = [locationSubtitle(row), unitLabel(row.units)].filter(Boolean).join(" · ");
                       return (
                         <Link key={row.propertyId} href={`/pipeline?propertyId=${encodeURIComponent(row.propertyId)}`} className={styles.savedDealRow}>
                           {row.firstImageUrl ? <img src={row.firstImageUrl} alt="" /> : <span className={styles.thumbnailFallback}>{rowAddress(row).charAt(0)}</span>}
-                          <span>
+                          <span className={styles.savedDealTitle}>
                             <strong>{rowAddress(row)}</strong>
                             <small>{subtitle || titleize(row.source)}</small>
                           </span>
-                          <em>{formatCurrency(row.price)}</em>
+                          <span className={styles.metricCell}>
+                            <small>Listed</small>
+                            <strong>{formatCurrency(row.price)}</strong>
+                          </span>
+                          <span className={styles.metricCell}>
+                            <small>YoC LTR</small>
+                            <strong>{formatPercent(row.ltrYocPct)}</strong>
+                          </span>
+                          <span className={styles.metricCell}>
+                            <small>YoC MTR</small>
+                            <strong>{formatPercent(row.mtrYocPct)}</strong>
+                          </span>
                           <span className={`${styles.scorePill} ${scoreClass(score)}`}>
                             <strong>{score == null ? "—" : Math.round(score)}</strong>
                             <em> /100</em>
                           </span>
-                          <small>{titleize(row.omStatus ?? "no_om")}</small>
+                          <span className={styles.workflowBadges} aria-label="Deal workup status">
+                            <span className={`${styles.workflowBadge} ${rowHasComps(row) ? styles.badgeReady : styles.badgeMissing}`}>Comps</span>
+                            <span className={`${styles.workflowBadge} ${rowHasOm(row) ? styles.badgeReady : styles.badgeMissing}`}>OM</span>
+                            <span className={`${styles.workflowBadge} ${rowHasDossier(row) ? styles.badgeReady : styles.badgeMissing}`}>UW</span>
+                          </span>
                         </Link>
                       );
                     })}
