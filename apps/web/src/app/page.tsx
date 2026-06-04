@@ -68,6 +68,18 @@ type HomeProgressRow = {
   omStatus?: string | null;
 };
 
+type FunnelMetric = {
+  key: SavedStageKey;
+  label: string;
+  count: number;
+  href: string;
+  subMetric?: {
+    label: string;
+    count: number;
+    tone?: "danger" | "neutral";
+  };
+};
+
 const SAVED_STAGE_GROUPS = [
   { key: "sourced", label: "Sourced", statuses: ["new", "screening", "interesting", "saved"] },
   { key: "om_requested", label: "OM Requested", statuses: ["outreach", "awaiting_broker"] },
@@ -83,6 +95,8 @@ const WORKLIST_STAGE_KEYS = new Set<SavedStageKey>(["underwriting", "loi_sent", 
 const LATER_STAGE_STATUSES = new Set(["offer_review", "negotiation", "contract_signed"]);
 const CLOSED_STATUSES = new Set(["deal_closed", "archived", "closed"]);
 const REJECTED_STATUSES = new Set(["rejected"]);
+const OM_REQUESTED_STATUSES = new Set(["outreach", "awaiting_broker"]);
+const OM_EVIDENCE_STATUSES = new Set(["available", "completed", "promoted", "needs_review"]);
 
 function formatCurrency(value: number | null | undefined): string {
   if (value == null || Number.isNaN(value)) return "-";
@@ -185,6 +199,25 @@ function savedStageKeyForRow(row: SavedDealRow): SavedStageKey | null {
   return SAVED_STAGE_GROUPS.find((stage) => (stage.statuses as readonly string[]).includes(status))?.key ?? "sourced";
 }
 
+function pipelineStatus(row: UiV2PipelineRow): string {
+  return String(row.statusChip?.status ?? "");
+}
+
+function pipelineIsTerminal(row: UiV2PipelineRow): boolean {
+  const status = pipelineStatus(row);
+  return CLOSED_STATUSES.has(status) || REJECTED_STATUSES.has(status) || status === "archived";
+}
+
+function pipelineHasOmRequest(row: UiV2PipelineRow): boolean {
+  const omStatus = String(row.documentStatus?.omStatus ?? "").trim().toLowerCase();
+  return Boolean(row.documentStatus?.latestRequestAt) || omStatus === "requested" || OM_REQUESTED_STATUSES.has(pipelineStatus(row));
+}
+
+function pipelineHasOmEvidence(row: UiV2PipelineRow): boolean {
+  const omStatus = String(row.documentStatus?.omStatus ?? "").trim().toLowerCase();
+  return row.documentStatus?.hasOm === true || OM_EVIDENCE_STATUSES.has(omStatus);
+}
+
 function HomePageContent() {
   const searchParams = useSearchParams();
   const query = (searchParams.get("q") ?? "").trim().toLowerCase();
@@ -277,6 +310,37 @@ function HomePageContent() {
     return { closed, rejected };
   }, [filteredSavedRows]);
 
+  const funnelMetrics = useMemo<FunnelMetric[]>(() => {
+    const rejected = pipelineRows.filter((row) => REJECTED_STATUSES.has(pipelineStatus(row))).length;
+    const omRequested = pipelineRows.filter((row) =>
+      !pipelineIsTerminal(row) &&
+      pipelineHasOmRequest(row) &&
+      !pipelineHasOmEvidence(row)
+    ).length;
+    const underwriting = pipelineRows.filter((row) =>
+      !pipelineIsTerminal(row) &&
+      pipelineHasOmEvidence(row) &&
+      !LATER_STAGE_STATUSES.has(pipelineStatus(row))
+    ).length;
+    const loiSent = pipelineRows.filter((row) => pipelineStatus(row) === "offer_review").length;
+    const negotiation = pipelineRows.filter((row) => pipelineStatus(row) === "negotiation").length;
+    const contractSigned = pipelineRows.filter((row) => pipelineStatus(row) === "contract_signed").length;
+    return [
+      {
+        key: "sourced",
+        label: "Sourced",
+        count: pipelineTotal,
+        href: "/pipeline",
+        subMetric: { label: "Rejected", count: rejected, tone: "danger" },
+      },
+      { key: "om_requested", label: "OM Requested", count: omRequested, href: "/pipeline" },
+      { key: "underwriting", label: "Underwriting", count: underwriting, href: "/pipeline" },
+      { key: "loi_sent", label: "LOI Sent", count: loiSent, href: "/pipeline" },
+      { key: "negotiation", label: "Negotiation", count: negotiation, href: "/pipeline" },
+      { key: "contract_signed", label: "Contract Signed", count: contractSigned, href: "/pipeline" },
+    ];
+  }, [pipelineRows, pipelineTotal]);
+
   const attentionItems = useMemo(() => {
     const missingEnrichment = pipelineRows.filter((row) => row.enrichmentState?.status !== "complete").slice(0, 5);
     const missingDocs = pipelineRows.filter((row) => !row.documentStatus?.hasOm).slice(0, 5);
@@ -310,10 +374,15 @@ function HomePageContent() {
 
       <section aria-label="Saved deal status overview">
         <div className={styles.stageStrip}>
-          {savedStageGroups.map((group) => (
-            <Link key={group.key} href="/saved" className={styles.stageCell}>
-              <span>{group.label}</span>
-              <strong>{group.rows.length}</strong>
+          {funnelMetrics.map((metric) => (
+            <Link key={metric.key} href={metric.href} className={styles.stageCell}>
+              <span>{metric.label}</span>
+              <strong>{metric.count}</strong>
+              {metric.subMetric ? (
+                <small className={`${styles.stageSubMetric} ${metric.subMetric.tone === "danger" ? styles.stageSubMetricDanger : ""}`}>
+                  {metric.subMetric.label} <b>{metric.subMetric.count}</b>
+                </small>
+              ) : null}
             </Link>
           ))}
         </div>
