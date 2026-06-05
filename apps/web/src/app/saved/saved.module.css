@@ -18,7 +18,7 @@
   margin: 0 0 0.35rem;
   color: var(--app-muted);
   font-size: 0.74rem;
-  font-weight: 750;
+  font-weight: 560;
   letter-spacing: 0;
   text-transform: uppercase;
 }
@@ -27,9 +27,9 @@
   margin: 0;
   color: var(--app-ink);
   font-family: var(--font-ui);
-  font-size: 1.8rem;
-  font-weight: 760;
-  line-height: 1.05;
+  font-size: var(--text-3xl);
+  font-weight: 560;
+  line-height: 1.12;
   letter-spacing: 0;
 }
 
@@ -59,7 +59,7 @@
   align-items: center;
   justify-content: center;
   min-height: 1.95rem;
-  padding: 0.38rem 0.82rem;
+  padding: 0.42rem 0.95rem;
   border-radius: 999px;
   font-size: 0.8rem;
   font-weight: 750;
@@ -103,7 +103,7 @@
   align-items: center;
   justify-content: center;
   min-height: 2rem;
-  padding: 0.42rem 0.76rem;
+  padding: 0.46rem 0.92rem;
   border-radius: 999px;
   font-size: 0.82rem;
   font-weight: 750;
@@ -127,7 +127,7 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 0.5rem;
-  padding: 0.7rem 0.8rem;
+  padding: 0.82rem 1rem;
   border: 1px solid var(--app-blue-border);
   border-radius: 8px;
   background: var(--app-blue-soft);
@@ -136,7 +136,7 @@
 }
 
 .filterNotice strong {
-  padding: 0.18rem 0.45rem;
+  padding: 0.2rem 0.6rem;
   border-radius: 999px;
   background: var(--app-surface);
   color: var(--app-blue);
@@ -152,7 +152,7 @@
   display: grid;
   gap: 0.28rem;
   min-width: 0;
-  padding: 0.72rem 0.8rem;
+  padding: 0.78rem 0.95rem;
   border: 1px solid var(--app-line);
   border-radius: 8px;
   background: var(--app-surface);
@@ -200,7 +200,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
-  padding: 0.78rem 0.85rem;
+  padding: 0.82rem 1.05rem;
   border-bottom: 1px solid var(--app-line);
   background: var(--app-surface-raised);
 }
@@ -251,7 +251,7 @@
 
 .table th,
 .table td {
-  padding: 0.68rem 0.78rem;
+  padding: 0.72rem 0.9rem;
   border-bottom: 1px solid var(--app-line-subtle);
   text-align: left;
   vertical-align: top;
@@ -353,7 +353,7 @@
 }
 
 .tagChip {
-  padding: 0.16rem 0.4rem;
+  padding: 0.18rem 0.52rem;
   border: 1px solid var(--app-line);
   border-radius: 6px;
   background: var(--app-surface-raised);
@@ -413,7 +413,7 @@
   min-height: 1.35rem;
   border: 1px solid var(--app-line);
   border-radius: 999px;
-  padding: 0.12rem 0.4rem;
+  padding: 0.14rem 0.52rem;
   background: var(--app-surface-raised);
   color: var(--app-ink-secondary);
   font-weight: 750;
@@ -424,7 +424,7 @@
   width: fit-content;
   align-items: center;
   min-height: 1.42rem;
-  padding: 0.2rem 0.48rem;
+  padding: 0.22rem 0.58rem;
   border-radius: 999px;
   font-size: 0.7rem;
   font-weight: 850;
@@ -462,7 +462,7 @@
 
 .rejectionBlock {
   max-width: 16rem;
-  padding: 0.55rem;
+  padding: 0.65rem 0.75rem;
   border: 1px solid var(--app-red-border);
   border-radius: 7px;
   background: var(--app-surface);
@@ -485,7 +485,7 @@
   justify-content: center;
   min-width: 4.5rem;
   min-height: 1.42rem;
-  padding: 0.16rem 0.5rem;
+  padding: 0.18rem 0.6rem;
   border-radius: 999px;
   font-size: 0.7rem;
   font-weight: 850;
@@ -531,7 +531,7 @@
   flex: 0 0 auto;
   width: fit-content;
   min-height: 1.55rem;
-  padding: 0.18rem 0.48rem;
+  padding: 0.2rem 0.6rem;
   border: 1px solid var(--app-line-strong);
   border-radius: 999px;
   background: var(--app-surface);

@@ -1281,9 +1281,9 @@ export default function RunsPage() {
               gap: "0.75rem 1rem",
               marginBottom: "1rem",
               padding: "0.85rem 1rem",
-              border: "1px solid #e5e7eb",
+              border: "1px solid var(--app-line)",
               borderRadius: 8,
-              background: "#fafafa",
+              background: "var(--app-surface-strong)",
             }}
           >
             {form.manualRunSource === "loopnet" ? (
@@ -1318,10 +1318,10 @@ export default function RunsPage() {
               <div style={{ gridColumn: "1 / -1", display: "grid", gap: "0.75rem" }}>
                 <div
                   style={{
-                    border: "1px solid #d1d5db",
+                    border: "1px solid var(--app-line)",
                     borderRadius: 8,
                     padding: "0.75rem",
-                    background: "#fff",
+                    background: "var(--app-surface)",
                     display: "grid",
                     gap: "0.6rem",
                   }}
@@ -1417,9 +1417,9 @@ export default function RunsPage() {
           style={{
             marginBottom: "1rem",
             padding: "0.85rem 1rem",
-            border: "1px solid #e5e7eb",
+            border: "1px solid var(--app-line)",
             borderRadius: 8,
-            background: "#fafafa",
+            background: "var(--app-surface-strong)",
           }}
         >
           <h3 style={{ fontSize: "0.95rem", marginBottom: "0.5rem" }}>Saved-search sources</h3>
@@ -1452,9 +1452,9 @@ export default function RunsPage() {
           style={{
             marginBottom: "1rem",
             padding: "0.85rem 1rem",
-            border: "1px solid #e5e7eb",
+            border: "1px solid var(--app-line)",
             borderRadius: 8,
-            background: "#fafafa",
+            background: "var(--app-surface-strong)",
           }}
         >
           <div style={{ marginBottom: "0.75rem" }}>
@@ -1525,7 +1525,7 @@ export default function RunsPage() {
               gap: "0.25rem",
               marginBottom: "0.5rem",
               flexWrap: "wrap",
-              borderBottom: "1px solid #e5e5e5",
+              borderBottom: "1px solid var(--app-line)",
               paddingBottom: "0.5rem",
             }}
           >
@@ -1537,11 +1537,11 @@ export default function RunsPage() {
                 style={{
                   padding: "0.35rem 0.6rem",
                   fontSize: "0.8rem",
-                  fontWeight: areaBoroughTab === tab.id ? 600 : 400,
-                  border: "1px solid #e5e5e5",
-                  borderRadius: 4,
-                  background: areaBoroughTab === tab.id ? "#e5e5e5" : "#fafafa",
-                  color: areaBoroughTab === tab.id ? "#171717" : "#525252",
+                  fontWeight: areaBoroughTab === tab.id ? 700 : 650,
+                  border: `1px solid ${areaBoroughTab === tab.id ? "var(--brand-border)" : "var(--app-line)"}`,
+                  borderRadius: 999,
+                  background: areaBoroughTab === tab.id ? "var(--brand-soft)" : "var(--app-surface)",
+                  color: areaBoroughTab === tab.id ? "var(--brand-strong)" : "var(--app-muted)",
                   cursor: "pointer",
                 }}
               >
@@ -1555,9 +1555,9 @@ export default function RunsPage() {
               maxHeight: "14rem",
               overflowY: "auto",
               padding: "0.75rem 1rem",
-              border: "1px solid #e5e5e5",
+              border: "1px solid var(--app-line)",
               borderRadius: 6,
-              background: "#f5f5f5",
+              background: "var(--app-surface-strong)",
             }}
           >
             {BOROUGH_TABS.find((tab) => tab.id === areaBoroughTab)?.tree.map((node) => renderAreaNodes([node], 0))}
@@ -1723,9 +1723,9 @@ export default function RunsPage() {
               flexWrap: "wrap",
               gap: "0.35rem",
               padding: "0.5rem",
-              border: "1px solid #e5e5e5",
+              border: "1px solid var(--app-line)",
               borderRadius: 6,
-              background: "#f5f5f5",
+              background: "var(--app-surface-strong)",
             }}
           >
             {TYPE_OPTIONS.map((option) => (

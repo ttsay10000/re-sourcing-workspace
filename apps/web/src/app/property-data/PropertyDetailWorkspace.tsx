@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+import { AlertCircle, CalendarDays, CheckCircle2, Circle, Info } from "lucide-react";
 
 export type PropertyDetailTabId =
   | "overview"
@@ -52,6 +53,13 @@ export function PropertyDetailWorkspace({
   actions,
   children,
 }: PropertyDetailWorkspaceProps) {
+  const statusIcon = (tone: PropertyDetailRailItem["tone"]) => {
+    if (tone === "good") return <CheckCircle2 size={14} strokeWidth={1.9} />;
+    if (tone === "warn") return <AlertCircle size={14} strokeWidth={1.9} />;
+    if (tone === "danger") return <AlertCircle size={14} strokeWidth={1.9} />;
+    return <Circle size={13} strokeWidth={1.9} />;
+  };
+
   return (
     <div className="property-detail-workspace">
       <div className="property-detail-workspace-top">
@@ -93,9 +101,12 @@ export function PropertyDetailWorkspace({
                 key={item.label}
                 className={`property-detail-rail-item property-detail-rail-item--${item.tone ?? "neutral"}`}
               >
-                <span className="property-detail-rail-label">{item.label}</span>
-                <strong className="property-detail-rail-value">{item.value}</strong>
-                {item.detail ? <span className="property-detail-rail-detail">{item.detail}</span> : null}
+                <span className="property-detail-rail-icon" aria-hidden="true">{statusIcon(item.tone)}</span>
+                <span className="property-detail-rail-copy">
+                  <span className="property-detail-rail-label">{item.label}</span>
+                  <strong className="property-detail-rail-value">{item.value}</strong>
+                  {item.detail ? <span className="property-detail-rail-detail">{item.detail}</span> : null}
+                </span>
               </div>
             ))}
           </div>
@@ -108,12 +119,18 @@ export function PropertyDetailWorkspace({
                   key={`${item.label}-${item.detail ?? ""}`}
                   className={`property-detail-activity-item property-detail-activity-item--${item.tone ?? "neutral"}`}
                 >
-                  <strong>{item.label}</strong>
-                  {item.detail ? <span>{item.detail}</span> : null}
+                  <CalendarDays className="property-detail-activity-icon" size={14} strokeWidth={1.75} aria-hidden="true" />
+                  <span className="property-detail-activity-copy">
+                    <strong>{item.label}</strong>
+                    {item.detail ? <span>{item.detail}</span> : null}
+                  </span>
                 </div>
               ))
             ) : (
-              <div className="property-detail-activity-empty">No recent activity yet.</div>
+              <div className="property-detail-activity-empty">
+                <Info size={14} strokeWidth={1.75} aria-hidden="true" />
+                <span>No recent activity yet.</span>
+              </div>
             )}
           </div>
         </aside>

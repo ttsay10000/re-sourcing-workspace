@@ -4,6 +4,15 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useState } from "react";
 import type { UiV2PipelineListPayload, UiV2PipelineRow } from "@re-sourcing/contracts";
+import {
+  AlertTriangle,
+  FileQuestion,
+  MailX,
+  Minus,
+  Plus,
+  RefreshCcw,
+  type LucideIcon,
+} from "lucide-react";
 import styles from "./home.module.css";
 
 const API_BASE = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000").replace(/\/$/, "");
@@ -78,6 +87,13 @@ type FunnelMetric = {
     count: number;
     tone?: "danger" | "neutral";
   };
+};
+type AttentionGroup = {
+  count: number;
+  icon: LucideIcon;
+  label: string;
+  rows: Array<UiV2PipelineRow | HomeProgressRow>;
+  tone: "warning" | "neutral" | "danger";
 };
 
 const SAVED_STAGE_GROUPS = [
@@ -341,15 +357,15 @@ function HomePageContent() {
     ];
   }, [pipelineRows, pipelineTotal]);
 
-  const attentionItems = useMemo(() => {
+  const attentionItems = useMemo<AttentionGroup[]>(() => {
     const missingEnrichment = pipelineRows.filter((row) => row.enrichmentState?.status !== "complete").slice(0, 5);
     const missingDocs = pipelineRows.filter((row) => !row.documentStatus?.hasOm).slice(0, 5);
     const missingBroker = pipelineRows.filter((row) => !row.broker?.email).slice(0, 5);
     return [
-      { label: "Missing enrichment", icon: "!", tone: "warning", count: missingEnrichment.length, rows: missingEnrichment },
-      { label: "Missing rental flow", icon: "R", tone: "neutral", count: pipelineRows.filter((row) => row.openActionItemCount).length, rows: progressRows.slice(0, 5) },
-      { label: "Missing broker contact", icon: "@", tone: "danger", count: missingBroker.length, rows: missingBroker },
-      { label: "Needs OM request", icon: "OM", tone: "warning", count: missingDocs.length, rows: missingDocs },
+      { label: "Missing enrichment", icon: AlertTriangle, tone: "warning", count: missingEnrichment.length, rows: missingEnrichment },
+      { label: "Missing rental flow", icon: RefreshCcw, tone: "neutral", count: pipelineRows.filter((row) => row.openActionItemCount).length, rows: progressRows.slice(0, 5) },
+      { label: "Missing broker contact", icon: MailX, tone: "danger", count: missingBroker.length, rows: missingBroker },
+      { label: "Needs OM request", icon: FileQuestion, tone: "warning", count: missingDocs.length, rows: missingDocs },
     ];
   }, [pipelineRows, progressRows]);
 
@@ -484,6 +500,7 @@ function HomePageContent() {
           </div>
           {attentionItems.map((group) => {
             const isOpen = openAttentionGroups[group.label] !== false;
+            const AttentionIcon = group.icon;
             return (
               <section key={group.label} className={styles.attentionGroup}>
                 <button
@@ -492,10 +509,12 @@ function HomePageContent() {
                   aria-expanded={isOpen}
                   onClick={() => setOpenAttentionGroups((current) => ({ ...current, [group.label]: !isOpen }))}
                 >
-                  <span className={`${styles.attentionIcon} ${styles[`attentionTone${titleize(group.tone)}`]}`} aria-hidden="true">{group.icon}</span>
+                  <span className={`${styles.attentionIcon} ${styles[`attentionTone${titleize(group.tone)}`]}`} aria-hidden="true">
+                    <AttentionIcon size={14} strokeWidth={2} />
+                  </span>
                   <strong>{group.label}</strong>
                   <span>{group.count}</span>
-                  <i aria-hidden="true">{isOpen ? "−" : "+"}</i>
+                  <i aria-hidden="true">{isOpen ? <Minus size={13} strokeWidth={2} /> : <Plus size={13} strokeWidth={2} />}</i>
                 </button>
                 {isOpen ? (
                   <div className={styles.attentionRows}>

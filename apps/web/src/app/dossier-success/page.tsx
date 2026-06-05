@@ -3,6 +3,7 @@
 import React, { Suspense, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
+import styles from "./dossierSuccess.module.css";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
 
@@ -68,32 +69,24 @@ function DossierSuccessContent() {
   }
 
   return (
-    <div style={{ padding: "1.5rem", maxWidth: "560px" }}>
-      <h1 className="page-title">Deal dossier generated</h1>
-      <p style={{ marginBottom: "1.5rem", color: "#666" }}>
+    <div className={styles.page}>
+      <section className={styles.panel}>
+        <p className={styles.kicker}>Output ready</p>
+        <h1 className={styles.title}>Deal dossier generated</h1>
+        <p className={styles.copy}>
         Your deal dossier and Excel pro forma have been saved to the property documents.
         {dealScore != null && (
           <> Deal score: <strong>{dealScore}/100</strong> (included in dossier PDF).</>
         )}
         {emailSent && " A copy was sent to your profile email address."}
-      </p>
-      <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+        </p>
+      <div className={styles.actions}>
         {dossierUrl && (
           <button
             type="button"
             onClick={() => void downloadDocument(dossierUrl, "Deal-Dossier.pdf", "pdf")}
             disabled={downloading != null}
-            style={{
-              display: "inline-block",
-              padding: "0.75rem 1rem",
-              background: "#0066cc",
-              color: "#fff",
-              borderRadius: "6px",
-              border: "none",
-              fontWeight: 500,
-              textAlign: "left",
-              cursor: downloading != null ? "not-allowed" : "pointer",
-            }}
+            className={styles.downloadButton}
           >
             {downloading === "pdf" ? "Downloading dossier..." : "Download dossier (PDF)"}
           </button>
@@ -103,33 +96,24 @@ function DossierSuccessContent() {
             type="button"
             onClick={() => void downloadDocument(excelUrl, "Deal-Dossier-Workbook.xlsx", "excel")}
             disabled={downloading != null}
-            style={{
-              display: "inline-block",
-              padding: "0.75rem 1rem",
-              background: "#15803d",
-              color: "#fff",
-              borderRadius: "6px",
-              border: "none",
-              fontWeight: 500,
-              textAlign: "left",
-              cursor: downloading != null ? "not-allowed" : "pointer",
-            }}
+            className={`${styles.downloadButton} ${styles.downloadButtonSecondary}`}
           >
             {downloading === "excel" ? "Downloading Excel..." : "Download Excel pro forma"}
           </button>
         )}
         {(!dossierUrl || !excelUrl) && (
-          <p style={{ fontSize: "0.875rem", color: "#666" }}>
+          <p className={styles.copy}>
             Missing document IDs in the URL. You can still open the property and download from the Documents section.
           </p>
         )}
         {error && (
-          <p style={{ fontSize: "0.875rem", color: "#b91c1c", margin: 0 }}>
+          <p className={styles.error}>
             {error}
           </p>
         )}
       </div>
-      <p style={{ marginTop: "1.5rem", fontSize: "0.875rem" }}>
+      </section>
+      <p className={styles.links}>
         {propertyId && (
           <>
             <Link href={`/property/${propertyId}`}>View property &amp; documents</Link>
@@ -148,9 +132,12 @@ export default function DossierSuccessPage() {
   return (
     <Suspense
       fallback={
-        <div style={{ padding: "1.5rem" }}>
-          <h1 className="page-title">Deal dossier generated</h1>
-          <p>Loading…</p>
+        <div className={styles.page}>
+          <section className={styles.panel}>
+            <p className={styles.kicker}>Output ready</p>
+            <h1 className={styles.title}>Deal dossier generated</h1>
+            <p className={styles.copy}>Loading…</p>
+          </section>
         </div>
       }
     >

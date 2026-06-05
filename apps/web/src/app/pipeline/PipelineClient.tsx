@@ -12,6 +12,7 @@ import {
 } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
+import { X } from "lucide-react";
 import {
   UI_V2_PIPELINE_STATUS_OPTIONS,
   UI_V2_REJECTION_REASON_OPTIONS,
@@ -2609,7 +2610,7 @@ export default function PipelineClient() {
                   {sheetFullscreen ? "Compact" : "Full screen"}
                 </button>
                 <button className={styles.closeButton} type="button" onClick={closeSheet} aria-label="Close property sheet">
-                  ×
+                  <X size={16} strokeWidth={2} aria-hidden="true" />
                 </button>
               </div>
             </div>
@@ -3047,7 +3048,8 @@ export default function PipelineClient() {
                           onClick={() => removeTag(tag)}
                           disabled={busyAction === `${selectedId}:tag-remove:${tag}`}
                         >
-                          {tagLabel(tag)} x
+                          <span>{tagLabel(tag)}</span>
+                          <X className={styles.tagRemoveIcon} size={12} strokeWidth={2.3} aria-hidden="true" />
                         </button>
                       ))}
                     </div>
@@ -3288,7 +3290,7 @@ export default function PipelineClient() {
                 <h2>{rejectState.address}</h2>
               </div>
               <button className={styles.closeButton} type="button" onClick={() => setRejectState(null)} aria-label="Close rejection modal">
-                x
+                <X size={16} strokeWidth={2} aria-hidden="true" />
               </button>
             </div>
             <label>
@@ -3358,7 +3360,7 @@ export default function PipelineClient() {
                 }}
                 aria-label="Close outreach composer"
               >
-                x
+                <X size={16} strokeWidth={2} aria-hidden="true" />
               </button>
             </div>
             {composer.warnings.length > 0 ? (

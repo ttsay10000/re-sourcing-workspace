@@ -18,7 +18,7 @@
   margin: 0 0 0.35rem;
   color: var(--app-muted);
   font-size: 0.74rem;
-  font-weight: 750;
+  font-weight: 560;
   letter-spacing: 0;
   text-transform: uppercase;
 }
@@ -27,9 +27,9 @@
   margin: 0;
   color: var(--app-ink);
   font-family: var(--font-ui);
-  font-size: 1.8rem;
-  font-weight: 760;
-  line-height: 1.05;
+  font-size: var(--text-3xl);
+  font-weight: 560;
+  line-height: 1.12;
   letter-spacing: 0;
 }
 
@@ -55,7 +55,7 @@
   align-items: center;
   justify-content: center;
   min-height: 2.1rem;
-  padding: 0.48rem 0.76rem;
+  padding: 0.52rem 0.95rem;
   border-radius: 7px;
   font-size: 0.82rem;
   font-weight: 750;
@@ -86,7 +86,7 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 0.5rem;
-  padding: 0.7rem 0.8rem;
+  padding: 0.82rem 1rem;
   border: 1px solid var(--app-green-border);
   border-radius: 8px;
   background: var(--app-green-soft);
@@ -95,7 +95,7 @@
 }
 
 .filterNotice strong {
-  padding: 0.18rem 0.45rem;
+  padding: 0.2rem 0.6rem;
   border-radius: 999px;
   background: var(--app-surface);
   color: var(--app-accent);
@@ -111,7 +111,7 @@
   display: grid;
   gap: 0.28rem;
   min-width: 0;
-  padding: 0.62rem 0.68rem;
+  padding: 0.78rem 1rem;
   border: 1px solid var(--app-line);
   border-radius: 8px;
   background: var(--app-surface);
@@ -160,7 +160,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
-  padding: 0.78rem 0.85rem;
+  padding: 0.85rem 1rem;
 }
 
 .boardHeader h2,
@@ -192,7 +192,7 @@
 }
 
 .savedFlowHeader {
-  padding: 0.78rem 0.85rem;
+  padding: 0.85rem 1rem;
   border-bottom: 1px solid var(--app-line);
   background: var(--app-surface-raised);
 }
@@ -202,7 +202,7 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 0.55rem;
-  padding: 0.5rem 0.72rem;
+  padding: 0.55rem 0.85rem;
   border-bottom: 1px solid var(--app-line);
   background: var(--app-surface);
 }
@@ -324,13 +324,13 @@
 .tagSections {
   display: grid;
   gap: 0.5rem;
-  padding: 0.65rem;
+  padding: 0.75rem;
 }
 
 .flowSections {
   overflow-x: auto;
   align-items: start;
-  grid-template-columns: repeat(7, minmax(11.8rem, 1fr));
+  grid-template-columns: repeat(7, minmax(13rem, 1fr));
 }
 
 .tagSections {
@@ -359,7 +359,7 @@
 }
 
 .miniSectionHeader {
-  padding: 0.48rem 0.54rem;
+  padding: 0.56rem 0.7rem;
   border-bottom: 1px solid var(--app-line-subtle);
   background: var(--app-surface-raised);
 }
@@ -388,7 +388,7 @@
   gap: 0.34rem;
   align-items: center;
   min-height: 2.55rem;
-  padding: 0.34rem 0.44rem;
+  padding: 0.42rem 0.6rem;
   border-bottom: 1px solid var(--app-line-subtle);
   color: var(--app-ink);
   cursor: grab;
@@ -460,7 +460,7 @@
   min-height: 1.35rem;
   border: 1px solid var(--app-line);
   border-radius: 6px;
-  padding: 0.16rem 0.42rem;
+  padding: 0.18rem 0.54rem;
   background: var(--app-surface-raised);
   color: var(--app-ink-secondary);
   font-size: 0.66rem;
@@ -512,7 +512,7 @@
   max-width: 4.2rem;
   min-height: 1.08rem;
   overflow: hidden;
-  padding: 0.08rem 0.28rem;
+  padding: 0.1rem 0.34rem;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 0.56rem;
@@ -521,7 +521,7 @@
 .miniMeta .scorePill {
   min-width: 1.85rem;
   min-height: 1.08rem;
-  padding: 0.08rem 0.28rem;
+  padding: 0.1rem 0.34rem;
   font-size: 0.58rem;
 }
 
@@ -532,13 +532,13 @@
 }
 
 .moreRows {
-  padding: 0.65rem 0.8rem;
+  padding: 0.7rem 0.9rem;
   background: var(--app-surface-raised);
 }
 
 .error,
 .emptyState {
-  padding: 0.85rem 0.95rem;
+  padding: 0.9rem 1.05rem;
   border-radius: 8px;
 }
 
@@ -604,7 +604,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
-  padding: 0.72rem 0.82rem;
+  padding: 0.78rem 0.95rem;
   border-bottom: 1px solid var(--app-line);
   background: var(--app-surface-raised);
 }
@@ -644,7 +644,7 @@
 
 .table th,
 .table td {
-  padding: 0.56rem 0.62rem;
+  padding: 0.62rem 0.78rem;
   border-bottom: 1px solid var(--app-line-subtle);
   text-align: left;
   vertical-align: top;
@@ -711,7 +711,7 @@
   width: fit-content;
   align-items: center;
   min-height: 1.42rem;
-  padding: 0.2rem 0.48rem;
+  padding: 0.22rem 0.58rem;
   border-radius: 999px;
   font-size: 0.7rem;
   font-weight: 850;
@@ -799,7 +799,7 @@
   }
 
   .flowSections {
-    grid-template-columns: repeat(7, minmax(11.8rem, 1fr));
+    grid-template-columns: repeat(7, minmax(13rem, 1fr));
   }
 }
 

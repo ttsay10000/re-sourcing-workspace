@@ -550,37 +550,17 @@ function V3ReportPanel({
   actions?: React.ReactNode;
 }) {
   return (
-    <section
-      style={{
-        border: "1px solid rgba(38, 47, 44, 0.14)",
-        borderRadius: "10px",
-        background: "#fff",
-        boxShadow: "0 10px 26px rgba(31, 43, 37, 0.05)",
-        overflow: "hidden",
-      }}
-    >
-      <div
-        style={{
-          display: "flex",
-          alignItems: "flex-start",
-          justifyContent: "space-between",
-          gap: "1rem",
-          padding: "0.95rem 1rem",
-          borderBottom: "1px solid rgba(38, 47, 44, 0.1)",
-          background: "linear-gradient(180deg, #fbfaf6 0%, #ffffff 100%)",
-        }}
-      >
+    <section className="v3-report-panel">
+      <div className="v3-report-panel-header">
         <div>
-          <h3 style={{ margin: 0, fontSize: "1.05rem", lineHeight: 1.25, color: "#111827" }}>{title}</h3>
+          <h3 className="v3-report-panel-title">{title}</h3>
           {subtitle ? (
-            <p style={{ margin: "0.28rem 0 0", color: "#64706a", fontSize: "0.86rem", lineHeight: 1.45 }}>
-              {subtitle}
-            </p>
+            <p className="v3-report-panel-subtitle">{subtitle}</p>
           ) : null}
         </div>
-        {actions ? <div style={{ flexShrink: 0 }}>{actions}</div> : null}
+        {actions ? <div className="v3-report-panel-actions">{actions}</div> : null}
       </div>
-      <div style={{ padding: "1rem", display: "grid", gap: "1rem" }}>{children}</div>
+      <div className="v3-report-panel-body">{children}</div>
     </section>
   );
 }
@@ -595,13 +575,11 @@ function V3ReportSection({
   subtitle?: string;
 }) {
   return (
-    <section style={{ display: "grid", gap: "0.55rem" }}>
+    <section className="v3-report-section">
       <div>
-        <h4 style={{ margin: 0, color: "#172117", fontSize: "0.92rem", lineHeight: 1.3 }}>{title}</h4>
+        <h4 className="v3-report-section-title">{title}</h4>
         {subtitle ? (
-          <p style={{ margin: "0.2rem 0 0", color: "#6b756f", fontSize: "0.8rem", lineHeight: 1.45 }}>
-            {subtitle}
-          </p>
+          <p className="v3-report-section-subtitle">{subtitle}</p>
         ) : null}
       </div>
       {children}
@@ -611,51 +589,17 @@ function V3ReportSection({
 
 function V3FactList({ items }: { items: V3FactItem[] }) {
   return (
-    <dl
-      style={{
-        display: "grid",
-        gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))",
-        gap: "0.7rem 1rem",
-        margin: 0,
-      }}
-    >
+    <dl className="v3-fact-list">
       {items.map((item) => (
-        <div key={item.label} style={{ minWidth: 0 }}>
-          <dt
-            style={{
-              color: "#6b7280",
-              fontSize: "0.72rem",
-              fontWeight: 700,
-              lineHeight: 1.35,
-              textTransform: "uppercase",
-              letterSpacing: 0,
-            }}
-          >
-            {item.label}
-          </dt>
+        <div key={item.label} className="v3-fact-row">
+          <dt className="v3-fact-label">{item.label}</dt>
           <dd
-            style={{
-              margin: "0.15rem 0 0",
-              color:
-                item.tone === "good"
-                  ? "#166534"
-                  : item.tone === "warn"
-                    ? "#92400e"
-                    : item.tone === "danger"
-                      ? "#991b1b"
-                      : "#111827",
-              fontSize: "0.95rem",
-              fontWeight: 650,
-              lineHeight: 1.35,
-              overflowWrap: "anywhere",
-            }}
+            className={`v3-fact-value v3-fact-value--${item.tone ?? "neutral"}`}
           >
             {item.value}
           </dd>
           {item.detail ? (
-            <div style={{ marginTop: "0.12rem", color: "#64748b", fontSize: "0.76rem", lineHeight: 1.35 }}>
-              {item.detail}
-            </div>
+            <div className="v3-fact-detail">{item.detail}</div>
           ) : null}
         </div>
       ))}
@@ -665,10 +609,10 @@ function V3FactList({ items }: { items: V3FactItem[] }) {
 
 function V3Bullets({ items }: { items: string[] }) {
   if (items.length === 0) {
-    return <p style={{ margin: 0, color: "#7a847d", fontSize: "0.86rem" }}>No summary available yet.</p>;
+    return <p className="v3-empty-copy">No summary available yet.</p>;
   }
   return (
-    <ul style={{ margin: 0, paddingLeft: "1.05rem", color: "#26342e", fontSize: "0.88rem", lineHeight: 1.55 }}>
+    <ul className="v3-bullet-list">
       {items.map((item, index) => (
         <li key={`${item}-${index}`}>{item}</li>
       ))}

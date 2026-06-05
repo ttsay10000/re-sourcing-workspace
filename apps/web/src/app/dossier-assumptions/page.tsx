@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useState, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
+import styles from "./dossierAssumptions.module.css";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
 
@@ -86,17 +87,21 @@ const DOSSIER_GENERATION_STEPS = [
 ] as const;
 
 const inputStyle: React.CSSProperties = {
-  padding: "0.5rem",
-  border: "1px solid #ccc",
-  borderRadius: "4px",
+  minHeight: "2.45rem",
+  padding: "0.52rem 0.68rem",
+  border: "1px solid var(--app-line-strong)",
+  borderRadius: "8px",
+  background: "var(--app-surface)",
+  color: "var(--app-ink)",
+  font: "inherit",
 };
 
 const sectionStyle: React.CSSProperties = {
-  marginBottom: "1.5rem",
   padding: "1rem",
-  border: "1px solid #e5e5e5",
+  border: "1px solid var(--app-line)",
   borderRadius: "8px",
-  background: "#fafafa",
+  background: "var(--app-surface)",
+  boxShadow: "var(--app-shadow-xs)",
 };
 
 function formatDuration(ms: number, roundUp = false): string {
@@ -343,18 +348,27 @@ function DossierAssumptionsContent() {
 
   if (loading) {
     return (
-      <div style={{ padding: "1.5rem" }}>
-        <h1 className="page-title">Dossier assumptions</h1>
-        <p>Loading…</p>
+      <div className={styles.page}>
+        <header className={styles.header}>
+          <p className={styles.kicker}>Deal dossier</p>
+          <h1 className={styles.title}>Dossier assumptions</h1>
+          <p className={styles.meta}>Loading…</p>
+        </header>
       </div>
     );
   }
 
   return (
-    <div style={{ padding: "1.5rem", maxWidth: "720px" }}>
-      <h1 className="page-title">Dossier assumptions</h1>
+    <div className={styles.page}>
+      <header className={styles.header}>
+        <p className={styles.kicker}>Deal dossier</p>
+        <h1 className={styles.title}>Dossier assumptions</h1>
+        <p className={styles.meta}>
+          Tune deal-level underwriting assumptions before generating the PDF and Excel outputs.
+        </p>
+      </header>
       {propertyId && (
-        <p style={{ fontSize: "0.875rem", color: "#666", marginBottom: "1rem" }}>
+        <p className={styles.meta}>
           Property: <code>{propertyId}</code>
           {property ? (
             <>
@@ -365,37 +379,27 @@ function DossierAssumptionsContent() {
               )}
             </>
           ) : (
-            <span style={{ color: "#b91c1c" }}> — Property not found</span>
+            <span style={{ color: "var(--app-red)" }}> — Property not found</span>
           )}
         </p>
       )}
       {propertyId && (
-        <p style={{ marginTop: "-0.5rem", marginBottom: "1rem" }}>
+        <p className={styles.toolbar}>
           <Link
             href={`/deal-analysis?property_id=${encodeURIComponent(propertyId)}`}
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              border: "1px solid #cfd8d3",
-              borderRadius: "999px",
-              color: "#164b3f",
-              fontSize: "0.875rem",
-              fontWeight: 600,
-              padding: "0.45rem 0.75rem",
-              textDecoration: "none",
-            }}
+            className={styles.linkButton}
           >
             Open OM workspace
           </Link>
         </p>
       )}
       {!propertyId && (
-        <p style={{ fontSize: "0.875rem", color: "#666", marginBottom: "1rem" }}>
+        <p className={styles.meta}>
           Add <code>?property_id=...</code> to preload assumptions for a specific property, or use your profile defaults below.
         </p>
       )}
       {error && (
-        <p style={{ color: "#b91c1c", marginBottom: "1rem" }}>{error}</p>
+        <p className={styles.error}>{error}</p>
       )}
 
       <section style={sectionStyle}>
@@ -705,19 +709,12 @@ function DossierAssumptionsContent() {
         </div>
       </section>
 
-      <div style={{ display: "flex", flexWrap: "wrap", gap: "0.75rem", marginTop: "1.5rem" }}>
+      <div className={styles.toolbar}>
         <button
           type="button"
           onClick={handleSaveAssumptions}
           disabled={saving || generating}
-          style={{
-            padding: "0.5rem 1rem",
-            background: "#0066cc",
-            color: "#fff",
-            border: "none",
-            borderRadius: "4px",
-            cursor: saving || generating ? "wait" : "pointer",
-          }}
+          className={`${styles.button} ${styles.buttonPrimary}`}
         >
           {saving ? "Saving…" : "Save to profile"}
         </button>
@@ -725,18 +722,11 @@ function DossierAssumptionsContent() {
           type="button"
           onClick={handleGenerateStandardLeverage}
           disabled={saving || generating}
-          style={{
-            padding: "0.5rem 1rem",
-            background: "#f0f0f0",
-            color: "#333",
-            border: "1px solid #ccc",
-            borderRadius: "4px",
-            cursor: saving || generating ? "wait" : "pointer",
-          }}
+          className={`${styles.button} ${styles.buttonSecondary}`}
         >
           Generate standard leverage
         </button>
-        <span style={{ alignSelf: "center", color: "#666", fontSize: "0.875rem" }}>
+        <span className={styles.helper}>
           Saves reusable defaults only. Renovation and furnishing costs remain deal-specific.
         </span>
       </div>
@@ -804,21 +794,13 @@ function DossierAssumptionsContent() {
           type="button"
           disabled={!propertyId || generating}
           onClick={handleGenerateDossier}
-          className="dossier-generate-button"
-          style={{
-            padding: "0.5rem 1rem",
-            background: propertyId && !generating ? "#0066cc" : "#ccc",
-            color: "#fff",
-            border: "none",
-            borderRadius: "4px",
-            cursor: propertyId && !generating ? "pointer" : "not-allowed",
-          }}
+          className={`dossier-generate-button ${styles.button} ${styles.buttonPrimary}`}
         >
           {generating ? `Generating… ${generationProgressPct}%` : "Generate dossier"}
         </button>
       </div>
 
-      <p style={{ marginTop: "1.5rem", fontSize: "0.875rem" }}>
+      <p className={styles.toolbar}>
         <Link href="/profile">Edit profile &amp; defaults</Link>
         {propertyId && (
           <>
@@ -834,9 +816,12 @@ function DossierAssumptionsContent() {
 export default function DossierAssumptionsPage() {
   return (
     <Suspense fallback={
-      <div style={{ padding: "1.5rem" }}>
-        <h1 className="page-title">Dossier assumptions</h1>
-        <p>Loading…</p>
+      <div className={styles.page}>
+        <header className={styles.header}>
+          <p className={styles.kicker}>Deal dossier</p>
+          <h1 className={styles.title}>Dossier assumptions</h1>
+          <p className={styles.meta}>Loading…</p>
+        </header>
       </div>
     }>
       <DossierAssumptionsContent />

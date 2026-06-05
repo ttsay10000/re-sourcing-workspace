@@ -1,13 +1,30 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
+import {
+  Bookmark,
+  Building2,
+  Contact,
+  FileText,
+  Home,
+  KanbanSquare,
+  Menu,
+  Plus,
+  Search,
+  Upload,
+  User,
+  X,
+  type LucideIcon,
+} from "lucide-react";
 
 type NavChildLink = {
   href: string;
   label: string;
   shortLabel: string;
+  icon: LucideIcon;
   matches: (pathname: string, section: string | null) => boolean;
 };
 
@@ -20,12 +37,14 @@ const NAV_LINKS: NavLink[] = [
     href: "/",
     label: "Home",
     shortLabel: "H",
+    icon: Home,
     matches: (pathname: string) => pathname === "/",
   },
   {
     href: "/pipeline",
     label: "Pipeline",
     shortLabel: "P",
+    icon: Building2,
     matches: (pathname: string) =>
       pathname === "/pipeline" ||
       pathname.startsWith("/pipeline/") ||
@@ -37,6 +56,7 @@ const NAV_LINKS: NavLink[] = [
     href: "/crm",
     label: "Broker CRM",
     shortLabel: "B",
+    icon: Contact,
     matches: (pathname: string) =>
       pathname === "/crm" ||
       pathname.startsWith("/crm/") ||
@@ -47,6 +67,7 @@ const NAV_LINKS: NavLink[] = [
     href: "/saved",
     label: "Saved Deals",
     shortLabel: "S",
+    icon: Bookmark,
     matches: (pathname: string, section: string | null) =>
       pathname === "/saved" ||
       pathname.startsWith("/saved/") ||
@@ -56,6 +77,7 @@ const NAV_LINKS: NavLink[] = [
     href: "/progress",
     label: "Deal Progress",
     shortLabel: "D",
+    icon: KanbanSquare,
     matches: (pathname: string) =>
       pathname === "/progress" ||
       pathname.startsWith("/progress/") ||
@@ -68,12 +90,14 @@ const NAV_LINKS: NavLink[] = [
         href: "/progress",
         label: "Progress Board",
         shortLabel: "B",
+        icon: KanbanSquare,
         matches: (pathname: string) => pathname === "/progress" || pathname.startsWith("/progress/"),
       },
       {
         href: "/deal-analysis",
         label: "OM Workspace",
         shortLabel: "O",
+        icon: FileText,
         matches: (pathname: string) => pathname === "/deal-analysis" || pathname.startsWith("/deal-analysis/"),
       },
     ],
@@ -82,6 +106,7 @@ const NAV_LINKS: NavLink[] = [
     href: "/profile",
     label: "Profile",
     shortLabel: "U",
+    icon: User,
     matches: (pathname: string, section: string | null) =>
       (pathname === "/profile" || pathname.startsWith("/profile/") || pathname === "/profiles") &&
       section !== "saved-deals",
@@ -178,8 +203,17 @@ export function AppShell({ children }: { children: ReactNode }) {
   return (
     <div className={`app-shell ${sidebarCollapsed ? "app-shell--sidebar-collapsed" : ""}`}>
       <aside className="app-sidebar" aria-label="Workspace navigation">
-        <Link href="/" className="app-sidebar-brand" aria-label="Real Estate Sourcing Flow home">
-          <span className="app-sidebar-mark">SO</span>
+        <Link href="/" className="app-sidebar-brand" aria-label="Sourcing OS home">
+          <span className="app-sidebar-mark" aria-hidden="true">
+            <Image
+              src="/sourcing-os-mark.svg"
+              alt=""
+              width={30}
+              height={30}
+              className="app-sidebar-mark-image"
+              priority
+            />
+          </span>
           <span className="app-sidebar-brand-text">
             <span>Sourcing OS</span>
             <small>Manhattan MF</small>
@@ -191,6 +225,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           {NAV_LINKS.map((navItem) => {
             const isActive = navItem.matches(pathname, currentSection);
             const childIsActive = navItem.children?.some((child) => child.matches(pathname, currentSection)) ?? false;
+            const NavIcon = navItem.icon;
             return (
               <div
                 key={navItem.href}
@@ -203,8 +238,8 @@ export function AppShell({ children }: { children: ReactNode }) {
                   onClick={() => handleNavClick(navItem.href)}
                   className={`app-nav-link ${isActive ? "app-nav-link--active" : ""}`}
                 >
-                  <span className="app-nav-short" aria-hidden="true">
-                    {navItem.shortLabel}
+                  <span className="app-nav-icon" aria-hidden="true">
+                    <NavIcon size={17} strokeWidth={1.85} />
                   </span>
                   <span className="app-nav-label">{navItem.label}</span>
                 </Link>
@@ -212,6 +247,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                   <div className="app-nav-children" aria-label={`${navItem.label} pages`}>
                     {navItem.children.map((child) => {
                       const isChildActive = child.matches(pathname, currentSection);
+                      const ChildIcon = child.icon;
                       return (
                         <Link
                           key={child.href}
@@ -220,7 +256,9 @@ export function AppShell({ children }: { children: ReactNode }) {
                           onClick={() => handleNavClick(child.href)}
                           className={`app-nav-sublink ${isChildActive ? "app-nav-sublink--active" : ""}`}
                         >
-                          <span className="app-nav-sublink-dot" aria-hidden="true" />
+                          <span className="app-nav-sublink-icon" aria-hidden="true">
+                            <ChildIcon size={14} strokeWidth={1.85} />
+                          </span>
                           <span className="app-nav-sublink-label">{child.label}</span>
                         </Link>
                       );
@@ -243,15 +281,13 @@ export function AppShell({ children }: { children: ReactNode }) {
             aria-pressed={!sidebarCollapsed}
             onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}
           >
-            <span className="app-sidebar-toggle-lines" aria-hidden="true">
-              <span />
-              <span />
-              <span />
-            </span>
+            <Menu size={18} strokeWidth={1.85} aria-hidden="true" />
           </button>
 
           <div className="app-global-search" role="search">
-            <span className="app-global-search-icon" aria-hidden="true" />
+            <span className="app-global-search-icon" aria-hidden="true">
+              <Search size={17} strokeWidth={1.85} />
+            </span>
             <input
               type="search"
               value={globalSearch}
@@ -267,17 +303,19 @@ export function AppShell({ children }: { children: ReactNode }) {
                 onClick={clearGlobalSearch}
                 aria-label="Clear search"
               >
-                Clear
+                <X size={14} strokeWidth={2} aria-hidden="true" />
               </button>
             ) : null}
           </div>
 
           <div className="app-topbar-actions">
             <Link href="/add-property" className="app-import-link">
-              Import
+              <Upload size={15} strokeWidth={1.85} aria-hidden="true" />
+              <span>Import</span>
             </Link>
             <Link href="/add-property" className="app-primary-action">
-              Add property
+              <Plus size={15} strokeWidth={2} aria-hidden="true" />
+              <span>Add property</span>
             </Link>
           </div>
         </header>

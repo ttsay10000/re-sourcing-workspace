@@ -24,9 +24,9 @@
 .headerCopy h1 {
   margin: 0;
   font-family: var(--font-display);
-  font-size: clamp(1.8rem, 3vw, 2.5rem);
-  font-weight: 400;
-  line-height: 1.05;
+  font-size: var(--text-3xl);
+  font-weight: 560;
+  line-height: 1.12;
   letter-spacing: 0;
   color: var(--app-ink, #18181b);
 }
@@ -81,15 +81,16 @@
 
 .primaryLink,
 .primaryButton {
-  background: var(--app-ink, #18181b);
+  background: var(--brand, #0f766e);
   color: #ffffff;
-  border-color: var(--app-ink, #18181b);
+  border-color: var(--brand, #0f766e);
+  box-shadow: var(--app-control-shadow);
 }
 
 .primaryLink:hover,
 .primaryButton:hover {
-  background: #27272a;
-  border-color: #27272a;
+  background: var(--brand-strong, #115e59);
+  border-color: var(--brand-strong, #115e59);
 }
 
 .secondaryLink,
@@ -99,6 +100,7 @@
   background: var(--app-surface, #ffffff);
   color: var(--app-ink-secondary, #52525b);
   border-color: var(--app-line, #e4e4e7);
+  box-shadow: var(--app-control-shadow);
 }
 
 .secondaryLink:hover,
@@ -187,7 +189,7 @@
 }
 
 .modeGroupHeader {
-  padding: 0.65rem 0.5rem 0.3rem;
+  padding: 0.65rem 0.75rem 0.3rem;
 }
 
 .modeGroupHeader h2 {
@@ -216,7 +218,7 @@
   align-items: center;
   gap: 0.6rem;
   width: 100%;
-  padding: 0.6rem 0.75rem;
+  padding: 0.66rem 0.9rem;
   text-align: left;
   color: var(--app-ink-secondary, #52525b);
   border: 1px solid transparent;
@@ -245,7 +247,7 @@
   background: var(--app-surface, #ffffff);
   border-color: var(--app-line, #e4e4e7);
   color: var(--app-ink, #18181b);
-  box-shadow: var(--app-shadow);
+  box-shadow: var(--app-control-shadow);
 }
 
 .modeKicker {
@@ -297,9 +299,10 @@
 
 .panel {
   border: 1px solid var(--app-line, #e4e4e7);
-  border-radius: 10px;
-  padding: 1.25rem;
+  border-radius: 8px;
+  padding: 1.35rem 1.45rem;
   background: var(--app-surface, #ffffff);
+  box-shadow: var(--app-shadow-xs);
 }
 
 .panelHeader {
@@ -316,8 +319,8 @@
 .drawerHeader h2 {
   margin: 0;
   font-family: var(--font-display);
-  font-size: 1.4rem;
-  font-weight: 400;
+  font-size: var(--text-xl);
+  font-weight: 560;
   letter-spacing: 0;
   color: var(--app-ink, #18181b);
 }
@@ -332,7 +335,7 @@
   display: inline-flex;
   align-items: center;
   min-height: 1.6rem;
-  padding: 0.2rem 0.55rem;
+  padding: 0.2rem 0.68rem;
   border-radius: 999px;
   font-size: 0.72rem;
   font-weight: 600;
@@ -410,30 +413,32 @@
 .textarea {
   width: 100%;
   min-width: 0;
-  border: 1px solid var(--app-line, #e4e4e7);
-  border-radius: 6px;
-  background: var(--app-surface, #ffffff);
+  border: 1px solid var(--app-line-strong, #d4d4d8);
+  border-radius: 8px;
+  background: linear-gradient(180deg, #ffffff 0%, var(--app-surface-raised, #fafaf9) 100%);
   color: var(--app-ink, #18181b);
   font-size: 0.9rem;
   line-height: 1.3;
+  box-shadow: var(--app-control-shadow);
   transition: border-color 140ms ease, box-shadow 140ms ease;
 }
 
 .input {
   min-height: 2.5rem;
-  padding: 0.52rem 0.72rem;
+  padding: 0.58rem 0.88rem;
 }
 
 .textarea {
   resize: vertical;
-  padding: 0.65rem 0.72rem;
+  padding: 0.72rem 0.88rem;
 }
 
 .input:focus,
 .textarea:focus {
   outline: none;
-  border-color: var(--app-accent-teal, #0f766e);
-  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.1);
+  border-color: var(--brand-border, #99f6e4);
+  background: #ffffff;
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12), var(--app-control-shadow);
 }
 
 .input:disabled,
@@ -452,8 +457,8 @@
 .supportBox {
   border: 1px solid var(--app-line, #e4e4e7);
   border-radius: 8px;
-  background: var(--app-surface-raised, #fafaf9);
-  padding: 1rem;
+  background: var(--app-surface, #ffffff);
+  padding: 1.1rem 1.2rem;
 }
 
 .brokerBox {
@@ -483,15 +488,17 @@
   padding: 0.2rem;
   border: 1px solid var(--app-line, #e4e4e7);
   border-radius: 8px;
-  background: var(--app-surface-strong, #f4f4f3);
+  background: #f1f5f7;
+  box-shadow: inset 0 0 0 1px rgba(82, 82, 91, 0.04);
   gap: 0.15rem;
 }
 
 .segmentButton {
   flex: 1;
   min-height: 2.1rem;
-  border: 0;
+  border: 1px solid transparent;
   border-radius: 6px;
+  padding-inline: 0.8rem;
   background: transparent;
   color: var(--app-muted, #71717a);
   font-size: 0.84rem;
@@ -504,7 +511,8 @@
   background: var(--app-surface, #ffffff);
   color: var(--app-ink, #18181b);
   font-weight: 600;
-  box-shadow: var(--app-shadow);
+  border: 1px solid color-mix(in srgb, var(--brand, #0f766e) 42%, var(--app-line-strong, #d4d4d8));
+  box-shadow: var(--app-control-shadow);
 }
 
 /* ─── Action split (pull mode) ────────────────────────────────── */
@@ -580,7 +588,7 @@
 /* ─── Inline notes / errors ───────────────────────────────────── */
 
 .inlineNote {
-  padding: 0.75rem;
+  padding: 0.85rem 1rem;
   border-radius: 6px;
   background: var(--app-surface-strong, #f4f4f3);
   border: 1px solid var(--app-line, #e4e4e7);
@@ -598,7 +606,7 @@
   justify-content: space-between;
   align-items: flex-start;
   gap: 1rem;
-  padding: 0.9rem 1rem;
+  padding: 1rem 1.15rem;
   border-radius: 8px;
   border: 1px solid var(--app-line, #e4e4e7);
   background: var(--app-surface, #ffffff);
@@ -636,7 +644,7 @@
   gap: 1rem;
   border: 1px solid var(--app-line, #e4e4e7);
   border-radius: 10px;
-  padding: 1rem;
+  padding: 1.15rem 1.25rem;
   background: var(--app-surface, #ffffff);
   position: sticky;
   top: 1.25rem;
@@ -663,7 +671,7 @@
 }
 
 .emptyState {
-  padding: 0.75rem;
+  padding: 0.9rem 1rem;
   border-radius: 6px;
   background: var(--app-surface-raised, #fafaf9);
   border: 1px solid var(--app-line, #e4e4e7);
@@ -680,7 +688,7 @@
 .recentItem {
   display: grid;
   gap: 0.45rem;
-  padding: 0.75rem;
+  padding: 0.85rem 1rem;
   border: 1px solid var(--app-line, #e4e4e7);
   border-radius: 8px;
   background: var(--app-surface-raised, #fafaf9);

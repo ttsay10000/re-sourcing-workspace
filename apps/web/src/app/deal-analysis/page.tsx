@@ -153,19 +153,20 @@ const pageShellStyle: React.CSSProperties = {
   flexDirection: "column",
   gap: "1rem",
   color: "var(--app-ink)",
+  fontVariantNumeric: "tabular-nums",
 };
 
 const cardStyle: React.CSSProperties = {
   border: "1px solid var(--app-line)",
   borderRadius: "8px",
   background: "var(--app-surface)",
-  boxShadow: "var(--app-shadow)",
+  boxShadow: "var(--app-shadow-xs)",
 };
 
 const inputStyle: React.CSSProperties = {
   minHeight: "2.45rem",
   border: "1px solid var(--app-line-strong)",
-  borderRadius: "6px",
+  borderRadius: "8px",
   padding: "0.52rem 0.68rem",
   color: "var(--app-ink)",
   background: "var(--app-surface)",
@@ -175,10 +176,10 @@ const inputStyle: React.CSSProperties = {
 const primaryButtonStyle: React.CSSProperties = {
   minHeight: "2.35rem",
   padding: "0.58rem 0.85rem",
-  borderRadius: "6px",
-  border: "1px solid var(--app-accent)",
-  background: "var(--app-accent)",
-  color: "#ffffff",
+  borderRadius: "8px",
+  border: "1px solid var(--brand)",
+  background: "var(--brand)",
+  color: "var(--brand-on)",
   fontSize: "0.86rem",
   fontWeight: 750,
   cursor: "pointer",
@@ -187,10 +188,10 @@ const primaryButtonStyle: React.CSSProperties = {
 const secondaryButtonStyle: React.CSSProperties = {
   minHeight: "2.35rem",
   padding: "0.58rem 0.85rem",
-  borderRadius: "6px",
+  borderRadius: "8px",
   border: "1px solid var(--app-line-strong)",
   background: "var(--app-surface)",
-  color: "var(--app-accent)",
+  color: "var(--brand-strong)",
   fontSize: "0.86rem",
   fontWeight: 750,
   cursor: "pointer",
@@ -1198,9 +1199,10 @@ function DealAnalysisPageContent() {
         <div style={{ maxWidth: "760px" }}>
           <div
             style={{
-              color: "var(--app-muted)",
+              color: "var(--brand-strong)",
               fontSize: "0.72rem",
               fontWeight: 800,
+              letterSpacing: "var(--tracking-label)",
               textTransform: "uppercase",
             }}
           >
@@ -1209,8 +1211,9 @@ function DealAnalysisPageContent() {
           <h1
             style={{
               margin: "0.18rem 0 0",
-              fontFamily: "var(--font-ui)",
-              fontSize: "2rem",
+              fontFamily: "var(--font-display)",
+              fontSize: "var(--text-3xl)",
+              fontWeight: 700,
               lineHeight: 1.06,
               color: "var(--app-ink)",
             }}
@@ -1237,14 +1240,14 @@ function DealAnalysisPageContent() {
       <div style={{ ...cardStyle, padding: "1.15rem" }}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap" }}>
           <div>
-            <strong style={{ color: "#18231e", fontSize: "1rem" }}>OM workspace navigator</strong>
-            <div style={{ marginTop: "0.3rem", color: "#68736d", fontSize: "0.9rem", lineHeight: 1.5 }}>
+            <strong style={{ color: "var(--app-ink)", fontSize: "1rem" }}>OM workspace navigator</strong>
+            <div style={{ marginTop: "0.3rem", color: "var(--app-muted)", fontSize: "0.9rem", lineHeight: 1.5 }}>
               One reusable workspace per property with OM-side uploads, authoritative OM data, or saved
               underwriting edits.
             </div>
           </div>
           {propertyId ? (
-            <div style={{ color: "#2f6f52", fontSize: "0.84rem", fontWeight: 800 }}>
+            <div style={{ color: "var(--brand-strong)", fontSize: "0.84rem", fontWeight: 800 }}>
               {savedWorkspaceLoading ? "Loading saved workspace..." : "Saved workspace loaded"}
             </div>
           ) : null}
@@ -1259,7 +1262,7 @@ function DealAnalysisPageContent() {
             alignItems: "end",
           }}
         >
-          <label style={{ display: "grid", gap: "0.32rem", color: "#303832", fontSize: "0.78rem", fontWeight: 800 }}>
+          <label style={{ display: "grid", gap: "0.32rem", color: "var(--app-ink-secondary)", fontSize: "0.78rem", fontWeight: 800 }}>
             Open workspace
             <select
               value={propertyId ?? ""}
@@ -1289,7 +1292,7 @@ function DealAnalysisPageContent() {
             </select>
           </label>
 
-          <label style={{ display: "grid", gap: "0.32rem", color: "#303832", fontSize: "0.78rem", fontWeight: 800 }}>
+          <label style={{ display: "grid", gap: "0.32rem", color: "var(--app-ink-secondary)", fontSize: "0.78rem", fontWeight: 800 }}>
             Search
             <input
               type="search"
@@ -1300,7 +1303,7 @@ function DealAnalysisPageContent() {
             />
           </label>
 
-          <label style={{ display: "grid", gap: "0.32rem", color: "#303832", fontSize: "0.78rem", fontWeight: 800 }}>
+          <label style={{ display: "grid", gap: "0.32rem", color: "var(--app-ink-secondary)", fontSize: "0.78rem", fontWeight: 800 }}>
             Sort
             <select
               value={workspaceSort}
@@ -1341,9 +1344,9 @@ function DealAnalysisPageContent() {
                   style={{
                     padding: "0.35rem 0.62rem",
                     borderRadius: "999px",
-                    border: isActive ? "1px solid rgba(47, 111, 82, 0.48)" : "1px solid rgba(38, 47, 44, 0.12)",
-                    background: isActive ? "#edf8f1" : "#fff",
-                    color: isActive ? "#1c5d3f" : "#47534d",
+                    border: isActive ? "1px solid var(--brand-border)" : "1px solid var(--app-line)",
+                    background: isActive ? "var(--brand-soft)" : "var(--app-surface)",
+                    color: isActive ? "var(--brand-strong)" : "var(--app-ink-secondary)",
                     fontSize: "0.8rem",
                     fontWeight: 800,
                     cursor: "pointer",
@@ -1374,8 +1377,8 @@ function DealAnalysisPageContent() {
               marginTop: "0.85rem",
               padding: "0.75rem 0.85rem",
               borderRadius: "8px",
-              border: "1px solid rgba(47, 111, 82, 0.22)",
-              background: "#edf8f1",
+              border: "1px solid var(--brand-border)",
+              background: "var(--brand-soft)",
               display: "flex",
               justifyContent: "space-between",
               gap: "0.75rem",
@@ -1383,13 +1386,13 @@ function DealAnalysisPageContent() {
             }}
           >
             <div>
-              <div style={{ color: "#173f36", fontWeight: 850 }}>{activeSavedWorkspace.canonicalAddress}</div>
-              <div style={{ marginTop: "0.25rem", color: "#5d635d", fontSize: "0.84rem" }}>
+              <div style={{ color: "var(--brand-strong)", fontWeight: 850 }}>{activeSavedWorkspace.canonicalAddress}</div>
+              <div style={{ marginTop: "0.25rem", color: "var(--app-muted)", fontSize: "0.84rem" }}>
                 Last workspace update {formatDateLabel(getSavedWorkspaceUpdatedAt(activeSavedWorkspace))}
                 {activeSavedWorkspace.omFileName ? ` • ${activeSavedWorkspace.omFileName}` : ""}
               </div>
             </div>
-            <div style={{ color: "#2f6f52", fontSize: "0.82rem", fontWeight: 850 }}>Currently open</div>
+            <div style={{ color: "var(--brand-strong)", fontSize: "0.82rem", fontWeight: 850 }}>Currently open</div>
           </div>
         ) : null}
 

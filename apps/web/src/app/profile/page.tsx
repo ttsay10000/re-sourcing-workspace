@@ -949,7 +949,6 @@ function ProfilePageContent() {
                     : "",
                 }))
               }
-              style={{ width: "1rem", height: "1rem", marginTop: "0.5rem" }}
             />
           </label>
           <label className="profile-field">
@@ -960,7 +959,6 @@ function ProfilePageContent() {
               onChange={(e) =>
                 setDraft((prev) => ({ ...prev, automationInitialEmailEnabled: e.target.checked }))
               }
-              style={{ width: "1rem", height: "1rem", marginTop: "0.5rem" }}
             />
           </label>
           <label className="profile-field">
@@ -971,7 +969,6 @@ function ProfilePageContent() {
               onChange={(e) =>
                 setDraft((prev) => ({ ...prev, automationReplyEmailEnabled: e.target.checked }))
               }
-              style={{ width: "1rem", height: "1rem", marginTop: "0.5rem" }}
             />
           </label>
           <label className="profile-field">
@@ -985,7 +982,6 @@ function ProfilePageContent() {
                   automationAmbiguousActionHandlingEnabled: e.target.checked,
                 }))
               }
-              style={{ width: "1rem", height: "1rem", marginTop: "0.5rem" }}
             />
           </label>
         </div>
@@ -1038,7 +1034,7 @@ function ProfilePageContent() {
             </section>
           ))}
         </div>
-        <section className="profile-assumption-group" style={{ marginTop: "1rem" }}>
+        <section className="profile-assumption-group profile-assumption-group--scoring">
           <div className="profile-assumption-group-header">
             <h3>Scoring preferences</h3>
             <p>Defaults for the overall deal score. Neighborhood context remains presentation-only.</p>
@@ -1103,7 +1099,7 @@ function ProfilePageContent() {
                 <option value="value_add_furnished_monthly_rental">Value-add / furnished monthly rental</option>
               </select>
             </label>
-            <label className="profile-field" style={{ justifyContent: "center" }}>
+            <label className="profile-field profile-field--checkbox">
               <span>Rent stabilization/control do-not-buy</span>
               <input
                 type="checkbox"
@@ -1144,17 +1140,17 @@ function ProfilePageContent() {
             View run history
           </Link>
         </div>
-        {savedSearchError && <p className="profile-page-error" style={{ marginTop: 0 }}>{savedSearchError}</p>}
-        {savedSearchNotice && <p style={{ marginTop: 0, color: "#166534" }}>{savedSearchNotice}</p>}
+        {savedSearchError && <p className="profile-page-error profile-page-message">{savedSearchError}</p>}
+        {savedSearchNotice && <p className="profile-page-success profile-page-message">{savedSearchNotice}</p>}
         <div className="profile-v2-form-panel">
-          <div className="profile-section-heading" style={{ marginBottom: "1rem" }}>
+          <div className="profile-section-heading profile-section-heading--nested">
             <div>
-              <h3 style={{ margin: 0 }}>{editingSavedSearchId ? "Edit saved search" : "Add saved search"}</h3>
-              <p style={{ margin: "0.35rem 0 0", color: "#57534e" }}>
+              <h3>{editingSavedSearchId ? "Edit saved search" : "Add saved search"}</h3>
+              <p>
                 Use area slugs separated by commas, for example `all-downtown, all-midtown` or a single slug like `upper-east-side`.
               </p>
             </div>
-            <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
+            <div className="profile-form-actions">
               <button type="button" onClick={handleSaveSavedSearch} disabled={savingSavedSearch} className="profile-primary-button">
                 {savingSavedSearch ? "Saving…" : editingSavedSearchId ? "Update search" : "Create search"}
               </button>
@@ -1316,16 +1312,15 @@ function ProfilePageContent() {
                 />
               </label>
             )}
-            <label className="profile-field" style={{ justifyContent: "center" }}>
+            <label className="profile-field profile-field--checkbox">
               <span>Enabled</span>
               <input
                 type="checkbox"
                 checked={savedSearchDraft.enabled}
                 onChange={(e) => setSavedSearchDraft((prev) => ({ ...prev, enabled: e.target.checked }))}
-                style={{ width: "1rem", height: "1rem", marginTop: "0.5rem" }}
               />
             </label>
-            <label className="profile-field" style={{ gridColumn: "1 / -1" }}>
+            <label className="profile-field profile-field--full">
               <span>Amenities (comma-separated)</span>
               <input
                 type="text"
@@ -1335,13 +1330,13 @@ function ProfilePageContent() {
                 placeholder="doorman, laundry_in_unit"
               />
             </label>
-            <div className="profile-field" style={{ gridColumn: "1 / -1" }}>
+            <div className="profile-field profile-field--full">
               <span>Property types</span>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: "0.75rem", marginTop: "0.45rem" }}>
+              <div className="profile-checkbox-row">
                 {SAVED_SEARCH_TYPE_OPTIONS.map((option) => {
                   const checked = savedSearchDraft.propertyTypes.includes(option.value);
                   return (
-                    <label key={option.value} style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem" }}>
+                    <label key={option.value} className="profile-checkbox-pill">
                       <input
                         type="checkbox"
                         checked={checked}
@@ -1363,30 +1358,30 @@ function ProfilePageContent() {
           </div>
         </div>
         {savedSearchesLoading ? (
-          <p>Loading saved searches…</p>
+          <p className="profile-muted-copy">Loading saved searches…</p>
         ) : savedSearches.length === 0 ? (
-          <p style={{ color: "#737373" }}>No saved searches yet.</p>
+          <p className="profile-muted-copy">No saved searches yet.</p>
         ) : filteredSavedSearches.length === 0 ? (
-          <p style={{ color: "#737373" }}>No saved searches match the current search.</p>
+          <p className="profile-muted-copy">No saved searches match the current search.</p>
         ) : (
-          <div style={{ display: "grid", gap: "1rem" }}>
+          <div className="profile-saved-search-list">
             {filteredSavedSearches.map((search) => (
-              <article key={search.id} className="profile-saved-deal-card">
-                <div className="profile-saved-deal-main">
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap", alignItems: "flex-start" }}>
+              <article key={search.id} className="profile-saved-search-card">
+                <div className="profile-saved-search-main">
+                  <div className="profile-saved-search-header">
                     <div>
-                      <h3 className="profile-saved-deal-address" style={{ marginBottom: "0.35rem" }}>{search.name}</h3>
-                      <p style={{ margin: 0, color: search.enabled ? "#166534" : "#a16207", fontWeight: 600 }}>
+                      <h3 className="profile-saved-search-title">{search.name}</h3>
+                      <p className={search.enabled ? "profile-saved-search-state profile-saved-search-state--enabled" : "profile-saved-search-state profile-saved-search-state--paused"}>
                         {search.enabled ? "Enabled" : "Paused"} · {formatSavedSearchSchedule(search)}
                       </p>
                     </div>
-                    <div style={{ display: "grid", gap: "0.2rem", fontSize: "0.9rem", color: "#57534e", textAlign: "right" }}>
-                      <span>Next run: {formatDateTime(search.nextRunAt)}</span>
-                      <span>Last run: {formatDateTime(search.lastRunAt)}</span>
-                      <span>Last success: {formatDateTime(search.lastSuccessAt)}</span>
+                    <div className="profile-saved-search-times">
+                      <span><b>Next</b>{formatDateTime(search.nextRunAt)}</span>
+                      <span><b>Last</b>{formatDateTime(search.lastRunAt)}</span>
+                      <span><b>Success</b>{formatDateTime(search.lastSuccessAt)}</span>
                     </div>
                   </div>
-                  <p style={{ margin: "0.85rem 0 0", color: "#44403c", lineHeight: 1.5 }}>{formatSavedSearchFilters(search)}</p>
+                  <p className="profile-saved-search-filters">{formatSavedSearchFilters(search)}</p>
                 </div>
                 <div className="profile-saved-deals-actions profile-saved-deals-actions--row">
                   <button
@@ -1447,11 +1442,11 @@ function ProfilePageContent() {
           </div>
         </div>
         {savedDealsLoading ? (
-          <p>Loading saved deals…</p>
+          <p className="profile-muted-copy">Loading saved deals…</p>
         ) : savedDeals.length === 0 ? (
-          <p style={{ color: "#737373" }}>No saved deals. Save a property from Pipeline to see it here.</p>
+          <p className="profile-muted-copy">No saved deals. Save a property from Pipeline to see it here.</p>
         ) : filteredSavedDeals.length === 0 ? (
-          <p style={{ color: "#737373" }}>No saved deals match the current search.</p>
+          <p className="profile-muted-copy">No saved deals match the current search.</p>
         ) : (
           <div className="profile-saved-deals-grid">
             {filteredSavedDeals.map((row) => (
@@ -1523,65 +1518,80 @@ function ProfilePageContent() {
         .profile-v2.profile-page--holistic {
           max-width: none;
           padding: 0;
-          gap: 1rem;
-          color: #17201b;
+          gap: 1.15rem;
+          color: var(--app-ink);
+          font-family: var(--font-ui);
+          font-variant-numeric: tabular-nums;
         }
 
         .profile-v2 .profile-page-header {
           align-items: flex-end;
-          padding: 1rem 0 0.25rem;
-          gap: 1rem;
+          padding: 1.1rem 0 0.35rem;
+          gap: 1.1rem;
         }
 
         .profile-v2 .profile-page-kicker {
           margin-bottom: 0.35rem;
-          color: #5c6b62;
+          color: var(--app-muted);
           font-size: 0.74rem;
-          font-weight: 800;
-          letter-spacing: 0.08em;
+          font-weight: 780;
+          letter-spacing: var(--tracking-label);
+          text-transform: uppercase;
         }
 
         .profile-v2 .profile-page-title {
           margin: 0;
-          color: #111827;
-          font-size: 2rem;
-          line-height: 1.05;
-          letter-spacing: 0;
+          color: var(--app-ink);
+          font-size: var(--text-3xl);
+          font-weight: 560;
+          line-height: var(--leading-tight);
         }
 
         .profile-v2 .profile-page-intro {
           max-width: 44rem;
           margin-top: 0.55rem;
-          color: #5f6b64;
+          color: var(--app-ink-secondary);
           font-size: 0.98rem;
-          line-height: 1.45;
+          line-height: 1.55;
         }
 
         .profile-v2 .profile-page-summary {
           grid-template-columns: repeat(4, minmax(7.5rem, 1fr));
           min-width: min(100%, 34rem);
-          gap: 0.75rem;
+          gap: 0.7rem;
         }
 
         .profile-v2 .profile-page-summary-item {
-          padding: 0.85rem;
-          border: 1px solid #d8dfda;
+          padding: 0.84rem 1rem;
+          border: 1px solid var(--app-line);
           border-radius: 8px;
-          background: #ffffff;
-          box-shadow: 0 8px 24px rgba(22, 42, 35, 0.06);
+          background: var(--app-surface);
+          box-shadow: var(--app-shadow);
+          transition:
+            border-color 150ms ease,
+            box-shadow 150ms ease,
+            transform 150ms ease;
+        }
+
+        .profile-v2 .profile-page-summary-item:hover {
+          border-color: var(--app-line-strong);
+          box-shadow: var(--app-shadow-md);
+          transform: translateY(-1px);
         }
 
         .profile-v2 .profile-page-summary-item span {
-          margin-bottom: 0.35rem;
-          color: #68746d;
+          margin-bottom: 0.42rem;
+          color: var(--app-muted);
           font-size: 0.72rem;
-          font-weight: 760;
-          letter-spacing: 0;
+          font-weight: 800;
+          letter-spacing: 0.03em;
+          text-transform: uppercase;
         }
 
         .profile-v2 .profile-page-summary-item strong {
-          color: #101918;
+          color: var(--app-ink);
           font-size: 1.45rem;
+          line-height: 1;
         }
 
         .profile-v2-query {
@@ -1589,153 +1599,205 @@ function ProfilePageContent() {
           flex-wrap: wrap;
           align-items: center;
           gap: 0.5rem;
-          padding: 0.7rem 0.8rem;
-          border: 1px solid #c7d2fe;
+          padding: 0.75rem 1rem;
+          border: 1px solid var(--app-blue-border);
           border-radius: 8px;
-          background: #eef2ff;
-          color: #26346f;
+          background: var(--app-blue-soft);
+          color: var(--app-blue);
           font-size: 0.88rem;
         }
 
         .profile-v2-query strong {
-          padding: 0.18rem 0.45rem;
+          padding: 0.2rem 0.58rem;
           border-radius: 999px;
-          background: #ffffff;
-          color: #172554;
+          background: var(--app-surface);
+          color: var(--app-blue);
         }
 
         .profile-v2 .profile-page-error {
           border-radius: 8px;
-          border-color: #fecaca;
-          background: #fef2f2;
-          color: #991b1b;
+          border: 1px solid var(--app-red-border);
+          background: var(--app-red-soft);
+          color: var(--app-red);
         }
 
         .profile-v2 .profile-section {
-          padding: 1rem;
-          border: 1px solid #d8dfda;
+          padding: 1.2rem 1.3rem;
+          border: 1px solid var(--app-line);
           border-radius: 8px;
-          background: #ffffff;
-          box-shadow: 0 14px 40px rgba(22, 42, 35, 0.07);
+          background: var(--app-surface);
+          box-shadow: var(--app-shadow-md);
         }
 
         .profile-v2 .profile-section-heading {
           align-items: center;
           gap: 1rem;
-          margin-bottom: 1rem;
+          margin-bottom: 1.1rem;
         }
 
         .profile-v2 .profile-section-heading h2 {
           margin-bottom: 0.25rem;
-          color: #111827;
+          color: var(--app-ink);
           font-size: 1.05rem;
+          font-weight: 760;
+        }
+
+        .profile-v2 .profile-section-heading h3 {
+          margin: 0;
+          color: var(--app-ink);
+          font-size: 0.98rem;
+          font-weight: 760;
         }
 
         .profile-v2 .profile-section-heading p,
         .profile-v2 .profile-section-note {
-          color: #66746c;
+          color: var(--app-muted);
           font-size: 0.88rem;
-          line-height: 1.45;
+          line-height: 1.52;
         }
 
         .profile-v2 .profile-form-grid {
-          gap: 0.8rem;
+          gap: 0.95rem 1rem;
         }
 
         .profile-v2 .profile-field {
-          gap: 0.38rem;
+          gap: 0.45rem;
+          min-width: 0;
+        }
+
+        .profile-v2 .profile-field--full {
+          grid-column: 1 / -1;
+        }
+
+        .profile-v2 .profile-field--checkbox {
+          justify-content: end;
+          min-height: 4.2rem;
+        }
+
+        .profile-v2 .profile-field--checkbox input[type="checkbox"] {
+          margin-top: 0.25rem;
         }
 
         .profile-v2 .profile-field span {
-          color: #45524c;
+          color: var(--app-ink-secondary);
           font-size: 0.78rem;
-          font-weight: 760;
+          font-weight: 780;
+          line-height: 1.25;
         }
 
         .profile-v2 .profile-input {
-          min-height: 2.45rem;
-          padding: 0.62rem 0.75rem;
-          border: 1px solid #cfd8d2;
-          border-radius: 7px;
-          background: #ffffff;
-          color: #17201b;
-          box-shadow: none;
+          min-height: 2.55rem;
+          padding: 0.64rem 0.9rem;
+          border: 1px solid var(--app-line-strong);
+          border-radius: 8px;
+          background: linear-gradient(180deg, #ffffff 0%, var(--app-surface-raised) 100%);
+          color: var(--app-ink);
+          box-shadow: var(--app-control-shadow);
+          font-size: 0.94rem;
+          line-height: 1.25;
         }
 
         .profile-v2 .profile-input:focus {
-          border-color: #1f3d35;
-          box-shadow: 0 0 0 3px rgba(31, 61, 53, 0.14);
+          border-color: var(--brand-border);
+          background: var(--app-surface);
+          box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12), var(--app-control-shadow);
         }
 
         .profile-v2 input[type="checkbox"] {
-          accent-color: #1f3d35;
+          width: 1rem;
+          height: 1rem;
+          accent-color: var(--brand);
         }
 
         .profile-v2 .profile-primary-button,
         .profile-v2 .profile-secondary-button,
         .profile-v2 .profile-saved-deals-action {
-          min-height: 1.95rem;
-          padding: 0.4rem 0.62rem;
+          min-height: 2rem;
+          padding: 0.42rem 0.8rem;
           border-radius: 7px;
           font-size: 0.82rem;
           font-weight: 750;
+          line-height: 1.1;
           white-space: nowrap;
+          box-shadow: var(--app-control-shadow);
+          transition:
+            background 150ms ease,
+            border-color 150ms ease,
+            color 150ms ease,
+            transform 150ms ease;
         }
 
         .profile-v2 .profile-primary-button {
-          border-color: #1f3d35;
-          background: #1f3d35;
-          color: #ffffff;
+          border-color: var(--brand);
+          background: var(--brand);
+          color: var(--brand-on);
         }
 
         .profile-v2 .profile-secondary-button {
-          border-color: #cfd8d2;
-          background: #ffffff;
-          color: #1f3d35;
+          border-color: var(--app-line-strong);
+          background: var(--app-surface);
+          color: var(--brand-strong);
+        }
+
+        .profile-v2 .profile-primary-button:hover,
+        .profile-v2 .profile-secondary-button:hover,
+        .profile-v2 .profile-saved-deals-action:hover {
+          transform: translateY(-1px);
         }
 
         .profile-v2 .profile-section-note--callout,
         .profile-v2-form-panel {
-          border: 1px solid #d8dfda;
+          border: 1px solid var(--app-line);
           border-radius: 8px;
-          background: #fbfcfb;
+          background: var(--app-surface-raised);
         }
 
         .profile-v2 .profile-section-note--callout {
-          padding: 0.8rem;
+          padding: 0.85rem 1rem;
+          border-left: 3px solid var(--brand);
         }
 
         .profile-v2-form-panel {
-          margin-bottom: 1rem;
-          padding: 1rem;
+          margin-bottom: 1.05rem;
+          padding: 1.15rem 1.25rem;
         }
 
         .profile-v2 .profile-assumption-groups {
-          gap: 0.85rem;
+          gap: 0.95rem;
         }
 
         .profile-v2 .profile-assumption-group {
-          padding: 1rem;
-          border: 1px solid #d8dfda;
+          padding: 1.1rem 1.2rem;
+          border: 1px solid var(--app-line);
           border-radius: 8px;
-          background: #fbfcfb;
+          background: var(--app-surface);
+          box-shadow: var(--app-shadow);
+        }
+
+        .profile-v2 .profile-assumption-group--scoring {
+          margin-top: 1rem;
         }
 
         .profile-v2 .profile-assumption-group-header h3,
         .profile-v2 .profile-saved-deal-address {
-          color: #111827;
+          color: var(--app-ink);
         }
 
         .profile-v2 .profile-assumption-group-header p {
-          color: #66746c;
+          color: var(--app-muted);
           font-size: 0.84rem;
-          line-height: 1.45;
+          line-height: 1.5;
         }
 
         .profile-v2 .profile-assumptions-toolbar {
           margin-top: 1rem;
           padding-top: 1rem;
-          border-top: 1px solid #e3e8e4;
+          border-top: 1px solid var(--app-line);
+        }
+
+        .profile-v2 .profile-assumptions-toolbar span {
+          color: var(--app-ink-secondary);
+          font-size: 0.88rem;
         }
 
         .profile-v2 .profile-saved-deals-grid {
@@ -1746,10 +1808,10 @@ function ProfilePageContent() {
         .profile-v2 .profile-saved-deal-card {
           overflow: hidden;
           padding: 0;
-          border: 1px solid #d8dfda;
+          border: 1px solid var(--app-line);
           border-radius: 8px;
-          background: #ffffff;
-          box-shadow: 0 8px 24px rgba(22, 42, 35, 0.05);
+          background: var(--app-surface);
+          box-shadow: var(--app-shadow);
           transition:
             border-color 150ms ease,
             box-shadow 150ms ease,
@@ -1757,8 +1819,8 @@ function ProfilePageContent() {
         }
 
         .profile-v2 .profile-saved-deal-card:hover {
-          border-color: #b7cbc1;
-          box-shadow: 0 12px 30px rgba(22, 42, 35, 0.08);
+          border-color: var(--app-line-strong);
+          box-shadow: var(--app-shadow-md);
           transform: translateY(-1px);
         }
 
@@ -1768,8 +1830,8 @@ function ProfilePageContent() {
           aspect-ratio: 16 / 9;
           place-items: center;
           overflow: hidden;
-          background: linear-gradient(135deg, #eef4f0, #f8faf8);
-          color: #1f3d35;
+          background: linear-gradient(135deg, var(--brand-soft), var(--app-surface-raised));
+          color: var(--brand-strong);
         }
 
         .profile-v2 .profile-saved-deals-grid .profile-saved-deal-photo {
@@ -1788,18 +1850,18 @@ function ProfilePageContent() {
           width: 3.2rem;
           height: 3.2rem;
           place-items: center;
-          border: 1px solid #cfe0d5;
+          border: 1px solid var(--brand-border);
           border-radius: 999px;
-          background: #ffffff;
-          color: #1f3d35;
+          background: var(--app-surface);
+          color: var(--brand-strong);
           font-size: 1.45rem;
           font-weight: 850;
         }
 
         .profile-v2 .profile-saved-deal-body {
           display: grid;
-          gap: 0.75rem;
-          padding: 0.9rem;
+          gap: 0.82rem;
+          padding: 1rem 1.05rem;
         }
 
         .profile-v2 .profile-saved-deal-main {
@@ -1814,7 +1876,7 @@ function ProfilePageContent() {
         }
 
         .profile-v2 .profile-saved-deal-meta small {
-          color: #68746d;
+          color: var(--app-muted);
           font-size: 0.78rem;
           font-weight: 650;
         }
@@ -1823,7 +1885,7 @@ function ProfilePageContent() {
           display: inline-flex;
           align-items: center;
           min-height: 1.35rem;
-          padding: 0.16rem 0.48rem;
+          padding: 0.18rem 0.58rem;
           border-radius: 999px;
           font-size: 0.72rem;
           font-weight: 800;
@@ -1861,28 +1923,29 @@ function ProfilePageContent() {
         }
 
         .profile-v2 .profile-saved-deal-stat span {
-          color: #68746d;
-          letter-spacing: 0;
+          color: var(--app-muted);
+          letter-spacing: 0.03em;
+          text-transform: uppercase;
         }
 
         .profile-v2 .profile-saved-deals-action {
           flex: 0 0 auto;
-          border-color: #cfd8d2;
-          background: #ffffff;
-          color: #1f3d35;
-          padding: 0.34rem 0.52rem;
+          border-color: var(--app-line-strong);
+          background: var(--app-surface);
+          color: var(--brand-strong);
+          padding: 0.36rem 0.68rem;
         }
 
         .profile-v2 .profile-saved-deals-action--danger {
-          border-color: #f3b6b6;
-          background: #fff7f7;
-          color: #a33131;
+          border-color: var(--app-red-border);
+          background: var(--app-red-soft);
+          color: var(--app-red);
         }
 
         .profile-v2 .profile-saved-deals-actions--row {
-          flex-wrap: nowrap;
-          overflow-x: auto;
-          gap: 0.4rem;
+          flex-wrap: wrap;
+          overflow: visible;
+          gap: 0.45rem;
         }
 
         .profile-v2 .profile-saved-deals-score {
@@ -1894,22 +1957,167 @@ function ProfilePageContent() {
           font-weight: 850;
         }
 
+        .profile-section-heading--nested {
+          margin-bottom: 1.05rem;
+        }
+
+        .profile-form-actions {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 0.65rem;
+          justify-content: flex-end;
+        }
+
+        .profile-checkbox-row {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 0.55rem;
+          margin-top: 0.25rem;
+        }
+
+        .profile-checkbox-pill {
+          display: inline-flex;
+          align-items: center;
+          gap: 0.45rem;
+          min-height: 1.9rem;
+          padding: 0.34rem 0.62rem;
+          border: 1px solid var(--app-line);
+          border-radius: 999px;
+          background: var(--app-surface);
+          color: var(--app-ink-secondary);
+          font-size: 0.82rem;
+          font-weight: 720;
+          box-shadow: var(--app-control-shadow);
+        }
+
+        .profile-muted-copy,
+        .profile-page-message {
+          margin: 0.1rem 0 1rem;
+          color: var(--app-muted);
+          font-size: 0.9rem;
+          line-height: 1.5;
+        }
+
+        .profile-page-success {
+          padding: 0.75rem 1rem;
+          border: 1px solid var(--app-green-border);
+          border-radius: 8px;
+          background: var(--app-green-soft);
+          color: var(--app-green);
+          font-weight: 650;
+        }
+
+        .profile-saved-search-list {
+          display: grid;
+          gap: 0.85rem;
+        }
+
+        .profile-saved-search-card {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) auto;
+          gap: 1rem;
+          align-items: start;
+          padding: 1rem 1.1rem;
+          border: 1px solid var(--app-line);
+          border-radius: 8px;
+          background: var(--app-surface);
+          box-shadow: var(--app-shadow);
+          transition:
+            border-color 150ms ease,
+            box-shadow 150ms ease,
+            transform 150ms ease;
+        }
+
+        .profile-saved-search-card:hover {
+          border-color: var(--app-line-strong);
+          box-shadow: var(--app-shadow-md);
+          transform: translateY(-1px);
+        }
+
+        .profile-saved-search-main {
+          display: grid;
+          gap: 0.82rem;
+          min-width: 0;
+        }
+
+        .profile-saved-search-header {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 1rem;
+        }
+
+        .profile-saved-search-title {
+          margin: 0;
+          color: var(--app-ink);
+          font-size: 1rem;
+          font-weight: 760;
+          line-height: 1.25;
+        }
+
+        .profile-saved-search-state {
+          margin: 0.35rem 0 0;
+          font-size: 0.84rem;
+          font-weight: 760;
+        }
+
+        .profile-saved-search-state--enabled {
+          color: var(--app-green);
+        }
+
+        .profile-saved-search-state--paused {
+          color: var(--app-amber);
+        }
+
+        .profile-saved-search-times {
+          display: grid;
+          gap: 0.3rem;
+          min-width: 13rem;
+          color: var(--app-ink-secondary);
+          font-size: 0.8rem;
+          line-height: 1.25;
+          text-align: right;
+        }
+
+        .profile-saved-search-times span {
+          display: flex;
+          justify-content: flex-end;
+          gap: 0.35rem;
+        }
+
+        .profile-saved-search-times b {
+          color: var(--app-muted);
+          font-size: 0.68rem;
+          font-weight: 800;
+          letter-spacing: 0.03em;
+          text-transform: uppercase;
+        }
+
+        .profile-saved-search-filters {
+          margin: 0;
+          padding-top: 0.8rem;
+          border-top: 1px solid var(--app-line-subtle);
+          color: var(--app-ink-secondary);
+          font-size: 0.9rem;
+          line-height: 1.55;
+        }
+
         .profile-v2 .profile-saved-deals-score--strong {
           border-color: var(--app-green-border);
           background: var(--app-green-soft);
-          color: #166534;
+          color: var(--app-green);
         }
 
         .profile-v2 .profile-saved-deals-score--watch {
           border-color: var(--app-amber-border);
           background: var(--app-amber-soft);
-          color: #92400e;
+          color: var(--app-amber);
         }
 
         .profile-v2 .profile-saved-deals-score--weak {
           border-color: var(--app-red-border);
           background: var(--app-red-soft);
-          color: #991b1b;
+          color: var(--app-red);
         }
 
         .profile-v2 .profile-saved-deals-score--empty {
@@ -1931,6 +2139,24 @@ function ProfilePageContent() {
 
           .profile-v2 .profile-assumption-groups {
             grid-template-columns: 1fr;
+          }
+
+          .profile-saved-search-card {
+            grid-template-columns: 1fr;
+          }
+
+          .profile-saved-search-header {
+            flex-direction: column;
+          }
+
+          .profile-saved-search-times {
+            width: 100%;
+            min-width: 0;
+            text-align: left;
+          }
+
+          .profile-saved-search-times span {
+            justify-content: flex-start;
           }
         }
 
