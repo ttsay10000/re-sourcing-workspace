@@ -459,13 +459,22 @@ export default function AddPropertyPage() {
           body: JSON.stringify(payload),
         });
         const data = (await response.json().catch(() => ({}))) as Partial<UiV2ImportJobResponse> & {
+          job?: UiV2ImportJobStatus;
           error?: string;
           details?: string;
         };
-        const jobPayload = data.importJob;
+        const jobPayload =
+          data.importJob ??
+          (data.job
+            ? {
+                job: data.job,
+                property: null,
+              }
+            : undefined);
         if (!response.ok || !jobPayload?.job) {
           const message =
             jobPayload?.job?.errorMessage ||
+            jobPayload?.job?.label ||
             data.error ||
             data.details ||
             `Import request failed with HTTP ${response.status}`;

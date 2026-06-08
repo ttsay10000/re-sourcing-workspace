@@ -7,6 +7,56 @@ export interface RunRepoOptions {
   pool: import("pg").Pool;
 }
 
+export interface RunningRunTimeoutOptions {
+  staleAfterMs?: number | null;
+  maxRuntimeMs?: number | null;
+  now?: Date;
+}
+
+const DEFAULT_STALE_AFTER_MS = 5 * 60 * 1000;
+
+function positiveMs(value: unknown): number | null {
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return Math.round(parsed);
+}
+
+function positiveMinutesToMs(value: unknown): number | null {
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return Math.round(parsed * 60 * 1000);
+}
+
+function resolveStaleAfterMs(input?: number | null): number {
+  return (
+    positiveMs(input) ??
+    positiveMs(process.env.INGESTION_RUN_STALE_AFTER_MS) ??
+    positiveMinutesToMs(process.env.INGESTION_RUN_STALE_AFTER_MINUTES) ??
+    positiveMs(process.env.SAVED_SEARCH_RUN_STALE_AFTER_MS) ??
+    positiveMinutesToMs(process.env.SAVED_SEARCH_RUN_STALE_AFTER_MINUTES) ??
+    DEFAULT_STALE_AFTER_MS
+  );
+}
+
+function resolveMaxRuntimeMs(input?: number | null): number | null {
+  return (
+    positiveMs(input) ??
+    positiveMs(process.env.INGESTION_RUN_MAX_RUNTIME_MS) ??
+    positiveMinutesToMs(process.env.INGESTION_RUN_MAX_RUNTIME_MINUTES) ??
+    positiveMs(process.env.SAVED_SEARCH_RUN_MAX_RUNTIME_MS) ??
+    positiveMinutesToMs(process.env.SAVED_SEARCH_RUN_MAX_RUNTIME_MINUTES)
+  );
+}
+
+function formatDuration(ms: number): string {
+  const seconds = Math.round(ms / 1000);
+  if (seconds % 60 === 0) {
+    const minutes = seconds / 60;
+    return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+  }
+  return `${seconds} second${seconds === 1 ? "" : "s"}`;
+}
+
 export class RunRepo {
   constructor(private options: RunRepoOptions) {}
 
@@ -56,7 +106,138 @@ export class RunRepo {
     return mapRun(r.rows[0]);
   }
 
-  async hasRunningForProfile(profileId: string): Promise<boolean> {
+  async expireStaleRunningForProfile(
+    profileId: string,
+    options?: RunningRunTimeoutOptions
+  ): Promise<number> {
+    const staleAfterMs = resolveStaleAfterMs(options?.staleAfterMs);
+    const maxRuntimeMs = resolveMaxRuntimeMs(options?.maxRuntimeMs);
+    if (staleAfterMs <= 0 && (maxRuntimeMs == null || maxRuntimeMs <= 0)) return 0;
+
+    const now = options?.now ?? new Date();
+    const nowIso = now.toISOString();
+    const stale = await this.client.query<{
+      id: string;
+      workflow_run_id: string | null;
+      started_at: Date | string;
+      last_heartbeat_at: Date | string | null;
+      timeout_reason: "max_runtime" | "stale_heartbeat";
+    }>(
+      `SELECT
+         r.id,
+         r.metadata->>'workflowRunId' AS workflow_run_id,
+         r.started_at,
+         COALESCE(step.last_step_at, w.updated_at, w.started_at, r.started_at) AS last_heartbeat_at,
+         CASE
+           WHEN $4::double precision > 0
+            AND r.started_at <= $2::timestamptz - ($4::double precision * interval '1 millisecond')
+             THEN 'max_runtime'
+           ELSE 'stale_heartbeat'
+         END AS timeout_reason
+       FROM ingestion_runs r
+       LEFT JOIN workflow_runs w
+         ON w.id::text = r.metadata->>'workflowRunId'
+       LEFT JOIN LATERAL (
+         SELECT MAX(updated_at) AS last_step_at
+           FROM workflow_run_steps
+          WHERE run_id = w.id
+       ) step ON true
+       WHERE r.profile_id = $1
+         AND r.status = 'running'
+         AND (
+           ($4::double precision > 0
+             AND r.started_at <= $2::timestamptz - ($4::double precision * interval '1 millisecond'))
+           OR
+           ($3::double precision > 0
+             AND COALESCE(step.last_step_at, w.updated_at, w.started_at, r.started_at)
+               <= $2::timestamptz - ($3::double precision * interval '1 millisecond'))
+         )`,
+      [profileId, nowIso, staleAfterMs, maxRuntimeMs ?? 0]
+    );
+
+    for (const row of stale.rows) {
+      const message =
+        row.timeout_reason === "max_runtime" && maxRuntimeMs != null
+          ? `Timed out after exceeding max runtime of ${formatDuration(maxRuntimeMs)}.`
+          : `Timed out after no workflow progress for ${formatDuration(staleAfterMs)}.`;
+      const metadataPatch = {
+        timeout: {
+          reason: row.timeout_reason,
+          message,
+          timedOutAt: nowIso,
+          staleAfterMs,
+          maxRuntimeMs,
+          startedAt:
+            row.started_at instanceof Date
+              ? row.started_at.toISOString()
+              : String(row.started_at),
+          lastHeartbeatAt:
+            row.last_heartbeat_at instanceof Date
+              ? row.last_heartbeat_at.toISOString()
+              : row.last_heartbeat_at != null
+                ? String(row.last_heartbeat_at)
+                : null,
+        },
+      };
+      await this.client.query(
+        `UPDATE ingestion_runs
+            SET status = 'failed',
+                finished_at = $1,
+                summary = jsonb_set(
+                  jsonb_set(
+                    COALESCE(summary, '{}'::jsonb),
+                    '{jobsFailed}',
+                    to_jsonb(GREATEST(COALESCE((summary->>'jobsFailed')::int, 0), 1)),
+                    true
+                  ),
+                  '{errors}',
+                  COALESCE(summary->'errors', '[]'::jsonb) || to_jsonb($2::text),
+                  true
+                ),
+                metadata = COALESCE(metadata, '{}'::jsonb) || $3::jsonb
+          WHERE id = $4
+            AND status = 'running'`,
+        [nowIso, message, JSON.stringify(metadataPatch), row.id]
+      );
+      await this.client.query(
+        `UPDATE ingestion_jobs
+            SET status = 'failed',
+                finished_at = $1,
+                error_message = COALESCE(error_message, $2)
+          WHERE run_id = $3
+            AND status IN ('pending', 'running')`,
+        [nowIso, message, row.id]
+      );
+      if (row.workflow_run_id) {
+        await this.client.query(
+          `UPDATE workflow_runs
+              SET status = 'failed',
+                  finished_at = COALESCE(finished_at, $1),
+                  metadata = COALESCE(metadata, '{}'::jsonb) || $2::jsonb,
+                  updated_at = $1
+            WHERE id::text = $3
+              AND status IN ('pending', 'running')`,
+          [nowIso, JSON.stringify(metadataPatch), row.workflow_run_id]
+        );
+        await this.client.query(
+          `UPDATE workflow_run_steps
+              SET status = 'failed',
+                  finished_at = COALESCE(finished_at, $1),
+                  last_message = COALESCE(last_message, 'Timed out after no workflow progress'),
+                  last_error = COALESCE(last_error, $2),
+                  updated_at = $1
+            WHERE run_id::text = $3
+              AND status IN ('pending', 'running')`,
+          [nowIso, message, row.workflow_run_id]
+        );
+      }
+    }
+
+    return stale.rowCount ?? 0;
+  }
+
+  async hasRunningForProfile(profileId: string, options?: RunningRunTimeoutOptions): Promise<boolean> {
+    await this.expireStaleRunningForProfile(profileId, options);
     const r = await this.client.query(
       `SELECT 1
          FROM ingestion_runs
