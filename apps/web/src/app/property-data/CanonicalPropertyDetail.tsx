@@ -4437,7 +4437,7 @@ export function CanonicalPropertyDetail({
                 </V3ReportSection>
               ) : null}
 
-              {omRentRoll.length > 0 && displayRentalCards.length === 0 ? (
+              {omRentRoll.length > 0 ? (
                 <V3ReportSection title="OM rent roll">
                   <V3RecordsTable
                     columns={[
@@ -4445,7 +4445,7 @@ export function CanonicalPropertyDetail({
                       { key: "monthly", label: "Monthly", width: "8rem", align: "right" },
                       { key: "annual", label: "Annual", width: "8rem", align: "right" },
                       { key: "mix", label: "Beds / Baths", width: "8rem", align: "center" },
-                      { key: "sqft", label: "Sqft", width: "7rem", align: "right" },
+                      { key: "sqft", label: "SF", width: "7rem", align: "right" },
                       { key: "status", label: "Status", width: "10rem" },
                       { key: "notes", label: "Notes" },
                     ]}

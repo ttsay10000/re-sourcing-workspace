@@ -198,6 +198,8 @@ export class ListingRepo {
       updates.push("missing_since = now()");
     } else if (lifecycleState === "pruned") {
       updates.push("pruned_at = now()");
+    } else if (lifecycleState === "active") {
+      updates.push("missing_since = NULL", "pruned_at = NULL");
     }
     values.push(id);
     const r = await this.client.query(

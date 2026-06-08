@@ -1,4 +1,5 @@
 import type { IngestionJobStatus, IngestionRunStatus, ListingSource } from "./enums.js";
+import type { ListingActivitySummary } from "./listing.js";
 import type {
   BrokerCompMarketSummary,
   OmIngestionRun,
@@ -672,6 +673,8 @@ export interface UiV2PipelineRow {
   underwriting?: UiV2UnderwritingSummary | null;
   brokerComps?: BrokerCompMarketSummary | null;
   openActionItemCount?: number;
+  savedDeal?: SavedDeal | null;
+  listingActivity?: ListingActivitySummary | null;
   lastActivityAt?: string | null;
   newness?: UiV2PipelineNewness | null;
   listedAt?: string | null;

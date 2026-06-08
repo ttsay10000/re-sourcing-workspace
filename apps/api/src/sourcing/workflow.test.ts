@@ -37,12 +37,22 @@ describe("mergeManualOverrideCandidateContacts", () => {
         name: "Jordan Manual",
         firm: "Outside Broker",
         contactId: "contact-1",
+        source: "manual",
+        confidence: 100,
+        evidence: "Manual broker recipient override.",
+        sourceUrl: null,
+        needsReview: false,
       },
       {
         email: "primary@listing-team.com",
         name: "Primary Agent",
         firm: "Listing Team",
         contactId: null,
+        source: null,
+        confidence: null,
+        evidence: null,
+        sourceUrl: null,
+        needsReview: null,
       },
     ]);
   });
@@ -75,6 +85,11 @@ describe("mergeManualOverrideCandidateContacts", () => {
         name: "Bernadette Brennan",
         firm: "SERHANT",
         contactId: "contact-2",
+        source: "manual",
+        confidence: 100,
+        evidence: "Manual broker recipient override.",
+        sourceUrl: null,
+        needsReview: false,
       },
     ]);
   });

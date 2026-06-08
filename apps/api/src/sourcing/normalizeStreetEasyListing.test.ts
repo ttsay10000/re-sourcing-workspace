@@ -67,14 +67,34 @@ describe("normalizeStreetEasySaleDetails", () => {
 
     expect(normalized.agentNames).toEqual(["Jane Broker"]);
     expect(normalized.agentEnrichment).toEqual([
-      {
+      expect.objectContaining({
         name: "Jane Broker",
         firm: "Example Realty",
         email: "jane@example-realty.com",
         phone: "212-555-0100",
-      },
+        source: "source",
+        confidence: 100,
+        needsReview: false,
+      }),
     ]);
     expect(normalized.extra?.brokerageName).toBe("Example Realty");
     expect(normalized.extra?.listingBrokerNames).toEqual(["Jane Broker"]);
+  });
+
+  it("normalizes listing status signals from StreetEasy refresh payloads", () => {
+    const normalized = normalizeStreetEasySaleDetails(
+      {
+        id: "1999002",
+        address: "22 West 22nd Street",
+        borough: "manhattan",
+        price: 5_250_000,
+        listingStatus: "In Contract",
+      },
+      0
+    );
+
+    expect(normalized.extra?.listingStatus).toBe("In Contract");
+    expect(normalized.extra?.saleStatus).toBe("In Contract");
+    expect(normalized.extra?.inContract).toBe(true);
   });
 });

@@ -108,6 +108,14 @@ export function normalizeStreetEasySaleDetails(raw: Record<string, unknown>, ind
   const { priceHistory, rentalPriceHistory } = parsePriceHistoriesFromRaw(raw);
   const priceChangeSinceListed = computePriceChangeSinceListed(price, priceHistory ?? undefined);
   if (priceChangeSinceListed != null) extra.priceChangeSinceListed = priceChangeSinceListed;
+  const listingStatus = parseListingStatusFromRaw(raw);
+  if (listingStatus) {
+    extra.listingStatus = listingStatus;
+    extra.status = listingStatus;
+    extra.saleStatus = listingStatus;
+  }
+  const inContract = parseListingInContract(raw, listingStatus);
+  if (inContract != null) extra.inContract = inContract;
 
   return {
     source: "streeteasy",
@@ -184,6 +192,68 @@ function firstString(...values: unknown[]): string | null {
   return null;
 }
 
+function firstStringFromPaths(root: unknown, paths: string[][]): string | null {
+  for (const path of paths) {
+    const value = firstString(readPath(root, path));
+    if (value) return value;
+  }
+  return null;
+}
+
+function parseListingStatusFromRaw(raw: Record<string, unknown>): string | null {
+  return firstString(
+    raw.listingStatus,
+    raw.listing_status,
+    raw.saleStatus,
+    raw.sale_status,
+    raw.marketStatus,
+    raw.market_status,
+    raw.contractStatus,
+    raw.contract_status,
+    raw.availability,
+    raw.status,
+    raw.statusText,
+    raw.status_text,
+    firstStringFromPaths(raw, [
+      ["listing", "listingStatus"],
+      ["listing", "listing_status"],
+      ["listing", "saleStatus"],
+      ["listing", "sale_status"],
+      ["listing", "status"],
+      ["listing", "statusText"],
+      ["data", "listingStatus"],
+      ["data", "saleStatus"],
+      ["data", "status"],
+      ["property", "status"],
+      ["details", "status"],
+    ])
+  );
+}
+
+function parseListingInContract(raw: Record<string, unknown>, listingStatus: string | null): boolean | null {
+  const explicit = [
+    raw.inContract,
+    raw.in_contract,
+    raw.isInContract,
+    raw.is_in_contract,
+    raw.pendingContract,
+    raw.pending_contract,
+    readPath(raw, ["listing", "inContract"]),
+    readPath(raw, ["listing", "in_contract"]),
+    readPath(raw, ["data", "inContract"]),
+    readPath(raw, ["data", "in_contract"]),
+  ];
+  for (const value of explicit) {
+    if (typeof value === "boolean") return value;
+    if (typeof value === "string") {
+      const normalized = value.trim().toLowerCase();
+      if (["true", "yes", "1"].includes(normalized)) return true;
+      if (["false", "no", "0"].includes(normalized)) return false;
+    }
+  }
+  return listingStatus && /\b(in[-_\s]?contract|contract\s+out|pending)\b/i.test(listingStatus) ? true : null;
+}
+
 function inferUnitCountFromText(...values: unknown[]): number | null {
   const text = values.filter((value): value is string => typeof value === "string").join(" ").toLowerCase();
   if (!text.trim()) return null;
@@ -256,6 +326,11 @@ function parseAgentFacts(raw: Record<string, unknown>): {
         firm: entries[existingIndex]!.firm ?? entry.firm ?? null,
         email: entries[existingIndex]!.email ?? entry.email ?? null,
         phone: entries[existingIndex]!.phone ?? entry.phone ?? null,
+        source: entries[existingIndex]!.source ?? entry.source ?? "source",
+        confidence: entries[existingIndex]!.confidence ?? entry.confidence ?? (entry.email ? 100 : null),
+        evidence: entries[existingIndex]!.evidence ?? entry.evidence ?? "Broker fact provided by source listing payload.",
+        sourceUrl: entries[existingIndex]!.sourceUrl ?? entry.sourceUrl ?? firstString(raw.url, raw._fetchUrl),
+        needsReview: entries[existingIndex]!.needsReview ?? entry.needsReview ?? false,
       };
     } else {
       entries.push(entry);
@@ -285,6 +360,11 @@ function parseAgentFacts(raw: Record<string, unknown>): {
       firm: brokerageName,
       email: cleanEmail(raw.broker_email ?? raw.agent_email ?? raw.email),
       phone: firstString(raw.broker_phone, raw.agent_phone, raw.phone),
+      source: "source",
+      confidence: cleanEmail(raw.broker_email ?? raw.agent_email ?? raw.email) ? 100 : null,
+      evidence: "Broker fact provided by source listing payload.",
+      sourceUrl: firstString(raw.url, raw._fetchUrl),
+      needsReview: false,
     });
   }
 
@@ -292,7 +372,17 @@ function parseAgentFacts(raw: Record<string, unknown>): {
     names: names.length > 0 ? names : null,
     brokerageName,
     entries: entries.length > 0 ? entries : brokerageName && names.length > 0
-      ? names.map((name) => ({ name, firm: brokerageName, email: null, phone: null }))
+      ? names.map((name) => ({
+          name,
+          firm: brokerageName,
+          email: null,
+          phone: null,
+          source: "source",
+          confidence: null,
+          evidence: "Broker name and brokerage provided by source listing payload.",
+          sourceUrl: firstString(raw.url, raw._fetchUrl),
+          needsReview: false,
+        }))
       : null,
   };
 }
@@ -301,11 +391,35 @@ function agentEntryFromRaw(item: unknown, fallbackFirm: string | null): AgentEnr
   if (item == null) return null;
   if (typeof item === "string") {
     const name = item.trim();
-    return name ? { name, firm: fallbackFirm, email: null, phone: null } : null;
+    return name
+      ? {
+          name,
+          firm: fallbackFirm,
+          email: null,
+          phone: null,
+          source: "source",
+          confidence: null,
+          evidence: "Broker name provided by source listing payload.",
+          sourceUrl: null,
+          needsReview: false,
+        }
+      : null;
   }
   if (typeof item !== "object" || Array.isArray(item)) {
     const name = String(item).trim();
-    return name ? { name, firm: fallbackFirm, email: null, phone: null } : null;
+    return name
+      ? {
+          name,
+          firm: fallbackFirm,
+          email: null,
+          phone: null,
+          source: "source",
+          confidence: null,
+          evidence: "Broker name provided by source listing payload.",
+          sourceUrl: null,
+          needsReview: false,
+        }
+      : null;
   }
   const obj = item as Record<string, unknown>;
   const name = firstString(
@@ -341,6 +455,11 @@ function agentEntryFromRaw(item: unknown, fallbackFirm: string | null): AgentEnr
     firm,
     email: cleanEmail(obj.email ?? obj.emailAddress ?? obj.email_address),
     phone: firstString(obj.phone, obj.phoneNumber, obj.phone_number, obj.mobile, obj.cell),
+    source: "source",
+    confidence: cleanEmail(obj.email ?? obj.emailAddress ?? obj.email_address) ? 100 : null,
+    evidence: "Broker fact provided by source listing payload.",
+    sourceUrl: firstString(obj.url, obj.profileUrl, obj.profile_url),
+    needsReview: false,
   };
 }
 

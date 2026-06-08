@@ -371,6 +371,10 @@
   width: 2.35rem;
 }
 
+.colStar {
+  width: 2.55rem;
+}
+
 .colAddress {
   width: 22rem;
 }
@@ -697,6 +701,47 @@
   text-align: center;
 }
 
+.starColumn {
+  text-align: center;
+}
+
+.saveStarButton {
+  display: inline-flex;
+  width: 1.9rem;
+  height: 1.9rem;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: #8a949c;
+  cursor: pointer;
+  transition: background 140ms ease, border-color 140ms ease, color 140ms ease, box-shadow 140ms ease;
+}
+
+.saveStarButton:hover:not(:disabled) {
+  border-color: rgba(15, 118, 110, 0.24);
+  background: rgba(15, 118, 110, 0.08);
+  color: var(--brand, #0f766e);
+}
+
+.saveStarButton:focus-visible {
+  outline: none;
+  border-color: rgba(15, 118, 110, 0.42);
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.16);
+}
+
+.saveStarButton:disabled {
+  cursor: default;
+}
+
+.saveStarButtonActive,
+.saveStarButtonActive:disabled {
+  border-color: rgba(15, 118, 110, 0.18);
+  background: rgba(15, 118, 110, 0.1);
+  color: var(--brand, #0f766e);
+}
+
 .addressWrap {
   display: grid;
   grid-template-columns: 2.4rem minmax(0, 1fr);
@@ -765,6 +810,34 @@
 .dateCell {
   text-align: right;
   font-variant-numeric: tabular-nums;
+}
+
+.askCell strong,
+.askActivity {
+  display: block;
+}
+
+.askCell strong {
+  color: var(--app-ink, #17232a);
+  font-size: 0.76rem;
+  font-weight: 850;
+}
+
+.askActivity {
+  margin-top: 0.14rem;
+  color: #64748b;
+  font-size: 0.63rem;
+  font-weight: 800;
+  line-height: 1.15;
+  white-space: nowrap;
+}
+
+.askActivityCut {
+  color: #0f766e;
+}
+
+.askActivityRaise {
+  color: #b45309;
 }
 
 .dateCell {

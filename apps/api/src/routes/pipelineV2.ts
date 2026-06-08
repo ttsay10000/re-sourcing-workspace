@@ -1874,11 +1874,20 @@ function savedDealFromRow(row: PipelineBaseRow, userId: string): SavedDeal | nul
   };
 }
 
-function buildPipelineRow(row: PipelineBaseRow): UiV2PipelineRow {
+function buildListingActivitySummary(row: PipelineBaseRow): ReturnType<typeof deriveListingActivitySummary> {
+  return deriveListingActivitySummary({
+    listedAt: optionalIso(row.listing_listed_at),
+    currentPrice: getAskingPrice(row),
+    priceHistory: Array.isArray(row.listing_price_history) ? row.listing_price_history : null,
+  });
+}
+
+function buildPipelineRow(row: PipelineBaseRow, userId: string): UiV2PipelineRow {
   const overview = buildOverview(row);
   const gallery = buildGallery(row);
   const pipeline = readPipelineState(row.details);
   const status = listingStatus(row);
+  const listingActivity = buildListingActivitySummary(row);
   const tags = uniqueStrings([
     ...pipeline.tags,
     isUnavailableListingStatus(status) ? "listing_unavailable" : null,
@@ -1904,6 +1913,8 @@ function buildPipelineRow(row: PipelineBaseRow): UiV2PipelineRow {
     enrichmentState: buildEnrichmentState(row),
     underwriting: buildUnderwriting(row),
     openActionItemCount: Number(row.open_action_item_count ?? 0),
+    savedDeal: savedDealFromRow(row, userId),
+    listingActivity,
     lastActivityAt: pipeline.lastActivityAt ?? optionalIso(row.property_updated_at),
     newness: buildPipelineNewness(row),
     listedAt: getListedAt(row),
@@ -1983,11 +1994,7 @@ function buildActivityTimeline(row: PipelineBaseRow, collections: DetailCollecti
     createdAt: event.createdAt,
   }));
   const pipeline = readPipelineState(row.details);
-  const activity = deriveListingActivitySummary({
-    listedAt: optionalIso(row.listing_listed_at),
-    currentPrice: getAskingPrice(row),
-    priceHistory: Array.isArray(row.listing_price_history) ? row.listing_price_history : null,
-  });
+  const activity = buildListingActivitySummary(row);
   const activityBody = describeListingActivity(activity);
   if (activityBody && activity?.lastActivityDate) {
     items.push({
@@ -2524,8 +2531,8 @@ function sortRows(rows: UiV2PipelineRow[], query: ParsedPipelineQuery): UiV2Pipe
   });
 }
 
-function buildPipelinePayload(baseRows: PipelineBaseRow[], query: ParsedPipelineQuery): UiV2PipelineListPayload {
-  const mappedRows = baseRows.map(buildPipelineRow);
+function buildPipelinePayload(baseRows: PipelineBaseRow[], query: ParsedPipelineQuery, userId: string): UiV2PipelineListPayload {
+  const mappedRows = baseRows.map((row) => buildPipelineRow(row, userId));
   const filtered = filterRows(mappedRows, query);
   const sorted = sortRows(filtered, query);
   const rows =
@@ -2745,7 +2752,7 @@ router.get("/ui-v2/pipeline", async (req: Request, res: Response) => {
     const userId = await getDefaultUserId(pool);
     const query = parsePipelineQuery(req);
     const rows = await fetchPipelineRows(pool, userId);
-    const pipeline = buildPipelinePayload(rows, query);
+    const pipeline = buildPipelinePayload(rows, query, userId);
     res.json({ pipeline } satisfies { pipeline: UiV2PipelineListPayload });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

@@ -12,7 +12,7 @@ import {
 } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { X } from "lucide-react";
+import { Star, X } from "lucide-react";
 import {
   UI_V2_PIPELINE_STATUS_OPTIONS,
   UI_V2_REJECTION_REASON_OPTIONS,
@@ -329,6 +329,38 @@ function formatDate(value: string | null | undefined): string {
   return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
+function askActivityDisplay(row: UiV2PipelineRow): { label: string; title: string; tone: "cut" | "raise" | "neutral" } | null {
+  const activity = row.listingActivity;
+  if (!activity) return null;
+  if (
+    activity.latestPriceChangeDate &&
+    activity.latestPriceChangeAmount != null &&
+    Math.abs(activity.latestPriceChangeAmount) >= 1
+  ) {
+    const isCut = activity.latestPriceChangeAmount < 0;
+    const amount = Math.abs(activity.latestPriceChangeAmount);
+    const pct = activity.latestPriceChangePercent != null ? ` (${Math.abs(activity.latestPriceChangePercent).toFixed(1)}%)` : "";
+    const eventDate = formatDate(activity.latestPriceChangeDate);
+    return {
+      label: `${isCut ? "Cut" : "Raised"} ${formatCurrency(amount, false)}${pct}`,
+      title: `${isCut ? "Price cut" : "Price increase"} on ${eventDate}`,
+      tone: isCut ? "cut" : "raise",
+    };
+  }
+  if (
+    activity.currentDiscountFromOriginalAskAmount != null &&
+    activity.currentDiscountFromOriginalAskAmount >= 1 &&
+    activity.currentDiscountFromOriginalAskPct != null
+  ) {
+    return {
+      label: `${activity.currentDiscountFromOriginalAskPct.toFixed(1)}% below original`,
+      title: `${formatCurrency(activity.currentDiscountFromOriginalAskAmount, false)} below original ask`,
+      tone: "cut",
+    };
+  }
+  return null;
+}
+
 function toDateTimeLocal(date: Date): string {
   const pad = (value: number) => String(value).padStart(2, "0");
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(
@@ -400,6 +432,10 @@ function sourceLabel(value: string | null | undefined): string {
   if (!value) return "-";
   const normalized = value.toLowerCase();
   return SOURCE_LABELS[normalized] ?? "Other";
+}
+
+function rowIsSaved(row: UiV2PipelineRow): boolean {
+  return Boolean(row.savedDeal) || row.statusChip.status === "saved" || row.tags.some((tag) => normalizeTag(tag) === "saved");
 }
 
 function marketTypeLabel(value: string | null | undefined): string {
@@ -706,6 +742,7 @@ function rowFromProperty(row: PipelineRow, property: FlexiblePropertyDetail): Pi
     enrichmentState: property.enrichmentState,
     underwriting: property.underwriting,
     openActionItemCount: property.actionItems.filter((item) => item.status === "open").length,
+    savedDeal: property.savedDeal ?? row.savedDeal ?? null,
     lastActivityAt: latestActivity,
     updatedAt: new Date().toISOString(),
     gallery,
@@ -2351,6 +2388,7 @@ export default function PipelineClient() {
         <table className={styles.pipelineTable}>
           <colgroup>
             <col className={styles.colSelect} />
+            <col className={styles.colStar} />
             <col className={styles.colAddress} />
             <col className={styles.colSource} />
             <col className={styles.colPropertyType} />
@@ -2382,6 +2420,7 @@ export default function PipelineClient() {
                   onChange={toggleAllVisible}
                 />
               </th>
+              <th className={styles.starColumn} aria-label="Saved deal" />
               <th>{renderHeader("address", "Address")}</th>
               <th>{renderHeader("source", "Source")}</th>
               <th>{renderHeader("propertyType", "Property Type")}</th>
@@ -2415,6 +2454,8 @@ export default function PipelineClient() {
               const rowMtrYoc = calculateYieldOnCost(row, "mtr");
               const rowIsNew = row.newness?.isNew === true;
               const rowLocationLabels = locationLabels(row);
+              const askActivity = askActivityDisplay(row);
+              const isSaved = rowIsSaved(row);
               return (
                 <tr
                   key={row.propertyId}
@@ -2428,6 +2469,18 @@ export default function PipelineClient() {
                       checked={isChecked}
                       onChange={() => toggleSelected(row.propertyId)}
                     />
+                  </td>
+                  <td className={styles.starColumn} onClick={stopRowClick}>
+                    <button
+                      className={`${styles.saveStarButton} ${isSaved ? styles.saveStarButtonActive : ""}`}
+                      type="button"
+                      aria-label={isSaved ? `${row.displayAddress ?? row.canonicalAddress} is saved` : `Save ${row.displayAddress ?? row.canonicalAddress}`}
+                      title={isSaved ? "Saved deal" : "Save deal"}
+                      disabled={isSaved || isTerminal || busyAction === `${row.propertyId}:save`}
+                      onClick={() => saveDeal(row.propertyId, "pipeline_table")}
+                    >
+                      <Star size={15} fill={isSaved ? "currentColor" : "none"} strokeWidth={2.2} aria-hidden="true" />
+                    </button>
                   </td>
                   <td className={styles.addressCell}>
                     <div className={styles.addressWrap}>
@@ -2468,7 +2521,17 @@ export default function PipelineClient() {
                     {rowIsNew ? <span className={styles.newBadge} title={newBadgeTitle(row)}>New</span> : null}
                   </td>
                   <td className={styles.dateCell}>{formatDate(row.updatedAt)}</td>
-                  <td className={styles.numericCell}>{formatCurrency(row.askingPrice)}</td>
+                  <td className={cx(styles.numericCell, styles.askCell)}>
+                    <strong>{formatCurrency(row.askingPrice)}</strong>
+                    {askActivity ? (
+                      <span
+                        className={`${styles.askActivity} ${askActivity.tone === "cut" ? styles.askActivityCut : askActivity.tone === "raise" ? styles.askActivityRaise : ""}`}
+                        title={askActivity.title}
+                      >
+                        {askActivity.label}
+                      </span>
+                    ) : null}
+                  </td>
                   <td className={cx(styles.numericCell, styles.yocCell)}>
                     <strong>{formatPercent(rowLtrYoc)}</strong>
                   </td>
@@ -2550,7 +2613,7 @@ export default function PipelineClient() {
                               <button
                                 className={styles.linkButton}
                                 type="button"
-                                disabled={status === "saved" || busyAction === `${row.propertyId}:save`}
+                                disabled={isSaved || busyAction === `${row.propertyId}:save`}
                                 onClick={() => saveDeal(row.propertyId, "pipeline_table")}
                               >
                                 Save
@@ -3763,7 +3826,8 @@ function RentRollTable({ rows }: { rows: RentRollItem[] }) {
             <th>Unit</th>
             <th>Type</th>
             <th>Rent</th>
-            <th>Size</th>
+            <th>Beds / Baths</th>
+            <th>SF</th>
             <th>Tenant/status</th>
           </tr>
         </thead>
@@ -3774,10 +3838,11 @@ function RentRollTable({ rows }: { rows: RentRollItem[] }) {
               <td>{row.unitCategory ?? row.rentType ?? "-"}</td>
               <td>{formatCurrency(row.monthlyTotalRent ?? row.monthlyRent ?? row.monthlyBaseRent, false)}</td>
               <td>
-                {[row.beds != null ? `${formatNumber(row.beds)} bd` : null, row.baths != null ? `${formatNumber(row.baths)} ba` : null, row.sqft != null ? `${formatNumber(row.sqft)} sf` : null]
+                {[row.beds != null ? `${formatNumber(row.beds)} bd` : null, row.baths != null ? `${formatNumber(row.baths)} ba` : null]
                   .filter(Boolean)
                   .join(" · ") || "-"}
               </td>
+              <td>{row.sqft != null ? `${formatNumber(row.sqft)} sf` : "-"}</td>
               <td>{[row.tenantName, typeof row.occupied === "boolean" ? (row.occupied ? "Occupied" : "Vacant") : row.occupied, row.tenantStatus].filter(Boolean).join(" · ") || "-"}</td>
             </tr>
           ))}

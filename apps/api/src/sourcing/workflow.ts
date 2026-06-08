@@ -53,6 +53,11 @@ function mergeRecipientCandidate(
     name: existing?.name ?? incoming.name ?? null,
     firm: existing?.firm ?? incoming.firm ?? null,
     contactId: existing?.contactId ?? incoming.contactId ?? null,
+    source: existing?.source ?? incoming.source ?? null,
+    confidence: existing?.confidence ?? incoming.confidence ?? null,
+    evidence: existing?.evidence ?? incoming.evidence ?? null,
+    sourceUrl: existing?.sourceUrl ?? incoming.sourceUrl ?? null,
+    needsReview: existing?.needsReview ?? incoming.needsReview ?? null,
   };
 }
 
@@ -90,6 +95,11 @@ export function mergeManualOverrideCandidateContacts(params: {
           name: manualMatch?.name ?? null,
           firm: manualMatch?.firm ?? null,
           contactId: params.manualResolution.contactId ?? manualMatch?.contactId ?? null,
+          source: "manual",
+          confidence: 100,
+          evidence: "Manual broker recipient override.",
+          sourceUrl: null,
+          needsReview: false,
         }
       : null;
 
@@ -125,10 +135,26 @@ function buildRecipientCandidatesFromListing(listing: ListingRow | null): Recipi
         email,
         name: entry.name ?? null,
         firm: entry.firm ?? null,
+        source: entry.source ?? null,
+        confidence: entry.confidence ?? null,
+        evidence: entry.evidence ?? null,
+        sourceUrl: entry.sourceUrl ?? null,
+        needsReview: entry.needsReview ?? null,
       });
     }
   }
   return [...candidates.values()];
+}
+
+function candidateNeedsBrokerEmailReview(candidate: RecipientContactCandidate): boolean {
+  if (candidate.needsReview === true) return true;
+  if (candidate.source === "llm") return true;
+  if (candidate.confidence != null && candidate.confidence < 90) return true;
+  return false;
+}
+
+function brokerReviewCandidates(candidates: RecipientContactCandidate[]): RecipientContactCandidate[] {
+  return candidates.filter(candidateNeedsBrokerEmailReview);
 }
 
 function buildNoEmailBrokerSourceKey(params: {
@@ -232,6 +258,26 @@ export async function syncRecipientResolution(
         normalizedEmail: candidate.email,
         displayName: candidate.name ?? null,
         firm: candidate.firm ?? null,
+        source: candidate.source ?? "sourced",
+        sourceMetadata: {
+          kind: "listing_broker_email",
+          source: candidate.source ?? null,
+          confidence: candidate.confidence ?? null,
+          evidence: candidate.evidence ?? null,
+          sourceUrl: candidate.sourceUrl ?? null,
+          needsReview: candidateNeedsBrokerEmailReview(candidate),
+          propertyId,
+          listingId: listing?.id ?? null,
+        },
+        manualReviewOnly: candidateNeedsBrokerEmailReview(candidate),
+        activitySummary: {
+          brokerEmailCandidate: true,
+          needsReview: candidateNeedsBrokerEmailReview(candidate),
+          confidence: candidate.confidence ?? null,
+          evidence: candidate.evidence ?? null,
+          sourceUrl: candidate.sourceUrl ?? null,
+          relatedPropertyIds: [propertyId],
+        },
       })
     );
   }
@@ -248,13 +294,16 @@ export async function syncRecipientResolution(
 
   if (candidateContacts.length === 1) {
     const only = candidateContacts[0]!;
+    const needsReview = candidateNeedsBrokerEmailReview(only);
     return resolutionRepo.upsert({
       propertyId,
       status: "resolved",
       contactId: only.contactId ?? null,
       contactEmail: only.email,
-      confidence: 100,
-      resolutionReason: "Single broker email from listing enrichment",
+      confidence: needsReview ? only.confidence ?? 70 : 100,
+      resolutionReason: needsReview
+        ? "Single broker email from LLM lookup pending review"
+        : "Single broker email from listing enrichment",
       candidateContacts,
     });
   }
@@ -586,6 +635,8 @@ export async function syncPropertySourcingWorkflow(
   const outreachBlockReason = await resolveOutreachBlockReason(propertyId, resolution, options?.outreachRules ?? null, pool);
 
   const needsBrokerEmail = !normalizeValidEmail(resolution.contactEmail);
+  const reviewCandidates = brokerReviewCandidates(resolution.candidateContacts ?? []);
+  const needsBrokerEmailReview = resolution.status !== "manual_override" && reviewCandidates.length > 0;
 
   if (resolution.status === "multiple_candidates") {
     await flagRepo.upsertOpen(propertyId, "manual_reconcile_needed", "Property has multiple broker candidates and needs manual review");
@@ -595,6 +646,7 @@ export async function syncPropertySourcingWorkflow(
     });
     await flagRepo.resolve(propertyId, "missing_broker_email");
     await actionRepo.resolve(propertyId, "add_broker_email");
+    await actionRepo.resolve(propertyId, "review_broker_email");
   } else if (resolution.status === "missing" || needsBrokerEmail) {
     await flagRepo.upsertOpen(propertyId, "missing_broker_email", "Property needs a broker email before OM outreach can run");
     await actionRepo.upsertOpen(propertyId, "add_broker_email", {
@@ -605,11 +657,33 @@ export async function syncPropertySourcingWorkflow(
       },
     });
     await actionRepo.resolve(propertyId, "choose_recipient");
+    await actionRepo.resolve(propertyId, "review_broker_email");
+  } else if (needsBrokerEmailReview) {
+    await flagRepo.resolve(propertyId, "missing_broker_email");
+    await flagRepo.upsertOpen(propertyId, "manual_reconcile_needed", "Sourced broker email needs review before OM outreach");
+    await actionRepo.upsertOpen(propertyId, "review_broker_email", {
+      priority: "high",
+      summary: "Review sourced broker email before OM outreach",
+      details: {
+        candidates: reviewCandidates.map((candidate) => ({
+          email: candidate.email,
+          name: candidate.name ?? null,
+          firm: candidate.firm ?? null,
+          source: candidate.source ?? null,
+          confidence: candidate.confidence ?? null,
+          evidence: candidate.evidence ?? null,
+          sourceUrl: candidate.sourceUrl ?? null,
+        })),
+      },
+    });
+    await actionRepo.resolve(propertyId, "add_broker_email");
+    await actionRepo.resolve(propertyId, "choose_recipient");
   } else {
     await flagRepo.resolve(propertyId, "missing_broker_email");
     await flagRepo.resolve(propertyId, "manual_reconcile_needed");
     await actionRepo.resolve(propertyId, "add_broker_email");
     await actionRepo.resolve(propertyId, "choose_recipient");
+    await actionRepo.resolve(propertyId, "review_broker_email");
   }
 
   if (lastReplyAt && !hasManualOm) {

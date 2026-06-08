@@ -327,7 +327,7 @@ async function importLoopNetPublicDocumentsForProperty(params: {
 async function refreshStreetEasyListingForProperty(
   propertyId: string,
   pool: import("pg").Pool
-): Promise<{ attempted: boolean; ok: boolean; priceChanged: boolean; error?: string }> {
+): Promise<{ attempted: boolean; ok: boolean; priceChanged: boolean; unavailable: boolean; listingStatus?: string | null; error?: string }> {
   const listing = await getPrimaryListingForProperty(propertyId, pool);
   const listingUrl = listing?.url?.trim() ?? "";
   const saleId = listingUrl ? extractStreetEasySaleIdFromUrl(listingUrl) : null;
@@ -336,7 +336,7 @@ async function refreshStreetEasyListingForProperty(
     listing?.source === "nyc_api" ||
     (listingUrl ? extractStreetEasySaleIdFromUrl(listingUrl) != null || /streeteasy\.com/i.test(listingUrl) : false);
   if (!listing || !isStreetEasyListing || (!listingUrl && !saleId)) {
-    return { attempted: false, ok: false, priceChanged: false };
+    return { attempted: false, ok: false, priceChanged: false, unavailable: false };
   }
 
   try {
@@ -361,6 +361,8 @@ async function refreshStreetEasyListingForProperty(
       },
       0
     );
+    const listingStatus = refreshedListingStatus(normalized);
+    const listingUnavailable = isUnavailableStreetEasyStatus(listingStatus, refreshedListingInContract(normalized));
     const oldPrice = Number(listing.price);
     const newPrice = Number(normalized.price);
     const priceChanged = Number.isFinite(oldPrice) && Number.isFinite(newPrice) && Math.abs(oldPrice - newPrice) >= 1;
@@ -369,6 +371,7 @@ async function refreshStreetEasyListingForProperty(
     const snapshotRepo = new SnapshotRepo({ pool });
     const propertyRepo = new PropertyRepo({ pool });
     const matchRepo = new MatchRepo({ pool });
+    const actionRepo = new PropertyActionItemRepo({ pool });
     const previousSnapshot = (await snapshotRepo.list({ listingId: listing.id, limit: 1 })).snapshots[0] ?? null;
     Object.assign(normalized, withRefreshPriceHistory({ normalized, existing: listing, previousSnapshot }));
     normalized.rentalPriceHistory = normalized.rentalPriceHistory ?? listing.rentalPriceHistory ?? null;
@@ -391,6 +394,22 @@ async function refreshStreetEasyListingForProperty(
     }
 
     const upserted = await listingRepo.upsert(normalized, { uploadedRunId: null });
+    if (listingUnavailable) {
+      await listingRepo.setLifecycle(upserted.listing.id, "missing");
+      await actionRepo.upsertOpen(propertyId, "review_listing_unavailable", {
+        priority: "high",
+        summary: `StreetEasy status is ${listingStatus ?? "unavailable"}; review/remove from pipeline`,
+        details: {
+          listingId: upserted.listing.id,
+          listingUrl: normalized.url,
+          listingStatus,
+          source: "streeteasy_refresh",
+        },
+      });
+    } else {
+      await listingRepo.setLifecycle(upserted.listing.id, "active");
+      await actionRepo.resolve(propertyId, "review_listing_unavailable");
+    }
     if (upserted.listing.id !== listing.id) {
       await matchRepo.create({
         listingId: upserted.listing.id,
@@ -417,6 +436,8 @@ async function refreshStreetEasyListingForProperty(
         rentalPriceHistory: normalized.rentalPriceHistory ?? null,
         normalizedListing: normalized as unknown as Record<string, unknown>,
         priceChanged,
+        listingUnavailable,
+        listingStatus,
         previousPrice: Number.isFinite(oldPrice) ? oldPrice : null,
         currentPrice: Number.isFinite(newPrice) ? newPrice : null,
       },
@@ -424,12 +445,13 @@ async function refreshStreetEasyListingForProperty(
     const detailsMerge = buildPropertyDetailsMergeFromListing(normalized);
     if (Object.keys(detailsMerge).length > 0) await propertyRepo.mergeDetails(propertyId, detailsMerge);
     await refreshPropertyPipelineMetadata(propertyId, pool);
-    return { attempted: true, ok: true, priceChanged };
+    return { attempted: true, ok: true, priceChanged, unavailable: listingUnavailable, listingStatus };
   } catch (error) {
     return {
       attempted: true,
       ok: false,
       priceChanged: false,
+      unavailable: false,
       error: error instanceof Error ? error.message : String(error),
     };
   }
@@ -527,6 +549,45 @@ const DEFAULT_PIPELINE_TAGS = [
   "duplicate",
   "partner_review_needed",
 ];
+
+function normalizedListingExtra(value: unknown): Record<string, unknown> {
+  return value != null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function stringField(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
+
+function refreshedListingStatus(normalized: { extra?: Record<string, unknown> | null }): string | null {
+  const extra = normalizedListingExtra(normalized.extra);
+  return stringField(
+    extra.listingStatus ??
+      extra.listing_status ??
+      extra.saleStatus ??
+      extra.sale_status ??
+      extra.marketStatus ??
+      extra.market_status ??
+      extra.status
+  );
+}
+
+function refreshedListingInContract(normalized: { extra?: Record<string, unknown> | null }): boolean {
+  const extra = normalizedListingExtra(normalized.extra);
+  const raw = extra.inContract ?? extra.in_contract ?? extra.isInContract ?? extra.is_in_contract;
+  if (typeof raw === "boolean") return raw;
+  if (typeof raw === "string") return ["true", "yes", "1"].includes(raw.trim().toLowerCase());
+  return false;
+}
+
+function isUnavailableStreetEasyStatus(status: string | null | undefined, inContract: boolean): boolean {
+  if (inContract) return true;
+  if (!status) return false;
+  return /\b(off[-_\s]?market|in[-_\s]?contract|contract|pending|sold|closed|delisted|withdrawn|unavailable|temporarily\s+off)\b/i.test(status);
+}
 
 function normalizeTag(value: unknown): string | null {
   if (typeof value !== "string") return null;
@@ -2232,7 +2293,7 @@ router.post("/properties/run-enrichment", async (req: Request, res: Response) =>
 
     const appToken = process.env.SOCRATA_APP_TOKEN ?? null;
     const sourcingPool = getPool();
-    const streetEasyRefresh = { attempted: 0, success: 0, failed: 0, skipped: 0, priceChanged: 0, errors: [] as string[] };
+    const streetEasyRefresh = { attempted: 0, success: 0, failed: 0, skipped: 0, priceChanged: 0, unavailable: 0, errors: [] as string[] };
     for (let i = 0; i < propertyIds.length; i++) {
       if (i > 0) await new Promise((r) => setTimeout(r, ENRICHMENT_RATE_LIMIT_DELAY_MS));
       const propertyId = propertyIds[i]!;
@@ -2242,6 +2303,7 @@ router.post("/properties/run-enrichment", async (req: Request, res: Response) =>
         streetEasyRefresh.attempted++;
         streetEasyRefresh.success++;
         if (result.priceChanged) streetEasyRefresh.priceChanged++;
+        if (result.unavailable) streetEasyRefresh.unavailable++;
       } else {
         streetEasyRefresh.attempted++;
         streetEasyRefresh.failed++;
@@ -2265,7 +2327,9 @@ router.post("/properties/run-enrichment", async (req: Request, res: Response) =>
             ? new Date().toISOString()
             : null,
         lastMessage:
-          streetEasyRefresh.priceChanged > 0
+          streetEasyRefresh.unavailable > 0
+            ? `${streetEasyRefresh.unavailable} unavailable listing${streetEasyRefresh.unavailable === 1 ? "" : "s"} flagged`
+            : streetEasyRefresh.priceChanged > 0
             ? `${streetEasyRefresh.priceChanged} ask change${streetEasyRefresh.priceChanged === 1 ? "" : "s"} found`
             : `${streetEasyRefresh.success}/${propertyIds.length} StreetEasy refreshes completed`,
         lastError: result.ok || !result.error ? null : result.error,
@@ -4945,7 +5009,7 @@ router.post("/properties/run-rental-flow", async (req: Request, res: Response) =
     const appToken = process.env.SOCRATA_APP_TOKEN ?? null;
     let completed = 0;
     let failed = 0;
-    const streetEasyRefresh = { attempted: 0, success: 0, failed: 0, skipped: 0, priceChanged: 0, errors: [] as string[] };
+    const streetEasyRefresh = { attempted: 0, success: 0, failed: 0, skipped: 0, priceChanged: 0, unavailable: 0, errors: [] as string[] };
 
     if (shouldRefreshStreetEasy) {
       for (const propertyId of propertyIds) {
@@ -4955,6 +5019,7 @@ router.post("/properties/run-rental-flow", async (req: Request, res: Response) =
           streetEasyRefresh.attempted++;
           streetEasyRefresh.success++;
           if (result.priceChanged) streetEasyRefresh.priceChanged++;
+          if (result.unavailable) streetEasyRefresh.unavailable++;
         } else {
           streetEasyRefresh.attempted++;
           streetEasyRefresh.failed++;
@@ -4978,7 +5043,9 @@ router.post("/properties/run-rental-flow", async (req: Request, res: Response) =
               ? new Date().toISOString()
               : null,
           lastMessage:
-            streetEasyRefresh.priceChanged > 0
+            streetEasyRefresh.unavailable > 0
+              ? `${streetEasyRefresh.unavailable} unavailable listing${streetEasyRefresh.unavailable === 1 ? "" : "s"} flagged`
+              : streetEasyRefresh.priceChanged > 0
               ? `${streetEasyRefresh.priceChanged} ask change${streetEasyRefresh.priceChanged === 1 ? "" : "s"} found`
               : `${streetEasyRefresh.success}/${propertyIds.length} StreetEasy refreshes completed`,
           lastError: result.ok || !result.error ? null : result.error,

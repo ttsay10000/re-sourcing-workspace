@@ -5,7 +5,7 @@
 
 import type { AgentEnrichmentEntry, ListingNormalized } from "@re-sourcing/contracts";
 import OpenAI from "openai";
-import { getEnrichmentModel } from "./openaiModels.js";
+import { getBrokerLookupModel } from "./openaiModels.js";
 
 const BROKER_LOOKUP_SCHEMA = {
   type: "object",
@@ -17,12 +17,16 @@ const BROKER_LOOKUP_SCHEMA = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["name", "firm", "email", "phone"],
+        required: ["name", "firm", "email", "phone", "confidence", "evidence", "sourceUrl", "needsReview"],
         properties: {
           name: { type: "string" },
           firm: { type: ["string", "null"] },
           email: { type: ["string", "null"] },
           phone: { type: ["string", "null"] },
+          confidence: { type: ["number", "null"] },
+          evidence: { type: ["string", "null"] },
+          sourceUrl: { type: ["string", "null"] },
+          needsReview: { type: ["boolean", "null"] },
         },
       },
     },
@@ -71,6 +75,28 @@ function cleanEmail(value: unknown): string | null {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized) ? normalized : null;
 }
 
+function cleanConfidence(value: unknown): number | null {
+  const numeric = typeof value === "number" ? value : typeof value === "string" ? Number(value) : null;
+  if (numeric == null || !Number.isFinite(numeric)) return null;
+  return Math.max(0, Math.min(100, Math.round(numeric)));
+}
+
+function cleanBoolean(value: unknown): boolean | null {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["true", "yes", "1"].includes(normalized)) return true;
+    if (["false", "no", "0"].includes(normalized)) return false;
+  }
+  return null;
+}
+
+function cleanSourceUrl(value: unknown): string | null {
+  const normalized = cleanNullableString(value);
+  if (!normalized) return null;
+  return /^https?:\/\//i.test(normalized) ? normalized : null;
+}
+
 function normalizeEntry(name: string, raw: unknown): AgentEnrichmentEntry {
   if (!raw || typeof raw !== "object") {
     return { name, firm: null, email: null, phone: null };
@@ -81,6 +107,11 @@ function normalizeEntry(name: string, raw: unknown): AgentEnrichmentEntry {
     firm: cleanNullableString(entry.firm),
     email: cleanEmail(entry.email),
     phone: cleanNullableString(entry.phone),
+    source: cleanNullableString(entry.source),
+    confidence: cleanConfidence(entry.confidence),
+    evidence: cleanNullableString(entry.evidence),
+    sourceUrl: cleanSourceUrl(entry.sourceUrl ?? entry.source_url ?? entry.url),
+    needsReview: cleanBoolean(entry.needsReview ?? entry.needs_review),
   };
 }
 
@@ -168,12 +199,13 @@ export function brokerLookupContextFromListing(
     : Array.isArray(listing.agentEnrichment)
       ? listing.agentEnrichment
       : null;
+  const agentFactBrokerage = agentFacts?.map((entry) => cleanNullableString(entry.firm)).find(Boolean) ?? null;
   return {
     propertyContext: [listing.address, listing.city, listing.zip].filter(Boolean).join(", ") || null,
     source: listing.source,
     listingUrl: listing.url,
     listedAt: listing.listedAt ?? null,
-    brokerageName,
+    brokerageName: brokerageName ?? agentFactBrokerage,
     agentFacts,
   };
 }
@@ -213,11 +245,22 @@ export function mergeBrokerEnrichment(
     const sourceFirm = source?.firm ?? normalizedContext?.brokerageName ?? null;
     const lookupFirm = lookup?.firm ?? null;
     const lookupAllowed = firmsCompatible(sourceFirm, lookupFirm);
+    const sourceHasContact = Boolean(source?.email || source?.phone);
+    const lookupConfidence = lookup?.confidence ?? null;
+    const lookupHasUsableEvidence = lookupAllowed && (lookupConfidence == null || lookupConfidence >= 70);
+    const lookupEmail = lookupHasUsableEvidence ? lookup?.email ?? null : null;
+    const lookupPhone = lookupHasUsableEvidence ? lookup?.phone ?? null : null;
+    const usedLookupContact = !sourceHasContact && Boolean(lookupEmail || lookupPhone);
     return {
       name: source?.name ?? lookup?.name ?? agentName,
       firm: source?.firm ?? (lookupAllowed ? lookup?.firm ?? null : sourceFirm),
-      email: source?.email ?? (lookupAllowed ? lookup?.email ?? null : null),
-      phone: source?.phone ?? (lookupAllowed ? lookup?.phone ?? null : null),
+      email: source?.email ?? lookupEmail,
+      phone: source?.phone ?? lookupPhone,
+      source: sourceHasContact ? "source" : usedLookupContact ? "llm" : source?.source ?? lookup?.source ?? null,
+      confidence: sourceHasContact ? 100 : lookupHasUsableEvidence ? lookupConfidence : null,
+      evidence: sourceHasContact ? source?.evidence ?? "Broker contact provided by source listing payload." : lookup?.evidence ?? null,
+      sourceUrl: sourceHasContact ? source?.sourceUrl ?? normalizedContext?.listingUrl ?? null : lookup?.sourceUrl ?? null,
+      needsReview: sourceHasContact ? false : Boolean(usedLookupContact || lookup?.needsReview),
     };
   });
 
@@ -237,9 +280,10 @@ function buildLookupInput(agentNames: string[], contextInput?: string | BrokerLo
   ].filter(Boolean);
   const sourceAgentLines = agentNames.map((name) => {
     const fact = findSourceFact(name, context);
+    const firm = fact?.firm ?? context?.brokerageName ?? null;
     const pieces = [
       `- ${name}`,
-      fact?.firm ? `source agency: ${fact.firm}` : null,
+      firm ? `source agency: ${firm}` : "source agency: not provided",
       fact?.email ? `source email: ${fact.email}` : null,
       fact?.phone ? `source phone: ${fact.phone}` : null,
     ].filter(Boolean);
@@ -251,9 +295,13 @@ function buildLookupInput(agentNames: string[], contextInput?: string | BrokerLo
     contextLine,
     ...listingFacts,
     "",
+    "Use only the broker names supplied in Source agent facts. Do not search for, select, substitute, or guess a different broker/contact name.",
+    "The listing-time agency/brokerage supplied here is a required disambiguation constraint. Search for the exact broker name together with that brokerage first.",
+    "Return each entry's name exactly as provided in the input list, even if a search result displays a variation.",
     "The source listing facts are primary constraints. Agents move firms; do not return an email or phone from a different current brokerage when the listing-time agency is known.",
     "If the source agency is known, only return contact details that public evidence ties to that same agency, the exact StreetEasy listing, or an official listing/team page for the same property.",
     "If you cannot verify the agent at the listing-time agency, return null for email and phone instead of guessing.",
+    "Set confidence from 0 to 100, include a short evidence note, include the best source URL, and set needsReview true unless the evidence explicitly ties the broker, brokerage, and property/listing together.",
     "",
     "Source agent facts:",
     ...sourceAgentLines,
@@ -267,7 +315,7 @@ function buildLookupInput(agentNames: string[], contextInput?: string | BrokerLo
     "",
     "Also check combinations like '<name> <agency> StreetEasy', '<name> <property address>', and '<name> <agency> email'.",
     "Only return contact info that you can directly find in search results, brokerage pages, or public agent/profile pages.",
-    "Do not infer or guess email formats, phone numbers, or firms.",
+    "Do not infer or guess email formats, phone numbers, firms, or broker names.",
     "Keep the reply in the same order as the input names.",
     "",
     "Names:",
@@ -286,8 +334,10 @@ async function requestBrokerLookup(
     instructions: [
       "You look up actual broker contact info for NYC real estate listings.",
       "You must use web search before answering.",
+      "The caller supplies the listing broker name and listing-time brokerage. Never invent, replace, or infer a different contact name.",
       "Listing-time brokerage matters more than a broker's current firm.",
       "If evidence points to a different current agency than the listing-time agency, leave contact fields null.",
+      "Return confidence, evidence, sourceUrl, and needsReview for every entry.",
       "Return only JSON matching the provided schema.",
       "Do not infer or guess contact details.",
     ].join(" "),
@@ -295,7 +345,7 @@ async function requestBrokerLookup(
     tools: [NYC_WEB_SEARCH_TOOL],
     tool_choice: { type: NYC_WEB_SEARCH_TOOL.type },
     parallel_tool_calls: false,
-    max_output_tokens: Math.max(500, agentNames.length * 180),
+    max_output_tokens: Math.max(700, agentNames.length * 260),
     text: {
       format: {
         type: "json_schema",
@@ -318,7 +368,7 @@ async function requestBrokerLookup(
   }
 
   const rows = Array.isArray(parsed.entries) ? parsed.entries : [];
-  return agentNames.map((name, index) => normalizeEntry(name, rows[index]));
+  return agentNames.map((name, index) => ({ ...normalizeEntry(name, rows[index]), name }));
 }
 
 async function requestBrokerLookupWithRetry(
@@ -362,7 +412,7 @@ export async function enrichBrokers(
   if (names.length === 0) return null;
 
   const openai = new OpenAI({ apiKey: key });
-  const model = getEnrichmentModel();
+  const model = getBrokerLookupModel();
 
   try {
     const initial = await requestBrokerLookupWithRetry(openai, model, names, propertyContext);

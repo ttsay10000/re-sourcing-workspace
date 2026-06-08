@@ -133,6 +133,11 @@ export interface AgentEnrichmentEntry {
   firm?: string | null;
   email?: string | null;
   phone?: string | null;
+  source?: "source" | "llm" | "manual" | string | null;
+  confidence?: number | null;
+  evidence?: string | null;
+  sourceUrl?: string | null;
+  needsReview?: boolean | null;
 }
 
 /** Single price history row (from Property history section). */

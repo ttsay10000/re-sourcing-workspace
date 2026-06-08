@@ -64,6 +64,13 @@ export function getEnrichmentModel(): string {
   return DEFAULT_MODEL;
 }
 
+/** Broker contact search is intentionally pinned to GPT-4o by default for web-search accuracy. */
+export function getBrokerLookupModel(): string {
+  const model = getModelFromEnv("OPENAI_BROKER_LOOKUP_MODEL", "OPENAI_BROKER_MODEL");
+  if (model) return model;
+  return DEFAULT_MODEL;
+}
+
 /** Vision/multimodal property condition review; defaults to gpt-4o for broad image support. */
 export function getPropertyConditionModel(): string {
   const model = getModelFromEnv("OPENAI_PROPERTY_CONDITION_MODEL");

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  getBrokerLookupModel,
   getDealScoringModel,
   getDossierModel,
   getEnrichmentModel,
@@ -11,6 +12,8 @@ describe("OpenAI model helpers", () => {
   beforeEach(() => {
     for (const key of [
       "OPENAI_MODEL",
+      "OPENAI_BROKER_LOOKUP_MODEL",
+      "OPENAI_BROKER_MODEL",
       "OPENAI_OM_MODEL",
       "OPENAI_DOSSIER_MODEL",
       "OPENAI_DEAL_SCORING_MODEL",
@@ -28,6 +31,13 @@ describe("OpenAI model helpers", () => {
     expect(getDossierModel()).toBe("gpt-5.5");
     expect(getOmAnalysisModel()).toBe("gpt-5.5");
     expect(getDealScoringModel()).toBe("gpt-5.5");
+  });
+
+  it("defaults broker lookup to GPT-4o with a broker-specific override", () => {
+    expect(getBrokerLookupModel()).toBe("gpt-4o");
+
+    vi.stubEnv("OPENAI_BROKER_LOOKUP_MODEL", "4o-mini");
+    expect(getBrokerLookupModel()).toBe("gpt-4o-mini");
   });
 
   it("normalizes GPT-5.5 shorthand and ChatGPT display names to the API model id", () => {

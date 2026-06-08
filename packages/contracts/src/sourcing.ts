@@ -37,6 +37,8 @@ export type PropertyOutreachFlagType =
 export type PropertyActionItemType =
   | "choose_recipient"
   | "add_broker_email"
+  | "review_broker_email"
+  | "review_listing_unavailable"
   | "review_thread_conflict"
   | "reply_received_no_om"
   | "upload_om_manually"
@@ -81,6 +83,11 @@ export interface RecipientContactCandidate {
   name?: string | null;
   firm?: string | null;
   contactId?: string | null;
+  source?: "source" | "llm" | "manual" | string | null;
+  confidence?: number | null;
+  evidence?: string | null;
+  sourceUrl?: string | null;
+  needsReview?: boolean | null;
 }
 
 export interface RecipientResolution {
