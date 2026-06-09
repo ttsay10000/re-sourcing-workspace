@@ -443,11 +443,12 @@ export function resolveDetailedCashFlowModel(params: {
       rentBasis: currentFinancials.rentBasis,
       assumedLongTermOccupancyPct: currentFinancials.assumedLongTermOccupancyPct,
     });
-    const defaultProjectedAnnualRent =
-      conservativeProjectedAnnualRentFromRecord(record) ?? normalizedCurrentAnnualRent;
+    const sourceProjectedAnnualRent = conservativeProjectedAnnualRentFromRecord(record);
+    const defaultProjectedAnnualRent = sourceProjectedAnnualRent ?? normalizedCurrentAnnualRent;
     const underwrittenAnnualRent = override?.underwrittenAnnualRent ?? defaultProjectedAnnualRent;
     const rentUpliftPct =
-      override?.rentUpliftPct ?? (isProtected ? 0 : params.defaultRentUpliftPct ?? 0);
+      override?.rentUpliftPct ??
+      (isProtected || sourceProjectedAnnualRent != null ? 0 : params.defaultRentUpliftPct ?? 0);
     const occupancyPct =
       clampPct(override?.occupancyPct) ??
       defaultModeledOccupancyPct({

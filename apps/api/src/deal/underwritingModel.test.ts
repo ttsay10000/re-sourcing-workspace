@@ -509,6 +509,71 @@ describe("underwritingModel", () => {
     expect(projection.yearly.leadTimeLoss[1]).toBeCloseTo(30_000, 2);
   });
 
+  it("uses MTR gross rent for cash flow before vacancy and lead-time losses", () => {
+    const assumptions = resolveDossierAssumptions(
+      {
+        id: "profile-mtr-cash-flow",
+        createdAt: "2026-03-10T00:00:00.000Z",
+        updatedAt: "2026-03-10T00:00:00.000Z",
+        defaultPurchaseClosingCostPct: 3,
+        defaultLtv: 65,
+        defaultInterestRate: 6,
+        defaultAmortization: 30,
+        defaultHoldPeriodYears: 5,
+        defaultExitCap: 5,
+        defaultExitClosingCostPct: 5,
+        defaultRentUplift: 70,
+        defaultExpenseIncrease: 0,
+        defaultManagementFee: 0,
+        defaultVacancyPct: 15,
+        defaultLeadTimeMonths: 2,
+        defaultAnnualRentGrowthPct: 1,
+        defaultAnnualCommercialRentGrowthPct: 1.5,
+        defaultAnnualOtherIncomeGrowthPct: 0,
+        defaultAnnualExpenseGrowthPct: 0,
+        defaultAnnualPropertyTaxGrowthPct: 0,
+        defaultRecurringCapexAnnual: 0,
+        defaultLoanFeePct: 0,
+      },
+      10_000_000,
+      { occupancyTaxPct: 0 }
+    );
+
+    const projection = computeUnderwritingProjection({
+      assumptions,
+      currentGrossRent: 291_000,
+      currentNoi: 200_000,
+      unitRows: [
+        {
+          rowId: "residential-mtr",
+          unitLabel: "Free-market residential",
+          currentAnnualRent: 111_000,
+          underwrittenAnnualRent: 263_160,
+          rentUpliftPct: 0,
+          occupancyPct: 85,
+          isCommercial: false,
+          isProtected: false,
+        },
+        {
+          rowId: "retail",
+          unitLabel: "Commercial",
+          currentAnnualRent: 180_000,
+          underwrittenAnnualRent: 180_000,
+          rentUpliftPct: 0,
+          isCommercial: true,
+          isProtected: false,
+        },
+      ],
+    });
+
+    expect(projection.yearly.freeMarketResidentialGrossRentalIncome[1]).toBeCloseTo(263_160, 2);
+    expect(projection.yearly.commercialGrossRentalIncome[1]).toBeCloseTo(180_000, 2);
+    expect(projection.yearly.grossRentalIncome[1]).toBeCloseTo(443_160, 2);
+    expect(projection.yearly.vacancyLoss[1]).toBeCloseTo(39_474, 2);
+    expect(projection.yearly.leadTimeLoss[1]).toBeCloseTo(43_860, 2);
+    expect(projection.yearly.netRentalIncome[1]).toBeCloseTo(359_826, 2);
+  });
+
   it("treats the legacy $1.2k profile reserve default as a fallback when unit mix is known", () => {
     const assumptions = resolveDossierAssumptions(
       {

@@ -108,6 +108,41 @@ describe("detailedCashFlowModel", () => {
     );
   });
 
+  it("uses extracted projected market rent as the MTR base without applying default rent uplift again", () => {
+    const model = resolveDetailedCashFlowModel({
+      details: {
+        omData: {
+          authoritative: {
+            rentRoll: [
+              {
+                unit: "1A",
+                unitCategory: "Residential",
+                annualRent: 120_000,
+                projectedAnnualRent: 263_160,
+              },
+            ],
+          },
+        },
+      } as never,
+      defaultRentUpliftPct: 70,
+      defaultVacancyPct: 15,
+      defaultAnnualExpenseGrowthPct: 2,
+      defaultAnnualPropertyTaxGrowthPct: 3,
+      unitModelRows: null,
+      expenseModelRows: null,
+    });
+
+    expect(model.unitModelRows[0]).toEqual(
+      expect.objectContaining({
+        currentAnnualRent: 120_000,
+        underwrittenAnnualRent: 263_160,
+        rentUpliftPct: 0,
+        modeledAnnualRent: 223_686,
+        defaultProjectedAnnualRent: 263_160,
+      })
+    );
+  });
+
   it("migrates the legacy in-unit-electric saved row onto furnished rental utilities", () => {
     const model = resolveDetailedCashFlowModel({
       details: {

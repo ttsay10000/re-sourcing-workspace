@@ -963,7 +963,7 @@ export function computeUnderwritingProjection(
   const eligibleGrossRentalIncomeBase = detailedUnitModelActive
     ? roundCurrency(
         normalizedUnitRows.reduce((sum, row) => {
-          if (row.includeInUnderwriting === false || row.isProtected === true) return sum;
+          if (row.includeInUnderwriting === false || row.isCommercial === true || row.isProtected === true) return sum;
           return sum + grossAnnualRentForUnit(row);
         }, 0)
       )
@@ -1032,7 +1032,7 @@ export function computeUnderwritingProjection(
   const eligibleOccupiedRentalIncomeBase = detailedUnitModelActive
     ? roundCurrency(
         normalizedUnitRows.reduce((sum, row) => {
-          if (row.includeInUnderwriting === false || row.isProtected === true) return sum;
+          if (row.includeInUnderwriting === false || row.isCommercial === true || row.isProtected === true) return sum;
           return sum + effectiveAnnualRentForUnit(row, assumptions.operating.vacancyPct);
         }, 0)
       )
@@ -1042,7 +1042,8 @@ export function computeUnderwritingProjection(
   const protectedOccupiedRentalIncomeBase = detailedUnitModelActive
     ? roundCurrency(
         normalizedUnitRows.reduce((sum, row) => {
-          if (row.includeInUnderwriting === false || row.isProtected !== true) return sum;
+          if (row.includeInUnderwriting === false || (row.isCommercial !== true && row.isProtected !== true)) return sum;
+          if (row.isCommercial === true) return sum + grossAnnualRentForUnit(row);
           return sum + effectiveAnnualRentForUnit(row, assumptions.operating.vacancyPct);
         }, 0)
       )
