@@ -3,7 +3,7 @@
  */
 
 import { Router, type Request, type Response } from "express";
-import type { DealSignalRow, PropertyDetails } from "@re-sourcing/contracts";
+import type { DealSignalRow, PropertyDealDossierGeneration, PropertyDetails } from "@re-sourcing/contracts";
 import {
   DealScoreOverridesRepo,
   DealSignalsRepo,
@@ -624,6 +624,22 @@ router.post("/dossier/generate", async (req: Request, res: Response) => {
         ],
       });
       if (requiresStructuredSource) {
+        const failedAt = new Date().toISOString();
+        const failedGeneration: PropertyDealDossierGeneration = {
+          status: "failed",
+          stageLabel: "Source required",
+          startedAt: workflowStartedAt,
+          completedAt: failedAt,
+          lastError: MISSING_DOSSIER_SOURCE_DETAILS,
+          dealScore: null,
+          dossierDocumentId: null,
+          excelDocumentId: null,
+        };
+        await propertyRepo.updateDetails(
+          propertyId,
+          "dealDossier.generation",
+          failedGeneration as Record<string, unknown>
+        );
         await upsertWorkflowStep(workflowRunId, {
           stepKey: "dossier",
           totalItems: 1,
@@ -631,7 +647,7 @@ router.post("/dossier/generate", async (req: Request, res: Response) => {
           failedItems: 1,
           status: "failed",
           startedAt: workflowStartedAt,
-          finishedAt: new Date().toISOString(),
+          finishedAt: failedAt,
           lastError: MISSING_DOSSIER_SOURCE_DETAILS,
           lastMessage: "Authoritative OM or broker notes required before dossier generation",
         });

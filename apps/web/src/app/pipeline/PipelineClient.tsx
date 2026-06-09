@@ -128,6 +128,7 @@ function tabFromParam(value: string | null): SheetTab | null {
 }
 
 type PipelineRow = UiV2PipelineRow & {
+  documents?: UiV2PropertyDocumentItem[];
   gallery?: UiV2ImageAsset[];
   overview?: { gallery?: UiV2ImageAsset[]; listingUrl?: string | null };
 };
@@ -136,6 +137,29 @@ type FlexiblePropertyDetail = UiV2PropertyDetailPayload & {
   gallery?: UiV2ImageAsset[];
   overview: UiV2PropertyDetailPayload["overview"] & { gallery?: UiV2ImageAsset[] };
 };
+
+type RowActionMenuState = {
+  propertyId: string;
+  top: number;
+  right: number;
+};
+
+type RowDownloadAction = {
+  key: "om" | "comps" | "dossier" | "excel";
+  label: string;
+  url: string | null;
+  fileName?: string | null;
+  title: string;
+};
+
+type TrackerTone = "complete" | "pending" | "warning" | "failed" | "neutral";
+
+interface PipelineTrackerItem {
+  key: "comps" | "om" | "uw";
+  label: string;
+  tone: TrackerTone;
+  title: string;
+}
 
 const EMPTY_ENRICHMENT_STATE: UiV2EnrichmentState = {
   status: "not_started",
@@ -187,6 +211,14 @@ const COLUMN_SORT_FIELDS: Partial<Record<PipelineHeaderMenuId, UiV2PipelineSortF
   om: "omStatus",
   flow: "lastActivityAt",
 };
+
+const COMP_DOCUMENT_CATEGORIES = new Set([
+  "Broker Comp Package",
+  "Sale Comp Package",
+  "Rent Comp Package",
+  "Expense Comp Package",
+  "Market Analysis",
+]);
 
 interface PipelineResponse {
   pipeline: UiV2PipelineListPayload;
@@ -626,6 +658,224 @@ function documentUrl(document: UiV2PropertyDocumentItem): string {
   return `${API_BASE}${fileUrl}`;
 }
 
+function propertyDocumentFileUrl(propertyId: string, documentId: string): string {
+  return `${API_BASE}/api/properties/${encodeURIComponent(propertyId)}/documents/${encodeURIComponent(documentId)}/file`;
+}
+
+function normalizedSearchText(values: Array<string | null | undefined>): string {
+  return values.filter(Boolean).join(" ").toLowerCase();
+}
+
+function documentSearchText(document: UiV2PropertyDocumentItem): string {
+  return normalizedSearchText([
+    document.fileName,
+    document.fileType,
+    document.source,
+    document.sourceType,
+    typeof document.category === "string" ? document.category : null,
+  ]);
+}
+
+function isOmDocument(document: UiV2PropertyDocumentItem): boolean {
+  const category = typeof document.category === "string" ? document.category : "";
+  const searchText = documentSearchText(document);
+  return (
+    category === "OM" ||
+    category === "Brochure" ||
+    /\b(om|offering memorandum|offering memo|brochure)\b/.test(searchText)
+  );
+}
+
+function isCompDocument(document: UiV2PropertyDocumentItem): boolean {
+  const category = typeof document.category === "string" ? document.category : "";
+  const searchText = documentSearchText(document);
+  return COMP_DOCUMENT_CATEGORIES.has(category) || /\b(comp|comps|market analysis|sellout|pricing)\b/.test(searchText);
+}
+
+function isGeneratedDossierDocument(document: UiV2PropertyDocumentItem): boolean {
+  const searchText = documentSearchText(document);
+  return document.source === "generated_dossier" || (document.sourceType === "generated" && /\bdossier\b/.test(searchText));
+}
+
+function isGeneratedExcelDocument(document: UiV2PropertyDocumentItem): boolean {
+  const searchText = documentSearchText(document);
+  return (
+    document.source === "generated_excel" ||
+    (document.sourceType === "generated" && /\b(excel|workbook|xlsx|model)\b/.test(searchText))
+  );
+}
+
+function firstMatchingDocument(
+  documents: UiV2PropertyDocumentItem[] | null | undefined,
+  predicate: (document: UiV2PropertyDocumentItem) => boolean
+): UiV2PropertyDocumentItem | null {
+  return documents?.find(predicate) ?? null;
+}
+
+function resolvedDocumentUrl(document: UiV2PropertyDocumentItem | null): string | null {
+  if (!document) return null;
+  const url = documentUrl(document);
+  return url === "#" ? null : url;
+}
+
+function brokerCompSourceDocumentId(row: PipelineRow): string | null {
+  const packages = row.brokerComps?.packages;
+  if (!Array.isArray(packages)) return null;
+  for (const packagePayload of packages) {
+    if (!isRecord(packagePayload)) continue;
+    const pkg = isRecord(packagePayload.package) ? packagePayload.package : null;
+    const sourceDocumentId = typeof pkg?.sourceDocumentId === "string" ? pkg.sourceDocumentId.trim() : "";
+    if (sourceDocumentId) return sourceDocumentId;
+  }
+  return null;
+}
+
+function rowHasCompEvidence(row: PipelineRow): boolean {
+  const categories = row.documentStatus?.categories ?? [];
+  if (categories.some((category) => COMP_DOCUMENT_CATEGORIES.has(String(category)))) return true;
+  if (row.documents?.some(isCompDocument)) return true;
+  const brokerComps = row.brokerComps;
+  if (!brokerComps) return false;
+  if (Array.isArray(brokerComps.packages) && brokerComps.packages.length > 0) return true;
+  if (Array.isArray(brokerComps.items) && brokerComps.items.length > 0) return true;
+  if (Array.isArray(brokerComps.pricingOpinions) && brokerComps.pricingOpinions.length > 0) return true;
+  return typeof brokerComps.summary === "string" && brokerComps.summary.trim().length > 0;
+}
+
+function rowDossierDocumentId(row: PipelineRow): string | null {
+  return row.underwriting?.summary?.dossierDocumentId ?? firstMatchingDocument(row.documents, isGeneratedDossierDocument)?.id ?? null;
+}
+
+function rowExcelDocumentId(row: PipelineRow): string | null {
+  return row.underwriting?.summary?.excelDocumentId ?? firstMatchingDocument(row.documents, isGeneratedExcelDocument)?.id ?? null;
+}
+
+function rowDownloadActions(row: PipelineRow): RowDownloadAction[] {
+  const omDocument = firstMatchingDocument(row.documents, isOmDocument);
+  const compDocument = firstMatchingDocument(row.documents, isCompDocument);
+  const dossierDocument = firstMatchingDocument(row.documents, isGeneratedDossierDocument);
+  const excelDocument = firstMatchingDocument(row.documents, isGeneratedExcelDocument);
+  const dossierDocumentId = rowDossierDocumentId(row);
+  const excelDocumentId = rowExcelDocumentId(row);
+  const compSourceDocumentId = brokerCompSourceDocumentId(row);
+
+  const omUrl = resolvedDocumentUrl(omDocument);
+  const compsUrl = resolvedDocumentUrl(compDocument) ?? (compSourceDocumentId ? propertyDocumentFileUrl(row.propertyId, compSourceDocumentId) : null);
+  const dossierUrl = resolvedDocumentUrl(dossierDocument) ?? (dossierDocumentId ? propertyDocumentFileUrl(row.propertyId, dossierDocumentId) : null);
+  const excelUrl = resolvedDocumentUrl(excelDocument) ?? (excelDocumentId ? propertyDocumentFileUrl(row.propertyId, excelDocumentId) : null);
+
+  return [
+    {
+      key: "om",
+      label: "Download OM",
+      url: omUrl,
+      fileName: omDocument?.fileName ?? null,
+      title: omUrl
+        ? "Download the latest available OM or brochure."
+        : row.documentStatus?.hasOm
+          ? "OM is present, but this row does not include a document URL yet. Open the property to load document details."
+          : "No OM document is available for this property.",
+    },
+    {
+      key: "comps",
+      label: "Download comps",
+      url: compsUrl,
+      fileName: compDocument?.fileName ?? null,
+      title: compsUrl
+        ? "Download the latest available broker comp package."
+        : rowHasCompEvidence(row)
+          ? "Comp data is present, but this row does not include a source document URL."
+          : "No broker comp package is available for this property.",
+    },
+    {
+      key: "dossier",
+      label: "Download dossier PDF",
+      url: dossierUrl,
+      fileName: dossierDocument?.fileName ?? null,
+      title: dossierUrl
+        ? "Download the generated deal dossier PDF."
+        : row.underwriting?.generationStatus === "completed"
+          ? "Dossier generation is complete, but no PDF document ID is present on this row."
+          : "No generated deal dossier PDF is available for this property.",
+    },
+    {
+      key: "excel",
+      label: "Download Excel",
+      url: excelUrl,
+      fileName: excelDocument?.fileName ?? null,
+      title: excelUrl
+        ? "Download the generated deal dossier Excel workbook."
+        : row.underwriting?.generationStatus === "completed"
+          ? "Dossier generation is complete, but no Excel document ID is present on this row."
+          : "No generated Excel workbook is available for this property.",
+    },
+  ];
+}
+
+function trackerToneClass(tone: TrackerTone): string {
+  switch (tone) {
+    case "complete":
+      return styles.trackerChipComplete;
+    case "warning":
+      return styles.trackerChipWarning;
+    case "failed":
+      return styles.trackerChipFailed;
+    case "neutral":
+      return styles.trackerChipNeutral;
+    case "pending":
+    default:
+      return styles.trackerChipPending;
+  }
+}
+
+function rowTrackerItems(row: PipelineRow): PipelineTrackerItem[] {
+  const compStatus = typeof row.brokerComps?.status === "string" ? row.brokerComps.status : null;
+  const hasCompEvidence = rowHasCompEvidence(row);
+  const omStatus = row.documentStatus?.omStatus ?? "missing";
+  const generationStatus = row.underwriting?.generationStatus ?? null;
+  const hasDossierDocument = Boolean(rowDossierDocumentId(row) || rowExcelDocumentId(row));
+  const hasUnderwriting = Boolean(row.underwriting?.dealScore != null || row.underwriting?.summary);
+
+  return [
+    {
+      key: "comps",
+      label: "Comps",
+      tone: compStatus === "failed" ? "failed" : hasCompEvidence ? "complete" : "pending",
+      title: hasCompEvidence ? "Broker comps or comp package available." : "No broker comp package available yet.",
+    },
+    {
+      key: "om",
+      label: "OM",
+      tone: row.documentStatus?.hasOm ? "complete" : omStatus === "requested" ? "warning" : "pending",
+      title: row.documentStatus?.hasOm ? `OM ${titleize(omStatus)}.` : omStatus === "requested" ? "OM requested from broker." : "OM missing.",
+    },
+    {
+      key: "uw",
+      label: "UW/Dossier",
+      tone:
+        generationStatus === "failed"
+          ? "failed"
+          : generationStatus === "running"
+            ? "warning"
+            : generationStatus === "completed" || hasDossierDocument
+              ? "complete"
+              : hasUnderwriting
+                ? "neutral"
+                : "pending",
+      title:
+        generationStatus === "completed" || hasDossierDocument
+          ? "Underwriting and dossier complete."
+          : generationStatus === "running"
+            ? "Dossier generation is running."
+            : generationStatus === "failed"
+              ? "Dossier generation failed."
+              : hasUnderwriting
+                ? "Underwriting inputs are present; dossier is not complete yet."
+                : "Underwriting and dossier are not started.",
+    },
+  ];
+}
+
 function displayDetailValue(item: UiV2DetailItem): string {
   if (item.value == null || item.value === "") return "-";
   if (typeof item.value === "boolean") return item.value ? "Yes" : "No";
@@ -867,6 +1117,7 @@ function rowFromProperty(row: PipelineRow, property: FlexiblePropertyDetail): Pi
     thumbnailUrl: gallery[0]?.thumbnailUrl ?? gallery[0]?.url ?? row.thumbnailUrl,
     broker: property.broker,
     documentStatus: property.documentStatus,
+    documents: property.documents,
     enrichmentState: property.enrichmentState,
     underwriting: property.underwriting,
     openActionItemCount: property.actionItems.filter((item) => item.status === "open").length,
@@ -955,6 +1206,7 @@ export default function PipelineClient() {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [emailQueue, setEmailQueue] = useState<string[]>([]);
   const [headerMenu, setHeaderMenu] = useState<PipelineHeaderMenuId | null>(null);
+  const [rowMenu, setRowMenu] = useState<RowActionMenuState | null>(null);
   const [brokerCompPayloads, setBrokerCompPayloads] = useState<Record<string, unknown>>({});
   const [brokerCompLoading, setBrokerCompLoading] = useState<Record<string, boolean>>({});
   const [brokerCompUploading, setBrokerCompUploading] = useState<Record<string, boolean>>({});
@@ -968,6 +1220,10 @@ export default function PipelineClient() {
   const selectedRow = useMemo(
     () => rows.find((row) => row.propertyId === selectedId) ?? null,
     [rows, selectedId]
+  );
+  const rowMenuRow = useMemo(
+    () => (rowMenu ? rows.find((row) => row.propertyId === rowMenu.propertyId) ?? null : null),
+    [rows, rowMenu]
   );
   const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds]);
   const allVisibleSelected = rows.length > 0 && rows.every((row) => selectedIdSet.has(row.propertyId));
@@ -1042,6 +1298,22 @@ export default function PipelineClient() {
     const visibleIds = new Set(rows.map((row) => row.propertyId));
     setSelectedIds((current) => current.filter((propertyId) => visibleIds.has(propertyId)));
   }, [rows]);
+
+  useEffect(() => {
+    if (!rowMenu) return;
+    const close = () => setRowMenu(null);
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") close();
+    };
+    window.addEventListener("resize", close);
+    window.addEventListener("scroll", close, true);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("resize", close);
+      window.removeEventListener("scroll", close, true);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [rowMenu]);
 
   useEffect(() => {
     let ignore = false;
@@ -2278,6 +2550,127 @@ export default function PipelineClient() {
     event.stopPropagation();
   }
 
+  function toggleRowActionMenu(row: PipelineRow, event: MouseEvent<HTMLButtonElement>) {
+    event.stopPropagation();
+    const rect = event.currentTarget.getBoundingClientRect();
+    setHeaderMenu(null);
+    setRowMenu((current) =>
+      current?.propertyId === row.propertyId
+        ? null
+        : {
+            propertyId: row.propertyId,
+            top: Math.round(rect.bottom + 6),
+            right: Math.max(8, Math.round(window.innerWidth - rect.right)),
+          }
+    );
+  }
+
+  function closeRowActionMenu() {
+    setRowMenu(null);
+  }
+
+  function renderDownloadMenuItem(action: RowDownloadAction) {
+    if (action.url) {
+      return (
+        <a
+          key={action.key}
+          href={action.url}
+          download={action.fileName || true}
+          className={styles.linkButton}
+          title={action.title}
+          onClick={closeRowActionMenu}
+        >
+          {action.label}
+        </a>
+      );
+    }
+    return (
+      <button
+        key={action.key}
+        className={cx(styles.linkButton, styles.unavailableLinkButton)}
+        type="button"
+        disabled
+        title={action.title}
+      >
+        {action.label}
+      </button>
+    );
+  }
+
+  function renderRowActionPopover(row: PipelineRow) {
+    const status = String(row.statusChip.status) as UiV2PipelineStatus;
+    const isTerminal = status === "rejected" || status === "archived" || status === "deal_closed";
+    return (
+      <div
+        className={styles.rowActionPopover}
+        style={{ top: rowMenu?.top ?? 0, right: rowMenu?.right ?? 8 }}
+        onClick={stopRowClick}
+      >
+        <div className={styles.rowActionMenuSection}>
+          <span className={styles.rowActionMenuLabel}>Downloads</span>
+          {rowDownloadActions(row).map(renderDownloadMenuItem)}
+        </div>
+        <div className={styles.rowActionMenuSection}>
+          <span className={styles.rowActionMenuLabel}>Row actions</span>
+          <button
+            className={styles.linkButton}
+            type="button"
+            onClick={() => {
+              closeRowActionMenu();
+              void openProperty(row);
+            }}
+          >
+            Open
+          </button>
+          {isTerminal ? (
+            <button
+              className={styles.linkButton}
+              type="button"
+              disabled={busyAction === `${row.propertyId}:restore`}
+              onClick={() => {
+                closeRowActionMenu();
+                void restoreDeal(row.propertyId, "pipeline_table");
+              }}
+            >
+              Restore
+            </button>
+          ) : (
+            <>
+              <button
+                className={styles.linkButton}
+                type="button"
+                disabled={rowIsSaved(row) || busyAction === `${row.propertyId}:save`}
+                onClick={() => {
+                  closeRowActionMenu();
+                  void saveDeal(row.propertyId, "pipeline_table");
+                }}
+              >
+                Save
+              </button>
+              <button
+                className={styles.dangerLinkButton}
+                type="button"
+                disabled={busyAction === `${row.propertyId}:reject`}
+                onClick={() => {
+                  closeRowActionMenu();
+                  setRejectState({
+                    propertyId: row.propertyId,
+                    address: row.displayAddress ?? row.canonicalAddress,
+                    surface: "pipeline_table",
+                    reasonCode: "",
+                    note: "",
+                  });
+                }}
+              >
+                Reject
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   function applyColumnSort(sort: UiV2PipelineSortField, direction: SortDirection) {
     replaceQueryParams({ sort, sortDirection: direction });
     setHeaderMenu(null);
@@ -2600,7 +2993,13 @@ export default function PipelineClient() {
       : null;
 
   return (
-    <main className={styles.page}>
+    <main
+      className={styles.page}
+      onClick={() => {
+        setHeaderMenu(null);
+        closeRowActionMenu();
+      }}
+    >
       <div className={styles.headerRow}>
         <div>
           <h1 className={styles.title}>Pipeline</h1>
@@ -2842,7 +3241,7 @@ export default function PipelineClient() {
               <th>{renderHeader("buildingSqft", "SF")}</th>
               <th>{renderHeader("dealScore", "Score")}</th>
               <th>{renderHeader("status", "Status")}</th>
-              <th>{renderHeader("om", "OM")}</th>
+              <th>{renderHeader("om", "Tracker")}</th>
               <th>{renderHeader("enrichment", "Enrich")}</th>
               <th>{renderHeader("flow", "Flow")}</th>
               <th>{renderHeader("tags", "Tags")}</th>
@@ -2862,6 +3261,7 @@ export default function PipelineClient() {
               const rowLocationLabels = locationLabels(row);
               const askActivity = askActivityDisplay(row);
               const isSaved = rowIsSaved(row);
+              const trackerItems = rowTrackerItems(row);
               return (
                 <tr
                   key={row.propertyId}
@@ -2966,10 +3366,18 @@ export default function PipelineClient() {
                       ))}
                     </select>
                   </td>
-                  <td>
-                    <span className={`${styles.tinyChip} ${row.documentStatus?.hasOm ? styles.toneSuccess : styles.toneWarning}`}>
-                      {omLabel(row)}
-                    </span>
+                  <td className={styles.trackerCell}>
+                    <div className={styles.trackerGroup} aria-label={`Tracker for ${row.displayAddress ?? row.canonicalAddress}`}>
+                      {trackerItems.map((item) => (
+                        <span
+                          key={item.key}
+                          className={cx(styles.trackerChip, trackerToneClass(item.tone))}
+                          title={item.title}
+                        >
+                          {item.label}
+                        </span>
+                      ))}
+                    </div>
                   </td>
                   <td>
                     <span className={`${styles.tinyChip} ${statusToneClass(row.enrichmentState?.status === "complete" ? "success" : row.enrichmentState?.status === "failed" ? "danger" : "neutral")}`}>
@@ -2995,55 +3403,17 @@ export default function PipelineClient() {
                       >
                         Email
                       </button>
-                      <details className={styles.rowActionMenu}>
-                        <summary>More</summary>
-                        <div>
-                          <button
-                            className={styles.linkButton}
-                            type="button"
-                            onClick={() => openProperty(row)}
-                          >
-                            Open
-                          </button>
-                          {isTerminal ? (
-                            <button
-                              className={styles.linkButton}
-                              type="button"
-                              disabled={busyAction === `${row.propertyId}:restore`}
-                              onClick={() => restoreDeal(row.propertyId, "pipeline_table")}
-                            >
-                              Restore
-                            </button>
-                          ) : (
-                            <>
-                              <button
-                                className={styles.linkButton}
-                                type="button"
-                                disabled={isSaved || busyAction === `${row.propertyId}:save`}
-                                onClick={() => saveDeal(row.propertyId, "pipeline_table")}
-                              >
-                                Save
-                              </button>
-                              <button
-                                className={styles.dangerLinkButton}
-                                type="button"
-                                disabled={busyAction === `${row.propertyId}:reject`}
-                                onClick={() =>
-                                  setRejectState({
-                                    propertyId: row.propertyId,
-                                    address: row.displayAddress ?? row.canonicalAddress,
-                                    surface: "pipeline_table",
-                                    reasonCode: "",
-                                    note: "",
-                                  })
-                                }
-                              >
-                                Reject
-                              </button>
-                            </>
-                          )}
-                        </div>
-                      </details>
+                      <div className={styles.rowActionMenu}>
+                        <button
+                          className={cx(styles.rowActionMenuButton, rowMenu?.propertyId === row.propertyId && styles.rowActionMenuButtonOpen)}
+                          type="button"
+                          aria-haspopup="menu"
+                          aria-expanded={rowMenu?.propertyId === row.propertyId}
+                          onClick={(event) => toggleRowActionMenu(row, event)}
+                        >
+                          More
+                        </button>
+                      </div>
                     </div>
                   </td>
                 </tr>
@@ -3054,6 +3424,8 @@ export default function PipelineClient() {
         {!loading && rows.length === 0 ? <div className={styles.emptyState}>No properties match the current filters.</div> : null}
         {loading ? <div className={styles.tableOverlay}>Loading pipeline...</div> : null}
       </section>
+
+      {rowMenu && rowMenuRow ? renderRowActionPopover(rowMenuRow) : null}
 
       {selectedId ? (
         <div className={styles.sheetOverlay} onClick={closeSheet}>

@@ -1077,6 +1077,10 @@ export function OmCalculationPanel({
       bold?: boolean;
       highlight?: boolean;
       italic?: boolean;
+      indent?: boolean;
+      topRule?: boolean;
+      bottomRule?: boolean;
+      doubleTopRule?: boolean;
       formatter?: (value: number | null | undefined, blankZero: boolean) => string;
     }
   ) {
@@ -1084,16 +1088,25 @@ export function OmCalculationPanel({
     const background = options?.highlight ? "#f8fafc" : "#fff";
     const fontWeight = options?.bold ? 700 : 500;
     const fontStyle = options?.italic ? "italic" : "normal";
+    const borderTop = options?.doubleTopRule
+      ? "3px double #9fb0c3"
+      : options?.topRule
+        ? "1.5px solid #94a3b8"
+        : tableCellStyle.borderBottom;
+    const borderBottom = options?.bottomRule ? "1.5px solid #94a3b8" : tableCellStyle.borderBottom;
     return (
       <tr key={label}>
         <td
           style={{
             ...tableCellStyle,
+            borderTop,
+            borderBottom,
             fontWeight,
             fontStyle,
             color: "#0f172a",
             background,
             minWidth: "240px",
+            paddingLeft: options?.indent ? "1.25rem" : tableCellStyle.padding,
           }}
         >
           {label}
@@ -1103,6 +1116,8 @@ export function OmCalculationPanel({
             key={`${label}-${yearLabel}`}
             style={{
               ...tableCellStyle,
+              borderTop,
+              borderBottom,
               textAlign: "right",
               fontWeight,
               fontStyle,
@@ -2668,7 +2683,7 @@ export function OmCalculationPanel({
                       {renderCashFlowValueRow(
                         "Total cash uses incl. financing fees",
                         calculation.yearlyCashFlow.totalInvestmentCost,
-                        { blankZero: true, bold: true, highlight: true }
+                        { blankZero: true, bold: true, highlight: true, topRule: true, bottomRule: true }
                       )}
                       {renderCashFlowValueRow(
                         "Loan proceeds / leverage",
@@ -2680,53 +2695,53 @@ export function OmCalculationPanel({
                         calculation.yearlyCashFlow.endingLabels.map((_, index) =>
                           index === 0 ? calculation.yearlyCashFlow.leveredCashFlow[index] : null
                         ),
-                        { blankZero: true, bold: true, highlight: true }
+                        { blankZero: true, bold: true, highlight: true, doubleTopRule: true, bottomRule: true }
                       )}
 
                       {renderCashFlowSectionRow("Operating cash flow")}
                       {renderCashFlowValueRow(
-                        "Gross rental income",
-                        calculation.yearlyCashFlow.grossRentalIncome,
-                        { blankZero: true }
-                      )}
-                      {renderCashFlowValueRow(
                         "Free-market residential",
                         calculation.yearlyCashFlow.freeMarketResidentialGrossRentalIncome,
-                        { blankZero: true }
+                        { blankZero: true, indent: true }
                       )}
                       {renderCashFlowValueRow(
                         "RS / RC residential",
                         calculation.yearlyCashFlow.protectedResidentialGrossRentalIncome,
-                        { blankZero: true }
+                        { blankZero: true, indent: true }
                       )}
                       {renderCashFlowValueRow(
                         "Commercial gross",
                         calculation.yearlyCashFlow.commercialGrossRentalIncome,
-                        { blankZero: true }
+                        { blankZero: true, indent: true }
+                      )}
+                      {renderCashFlowValueRow(
+                        "Gross rental income",
+                        calculation.yearlyCashFlow.grossRentalIncome,
+                        { blankZero: true, bold: true, highlight: true, topRule: true, bottomRule: true }
                       )}
                       {renderCashFlowValueRow(
                         "Other income",
                         calculation.yearlyCashFlow.otherIncome,
-                        { blankZero: true }
+                        { blankZero: true, indent: true }
                       )}
                       {renderCashFlowValueRow(
                         "Vacancy loss",
                         calculation.yearlyCashFlow.vacancyLoss.map((value) =>
                           value != null ? -Math.abs(value) : value
                         ),
-                        { blankZero: true }
+                        { blankZero: true, indent: true }
                       )}
                       {renderCashFlowValueRow(
                         "Lead time loss",
                         calculation.yearlyCashFlow.leadTimeLoss.map((value) =>
                           value != null ? -Math.abs(value) : value
                         ),
-                        { blankZero: true }
+                        { blankZero: true, indent: true }
                       )}
                       {renderCashFlowValueRow(
                         "Net rental income",
                         calculation.yearlyCashFlow.netRentalIncome,
-                        { blankZero: true, bold: true }
+                        { blankZero: true, bold: true, highlight: true, doubleTopRule: true, bottomRule: true }
                       )}
                       {calculation.yearlyCashFlow.expenseLineItems.map((row) =>
                         renderCashFlowValueRow(
@@ -2734,7 +2749,7 @@ export function OmCalculationPanel({
                           projectedExpenseLineSeries(row.yearlyAmounts).map((value) =>
                             value != null ? -Math.abs(value) : value
                           ),
-                          { blankZero: true }
+                          { blankZero: true, indent: true }
                         )
                       )}
                       {renderCashFlowValueRow(
@@ -2742,31 +2757,31 @@ export function OmCalculationPanel({
                         calculation.yearlyCashFlow.managementFee.map((value) =>
                           value != null ? -Math.abs(value) : value
                         ),
-                        { blankZero: true }
+                        { blankZero: true, indent: true }
                       )}
                       {renderCashFlowValueRow(
                         "Total operating expenses",
                         calculation.yearlyCashFlow.totalOperatingExpenses.map((value) =>
                           value != null ? -Math.abs(value) : value
                         ),
-                        { blankZero: true, bold: true, highlight: true }
+                        { blankZero: true, bold: true, highlight: true, topRule: true, bottomRule: true }
                       )}
                       {renderCashFlowValueRow(
                         "Net operating income (NOI)",
                         calculation.yearlyCashFlow.noi,
-                        { blankZero: true, bold: true }
+                        { blankZero: true, bold: true, highlight: true, doubleTopRule: true, bottomRule: true }
                       )}
                       {renderCashFlowValueRow(
                         "Recurring CapEx / reserve",
                         calculation.yearlyCashFlow.recurringCapex.map((value) =>
                           value != null ? -Math.abs(value) : value
                         ),
-                        { blankZero: true }
+                        { blankZero: true, indent: true }
                       )}
                       {renderCashFlowValueRow(
                         "Unlevered CF after reserves",
                         calculation.yearlyCashFlow.cashFlowFromOperations,
-                        { blankZero: true, bold: true, highlight: true }
+                        { blankZero: true, bold: true, highlight: true, topRule: true, bottomRule: true }
                       )}
 
                       {renderCashFlowSectionRow("Debt & financing")}
@@ -2787,7 +2802,7 @@ export function OmCalculationPanel({
                         calculation.yearlyCashFlow.debtService.map((value) =>
                           value != null ? -Math.abs(value) : value
                         ),
-                        { blankZero: true }
+                        { blankZero: true, topRule: true }
                       )}
                       {renderCashFlowValueRow(
                         "Ending loan balance",
@@ -2797,7 +2812,7 @@ export function OmCalculationPanel({
                       {renderCashFlowValueRow(
                         "Levered CF to equity",
                         leveredCashFlowToEquitySeries,
-                        { blankZero: true, bold: true, highlight: true }
+                        { blankZero: true, bold: true, highlight: true, doubleTopRule: true, bottomRule: true }
                       )}
                       {renderCashFlowValueRow(
                         "Equity value creation incl. principal paydown (memo only)",
@@ -2847,7 +2862,7 @@ export function OmCalculationPanel({
                       {renderCashFlowValueRow(
                         "NSP before debt payoff",
                         calculation.yearlyCashFlow.netSaleProceedsBeforeDebtPayoff,
-                        { blankZero: true, bold: true }
+                        { blankZero: true, bold: true, highlight: true, topRule: true, bottomRule: true }
                       )}
                       {renderCashFlowValueRow(
                         "Less: remaining loan balance",
@@ -2859,12 +2874,12 @@ export function OmCalculationPanel({
                       {renderCashFlowValueRow(
                         "Net sale proceeds to equity",
                         calculation.yearlyCashFlow.netSaleProceedsToEquity,
-                        { blankZero: true, bold: true }
+                        { blankZero: true, bold: true, topRule: true, bottomRule: true }
                       )}
                       {renderCashFlowValueRow(
                         "Total levered CF incl. exit",
                         calculation.yearlyCashFlow.leveredCashFlow,
-                        { blankZero: true, bold: true, highlight: true }
+                        { blankZero: true, bold: true, highlight: true, doubleTopRule: true, bottomRule: true }
                       )}
                     </tbody>
                   </table>

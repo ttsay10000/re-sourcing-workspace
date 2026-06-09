@@ -1013,8 +1013,9 @@ function moduleStatus(items: UiV2DetailItem[], fallback?: string | null): UiV2En
 
 function getAskingPrice(row: PipelineBaseRow): number | null {
   const details = row.details;
-  const assumptions = getPropertyDossierAssumptions(details);
-  const summary = getPropertyDossierSummary(details);
+  const hasCurrentSource = hasCurrentUnderwritingSource(row);
+  const assumptions = hasCurrentSource ? getPropertyDossierAssumptions(details) : null;
+  const summary = hasCurrentSource ? getPropertyDossierSummary(details) : null;
   return (
     readFirstPositiveNumericPath(details, [
       ["manualSourceFacts", "askingPrice"],
@@ -1262,6 +1263,32 @@ function looksLikeOmStyleFilename(filename: string | null | undefined): boolean 
 
 function hasAuthoritativeOm(details: PropertyDetails | null | undefined): boolean {
   return isPlainRecord(details?.omData) && isPlainRecord(details.omData.authoritative);
+}
+
+function hasManualUnderwritingInputs(details: PropertyDetails | null | undefined): boolean {
+  const assumptions = getPropertyDossierAssumptions(details);
+  if (assumptions == null) return false;
+  const hasNoiInput = toFiniteNumber(assumptions.currentNoi) != null;
+  const hasUnitModelInput = (assumptions.unitModelRows ?? []).some(
+    (unit) =>
+      toFiniteNumber(unit.currentAnnualRent) != null ||
+      toFiniteNumber(unit.underwrittenAnnualRent) != null ||
+      toFiniteNumber(unit.rentUpliftPct) != null
+  );
+  const hasExpenseModelInput = (assumptions.expenseModelRows ?? []).some(
+    (expense) => toFiniteNumber(expense.amount) != null
+  );
+  const hasBrokerFinancialNotes =
+    typeof assumptions.brokerEmailNotes === "string" && assumptions.brokerEmailNotes.trim().length > 0;
+  return hasNoiInput || hasUnitModelInput || hasExpenseModelInput || hasBrokerFinancialNotes;
+}
+
+function hasCurrentUnderwritingSource(row: PipelineBaseRow): boolean {
+  return hasAuthoritativeOm(row.details) || hasManualUnderwritingInputs(row.details);
+}
+
+function getCurrentDossierSummary(row: PipelineBaseRow) {
+  return hasCurrentUnderwritingSource(row) ? getPropertyDossierSummary(row.details) : null;
 }
 
 function hasOm(row: PipelineBaseRow): boolean {
@@ -1759,8 +1786,11 @@ function buildEnrichmentDetails(row: PipelineBaseRow): UiV2EnrichmentDetailPaylo
 }
 
 function getCalculatedDealScore(row: PipelineBaseRow): number | null {
-  const summary = getPropertyDossierSummary(row.details);
-  const calculated = summary?.calculatedDealScore ?? summary?.dealScore ?? toFiniteNumber(row.latest_signal_deal_score);
+  const summary = getCurrentDossierSummary(row);
+  const calculated =
+    summary?.calculatedDealScore ??
+    summary?.dealScore ??
+    (hasCurrentUnderwritingSource(row) ? toFiniteNumber(row.latest_signal_deal_score) : null);
   const override = row.override_score != null
     ? {
         score: Number(row.override_score),
@@ -1777,7 +1807,8 @@ function getCalculatedDealScore(row: PipelineBaseRow): number | null {
 
 function getCapRate(row: PipelineBaseRow): number | null {
   const details = row.details;
-  const summary = getPropertyDossierSummary(details);
+  const summary = getCurrentDossierSummary(row);
+  const allowSignalFallback = hasCurrentUnderwritingSource(row);
   const explicit =
     readFirstNumericPath(details, [
       ["omData", "authoritative", "valuationMetrics", "capRate"],
@@ -1795,9 +1826,9 @@ function getCapRate(row: PipelineBaseRow): number | null {
     readNumericPath(details, ["rentalFinancials", "omAnalysis", "currentFinancials", "netOperatingIncome"]) ??
     readNumericPath(details, ["rentalFinancials", "fromLlm", "noi"]) ??
     summary?.currentNoi ??
-    toFiniteNumber(row.latest_signal_current_noi) ??
+    (allowSignalFallback ? toFiniteNumber(row.latest_signal_current_noi) : null) ??
     summary?.adjustedNoi ??
-    toFiniteNumber(row.latest_signal_adjusted_noi);
+    (allowSignalFallback ? toFiniteNumber(row.latest_signal_adjusted_noi) : null);
   const price = getAskingPrice(row);
   if (noi == null || price == null || price <= 0) return null;
   return (noi / price) * 100;
@@ -1805,7 +1836,8 @@ function getCapRate(row: PipelineBaseRow): number | null {
 
 function getCurrentNoi(row: PipelineBaseRow): number | null {
   const details = row.details;
-  const summary = getPropertyDossierSummary(details);
+  const summary = getCurrentDossierSummary(row);
+  const allowSignalFallback = hasCurrentUnderwritingSource(row);
   return (
     summary?.currentNoi ??
     readNumericPath(details, ["omData", "authoritative", "currentFinancials", "noi"]) ??
@@ -1813,14 +1845,13 @@ function getCurrentNoi(row: PipelineBaseRow): number | null {
     readNumericPath(details, ["rentalFinancials", "omAnalysis", "currentFinancials", "noi"]) ??
     readNumericPath(details, ["rentalFinancials", "omAnalysis", "currentFinancials", "netOperatingIncome"]) ??
     readNumericPath(details, ["rentalFinancials", "fromLlm", "noi"]) ??
-    toFiniteNumber(row.latest_signal_current_noi)
+    (allowSignalFallback ? toFiniteNumber(row.latest_signal_current_noi) : null)
   );
 }
 
 function getAdjustedNoi(row: PipelineBaseRow): number | null {
-  const details = row.details;
-  const summary = getPropertyDossierSummary(details);
-  return summary?.adjustedNoi ?? summary?.stabilizedNoi ?? toFiniteNumber(row.latest_signal_adjusted_noi);
+  const summary = getCurrentDossierSummary(row);
+  return summary?.adjustedNoi ?? summary?.stabilizedNoi ?? (hasCurrentUnderwritingSource(row) ? toFiniteNumber(row.latest_signal_adjusted_noi) : null);
 }
 
 function getNoiYieldOnCost(row: PipelineBaseRow, noi: number | null, fallbackPct: number | string | null): number | null {
@@ -1831,18 +1862,19 @@ function getNoiYieldOnCost(row: PipelineBaseRow, noi: number | null, fallbackPct
 
 function buildUnderwriting(row: PipelineBaseRow): UiV2UnderwritingSummary | null {
   const details = row.details;
-  const summary = getPropertyDossierSummary(details);
+  const summary = getCurrentDossierSummary(row);
   const assumptions = getPropertyDossierAssumptions(details);
   const generation = getPropertyDossierGeneration(details);
+  const allowSignalFallback = hasCurrentUnderwritingSource(row);
   const currentNoi = getCurrentNoi(row);
   const adjustedNoi = getAdjustedNoi(row);
-  const ltrYocPct = getNoiYieldOnCost(row, currentNoi, row.latest_signal_asset_cap_rate);
-  const mtrYocPct = getNoiYieldOnCost(row, adjustedNoi, row.latest_signal_adjusted_cap_rate);
+  const ltrYocPct = getNoiYieldOnCost(row, currentNoi, allowSignalFallback ? row.latest_signal_asset_cap_rate : null);
+  const mtrYocPct = getNoiYieldOnCost(row, adjustedNoi, allowSignalFallback ? row.latest_signal_adjusted_cap_rate : null);
   const hasAnyUnderwriting =
     summary != null ||
     assumptions != null ||
     generation != null ||
-    row.latest_signal_deal_score != null ||
+    (allowSignalFallback && row.latest_signal_deal_score != null) ||
     ltrYocPct != null ||
     mtrYocPct != null ||
     row.override_score != null;
@@ -1861,8 +1893,8 @@ function buildUnderwriting(row: PipelineBaseRow): UiV2UnderwritingSummary | null
     marketCapRatePct: null,
     yocSpreadPct: null,
     targetIrrPct: summary?.targetIrrPct ?? assumptions?.targetIrrPct ?? null,
-    irrPct: summary?.irrPct ?? toFiniteNumber(row.latest_signal_irr_pct),
-    cocPct: summary?.cocPct ?? toFiniteNumber(row.latest_signal_coc_pct),
+    irrPct: summary?.irrPct ?? (allowSignalFallback ? toFiniteNumber(row.latest_signal_irr_pct) : null),
+    cocPct: summary?.cocPct ?? (allowSignalFallback ? toFiniteNumber(row.latest_signal_coc_pct) : null),
     currentNoi,
     adjustedNoi,
     summary,

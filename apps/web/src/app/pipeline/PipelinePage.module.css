@@ -151,7 +151,7 @@
   flex: 0 0 auto;
 }
 
-.rowActionMenu summary {
+.rowActionMenuButton {
   display: inline-flex;
   min-width: 4.35rem;
   min-height: 1.75rem;
@@ -165,14 +165,9 @@
   font-size: 0.78rem;
   font-weight: 600;
   cursor: pointer;
-  list-style: none;
 }
 
-.rowActionMenu summary::-webkit-details-marker {
-  display: none;
-}
-
-.rowActionMenu summary::after {
+.rowActionMenuButton::after {
   width: 0.38rem;
   height: 0.38rem;
   margin-left: 0.28rem;
@@ -182,46 +177,57 @@
   transform: translateY(-0.12rem) rotate(45deg);
 }
 
-.rowActionMenu summary:hover {
+.rowActionMenuButton:hover,
+.rowActionMenuButtonOpen {
   border-color: var(--brand-border, #99f6e4);
   background: var(--brand-soft, #f0fdfa);
   color: var(--brand-strong, #115e59);
 }
 
-.rowActionMenu[open] {
-  z-index: 45;
-}
-
-.rowActionMenu[open] summary {
-  border-color: var(--brand-border, #99f6e4);
-  background: var(--brand-soft, #f0fdfa);
-  color: var(--brand-strong, #115e59);
-}
-
-.rowActionMenu:not([open]) > div {
-  display: none;
-}
-
-.rowActionMenu > div {
-  position: absolute;
-  top: calc(100% + 0.35rem);
-  right: 0;
-  z-index: 50;
+.rowActionPopover {
+  position: fixed;
+  z-index: 95;
   display: grid;
-  min-width: 7.5rem;
-  gap: 0.25rem;
+  min-width: 12.4rem;
+  max-width: min(16rem, calc(100vw - 1rem));
+  gap: 0.45rem;
   border: 1px solid var(--app-line, #e4e4e7);
   border-radius: var(--radius-md, 8px);
-  padding: 0.35rem;
+  padding: 0.45rem;
   background: var(--app-surface, #ffffff);
   box-shadow: var(--app-shadow-lg);
 }
 
-.rowActionMenu > div .linkButton,
-.rowActionMenu > div .dangerLinkButton {
+.rowActionMenuSection {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.rowActionMenuSection + .rowActionMenuSection {
+  border-top: 1px solid var(--app-line-subtle, #f4f4f5);
+  padding-top: 0.45rem;
+}
+
+.rowActionMenuLabel {
+  color: #66727d;
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.rowActionPopover .linkButton,
+.rowActionPopover .dangerLinkButton {
   width: 100%;
   justify-content: flex-start;
   border-radius: 6px;
+}
+
+.unavailableLinkButton,
+.unavailableLinkButton:hover {
+  border-color: #e0e5e2;
+  background: #f7f9f7;
+  color: #7a858d;
 }
 
 .primaryButton,
@@ -367,7 +373,7 @@
 
 .pipelineTable {
   width: 100%;
-  min-width: 2150px;
+  min-width: 2240px;
   border-collapse: collapse;
   table-layout: fixed;
   font-size: 0.78rem;
@@ -429,7 +435,10 @@
   width: 11rem;
 }
 
-.colOm,
+.colOm {
+  width: 13.8rem;
+}
+
 .colEnrich {
   width: 5.9rem;
 }
@@ -443,7 +452,7 @@
 }
 
 .colAction {
-  width: 8.6rem;
+  width: 9rem;
 }
 
 .pipelineTable th {
@@ -1012,6 +1021,65 @@
 
 .tagMore {
   color: #66727d;
+}
+
+.trackerCell {
+  overflow: hidden;
+}
+
+.trackerGroup {
+  display: flex;
+  align-items: center;
+  gap: 0.26rem;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.trackerChip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  min-height: 1.5rem;
+  border: 1px solid #d5ddd8;
+  border-radius: 999px;
+  padding: 0.12rem 0.42rem;
+  color: #43505b;
+  background: #f7f9f7;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0;
+  line-height: 1;
+}
+
+.trackerChipComplete {
+  border-color: #0f766e;
+  background: #e6f4ed;
+  color: #064e3b;
+}
+
+.trackerChipPending {
+  border-color: #d8dedb;
+  background: #f7f9f7;
+  color: #6a7580;
+}
+
+.trackerChipWarning {
+  border-color: #ecd29a;
+  background: #fff8e7;
+  color: #7a521c;
+}
+
+.trackerChipFailed {
+  border-color: #edc6c0;
+  background: #fff1ee;
+  color: #983429;
+}
+
+.trackerChipNeutral {
+  border-color: #c9d7d1;
+  background: #f4f7f4;
+  color: #43505b;
 }
 
 .tagOpportunity {

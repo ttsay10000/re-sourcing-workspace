@@ -35,8 +35,11 @@ type ProgressRow = {
   source?: string | null;
   price?: number | null;
   units?: number | null;
+  sqft?: number | null;
   pricePerSqft?: number | null;
   dealScore?: number | null;
+  ltrYocPct?: number | null;
+  mtrYocPct?: number | null;
   status?: string | null;
   savedDealStatus?: string | null;
   tags?: string[];
@@ -78,8 +81,11 @@ type SavedDealRow = {
   source?: string | null;
   price?: number | null;
   units?: number | null;
+  sqft?: number | null;
   pricePerSqft?: number | null;
   dealScore?: number | null;
+  ltrYocPct?: number | null;
+  mtrYocPct?: number | null;
   status?: string | null;
   tags?: string[];
   omStatus?: string | null;
@@ -162,10 +168,19 @@ type DealPathFormState = {
   rejectionNotes: string;
 };
 
+type RejectFormState = {
+  propertyId: string;
+  address: string;
+  reasonCode: UiV2RejectionReasonCode | "";
+  note: string;
+};
+
 const SECTION_ORDER: ProgressSection[] = [
+  { id: "om_not_requested", label: "OM Not Requested", count: 0, rows: [] },
   { id: "om_requested", label: "OM Requested", count: 0, rows: [] },
   { id: "underwriting", label: "Underwriting", count: 0, rows: [] },
-  { id: "tour_scheduled", label: "Tour Requested", count: 0, rows: [] },
+  { id: "tour_requested", label: "Tour Requested", count: 0, rows: [] },
+  { id: "tour_scheduled", label: "Tour Scheduled", count: 0, rows: [] },
   { id: "tour_completed_awaiting_inputs", label: "Tour Completed", count: 0, rows: [] },
   { id: "offer_review", label: "LOI Offered", count: 0, rows: [] },
   { id: "negotiation", label: "Negotiation", count: 0, rows: [] },
@@ -174,6 +189,12 @@ const SECTION_ORDER: ProgressSection[] = [
 ];
 
 const SAVED_STATUS_GROUPS: SavedStatusGroup[] = [
+  {
+    id: "om_not_requested",
+    label: "OM Not Requested",
+    description: "Saved deals where the OM request has not started.",
+    statuses: [],
+  },
   {
     id: "om_requested",
     label: "OM Requested",
@@ -191,12 +212,18 @@ const SAVED_STATUS_GROUPS: SavedStatusGroup[] = [
     moveLabel: "Underwriting",
   },
   {
-    id: "tour_scheduled",
+    id: "tour_requested",
     label: "Tour Requested",
-    description: "Tour scheduled or requested; waiting on visit.",
+    description: "Tour requested and waiting for a confirmed time.",
     statuses: ["tour_scheduled"],
     targetStatus: "tour_scheduled",
     moveLabel: "Tour Requested",
+  },
+  {
+    id: "tour_scheduled",
+    label: "Tour Scheduled",
+    description: "Tour date is confirmed; waiting on visit.",
+    statuses: [],
   },
   {
     id: "tour_completed_awaiting_inputs",
@@ -256,6 +283,16 @@ function formatCurrency(value: number | null | undefined): string {
 function formatNumber(value: number | null | undefined): string {
   if (value == null || Number.isNaN(value)) return "—";
   return Number.isInteger(value) ? value.toFixed(0) : value.toFixed(1);
+}
+
+function formatCompactNumber(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return "—";
+  return new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(value);
+}
+
+function formatPercent(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return "—";
+  return `${value.toFixed(1)}%`;
 }
 
 function formatUnitLabel(value: number | null | undefined): string | null {
@@ -328,6 +365,10 @@ function needsTourInputs(row: DealFlowRow): boolean {
   return row.status === "tour_completed_awaiting_inputs" && (row.dealPath?.postTourDecision == null || row.dealPath.postTourDecision === "pending");
 }
 
+function hasScheduledTour(row: ProgressRow): boolean {
+  return Boolean(row.dealPath?.tourScheduledAt);
+}
+
 function labelFromKey(value: string | null | undefined): string {
   if (!value) return "Unknown";
   const normalized = value.trim().toLowerCase();
@@ -338,9 +379,11 @@ function labelFromKey(value: string | null | undefined): string {
     dossier_generated: "Dossier Generated",
     loopnet: "LoopNet",
     offer_review: "LOI Offered",
+    om_not_requested: "OM Not Requested",
     om_received: "OM Received",
     streeteasy: "StreetEasy",
-    tour_scheduled: "Tour Requested",
+    tour_requested: "Tour Requested",
+    tour_scheduled: "Tour Scheduled",
     tour_completed_awaiting_inputs: "Tour Completed",
   };
   if (specialLabels[normalized]) return specialLabels[normalized];
@@ -395,18 +438,28 @@ function sectionCount(summary: Summary | null, sectionId: string, fallback: numb
 
 function normalizeSections(data: DealProgressResponse): ProgressSection[] {
   const byId = new Map((data.sections ?? []).map((section) => [section.id, section]));
+  const tourRows = Array.isArray(byId.get("tour_scheduled")?.rows) ? byId.get("tour_scheduled")!.rows! : [];
   const known = SECTION_ORDER.map((base) => {
     const incoming = byId.get(base.id);
-    const rows = Array.isArray(incoming?.rows) ? incoming.rows : [];
-    const count = sectionCount(data.summary ?? null, base.id, incoming?.count ?? rows.length);
+    const incomingRows = Array.isArray(incoming?.rows) ? incoming.rows : [];
+    const rows =
+      base.id === "tour_requested" && !byId.has("tour_requested")
+        ? tourRows.filter((row) => !hasScheduledTour(row))
+        : base.id === "tour_scheduled"
+          ? incomingRows.filter(hasScheduledTour)
+          : incomingRows;
+    const count =
+      base.id === "tour_requested" || base.id === "tour_scheduled"
+        ? rows.length
+        : sectionCount(data.summary ?? null, base.id, incoming?.count ?? rows.length);
     return {
       ...base,
       ...incoming,
-      label: incoming?.label || base.label,
+      label: base.id === "tour_scheduled" ? base.label : incoming?.label || base.label,
       count,
       rows,
     };
-  });
+  }).filter((section) => section.id !== "om_not_requested" || byId.has("om_not_requested"));
   const extras = (data.sections ?? []).filter((section) => !SECTION_ORDER.some((base) => base.id === section.id));
   return [...known, ...extras];
 }
@@ -605,6 +658,8 @@ function ProgressPageContent() {
   const [editingDealPathId, setEditingDealPathId] = useState<string | null>(null);
   const [dealPathForms, setDealPathForms] = useState<Record<string, DealPathFormState>>({});
   const [dealPathSavingId, setDealPathSavingId] = useState<string | null>(null);
+  const [rejectState, setRejectState] = useState<RejectFormState | null>(null);
+  const [rejectSavingId, setRejectSavingId] = useState<string | null>(null);
 
   const loadProgress = useCallback(async (mode: "initial" | "refresh" = "initial") => {
     if (mode === "initial") setLoading(true);
@@ -703,6 +758,10 @@ function ProgressPageContent() {
 
   const flowRows = useMemo(() => sections.flatMap((section) => section.rows ?? []), [sections]);
   const filteredFlowRows = useMemo(() => filteredSections.flatMap((section) => section.rows ?? []), [filteredSections]);
+  const editingDealPathRow = useMemo(
+    () => flowRows.find((row) => row.propertyId === editingDealPathId) ?? null,
+    [editingDealPathId, flowRows]
+  );
 
   useEffect(() => {
     setSelectedDealIds((current) => {
@@ -807,6 +866,60 @@ function ProgressPageContent() {
       }
     },
     [dealPathForms, loadProgress]
+  );
+
+  const startReject = useCallback((row: DealFlowRow) => {
+    setRejectState({
+      propertyId: row.propertyId,
+      address: row.displayAddress || row.canonicalAddress || row.propertyId,
+      reasonCode: "",
+      note: "",
+    });
+  }, []);
+
+  const submitReject = useCallback(
+    async (event: FormEvent<HTMLFormElement>) => {
+      event.preventDefault();
+      if (!rejectState) return;
+      if (!rejectState.reasonCode) {
+        setError("Choose a rejection reason before rejecting this property.");
+        return;
+      }
+      setRejectSavingId(rejectState.propertyId);
+      setError(null);
+      setNotice(null);
+      try {
+        const response = await fetch(`${API_BASE}/api/ui-v2/properties/${encodeURIComponent(rejectState.propertyId)}/reject`, {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            status: "rejected",
+            rejection: {
+              reasonCode: rejectState.reasonCode,
+              note: rejectState.note.trim() || null,
+            },
+            actorName: "progress_table",
+            source: "progress_table",
+          }),
+        });
+        const data = (await response.json().catch(() => ({}))) as { error?: string; details?: string };
+        if (!response.ok) throw new Error(data.error || data.details || "Failed to reject property.");
+        setSelectedDealIds((current) => {
+          const next = new Set(current);
+          next.delete(rejectState.propertyId);
+          return next;
+        });
+        setRejectState(null);
+        setNotice("Property rejected.");
+        await loadProgress("refresh");
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to reject property.");
+      } finally {
+        setRejectSavingId(null);
+      }
+    },
+    [loadProgress, rejectState]
   );
 
   const refreshSelectedOmAnalysis = useCallback(async () => {
@@ -967,10 +1080,10 @@ function ProgressPageContent() {
       {notice ? <div className={styles.notice}>{notice}</div> : null}
 
       <section className={styles.metrics} aria-label="Deal progress summary">
-        {SAVED_STATUS_GROUPS.map((group) => (
-          <article className={styles.metric} key={group.id}>
-            <span>{group.label}</span>
-            <strong>{savedStageCounts.get(group.id) ?? 0}</strong>
+        {savedStatusSections.map((section) => (
+          <article className={styles.metric} key={section.id}>
+            <span>{section.label}</span>
+            <strong>{savedStageCounts.get(section.id) ?? section.rows.length}</strong>
           </article>
         ))}
       </section>
@@ -1086,12 +1199,9 @@ function ProgressPageContent() {
               }}
               onDropOnSection={() => dropSavedDeal(section)}
               editingPropertyId={editingDealPathId}
-              dealPathForms={dealPathForms}
-              dealPathSavingId={dealPathSavingId}
               onStartDealPathEdit={startDealPathEdit}
               onCancelDealPathEdit={() => setEditingDealPathId(null)}
-              onUpdateDealPathField={updateDealPathField}
-              onSaveDealPath={saveDealPathForRow}
+              onStartReject={startReject}
             />
           ))}
         </div>
@@ -1101,6 +1211,7 @@ function ProgressPageContent() {
 
       {rejectionReasons.length > 0 ? (
         <section className={styles.reasonStrip} aria-label="Rejection reason counts">
+          <strong className={styles.reasonStripLabel}>Rejected properties:</strong>
           {rejectionReasons.slice(0, 8).map((reason) => (
             <span key={reason.reasonCode || "unknown"}>
               {labelFromKey(reason.reasonCode)} <strong>{reason.count ?? 0}</strong>
@@ -1109,11 +1220,32 @@ function ProgressPageContent() {
         </section>
       ) : null}
 
+      {editingDealPathRow ? (
+        <DealPathModal
+          row={editingDealPathRow}
+          form={dealPathForms[editingDealPathRow.propertyId] ?? dealPathFormFromState(editingDealPathRow.dealPath)}
+          saving={dealPathSavingId === editingDealPathRow.propertyId}
+          onUpdate={updateDealPathField}
+          onCancel={() => setEditingDealPathId(null)}
+          onSave={saveDealPathForRow}
+        />
+      ) : null}
+
+      {rejectState ? (
+        <RejectDealModal
+          state={rejectState}
+          saving={rejectSavingId === rejectState.propertyId}
+          onChange={setRejectState}
+          onCancel={() => setRejectState(null)}
+          onSubmit={submitReject}
+        />
+      ) : null}
+
     </div>
   );
 }
 
-function DealPathInlineForm({
+function DealPathModal({
   row,
   form,
   saving,
@@ -1129,113 +1261,192 @@ function DealPathInlineForm({
   onSave: (row: DealFlowRow, event: FormEvent<HTMLFormElement>) => void;
 }) {
   return (
-    <form className={styles.dealPathInlineForm} onSubmit={(event) => onSave(row, event)}>
-      <label>
-        <span>Tour date and time</span>
-        <input
-          type="datetime-local"
-          value={form.tourScheduledAt}
-          onChange={(event) => onUpdate(row.propertyId, "tourScheduledAt", event.target.value)}
-        />
-      </label>
-      <label>
-        <span>Post-tour decision</span>
-        <select
-          value={form.postTourDecision}
-          onChange={(event) => onUpdate(row.propertyId, "postTourDecision", event.target.value as UiV2DealPathDecision)}
-        >
-          <option value="pending">Pending inputs</option>
-          <option value="move_forward">Move forward with offer</option>
-          <option value="need_more_info">Need more information</option>
-          <option value="reject">Reject after tour</option>
-        </select>
-      </label>
-      <label>
-        <span>Target price</span>
-        <input
-          inputMode="numeric"
-          value={form.targetPrice}
-          onChange={(event) => onUpdate(row.propertyId, "targetPrice", event.target.value)}
-          placeholder="Target pricing"
-        />
-      </label>
-      <label>
-        <span>Offer amount</span>
-        <input
-          inputMode="numeric"
-          value={form.offerAmount}
-          onChange={(event) => onUpdate(row.propertyId, "offerAmount", event.target.value)}
-          placeholder="LOI offer"
-        />
-      </label>
-      <label className={styles.dealPathWideField}>
-        <span>Tour notes</span>
-        <textarea
-          value={form.tourNotes}
-          onChange={(event) => onUpdate(row.propertyId, "tourNotes", event.target.value)}
-          placeholder="Tour takeaways, condition, broker comments, follow-up questions"
-        />
-      </label>
-      <label className={styles.dealPathWideField}>
-        <span>Offer notes</span>
-        <textarea
-          value={form.offerNotes}
-          onChange={(event) => onUpdate(row.propertyId, "offerNotes", event.target.value)}
-          placeholder="Rationale for offer, pricing read, partner feedback"
-        />
-      </label>
-      <label className={styles.dealPathWideField}>
-        <span>LOI contingencies</span>
-        <textarea
-          value={form.loiContingenciesText}
-          onChange={(event) => onUpdate(row.propertyId, "loiContingenciesText", event.target.value)}
-          placeholder="Financing contingency, diligence period, rent roll verification"
-        />
-      </label>
-      <label className={styles.dealPathWideField}>
-        <span>LOI contingency notes</span>
-        <textarea
-          value={form.loiContingencyNotes}
-          onChange={(event) => onUpdate(row.propertyId, "loiContingencyNotes", event.target.value)}
-          placeholder="Timing, diligence needs, third-party reports, deposit terms"
-        />
-      </label>
-      {form.postTourDecision === "reject" ? (
-        <>
+    <div className={styles.modalOverlay} role="presentation" onMouseDown={onCancel}>
+      <form
+        className={styles.dealPathModal}
+        onSubmit={(event) => onSave(row, event)}
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className={styles.modalHeader}>
+          <div>
+            <span className={styles.modalKicker}>Deal path</span>
+            <h2>{row.displayAddress || row.canonicalAddress || row.propertyId}</h2>
+          </div>
+          <button type="button" className={styles.closeButton} onClick={onCancel} aria-label="Close deal path modal">
+            x
+          </button>
+        </div>
+        <div className={styles.dealPathModalGrid}>
           <label>
-            <span>Reject reason</span>
-            <select
-              value={form.rejectionReasonCode}
-              onChange={(event) => onUpdate(row.propertyId, "rejectionReasonCode", event.target.value as UiV2RejectionReasonCode | "")}
-              required
-            >
-              <option value="">Choose reason</option>
-              {UI_V2_REJECTION_REASON_OPTIONS.map((option) => (
-                <option key={option.code} value={option.code}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className={styles.dealPathWideField}>
-            <span>Reject notes</span>
-            <textarea
-              value={form.rejectionNotes}
-              onChange={(event) => onUpdate(row.propertyId, "rejectionNotes", event.target.value)}
-              placeholder="Why we are passing after the tour"
+            <span>Tour date and time</span>
+            <input
+              type="datetime-local"
+              value={form.tourScheduledAt}
+              onChange={(event) => onUpdate(row.propertyId, "tourScheduledAt", event.target.value)}
             />
           </label>
-        </>
-      ) : null}
-      <div className={styles.dealPathFormActions}>
-        <button type="button" className={styles.bulkClearButton} onClick={onCancel} disabled={saving}>
-          Cancel
-        </button>
-        <button type="submit" className={styles.bulkMoveButton} disabled={saving}>
-          {saving ? "Saving..." : form.postTourDecision === "reject" ? "Save rejection" : "Save deal path"}
-        </button>
-      </div>
-    </form>
+          <label>
+            <span>Post-tour decision</span>
+            <select
+              value={form.postTourDecision}
+              onChange={(event) => onUpdate(row.propertyId, "postTourDecision", event.target.value as UiV2DealPathDecision)}
+            >
+              <option value="pending">Pending inputs</option>
+              <option value="move_forward">Move forward with offer</option>
+              <option value="need_more_info">Need more information</option>
+              <option value="reject">Reject after tour</option>
+            </select>
+          </label>
+          <label>
+            <span>Target price</span>
+            <input
+              inputMode="numeric"
+              value={form.targetPrice}
+              onChange={(event) => onUpdate(row.propertyId, "targetPrice", event.target.value)}
+              placeholder="Target pricing"
+            />
+          </label>
+          <label>
+            <span>Offer amount</span>
+            <input
+              inputMode="numeric"
+              value={form.offerAmount}
+              onChange={(event) => onUpdate(row.propertyId, "offerAmount", event.target.value)}
+              placeholder="LOI offer"
+            />
+          </label>
+          <label className={styles.dealPathWideField}>
+            <span>Tour notes</span>
+            <textarea
+              value={form.tourNotes}
+              onChange={(event) => onUpdate(row.propertyId, "tourNotes", event.target.value)}
+              placeholder="Tour takeaways, condition, broker comments, follow-up questions"
+            />
+          </label>
+          <label className={styles.dealPathWideField}>
+            <span>Offer notes</span>
+            <textarea
+              value={form.offerNotes}
+              onChange={(event) => onUpdate(row.propertyId, "offerNotes", event.target.value)}
+              placeholder="Rationale for offer, pricing read, partner feedback"
+            />
+          </label>
+          <label className={styles.dealPathWideField}>
+            <span>LOI contingencies</span>
+            <textarea
+              value={form.loiContingenciesText}
+              onChange={(event) => onUpdate(row.propertyId, "loiContingenciesText", event.target.value)}
+              placeholder="Financing contingency, diligence period, rent roll verification"
+            />
+          </label>
+          <label className={styles.dealPathWideField}>
+            <span>LOI contingency notes</span>
+            <textarea
+              value={form.loiContingencyNotes}
+              onChange={(event) => onUpdate(row.propertyId, "loiContingencyNotes", event.target.value)}
+              placeholder="Timing, diligence needs, third-party reports, deposit terms"
+            />
+          </label>
+          {form.postTourDecision === "reject" ? (
+            <>
+              <label>
+                <span>Reject reason</span>
+                <select
+                  value={form.rejectionReasonCode}
+                  onChange={(event) => onUpdate(row.propertyId, "rejectionReasonCode", event.target.value as UiV2RejectionReasonCode | "")}
+                  required
+                >
+                  <option value="">Choose reason</option>
+                  {UI_V2_REJECTION_REASON_OPTIONS.map((option) => (
+                    <option key={option.code} value={option.code}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className={styles.dealPathWideField}>
+                <span>Reject notes</span>
+                <textarea
+                  value={form.rejectionNotes}
+                  onChange={(event) => onUpdate(row.propertyId, "rejectionNotes", event.target.value)}
+                  placeholder="Why we are passing after the tour"
+                />
+              </label>
+            </>
+          ) : null}
+        </div>
+        <div className={styles.modalActions}>
+          <button type="button" className={styles.bulkClearButton} onClick={onCancel} disabled={saving}>
+            Cancel
+          </button>
+          <button type="submit" className={styles.bulkMoveButton} disabled={saving}>
+            {saving ? "Saving..." : form.postTourDecision === "reject" ? "Save rejection" : "Save deal path"}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function RejectDealModal({
+  state,
+  saving,
+  onChange,
+  onCancel,
+  onSubmit,
+}: {
+  state: RejectFormState;
+  saving: boolean;
+  onChange: (state: RejectFormState) => void;
+  onCancel: () => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+}) {
+  return (
+    <div className={styles.modalOverlay} role="presentation" onMouseDown={onCancel}>
+      <form className={styles.rejectModal} onSubmit={onSubmit} onMouseDown={(event) => event.stopPropagation()}>
+        <div className={styles.modalHeader}>
+          <div>
+            <span className={styles.modalKicker}>Reject property</span>
+            <h2>{state.address}</h2>
+          </div>
+          <button type="button" className={styles.closeButton} onClick={onCancel} aria-label="Close rejection modal">
+            x
+          </button>
+        </div>
+        <label>
+          <span>Reason</span>
+          <select
+            value={state.reasonCode}
+            onChange={(event) => onChange({ ...state, reasonCode: event.target.value as UiV2RejectionReasonCode | "" })}
+            required
+          >
+            <option value="">Select reason</option>
+            {UI_V2_REJECTION_REASON_OPTIONS.map((option) => (
+              <option key={option.code} value={option.code}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>Note</span>
+          <textarea
+            value={state.note}
+            onChange={(event) => onChange({ ...state, note: event.target.value })}
+            rows={4}
+            placeholder="Optional context"
+          />
+        </label>
+        <div className={styles.modalActions}>
+          <button className={styles.bulkClearButton} type="button" onClick={onCancel} disabled={saving}>
+            Cancel
+          </button>
+          <button className={styles.rejectConfirmButton} type="submit" disabled={saving || !state.reasonCode}>
+            {saving ? "Rejecting..." : "Reject"}
+          </button>
+        </div>
+      </form>
+    </div>
   );
 }
 
@@ -1245,6 +1456,17 @@ export default function ProgressPage() {
       <ProgressPageContent />
     </Suspense>
   );
+}
+
+function cardMetricsForRow(row: DealFlowRow): Array<{ label: string; value: string }> {
+  return [
+    row.ltrYocPct != null ? { label: "LTR Yield", value: formatPercent(row.ltrYocPct) } : null,
+    row.mtrYocPct != null ? { label: "MTR Yield", value: formatPercent(row.mtrYocPct) } : null,
+    row.pricePerSqft != null ? { label: "$/SF", value: formatCurrency(row.pricePerSqft) } : null,
+    row.sqft != null ? { label: "SF", value: formatCompactNumber(row.sqft) } : null,
+    row.price != null ? { label: "Ask", value: formatCurrency(row.price) } : null,
+    row.units != null ? { label: "Units", value: formatCompactNumber(row.units) } : null,
+  ].filter((metric): metric is { label: string; value: string } => metric != null);
 }
 
 function SavedDealMiniSection({
@@ -1262,12 +1484,9 @@ function SavedDealMiniSection({
   onDragOverSection,
   onDropOnSection,
   editingPropertyId = null,
-  dealPathForms,
-  dealPathSavingId = null,
   onStartDealPathEdit,
   onCancelDealPathEdit,
-  onUpdateDealPathField,
-  onSaveDealPath,
+  onStartReject,
 }: {
   section: SavedDealSection;
   loading: boolean;
@@ -1283,12 +1502,9 @@ function SavedDealMiniSection({
   onDragOverSection?: (event: DragEvent<HTMLElement>) => void;
   onDropOnSection?: () => void;
   editingPropertyId?: string | null;
-  dealPathForms?: Record<string, DealPathFormState>;
-  dealPathSavingId?: string | null;
   onStartDealPathEdit?: (row: DealFlowRow) => void;
   onCancelDealPathEdit?: () => void;
-  onUpdateDealPathField?: <K extends keyof DealPathFormState>(propertyId: string, field: K, value: DealPathFormState[K]) => void;
-  onSaveDealPath?: (row: DealFlowRow, event: FormEvent<HTMLFormElement>) => void;
+  onStartReject?: (row: DealFlowRow) => void;
 }) {
   const visibleRows = compact ? section.rows.slice(0, 5) : section.rows;
   return (
@@ -1321,8 +1537,14 @@ function SavedDealMiniSection({
             const selected = selectedDealIds?.has(row.propertyId) ?? false;
             const busy = bulkMoving || movingPropertyId === row.propertyId;
             const editing = editingPropertyId === row.propertyId;
-            const form = dealPathForms?.[row.propertyId] ?? dealPathFormFromState(row.dealPath);
             const tourNeedsInputs = needsTourInputs(row);
+            const metrics = cardMetricsForRow(row);
+            const statusLabel =
+              section.id === "tour_requested"
+                ? "Tour Requested"
+                : section.id === "tour_scheduled"
+                  ? "Tour Scheduled"
+                  : labelFromKey(rowStatus(row));
             return (
               <article
                 key={`${section.id}-${row.propertyId}`}
@@ -1356,25 +1578,26 @@ function SavedDealMiniSection({
                   ) : null}
                   <Link href={`/pipeline?propertyId=${encodeURIComponent(row.propertyId)}`} className={styles.miniRowLink}>
                     <strong>{row.displayAddress || row.canonicalAddress || row.propertyId}</strong>
-                    <span>
-                      {[
-                        row.source ? labelFromKey(row.source) : null,
-                        formatUnitLabel(row.units),
-                        row.price != null ? formatCurrency(row.price) : null,
-                        row.pricePerSqft != null ? `${formatCurrency(row.pricePerSqft)} / SF` : null,
-                      ]
-                        .filter(Boolean)
-                        .join(" / ") || "No context"}
-                    </span>
+                    <span>{row.source ? labelFromKey(row.source) : "No source"}</span>
                   </Link>
                   <div className={styles.miniMeta}>
-                    <span className={statusClass(rowStatus(row))}>{labelFromKey(rowStatus(row))}</span>
+                    <span className={statusClass(rowStatus(row))}>{statusLabel}</span>
                     <small className={scoreClass(row.dealScore)}>
                       {row.dealScore == null ? "—" : Math.round(row.dealScore)}
                     </small>
                   </div>
                 </div>
                 {tourNeedsInputs ? <div className={styles.tourInputNotice}>Tour completed. Add notes, decision, and offer inputs.</div> : null}
+                {metrics.length > 0 ? (
+                  <div className={styles.cardMetrics} aria-label="Property metrics">
+                    {metrics.map((metric) => (
+                      <span key={metric.label}>
+                        <small>{metric.label}</small>
+                        <strong>{metric.value}</strong>
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
                 <div className={styles.miniRowDetails}>
                   <span>Tour: {formatDateTime(row.dealPath?.tourScheduledAt)}</span>
                   <span>Target: {formatCurrency(row.dealPath?.targetPrice)}</span>
@@ -1387,24 +1610,34 @@ function SavedDealMiniSection({
                   {(row.openActionItemCount ?? 0) > 0 ? <span className={styles.workflowBadgeAction}>{row.openActionItemCount} item{row.openActionItemCount === 1 ? "" : "s"}</span> : null}
                 </div>
                 {!compact ? (
-                  <button
-                    type="button"
-                    className={styles.pathEditButton}
-                    disabled={busy}
-                    onClick={() => (editing ? onCancelDealPathEdit?.() : onStartDealPathEdit?.(row))}
-                  >
-                    {editing ? "Close deal path" : row.dealPath?.tourScheduledAt ? "Edit deal path" : "Add tour / LOI"}
-                  </button>
-                ) : null}
-                {editing && onUpdateDealPathField && onSaveDealPath ? (
-                  <DealPathInlineForm
-                    row={row}
-                    form={form}
-                    saving={dealPathSavingId === row.propertyId}
-                    onUpdate={onUpdateDealPathField}
-                    onCancel={onCancelDealPathEdit}
-                    onSave={onSaveDealPath}
-                  />
+                  <div className={styles.cardActions}>
+                    <button
+                      type="button"
+                      className={`${styles.cardActionButton} ${editing ? styles.cardActionActive : ""}`}
+                      disabled={busy}
+                      title={row.dealPath?.tourScheduledAt ? "Edit tour details" : "Schedule tour"}
+                      onClick={() => (editing ? onCancelDealPathEdit?.() : onStartDealPathEdit?.(row))}
+                    >
+                      Tour
+                    </button>
+                    <button
+                      type="button"
+                      className={styles.cardActionButton}
+                      disabled={busy}
+                      title="Track LOI inputs"
+                      onClick={() => onStartDealPathEdit?.(row)}
+                    >
+                      LOI
+                    </button>
+                    <button
+                      type="button"
+                      className={styles.cardRejectButton}
+                      disabled={busy}
+                      onClick={() => onStartReject?.(row)}
+                    >
+                      Reject
+                    </button>
+                  </div>
                 ) : null}
               </article>
             );

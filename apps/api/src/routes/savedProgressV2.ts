@@ -18,7 +18,11 @@ import type {
 import { getPool, UserProfileRepo } from "@re-sourcing/db";
 import { resolveEffectiveDealScore } from "../deal/effectiveDealScore.js";
 import { resolveOmAskingPriceFromDetails } from "../deal/omAskingPrice.js";
-import { getPropertyDossierSummary, hasCompletedDealDossier } from "../deal/propertyDossierState.js";
+import {
+  getPropertyDossierAssumptions,
+  getPropertyDossierSummary,
+  hasCompletedDealDossier,
+} from "../deal/propertyDossierState.js";
 import { resolvePreferredOmUnitCount } from "../om/authoritativeOm.js";
 
 const router = Router();
@@ -158,8 +162,11 @@ interface ProgressPropertyRow {
   source: string | null;
   price: number | null;
   units: number | null;
+  sqft: number | null;
   pricePerSqft: number | null;
   dealScore: number | null;
+  ltrYocPct: number | null;
+  mtrYocPct: number | null;
   status: UiV2PipelineStatus;
   savedDealStatus: string | null;
   tags: string[];
@@ -174,6 +181,7 @@ interface ProgressPropertyRow {
 
 interface ProgressSection {
   id:
+    | "om_not_requested"
     | "om_requested"
     | "underwriting"
     | "tour_scheduled"
@@ -588,9 +596,39 @@ function hasOmEvidence(row: SavedProgressBaseRow): boolean {
   );
 }
 
+function hasAuthoritativeOm(row: SavedProgressBaseRow): boolean {
+  return isJsonRecord(row.details?.omData) && isJsonRecord(row.details.omData.authoritative);
+}
+
+function hasManualUnderwritingInputs(row: SavedProgressBaseRow): boolean {
+  const assumptions = getPropertyDossierAssumptions(row.details as never);
+  if (assumptions == null) return false;
+  const hasNoiInput = toNumber(assumptions.currentNoi) != null;
+  const hasUnitModelInput = (assumptions.unitModelRows ?? []).some(
+    (unit) =>
+      toNumber(unit.currentAnnualRent) != null ||
+      toNumber(unit.underwrittenAnnualRent) != null ||
+      toNumber(unit.rentUpliftPct) != null
+  );
+  const hasExpenseModelInput = (assumptions.expenseModelRows ?? []).some(
+    (expense) => toNumber(expense.amount) != null
+  );
+  const hasBrokerFinancialNotes =
+    typeof assumptions.brokerEmailNotes === "string" && assumptions.brokerEmailNotes.trim().length > 0;
+  return hasNoiInput || hasUnitModelInput || hasExpenseModelInput || hasBrokerFinancialNotes;
+}
+
+function hasCurrentUnderwritingSource(row: SavedProgressBaseRow): boolean {
+  return hasAuthoritativeOm(row) || hasManualUnderwritingInputs(row);
+}
+
+function getCurrentDossierSummary(row: SavedProgressBaseRow) {
+  return hasCurrentUnderwritingSource(row) ? getPropertyDossierSummary(row.details as never) : null;
+}
+
 function getSavedAskingPrice(row: SavedProgressBaseRow): number | null {
   const details = row.details;
-  const summary = getPropertyDossierSummary(details as never);
+  const summary = getCurrentDossierSummary(row);
   return (
     readFirstPositiveNumericPath(details, [
       ["manualSourceFacts", "askingPrice"],
@@ -632,7 +670,8 @@ function getSavedAskingPrice(row: SavedProgressBaseRow): number | null {
 
 function getSavedCurrentNoi(row: SavedProgressBaseRow): number | null {
   const details = row.details;
-  const summary = getPropertyDossierSummary(details as never);
+  const summary = getCurrentDossierSummary(row);
+  const allowSignalFallback = hasCurrentUnderwritingSource(row);
   return (
     summary?.currentNoi ??
     readNumericPath(details, ["omData", "authoritative", "currentFinancials", "noi"]) ??
@@ -640,14 +679,13 @@ function getSavedCurrentNoi(row: SavedProgressBaseRow): number | null {
     readNumericPath(details, ["rentalFinancials", "omAnalysis", "currentFinancials", "noi"]) ??
     readNumericPath(details, ["rentalFinancials", "omAnalysis", "currentFinancials", "netOperatingIncome"]) ??
     readNumericPath(details, ["rentalFinancials", "fromLlm", "noi"]) ??
-    toNumber(row.latest_signal_current_noi)
+    (allowSignalFallback ? toNumber(row.latest_signal_current_noi) : null)
   );
 }
 
 function getSavedAdjustedNoi(row: SavedProgressBaseRow): number | null {
-  const details = row.details;
-  const summary = getPropertyDossierSummary(details as never);
-  return summary?.adjustedNoi ?? summary?.stabilizedNoi ?? toNumber(row.latest_signal_adjusted_noi);
+  const summary = getCurrentDossierSummary(row);
+  return summary?.adjustedNoi ?? summary?.stabilizedNoi ?? (hasCurrentUnderwritingSource(row) ? toNumber(row.latest_signal_adjusted_noi) : null);
 }
 
 function getNoiYieldOnCost(row: SavedProgressBaseRow, noi: number | null, fallbackPct: number | string | null): number | null {
@@ -657,6 +695,7 @@ function getNoiYieldOnCost(row: SavedProgressBaseRow, noi: number | null, fallba
 }
 
 function hasUnderwritingWorkup(row: SavedProgressBaseRow): boolean {
+  if (!hasCurrentUnderwritingSource(row)) return false;
   return (
     hasCompletedDealDossier(row.details as never) ||
     toInteger(row.generated_doc_count) > 0 ||
@@ -665,12 +704,12 @@ function hasUnderwritingWorkup(row: SavedProgressBaseRow): boolean {
 }
 
 function resolveDealScore(row: SavedProgressBaseRow): number | null {
-  const details = row.details;
-  const dossierSummary = getPropertyDossierSummary(details as never);
+  const dossierSummary = getCurrentDossierSummary(row);
+  const allowSignalFallback = hasCurrentUnderwritingSource(row);
   const calculated =
     dossierSummary?.calculatedDealScore
     ?? dossierSummary?.dealScore
-    ?? toNumber(row.latest_signal_deal_score)
+    ?? (allowSignalFallback ? toNumber(row.latest_signal_deal_score) : null)
     ?? null;
   const override = row.override_score != null
     ? {
@@ -720,6 +759,7 @@ function mapSavedRow(row: SavedProgressBaseRow): SavedDealV2Row {
   const price = toNumber(row.listing_price) ?? getSavedAskingPrice(row);
   const currentNoi = getSavedCurrentNoi(row);
   const adjustedNoi = getSavedAdjustedNoi(row);
+  const allowSignalFallback = hasCurrentUnderwritingSource(row);
   const location = readLocation(details, row.listing_extra);
   const documentCount = toInteger(row.uploaded_doc_count) + toInteger(row.inquiry_doc_count) + toInteger(row.generated_doc_count);
   return {
@@ -735,13 +775,13 @@ function mapSavedRow(row: SavedProgressBaseRow): SavedDealV2Row {
     sqft,
     pricePerUnit: price != null && units != null && units > 0 ? Math.round(price / units) : null,
     pricePerSqft: price != null && sqft != null && sqft > 0 ? Math.round(price / sqft) : null,
-    capRate: toNumber(row.latest_signal_adjusted_cap_rate) ?? toNumber(row.latest_signal_asset_cap_rate),
-    rentUpside: toNumber(row.latest_signal_rent_upside),
-    irrPct: toNumber(row.latest_signal_irr_pct),
-    cocPct: toNumber(row.latest_signal_coc_pct),
+    capRate: allowSignalFallback ? toNumber(row.latest_signal_adjusted_cap_rate) ?? toNumber(row.latest_signal_asset_cap_rate) : null,
+    rentUpside: allowSignalFallback ? toNumber(row.latest_signal_rent_upside) : null,
+    irrPct: allowSignalFallback ? toNumber(row.latest_signal_irr_pct) : null,
+    cocPct: allowSignalFallback ? toNumber(row.latest_signal_coc_pct) : null,
     dealScore: resolveDealScore(row),
-    ltrYocPct: getNoiYieldOnCost(row, currentNoi, row.latest_signal_asset_cap_rate),
-    mtrYocPct: getNoiYieldOnCost(row, adjustedNoi, row.latest_signal_adjusted_cap_rate),
+    ltrYocPct: getNoiYieldOnCost(row, currentNoi, allowSignalFallback ? row.latest_signal_asset_cap_rate : null),
+    mtrYocPct: getNoiYieldOnCost(row, adjustedNoi, allowSignalFallback ? row.latest_signal_adjusted_cap_rate : null),
     hasOm: hasOmEvidence(row),
     hasComps: hasComparablePackage(row),
     hasDossier: hasUnderwritingWorkup(row),
@@ -782,8 +822,11 @@ function mapProgressRow(row: SavedProgressBaseRow): ProgressPropertyRow {
     source: saved.source,
     price: saved.price,
     units: saved.units,
+    sqft: saved.sqft,
     pricePerSqft: saved.pricePerSqft,
     dealScore: saved.dealScore,
+    ltrYocPct: saved.ltrYocPct,
+    mtrYocPct: saved.mtrYocPct,
     status: saved.status,
     savedDealStatus: row.saved_deal_status,
     tags: saved.tags,
@@ -991,6 +1034,7 @@ async function fetchProgressRows(pool: Pool, userId: string, hasRejections: bool
 
 function buildProgressSections(rows: ProgressPropertyRow[]): ProgressSection[] {
   const sectionLabels: Record<ProgressSection["id"], string> = {
+    om_not_requested: "OM Not Requested",
     om_requested: "OM Requested",
     underwriting: "Underwriting",
     tour_scheduled: "Tour Requested",
@@ -1001,6 +1045,7 @@ function buildProgressSections(rows: ProgressPropertyRow[]): ProgressSection[] {
     deal_closed: "Deal Closed",
   };
   const ids: ProgressSection["id"][] = [
+    "om_not_requested",
     "om_requested",
     "underwriting",
     "tour_scheduled",
@@ -1024,7 +1069,12 @@ function buildProgressSections(rows: ProgressPropertyRow[]): ProgressSection[] {
         "deal_closed",
       ].includes(row.status);
       const matched =
-        id === "om_requested"
+        id === "om_not_requested"
+          ? !isLaterDealStage &&
+            !row.hasOm &&
+            row.savedDealStatus == null &&
+            !["outreach", "awaiting_broker", "om_received", "underwriting", "dossier_generated"].includes(row.status)
+          : id === "om_requested"
           ? row.status === "outreach" || row.status === "awaiting_broker"
           : id === "underwriting"
             ? !isLaterDealStage &&
