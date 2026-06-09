@@ -3838,12 +3838,31 @@ export default function PipelineClient() {
                       <div>
                         <dt>Score</dt>
                         <dd>
-                          <span className={`${styles.scoreBadge} ${scoreTone(selectedProperty?.underwriting?.dealScore ?? selectedRow?.underwriting?.dealScore)}`}>
+                          <span
+                            className={`${styles.scoreBadge} ${scoreTone(selectedProperty?.underwriting?.dealScore ?? selectedRow?.underwriting?.dealScore)}`}
+                            title={scoreExplanation(selectedProperty ?? selectedRow)}
+                          >
 	                            {scoreLabel(selectedProperty?.underwriting?.dealScore ?? selectedRow?.underwriting?.dealScore)}
 	                          </span>
 	                        </dd>
 	                      </div>
 	                    </dl>
+                    {(() => {
+                      const sheetScoreFlags = [
+                        ...((selectedProperty ?? selectedRow)?.underwriting?.capReasons ?? []),
+                        ...((selectedProperty ?? selectedRow)?.underwriting?.riskFlags ?? []),
+                      ];
+                      return sheetScoreFlags.length > 0 ? (
+                        <div className={styles.sheetScoreFlags}>
+                          <strong>Why this score</strong>
+                          <ul>
+                            {sheetScoreFlags.slice(0, 8).map((flag) => (
+                              <li key={flag}>{flag}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      ) : null;
+                    })()}
 	                    {sourceFactsEditOpen ? (
 	                      <form className={styles.sourceFactsForm} onSubmit={saveSourceFacts}>
 	                        <label>

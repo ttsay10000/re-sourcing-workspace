@@ -2794,3 +2794,30 @@
     flex-direction: column;
   }
 }
+
+.sheetScoreFlags {
+  margin-top: 0.6rem;
+  padding: 0.65rem 0.8rem;
+  border: 1px solid rgba(180, 83, 9, 0.25);
+  border-left: 4px solid #b45309;
+  border-radius: 10px;
+  background: #fffbeb;
+  font-size: 0.78rem;
+  color: #7c2d12;
+}
+
+.sheetScoreFlags strong {
+  display: block;
+  margin-bottom: 0.3rem;
+  font-size: 0.68rem;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: #92400e;
+}
+
+.sheetScoreFlags ul {
+  margin: 0;
+  padding-left: 1rem;
+  display: grid;
+  gap: 0.2rem;
+}
