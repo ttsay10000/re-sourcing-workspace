@@ -1196,6 +1196,7 @@ export default function PipelineClient() {
         for (const file of files) form.append("files", file);
         form.append("category", "auto");
         form.append("source", "Pipeline document upload");
+        form.append("splitByAddress", "true");
         const response = await fetch(`${API_BASE}/api/properties/${encodeURIComponent(propertyId)}/documents/upload-batch`, {
           method: "POST",
           body: form,
@@ -1207,18 +1208,34 @@ export default function PipelineClient() {
         }
         const classified = Array.isArray(payload?.classifiedDocuments) ? payload.classifiedDocuments : [];
         const omStatus = typeof payload?.omRefresh?.status === "string" ? titleize(payload.omRefresh.status) : null;
+        const addressAware = isRecord(payload?.addressAwareOmImport) ? payload.addressAwareOmImport : null;
+        const importedCount = typeof addressAware?.imported === "number" ? addressAware.imported : 0;
+        const failedCount = typeof addressAware?.failed === "number" ? addressAware.failed : 0;
+        const createdCount = typeof addressAware?.createdProperties === "number" ? addressAware.createdProperties : 0;
+        const dossierCount = typeof addressAware?.dossierGenerated === "number" ? addressAware.dossierGenerated : 0;
         setDocumentUploadFiles([]);
-        setNotice(
-          `${files.length} document${files.length === 1 ? "" : "s"} uploaded${classified.length ? ` and classified` : ""}${omStatus ? `; OM extraction ${omStatus}` : ""}.`
-        );
+        if (addressAware) {
+          setNotice(
+            `${files.length} document${files.length === 1 ? "" : "s"} uploaded; ${importedCount} OM PDF${importedCount === 1 ? "" : "s"} routed by address${createdCount ? `, ${createdCount} new propert${createdCount === 1 ? "y" : "ies"}` : ""}${dossierCount ? `, ${dossierCount} dossier${dossierCount === 1 ? "" : "s"} generated` : ""}${failedCount ? `, ${failedCount} need review` : ""}.`
+          );
+        } else {
+          setNotice(
+            `${files.length} document${files.length === 1 ? "" : "s"} uploaded${classified.length ? ` and classified` : ""}${omStatus ? `; OM extraction ${omStatus}` : ""}.`
+          );
+        }
         await loadPropertyDetail(propertyId);
+        const pipelineResponse = await apiFetch<PipelineResponse>(
+          `${API_BASE}/api/ui-v2/pipeline?${buildPipelineQueryString(queryString)}`
+        );
+        setRows(pipelineResponse.pipeline.rows as PipelineRow[]);
+        setTotal(pipelineResponse.pipeline.total);
       } catch (err) {
         setDocumentUploadError(err instanceof Error ? err.message : "Failed to upload documents.");
       } finally {
         setDocumentUploading(false);
       }
     },
-    [documentUploading, loadPropertyDetail]
+    [documentUploading, loadPropertyDetail, queryString]
   );
 
   const reviewBrokerCompItem = useCallback(
@@ -2606,11 +2623,11 @@ export default function PipelineClient() {
             <col className={styles.colDate} />
             <col className={styles.colDate} />
             <col className={styles.colAsk} />
+            <col className={styles.colPsf} />
             <col className={styles.colYoc} />
             <col className={styles.colYoc} />
             <col className={styles.colUnit} />
             <col className={styles.colSqft} />
-            <col className={styles.colPsf} />
             <col className={styles.colScore} />
             <col className={styles.colStatus} />
             <col className={styles.colOm} />
@@ -2638,11 +2655,11 @@ export default function PipelineClient() {
               <th>{renderHeader("createdAt", "Date Added")}</th>
               <th>{renderHeader("updatedAt", "Updated")}</th>
               <th>{renderHeader("askingPrice", "Ask")}</th>
+              <th>{renderHeader("pricePerSqft", "$/SF")}</th>
               <th>{renderHeader("ltrYocPct", "YoC LTR")}</th>
               <th>{renderHeader("mtrYocPct", "YoC MTR")}</th>
               <th>{renderHeader("units", "Units")}</th>
               <th>{renderHeader("buildingSqft", "SF")}</th>
-              <th>{renderHeader("pricePerSqft", "$/SF")}</th>
               <th>{renderHeader("dealScore", "Score")}</th>
               <th>{renderHeader("status", "Status")}</th>
               <th>{renderHeader("om", "OM")}</th>
@@ -2741,6 +2758,7 @@ export default function PipelineClient() {
                       </span>
                     ) : null}
                   </td>
+                  <td className={styles.numericCell}>{formatCurrency(row.pricePerSqft, false)}</td>
                   <td className={cx(styles.numericCell, styles.yocCell)}>
                     <strong>{formatPercent(rowLtrYoc)}</strong>
                   </td>
@@ -2749,7 +2767,6 @@ export default function PipelineClient() {
                   </td>
                   <td className={styles.numericCell}>{formatNumber(row.units)}</td>
                   <td className={styles.numericCell}>{formatNumber(row.buildingSqft)}</td>
-                  <td className={styles.numericCell}>{formatCurrency(row.pricePerSqft, false)}</td>
                   <td className={styles.scoreCell}>
                     <span className={`${styles.scoreBadge} ${scoreTone(score)}`}>
                       {scoreLabel(score)}

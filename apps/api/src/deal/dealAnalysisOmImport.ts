@@ -132,7 +132,7 @@ function resolveWorkspaceProperty(details: PropertyDetails | null | undefined) {
 
 export async function analyzeAndPersistDealAnalysisOmDocuments(params: {
   documents: DealAnalysisOmInputDocument[];
-  sourceType: "deal_analysis_upload" | "deal_analysis_om_link";
+  sourceType: "deal_analysis_upload" | "deal_analysis_om_link" | "pipeline_document_upload";
   sourceLabel: string;
   targetPropertyId?: string | null;
   propertyContext?: string | null;

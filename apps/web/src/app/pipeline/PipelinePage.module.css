@@ -367,7 +367,7 @@
 
 .pipelineTable {
   width: 100%;
-  min-width: 2080px;
+  min-width: 2150px;
   border-collapse: collapse;
   table-layout: fixed;
   font-size: 0.78rem;
@@ -398,7 +398,7 @@
 }
 
 .colAsk {
-  width: 6.1rem;
+  width: 10.5rem;
 }
 
 .colDate {

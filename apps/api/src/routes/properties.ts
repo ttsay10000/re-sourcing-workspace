@@ -107,6 +107,11 @@ import {
   formatByteLimit,
   resolveOmImportMaxBytes,
 } from "../upload/downloadOmDocument.js";
+import {
+  analyzeAndPersistDealAnalysisOmDocuments,
+  DealAnalysisOmImportError,
+} from "../deal/dealAnalysisOmImport.js";
+import { runGenerateDossier } from "../deal/runGenerateDossier.js";
 
 const router = Router();
 
@@ -3090,6 +3095,124 @@ function uploadedFilesFromRequest(req: Request): UploadMemoryFile[] {
   return requestWithFiles.file ? [requestWithFiles.file] : [];
 }
 
+type PlannedDocumentUpload = {
+  file: UploadMemoryFile;
+  filename: string;
+  category: PropertyDocumentCategory;
+};
+
+type AddressAwareOmUploadResult = {
+  filename: string;
+  status: "imported" | "failed";
+  propertyId: string | null;
+  canonicalAddress: string | null;
+  createdProperty: boolean;
+  matchStrategy: string | null;
+  uploadedDocumentIds: string[];
+  omReviewStatus: string | null;
+  rentalFlow: { rentalUnitsCount: number; hasLlmFinancials: boolean; error?: string } | null;
+  dossier: { generated: boolean; dealScore: number | null; error?: string } | null;
+  error?: string;
+};
+
+function parseBooleanFormFlag(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some((entry) => parseBooleanFormFlag(entry));
+  if (typeof value === "boolean") return value;
+  if (typeof value !== "string") return false;
+  return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
+}
+
+function isPdfUpload(file: UploadMemoryFile): boolean {
+  const mimeType = file.mimetype?.toLowerCase() ?? "";
+  const filename = file.originalname?.toLowerCase() ?? "";
+  return mimeType.includes("pdf") || extname(filename) === ".pdf";
+}
+
+function planDocumentUploads(files: UploadMemoryFile[], requestedCategory: unknown): PlannedDocumentUpload[] {
+  return files.map((file) => ({
+    file,
+    filename: file.originalname?.trim() || "document",
+    category: classifyUploadCategory(file, requestedCategory),
+  }));
+}
+
+async function persistUploadedDocumentForProperty(params: {
+  propertyId: string;
+  docRepo: PropertyUploadedDocumentRepo;
+  plan: PlannedDocumentUpload;
+  source: string;
+  uploadedAt: string;
+  uploadedVia: string;
+  extraMetadata?: Record<string, unknown> | null;
+}) {
+  const docId = randomUUID();
+  const filePath = await saveUploadedDocument(params.propertyId, docId, params.plan.filename, params.plan.file.buffer);
+  return params.docRepo.insert({
+    id: docId,
+    propertyId: params.propertyId,
+    filename: params.plan.filename,
+    contentType: params.plan.file.mimetype || null,
+    filePath,
+    category: params.plan.category,
+    source: params.source,
+    sourceMetadata: {
+      uploadedVia: params.uploadedVia,
+      uploadedAt: params.uploadedAt,
+      classificationMethod: "filename_auto",
+      originalFileName: params.plan.filename,
+      sizeBytes: params.plan.file.size ?? params.plan.file.buffer.length,
+      ...(params.extraMetadata ?? {}),
+    },
+    fileContent: params.plan.file.buffer,
+  });
+}
+
+async function runAddressAwareOmPostProcessing(
+  propertyId: string,
+  pool: import("pg").Pool
+): Promise<{
+  autoSaved: boolean;
+  rentalFlow: { rentalUnitsCount: number; hasLlmFinancials: boolean; error?: string } | null;
+  dossier: { generated: boolean; dealScore: number | null; error?: string };
+}> {
+  const autoSaved = await autoSavePropertyWithUnderwritingDocument(propertyId, pool).catch((error) => {
+    console.warn("[properties address-aware OM upload] failed to auto-save OM-backed property", {
+      propertyId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return false;
+  });
+  const rentalFlow = await runRentalFlowForProperty(propertyId, pool).catch((error) => ({
+    rentalUnitsCount: 0,
+    hasLlmFinancials: false,
+    error: error instanceof Error ? error.message : String(error),
+  }));
+  const dossier = await runGenerateDossier(propertyId, undefined, { sendEmail: false })
+    .then((result) => ({
+      generated: true,
+      dealScore: result.dealScore,
+    }))
+    .catch((error) => ({
+      generated: false,
+      dealScore: null,
+      error: error instanceof Error ? error.message : String(error),
+    }));
+
+  await syncPropertySourcingWorkflow(propertyId, { pool }).catch(() => {});
+  await refreshPropertyPipelineMetadata(propertyId, pool, {
+    rentalFlowStatus: rentalFlow.error ? "failed" : "complete",
+    dossierStatus: dossier.generated ? "complete" : "failed",
+    excelStatus: dossier.generated ? "complete" : "failed",
+    underwritingStatus: dossier.generated ? "complete" : "in_progress",
+  }).catch(() => {});
+
+  return {
+    autoSaved,
+    rentalFlow,
+    dossier,
+  };
+}
+
 /** GET /api/properties/ny-dos-entity?name=... - NY DOS entity details for a business name (LLC, Corp, etc.). Returns N/A when name does not look like a business entity. */
 router.get("/properties/ny-dos-entity", async (req: Request, res: Response) => {
   try {
@@ -3421,19 +3544,216 @@ router.post(
 
       const source = typeof req.body?.source === "string" ? req.body.source.trim() || "Pipeline document upload" : "Pipeline document upload";
       const uploadedAt = new Date().toISOString();
+      const uploadPlans = planDocumentUploads(files, req.body?.category);
+      const splitByAddress = parseBooleanFormFlag(req.body?.splitByAddress) || parseBooleanFormFlag(req.body?.addressAwareOmImport);
+      const addressAwarePlans = splitByAddress ? uploadPlans.filter((plan) => isPdfUpload(plan.file)) : [];
+
+      if (addressAwarePlans.length > 0) {
+        const addressAwarePlanSet = new Set(addressAwarePlans);
+        const selectedPropertyDocuments: Array<Awaited<ReturnType<PropertyUploadedDocumentRepo["insert"]>>> = [];
+        const addressAwareDocuments: Array<{
+          id: string;
+          propertyId: string;
+          filename: string;
+          contentType: string | null;
+          category: PropertyDocumentCategory;
+          createdAt: string;
+        }> = [];
+        const addressAwareResults: AddressAwareOmUploadResult[] = [];
+        const importedPropertyIds = new Set<string>();
+
+        for (const plan of uploadPlans) {
+          if (!addressAwarePlanSet.has(plan)) {
+            const inserted = await persistUploadedDocumentForProperty({
+              propertyId,
+              docRepo,
+              plan,
+              source,
+              uploadedAt,
+              uploadedVia: "property_documents_batch",
+            });
+            selectedPropertyDocuments.push(inserted);
+            continue;
+          }
+
+          try {
+            const result = await analyzeAndPersistDealAnalysisOmDocuments({
+              documents: [
+                {
+                  filename: plan.filename,
+                  mimeType: plan.file.mimetype || "application/pdf",
+                  buffer: plan.file.buffer,
+                  sizeBytes: plan.file.size ?? plan.file.buffer.length,
+                },
+              ],
+              sourceType: "pipeline_document_upload",
+              sourceLabel: source,
+              propertyContext: [
+                `Uploaded from Pipeline OM / Docs for ${property.canonicalAddress}`,
+                "Treat this PDF as its own possible OM package. Extract the document address and do not assume it belongs to the selected property if the PDF says otherwise.",
+              ].join("\n"),
+              sourceMetadata: {
+                selectedPropertyId: propertyId,
+                selectedCanonicalAddress: property.canonicalAddress,
+                splitByAddress: true,
+                originalFileName: plan.filename,
+                uploadedAt,
+              },
+              pool,
+            });
+            importedPropertyIds.add(result.propertyId);
+            for (const uploadedDocument of result.uploadedDocuments ?? []) {
+              addressAwareDocuments.push({
+                id: uploadedDocument.id,
+                propertyId: result.propertyId,
+                filename: uploadedDocument.fileName,
+                contentType: uploadedDocument.mimeType ?? null,
+                category: "OM",
+                createdAt: uploadedDocument.createdAt,
+              });
+            }
+            addressAwareResults.push({
+              filename: plan.filename,
+              status: "imported",
+              propertyId: result.propertyId,
+              canonicalAddress: result.canonicalAddress,
+              createdProperty: result.createdProperty,
+              matchStrategy: result.matchStrategy,
+              uploadedDocumentIds: (result.uploadedDocuments ?? []).map((document) => document.id),
+              omReviewStatus: result.omReview?.ok ? "promoted" : result.omReview?.error ? "failed" : null,
+              rentalFlow: null,
+              dossier: null,
+            });
+          } catch (error) {
+            const inserted = await persistUploadedDocumentForProperty({
+              propertyId,
+              docRepo,
+              plan,
+              source,
+              uploadedAt,
+              uploadedVia: "property_documents_batch_address_parse_failed",
+              extraMetadata: {
+                addressAwareImportFailed: true,
+                addressAwareError: error instanceof Error ? error.message : String(error),
+              },
+            });
+            selectedPropertyDocuments.push(inserted);
+            addressAwareResults.push({
+              filename: plan.filename,
+              status: "failed",
+              propertyId,
+              canonicalAddress: property.canonicalAddress,
+              createdProperty: false,
+              matchStrategy: "fallback_selected_property",
+              uploadedDocumentIds: [inserted.id],
+              omReviewStatus: null,
+              rentalFlow: null,
+              dossier: null,
+              error:
+                error instanceof DealAnalysisOmImportError || error instanceof Error
+                  ? error.message
+                  : String(error),
+            });
+          }
+        }
+
+        const automationByPropertyId = new Map<
+          string,
+          Awaited<ReturnType<typeof runAddressAwareOmPostProcessing>>
+        >();
+        for (const importedPropertyId of importedPropertyIds) {
+          const automation = await runAddressAwareOmPostProcessing(importedPropertyId, pool);
+          automationByPropertyId.set(importedPropertyId, automation);
+        }
+        for (const result of addressAwareResults) {
+          if (!result.propertyId || result.status !== "imported") continue;
+          const automation = automationByPropertyId.get(result.propertyId);
+          if (!automation) continue;
+          result.rentalFlow = automation.rentalFlow;
+          result.dossier = automation.dossier;
+        }
+
+        const shouldRefreshSelectedProperty = selectedPropertyDocuments.some((document) =>
+          isOmIngestionCategory(document.category)
+        );
+        const selectedAutoSaved = shouldRefreshSelectedProperty
+          ? await autoSavePropertyWithUnderwritingDocument(propertyId, pool).catch((error) => {
+              console.warn("[properties documents upload batch] failed to auto-save fallback OM-backed property", {
+                propertyId,
+                error: error instanceof Error ? error.message : String(error),
+              });
+              return false;
+            })
+          : false;
+        const selectedOmRefresh = shouldRefreshSelectedProperty
+          ? await refreshOmFinancialsForProperty(propertyId, pool, {
+              autoPromote: true,
+              triggerDossier: true,
+            }).catch((error) => ({
+              documentsProcessed: 0,
+              documentsSkippedNoFile: 0,
+              runId: null,
+              extractedSnapshotId: null,
+              authoritativeSnapshotId: null,
+              status: "failed" as const,
+              reviewRequired: false,
+              error: error instanceof Error ? error.message : String(error),
+            }))
+          : null;
+        let selectedRentalFlow: { rentalUnitsCount: number; hasLlmFinancials: boolean; error?: string } | null = null;
+        if (shouldRefreshSelectedProperty && selectedOmRefresh?.status !== "failed") {
+          selectedRentalFlow = await runRentalFlowForProperty(propertyId, pool).catch((error) => ({
+            rentalUnitsCount: 0,
+            hasLlmFinancials: false,
+            error: error instanceof Error ? error.message : String(error),
+          }));
+        }
+        await syncPropertySourcingWorkflow(propertyId, { pool }).catch(() => {});
+        await refreshPropertyPipelineMetadata(propertyId, pool, {
+          ...(selectedOmRefresh ? { underwritingStatus: selectedOmRefresh.reviewRequired ? "needs_assumptions" : "in_progress" } : {}),
+          ...(selectedRentalFlow ? { rentalFlowStatus: selectedRentalFlow.error ? "failed" : "complete" } : {}),
+        }).catch(() => {});
+
+        const allDocuments = [...selectedPropertyDocuments, ...addressAwareDocuments];
+        res.status(201).json({
+          propertyId,
+          documents: allDocuments,
+          classifiedDocuments: allDocuments.map((document) => ({
+            id: document.id,
+            propertyId: document.propertyId,
+            filename: document.filename,
+            category: document.category,
+            contentType: document.contentType ?? null,
+          })),
+          omRefresh: selectedOmRefresh,
+          rentalFlow: selectedRentalFlow,
+          autoSaved: selectedAutoSaved || Array.from(automationByPropertyId.values()).some((automation) => automation.autoSaved),
+          addressAwareOmImport: {
+            enabled: true,
+            processed: addressAwareResults.length,
+            imported: addressAwareResults.filter((result) => result.status === "imported").length,
+            failed: addressAwareResults.filter((result) => result.status === "failed").length,
+            createdProperties: addressAwareResults.filter((result) => result.status === "imported" && result.createdProperty).length,
+            matchedProperties: addressAwareResults.filter((result) => result.status === "imported" && !result.createdProperty).length,
+            dossierGenerated: addressAwareResults.filter((result) => result.dossier?.generated).length,
+            results: addressAwareResults,
+          },
+        });
+        return;
+      }
+
       const documents: Array<Awaited<ReturnType<PropertyUploadedDocumentRepo["insert"]>>> = [];
-      for (const file of files) {
-        const category = classifyUploadCategory(file, req.body?.category);
+      for (const plan of uploadPlans) {
         const docId = randomUUID();
-        const filename = file.originalname?.trim() || "document";
-        const filePath = await saveUploadedDocument(propertyId, docId, filename, file.buffer);
+        const filename = plan.filename;
+        const filePath = await saveUploadedDocument(propertyId, docId, filename, plan.file.buffer);
         const inserted = await docRepo.insert({
           id: docId,
           propertyId,
           filename,
-          contentType: file.mimetype || null,
+          contentType: plan.file.mimetype || null,
           filePath,
-          category,
+          category: plan.category,
           source,
           sourceMetadata: {
             uploadedVia: "property_documents_batch",
@@ -3443,9 +3763,9 @@ router.post(
                 ? "user_selected"
                 : "filename_auto",
             originalFileName: filename,
-            sizeBytes: file.size ?? file.buffer.length,
+            sizeBytes: plan.file.size ?? plan.file.buffer.length,
           },
-          fileContent: file.buffer,
+          fileContent: plan.file.buffer,
         });
         documents.push(inserted);
       }
