@@ -89,16 +89,6 @@ const NAV_LINKS: NavLink[] = [
     ],
   },
   {
-    href: "/saved",
-    label: "Saved Deals",
-    shortLabel: "S",
-    icon: Bookmark,
-    matches: (pathname: string, section: string | null) =>
-      pathname === "/saved" ||
-      pathname.startsWith("/saved/") ||
-      ((pathname === "/profile" || pathname.startsWith("/profile/")) && section === "saved-deals"),
-  },
-  {
     href: "/progress",
     label: "Deal Progress",
     shortLabel: "D",
@@ -135,6 +125,16 @@ const NAV_LINKS: NavLink[] = [
     matches: (pathname: string, section: string | null) =>
       (pathname === "/profile" || pathname.startsWith("/profile/") || pathname === "/profiles") &&
       section !== "saved-deals",
+  },
+  {
+    href: "/saved",
+    label: "Saved Deals",
+    shortLabel: "S",
+    icon: Bookmark,
+    matches: (pathname: string, section: string | null) =>
+      pathname === "/saved" ||
+      pathname.startsWith("/saved/") ||
+      ((pathname === "/profile" || pathname.startsWith("/profile/")) && section === "saved-deals"),
   },
 ];
 const API_BASE = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000").replace(/\/$/, "");
