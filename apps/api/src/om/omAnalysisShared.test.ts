@@ -87,6 +87,26 @@ describe("omAnalysisShared", () => {
     expect(derived.keyTakeaways).toContain("Stable in-place rent roll");
   });
 
+  it("does not treat rent PSF values as monthly rents when mapping OM rent roll rows", () => {
+    const derived = fromLlmFromOmAnalysis({
+      propertyInfo: {
+        totalUnits: 2,
+      },
+      rentRoll: [
+        { unit: "2F", sqft: 1_100, monthlyRent: 63, annualRent: 69_300 },
+        { unit: "Retail", sqft: 2_450, monthlyRent: 85, notes: "Rent ($) PSF" },
+      ],
+      sourceCoverage: {
+        rentRollExtracted: true,
+      },
+    });
+
+    expect(derived.rentalNumbersPerUnit?.[0]?.monthlyRent).toBe(5_775);
+    expect(derived.rentalNumbersPerUnit?.[0]?.annualRent).toBe(69_300);
+    expect(derived.rentalNumbersPerUnit?.[1]?.monthlyRent).toBe(17_354.17);
+    expect(derived.rentalNumbersPerUnit?.[1]?.annualRent).toBe(208_250);
+  });
+
   it("summarizes OM coverage for dossier readiness checks", () => {
     const coverage = summarizeOmAnalysisCoverage({
       propertyInfo: {

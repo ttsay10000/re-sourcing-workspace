@@ -2,12 +2,20 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { Suspense, useCallback, useEffect, useMemo, useState, type DragEvent } from "react";
-import type { UiV2PipelineStatus } from "@re-sourcing/contracts";
+import { Suspense, useCallback, useEffect, useMemo, useState, type DragEvent, type FormEvent } from "react";
+import {
+  UI_V2_REJECTION_REASON_OPTIONS,
+  type UiV2DealPathDecision,
+  type UiV2DealPathState,
+  type UiV2PipelineStatus,
+  type UiV2RejectionReasonCode,
+} from "@re-sourcing/contracts";
 import styles from "./progress.module.css";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
 const BULK_STAGE_MOVE_ID = "__bulk_stage_move__";
+const OM_ANALYSIS_BULK_ID = "__bulk_om_analysis__";
+const DOSSIER_BULK_ID = "__bulk_dossier__";
 
 type Summary = {
   savedCount?: number;
@@ -20,6 +28,7 @@ type Summary = {
 };
 
 type ProgressRow = {
+  savedDeal?: SavedDealRow["savedDeal"];
   propertyId: string;
   canonicalAddress?: string | null;
   displayAddress?: string | null;
@@ -32,12 +41,25 @@ type ProgressRow = {
   savedDealStatus?: string | null;
   tags?: string[];
   omStatus?: string | null;
+  hasOm?: boolean;
+  hasComps?: boolean;
+  hasDossier?: boolean;
+  dealPath?: UiV2DealPathState | null;
   openActionItemCount?: number | null;
   updatedAt?: string | null;
 };
 
 type ProgressSection = {
-  id: "saved" | "underwriting" | "outreach" | "awaiting_broker" | "om_received" | "rejected" | string;
+  id:
+    | "om_requested"
+    | "underwriting"
+    | "tour_scheduled"
+    | "tour_completed_awaiting_inputs"
+    | "offer_review"
+    | "negotiation"
+    | "contract_signed"
+    | "deal_closed"
+    | string;
   label?: string;
   count?: number;
   rows?: ProgressRow[];
@@ -61,8 +83,16 @@ type SavedDealRow = {
   status?: string | null;
   tags?: string[];
   omStatus?: string | null;
+  hasOm?: boolean;
+  hasComps?: boolean;
+  hasDossier?: boolean;
+  dealPath?: UiV2DealPathState | null;
   openActionItemCount?: number | null;
   updatedAt?: string | null;
+};
+
+type DealFlowRow = ProgressRow & {
+  propertyId: string;
 };
 
 type DealProgressResponse = {
@@ -83,11 +113,24 @@ type SavedDealsResponse = {
   details?: string;
 };
 
+type OmRefreshResponse = {
+  documentsProcessed?: number;
+  status?: string | null;
+  error?: string;
+  details?: string;
+};
+
+type DossierGenerateResponse = {
+  dealScore?: number | null;
+  error?: string;
+  details?: string;
+};
+
 type SavedDealSection = {
   id: string;
   label: string;
   description?: string;
-  rows: SavedDealRow[];
+  rows: DealFlowRow[];
   targetStatus?: UiV2PipelineStatus;
   moveLabel?: string;
 };
@@ -106,28 +149,35 @@ type MovableSavedStatusGroup = SavedStatusGroup & {
   moveLabel: string;
 };
 
+type DealPathFormState = {
+  tourScheduledAt: string;
+  tourNotes: string;
+  postTourDecision: UiV2DealPathDecision;
+  targetPrice: string;
+  offerAmount: string;
+  offerNotes: string;
+  loiContingenciesText: string;
+  loiContingencyNotes: string;
+  rejectionReasonCode: UiV2RejectionReasonCode | "";
+  rejectionNotes: string;
+};
+
 const SECTION_ORDER: ProgressSection[] = [
-  { id: "saved", label: "Saved Deals", count: 0, rows: [] },
+  { id: "om_requested", label: "OM Requested", count: 0, rows: [] },
   { id: "underwriting", label: "Underwriting", count: 0, rows: [] },
-  { id: "outreach", label: "Outreach", count: 0, rows: [] },
-  { id: "awaiting_broker", label: "Awaiting Broker", count: 0, rows: [] },
-  { id: "om_received", label: "OM Received", count: 0, rows: [] },
-  { id: "rejected", label: "Rejected", count: 0, rows: [] },
+  { id: "tour_scheduled", label: "Tour Requested", count: 0, rows: [] },
+  { id: "tour_completed_awaiting_inputs", label: "Tour Completed", count: 0, rows: [] },
+  { id: "offer_review", label: "LOI Offered", count: 0, rows: [] },
+  { id: "negotiation", label: "Negotiation", count: 0, rows: [] },
+  { id: "contract_signed", label: "Contract Signed/Diligence", count: 0, rows: [] },
+  { id: "deal_closed", label: "Deal Closed", count: 0, rows: [] },
 ];
 
 const SAVED_STATUS_GROUPS: SavedStatusGroup[] = [
   {
-    id: "watchlist",
-    label: "Watchlist",
-    description: "Saved and early-review deals.",
-    statuses: ["saved", "interesting", "screening", "new"],
-    targetStatus: "saved",
-    moveLabel: "Watchlist",
-  },
-  {
     id: "om_requested",
     label: "OM Requested",
-    description: "Materials requested; waiting on broker response.",
+    description: "OMs and related materials requested from brokers.",
     statuses: ["outreach", "awaiting_broker"],
     targetStatus: "awaiting_broker",
     moveLabel: "OM Requested",
@@ -135,10 +185,26 @@ const SAVED_STATUS_GROUPS: SavedStatusGroup[] = [
   {
     id: "underwriting",
     label: "Underwriting",
-    description: "OM is in hand or deal analysis is active.",
-    statuses: ["underwriting", "om_received", "dossier_generated"],
+    description: "Saved deals, received OMs, and active underwriting work.",
+    statuses: ["saved", "underwriting", "om_received", "dossier_generated"],
     targetStatus: "underwriting",
     moveLabel: "Underwriting",
+  },
+  {
+    id: "tour_scheduled",
+    label: "Tour Requested",
+    description: "Tour scheduled or requested; waiting on visit.",
+    statuses: ["tour_scheduled"],
+    targetStatus: "tour_scheduled",
+    moveLabel: "Tour Requested",
+  },
+  {
+    id: "tour_completed_awaiting_inputs",
+    label: "Tour Completed",
+    description: "Tour date has passed; notes and post-tour decision needed.",
+    statuses: ["tour_completed_awaiting_inputs"],
+    targetStatus: "tour_completed_awaiting_inputs",
+    moveLabel: "Tour Completed",
   },
   {
     id: "loi_offered",
@@ -205,6 +271,63 @@ function formatDate(value: string | null | undefined): string {
   return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
+function formatDateTime(value: string | null | undefined): string {
+  if (!value) return "Not scheduled";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Not scheduled";
+  return date.toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
+function datetimeLocalFromIso(value: string | null | undefined): string {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 16);
+}
+
+function formValue(value: string | number | null | undefined): string {
+  if (value == null) return "";
+  return String(value);
+}
+
+function dealPathFormFromState(dealPath: UiV2DealPathState | null | undefined): DealPathFormState {
+  return {
+    tourScheduledAt: datetimeLocalFromIso(dealPath?.tourScheduledAt),
+    tourNotes: dealPath?.tourNotes ?? "",
+    postTourDecision: dealPath?.postTourDecision ?? "pending",
+    targetPrice: formValue(dealPath?.targetPrice),
+    offerAmount: formValue(dealPath?.offerAmount),
+    offerNotes: dealPath?.offerNotes ?? "",
+    loiContingenciesText: (dealPath?.loiContingencies ?? []).join("\n"),
+    loiContingencyNotes: dealPath?.loiContingencyNotes ?? "",
+    rejectionReasonCode: dealPath?.rejectionReasonCode ?? "",
+    rejectionNotes: dealPath?.rejectionNotes ?? "",
+  };
+}
+
+function dealPathPayload(form: DealPathFormState): Record<string, unknown> {
+  return {
+    tourScheduledAt: form.tourScheduledAt.trim() || null,
+    tourNotes: form.tourNotes.trim() || null,
+    postTourDecision: form.postTourDecision,
+    targetPrice: form.targetPrice.trim() || null,
+    offerAmount: form.offerAmount.trim() || null,
+    offerNotes: form.offerNotes.trim() || null,
+    loiContingencies: form.loiContingenciesText
+      .split(/\n|,/)
+      .map((value) => value.trim())
+      .filter(Boolean),
+    loiContingencyNotes: form.loiContingencyNotes.trim() || null,
+    rejectionReasonCode: form.postTourDecision === "reject" ? form.rejectionReasonCode : null,
+    rejectionNotes: form.postTourDecision === "reject" ? form.rejectionNotes.trim() || null : null,
+  };
+}
+
+function needsTourInputs(row: DealFlowRow): boolean {
+  return row.status === "tour_completed_awaiting_inputs" && (row.dealPath?.postTourDecision == null || row.dealPath.postTourDecision === "pending");
+}
+
 function labelFromKey(value: string | null | undefined): string {
   if (!value) return "Unknown";
   const normalized = value.trim().toLowerCase();
@@ -217,6 +340,8 @@ function labelFromKey(value: string | null | undefined): string {
     offer_review: "LOI Offered",
     om_received: "OM Received",
     streeteasy: "StreetEasy",
+    tour_scheduled: "Tour Requested",
+    tour_completed_awaiting_inputs: "Tour Completed",
   };
   if (specialLabels[normalized]) return specialLabels[normalized];
   return normalized
@@ -356,11 +481,20 @@ function scoreClass(score: number | null | undefined): string {
   return `${styles.scorePill} ${styles.scoreWeak}`;
 }
 
-function rowStatus(row: SavedDealRow): string {
+function rowStatus(row: DealFlowRow): string {
   return row.status || row.savedDeal?.dealStatus || "saved";
 }
 
-function moveStatusForRow(row: SavedDealRow): UiV2PipelineStatus {
+function savedDealHasUploadedOm(row: DealFlowRow): boolean {
+  if (row.hasOm === true) return true;
+  const normalized = String(row.omStatus ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_");
+  return ["available", "received", "om_received", "uploaded", "reviewed", "promoted", "ready"].includes(normalized);
+}
+
+function moveStatusForRow(row: DealFlowRow): UiV2PipelineStatus {
   const status = rowStatus(row);
   if (status === "dossier_generated" || status === "om_received") return "underwriting";
   if (status === "outreach") return "awaiting_broker";
@@ -427,6 +561,30 @@ async function patchSavedDealStatus(propertyId: string, nextStatus: UiV2Pipeline
   if (!response.ok) throw new Error(data.error || data.details || "Failed to move deal stage.");
 }
 
+async function refreshPropertyOmAnalysis(propertyId: string): Promise<OmRefreshResponse> {
+  const response = await fetch(`${API_BASE}/api/properties/${propertyId}/refresh-om-financials`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ autoPromote: true }),
+  });
+  const data = (await response.json().catch(() => ({}))) as OmRefreshResponse;
+  if (!response.ok) throw new Error(data.error || data.details || "Failed to refresh OM analysis.");
+  return data;
+}
+
+async function rerunPropertyDossier(propertyId: string): Promise<DossierGenerateResponse> {
+  const response = await fetch(`${API_BASE}/api/dossier/generate`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ propertyId }),
+  });
+  const data = (await response.json().catch(() => ({}))) as DossierGenerateResponse;
+  if (!response.ok) throw new Error(data.error || data.details || "Failed to rerun dossier.");
+  return data;
+}
+
 function ProgressPageContent() {
   const searchParams = useSearchParams();
   const query = (searchParams.get("q") ?? "").trim().toLowerCase();
@@ -436,29 +594,29 @@ function ProgressPageContent() {
   const [rejectionReasons, setRejectionReasons] = useState<Array<{ reasonCode?: string; count?: number }>>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [stageMoveBusy, setStageMoveBusy] = useState<string | null>(null);
+  const [bulkWorkflowBusy, setBulkWorkflowBusy] = useState<typeof OM_ANALYSIS_BULK_ID | typeof DOSSIER_BULK_ID | null>(null);
   const [bulkTargetStatus, setBulkTargetStatus] = useState<UiV2PipelineStatus>("awaiting_broker");
   const [selectedDealIds, setSelectedDealIds] = useState<Set<string>>(() => new Set());
-  const [draggedDeal, setDraggedDeal] = useState<SavedDealRow | null>(null);
+  const [draggedDeal, setDraggedDeal] = useState<DealFlowRow | null>(null);
   const [dragOverSectionId, setDragOverSectionId] = useState<string | null>(null);
+  const [editingDealPathId, setEditingDealPathId] = useState<string | null>(null);
+  const [dealPathForms, setDealPathForms] = useState<Record<string, DealPathFormState>>({});
+  const [dealPathSavingId, setDealPathSavingId] = useState<string | null>(null);
 
   const loadProgress = useCallback(async (mode: "initial" | "refresh" = "initial") => {
     if (mode === "initial") setLoading(true);
     else setRefreshing(true);
     setError(null);
     try {
-      const [progressResponse, savedResponse] = await Promise.all([
-        fetch(`${API_BASE}/api/ui-v2/deal-progress`),
-        fetch(`${API_BASE}/api/ui-v2/saved-deals?${new URLSearchParams({ limit: "250" })}`),
-      ]);
+      const progressResponse = await fetch(`${API_BASE}/api/ui-v2/deal-progress`);
       const progressData = (await progressResponse.json().catch(() => ({}))) as DealProgressResponse;
-      const savedData = (await savedResponse.json().catch(() => ({}))) as SavedDealsResponse;
       if (!progressResponse.ok) throw new Error(progressData.error || progressData.details || "Failed to load deal progress");
-      if (!savedResponse.ok) throw new Error(savedData.error || savedData.details || "Failed to load saved deal sections");
       setSummary(progressData.summary ?? null);
       setSections(normalizeSections(progressData));
-      setSavedDealRows(normalizeSavedDeals(savedData));
+      setSavedDealRows([]);
       setRejectionReasons(Array.isArray(progressData.rejectionReasons) ? progressData.rejectionReasons : []);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load deal progress");
@@ -477,7 +635,7 @@ function ProgressPageContent() {
   }, [loadProgress]);
 
   const moveSavedDeals = useCallback(
-    async (rows: SavedDealRow[], nextStatus: UiV2PipelineStatus, options?: { clearSelection?: boolean }) => {
+    async (rows: DealFlowRow[], nextStatus: UiV2PipelineStatus, options?: { clearSelection?: boolean }) => {
       const uniqueRows = [...new Map(rows.map((row) => [row.propertyId, row])).values()];
       const rowsToMove = uniqueRows.filter((row) => moveStatusForRow(row) !== nextStatus);
       if (rowsToMove.length === 0) return;
@@ -500,9 +658,6 @@ function ProgressPageContent() {
         );
         const movedIds = new Set(results.filter((result) => result.ok).map((result) => result.propertyId));
         if (movedIds.size > 0) {
-          setSavedDealRows((current) =>
-            current.map((deal) => (movedIds.has(deal.propertyId) ? { ...deal, status: nextStatus } : deal))
-          );
           if (options?.clearSelection) {
             setSelectedDealIds((current) => {
               const next = new Set(current);
@@ -531,10 +686,11 @@ function ProgressPageContent() {
       setDragOverSectionId(null);
       if (!row || !section.targetStatus) return;
       const movingSelection = selectedDealIds.has(row.propertyId);
-      const rowsToMove = movingSelection ? savedDealRows.filter((deal) => selectedDealIds.has(deal.propertyId)) : [row];
+      const loadedRows = sections.flatMap((progressSection) => progressSection.rows ?? []);
+      const rowsToMove = movingSelection ? loadedRows.filter((deal) => selectedDealIds.has(deal.propertyId)) : [row];
       void moveSavedDeals(rowsToMove, section.targetStatus, { clearSelection: movingSelection });
     },
-    [draggedDeal, moveSavedDeals, savedDealRows, selectedDealIds]
+    [draggedDeal, moveSavedDeals, sections, selectedDealIds]
   );
 
   const filteredSections = useMemo(() => {
@@ -545,30 +701,33 @@ function ProgressPageContent() {
     }));
   }, [query, sections]);
 
-  const filteredSavedDealRows = useMemo(() => {
-    if (!query) return savedDealRows;
-    return savedDealRows.filter((row) => searchableSavedDealText(row).includes(query));
-  }, [query, savedDealRows]);
+  const flowRows = useMemo(() => sections.flatMap((section) => section.rows ?? []), [sections]);
+  const filteredFlowRows = useMemo(() => filteredSections.flatMap((section) => section.rows ?? []), [filteredSections]);
 
   useEffect(() => {
     setSelectedDealIds((current) => {
       if (current.size === 0) return current;
-      const validIds = new Set(savedDealRows.map((row) => row.propertyId));
+      const validIds = new Set(flowRows.map((row) => row.propertyId));
       const next = new Set([...current].filter((propertyId) => validIds.has(propertyId)));
       return next.size === current.size ? current : next;
     });
-  }, [savedDealRows]);
+  }, [flowRows]);
 
   const selectedSavedDeals = useMemo(
-    () => savedDealRows.filter((row) => selectedDealIds.has(row.propertyId)),
-    [savedDealRows, selectedDealIds]
+    () => flowRows.filter((row) => selectedDealIds.has(row.propertyId)),
+    [flowRows, selectedDealIds]
   );
-  const visibleSavedDealIds = useMemo(() => filteredSavedDealRows.map((row) => row.propertyId), [filteredSavedDealRows]);
+  const selectedSavedDealsWithOm = useMemo(
+    () => selectedSavedDeals.filter(savedDealHasUploadedOm),
+    [selectedSavedDeals]
+  );
+  const visibleSavedDealIds = useMemo(() => filteredFlowRows.map((row) => row.propertyId), [filteredFlowRows]);
   const allVisibleSelected =
     visibleSavedDealIds.length > 0 && visibleSavedDealIds.every((propertyId) => selectedDealIds.has(propertyId));
   const someVisibleSelected =
     visibleSavedDealIds.length > 0 && visibleSavedDealIds.some((propertyId) => selectedDealIds.has(propertyId));
   const bulkMoveBusy = stageMoveBusy === BULK_STAGE_MOVE_ID;
+  const bulkControlsBusy = bulkMoveBusy || bulkWorkflowBusy != null;
 
   const toggleSavedDealSelected = useCallback((propertyId: string, selected: boolean) => {
     setSelectedDealIds((current) => {
@@ -591,11 +750,187 @@ function ProgressPageContent() {
     });
   }, [visibleSavedDealIds]);
 
-  const savedStatusSections = useMemo(() => buildSavedStatusSections(filteredSavedDealRows), [filteredSavedDealRows]);
-  const savedTagSections = useMemo(() => buildSavedTagSections(filteredSavedDealRows), [filteredSavedDealRows]);
+  const startDealPathEdit = useCallback((row: DealFlowRow) => {
+    setEditingDealPathId(row.propertyId);
+    setDealPathForms((current) => ({
+      ...current,
+      [row.propertyId]: current[row.propertyId] ?? dealPathFormFromState(row.dealPath),
+    }));
+  }, []);
+
+  const updateDealPathField = useCallback(
+    <K extends keyof DealPathFormState>(propertyId: string, field: K, value: DealPathFormState[K]) => {
+      setDealPathForms((current) => ({
+        ...current,
+        [propertyId]: {
+          ...(current[propertyId] ?? dealPathFormFromState(flowRows.find((row) => row.propertyId === propertyId)?.dealPath)),
+          [field]: value,
+        },
+      }));
+    },
+    [flowRows]
+  );
+
+  const saveDealPathForRow = useCallback(
+    async (row: DealFlowRow, event: FormEvent<HTMLFormElement>) => {
+      event.preventDefault();
+      const form = dealPathForms[row.propertyId] ?? dealPathFormFromState(row.dealPath);
+      if (form.postTourDecision === "reject" && !form.rejectionReasonCode) {
+        setError("Choose a rejection reason before rejecting after a tour.");
+        return;
+      }
+      setDealPathSavingId(row.propertyId);
+      setError(null);
+      setNotice(null);
+      try {
+        const response = await fetch(`${API_BASE}/api/ui-v2/properties/${row.propertyId}/deal-path`, {
+          method: "PATCH",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            dealPath: dealPathPayload(form),
+            actorName: "progress_table",
+            source: "progress_table",
+          }),
+        });
+        const data = (await response.json().catch(() => ({}))) as { error?: string; details?: string };
+        if (!response.ok) {
+          throw new Error(data.error || data.details || "Failed to update deal path.");
+        }
+        setNotice(form.postTourDecision === "reject" ? "Property rejected after tour." : "Deal path updated.");
+        setEditingDealPathId(null);
+        await loadProgress("refresh");
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to update deal path.");
+      } finally {
+        setDealPathSavingId(null);
+      }
+    },
+    [dealPathForms, loadProgress]
+  );
+
+  const refreshSelectedOmAnalysis = useCallback(async () => {
+    if (selectedSavedDeals.length === 0) return;
+    if (selectedSavedDealsWithOm.length === 0) {
+      setError("Select at least one saved deal with an uploaded OM before refreshing OM analysis.");
+      return;
+    }
+    const skipped = selectedSavedDeals.length - selectedSavedDealsWithOm.length;
+    let completed = 0;
+    const failures: Array<{ address: string; message: string }> = [];
+    setBulkWorkflowBusy(OM_ANALYSIS_BULK_ID);
+    setNotice(
+      `Updating OM analysis for ${selectedSavedDealsWithOm.length} deal${selectedSavedDealsWithOm.length === 1 ? "" : "s"}${
+        skipped > 0 ? `; ${skipped} selected without OM skipped` : ""
+      }...`
+    );
+    setError(null);
+    try {
+      for (let index = 0; index < selectedSavedDealsWithOm.length; index++) {
+        const row = selectedSavedDealsWithOm[index]!;
+        const address = row.displayAddress ?? row.canonicalAddress ?? row.propertyId;
+        setNotice(`Updating OM analysis ${index + 1} of ${selectedSavedDealsWithOm.length}: ${address}`);
+        try {
+          await refreshPropertyOmAnalysis(row.propertyId);
+          completed++;
+        } catch (err) {
+          failures.push({
+            address,
+            message: err instanceof Error ? err.message : "Failed to refresh OM analysis.",
+          });
+        }
+      }
+      await loadProgress("refresh");
+      const skippedMessage = skipped > 0 ? ` ${skipped} selected without OM skipped.` : "";
+      setNotice(
+        failures.length === 0
+          ? `OM analysis updated for ${completed} deal${completed === 1 ? "" : "s"}.${skippedMessage}`
+          : `OM analysis updated for ${completed} of ${selectedSavedDealsWithOm.length} eligible deals.${skippedMessage}`
+      );
+      if (failures.length > 0) {
+        setError(
+          `${failures.length} OM analysis refresh${failures.length === 1 ? "" : "es"} failed. First issue: ${
+            failures[0]!.address
+          } - ${failures[0]!.message}`
+        );
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to refresh selected OM analysis.");
+    } finally {
+      setBulkWorkflowBusy(null);
+    }
+  }, [loadProgress, selectedSavedDeals, selectedSavedDealsWithOm]);
+
+  const rerunSelectedDossiers = useCallback(async () => {
+    if (selectedSavedDeals.length === 0) return;
+    if (selectedSavedDealsWithOm.length === 0) {
+      setError("Select at least one saved deal with an uploaded OM before rerunning dossiers.");
+      return;
+    }
+    const skipped = selectedSavedDeals.length - selectedSavedDealsWithOm.length;
+    let completed = 0;
+    const failures: Array<{ address: string; message: string }> = [];
+    setBulkWorkflowBusy(DOSSIER_BULK_ID);
+    setNotice(
+      `Rerunning dossiers for ${selectedSavedDealsWithOm.length} deal${selectedSavedDealsWithOm.length === 1 ? "" : "s"}${
+        skipped > 0 ? `; ${skipped} selected without OM skipped` : ""
+      }...`
+    );
+    setError(null);
+    try {
+      for (let index = 0; index < selectedSavedDealsWithOm.length; index++) {
+        const row = selectedSavedDealsWithOm[index]!;
+        const address = row.displayAddress ?? row.canonicalAddress ?? row.propertyId;
+        setNotice(`Rerunning dossiers ${index + 1} of ${selectedSavedDealsWithOm.length}: ${address}`);
+        try {
+          await rerunPropertyDossier(row.propertyId);
+          completed++;
+        } catch (err) {
+          failures.push({
+            address,
+            message: err instanceof Error ? err.message : "Failed to rerun dossier.",
+          });
+        }
+      }
+      await loadProgress("refresh");
+      const skippedMessage = skipped > 0 ? ` ${skipped} selected without OM skipped.` : "";
+      setNotice(
+        failures.length === 0
+          ? `Dossiers rerun for ${completed} deal${completed === 1 ? "" : "s"}.${skippedMessage}`
+          : `Dossiers rerun for ${completed} of ${selectedSavedDealsWithOm.length} eligible deals.${skippedMessage}`
+      );
+      if (failures.length > 0) {
+        setError(
+          `${failures.length} dossier rerun${failures.length === 1 ? "" : "s"} failed. First issue: ${
+            failures[0]!.address
+          } - ${failures[0]!.message}`
+        );
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to rerun selected dossiers.");
+    } finally {
+      setBulkWorkflowBusy(null);
+    }
+  }, [loadProgress, selectedSavedDeals, selectedSavedDealsWithOm]);
+
+  const savedStatusSections = useMemo(
+    () =>
+      filteredSections.map((section) => {
+        const group = SAVED_STATUS_GROUPS.find((candidate) => candidate.id === section.id);
+        return {
+          id: section.id,
+          label: section.label || group?.label || labelFromKey(section.id),
+          description: group?.description,
+          rows: (section.rows ?? []) as DealFlowRow[],
+          targetStatus: group?.targetStatus,
+          moveLabel: group?.moveLabel,
+        };
+      }),
+    [filteredSections]
+  );
   const savedStageCounts = useMemo(
-    () => new Map(savedStatusSections.map((section) => [section.id, section.rows.length])),
-    [savedStatusSections]
+    () => new Map(filteredSections.map((section) => [section.id, section.count ?? section.rows?.length ?? 0])),
+    [filteredSections]
   );
 
   const visibleRowCount = useMemo(
@@ -603,13 +938,7 @@ function ProgressPageContent() {
     [filteredSections]
   );
 
-  const totalCount =
-    (summary?.savedCount ?? 0) +
-    (summary?.underwritingCount ?? 0) +
-    (summary?.outreachCount ?? 0) +
-    (summary?.awaitingBrokerCount ?? 0) +
-    (summary?.omReceivedCount ?? 0) +
-    (summary?.rejectedCount ?? 0);
+  const totalCount = flowRows.length;
 
   return (
     <div className={styles.page}>
@@ -618,7 +947,7 @@ function ProgressPageContent() {
           <p className={styles.eyebrow}>Deal movement</p>
           <h1 className={styles.title}>Progress</h1>
           <p className={styles.subtitle}>
-            Move saved properties from watchlist through OM request, underwriting, LOI, negotiation, diligence, and close.
+            Track OM requests, underwriting, tours, LOIs, negotiation, diligence, and close without leaving the progress board.
           </p>
         </div>
         <div className={styles.headerActions}>
@@ -635,6 +964,8 @@ function ProgressPageContent() {
         </div>
       ) : null}
 
+      {notice ? <div className={styles.notice}>{notice}</div> : null}
+
       <section className={styles.metrics} aria-label="Deal progress summary">
         {SAVED_STATUS_GROUPS.map((group) => (
           <article className={styles.metric} key={group.id}>
@@ -644,13 +975,22 @@ function ProgressPageContent() {
         ))}
       </section>
 
-      <section className={styles.savedFlowPanel} aria-label="Saved deals by status">
+      <section className={styles.savedFlowPanel} aria-label="Deal path by status">
         <div className={styles.savedFlowHeader}>
           <div>
-            <h2>Saved Deals by Status</h2>
-            <p>{filteredSavedDealRows.length} saved deal{filteredSavedDealRows.length === 1 ? "" : "s"} grouped into deal-flow stages</p>
+            <h2>Deal Path by Status</h2>
+            <p>
+              {filteredFlowRows.length} loaded propert{filteredFlowRows.length === 1 ? "y" : "ies"} · Updated {formatDate(summary?.updatedAt)}
+            </p>
           </div>
-          <Link href="/saved" className={styles.secondaryLink}>Open Saved Deals</Link>
+          <button
+            type="button"
+            className={styles.refreshButton}
+            onClick={() => void loadProgress("refresh")}
+            disabled={loading || refreshing}
+          >
+            {refreshing ? "Refreshing..." : "Refresh"}
+          </button>
         </div>
         <div className={styles.bulkToolbar} aria-label="Bulk stage controls">
           <label className={styles.bulkCheck}>
@@ -658,7 +998,7 @@ function ProgressPageContent() {
               type="checkbox"
               checked={allVisibleSelected}
               aria-checked={allVisibleSelected ? "true" : someVisibleSelected ? "mixed" : "false"}
-              disabled={filteredSavedDealRows.length === 0 || bulkMoveBusy}
+              disabled={filteredFlowRows.length === 0 || bulkControlsBusy}
               onChange={toggleVisibleSavedDeals}
             />
             <span>{allVisibleSelected ? "Unselect visible" : "Select visible"}</span>
@@ -669,7 +1009,7 @@ function ProgressPageContent() {
               className={styles.bulkStageSelect}
               aria-label="Stage for selected deals"
               value={bulkTargetStatus}
-              disabled={bulkMoveBusy}
+              disabled={bulkControlsBusy}
               onChange={(event) => setBulkTargetStatus(event.target.value as UiV2PipelineStatus)}
             >
               {MOVE_STAGE_OPTIONS.map((option) => (
@@ -681,15 +1021,41 @@ function ProgressPageContent() {
             <button
               type="button"
               className={styles.bulkMoveButton}
-              disabled={selectedSavedDeals.length === 0 || bulkMoveBusy}
+              disabled={selectedSavedDeals.length === 0 || bulkControlsBusy}
               onClick={() => void moveSavedDeals(selectedSavedDeals, bulkTargetStatus, { clearSelection: true })}
             >
               {bulkMoveBusy ? "Moving..." : "Move selected"}
             </button>
             <button
               type="button"
+              className={styles.bulkWorkflowButton}
+              title={
+                selectedSavedDealsWithOm.length === 0
+                  ? "Select at least one saved deal with an uploaded OM."
+                  : "Refresh and promote OM extraction for selected saved deals with uploaded OMs."
+              }
+              disabled={selectedSavedDealsWithOm.length === 0 || bulkControlsBusy}
+              onClick={() => void refreshSelectedOmAnalysis()}
+            >
+              {bulkWorkflowBusy === OM_ANALYSIS_BULK_ID ? "Updating OM..." : "Update OM analysis"}
+            </button>
+            <button
+              type="button"
+              className={styles.bulkWorkflowButton}
+              title={
+                selectedSavedDealsWithOm.length === 0
+                  ? "Select at least one saved deal with an uploaded OM."
+                  : "Regenerate deal dossier PDFs and Excel workbooks for selected saved deals with uploaded OMs."
+              }
+              disabled={selectedSavedDealsWithOm.length === 0 || bulkControlsBusy}
+              onClick={() => void rerunSelectedDossiers()}
+            >
+              {bulkWorkflowBusy === DOSSIER_BULK_ID ? "Rerunning..." : "Rerun dossiers"}
+            </button>
+            <button
+              type="button"
               className={styles.bulkClearButton}
-              disabled={selectedSavedDeals.length === 0 || bulkMoveBusy}
+              disabled={selectedSavedDeals.length === 0 || bulkControlsBusy}
               onClick={() => setSelectedDealIds(new Set())}
             >
               Clear
@@ -705,7 +1071,7 @@ function ProgressPageContent() {
               enableMoves
               movingPropertyId={stageMoveBusy}
               selectedDealIds={selectedDealIds}
-              bulkMoving={bulkMoveBusy}
+              bulkMoving={bulkControlsBusy}
               dragOver={dragOverSectionId === section.id}
               onToggleSelected={toggleSavedDealSelected}
               onDragStartDeal={setDraggedDeal}
@@ -719,48 +1085,16 @@ function ProgressPageContent() {
                 setDragOverSectionId(section.id);
               }}
               onDropOnSection={() => dropSavedDeal(section)}
+              editingPropertyId={editingDealPathId}
+              dealPathForms={dealPathForms}
+              dealPathSavingId={dealPathSavingId}
+              onStartDealPathEdit={startDealPathEdit}
+              onCancelDealPathEdit={() => setEditingDealPathId(null)}
+              onUpdateDealPathField={updateDealPathField}
+              onSaveDealPath={saveDealPathForRow}
             />
           ))}
         </div>
-      </section>
-
-      <section className={styles.savedFlowPanel} aria-label="Saved deals by tag">
-        <div className={styles.savedFlowHeader}>
-          <div>
-            <h2>Saved Deals by Tag</h2>
-            <p>Same saved deal set grouped by active tags for faster review.</p>
-          </div>
-        </div>
-        {loading ? (
-          <div className={styles.emptyState}>Loading saved deal tags...</div>
-        ) : savedTagSections.length === 0 ? (
-          <div className={styles.emptyState}>
-            {filteredSavedDealRows.length === 0 ? "No saved deals available for tag grouping." : "No tags found on saved deals yet."}
-          </div>
-        ) : (
-          <div className={styles.tagSections}>
-            {savedTagSections.slice(0, 12).map((section) => (
-              <SavedDealMiniSection key={section.id} section={section} loading={loading} compact />
-            ))}
-          </div>
-        )}
-      </section>
-
-      <section className={styles.boardHeader}>
-        <div>
-          <h2>Progress Tables</h2>
-          <p>
-            {totalCount} total counted row{totalCount === 1 ? "" : "s"} · Updated {formatDate(summary?.updatedAt)}
-          </p>
-        </div>
-        <button
-          type="button"
-          className={styles.refreshButton}
-          onClick={() => void loadProgress("refresh")}
-          disabled={loading || refreshing}
-        >
-          {refreshing ? "Refreshing..." : "Refresh"}
-        </button>
       </section>
 
       {error ? <div className={styles.error}>{error}</div> : null}
@@ -775,96 +1109,133 @@ function ProgressPageContent() {
         </section>
       ) : null}
 
-      <div className={styles.sections}>
-        {filteredSections.map((section) => {
-          const rows = section.rows ?? [];
-          return (
-            <section key={section.id} className={styles.sectionPanel}>
-              <div className={styles.sectionHeader}>
-                <div>
-                  <h3>{section.label || labelFromKey(section.id)}</h3>
-                  <p>
-                    {section.count ?? rows.length} counted · {rows.length} loaded row{rows.length === 1 ? "" : "s"}
-                  </p>
-                </div>
-                <span className={section.id === "rejected" ? styles.sectionCountDanger : styles.sectionCount}>
-                  {section.count ?? rows.length}
-                </span>
-              </div>
-
-              {loading ? (
-                <div className={styles.emptyState}>Loading rows...</div>
-              ) : rows.length === 0 ? (
-                <div className={styles.emptyState}>
-                  {(section.count ?? 0) > 0 && !query
-                    ? "Count is available; detailed rows are pending."
-                    : query
-                      ? "No loaded rows match the current search."
-                      : "No rows in this stage."}
-                </div>
-              ) : (
-                <div className={styles.tableWrap}>
-                  <table className={styles.table}>
-                    <thead>
-                      <tr>
-                        <th>Property</th>
-                        <th>Status</th>
-                        <th>Score</th>
-                        <th>Price / Units</th>
-                        <th>OM / Items</th>
-                        <th>Updated</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {rows.map((row) => (
-                        <tr key={`${section.id}-${row.propertyId}`}>
-                          <td>
-                            <div className={styles.propertyCell}>
-                              <Link href={`/pipeline?propertyId=${encodeURIComponent(row.propertyId)}`}>
-                                {row.displayAddress || row.canonicalAddress || row.propertyId}
-                              </Link>
-                              <span>{row.source ? labelFromKey(row.source) : "No source context"}</span>
-                              {row.tags && row.tags.length > 0 ? (
-                                <div className={styles.tagLine}>
-                                  {row.tags.slice(0, 3).map((tag) => (
-                                    <span className={tagClass(tag)} key={tag}>{labelFromKey(tag)}</span>
-                                  ))}
-                                  {row.tags.length > 3 ? <span className={styles.tagChip}>+{row.tags.length - 3}</span> : null}
-                                </div>
-                              ) : null}
-                            </div>
-                          </td>
-                          <td><span className={statusClass(row.status)}>{labelFromKey(row.status)}</span></td>
-                          <td>
-                            <span className={scoreClass(row.dealScore)}>
-                              {row.dealScore == null ? "—" : `${Math.round(row.dealScore)} / 100`}
-                            </span>
-                          </td>
-                          <td>
-                            <div className={styles.stack}>
-                              <span>{formatCurrency(row.price)}</span>
-                              <small>{formatNumber(row.units)} units</small>
-                              <small>{formatCurrency(row.pricePerSqft)} / SF</small>
-                            </div>
-                          </td>
-                          <td>
-                            <div className={styles.stack}>
-                              <span>{labelFromKey(row.omStatus || "none")}</span>
-                              <small>{formatNumber(row.openActionItemCount)} open action item{row.openActionItemCount === 1 ? "" : "s"}</small>
-                            </div>
-                          </td>
-                          <td>{formatDate(row.updatedAt)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </section>
-          );
-        })}
-      </div>
     </div>
+  );
+}
+
+function DealPathInlineForm({
+  row,
+  form,
+  saving,
+  onUpdate,
+  onCancel,
+  onSave,
+}: {
+  row: DealFlowRow;
+  form: DealPathFormState;
+  saving: boolean;
+  onUpdate: <K extends keyof DealPathFormState>(propertyId: string, field: K, value: DealPathFormState[K]) => void;
+  onCancel?: () => void;
+  onSave: (row: DealFlowRow, event: FormEvent<HTMLFormElement>) => void;
+}) {
+  return (
+    <form className={styles.dealPathInlineForm} onSubmit={(event) => onSave(row, event)}>
+      <label>
+        <span>Tour date and time</span>
+        <input
+          type="datetime-local"
+          value={form.tourScheduledAt}
+          onChange={(event) => onUpdate(row.propertyId, "tourScheduledAt", event.target.value)}
+        />
+      </label>
+      <label>
+        <span>Post-tour decision</span>
+        <select
+          value={form.postTourDecision}
+          onChange={(event) => onUpdate(row.propertyId, "postTourDecision", event.target.value as UiV2DealPathDecision)}
+        >
+          <option value="pending">Pending inputs</option>
+          <option value="move_forward">Move forward with offer</option>
+          <option value="need_more_info">Need more information</option>
+          <option value="reject">Reject after tour</option>
+        </select>
+      </label>
+      <label>
+        <span>Target price</span>
+        <input
+          inputMode="numeric"
+          value={form.targetPrice}
+          onChange={(event) => onUpdate(row.propertyId, "targetPrice", event.target.value)}
+          placeholder="Target pricing"
+        />
+      </label>
+      <label>
+        <span>Offer amount</span>
+        <input
+          inputMode="numeric"
+          value={form.offerAmount}
+          onChange={(event) => onUpdate(row.propertyId, "offerAmount", event.target.value)}
+          placeholder="LOI offer"
+        />
+      </label>
+      <label className={styles.dealPathWideField}>
+        <span>Tour notes</span>
+        <textarea
+          value={form.tourNotes}
+          onChange={(event) => onUpdate(row.propertyId, "tourNotes", event.target.value)}
+          placeholder="Tour takeaways, condition, broker comments, follow-up questions"
+        />
+      </label>
+      <label className={styles.dealPathWideField}>
+        <span>Offer notes</span>
+        <textarea
+          value={form.offerNotes}
+          onChange={(event) => onUpdate(row.propertyId, "offerNotes", event.target.value)}
+          placeholder="Rationale for offer, pricing read, partner feedback"
+        />
+      </label>
+      <label className={styles.dealPathWideField}>
+        <span>LOI contingencies</span>
+        <textarea
+          value={form.loiContingenciesText}
+          onChange={(event) => onUpdate(row.propertyId, "loiContingenciesText", event.target.value)}
+          placeholder="Financing contingency, diligence period, rent roll verification"
+        />
+      </label>
+      <label className={styles.dealPathWideField}>
+        <span>LOI contingency notes</span>
+        <textarea
+          value={form.loiContingencyNotes}
+          onChange={(event) => onUpdate(row.propertyId, "loiContingencyNotes", event.target.value)}
+          placeholder="Timing, diligence needs, third-party reports, deposit terms"
+        />
+      </label>
+      {form.postTourDecision === "reject" ? (
+        <>
+          <label>
+            <span>Reject reason</span>
+            <select
+              value={form.rejectionReasonCode}
+              onChange={(event) => onUpdate(row.propertyId, "rejectionReasonCode", event.target.value as UiV2RejectionReasonCode | "")}
+              required
+            >
+              <option value="">Choose reason</option>
+              {UI_V2_REJECTION_REASON_OPTIONS.map((option) => (
+                <option key={option.code} value={option.code}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className={styles.dealPathWideField}>
+            <span>Reject notes</span>
+            <textarea
+              value={form.rejectionNotes}
+              onChange={(event) => onUpdate(row.propertyId, "rejectionNotes", event.target.value)}
+              placeholder="Why we are passing after the tour"
+            />
+          </label>
+        </>
+      ) : null}
+      <div className={styles.dealPathFormActions}>
+        <button type="button" className={styles.bulkClearButton} onClick={onCancel} disabled={saving}>
+          Cancel
+        </button>
+        <button type="submit" className={styles.bulkMoveButton} disabled={saving}>
+          {saving ? "Saving..." : form.postTourDecision === "reject" ? "Save rejection" : "Save deal path"}
+        </button>
+      </div>
+    </form>
   );
 }
 
@@ -890,6 +1261,13 @@ function SavedDealMiniSection({
   onDragEndDeal,
   onDragOverSection,
   onDropOnSection,
+  editingPropertyId = null,
+  dealPathForms,
+  dealPathSavingId = null,
+  onStartDealPathEdit,
+  onCancelDealPathEdit,
+  onUpdateDealPathField,
+  onSaveDealPath,
 }: {
   section: SavedDealSection;
   loading: boolean;
@@ -900,10 +1278,17 @@ function SavedDealMiniSection({
   bulkMoving?: boolean;
   dragOver?: boolean;
   onToggleSelected?: (propertyId: string, selected: boolean) => void;
-  onDragStartDeal?: (row: SavedDealRow) => void;
+  onDragStartDeal?: (row: DealFlowRow) => void;
   onDragEndDeal?: () => void;
   onDragOverSection?: (event: DragEvent<HTMLElement>) => void;
   onDropOnSection?: () => void;
+  editingPropertyId?: string | null;
+  dealPathForms?: Record<string, DealPathFormState>;
+  dealPathSavingId?: string | null;
+  onStartDealPathEdit?: (row: DealFlowRow) => void;
+  onCancelDealPathEdit?: () => void;
+  onUpdateDealPathField?: <K extends keyof DealPathFormState>(propertyId: string, field: K, value: DealPathFormState[K]) => void;
+  onSaveDealPath?: (row: DealFlowRow, event: FormEvent<HTMLFormElement>) => void;
 }) {
   const visibleRows = compact ? section.rows.slice(0, 5) : section.rows;
   return (
@@ -927,18 +1312,23 @@ function SavedDealMiniSection({
         <span>{section.rows.length}</span>
       </div>
       {loading ? (
-        <div className={styles.emptyState}>Loading saved deals...</div>
+        <div className={styles.emptyState}>Loading deal path...</div>
       ) : visibleRows.length === 0 ? (
-        <div className={styles.emptyState}>No saved deals in this section.</div>
+        <div className={styles.emptyState}>No properties in this stage.</div>
       ) : (
         <div className={styles.miniRows}>
           {visibleRows.map((row) => {
             const selected = selectedDealIds?.has(row.propertyId) ?? false;
             const busy = bulkMoving || movingPropertyId === row.propertyId;
+            const editing = editingPropertyId === row.propertyId;
+            const form = dealPathForms?.[row.propertyId] ?? dealPathFormFromState(row.dealPath);
+            const tourNeedsInputs = needsTourInputs(row);
             return (
               <article
                 key={`${section.id}-${row.propertyId}`}
-                className={`${styles.miniRow} ${selected ? styles.miniRowSelected : ""} ${busy ? styles.miniRowBusy : ""}`}
+                className={`${styles.miniRow} ${selected ? styles.miniRowSelected : ""} ${busy ? styles.miniRowBusy : ""} ${
+                  tourNeedsInputs ? styles.miniRowNeedsInput : ""
+                }`}
                 draggable={enableMoves && !compact && !busy}
                 aria-selected={selected}
                 onDragStart={
@@ -952,35 +1342,70 @@ function SavedDealMiniSection({
                 }
                 onDragEnd={enableMoves ? onDragEndDeal : undefined}
               >
-                {enableMoves ? (
-                  <input
-                    type="checkbox"
-                    className={styles.miniSelect}
-                    aria-label={`Select ${row.displayAddress || row.canonicalAddress || "property"}`}
-                    checked={selected}
+                <div className={styles.miniRowMain}>
+                  {enableMoves ? (
+                    <input
+                      type="checkbox"
+                      className={styles.miniSelect}
+                      aria-label={`Select ${row.displayAddress || row.canonicalAddress || "property"}`}
+                      checked={selected}
+                      disabled={busy}
+                      onChange={(event) => onToggleSelected?.(row.propertyId, event.target.checked)}
+                      onClick={(event) => event.stopPropagation()}
+                    />
+                  ) : null}
+                  <Link href={`/pipeline?propertyId=${encodeURIComponent(row.propertyId)}`} className={styles.miniRowLink}>
+                    <strong>{row.displayAddress || row.canonicalAddress || row.propertyId}</strong>
+                    <span>
+                      {[
+                        row.source ? labelFromKey(row.source) : null,
+                        formatUnitLabel(row.units),
+                        row.price != null ? formatCurrency(row.price) : null,
+                        row.pricePerSqft != null ? `${formatCurrency(row.pricePerSqft)} / SF` : null,
+                      ]
+                        .filter(Boolean)
+                        .join(" / ") || "No context"}
+                    </span>
+                  </Link>
+                  <div className={styles.miniMeta}>
+                    <span className={statusClass(rowStatus(row))}>{labelFromKey(rowStatus(row))}</span>
+                    <small className={scoreClass(row.dealScore)}>
+                      {row.dealScore == null ? "—" : Math.round(row.dealScore)}
+                    </small>
+                  </div>
+                </div>
+                {tourNeedsInputs ? <div className={styles.tourInputNotice}>Tour completed. Add notes, decision, and offer inputs.</div> : null}
+                <div className={styles.miniRowDetails}>
+                  <span>Tour: {formatDateTime(row.dealPath?.tourScheduledAt)}</span>
+                  <span>Target: {formatCurrency(row.dealPath?.targetPrice)}</span>
+                  <span>Offer: {formatCurrency(row.dealPath?.offerAmount)}</span>
+                </div>
+                <div className={styles.workflowBadges}>
+                  <span className={row.hasOm ? styles.workflowBadgeReady : styles.workflowBadgeMuted}>OM</span>
+                  <span className={row.hasComps ? styles.workflowBadgeReady : styles.workflowBadgeMuted}>Comps</span>
+                  <span className={row.hasDossier ? styles.workflowBadgeReady : styles.workflowBadgeMuted}>Dossier</span>
+                  {(row.openActionItemCount ?? 0) > 0 ? <span className={styles.workflowBadgeAction}>{row.openActionItemCount} item{row.openActionItemCount === 1 ? "" : "s"}</span> : null}
+                </div>
+                {!compact ? (
+                  <button
+                    type="button"
+                    className={styles.pathEditButton}
                     disabled={busy}
-                    onChange={(event) => onToggleSelected?.(row.propertyId, event.target.checked)}
-                    onClick={(event) => event.stopPropagation()}
+                    onClick={() => (editing ? onCancelDealPathEdit?.() : onStartDealPathEdit?.(row))}
+                  >
+                    {editing ? "Close deal path" : row.dealPath?.tourScheduledAt ? "Edit deal path" : "Add tour / LOI"}
+                  </button>
+                ) : null}
+                {editing && onUpdateDealPathField && onSaveDealPath ? (
+                  <DealPathInlineForm
+                    row={row}
+                    form={form}
+                    saving={dealPathSavingId === row.propertyId}
+                    onUpdate={onUpdateDealPathField}
+                    onCancel={onCancelDealPathEdit}
+                    onSave={onSaveDealPath}
                   />
                 ) : null}
-                <Link href={`/pipeline?propertyId=${encodeURIComponent(row.propertyId)}`} className={styles.miniRowLink}>
-                  <strong>{row.displayAddress || row.canonicalAddress || row.propertyId}</strong>
-                  <span>
-                    {[
-                      row.source ? labelFromKey(row.source) : null,
-                      formatUnitLabel(row.units),
-                      row.pricePerSqft != null ? `${formatCurrency(row.pricePerSqft)} / SF` : null,
-                    ]
-                      .filter(Boolean)
-                      .join(" / ") || "No context"}
-                  </span>
-                </Link>
-                <div className={styles.miniMeta}>
-                  <span className={statusClass(rowStatus(row))}>{labelFromKey(rowStatus(row))}</span>
-                  <small className={scoreClass(row.dealScore)}>
-                    {row.dealScore == null ? "—" : Math.round(row.dealScore)}
-                  </small>
-                </div>
               </article>
             );
           })}

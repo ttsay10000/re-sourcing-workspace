@@ -109,7 +109,7 @@ const COMMON_PIPELINE_TAGS = [
   "duplicate",
 ] as const;
 
-const SHEET_TABS = ["Overview", "Deal Path", "Enrichment", "OM / Docs", "Market / Comps", "Underwriting", "Activity"] as const;
+const SHEET_TABS = ["Overview", "Enrichment", "OM / Docs", "Market / Comps", "Underwriting", "Activity"] as const;
 
 type SheetTab = (typeof SHEET_TABS)[number];
 type SortDirection = "asc" | "desc";
@@ -118,7 +118,7 @@ function tabFromParam(value: string | null): SheetTab | null {
   if (!value) return null;
   const normalized = value.toLowerCase().replace(/[^a-z]/g, "");
   if (normalized === "overview") return "Overview";
-  if (normalized === "dealpath" || normalized === "tour" || normalized === "tours") return "Deal Path";
+  if (normalized === "dealpath" || normalized === "tour" || normalized === "tours") return "Activity";
   if (normalized === "enrichment") return "Enrichment";
   if (normalized === "om" || normalized === "omdocs" || normalized === "docs") return "OM / Docs";
   if (normalized === "market" || normalized === "marketcomps" || normalized === "comps") return "Market / Comps";
@@ -220,6 +220,16 @@ interface DossierGenerateResponse {
   ok?: boolean;
   propertyId?: string;
   dealScore?: number | null;
+  error?: string;
+  details?: string;
+}
+
+interface OmRefreshResponse {
+  ok?: boolean;
+  documentsProcessed?: number;
+  documentsSkippedNoFile?: number;
+  status?: "needs_review" | "promoted" | "failed" | null;
+  reviewRequired?: boolean;
   error?: string;
   details?: string;
 }
@@ -334,6 +344,14 @@ async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
     throw new Error(message);
   }
   return payload as T;
+}
+
+function pipelineRowHasOm(row: Pick<PipelineRow, "documentStatus"> | null | undefined): boolean {
+  return row?.documentStatus?.hasOm === true;
+}
+
+function propertyDetailHasOm(property: FlexiblePropertyDetail | null | undefined): boolean {
+  return property?.documentStatus?.hasOm === true;
 }
 
 function formatCurrency(value: number | null | undefined, compact = true): string {
@@ -957,6 +975,10 @@ export default function PipelineClient() {
     () => rows.filter((row) => selectedIdSet.has(row.propertyId)),
     [rows, selectedIdSet]
   );
+  const selectedRowsWithOm = useMemo(
+    () => selectedRows.filter(pipelineRowHasOm),
+    [selectedRows]
+  );
   const selectedRejectableRows = useMemo(
     () =>
       selectedRows.filter((row) => {
@@ -1132,6 +1154,14 @@ export default function PipelineClient() {
     },
     [applyProperty]
   );
+
+  const reloadPipelineRows = useCallback(async (): Promise<void> => {
+    const response = await apiFetch<PipelineResponse>(
+      `${API_BASE}/api/ui-v2/pipeline?${buildPipelineQueryString(queryString)}`
+    );
+    setRows(response.pipeline.rows as PipelineRow[]);
+    setTotal(response.pipeline.total);
+  }, [queryString]);
 
   const loadBrokerComps = useCallback(async (propertyId: string): Promise<void> => {
     setBrokerCompLoading((current) => ({ ...current, [propertyId]: true }));
@@ -1503,16 +1533,150 @@ export default function PipelineClient() {
     }
   }
 
+  async function refreshOmAnalysisForProperty(propertyId: string) {
+    const row = rows.find((candidate) => candidate.propertyId === propertyId) ?? null;
+    const detailHasOm = selectedId === propertyId && propertyDetailHasOm(selectedProperty);
+    if (!pipelineRowHasOm(row) && !detailHasOm) {
+      setError("Upload an OM before refreshing OM analysis.");
+      return;
+    }
+    setBusyAction(`${propertyId}:om-analysis`);
+    setNotice(null);
+    setError(null);
+    try {
+      const payload = await apiFetch<OmRefreshResponse>(`${API_BASE}/api/properties/${propertyId}/refresh-om-financials`, {
+        method: "POST",
+        body: JSON.stringify({ autoPromote: true }),
+      });
+      await reloadPipelineRows();
+      if (selectedId === propertyId) await loadPropertyDetail(propertyId).catch(() => null);
+      const processed = Number(payload.documentsProcessed ?? 0);
+      setNotice(
+        `OM analysis ${payload.status === "promoted" ? "updated" : "refreshed"}${
+          processed > 0 ? ` from ${processed} document${processed === 1 ? "" : "s"}` : ""
+        }.`
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to refresh OM analysis.");
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function rerunDossierForProperty(propertyId: string) {
+    const row = rows.find((candidate) => candidate.propertyId === propertyId) ?? null;
+    const detailHasOm = selectedId === propertyId && propertyDetailHasOm(selectedProperty);
+    if (!pipelineRowHasOm(row) && !detailHasOm) {
+      setError("Upload an OM before rerunning the deal dossier.");
+      return;
+    }
+    setBusyAction(`${propertyId}:dossier`);
+    setNotice(null);
+    setError(null);
+    try {
+      const payload = await apiFetch<DossierGenerateResponse>(`${API_BASE}/api/dossier/generate`, {
+        method: "POST",
+        body: JSON.stringify({ propertyId }),
+      });
+      await reloadPipelineRows();
+      if (selectedId === propertyId) await loadPropertyDetail(propertyId).catch(() => null);
+      const score = typeof payload.dealScore === "number" && Number.isFinite(payload.dealScore)
+        ? ` Score ${Math.round(payload.dealScore)}/100.`
+        : "";
+      setNotice(`Deal dossier rerun completed.${score}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to rerun deal dossier.");
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function refreshSelectedOmAnalysis() {
+    if (selectedIds.length === 0) return;
+    const rowsToRefresh = selectedRowsWithOm;
+    if (rowsToRefresh.length === 0) {
+      setError("Select at least one property with an uploaded OM before refreshing OM analysis.");
+      return;
+    }
+    const skipped = selectedIds.length - rowsToRefresh.length;
+    const addressById = new Map(
+      rows.map((row) => [row.propertyId, row.displayAddress ?? row.canonicalAddress ?? row.propertyId])
+    );
+    let completed = 0;
+    const failures: Array<{ propertyId: string; address: string; message: string }> = [];
+    setBusyAction("bulk:om-analysis");
+    setNotice(
+      `Updating OM analysis for ${rowsToRefresh.length} propert${rowsToRefresh.length === 1 ? "y" : "ies"}${
+        skipped > 0 ? `; ${skipped} selected without OM skipped` : ""
+      }...`
+    );
+    setError(null);
+    try {
+      for (let index = 0; index < rowsToRefresh.length; index++) {
+        const propertyId = rowsToRefresh[index]!.propertyId;
+        setNotice(
+          `Updating OM analysis ${index + 1} of ${rowsToRefresh.length}: ${
+            addressById.get(propertyId) ?? "selected property"
+          }`
+        );
+        try {
+          await apiFetch<OmRefreshResponse>(`${API_BASE}/api/properties/${propertyId}/refresh-om-financials`, {
+            method: "POST",
+            body: JSON.stringify({ autoPromote: true }),
+          });
+          completed++;
+        } catch (err) {
+          failures.push({
+            propertyId,
+            address: addressById.get(propertyId) ?? propertyId,
+            message: err instanceof Error ? err.message : "Failed to refresh OM analysis.",
+          });
+        }
+      }
+
+      await reloadPipelineRows();
+      if (selectedId) await loadPropertyDetail(selectedId).catch(() => null);
+
+      const skippedMessage = skipped > 0 ? ` ${skipped} selected without OM skipped.` : "";
+      setNotice(
+        failures.length === 0
+          ? `OM analysis updated for ${completed} propert${completed === 1 ? "y" : "ies"}.${skippedMessage}`
+          : `OM analysis updated for ${completed} of ${rowsToRefresh.length} eligible properties.${skippedMessage}`
+      );
+      if (failures.length > 0) {
+        setError(
+          `${failures.length} OM analysis refresh${failures.length === 1 ? "" : "es"} failed. First issue: ${
+            failures[0]!.address
+          } - ${failures[0]!.message}`
+        );
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to refresh selected OM analysis.");
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
   async function rerunSelectedDossiers() {
     if (selectedIds.length === 0) return;
-    const propertyIds = [...selectedIds];
+    const rowsToRerun = selectedRowsWithOm;
+    if (rowsToRerun.length === 0) {
+      setError("Select at least one property with an uploaded OM before rerunning dossiers.");
+      return;
+    }
+    const propertyIds = rowsToRerun.map((row) => row.propertyId);
+    const skipped = selectedIds.length - rowsToRerun.length;
     const addressById = new Map(
       rows.map((row) => [row.propertyId, row.displayAddress ?? row.canonicalAddress ?? row.propertyId])
     );
     let completed = 0;
     const failures: Array<{ propertyId: string; address: string; message: string }> = [];
     setBusyAction("bulk:dossier");
-    setNotice(`Rerunning dossier generation for ${propertyIds.length} propert${propertyIds.length === 1 ? "y" : "ies"}...`);
+    setNotice(
+      `Rerunning dossier generation for ${propertyIds.length} propert${propertyIds.length === 1 ? "y" : "ies"}${
+        skipped > 0 ? `; ${skipped} selected without OM skipped` : ""
+      }...`
+    );
     setError(null);
     try {
       for (let index = 0; index < propertyIds.length; index++) {
@@ -1542,17 +1706,14 @@ export default function PipelineClient() {
         }
       }
 
-      const response = await apiFetch<PipelineResponse>(
-        `${API_BASE}/api/ui-v2/pipeline?${buildPipelineQueryString(queryString)}`
-      );
-      setRows(response.pipeline.rows as PipelineRow[]);
-      setTotal(response.pipeline.total);
+      await reloadPipelineRows();
       if (selectedId) await loadPropertyDetail(selectedId).catch(() => null);
 
+      const skippedMessage = skipped > 0 ? ` ${skipped} selected without OM skipped.` : "";
       setNotice(
         failures.length === 0
-          ? `Dossier generation completed for ${completed} propert${completed === 1 ? "y" : "ies"}.`
-          : `Dossier generation completed for ${completed} of ${propertyIds.length} selected properties.`
+          ? `Dossier generation completed for ${completed} propert${completed === 1 ? "y" : "ies"}.${skippedMessage}`
+          : `Dossier generation completed for ${completed} of ${propertyIds.length} eligible properties.${skippedMessage}`
       );
       if (failures.length > 0) {
         setError(
@@ -2406,6 +2567,7 @@ export default function PipelineClient() {
   const sheetBroker = selectedProperty?.broker ?? selectedRow?.broker ?? null;
   const sheetStatus = selectedProperty?.statusChip ?? selectedRow?.statusChip ?? null;
   const sheetTags = selectedProperty?.tags ?? selectedRow?.tags ?? [];
+  const sheetHasOm = propertyDetailHasOm(selectedProperty) || pipelineRowHasOm(selectedRow);
   const selectedDealPath = selectedProperty?.dealPath ?? selectedRow?.dealPath ?? null;
   const sheetMarketType = selectedProperty?.overview.marketType ?? selectedRow?.marketType ?? "unknown";
   const sheetDocuments = selectedProperty?.documents ?? [];
@@ -2586,8 +2748,25 @@ export default function PipelineClient() {
           <button
             className={styles.secondaryButton}
             type="button"
-            title="Regenerate the selected properties' deal dossier PDFs and Excel workbooks using saved assumptions."
-            disabled={selectedIds.length === 0 || busyAction?.startsWith("bulk:")}
+            title={
+              selectedRowsWithOm.length === 0
+                ? "Select at least one property with an uploaded OM."
+                : "Refresh and promote OM extraction for selected properties with uploaded OMs."
+            }
+            disabled={selectedRowsWithOm.length === 0 || busyAction?.startsWith("bulk:")}
+            onClick={refreshSelectedOmAnalysis}
+          >
+            {busyAction === "bulk:om-analysis" ? "Updating OM..." : "Update OM analysis"}
+          </button>
+          <button
+            className={styles.secondaryButton}
+            type="button"
+            title={
+              selectedRowsWithOm.length === 0
+                ? "Select at least one property with an uploaded OM."
+                : "Regenerate the selected properties' deal dossier PDFs and Excel workbooks using saved assumptions."
+            }
+            disabled={selectedRowsWithOm.length === 0 || busyAction?.startsWith("bulk:")}
             onClick={rerunSelectedDossiers}
           >
             {busyAction === "bulk:dossier" ? "Rerunning dossiers..." : "Rerun dossiers"}
@@ -3034,6 +3213,26 @@ export default function PipelineClient() {
               <button className={styles.primaryButton} type="button" onClick={(event) => emailBroker(selectedId, "property_sheet", event)}>
                 Email broker
               </button>
+              {sheetHasOm ? (
+                <>
+                  <button
+                    className={styles.secondaryButton}
+                    type="button"
+                    disabled={busyAction === `${selectedId}:om-analysis` || busyAction?.startsWith("bulk:")}
+                    onClick={() => refreshOmAnalysisForProperty(selectedId)}
+                  >
+                    {busyAction === `${selectedId}:om-analysis` ? "Updating OM..." : "Update OM analysis"}
+                  </button>
+                  <button
+                    className={styles.secondaryButton}
+                    type="button"
+                    disabled={busyAction === `${selectedId}:dossier` || busyAction?.startsWith("bulk:")}
+                    onClick={() => rerunDossierForProperty(selectedId)}
+                  >
+                    {busyAction === `${selectedId}:dossier` ? "Rerunning..." : "Rerun dossier"}
+                  </button>
+                </>
+              ) : null}
               {terminalStatus ? (
                 <button className={styles.secondaryButton} type="button" onClick={() => restoreDeal(selectedId, "property_sheet")}>
                   Restore
@@ -3363,164 +3562,6 @@ export default function PipelineClient() {
                     </div>
                   </section>
                 </div>
-              ) : null}
-
-              {sheetTab === "Deal Path" ? (
-                <section className={styles.sheetPanel}>
-                  <div className={styles.sectionHeading}>
-                    <h3>Deal Path</h3>
-                    <span className={cx(styles.statusPill, dealPathToneClass(selectedDealPath))}>
-                      {selectedDealPath?.statusLabel ?? "Not Scheduled"}
-                    </span>
-                  </div>
-                  <div className={styles.dealPathSummary}>
-                    <div>
-                      <span>Tour</span>
-                      <strong>{formatDateTime(selectedDealPath?.tourScheduledAt)}</strong>
-                    </div>
-                    <div>
-                      <span>Decision</span>
-                      <strong>{titleize(selectedDealPath?.postTourDecision ?? "pending")}</strong>
-                    </div>
-                    <div>
-                      <span>Target</span>
-                      <strong>{formatCurrency(selectedDealPath?.targetPrice, false)}</strong>
-                    </div>
-                    <div>
-                      <span>Offer</span>
-                      <strong>{formatCurrency(selectedDealPath?.offerAmount, false)}</strong>
-                    </div>
-                  </div>
-                  {selectedDealPath?.status === "tour_completed_awaiting_inputs" ? (
-                    <div className={styles.dealPathNotice}>
-                      Tour date has passed. Add notes, offer intent, target pricing, contingencies, or a rejection reason.
-                    </div>
-                  ) : null}
-                  <form className={styles.dealPathForm} onSubmit={saveDealPath}>
-                    <label>
-                      Tour date and time
-                      <input
-                        type="datetime-local"
-                        value={dealPathForm.tourScheduledAt}
-                        onChange={(event) => updateDealPathField("tourScheduledAt", event.target.value)}
-                      />
-                    </label>
-                    <label>
-                      Post-tour decision
-                      <select
-                        value={dealPathForm.postTourDecision}
-                        onChange={(event) =>
-                          updateDealPathField("postTourDecision", event.target.value as UiV2DealPathDecision)
-                        }
-                      >
-                        <option value="pending">Pending inputs</option>
-                        <option value="move_forward">Move forward with offer</option>
-                        <option value="need_more_info">Need more information</option>
-                        <option value="reject">Reject after tour</option>
-                      </select>
-                    </label>
-                    <label>
-                      Target price
-                      <input
-                        inputMode="numeric"
-                        value={dealPathForm.targetPrice}
-                        onChange={(event) => updateDealPathField("targetPrice", event.target.value)}
-                        placeholder="12000000"
-                      />
-                    </label>
-                    <label>
-                      Offer amount
-                      <input
-                        inputMode="numeric"
-                        value={dealPathForm.offerAmount}
-                        onChange={(event) => updateDealPathField("offerAmount", event.target.value)}
-                        placeholder="11250000"
-                      />
-                    </label>
-                    <label className={styles.formSpanTwo}>
-                      Tour notes
-                      <textarea
-                        rows={4}
-                        value={dealPathForm.tourNotes}
-                        onChange={(event) => updateDealPathField("tourNotes", event.target.value)}
-                        placeholder="Tour takeaways, condition, broker comments, follow-up questions"
-                      />
-                    </label>
-                    <label className={styles.formSpanTwo}>
-                      Offer notes
-                      <textarea
-                        rows={3}
-                        value={dealPathForm.offerNotes}
-                        onChange={(event) => updateDealPathField("offerNotes", event.target.value)}
-                        placeholder="Rationale for offer, pricing read, partner feedback"
-                      />
-                    </label>
-                    <label className={styles.formSpanTwo}>
-                      LOI contingencies
-                      <textarea
-                        rows={4}
-                        value={dealPathForm.loiContingenciesText}
-                        onChange={(event) => updateDealPathField("loiContingenciesText", event.target.value)}
-                        placeholder="Financing contingency&#10;Due diligence period&#10;Rent roll verification"
-                      />
-                    </label>
-                    <label className={styles.formSpanTwo}>
-                      LOI contingency notes
-                      <textarea
-                        rows={3}
-                        value={dealPathForm.loiContingencyNotes}
-                        onChange={(event) => updateDealPathField("loiContingencyNotes", event.target.value)}
-                        placeholder="Timing, diligence needs, third-party reports, deposit terms"
-                      />
-                    </label>
-                    {dealPathForm.postTourDecision === "reject" ? (
-                      <>
-                        <label>
-                          Rejection reason
-                          <select
-                            value={dealPathForm.rejectionReasonCode}
-                            onChange={(event) =>
-                              updateDealPathField("rejectionReasonCode", event.target.value as UiV2RejectionReasonCode | "")
-                            }
-                            required
-                          >
-                            <option value="">Select reason</option>
-                            {UI_V2_REJECTION_REASON_OPTIONS.map((option) => (
-                              <option key={option.code} value={option.code}>
-                                {option.label}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                        <label>
-                          Rejection notes
-                          <textarea
-                            rows={3}
-                            value={dealPathForm.rejectionNotes}
-                            onChange={(event) => updateDealPathField("rejectionNotes", event.target.value)}
-                            placeholder="Why we are passing after the tour"
-                          />
-                        </label>
-                      </>
-                    ) : null}
-                    <div className={styles.sourceFactsFormActions}>
-                      <button
-                        className={styles.secondaryButton}
-                        type="button"
-                        onClick={() => setDealPathForm(dealPathFormFromState(selectedDealPath))}
-                      >
-                        Reset
-                      </button>
-                      <button className={styles.primaryButton} type="submit" disabled={busyAction === `${selectedId}:deal-path`}>
-                        {busyAction === `${selectedId}:deal-path`
-                          ? "Saving..."
-                          : dealPathForm.postTourDecision === "reject"
-                            ? "Reject after tour"
-                            : "Save deal path"}
-                      </button>
-                    </div>
-                  </form>
-                </section>
               ) : null}
 
               {sheetTab === "Enrichment" ? (

@@ -103,8 +103,11 @@
 
 .metrics {
   display: grid;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(11rem, 1fr);
   gap: 0.55rem;
+  overflow-x: auto;
+  padding-bottom: 0.1rem;
 }
 
 .metric {
@@ -248,6 +251,7 @@
 
 .bulkStageSelect,
 .bulkMoveButton,
+.bulkWorkflowButton,
 .bulkClearButton {
   min-height: 1.85rem;
   border-radius: 6px;
@@ -263,6 +267,7 @@
 }
 
 .bulkMoveButton,
+.bulkWorkflowButton,
 .bulkClearButton {
   display: inline-flex;
   align-items: center;
@@ -278,12 +283,18 @@
   color: var(--app-surface);
 }
 
+.bulkWorkflowButton {
+  background: var(--app-surface);
+  color: var(--app-accent);
+}
+
 .bulkClearButton {
   background: var(--app-surface);
   color: var(--app-ink-secondary);
 }
 
 .bulkMoveButton:disabled,
+.bulkWorkflowButton:disabled,
 .bulkClearButton:disabled,
 .bulkStageSelect:disabled {
   cursor: wait;
@@ -328,9 +339,11 @@
 }
 
 .flowSections {
-  overflow-x: auto;
   align-items: start;
-  grid-template-columns: repeat(7, minmax(13rem, 1fr));
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(18.5rem, 21rem);
+  grid-template-columns: none;
+  overflow-x: auto;
 }
 
 .tagSections {
@@ -384,14 +397,19 @@
 
 .miniRow {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  gap: 0.34rem;
-  align-items: center;
+  gap: 0.42rem;
   min-height: 2.55rem;
-  padding: 0.42rem 0.6rem;
+  padding: 0.52rem 0.6rem;
   border-bottom: 1px solid var(--app-line-subtle);
   color: var(--app-ink);
   cursor: grab;
+}
+
+.miniRowMain {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 0.4rem;
+  align-items: center;
 }
 
 .miniRow:last-child {
@@ -405,6 +423,11 @@
 .miniRowSelected {
   background: color-mix(in srgb, var(--app-accent-teal) 11%, var(--app-surface));
   box-shadow: inset 2px 0 0 var(--app-accent-teal);
+}
+
+.miniRowNeedsInput {
+  background: color-mix(in srgb, var(--app-amber) 8%, var(--app-surface));
+  box-shadow: inset 2px 0 0 var(--app-amber);
 }
 
 .miniRowBusy {
@@ -445,6 +468,146 @@
   color: var(--app-muted);
   font-size: 0.65rem;
   line-height: 1.18;
+}
+
+.miniRowDetails {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.3rem;
+  color: var(--app-muted);
+  font-size: 0.62rem;
+}
+
+.miniRowDetails span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tourInputNotice {
+  border: 1px solid var(--app-amber-border);
+  border-radius: 7px;
+  padding: 0.42rem 0.5rem;
+  background: var(--app-amber-soft);
+  color: var(--app-amber);
+  font-size: 0.68rem;
+  font-weight: 760;
+  line-height: 1.25;
+}
+
+.workflowBadges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.28rem;
+}
+
+.workflowBadgeReady,
+.workflowBadgeMuted,
+.workflowBadgeAction {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.1rem;
+  border: 1px solid var(--app-line);
+  border-radius: 999px;
+  padding: 0.1rem 0.42rem;
+  font-size: 0.58rem;
+  font-weight: 820;
+  line-height: 1;
+}
+
+.workflowBadgeReady {
+  border-color: var(--app-green-border);
+  background: var(--app-green-soft);
+  color: var(--app-green);
+}
+
+.workflowBadgeMuted {
+  background: var(--app-surface-raised);
+  color: var(--app-muted);
+}
+
+.workflowBadgeAction {
+  border-color: var(--app-amber-border);
+  background: var(--app-amber-soft);
+  color: var(--app-amber);
+}
+
+.pathEditButton {
+  justify-self: start;
+  min-height: 1.7rem;
+  border: 1px solid var(--app-line-strong);
+  border-radius: 6px;
+  padding: 0.24rem 0.54rem;
+  background: var(--app-surface);
+  color: var(--app-accent);
+  font-size: 0.68rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.pathEditButton:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.dealPathInlineForm {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.52rem;
+  margin-top: 0.12rem;
+  padding: 0.62rem;
+  border: 1px solid var(--app-line);
+  border-radius: 8px;
+  background: var(--app-surface-raised);
+}
+
+.dealPathInlineForm label {
+  display: grid;
+  gap: 0.24rem;
+  min-width: 0;
+  color: var(--app-ink-secondary);
+  font-size: 0.62rem;
+  font-weight: 820;
+  text-transform: uppercase;
+}
+
+.dealPathInlineForm input,
+.dealPathInlineForm select,
+.dealPathInlineForm textarea {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--app-line-strong);
+  border-radius: 6px;
+  background: var(--app-surface);
+  color: var(--app-ink);
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 560;
+  text-transform: none;
+}
+
+.dealPathInlineForm input,
+.dealPathInlineForm select {
+  min-height: 2rem;
+  padding: 0.34rem 0.5rem;
+}
+
+.dealPathInlineForm textarea {
+  min-height: 4.5rem;
+  resize: vertical;
+  padding: 0.45rem 0.5rem;
+  line-height: 1.35;
+}
+
+.dealPathWideField,
+.dealPathFormActions {
+  grid-column: 1 / -1;
+}
+
+.dealPathFormActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.42rem;
 }
 
 .tagLine {
@@ -536,10 +699,17 @@
   background: var(--app-surface-raised);
 }
 
+.notice,
 .error,
 .emptyState {
   padding: 0.9rem 1.05rem;
   border-radius: 8px;
+}
+
+.notice {
+  border: 1px solid var(--app-green-border);
+  background: var(--app-green-soft);
+  color: var(--app-green);
 }
 
 .error {

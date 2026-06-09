@@ -176,6 +176,8 @@ GEMINI RESPONSE RULES:
 - propertyInfo.totalUnits must be the selected unit count after reconciliation. rentRoll must still include every rent-bearing row, even if one tenant leases multiple spaces and rentRoll rows exceed totalUnits.
 - If a narrative/unit summary conflicts with the detailed rent roll, choose one value for calculations, record the conflict in reportedDiscrepancies, and explain exactly why.
 - Use exact CURRENT / IN-PLACE figures. Do not put pro forma numbers into income, noiReported, uiFinancialSummary, or valuationMetrics.
+- In rent-roll tables with adjacent columns like "Rent ($) PSF", "Monthly", and "Annual", never map the rent PSF value into monthlyRent/monthlyBaseRent/monthlyTotalRent. Put the actual monthly dollar column into monthly rent fields, put the annual dollar column into annual rent fields, and preserve the PSF value only as rentPsf or in notes.
+- Gross rent / LTR calculations must sum actual monthly or annual rents, not annual rent per square foot values. If only rent PSF and square footage are available, derive annual rent as rentPsf * sqft and monthly rent as annual / 12, and state that derivation in notes.
 - Preserve exact dollar amounts from the OM. Do not shift decimals or simplify values.`;
 }
 

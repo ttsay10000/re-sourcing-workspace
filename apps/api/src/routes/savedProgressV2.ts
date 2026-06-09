@@ -11,6 +11,7 @@ import type {
   DealStatus,
   SavedDeal,
   UiV2DealProgressSummaryResponse,
+  UiV2DealPathState,
   UiV2PipelineStatus,
   UiV2SavedDealsListResponse,
 } from "@re-sourcing/contracts";
@@ -24,7 +25,7 @@ const router = Router();
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 250;
-const PROGRESS_SECTION_LIMIT = 12;
+const PROGRESS_SECTION_LIMIT = 250;
 
 const DEAL_STATUSES = new Set<DealStatus>(["new", "interesting", "saved", "dossier_generated", "rejected"]);
 const UI_V2_STATUSES = new Set<UiV2PipelineStatus>([
@@ -157,25 +158,30 @@ interface ProgressPropertyRow {
   source: string | null;
   price: number | null;
   units: number | null;
+  pricePerSqft: number | null;
   dealScore: number | null;
   status: UiV2PipelineStatus;
   savedDealStatus: string | null;
   tags: string[];
   omStatus: string;
+  hasOm: boolean;
+  hasComps: boolean;
+  hasDossier: boolean;
+  dealPath: UiV2DealPathState | null;
   openActionItemCount: number;
   updatedAt: string;
 }
 
 interface ProgressSection {
   id:
-    | "saved"
+    | "om_requested"
     | "underwriting"
     | "tour_scheduled"
     | "tour_completed_awaiting_inputs"
-    | "outreach"
-    | "awaiting_broker"
-    | "om_received"
-    | "rejected";
+    | "offer_review"
+    | "negotiation"
+    | "contract_signed"
+    | "deal_closed";
   label: string;
   count: number;
   rows: ProgressPropertyRow[];
@@ -525,6 +531,11 @@ function deriveOmStatus(row: SavedProgressBaseRow): string {
   return "none";
 }
 
+function readDealPath(details: JsonRecord | null): UiV2DealPathState | null {
+  const pipeline = readPipeline(details);
+  return isJsonRecord(pipeline.dealPath) ? (pipeline.dealPath as unknown as UiV2DealPathState) : null;
+}
+
 function hasUnderwritingDocumentCategory(row: SavedProgressBaseRow): boolean {
   const categories = Array.isArray(row.uploaded_categories) ? row.uploaded_categories : [];
   return categories.some((category) =>
@@ -771,11 +782,16 @@ function mapProgressRow(row: SavedProgressBaseRow): ProgressPropertyRow {
     source: saved.source,
     price: saved.price,
     units: saved.units,
+    pricePerSqft: saved.pricePerSqft,
     dealScore: saved.dealScore,
     status: saved.status,
     savedDealStatus: row.saved_deal_status,
     tags: saved.tags,
     omStatus: saved.omStatus,
+    hasOm: saved.hasOm,
+    hasComps: saved.hasComps,
+    hasDossier: saved.hasDossier,
+    dealPath: readDealPath(row.details),
     openActionItemCount: saved.openActionItemCount,
     updatedAt: saved.updatedAt,
   };
@@ -975,21 +991,53 @@ async function fetchProgressRows(pool: Pool, userId: string, hasRejections: bool
 
 function buildProgressSections(rows: ProgressPropertyRow[]): ProgressSection[] {
   const sectionLabels: Record<ProgressSection["id"], string> = {
-    saved: "Saved Deals",
+    om_requested: "OM Requested",
     underwriting: "Underwriting",
-    tour_scheduled: "Tour Scheduled",
-    tour_completed_awaiting_inputs: "Tour Completed - Awaiting Inputs",
-    outreach: "OM Requested",
-    awaiting_broker: "OM Requested",
-    om_received: "OM Received",
-    rejected: "Rejected",
+    tour_scheduled: "Tour Requested",
+    tour_completed_awaiting_inputs: "Tour Completed",
+    offer_review: "LOI Offered",
+    negotiation: "Negotiation",
+    contract_signed: "Contract Signed/Diligence",
+    deal_closed: "Deal Closed",
   };
-  const ids = Object.keys(sectionLabels) as ProgressSection["id"][];
+  const ids: ProgressSection["id"][] = [
+    "om_requested",
+    "underwriting",
+    "tour_scheduled",
+    "tour_completed_awaiting_inputs",
+    "offer_review",
+    "negotiation",
+    "contract_signed",
+    "deal_closed",
+  ];
+  const claimed = new Set<string>();
   return ids.map((id) => {
-    const matches =
-      id === "saved"
-        ? rows.filter((row) => row.savedDealStatus != null || row.status === "saved")
-        : rows.filter((row) => row.status === id);
+    const matches = rows.filter((row) => {
+      if (claimed.has(row.propertyId)) return false;
+      if (row.status === "rejected" || row.status === "archived") return false;
+      const isLaterDealStage = [
+        "tour_scheduled",
+        "tour_completed_awaiting_inputs",
+        "offer_review",
+        "negotiation",
+        "contract_signed",
+        "deal_closed",
+      ].includes(row.status);
+      const matched =
+        id === "om_requested"
+          ? row.status === "outreach" || row.status === "awaiting_broker"
+          : id === "underwriting"
+            ? !isLaterDealStage &&
+              (row.status === "underwriting" ||
+              row.status === "om_received" ||
+              row.status === "dossier_generated" ||
+              row.status === "saved" ||
+              row.hasOm ||
+              row.savedDealStatus != null)
+            : row.status === id;
+      if (matched) claimed.add(row.propertyId);
+      return matched;
+    });
     return {
       id,
       label: sectionLabels[id],
@@ -1059,12 +1107,12 @@ router.get("/ui-v2/deal-progress", async (_req: Request, res: Response) => {
     ]));
     const response: DealProgressV2Response = {
       summary: {
-        savedCount: sectionCount("saved"),
+        savedCount: sectionCount("underwriting"),
         underwritingCount: sectionCount("underwriting"),
-        outreachCount: sectionCount("outreach"),
-        awaitingBrokerCount: sectionCount("awaiting_broker"),
-        omReceivedCount: sectionCount("om_received"),
-        rejectedCount: sectionCount("rejected"),
+        outreachCount: sectionCount("om_requested"),
+        awaitingBrokerCount: sectionCount("om_requested"),
+        omReceivedCount: sectionCount("underwriting"),
+        rejectedCount: rows.filter((row) => row.status === "rejected").length,
         updatedAt,
       },
       sections,

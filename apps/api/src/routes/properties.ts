@@ -2751,13 +2751,16 @@ router.post("/properties/:id/refresh-om-financials", async (req: Request, res: R
       res.status(400).json({ error: "Property ID required." });
       return;
     }
+    const requestBody = isPlainRecord(req.body) ? req.body : {};
+    const autoPromote = requestBody.autoPromote === true;
+    const triggerDossier = requestBody.triggerDossier === true;
     workflowRunId = await createWorkflowRun({
       runType: "refresh_om_financials",
       displayName: "Refresh OM financials",
       scopeLabel: "1 property",
       triggerSource: "manual",
       totalItems: 1,
-      metadata: { propertyIds: [propertyId.trim()] },
+      metadata: { propertyIds: [propertyId.trim()], autoPromote, triggerDossier },
       steps: [
         {
           stepKey: "om_financials",
@@ -2769,7 +2772,10 @@ router.post("/properties/:id/refresh-om-financials", async (req: Request, res: R
       ],
     });
     const pool = getPool();
-    const result = await refreshOmFinancialsForProperty(propertyId.trim(), pool);
+    const result = await refreshOmFinancialsForProperty(propertyId.trim(), pool, {
+      autoPromote,
+      triggerDossier,
+    });
     if (result.error) {
       await upsertWorkflowStep(workflowRunId, {
         stepKey: "om_financials",

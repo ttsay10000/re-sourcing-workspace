@@ -18,6 +18,19 @@ function hasMeaningfulValue(value: unknown): boolean {
   return true;
 }
 
+function toFiniteNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const parsed = Number(value.replace(/[$,%\s,]/g, ""));
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function roundDollar(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
 function normalizedLabel(value: unknown): string {
   if (typeof value !== "string") return "";
   return value
@@ -38,6 +51,9 @@ export function isAggregateRentRollLabel(value: unknown): boolean {
     "total rent roll",
     "gross rent total",
     "unit total",
+    "total rentable space",
+    "average total",
+    "average totals",
     "subtotal",
     "summary",
   ].includes(label);
@@ -108,12 +124,89 @@ export function rentRollQualityScore(rows: unknown[]): number {
   return rows.reduce<number>((sum, row) => sum + rowQualityScore(row), 0);
 }
 
+function appendCorrectionNote(row: Record<string, unknown>, note: string): void {
+  const current = typeof row.notes === "string" && row.notes.trim().length > 0 ? row.notes.trim() : "";
+  if (current.toLowerCase().includes(note.toLowerCase())) return;
+  row.notes = current ? `${current}; ${note}` : note;
+}
+
+function hasRentPsfEvidence(row: Record<string, unknown>): boolean {
+  const psfKeys = [
+    "rentPsf",
+    "rentPSF",
+    "rentPerSf",
+    "rentPerSF",
+    "rentPerSqft",
+    "rentPerSqFt",
+    "rentPerSquareFoot",
+    "annualRentPsf",
+  ];
+  if (psfKeys.some((key) => toFiniteNumber(row[key]) != null)) return true;
+
+  const text = [
+    row.notes,
+    row.note,
+    row.rentType,
+    row.leaseType,
+  ]
+    .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+    .join(" ");
+
+  return /\bpsf\b|\$?\s*\/\s*sf\b|per\s+(?:sf|square\s+foot)/i.test(text);
+}
+
+function correctRentPsfMonthlyConfusion(row: OmRentRollRow): OmRentRollRow {
+  const normalized: Record<string, unknown> = { ...row };
+  const sqft = toFiniteNumber(normalized.sqft);
+  if (sqft == null || sqft < 100) return row;
+  const rentPsfEvidence = hasRentPsfEvidence(normalized);
+
+  const pairs = [
+    ["monthlyRent", "annualRent"],
+    ["monthlyBaseRent", "annualBaseRent"],
+    ["monthlyTotalRent", "annualTotalRent"],
+  ] as const;
+
+  for (const [monthlyKey, annualKey] of pairs) {
+    const monthly = toFiniteNumber(normalized[monthlyKey]);
+    const annual = toFiniteNumber(normalized[annualKey]);
+    const monthlyLooksLikeAnnualRentPsf = monthly != null && monthly > 0 && monthly <= 250;
+    const annualLooksLikeAnnualRentPsf = annual != null && annual > 0 && annual <= 250;
+
+    if (monthlyLooksLikeAnnualRentPsf) {
+      const monthlyFromAnnual = annual != null && !annualLooksLikeAnnualRentPsf && annual / 12 >= 500 ? annual / 12 : null;
+      const annualFromPsf = monthly * sqft;
+      const monthlyFromPsf = annualFromPsf / 12;
+      const canDeriveFromPsf = rentPsfEvidence || annualLooksLikeAnnualRentPsf;
+      const replacement = monthlyFromAnnual ?? (canDeriveFromPsf && monthlyFromPsf >= 500 ? monthlyFromPsf : null);
+      if (replacement != null && replacement > monthly * 3) {
+        normalized.rentPsf = normalized.rentPsf ?? monthly;
+        normalized[monthlyKey] = roundDollar(replacement);
+        if (annual == null || annualLooksLikeAnnualRentPsf) normalized[annualKey] = roundDollar(annualFromPsf);
+        appendCorrectionNote(normalized, "Monthly rent corrected from rent PSF using SF/annual rent context");
+      }
+    } else if (annualLooksLikeAnnualRentPsf) {
+      const annualFromPsf = annual * sqft;
+      if (annualFromPsf >= 6_000) {
+        normalized.rentPsf = normalized.rentPsf ?? annual;
+        normalized[annualKey] = roundDollar(annualFromPsf);
+        if (monthly == null || monthly <= 250) normalized[monthlyKey] = roundDollar(annualFromPsf / 12);
+        appendCorrectionNote(normalized, "Annual rent corrected from rent PSF using SF context");
+      }
+    }
+  }
+
+  return normalized as OmRentRollRow;
+}
+
 export function sanitizeOmRentRollRows(rows: OmRentRollRow[] | null | undefined): OmRentRollRow[] {
   if (!Array.isArray(rows)) return [];
-  return rows.filter(
-    (row): row is OmRentRollRow =>
-      !!row && !isAggregateRentRollRow(row) && !isPlaceholderRentRollRow(row)
-  );
+  return rows
+    .filter(
+      (row): row is OmRentRollRow =>
+        !!row && !isAggregateRentRollRow(row) && !isPlaceholderRentRollRow(row)
+    )
+    .map((row) => correctRentPsfMonthlyConfusion(row));
 }
 
 export function sanitizeRentalNumberRows(

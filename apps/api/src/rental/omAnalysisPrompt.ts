@@ -172,6 +172,8 @@ notes
 Rules:
 
 • For residential rows, use unit identifiers (e.g. "3", "4A"). For commercial rows, use storefront / suite / tenant label if that is how the OM presents the space.
+• IMPORTANT rent table edge case: if a rent roll has adjacent columns such as "Rent ($) PSF", "Monthly", and "Annual", the "$/PSF" value is annual rent per square foot, not monthly rent. Put the actual Monthly column into monthlyRent/monthlyBaseRent/monthlyTotalRent, put the Annual column into annualRent/annualBaseRent/annualTotalRent, and preserve the PSF value only in notes or a rentPsf field.
+• Gross rent / LTR calculations must sum actual monthly or annual rents, not rent PSF values. If only annual rent PSF and square footage are provided, derive annualRent = rentPsf * sqft and monthlyRent = annualRent / 12, and state that derivation in notes.
 • annualRent = monthlyRent * 12 if annualRent missing
 • For commercial rows, capture lease timing, reimbursements, and rent escalations whenever provided.
 • rentRoll should include both residential and commercial entries. Set unitCategory clearly so downstream calculations can separate the rent streams when needed.
