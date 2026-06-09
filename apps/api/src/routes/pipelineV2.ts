@@ -6,7 +6,7 @@
  */
 
 import { Router, type Request, type Response } from "express";
-import type { Pool } from "pg";
+import type { Pool, PoolClient } from "pg";
 import { deriveListingActivitySummary, describeListingActivity } from "@re-sourcing/contracts";
 import {
   DocumentRepo,
@@ -2748,6 +2748,172 @@ async function updatePipelineState(
   return propertyRepo.byId(propertyId);
 }
 
+const PROPERTY_MERGE_REASSIGN_TABLES = [
+  "property_uploaded_documents",
+  "property_inquiry_documents",
+  "documents",
+  "om_ingestion_runs",
+  "om_extracted_snapshots",
+  "deal_signals",
+  "broker_comp_packages",
+  "broker_comp_extracted_items",
+  "broker_comp_promoted_items",
+] as const;
+
+function detailsRecord(details: PropertyDetails | null | undefined): Record<string, unknown> {
+  return isPlainRecord(details) ? details : {};
+}
+
+function mergedSourceProperties(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value) ? value.filter(isPlainRecord) : [];
+}
+
+function mergePropertyDetailsForTarget(input: {
+  source: Property;
+  target: Property;
+  actorName: string;
+  now: string;
+}): Record<string, unknown> {
+  const sourceDetails = detailsRecord(input.source.details);
+  const targetDetails = detailsRecord(input.target.details);
+  const sourceManualLinks = isPlainRecord(sourceDetails.manualSourceLinks) ? sourceDetails.manualSourceLinks : {};
+  const targetManualLinks = isPlainRecord(targetDetails.manualSourceLinks) ? targetDetails.manualSourceLinks : {};
+  const mergedSourceProperty = {
+    propertyId: input.source.id,
+    canonicalAddress: input.source.canonicalAddress,
+    mergedAt: input.now,
+    mergedBy: input.actorName,
+  };
+  const mergedHistory = [
+    ...mergedSourceProperties(sourceDetails.mergedSourceProperties),
+    ...mergedSourceProperties(targetDetails.mergedSourceProperties),
+    mergedSourceProperty,
+  ];
+  const seen = new Set<string>();
+  const uniqueHistory = mergedHistory.filter((entry) => {
+    const propertyId = stringOrNull(entry.propertyId);
+    if (!propertyId) return true;
+    if (seen.has(propertyId)) return false;
+    seen.add(propertyId);
+    return true;
+  });
+  return {
+    ...sourceDetails,
+    ...targetDetails,
+    manualSourceLinks: {
+      ...sourceManualLinks,
+      ...targetManualLinks,
+      mergedFromPropertyIds: uniqueStrings([
+        ...(Array.isArray(targetManualLinks.mergedFromPropertyIds) ? targetManualLinks.mergedFromPropertyIds : []),
+        input.source.id,
+      ]),
+      lastMergedFromPropertyId: input.source.id,
+      lastMergedAt: input.now,
+      lastMergedBy: input.actorName,
+    },
+    mergedSourceProperties: uniqueHistory,
+  };
+}
+
+function mergePropertyDetailsForArchivedSource(input: {
+  source: Property;
+  target: Property;
+  actorName: string;
+  now: string;
+}): Record<string, unknown> {
+  const sourceDetails = detailsRecord(input.source.details);
+  const existing = readPipelineState(input.source.details);
+  const previousUiV2Status = existing.uiV2Status ?? mapLegacyStatus(existing.status);
+  return {
+    ...sourceDetails,
+    pipeline: {
+      ...existing,
+      status: "rejected_removed",
+      uiV2Status: "archived",
+      previousStatus: existing.status,
+      previousUiV2Status,
+      rejectedAt: input.now,
+      rejectionReason: `Merged into ${input.target.canonicalAddress}`,
+      rejection: {
+        reasonCode: "duplicate",
+        note: `Merged into ${input.target.canonicalAddress}`,
+        rejectedAt: input.now,
+      },
+      tags: uniqueStrings([...existing.tags, "duplicate", "merged"]),
+      lastActivityAt: input.now,
+    },
+    mergedIntoPropertyId: input.target.id,
+    mergedIntoCanonicalAddress: input.target.canonicalAddress,
+    mergedAt: input.now,
+    mergedBy: input.actorName,
+  };
+}
+
+async function reassignPropertyReferences(
+  client: PoolClient,
+  sourcePropertyId: string,
+  targetPropertyId: string
+): Promise<Record<string, number>> {
+  const counts: Record<string, number> = {};
+  for (const table of PROPERTY_MERGE_REASSIGN_TABLES) {
+    const result = await client.query(
+      `UPDATE ${table}
+       SET property_id = $1
+       WHERE property_id = $2`,
+      [targetPropertyId, sourcePropertyId]
+    );
+    counts[table] = result.rowCount ?? 0;
+  }
+  await client.query(
+    `UPDATE om_authoritative_snapshots source_snap
+     SET is_active = false,
+         updated_at = now()
+     WHERE source_snap.property_id = $2
+       AND source_snap.is_active = true
+       AND EXISTS (
+         SELECT 1
+         FROM om_authoritative_snapshots target_snap
+         WHERE target_snap.property_id = $1
+           AND target_snap.is_active = true
+       )`,
+    [targetPropertyId, sourcePropertyId]
+  );
+  const authoritative = await client.query(
+    `UPDATE om_authoritative_snapshots
+     SET property_id = $1,
+         updated_at = now()
+     WHERE property_id = $2`,
+    [targetPropertyId, sourcePropertyId]
+  );
+  counts.om_authoritative_snapshots = authoritative.rowCount ?? 0;
+
+  await client.query(
+    `INSERT INTO listing_property_matches (listing_id, property_id, confidence, reasons, status)
+     SELECT
+       listing_id,
+       $1,
+       confidence,
+       COALESCE(reasons, '{}'::jsonb) || jsonb_build_object('mergedFromPropertyId', $2),
+       status
+     FROM listing_property_matches
+     WHERE property_id = $2
+     ON CONFLICT (listing_id, property_id) DO UPDATE SET
+       confidence = GREATEST(listing_property_matches.confidence, EXCLUDED.confidence),
+       reasons = COALESCE(listing_property_matches.reasons, '{}'::jsonb) || EXCLUDED.reasons,
+       status = CASE
+         WHEN listing_property_matches.status = 'accepted' OR EXCLUDED.status = 'accepted' THEN 'accepted'::match_status
+         ELSE listing_property_matches.status
+       END`,
+    [targetPropertyId, sourcePropertyId]
+  );
+  const deletedMatches = await client.query(
+    "DELETE FROM listing_property_matches WHERE property_id = $1",
+    [sourcePropertyId]
+  );
+  counts.listing_property_matches = deletedMatches.rowCount ?? 0;
+  return counts;
+}
+
 const MANUAL_SOURCE_FACT_NUMERIC_ALIASES: Record<string, string> = {
   askingPrice: "askingPrice",
   listedPrice: "askingPrice",
@@ -2945,10 +3111,114 @@ router.get("/ui-v2/properties/:id", async (req: Request, res: Response) => {
   }
 });
 
+router.post("/ui-v2/properties/:id/merge-into", async (req: Request, res: Response) => {
+  const sourcePropertyId = req.params.id;
+  const body = isPlainRecord(req.body) ? req.body : {};
+  const targetPropertyId = stringOrNull(body.targetPropertyId);
+  if (!sourcePropertyId || !targetPropertyId) {
+    res.status(400).json({ error: "source property id and targetPropertyId are required." });
+    return;
+  }
+  if (sourcePropertyId === targetPropertyId) {
+    res.status(400).json({ error: "Cannot merge a property into itself." });
+    return;
+  }
+
+  const pool = getPool();
+  const client = await pool.connect();
+  const actorName = stringOrNull(body.actorName) ?? "ui-v2";
+  const now = new Date().toISOString();
+  try {
+    await client.query("BEGIN");
+    const propertyRepo = new PropertyRepo({ pool, client });
+    const source = await propertyRepo.byId(sourcePropertyId);
+    const target = await propertyRepo.byId(targetPropertyId);
+    if (!source || !target) {
+      await client.query("ROLLBACK");
+      res.status(404).json({
+        error: !source ? "Source property not found." : "Target property not found.",
+        sourcePropertyId,
+        targetPropertyId,
+      });
+      return;
+    }
+
+    const mergedTargetDetails = mergePropertyDetailsForTarget({ source, target, actorName, now });
+    const archivedSourceDetails = mergePropertyDetailsForArchivedSource({ source, target, actorName, now });
+    await client.query(
+      `UPDATE properties
+       SET details = $2::jsonb,
+           updated_at = now()
+       WHERE id = $1`,
+      [targetPropertyId, JSON.stringify(mergedTargetDetails)]
+    );
+    const reassignedRows = await reassignPropertyReferences(client, sourcePropertyId, targetPropertyId);
+    await client.query(
+      `UPDATE properties
+       SET details = $2::jsonb,
+           updated_at = now()
+       WHERE id = $1`,
+      [sourcePropertyId, JSON.stringify(archivedSourceDetails)]
+    );
+
+    const eventRepo = new PropertyPipelineEventRepo({ pool, client });
+    await eventRepo.create({
+      propertyId: targetPropertyId,
+      eventType: "property_merged",
+      actor: actorName,
+      source: "ui-v2",
+      title: "Property merged",
+      body: `Merged ${source.canonicalAddress} into this source property.`,
+      metadata: {
+        sourcePropertyId,
+        sourceCanonicalAddress: source.canonicalAddress,
+        reassignedRows,
+      },
+    });
+    await eventRepo.create({
+      propertyId: sourcePropertyId,
+      eventType: "property_merged_into_source",
+      actor: actorName,
+      source: "ui-v2",
+      title: "Property merged into source",
+      body: `Merged into ${target.canonicalAddress}.`,
+      metadata: {
+        targetPropertyId,
+        targetCanonicalAddress: target.canonicalAddress,
+        reassignedRows,
+      },
+    });
+    await client.query("COMMIT");
+
+    const userId = await getDefaultUserId(pool);
+    const detail = await loadDetailForProperty(pool, userId, targetPropertyId);
+    res.json({
+      property: detail,
+      merged: {
+        sourcePropertyId,
+        targetPropertyId,
+        reassignedRows,
+      },
+    } satisfies {
+      property: UiV2PropertyDetailPayload | null;
+      merged: { sourcePropertyId: string; targetPropertyId: string; reassignedRows: Record<string, number> };
+    });
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => null);
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[pipelineV2 merge]", err);
+    res.status(503).json({ error: "Failed to merge properties.", details: message });
+  } finally {
+    client.release();
+  }
+});
+
 router.patch("/ui-v2/properties/:id/status", handleStatusUpdate);
 router.post("/ui-v2/properties/:id/status", handleStatusUpdate);
 
 function dealPathStatusForPipeline(status: UiV2DealPathStatus): UiV2PipelineStatus | null {
+  if (status === "offer_candidate") return "offer_review";
+  if (status === "need_more_info") return "tour_completed_awaiting_inputs";
   return DEAL_PATH_DERIVED_PIPELINE_STATUSES.has(status as UiV2PipelineStatus)
     ? (status as UiV2PipelineStatus)
     : null;

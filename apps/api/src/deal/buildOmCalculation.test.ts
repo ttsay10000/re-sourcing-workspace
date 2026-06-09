@@ -433,7 +433,7 @@ describe("buildOmCalculationSnapshotFromInputs", () => {
     expect(snapshot.topLineMetrics.currentCapRatePct).toBe(6.5);
   });
 
-  it("keeps saved assumptions when a recalculation request supplies partial overrides", async () => {
+  it("uses the current asking price over an unmarked saved purchase price", async () => {
     const artifacts = await resolveOmCalculationArtifactsFromInputs({
       profile: {
         id: "profile-1",
@@ -494,9 +494,72 @@ describe("buildOmCalculationSnapshotFromInputs", () => {
       },
     });
 
-    expect(artifacts.assumptions.acquisition.purchasePrice).toBe(950_000);
+    expect(artifacts.assumptions.acquisition.purchasePrice).toBe(1_100_000);
     expect(artifacts.assumptions.acquisition.renovationCosts).toBe(45_000);
     expect(artifacts.assumptions.holdPeriodYears).toBe(4);
     expect(artifacts.assumptions.targetIrrPct).toBe(24);
+  });
+
+  it("keeps a saved purchase price when it is marked as a manual assumption", async () => {
+    const artifacts = await resolveOmCalculationArtifactsFromInputs({
+      profile: {
+        id: "profile-1",
+        createdAt: "2026-05-27T00:00:00.000Z",
+        updatedAt: "2026-05-27T00:00:00.000Z",
+        defaultPurchaseClosingCostPct: 3,
+        defaultLtv: 70,
+        defaultInterestRate: 6,
+        defaultAmortization: 30,
+        defaultHoldPeriodYears: 5,
+        defaultExitCap: 5,
+        defaultExitClosingCostPct: 2,
+        defaultRentUplift: 10,
+        defaultExpenseIncrease: 0,
+        defaultManagementFee: 4,
+        defaultTargetIrrPct: 20,
+        defaultVacancyPct: 5,
+        defaultLeadTimeMonths: 0,
+        defaultAnnualRentGrowthPct: 0,
+        defaultAnnualCommercialRentGrowthPct: 0,
+        defaultAnnualOtherIncomeGrowthPct: 0,
+        defaultAnnualExpenseGrowthPct: 0,
+        defaultAnnualPropertyTaxGrowthPct: 0,
+        defaultRecurringCapexAnnual: 0,
+        defaultLoanFeePct: 0,
+      },
+      askingPrice: 1_100_000,
+      rawDetails: {
+        dealDossier: {
+          assumptions: {
+            purchasePrice: 950_000,
+            manualFields: ["purchasePrice"],
+          },
+        },
+        omData: {
+          authoritative: {
+            propertyInfo: { totalUnits: 1, unitsResidential: 1, unitsCommercial: 0 },
+            rentRoll: [{ unit: "1", unitCategory: "Residential", annualRent: 120_000 }],
+            expenses: { expensesTable: [{ lineItem: "Taxes", amount: 40_000 }], totalExpenses: 40_000 },
+            currentFinancials: {
+              grossRentalIncome: 120_000,
+              otherIncome: 0,
+              vacancyLoss: null,
+              effectiveGrossIncome: 120_000,
+              operatingExpenses: 40_000,
+              noi: 80_000,
+              rentBasis: "gross_before_vacancy",
+              assumedLongTermOccupancyPct: null,
+              reportedOccupancyPct: null,
+              reportedVacancyPct: null,
+            },
+          },
+        },
+      },
+      savedAssumptions: {
+        purchasePrice: 950_000,
+      },
+    });
+
+    expect(artifacts.assumptions.acquisition.purchasePrice).toBe(950_000);
   });
 });

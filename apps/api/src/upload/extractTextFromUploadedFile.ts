@@ -1,5 +1,5 @@
 /**
- * Extract plain text from an uploaded property document (PDF, TXT, XLS, XLSX) for LLM use.
+ * Extract plain text from an uploaded property document (PDF, TXT, CSV, XLS, XLSX) for LLM use.
  * Uses resolveUploadedDocFilePath so the path matches what was stored at upload time.
  * For re-run when file is in DB only, use extractTextFromBuffer.
  */
@@ -96,10 +96,10 @@ export async function extractTextMetadataFromBuffer(buffer: Buffer, filename: st
     if (ext === "pdf") {
       return await extractPdfTextMetadata(buffer);
     }
-    if (ext === "txt" || ext === "text") {
+    if (ext === "txt" || ext === "text" || ext === "csv") {
       return { text: buffer.toString("utf-8").trim(), pageCount: null, pages: [] };
     }
-    if (ext === "xls" || ext === "xlsx") {
+    if (ext === "xls" || ext === "xlsx" || ext === "xlsm") {
       return { text: await extractWorkbookText(buffer), pageCount: null, pages: [] };
     }
   } catch (e) {
@@ -124,11 +124,11 @@ export async function extractTextFromUploadedFile(filePath: string, filename?: s
       const data = await pdfParse(buffer);
       return typeof data?.text === "string" ? data.text.trim() : "";
     }
-    if (ext === "txt" || ext === "text") {
+    if (ext === "txt" || ext === "text" || ext === "csv") {
       const buf = await readFile(absolutePath, "utf-8");
       return buf.trim();
     }
-    if (ext === "xls" || ext === "xlsx") {
+    if (ext === "xls" || ext === "xlsx" || ext === "xlsm") {
       const buffer = await readFile(absolutePath);
       return await extractWorkbookText(buffer);
     }

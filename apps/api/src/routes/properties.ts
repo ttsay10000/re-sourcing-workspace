@@ -102,6 +102,7 @@ import {
 import { extractStreetEasySaleIdFromUrl, fetchSaleDetailsById, fetchSaleDetailsByUrl, normalizeStreeteasyUrl } from "../nycRealEstateApi.js";
 import { extractOmAnalysisFromGeminiPdfOnly } from "../om/extractOmAnalysisFromGeminiPdfOnly.js";
 import { resolveOmPropertyAddress } from "../om/resolveOmPropertyAddress.js";
+import { resolveOmAskingPriceFromDetails } from "../deal/omAskingPrice.js";
 import {
   downloadOmDocument,
   formatByteLimit,
@@ -4962,6 +4963,52 @@ function parseDossierAssumptionOverridesPayload(
   return overrides;
 }
 
+function normalizedMetadataField(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+function assumptionManualFields(value: unknown): Set<string> {
+  const fields = new Set<string>();
+  if (!Array.isArray(value)) return fields;
+  for (const entry of value) {
+    const field = normalizedMetadataField(entry);
+    if (field) fields.add(field);
+  }
+  return fields;
+}
+
+function updateAssumptionManualField(
+  assumptionsPatch: Record<string, unknown>,
+  field: keyof DossierAssumptionOverrides,
+  isManual: boolean
+): void {
+  const fieldName = String(field);
+  const manualFields = assumptionManualFields(assumptionsPatch.manualFields);
+  const fieldSources = isPlainRecord(assumptionsPatch.fieldSources)
+    ? { ...assumptionsPatch.fieldSources }
+    : {};
+
+  if (isManual) {
+    manualFields.add(fieldName);
+    fieldSources[fieldName] = "manual_override";
+  } else {
+    manualFields.delete(fieldName);
+    delete fieldSources[fieldName];
+  }
+
+  if (manualFields.size > 0) assumptionsPatch.manualFields = [...manualFields].sort();
+  else delete assumptionsPatch.manualFields;
+
+  if (Object.keys(fieldSources).length > 0) assumptionsPatch.fieldSources = fieldSources;
+  else delete assumptionsPatch.fieldSources;
+}
+
+function materiallyDifferentPrice(left: number | null | undefined, right: number | null | undefined): boolean {
+  if (left == null || !Number.isFinite(left)) return false;
+  if (right == null || !Number.isFinite(right)) return true;
+  return Math.abs(left - right) >= 1;
+}
+
 router.post("/properties/:id/om-calculation", async (req: Request, res: Response) => {
   try {
     const { id: propertyId } = req.params;
@@ -5066,6 +5113,16 @@ router.put("/properties/:id/dossier-settings", async (req: Request, res: Respons
     }
     if (requestBody && Object.prototype.hasOwnProperty.call(requestBody, "brokerEmailNotes")) {
       assumptionsPatch.brokerEmailNotes = brokerEmailNotes;
+    }
+    if (requestBody && Object.prototype.hasOwnProperty.call(requestBody, "purchasePrice")) {
+      const primaryListing = await getPrimaryListingForProperty(propertyId, pool).catch(() => null);
+      const sourcePurchasePrice =
+        primaryListing?.price ?? resolveOmAskingPriceFromDetails(property.details as PropertyDetails | null);
+      updateAssumptionManualField(
+        assumptionsPatch,
+        "purchasePrice",
+        materiallyDifferentPrice(assumptionOverrides?.purchasePrice ?? null, sourcePurchasePrice)
+      );
     }
     await repo.updateDetails(propertyId, "dealDossier.assumptions", assumptionsPatch);
     res.json({

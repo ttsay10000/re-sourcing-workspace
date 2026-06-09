@@ -18,11 +18,12 @@ import {
 } from "./underwritingModel.js";
 
 const MAX_MODEL_YEARS = MAX_UNDERWRITING_HOLD_PERIOD_YEARS;
-const CURRENCY_FMT = "$#,##0;[Red]($#,##0)";
-const PERCENT_FMT = "0.00%";
-const INPUT_PERCENT_FMT = "0.00";
-const MULTIPLE_FMT = "0.00x";
-const INTEGER_FMT = "0";
+const MONTHS_PER_YEAR = 12;
+const CURRENCY_FMT = "$#,##0;[Red]($#,##0);-";
+const PERCENT_FMT = "0.00%;[Red](0.00%);-";
+const INPUT_PERCENT_FMT = PERCENT_FMT;
+const MULTIPLE_FMT = "0.00x;[Red](0.00x);-";
+const INTEGER_FMT = "0;[Red](0);-";
 const DATE_FMT = "yyyy-mm-dd";
 
 const COLOR = {
@@ -37,6 +38,7 @@ const COLOR = {
   border: "FFD6DCE5",
   text: "FF1F2937",
   muted: "FF64748B",
+  greenText: "FF008000",
   sectionText: "FFFFFFFF",
 } as const;
 
@@ -68,7 +70,7 @@ const COLUMN_FILL: FillPattern = {
 const HARD_CODED_FILL: FillPattern = {
   type: "pattern",
   pattern: "solid",
-  fgColor: { argb: COLOR.blueFill },
+  fgColor: { argb: COLOR.paleYellow },
 };
 
 const FORMULA_FILL: FillPattern = {
@@ -107,6 +109,14 @@ const LABEL_FONT: Partial<Font> = {
 const HARD_CODED_FONT: Partial<Font> = {
   color: { argb: COLOR.blue },
   bold: false,
+};
+
+const FORMULA_FONT: Partial<Font> = {
+  color: { argb: COLOR.text },
+};
+
+const LINKED_FORMULA_FONT: Partial<Font> = {
+  color: { argb: COLOR.greenText },
 };
 
 const NOTE_FONT: Partial<Font> = {
@@ -159,49 +169,10 @@ const assumptionRows = {
   targetIrrPct: 54,
 } as const;
 
-const assumptionNames = {
-  address: "PropertyAddress",
-  area: "PropertyArea",
-  units: "UnitCount",
-  dealScore: "DealScore",
-  investmentProfile: "InvestmentProfile",
-  targetAcquisitionDate: "TargetAcquisitionDate",
-  purchasePrice: "PurchasePrice",
-  purchaseClosingPct: "PurchaseClosingPct",
-  renovationCosts: "RenovationCosts",
-  furnishingCosts: "FurnishingSetupCosts",
-  onboardingCosts: "OnboardingCosts",
-  currentFreeMarketResidentialGrossRent: "CurrentFreeMarketResidentialGrossRent",
-  currentProtectedResidentialGrossRent: "CurrentProtectedResidentialGrossRent",
-  currentCommercialGrossRent: "CurrentCommercialGrossRent",
-  currentGrossRent: "CurrentGrossRent",
-  currentOtherIncome: "CurrentOtherIncome",
-  currentExpenses: "CurrentOperatingExpensesExManagement",
-  currentNoi: "CurrentNOI",
-  currentNoiAdjustment: "CurrentNoiCapRateAdjustment",
-  ltvPct: "LtvPct",
-  interestRatePct: "InterestRatePct",
-  amortizationYears: "AmortizationYears",
-  loanFeePct: "LoanFeePct",
-  eligibleRevenueSharePct: "EligibleRevenueSharePct",
-  rentUpliftPct: "RentUpliftPct",
-  blendedRentUpliftPct: "BlendedRentUpliftPct",
-  expenseIncreasePct: "ExpenseIncreasePct",
-  managementFeePct: "ManagementFeePct",
-  occupancyTaxPct: "OccupancyTaxPct",
-  vacancyPct: "VacancyPct",
-  leadTimeMonths: "LeadTimeMonths",
-  annualRentGrowthPct: "AnnualRentGrowthPct",
-  annualCommercialRentGrowthPct: "AnnualCommercialRentGrowthPct",
-  annualOtherIncomeGrowthPct: "AnnualOtherIncomeGrowthPct",
-  annualExpenseGrowthPct: "AnnualExpenseGrowthPct",
-  annualPropertyTaxGrowthPct: "AnnualPropertyTaxGrowthPct",
-  recurringCapexAnnual: "RecurringCapexAnnual",
-  holdPeriodYears: "HoldPeriodYears",
-  exitCapPct: "ExitCapPct",
-  exitClosingCostPct: "ExitClosingCostPct",
-  targetIrrPct: "TargetIrrPct",
-} as const;
+type AssumptionKey = keyof typeof assumptionRows;
+
+const EXPENSE_ASSUMPTION_HEADER_ROW = 57;
+const EXPENSE_ASSUMPTION_START_ROW = EXPENSE_ASSUMPTION_HEADER_ROW + 1;
 
 const financingRows = {
   loanAmount: 2,
@@ -215,6 +186,12 @@ const financingRows = {
   annualDebtService: 10,
   totalCapitalization: 11,
   amortizationStart: 13,
+} as const;
+
+const monthlyDebtRows = {
+  header: 4,
+  start: 5,
+  maxMonths: MAX_MODEL_YEARS * MONTHS_PER_YEAR,
 } as const;
 
 interface CashFlowRowMap {
@@ -304,13 +281,54 @@ function assumptionCell(row: number): string {
   return `$C$${row}`;
 }
 
-function defineName(
-  workbook: ExcelJS.Workbook,
-  name: string,
-  worksheetName: string,
-  cell: string
-): void {
-  workbook.definedNames.add(`${worksheetName}!${cell}`, name);
+function quotedSheetRef(sheetName: string, cell: string): string {
+  return `'${sheetName.replace(/'/g, "''")}'!${cell}`;
+}
+
+function assumptionRef(key: AssumptionKey): string {
+  return quotedSheetRef("Assumptions", assumptionCell(assumptionRows[key]));
+}
+
+function percentAssumption(value: number | null | undefined): number {
+  return num(value) / 100;
+}
+
+function expenseAssumptionRow(index: number): number {
+  return EXPENSE_ASSUMPTION_START_ROW + index;
+}
+
+function expenseBaseAmountRef(index: number): string {
+  return quotedSheetRef("Assumptions", `$B$${expenseAssumptionRow(index)}`);
+}
+
+function expenseGrowthRef(index: number): string {
+  return quotedSheetRef("Assumptions", `$C$${expenseAssumptionRow(index)}`);
+}
+
+function yieldOnCostAssumptionRows(artifacts: WorkbookBuildArtifacts): {
+  longTermNoi: number;
+  midTermNoi: number;
+} {
+  const start = EXPENSE_ASSUMPTION_START_ROW + artifacts.expenses.length + 4;
+  return {
+    longTermNoi: start,
+    midTermNoi: start + 1,
+  };
+}
+
+function currentNoiResult(ctx: UnderwritingContext, artifacts: WorkbookBuildArtifacts): number {
+  return (
+    artifacts.currentRentBreakdown.freeMarketResidential +
+    artifacts.currentRentBreakdown.protectedResidential +
+    artifacts.currentRentBreakdown.commercial +
+    num(ctx.currentOtherIncome) -
+    num(ctx.currentExpensesTotal ?? ctx.operating.currentExpenses) +
+    Math.max(0, num(ctx.conservativeProjectedLeaseUpRent))
+  );
+}
+
+function monthlyDebtEndRow(): number {
+  return monthlyDebtRows.start + monthlyDebtRows.maxMonths - 1;
 }
 
 function applyFill(cell: ExcelJS.Cell, fill: FillPattern): void {
@@ -567,6 +585,7 @@ function buildAssumptionsSheet(
       hardCoded?: boolean;
       formula?: string;
       result?: string | number | boolean | Date | ExcelJS.CellErrorValue;
+      linkedFormula?: boolean;
     }
   ) => {
     setSheetCell(worksheet, `A${row}`, params.section, { font: LABEL_FONT, fill: SOFT_FILL });
@@ -576,6 +595,7 @@ function buildAssumptionsSheet(
         result: params.result,
         numFmt: params.valueNumFmt,
         fill: FORMULA_FILL,
+        font: params.linkedFormula ? LINKED_FORMULA_FONT : FORMULA_FONT,
         alignment: { horizontal: "right" },
       });
     } else {
@@ -630,14 +650,14 @@ function buildAssumptionsSheet(
     hardCoded: true,
   });
   addRow(assumptionRows.investmentProfile, {
-    section: "Property",
+    section: "Acquisition Assumptions",
     label: "Investment profile",
     value: ctx.assumptions.acquisition.investmentProfile ?? "",
     source: "Hard coded user / profile assumption",
     hardCoded: true,
   });
   addRow(assumptionRows.targetAcquisitionDate, {
-    section: "Property",
+    section: "Acquisition Assumptions",
     label: "Target acquisition date",
     value: ctx.assumptions.acquisition.targetAcquisitionDate ?? "",
     valueNumFmt: ctx.assumptions.acquisition.targetAcquisitionDate ? DATE_FMT : undefined,
@@ -646,7 +666,7 @@ function buildAssumptionsSheet(
   });
 
   addRow(assumptionRows.purchasePrice, {
-    section: "Acquisition",
+    section: "Acquisition Assumptions",
     label: "Purchase price",
     value: num(ctx.assumptions.acquisition.purchasePrice),
     valueNumFmt: CURRENCY_FMT,
@@ -655,16 +675,16 @@ function buildAssumptionsSheet(
     hardCoded: true,
   });
   addRow(assumptionRows.purchaseClosingPct, {
-    section: "Acquisition",
+    section: "CapEx / FF&E / Closing Cost Assumptions",
     label: "Purchase closing costs",
-    value: num(ctx.assumptions.acquisition.purchaseClosingCostPct),
+    value: percentAssumption(ctx.assumptions.acquisition.purchaseClosingCostPct),
     valueNumFmt: INPUT_PERCENT_FMT,
     units: "%",
     source: "Hard coded underwriting input",
     hardCoded: true,
   });
   addRow(assumptionRows.renovationCosts, {
-    section: "Acquisition",
+    section: "CapEx / FF&E / Closing Cost Assumptions",
     label: "Renovation costs",
     value: num(ctx.assumptions.acquisition.renovationCosts),
     valueNumFmt: CURRENCY_FMT,
@@ -673,7 +693,7 @@ function buildAssumptionsSheet(
     hardCoded: true,
   });
   addRow(assumptionRows.furnishingCosts, {
-    section: "Acquisition",
+    section: "CapEx / FF&E / Closing Cost Assumptions",
     label: "Furnishing / setup costs",
     value: num(ctx.assumptions.acquisition.furnishingSetupCosts),
     valueNumFmt: CURRENCY_FMT,
@@ -682,7 +702,7 @@ function buildAssumptionsSheet(
     hardCoded: true,
   });
   addRow(assumptionRows.onboardingCosts, {
-    section: "Acquisition",
+    section: "CapEx / FF&E / Closing Cost Assumptions",
     label: "Onboarding / unit turn costs",
     value: num(ctx.assumptions.acquisition.onboardingCosts),
     valueNumFmt: CURRENCY_FMT,
@@ -692,7 +712,7 @@ function buildAssumptionsSheet(
   });
 
   addRow(assumptionRows.currentFreeMarketResidentialGrossRent, {
-    section: "Current Basis",
+    section: "Rental Revenue Assumptions",
     label: "Current free-market residential gross rent",
     value: artifacts.currentRentBreakdown.freeMarketResidential,
     valueNumFmt: CURRENCY_FMT,
@@ -701,7 +721,7 @@ function buildAssumptionsSheet(
     hardCoded: true,
   });
   addRow(assumptionRows.currentProtectedResidentialGrossRent, {
-    section: "Current Basis",
+    section: "Rental Revenue Assumptions",
     label: "Current protected residential gross rent",
     value: artifacts.currentRentBreakdown.protectedResidential,
     valueNumFmt: CURRENCY_FMT,
@@ -710,7 +730,7 @@ function buildAssumptionsSheet(
     hardCoded: true,
   });
   addRow(assumptionRows.currentCommercialGrossRent, {
-    section: "Current Basis",
+    section: "Rental Revenue Assumptions",
     label: "Current commercial gross rent",
     value: artifacts.currentRentBreakdown.commercial,
     valueNumFmt: CURRENCY_FMT,
@@ -719,20 +739,20 @@ function buildAssumptionsSheet(
     hardCoded: true,
   });
   addRow(assumptionRows.currentGrossRent, {
-    section: "Current Basis",
+    section: "Rental Revenue Assumptions",
     label: "Current gross rent",
     value: "",
     valueNumFmt: CURRENCY_FMT,
     units: "USD",
     source: "Formula = residential + protected + commercial rent",
-    formula: `${assumptionNames.currentFreeMarketResidentialGrossRent}+${assumptionNames.currentProtectedResidentialGrossRent}+${assumptionNames.currentCommercialGrossRent}`,
+    formula: `${assumptionRef("currentFreeMarketResidentialGrossRent")}+${assumptionRef("currentProtectedResidentialGrossRent")}+${assumptionRef("currentCommercialGrossRent")}`,
     result:
       artifacts.currentRentBreakdown.freeMarketResidential +
       artifacts.currentRentBreakdown.protectedResidential +
       artifacts.currentRentBreakdown.commercial,
   });
   addRow(assumptionRows.currentOtherIncome, {
-    section: "Current Basis",
+    section: "Rental Revenue Assumptions",
     label: "Current other income",
     value: num(ctx.currentOtherIncome),
     valueNumFmt: CURRENCY_FMT,
@@ -741,7 +761,7 @@ function buildAssumptionsSheet(
     hardCoded: true,
   });
   addRow(assumptionRows.currentExpenses, {
-    section: "Current Basis",
+    section: "Operating Expense Assumptions",
     label: "Current operating expenses (ex management)",
     value: num(ctx.currentExpensesTotal ?? ctx.operating.currentExpenses),
     valueNumFmt: CURRENCY_FMT,
@@ -750,7 +770,7 @@ function buildAssumptionsSheet(
     hardCoded: true,
   });
   addRow(assumptionRows.currentNoiAdjustment, {
-    section: "Current Basis",
+    section: "Rental Revenue Assumptions",
     label: "Projected vacant residential rent",
     value: Math.max(0, num(ctx.conservativeProjectedLeaseUpRent)),
     valueNumFmt: CURRENCY_FMT,
@@ -760,42 +780,36 @@ function buildAssumptionsSheet(
     hardCoded: true,
   });
   addRow(assumptionRows.currentNoi, {
-    section: "Current Basis",
+    section: "Rental Revenue Assumptions",
     label: "Current NOI",
     value: "",
     valueNumFmt: CURRENCY_FMT,
     units: "USD",
     source: "Formula = gross rent + other income - current expenses + projected vacant residential rent",
-    formula: `${assumptionNames.currentGrossRent}+${assumptionNames.currentOtherIncome}-${assumptionNames.currentExpenses}+${assumptionNames.currentNoiAdjustment}`,
-    result:
-      artifacts.currentRentBreakdown.freeMarketResidential +
-      artifacts.currentRentBreakdown.protectedResidential +
-      artifacts.currentRentBreakdown.commercial +
-      num(ctx.currentOtherIncome) -
-      num(ctx.currentExpensesTotal ?? ctx.operating.currentExpenses) +
-      Math.max(0, num(ctx.conservativeProjectedLeaseUpRent)),
+    formula: `${assumptionRef("currentGrossRent")}+${assumptionRef("currentOtherIncome")}-${assumptionRef("currentExpenses")}+${assumptionRef("currentNoiAdjustment")}`,
+    result: currentNoiResult(ctx, artifacts),
   });
 
   addRow(assumptionRows.ltvPct, {
-    section: "Financing",
+    section: "Financing Assumptions",
     label: "Loan-to-value",
-    value: num(ctx.assumptions.financing.ltvPct),
+    value: percentAssumption(ctx.assumptions.financing.ltvPct),
     valueNumFmt: INPUT_PERCENT_FMT,
     units: "%",
     source: "Hard coded underwriting input",
     hardCoded: true,
   });
   addRow(assumptionRows.interestRatePct, {
-    section: "Financing",
+    section: "Financing Assumptions",
     label: "Interest rate",
-    value: num(ctx.assumptions.financing.interestRatePct),
+    value: percentAssumption(ctx.assumptions.financing.interestRatePct),
     valueNumFmt: INPUT_PERCENT_FMT,
     units: "%",
     source: "Hard coded underwriting input",
     hardCoded: true,
   });
   addRow(assumptionRows.amortizationYears, {
-    section: "Financing",
+    section: "Financing Assumptions",
     label: "Amortization period",
     value: num(ctx.assumptions.financing.amortizationYears),
     valueNumFmt: INTEGER_FMT,
@@ -804,9 +818,9 @@ function buildAssumptionsSheet(
     hardCoded: true,
   });
   addRow(assumptionRows.loanFeePct, {
-    section: "Financing",
+    section: "Financing Assumptions",
     label: "Loan fee",
-    value: num(ctx.assumptions.financing.loanFeePct),
+    value: percentAssumption(ctx.assumptions.financing.loanFeePct),
     valueNumFmt: INPUT_PERCENT_FMT,
     units: "%",
     source: "Hard coded underwriting input",
@@ -814,27 +828,27 @@ function buildAssumptionsSheet(
   });
 
   addRow(assumptionRows.eligibleRevenueSharePct, {
-    section: "Operating",
+    section: "Rental Revenue Assumptions",
     label: "Eligible revenue share",
-    value: num(ctx.propertyMix?.eligibleRevenueSharePct) * 100,
+    value: num(ctx.propertyMix?.eligibleRevenueSharePct),
     valueNumFmt: INPUT_PERCENT_FMT,
     units: "%",
     source: "Hard coded model input for blended uplift logic",
     hardCoded: true,
   });
   addRow(assumptionRows.rentUpliftPct, {
-    section: "Operating",
+    section: "Rental Revenue Assumptions",
     label: "Rent uplift",
-    value: num(ctx.assumptions.operating.rentUpliftPct),
+    value: percentAssumption(ctx.assumptions.operating.rentUpliftPct),
     valueNumFmt: INPUT_PERCENT_FMT,
     units: "%",
     source: "Hard coded underwriting input",
     hardCoded: true,
   });
   addRow(assumptionRows.blendedRentUpliftPct, {
-    section: "Operating",
+    section: "Rental Revenue Assumptions",
     label: "Blended rent uplift",
-    value: num(ctx.assumptions.operating.blendedRentUpliftPct),
+    value: percentAssumption(ctx.assumptions.operating.blendedRentUpliftPct),
     valueNumFmt: INPUT_PERCENT_FMT,
     units: "%",
     source:
@@ -842,43 +856,43 @@ function buildAssumptionsSheet(
     hardCoded: true,
   });
   addRow(assumptionRows.expenseIncreasePct, {
-    section: "Operating",
+    section: "Operating Expense Assumptions",
     label: "Expense increase",
-    value: num(ctx.assumptions.operating.expenseIncreasePct),
+    value: percentAssumption(ctx.assumptions.operating.expenseIncreasePct),
     valueNumFmt: INPUT_PERCENT_FMT,
     units: "%",
     source: "Hard coded underwriting input",
     hardCoded: true,
   });
   addRow(assumptionRows.managementFeePct, {
-    section: "Operating",
+    section: "Operating Expense Assumptions",
     label: "Management fee",
-    value: num(ctx.assumptions.operating.managementFeePct),
+    value: percentAssumption(ctx.assumptions.operating.managementFeePct),
     valueNumFmt: INPUT_PERCENT_FMT,
     units: "%",
     source: "Hard coded underwriting input",
     hardCoded: true,
   });
   addRow(assumptionRows.occupancyTaxPct, {
-    section: "Operating",
+    section: "Operating Expense Assumptions",
     label: "Occupancy tax",
-    value: num(ctx.assumptions.operating.occupancyTaxPct),
+    value: percentAssumption(ctx.assumptions.operating.occupancyTaxPct),
     valueNumFmt: INPUT_PERCENT_FMT,
     units: "%",
     source: "Hard coded underwriting input",
     hardCoded: true,
   });
   addRow(assumptionRows.vacancyPct, {
-    section: "Operating",
+    section: "Rental Revenue Assumptions",
     label: "Vacancy",
-    value: num(ctx.assumptions.operating.vacancyPct),
+    value: percentAssumption(ctx.assumptions.operating.vacancyPct),
     valueNumFmt: INPUT_PERCENT_FMT,
     units: "%",
     source: "Hard coded underwriting input",
     hardCoded: true,
   });
   addRow(assumptionRows.leadTimeMonths, {
-    section: "Operating",
+    section: "Rental Revenue Assumptions",
     label: "Lead time",
     value: num(ctx.assumptions.operating.leadTimeMonths),
     valueNumFmt: INTEGER_FMT,
@@ -887,52 +901,52 @@ function buildAssumptionsSheet(
     hardCoded: true,
   });
   addRow(assumptionRows.annualRentGrowthPct, {
-    section: "Operating",
+    section: "Rental Revenue Assumptions",
     label: "Annual free-market rent growth",
-    value: num(ctx.assumptions.operating.annualRentGrowthPct),
+    value: percentAssumption(ctx.assumptions.operating.annualRentGrowthPct),
     valueNumFmt: INPUT_PERCENT_FMT,
     units: "%",
     source: "Hard coded underwriting input",
     hardCoded: true,
   });
   addRow(assumptionRows.annualCommercialRentGrowthPct, {
-    section: "Operating",
+    section: "Rental Revenue Assumptions",
     label: "Annual commercial rent growth",
-    value: num(ctx.assumptions.operating.annualCommercialRentGrowthPct),
+    value: percentAssumption(ctx.assumptions.operating.annualCommercialRentGrowthPct),
     valueNumFmt: INPUT_PERCENT_FMT,
     units: "%",
     source: "Hard coded underwriting input",
     hardCoded: true,
   });
   addRow(assumptionRows.annualOtherIncomeGrowthPct, {
-    section: "Operating",
+    section: "Rental Revenue Assumptions",
     label: "Annual other-income growth",
-    value: num(ctx.assumptions.operating.annualOtherIncomeGrowthPct),
+    value: percentAssumption(ctx.assumptions.operating.annualOtherIncomeGrowthPct),
     valueNumFmt: INPUT_PERCENT_FMT,
     units: "%",
     source: "Hard coded underwriting input",
     hardCoded: true,
   });
   addRow(assumptionRows.annualExpenseGrowthPct, {
-    section: "Operating",
+    section: "Operating Expense Assumptions",
     label: "Annual expense growth",
-    value: num(ctx.assumptions.operating.annualExpenseGrowthPct),
+    value: percentAssumption(ctx.assumptions.operating.annualExpenseGrowthPct),
     valueNumFmt: INPUT_PERCENT_FMT,
     units: "%",
     source: "Hard coded underwriting input",
     hardCoded: true,
   });
   addRow(assumptionRows.annualPropertyTaxGrowthPct, {
-    section: "Operating",
+    section: "Operating Expense Assumptions",
     label: "Annual property-tax growth",
-    value: num(ctx.assumptions.operating.annualPropertyTaxGrowthPct),
+    value: percentAssumption(ctx.assumptions.operating.annualPropertyTaxGrowthPct),
     valueNumFmt: INPUT_PERCENT_FMT,
     units: "%",
     source: "Hard coded underwriting input",
     hardCoded: true,
   });
   addRow(assumptionRows.recurringCapexAnnual, {
-    section: "Operating",
+    section: "CapEx / FF&E / Closing Cost Assumptions",
     label: "Recurring CapEx / reserve",
     value: num(ctx.assumptions.operating.recurringCapexAnnual),
     valueNumFmt: CURRENCY_FMT,
@@ -942,7 +956,7 @@ function buildAssumptionsSheet(
   });
 
   addRow(assumptionRows.holdPeriodYears, {
-    section: "Exit",
+    section: "Yield on Cost Assumptions",
     label: "Hold period",
     value: num(ctx.assumptions.holdPeriodYears),
     valueNumFmt: INTEGER_FMT,
@@ -951,38 +965,120 @@ function buildAssumptionsSheet(
     hardCoded: true,
   });
   addRow(assumptionRows.exitCapPct, {
-    section: "Exit",
+    section: "Yield on Cost Assumptions",
     label: "Exit cap rate",
-    value: num(ctx.assumptions.exit.exitCapPct),
+    value: percentAssumption(ctx.assumptions.exit.exitCapPct),
     valueNumFmt: INPUT_PERCENT_FMT,
     units: "%",
     source: "Hard coded underwriting input",
     hardCoded: true,
   });
   addRow(assumptionRows.exitClosingCostPct, {
-    section: "Exit",
+    section: "CapEx / FF&E / Closing Cost Assumptions",
     label: "Exit closing costs",
-    value: num(ctx.assumptions.exit.exitClosingCostPct),
+    value: percentAssumption(ctx.assumptions.exit.exitClosingCostPct),
     valueNumFmt: INPUT_PERCENT_FMT,
     units: "%",
     source: "Hard coded underwriting input",
     hardCoded: true,
   });
   addRow(assumptionRows.targetIrrPct, {
-    section: "Exit",
+    section: "Yield on Cost Assumptions",
     label: "Target IRR",
-    value: num(ctx.assumptions.targetIrrPct),
+    value: percentAssumption(ctx.assumptions.targetIrrPct),
     valueNumFmt: INPUT_PERCENT_FMT,
     units: "%",
     source: "Hard coded underwriting input",
     hardCoded: true,
   });
 
-  for (const [key, row] of Object.entries(assumptionRows) as Array<
-    [keyof typeof assumptionRows, number]
-  >) {
-    defineName(workbook, assumptionNames[key], "Assumptions", assumptionCell(row));
-  }
+  styledSectionTitle(
+    worksheet,
+    `A${EXPENSE_ASSUMPTION_HEADER_ROW - 1}`,
+    `E${EXPENSE_ASSUMPTION_HEADER_ROW - 1}`,
+    "Operating Expense Assumptions"
+  );
+  ["Expense Line", "Base Amount", "Annual Growth Rate", "Notes / Source"].forEach((label, index) => {
+    const cell = worksheet.getCell(EXPENSE_ASSUMPTION_HEADER_ROW, index + 1);
+    cell.value = label;
+    cell.fill = COLUMN_FILL;
+    cell.font = HEADER_FONT;
+    cell.alignment = { horizontal: "center" };
+    applyBorder(cell);
+  });
+
+  artifacts.expenses.forEach((expense, index) => {
+    const row = expenseAssumptionRow(index);
+    const fallbackGrowth = isTaxExpense(expense.lineItem)
+      ? percentAssumption(ctx.assumptions.operating.annualPropertyTaxGrowthPct)
+      : percentAssumption(ctx.assumptions.operating.annualExpenseGrowthPct);
+    const annualGrowth =
+      expense.annualGrowthPct != null && Number.isFinite(expense.annualGrowthPct)
+        ? percentAssumption(expense.annualGrowthPct)
+        : fallbackGrowth;
+    setSheetCell(worksheet, `A${row}`, expense.lineItem, {
+      fill: HARD_CODED_FILL,
+      font: HARD_CODED_FONT,
+      alignment: { wrapText: true },
+    });
+    setSheetCell(worksheet, `B${row}`, num(expense.amount), {
+      numFmt: CURRENCY_FMT,
+      fill: HARD_CODED_FILL,
+      font: HARD_CODED_FONT,
+      alignment: { horizontal: "right" },
+    });
+    setSheetCell(worksheet, `C${row}`, annualGrowth, {
+      numFmt: INPUT_PERCENT_FMT,
+      fill: HARD_CODED_FILL,
+      font: HARD_CODED_FONT,
+      alignment: { horizontal: "right" },
+    });
+    setSheetCell(
+      worksheet,
+      `D${row}`,
+      expense.annualGrowthPct != null && Number.isFinite(expense.annualGrowthPct)
+        ? "Line-specific annual growth from detailed cash-flow model"
+        : isTaxExpense(expense.lineItem)
+          ? "Uses property-tax growth fallback"
+          : "Uses operating-expense growth fallback",
+      {
+        fill: SOFT_FILL,
+        font: NOTE_FONT,
+        alignment: { wrapText: true },
+      }
+    );
+    setSheetCell(worksheet, `E${row}`, "", { fill: SOFT_FILL });
+  });
+
+  const yocRows = yieldOnCostAssumptionRows(artifacts);
+  styledSectionTitle(
+    worksheet,
+    `A${yocRows.longTermNoi - 2}`,
+    `E${yocRows.longTermNoi - 2}`,
+    "Yield on Cost Assumptions"
+  );
+  addRow(yocRows.longTermNoi, {
+    section: "Yield on Cost Assumptions",
+    label: "Stabilized long-term rental NOI",
+    value: "",
+    valueNumFmt: CURRENCY_FMT,
+    units: "USD",
+    source: "Formula linked to the current long-term NOI basis",
+    formula: assumptionRef("currentNoi"),
+    result: currentNoiResult(ctx, artifacts),
+  });
+  addRow(yocRows.midTermNoi, {
+    section: "Yield on Cost Assumptions",
+    label: "Stabilized mid-term rental NOI",
+    value: "",
+    valueNumFmt: CURRENCY_FMT,
+    units: "USD",
+    source: "Formula linked to CashFlowModel calculated stabilized NOI",
+    formula: quotedSheetRef("CashFlowModel", `$B$${artifacts.cashFlowRows.calculatedStabilizedNoi}`),
+    result: ctx.operating.stabilizedNoi,
+    linkedFormula: true,
+  });
+
 }
 
 function buildFinancingModelSheet(
@@ -1008,30 +1104,34 @@ function buildFinancingModelSheet(
   });
 
   setSheetCell(worksheet, "A2", "Loan amount", { font: LABEL_FONT });
-  setFormulaCell(worksheet, "B2", "PurchasePrice*(LtvPct/100)", {
+  setFormulaCell(worksheet, "B2", `${assumptionRef("purchasePrice")}*${assumptionRef("ltvPct")}`, {
     numFmt: CURRENCY_FMT,
     fill: FORMULA_FILL,
+    font: LINKED_FORMULA_FONT,
     result: ctx.financing.loanAmount,
   });
   setSheetCell(worksheet, "A3", "Financing fees", { font: LABEL_FONT });
-  setFormulaCell(worksheet, "B3", "B2*(LoanFeePct/100)", {
+  setFormulaCell(worksheet, "B3", `B2*${assumptionRef("loanFeePct")}`, {
     numFmt: CURRENCY_FMT,
     fill: FORMULA_FILL,
+    font: LINKED_FORMULA_FONT,
     result: ctx.financing.financingFees ?? 0,
   });
   setSheetCell(worksheet, "A4", "Purchase closing costs", { font: LABEL_FONT });
-  setFormulaCell(worksheet, "B4", "PurchasePrice*(PurchaseClosingPct/100)", {
+  setFormulaCell(worksheet, "B4", `${assumptionRef("purchasePrice")}*${assumptionRef("purchaseClosingPct")}`, {
     numFmt: CURRENCY_FMT,
     fill: FORMULA_FILL,
+    font: LINKED_FORMULA_FONT,
     result: ctx.acquisition.purchaseClosingCosts,
   });
   setSheetCell(worksheet, "A5", "Total project cost", {
     font: LABEL_FONT,
     fill: COLUMN_FILL,
   });
-  setFormulaCell(worksheet, "B5", "SUM(PurchasePrice,B4,RenovationCosts,FurnishingSetupCosts,OnboardingCosts)", {
+  setFormulaCell(worksheet, "B5", `SUM(${assumptionRef("purchasePrice")},B4,${assumptionRef("renovationCosts")},${assumptionRef("furnishingCosts")},${assumptionRef("onboardingCosts")})`, {
     numFmt: CURRENCY_FMT,
     fill: FORMULA_FILL,
+    font: LINKED_FORMULA_FONT,
     result: ctx.acquisition.totalProjectCost,
   });
   setSheetCell(worksheet, "A6", "Initial equity invested", {
@@ -1044,22 +1144,24 @@ function buildFinancingModelSheet(
     result: ctx.acquisition.initialEquityInvested,
   });
   setSheetCell(worksheet, "A7", "Monthly interest rate", { font: LABEL_FONT });
-  setFormulaCell(worksheet, "B7", "InterestRatePct/100/12", {
+  setFormulaCell(worksheet, "B7", `${assumptionRef("interestRatePct")}/${MONTHS_PER_YEAR}`, {
     numFmt: "0.0000%",
     fill: FORMULA_FILL,
+    font: LINKED_FORMULA_FONT,
     result: num(ctx.assumptions.financing.interestRatePct) / 100 / 12,
   });
   setSheetCell(worksheet, "A8", "Total amortization months", { font: LABEL_FONT });
-  setFormulaCell(worksheet, "B8", "AmortizationYears*12", {
+  setFormulaCell(worksheet, "B8", `${assumptionRef("amortizationYears")}*${MONTHS_PER_YEAR}`, {
     numFmt: INTEGER_FMT,
     fill: FORMULA_FILL,
+    font: LINKED_FORMULA_FONT,
     result: num(ctx.assumptions.financing.amortizationYears) * 12,
   });
   setSheetCell(worksheet, "A9", "Monthly payment", {
     font: LABEL_FONT,
     fill: COLUMN_FILL,
   });
-  setFormulaCell(worksheet, "B9", "IF(B2=0,0,IF(B7=0,B2/B8,-PMT(B7,B8,B2)))", {
+  setFormulaCell(worksheet, "B9", "IF(OR(B2=0,B8=0),0,IF(B7=0,B2/B8,-PMT(B7,B8,B2)))", {
     numFmt: CURRENCY_FMT,
     fill: FORMULA_FILL,
     result: ctx.financing.monthlyPayment,
@@ -1068,7 +1170,7 @@ function buildFinancingModelSheet(
     font: LABEL_FONT,
     fill: COLUMN_FILL,
   });
-  setFormulaCell(worksheet, "B10", "B9*12", {
+  setFormulaCell(worksheet, "B10", `B9*${MONTHS_PER_YEAR}`, {
     numFmt: CURRENCY_FMT,
     fill: FORMULA_FILL,
     result: ctx.financing.annualDebtService,
@@ -1094,11 +1196,10 @@ function buildFinancingModelSheet(
     }
   );
 
+  const monthlyStart = monthlyDebtRows.start;
+  const monthlyEnd = monthlyDebtEndRow();
   for (let year = 1; year <= MAX_MODEL_YEARS; year += 1) {
     const row = financingRows.amortizationStart + year - 1;
-    const previousRow = row - 1;
-    const annualPeriodsFormula = `MIN(12,MAX(0,$B$8-((A${row}-1)*12)))`;
-    const periodRangeFormula = `ROW(INDIRECT(((A${row}-1)*12+1)&":"&MIN(A${row}*12,$B$8)))`;
     setSheetCell(worksheet, `A${row}`, year, {
       numFmt: INTEGER_FMT,
       fill: SOFT_FILL,
@@ -1107,47 +1208,145 @@ function buildFinancingModelSheet(
     setFormulaCell(
       worksheet,
       `B${row}`,
-      year === 1 ? "$B$2" : `F${previousRow}`,
-      { numFmt: CURRENCY_FMT, fill: FORMULA_FILL }
+      year === 1
+        ? "$B$2"
+        : `IFERROR(INDEX(MonthlyDebt!$H$${monthlyStart}:$H$${monthlyEnd},MATCH((A${row}-1)*${MONTHS_PER_YEAR},MonthlyDebt!$A$${monthlyStart}:$A$${monthlyEnd},0)),0)`,
+      { numFmt: CURRENCY_FMT, fill: FORMULA_FILL, font: LINKED_FORMULA_FONT }
     );
     setFormulaCell(
       worksheet,
       `C${row}`,
-      `IF(OR(B${row}=0,${annualPeriodsFormula}=0),0,D${row}+E${row})`,
-      { numFmt: CURRENCY_FMT, fill: FORMULA_FILL }
+      `SUMIFS(MonthlyDebt!$F$${monthlyStart}:$F$${monthlyEnd},MonthlyDebt!$I$${monthlyStart}:$I$${monthlyEnd},A${row})`,
+      { numFmt: CURRENCY_FMT, fill: FORMULA_FILL, font: LINKED_FORMULA_FONT }
     );
     setFormulaCell(
       worksheet,
       `D${row}`,
-      `IF(OR(B${row}=0,${annualPeriodsFormula}=0),0,IF($B$7=0,MIN(B${row},$B$9*${annualPeriodsFormula}),-SUMPRODUCT(PPMT($B$7,${periodRangeFormula},$B$8,$B$2))))`,
+      `SUMIFS(MonthlyDebt!$G$${monthlyStart}:$G$${monthlyEnd},MonthlyDebt!$I$${monthlyStart}:$I$${monthlyEnd},A${row})`,
       {
         numFmt: CURRENCY_FMT,
         fill: FORMULA_FILL,
+        font: LINKED_FORMULA_FONT,
       }
     );
     setFormulaCell(
       worksheet,
       `E${row}`,
-      `IF(OR(B${row}=0,${annualPeriodsFormula}=0),0,IF($B$7=0,0,-SUMPRODUCT(IPMT($B$7,${periodRangeFormula},$B$8,$B$2))))`,
+      `SUMIFS(MonthlyDebt!$E$${monthlyStart}:$E$${monthlyEnd},MonthlyDebt!$I$${monthlyStart}:$I$${monthlyEnd},A${row})`,
       {
         numFmt: CURRENCY_FMT,
         fill: FORMULA_FILL,
+        font: LINKED_FORMULA_FONT,
       }
     );
-    setFormulaCell(worksheet, `F${row}`, `MAX(0,B${row}-D${row})`, {
+    setFormulaCell(worksheet, `F${row}`, `IFERROR(INDEX(MonthlyDebt!$H$${monthlyStart}:$H$${monthlyEnd},MATCH(MIN(A${row}*${MONTHS_PER_YEAR},$B$8),MonthlyDebt!$A$${monthlyStart}:$A$${monthlyEnd},0)),0)`, {
+      numFmt: CURRENCY_FMT,
+      fill: FORMULA_FILL,
+      font: LINKED_FORMULA_FONT,
+    });
+  }
+}
+
+function buildMonthlyDebtSheet(workbook: ExcelJS.Workbook): void {
+  const worksheet = workbook.addWorksheet("MonthlyDebt");
+  worksheet.views = [{ state: "frozen", ySplit: monthlyDebtRows.header, showGridLines: false }];
+  worksheet.columns = [
+    { width: 12 },
+    { width: 14 },
+    { width: 18 },
+    { width: 14 },
+    { width: 18 },
+    { width: 18 },
+    { width: 20 },
+    { width: 18 },
+    { width: 10 },
+  ];
+
+  worksheet.mergeCells("A1:I1");
+  setSheetCell(worksheet, "A1", "Monthly Debt Schedule", {
+    fill: TITLE_FILL,
+    font: TITLE_FONT,
+    alignment: { horizontal: "left" },
+  });
+  worksheet.mergeCells("A2:I2");
+  setSheetCell(
+    worksheet,
+    "A2",
+    "Monthly loan mechanics feed the annual FinancingModel summary through SUMIFS, so debt service, interest, principal, and ending balance are traceable month by month.",
+    {
+      fill: SOFT_FILL,
+      font: NOTE_FONT,
+      alignment: { wrapText: true, vertical: "top" },
+    }
+  );
+  worksheet.getRow(2).height = 36;
+
+  [
+    "Month #",
+    "Date / Period",
+    "Beginning Loan Balance",
+    "Interest Rate",
+    "Monthly Interest",
+    "Monthly Debt Service",
+    "Principal Amortization",
+    "Ending Loan Balance",
+    "Year",
+  ].forEach((label, index) => {
+    setSheetCell(worksheet, `${columnLetter(index + 1)}${monthlyDebtRows.header}`, label, {
+      fill: COLUMN_FILL,
+      font: HEADER_FONT,
+      alignment: { horizontal: "center", wrapText: true },
+    });
+  });
+
+  for (let month = 1; month <= monthlyDebtRows.maxMonths; month += 1) {
+    const row = monthlyDebtRows.start + month - 1;
+    const previousRow = row - 1;
+    setSheetCell(worksheet, `A${row}`, month, {
+      numFmt: INTEGER_FMT,
+      fill: SOFT_FILL,
+      alignment: { horizontal: "center" },
+    });
+    setFormulaCell(worksheet, `B${row}`, `IF(A${row}>FinancingModel!$B$8,"","Month "&A${row})`, {
+      fill: FORMULA_FILL,
+      font: LINKED_FORMULA_FONT,
+      alignment: { horizontal: "center" },
+    });
+    setFormulaCell(
+      worksheet,
+      `C${row}`,
+      month === 1
+        ? `IF(A${row}>FinancingModel!$B$8,0,FinancingModel!$B$2)`
+        : `IF(A${row}>FinancingModel!$B$8,0,H${previousRow})`,
+      { numFmt: CURRENCY_FMT, fill: FORMULA_FILL, font: LINKED_FORMULA_FONT }
+    );
+    setFormulaCell(worksheet, `D${row}`, assumptionRef("interestRatePct"), {
+      numFmt: PERCENT_FMT,
+      fill: FORMULA_FILL,
+      font: LINKED_FORMULA_FONT,
+    });
+    setFormulaCell(worksheet, `E${row}`, `IF(OR(A${row}>FinancingModel!$B$8,C${row}=0),0,C${row}*(D${row}/${MONTHS_PER_YEAR}))`, {
       numFmt: CURRENCY_FMT,
       fill: FORMULA_FILL,
     });
+    setFormulaCell(worksheet, `F${row}`, `IF(OR(A${row}>FinancingModel!$B$8,C${row}=0),0,MIN(FinancingModel!$B$9,C${row}+E${row}))`, {
+      numFmt: CURRENCY_FMT,
+      fill: FORMULA_FILL,
+      font: LINKED_FORMULA_FONT,
+    });
+    setFormulaCell(worksheet, `G${row}`, `IF(OR(A${row}>FinancingModel!$B$8,C${row}=0),0,MAX(0,MIN(C${row},F${row}-E${row})))`, {
+      numFmt: CURRENCY_FMT,
+      fill: FORMULA_FILL,
+    });
+    setFormulaCell(worksheet, `H${row}`, `MAX(0,C${row}-G${row})`, {
+      numFmt: CURRENCY_FMT,
+      fill: FORMULA_FILL,
+    });
+    setFormulaCell(worksheet, `I${row}`, `ROUNDUP(A${row}/${MONTHS_PER_YEAR},0)`, {
+      numFmt: INTEGER_FMT,
+      fill: FORMULA_FILL,
+    });
   }
-
-  defineName(workbook, "CalculatedLoanAmount", "FinancingModel", "$B$2");
-  defineName(workbook, "CalculatedFinancingFees", "FinancingModel", "$B$3");
-  defineName(workbook, "CalculatedPurchaseClosingCosts", "FinancingModel", "$B$4");
-  defineName(workbook, "CalculatedTotalProjectCost", "FinancingModel", "$B$5");
-  defineName(workbook, "CalculatedInitialEquity", "FinancingModel", "$B$6");
-  defineName(workbook, "CalculatedMonthlyPayment", "FinancingModel", "$B$9");
-  defineName(workbook, "CalculatedAnnualDebtService", "FinancingModel", "$B$10");
-  defineName(workbook, "CalculatedTotalCapitalization", "FinancingModel", "$B$11");
 }
 
 function isTaxExpense(lineItem: string): boolean {
@@ -1172,6 +1371,9 @@ function buildCashFlowModelSheet(
   ];
 
   const rows = artifacts.cashFlowRows;
+  const holdPeriodRef = assumptionRef("holdPeriodYears");
+  const leadTimeMonthsRef = assumptionRef("leadTimeMonths");
+  const lastModelColumn = columnLetter(3 + MAX_MODEL_YEARS);
 
   worksheet.mergeCells("A1:F1");
   setSheetCell(worksheet, "A1", "Cash Flow Model", {
@@ -1181,9 +1383,10 @@ function buildCashFlowModelSheet(
   });
 
   setSheetCell(worksheet, "A3", "Hold period", { font: LABEL_FONT });
-  setFormulaCell(worksheet, "B3", "HoldPeriodYears", {
+  setFormulaCell(worksheet, "B3", holdPeriodRef, {
     numFmt: INTEGER_FMT,
     fill: FORMULA_FILL,
+    font: LINKED_FORMULA_FONT,
     result: num(ctx.assumptions.holdPeriodYears),
   });
 
@@ -1208,15 +1411,17 @@ function buildCashFlowModelSheet(
   }
 
   setSheetCell(worksheet, "A6", "Property value", { font: LABEL_FONT });
-  setFormulaCell(worksheet, "B6", "AnnualRentGrowthPct/100", {
+  setFormulaCell(worksheet, "B6", assumptionRef("annualRentGrowthPct"), {
     numFmt: PERCENT_FMT,
     fill: FORMULA_FILL,
+    font: LINKED_FORMULA_FONT,
   });
   setSheetCell(worksheet, "A7", "Gross rental income", { font: LABEL_FONT });
   setSheetCell(worksheet, "A8", "Free-market residential gross rent", { font: LABEL_FONT });
-  setFormulaCell(worksheet, "B8", "BlendedRentUpliftPct/100", {
+  setFormulaCell(worksheet, "B8", assumptionRef("blendedRentUpliftPct"), {
     numFmt: PERCENT_FMT,
     fill: FORMULA_FILL,
+    font: LINKED_FORMULA_FONT,
     result: num(ctx.assumptions.operating.blendedRentUpliftPct) / 100,
   });
   setSheetCell(worksheet, "A9", "RS / RC residential gross rent", { font: LABEL_FONT });
@@ -1225,19 +1430,22 @@ function buildCashFlowModelSheet(
     alignment: { horizontal: "center" },
   });
   setSheetCell(worksheet, "A10", "Commercial gross rent", { font: LABEL_FONT });
-  setFormulaCell(worksheet, "B10", "AnnualCommercialRentGrowthPct/100", {
+  setFormulaCell(worksheet, "B10", assumptionRef("annualCommercialRentGrowthPct"), {
     numFmt: PERCENT_FMT,
     fill: FORMULA_FILL,
+    font: LINKED_FORMULA_FONT,
   });
   setSheetCell(worksheet, "A11", "Other income", { font: LABEL_FONT });
-  setFormulaCell(worksheet, "B11", "AnnualOtherIncomeGrowthPct/100", {
+  setFormulaCell(worksheet, "B11", assumptionRef("annualOtherIncomeGrowthPct"), {
     numFmt: PERCENT_FMT,
     fill: FORMULA_FILL,
+    font: LINKED_FORMULA_FONT,
   });
   setSheetCell(worksheet, "A12", "Vacancy assumption", { font: LABEL_FONT });
-  setFormulaCell(worksheet, "B12", "VacancyPct/100", {
+  setFormulaCell(worksheet, "B12", assumptionRef("vacancyPct"), {
     numFmt: PERCENT_FMT,
     fill: FORMULA_FILL,
+    font: LINKED_FORMULA_FONT,
   });
   setSheetCell(worksheet, "A13", "Lead time assumption", { font: LABEL_FONT });
   setSheetCell(worksheet, "B13", "Year 1 only", {
@@ -1254,33 +1462,25 @@ function buildCashFlowModelSheet(
     const row = rows.expenseStart + index;
     setSheetCell(worksheet, `A${row}`, expense.lineItem, { font: LABEL_FONT });
     if (isOccupancyTaxExpense(expense.lineItem)) {
-      setFormulaCell(worksheet, `B${row}`, "OccupancyTaxPct/100", {
+      setFormulaCell(worksheet, `B${row}`, assumptionRef("occupancyTaxPct"), {
         numFmt: PERCENT_FMT,
         fill: FORMULA_FILL,
-      });
-    } else if (expense.annualGrowthPct != null && Number.isFinite(expense.annualGrowthPct)) {
-      setSheetCell(worksheet, `B${row}`, expense.annualGrowthPct / 100, {
-        numFmt: PERCENT_FMT,
-        fill: HARD_CODED_FILL,
-        font: HARD_CODED_FONT,
-      });
-    } else if (isTaxExpense(expense.lineItem)) {
-      setFormulaCell(worksheet, `B${row}`, "AnnualPropertyTaxGrowthPct/100", {
-        numFmt: PERCENT_FMT,
-        fill: FORMULA_FILL,
+        font: LINKED_FORMULA_FONT,
       });
     } else {
-      setFormulaCell(worksheet, `B${row}`, "AnnualExpenseGrowthPct/100", {
+      setFormulaCell(worksheet, `B${row}`, expenseGrowthRef(index), {
         numFmt: PERCENT_FMT,
         fill: FORMULA_FILL,
+        font: LINKED_FORMULA_FONT,
       });
     }
   });
 
   setSheetCell(worksheet, `A${rows.management}`, "Management fee", { font: LABEL_FONT });
-  setFormulaCell(worksheet, `B${rows.management}`, "ManagementFeePct/100", {
+  setFormulaCell(worksheet, `B${rows.management}`, assumptionRef("managementFeePct"), {
     numFmt: PERCENT_FMT,
     fill: FORMULA_FILL,
+    font: LINKED_FORMULA_FONT,
   });
   setSheetCell(worksheet, `A${rows.totalOperatingExpenses}`, "Total operating expenses", {
     fill: COLUMN_FILL,
@@ -1305,14 +1505,16 @@ function buildCashFlowModelSheet(
   });
   setSheetCell(worksheet, `A${rows.totalInvestmentCost}`, "Total investment cost", { font: LABEL_FONT });
   setSheetCell(worksheet, `A${rows.saleValue}`, "Sale value", { font: LABEL_FONT });
-  setFormulaCell(worksheet, `B${rows.saleValue}`, "ExitCapPct/100", {
+  setFormulaCell(worksheet, `B${rows.saleValue}`, assumptionRef("exitCapPct"), {
     numFmt: PERCENT_FMT,
     fill: FORMULA_FILL,
+    font: LINKED_FORMULA_FONT,
   });
   setSheetCell(worksheet, `A${rows.saleClosingCosts}`, "Closing costs @ sale", { font: LABEL_FONT });
-  setFormulaCell(worksheet, `B${rows.saleClosingCosts}`, "ExitClosingCostPct/100", {
+  setFormulaCell(worksheet, `B${rows.saleClosingCosts}`, assumptionRef("exitClosingCostPct"), {
     numFmt: PERCENT_FMT,
     fill: FORMULA_FILL,
+    font: LINKED_FORMULA_FONT,
   });
   setSheetCell(worksheet, `A${rows.reserveRelease}`, "Reserve release at exit", { font: LABEL_FONT });
   setSheetCell(worksheet, `A${rows.unleveredCashFlow}`, "Unlevered CF", {
@@ -1330,32 +1532,32 @@ function buildCashFlowModelSheet(
   for (let yearIndex = 0; yearIndex <= MAX_MODEL_YEARS; yearIndex += 1) {
     const year = yearIndex;
     const column = columnLetter(3 + yearIndex);
-    const activeOperatingCondition = `OR(${column}$5=0,${column}$5>HoldPeriodYears)`;
-    const activeYearCondition = `${column}$5<=HoldPeriodYears`;
+    const activeOperatingCondition = `OR(${column}$5=0,${column}$5>${holdPeriodRef})`;
+    const activeYearCondition = `${column}$5<=${holdPeriodRef}`;
 
     setFormulaCell(
       worksheet,
       `${column}${rows.propertyValue}`,
-      `IF(${column}$5=0,PurchasePrice,IF(${activeYearCondition},PurchasePrice*(1+AnnualRentGrowthPct/100)^${column}$5,0))`,
-      { numFmt: CURRENCY_FMT, fill: FORMULA_FILL }
+      `IF(${column}$5=0,${assumptionRef("purchasePrice")},IF(${activeYearCondition},${assumptionRef("purchasePrice")}*(1+${assumptionRef("annualRentGrowthPct")})^${column}$5,0))`,
+      { numFmt: CURRENCY_FMT, fill: FORMULA_FILL, font: LINKED_FORMULA_FONT }
     );
     setFormulaCell(
       worksheet,
       `${column}${rows.freeMarketResidential}`,
-      `IF(${activeOperatingCondition},0,CurrentFreeMarketResidentialGrossRent*(1+BlendedRentUpliftPct/100)*(1+AnnualRentGrowthPct/100)^(${column}$5-1))`,
-      { numFmt: CURRENCY_FMT, fill: FORMULA_FILL }
+      `IF(${activeOperatingCondition},0,${assumptionRef("currentFreeMarketResidentialGrossRent")}*(1+${assumptionRef("blendedRentUpliftPct")})*(1+${assumptionRef("annualRentGrowthPct")})^(${column}$5-1))`,
+      { numFmt: CURRENCY_FMT, fill: FORMULA_FILL, font: LINKED_FORMULA_FONT }
     );
     setFormulaCell(
       worksheet,
       `${column}${rows.protectedResidential}`,
-      `IF(${activeOperatingCondition},0,CurrentProtectedResidentialGrossRent)`,
-      { numFmt: CURRENCY_FMT, fill: FORMULA_FILL }
+      `IF(${activeOperatingCondition},0,${assumptionRef("currentProtectedResidentialGrossRent")})`,
+      { numFmt: CURRENCY_FMT, fill: FORMULA_FILL, font: LINKED_FORMULA_FONT }
     );
     setFormulaCell(
       worksheet,
       `${column}${rows.commercial}`,
-      `IF(${activeOperatingCondition},0,CurrentCommercialGrossRent*(1+AnnualCommercialRentGrowthPct/100)^(${column}$5-1))`,
-      { numFmt: CURRENCY_FMT, fill: FORMULA_FILL }
+      `IF(${activeOperatingCondition},0,${assumptionRef("currentCommercialGrossRent")}*(1+${assumptionRef("annualCommercialRentGrowthPct")})^(${column}$5-1))`,
+      { numFmt: CURRENCY_FMT, fill: FORMULA_FILL, font: LINKED_FORMULA_FONT }
     );
     setFormulaCell(
       worksheet,
@@ -1366,20 +1568,20 @@ function buildCashFlowModelSheet(
     setFormulaCell(
       worksheet,
       `${column}${rows.otherIncome}`,
-      `IF(${activeOperatingCondition},0,CurrentOtherIncome*(1+AnnualOtherIncomeGrowthPct/100)^(${column}$5-1))`,
-      { numFmt: CURRENCY_FMT, fill: FORMULA_FILL }
+      `IF(${activeOperatingCondition},0,${assumptionRef("currentOtherIncome")}*(1+${assumptionRef("annualOtherIncomeGrowthPct")})^(${column}$5-1))`,
+      { numFmt: CURRENCY_FMT, fill: FORMULA_FILL, font: LINKED_FORMULA_FONT }
     );
     setFormulaCell(
       worksheet,
       `${column}${rows.vacancy}`,
-      `IF(${activeOperatingCondition},0,-${column}${rows.grossRentalIncome}*(VacancyPct/100))`,
-      { numFmt: CURRENCY_FMT, fill: FORMULA_FILL }
+      `IF(${activeOperatingCondition},0,-${column}${rows.grossRentalIncome}*${assumptionRef("vacancyPct")})`,
+      { numFmt: CURRENCY_FMT, fill: FORMULA_FILL, font: LINKED_FORMULA_FONT }
     );
     setFormulaCell(
       worksheet,
       `${column}${rows.leadTime}`,
-      `IF(${column}$5=1,-${column}${rows.grossRentalIncome}*(LeadTimeMonths/12),0)`,
-      { numFmt: CURRENCY_FMT, fill: FORMULA_FILL }
+      `IF(${column}$5=1,-${column}${rows.grossRentalIncome}*(${leadTimeMonthsRef}/${MONTHS_PER_YEAR}),0)`,
+      { numFmt: CURRENCY_FMT, fill: FORMULA_FILL, font: LINKED_FORMULA_FONT }
     );
     setFormulaCell(
       worksheet,
@@ -1391,27 +1593,24 @@ function buildCashFlowModelSheet(
     artifacts.expenses.forEach((expense, index) => {
       const row = rows.expenseStart + index;
       const growthRef =
-        expense.annualGrowthPct != null && Number.isFinite(expense.annualGrowthPct)
-          ? `B${row}`
-          : isOccupancyTaxExpense(expense.lineItem)
-            ? "OccupancyTaxPct/100"
-            : isTaxExpense(expense.lineItem)
-            ? "AnnualPropertyTaxGrowthPct/100"
-            : "AnnualExpenseGrowthPct/100";
+        isOccupancyTaxExpense(expense.lineItem)
+          ? assumptionRef("occupancyTaxPct")
+          : expenseGrowthRef(index);
       const projectedValue =
         year > 0 && Array.isArray(expense.yearlyAmounts)
           ? expense.yearlyAmounts[year - 1] ?? 0
           : undefined;
       const baseAmountFormula = artifacts.aggregateExpenseFallback
-        ? `${expense.amount}*(1+ExpenseIncreasePct/100)`
-        : `${expense.amount}`;
+        ? `${expenseBaseAmountRef(index)}*(1+${assumptionRef("expenseIncreasePct")})`
+        : expenseBaseAmountRef(index);
       const expenseFormula = isOccupancyTaxExpense(expense.lineItem)
-        ? `IF(${activeOperatingCondition},0,-MAX(0,${column}${rows.grossRentalIncome}+${column}${rows.vacancy}+${column}${rows.leadTime})*(OccupancyTaxPct/100))`
+        ? `IF(${activeOperatingCondition},0,-MAX(0,${column}${rows.grossRentalIncome}+${column}${rows.vacancy}+${column}${rows.leadTime})*${growthRef})`
         : `IF(${activeOperatingCondition},0,-(${baseAmountFormula})*((1+${growthRef})^(${column}$5-1)))`;
 
       setFormulaCell(worksheet, `${column}${row}`, expenseFormula, {
         numFmt: CURRENCY_FMT,
         fill: FORMULA_FILL,
+        font: LINKED_FORMULA_FONT,
         result: projectedValue == null ? undefined : -Math.abs(projectedValue),
       });
     });
@@ -1419,8 +1618,8 @@ function buildCashFlowModelSheet(
     setFormulaCell(
       worksheet,
       `${column}${rows.management}`,
-      `IF(${activeOperatingCondition},0,-MAX(0,${column}${rows.grossRentalIncome}+${column}${rows.vacancy}+${column}${rows.leadTime})*(ManagementFeePct/100))`,
-      { numFmt: CURRENCY_FMT, fill: FORMULA_FILL }
+      `IF(${activeOperatingCondition},0,-MAX(0,${column}${rows.grossRentalIncome}+${column}${rows.vacancy}+${column}${rows.leadTime})*${assumptionRef("managementFeePct")})`,
+      { numFmt: CURRENCY_FMT, fill: FORMULA_FILL, font: LINKED_FORMULA_FONT }
     );
     setFormulaCell(
       worksheet,
@@ -1437,8 +1636,8 @@ function buildCashFlowModelSheet(
     setFormulaCell(
       worksheet,
       `${column}${rows.recurringCapex}`,
-      `IF(${activeOperatingCondition},0,-RecurringCapexAnnual)`,
-      { numFmt: CURRENCY_FMT, fill: FORMULA_FILL }
+      `IF(${activeOperatingCondition},0,-${assumptionRef("recurringCapexAnnual")})`,
+      { numFmt: CURRENCY_FMT, fill: FORMULA_FILL, font: LINKED_FORMULA_FONT }
     );
     setFormulaCell(
       worksheet,
@@ -1449,26 +1648,26 @@ function buildCashFlowModelSheet(
     setFormulaCell(
       worksheet,
       `${column}${rows.capRate}`,
-      `IF(${activeOperatingCondition},"",IF(PurchasePrice=0,0,${column}${rows.noi}/PurchasePrice))`,
-      { numFmt: PERCENT_FMT, fill: FORMULA_FILL }
+      `IF(${activeOperatingCondition},"",IF(${assumptionRef("purchasePrice")}=0,0,${column}${rows.noi}/${assumptionRef("purchasePrice")}))`,
+      { numFmt: PERCENT_FMT, fill: FORMULA_FILL, font: LINKED_FORMULA_FONT }
     );
     setFormulaCell(
       worksheet,
       `${column}${rows.debtService}`,
       `IF(${activeOperatingCondition},0,-IFERROR(INDEX(FinancingModel!$C$${financingRows.amortizationStart}:$C$${financingRows.amortizationStart + MAX_MODEL_YEARS - 1},${column}$5),0))`,
-      { numFmt: CURRENCY_FMT, fill: FORMULA_FILL }
+      { numFmt: CURRENCY_FMT, fill: FORMULA_FILL, font: LINKED_FORMULA_FONT }
     );
     setFormulaCell(
       worksheet,
       `${column}${rows.principal}`,
       `IF(${activeOperatingCondition},0,-IFERROR(INDEX(FinancingModel!$D$${financingRows.amortizationStart}:$D$${financingRows.amortizationStart + MAX_MODEL_YEARS - 1},${column}$5),0))`,
-      { numFmt: CURRENCY_FMT, fill: FORMULA_FILL }
+      { numFmt: CURRENCY_FMT, fill: FORMULA_FILL, font: LINKED_FORMULA_FONT }
     );
     setFormulaCell(
       worksheet,
       `${column}${rows.interest}`,
       `IF(${activeOperatingCondition},0,-IFERROR(INDEX(FinancingModel!$E$${financingRows.amortizationStart}:$E$${financingRows.amortizationStart + MAX_MODEL_YEARS - 1},${column}$5),0))`,
-      { numFmt: CURRENCY_FMT, fill: FORMULA_FILL }
+      { numFmt: CURRENCY_FMT, fill: FORMULA_FILL, font: LINKED_FORMULA_FONT }
     );
     setFormulaCell(
       worksheet,
@@ -1479,24 +1678,25 @@ function buildCashFlowModelSheet(
     setFormulaCell(worksheet, `${column}${rows.totalInvestmentCost}`, `IF(${column}$5=0,-FinancingModel!$B$5,0)`, {
       numFmt: CURRENCY_FMT,
       fill: FORMULA_FILL,
+      font: LINKED_FORMULA_FONT,
     });
     setFormulaCell(
       worksheet,
       `${column}${rows.saleValue}`,
-      `IF(${column}$5=HoldPeriodYears,IF(ExitCapPct=0,0,${column}${rows.noi}/(ExitCapPct/100)),0)`,
-      { numFmt: CURRENCY_FMT, fill: FORMULA_FILL }
+      `IF(${column}$5=${holdPeriodRef},IF(${assumptionRef("exitCapPct")}=0,0,${column}${rows.noi}/${assumptionRef("exitCapPct")}),0)`,
+      { numFmt: CURRENCY_FMT, fill: FORMULA_FILL, font: LINKED_FORMULA_FONT }
     );
     setFormulaCell(
       worksheet,
       `${column}${rows.saleClosingCosts}`,
-      `IF(${column}$5=HoldPeriodYears,-${column}${rows.saleValue}*(ExitClosingCostPct/100),0)`,
-      { numFmt: CURRENCY_FMT, fill: FORMULA_FILL }
+      `IF(${column}$5=${holdPeriodRef},-${column}${rows.saleValue}*${assumptionRef("exitClosingCostPct")},0)`,
+      { numFmt: CURRENCY_FMT, fill: FORMULA_FILL, font: LINKED_FORMULA_FONT }
     );
     setFormulaCell(
       worksheet,
       `${column}${rows.reserveRelease}`,
-      `IF(${column}$5=HoldPeriodYears,-SUM($C${rows.recurringCapex}:${column}${rows.recurringCapex}),0)`,
-      { numFmt: CURRENCY_FMT, fill: FORMULA_FILL }
+      `IF(${column}$5=${holdPeriodRef},-SUM($C${rows.recurringCapex}:${column}${rows.recurringCapex}),0)`,
+      { numFmt: CURRENCY_FMT, fill: FORMULA_FILL, font: LINKED_FORMULA_FONT }
     );
     setFormulaCell(
       worksheet,
@@ -1507,16 +1707,18 @@ function buildCashFlowModelSheet(
     setFormulaCell(worksheet, `${column}${rows.financingFunding}`, `IF(${column}$5=0,FinancingModel!$B$2,0)`, {
       numFmt: CURRENCY_FMT,
       fill: FORMULA_FILL,
+      font: LINKED_FORMULA_FONT,
     });
     setFormulaCell(worksheet, `${column}${rows.financingFees}`, `IF(${column}$5=0,-FinancingModel!$B$3,0)`, {
       numFmt: CURRENCY_FMT,
       fill: FORMULA_FILL,
+      font: LINKED_FORMULA_FONT,
     });
     setFormulaCell(
       worksheet,
       `${column}${rows.financingPayoff}`,
-      `IF(${column}$5=HoldPeriodYears,-IFERROR(INDEX(FinancingModel!$F$${financingRows.amortizationStart}:$F$${financingRows.amortizationStart + MAX_MODEL_YEARS - 1},${column}$5),0),0)`,
-      { numFmt: CURRENCY_FMT, fill: FORMULA_FILL }
+      `IF(${column}$5=${holdPeriodRef},-IFERROR(INDEX(FinancingModel!$F$${financingRows.amortizationStart}:$F$${financingRows.amortizationStart + MAX_MODEL_YEARS - 1},${column}$5),0),0)`,
+      { numFmt: CURRENCY_FMT, fill: FORMULA_FILL, font: LINKED_FORMULA_FONT }
     );
     setFormulaCell(
       worksheet,
@@ -1533,8 +1735,8 @@ function buildCashFlowModelSheet(
   setFormulaCell(
     worksheet,
     `B${rows.calculatedStabilizedNoi}`,
-    `INDEX($C${rows.noi}:${columnLetter(3 + MAX_MODEL_YEARS)}${rows.noi},1,IF(LeadTimeMonths>0,MIN(HoldPeriodYears,2),MIN(HoldPeriodYears,1))+1)`,
-    { numFmt: CURRENCY_FMT, fill: FORMULA_FILL, result: ctx.operating.stabilizedNoi }
+    `INDEX($C${rows.noi}:${lastModelColumn}${rows.noi},1,IF(${leadTimeMonthsRef}>0,MIN(${holdPeriodRef},2),MIN(${holdPeriodRef},1))+1)`,
+    { numFmt: CURRENCY_FMT, fill: FORMULA_FILL, font: LINKED_FORMULA_FONT, result: ctx.operating.stabilizedNoi }
   );
   setSheetCell(worksheet, `A${rows.calculatedGrossSaleValue}`, "Calculated gross sale value", {
     font: LABEL_FONT,
@@ -1543,8 +1745,8 @@ function buildCashFlowModelSheet(
   setFormulaCell(
     worksheet,
     `B${rows.calculatedGrossSaleValue}`,
-    `INDEX($C${rows.saleValue}:${columnLetter(3 + MAX_MODEL_YEARS)}${rows.saleValue},1,HoldPeriodYears+1)`,
-    { numFmt: CURRENCY_FMT, fill: FORMULA_FILL, result: ctx.exit.exitPropertyValue }
+    `INDEX($C${rows.saleValue}:${lastModelColumn}${rows.saleValue},1,${holdPeriodRef}+1)`,
+    { numFmt: CURRENCY_FMT, fill: FORMULA_FILL, font: LINKED_FORMULA_FONT, result: ctx.exit.exitPropertyValue }
   );
   setSheetCell(worksheet, `A${rows.calculatedNetSaleValue}`, "Calculated net sale value", {
     font: LABEL_FONT,
@@ -1553,10 +1755,11 @@ function buildCashFlowModelSheet(
   setFormulaCell(
     worksheet,
     `B${rows.calculatedNetSaleValue}`,
-    `INDEX($C${rows.saleValue}:${columnLetter(3 + MAX_MODEL_YEARS)}${rows.saleValue},1,HoldPeriodYears+1)+INDEX($C${rows.saleClosingCosts}:${columnLetter(3 + MAX_MODEL_YEARS)}${rows.saleClosingCosts},1,HoldPeriodYears+1)`,
+    `INDEX($C${rows.saleValue}:${lastModelColumn}${rows.saleValue},1,${holdPeriodRef}+1)+INDEX($C${rows.saleClosingCosts}:${lastModelColumn}${rows.saleClosingCosts},1,${holdPeriodRef}+1)`,
     {
       numFmt: CURRENCY_FMT,
       fill: FORMULA_FILL,
+      font: LINKED_FORMULA_FONT,
       result: ctx.exit.netSaleProceedsBeforeDebtPayoff,
     }
   );
@@ -1567,8 +1770,8 @@ function buildCashFlowModelSheet(
   setFormulaCell(
     worksheet,
     `B${rows.calculatedUnleveredIrr}`,
-    `IFERROR(IRR(OFFSET($C$${rows.unleveredCashFlow},0,0,1,HoldPeriodYears+1)),"")`,
-    { numFmt: PERCENT_FMT, fill: FORMULA_FILL }
+    `IFERROR(IRR($C$${rows.unleveredCashFlow}:INDEX($C$${rows.unleveredCashFlow}:$${lastModelColumn}$${rows.unleveredCashFlow},1,${holdPeriodRef}+1)),"")`,
+    { numFmt: PERCENT_FMT, fill: FORMULA_FILL, font: LINKED_FORMULA_FONT }
   );
   setSheetCell(worksheet, `A${rows.calculatedLeveredIrr}`, "Calculated levered IRR", {
     font: LABEL_FONT,
@@ -1577,8 +1780,8 @@ function buildCashFlowModelSheet(
   setFormulaCell(
     worksheet,
     `B${rows.calculatedLeveredIrr}`,
-    `IFERROR(IRR(OFFSET($C$${rows.leveredCashFlow},0,0,1,HoldPeriodYears+1)),"")`,
-    { numFmt: PERCENT_FMT, fill: FORMULA_FILL, result: ctx.returns.irrPct ?? undefined }
+    `IFERROR(IRR($C$${rows.leveredCashFlow}:INDEX($C$${rows.leveredCashFlow}:$${lastModelColumn}$${rows.leveredCashFlow},1,${holdPeriodRef}+1)),"")`,
+    { numFmt: PERCENT_FMT, fill: FORMULA_FILL, font: LINKED_FORMULA_FONT, result: ctx.returns.irrPct ?? undefined }
   );
   setSheetCell(worksheet, `A${rows.calculatedAverageCashOnCash}`, "Calculated average cash-on-cash", {
     font: LABEL_FONT,
@@ -1587,8 +1790,8 @@ function buildCashFlowModelSheet(
   setFormulaCell(
     worksheet,
     `B${rows.calculatedAverageCashOnCash}`,
-    `IF(OR(CalculatedInitialEquity=0,HoldPeriodYears=0),0,(SUM(OFFSET($D$${rows.noi},0,0,1,HoldPeriodYears))+SUM(OFFSET($D$${rows.debtService},0,0,1,HoldPeriodYears)))/(HoldPeriodYears*CalculatedInitialEquity))`,
-    { numFmt: PERCENT_FMT, fill: FORMULA_FILL, result: ctx.returns.averageCashOnCashReturn ?? undefined }
+    `IF(OR(FinancingModel!$B$6=0,${holdPeriodRef}=0),0,(SUM($D$${rows.noi}:INDEX($D$${rows.noi}:$${lastModelColumn}$${rows.noi},1,${holdPeriodRef}))+SUM($D$${rows.debtService}:INDEX($D$${rows.debtService}:$${lastModelColumn}$${rows.debtService},1,${holdPeriodRef})))/(${holdPeriodRef}*FinancingModel!$B$6))`,
+    { numFmt: PERCENT_FMT, fill: FORMULA_FILL, font: LINKED_FORMULA_FONT, result: ctx.returns.averageCashOnCashReturn ?? undefined }
   );
   setSheetCell(worksheet, `A${rows.calculatedEquityMultiple}`, "Calculated equity multiple", {
     font: LABEL_FONT,
@@ -1597,17 +1800,9 @@ function buildCashFlowModelSheet(
   setFormulaCell(
     worksheet,
     `B${rows.calculatedEquityMultiple}`,
-    `IF(CalculatedInitialEquity=0,0,SUMPRODUCT((OFFSET($D$${rows.leveredCashFlow},0,0,1,HoldPeriodYears)>0)*OFFSET($D$${rows.leveredCashFlow},0,0,1,HoldPeriodYears))/CalculatedInitialEquity)`,
-    { numFmt: MULTIPLE_FMT, fill: FORMULA_FILL, result: ctx.returns.equityMultiple ?? undefined }
+    `IF(FinancingModel!$B$6=0,0,SUMPRODUCT(($D$${rows.leveredCashFlow}:INDEX($D$${rows.leveredCashFlow}:$${lastModelColumn}$${rows.leveredCashFlow},1,${holdPeriodRef})>0)*$D$${rows.leveredCashFlow}:INDEX($D$${rows.leveredCashFlow}:$${lastModelColumn}$${rows.leveredCashFlow},1,${holdPeriodRef}))/FinancingModel!$B$6)`,
+    { numFmt: MULTIPLE_FMT, fill: FORMULA_FILL, font: LINKED_FORMULA_FONT, result: ctx.returns.equityMultiple ?? undefined }
   );
-
-  defineName(workbook, "CalculatedStabilizedNoi", "CashFlowModel", `$B$${rows.calculatedStabilizedNoi}`);
-  defineName(workbook, "CalculatedGrossSaleValue", "CashFlowModel", `$B$${rows.calculatedGrossSaleValue}`);
-  defineName(workbook, "CalculatedNetSaleValue", "CashFlowModel", `$B$${rows.calculatedNetSaleValue}`);
-  defineName(workbook, "CalculatedUnleveredIRR", "CashFlowModel", `$B$${rows.calculatedUnleveredIrr}`);
-  defineName(workbook, "CalculatedLeveredIRR", "CashFlowModel", `$B$${rows.calculatedLeveredIrr}`);
-  defineName(workbook, "CalculatedAverageCashOnCash", "CashFlowModel", `$B$${rows.calculatedAverageCashOnCash}`);
-  defineName(workbook, "CalculatedEquityMultiple", "CashFlowModel", `$B$${rows.calculatedEquityMultiple}`);
 }
 
 function summaryMetricDefinitions(
@@ -1623,135 +1818,133 @@ function summaryMetricDefinitions(
   return {
     address: {
       label: "Address",
-      formula: "PropertyAddress",
+      formula: assumptionRef("address"),
       result: ctx.canonicalAddress,
     },
     area: {
       label: "Area",
-      formula: "PropertyArea",
+      formula: assumptionRef("area"),
       result: ctx.listingCity ?? "",
     },
     units: {
       label: "Units",
-      formula: "UnitCount",
+      formula: assumptionRef("units"),
       result: num(ctx.unitCount),
       numFmt: INTEGER_FMT,
     },
     deal_score: {
       label: "Deal score",
-      formula: "DealScore",
+      formula: assumptionRef("dealScore"),
       result: ctx.dealScore ?? "",
       numFmt: INTEGER_FMT,
     },
     investment_profile: {
       label: "Investment profile",
-      formula: "InvestmentProfile",
+      formula: assumptionRef("investmentProfile"),
       result: ctx.assumptions.acquisition.investmentProfile ?? "",
     },
     target_acquisition_date: {
       label: "Target acquisition",
-      formula: "TargetAcquisitionDate",
+      formula: assumptionRef("targetAcquisitionDate"),
       result: ctx.assumptions.acquisition.targetAcquisitionDate ?? "",
       numFmt: ctx.assumptions.acquisition.targetAcquisitionDate ? DATE_FMT : undefined,
     },
     purchase_price: {
       label: "Purchase price",
-      formula: "PurchasePrice",
+      formula: assumptionRef("purchasePrice"),
       result: num(ctx.assumptions.acquisition.purchasePrice),
       numFmt: CURRENCY_FMT,
     },
     total_capitalization: {
       label: "Total capitalization",
-      formula: "CalculatedTotalCapitalization",
+      formula: "FinancingModel!$B$11",
       result: ctx.acquisition.totalProjectCost + num(ctx.financing.financingFees),
       numFmt: CURRENCY_FMT,
     },
     loan_amount: {
       label: "Loan amount",
-      formula: "CalculatedLoanAmount",
+      formula: "FinancingModel!$B$2",
       result: ctx.financing.loanAmount,
       numFmt: CURRENCY_FMT,
     },
     cash_required: {
       label: "Cash required",
-      formula: "CalculatedInitialEquity",
+      formula: "FinancingModel!$B$6",
       result: ctx.acquisition.initialEquityInvested,
       numFmt: CURRENCY_FMT,
     },
     current_gross_rent: {
       label: "Current gross rent",
-      formula: "CurrentGrossRent",
-      result: num(ctx.currentGrossRent),
+      formula: assumptionRef("currentGrossRent"),
+      result:
+        artifacts.currentRentBreakdown.freeMarketResidential +
+        artifacts.currentRentBreakdown.protectedResidential +
+        artifacts.currentRentBreakdown.commercial,
       numFmt: CURRENCY_FMT,
     },
     current_noi: {
       label: "Current NOI",
-      formula: "CurrentNOI",
-      result:
-        artifacts.currentRentBreakdown.freeMarketResidential +
-        artifacts.currentRentBreakdown.protectedResidential +
-        artifacts.currentRentBreakdown.commercial +
-        num(ctx.currentOtherIncome) -
-        num(ctx.currentExpensesTotal ?? ctx.operating.currentExpenses),
+      formula: assumptionRef("currentNoi"),
+      result: currentNoiResult(ctx, artifacts),
       numFmt: CURRENCY_FMT,
     },
     stabilized_noi: {
       label: "Stabilized NOI",
-      formula: "CalculatedStabilizedNoi",
+      formula: `CashFlowModel!$B$${artifacts.cashFlowRows.calculatedStabilizedNoi}`,
       result: ctx.operating.stabilizedNoi,
       numFmt: CURRENCY_FMT,
     },
     hold_period: {
       label: "Hold period",
-      formula: "HoldPeriodYears",
+      formula: assumptionRef("holdPeriodYears"),
       result: num(ctx.assumptions.holdPeriodYears),
       numFmt: INTEGER_FMT,
     },
     exit_cap: {
       label: "Exit cap rate",
-      formula: "ExitCapPct/100",
+      formula: assumptionRef("exitCapPct"),
       result: num(ctx.assumptions.exit.exitCapPct) / 100,
       numFmt: PERCENT_FMT,
     },
     gross_sale_value: {
       label: "Gross sale value",
-      formula: "CalculatedGrossSaleValue",
+      formula: `CashFlowModel!$B$${artifacts.cashFlowRows.calculatedGrossSaleValue}`,
       result: ctx.exit.exitPropertyValue,
       numFmt: CURRENCY_FMT,
     },
     net_sale_value: {
       label: "Net sale value",
-      formula: "CalculatedNetSaleValue",
+      formula: `CashFlowModel!$B$${artifacts.cashFlowRows.calculatedNetSaleValue}`,
       result: ctx.exit.netSaleProceedsBeforeDebtPayoff,
       numFmt: CURRENCY_FMT,
     },
     levered_irr: {
       label: "Levered IRR",
-      formula: "CalculatedLeveredIRR",
+      formula: `CashFlowModel!$B$${artifacts.cashFlowRows.calculatedLeveredIrr}`,
       result: ctx.returns.irrPct ?? undefined,
       numFmt: PERCENT_FMT,
     },
     unlevered_irr: {
       label: "Unlevered IRR",
-      formula: "CalculatedUnleveredIRR",
+      formula: `CashFlowModel!$B$${artifacts.cashFlowRows.calculatedUnleveredIrr}`,
       result: unleveredReturn?.irr ?? undefined,
       numFmt: PERCENT_FMT,
     },
     avg_cash_on_cash: {
       label: "Avg cash-on-cash",
-      formula: "CalculatedAverageCashOnCash",
+      formula: `CashFlowModel!$B$${artifacts.cashFlowRows.calculatedAverageCashOnCash}`,
       result: ctx.returns.averageCashOnCashReturn ?? undefined,
       numFmt: PERCENT_FMT,
     },
     equity_multiple: {
       label: "Equity multiple",
-      formula: "CalculatedEquityMultiple",
+      formula: `CashFlowModel!$B$${artifacts.cashFlowRows.calculatedEquityMultiple}`,
       result: ctx.returns.equityMultiple ?? undefined,
       numFmt: MULTIPLE_FMT,
     },
     target_irr: {
       label: "Target IRR",
-      formula: "TargetIrrPct/100",
+      formula: assumptionRef("targetIrrPct"),
       result: num(ctx.assumptions.targetIrrPct) / 100,
       numFmt: PERCENT_FMT,
     },
@@ -1832,6 +2025,7 @@ function buildSummarySheet(
         result: definition.result,
         numFmt: definition.numFmt,
         fill: FORMULA_FILL,
+        font: LINKED_FORMULA_FONT,
         alignment: definition.numFmt ? { horizontal: "right" } : definition.alignment,
       });
       for (let current = start.col; current <= start.col + 3; current += 1) {
@@ -1844,7 +2038,7 @@ function buildSummarySheet(
   setSheetCell(
     worksheet,
     "A16",
-    "Blue text on the Assumptions tab marks hard-coded inputs. FinancingModel and CashFlowModel are visible formula tabs so the workbook can be audited without unhiding support sheets.",
+    "Blue text on the Assumptions tab marks hard-coded editable inputs; yellow fill marks key assumptions to review. Summary formulas use direct visible references into Assumptions, FinancingModel, MonthlyDebt, and CashFlowModel.",
     {
       fill: SOFT_FILL,
       font: NOTE_FONT,
@@ -2021,6 +2215,255 @@ function buildSummarySheet(
   }
 }
 
+function buildYieldOnCostSheet(
+  workbook: ExcelJS.Workbook,
+  ctx: UnderwritingContext,
+  artifacts: WorkbookBuildArtifacts
+): void {
+  const worksheet = workbook.addWorksheet("Yield on Cost", {
+    views: [{ state: "frozen", ySplit: 3, showGridLines: false }],
+  });
+  worksheet.columns = [
+    { width: 30 },
+    { width: 18 },
+    { width: 4 },
+    { width: 32 },
+    { width: 18 },
+    { width: 4 },
+    { width: 28 },
+    { width: 18 },
+  ];
+
+  const yocRows = yieldOnCostAssumptionRows(artifacts);
+  const longTermNoiRef = quotedSheetRef("Assumptions", `$C$${yocRows.longTermNoi}`);
+  const midTermNoiRef = quotedSheetRef("Assumptions", `$C$${yocRows.midTermNoi}`);
+
+  worksheet.mergeCells("A1:H1");
+  setSheetCell(worksheet, "A1", "Yield on Cost", {
+    fill: TITLE_FILL,
+    font: TITLE_FONT,
+    alignment: { horizontal: "left" },
+  });
+
+  styledSectionTitle(worksheet, "A3", "B3", "Total Cost Basis");
+  const costRows = [
+    ["Purchase price", assumptionRef("purchasePrice"), num(ctx.assumptions.acquisition.purchasePrice)],
+    ["Closing costs", "FinancingModel!$B$4", ctx.acquisition.purchaseClosingCosts],
+    ["Initial CapEx", assumptionRef("renovationCosts"), num(ctx.assumptions.acquisition.renovationCosts)],
+    ["FF&E / furnishing cost", assumptionRef("furnishingCosts"), num(ctx.assumptions.acquisition.furnishingSetupCosts)],
+    ["Other upfront costs", assumptionRef("onboardingCosts"), num(ctx.assumptions.acquisition.onboardingCosts)],
+  ] as const;
+  costRows.forEach(([label, formula, result], index) => {
+    const row = 4 + index;
+    setSheetCell(worksheet, `A${row}`, label, { font: LABEL_FONT, fill: SOFT_FILL });
+    setFormulaCell(worksheet, `B${row}`, formula, {
+      result,
+      numFmt: CURRENCY_FMT,
+      fill: FORMULA_FILL,
+      font: LINKED_FORMULA_FONT,
+      alignment: { horizontal: "right" },
+    });
+  });
+  setSheetCell(worksheet, "A9", "Total project cost", { font: LABEL_FONT, fill: COLUMN_FILL });
+  setFormulaCell(worksheet, "B9", "SUM(B4:B8)", {
+    result: ctx.acquisition.totalProjectCost,
+    numFmt: CURRENCY_FMT,
+    fill: FORMULA_FILL,
+    alignment: { horizontal: "right" },
+  });
+
+  styledSectionTitle(worksheet, "D3", "E3", "NOI Comparison");
+  [
+    ["Stabilized long-term rental NOI", longTermNoiRef, currentNoiResult(ctx, artifacts), CURRENCY_FMT],
+    ["Stabilized mid-term rental NOI", midTermNoiRef, ctx.operating.stabilizedNoi, CURRENCY_FMT],
+    ["NOI uplift", "E5-E4", ctx.operating.stabilizedNoi - currentNoiResult(ctx, artifacts), CURRENCY_FMT],
+    [
+      "NOI uplift %",
+      "IF(E4=0,0,E5/E4-1)",
+      currentNoiResult(ctx, artifacts) === 0
+        ? 0
+        : ctx.operating.stabilizedNoi / currentNoiResult(ctx, artifacts) - 1,
+      PERCENT_FMT,
+    ],
+    ["Exit cap rate", assumptionRef("exitCapPct"), percentAssumption(ctx.assumptions.exit.exitCapPct), PERCENT_FMT],
+  ].forEach(([label, formula, result, numFmt], index) => {
+    const row = 4 + index;
+    setSheetCell(worksheet, `D${row}`, label, { font: LABEL_FONT, fill: SOFT_FILL });
+    setFormulaCell(worksheet, `E${row}`, formula as string, {
+      result: result as number,
+      numFmt: numFmt as string,
+      fill: FORMULA_FILL,
+      font: index < 2 || index === 4 ? LINKED_FORMULA_FONT : FORMULA_FONT,
+      alignment: { horizontal: "right" },
+    });
+  });
+
+  styledSectionTitle(worksheet, "A11", "E11", "Yield on Cost / Value Creation Summary");
+  const summaryRows = [
+    ["Long-term rental yield on cost", "IF(B9=0,0,E4/B9)", PERCENT_FMT],
+    ["Mid-term rental yield on cost", "IF(B9=0,0,E5/B9)", PERCENT_FMT],
+    ["Yield on cost spread", "B13-B12", PERCENT_FMT],
+    ["Implied value using LTR NOI", "IF(E8=0,0,E4/E8)", CURRENCY_FMT],
+    ["Implied value using MTR NOI", "IF(E8=0,0,E5/E8)", CURRENCY_FMT],
+    ["Implied value uplift", "B16-B15", CURRENCY_FMT],
+  ] as const;
+  summaryRows.forEach(([label, formula, numFmt], index) => {
+    const row = 12 + index;
+    setSheetCell(worksheet, `A${row}`, label, { font: LABEL_FONT, fill: SOFT_FILL });
+    setFormulaCell(worksheet, `B${row}`, formula, {
+      numFmt,
+      fill: FORMULA_FILL,
+      alignment: { horizontal: "right" },
+    });
+  });
+
+  styledSectionTitle(worksheet, "G3", "H3", "Summary Box");
+  [
+    ["Total Project Cost", "B9", CURRENCY_FMT],
+    ["LTR NOI", "E4", CURRENCY_FMT],
+    ["MTR NOI", "E5", CURRENCY_FMT],
+    ["LTR Yield on Cost", "B12", PERCENT_FMT],
+    ["MTR Yield on Cost", "B13", PERCENT_FMT],
+    ["Yield Spread", "B14", PERCENT_FMT],
+    ["Implied Value Uplift", "B17", CURRENCY_FMT],
+  ].forEach(([label, formula, numFmt], index) => {
+    const row = 4 + index;
+    setSheetCell(worksheet, `G${row}`, label, { font: LABEL_FONT, fill: index === 0 ? COLUMN_FILL : SOFT_FILL });
+    setFormulaCell(worksheet, `H${row}`, formula, {
+      numFmt,
+      fill: FORMULA_FILL,
+      alignment: { horizontal: "right" },
+    });
+  });
+
+  styledSectionTitle(worksheet, "A21", "D21", "MTR Yield Sensitivity");
+  setSheetCell(worksheet, "A22", "MTR NOI premium", { fill: COLUMN_FILL, font: HEADER_FONT, alignment: { horizontal: "center" } });
+  [0, 0.05, 0.1].forEach((costCase, index) => {
+    const cell = `${columnLetter(2 + index)}22`;
+    setSheetCell(worksheet, cell, costCase, {
+      numFmt: PERCENT_FMT,
+      fill: COLUMN_FILL,
+      font: HEADER_FONT,
+      alignment: { horizontal: "center" },
+    });
+  });
+  [0.2, 0.4, 0.6, 0.8, 1].forEach((premium, index) => {
+    const row = 23 + index;
+    setSheetCell(worksheet, `A${row}`, premium, {
+      numFmt: PERCENT_FMT,
+      fill: SOFT_FILL,
+      font: LABEL_FONT,
+      alignment: { horizontal: "center" },
+    });
+    for (let colIndex = 2; colIndex <= 4; colIndex += 1) {
+      const col = columnLetter(colIndex);
+      setFormulaCell(worksheet, `${col}${row}`, `IF($B$9=0,0,($E$4*(1+$A${row}))/($B$9*(1+${col}$22)))`, {
+        numFmt: PERCENT_FMT,
+        fill: FORMULA_FILL,
+        alignment: { horizontal: "right" },
+      });
+    }
+  });
+}
+
+function buildFormulaAuditSheet(workbook: ExcelJS.Workbook, artifacts: WorkbookBuildArtifacts): void {
+  const worksheet = workbook.addWorksheet("Formula Audit", {
+    views: [{ state: "frozen", ySplit: 4, showGridLines: false }],
+  });
+  worksheet.columns = [
+    { width: 30 },
+    { width: 38 },
+    { width: 38 },
+    { width: 42 },
+    { width: 56 },
+  ];
+
+  worksheet.mergeCells("A1:E1");
+  setSheetCell(worksheet, "A1", "Formula Audit", {
+    fill: TITLE_FILL,
+    font: TITLE_FONT,
+    alignment: { horizontal: "left" },
+  });
+  worksheet.mergeCells("A2:E2");
+  setSheetCell(
+    worksheet,
+    "A2",
+    "Audit trail for the workbook-generation changes applied to every deal dossier / analysis Excel export.",
+    {
+      fill: SOFT_FILL,
+      font: NOTE_FONT,
+      alignment: { wrapText: true },
+    }
+  );
+
+  ["Area", "Original issue", "Why it mattered", "Fix implemented", "Example revised formula / reference logic"].forEach(
+    (label, index) => {
+      setSheetCell(worksheet, `${columnLetter(index + 1)}4`, label, {
+        fill: COLUMN_FILL,
+        font: HEADER_FONT,
+        alignment: { horizontal: "center", wrapText: true },
+      });
+    }
+  );
+
+  const rows = [
+    [
+      "Named ranges replaced with direct visible references",
+      "Summary and model cells previously used workbook-level names for key outputs.",
+      "Named ranges make click-through review harder because the user must inspect name definitions.",
+      "Summary formulas now point directly to visible cells on Assumptions, FinancingModel, and CashFlowModel.",
+      `Summary purchase price = ${assumptionRef("purchasePrice")}; levered IRR = CashFlowModel!$B$${artifacts.cashFlowRows.calculatedLeveredIrr}`,
+    ],
+    [
+      "Hardcoded expense constants moved to Assumptions",
+      "Annual cash-flow expense formulas embedded base amounts from source data.",
+      "Expense diligence requires each base amount and growth rate to be editable in one visible place.",
+      "Operating expenses now use the Assumptions expense table for base amount and growth.",
+      `CashFlowModel expense row uses ${expenseBaseAmountRef(0)} and ${expenseGrowthRef(0)}`,
+    ],
+    [
+      "Percentage assumptions converted to true percentages",
+      "Percent inputs were stored as whole numbers and divided by 100 inside formulas.",
+      "Whole-number percentages hide unit conversion and invite accidental double-scaling.",
+      "Assumptions stores 65% as 0.65 with percent formatting, and formulas reference the cell directly.",
+      `Loan amount = ${assumptionRef("purchasePrice")}*${assumptionRef("ltvPct")}`,
+    ],
+    [
+      "Monthly debt schedule added",
+      "Annual debt formulas used opaque per-year amortization formulas.",
+      "Debt service, interest, principal, and payoff should be traceable month by month.",
+      "MonthlyDebt now shows each month; FinancingModel annual rows roll up with SUMIFS.",
+      `FinancingModel annual interest = SUMIFS(MonthlyDebt!$E$${monthlyDebtRows.start}:$E$${monthlyDebtEndRow()},MonthlyDebt!$I$${monthlyDebtRows.start}:$I$${monthlyDebtEndRow()},A${financingRows.amortizationStart})`,
+    ],
+    [
+      "OFFSET / INDIRECT replaced",
+      "Return metrics and debt calculations used volatile or hard-to-audit dynamic references.",
+      "Volatile formulas are harder to review and can recalculate unpredictably.",
+      "Dynamic ending-period logic now uses INDEX with visible row ranges.",
+      `IRR range = $C$${artifacts.cashFlowRows.leveredCashFlow}:INDEX($C$${artifacts.cashFlowRows.leveredCashFlow}:$${columnLetter(3 + MAX_MODEL_YEARS)}$${artifacts.cashFlowRows.leveredCashFlow},1,${assumptionRef("holdPeriodYears")}+1)`,
+    ],
+    [
+      "Yield on Cost calculator added",
+      "Yield-on-cost comparison was not isolated as a reviewable tab.",
+      "The long-term vs mid-term rental value creation thesis needs a clear diligence view.",
+      "Yield on Cost compares LTR NOI, MTR NOI, total project cost, yield spread, and implied value uplift.",
+      `MTR yield on cost = ${quotedSheetRef("Yield on Cost", "$E$5")}/${quotedSheetRef("Yield on Cost", "$B$9")}`,
+    ],
+  ];
+
+  rows.forEach((values, index) => {
+    const row = 5 + index;
+    values.forEach((value, colIndex) => {
+      setSheetCell(worksheet, `${columnLetter(colIndex + 1)}${row}`, value, {
+        fill: colIndex === 0 ? SOFT_FILL : FORMULA_FILL,
+        font: colIndex === 0 ? LABEL_FONT : undefined,
+        alignment: { wrapText: true, vertical: "top" },
+      });
+    });
+    worksheet.getRow(row).height = 72;
+  });
+}
+
 function buildModelGuideSheet(workbook: ExcelJS.Workbook): void {
   const worksheet = workbook.addWorksheet("Model Guide", {
     views: [{ state: "frozen", ySplit: 4, showGridLines: false }],
@@ -2041,7 +2484,7 @@ function buildModelGuideSheet(workbook: ExcelJS.Workbook): void {
   setSheetCell(
     worksheet,
     "A2",
-    "This workbook is formula-visible by design: inputs live on Assumptions, financing mechanics live on FinancingModel, operating / exit cash flows live on CashFlowModel, and Summary links to those model outputs.",
+    "This workbook is formula-visible by design: inputs live on Assumptions, monthly debt mechanics live on MonthlyDebt, annual financing rollups live on FinancingModel, operating / exit cash flows live on CashFlowModel, and Summary links directly to those visible cells.",
     {
       fill: SOFT_FILL,
       font: NOTE_FONT,
@@ -2062,7 +2505,7 @@ function buildModelGuideSheet(workbook: ExcelJS.Workbook): void {
     [
       "Summary",
       "Presentation output",
-      "Uses formulas and named ranges linked to Assumptions, FinancingModel, and CashFlowModel.",
+      "Uses direct sheet-qualified formulas linked to Assumptions, FinancingModel, and CashFlowModel.",
     ],
     [
       "Assumptions",
@@ -2072,12 +2515,27 @@ function buildModelGuideSheet(workbook: ExcelJS.Workbook): void {
     [
       "FinancingModel",
       "Loan sizing and amortization schedule",
-      "Visible support model. Loan amount, fees, payment, debt service, principal, interest, and ending balance are formula-driven.",
+      "Visible annual support model. Loan amount, fees, payment, debt service, principal, interest, and ending balance are formula-driven from MonthlyDebt.",
+    ],
+    [
+      "MonthlyDebt",
+      "Monthly debt schedule",
+      "Shows beginning balance, rate, monthly interest, debt service, principal amortization, ending balance, and annual grouping.",
     ],
     [
       "CashFlowModel",
       "Revenue, expenses, NOI, exit, and returns",
-      "Visible support model. Summary metrics link to this sheet through named ranges and direct sheet formulas.",
+      "Visible support model. Expense formulas reference the editable Assumptions expense table; return metrics use INDEX ranges.",
+    ],
+    [
+      "Yield on Cost",
+      "LTR vs MTR value creation",
+      "Compares total project cost, long-term NOI, mid-term NOI, yield spread, and implied value uplift.",
+    ],
+    [
+      "Formula Audit",
+      "Change log and formula audit trail",
+      "Documents the formula cleanup applied to the generated workbook.",
     ],
   ];
 
@@ -2093,16 +2551,18 @@ function buildModelGuideSheet(workbook: ExcelJS.Workbook): void {
     worksheet.getRow(rowNumber).height = 42;
   });
 
-  worksheet.mergeCells("A11:C11");
-  setSheetCell(worksheet, "A11", "Manual-change freshness", {
+  const freshnessTitleRow = rows.length + 7;
+  const freshnessBodyRow = freshnessTitleRow + 1;
+  worksheet.mergeCells(`A${freshnessTitleRow}:C${freshnessTitleRow}`);
+  setSheetCell(worksheet, `A${freshnessTitleRow}`, "Manual-change freshness", {
     fill: SECTION_FILL,
     font: SECTION_FONT,
     alignment: { horizontal: "left" },
   });
-  worksheet.mergeCells("A12:C12");
+  worksheet.mergeCells(`A${freshnessBodyRow}:C${freshnessBodyRow}`);
   setSheetCell(
     worksheet,
-    "A12",
+    `A${freshnessBodyRow}`,
     "For property-backed Deal Analysis workspaces, the app saves the current manual underwriting draft before dossier / Excel generation. Batch regeneration should use the saved per-property assumptions already persisted to the property record.",
     {
       fill: SOFT_FILL,
@@ -2110,7 +2570,7 @@ function buildModelGuideSheet(workbook: ExcelJS.Workbook): void {
       alignment: { wrapText: true, vertical: "top" },
     }
   );
-  worksheet.getRow(12).height = 50;
+  worksheet.getRow(freshnessBodyRow).height = 50;
 }
 
 export async function buildDealAnalysisWorkbook(
@@ -2131,8 +2591,11 @@ export async function buildDealAnalysisWorkbook(
   const artifacts = buildArtifacts(ctx);
   buildAssumptionsSheet(workbook, ctx, blueprint, artifacts);
   buildFinancingModelSheet(workbook, ctx);
+  buildMonthlyDebtSheet(workbook);
   buildCashFlowModelSheet(workbook, ctx, artifacts);
   buildSummarySheet(workbook, ctx, blueprint, artifacts);
+  buildYieldOnCostSheet(workbook, ctx, artifacts);
+  buildFormulaAuditSheet(workbook, artifacts);
   buildModelGuideSheet(workbook);
 
   const buffer = await workbook.xlsx.writeBuffer();

@@ -31,6 +31,7 @@ import { hasBrokerEmailNotes } from "../deal/brokerDossierNotes.js";
 import {
   getPropertyDossierAssumptions,
   getPropertyDossierSummary,
+  hasManualDossierAssumptionField,
   mergeDossierAssumptionOverrides,
   propertyAssumptionsToOverrides,
 } from "../deal/propertyDossierState.js";
@@ -170,6 +171,7 @@ router.get("/dossier-assumptions", async (req: Request, res: Response) => {
         const details = (prop.details ?? null) as PropertyDetails | null;
         const currentFinancials = resolveCurrentFinancialsFromDetails(details);
         const propertyAssumptions = getPropertyDossierAssumptions(details);
+        const preservePersistedPurchasePrice = hasManualDossierAssumptionField(details, "purchasePrice");
         const sourceBuildingSqft = resolveSourceBuildingSqft(details, listing);
         const formulaAssumptions = resolveDossierAssumptions(profile, listing?.price ?? null, null, {
           details,
@@ -177,7 +179,9 @@ router.get("/dossier-assumptions", async (req: Request, res: Response) => {
         const assumptions = resolveDossierAssumptions(
           profile,
           listing?.price ?? null,
-          propertyAssumptionsToOverrides(propertyAssumptions),
+          propertyAssumptionsToOverrides(propertyAssumptions, {
+            includePurchasePrice: preservePersistedPurchasePrice,
+          }),
           {
             details,
           }

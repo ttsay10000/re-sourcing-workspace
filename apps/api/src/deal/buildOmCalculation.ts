@@ -23,6 +23,7 @@ import {
 } from "./brokerDossierNotes.js";
 import {
   getPropertyDossierAssumptions,
+  hasManualDossierAssumptionField,
   mergeDossierAssumptionOverrides,
   propertyAssumptionsToOverrides,
 } from "./propertyDossierState.js";
@@ -387,8 +388,11 @@ export async function resolveOmCalculationArtifactsFromInputs(params: {
   }
 
   const savedAssumptions = params.savedAssumptions ?? null;
+  const preservePersistedPurchasePrice = hasManualDossierAssumptionField(rawDetails, "purchasePrice");
   const mergedAssumptionOverrides = mergeDossierAssumptionOverrides(
-    propertyAssumptionsToOverrides(savedAssumptions),
+    propertyAssumptionsToOverrides(savedAssumptions, {
+      includePurchasePrice: preservePersistedPurchasePrice,
+    }),
     params.assumptionOverrides
   );
   const assumptions = resolveDossierAssumptions(

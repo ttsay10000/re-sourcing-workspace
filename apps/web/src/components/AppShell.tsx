@@ -61,7 +61,32 @@ const NAV_LINKS: NavLink[] = [
       pathname === "/crm" ||
       pathname.startsWith("/crm/") ||
       pathname === "/om-review" ||
-      pathname.startsWith("/om-review/"),
+      pathname.startsWith("/om-review/") ||
+      pathname === "/broker-om" ||
+      pathname.startsWith("/broker-om/"),
+    children: [
+      {
+        href: "/crm",
+        label: "CRM",
+        shortLabel: "C",
+        icon: Contact,
+        matches: (pathname: string) => pathname === "/crm" || pathname.startsWith("/crm/"),
+      },
+      {
+        href: "/om-review",
+        label: "OM Review",
+        shortLabel: "O",
+        icon: FileText,
+        matches: (pathname: string) => pathname === "/om-review" || pathname.startsWith("/om-review/"),
+      },
+      {
+        href: "/broker-om/email-search",
+        label: "Gmail Pull",
+        shortLabel: "G",
+        icon: Search,
+        matches: (pathname: string) => pathname === "/broker-om/email-search",
+      },
+    ],
   },
   {
     href: "/saved",

@@ -3,6 +3,7 @@ import {
   getPropertyDossierAssumptions,
   getRawPropertyDossierAssumptions,
   getPropertyDossierSummary,
+  hasManualDossierAssumptionField,
   hasCompletedDealDossier,
   mergeDossierAssumptionOverrides,
   propertyAssumptionsToOverrides,
@@ -223,6 +224,62 @@ describe("propertyDossierState", () => {
       customDebtNote: "Seller financing possible",
       customRevenueCases: [{ label: "Upside", amount: 42_000 }],
     });
+  });
+
+  it("can exclude unmarked saved purchase price from dossier overrides", () => {
+    const assumptions = getPropertyDossierAssumptions({
+      dealDossier: {
+        assumptions: {
+          purchasePrice: 1_250_000,
+          renovationCosts: 25_000,
+        },
+      },
+    });
+
+    expect(propertyAssumptionsToOverrides(assumptions, { includePurchasePrice: false })).toEqual({
+      renovationCosts: 25_000,
+    });
+  });
+
+  it("detects manual purchase price metadata from assumptions", () => {
+    expect(
+      hasManualDossierAssumptionField(
+        {
+          dealDossier: {
+            assumptions: {
+              purchasePrice: 1_250_000,
+              manualFields: ["purchasePrice"],
+            },
+          },
+        },
+        "purchasePrice"
+      )
+    ).toBe(true);
+    expect(
+      hasManualDossierAssumptionField(
+        {
+          dealDossier: {
+            assumptions: {
+              purchasePrice: 1_250_000,
+              fieldSources: { purchasePrice: "manual_override" },
+            },
+          },
+        },
+        "purchasePrice"
+      )
+    ).toBe(true);
+    expect(
+      hasManualDossierAssumptionField(
+        {
+          dealDossier: {
+            assumptions: {
+              purchasePrice: 1_250_000,
+            },
+          },
+        },
+        "purchasePrice"
+      )
+    ).toBe(false);
   });
 
   it("keeps manual unit row edits even when the edited row has no rent amount", () => {

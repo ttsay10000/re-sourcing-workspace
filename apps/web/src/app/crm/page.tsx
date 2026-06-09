@@ -6,8 +6,11 @@ import type {
   BrokerContact,
   RecipientResolution,
   UiV2BrokerBlock,
+  UiV2CrmBrokerResponsePayload,
+  UiV2CrmBrokerResponseStatus,
   UiV2CrmContactPayload,
   UiV2CrmListPayload,
+  UiV2CrmPropertyRowPayload,
   UiV2CrmRelatedProperty,
   UiV2OutreachComposerPayload,
   UiV2OutreachDraftPayload,
@@ -21,8 +24,19 @@ import styles from "./CrmPage.module.css";
 const API_BASE = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000").replace(/\/$/, "");
 const CRM_LIMIT = 100;
 const PROPERTY_LABEL_PREFETCH_LIMIT = 200;
+const BROKER_RESPONSE_OPTIONS: Array<{ value: UiV2CrmBrokerResponseStatus; label: string }> = [
+  { value: "none", label: "No response" },
+  { value: "waiting", label: "Waiting" },
+  { value: "responded", label: "Responded" },
+  { value: "unresponsive", label: "Unresponsive" },
+  { value: "inefficient", label: "Inefficient" },
+  { value: "wrong_contact", label: "Wrong contact" },
+];
 
 type NoticeType = "success" | "error" | "info";
+type CrmViewMode = "properties" | "contacts";
+type CrmSortField = "address" | "broker" | "email" | "flags" | "lastActivity" | "open" | "response";
+type SortDirection = "asc" | "desc";
 
 interface Notice {
   type: NoticeType;
@@ -82,6 +96,7 @@ interface OutreachTemplateResponse {
 
 type PanelState =
   | { type: "contact"; contactPayload: UiV2CrmContactPayload; notice?: Notice }
+  | { type: "merge"; contactPayload: UiV2CrmContactPayload; notice?: Notice }
   | {
       type: "property";
       propertyId: string;
@@ -118,6 +133,19 @@ interface RelatedPropertyItem {
   label: string;
   canonicalAddress?: string | null;
   displayAddress?: string | null;
+}
+
+interface BrokerResponseDraft {
+  status: UiV2CrmBrokerResponseStatus | string;
+  note: string;
+}
+
+interface MergeResponse {
+  merge: {
+    contact: BrokerContact;
+    mergedCount: number;
+    affectedPropertyCount: number;
+  };
 }
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
@@ -257,6 +285,81 @@ function contactFlags(contact: BrokerContact): Array<{ label: string; tone: "war
   return flags;
 }
 
+function responseStatusLabel(value: string | null | undefined): string {
+  const match = BROKER_RESPONSE_OPTIONS.find((option) => option.value === value);
+  return match?.label ?? labelFromKey(value ?? "none");
+}
+
+function labelFromKey(value: string): string {
+  return value
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function propertyFlags(row: UiV2CrmPropertyRowPayload): Array<{ label: string; tone: "warning" | "danger" | "neutral" | "success" }> {
+  const flags: Array<{ label: string; tone: "warning" | "danger" | "neutral" | "success" }> = [];
+  if (!row.hasEmail) flags.push({ label: "Needs email", tone: "danger" });
+  if (row.resolutionStatus === "multiple_candidates") flags.push({ label: "Choose primary", tone: "warning" });
+  if (row.contact?.manualReviewOnly) flags.push({ label: "Manual review", tone: "warning" });
+  if (row.response?.status === "unresponsive" || row.response?.status === "wrong_contact") {
+    flags.push({ label: responseStatusLabel(row.response.status), tone: "danger" });
+  } else if (row.response?.status === "inefficient") {
+    flags.push({ label: "Inefficient", tone: "warning" });
+  } else if (row.response?.status === "responded") {
+    flags.push({ label: "Responded", tone: "success" });
+  }
+  if (row.uiV2Status === "rejected" || row.rejectedAt) flags.push({ label: "Rejected", tone: "neutral" });
+  if (flags.length === 0) flags.push({ label: "Clear", tone: "neutral" });
+  return flags;
+}
+
+function propertyFlagRank(row: UiV2CrmPropertyRowPayload): number {
+  if (!row.hasEmail) return 0;
+  if (row.response?.status === "unresponsive" || row.response?.status === "wrong_contact") return 1;
+  if (row.resolutionStatus === "multiple_candidates" || row.response?.status === "inefficient" || row.contact?.manualReviewOnly) return 2;
+  if (Number(row.openActionItemCount ?? 0) > 0) return 3;
+  return 4;
+}
+
+function contactFlagRank(payload: UiV2CrmContactPayload): number {
+  if (contactNeedsEmail(payload.contact)) return 0;
+  if (payload.contact.manualReviewOnly) return 1;
+  if (Number(payload.openActionItemCount ?? 0) > 0) return 2;
+  return 3;
+}
+
+function normalizedKey(value: string | null | undefined): string {
+  return cleanDisplayText(value)?.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim() ?? "";
+}
+
+function relatedPropertyIds(payload: UiV2CrmContactPayload): Set<string> {
+  return new Set([
+    ...(payload.relatedPropertyIds ?? []),
+    ...(payload.relatedProperties ?? []).map((property) => property.propertyId),
+  ].filter(Boolean));
+}
+
+function likelyDuplicateContact(left: UiV2CrmContactPayload, right: UiV2CrmContactPayload): boolean {
+  const leftName = normalizedKey(left.contact.displayName);
+  const rightName = normalizedKey(right.contact.displayName);
+  const leftFirm = normalizedKey(displayBrokerFirm(left.contact));
+  const rightFirm = normalizedKey(displayBrokerFirm(right.contact));
+  const leftPhone = normalizedKey(left.contact.phone);
+  const rightPhone = normalizedKey(right.contact.phone);
+  if (leftName && leftName === rightName) return true;
+  if (leftPhone && leftPhone === rightPhone) return true;
+  if (leftFirm && leftFirm === rightFirm && leftName && rightName && (leftName.includes(rightName) || rightName.includes(leftName))) {
+    return true;
+  }
+  const rightProperties = relatedPropertyIds(right);
+  for (const propertyId of relatedPropertyIds(left)) {
+    if (rightProperties.has(propertyId)) return true;
+  }
+  return false;
+}
+
 function contactActivityAt(payload: UiV2CrmContactPayload): string | null {
   return payload.lastActivityAt ?? payload.contact.lastReplyAt ?? payload.contact.lastOutreachAt ?? payload.contact.updatedAt ?? null;
 }
@@ -372,6 +475,62 @@ function relatedPropertyItems(
   return [...byId.values()];
 }
 
+function normalizeBrokerContact(value: unknown): BrokerContact | null {
+  const record = readRecord(value);
+  const id = String(record.id ?? "");
+  if (!id) return null;
+  const now = new Date().toISOString();
+  return {
+    id,
+    normalizedEmail: typeof record.normalizedEmail === "string"
+      ? record.normalizedEmail
+      : typeof record.normalized_email === "string"
+        ? record.normalized_email
+        : typeof record.email === "string"
+          ? record.email.toLowerCase()
+          : null,
+    sourceKey: typeof record.sourceKey === "string" ? record.sourceKey : typeof record.source_key === "string" ? record.source_key : null,
+    displayName: typeof record.displayName === "string"
+      ? record.displayName
+      : typeof record.display_name === "string"
+        ? record.display_name
+        : typeof record.name === "string"
+          ? record.name
+          : null,
+    firm: typeof record.firm === "string" ? record.firm : null,
+    phone: typeof record.phone === "string" ? record.phone : null,
+    source: typeof record.source === "string" ? record.source : null,
+    sourceMetadata: readRecord(record.sourceMetadata ?? record.source_metadata),
+    preferredThreadId: typeof record.preferredThreadId === "string"
+      ? record.preferredThreadId
+      : typeof record.preferred_thread_id === "string"
+        ? record.preferred_thread_id
+        : null,
+    lastOutreachAt: typeof record.lastOutreachAt === "string" ? record.lastOutreachAt : typeof record.last_outreach_at === "string" ? record.last_outreach_at : null,
+    lastReplyAt: typeof record.lastReplyAt === "string" ? record.lastReplyAt : typeof record.last_reply_at === "string" ? record.last_reply_at : null,
+    doNotContactUntil: typeof record.doNotContactUntil === "string"
+      ? record.doNotContactUntil
+      : typeof record.do_not_contact_until === "string"
+        ? record.do_not_contact_until
+        : null,
+    manualReviewOnly: record.manualReviewOnly === true || record.manual_review_only === true,
+    notes: typeof record.notes === "string" ? record.notes : null,
+    activitySummary: readRecord(record.activitySummary ?? record.activity_summary),
+    manualOverwrittenAt: typeof record.manualOverwrittenAt === "string"
+      ? record.manualOverwrittenAt
+      : typeof record.manual_overwritten_at === "string"
+        ? record.manual_overwritten_at
+        : null,
+    manualOverwrittenBy: typeof record.manualOverwrittenBy === "string"
+      ? record.manualOverwrittenBy
+      : typeof record.manual_overwritten_by === "string"
+        ? record.manual_overwritten_by
+        : null,
+    createdAt: typeof record.createdAt === "string" ? record.createdAt : typeof record.created_at === "string" ? record.created_at : now,
+    updatedAt: typeof record.updatedAt === "string" ? record.updatedAt : typeof record.updated_at === "string" ? record.updated_at : now,
+  };
+}
+
 function normalizeCrmContactPayload(value: unknown): UiV2CrmContactPayload | null {
   const record = readRecord(value);
   const contactRecord = readRecord(record.contact ?? value);
@@ -389,6 +548,13 @@ function normalizeCrmContactPayload(value: unknown): UiV2CrmContactPayload | nul
             propertyId,
             canonicalAddress: typeof propertyRecord.canonicalAddress === "string" ? propertyRecord.canonicalAddress : label,
             displayAddress: typeof propertyRecord.displayAddress === "string" ? propertyRecord.displayAddress : label,
+            contactEmail: typeof propertyRecord.contactEmail === "string" ? propertyRecord.contactEmail : null,
+            isPrimary: propertyRecord.isPrimary === true,
+            openActionItemCount: Number(propertyRecord.openActionItemCount ?? 0),
+            lastActivityAt: typeof propertyRecord.lastActivityAt === "string" ? propertyRecord.lastActivityAt : null,
+            uiV2Status: typeof propertyRecord.uiV2Status === "string" ? propertyRecord.uiV2Status : null,
+            brokerResponseStatus:
+              typeof propertyRecord.brokerResponseStatus === "string" ? propertyRecord.brokerResponseStatus : null,
           };
         })
         .filter(Boolean) as UiV2CrmRelatedProperty[]
@@ -431,15 +597,74 @@ function normalizeCrmContactPayload(value: unknown): UiV2CrmContactPayload | nul
   };
 }
 
+function normalizeBrokerBlock(value: unknown): UiV2BrokerBlock | null {
+  const record = readRecord(value);
+  if (Object.keys(record).length === 0) return null;
+  return {
+    contactId: typeof record.contactId === "string" ? record.contactId : null,
+    name: typeof record.name === "string" ? record.name : null,
+    email: typeof record.email === "string" ? record.email : null,
+    phone: typeof record.phone === "string" ? record.phone : null,
+    firm: typeof record.firm === "string" ? record.firm : null,
+    source: typeof record.source === "string" ? record.source : null,
+    overwrittenAt: typeof record.overwrittenAt === "string" ? record.overwrittenAt : null,
+    overwrittenBy: typeof record.overwrittenBy === "string" ? record.overwrittenBy : null,
+    notes: typeof record.notes === "string" ? record.notes : null,
+  };
+}
+
+function normalizeBrokerResponse(value: unknown): UiV2CrmBrokerResponsePayload | null {
+  const record = readRecord(value);
+  if (Object.keys(record).length === 0) return null;
+  return {
+    status: typeof record.status === "string" ? record.status : "none",
+    note: typeof record.note === "string" ? record.note : null,
+    recordedAt: typeof record.recordedAt === "string" ? record.recordedAt : null,
+    recordedBy: typeof record.recordedBy === "string" ? record.recordedBy : null,
+    lastActivityAt: typeof record.lastActivityAt === "string" ? record.lastActivityAt : null,
+  };
+}
+
+function normalizeCrmPropertyRowPayload(value: unknown): UiV2CrmPropertyRowPayload | null {
+  const record = readRecord(value);
+  const propertyId = String(record.propertyId ?? record.property_id ?? "");
+  if (!propertyId) return null;
+  const canonicalAddress = typeof record.canonicalAddress === "string"
+    ? record.canonicalAddress
+    : typeof record.canonical_address === "string"
+      ? record.canonical_address
+      : propertyId;
+  const broker = normalizeBrokerBlock(record.broker);
+  return {
+    propertyId,
+    canonicalAddress,
+    displayAddress: typeof record.displayAddress === "string" ? record.displayAddress : typeof record.display_address === "string" ? record.display_address : null,
+    uiV2Status: typeof record.uiV2Status === "string" ? record.uiV2Status : null,
+    rejectedAt: typeof record.rejectedAt === "string" ? record.rejectedAt : null,
+    broker,
+    contact: normalizeBrokerContact(record.contact),
+    resolutionStatus: typeof record.resolutionStatus === "string" ? record.resolutionStatus : null,
+    candidateCount: Number(record.candidateCount ?? 0),
+    hasEmail: record.hasEmail === true || Boolean(cleanDisplayText(broker?.email)),
+    openActionItemCount: Number(record.openActionItemCount ?? 0),
+    lastActivityAt: typeof record.lastActivityAt === "string" ? record.lastActivityAt : null,
+    response: normalizeBrokerResponse(record.response),
+  };
+}
+
 function normalizeCrmListPayload(payload: unknown): UiV2CrmListPayload {
   const root = readRecord(payload);
   const crm = readRecord(root.crm ?? payload);
   const contacts = Array.isArray(crm.contacts)
     ? crm.contacts.map(normalizeCrmContactPayload).filter(Boolean) as UiV2CrmContactPayload[]
     : [];
+  const propertyRows = Array.isArray(crm.propertyRows)
+    ? crm.propertyRows.map(normalizeCrmPropertyRowPayload).filter(Boolean) as UiV2CrmPropertyRowPayload[]
+    : [];
   const summary = readRecord(crm.summary);
   return {
     contacts,
+    propertyRows,
     total: Number(crm.total ?? summary.contacts ?? contacts.length),
     limit: Number(crm.limit ?? CRM_LIMIT),
     offset: Number(crm.offset ?? 0),
@@ -511,6 +736,28 @@ function classNames(...values: Array<string | false | null | undefined>): string
   return values.filter(Boolean).join(" ");
 }
 
+function SortHeader({
+  label,
+  field,
+  activeField,
+  direction,
+  onSort,
+}: {
+  label: string;
+  field: CrmSortField;
+  activeField: CrmSortField;
+  direction: SortDirection;
+  onSort: (field: CrmSortField) => void;
+}) {
+  const active = activeField === field;
+  return (
+    <button className={styles.sortHeaderButton} type="button" onClick={() => onSort(field)}>
+      <span>{label}</span>
+      <span aria-hidden="true">{active ? direction : ""}</span>
+    </button>
+  );
+}
+
 function CrmPageContent() {
   const router = useRouter();
   const pathname = usePathname();
@@ -519,17 +766,26 @@ function CrmPageContent() {
 
   const [searchText, setSearchText] = useState(query);
   const [contacts, setContacts] = useState<UiV2CrmContactPayload[]>([]);
+  const [propertyRows, setPropertyRows] = useState<UiV2CrmPropertyRowPayload[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [panel, setPanel] = useState<PanelState | null>(null);
+  const [viewMode, setViewMode] = useState<CrmViewMode>("properties");
+  const [sortField, setSortField] = useState<CrmSortField>("flags");
+  const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
   const [propertyLabels, setPropertyLabels] = useState<Record<string, string>>({});
   const [propertyDetail, setPropertyDetail] = useState<UiV2PropertyDetailPayload | null>(null);
   const [propertyBroker, setPropertyBroker] = useState<PropertyBrokerPayload | null>(null);
   const [propertyLoading, setPropertyLoading] = useState(false);
   const [propertyError, setPropertyError] = useState<string | null>(null);
   const [brokerForm, setBrokerForm] = useState<BrokerFormState>(brokerToForm(null));
+  const [inlineBrokerDrafts, setInlineBrokerDrafts] = useState<Record<string, BrokerFormState>>({});
+  const [savingInlineBrokerId, setSavingInlineBrokerId] = useState<string | null>(null);
   const [savingBroker, setSavingBroker] = useState(false);
+  const [responseDrafts, setResponseDrafts] = useState<Record<string, BrokerResponseDraft>>({});
+  const [savingResponseId, setSavingResponseId] = useState<string | null>(null);
+  const [rejectingPropertyId, setRejectingPropertyId] = useState<string | null>(null);
   const [composer, setComposer] = useState<UiV2OutreachComposerPayload | null>(null);
   const [draftForm, setDraftForm] = useState<DraftFormState>(emptyDraftForm());
   const [loadingComposer, setLoadingComposer] = useState(false);
@@ -544,6 +800,9 @@ function CrmPageContent() {
     note: "",
   });
   const [savingFollowUp, setSavingFollowUp] = useState(false);
+  const [mergeDuplicateIds, setMergeDuplicateIds] = useState<string[]>([]);
+  const [mergeSearchText, setMergeSearchText] = useState("");
+  const [savingMerge, setSavingMerge] = useState(false);
 
   useEffect(() => {
     setSearchText(query);
@@ -559,11 +818,13 @@ function CrmPageContent() {
         const data = await apiFetch<CrmResponse>(`/api/ui-v2/crm?${params.toString()}`, { signal });
         const crm = normalizeCrmListPayload(data);
         setContacts(crm.contacts);
+        setPropertyRows(crm.propertyRows ?? []);
         setTotal(Number(crm.total ?? 0));
       } catch (err) {
         if (err instanceof DOMException && err.name === "AbortError") return;
         setError(err instanceof Error ? err.message : "Failed to load CRM contacts.");
         setContacts([]);
+        setPropertyRows([]);
         setTotal(0);
       } finally {
         if (!signal?.aborted) setLoading(false);
@@ -586,14 +847,18 @@ function CrmPageContent() {
         labelsFromPayload[property.propertyId] = propertyLabelFromRelated(property, property.propertyId);
       }
     }
+    for (const row of propertyRows) {
+      labelsFromPayload[row.propertyId] =
+        shortPropertyAddress(row.displayAddress) ?? shortPropertyAddress(row.canonicalAddress) ?? compactPropertyId(row.propertyId);
+    }
     if (Object.keys(labelsFromPayload).length > 0) {
       setPropertyLabels((prev) => ({ ...prev, ...labelsFromPayload }));
     }
-  }, [contacts]);
+  }, [contacts, propertyRows]);
 
   const visiblePropertyIds = useMemo(
-    () => uniquePropertyIds(contacts).slice(0, PROPERTY_LABEL_PREFETCH_LIMIT),
-    [contacts]
+    () => [...new Set([...uniquePropertyIds(contacts), ...propertyRows.map((row) => row.propertyId)])].slice(0, PROPERTY_LABEL_PREFETCH_LIMIT),
+    [contacts, propertyRows]
   );
 
   useEffect(() => {
@@ -630,9 +895,9 @@ function CrmPageContent() {
     const needsEmail = contacts.filter((payload) => contactNeedsEmail(payload.contact)).length;
     const manualReview = contacts.filter((payload) => payload.contact.manualReviewOnly).length;
     const openActions = contacts.reduce((sum, payload) => sum + Number(payload.openActionItemCount ?? 0), 0);
-    const relatedProperties = uniquePropertyIds(contacts).length;
+    const relatedProperties = propertyRows.length || uniquePropertyIds(contacts).length;
     return { needsEmail, manualReview, openActions, relatedProperties };
-  }, [contacts]);
+  }, [contacts, propertyRows]);
 
   const updateQuery = useCallback(
     (value: string) => {
@@ -645,6 +910,63 @@ function CrmPageContent() {
     },
     [pathname, router, searchParams]
   );
+
+  const requestSort = useCallback((field: CrmSortField) => {
+    setSortField((currentField) => {
+      if (currentField === field) {
+        setSortDirection((currentDirection) => (currentDirection === "asc" ? "desc" : "asc"));
+        return currentField;
+      }
+      setSortDirection(field === "lastActivity" || field === "open" ? "desc" : "asc");
+      return field;
+    });
+  }, []);
+
+  const sortedPropertyRows = useMemo(() => {
+    const direction = sortDirection === "asc" ? 1 : -1;
+    return [...propertyRows].sort((left, right) => {
+      let result = 0;
+      if (sortField === "address") {
+        result = (left.displayAddress ?? left.canonicalAddress).localeCompare(right.displayAddress ?? right.canonicalAddress);
+      } else if (sortField === "broker") {
+        result = displayBrokerBlockName(left.broker).localeCompare(displayBrokerBlockName(right.broker));
+      } else if (sortField === "email") {
+        result = (left.broker?.email ?? "").localeCompare(right.broker?.email ?? "");
+      } else if (sortField === "flags") {
+        result = propertyFlagRank(left) - propertyFlagRank(right);
+      } else if (sortField === "open") {
+        result = Number(left.openActionItemCount ?? 0) - Number(right.openActionItemCount ?? 0);
+      } else if (sortField === "response") {
+        result = responseStatusLabel(left.response?.status).localeCompare(responseStatusLabel(right.response?.status));
+      } else {
+        result = new Date(left.lastActivityAt ?? 0).getTime() - new Date(right.lastActivityAt ?? 0).getTime();
+      }
+      return result * direction;
+    });
+  }, [propertyRows, sortDirection, sortField]);
+
+  const sortedContacts = useMemo(() => {
+    const direction = sortDirection === "asc" ? 1 : -1;
+    return [...contacts].sort((left, right) => {
+      let result = 0;
+      if (sortField === "address") {
+        const leftAddress = relatedPropertyItems(left, propertyLabels)[0]?.label ?? "";
+        const rightAddress = relatedPropertyItems(right, propertyLabels)[0]?.label ?? "";
+        result = leftAddress.localeCompare(rightAddress);
+      } else if (sortField === "broker") {
+        result = displayBrokerName(left.contact).localeCompare(displayBrokerName(right.contact));
+      } else if (sortField === "email") {
+        result = (left.contact.normalizedEmail ?? "").localeCompare(right.contact.normalizedEmail ?? "");
+      } else if (sortField === "flags") {
+        result = contactFlagRank(left) - contactFlagRank(right);
+      } else if (sortField === "open") {
+        result = Number(left.openActionItemCount ?? 0) - Number(right.openActionItemCount ?? 0);
+      } else {
+        result = new Date(contactActivityAt(left) ?? 0).getTime() - new Date(contactActivityAt(right) ?? 0).getTime();
+      }
+      return result * direction;
+    });
+  }, [contacts, propertyLabels, sortDirection, sortField]);
 
   const setPanelNotice = useCallback((notice: Notice) => {
     setPanel((current) => (current ? { ...current, notice } : current));
@@ -673,6 +995,15 @@ function CrmPageContent() {
     setPanel({ type: "contact", contactPayload, notice });
   }, []);
 
+  const openMergePanel = useCallback((contactPayload: UiV2CrmContactPayload, notice?: Notice) => {
+    setComposer(null);
+    setPropertyDetail(null);
+    setPropertyBroker(null);
+    setMergeDuplicateIds([]);
+    setMergeSearchText("");
+    setPanel({ type: "merge", contactPayload, notice });
+  }, []);
+
   const openPropertyPanel = useCallback(
     (propertyId: string, contactPayload?: UiV2CrmContactPayload, notice?: Notice, options?: { composer?: boolean; followUp?: boolean }) => {
       setComposer(null);
@@ -691,6 +1022,25 @@ function CrmPageContent() {
     },
     []
   );
+
+  const updateInlineBrokerDraft = useCallback((propertyId: string, patch: Partial<BrokerFormState>) => {
+    setInlineBrokerDrafts((current) => {
+      const row = propertyRows.find((item) => item.propertyId === propertyId);
+      const base = current[propertyId] ?? brokerToForm(row?.broker ?? null);
+      return { ...current, [propertyId]: { ...base, ...patch } };
+    });
+  }, [propertyRows]);
+
+  const updateResponseDraft = useCallback((propertyId: string, patch: Partial<BrokerResponseDraft>) => {
+    setResponseDrafts((current) => {
+      const row = propertyRows.find((item) => item.propertyId === propertyId);
+      const base: BrokerResponseDraft = current[propertyId] ?? {
+        status: row?.response?.status ?? "none",
+        note: row?.response?.note ?? "",
+      };
+      return { ...current, [propertyId]: { ...base, ...patch } };
+    });
+  }, [propertyRows]);
 
   const activePropertyId = panel?.type === "property" ? panel.propertyId : null;
   const activePropertyLabel = activePropertyId
@@ -841,6 +1191,141 @@ function CrmPageContent() {
       }
     },
     [activePropertyId, brokerForm, loadCrm, setPanelNotice]
+  );
+
+  const handleSaveInlineBroker = useCallback(
+    async (row: UiV2CrmPropertyRowPayload) => {
+      const draft = inlineBrokerDrafts[row.propertyId] ?? brokerToForm(row.broker);
+      setSavingInlineBrokerId(row.propertyId);
+      try {
+        await apiFetch<PropertyBrokerResponse>(
+          `/api/ui-v2/properties/${encodeURIComponent(row.propertyId)}/broker`,
+          {
+            method: "PUT",
+            body: JSON.stringify({
+              name: draft.name.trim() || row.broker?.name || null,
+              firm: draft.firm.trim() || row.broker?.firm || null,
+              email: draft.email.trim() || null,
+              phone: draft.phone.trim() || row.broker?.phone || null,
+              notes: draft.notes.trim() || row.broker?.notes || null,
+              actorName: "crm",
+            }),
+          }
+        );
+        setInlineBrokerDrafts((current) => {
+          const next = { ...current };
+          delete next[row.propertyId];
+          return next;
+        });
+        await loadCrm();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to save broker for property.");
+      } finally {
+        setSavingInlineBrokerId(null);
+      }
+    },
+    [inlineBrokerDrafts, loadCrm]
+  );
+
+  const handleSaveBrokerResponse = useCallback(
+    async (row: UiV2CrmPropertyRowPayload) => {
+      const draft = responseDrafts[row.propertyId] ?? {
+        status: row.response?.status ?? "none",
+        note: row.response?.note ?? "",
+      };
+      setSavingResponseId(row.propertyId);
+      try {
+        await apiFetch<{ response: UiV2CrmBrokerResponsePayload }>(
+          `/api/ui-v2/properties/${encodeURIComponent(row.propertyId)}/broker-response`,
+          {
+            method: "PUT",
+            body: JSON.stringify({
+              status: draft.status,
+              note: draft.note.trim() || null,
+              actorName: "crm",
+            }),
+          }
+        );
+        setResponseDrafts((current) => {
+          const next = { ...current };
+          delete next[row.propertyId];
+          return next;
+        });
+        await loadCrm();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to save broker response.");
+      } finally {
+        setSavingResponseId(null);
+      }
+    },
+    [loadCrm, responseDrafts]
+  );
+
+  const handleRejectPropertyFromCrm = useCallback(
+    async (row: UiV2CrmPropertyRowPayload) => {
+      const draft = responseDrafts[row.propertyId] ?? {
+        status: row.response?.status ?? "unresponsive",
+        note: row.response?.note ?? "",
+      };
+      const note = draft.note.trim() || `Rejected from Broker CRM after ${responseStatusLabel(draft.status).toLowerCase()} broker response.`;
+      if (!window.confirm(`Reject ${row.displayAddress ?? row.canonicalAddress}?`)) return;
+      setRejectingPropertyId(row.propertyId);
+      try {
+        await apiFetch<PropertyDetailResponse>(`/api/ui-v2/properties/${encodeURIComponent(row.propertyId)}/reject`, {
+          method: "POST",
+          body: JSON.stringify({
+            actorName: "crm",
+            rejection: {
+              reasonCode: "broker_unresponsive",
+              note,
+            },
+          }),
+        });
+        await loadCrm();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to reject property.");
+      } finally {
+        setRejectingPropertyId(null);
+      }
+    },
+    [loadCrm, responseDrafts]
+  );
+
+  const handleMergeContacts = useCallback(
+    async (primaryPayload: UiV2CrmContactPayload) => {
+      if (mergeDuplicateIds.length === 0) {
+        setPanelNotice({ type: "info", message: "Select at least one duplicate broker contact to merge." });
+        return;
+      }
+      if (!window.confirm(`Merge ${mergeDuplicateIds.length} duplicate contact${mergeDuplicateIds.length === 1 ? "" : "s"} into ${displayBrokerName(primaryPayload.contact)}?`)) {
+        return;
+      }
+      setSavingMerge(true);
+      try {
+        const data = await apiFetch<MergeResponse>("/api/ui-v2/crm/contacts/merge", {
+          method: "POST",
+          body: JSON.stringify({
+            primaryContactId: primaryPayload.contact.id,
+            duplicateContactIds: mergeDuplicateIds,
+            actorName: "crm",
+          }),
+        });
+        setMergeDuplicateIds([]);
+        setPanelNotice({
+          type: "success",
+          message: `Merged ${data.merge.mergedCount} duplicate contact${data.merge.mergedCount === 1 ? "" : "s"} across ${data.merge.affectedPropertyCount} properties.`,
+        });
+        await loadCrm();
+      } catch (err) {
+        setPanelNotice({
+          type: "error",
+          message: err instanceof Error ? err.message : "Failed to merge broker contacts.",
+        });
+      } finally {
+        setSavingMerge(false);
+      }
+    },
+    [loadCrm, mergeDuplicateIds, setPanelNotice]
   );
 
   const templateContext = useMemo(
@@ -1096,6 +1581,8 @@ function CrmPageContent() {
     setPropertyDetail(null);
     setPropertyBroker(null);
     setPropertyError(null);
+    setMergeDuplicateIds([]);
+    setMergeSearchText("");
   }, []);
 
   return (
@@ -1103,7 +1590,7 @@ function CrmPageContent() {
       <header className={styles.header}>
         <div>
           <p className={styles.eyebrow}>Broker CRM</p>
-          <h1 className={styles.title}>Contacts</h1>
+          <h1 className={styles.title}>Property contacts</h1>
         </div>
         <div className={styles.searchWrap}>
           <label className={styles.searchLabel} htmlFor="crm-search">
@@ -1114,7 +1601,7 @@ function CrmPageContent() {
             className={styles.searchInput}
             value={searchText}
             onChange={(event) => updateQuery(event.target.value)}
-            placeholder="Broker, firm, email, phone, notes"
+            placeholder="Property, broker, firm, email, phone, notes"
             autoComplete="off"
           />
         </div>
@@ -1148,126 +1635,311 @@ function CrmPageContent() {
       <section className={styles.tableShell}>
         <div className={styles.tableHeader}>
           <div>
-            <strong>{loading ? "Loading CRM contacts" : `${contacts.length} shown`}</strong>
-            <span>{query.trim() ? `Filtered by "${query.trim()}"` : "Sorted by recent activity"}</span>
+            <strong>
+              {loading
+                ? "Loading CRM"
+                : viewMode === "properties"
+                  ? `${sortedPropertyRows.length} properties shown`
+                  : `${sortedContacts.length} contacts shown`}
+            </strong>
+            <span>{query.trim() ? `Filtered by "${query.trim()}"` : `Sorted by ${sortField}`}</span>
           </div>
-          <button className={styles.secondaryButton} type="button" onClick={() => void loadCrm()} disabled={loading}>
-            Refresh
-          </button>
+          <div className={styles.tableTools}>
+            <div className={styles.segmentedControl} aria-label="CRM view">
+              <button
+                className={viewMode === "properties" ? styles.segmentActive : undefined}
+                type="button"
+                onClick={() => setViewMode("properties")}
+              >
+                Properties
+              </button>
+              <button
+                className={viewMode === "contacts" ? styles.segmentActive : undefined}
+                type="button"
+                onClick={() => setViewMode("contacts")}
+              >
+                Contacts
+              </button>
+            </div>
+            <button className={styles.secondaryButton} type="button" onClick={() => void loadCrm()} disabled={loading}>
+              Refresh
+            </button>
+          </div>
         </div>
 
         <div className={styles.tableScroll}>
-          <table className={styles.table}>
-            <thead>
-              <tr>
-                <th>Broker</th>
-                <th>Contact</th>
-                <th>Related properties</th>
-                <th>Last activity</th>
-                <th>Open</th>
-                <th>Flags</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading ? (
+          {viewMode === "properties" ? (
+            <table className={classNames(styles.table, styles.propertyTable)}>
+              <thead>
                 <tr>
-                  <td colSpan={7} className={styles.emptyCell}>
-                    Loading contacts...
-                  </td>
+                  <th><SortHeader label="Property" field="address" activeField={sortField} direction={sortDirection} onSort={requestSort} /></th>
+                  <th><SortHeader label="Primary broker" field="broker" activeField={sortField} direction={sortDirection} onSort={requestSort} /></th>
+                  <th><SortHeader label="Email" field="email" activeField={sortField} direction={sortDirection} onSort={requestSort} /></th>
+                  <th><SortHeader label="Response" field="response" activeField={sortField} direction={sortDirection} onSort={requestSort} /></th>
+                  <th><SortHeader label="Last activity" field="lastActivity" activeField={sortField} direction={sortDirection} onSort={requestSort} /></th>
+                  <th><SortHeader label="Open" field="open" activeField={sortField} direction={sortDirection} onSort={requestSort} /></th>
+                  <th><SortHeader label="Flags" field="flags" activeField={sortField} direction={sortDirection} onSort={requestSort} /></th>
+                  <th>Actions</th>
                 </tr>
-              ) : contacts.length === 0 ? (
-                <tr>
-                  <td colSpan={7} className={styles.emptyCell}>
-                    No broker contacts match this search.
-                  </td>
-                </tr>
-              ) : (
-                contacts.map((payload) => {
-                  const { contact } = payload;
-                  const flags = contactFlags(contact);
-                  const related = relatedPropertyItems(payload, propertyLabels);
-                  const email = cleanDisplayText(contact.normalizedEmail);
-                  const phone = cleanDisplayText(contact.phone);
-                  const firmLabel = displayBrokerFirm(contact);
-                  const brokerSubline = [firmLabel, cleanDisplayText(contact.source)]
-                    .filter((value): value is string => Boolean(value))
-                    .join(" · ") || "Broker contact";
-                  return (
-                    <tr key={contact.id}>
-                      <td className={styles.brokerCell}>
-                        <button
-                          className={styles.linkButton}
-                          type="button"
-                          title={displayBrokerName(contact)}
-                          onClick={() => openContactPanel(payload)}
-                        >
-                          {displayBrokerName(contact)}
-                        </button>
-                        <div className={styles.subtleLine}>{brokerSubline}</div>
-                      </td>
-                      <td>
-                        <div className={styles.contactLine}>
-                          {email ? <span className={styles.contactItem}>{email}</span> : null}
-                          {phone ? <span className={styles.contactItem}>{phone}</span> : null}
-                          {!email && !phone ? (
-                            <span className={styles.missingText}>Email needed</span>
-                          ) : null}
-                        </div>
-                      </td>
-                      <td>
-                        <div className={styles.propertyChips}>
-                          {related.slice(0, 3).map((propertyId) => (
+              </thead>
+              <tbody>
+                {loading ? (
+                  <tr>
+                    <td colSpan={8} className={styles.emptyCell}>
+                      Loading property contacts...
+                    </td>
+                  </tr>
+                ) : sortedPropertyRows.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} className={styles.emptyCell}>
+                      No properties match this search.
+                    </td>
+                  </tr>
+                ) : (
+                  sortedPropertyRows.map((row) => {
+                    const flags = propertyFlags(row);
+                    const brokerDraft = inlineBrokerDrafts[row.propertyId] ?? brokerToForm(row.broker);
+                    const responseDraft = responseDrafts[row.propertyId] ?? {
+                      status: row.response?.status ?? "none",
+                      note: row.response?.note ?? "",
+                    };
+                    const addressLabel = shortPropertyAddress(row.displayAddress) ?? shortPropertyAddress(row.canonicalAddress) ?? compactPropertyId(row.propertyId);
+                    return (
+                      <tr key={row.propertyId}>
+                        <td className={styles.brokerCell}>
+                          <button
+                            className={styles.linkButton}
+                            type="button"
+                            title={row.canonicalAddress}
+                            onClick={() => openPropertyPanel(row.propertyId)}
+                          >
+                            {addressLabel}
+                          </button>
+                          <div className={styles.subtleLine}>{row.uiV2Status ? labelFromKey(row.uiV2Status) : row.canonicalAddress}</div>
+                        </td>
+                        <td>
+                          <div className={styles.inlineBrokerGrid}>
+                            <input
+                              className={styles.inlineInput}
+                              value={brokerDraft.name}
+                              onChange={(event) => updateInlineBrokerDraft(row.propertyId, { name: event.target.value })}
+                              placeholder="Broker name"
+                            />
+                            <input
+                              className={styles.inlineInput}
+                              value={brokerDraft.firm}
+                              onChange={(event) => updateInlineBrokerDraft(row.propertyId, { firm: event.target.value })}
+                              placeholder="Firm"
+                            />
+                          </div>
+                        </td>
+                        <td>
+                          <div className={styles.inlineSaveGroup}>
+                            <input
+                              className={classNames(styles.inlineInput, !cleanDisplayText(brokerDraft.email) && styles.inlineInputWarning)}
+                              value={brokerDraft.email}
+                              onChange={(event) => updateInlineBrokerDraft(row.propertyId, { email: event.target.value })}
+                              placeholder="broker@firm.com"
+                            />
                             <button
-                              key={propertyId.propertyId}
-                              className={styles.propertyChip}
+                              className={styles.tableButton}
                               type="button"
-                              title={propertyId.canonicalAddress ?? propertyId.propertyId}
-                              onClick={() => openPropertyPanel(propertyId.propertyId, payload)}
+                              onClick={() => void handleSaveInlineBroker(row)}
+                              disabled={savingInlineBrokerId === row.propertyId}
                             >
-                              {propertyId.label}
+                              {savingInlineBrokerId === row.propertyId ? "Saving" : "Save"}
                             </button>
-                          ))}
-                          {related.length > 3 ? <span className={styles.moreChip}>+{related.length - 3}</span> : null}
-                          {related.length === 0 ? <span className={styles.subtleLine}>No properties</span> : null}
-                        </div>
-                      </td>
-                      <td>
-                        <div className={styles.activityLine}>
-                          <span className={styles.cellStrong}>{contactLastActivityLabel(payload)}</span>
-                          {contactActivityAt(payload) ? <span>{formatDateTime(contactActivityAt(payload))}</span> : null}
-                        </div>
-                      </td>
-                      <td>
-                        <span className={payload.openActionItemCount ? styles.actionCountHot : styles.actionCount}>
-                          {payload.openActionItemCount ?? 0}
-                        </span>
-                      </td>
-                      <td>
-                        <div className={styles.flagWrap}>
-                          {flags.map((flag) => (
-                            <span key={flag.label} className={classNames(styles.flag, styles[`flag_${flag.tone}`])}>
-                              {flag.label}
-                            </span>
-                          ))}
-                        </div>
-                      </td>
-                      <td>
-                        <div className={styles.rowActions}>
-                          <button className={styles.tableButton} type="button" onClick={() => handleComposeFromContact(payload)}>
-                            Email
+                          </div>
+                        </td>
+                        <td>
+                          <div className={styles.responseCell}>
+                            <select
+                              className={styles.inlineSelect}
+                              value={responseDraft.status}
+                              onChange={(event) => updateResponseDraft(row.propertyId, { status: event.target.value })}
+                            >
+                              {BROKER_RESPONSE_OPTIONS.map((option) => (
+                                <option key={option.value} value={option.value}>
+                                  {option.label}
+                                </option>
+                              ))}
+                            </select>
+                            <input
+                              className={styles.inlineInput}
+                              value={responseDraft.note}
+                              onChange={(event) => updateResponseDraft(row.propertyId, { note: event.target.value })}
+                              placeholder="Broker response notes"
+                            />
+                            <button
+                              className={styles.tableButton}
+                              type="button"
+                              onClick={() => void handleSaveBrokerResponse(row)}
+                              disabled={savingResponseId === row.propertyId}
+                            >
+                              {savingResponseId === row.propertyId ? "Saving" : "Record"}
+                            </button>
+                          </div>
+                        </td>
+                        <td>
+                          <div className={styles.activityLine}>
+                            <span className={styles.cellStrong}>{relativeActivity(row.lastActivityAt)}</span>
+                            {row.lastActivityAt ? <span>{formatDateTime(row.lastActivityAt)}</span> : null}
+                          </div>
+                        </td>
+                        <td>
+                          <span className={row.openActionItemCount ? styles.actionCountHot : styles.actionCount}>
+                            {row.openActionItemCount ?? 0}
+                          </span>
+                        </td>
+                        <td>
+                          <div className={styles.flagWrap}>
+                            {flags.map((flag) => (
+                              <span key={flag.label} className={classNames(styles.flag, styles[`flag_${flag.tone}`])}>
+                                {flag.label}
+                              </span>
+                            ))}
+                          </div>
+                        </td>
+                        <td>
+                          <div className={styles.rowActions}>
+                            <button className={styles.tableButton} type="button" onClick={() => openPropertyPanel(row.propertyId, undefined, undefined, { composer: true })}>
+                              Email
+                            </button>
+                            <button className={styles.tableButton} type="button" onClick={() => openPropertyPanel(row.propertyId, undefined, undefined, { followUp: true })}>
+                              Follow-up
+                            </button>
+                            <button
+                              className={styles.tableButtonDanger}
+                              type="button"
+                              onClick={() => void handleRejectPropertyFromCrm(row)}
+                              disabled={rejectingPropertyId === row.propertyId || row.uiV2Status === "rejected"}
+                            >
+                              {rejectingPropertyId === row.propertyId ? "Rejecting" : "Reject"}
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          ) : (
+            <table className={styles.table}>
+              <thead>
+                <tr>
+                  <th><SortHeader label="Broker" field="broker" activeField={sortField} direction={sortDirection} onSort={requestSort} /></th>
+                  <th><SortHeader label="Contact" field="email" activeField={sortField} direction={sortDirection} onSort={requestSort} /></th>
+                  <th><SortHeader label="Related properties" field="address" activeField={sortField} direction={sortDirection} onSort={requestSort} /></th>
+                  <th><SortHeader label="Last activity" field="lastActivity" activeField={sortField} direction={sortDirection} onSort={requestSort} /></th>
+                  <th><SortHeader label="Open" field="open" activeField={sortField} direction={sortDirection} onSort={requestSort} /></th>
+                  <th><SortHeader label="Flags" field="flags" activeField={sortField} direction={sortDirection} onSort={requestSort} /></th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loading ? (
+                  <tr>
+                    <td colSpan={7} className={styles.emptyCell}>
+                      Loading contacts...
+                    </td>
+                  </tr>
+                ) : sortedContacts.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className={styles.emptyCell}>
+                      No broker contacts match this search.
+                    </td>
+                  </tr>
+                ) : (
+                  sortedContacts.map((payload) => {
+                    const { contact } = payload;
+                    const flags = contactFlags(contact);
+                    const related = relatedPropertyItems(payload, propertyLabels);
+                    const email = cleanDisplayText(contact.normalizedEmail);
+                    const phone = cleanDisplayText(contact.phone);
+                    const firmLabel = displayBrokerFirm(contact);
+                    const brokerSubline = [firmLabel, cleanDisplayText(contact.source)]
+                      .filter((value): value is string => Boolean(value))
+                      .join(" · ") || "Broker contact";
+                    return (
+                      <tr key={contact.id}>
+                        <td className={styles.brokerCell}>
+                          <button
+                            className={styles.linkButton}
+                            type="button"
+                            title={displayBrokerName(contact)}
+                            onClick={() => openContactPanel(payload)}
+                          >
+                            {displayBrokerName(contact)}
                           </button>
-                          <button className={styles.tableButton} type="button" onClick={() => handleFollowUpFromContact(payload)}>
-                            Follow-up
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
+                          <div className={styles.subtleLine}>{brokerSubline}</div>
+                        </td>
+                        <td>
+                          <div className={styles.contactLine}>
+                            {email ? <span className={styles.contactItem}>{email}</span> : null}
+                            {phone ? <span className={styles.contactItem}>{phone}</span> : null}
+                            {!email && !phone ? (
+                              <span className={styles.missingText}>Email needed</span>
+                            ) : null}
+                          </div>
+                        </td>
+                        <td>
+                          <div className={styles.propertyChips}>
+                            {related.slice(0, 3).map((propertyId) => (
+                              <button
+                                key={propertyId.propertyId}
+                                className={styles.propertyChip}
+                                type="button"
+                                title={propertyId.canonicalAddress ?? propertyId.propertyId}
+                                onClick={() => openPropertyPanel(propertyId.propertyId, payload)}
+                              >
+                                {propertyId.label}
+                              </button>
+                            ))}
+                            {related.length > 3 ? <span className={styles.moreChip}>+{related.length - 3}</span> : null}
+                            {related.length === 0 ? <span className={styles.subtleLine}>No properties</span> : null}
+                          </div>
+                        </td>
+                        <td>
+                          <div className={styles.activityLine}>
+                            <span className={styles.cellStrong}>{contactLastActivityLabel(payload)}</span>
+                            {contactActivityAt(payload) ? <span>{formatDateTime(contactActivityAt(payload))}</span> : null}
+                          </div>
+                        </td>
+                        <td>
+                          <span className={payload.openActionItemCount ? styles.actionCountHot : styles.actionCount}>
+                            {payload.openActionItemCount ?? 0}
+                          </span>
+                        </td>
+                        <td>
+                          <div className={styles.flagWrap}>
+                            {flags.map((flag) => (
+                              <span key={flag.label} className={classNames(styles.flag, styles[`flag_${flag.tone}`])}>
+                                {flag.label}
+                              </span>
+                            ))}
+                          </div>
+                        </td>
+                        <td>
+                          <div className={styles.rowActions}>
+                            <button className={styles.tableButton} type="button" onClick={() => handleComposeFromContact(payload)}>
+                              Email
+                            </button>
+                            <button className={styles.tableButton} type="button" onClick={() => handleFollowUpFromContact(payload)}>
+                              Follow-up
+                            </button>
+                            <button className={styles.tableButton} type="button" onClick={() => openMergePanel(payload)}>
+                              Merge
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          )}
         </div>
       </section>
 
@@ -1286,6 +1958,20 @@ function CrmPageContent() {
                 onOpenProperty={(propertyId) => openPropertyPanel(propertyId, panel.contactPayload)}
                 onCompose={() => handleComposeFromContact(panel.contactPayload)}
                 onFollowUp={() => handleFollowUpFromContact(panel.contactPayload)}
+                onMerge={() => openMergePanel(panel.contactPayload)}
+              />
+            ) : panel.type === "merge" ? (
+              <MergePanel
+                primaryPayload={panel.contactPayload}
+                contacts={contacts}
+                notice={panel.notice}
+                propertyLabels={propertyLabels}
+                selectedDuplicateIds={mergeDuplicateIds}
+                setSelectedDuplicateIds={setMergeDuplicateIds}
+                searchText={mergeSearchText}
+                setSearchText={setMergeSearchText}
+                saving={savingMerge}
+                onMerge={() => void handleMergeContacts(panel.contactPayload)}
               />
             ) : (
               <PropertyPanel
@@ -1336,6 +2022,7 @@ function ContactPanel({
   onOpenProperty,
   onCompose,
   onFollowUp,
+  onMerge,
 }: {
   payload: UiV2CrmContactPayload;
   notice?: Notice;
@@ -1343,6 +2030,7 @@ function ContactPanel({
   onOpenProperty: (propertyId: string) => void;
   onCompose: () => void;
   onFollowUp: () => void;
+  onMerge: () => void;
 }) {
   const { contact } = payload;
   const flags = contactFlags(contact);
@@ -1363,6 +2051,9 @@ function ContactPanel({
         </button>
         <button className={styles.secondaryButton} type="button" onClick={onFollowUp}>
           Follow-up
+        </button>
+        <button className={styles.secondaryButton} type="button" onClick={onMerge}>
+          Merge
         </button>
       </div>
 
@@ -1427,6 +2118,128 @@ function ContactPanel({
           <p className={styles.notes}>{contact.notes}</p>
         </section>
       ) : null}
+    </div>
+  );
+}
+
+function MergePanel({
+  primaryPayload,
+  contacts,
+  notice,
+  propertyLabels,
+  selectedDuplicateIds,
+  setSelectedDuplicateIds,
+  searchText,
+  setSearchText,
+  saving,
+  onMerge,
+}: {
+  primaryPayload: UiV2CrmContactPayload;
+  contacts: UiV2CrmContactPayload[];
+  notice?: Notice;
+  propertyLabels: Record<string, string>;
+  selectedDuplicateIds: string[];
+  setSelectedDuplicateIds: (value: string[] | ((prev: string[]) => string[])) => void;
+  searchText: string;
+  setSearchText: (value: string) => void;
+  saving: boolean;
+  onMerge: () => void;
+}) {
+  const search = searchText.trim().toLowerCase();
+  const candidates = contacts
+    .filter((payload) => payload.contact.id !== primaryPayload.contact.id)
+    .map((payload) => ({ payload, likely: likelyDuplicateContact(primaryPayload, payload) }))
+    .filter(({ payload, likely }) => {
+      if (!search) return likely;
+      const related = relatedPropertyItems(payload, propertyLabels).map((property) => property.label).join(" ");
+      const haystack = [
+        displayBrokerName(payload.contact),
+        displayBrokerFirm(payload.contact),
+        payload.contact.normalizedEmail,
+        payload.contact.phone,
+        related,
+      ].filter(Boolean).join(" ").toLowerCase();
+      return haystack.includes(search);
+    })
+    .sort((left, right) => Number(right.likely) - Number(left.likely) || displayBrokerName(left.payload.contact).localeCompare(displayBrokerName(right.payload.contact)));
+
+  const toggle = (contactId: string) => {
+    setSelectedDuplicateIds((current) =>
+      current.includes(contactId) ? current.filter((id) => id !== contactId) : [...current, contactId]
+    );
+  };
+
+  return (
+    <div className={styles.panelBody}>
+      <p className={styles.eyebrow}>Merge contacts</p>
+      <h2 className={styles.panelTitle}>{displayBrokerName(primaryPayload.contact)}</h2>
+      <p className={styles.panelMeta}>Keep this broker as the primary record and merge duplicate rows into it.</p>
+      {notice ? <div className={classNames(styles.notice, styles[`notice_${notice.type}`])}>{notice.message}</div> : null}
+
+      <section className={styles.panelSection}>
+        <h3>Primary record</h3>
+        <div className={styles.brokerSummary}>
+          <div>
+            <strong>{displayBrokerName(primaryPayload.contact)}</strong>
+            <span>
+              {[primaryPayload.contact.normalizedEmail, primaryPayload.contact.phone, displayBrokerFirm(primaryPayload.contact)]
+                .filter(Boolean)
+                .join(" · ") || "No contact details"}
+            </span>
+          </div>
+          <div className={styles.flagWrap}>
+            {contactFlags(primaryPayload.contact).map((flag) => (
+              <span key={flag.label} className={classNames(styles.flag, styles[`flag_${flag.tone}`])}>
+                {flag.label}
+              </span>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <section className={styles.panelSection}>
+        <div className={styles.sectionHeaderRow}>
+          <h3>Duplicates</h3>
+          <span className={styles.countText}>{selectedDuplicateIds.length} selected</span>
+        </div>
+        <input
+          className={styles.searchInput}
+          value={searchText}
+          onChange={(event) => setSearchText(event.target.value)}
+          placeholder="Search visible contacts"
+        />
+        <div className={styles.mergeList}>
+          {candidates.map(({ payload, likely }) => {
+            const related = relatedPropertyItems(payload, propertyLabels);
+            return (
+              <label key={payload.contact.id} className={styles.mergeItem}>
+                <input
+                  type="checkbox"
+                  checked={selectedDuplicateIds.includes(payload.contact.id)}
+                  onChange={() => toggle(payload.contact.id)}
+                />
+                <span>
+                  <strong>{displayBrokerName(payload.contact)}</strong>
+                  <small>
+                    {[payload.contact.normalizedEmail, payload.contact.phone, displayBrokerFirm(payload.contact)]
+                      .filter(Boolean)
+                      .join(" · ") || "No contact details"}
+                  </small>
+                  <small>{related.slice(0, 3).map((property) => property.label).join(", ") || "No linked properties"}</small>
+                </span>
+                {likely ? <em>Likely</em> : null}
+              </label>
+            );
+          })}
+          {candidates.length === 0 ? <p className={styles.emptyNote}>No likely duplicates in the current result set. Search to find another contact.</p> : null}
+        </div>
+      </section>
+
+      <div className={styles.formActions}>
+        <button className={styles.primaryButton} type="button" onClick={onMerge} disabled={saving || selectedDuplicateIds.length === 0}>
+          {saving ? "Merging..." : "Merge selected"}
+        </button>
+      </div>
     </div>
   );
 }
@@ -1531,6 +2344,33 @@ function PropertyPanel({
               </div>
             </div>
           </section>
+
+          {propertyBroker?.candidates?.length ? (
+            <section className={styles.panelSection}>
+              <h3>Sourced contacts</h3>
+              <div className={styles.candidateList}>
+                {propertyBroker.candidates.map((candidate, index) => (
+                  <button
+                    key={`${candidate.email ?? candidate.name ?? "candidate"}-${index}`}
+                    className={styles.candidateButton}
+                    type="button"
+                    onClick={() =>
+                      setBrokerForm((prev) => ({
+                        ...prev,
+                        name: candidate.name ?? "",
+                        firm: candidate.firm ?? "",
+                        email: candidate.email ?? "",
+                        phone: candidate.phone ?? "",
+                      }))
+                    }
+                  >
+                    <span>{candidate.name || candidate.email || "Unnamed broker"}</span>
+                    <small>{[candidate.email, candidate.phone, candidate.firm, candidate.source].filter(Boolean).join(" · ")}</small>
+                  </button>
+                ))}
+              </div>
+            </section>
+          ) : null}
 
           <section className={styles.panelSection}>
             <h3>Edit property-specific broker</h3>

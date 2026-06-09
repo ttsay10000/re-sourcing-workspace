@@ -228,6 +228,14 @@ interface PropertyResponse {
   property: FlexiblePropertyDetail | null;
 }
 
+interface MergePropertyResponse extends PropertyResponse {
+  merged?: {
+    sourcePropertyId: string;
+    targetPropertyId: string;
+    reassignedRows?: Record<string, number>;
+  };
+}
+
 interface BrokerResponse {
   broker: UiV2BrokerBlock | null;
 }
@@ -2090,6 +2098,48 @@ export default function PipelineClient() {
     }
   }
 
+  async function mergePropertyIntoSelectedTarget(row: PipelineRow) {
+    const targetIds = selectedIds.filter((id) => id !== row.propertyId);
+    if (targetIds.length !== 1) {
+      setError("Select exactly one source row as the merge target, then use More on the duplicate row.");
+      return;
+    }
+    const targetId = targetIds[0]!;
+    const targetRow = rows.find((candidate) => candidate.propertyId === targetId);
+    const sourceLabel = row.displayAddress ?? row.canonicalAddress;
+    const targetLabel = targetRow?.displayAddress ?? targetRow?.canonicalAddress ?? "the selected source row";
+    const confirmed = window.confirm(
+      `Merge ${sourceLabel} into ${targetLabel}? Uploaded OM documents, generated files, OM runs, and deal signals will move to the target row; the duplicate row will be archived.`
+    );
+    if (!confirmed) return;
+
+    setBusyAction(`${row.propertyId}:merge`);
+    setNotice(null);
+    setError(null);
+    try {
+      const response = await apiFetch<MergePropertyResponse>(
+        `${API_BASE}/api/ui-v2/properties/${encodeURIComponent(row.propertyId)}/merge-into`,
+        {
+          method: "POST",
+          body: JSON.stringify({ targetPropertyId: targetId, actorName: "pipeline_table" }),
+        }
+      );
+      const property = normalizePropertyDetail(response.property);
+      if (property) {
+        setSelectedId(property.overview.propertyId);
+        setSelectedProperty(property);
+        applyProperty(property);
+      }
+      await reloadPipelineRows();
+      setSelectedIds((current) => current.filter((id) => id !== row.propertyId));
+      setNotice(`Merged ${sourceLabel} into ${targetLabel}.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to merge properties.");
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
   async function submitReject(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!rejectState?.reasonCode) return;
@@ -2600,6 +2650,8 @@ export default function PipelineClient() {
   function renderRowActionPopover(row: PipelineRow) {
     const status = String(row.statusChip.status) as UiV2PipelineStatus;
     const isTerminal = status === "rejected" || status === "archived" || status === "deal_closed";
+    const mergeTargetIds = selectedIds.filter((id) => id !== row.propertyId);
+    const canMergeIntoSelectedTarget = mergeTargetIds.length === 1;
     return (
       <div
         className={styles.rowActionPopover}
@@ -2621,6 +2673,22 @@ export default function PipelineClient() {
             }}
           >
             Open
+          </button>
+          <button
+            className={styles.linkButton}
+            type="button"
+            disabled={!canMergeIntoSelectedTarget || busyAction === `${row.propertyId}:merge`}
+            title={
+              canMergeIntoSelectedTarget
+                ? "Merge this duplicate row into the selected source row."
+                : "Select exactly one other row as the source target first."
+            }
+            onClick={() => {
+              closeRowActionMenu();
+              void mergePropertyIntoSelectedTarget(row);
+            }}
+          >
+            {busyAction === `${row.propertyId}:merge` ? "Merging..." : "Merge into selected row"}
           </button>
           {isTerminal ? (
             <button

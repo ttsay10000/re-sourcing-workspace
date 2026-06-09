@@ -290,8 +290,8 @@ export function getBodyText(msg: GmailMessage): string {
 }
 
 /** Collect all attachment parts (part with attachmentId and filename). */
-export function getAttachmentParts(msg: GmailMessage): Array<{ filename: string; mimeType: string; attachmentId: string }> {
-  const out: Array<{ filename: string; mimeType: string; attachmentId: string }> = [];
+export function getAttachmentParts(msg: GmailMessage): Array<{ filename: string; mimeType: string; attachmentId: string; sizeBytes?: number }> {
+  const out: Array<{ filename: string; mimeType: string; attachmentId: string; sizeBytes?: number }> = [];
   function walk(parts: GmailMessagePart[] | undefined) {
     if (!parts) return;
     for (const part of parts) {
@@ -300,6 +300,7 @@ export function getAttachmentParts(msg: GmailMessage): Array<{ filename: string;
           filename: part.filename,
           mimeType: part.mimeType ?? "application/octet-stream",
           attachmentId: part.body.attachmentId,
+          sizeBytes: part.body.size,
         });
       }
       if (part.parts?.length) walk(part.parts);
@@ -312,13 +313,14 @@ export function getAttachmentParts(msg: GmailMessage): Array<{ filename: string;
       filename: pl.filename,
       mimeType: pl.mimeType ?? "application/octet-stream",
       attachmentId: pl.body.attachmentId,
+      sizeBytes: pl.body.size,
     });
   }
   return out;
 }
 
 /** Return only PDF attachments (by mimeType or .pdf extension). Other types (e.g. PNG) are skipped. */
-export function getPdfAttachmentParts(msg: GmailMessage): Array<{ filename: string; mimeType: string; attachmentId: string }> {
+export function getPdfAttachmentParts(msg: GmailMessage): Array<{ filename: string; mimeType: string; attachmentId: string; sizeBytes?: number }> {
   return getAttachmentParts(msg).filter(
     (p) =>
       p.mimeType === "application/pdf" ||

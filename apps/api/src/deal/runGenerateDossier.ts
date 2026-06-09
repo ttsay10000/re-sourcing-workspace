@@ -58,6 +58,7 @@ import {
 } from "./brokerDossierNotes.js";
 import {
   getPropertyDossierAssumptions,
+  hasManualDossierAssumptionField,
   mergeDossierAssumptionOverrides,
   propertyAssumptionsToOverrides,
 } from "./propertyDossierState.js";
@@ -447,7 +448,7 @@ export async function runGenerateDossier(
     );
 
     const rawDetails = property.details as PropertyDetails | null;
-    const purchasePrice = listing?.price ?? resolveOmAskingPriceFromDetails(rawDetails);
+    const latestAskingPrice = listing?.price ?? resolveOmAskingPriceFromDetails(rawDetails);
     const brokerEmailNotes = getBrokerEmailNotes(rawDetails);
     const brokerNotesExtract = await extractBrokerDossierNotes(brokerEmailNotes);
     let details = mergeBrokerNotesIntoDetails(rawDetails, brokerNotesExtract);
@@ -465,7 +466,10 @@ export async function runGenerateDossier(
     const rentRollRows = rentRollRowsFromDetails(details, currentGrossRent);
     const { rows: expenseRows, total: extractedExpenseTotal } = expenseRowsFromDetails(details);
     const propertyAssumptions = getPropertyDossierAssumptions(rawDetails);
-    const propertyAssumptionOverrides = propertyAssumptionsToOverrides(propertyAssumptions);
+    const preservePersistedPurchasePrice = hasManualDossierAssumptionField(rawDetails, "purchasePrice");
+    const propertyAssumptionOverrides = propertyAssumptionsToOverrides(propertyAssumptions, {
+      includePurchasePrice: preservePersistedPurchasePrice,
+    });
     const mergedAssumptionOverrides = mergeDossierAssumptionOverrides(
       propertyAssumptionOverrides,
       assumptionOverrides
@@ -492,7 +496,7 @@ export async function runGenerateDossier(
     await setGenerationState(runningGenerationState(startedAt, "Running underwriting model"));
     const assumptions = resolveDossierAssumptions(
       profile,
-      purchasePrice,
+      latestAskingPrice,
       mergedAssumptionOverrides,
       { details }
     );

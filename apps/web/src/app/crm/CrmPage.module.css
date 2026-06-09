@@ -44,6 +44,8 @@
 }
 
 .searchInput,
+.inlineInput,
+.inlineSelect,
 .formGrid input,
 .formGrid textarea,
 .stackForm select,
@@ -62,6 +64,8 @@
 }
 
 .searchInput:focus,
+.inlineInput:focus,
+.inlineSelect:focus,
 .formGrid input:focus,
 .formGrid textarea:focus,
 .stackForm select:focus,
@@ -132,10 +136,47 @@
   padding: 0.78rem 1.15rem;
 }
 
-.tableHeader div {
+.tableHeader > div:first-child {
   display: flex;
   align-items: baseline;
   gap: 0.65rem;
+}
+
+.tableTools {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.segmentedControl {
+  display: inline-flex;
+  overflow: hidden;
+  border: 1px solid var(--app-line-strong);
+  border-radius: 6px;
+  background: var(--app-surface);
+}
+
+.segmentedControl button {
+  border: 0;
+  border-right: 1px solid var(--app-line);
+  background: transparent;
+  color: var(--app-ink-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 760;
+  min-height: 1.85rem;
+  padding: 0.35rem 0.7rem;
+}
+
+.segmentedControl button:last-child {
+  border-right: 0;
+}
+
+.segmentedControl button:hover,
+.segmentActive {
+  background: var(--app-accent-teal-soft) !important;
+  color: var(--app-accent-teal) !important;
 }
 
 .tableHeader strong {
@@ -160,6 +201,10 @@
   table-layout: fixed;
 }
 
+.propertyTable {
+  min-width: 118rem;
+}
+
 .table th {
   position: sticky;
   top: 0;
@@ -171,6 +216,28 @@
   font-weight: 780;
   padding: 0.55rem 0.78rem;
   text-align: left;
+  text-transform: uppercase;
+}
+
+.sortHeaderButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  padding: 0;
+  text-align: left;
+  text-transform: inherit;
+}
+
+.sortHeaderButton span:last-child {
+  color: var(--app-muted);
+  font-size: 0.62rem;
   text-transform: uppercase;
 }
 
@@ -222,6 +289,46 @@
 .table th:nth-child(7),
 .table td:nth-child(7) {
   width: 12rem;
+}
+
+.propertyTable th:nth-child(1),
+.propertyTable td:nth-child(1) {
+  width: 15rem;
+}
+
+.propertyTable th:nth-child(2),
+.propertyTable td:nth-child(2) {
+  width: 17rem;
+}
+
+.propertyTable th:nth-child(3),
+.propertyTable td:nth-child(3) {
+  width: 18rem;
+}
+
+.propertyTable th:nth-child(4),
+.propertyTable td:nth-child(4) {
+  width: 24rem;
+}
+
+.propertyTable th:nth-child(5),
+.propertyTable td:nth-child(5) {
+  width: 13rem;
+}
+
+.propertyTable th:nth-child(6),
+.propertyTable td:nth-child(6) {
+  width: 5rem;
+}
+
+.propertyTable th:nth-child(7),
+.propertyTable td:nth-child(7) {
+  width: 12rem;
+}
+
+.propertyTable th:nth-child(8),
+.propertyTable td:nth-child(8) {
+  width: 16rem;
 }
 
 .emptyCell {
@@ -442,6 +549,7 @@
 }
 
 .tableButton,
+.tableButtonDanger,
 .secondaryButton,
 .primaryButton {
   border: 1px solid var(--app-line-strong);
@@ -460,9 +568,15 @@
 }
 
 .tableButton,
+.tableButtonDanger,
 .secondaryButton {
   background: var(--app-surface);
   color: var(--app-accent-teal);
+}
+
+.tableButtonDanger {
+  border-color: var(--app-red-border);
+  color: var(--app-red);
 }
 
 .primaryButton {
@@ -472,10 +586,16 @@
 }
 
 .tableButton:hover,
+.tableButtonDanger:hover,
 .secondaryButton:hover {
   border-color: var(--app-accent-teal);
   background: var(--app-accent-teal-soft);
   transform: translateY(-1px);
+}
+
+.tableButtonDanger:hover {
+  border-color: var(--app-red-border);
+  background: var(--app-red-soft);
 }
 
 .primaryButton:hover {
@@ -484,10 +604,43 @@
 }
 
 .tableButton:disabled,
+.tableButtonDanger:disabled,
 .secondaryButton:disabled,
 .primaryButton:disabled {
   cursor: not-allowed;
   opacity: 0.6;
+}
+
+.inlineBrokerGrid,
+.inlineSaveGroup,
+.responseCell {
+  display: grid;
+  gap: 0.38rem;
+}
+
+.inlineBrokerGrid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.inlineSaveGroup {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.responseCell {
+  grid-template-columns: 8rem minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.inlineInput,
+.inlineSelect {
+  min-height: 1.85rem;
+  padding: 0.36rem 0.55rem;
+}
+
+.inlineInputWarning {
+  border-color: var(--app-red-border);
+  background: var(--app-red-soft);
 }
 
 .notice,
@@ -622,6 +775,64 @@
   gap: 0.45rem;
 }
 
+.candidateList,
+.mergeList {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.candidateButton,
+.mergeItem {
+  display: grid;
+  width: 100%;
+  border: 1px solid var(--app-line);
+  border-radius: 6px;
+  background: var(--app-surface-raised);
+  color: var(--app-ink);
+  padding: 0.65rem 0.75rem;
+  text-align: left;
+}
+
+.candidateButton {
+  cursor: pointer;
+  gap: 0.18rem;
+}
+
+.candidateButton:hover {
+  border-color: var(--app-accent-teal);
+  background: var(--app-accent-teal-soft);
+}
+
+.candidateButton span,
+.mergeItem strong {
+  font-weight: 760;
+}
+
+.candidateButton small,
+.mergeItem small {
+  color: var(--app-muted);
+}
+
+.mergeItem {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.mergeItem > span {
+  display: grid;
+  gap: 0.16rem;
+  min-width: 0;
+}
+
+.mergeItem em,
+.countText {
+  color: var(--app-accent-teal);
+  font-size: 0.72rem;
+  font-style: normal;
+  font-weight: 780;
+}
+
 .panelListItem {
   display: grid;
   gap: 0.18rem;
@@ -750,6 +961,12 @@
   .metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .tableHeader,
+  .tableTools {
+    align-items: stretch;
+    flex-direction: column;
+  }
 }
 
 @media (max-width: 640px) {
@@ -760,7 +977,9 @@
   .metrics,
   .detailGrid,
   .formGrid,
-  .templateToolbar {
+  .templateToolbar,
+  .inlineSaveGroup,
+  .responseCell {
     grid-template-columns: 1fr;
   }
 

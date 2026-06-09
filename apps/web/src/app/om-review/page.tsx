@@ -102,6 +102,9 @@ export default function OmReviewPage() {
         <Link href="/property-data" className="profile-secondary-button">
           Property Data
         </Link>
+        <Link href="/broker-om/email-search" className="profile-secondary-button">
+          Manual Gmail Pull
+        </Link>
       </header>
 
       {error && <p className="profile-page-error">{error}</p>}

@@ -60,12 +60,53 @@ describe("resolveOmPropertyAddress", () => {
 
     expect(resolved).toEqual({
       rawAddress: "45-02 Ditmars Blvd",
-      addressLine: "45-02 Ditmars Blvd",
+      addressLine: "45-02 Ditmars Boulevard",
       locality: null,
       zip: "11105",
-      canonicalAddress: "45-02 Ditmars Blvd, NYC, NY 11105",
+      canonicalAddress: "45-02 Ditmars Boulevard, NYC, NY 11105",
       addressSource: "addressLine",
       canAttemptBblResolution: true,
     });
+  });
+
+  it("cleans zip and casing from OM-uploaded address lines before matching", () => {
+    const resolved = resolveOmPropertyAddress({
+      addressLine: "252 east 33rd st 10016",
+    });
+
+    expect(resolved).toEqual({
+      rawAddress: "252 east 33rd st 10016",
+      addressLine: "252 East 33rd Street",
+      locality: null,
+      zip: "10016",
+      canonicalAddress: "252 East 33rd Street, NYC, NY 10016",
+      addressSource: "addressLine",
+      canAttemptBblResolution: true,
+    });
+  });
+
+  it("expands directional and suffix abbreviations from compact OM addresses", () => {
+    const resolved = resolveOmPropertyAddress({
+      address: "252 E 33 St, New York, NY 10016",
+    });
+
+    expect(resolved).toEqual({
+      rawAddress: "252 E 33 St, New York, NY 10016",
+      addressLine: "252 East 33rd Street",
+      locality: "Manhattan",
+      zip: "10016",
+      canonicalAddress: "252 East 33rd Street, Manhattan, NY 10016",
+      addressSource: "address",
+      canAttemptBblResolution: true,
+    });
+  });
+
+  it("does not remove New York when it is part of the street name", () => {
+    const resolved = resolveOmPropertyAddress({
+      address: "123 New York Ave, Brooklyn, NY 11213",
+    });
+
+    expect(resolved?.addressLine).toBe("123 New York Avenue");
+    expect(resolved?.canonicalAddress).toBe("123 New York Avenue, Brooklyn, NY 11213");
   });
 });

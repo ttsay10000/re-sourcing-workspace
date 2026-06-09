@@ -47,6 +47,9 @@ type ProgressRow = {
   hasOm?: boolean;
   hasComps?: boolean;
   hasDossier?: boolean;
+  underwritingReviewStatus?: string | null;
+  underwritingReviewRequired?: boolean;
+  underwritingReviewCompleted?: boolean;
   dealPath?: UiV2DealPathState | null;
   openActionItemCount?: number | null;
   updatedAt?: string | null;
@@ -54,8 +57,11 @@ type ProgressRow = {
 
 type ProgressSection = {
   id:
+    | "sourced"
     | "om_requested"
-    | "underwriting"
+    | "underwriting_awaiting_review"
+    | "underwriting_review_completed"
+    | "tour_requested"
     | "tour_scheduled"
     | "tour_completed_awaiting_inputs"
     | "offer_review"
@@ -157,16 +163,21 @@ type MovableSavedStatusGroup = SavedStatusGroup & {
 
 type DealPathFormState = {
   tourScheduledAt: string;
+  tourCompletedAt: string;
+  tourBrokerName: string;
   tourNotes: string;
   postTourDecision: UiV2DealPathDecision;
   targetPrice: string;
   offerAmount: string;
+  loiRecipientEmail: string;
   offerNotes: string;
   loiContingenciesText: string;
   loiContingencyNotes: string;
   rejectionReasonCode: UiV2RejectionReasonCode | "";
   rejectionNotes: string;
 };
+
+type DealPathPromptMode = "general" | "tour_scheduled" | "tour_completed" | "loi_offered";
 
 type RejectFormState = {
   propertyId: string;
@@ -176,9 +187,10 @@ type RejectFormState = {
 };
 
 const SECTION_ORDER: ProgressSection[] = [
-  { id: "om_not_requested", label: "OM Not Requested", count: 0, rows: [] },
+  { id: "sourced", label: "Sourced", count: 0, rows: [] },
   { id: "om_requested", label: "OM Requested", count: 0, rows: [] },
-  { id: "underwriting", label: "Underwriting", count: 0, rows: [] },
+  { id: "underwriting_awaiting_review", label: "Underwriting - Awaiting User Review", count: 0, rows: [] },
+  { id: "underwriting_review_completed", label: "Underwriting - Review Completed", count: 0, rows: [] },
   { id: "tour_requested", label: "Tour Requested", count: 0, rows: [] },
   { id: "tour_scheduled", label: "Tour Scheduled", count: 0, rows: [] },
   { id: "tour_completed_awaiting_inputs", label: "Tour Completed", count: 0, rows: [] },
@@ -190,10 +202,12 @@ const SECTION_ORDER: ProgressSection[] = [
 
 const SAVED_STATUS_GROUPS: SavedStatusGroup[] = [
   {
-    id: "om_not_requested",
-    label: "OM Not Requested",
-    description: "Saved deals where the OM request has not started.",
+    id: "sourced",
+    label: "Sourced",
+    description: "Sourced properties where the OM request has not started.",
     statuses: [],
+    targetStatus: "saved",
+    moveLabel: "Sourced",
   },
   {
     id: "om_requested",
@@ -204,12 +218,20 @@ const SAVED_STATUS_GROUPS: SavedStatusGroup[] = [
     moveLabel: "OM Requested",
   },
   {
-    id: "underwriting",
-    label: "Underwriting",
-    description: "Saved deals, received OMs, and active underwriting work.",
+    id: "underwriting_awaiting_review",
+    label: "Underwriting - Awaiting User Review",
+    description: "OM uploaded or underwriting generated; user review is still required.",
     statuses: ["saved", "underwriting", "om_received", "dossier_generated"],
     targetStatus: "underwriting",
-    moveLabel: "Underwriting",
+    moveLabel: "Underwriting - Awaiting Review",
+  },
+  {
+    id: "underwriting_review_completed",
+    label: "Underwriting - Review Completed",
+    description: "User-reviewed underwriting and completed workups.",
+    statuses: ["underwriting", "om_received", "dossier_generated"],
+    targetStatus: "underwriting",
+    moveLabel: "Underwriting - Review Completed",
   },
   {
     id: "tour_requested",
@@ -224,6 +246,8 @@ const SAVED_STATUS_GROUPS: SavedStatusGroup[] = [
     label: "Tour Scheduled",
     description: "Tour date is confirmed; waiting on visit.",
     statuses: [],
+    targetStatus: "tour_scheduled",
+    moveLabel: "Tour Scheduled",
   },
   {
     id: "tour_completed_awaiting_inputs",
@@ -234,7 +258,7 @@ const SAVED_STATUS_GROUPS: SavedStatusGroup[] = [
     moveLabel: "Tour Completed",
   },
   {
-    id: "loi_offered",
+    id: "offer_review",
     label: "LOI Offered",
     description: "Offer has been sent or is ready to track.",
     statuses: ["offer_review"],
@@ -272,11 +296,17 @@ const MOVE_STAGE_OPTIONS = SAVED_STATUS_GROUPS
     Boolean(group.targetStatus && group.moveLabel)
   )
   .filter((group) => group.targetStatus !== "rejected");
+const DEFAULT_BULK_STAGE_ID = MOVE_STAGE_OPTIONS[0]?.id ?? "om_requested";
 
 function formatCurrency(value: number | null | undefined): string {
   if (value == null || Number.isNaN(value)) return "—";
   if (Math.abs(value) >= 1_000_000) return `$${(value / 1_000_000).toFixed(1)}M`;
   if (Math.abs(value) >= 1_000) return `$${(value / 1_000).toFixed(0)}K`;
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(value);
+}
+
+function formatWholeCurrency(value: number | null | undefined): string {
+  if (value == null || Number.isNaN(value)) return "—";
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(value);
 }
 
@@ -308,19 +338,23 @@ function formatDate(value: string | null | undefined): string {
   return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
-function formatDateTime(value: string | null | undefined): string {
-  if (!value) return "Not scheduled";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "Not scheduled";
-  return date.toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
-}
-
-function datetimeLocalFromIso(value: string | null | undefined): string {
+function dateInputFromIso(value: string | null | undefined): string {
   if (!value) return "";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "";
+  return date.toISOString().slice(0, 10);
+}
+
+function todayDateInput(): string {
+  const date = new Date();
   const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
-  return local.toISOString().slice(0, 16);
+  return local.toISOString().slice(0, 10);
+}
+
+function dateInputToPayload(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed) return null;
+  return /^\d{4}-\d{2}-\d{2}$/.test(trimmed) ? `${trimmed}T12:00:00` : trimmed;
 }
 
 function formValue(value: string | number | null | undefined): string {
@@ -328,14 +362,48 @@ function formValue(value: string | number | null | undefined): string {
   return String(value);
 }
 
+function extractTourBrokerName(notes: string | null | undefined): string {
+  if (!notes) return "";
+  const match = /^Broker:\s*(.+)$/im.exec(notes);
+  return match?.[1]?.trim() ?? "";
+}
+
+function stripTourBrokerLine(notes: string | null | undefined): string {
+  if (!notes) return "";
+  return notes
+    .split(/\r?\n/)
+    .filter((line) => !/^Broker:\s*/i.test(line.trim()))
+    .join("\n")
+    .trim();
+}
+
+function extractLoiRecipientEmail(notes: string | null | undefined): string {
+  if (!notes) return "";
+  const match = /^LOI recipient:\s*(.+)$/im.exec(notes);
+  return match?.[1]?.trim() ?? "";
+}
+
+function stripLoiRecipientLine(notes: string | null | undefined): string {
+  if (!notes) return "";
+  return notes
+    .split(/\r?\n/)
+    .filter((line) => !/^LOI recipient:\s*/i.test(line.trim()))
+    .join("\n")
+    .trim();
+}
+
 function dealPathFormFromState(dealPath: UiV2DealPathState | null | undefined): DealPathFormState {
+  const rawDealPath = dealPath as (UiV2DealPathState & { tourBrokerName?: string | null }) | null | undefined;
   return {
-    tourScheduledAt: datetimeLocalFromIso(dealPath?.tourScheduledAt),
-    tourNotes: dealPath?.tourNotes ?? "",
+    tourScheduledAt: dateInputFromIso(dealPath?.tourScheduledAt),
+    tourCompletedAt: dateInputFromIso(dealPath?.tourCompletedAt),
+    tourBrokerName: rawDealPath?.tourBrokerName ?? extractTourBrokerName(dealPath?.tourNotes),
+    tourNotes: stripTourBrokerLine(dealPath?.tourNotes),
     postTourDecision: dealPath?.postTourDecision ?? "pending",
     targetPrice: formValue(dealPath?.targetPrice),
     offerAmount: formValue(dealPath?.offerAmount),
-    offerNotes: dealPath?.offerNotes ?? "",
+    loiRecipientEmail: extractLoiRecipientEmail(dealPath?.offerNotes),
+    offerNotes: stripLoiRecipientLine(dealPath?.offerNotes),
     loiContingenciesText: (dealPath?.loiContingencies ?? []).join("\n"),
     loiContingencyNotes: dealPath?.loiContingencyNotes ?? "",
     rejectionReasonCode: dealPath?.rejectionReasonCode ?? "",
@@ -343,21 +411,58 @@ function dealPathFormFromState(dealPath: UiV2DealPathState | null | undefined): 
   };
 }
 
-function dealPathPayload(form: DealPathFormState): Record<string, unknown> {
+function dealPathFormForPrompt(dealPath: UiV2DealPathState | null | undefined, mode: DealPathPromptMode): DealPathFormState {
+  const form = dealPathFormFromState(dealPath);
+  if (mode === "tour_scheduled") {
+    return {
+      ...form,
+      tourCompletedAt: "",
+      postTourDecision: "pending",
+      rejectionReasonCode: "",
+      rejectionNotes: "",
+    };
+  }
+  if (mode === "tour_completed") {
+    return {
+      ...form,
+      tourCompletedAt: form.tourCompletedAt || todayDateInput(),
+      postTourDecision: "pending",
+      rejectionReasonCode: "",
+      rejectionNotes: "",
+    };
+  }
+  if (mode === "loi_offered") {
+    return {
+      ...form,
+      postTourDecision: "move_forward",
+      rejectionReasonCode: "",
+      rejectionNotes: "",
+    };
+  }
+  return form;
+}
+
+function dealPathPayload(form: DealPathFormState, mode: DealPathPromptMode = "general"): Record<string, unknown> {
+  const tourBrokerName = form.tourBrokerName.trim();
+  const tourNotes = form.tourNotes.trim();
+  const loiRecipientEmail = form.loiRecipientEmail.trim();
+  const offerNotes = form.offerNotes.trim();
+  const postTourDecision: UiV2DealPathDecision = mode === "loi_offered" ? "move_forward" : form.postTourDecision;
   return {
-    tourScheduledAt: form.tourScheduledAt.trim() || null,
-    tourNotes: form.tourNotes.trim() || null,
-    postTourDecision: form.postTourDecision,
+    tourScheduledAt: dateInputToPayload(form.tourScheduledAt),
+    tourCompletedAt: mode === "tour_scheduled" ? null : dateInputToPayload(form.tourCompletedAt),
+    tourNotes: [tourBrokerName ? `Broker: ${tourBrokerName}` : null, tourNotes || null].filter(Boolean).join("\n") || null,
+    postTourDecision,
     targetPrice: form.targetPrice.trim() || null,
     offerAmount: form.offerAmount.trim() || null,
-    offerNotes: form.offerNotes.trim() || null,
+    offerNotes: [loiRecipientEmail ? `LOI recipient: ${loiRecipientEmail}` : null, offerNotes || null].filter(Boolean).join("\n") || null,
     loiContingencies: form.loiContingenciesText
       .split(/\n|,/)
       .map((value) => value.trim())
       .filter(Boolean),
     loiContingencyNotes: form.loiContingencyNotes.trim() || null,
-    rejectionReasonCode: form.postTourDecision === "reject" ? form.rejectionReasonCode : null,
-    rejectionNotes: form.postTourDecision === "reject" ? form.rejectionNotes.trim() || null : null,
+    rejectionReasonCode: postTourDecision === "reject" ? form.rejectionReasonCode : null,
+    rejectionNotes: postTourDecision === "reject" ? form.rejectionNotes.trim() || null : null,
   };
 }
 
@@ -379,12 +484,14 @@ function labelFromKey(value: string | null | undefined): string {
     dossier_generated: "Dossier Generated",
     loopnet: "LoopNet",
     offer_review: "LOI Offered",
-    om_not_requested: "OM Not Requested",
+    sourced: "Sourced",
     om_received: "OM Received",
     streeteasy: "StreetEasy",
     tour_requested: "Tour Requested",
     tour_scheduled: "Tour Scheduled",
     tour_completed_awaiting_inputs: "Tour Completed",
+    underwriting_awaiting_review: "Underwriting - Awaiting User Review",
+    underwriting_review_completed: "Underwriting - Review Completed",
   };
   if (specialLabels[normalized]) return specialLabels[normalized];
   return normalized
@@ -419,10 +526,8 @@ function tagClass(tag: string): string {
 function sectionCount(summary: Summary | null, sectionId: string, fallback: number): number {
   if (!summary) return fallback;
   switch (sectionId) {
-    case "saved":
+    case "sourced":
       return summary.savedCount ?? fallback;
-    case "underwriting":
-      return summary.underwritingCount ?? fallback;
     case "outreach":
       return summary.outreachCount ?? fallback;
     case "awaiting_broker":
@@ -438,28 +543,22 @@ function sectionCount(summary: Summary | null, sectionId: string, fallback: numb
 
 function normalizeSections(data: DealProgressResponse): ProgressSection[] {
   const byId = new Map((data.sections ?? []).map((section) => [section.id, section]));
-  const tourRows = Array.isArray(byId.get("tour_scheduled")?.rows) ? byId.get("tour_scheduled")!.rows! : [];
   const known = SECTION_ORDER.map((base) => {
     const incoming = byId.get(base.id);
     const incomingRows = Array.isArray(incoming?.rows) ? incoming.rows : [];
-    const rows =
-      base.id === "tour_requested" && !byId.has("tour_requested")
-        ? tourRows.filter((row) => !hasScheduledTour(row))
-        : base.id === "tour_scheduled"
-          ? incomingRows.filter(hasScheduledTour)
-          : incomingRows;
+    const rows = base.id === "tour_scheduled" ? incomingRows.filter(hasScheduledTour) : incomingRows;
     const count =
-      base.id === "tour_requested" || base.id === "tour_scheduled"
+      base.id === "tour_scheduled"
         ? rows.length
         : sectionCount(data.summary ?? null, base.id, incoming?.count ?? rows.length);
     return {
       ...base,
       ...incoming,
-      label: base.id === "tour_scheduled" ? base.label : incoming?.label || base.label,
+      label: incoming?.label || base.label,
       count,
       rows,
     };
-  }).filter((section) => section.id !== "om_not_requested" || byId.has("om_not_requested"));
+  });
   const extras = (data.sections ?? []).filter((section) => !SECTION_ORDER.some((base) => base.id === section.id));
   return [...known, ...extras];
 }
@@ -614,6 +713,35 @@ async function patchSavedDealStatus(propertyId: string, nextStatus: UiV2Pipeline
   if (!response.ok) throw new Error(data.error || data.details || "Failed to move deal stage.");
 }
 
+async function patchDealPath(propertyId: string, dealPath: Record<string, unknown>): Promise<void> {
+  const response = await fetch(`${API_BASE}/api/ui-v2/properties/${propertyId}/deal-path`, {
+    method: "PATCH",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      dealPath,
+      actorName: "progress_table",
+      source: "progress_table",
+    }),
+  });
+  const data = (await response.json().catch(() => ({}))) as { error?: string; details?: string };
+  if (!response.ok) throw new Error(data.error || data.details || "Failed to update deal path.");
+}
+
+async function uploadLoiDocument(propertyId: string, file: File): Promise<void> {
+  const form = new FormData();
+  form.append("file", file);
+  form.append("category", "Other");
+  form.append("source", "Deal Progress LOI upload");
+  const response = await fetch(`${API_BASE}/api/properties/${encodeURIComponent(propertyId)}/documents/upload`, {
+    method: "POST",
+    credentials: "include",
+    body: form,
+  });
+  const data = (await response.json().catch(() => ({}))) as { error?: string; details?: string };
+  if (!response.ok) throw new Error(data.error || data.details || "Failed to upload LOI document.");
+}
+
 async function refreshPropertyOmAnalysis(propertyId: string): Promise<OmRefreshResponse> {
   const response = await fetch(`${API_BASE}/api/properties/${propertyId}/refresh-om-financials`, {
     method: "POST",
@@ -651,12 +779,14 @@ function ProgressPageContent() {
   const [error, setError] = useState<string | null>(null);
   const [stageMoveBusy, setStageMoveBusy] = useState<string | null>(null);
   const [bulkWorkflowBusy, setBulkWorkflowBusy] = useState<typeof OM_ANALYSIS_BULK_ID | typeof DOSSIER_BULK_ID | null>(null);
-  const [bulkTargetStatus, setBulkTargetStatus] = useState<UiV2PipelineStatus>("awaiting_broker");
+  const [bulkTargetSectionId, setBulkTargetSectionId] = useState<string>(DEFAULT_BULK_STAGE_ID);
   const [selectedDealIds, setSelectedDealIds] = useState<Set<string>>(() => new Set());
   const [draggedDeal, setDraggedDeal] = useState<DealFlowRow | null>(null);
   const [dragOverSectionId, setDragOverSectionId] = useState<string | null>(null);
   const [editingDealPathId, setEditingDealPathId] = useState<string | null>(null);
+  const [dealPathPromptMode, setDealPathPromptMode] = useState<DealPathPromptMode>("general");
   const [dealPathForms, setDealPathForms] = useState<Record<string, DealPathFormState>>({});
+  const [loiUploadFiles, setLoiUploadFiles] = useState<Record<string, File | null>>({});
   const [dealPathSavingId, setDealPathSavingId] = useState<string | null>(null);
   const [rejectState, setRejectState] = useState<RejectFormState | null>(null);
   const [rejectSavingId, setRejectSavingId] = useState<string | null>(null);
@@ -688,6 +818,22 @@ function ProgressPageContent() {
   useEffect(() => {
     void loadProgress();
   }, [loadProgress]);
+
+  const startDealPathEdit = useCallback((row: DealFlowRow, options?: { mode?: DealPathPromptMode }) => {
+    const mode = options?.mode ?? "general";
+    setEditingDealPathId(row.propertyId);
+    setDealPathPromptMode(mode);
+    setDealPathForms((current) => ({
+      ...current,
+      [row.propertyId]: mode === "general" ? current[row.propertyId] ?? dealPathFormForPrompt(row.dealPath, mode) : dealPathFormForPrompt(row.dealPath, mode),
+    }));
+  }, []);
+
+  const closeDealPathEdit = useCallback(() => {
+    setEditingDealPathId(null);
+    setDealPathPromptMode("general");
+    setLoiUploadFiles({});
+  }, []);
 
   const moveSavedDeals = useCallback(
     async (rows: DealFlowRow[], nextStatus: UiV2PipelineStatus, options?: { clearSelection?: boolean }) => {
@@ -734,6 +880,63 @@ function ProgressPageContent() {
     [loadProgress]
   );
 
+  const moveDealsToTourRequested = useCallback(
+    async (rows: DealFlowRow[], options?: { clearSelection?: boolean }) => {
+      const uniqueRows = [...new Map(rows.map((row) => [row.propertyId, row])).values()];
+      if (uniqueRows.length === 0) return;
+      setStageMoveBusy(uniqueRows.length === 1 ? uniqueRows[0].propertyId : BULK_STAGE_MOVE_ID);
+      setError(null);
+      try {
+        const results = await Promise.all(
+          uniqueRows.map(async (row) => {
+            try {
+              const form = dealPathFormFromState(row.dealPath);
+              await patchDealPath(row.propertyId, {
+                ...dealPathPayload({
+                  ...form,
+                  tourScheduledAt: "",
+                  tourCompletedAt: "",
+                  postTourDecision: "pending",
+                  rejectionReasonCode: "",
+                  rejectionNotes: "",
+                }),
+                tourScheduledAt: null,
+                tourCompletedAt: null,
+                postTourDecision: "pending",
+              });
+              await patchSavedDealStatus(row.propertyId, "tour_scheduled");
+              return { propertyId: row.propertyId, ok: true as const };
+            } catch (err) {
+              return {
+                propertyId: row.propertyId,
+                ok: false as const,
+                message: err instanceof Error ? err.message : "Failed to move deal stage.",
+              };
+            }
+          })
+        );
+        const movedIds = new Set(results.filter((result) => result.ok).map((result) => result.propertyId));
+        if (movedIds.size > 0) {
+          if (options?.clearSelection) {
+            setSelectedDealIds((current) => {
+              const next = new Set(current);
+              movedIds.forEach((propertyId) => next.delete(propertyId));
+              return next;
+            });
+          }
+          await loadProgress("refresh");
+        }
+        const failures = results.filter((result) => !result.ok);
+        if (failures.length > 0) {
+          setError(`${failures.length} of ${uniqueRows.length} selected deal${uniqueRows.length === 1 ? "" : "s"} could not move to Tour Requested.`);
+        }
+      } finally {
+        setStageMoveBusy(null);
+      }
+    },
+    [loadProgress]
+  );
+
   const dropSavedDeal = useCallback(
     (section: SavedDealSection) => {
       const row = draggedDeal;
@@ -743,9 +946,37 @@ function ProgressPageContent() {
       const movingSelection = selectedDealIds.has(row.propertyId);
       const loadedRows = sections.flatMap((progressSection) => progressSection.rows ?? []);
       const rowsToMove = movingSelection ? loadedRows.filter((deal) => selectedDealIds.has(deal.propertyId)) : [row];
+      if (section.id === "tour_requested") {
+        void moveDealsToTourRequested(rowsToMove, { clearSelection: movingSelection });
+        return;
+      }
+      if (section.id === "tour_scheduled") {
+        if (rowsToMove.length > 1) {
+          setError("Schedule tours one property at a time so each one gets its own date.");
+          return;
+        }
+        startDealPathEdit(row, { mode: "tour_scheduled" });
+        return;
+      }
+      if (section.id === "tour_completed_awaiting_inputs") {
+        if (rowsToMove.length > 1) {
+          setError("Complete tours one property at a time so each one gets its own notes and decision.");
+          return;
+        }
+        startDealPathEdit(row, { mode: "tour_completed" });
+        return;
+      }
+      if (section.id === "offer_review") {
+        if (rowsToMove.length > 1) {
+          setError("Move one property at a time to LOI Offered so each one gets offer notes or an LOI upload.");
+          return;
+        }
+        startDealPathEdit(row, { mode: "loi_offered" });
+        return;
+      }
       void moveSavedDeals(rowsToMove, section.targetStatus, { clearSelection: movingSelection });
     },
-    [draggedDeal, moveSavedDeals, sections, selectedDealIds]
+    [draggedDeal, moveDealsToTourRequested, moveSavedDeals, sections, selectedDealIds, startDealPathEdit]
   );
 
   const filteredSections = useMemo(() => {
@@ -787,6 +1018,7 @@ function ProgressPageContent() {
     visibleSavedDealIds.length > 0 && visibleSavedDealIds.some((propertyId) => selectedDealIds.has(propertyId));
   const bulkMoveBusy = stageMoveBusy === BULK_STAGE_MOVE_ID;
   const bulkControlsBusy = bulkMoveBusy || bulkWorkflowBusy != null;
+  const bulkTargetGroup = MOVE_STAGE_OPTIONS.find((option) => option.id === bulkTargetSectionId) ?? MOVE_STAGE_OPTIONS[0] ?? null;
 
   const toggleSavedDealSelected = useCallback((propertyId: string, selected: boolean) => {
     setSelectedDealIds((current) => {
@@ -809,13 +1041,38 @@ function ProgressPageContent() {
     });
   }, [visibleSavedDealIds]);
 
-  const startDealPathEdit = useCallback((row: DealFlowRow) => {
-    setEditingDealPathId(row.propertyId);
-    setDealPathForms((current) => ({
-      ...current,
-      [row.propertyId]: current[row.propertyId] ?? dealPathFormFromState(row.dealPath),
-    }));
-  }, []);
+  const moveSelectedToBulkTarget = useCallback(() => {
+    if (!bulkTargetGroup) return;
+    if (bulkTargetGroup.id === "tour_requested") {
+      void moveDealsToTourRequested(selectedSavedDeals, { clearSelection: true });
+      return;
+    }
+    if (bulkTargetGroup.id === "tour_scheduled") {
+      if (selectedSavedDeals.length !== 1) {
+        setError("Select one property at a time when scheduling a tour so you can add the date.");
+        return;
+      }
+      startDealPathEdit(selectedSavedDeals[0]!, { mode: "tour_scheduled" });
+      return;
+    }
+    if (bulkTargetGroup.id === "tour_completed_awaiting_inputs") {
+      if (selectedSavedDeals.length !== 1) {
+        setError("Select one property at a time when completing a tour so you can add notes and a decision.");
+        return;
+      }
+      startDealPathEdit(selectedSavedDeals[0]!, { mode: "tour_completed" });
+      return;
+    }
+    if (bulkTargetGroup.id === "offer_review") {
+      if (selectedSavedDeals.length !== 1) {
+        setError("Select one property at a time when moving to LOI Offered so you can add offer context.");
+        return;
+      }
+      startDealPathEdit(selectedSavedDeals[0]!, { mode: "loi_offered" });
+      return;
+    }
+    void moveSavedDeals(selectedSavedDeals, bulkTargetGroup.targetStatus, { clearSelection: true });
+  }, [bulkTargetGroup, moveDealsToTourRequested, moveSavedDeals, selectedSavedDeals, startDealPathEdit]);
 
   const updateDealPathField = useCallback(
     <K extends keyof DealPathFormState>(propertyId: string, field: K, value: DealPathFormState[K]) => {
@@ -834,6 +1091,30 @@ function ProgressPageContent() {
     async (row: DealFlowRow, event: FormEvent<HTMLFormElement>) => {
       event.preventDefault();
       const form = dealPathForms[row.propertyId] ?? dealPathFormFromState(row.dealPath);
+      const mode = dealPathPromptMode;
+      const loiFile = loiUploadFiles[row.propertyId] ?? null;
+      if (mode === "tour_scheduled" && !form.tourScheduledAt.trim()) {
+        setError("Add a tour date before moving this property to Tour Scheduled.");
+        return;
+      }
+      if (mode === "tour_completed" && !form.tourCompletedAt.trim()) {
+        setError("Add the completed tour date before moving this property to Tour Completed.");
+        return;
+      }
+      if (mode === "tour_completed" && !form.tourNotes.trim()) {
+        setError("Add tour notes before moving this property to Tour Completed.");
+        return;
+      }
+      if (
+        mode === "loi_offered" &&
+        !form.offerAmount.trim() &&
+        !form.offerNotes.trim() &&
+        !form.loiRecipientEmail.trim() &&
+        loiFile == null
+      ) {
+        setError("Add offer notes, an offer amount, recipient context, or upload the LOI PDF before moving to LOI Offered.");
+        return;
+      }
       if (form.postTourDecision === "reject" && !form.rejectionReasonCode) {
         setError("Choose a rejection reason before rejecting after a tour.");
         return;
@@ -842,22 +1123,17 @@ function ProgressPageContent() {
       setError(null);
       setNotice(null);
       try {
-        const response = await fetch(`${API_BASE}/api/ui-v2/properties/${row.propertyId}/deal-path`, {
-          method: "PATCH",
-          credentials: "include",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            dealPath: dealPathPayload(form),
-            actorName: "progress_table",
-            source: "progress_table",
-          }),
-        });
-        const data = (await response.json().catch(() => ({}))) as { error?: string; details?: string };
-        if (!response.ok) {
-          throw new Error(data.error || data.details || "Failed to update deal path.");
-        }
+        if (mode === "loi_offered" && loiFile) await uploadLoiDocument(row.propertyId, loiFile);
+        await patchDealPath(row.propertyId, dealPathPayload(form, mode));
         setNotice(form.postTourDecision === "reject" ? "Property rejected after tour." : "Deal path updated.");
         setEditingDealPathId(null);
+        setDealPathPromptMode("general");
+        setLoiUploadFiles((current) => {
+          if (!(row.propertyId in current)) return current;
+          const next = { ...current };
+          delete next[row.propertyId];
+          return next;
+        });
         await loadProgress("refresh");
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to update deal path.");
@@ -865,7 +1141,7 @@ function ProgressPageContent() {
         setDealPathSavingId(null);
       }
     },
-    [dealPathForms, loadProgress]
+    [dealPathForms, dealPathPromptMode, loadProgress, loiUploadFiles]
   );
 
   const startReject = useCallback((row: DealFlowRow) => {
@@ -1121,12 +1397,12 @@ function ProgressPageContent() {
             <select
               className={styles.bulkStageSelect}
               aria-label="Stage for selected deals"
-              value={bulkTargetStatus}
+              value={bulkTargetSectionId}
               disabled={bulkControlsBusy}
-              onChange={(event) => setBulkTargetStatus(event.target.value as UiV2PipelineStatus)}
+              onChange={(event) => setBulkTargetSectionId(event.target.value)}
             >
               {MOVE_STAGE_OPTIONS.map((option) => (
-                <option key={option.targetStatus} value={option.targetStatus}>
+                <option key={option.id} value={option.id}>
                   {option.moveLabel}
                 </option>
               ))}
@@ -1134,8 +1410,8 @@ function ProgressPageContent() {
             <button
               type="button"
               className={styles.bulkMoveButton}
-              disabled={selectedSavedDeals.length === 0 || bulkControlsBusy}
-              onClick={() => void moveSavedDeals(selectedSavedDeals, bulkTargetStatus, { clearSelection: true })}
+              disabled={selectedSavedDeals.length === 0 || bulkControlsBusy || bulkTargetGroup == null}
+              onClick={moveSelectedToBulkTarget}
             >
               {bulkMoveBusy ? "Moving..." : "Move selected"}
             </button>
@@ -1200,7 +1476,7 @@ function ProgressPageContent() {
               onDropOnSection={() => dropSavedDeal(section)}
               editingPropertyId={editingDealPathId}
               onStartDealPathEdit={startDealPathEdit}
-              onCancelDealPathEdit={() => setEditingDealPathId(null)}
+              onCancelDealPathEdit={closeDealPathEdit}
               onStartReject={startReject}
             />
           ))}
@@ -1224,9 +1500,17 @@ function ProgressPageContent() {
         <DealPathModal
           row={editingDealPathRow}
           form={dealPathForms[editingDealPathRow.propertyId] ?? dealPathFormFromState(editingDealPathRow.dealPath)}
+          promptMode={dealPathPromptMode}
+          loiFile={loiUploadFiles[editingDealPathRow.propertyId] ?? null}
           saving={dealPathSavingId === editingDealPathRow.propertyId}
           onUpdate={updateDealPathField}
-          onCancel={() => setEditingDealPathId(null)}
+          onLoiFileChange={(file) =>
+            setLoiUploadFiles((current) => ({
+              ...current,
+              [editingDealPathRow.propertyId]: file,
+            }))
+          }
+          onCancel={closeDealPathEdit}
           onSave={saveDealPathForRow}
         />
       ) : null}
@@ -1248,18 +1532,40 @@ function ProgressPageContent() {
 function DealPathModal({
   row,
   form,
+  promptMode,
+  loiFile,
   saving,
   onUpdate,
+  onLoiFileChange,
   onCancel,
   onSave,
 }: {
   row: DealFlowRow;
   form: DealPathFormState;
+  promptMode: DealPathPromptMode;
+  loiFile?: File | null;
   saving: boolean;
   onUpdate: <K extends keyof DealPathFormState>(propertyId: string, field: K, value: DealPathFormState[K]) => void;
+  onLoiFileChange: (file: File | null) => void;
   onCancel?: () => void;
   onSave: (row: DealFlowRow, event: FormEvent<HTMLFormElement>) => void;
 }) {
+  const isTourScheduledPrompt = promptMode === "tour_scheduled";
+  const isTourCompletedPrompt = promptMode === "tour_completed";
+  const isLoiPrompt = promptMode === "loi_offered";
+  const showGeneralTourFields = promptMode === "general";
+  const title =
+    isTourScheduledPrompt ? "Schedule tour" :
+    isTourCompletedPrompt ? "Complete tour" :
+    isLoiPrompt ? "LOI offered" :
+    "Deal path";
+  const submitLabel =
+    saving ? "Saving..." :
+    form.postTourDecision === "reject" ? "Save rejection" :
+    isTourScheduledPrompt ? "Save tour date" :
+    isTourCompletedPrompt ? "Save tour notes" :
+    isLoiPrompt ? "Save LOI details" :
+    "Save deal path";
   return (
     <div className={styles.modalOverlay} role="presentation" onMouseDown={onCancel}>
       <form
@@ -1269,7 +1575,7 @@ function DealPathModal({
       >
         <div className={styles.modalHeader}>
           <div>
-            <span className={styles.modalKicker}>Deal path</span>
+            <span className={styles.modalKicker}>{title}</span>
             <h2>{row.displayAddress || row.canonicalAddress || row.propertyId}</h2>
           </div>
           <button type="button" className={styles.closeButton} onClick={onCancel} aria-label="Close deal path modal">
@@ -1277,14 +1583,39 @@ function DealPathModal({
           </button>
         </div>
         <div className={styles.dealPathModalGrid}>
+          {isTourScheduledPrompt || showGeneralTourFields ? (
           <label>
-            <span>Tour date and time</span>
+            <span>Tour date</span>
             <input
-              type="datetime-local"
+              type="date"
               value={form.tourScheduledAt}
+              required={isTourScheduledPrompt}
               onChange={(event) => onUpdate(row.propertyId, "tourScheduledAt", event.target.value)}
             />
           </label>
+          ) : null}
+          {showGeneralTourFields ? (
+          <label>
+            <span>Tour broker</span>
+            <input
+              value={form.tourBrokerName}
+              onChange={(event) => onUpdate(row.propertyId, "tourBrokerName", event.target.value)}
+              placeholder="Broker or agent name"
+            />
+          </label>
+          ) : null}
+          {isTourCompletedPrompt || showGeneralTourFields ? (
+          <label>
+            <span>Tour completed date</span>
+            <input
+              type="date"
+              value={form.tourCompletedAt}
+              required={isTourCompletedPrompt}
+              onChange={(event) => onUpdate(row.propertyId, "tourCompletedAt", event.target.value)}
+            />
+          </label>
+          ) : null}
+          {isTourCompletedPrompt || showGeneralTourFields ? (
           <label>
             <span>Post-tour decision</span>
             <select
@@ -1297,6 +1628,8 @@ function DealPathModal({
               <option value="reject">Reject after tour</option>
             </select>
           </label>
+          ) : null}
+          {isLoiPrompt || isTourCompletedPrompt || showGeneralTourFields ? (
           <label>
             <span>Target price</span>
             <input
@@ -1306,6 +1639,8 @@ function DealPathModal({
               placeholder="Target pricing"
             />
           </label>
+          ) : null}
+          {isLoiPrompt || isTourCompletedPrompt || showGeneralTourFields ? (
           <label>
             <span>Offer amount</span>
             <input
@@ -1315,6 +1650,8 @@ function DealPathModal({
               placeholder="LOI offer"
             />
           </label>
+          ) : null}
+          {isTourCompletedPrompt || showGeneralTourFields ? (
           <label className={styles.dealPathWideField}>
             <span>Tour notes</span>
             <textarea
@@ -1323,14 +1660,39 @@ function DealPathModal({
               placeholder="Tour takeaways, condition, broker comments, follow-up questions"
             />
           </label>
+          ) : null}
+          {isLoiPrompt ? (
+            <>
+              <label>
+                <span>LOI recipient / email</span>
+                <input
+                  value={form.loiRecipientEmail}
+                  onChange={(event) => onUpdate(row.propertyId, "loiRecipientEmail", event.target.value)}
+                  placeholder="Broker, seller, or recipient email"
+                />
+              </label>
+              <label>
+                <span>Upload LOI PDF</span>
+                <input
+                  type="file"
+                  accept="application/pdf,.pdf"
+                  onChange={(event) => onLoiFileChange(event.target.files?.[0] ?? null)}
+                />
+                {loiFile ? <small>{loiFile.name}</small> : null}
+              </label>
+            </>
+          ) : null}
+          {isLoiPrompt || isTourCompletedPrompt || showGeneralTourFields ? (
           <label className={styles.dealPathWideField}>
-            <span>Offer notes</span>
+            <span>{isLoiPrompt ? "LOI offer notes" : "Offer notes"}</span>
             <textarea
               value={form.offerNotes}
               onChange={(event) => onUpdate(row.propertyId, "offerNotes", event.target.value)}
               placeholder="Rationale for offer, pricing read, partner feedback"
             />
           </label>
+          ) : null}
+          {isLoiPrompt || showGeneralTourFields ? (
           <label className={styles.dealPathWideField}>
             <span>LOI contingencies</span>
             <textarea
@@ -1339,6 +1701,8 @@ function DealPathModal({
               placeholder="Financing contingency, diligence period, rent roll verification"
             />
           </label>
+          ) : null}
+          {isLoiPrompt || showGeneralTourFields ? (
           <label className={styles.dealPathWideField}>
             <span>LOI contingency notes</span>
             <textarea
@@ -1347,6 +1711,7 @@ function DealPathModal({
               placeholder="Timing, diligence needs, third-party reports, deposit terms"
             />
           </label>
+          ) : null}
           {form.postTourDecision === "reject" ? (
             <>
               <label>
@@ -1380,7 +1745,7 @@ function DealPathModal({
             Cancel
           </button>
           <button type="submit" className={styles.bulkMoveButton} disabled={saving}>
-            {saving ? "Saving..." : form.postTourDecision === "reject" ? "Save rejection" : "Save deal path"}
+            {submitLabel}
           </button>
         </div>
       </form>
@@ -1462,7 +1827,7 @@ function cardMetricsForRow(row: DealFlowRow): Array<{ label: string; value: stri
   return [
     row.ltrYocPct != null ? { label: "LTR Yield", value: formatPercent(row.ltrYocPct) } : null,
     row.mtrYocPct != null ? { label: "MTR Yield", value: formatPercent(row.mtrYocPct) } : null,
-    row.pricePerSqft != null ? { label: "$/SF", value: formatCurrency(row.pricePerSqft) } : null,
+    row.pricePerSqft != null ? { label: "$/SF", value: formatWholeCurrency(row.pricePerSqft) } : null,
     row.sqft != null ? { label: "SF", value: formatCompactNumber(row.sqft) } : null,
     row.price != null ? { label: "Ask", value: formatCurrency(row.price) } : null,
     row.units != null ? { label: "Units", value: formatCompactNumber(row.units) } : null,
@@ -1576,10 +1941,15 @@ function SavedDealMiniSection({
                       onClick={(event) => event.stopPropagation()}
                     />
                   ) : null}
-                  <Link href={`/pipeline?propertyId=${encodeURIComponent(row.propertyId)}`} className={styles.miniRowLink}>
+                  <button
+                    type="button"
+                    className={styles.miniRowLink}
+                    onClick={() => onStartDealPathEdit?.(row)}
+                    title="Review progress details"
+                  >
                     <strong>{row.displayAddress || row.canonicalAddress || row.propertyId}</strong>
                     <span>{row.source ? labelFromKey(row.source) : "No source"}</span>
-                  </Link>
+                  </button>
                   <div className={styles.miniMeta}>
                     <span className={statusClass(rowStatus(row))}>{statusLabel}</span>
                     <small className={scoreClass(row.dealScore)}>
@@ -1598,11 +1968,6 @@ function SavedDealMiniSection({
                     ))}
                   </div>
                 ) : null}
-                <div className={styles.miniRowDetails}>
-                  <span>Tour: {formatDateTime(row.dealPath?.tourScheduledAt)}</span>
-                  <span>Target: {formatCurrency(row.dealPath?.targetPrice)}</span>
-                  <span>Offer: {formatCurrency(row.dealPath?.offerAmount)}</span>
-                </div>
                 <div className={styles.workflowBadges}>
                   <span className={row.hasOm ? styles.workflowBadgeReady : styles.workflowBadgeMuted}>OM</span>
                   <span className={row.hasComps ? styles.workflowBadgeReady : styles.workflowBadgeMuted}>Comps</span>
@@ -1615,19 +1980,10 @@ function SavedDealMiniSection({
                       type="button"
                       className={`${styles.cardActionButton} ${editing ? styles.cardActionActive : ""}`}
                       disabled={busy}
-                      title={row.dealPath?.tourScheduledAt ? "Edit tour details" : "Schedule tour"}
+                      title="Edit tour, offer, and LOI inputs"
                       onClick={() => (editing ? onCancelDealPathEdit?.() : onStartDealPathEdit?.(row))}
                     >
-                      Tour
-                    </button>
-                    <button
-                      type="button"
-                      className={styles.cardActionButton}
-                      disabled={busy}
-                      title="Track LOI inputs"
-                      onClick={() => onStartDealPathEdit?.(row)}
-                    >
-                      LOI
+                      Update inputs
                     </button>
                     <button
                       type="button"

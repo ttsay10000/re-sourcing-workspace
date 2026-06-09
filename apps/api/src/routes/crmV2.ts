@@ -1,5 +1,6 @@
 import { randomUUID } from "crypto";
 import { Router, type Request, type Response } from "express";
+import type { PoolClient } from "pg";
 import type {
   AgentEnrichmentEntry,
   BrokerContact,
@@ -8,10 +9,14 @@ import type {
   RecipientContactCandidate,
   RecipientResolution,
   UiV2BrokerBlock,
+  UiV2CrmBrokerResponsePayload,
+  UiV2CrmBrokerResponseStatus,
+  UiV2CrmPropertyRowPayload,
   UiV2OutreachDraftPayload,
   UiV2OutreachFollowUpActionPayload,
   UiV2OutreachSendNowPayload,
   UiV2OutreachTemplatePayload,
+  UiV2PipelineStatus,
 } from "@re-sourcing/contracts";
 import {
   BrokerContactRepo,
@@ -86,6 +91,92 @@ function normalizeEmail(value: unknown): string | null {
 
 function normalizeTag(value: unknown): string {
   return typeof value === "string" ? value.trim().toLowerCase().replace(/\s+/g, "_") : "";
+}
+
+const CRM_BROKER_RESPONSE_STATUSES = new Set<UiV2CrmBrokerResponseStatus>([
+  "none",
+  "waiting",
+  "responded",
+  "unresponsive",
+  "inefficient",
+  "wrong_contact",
+]);
+
+const UI_V2_STATUSES = new Set<UiV2PipelineStatus>([
+  "new",
+  "screening",
+  "interesting",
+  "saved",
+  "underwriting",
+  "tour_scheduled",
+  "tour_completed_awaiting_inputs",
+  "outreach",
+  "awaiting_broker",
+  "om_received",
+  "dossier_generated",
+  "offer_review",
+  "negotiation",
+  "contract_signed",
+  "deal_closed",
+  "rejected",
+  "archived",
+]);
+
+function normalizeBrokerResponseStatus(value: unknown): UiV2CrmBrokerResponseStatus {
+  const normalized = normalizeTag(value);
+  return CRM_BROKER_RESPONSE_STATUSES.has(normalized as UiV2CrmBrokerResponseStatus)
+    ? (normalized as UiV2CrmBrokerResponseStatus)
+    : "none";
+}
+
+function normalizeUiV2Status(value: unknown): UiV2PipelineStatus | null {
+  const normalized = normalizeTag(value);
+  return UI_V2_STATUSES.has(normalized as UiV2PipelineStatus) ? (normalized as UiV2PipelineStatus) : null;
+}
+
+function readDetailsRecord(property: Property | null): JsonRecord {
+  return isJsonRecord(property?.details) ? (property.details as JsonRecord) : {};
+}
+
+function readPipelineRecord(property: Property | null): JsonRecord {
+  const pipeline = readDetailsRecord(property).pipeline;
+  return isJsonRecord(pipeline) ? pipeline : {};
+}
+
+function readBrokerCrmRecord(property: Property | null): JsonRecord {
+  const brokerCrm = readDetailsRecord(property).brokerCrm;
+  return isJsonRecord(brokerCrm) ? brokerCrm : {};
+}
+
+function readBrokerCrmResponse(property: Property | null): UiV2CrmBrokerResponsePayload | null {
+  const record = readBrokerCrmRecord(property);
+  const status = normalizeBrokerResponseStatus(record.responseStatus ?? record.status);
+  const note = cleanString(record.responseNote) ?? cleanString(record.note);
+  const recordedAt = toIso(record.recordedAt);
+  const recordedBy = cleanString(record.recordedBy);
+  const lastActivityAt = toIso(record.lastActivityAt);
+  if (status === "none" && !note && !recordedAt && !lastActivityAt) return null;
+  return {
+    status,
+    note,
+    recordedAt,
+    recordedBy,
+    lastActivityAt: lastActivityAt ?? recordedAt,
+  };
+}
+
+function maxIsoDate(values: Array<unknown>): string | null {
+  let maxMs = -Infinity;
+  let maxValue: string | null = null;
+  for (const value of values) {
+    const iso = toIso(value);
+    if (!iso) continue;
+    const ms = new Date(iso).getTime();
+    if (Number.isNaN(ms) || ms <= maxMs) continue;
+    maxMs = ms;
+    maxValue = iso;
+  }
+  return maxValue;
 }
 
 async function markOmRequestedFromOutreach(
@@ -195,6 +286,31 @@ function readManualPhone(contact: BrokerContact | null, manualOverride: JsonReco
   const manual = contact?.activitySummary?.manualBrokerOverride;
   if (!isJsonRecord(manual)) return null;
   return cleanString(manual.phone);
+}
+
+function mergeJsonRecords(...records: Array<Record<string, unknown> | null | undefined>): JsonRecord {
+  return records.reduce<JsonRecord>((merged, record) => {
+    if (!isJsonRecord(record)) return merged;
+    return { ...merged, ...record };
+  }, {});
+}
+
+function distinctStrings(values: Array<string | null | undefined>): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    const cleaned = cleanString(value);
+    if (!cleaned) continue;
+    const key = cleaned.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(cleaned);
+  }
+  return result;
+}
+
+function combineNotes(contacts: BrokerContact[]): string | null {
+  return distinctStrings(contacts.map((contact) => contact.notes)).join("\n\n") || null;
 }
 
 function hasBrokerIdentity(candidate: {
@@ -410,6 +526,324 @@ async function loadPropertyBrokerPayload(propertyId: string): Promise<PropertyBr
   };
 }
 
+async function replaceCandidateContactIds(
+  client: PoolClient,
+  primaryContactId: string,
+  duplicateContactIds: string[]
+): Promise<number> {
+  const r = await client.query<{ property_id: string; candidate_contacts: unknown }>(
+    `SELECT property_id, candidate_contacts
+     FROM property_recipient_resolution
+     WHERE EXISTS (
+       SELECT 1
+       FROM jsonb_array_elements(COALESCE(candidate_contacts, '[]'::jsonb)) AS candidate
+       WHERE candidate->>'contactId' = ANY($1::text[])
+     )`,
+    [duplicateContactIds]
+  );
+  let updated = 0;
+  for (const row of r.rows) {
+    const contacts = Array.isArray(row.candidate_contacts) ? row.candidate_contacts : [];
+    const nextContacts = contacts.map((candidate) => {
+      if (!isJsonRecord(candidate)) return candidate;
+      return duplicateContactIds.includes(String(candidate.contactId ?? ""))
+        ? { ...candidate, contactId: primaryContactId }
+        : candidate;
+    });
+    await client.query(
+      `UPDATE property_recipient_resolution
+       SET candidate_contacts = $2::jsonb,
+           updated_at = now()
+       WHERE property_id = $1`,
+      [row.property_id, JSON.stringify(nextContacts)]
+    );
+    updated++;
+  }
+  return updated;
+}
+
+async function mergeBrokerContacts(params: {
+  primaryContactId: string;
+  duplicateContactIds: string[];
+  actorName: string;
+}): Promise<{ contact: BrokerContact; mergedCount: number; affectedPropertyCount: number }> {
+  const duplicateIds = [...new Set(params.duplicateContactIds.filter((id) => id !== params.primaryContactId))];
+  if (duplicateIds.length === 0) {
+    throw new RouteError(400, "Choose at least one duplicate contact to merge.");
+  }
+  const pool = getPool();
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const contactRepo = new BrokerContactRepo({ pool, client });
+    const [primary, duplicates] = await Promise.all([
+      contactRepo.byId(params.primaryContactId),
+      Promise.all(duplicateIds.map((id) => contactRepo.byId(id))),
+    ]);
+    if (!primary) throw new RouteError(404, "Primary contact not found.");
+    const duplicateContacts = duplicates.filter((contact): contact is BrokerContact => contact != null);
+    if (duplicateContacts.length !== duplicateIds.length) throw new RouteError(404, "One or more duplicate contacts were not found.");
+
+    const allContacts = [primary, ...duplicateContacts];
+    const affectedProperties = await client.query<{ property_id: string }>(
+      `SELECT DISTINCT property_id
+       FROM property_recipient_resolution
+       WHERE contact_id = $1::uuid
+          OR contact_id = ANY($2::uuid[])
+          OR EXISTS (
+            SELECT 1
+            FROM jsonb_array_elements(COALESCE(candidate_contacts, '[]'::jsonb)) AS candidate
+            WHERE candidate->>'contactId' = $1
+               OR candidate->>'contactId' = ANY($3::text[])
+          )`,
+      [params.primaryContactId, duplicateIds, duplicateIds]
+    );
+
+    await client.query(
+      `UPDATE property_recipient_resolution
+       SET contact_id = $1,
+           updated_at = now()
+       WHERE contact_id = ANY($2::uuid[])`,
+      [params.primaryContactId, duplicateIds]
+    );
+    await client.query(
+      `UPDATE outreach_batches
+       SET contact_id = $1,
+           updated_at = now()
+       WHERE contact_id = ANY($2::uuid[])`,
+      [params.primaryContactId, duplicateIds]
+    );
+    await client.query(
+      `UPDATE property_action_items
+       SET details = CASE
+             WHEN details ? 'contactId' THEN jsonb_set(details, '{contactId}', to_jsonb($1::text), false)
+             ELSE details
+           END,
+           updated_at = now()
+       WHERE details->>'contactId' = ANY($2::text[])`,
+      [params.primaryContactId, duplicateIds]
+    );
+    await client.query(
+      `UPDATE properties
+       SET details = jsonb_set(COALESCE(details, '{}'::jsonb), '{brokerManualOverride,contactId}', to_jsonb($1::text), false),
+           updated_at = now()
+       WHERE details#>>'{brokerManualOverride,contactId}' = ANY($2::text[])`,
+      [params.primaryContactId, duplicateIds]
+    );
+    await replaceCandidateContactIds(client, params.primaryContactId, duplicateIds);
+
+    await client.query("DELETE FROM broker_contacts WHERE id = ANY($1::uuid[])", [duplicateIds]);
+
+    const duplicateMetadata = duplicateContacts.map((contact) => ({
+      id: contact.id,
+      normalizedEmail: contact.normalizedEmail,
+      sourceKey: contact.sourceKey,
+      displayName: contact.displayName,
+      firm: contact.firm,
+      phone: contact.phone,
+    }));
+    const now = new Date().toISOString();
+    const merged = await contactRepo.update(params.primaryContactId, {
+      normalizedEmail: primary.normalizedEmail ?? duplicateContacts.find((contact) => contact.normalizedEmail)?.normalizedEmail ?? null,
+      sourceKey: primary.sourceKey ?? duplicateContacts.find((contact) => contact.sourceKey)?.sourceKey ?? null,
+      displayName: primary.displayName ?? duplicateContacts.find((contact) => cleanString(contact.displayName))?.displayName ?? null,
+      firm: primary.firm ?? duplicateContacts.find((contact) => cleanString(contact.firm))?.firm ?? null,
+      phone: primary.phone ?? duplicateContacts.find((contact) => cleanString(contact.phone))?.phone ?? null,
+      preferredThreadId:
+        primary.preferredThreadId ?? duplicateContacts.find((contact) => cleanString(contact.preferredThreadId))?.preferredThreadId ?? null,
+      lastOutreachAt: maxIsoDate(allContacts.map((contact) => contact.lastOutreachAt)),
+      lastReplyAt: maxIsoDate(allContacts.map((contact) => contact.lastReplyAt)),
+      doNotContactUntil: maxIsoDate(allContacts.map((contact) => contact.doNotContactUntil)),
+      manualReviewOnly: allContacts.some((contact) => contact.manualReviewOnly),
+      notes: combineNotes(allContacts),
+      source: primary.source ?? duplicateContacts.find((contact) => cleanString(contact.source))?.source ?? "sourced",
+      sourceMetadata: {
+        ...mergeJsonRecords(...duplicateContacts.map((contact) => contact.sourceMetadata), primary.sourceMetadata),
+        mergedContactIds: distinctStrings([
+          ...((Array.isArray(primary.sourceMetadata?.mergedContactIds)
+            ? primary.sourceMetadata?.mergedContactIds.map(String)
+            : []) as string[]),
+          ...duplicateIds,
+        ]),
+        mergedContacts: duplicateMetadata,
+        mergedAt: now,
+        mergedBy: params.actorName,
+      },
+      activitySummary: {
+        ...mergeJsonRecords(...duplicateContacts.map((contact) => contact.activitySummary), primary.activitySummary),
+        mergedDuplicateCount:
+          Number(primary.activitySummary?.mergedDuplicateCount ?? 0) + duplicateContacts.length,
+      },
+      manualOverwrittenAt: maxIsoDate(allContacts.map((contact) => contact.manualOverwrittenAt)),
+      manualOverwrittenBy:
+        primary.manualOverwrittenBy ?? duplicateContacts.find((contact) => cleanString(contact.manualOverwrittenBy))?.manualOverwrittenBy ?? null,
+    });
+    if (!merged) throw new RouteError(404, "Merged contact could not be saved.");
+    await client.query("COMMIT");
+    return {
+      contact: merged,
+      mergedCount: duplicateContacts.length,
+      affectedPropertyCount: affectedProperties.rows.length,
+    };
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+function contactFromCrmPropertyRow(row: Record<string, unknown>): BrokerContact | null {
+  return cleanString(row.id) ? mapBrokerContact(row) : null;
+}
+
+function brokerBlockFromCrmPropertyRow(row: Record<string, unknown>, contact: BrokerContact | null): UiV2BrokerBlock | null {
+  const manualName = cleanString(row.manual_broker_name);
+  const manualEmail = normalizeEmail(row.manual_broker_email);
+  const manualPhone = cleanString(row.manual_broker_phone);
+  const manualFirm = cleanString(row.manual_broker_firm);
+  const manualNotes = cleanString(row.manual_broker_notes);
+  const email = manualEmail ?? normalizeEmail(row.resolution_contact_email) ?? normalizeEmail(contact?.normalizedEmail);
+  const name = manualName ?? contact?.displayName ?? null;
+  const firm = manualFirm ?? contact?.firm ?? null;
+  const phone = manualPhone ?? readManualPhone(contact, null);
+  if (!email && !name && !firm && !phone && !contact) return null;
+  return {
+    contactId: cleanString(row.resolution_contact_id) ?? contact?.id ?? null,
+    name,
+    email,
+    phone,
+    firm,
+    source: manualName || manualEmail || manualPhone || manualFirm ? "manual" : contact?.source ?? "sourced",
+    overwrittenAt: toIso(row.manual_overwritten_at) ?? contact?.manualOverwrittenAt ?? null,
+    overwrittenBy: cleanString(row.manual_overwritten_by) ?? contact?.manualOverwrittenBy ?? null,
+    notes: manualNotes ?? contact?.notes ?? null,
+  };
+}
+
+function propertyFromCrmRow(row: Record<string, unknown>): Property {
+  return {
+    id: String(row.property_id ?? ""),
+    canonicalAddress: String(row.canonical_address ?? ""),
+    details: isJsonRecord(row.details) ? row.details : {},
+    createdAt: toIso(row.property_created_at) ?? new Date().toISOString(),
+    updatedAt: toIso(row.property_updated_at) ?? new Date().toISOString(),
+  } as Property;
+}
+
+function mapCrmPropertyRow(row: Record<string, unknown>): UiV2CrmPropertyRowPayload {
+  const property = propertyFromCrmRow(row);
+  const contact = contactFromCrmPropertyRow(row);
+  const broker = brokerBlockFromCrmPropertyRow(row, contact);
+  const response = readBrokerCrmResponse(property);
+  const pipeline = readPipelineRecord(property);
+  const lastActivityAt = maxIsoDate([
+    row.last_sent_at,
+    row.last_reply_at,
+    row.last_action_at,
+    row.resolution_updated_at,
+    row.property_updated_at,
+    response?.lastActivityAt,
+    contact?.lastOutreachAt,
+    contact?.lastReplyAt,
+  ]);
+  return {
+    propertyId: property.id,
+    canonicalAddress: property.canonicalAddress,
+    displayAddress: cleanString(row.display_address) ?? property.canonicalAddress,
+    uiV2Status: normalizeUiV2Status(pipeline.uiV2Status) ?? normalizeUiV2Status(pipeline.status) ?? null,
+    rejectedAt: toIso(pipeline.rejectedAt),
+    broker,
+    contact,
+    resolutionStatus: cleanString(row.resolution_status),
+    candidateCount: Number(row.candidate_count ?? 0),
+    hasEmail: Boolean(normalizeEmail(broker?.email)),
+    openActionItemCount: Number(row.open_action_item_count ?? 0),
+    lastActivityAt,
+    response,
+  };
+}
+
+async function loadCrmPropertyRows(pool: ReturnType<typeof getPool>, q: string | null): Promise<UiV2CrmPropertyRowPayload[]> {
+  const values: unknown[] = [];
+  let qIndex: number | null = null;
+  if (q) {
+    values.push(`%${q.toLowerCase()}%`);
+    qIndex = values.length;
+  }
+  const result = await pool.query(
+    `SELECT
+       p.id AS property_id,
+       p.canonical_address,
+       NULLIF(split_part(p.canonical_address, ',', 1), '') AS display_address,
+       p.details,
+       p.created_at AS property_created_at,
+       p.updated_at AS property_updated_at,
+       rr.status AS resolution_status,
+       rr.contact_id AS resolution_contact_id,
+       rr.contact_email AS resolution_contact_email,
+       rr.candidate_contacts,
+       rr.manual_broker_name,
+       rr.manual_broker_email,
+       rr.manual_broker_phone,
+       rr.manual_broker_firm,
+       rr.manual_broker_notes,
+       rr.manual_overwritten_at,
+       rr.manual_overwritten_by,
+       rr.updated_at AS resolution_updated_at,
+       jsonb_array_length(COALESCE(rr.candidate_contacts, '[]'::jsonb)) AS candidate_count,
+       (
+         SELECT COUNT(*)::int
+         FROM property_action_items ai
+         WHERE ai.property_id = p.id AND ai.status = 'open'
+       ) AS open_action_item_count,
+       (
+         SELECT MAX(ai.created_at)
+         FROM property_action_items ai
+         WHERE ai.property_id = p.id AND ai.status = 'open'
+       ) AS last_action_at,
+       (
+         SELECT MAX(s.sent_at)
+         FROM property_inquiry_sends s
+         WHERE s.property_id = p.id
+       ) AS last_sent_at,
+       (
+         SELECT MAX(e.received_at)
+         FROM property_inquiry_email_properties link
+         INNER JOIN property_inquiry_emails e ON e.id = link.inquiry_email_id
+         WHERE link.property_id = p.id
+       ) AS last_reply_at,
+       bc.*
+     FROM property_recipient_resolution rr
+     INNER JOIN properties p ON p.id = rr.property_id
+     LEFT JOIN broker_contacts bc ON bc.id = rr.contact_id
+        OR (
+          rr.contact_id IS NULL
+          AND rr.contact_email IS NOT NULL
+          AND bc.normalized_email = LOWER(rr.contact_email)
+        )
+     ${
+       qIndex
+         ? `WHERE (
+             LOWER(COALESCE(p.canonical_address, '')) LIKE $${qIndex}
+             OR LOWER(COALESCE(rr.contact_email, '')) LIKE $${qIndex}
+             OR LOWER(COALESCE(rr.manual_broker_email, '')) LIKE $${qIndex}
+             OR LOWER(COALESCE(rr.manual_broker_name, '')) LIKE $${qIndex}
+             OR LOWER(COALESCE(rr.manual_broker_firm, '')) LIKE $${qIndex}
+             OR LOWER(COALESCE(bc.normalized_email, '')) LIKE $${qIndex}
+             OR LOWER(COALESCE(bc.display_name, '')) LIKE $${qIndex}
+             OR LOWER(COALESCE(bc.firm, '')) LIKE $${qIndex}
+             OR LOWER(COALESCE(bc.phone, '')) LIKE $${qIndex}
+           )`
+         : ""
+     }
+     ORDER BY LOWER(NULLIF(split_part(p.canonical_address, ',', 1), '')) ASC NULLS LAST, p.updated_at DESC
+     LIMIT 300`,
+    values
+  );
+  return result.rows.map(mapCrmPropertyRow);
+}
+
 function buildOutreachDraftText(params: {
   canonicalAddress: string;
   brokerName?: string | null;
@@ -467,6 +901,45 @@ router.get("/ui-v2/crm", async (req: Request, res: Response) => {
                rr.property_id,
                p.canonical_address,
                NULLIF(split_part(p.canonical_address, ',', 1), '') AS display_address,
+               rr.contact_email,
+               rr.status AS resolution_status,
+               (
+                 rr.contact_id = bc.id
+                 OR (
+                   bc.normalized_email IS NOT NULL
+                   AND LOWER(COALESCE(rr.contact_email, '')) = bc.normalized_email
+                 )
+               ) AS is_primary,
+               (p.details->'pipeline'->>'uiV2Status') AS ui_v2_status,
+               (p.details->'brokerCrm'->>'responseStatus') AS broker_response_status,
+               (
+                 SELECT COUNT(*)::int
+                 FROM property_action_items ai
+                 WHERE ai.property_id = rr.property_id AND ai.status = 'open'
+               ) AS property_open_action_item_count,
+               NULLIF(
+                 GREATEST(
+                   COALESCE((
+                     SELECT MAX(s.sent_at)
+                     FROM property_inquiry_sends s
+                     WHERE s.property_id = rr.property_id
+                   ), '-infinity'::timestamptz),
+                   COALESCE((
+                     SELECT MAX(e.received_at)
+                     FROM property_inquiry_email_properties link
+                     INNER JOIN property_inquiry_emails e ON e.id = link.inquiry_email_id
+                     WHERE link.property_id = rr.property_id
+                   ), '-infinity'::timestamptz),
+                   COALESCE((
+                     SELECT MAX(ai.created_at)
+                     FROM property_action_items ai
+                     WHERE ai.property_id = rr.property_id AND ai.status = 'open'
+                   ), '-infinity'::timestamptz),
+                   COALESCE(NULLIF(p.details->'brokerCrm'->>'lastActivityAt', '')::timestamptz, '-infinity'::timestamptz),
+                   COALESCE(rr.updated_at, '-infinity'::timestamptz)
+                 ),
+                 '-infinity'::timestamptz
+               ) AS property_last_activity_at,
                rr.updated_at
              FROM property_recipient_resolution rr
              INNER JOIN properties p ON p.id = rr.property_id
@@ -500,7 +973,13 @@ router.get("/ui-v2/crm", async (req: Request, res: Response) => {
                    jsonb_build_object(
                      'propertyId', r.property_id::text,
                      'canonicalAddress', r.canonical_address,
-                     'displayAddress', COALESCE(r.display_address, r.canonical_address)
+                     'displayAddress', COALESCE(r.display_address, r.canonical_address),
+                     'contactEmail', r.contact_email,
+                     'isPrimary', r.is_primary,
+                     'openActionItemCount', r.property_open_action_item_count,
+                     'lastActivityAt', r.property_last_activity_at,
+                     'uiV2Status', r.ui_v2_status,
+                     'brokerResponseStatus', r.broker_response_status
                    )
                    ORDER BY COALESCE(r.display_address, r.canonical_address)
                  )
@@ -576,10 +1055,29 @@ router.get("/ui-v2/crm", async (req: Request, res: Response) => {
         lastActivityAt: toIso(row.last_activity_at),
       };
     });
+    const propertyRows = await loadCrmPropertyRows(pool, q);
     const total = Number(result.rows[0]?.total_count ?? 0);
-    res.json({ crm: { contacts, total, limit, offset } });
+    res.json({ crm: { contacts, propertyRows, total, limit, offset } });
   } catch (err) {
     sendRouteError(res, "crm-list", err);
+  }
+});
+
+router.post("/ui-v2/crm/contacts/merge", async (req: Request, res: Response) => {
+  try {
+    const body = (req.body ?? {}) as JsonRecord;
+    const primaryContactId = requiredString(body.primaryContactId, "primaryContactId");
+    const duplicateContactIds = Array.isArray(body.duplicateContactIds)
+      ? body.duplicateContactIds.map((value) => cleanString(value)).filter((value): value is string => Boolean(value))
+      : [];
+    const result = await mergeBrokerContacts({
+      primaryContactId,
+      duplicateContactIds,
+      actorName: cleanString(body.actorName) ?? "crm",
+    });
+    res.json({ merge: result });
+  } catch (err) {
+    sendRouteError(res, "crm-contact-merge", err);
   }
 });
 
@@ -616,6 +1114,57 @@ router.put("/ui-v2/properties/:id/broker", async (req: Request, res: Response) =
     res.json(await loadPropertyBrokerPayload(propertyId));
   } catch (err) {
     sendRouteError(res, "property-broker-overwrite", err);
+  }
+});
+
+router.put("/ui-v2/properties/:id/broker-response", async (req: Request, res: Response) => {
+  try {
+    const propertyId = req.params.id;
+    if (!propertyId) throw new RouteError(400, "Property id is required.");
+    const body = (req.body ?? {}) as JsonRecord;
+    const status = normalizeBrokerResponseStatus(body.status);
+    const note = cleanString(body.note);
+    const actorName = cleanString(body.actorName) ?? "crm";
+    const pool = getPool();
+    const propertyRepo = new PropertyRepo({ pool });
+    const property = await propertyRepo.byId(propertyId);
+    if (!property) throw new RouteError(404, "Property not found.");
+    const now = new Date().toISOString();
+    const existingBrokerCrm = readBrokerCrmRecord(property);
+    const existingPipeline = readPipelineRecord(property);
+    const response: UiV2CrmBrokerResponsePayload = {
+      status,
+      note,
+      recordedAt: now,
+      recordedBy: actorName,
+      lastActivityAt: now,
+    };
+    await propertyRepo.mergeDetails(propertyId, {
+      brokerCrm: {
+        ...existingBrokerCrm,
+        responseStatus: status,
+        responseNote: note,
+        recordedAt: now,
+        recordedBy: actorName,
+        lastActivityAt: now,
+      },
+      pipeline: {
+        ...existingPipeline,
+        lastActivityAt: now,
+      },
+    });
+    await new PropertyPipelineEventRepo({ pool }).create({
+      propertyId,
+      eventType: "broker_reply",
+      actor: actorName,
+      source: "crm",
+      title: "Broker response recorded",
+      body: note ?? status,
+      metadata: { brokerResponse: response },
+    });
+    res.json({ response });
+  } catch (err) {
+    sendRouteError(res, "broker-response-save", err);
   }
 });
 

@@ -48,6 +48,15 @@ const DOSSIER_EXPENSE_TREATMENTS: PropertyDealDossierExpenseTreatment[] = [
   "exclude",
 ];
 
+const MANUAL_ASSUMPTION_SOURCE_VALUES = new Set([
+  "manual",
+  "manual_input",
+  "manual_override",
+  "user",
+  "user_input",
+  "user_override",
+]);
+
 function toFiniteNumber(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "string") {
@@ -55,6 +64,33 @@ function toFiniteNumber(value: unknown): number | null {
     if (Number.isFinite(parsed)) return parsed;
   }
   return null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value != null && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeMetadataToken(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase().replace(/[\s-]+/g, "_");
+  return normalized.length > 0 ? normalized : null;
+}
+
+function metadataStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    const normalized = normalizeMetadataToken(entry);
+    return normalized ? [normalized] : [];
+  });
+}
+
+function hasFieldListed(value: unknown, field: string): boolean {
+  return metadataStringArray(value).includes(field.toLowerCase());
+}
+
+function sourceMarksManual(value: unknown): boolean {
+  const normalized = normalizeMetadataToken(value);
+  return normalized != null && MANUAL_ASSUMPTION_SOURCE_VALUES.has(normalized);
 }
 
 function toTrimmedString(
@@ -355,12 +391,42 @@ export function getPropertyDossierSummary(
   return hasValue ? parsed : null;
 }
 
+export function hasManualDossierAssumptionField(
+  details: PropertyDetails | null | undefined,
+  field: keyof DossierAssumptionOverrides
+): boolean {
+  const assumptions = getRawPropertyDossierAssumptions(details);
+  if (!assumptions) return false;
+  const fieldName = String(field);
+
+  if (
+    hasFieldListed(assumptions.manualFields, fieldName) ||
+    hasFieldListed(assumptions.userEditedFields, fieldName) ||
+    hasFieldListed(assumptions.userOverrideFields, fieldName) ||
+    hasFieldListed(assumptions.manualOverrideFields, fieldName) ||
+    hasFieldListed(assumptions.dirtyFields, fieldName)
+  ) {
+    return true;
+  }
+
+  for (const sourceContainer of [assumptions.fieldSources, assumptions.sources, assumptions.sourceByField]) {
+    if (isRecord(sourceContainer) && sourceMarksManual(sourceContainer[fieldName])) return true;
+  }
+
+  return (
+    sourceMarksManual(assumptions[`${fieldName}Source`]) ||
+    sourceMarksManual(assumptions[`${fieldName}Origin`])
+  );
+}
+
 export function propertyAssumptionsToOverrides(
-  assumptions: PropertyDealDossierAssumptions | null | undefined
+  assumptions: PropertyDealDossierAssumptions | null | undefined,
+  options?: { includePurchasePrice?: boolean }
 ): DossierAssumptionOverrides | null {
   if (!assumptions) return null;
   const overrides: DossierAssumptionOverrides = {};
   for (const key of DOSSIER_ASSUMPTION_NUMERIC_KEYS) {
+    if (key === "purchasePrice" && options?.includePurchasePrice === false) continue;
     const value = assumptions[key];
     if (value != null && Number.isFinite(value)) {
       overrides[key] = value;

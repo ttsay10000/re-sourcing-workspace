@@ -5,6 +5,7 @@ import type {
   PropertyDealDossierExpenseModelRow,
   PropertyDealDossierUnitModelRow,
   PropertyDetails,
+  PropertyDocumentCategory,
   PropertyManualSourceLinks,
 } from "@re-sourcing/contracts";
 import { randomUUID } from "crypto";
@@ -51,7 +52,7 @@ import {
 const router = Router();
 const OM_IMPORT_MAX_BYTES = resolveOmImportMaxBytes();
 const OM_IMPORT_MAX_LABEL = formatByteLimit(OM_IMPORT_MAX_BYTES);
-const DEAL_ANALYSIS_MAX_FILES = 20;
+const DEAL_ANALYSIS_MAX_FILES = 10;
 const uploadMemory = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: OM_IMPORT_MAX_BYTES, files: DEAL_ANALYSIS_MAX_FILES },
@@ -101,15 +102,15 @@ function handleUploadMulterError(_req: Request, res: Response, next: (err?: unkn
       if (code === "LIMIT_FILE_SIZE") {
         res.status(413).json({
           error: "File too large.",
-          details: `Max ${OM_IMPORT_MAX_LABEL} per OM PDF.`,
+          details: `Max ${OM_IMPORT_MAX_LABEL} per OM / broker financial file.`,
           maxBytes: OM_IMPORT_MAX_BYTES,
         });
         return;
       }
-      if (code === "LIMIT_FILE_COUNT") {
+      if (code === "LIMIT_FILE_COUNT" || code === "LIMIT_UNEXPECTED_FILE") {
         res.status(413).json({
           error: "Too many files.",
-          details: `Upload up to ${DEAL_ANALYSIS_MAX_FILES} OM PDFs at a time.`,
+          details: `Upload up to ${DEAL_ANALYSIS_MAX_FILES} OM / broker financial files at a time.`,
           maxFiles: DEAL_ANALYSIS_MAX_FILES,
         });
         return;
@@ -123,6 +124,58 @@ function isPdfUpload(file: Express.Multer.File): boolean {
   const mimeType = file.mimetype?.toLowerCase() ?? "";
   if (mimeType.includes("pdf")) return true;
   return /\.pdf$/i.test(file.originalname ?? "");
+}
+
+function dealAnalysisUploadExtension(file: Express.Multer.File): string {
+  const filename = file.originalname ?? "";
+  const match = /\.([a-z0-9]+)$/i.exec(filename.trim());
+  return match?.[1]?.toLowerCase() ?? "";
+}
+
+function isSupportedDealAnalysisUpload(file: Express.Multer.File): boolean {
+  if (isPdfUpload(file)) return true;
+  const extension = dealAnalysisUploadExtension(file);
+  if (["xls", "xlsx", "xlsm", "csv", "txt", "text"].includes(extension)) return true;
+  const mimeType = file.mimetype?.toLowerCase() ?? "";
+  return (
+    mimeType.includes("spreadsheet") ||
+    mimeType.includes("excel") ||
+    mimeType.includes("csv") ||
+    mimeType === "text/plain" ||
+    mimeType === "application/vnd.ms-excel" ||
+    mimeType === "application/vnd.ms-excel.sheet.macroenabled.12"
+  );
+}
+
+function dealAnalysisUploadMimeType(file: Express.Multer.File): string {
+  if (file.mimetype) return file.mimetype;
+  const extension = dealAnalysisUploadExtension(file);
+  if (extension === "pdf") return "application/pdf";
+  if (extension === "csv") return "text/csv";
+  if (extension === "txt" || extension === "text") return "text/plain";
+  if (extension === "xls") return "application/vnd.ms-excel";
+  if (extension === "xlsm") return "application/vnd.ms-excel.sheet.macroenabled.12";
+  if (extension === "xlsx") return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+  return "application/octet-stream";
+}
+
+function dealAnalysisUploadFilename(file: Express.Multer.File): string {
+  const originalName = file.originalname?.trim();
+  if (originalName) return originalName;
+  const extension = dealAnalysisUploadExtension(file);
+  return extension ? `uploaded-om-source.${extension}` : "uploaded-om-source";
+}
+
+function dealAnalysisUploadCategory(file: Express.Multer.File): PropertyDocumentCategory {
+  const haystack = `${file.originalname ?? ""} ${file.mimetype ?? ""}`.toLowerCase();
+  if (/\b(rent[ _-]?roll|unit[ _-]?mix|tenant[ _-]?schedule)\b/i.test(haystack)) return "Rent Roll";
+  if (/\b(t-?12|trailing[ _-]?12|operating|income[ _-]?expense|p\s*&\s*l|profit[ _-]?loss)\b/i.test(haystack)) {
+    return "T12 / Operating Summary";
+  }
+  if (/\b(financial|model|pro[ _-]?forma|underwriting|workbook|analysis)\b/i.test(haystack)) return "Financial Model";
+  if (/\b(brochure|flyer|teaser|marketing)\b/i.test(haystack)) return "Brochure";
+  if (isPdfUpload(file) || /\b(offering|memorandum|(^|[^a-z])om([^a-z]|$))\b/i.test(haystack)) return "OM";
+  return "Other";
 }
 
 function optionalTrimmedText(value: unknown, maxLength = 20_000): string | null | "invalid" {
@@ -460,7 +513,11 @@ router.get("/deal-analysis/workspaces", async (req: Request, res: Response) => {
 router.post(
   "/deal-analysis/analyze-upload",
   (req, res, next) => {
-    uploadMemory.array("files", 20)(req, res, handleUploadMulterError(req, res, next));
+    uploadMemory.array("files", DEAL_ANALYSIS_MAX_FILES)(
+      req,
+      res,
+      handleUploadMulterError(req, res, next)
+    );
   },
   async (req: Request, res: Response) => {
     try {
@@ -473,18 +530,18 @@ router.post(
         });
         return;
       }
-      const nonPdfFile = files.find((file) => !isPdfUpload(file));
-      if (nonPdfFile) {
+      const unsupportedFile = files.find((file) => !isSupportedDealAnalysisUpload(file));
+      if (unsupportedFile) {
         res.status(422).json({
-          error: `Only PDF OM files are supported right now. '${nonPdfFile.originalname}' is not a PDF.`,
+          error: `Unsupported OM / broker financial file. '${unsupportedFile.originalname}' must be a PDF, Excel workbook, CSV, or text file.`,
         });
         return;
       }
 
       const result = await analyzeAndPersistDealAnalysisOmDocuments({
         documents: files.map((file) => ({
-          filename: file.originalname?.trim() || "uploaded-om.pdf",
-          mimeType: file.mimetype || "application/pdf",
+          filename: dealAnalysisUploadFilename(file),
+          mimeType: dealAnalysisUploadMimeType(file),
           buffer: file.buffer,
           sizeBytes: file.size,
         })),
@@ -707,7 +764,11 @@ router.post("/deal-analysis/generate-dossier-excel", async (req: Request, res: R
 router.post(
   "/deal-analysis/create-property",
   (req, res, next) => {
-    uploadMemory.array("files", 20)(req, res, handleUploadMulterError(req, res, next));
+    uploadMemory.array("files", DEAL_ANALYSIS_MAX_FILES)(
+      req,
+      res,
+      handleUploadMulterError(req, res, next)
+    );
   },
   async (req: Request, res: Response) => {
     try {
@@ -716,14 +777,14 @@ router.post(
       );
       if (files.length === 0) {
         res.status(400).json({
-          error: "Upload the OM PDF(s) again when creating the property record.",
+          error: "Upload the OM / broker financial file(s) again when creating the property record.",
         });
         return;
       }
-      const nonPdfFile = files.find((file) => !isPdfUpload(file));
-      if (nonPdfFile) {
+      const unsupportedFile = files.find((file) => !isSupportedDealAnalysisUpload(file));
+      if (unsupportedFile) {
         res.status(422).json({
-          error: `Only PDF OM files are supported right now. '${nonPdfFile.originalname}' is not a PDF.`,
+          error: `Unsupported OM / broker financial file. '${unsupportedFile.originalname}' must be a PDF, Excel workbook, CSV, or text file.`,
         });
         return;
       }
@@ -779,7 +840,7 @@ router.post(
       if (!resolvedAddress) {
         res.status(422).json({
           error:
-            "The uploaded OM analysis did not return a usable building address, so a property record could not be created.",
+            "The uploaded document analysis did not return a usable building address, so a property record could not be created.",
         });
         return;
       }
@@ -851,15 +912,16 @@ router.post(
       const uploadedDocuments = [];
       for (const file of files) {
         const docId = randomUUID();
-        const filename = file.originalname?.trim() || "uploaded-om.pdf";
+        const filename = dealAnalysisUploadFilename(file);
+        const category = dealAnalysisUploadCategory(file);
         const filePath = await saveUploadedDocument(propertyId, docId, filename, file.buffer);
         const inserted = await uploadedDocRepo.insert({
           id: docId,
           propertyId,
           filename,
-          contentType: file.mimetype || "application/pdf",
+          contentType: dealAnalysisUploadMimeType(file),
           filePath,
-          category: "OM",
+          category,
           source: "Deal analysis upload",
           fileContent: file.buffer,
         });
@@ -867,6 +929,7 @@ router.post(
           id: inserted.id,
           fileName: inserted.filename,
           contentType: inserted.contentType,
+          category,
           createdAt: inserted.createdAt,
         });
       }
@@ -895,6 +958,7 @@ router.post(
                 id: document.id,
                 filename: document.fileName,
                 contentType: document.contentType ?? null,
+                category: document.category ?? null,
                 createdAt: document.createdAt,
               })),
               review: {

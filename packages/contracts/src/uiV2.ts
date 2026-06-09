@@ -18,6 +18,7 @@ import type {
   PropertyActionItem,
   PropertyDisposition,
   PropertyWorkflowState,
+  RecipientResolution,
 } from "./sourcing.js";
 
 export type UiV2SortDirection = "asc" | "desc";
@@ -921,6 +922,12 @@ export interface UiV2CrmRelatedProperty {
   propertyId: string;
   canonicalAddress?: string | null;
   displayAddress?: string | null;
+  contactEmail?: string | null;
+  isPrimary?: boolean;
+  openActionItemCount?: number;
+  lastActivityAt?: string | null;
+  uiV2Status?: UiV2PipelineStatus | string | null;
+  brokerResponseStatus?: UiV2CrmBrokerResponseStatus | string | null;
 }
 
 export interface UiV2CrmContactPayload {
@@ -931,8 +938,41 @@ export interface UiV2CrmContactPayload {
   lastActivityAt?: string | null;
 }
 
+export type UiV2CrmBrokerResponseStatus =
+  | "none"
+  | "waiting"
+  | "responded"
+  | "unresponsive"
+  | "inefficient"
+  | "wrong_contact";
+
+export interface UiV2CrmBrokerResponsePayload {
+  status: UiV2CrmBrokerResponseStatus | string;
+  note?: string | null;
+  recordedAt?: string | null;
+  recordedBy?: string | null;
+  lastActivityAt?: string | null;
+}
+
+export interface UiV2CrmPropertyRowPayload {
+  propertyId: string;
+  canonicalAddress: string;
+  displayAddress?: string | null;
+  uiV2Status?: UiV2PipelineStatus | string | null;
+  rejectedAt?: string | null;
+  broker: UiV2BrokerBlock | null;
+  contact: BrokerContact | null;
+  resolutionStatus?: RecipientResolution["status"] | string | null;
+  candidateCount?: number;
+  hasEmail: boolean;
+  openActionItemCount?: number;
+  lastActivityAt?: string | null;
+  response?: UiV2CrmBrokerResponsePayload | null;
+}
+
 export interface UiV2CrmListPayload {
   contacts: UiV2CrmContactPayload[];
+  propertyRows?: UiV2CrmPropertyRowPayload[];
   total: number;
   limit: number;
   offset: number;

@@ -438,7 +438,13 @@
 .miniRowLink {
   display: block;
   min-width: 0;
+  border: 0;
+  padding: 0;
+  background: transparent;
   color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
   text-decoration: none;
 }
 
@@ -468,20 +474,6 @@
   color: var(--app-muted);
   font-size: 0.65rem;
   line-height: 1.18;
-}
-
-.miniRowDetails {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0.3rem;
-  color: var(--app-muted);
-  font-size: 0.62rem;
-}
-
-.miniRowDetails span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .cardMetrics {
@@ -572,6 +564,7 @@
 .cardActions {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 0.3rem;
 }
 
@@ -602,10 +595,14 @@
 }
 
 .cardRejectButton {
-  margin-left: auto;
+  border-color: transparent;
+  background: transparent;
+  color: var(--app-red);
+}
+
+.cardRejectButton:hover {
   border-color: var(--app-red-border);
   background: var(--app-red-soft);
-  color: var(--app-red);
 }
 
 .cardActionButton:disabled,
