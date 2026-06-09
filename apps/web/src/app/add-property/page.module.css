@@ -539,6 +539,13 @@
   line-height: 1.5;
 }
 
+.actionTitle {
+  margin: 0 0 0.25rem;
+  color: var(--app-ink, #18181b);
+  font-size: 0.94rem;
+  font-weight: 600;
+}
+
 /* ─── Saved search preview ────────────────────────────────────── */
 
 .savedSearchPreview {
@@ -701,10 +708,33 @@
   gap: 0.5rem;
 }
 
+.activityTitle {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  gap: 0.45rem;
+}
+
 .recentItemHeader strong {
   font-size: 0.84rem;
   font-weight: 600;
   color: var(--app-ink, #18181b);
+}
+
+.loadingSpinner {
+  width: 0.86rem;
+  height: 0.86rem;
+  flex: 0 0 auto;
+  border: 2px solid var(--app-line-strong, #d4d4d8);
+  border-top-color: var(--brand, #0f766e);
+  border-radius: 999px;
+  animation: addPropertySpin 720ms linear infinite;
+}
+
+@keyframes addPropertySpin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .recentLinks {

@@ -1212,11 +1212,12 @@ export default function PipelineClient() {
         const importedCount = typeof addressAware?.imported === "number" ? addressAware.imported : 0;
         const failedCount = typeof addressAware?.failed === "number" ? addressAware.failed : 0;
         const createdCount = typeof addressAware?.createdProperties === "number" ? addressAware.createdProperties : 0;
+        const enrichmentCount = typeof addressAware?.enrichmentComplete === "number" ? addressAware.enrichmentComplete : 0;
         const dossierCount = typeof addressAware?.dossierGenerated === "number" ? addressAware.dossierGenerated : 0;
         setDocumentUploadFiles([]);
         if (addressAware) {
           setNotice(
-            `${files.length} document${files.length === 1 ? "" : "s"} uploaded; ${importedCount} OM PDF${importedCount === 1 ? "" : "s"} routed by address${createdCount ? `, ${createdCount} new propert${createdCount === 1 ? "y" : "ies"}` : ""}${dossierCount ? `, ${dossierCount} dossier${dossierCount === 1 ? "" : "s"} generated` : ""}${failedCount ? `, ${failedCount} need review` : ""}.`
+            `${files.length} document${files.length === 1 ? "" : "s"} uploaded; ${importedCount} OM PDF${importedCount === 1 ? "" : "s"} routed by address${createdCount ? `, ${createdCount} new propert${createdCount === 1 ? "y" : "ies"}` : ""}${enrichmentCount ? `, ${enrichmentCount} enriched` : ""}${dossierCount ? `, ${dossierCount} dossier${dossierCount === 1 ? "" : "s"} generated` : ""}${failedCount ? `, ${failedCount} need review` : ""}.`
           );
         } else {
           setNotice(

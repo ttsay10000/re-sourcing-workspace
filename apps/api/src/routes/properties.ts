@@ -3110,9 +3110,17 @@ type AddressAwareOmUploadResult = {
   matchStrategy: string | null;
   uploadedDocumentIds: string[];
   omReviewStatus: string | null;
+  enrichment: UploadEnrichmentResult | null;
   rentalFlow: { rentalUnitsCount: number; hasLlmFinancials: boolean; error?: string } | null;
   dossier: { generated: boolean; dealScore: number | null; error?: string } | null;
   error?: string;
+};
+
+type UploadEnrichmentResult = {
+  attempted: boolean;
+  ok: boolean;
+  results?: Record<string, { ok: boolean; error?: string; skipped?: boolean }>;
+  warning?: string | null;
 };
 
 function parseBooleanFormFlag(value: unknown): boolean {
@@ -3165,6 +3173,31 @@ async function persistUploadedDocumentForProperty(params: {
     },
     fileContent: params.plan.file.buffer,
   });
+}
+
+async function runUploadedDocumentEnrichmentForProperty(
+  propertyId: string,
+  logContext: string
+): Promise<UploadEnrichmentResult> {
+  return runEnrichmentForProperty(propertyId)
+    .then((result) => ({
+      attempted: true,
+      ok: result.ok,
+      results: result.results,
+      warning: null,
+    }))
+    .catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`[properties ${logContext}] failed to run enrichment for uploaded OM document`, {
+        propertyId,
+        error: message,
+      });
+      return {
+        attempted: true,
+        ok: false,
+        warning: message,
+      };
+    });
 }
 
 async function runAddressAwareOmPostProcessing(
@@ -3621,6 +3654,14 @@ router.post(
               matchStrategy: result.matchStrategy,
               uploadedDocumentIds: (result.uploadedDocuments ?? []).map((document) => document.id),
               omReviewStatus: result.omReview?.ok ? "promoted" : result.omReview?.error ? "failed" : null,
+              enrichment: result.enrichment
+                ? {
+                    attempted: result.enrichment.attempted,
+                    ok: result.enrichment.ok,
+                    results: result.enrichment.results,
+                    warning: result.enrichment.warning ?? null,
+                  }
+                : null,
               rentalFlow: null,
               dossier: null,
             });
@@ -3647,6 +3688,7 @@ router.post(
               matchStrategy: "fallback_selected_property",
               uploadedDocumentIds: [inserted.id],
               omReviewStatus: null,
+              enrichment: null,
               rentalFlow: null,
               dossier: null,
               error:
@@ -3708,8 +3750,13 @@ router.post(
             error: error instanceof Error ? error.message : String(error),
           }));
         }
+        const selectedEnrichment =
+          shouldRefreshSelectedProperty && selectedOmRefresh?.status !== "failed"
+            ? await runUploadedDocumentEnrichmentForProperty(propertyId, "documents upload batch selected fallback")
+            : null;
         await syncPropertySourcingWorkflow(propertyId, { pool }).catch(() => {});
         await refreshPropertyPipelineMetadata(propertyId, pool, {
+          ...(selectedEnrichment ? { enrichmentStatus: selectedEnrichment.ok ? "complete" : "failed" } : {}),
           ...(selectedOmRefresh ? { underwritingStatus: selectedOmRefresh.reviewRequired ? "needs_assumptions" : "in_progress" } : {}),
           ...(selectedRentalFlow ? { rentalFlowStatus: selectedRentalFlow.error ? "failed" : "complete" } : {}),
         }).catch(() => {});
@@ -3726,6 +3773,7 @@ router.post(
             contentType: document.contentType ?? null,
           })),
           omRefresh: selectedOmRefresh,
+          enrichment: selectedEnrichment,
           rentalFlow: selectedRentalFlow,
           autoSaved: selectedAutoSaved || Array.from(automationByPropertyId.values()).some((automation) => automation.autoSaved),
           addressAwareOmImport: {
@@ -3735,6 +3783,7 @@ router.post(
             failed: addressAwareResults.filter((result) => result.status === "failed").length,
             createdProperties: addressAwareResults.filter((result) => result.status === "imported" && result.createdProperty).length,
             matchedProperties: addressAwareResults.filter((result) => result.status === "imported" && !result.createdProperty).length,
+            enrichmentComplete: addressAwareResults.filter((result) => result.enrichment?.ok).length,
             dossierGenerated: addressAwareResults.filter((result) => result.dossier?.generated).length,
             results: addressAwareResults,
           },
@@ -3804,9 +3853,14 @@ router.post(
           error: error instanceof Error ? error.message : String(error),
         }));
       }
+      const enrichment =
+        shouldRefreshOm && omRefresh?.status !== "failed"
+          ? await runUploadedDocumentEnrichmentForProperty(propertyId, "documents upload batch")
+          : null;
 
       await syncPropertySourcingWorkflow(propertyId, { pool }).catch(() => {});
       await refreshPropertyPipelineMetadata(propertyId, pool, {
+        ...(enrichment ? { enrichmentStatus: enrichment.ok ? "complete" : "failed" } : {}),
         ...(omRefresh ? { underwritingStatus: omRefresh.reviewRequired ? "needs_assumptions" : "in_progress" } : {}),
         ...(rentalFlow ? { rentalFlowStatus: rentalFlow.error ? "failed" : "complete" } : {}),
       }).catch(() => {});
@@ -3821,6 +3875,7 @@ router.post(
           contentType: document.contentType ?? null,
         })),
         omRefresh,
+        enrichment,
         rentalFlow,
         autoSaved,
       });
@@ -3879,13 +3934,18 @@ router.post(
             return false;
           })
         : false;
+      const enrichment = isOmIngestionCategory(inserted.category)
+        ? await runUploadedDocumentEnrichmentForProperty(propertyId, "documents upload")
+        : null;
 
       await syncPropertySourcingWorkflow(propertyId, { pool });
-      await refreshPropertyPipelineMetadata(propertyId, pool);
+      await refreshPropertyPipelineMetadata(propertyId, pool, {
+        ...(enrichment ? { enrichmentStatus: enrichment.ok ? "complete" : "failed" } : {}),
+      });
 
       // Upload only persists the document. Authoritative OM promotion is manual now
       // so inbox noise or partial uploads do not replace a stronger dossier-backed state.
-      res.status(201).json({ propertyId, document: inserted, autoSaved });
+      res.status(201).json({ propertyId, document: inserted, autoSaved, enrichment });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error("[properties documents upload]", err);
