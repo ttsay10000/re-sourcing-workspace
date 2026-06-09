@@ -285,6 +285,8 @@ interface PipelineBaseRow {
   latest_signal_asset_cap_rate: number | string | null;
   latest_signal_adjusted_cap_rate: number | string | null;
   latest_signal_yield_spread: number | string | null;
+  latest_signal_risk_flags: unknown;
+  latest_signal_cap_reasons: unknown;
   override_score: number | string | null;
   open_action_item_count: number | string | null;
   latest_inquiry_sent_at: Date | string | null;
@@ -1902,6 +1904,12 @@ function buildUnderwriting(row: PipelineBaseRow): UiV2UnderwritingSummary | null
     yocSpreadPct: yieldSignals.spreadPctPoints,
     mtrCalloutCode: yieldSignals.calloutCode,
     mtrCalloutLabel: yieldSignals.calloutLabel,
+    riskFlags: allowSignalFallback && Array.isArray(row.latest_signal_risk_flags)
+      ? (row.latest_signal_risk_flags as unknown[]).filter((flag): flag is string => typeof flag === "string")
+      : [],
+    capReasons: allowSignalFallback && Array.isArray(row.latest_signal_cap_reasons)
+      ? (row.latest_signal_cap_reasons as unknown[]).filter((flag): flag is string => typeof flag === "string")
+      : [],
     targetIrrPct: summary?.targetIrrPct ?? assumptions?.targetIrrPct ?? null,
     irrPct: summary?.irrPct ?? (allowSignalFallback ? toFiniteNumber(row.latest_signal_irr_pct) : null),
     cocPct: summary?.cocPct ?? (allowSignalFallback ? toFiniteNumber(row.latest_signal_coc_pct) : null),
@@ -2451,6 +2459,8 @@ async function fetchPipelineRows(pool: Pool, userId: string): Promise<PipelineBa
        ds.asset_cap_rate AS latest_signal_asset_cap_rate,
        ds.adjusted_cap_rate AS latest_signal_adjusted_cap_rate,
        ds.yield_spread AS latest_signal_yield_spread,
+       ds.risk_flags AS latest_signal_risk_flags,
+       ds.cap_reasons AS latest_signal_cap_reasons,
        dso.score AS override_score,
        COALESCE(ai.open_action_item_count, 0) AS open_action_item_count,
        pis.sent_at AS latest_inquiry_sent_at,

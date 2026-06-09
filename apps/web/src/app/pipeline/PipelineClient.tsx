@@ -648,6 +648,15 @@ function newBadgeTitle(row: UiV2PipelineRow): string {
   return `New property${suffix}`;
 }
 
+function scoreExplanation(row: Pick<UiV2PipelineRow, "underwriting"> | null | undefined): string | undefined {
+  const flags = [
+    ...(row?.underwriting?.capReasons ?? []),
+    ...(row?.underwriting?.riskFlags ?? []),
+  ];
+  if (flags.length === 0) return undefined;
+  return `Why this score:\n- ${flags.slice(0, 6).join("\n- ")}${flags.length > 6 ? `\n(+${flags.length - 6} more)` : ""}`;
+}
+
 function scoreTone(score: number | null | undefined): string {
   if (score == null || !Number.isFinite(score)) return styles.scoreMissing;
   if (score >= 75) return styles.scoreStrong;
@@ -3451,7 +3460,7 @@ export default function PipelineClient() {
                   <td className={styles.numericCell}>{formatNumber(row.units)}</td>
                   <td className={styles.numericCell}>{formatNumber(row.buildingSqft)}</td>
                   <td className={styles.scoreCell}>
-                    <span className={`${styles.scoreBadge} ${scoreTone(score)}`}>
+                    <span className={`${styles.scoreBadge} ${scoreTone(score)}`} title={scoreExplanation(row)}>
                       {scoreLabel(score)}
                     </span>
                   </td>

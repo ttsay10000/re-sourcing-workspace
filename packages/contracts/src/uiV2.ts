@@ -666,6 +666,8 @@ export interface UiV2UnderwritingSummary {
   yocSpreadPct?: number | null;
   mtrCalloutCode?: "mtr_below_ltr" | "mtr_weak_uplift" | null;
   mtrCalloutLabel?: string | null;
+  riskFlags?: string[];
+  capReasons?: string[];
   targetIrrPct?: number | null;
   irrPct?: number | null;
   cocPct?: number | null;
