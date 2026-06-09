@@ -24,6 +24,7 @@ import importV2Router from "./routes/importV2.js";
 import savedProgressV2Router from "./routes/savedProgressV2.js";
 import brokerCompsRouter from "./routes/brokerComps.js";
 import brokerOmRouter from "./routes/brokerOm.js";
+import compsRouter from "./routes/comps.js";
 
 const PORT = Number(process.env.PORT) || 4000;
 const version = process.env.npm_package_version || "1.0.0";
@@ -73,6 +74,7 @@ app.use("/api", listingsRouter);
 app.use("/api", propertiesRouter);
 app.use("/api", profileRouter);
 app.use("/api", dossierRouter);
+app.use("/api", compsRouter);
 app.use("/api", dealsRouter);
 app.use("/api", savedSearchesRouter);
 app.use("/api", salesMetricsRouter);
