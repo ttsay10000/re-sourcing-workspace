@@ -284,6 +284,14 @@ export interface OmCalculationSnapshot {
     year1EquityYield: number | null;
     equityMultiple: number | null;
   };
+  yieldSignals?: {
+    ltrYieldPct: number | null;
+    mtrYieldPct: number | null;
+    spreadPctPoints: number | null;
+    minHealthySpreadPctPoints: number;
+    calloutCode: "mtr_below_ltr" | "mtr_weak_uplift" | null;
+    calloutLabel: string | null;
+  } | null;
   rentRoll: OmCalculationRentRollRow[];
   expenseRows: OmCalculationExpenseRow[];
   unitModelRows: OmCalculationUnitModelRow[];
@@ -2389,7 +2397,35 @@ export function OmCalculationPanel({
               </div>
             </div>
 
-            {calculation.validationMessages.length > 0 ? (
+            {calculation.yieldSignals?.calloutCode ? (
+              <div
+                style={{
+                  padding: "0.85rem 1rem",
+                  borderRadius: "12px",
+                  border:
+                    calculation.yieldSignals.calloutCode === "mtr_below_ltr"
+                      ? "1px solid #fca5a5"
+                      : "1px solid #fcd34d",
+                  background:
+                    calculation.yieldSignals.calloutCode === "mtr_below_ltr" ? "#fef2f2" : "#fffbeb",
+                  color:
+                    calculation.yieldSignals.calloutCode === "mtr_below_ltr" ? "#991b1b" : "#92400e",
+                }}
+              >
+                <strong style={{ display: "block", marginBottom: "0.35rem" }}>
+                  {calculation.yieldSignals.calloutCode === "mtr_below_ltr"
+                    ? "MTR yield below LTR — source as an LTR deal"
+                    : "Weak MTR yield bump"}
+                </strong>
+                <div style={{ fontSize: "0.88rem", lineHeight: 1.5 }}>
+                  {calculation.yieldSignals.calloutLabel}
+                </div>
+              </div>
+            ) : null}
+
+            {calculation.validationMessages.filter(
+              (message) => message !== calculation.yieldSignals?.calloutLabel
+            ).length > 0 ? (
               <div
                 style={{
                   padding: "0.85rem 1rem",
@@ -2400,11 +2436,13 @@ export function OmCalculationPanel({
                 }}
               >
                 <strong style={{ display: "block", marginBottom: "0.35rem" }}>Validation flags</strong>
-                {calculation.validationMessages.map((message) => (
-                  <div key={message} style={{ fontSize: "0.88rem", lineHeight: 1.5 }}>
-                    {message}
-                  </div>
-                ))}
+                {calculation.validationMessages
+                  .filter((message) => message !== calculation.yieldSignals?.calloutLabel)
+                  .map((message) => (
+                    <div key={message} style={{ fontSize: "0.88rem", lineHeight: 1.5 }}>
+                      {message}
+                    </div>
+                  ))}
               </div>
             ) : null}
 
@@ -2478,8 +2516,27 @@ export function OmCalculationPanel({
                   },
                   { label: "Current NOI", value: formatCurrency(calculation.topLineMetrics.currentNoi) },
                   {
-                    label: "Current cap rate",
+                    label: "Current cap rate (LTR yield)",
                     value: formatPercent(calculation.topLineMetrics.currentCapRatePct, 1),
+                  },
+                  {
+                    label: "Stabilized cap rate (MTR yield)",
+                    value: formatPercent(calculation.topLineMetrics.stabilizedCapRatePct, 1),
+                  },
+                  {
+                    label: "MTR vs LTR spread",
+                    value:
+                      calculation.yieldSignals?.spreadPctPoints != null
+                        ? `${calculation.yieldSignals.spreadPctPoints >= 0 ? "+" : "−"}${Math.abs(
+                            calculation.yieldSignals.spreadPctPoints
+                          ).toFixed(2)} pt${
+                            calculation.yieldSignals.calloutCode === "mtr_below_ltr"
+                              ? " (below LTR)"
+                              : calculation.yieldSignals.calloutCode === "mtr_weak_uplift"
+                                ? " (weak bump)"
+                                : ""
+                          }`
+                        : "—",
                   },
                   {
                     label: `Projected Y${calculation.topLineMetrics.projectedYearNumber} rent`,

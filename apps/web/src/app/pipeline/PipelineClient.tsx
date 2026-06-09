@@ -1161,6 +1161,7 @@ function buildPipelineQueryString(queryString: string): string {
     "maxDealScore",
     "minAskingPrice",
     "maxAskingPrice",
+    "minLtrYoc",
     "includeRejected",
   ]) {
     const value = incoming.get(key);
@@ -1274,6 +1275,7 @@ export default function PipelineClient() {
       maxDealScore: searchParams.get("maxDealScore") ?? "",
       minAskingPrice: searchParams.get("minAskingPrice") ?? "",
       maxAskingPrice: searchParams.get("maxAskingPrice") ?? "",
+      minLtrYoc: searchParams.get("minLtrYoc") ?? "",
       sort: (searchParams.get("sort") ?? searchParams.get("sortBy") ?? "updatedAt") as UiV2PipelineSortField,
       sortDirection: (searchParams.get("sortDirection") ?? searchParams.get("direction") ?? "desc") as SortDirection,
       includeRejected: searchParams.get("includeRejected") === "true",
@@ -2764,6 +2766,8 @@ export default function PipelineClient() {
         return Boolean(filterValues.minAskingPrice || filterValues.maxAskingPrice);
       case "dealScore":
         return Boolean(filterValues.minDealScore || filterValues.maxDealScore);
+      case "ltrYocPct":
+        return Boolean(filterValues.minLtrYoc);
       case "status":
         return Boolean(filterValues.status);
       case "om":
@@ -2933,6 +2937,22 @@ export default function PipelineClient() {
             </label>
           </div>
         ) : null}
+        {column === "ltrYocPct" ? (
+          <div className={styles.columnMenuGrid}>
+            <label>
+              <span>Min YoC LTR %</span>
+              <input
+                type="number"
+                inputMode="decimal"
+                step="0.1"
+                min="0"
+                value={filterValues.minLtrYoc}
+                onChange={(event) => updateQueryParam("minLtrYoc", event.target.value)}
+                placeholder="e.g. 5.5"
+              />
+            </label>
+          </div>
+        ) : null}
         {column === "om" ? (
           <label>
             <span>Filter OM</span>
@@ -3053,6 +3073,10 @@ export default function PipelineClient() {
   const sheetMarketCapRate = sheetUnderwriting?.marketCapRatePct ?? null;
   const sheetYoCSpread =
     sheetUnderwriting?.yocSpreadPct ?? (sheetMtrYoc != null && sheetMarketCapRate != null ? sheetMtrYoc - sheetMarketCapRate : null);
+  const sheetMtrCalloutCode =
+    sheetUnderwriting?.mtrCalloutCode ?? selectedRow?.underwriting?.mtrCalloutCode ?? null;
+  const sheetMtrCalloutLabel =
+    sheetUnderwriting?.mtrCalloutLabel ?? selectedRow?.underwriting?.mtrCalloutLabel ?? null;
   const sheetCurrentNoi = sheetUnderwriting?.currentNoi ?? null;
   const sheetAdjustedNoi = sheetUnderwriting?.adjustedNoi ?? null;
   const sheetNoiUpliftPct =
@@ -3412,6 +3436,17 @@ export default function PipelineClient() {
                   </td>
                   <td className={cx(styles.numericCell, styles.yocCell)}>
                     <strong>{formatPercent(rowMtrYoc)}</strong>
+                    {row.underwriting?.mtrCalloutCode ? (
+                      <span
+                        className={cx(
+                          styles.yocFlag,
+                          row.underwriting.mtrCalloutCode === "mtr_below_ltr" ? styles.yocFlagDanger : styles.yocFlagWarn
+                        )}
+                        title={row.underwriting.mtrCalloutLabel ?? undefined}
+                      >
+                        {row.underwriting.mtrCalloutCode === "mtr_below_ltr" ? "Below LTR" : "Weak bump"}
+                      </span>
+                    ) : null}
                   </td>
                   <td className={styles.numericCell}>{formatNumber(row.units)}</td>
                   <td className={styles.numericCell}>{formatNumber(row.buildingSqft)}</td>
@@ -3552,8 +3587,24 @@ export default function PipelineClient() {
               </div>
               <div>
                 <dt>MTR spread</dt>
-                <dd>{formatPercent(sheetYoCSpread)}</dd>
-                <small>YoC MTR less market cap</small>
+                <dd
+                  className={
+                    sheetMtrCalloutCode === "mtr_below_ltr"
+                      ? styles.yocFlagDanger
+                      : sheetMtrCalloutCode === "mtr_weak_uplift"
+                        ? styles.yocFlagWarn
+                        : undefined
+                  }
+                >
+                  {formatPercent(sheetYoCSpread)}
+                </dd>
+                <small title={sheetMtrCalloutLabel ?? undefined}>
+                  {sheetMtrCalloutCode === "mtr_below_ltr"
+                    ? "Below LTR — source as LTR"
+                    : sheetMtrCalloutCode === "mtr_weak_uplift"
+                      ? "Weak MTR bump"
+                      : "YoC MTR less YoC LTR"}
+                </small>
               </div>
             </dl>
 

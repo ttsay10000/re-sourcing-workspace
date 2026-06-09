@@ -75,6 +75,7 @@ import {
 } from "../deal/propertyDossierState.js";
 import { resolveEffectiveDealScore } from "../deal/effectiveDealScore.js";
 import { resolveOmAskingPriceFromDetails } from "../deal/omAskingPrice.js";
+import { computeYieldSignals } from "../deal/yieldSignals.js";
 import { resolvePreferredOmUnitCount } from "../om/authoritativeOm.js";
 
 const router = Router();
@@ -324,6 +325,7 @@ interface ParsedPipelineQuery {
   maxDealScore?: number;
   minAskingPrice?: number;
   maxAskingPrice?: number;
+  minLtrYoc?: number;
   updatedSince?: string;
   sortBy: UiV2PipelineSortField;
   sortDirection: "asc" | "desc";
@@ -580,6 +582,7 @@ function parsePipelineQuery(req: Request): ParsedPipelineQuery {
     maxDealScore: parseNumberQuery(req.query.maxDealScore ?? req.query.max),
     minAskingPrice: parseNumberQuery(req.query.minAskingPrice),
     maxAskingPrice: parseNumberQuery(req.query.maxAskingPrice),
+    minLtrYoc: parseNumberQuery(req.query.minLtrYoc),
     updatedSince: firstQueryValue(req.query.updatedSince) ?? undefined,
     sortBy,
     sortDirection: sortDirectionRaw === "asc" ? "asc" : "desc",
@@ -632,6 +635,7 @@ function queryForResponse(query: ParsedPipelineQuery): UiV2PipelineQuery {
     ...(query.maxDealScore != null ? { maxDealScore: query.maxDealScore } : {}),
     ...(query.minAskingPrice != null ? { minAskingPrice: query.minAskingPrice } : {}),
     ...(query.maxAskingPrice != null ? { maxAskingPrice: query.maxAskingPrice } : {}),
+    ...(query.minLtrYoc != null ? { minLtrYoc: query.minLtrYoc } : {}),
     ...(query.updatedSince ? { updatedSince: query.updatedSince } : {}),
     sortBy: query.sortBy,
     sortDirection: query.sortDirection,
@@ -1870,6 +1874,7 @@ function buildUnderwriting(row: PipelineBaseRow): UiV2UnderwritingSummary | null
   const adjustedNoi = getAdjustedNoi(row);
   const ltrYocPct = getNoiYieldOnCost(row, currentNoi, allowSignalFallback ? row.latest_signal_asset_cap_rate : null);
   const mtrYocPct = getNoiYieldOnCost(row, adjustedNoi, allowSignalFallback ? row.latest_signal_adjusted_cap_rate : null);
+  const yieldSignals = computeYieldSignals({ ltrYieldPct: ltrYocPct, mtrYieldPct: mtrYocPct });
   const hasAnyUnderwriting =
     summary != null ||
     assumptions != null ||
@@ -1891,7 +1896,9 @@ function buildUnderwriting(row: PipelineBaseRow): UiV2UnderwritingSummary | null
     yocPct: mtrYocPct,
     yocBasis: mtrYocPct != null ? "adjusted_noi" : ltrYocPct != null ? "current_noi" : "unknown",
     marketCapRatePct: null,
-    yocSpreadPct: null,
+    yocSpreadPct: yieldSignals.spreadPctPoints,
+    mtrCalloutCode: yieldSignals.calloutCode,
+    mtrCalloutLabel: yieldSignals.calloutLabel,
     targetIrrPct: summary?.targetIrrPct ?? assumptions?.targetIrrPct ?? null,
     irrPct: summary?.irrPct ?? (allowSignalFallback ? toFiniteNumber(row.latest_signal_irr_pct) : null),
     cocPct: summary?.cocPct ?? (allowSignalFallback ? toFiniteNumber(row.latest_signal_coc_pct) : null),
@@ -2634,6 +2641,10 @@ function filterRows(rows: UiV2PipelineRow[], query: ParsedPipelineQuery): UiV2Pi
     if (query.maxDealScore != null && (score == null || score > query.maxDealScore)) return false;
     if (query.minAskingPrice != null && (row.askingPrice == null || row.askingPrice < query.minAskingPrice)) return false;
     if (query.maxAskingPrice != null && (row.askingPrice == null || row.askingPrice > query.maxAskingPrice)) return false;
+    if (query.minLtrYoc != null) {
+      const ltrYoc = row.underwriting?.ltrYocPct ?? null;
+      if (ltrYoc == null || ltrYoc < query.minLtrYoc) return false;
+    }
     if (Number.isFinite(updatedSinceMs) && Date.parse(row.updatedAt) < updatedSinceMs) return false;
     return true;
   });

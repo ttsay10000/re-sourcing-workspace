@@ -13,7 +13,7 @@
     "db:migrate": "npm run build -w @re-sourcing/db && npm run migrate -w @re-sourcing/db",
     "db:seed": "npm run seed -w @re-sourcing/db",
     "verify": "npm run build -w @re-sourcing/contracts && npm run build -w @re-sourcing/api",
-    "check": "npm test && npm run verify"
+    "check": "npm run build -w @re-sourcing/contracts && npm run build -w @re-sourcing/db && npm test && npm run verify"
   },
   "devDependencies": {
     "concurrently": "^9.1.0"

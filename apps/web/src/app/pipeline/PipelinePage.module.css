@@ -855,6 +855,23 @@
   color: #b45309;
 }
 
+.yocFlag {
+  margin-top: 0.14rem;
+  display: block;
+  font-size: 0.63rem;
+  font-weight: 800;
+  line-height: 1.15;
+  white-space: nowrap;
+}
+
+.yocFlagDanger {
+  color: #b91c1c;
+}
+
+.yocFlagWarn {
+  color: #b45309;
+}
+
 .dateCell {
   color: #3f4e58;
   white-space: nowrap;
