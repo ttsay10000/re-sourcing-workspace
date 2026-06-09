@@ -1205,7 +1205,7 @@ function CrmPageContent() {
             body: JSON.stringify({
               name: draft.name.trim() || row.broker?.name || null,
               firm: draft.firm.trim() || row.broker?.firm || null,
-              email: draft.email.trim() || null,
+              email: draft.email.trim() || row.broker?.email || null,
               phone: draft.phone.trim() || row.broker?.phone || null,
               notes: draft.notes.trim() || row.broker?.notes || null,
               actorName: "crm",
@@ -1268,6 +1268,12 @@ function CrmPageContent() {
         note: row.response?.note ?? "",
       };
       const note = draft.note.trim() || `Rejected from Broker CRM after ${responseStatusLabel(draft.status).toLowerCase()} broker response.`;
+      const reasonCode =
+        draft.status === "unresponsive" || draft.status === "none" || draft.status === "waiting"
+          ? "broker_unresponsive"
+          : draft.status === "wrong_contact" || draft.status === "inefficient"
+            ? "data_quality_issue"
+            : "other";
       if (!window.confirm(`Reject ${row.displayAddress ?? row.canonicalAddress}?`)) return;
       setRejectingPropertyId(row.propertyId);
       try {
@@ -1276,7 +1282,7 @@ function CrmPageContent() {
           body: JSON.stringify({
             actorName: "crm",
             rejection: {
-              reasonCode: "broker_unresponsive",
+              reasonCode,
               note,
             },
           }),

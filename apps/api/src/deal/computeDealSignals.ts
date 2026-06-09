@@ -30,6 +30,7 @@ import {
 } from "./dealScoringEngine.js";
 import type { DealScoringProfile, DealScoringProfileKey } from "./dealScoringProfiles.js";
 import { resolveDossierPackageContext } from "./dossierPropertyContext.js";
+import { computeYieldSignals } from "./yieldSignals.js";
 import type { InsertDealSignalsParams } from "@re-sourcing/db";
 
 export interface PropertyListingInput {
@@ -297,10 +298,11 @@ export function computeDealSignals(input: ComputeDealSignalsInput): ComputeDealS
   const pricePerUnit = price != null && unitCount != null && unitCount > 0 ? price / unitCount : null;
   const buildingSqft = grossBuildingSqft(details);
   const pricePsf = price != null && buildingSqft != null && buildingSqft > 0 ? price / buildingSqft : null;
-  const yieldSpread =
-    scoringResult.adjustedCapRate != null && scoringResult.assetCapRate != null
-      ? scoringResult.adjustedCapRate - scoringResult.assetCapRate
-      : null;
+  const yieldSignals = computeYieldSignals({
+    ltrYieldPct: scoringResult.assetCapRate,
+    mtrYieldPct: scoringResult.adjustedCapRate,
+  });
+  const yieldSpread = yieldSignals.spreadPctPoints;
   const expenseRatio =
     currentFinancials.operatingExpenses != null &&
     currentFinancials.effectiveGrossIncome != null &&
@@ -324,7 +326,9 @@ export function computeDealSignals(input: ComputeDealSignalsInput): ComputeDealS
     dealScore: scoringResult.isScoreable ? scoringResult.dealScore : undefined,
     scoreBreakdown: scoringResult.scoreBreakdown,
     riskProfile: scoringResult.riskProfile,
-    riskFlags: scoringResult.riskFlags,
+    riskFlags: yieldSignals.calloutLabel
+      ? [...scoringResult.riskFlags, yieldSignals.calloutLabel]
+      : scoringResult.riskFlags,
     capReasons: scoringResult.capReasons,
     confidenceScore: scoringResult.confidenceScore,
     scoreSensitivity: input.scoreSensitivity ?? undefined,

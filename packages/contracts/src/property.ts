@@ -886,7 +886,7 @@ export interface PropertyInput {
 }
 
 /** Source for rows in the unified documents table (generated files only; broker/user stay in existing tables). */
-export type DocumentSource = "generated_dossier" | "generated_excel";
+export type DocumentSource = "generated_dossier" | "generated_excel" | "generated_loi";
 
 /** Generated document row (dossier, Excel) — appears in same documents folder as OM on property card. */
 export interface Document {

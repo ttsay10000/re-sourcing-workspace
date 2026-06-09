@@ -65,3 +65,17 @@ Across runs, already-saved messages are skipped.
 ## UI Behavior
 
 The property UI prefers OM-style analysis when present and falls back to rental-flow output when there is no OM analysis.
+
+## Return Metric Definitions
+
+- Cash-on-cash (year 1 and average) = (NOI − debt service) / initial equity. Recurring capex is intentionally excluded from the CoC numerator; it is included in unlevered cash flow ("CF after reserves") and in IRR via the levered cash flow series. The dossier Excel (`excelProForma.ts`) and the deal-analysis workbook (`dealAnalysisWorkbook.ts`) use the same definition (debt service is stored as a negative value in the sheets, so `NOI + debtService` is a subtraction).
+- LTR yield = current NOI / purchase basis (the asset cap rate at ask). MTR yield = stabilized / rent-uplift NOI / purchase basis (the adjusted cap rate).
+
+## LTR vs MTR Yield Callouts
+
+`apps/api/src/deal/yieldSignals.ts` is the single comparison point for LTR vs MTR yields. Whenever an analysis runs it computes the spread (MTR − LTR, in percentage points) and classifies it:
+
+- `mtr_below_ltr` — MTR yield is below the LTR yield; the deal should be underwritten as an LTR play on its cap rate.
+- `mtr_weak_uplift` — MTR beats LTR by less than the healthy-spread threshold (default 0.75 pt; override with env `MTR_MIN_YIELD_SPREAD_PCT`).
+
+The callout is surfaced in three places: the OM calculation snapshot (`yieldSignals` field + validation messages, shown in the OM workspace), deal signals (`yield_spread` column plus a risk-flag entry), and the pipeline screening API (`yocSpreadPct`, `mtrCalloutCode`, `mtrCalloutLabel` on the underwriting summary; the table flags the YoC MTR cell). The pipeline list also supports a `minLtrYoc` filter for sourcing on LTR yield.

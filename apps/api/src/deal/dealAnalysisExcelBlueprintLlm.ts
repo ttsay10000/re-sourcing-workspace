@@ -28,7 +28,10 @@ export type DealAnalysisSummaryMetricKey =
   | "unlevered_irr"
   | "avg_cash_on_cash"
   | "equity_multiple"
-  | "target_irr";
+  | "target_irr"
+  | "ltr_yield"
+  | "mtr_yield"
+  | "mtr_spread";
 
 export interface DealAnalysisWorkbookBoxBlueprint {
   title: string;
@@ -66,6 +69,9 @@ const ALLOWED_METRIC_KEYS = new Set<DealAnalysisSummaryMetricKey>([
   "avg_cash_on_cash",
   "equity_multiple",
   "target_irr",
+  "ltr_yield",
+  "mtr_yield",
+  "mtr_spread",
 ]);
 
 export const FALLBACK_BLUEPRINT: DealAnalysisWorkbookBlueprint = {
@@ -86,11 +92,11 @@ export const FALLBACK_BLUEPRINT: DealAnalysisWorkbookBlueprint = {
     },
     {
       title: "Operations",
-      metricKeys: ["current_gross_rent", "current_noi", "stabilized_noi", "hold_period"],
+      metricKeys: ["current_noi", "ltr_yield", "stabilized_noi", "mtr_yield"],
     },
     {
       title: "Returns",
-      metricKeys: ["levered_irr", "unlevered_irr", "avg_cash_on_cash", "equity_multiple"],
+      metricKeys: ["levered_irr", "avg_cash_on_cash", "equity_multiple", "mtr_spread"],
     },
   ],
 };
@@ -164,6 +170,13 @@ function serializeContext(ctx: UnderwritingContext): string {
     )}`,
     `Current NOI: ${fmtCurrency(ctx.currentNoi)}`,
     `Stabilized NOI: ${fmtCurrency(ctx.operating.stabilizedNoi)}`,
+    `LTR yield (current cap rate at ask): ${fmtPct(ctx.assetCapRate)}`,
+    `MTR yield (stabilized cap rate): ${fmtPct(ctx.adjustedCapRate)}`,
+    `MTR vs LTR spread: ${
+      ctx.assetCapRate != null && ctx.adjustedCapRate != null
+        ? `${(ctx.adjustedCapRate - ctx.assetCapRate).toFixed(2)}pt`
+        : "n/a"
+    }`,
     `Hold period: ${ctx.assumptions.holdPeriodYears ?? "n/a"} years`,
     `Exit cap: ${fmtPct(ctx.assumptions.exit.exitCapPct)}`,
     `Gross sale value: ${fmtCurrency(ctx.exit.exitPropertyValue)}`,

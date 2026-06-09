@@ -1680,6 +1680,13 @@ function DealPathModal({
                 />
                 {loiFile ? <small>{loiFile.name}</small> : null}
               </label>
+              <GenerateLoiButton
+                propertyId={row.propertyId}
+                offerAmount={form.offerAmount}
+                targetPrice={form.targetPrice}
+                contingenciesText={form.loiContingenciesText}
+                notes={form.offerNotes}
+              />
             </>
           ) : null}
           {isLoiPrompt || isTourCompletedPrompt || showGeneralTourFields ? (
@@ -2006,3 +2013,89 @@ function SavedDealMiniSection({
     </section>
   );
 }
+
+function GenerateLoiButton({ propertyId, offerAmount, targetPrice, contingenciesText, notes }: {
+  propertyId: string;
+  offerAmount: string;
+  targetPrice: string;
+  contingenciesText: string;
+  notes: string;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{ fileName: string; downloadPath: string } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const effectiveOffer = Number((offerAmount || targetPrice).replace(/[$,\s]/g, ""));
+  const canGenerate = Number.isFinite(effectiveOffer) && effectiveOffer > 0;
+
+  async function generate() {
+    if (!canGenerate || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const response = await fetch(`${API_BASE}/api/ui-v2/properties/${encodeURIComponent(propertyId)}/loi`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          offerAmount: effectiveOffer,
+          contingencies: contingenciesText
+            .split(/\n+/)
+            .map((line) => line.trim())
+            .filter(Boolean),
+          notes: notes.trim() || undefined,
+          actorName: "progress_board",
+        }),
+      });
+      const data = (await response.json().catch(() => ({}))) as {
+        fileName?: string;
+        downloadPath?: string;
+        error?: string;
+        details?: string;
+      };
+      if (!response.ok || data.error || !data.downloadPath) {
+        throw new Error(data.details || data.error || "Failed to generate LOI.");
+      }
+      setResult({ fileName: data.fileName ?? "LOI.pdf", downloadPath: data.downloadPath });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to generate LOI.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div style={{ display: "grid", gap: "0.3rem" }}>
+      <button
+        type="button"
+        onClick={generate}
+        disabled={!canGenerate || busy}
+        title={canGenerate ? "Generate a standard LOI PDF at this offer" : "Enter an offer amount or target price first"}
+        style={{
+          justifySelf: "start",
+          padding: "0.4rem 0.75rem",
+          borderRadius: "8px",
+          border: "1px solid rgba(47, 111, 82, 0.45)",
+          background: canGenerate ? "#f0fdf4" : "#f3f4f6",
+          color: canGenerate ? "#166534" : "#9ca3af",
+          fontSize: "0.78rem",
+          fontWeight: 800,
+          cursor: canGenerate && !busy ? "pointer" : "not-allowed",
+        }}
+      >
+        {busy ? "Generating LOI..." : "Generate LOI PDF"}
+      </button>
+      {result ? (
+        <a
+          href={`${API_BASE}${result.downloadPath}`}
+          target="_blank"
+          rel="noreferrer"
+          style={{ fontSize: "0.78rem", fontWeight: 700, color: "#166534" }}
+        >
+          Download {result.fileName}
+        </a>
+      ) : null}
+      {error ? <span style={{ fontSize: "0.76rem", color: "#b91c1c" }}>{error}</span> : null}
+    </div>
+  );
+}
+

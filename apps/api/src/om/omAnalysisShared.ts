@@ -108,6 +108,24 @@ export function isPdfLikeOmInputDocument(
   return mime.includes("pdf") || filename.endsWith(".pdf");
 }
 
+const IMAGE_OM_EXTENSIONS = [".png", ".jpg", ".jpeg", ".webp", ".heic", ".heif", ".gif"];
+
+/** Broker screenshots (rent rolls, expense texts, listing photos of statements). */
+export function isImageLikeOmInputDocument(
+  doc: Pick<OmInputDocument, "filename"> & { mimeType?: string | null }
+): boolean {
+  const mime = (doc.mimeType ?? "").toLowerCase();
+  const filename = doc.filename.toLowerCase();
+  return mime.startsWith("image/") || IMAGE_OM_EXTENSIONS.some((ext) => filename.endsWith(ext));
+}
+
+/** Documents Gemini can ingest natively via the Files API (PDFs and images). */
+export function isGeminiNativeOmInputDocument(
+  doc: Pick<OmInputDocument, "filename"> & { mimeType?: string | null }
+): boolean {
+  return isPdfLikeOmInputDocument(doc) || isImageLikeOmInputDocument(doc);
+}
+
 export function parseCompletionJsonContent(content: string | null | undefined): Record<string, unknown> | null {
   if (!content || typeof content !== "string") return null;
   let jsonStr = content.trim();

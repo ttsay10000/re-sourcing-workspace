@@ -5,7 +5,7 @@ import {
   fromLlmFromOmAnalysis,
   type OmAnalysisExtractionResult,
   type OmInputDocument,
-  isPdfLikeOmInputDocument,
+  isGeminiNativeOmInputDocument,
   omAnalysisFromParsedJson,
   parseCompletionJsonContent,
 } from "./omAnalysisShared.js";
@@ -145,16 +145,17 @@ function buildPdfOnlyOmPrompt(params: {
   const contextSections = [
     params.propertyContext ? `Property context:\n${params.propertyContext.trim()}` : null,
     params.enrichmentContext ? `Additional enrichment data:\n${params.enrichmentContext.trim()}` : null,
-    params.filenames.length > 0 ? `Attached PDF file(s): ${params.filenames.join(", ")}` : null,
+    params.filenames.length > 0 ? `Attached source file(s): ${params.filenames.join(", ")}` : null,
   ].filter((value): value is string => typeof value === "string" && value.trim().length > 0);
 
   const prefix = contextSections.length > 0 ? `${contextSections.join("\n\n")}\n\n` : "";
 
   const sourceMode =
     params.filenames.length > 0
-      ? `CRITICAL PDF PACKAGE MODE:
-- Inspect the attached PDF file(s) directly and use any additional extracted text context as supporting source material.
-- Review every PDF page, including image-based rent rolls, screenshots, graphics, and scanned financial tables.`
+      ? `CRITICAL FILE PACKAGE MODE:
+- Inspect the attached file(s) directly (PDFs and/or images) and use any additional extracted text context as supporting source material.
+- Review every PDF page and every image, including image-based rent rolls, text-message screenshots, photos of statements, graphics, and scanned financial tables.
+- Standalone image attachments are usually broker-shared screenshots of rents, expenses, or unit details; extract their figures with the same rigor as document tables.`
       : `CRITICAL TEXT PACKAGE MODE:
 - No readable PDF file is attached for this run. Use the provided document text/spreadsheet context as the source package.
 - Treat workbook sheets, delimited rows, and extracted text as authoritative source material when they contain rent roll, T-12, expense, or OM data.`;
@@ -627,7 +628,7 @@ export async function extractOmAnalysisFromGeminiPdfOnly(
   const model = resolveGeminiOmModel(params.model);
   const apiKey = getGeminiApiKey();
   const documents = params.documents.filter((doc) => doc.buffer instanceof Buffer && doc.buffer.length > 0);
-  const pdfDocuments = documents.filter((doc) => isPdfLikeOmInputDocument(doc));
+  const pdfDocuments = documents.filter((doc) => isGeminiNativeOmInputDocument(doc));
 
   if (!apiKey) {
     console.warn("[extractOmAnalysisFromGeminiPdfOnly] GEMINI_API_KEY missing or invalid; skipping Gemini call.");

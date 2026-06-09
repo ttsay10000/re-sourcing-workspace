@@ -19,7 +19,7 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
 const OM_IMPORT_MAX_BYTES = 10 * 1024 * 1024;
 const OM_IMPORT_MAX_FILES = 10;
 const OM_PACKAGE_ACCEPT =
-  "application/pdf,.pdf,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel.sheet.macroenabled.12,.xls,.xlsx,.xlsm,text/csv,.csv,text/plain,.txt";
+  "application/pdf,.pdf,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel.sheet.macroenabled.12,.xls,.xlsx,.xlsm,text/csv,.csv,text/plain,.txt,image/*,.png,.jpg,.jpeg,.webp,.heic,.heif";
 
 type WorkspaceProperty = OmCalculationSnapshot["property"];
 
@@ -602,6 +602,9 @@ function DealAnalysisPageContent() {
   const [baselineDraft, setBaselineDraft] = useState<OmCalculationDraft>(emptyDraft);
   const [uploading, setUploading] = useState(false);
   const [linkAnalyzing, setLinkAnalyzing] = useState(false);
+  const [brokerNotes, setBrokerNotes] = useState("");
+  const [notesAddressHint, setNotesAddressHint] = useState("");
+  const [notesAnalyzing, setNotesAnalyzing] = useState(false);
   const [recalculating, setRecalculating] = useState(false);
   const [dossierDownloading, setDossierDownloading] = useState(false);
   const [excelDownloading, setExcelDownloading] = useState(false);
@@ -909,7 +912,7 @@ function DealAnalysisPageContent() {
   function applyAnalyzedWorkspace(
     data: Partial<AnalyzeUploadResponse>,
     sourceFiles: File[],
-    sourceLabel: "uploaded package" | "OM link"
+    sourceLabel: "uploaded package" | "OM link" | "broker notes"
   ) {
     const nextCalculation = data.calculation as OmCalculationSnapshot;
     const nextDraft = draftFromCalculation(nextCalculation);
@@ -1031,6 +1034,39 @@ function DealAnalysisPageContent() {
       setError(err instanceof Error ? err.message : "Failed to analyze OM link.");
     } finally {
       setLinkAnalyzing(false);
+    }
+  }
+
+  async function analyzeBrokerNotes() {
+    const trimmedNotes = brokerNotes.trim();
+    if (trimmedNotes.length < 20) {
+      setError("Paste at least a couple of lines of broker notes (rents, units, expenses).");
+      return;
+    }
+    setNotesAnalyzing(true);
+    setError(null);
+    setNotice(null);
+    setCreateResult(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/deal-analysis/analyze-notes`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ notes: trimmedNotes, addressHint: notesAddressHint.trim() || undefined }),
+      });
+      const data = (await res.json().catch(() => ({}))) as Partial<AnalyzeUploadResponse> & {
+        error?: string;
+        details?: string;
+      };
+      if (!res.ok || data.error) {
+        throw new Error(data.details || data.error || "Failed to analyze broker notes.");
+      }
+      setBrokerNotes("");
+      setNotesAddressHint("");
+      applyAnalyzedWorkspace(data, [], "broker notes");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to analyze broker notes.");
+    } finally {
+      setNotesAnalyzing(false);
     }
   }
 
@@ -1782,7 +1818,7 @@ function DealAnalysisPageContent() {
               style={{ display: "block", width: "100%" }}
             />
             <div style={{ marginTop: "0.7rem", color: "#68736d", fontSize: "0.84rem", lineHeight: 1.5 }}>
-              Upload OM PDFs, rent roll workbooks, T-12s, broker financial models, CSVs, or text notes.
+              Upload OM PDFs, rent roll workbooks, T-12s, broker financial models, CSVs, text notes, or screenshots/photos of rents and expenses (texts from brokers work).
               The analysis will combine them into one underwriting workspace. Up to {OM_IMPORT_MAX_FILES} files, max{" "}
               {formatBytes(OM_IMPORT_MAX_BYTES)} per file.
             </div>
@@ -1881,6 +1917,63 @@ function DealAnalysisPageContent() {
                 }}
               >
                 {linkAnalyzing ? "Analyzing OM link..." : "Analyze OM link"}
+              </button>
+            </div>
+          </div>
+
+          <div
+            style={{
+              marginTop: "1rem",
+              border: "1px solid rgba(38, 47, 44, 0.12)",
+              borderRadius: "8px",
+              padding: "1rem",
+              background: "#ffffff",
+              display: "grid",
+              gap: "0.7rem",
+            }}
+          >
+            <label style={{ display: "grid", gap: "0.35rem", color: "#303832", fontSize: "0.8rem", fontWeight: 800 }}>
+              Broker notes (texts, calls, email snippets)
+              <textarea
+                value={brokerNotes}
+                onChange={(event) => {
+                  setBrokerNotes(event.target.value);
+                  setError(null);
+                }}
+                placeholder={"Paste what the broker shared, e.g.\n6 units at 412 E 9th St. Unit 1: $3,400/mo, Unit 2: $2,950 stabilized...\nTaxes $48k, insurance $12k, water/sewer $9k."}
+                rows={5}
+                style={{ ...inputStyle, resize: "vertical", minHeight: "108px", fontFamily: "inherit" }}
+              />
+            </label>
+            <label style={{ display: "grid", gap: "0.35rem", color: "#303832", fontSize: "0.8rem", fontWeight: 800 }}>
+              Address hint (optional, helps match or create the right property)
+              <input
+                value={notesAddressHint}
+                onChange={(event) => setNotesAddressHint(event.target.value)}
+                placeholder="412 East 9th Street, Manhattan"
+                style={inputStyle}
+              />
+            </label>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", flexWrap: "wrap", alignItems: "center" }}>
+              <div style={{ color: "#68736d", fontSize: "0.84rem", lineHeight: 1.5 }}>
+                Notes run through the same extraction as OMs: rents, unit details, and expenses become
+                broker-reported current figures on the matched or newly created property, flagged for review.
+              </div>
+              <button
+                type="button"
+                onClick={analyzeBrokerNotes}
+                disabled={brokerNotes.trim().length < 20 || uploading || linkAnalyzing || notesAnalyzing}
+                style={{
+                  ...secondaryButtonStyle,
+                  background: brokerNotes.trim().length >= 20 ? "#fff" : "#f2f6f4",
+                  cursor:
+                    brokerNotes.trim().length < 20 || uploading || linkAnalyzing || notesAnalyzing
+                      ? "not-allowed"
+                      : "pointer",
+                  opacity: brokerNotes.trim().length < 20 ? 0.65 : 1,
+                }}
+              >
+                {notesAnalyzing ? "Analyzing notes..." : "Analyze broker notes"}
               </button>
             </div>
           </div>

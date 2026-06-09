@@ -513,6 +513,7 @@ export interface UiV2PipelineQuery extends UiV2PaginationQuery {
   maxDealScore?: number;
   minAskingPrice?: number;
   maxAskingPrice?: number;
+  minLtrYoc?: number;
   updatedSince?: string;
   sortBy?: UiV2PipelineSortField;
   sortDirection?: UiV2SortDirection;
@@ -663,6 +664,10 @@ export interface UiV2UnderwritingSummary {
   yocBasis?: "adjusted_noi" | "current_noi" | "unknown" | null;
   marketCapRatePct?: number | null;
   yocSpreadPct?: number | null;
+  mtrCalloutCode?: "mtr_below_ltr" | "mtr_weak_uplift" | null;
+  mtrCalloutLabel?: string | null;
+  riskFlags?: string[];
+  capReasons?: string[];
   targetIrrPct?: number | null;
   irrPct?: number | null;
   cocPct?: number | null;

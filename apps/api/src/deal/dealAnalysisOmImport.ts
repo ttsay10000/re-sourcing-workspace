@@ -12,7 +12,7 @@ import type {
   PropertyManualSourceLinks,
 } from "@re-sourcing/contracts";
 import { extractOmAnalysisFromGeminiPdfOnly } from "../om/extractOmAnalysisFromGeminiPdfOnly.js";
-import { isPdfLikeOmInputDocument } from "../om/omAnalysisShared.js";
+import { isGeminiNativeOmInputDocument } from "../om/omAnalysisShared.js";
 import { resolveOmPropertyAddress } from "../om/resolveOmPropertyAddress.js";
 import { saveUploadedDocument } from "../upload/uploadedDocStorage.js";
 import { extractTextMetadataFromBuffer } from "../upload/extractTextFromUploadedFile.js";
@@ -76,7 +76,7 @@ function documentSizeLabel(sizeBytes: number | null | undefined): string {
 }
 
 function isPdfLikeDealAnalysisDocument(document: DealAnalysisOmInputDocument): boolean {
-  return isPdfLikeOmInputDocument({
+  return isGeminiNativeOmInputDocument({
     filename: document.filename,
     mimeType: document.mimeType,
   });

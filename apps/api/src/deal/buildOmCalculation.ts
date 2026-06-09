@@ -45,6 +45,7 @@ import {
 import { buildRentBreakdown as buildSharedRentBreakdown } from "./rentBreakdown.js";
 import { buildSensitivityAnalyses, type SensitivityAnalysis } from "./sensitivityAnalysis.js";
 import { resolveOmAskingPriceFromDetails } from "./omAskingPrice.js";
+import { computeYieldSignals, type YieldSignals } from "./yieldSignals.js";
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value != null && typeof value === "object" && !Array.isArray(value)
@@ -296,6 +297,7 @@ export interface OmCalculationSnapshot {
     year1EquityYield: number | null;
     equityMultiple: number | null;
   };
+  yieldSignals: YieldSignals;
   rentRoll: OmRentRollRow[];
   expenseRows: ExpenseLineItem[];
   unitModelRows: ResolvedUnitModelRow[];
@@ -560,6 +562,10 @@ export function buildOmCalculationSnapshotFromInputs(params: {
 
   const infoSummary = buildPropertyInfoSummary(details, buildingSqftOverride);
   const rentBreakdown = buildRentBreakdown(artifacts);
+  const yieldSignals = computeYieldSignals({
+    ltrYieldPct: currentCapRatePct,
+    mtrYieldPct: stabilizedCapRatePct,
+  });
 
   return {
     property: {
@@ -625,6 +631,7 @@ export function buildOmCalculationSnapshotFromInputs(params: {
       year1EquityYield: projection.returns.year1EquityYield,
       equityMultiple: projection.returns.equityMultiple,
     },
+    yieldSignals,
     rentRoll: rentRollRows(details),
     expenseRows: expenseRows(details),
     unitModelRows: detailedModel.unitModelRows,
@@ -637,7 +644,9 @@ export function buildOmCalculationSnapshotFromInputs(params: {
     exit: projection.exit,
     returns: projection.returns,
     recommendedOffer,
-    validationMessages: validationMessages(details),
+    validationMessages: yieldSignals.calloutLabel
+      ? [...validationMessages(details), yieldSignals.calloutLabel]
+      : validationMessages(details),
   };
 }
 

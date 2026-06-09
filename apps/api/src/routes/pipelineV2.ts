@@ -5,6 +5,7 @@
  * can be mounted by a later integration step without disturbing existing flows.
  */
 
+import { randomUUID } from "node:crypto";
 import { Router, type Request, type Response } from "express";
 import type { Pool, PoolClient } from "pg";
 import { deriveListingActivitySummary, describeListingActivity } from "@re-sourcing/contracts";
@@ -16,6 +17,9 @@ import {
   OmIngestionRunRepo,
   PropertyActionItemRepo,
   PropertyPipelineEventRepo,
+  StageTransitionRepo,
+  isDealStage,
+  isDealState,
   PropertyRepo,
   PropertyRejectionRepo,
   PropertyUploadedDocumentRepo,
@@ -75,6 +79,9 @@ import {
 } from "../deal/propertyDossierState.js";
 import { resolveEffectiveDealScore } from "../deal/effectiveDealScore.js";
 import { resolveOmAskingPriceFromDetails } from "../deal/omAskingPrice.js";
+import { computeYieldSignals } from "../deal/yieldSignals.js";
+import { buildLoiFileName, buildLoiPdf } from "../deal/loiGenerator.js";
+import { saveGeneratedDocument } from "../deal/generatedDocStorage.js";
 import { resolvePreferredOmUnitCount } from "../om/authoritativeOm.js";
 
 const router = Router();
@@ -281,6 +288,8 @@ interface PipelineBaseRow {
   latest_signal_asset_cap_rate: number | string | null;
   latest_signal_adjusted_cap_rate: number | string | null;
   latest_signal_yield_spread: number | string | null;
+  latest_signal_risk_flags: unknown;
+  latest_signal_cap_reasons: unknown;
   override_score: number | string | null;
   open_action_item_count: number | string | null;
   latest_inquiry_sent_at: Date | string | null;
@@ -324,6 +333,7 @@ interface ParsedPipelineQuery {
   maxDealScore?: number;
   minAskingPrice?: number;
   maxAskingPrice?: number;
+  minLtrYoc?: number;
   updatedSince?: string;
   sortBy: UiV2PipelineSortField;
   sortDirection: "asc" | "desc";
@@ -580,6 +590,7 @@ function parsePipelineQuery(req: Request): ParsedPipelineQuery {
     maxDealScore: parseNumberQuery(req.query.maxDealScore ?? req.query.max),
     minAskingPrice: parseNumberQuery(req.query.minAskingPrice),
     maxAskingPrice: parseNumberQuery(req.query.maxAskingPrice),
+    minLtrYoc: parseNumberQuery(req.query.minLtrYoc),
     updatedSince: firstQueryValue(req.query.updatedSince) ?? undefined,
     sortBy,
     sortDirection: sortDirectionRaw === "asc" ? "asc" : "desc",
@@ -632,6 +643,7 @@ function queryForResponse(query: ParsedPipelineQuery): UiV2PipelineQuery {
     ...(query.maxDealScore != null ? { maxDealScore: query.maxDealScore } : {}),
     ...(query.minAskingPrice != null ? { minAskingPrice: query.minAskingPrice } : {}),
     ...(query.maxAskingPrice != null ? { maxAskingPrice: query.maxAskingPrice } : {}),
+    ...(query.minLtrYoc != null ? { minLtrYoc: query.minLtrYoc } : {}),
     ...(query.updatedSince ? { updatedSince: query.updatedSince } : {}),
     sortBy: query.sortBy,
     sortDirection: query.sortDirection,
@@ -1870,6 +1882,7 @@ function buildUnderwriting(row: PipelineBaseRow): UiV2UnderwritingSummary | null
   const adjustedNoi = getAdjustedNoi(row);
   const ltrYocPct = getNoiYieldOnCost(row, currentNoi, allowSignalFallback ? row.latest_signal_asset_cap_rate : null);
   const mtrYocPct = getNoiYieldOnCost(row, adjustedNoi, allowSignalFallback ? row.latest_signal_adjusted_cap_rate : null);
+  const yieldSignals = computeYieldSignals({ ltrYieldPct: ltrYocPct, mtrYieldPct: mtrYocPct });
   const hasAnyUnderwriting =
     summary != null ||
     assumptions != null ||
@@ -1891,7 +1904,15 @@ function buildUnderwriting(row: PipelineBaseRow): UiV2UnderwritingSummary | null
     yocPct: mtrYocPct,
     yocBasis: mtrYocPct != null ? "adjusted_noi" : ltrYocPct != null ? "current_noi" : "unknown",
     marketCapRatePct: null,
-    yocSpreadPct: null,
+    yocSpreadPct: yieldSignals.spreadPctPoints,
+    mtrCalloutCode: yieldSignals.calloutCode,
+    mtrCalloutLabel: yieldSignals.calloutLabel,
+    riskFlags: allowSignalFallback && Array.isArray(row.latest_signal_risk_flags)
+      ? (row.latest_signal_risk_flags as unknown[]).filter((flag): flag is string => typeof flag === "string")
+      : [],
+    capReasons: allowSignalFallback && Array.isArray(row.latest_signal_cap_reasons)
+      ? (row.latest_signal_cap_reasons as unknown[]).filter((flag): flag is string => typeof flag === "string")
+      : [],
     targetIrrPct: summary?.targetIrrPct ?? assumptions?.targetIrrPct ?? null,
     irrPct: summary?.irrPct ?? (allowSignalFallback ? toFiniteNumber(row.latest_signal_irr_pct) : null),
     cocPct: summary?.cocPct ?? (allowSignalFallback ? toFiniteNumber(row.latest_signal_coc_pct) : null),
@@ -2441,6 +2462,8 @@ async function fetchPipelineRows(pool: Pool, userId: string): Promise<PipelineBa
        ds.asset_cap_rate AS latest_signal_asset_cap_rate,
        ds.adjusted_cap_rate AS latest_signal_adjusted_cap_rate,
        ds.yield_spread AS latest_signal_yield_spread,
+       ds.risk_flags AS latest_signal_risk_flags,
+       ds.cap_reasons AS latest_signal_cap_reasons,
        dso.score AS override_score,
        COALESCE(ai.open_action_item_count, 0) AS open_action_item_count,
        pis.sent_at AS latest_inquiry_sent_at,
@@ -2634,6 +2657,10 @@ function filterRows(rows: UiV2PipelineRow[], query: ParsedPipelineQuery): UiV2Pi
     if (query.maxDealScore != null && (score == null || score > query.maxDealScore)) return false;
     if (query.minAskingPrice != null && (row.askingPrice == null || row.askingPrice < query.minAskingPrice)) return false;
     if (query.maxAskingPrice != null && (row.askingPrice == null || row.askingPrice > query.maxAskingPrice)) return false;
+    if (query.minLtrYoc != null) {
+      const ltrYoc = row.underwriting?.ltrYocPct ?? null;
+      if (ltrYoc == null || ltrYoc < query.minLtrYoc) return false;
+    }
     if (Number.isFinite(updatedSinceMs) && Date.parse(row.updatedAt) < updatedSinceMs) return false;
     return true;
   });
@@ -3210,6 +3237,185 @@ router.post("/ui-v2/properties/:id/merge-into", async (req: Request, res: Respon
     res.status(503).json({ error: "Failed to merge properties.", details: message });
   } finally {
     client.release();
+  }
+});
+
+router.post("/ui-v2/properties/:id/loi", async (req: Request, res: Response) => {
+  const propertyId = String(req.params.id ?? "").trim();
+  if (!propertyId) {
+    res.status(400).json({ error: "Property id is required." });
+    return;
+  }
+  try {
+    const pool = getPool();
+    const propertyRepo = new PropertyRepo({ pool });
+    const property = await propertyRepo.byId(propertyId);
+    if (!property) {
+      res.status(404).json({ error: "Property not found." });
+      return;
+    }
+    const details = (property.details ?? null) as PropertyDetails | null;
+    const dealPath = isPlainRecord(details?.pipeline) && isPlainRecord((details?.pipeline as Record<string, unknown>).dealPath)
+      ? ((details?.pipeline as Record<string, unknown>).dealPath as Record<string, unknown>)
+      : null;
+    const toNumber = (value: unknown): number | null => {
+      const numeric = typeof value === "string" ? Number(value.replace(/[$,\s]/g, "")) : value;
+      return typeof numeric === "number" && Number.isFinite(numeric) && numeric > 0 ? numeric : null;
+    };
+    const offerAmount =
+      toNumber(req.body?.offerAmount) ??
+      toNumber(dealPath?.offerAmount) ??
+      toNumber(dealPath?.targetPrice);
+    if (offerAmount == null) {
+      res.status(422).json({
+        error: "offerAmount is required - set an offer or target price on the deal path first, or pass offerAmount.",
+      });
+      return;
+    }
+    const buyerName = typeof req.body?.buyerName === "string" && req.body.buyerName.trim()
+      ? req.body.buyerName.trim()
+      : "The undersigned Buyer";
+    const dealPathContingencies = Array.isArray(dealPath?.loiContingencies)
+      ? (dealPath?.loiContingencies as unknown[]).filter((entry): entry is string => typeof entry === "string")
+      : [];
+    const bodyContingencies = Array.isArray(req.body?.contingencies)
+      ? (req.body.contingencies as unknown[]).filter((entry): entry is string => typeof entry === "string")
+      : [];
+    const pdf = await buildLoiPdf({
+      propertyAddress: property.canonicalAddress,
+      offerAmount,
+      buyerName,
+      buyerEntity: typeof req.body?.buyerEntity === "string" ? req.body.buyerEntity.trim() || null : null,
+      sellerName: typeof req.body?.sellerName === "string" ? req.body.sellerName.trim() || null : null,
+      brokerName: typeof req.body?.brokerName === "string" ? req.body.brokerName.trim() || null : null,
+      depositPct: toNumber(req.body?.depositPct),
+      dueDiligenceDays: toNumber(req.body?.dueDiligenceDays),
+      closingDays: toNumber(req.body?.closingDays),
+      financingContingency: typeof req.body?.financingContingency === "boolean" ? req.body.financingContingency : null,
+      contingencies: bodyContingencies.length > 0 ? bodyContingencies : dealPathContingencies,
+      additionalNotes:
+        typeof req.body?.notes === "string"
+          ? req.body.notes.trim() || null
+          : typeof dealPath?.loiContingencyNotes === "string"
+            ? (dealPath.loiContingencyNotes as string)
+            : null,
+      expirationDays: toNumber(req.body?.expirationDays),
+    });
+
+    const docId = randomUUID();
+    const fileName = buildLoiFileName(property.canonicalAddress);
+    const storagePath = await saveGeneratedDocument(propertyId, docId, fileName, pdf);
+    const documentRepo = new DocumentRepo({ pool });
+    const documentRow = await documentRepo.insert({
+      propertyId,
+      fileName,
+      fileType: "application/pdf",
+      source: "generated_loi",
+      storagePath,
+      fileContent: pdf,
+    });
+
+    await new PropertyPipelineEventRepo({ pool })
+      .create({
+        propertyId,
+        eventType: "loi_generated",
+        actor: typeof req.body?.actorName === "string" ? req.body.actorName : null,
+        source: "user",
+        title: `LOI generated at ${offerAmount.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 })}`,
+        body: null,
+        metadata: { documentId: documentRow.id, offerAmount },
+      })
+      .catch((err) => console.warn("[ui-v2 loi] event log failed", err));
+
+    res.status(201).json({
+      ok: true,
+      documentId: documentRow.id,
+      fileName,
+      offerAmount,
+      downloadPath: `/api/properties/${encodeURIComponent(propertyId)}/documents/${encodeURIComponent(documentRow.id)}/file`,
+    });
+  } catch (err) {
+    console.error("[ui-v2 loi]", err);
+    res.status(500).json({ error: "Failed to generate LOI.", details: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+router.post("/ui-v2/properties/:id/stage", async (req: Request, res: Response) => {
+  const propertyId = String(req.params.id ?? "").trim();
+  if (!propertyId) {
+    res.status(400).json({ error: "Property id is required." });
+    return;
+  }
+  const state = req.body?.state ?? "active";
+  const stage = req.body?.stage;
+  if (!isDealState(state)) {
+    res.status(422).json({ error: "state must be one of: active, dead, closed." });
+    return;
+  }
+  if (!isDealStage(stage)) {
+    res.status(422).json({ error: "stage is not a recognized deal stage." });
+    return;
+  }
+  const reason = typeof req.body?.reason === "string" ? req.body.reason.trim() || null : null;
+  const actor = typeof req.body?.actorName === "string" ? req.body.actorName.trim() || null : null;
+  try {
+    const pool = getPool();
+    const repo = new StageTransitionRepo({ pool });
+    const transition = await repo.recordTransition({
+      propertyId,
+      toState: state,
+      toStage: stage,
+      actor,
+      source: typeof req.body?.source === "string" ? req.body.source : "ui",
+      reason,
+      metadata: null,
+    });
+    if (transition) {
+      await new PropertyPipelineEventRepo({ pool })
+        .create({
+          propertyId,
+          eventType: "stage_changed",
+          actor,
+          source: "user",
+          title: `Stage: ${transition.fromStage ?? "unset"} -> ${transition.toStage}`,
+          body: reason,
+          metadata: {
+            fromState: transition.fromState,
+            fromStage: transition.fromStage,
+            toState: transition.toState,
+            toStage: transition.toStage,
+          },
+        })
+        .catch((err) => console.warn("[ui-v2 stage] event log failed", err));
+    }
+    res.json({ ok: true, transition, changed: transition != null });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (message === "Property not found") {
+      res.status(404).json({ error: message });
+      return;
+    }
+    console.error("[ui-v2 stage]", err);
+    res.status(500).json({ error: "Failed to update deal stage.", details: message });
+  }
+});
+
+router.get("/ui-v2/properties/:id/stage-history", async (req: Request, res: Response) => {
+  const propertyId = String(req.params.id ?? "").trim();
+  if (!propertyId) {
+    res.status(400).json({ error: "Property id is required." });
+    return;
+  }
+  try {
+    const repo = new StageTransitionRepo({ pool: getPool() });
+    const [transitions, agingDays] = await Promise.all([
+      repo.listByPropertyId(propertyId),
+      repo.stageAgingDays(propertyId),
+    ]);
+    res.json({ transitions, agingDays });
+  } catch (err) {
+    console.error("[ui-v2 stage-history]", err);
+    res.status(500).json({ error: "Failed to load stage history." });
   }
 });
 
