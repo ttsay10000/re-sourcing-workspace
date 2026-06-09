@@ -561,6 +561,90 @@ router.post(
   }
 );
 
+router.post(
+  "/deal-analysis/analyze-upload-batch",
+  (req, res, next) => {
+    uploadMemory.array("files", DEAL_ANALYSIS_MAX_FILES)(
+      req,
+      res,
+      handleUploadMulterError(req, res, next)
+    );
+  },
+  async (req: Request, res: Response) => {
+    try {
+      const files = ((req as Request & { files?: Express.Multer.File[] }).files ?? []).filter(
+        (file) => file.buffer && file.buffer.length > 0
+      );
+      if (files.length === 0) {
+        res.status(400).json({
+          error: "Missing files. Send multipart/form-data with one or more 'files' fields.",
+        });
+        return;
+      }
+      const unsupportedFile = files.find((file) => !isSupportedDealAnalysisUpload(file));
+      if (unsupportedFile) {
+        res.status(422).json({
+          error: `Unsupported OM / broker financial file. '${unsupportedFile.originalname}' must be a PDF, Excel workbook, CSV, text file, or image/screenshot.`,
+        });
+        return;
+      }
+
+      // Each file is its own property package: one Gemini extraction, one
+      // address match/create, one review-required workspace per file.
+      const results: Array<Record<string, unknown>> = [];
+      for (const file of files) {
+        const filename = dealAnalysisUploadFilename(file);
+        try {
+          const result = await analyzeAndPersistDealAnalysisOmDocuments({
+            documents: [
+              {
+                filename,
+                mimeType: dealAnalysisUploadMimeType(file),
+                buffer: file.buffer,
+                sizeBytes: file.size,
+              },
+            ],
+            sourceType: "deal_analysis_upload",
+            sourceLabel: "Deal analysis batch upload",
+            sourceMetadata: {
+              sourceType: "deal_analysis_upload",
+              intakeKind: "batch_separate_properties",
+            },
+          });
+          results.push({
+            filename,
+            ok: true,
+            propertyId: result.propertyId,
+            canonicalAddress: result.canonicalAddress,
+            createdProperty: result.createdProperty,
+            matchStrategy: result.matchStrategy,
+            needsReview: true,
+            omRunId: (result as { omReview?: { runId?: string | null } }).omReview?.runId ?? null,
+          });
+        } catch (err) {
+          results.push({
+            filename,
+            ok: false,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
+      const succeeded = results.filter((entry) => entry.ok === true).length;
+      res.status(succeeded > 0 ? 200 : 502).json({
+        ok: succeeded > 0,
+        total: results.length,
+        succeeded,
+        failed: results.length - succeeded,
+        results,
+      });
+    } catch (err) {
+      console.error("[deal-analysis analyze-upload-batch]", err);
+      sendDealAnalysisOmImportError(res, "Failed to analyze batch OM upload.", err);
+    }
+  }
+);
+
 router.post("/deal-analysis/analyze-notes", async (req: Request, res: Response) => {
   const rawNotes = typeof req.body?.notes === "string" ? req.body.notes.trim() : "";
   const addressHint = typeof req.body?.addressHint === "string" ? req.body.addressHint.trim() : "";

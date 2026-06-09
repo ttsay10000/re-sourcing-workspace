@@ -605,6 +605,16 @@ function DealAnalysisPageContent() {
   const [brokerNotes, setBrokerNotes] = useState("");
   const [notesAddressHint, setNotesAddressHint] = useState("");
   const [notesAnalyzing, setNotesAnalyzing] = useState(false);
+  const [separateProperties, setSeparateProperties] = useState(false);
+  const [batchResults, setBatchResults] = useState<Array<{
+    filename: string;
+    ok: boolean;
+    propertyId?: string;
+    canonicalAddress?: string;
+    createdProperty?: boolean;
+    matchStrategy?: string;
+    error?: string;
+  }> | null>(null);
   const [recalculating, setRecalculating] = useState(false);
   const [dossierDownloading, setDossierDownloading] = useState(false);
   const [excelDownloading, setExcelDownloading] = useState(false);
@@ -973,7 +983,58 @@ function DealAnalysisPageContent() {
     }
   }
 
+  async function analyzeUploadsBatch() {
+    if (pendingFiles.length === 0) return;
+    if (tooManyPendingFiles) {
+      setError(`Upload up to ${OM_IMPORT_MAX_FILES} OM / broker financial files at a time.`);
+      return;
+    }
+    if (oversizedPendingFiles.length > 0) {
+      setError(`Each OM / broker financial file must be ${formatBytes(OM_IMPORT_MAX_BYTES)} or smaller.`);
+      return;
+    }
+    const fileCount = pendingFiles.length;
+    setUploading(true);
+    setError(null);
+    setNotice(null);
+    setBatchResults(null);
+    setCreateResult(null);
+    try {
+      const formData = new FormData();
+      for (const file of pendingFiles) formData.append("files", file);
+      const res = await fetch(`${API_BASE}/api/deal-analysis/analyze-upload-batch`, {
+        method: "POST",
+        body: formData,
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        results?: Array<{ filename: string; ok: boolean; propertyId?: string; canonicalAddress?: string; createdProperty?: boolean; matchStrategy?: string; error?: string }>;
+        succeeded?: number;
+        total?: number;
+        error?: string;
+        details?: string;
+      };
+      if (!Array.isArray(data.results)) {
+        throw new Error(data.details || data.error || "Failed to run separate analyses.");
+      }
+      setBatchResults(data.results);
+      setPendingFiles([]);
+      setFreshUploadReview(null);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      setNotice(
+        `${data.succeeded ?? data.results.filter((row) => row.ok).length} of ${data.total ?? fileCount} OMs analyzed into separate property workspaces. Each one needs review before its numbers are trusted.`
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to run separate analyses.");
+    } finally {
+      setUploading(false);
+    }
+  }
+
   async function analyzeUploads() {
+    if (separateProperties) {
+      await analyzeUploadsBatch();
+      return;
+    }
     if (pendingFiles.length === 0) return;
     if (tooManyPendingFiles) {
       setError(`Upload up to ${OM_IMPORT_MAX_FILES} OM / broker financial files at a time.`);
@@ -1758,21 +1819,6 @@ function DealAnalysisPageContent() {
                 the saved workspace list above.
               </div>
             </div>
-            <button
-              type="button"
-              onClick={analyzeUploads}
-              disabled={!canAnalyze || uploading || linkAnalyzing}
-              style={{
-                ...primaryButtonStyle,
-                cursor: !canAnalyze || uploading || linkAnalyzing ? "not-allowed" : "pointer",
-                border: canAnalyze ? primaryButtonStyle.border : "1px solid var(--app-line)",
-                background: canAnalyze ? primaryButtonStyle.background : "var(--app-surface-strong)",
-                color: canAnalyze ? "#ffffff" : "var(--app-muted)",
-                opacity: uploading || linkAnalyzing ? 0.65 : 1,
-              }}
-            >
-              {uploading ? "Analyzing uploaded files..." : "Analyze uploaded files"}
-            </button>
           </div>
 
           <div
@@ -1878,6 +1924,130 @@ function DealAnalysisPageContent() {
               </div>
             ) : null}
           </div>
+          <div
+            style={{
+              marginTop: "0.85rem",
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              gap: "0.85rem",
+              flexWrap: "wrap",
+            }}
+          >
+            <label
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "0.45rem",
+                color: "#303832",
+                fontSize: "0.84rem",
+                fontWeight: 700,
+                cursor: "pointer",
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={separateProperties}
+                onChange={(event) => setSeparateProperties(event.target.checked)}
+                style={{ width: "15px", height: "15px", accentColor: "#0f766e" }}
+              />
+              Each file is a separate property (one analysis per OM)
+            </label>
+            <button
+              type="button"
+              onClick={analyzeUploads}
+              disabled={!canAnalyze || uploading || linkAnalyzing}
+              style={{
+                ...primaryButtonStyle,
+                cursor: !canAnalyze || uploading || linkAnalyzing ? "not-allowed" : "pointer",
+                border: canAnalyze ? primaryButtonStyle.border : "1px solid var(--app-line)",
+                background: canAnalyze ? primaryButtonStyle.background : "var(--app-surface-strong)",
+                color: canAnalyze ? "#ffffff" : "var(--app-muted)",
+                opacity: uploading || linkAnalyzing ? 0.65 : 1,
+              }}
+            >
+              {uploading
+                ? separateProperties
+                  ? "Running separate analyses..."
+                  : "Analyzing uploaded files..."
+                : separateProperties
+                  ? `Run ${pendingFiles.length || ""} separate analyses`.replace("  ", " ")
+                  : "Analyze uploaded files"}
+            </button>
+          </div>
+          {separateProperties ? (
+            <div style={{ marginTop: "0.45rem", color: "#68736d", fontSize: "0.8rem", lineHeight: 1.5 }}>
+              Each file gets its own Gemini extraction, property match-or-create, and review-required
+              workspace. Files run one at a time - keep this tab open for large batches.
+            </div>
+          ) : null}
+
+          {batchResults ? (
+            <div
+              style={{
+                marginTop: "1rem",
+                border: "1px solid rgba(38, 47, 44, 0.14)",
+                borderRadius: "10px",
+                padding: "0.9rem 1rem",
+                background: "#ffffff",
+                display: "grid",
+                gap: "0.55rem",
+              }}
+            >
+              <strong style={{ color: "#18231e", fontSize: "0.86rem" }}>Batch results</strong>
+              {batchResults.map((row) => (
+                <div
+                  key={`${row.filename}-${row.propertyId ?? "failed"}`}
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    gap: "0.75rem",
+                    flexWrap: "wrap",
+                    padding: "0.5rem 0.6rem",
+                    borderRadius: "8px",
+                    background: row.ok ? "#f7fbf8" : "#fef2f2",
+                    border: row.ok ? "1px solid rgba(47, 111, 82, 0.18)" : "1px solid #fecaca",
+                  }}
+                >
+                  <div style={{ display: "grid", gap: "0.1rem", minWidth: 0 }}>
+                    <span style={{ fontSize: "0.82rem", fontWeight: 800, color: row.ok ? "#1c5d3f" : "#991b1b" }}>
+                      {row.ok ? row.canonicalAddress ?? row.filename : row.filename}
+                    </span>
+                    <span style={{ fontSize: "0.76rem", color: "#68736d" }}>
+                      {row.ok
+                        ? `${row.createdProperty ? "New property created" : "Matched existing property"} from ${row.filename}`
+                        : row.error ?? "Analysis failed."}
+                    </span>
+                  </div>
+                  {row.ok && row.propertyId ? (
+                    <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                      <span
+                        style={{
+                          padding: "0.16rem 0.5rem",
+                          borderRadius: "999px",
+                          background: "#fff7ed",
+                          border: "1px solid #fed7aa",
+                          color: "#9a3412",
+                          fontSize: "0.72rem",
+                          fontWeight: 800,
+                        }}
+                      >
+                        Needs review
+                      </span>
+                      <a
+                        href={`/deal-analysis?propertyId=${encodeURIComponent(row.propertyId)}`}
+                        style={{ fontSize: "0.8rem", fontWeight: 800, color: "#0f766e" }}
+                      >
+                        Open workspace
+                      </a>
+                    </div>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          ) : null}
+
           <div
             style={{
               marginTop: "1rem",
