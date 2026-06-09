@@ -5,6 +5,7 @@
  * can be mounted by a later integration step without disturbing existing flows.
  */
 
+import { randomUUID } from "node:crypto";
 import { Router, type Request, type Response } from "express";
 import type { Pool, PoolClient } from "pg";
 import { deriveListingActivitySummary, describeListingActivity } from "@re-sourcing/contracts";
@@ -79,6 +80,8 @@ import {
 import { resolveEffectiveDealScore } from "../deal/effectiveDealScore.js";
 import { resolveOmAskingPriceFromDetails } from "../deal/omAskingPrice.js";
 import { computeYieldSignals } from "../deal/yieldSignals.js";
+import { buildLoiFileName, buildLoiPdf } from "../deal/loiGenerator.js";
+import { saveGeneratedDocument } from "../deal/generatedDocStorage.js";
 import { resolvePreferredOmUnitCount } from "../om/authoritativeOm.js";
 
 const router = Router();
@@ -3234,6 +3237,106 @@ router.post("/ui-v2/properties/:id/merge-into", async (req: Request, res: Respon
     res.status(503).json({ error: "Failed to merge properties.", details: message });
   } finally {
     client.release();
+  }
+});
+
+router.post("/ui-v2/properties/:id/loi", async (req: Request, res: Response) => {
+  const propertyId = String(req.params.id ?? "").trim();
+  if (!propertyId) {
+    res.status(400).json({ error: "Property id is required." });
+    return;
+  }
+  try {
+    const pool = getPool();
+    const propertyRepo = new PropertyRepo({ pool });
+    const property = await propertyRepo.byId(propertyId);
+    if (!property) {
+      res.status(404).json({ error: "Property not found." });
+      return;
+    }
+    const details = (property.details ?? null) as PropertyDetails | null;
+    const dealPath = isPlainRecord(details?.pipeline) && isPlainRecord((details?.pipeline as Record<string, unknown>).dealPath)
+      ? ((details?.pipeline as Record<string, unknown>).dealPath as Record<string, unknown>)
+      : null;
+    const toNumber = (value: unknown): number | null => {
+      const numeric = typeof value === "string" ? Number(value.replace(/[$,\s]/g, "")) : value;
+      return typeof numeric === "number" && Number.isFinite(numeric) && numeric > 0 ? numeric : null;
+    };
+    const offerAmount =
+      toNumber(req.body?.offerAmount) ??
+      toNumber(dealPath?.offerAmount) ??
+      toNumber(dealPath?.targetPrice);
+    if (offerAmount == null) {
+      res.status(422).json({
+        error: "offerAmount is required - set an offer or target price on the deal path first, or pass offerAmount.",
+      });
+      return;
+    }
+    const buyerName = typeof req.body?.buyerName === "string" && req.body.buyerName.trim()
+      ? req.body.buyerName.trim()
+      : "The undersigned Buyer";
+    const dealPathContingencies = Array.isArray(dealPath?.loiContingencies)
+      ? (dealPath?.loiContingencies as unknown[]).filter((entry): entry is string => typeof entry === "string")
+      : [];
+    const bodyContingencies = Array.isArray(req.body?.contingencies)
+      ? (req.body.contingencies as unknown[]).filter((entry): entry is string => typeof entry === "string")
+      : [];
+    const pdf = await buildLoiPdf({
+      propertyAddress: property.canonicalAddress,
+      offerAmount,
+      buyerName,
+      buyerEntity: typeof req.body?.buyerEntity === "string" ? req.body.buyerEntity.trim() || null : null,
+      sellerName: typeof req.body?.sellerName === "string" ? req.body.sellerName.trim() || null : null,
+      brokerName: typeof req.body?.brokerName === "string" ? req.body.brokerName.trim() || null : null,
+      depositPct: toNumber(req.body?.depositPct),
+      dueDiligenceDays: toNumber(req.body?.dueDiligenceDays),
+      closingDays: toNumber(req.body?.closingDays),
+      financingContingency: typeof req.body?.financingContingency === "boolean" ? req.body.financingContingency : null,
+      contingencies: bodyContingencies.length > 0 ? bodyContingencies : dealPathContingencies,
+      additionalNotes:
+        typeof req.body?.notes === "string"
+          ? req.body.notes.trim() || null
+          : typeof dealPath?.loiContingencyNotes === "string"
+            ? (dealPath.loiContingencyNotes as string)
+            : null,
+      expirationDays: toNumber(req.body?.expirationDays),
+    });
+
+    const docId = randomUUID();
+    const fileName = buildLoiFileName(property.canonicalAddress);
+    const storagePath = await saveGeneratedDocument(propertyId, docId, fileName, pdf);
+    const documentRepo = new DocumentRepo({ pool });
+    const documentRow = await documentRepo.insert({
+      propertyId,
+      fileName,
+      fileType: "application/pdf",
+      source: "generated_loi",
+      storagePath,
+      fileContent: pdf,
+    });
+
+    await new PropertyPipelineEventRepo({ pool })
+      .create({
+        propertyId,
+        eventType: "loi_generated",
+        actor: typeof req.body?.actorName === "string" ? req.body.actorName : null,
+        source: "user",
+        title: `LOI generated at ${offerAmount.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 })}`,
+        body: null,
+        metadata: { documentId: documentRow.id, offerAmount },
+      })
+      .catch((err) => console.warn("[ui-v2 loi] event log failed", err));
+
+    res.status(201).json({
+      ok: true,
+      documentId: documentRow.id,
+      fileName,
+      offerAmount,
+      downloadPath: `/api/properties/${encodeURIComponent(propertyId)}/documents/${encodeURIComponent(documentRow.id)}/file`,
+    });
+  } catch (err) {
+    console.error("[ui-v2 loi]", err);
+    res.status(500).json({ error: "Failed to generate LOI.", details: err instanceof Error ? err.message : String(err) });
   }
 });
 
