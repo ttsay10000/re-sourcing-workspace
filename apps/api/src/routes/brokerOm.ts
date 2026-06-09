@@ -27,8 +27,10 @@ import { analyzeAndPersistDealAnalysisOmDocuments, DealAnalysisOmImportError } f
 const router = Router();
 
 const SYSTEM_START_AT = new Date("2026-03-01T00:00:00-05:00");
+const GLOBAL_PULL_CURSOR_KEY = "gmail_property_document_pull:__all__";
 const DEFAULT_PROPERTY_SEARCH_LIMIT = 50;
 const DEFAULT_NEW_PROPERTY_SEARCH_LIMIT = 25;
+const DEFAULT_GLOBAL_SEARCH_LIMIT = 50;
 const MAX_SEARCH_LIMIT = 100;
 const LARGE_ATTACHMENT_BYTES =
   Number(process.env.BROKER_OM_EMAIL_LARGE_ATTACHMENT_BYTES) || 10 * 1024 * 1024;
@@ -50,9 +52,35 @@ const VALID_DOCUMENT_CATEGORIES: PropertyDocumentCategory[] = [
 ];
 
 const DEAL_KEYWORD_RE =
-  /\b(offering\s+memorandum|offering\s+memo|investment\s+memorandum|confidential\s+offering|\bom\b|rent\s*roll|rentroll|t\s*-?\s*12|trailing\s+twelve|operating\s+statement|financial\s+model|broker\s+package|broker\s+comp|market\s+analysis)\b/i;
+  /\b(offering\s+memorandum|offering\s+memo|investment\s+memorandum|confidential\s+offering|om|rent\s*rolls?|rentrolls?|rents?|t\s*-?\s*12|trailing\s+twelve|operating\s+statements?|operating\s+expenses?|expense\s+statements?|expenses?|pro\s*formas?|financial\s+models?|financials?|broker\s+packages?|broker\s+comps?|market\s+analysis)\b/i;
 
-type BrokerOmSearchMode = "since_last" | "system_start";
+const DEAL_SEARCH_TERMS: string[] = [
+  "offering memorandum",
+  "offering memo",
+  "confidential offering",
+  "investment memorandum",
+  "rent roll",
+  "rentroll",
+  "t12",
+  "t-12",
+  "operating statement",
+  "operating expenses",
+  "expense statement",
+  "pro forma",
+  "financial model",
+  "broker package",
+  "broker comp",
+  "market analysis",
+];
+
+const DEAL_SEARCH_BARE_TERMS: string[] = ["OM", "rent", "rents", "expenses", "financials"];
+
+type BrokerOmSearchMode = "since_last" | "system_start" | "custom";
+
+interface MatchedPropertyRef {
+  id: string;
+  canonicalAddress: string;
+}
 
 interface GmailDocumentCandidate {
   id: string;
@@ -74,6 +102,8 @@ interface GmailDocumentCandidate {
   bodyPreview: string | null;
   gmailUrl: string | null;
   matchedReason: string;
+  matchedProperty?: MatchedPropertyRef | null;
+  matchedProperties?: MatchedPropertyRef[];
 }
 
 interface NewPropertyEmailCandidate {
@@ -280,30 +310,64 @@ function buildPropertySearchQuery(property: Property, baseline: Date, extraQuery
   return `in:anywhere has:attachment after:${gmailDateInclusive(baseline)} ${addressQuery}${suffix}`.trim();
 }
 
-function buildNewPropertySearchQuery(baseline: Date): string {
-  return [
-    "in:anywhere",
-    "has:attachment",
-    `after:${gmailDateInclusive(baseline)}`,
-    "(",
-    [
-      gmailPhrase("offering memorandum"),
-      gmailPhrase("offering memo"),
-      gmailPhrase("confidential offering"),
-      gmailPhrase("investment memorandum"),
-      gmailPhrase("rent roll"),
-      gmailPhrase("rentroll"),
-      gmailPhrase("t12"),
-      gmailPhrase("t-12"),
-      gmailPhrase("operating statement"),
-      gmailPhrase("financial model"),
-      gmailPhrase("broker package"),
-      gmailPhrase("broker comp"),
-      gmailPhrase("market analysis"),
-      "OM",
-    ].join(" OR "),
-    ")",
-  ].join(" ");
+function buildDealKeywordSearchQuery(baseline: Date, extraQuery?: string | null): string {
+  const keywordClause = `(${[...DEAL_SEARCH_TERMS.map(gmailPhrase), ...DEAL_SEARCH_BARE_TERMS].join(" OR ")})`;
+  const suffix = extraQuery?.trim() ? ` ${extraQuery.trim()}` : "";
+  return `in:anywhere has:attachment after:${gmailDateInclusive(baseline)} ${keywordClause}${suffix}`.trim();
+}
+
+interface ResolvedBaseline {
+  mode: BrokerOmSearchMode;
+  baseline: Date;
+  error?: string;
+}
+
+function resolveBaseline(body: Record<string, unknown> | undefined, lastSyncedAt: string | null): ResolvedBaseline {
+  const rawMode = body?.mode;
+  if (rawMode === "custom") {
+    const rawSince = typeof body?.sinceDate === "string" ? body.sinceDate.trim() : "";
+    const sinceDate = rawSince ? new Date(rawSince) : null;
+    if (!sinceDate || Number.isNaN(sinceDate.getTime())) {
+      return {
+        mode: "custom",
+        baseline: SYSTEM_START_AT,
+        error: "Custom pulls require a valid sinceDate (ISO date string).",
+      };
+    }
+    return { mode: "custom", baseline: sinceDate };
+  }
+  if (rawMode === "system_start") {
+    return { mode: "system_start", baseline: SYSTEM_START_AT };
+  }
+  return {
+    mode: "since_last",
+    baseline: lastSyncedAt ? new Date(lastSyncedAt) : SYSTEM_START_AT,
+  };
+}
+
+interface PropertyMatcher extends MatchedPropertyRef {
+  normalizedFirstLine: string;
+}
+
+function buildPropertyMatchers(properties: Property[]): PropertyMatcher[] {
+  return properties
+    .map((property) => ({
+      id: property.id,
+      canonicalAddress: property.canonicalAddress,
+      normalizedFirstLine: normalizeSearchText(addressFirstLine(property)),
+    }))
+    .filter((matcher) => matcher.normalizedFirstLine.length >= 5);
+}
+
+function matchCandidateProperties(candidate: GmailDocumentCandidate, matchers: PropertyMatcher[]): MatchedPropertyRef[] {
+  const haystack = normalizeSearchText(
+    [candidate.subject, candidate.bodyPreview, candidate.filename].filter(Boolean).join(" ")
+  );
+  if (!haystack) return [];
+  return matchers
+    .filter((matcher) => haystack.includes(matcher.normalizedFirstLine))
+    .sort((a, b) => b.normalizedFirstLine.length - a.normalizedFirstLine.length)
+    .map((matcher) => ({ id: matcher.id, canonicalAddress: matcher.canonicalAddress }));
 }
 
 function messageMentionsProperty(candidate: GmailDocumentCandidate, property: Property): boolean {
@@ -327,7 +391,7 @@ async function buildNewPropertyCandidates(params: {
   property: Property;
   maxMessages: number;
 }): Promise<NewPropertyEmailCandidate[]> {
-  const query = buildNewPropertySearchQuery(SYSTEM_START_AT);
+  const query = buildDealKeywordSearchQuery(SYSTEM_START_AT);
   const documents = await buildCandidatesForQuery({
     query,
     baseline: SYSTEM_START_AT,
@@ -427,11 +491,11 @@ router.post("/broker-om/properties/:id/email-search", async (req: Request, res: 
     }
     const syncRepo = new InboxSyncStateRepo({ pool });
     const syncState = await syncRepo.get(propertyCursorKey(propertyId));
-    const mode: BrokerOmSearchMode = req.body?.mode === "system_start" ? "system_start" : "since_last";
-    const baseline =
-      mode === "system_start" || !syncState?.lastSyncedAt
-        ? SYSTEM_START_AT
-        : new Date(syncState.lastSyncedAt);
+    const { mode, baseline, error: baselineError } = resolveBaseline(req.body, syncState?.lastSyncedAt ?? null);
+    if (baselineError) {
+      res.status(400).json({ error: baselineError });
+      return;
+    }
     const maxMessages = numericBody(req.body?.maxMessages, DEFAULT_PROPERTY_SEARCH_LIMIT, MAX_SEARCH_LIMIT);
     const includeNewPropertyCandidates = req.body?.includeNewPropertyCandidates !== false;
     const maxNewPropertyMessages = numericBody(
@@ -481,6 +545,88 @@ router.post("/broker-om/properties/:id/email-search", async (req: Request, res: 
   }
 });
 
+router.get("/broker-om/email-pull-state", async (_req: Request, res: Response) => {
+  try {
+    const pool = getPool();
+    const syncState = await new InboxSyncStateRepo({ pool }).get(GLOBAL_PULL_CURSOR_KEY);
+    res.json({
+      propertyId: null,
+      canonicalAddress: null,
+      systemStartAt: SYSTEM_START_AT.toISOString(),
+      lastPulledAt: syncState?.lastSyncedAt ?? null,
+      largeAttachmentBytes: LARGE_ATTACHMENT_BYTES,
+      maxAttachmentBytes: MAX_ATTACHMENT_BYTES,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[broker-om global email pull state]", err);
+    res.status(503).json({ error: "Failed to load email pull state.", details: message });
+  }
+});
+
+router.post("/broker-om/email-search", async (req: Request, res: Response) => {
+  try {
+    const pool = getPool();
+    const syncRepo = new InboxSyncStateRepo({ pool });
+    const syncState = await syncRepo.get(GLOBAL_PULL_CURSOR_KEY);
+    const { mode, baseline, error: baselineError } = resolveBaseline(req.body, syncState?.lastSyncedAt ?? null);
+    if (baselineError) {
+      res.status(400).json({ error: baselineError });
+      return;
+    }
+    const maxMessages = numericBody(req.body?.maxMessages, DEFAULT_GLOBAL_SEARCH_LIMIT, MAX_SEARCH_LIMIT);
+    const extraQuery = typeof req.body?.query === "string" ? req.body.query.trim() || null : null;
+    const query = buildDealKeywordSearchQuery(baseline, extraQuery);
+    const searchRunAt = new Date().toISOString();
+
+    const [candidates, properties] = await Promise.all([
+      buildCandidatesForQuery({
+        query,
+        baseline,
+        maxMessages,
+        matchedReason: "Deal document keywords",
+      }),
+      new PropertyRepo({ pool }).list(),
+    ]);
+
+    const matchers = buildPropertyMatchers(properties);
+    const documents = candidates.map((candidate) => {
+      const matches = matchCandidateProperties(candidate, matchers);
+      const keywordReason = dealKeywordReason(candidate);
+      const matchedReason = matches[0]
+        ? `Matches ${matches[0].canonicalAddress.split(",")[0]?.trim() || matches[0].canonicalAddress}`
+        : keywordReason ?? candidate.matchedReason;
+      return {
+        ...candidate,
+        matchedReason,
+        matchedProperty: matches[0] ?? null,
+        matchedProperties: matches,
+      } satisfies GmailDocumentCandidate;
+    });
+
+    await syncRepo.upsert(GLOBAL_PULL_CURSOR_KEY, searchRunAt);
+    res.json({
+      ok: true,
+      property: null,
+      mode,
+      query,
+      baselineAt: baseline.toISOString(),
+      previousLastPulledAt: syncState?.lastSyncedAt ?? null,
+      searchRunAt,
+      lastPulledAt: searchRunAt,
+      systemStartAt: SYSTEM_START_AT.toISOString(),
+      largeAttachmentBytes: LARGE_ATTACHMENT_BYTES,
+      maxAttachmentBytes: MAX_ATTACHMENT_BYTES,
+      documents,
+      newPropertyCandidates: [],
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[broker-om global email search]", err);
+    res.status(503).json({ error: "Failed to search Gmail for broker documents.", details: message });
+  }
+});
+
 router.get("/broker-om/email-attachments/preview", async (req: Request, res: Response) => {
   try {
     const messageId = typeof req.query.messageId === "string" ? req.query.messageId.trim() : "";
@@ -514,6 +660,141 @@ router.get("/broker-om/email-attachments/preview", async (req: Request, res: Res
   }
 });
 
+interface EmailImportRequestDoc {
+  messageId?: unknown;
+  attachmentId?: unknown;
+  filename?: unknown;
+  mimeType?: unknown;
+  category?: unknown;
+  suggestedCategory?: unknown;
+  propertyId?: unknown;
+}
+
+async function importEmailDocumentsForProperty(params: {
+  pool: ReturnType<typeof getPool>;
+  propertyId: string;
+  documents: EmailImportRequestDoc[];
+  runOmReview: boolean;
+}) {
+  const { pool, propertyId } = params;
+  const docRepo = new PropertyUploadedDocumentRepo({ pool });
+  const imported: Array<Awaited<ReturnType<PropertyUploadedDocumentRepo["insert"]>>> = [];
+  const skipped: Array<{ messageId: string; attachmentId: string; reason: string; documentId?: string | null }> = [];
+  const errors: Array<{ messageId: string; attachmentId: string; error: string }> = [];
+  const uploadedAt = new Date().toISOString();
+
+  for (const requestDoc of params.documents) {
+    const messageId = typeof requestDoc?.messageId === "string" ? requestDoc.messageId.trim() : "";
+    const attachmentId = typeof requestDoc?.attachmentId === "string" ? requestDoc.attachmentId.trim() : "";
+    if (!messageId || !attachmentId) {
+      errors.push({ messageId, attachmentId, error: "messageId and attachmentId are required." });
+      continue;
+    }
+    const existing = await findExistingGmailImport({ propertyId, messageId, attachmentId });
+    if (existing) {
+      skipped.push({
+        messageId,
+        attachmentId,
+        reason: "already_imported",
+        documentId: existing.id,
+      });
+      continue;
+    }
+
+    try {
+      const msg = await getMessage(messageId);
+      const attachmentPart = getAttachmentParts(msg).find((part) => part.attachmentId === attachmentId);
+      const filename = safeFilename(requestDoc?.filename ?? attachmentPart?.filename);
+      const mimeType =
+        (typeof requestDoc?.mimeType === "string" && requestDoc.mimeType.trim()) ||
+        attachmentPart?.mimeType ||
+        "application/octet-stream";
+      const category = normalizeCategory(requestDoc?.category ?? requestDoc?.suggestedCategory);
+      const buffer = await getAttachment(messageId, attachmentId);
+      if (buffer.length === 0) {
+        errors.push({ messageId, attachmentId, error: "Gmail returned an empty attachment." });
+        continue;
+      }
+      if (buffer.length > MAX_ATTACHMENT_BYTES) {
+        skipped.push({
+          messageId,
+          attachmentId,
+          reason: `too_large:${buffer.length}`,
+          documentId: null,
+        });
+        continue;
+      }
+      const docId = randomUUID();
+      const filePath = await saveUploadedDocument(propertyId, docId, filename, buffer);
+      const inserted = await docRepo.insert({
+        id: docId,
+        propertyId,
+        filename,
+        contentType: mimeType,
+        filePath,
+        category,
+        source: sourceLabel(getHeader(msg, "From")),
+        sourceUrl: gmailMessageUrl(msg),
+        sourceMetadata: {
+          uploadedVia: "broker_om_manual_gmail_pull",
+          uploadedAt,
+          gmailMessageId: messageId,
+          gmailThreadId: msg.threadId || null,
+          gmailAttachmentId: attachmentId,
+          gmailSubject: getHeader(msg, "Subject"),
+          gmailFrom: getHeader(msg, "From"),
+          gmailDate: parseDateHeader(msg),
+          originalFileName: filename,
+          sizeBytes: buffer.length,
+          classificationMethod: requestDoc?.category ? "user_selected" : "filename_auto",
+        },
+        fileContent: buffer,
+      });
+      imported.push(inserted);
+    } catch (error) {
+      errors.push({
+        messageId,
+        attachmentId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  const omDocuments: OmAutomationDocument[] = imported
+    .filter((document) => isOmIngestionCategory(document.category))
+    .map((document) => ({
+      id: document.id,
+      origin: "uploaded_document",
+      filename: document.filename,
+      mimeType: document.contentType ?? null,
+      filePath: document.filePath,
+      category: document.category,
+      source: document.source ?? null,
+      createdAt: document.createdAt,
+    }));
+  const runOmReview = params.runOmReview && omDocuments.length > 0;
+  const omReview = runOmReview
+    ? await ingestAuthoritativeOm({
+        propertyId,
+        sourceType: "uploaded_document",
+        documents: omDocuments,
+        autoPromote: false,
+        triggerDossier: false,
+        pool,
+      }).catch((error) => ({
+        documentsProcessed: 0,
+        documentsSkippedNoFile: 0,
+        runId: null,
+        snapshotId: null,
+        dossierGenerated: false,
+        error: error instanceof Error ? error.message : String(error),
+      }))
+    : null;
+
+  await syncPropertySourcingWorkflow(propertyId, { pool }).catch(() => {});
+  return { imported, skipped, errors, omReview };
+}
+
 router.post("/broker-om/properties/:id/import-email-documents", async (req: Request, res: Response) => {
   try {
     const propertyId = req.params.id;
@@ -530,121 +811,12 @@ router.post("/broker-om/properties/:id/import-email-documents", async (req: Requ
       return;
     }
 
-    const docRepo = new PropertyUploadedDocumentRepo({ pool });
-    const imported: Array<Awaited<ReturnType<PropertyUploadedDocumentRepo["insert"]>>> = [];
-    const skipped: Array<{ messageId: string; attachmentId: string; reason: string; documentId?: string | null }> = [];
-    const errors: Array<{ messageId: string; attachmentId: string; error: string }> = [];
-    const uploadedAt = new Date().toISOString();
-
-    for (const requestDoc of requestedDocuments) {
-      const messageId = typeof requestDoc?.messageId === "string" ? requestDoc.messageId.trim() : "";
-      const attachmentId = typeof requestDoc?.attachmentId === "string" ? requestDoc.attachmentId.trim() : "";
-      if (!messageId || !attachmentId) {
-        errors.push({ messageId, attachmentId, error: "messageId and attachmentId are required." });
-        continue;
-      }
-      const existing = await findExistingGmailImport({ propertyId, messageId, attachmentId });
-      if (existing) {
-        skipped.push({
-          messageId,
-          attachmentId,
-          reason: "already_imported",
-          documentId: existing.id,
-        });
-        continue;
-      }
-
-      try {
-        const msg = await getMessage(messageId);
-        const attachmentPart = getAttachmentParts(msg).find((part) => part.attachmentId === attachmentId);
-        const filename = safeFilename(requestDoc?.filename ?? attachmentPart?.filename);
-        const mimeType =
-          (typeof requestDoc?.mimeType === "string" && requestDoc.mimeType.trim()) ||
-          attachmentPart?.mimeType ||
-          "application/octet-stream";
-        const category = normalizeCategory(requestDoc?.category ?? requestDoc?.suggestedCategory);
-        const buffer = await getAttachment(messageId, attachmentId);
-        if (buffer.length === 0) {
-          errors.push({ messageId, attachmentId, error: "Gmail returned an empty attachment." });
-          continue;
-        }
-        if (buffer.length > MAX_ATTACHMENT_BYTES) {
-          skipped.push({
-            messageId,
-            attachmentId,
-            reason: `too_large:${buffer.length}`,
-            documentId: null,
-          });
-          continue;
-        }
-        const docId = randomUUID();
-        const filePath = await saveUploadedDocument(propertyId, docId, filename, buffer);
-        const inserted = await docRepo.insert({
-          id: docId,
-          propertyId,
-          filename,
-          contentType: mimeType,
-          filePath,
-          category,
-          source: sourceLabel(getHeader(msg, "From")),
-          sourceUrl: gmailMessageUrl(msg),
-          sourceMetadata: {
-            uploadedVia: "broker_om_manual_gmail_pull",
-            uploadedAt,
-            gmailMessageId: messageId,
-            gmailThreadId: msg.threadId || null,
-            gmailAttachmentId: attachmentId,
-            gmailSubject: getHeader(msg, "Subject"),
-            gmailFrom: getHeader(msg, "From"),
-            gmailDate: parseDateHeader(msg),
-            originalFileName: filename,
-            sizeBytes: buffer.length,
-            classificationMethod: requestDoc?.category ? "user_selected" : "filename_auto",
-          },
-          fileContent: buffer,
-        });
-        imported.push(inserted);
-      } catch (error) {
-        errors.push({
-          messageId,
-          attachmentId,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
-
-    const omDocuments: OmAutomationDocument[] = imported
-      .filter((document) => isOmIngestionCategory(document.category))
-      .map((document) => ({
-        id: document.id,
-        origin: "uploaded_document",
-        filename: document.filename,
-        mimeType: document.contentType ?? null,
-        filePath: document.filePath,
-        category: document.category,
-        source: document.source ?? null,
-        createdAt: document.createdAt,
-      }));
-    const runOmReview = req.body?.runOmReview !== false && omDocuments.length > 0;
-    const omReview = runOmReview
-      ? await ingestAuthoritativeOm({
-          propertyId,
-          sourceType: "uploaded_document",
-          documents: omDocuments,
-          autoPromote: false,
-          triggerDossier: false,
-          pool,
-        }).catch((error) => ({
-          documentsProcessed: 0,
-          documentsSkippedNoFile: 0,
-          runId: null,
-          snapshotId: null,
-          dossierGenerated: false,
-          error: error instanceof Error ? error.message : String(error),
-        }))
-      : null;
-
-    await syncPropertySourcingWorkflow(propertyId, { pool }).catch(() => {});
+    const { imported, skipped, errors, omReview } = await importEmailDocumentsForProperty({
+      pool,
+      propertyId,
+      documents: requestedDocuments,
+      runOmReview: req.body?.runOmReview !== false,
+    });
     res.status(imported.length > 0 ? 201 : 200).json({
       ok: errors.length === 0,
       propertyId,
@@ -656,6 +828,85 @@ router.post("/broker-om/properties/:id/import-email-documents", async (req: Requ
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[broker-om import email documents]", err);
+    res.status(503).json({ error: "Failed to import Gmail documents.", details: message });
+  }
+});
+
+router.post("/broker-om/import-email-documents", async (req: Request, res: Response) => {
+  try {
+    const requestedDocuments: EmailImportRequestDoc[] = Array.isArray(req.body?.documents) ? req.body.documents : [];
+    if (requestedDocuments.length === 0) {
+      res.status(400).json({ error: "Select at least one Gmail attachment to import." });
+      return;
+    }
+
+    const pool = getPool();
+    const propertyRepo = new PropertyRepo({ pool });
+    const runOmReview = req.body?.runOmReview !== false;
+
+    const errors: Array<{ messageId: string; attachmentId: string; error: string }> = [];
+    const grouped = new Map<string, EmailImportRequestDoc[]>();
+    for (const requestDoc of requestedDocuments) {
+      const docPropertyId = typeof requestDoc?.propertyId === "string" ? requestDoc.propertyId.trim() : "";
+      const messageId = typeof requestDoc?.messageId === "string" ? requestDoc.messageId.trim() : "";
+      const attachmentId = typeof requestDoc?.attachmentId === "string" ? requestDoc.attachmentId.trim() : "";
+      if (!docPropertyId) {
+        errors.push({
+          messageId,
+          attachmentId,
+          error: "Assign a property to each document before importing an all-properties pull.",
+        });
+        continue;
+      }
+      const group = grouped.get(docPropertyId);
+      if (group) group.push(requestDoc);
+      else grouped.set(docPropertyId, [requestDoc]);
+    }
+
+    const imported: Array<Awaited<ReturnType<PropertyUploadedDocumentRepo["insert"]>>> = [];
+    const skipped: Array<{ messageId: string; attachmentId: string; reason: string; documentId?: string | null }> = [];
+    const omReviews: Array<{ propertyId: string; canonicalAddress: string; omReview: unknown }> = [];
+    for (const [docPropertyId, documents] of grouped) {
+      const property = await propertyRepo.byId(docPropertyId);
+      if (!property) {
+        for (const requestDoc of documents) {
+          errors.push({
+            messageId: typeof requestDoc?.messageId === "string" ? requestDoc.messageId : "",
+            attachmentId: typeof requestDoc?.attachmentId === "string" ? requestDoc.attachmentId : "",
+            error: `Property not found: ${docPropertyId}`,
+          });
+        }
+        continue;
+      }
+      const result = await importEmailDocumentsForProperty({
+        pool,
+        propertyId: docPropertyId,
+        documents,
+        runOmReview,
+      });
+      imported.push(...result.imported);
+      skipped.push(...result.skipped);
+      errors.push(...result.errors);
+      if (result.omReview) {
+        omReviews.push({
+          propertyId: docPropertyId,
+          canonicalAddress: property.canonicalAddress,
+          omReview: result.omReview,
+        });
+      }
+    }
+
+    res.status(imported.length > 0 ? 201 : 200).json({
+      ok: errors.length === 0,
+      imported,
+      skipped,
+      errors,
+      omReviews,
+      omReview: omReviews[0]?.omReview ?? null,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[broker-om import email documents all-properties]", err);
     res.status(503).json({ error: "Failed to import Gmail documents.", details: message });
   }
 });

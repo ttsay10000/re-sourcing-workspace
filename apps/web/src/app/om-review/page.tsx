@@ -94,9 +94,10 @@ export default function OmReviewPage() {
       <header className="profile-page-header">
         <div>
           <p className="profile-page-kicker">Manual document review</p>
-          <h1 className="page-title profile-page-title">OM Review Queue</h1>
+          <h1 className="page-title profile-page-title">Email Review Queue</h1>
           <p className="profile-page-intro">
-            Create review runs from broker attachments. Ambiguous batch replies stay grouped for human review.
+            Triage broker email attachments and create extraction review runs. Ambiguous batch replies stay grouped for
+            human review. For uploading and analyzing OM packages, use the OM Workspace under Deal Progress.
           </p>
         </div>
         <Link href="/property-data" className="profile-secondary-button">

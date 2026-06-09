@@ -74,8 +74,8 @@ const NAV_LINKS: NavLink[] = [
       },
       {
         href: "/om-review",
-        label: "OM Review",
-        shortLabel: "O",
+        label: "Email Review Queue",
+        shortLabel: "R",
         icon: FileText,
         matches: (pathname: string) => pathname === "/om-review" || pathname.startsWith("/om-review/"),
       },

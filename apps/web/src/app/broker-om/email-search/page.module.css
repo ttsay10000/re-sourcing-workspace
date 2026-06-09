@@ -119,7 +119,8 @@
 
 .segmented {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
   overflow: hidden;
   border: 1px solid var(--app-line-strong);
   border-radius: 7px;
@@ -306,6 +307,11 @@
   color: var(--app-muted);
   font-size: 0.86rem;
   overflow-wrap: anywhere;
+}
+
+.rowSelects {
+  display: grid;
+  gap: 0.4rem;
 }
 
 .rowActions {

@@ -33,7 +33,14 @@ const CATEGORY_OPTIONS = [
 ] as const;
 
 type DocumentCategory = (typeof CATEGORY_OPTIONS)[number];
-type PullMode = "since_last" | "system_start";
+type PullMode = "since_last" | "system_start" | "custom";
+type LookbackUnit = "days" | "weeks" | "months";
+
+const LOOKBACK_UNIT_OPTIONS: Array<{ value: LookbackUnit; label: string }> = [
+  { value: "days", label: "days" },
+  { value: "weeks", label: "weeks" },
+  { value: "months", label: "months" },
+];
 
 interface PropertyOption {
   id: string;
@@ -60,6 +67,8 @@ interface GmailDocumentCandidate {
   bodyPreview: string | null;
   gmailUrl: string | null;
   matchedReason: string;
+  matchedProperty?: PropertyOption | null;
+  matchedProperties?: PropertyOption[];
 }
 
 interface NewPropertyEmailCandidate {
@@ -76,8 +85,8 @@ interface NewPropertyEmailCandidate {
 }
 
 interface PullState {
-  propertyId: string;
-  canonicalAddress: string;
+  propertyId: string | null;
+  canonicalAddress: string | null;
   systemStartAt: string;
   lastPulledAt: string | null;
   largeAttachmentBytes: number;
@@ -86,7 +95,7 @@ interface PullState {
 
 interface SearchResponse {
   ok: boolean;
-  property: PropertyOption;
+  property: PropertyOption | null;
   mode: PullMode;
   query: string;
   baselineAt: string;
@@ -103,6 +112,7 @@ interface SearchResponse {
 interface SelectionState {
   selected: boolean;
   category: DocumentCategory;
+  propertyId: string;
 }
 
 interface ImportResponse {
@@ -111,6 +121,7 @@ interface ImportResponse {
   skipped?: Array<{ reason: string; documentId?: string | null }>;
   errors?: Array<{ error: string }>;
   omReview?: { runId?: string | null; error?: string } | null;
+  omReviews?: Array<{ propertyId: string; canonicalAddress: string }>;
   error?: string;
   details?: string;
 }
@@ -158,13 +169,14 @@ function candidatePreviewUrl(candidate: GmailDocumentCandidate): string {
   return `${API_BASE}/api/broker-om/email-attachments/preview?${params.toString()}`;
 }
 
-function defaultSelection(documents: GmailDocumentCandidate[]): Record<string, SelectionState> {
+function defaultSelection(documents: GmailDocumentCandidate[], fallbackPropertyId: string): Record<string, SelectionState> {
   return Object.fromEntries(
     documents.map((document) => [
       document.id,
       {
         selected: false,
         category: document.suggestedCategory,
+        propertyId: fallbackPropertyId || document.matchedProperty?.id || "",
       },
     ])
   );
@@ -174,11 +186,25 @@ function isPdfCandidate(candidate: GmailDocumentCandidate): boolean {
   return candidate.mimeType.toLowerCase().includes("pdf") || candidate.filename.toLowerCase().endsWith(".pdf");
 }
 
+function computeSinceDate(amount: number, unit: LookbackUnit): Date {
+  const since = new Date();
+  if (unit === "days") since.setDate(since.getDate() - amount);
+  else if (unit === "weeks") since.setDate(since.getDate() - amount * 7);
+  else since.setMonth(since.getMonth() - amount);
+  return since;
+}
+
+function shortAddress(value: string): string {
+  return value.split(",")[0]?.trim() || value;
+}
+
 export default function BrokerOmEmailSearchPage() {
   const [properties, setProperties] = useState<PropertyOption[]>([]);
   const [propertyId, setPropertyId] = useState("");
   const [pullState, setPullState] = useState<PullState | null>(null);
   const [mode, setMode] = useState<PullMode>("since_last");
+  const [lookbackAmount, setLookbackAmount] = useState(30);
+  const [lookbackUnit, setLookbackUnit] = useState<LookbackUnit>("days");
   const [query, setQuery] = useState("");
   const [includeNewPropertyCandidates, setIncludeNewPropertyCandidates] = useState(true);
   const [maxMessages, setMaxMessages] = useState(50);
@@ -199,32 +225,29 @@ export default function BrokerOmEmailSearchPage() {
     if (initialPropertyId) setPropertyId(initialPropertyId);
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
+  const loadProperties = useCallback(async () => {
     setLoadingProperties(true);
-    fetch(`${API_BASE}/api/properties`)
-      .then((response) => response.json().then((data) => ({ response, data })))
-      .then(({ response, data }) => {
-        if (!response.ok) throw new Error(data?.error || data?.details || "Failed to load properties");
-        if (cancelled) return;
-        const rows = Array.isArray(data?.properties) ? data.properties : [];
-        setProperties(
-          rows.map((row: Record<string, unknown>) => ({
-            id: String(row.id ?? ""),
-            canonicalAddress: String(row.canonicalAddress ?? row.canonical_address ?? ""),
-          })).filter((row: PropertyOption) => row.id && row.canonicalAddress)
-        );
-      })
-      .catch((err) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load properties");
-      })
-      .finally(() => {
-        if (!cancelled) setLoadingProperties(false);
-      });
-    return () => {
-      cancelled = true;
-    };
+    try {
+      const response = await fetch(`${API_BASE}/api/properties`);
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.error || data?.details || "Failed to load properties");
+      const rows = Array.isArray(data?.properties) ? data.properties : [];
+      setProperties(
+        rows.map((row: Record<string, unknown>) => ({
+          id: String(row.id ?? ""),
+          canonicalAddress: String(row.canonicalAddress ?? row.canonical_address ?? ""),
+        })).filter((row: PropertyOption) => row.id && row.canonicalAddress)
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load properties");
+    } finally {
+      setLoadingProperties(false);
+    }
   }, []);
+
+  useEffect(() => {
+    void loadProperties();
+  }, [loadProperties]);
 
   const selectedProperty = useMemo(
     () => properties.find((property) => property.id === propertyId) ?? null,
@@ -232,14 +255,13 @@ export default function BrokerOmEmailSearchPage() {
   );
 
   const loadPullState = useCallback(async (nextPropertyId: string) => {
-    if (!nextPropertyId) {
-      setPullState(null);
-      return;
-    }
     setStateLoading(true);
     setError(null);
     try {
-      const response = await fetch(`${API_BASE}/api/broker-om/properties/${encodeURIComponent(nextPropertyId)}/email-pull-state`);
+      const url = nextPropertyId
+        ? `${API_BASE}/api/broker-om/properties/${encodeURIComponent(nextPropertyId)}/email-pull-state`
+        : `${API_BASE}/api/broker-om/email-pull-state`;
+      const response = await fetch(url);
       const data = await response.json();
       if (!response.ok) throw new Error(data?.error || data?.details || "Failed to load pull state");
       setPullState(data as PullState);
@@ -255,14 +277,18 @@ export default function BrokerOmEmailSearchPage() {
     void loadPullState(propertyId);
   }, [loadPullState, propertyId]);
 
+  const allPropertiesMode = propertyId === "";
   const documents = searchResult?.documents ?? [];
   const selectedDocuments = documents.filter((document) => selection[document.id]?.selected);
   const selectedLargeCount = selectedDocuments.filter((document) => document.large).length;
   const selectedTooLargeCount = selectedDocuments.filter((document) => document.tooLarge).length;
+  const selectedUnassignedCount = allPropertiesMode
+    ? selectedDocuments.filter((document) => !selection[document.id]?.propertyId).length
+    : 0;
 
   const runSearch = async () => {
-    if (!propertyId) {
-      setError("Select a property before searching Gmail.");
+    if (mode === "custom" && (!Number.isFinite(lookbackAmount) || lookbackAmount < 1)) {
+      setError("Set a lookback period of at least 1 before pulling Gmail.");
       return;
     }
     setSearching(true);
@@ -270,30 +296,39 @@ export default function BrokerOmEmailSearchPage() {
     setError(null);
     setPreview(null);
     try {
-      const response = await fetch(`${API_BASE}/api/broker-om/properties/${encodeURIComponent(propertyId)}/email-search`, {
+      const url = propertyId
+        ? `${API_BASE}/api/broker-om/properties/${encodeURIComponent(propertyId)}/email-search`
+        : `${API_BASE}/api/broker-om/email-search`;
+      const response = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           mode,
+          sinceDate: mode === "custom" ? computeSinceDate(lookbackAmount, lookbackUnit).toISOString() : null,
           query: query.trim() || null,
           maxMessages,
-          includeNewPropertyCandidates,
+          includeNewPropertyCandidates: propertyId ? includeNewPropertyCandidates : false,
         }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data?.error || data?.details || "Failed to search Gmail");
       const result = data as SearchResponse;
       setSearchResult(result);
-      setSelection(defaultSelection(result.documents));
+      setSelection(defaultSelection(result.documents, propertyId));
       setPullState({
-        propertyId: result.property.id,
-        canonicalAddress: result.property.canonicalAddress,
+        propertyId: result.property?.id ?? null,
+        canonicalAddress: result.property?.canonicalAddress ?? null,
         systemStartAt: result.systemStartAt,
         lastPulledAt: result.lastPulledAt,
         largeAttachmentBytes: result.largeAttachmentBytes,
         maxAttachmentBytes: result.maxAttachmentBytes,
       });
-      setNotice(`Pull complete: ${result.documents.length} property document${result.documents.length === 1 ? "" : "s"} found.`);
+      const matchedCount = result.documents.filter((document) => document.matchedProperty).length;
+      setNotice(
+        propertyId
+          ? `Pull complete: ${result.documents.length} property document${result.documents.length === 1 ? "" : "s"} found.`
+          : `Pull complete: ${result.documents.length} deal document${result.documents.length === 1 ? "" : "s"} found, ${matchedCount} matched to existing properties.`
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to search Gmail");
     } finally {
@@ -301,12 +336,18 @@ export default function BrokerOmEmailSearchPage() {
     }
   };
 
+  const fallbackDocumentPropertyId = useCallback(
+    (document: GmailDocumentCandidate) => propertyId || document.matchedProperty?.id || "",
+    [propertyId]
+  );
+
   const updateDocumentSelection = (document: GmailDocumentCandidate, patch: Partial<SelectionState>) => {
     setSelection((current) => ({
       ...current,
       [document.id]: {
         selected: current[document.id]?.selected ?? false,
         category: current[document.id]?.category ?? document.suggestedCategory,
+        propertyId: current[document.id]?.propertyId ?? fallbackDocumentPropertyId(document),
         ...patch,
       },
     }));
@@ -319,6 +360,7 @@ export default function BrokerOmEmailSearchPage() {
         next[document.id] = {
           selected: !document.tooLarge,
           category: current[document.id]?.category ?? document.suggestedCategory,
+          propertyId: current[document.id]?.propertyId ?? fallbackDocumentPropertyId(document),
         };
       }
       return next;
@@ -332,26 +374,48 @@ export default function BrokerOmEmailSearchPage() {
         next[document.id] = {
           selected: false,
           category: current[document.id]?.category ?? document.suggestedCategory,
+          propertyId: current[document.id]?.propertyId ?? fallbackDocumentPropertyId(document),
         };
       }
       return next;
     });
   };
 
+  const propertyLabel = useCallback(
+    (id: string) => {
+      const match = properties.find((property) => property.id === id);
+      return match ? shortAddress(match.canonicalAddress) : "Unassigned";
+    },
+    [properties]
+  );
+
   const importSelected = async () => {
-    if (!propertyId || selectedDocuments.length === 0) return;
+    if (selectedDocuments.length === 0) return;
+    if (allPropertiesMode && selectedUnassignedCount > 0) {
+      setError("Assign a property to every selected document before uploading.");
+      return;
+    }
     const categorySummary = selectedDocuments
-      .map((document) => `${document.filename} -> ${selection[document.id]?.category ?? document.suggestedCategory}`)
+      .map((document) => {
+        const category = selection[document.id]?.category ?? document.suggestedCategory;
+        if (propertyId) return `${document.filename} -> ${category}`;
+        return `${document.filename} -> ${category} -> ${propertyLabel(selection[document.id]?.propertyId ?? "")}`;
+      })
       .join("\n");
     const confirmed = window.confirm(
-      `Upload ${selectedDocuments.length} Gmail document${selectedDocuments.length === 1 ? "" : "s"} to ${selectedProperty?.canonicalAddress ?? "this property"}?\n\n${categorySummary}`
+      propertyId
+        ? `Upload ${selectedDocuments.length} Gmail document${selectedDocuments.length === 1 ? "" : "s"} to ${selectedProperty?.canonicalAddress ?? "this property"}?\n\n${categorySummary}`
+        : `Upload ${selectedDocuments.length} Gmail document${selectedDocuments.length === 1 ? "" : "s"} to their assigned properties?\n\n${categorySummary}`
     );
     if (!confirmed) return;
     setImporting(true);
     setNotice(null);
     setError(null);
     try {
-      const response = await fetch(`${API_BASE}/api/broker-om/properties/${encodeURIComponent(propertyId)}/import-email-documents`, {
+      const url = propertyId
+        ? `${API_BASE}/api/broker-om/properties/${encodeURIComponent(propertyId)}/import-email-documents`
+        : `${API_BASE}/api/broker-om/import-email-documents`;
+      const response = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -362,6 +426,7 @@ export default function BrokerOmEmailSearchPage() {
             filename: document.filename,
             mimeType: document.mimeType,
             category: selection[document.id]?.category ?? document.suggestedCategory,
+            ...(propertyId ? {} : { propertyId: selection[document.id]?.propertyId ?? "" }),
           })),
         }),
       });
@@ -403,6 +468,15 @@ export default function BrokerOmEmailSearchPage() {
       setNotice(
         `${data.createdProperty ? "Created" : "Matched"} property: ${data.canonicalAddress}.`
       );
+      await loadProperties();
+      setSelection((current) => ({
+        ...current,
+        [candidate.id]: {
+          selected: current[candidate.id]?.selected ?? false,
+          category: current[candidate.id]?.category ?? candidate.suggestedCategory,
+          propertyId: data.propertyId,
+        },
+      }));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create property from Gmail document");
     } finally {
@@ -420,7 +494,7 @@ export default function BrokerOmEmailSearchPage() {
         <div className={styles.headerActions}>
           <Link href="/om-review" className={styles.secondaryButton}>
             <FileSearch size={16} aria-hidden="true" />
-            <span>OM review</span>
+            <span>Email review queue</span>
           </Link>
           {propertyId ? (
             <Link href={`/property-data?expand=${encodeURIComponent(propertyId)}`} className={styles.secondaryButton}>
@@ -437,7 +511,7 @@ export default function BrokerOmEmailSearchPage() {
       <section className={styles.panel}>
         <div className={styles.controls}>
           <label className={styles.field}>
-            <span className={styles.label}>Property</span>
+            <span className={styles.label}>Property scope</span>
             <select
               className={styles.select}
               value={propertyId}
@@ -449,7 +523,7 @@ export default function BrokerOmEmailSearchPage() {
               }}
               disabled={loadingProperties}
             >
-              <option value="">{loadingProperties ? "Loading properties..." : "Select property"}</option>
+              <option value="">{loadingProperties ? "Loading properties..." : "All properties (deal keywords)"}</option>
               {properties.map((property) => (
                 <option key={property.id} value={property.id}>
                   {property.canonicalAddress}
@@ -485,23 +559,62 @@ export default function BrokerOmEmailSearchPage() {
               >
                 Since Mar 2026
               </button>
+              <button
+                type="button"
+                className={`${styles.segment} ${mode === "custom" ? styles.segmentActive : ""}`}
+                onClick={() => setMode("custom")}
+              >
+                Custom
+              </button>
             </div>
           </label>
 
-          <button type="button" className={styles.button} onClick={() => void runSearch()} disabled={!propertyId || searching}>
+          <button type="button" className={styles.button} onClick={() => void runSearch()} disabled={searching}>
             {searching ? <RefreshCw size={16} aria-hidden="true" /> : <Search size={16} aria-hidden="true" />}
             <span>{searching ? "Pulling..." : "Pull Gmail"}</span>
           </button>
         </div>
         <div className={styles.toggles}>
-          <label className={styles.checkboxLine}>
-            <input
-              type="checkbox"
-              checked={includeNewPropertyCandidates}
-              onChange={(event) => setIncludeNewPropertyCandidates(event.target.checked)}
-            />
-            <span>Flag separate OM/rent roll emails since March 2026</span>
-          </label>
+          {mode === "custom" ? (
+            <label className={styles.checkboxLine}>
+              <span>Look back</span>
+              <input
+                className={styles.input}
+                style={{ width: "4.5rem", minHeight: "2rem" }}
+                type="number"
+                min={1}
+                value={lookbackAmount}
+                onChange={(event) => setLookbackAmount(Math.max(1, Number(event.target.value) || 1))}
+              />
+              <select
+                className={styles.select}
+                style={{ width: "auto", minHeight: "2rem" }}
+                value={lookbackUnit}
+                onChange={(event) => setLookbackUnit(event.target.value as LookbackUnit)}
+              >
+                {LOOKBACK_UNIT_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+              <span className={styles.mutedPill}>Since {formatDate(computeSinceDate(lookbackAmount, lookbackUnit).toISOString())}</span>
+            </label>
+          ) : null}
+          {!allPropertiesMode ? (
+            <label className={styles.checkboxLine}>
+              <input
+                type="checkbox"
+                checked={includeNewPropertyCandidates}
+                onChange={(event) => setIncludeNewPropertyCandidates(event.target.checked)}
+              />
+              <span>Flag separate OM/rent roll emails since March 2026</span>
+            </label>
+          ) : (
+            <span className={styles.checkboxLine}>
+              Searches your whole inbox for OM, offering memorandum, rent roll, rent/expense, T12, and pro forma attachments.
+            </span>
+          )}
           <label className={styles.checkboxLine}>
             <span>Messages</span>
             <input
@@ -530,7 +643,7 @@ export default function BrokerOmEmailSearchPage() {
         <div className={styles.panel}>
           <div className={styles.sectionHeader}>
             <div>
-              <h2>Property documents</h2>
+              <h2>{allPropertiesMode ? "Deal documents (all properties)" : "Property documents"}</h2>
               <p>{searchResult ? `${documents.length} attachment${documents.length === 1 ? "" : "s"} found` : "No pull run yet"}</p>
             </div>
             <div className={styles.headerActions}>
@@ -544,31 +657,46 @@ export default function BrokerOmEmailSearchPage() {
               </button>
               <button
                 type="button"
-                className={selectedTooLargeCount ? styles.dangerButton : styles.button}
+                className={selectedTooLargeCount || selectedUnassignedCount ? styles.dangerButton : styles.button}
                 onClick={() => void importSelected()}
-                disabled={importing || selectedDocuments.length === 0 || selectedTooLargeCount > 0}
+                disabled={importing || selectedDocuments.length === 0 || selectedTooLargeCount > 0 || selectedUnassignedCount > 0}
               >
                 <Upload size={15} aria-hidden="true" />
                 <span>{importing ? "Uploading..." : `Upload ${selectedDocuments.length || ""}`.trim()}</span>
               </button>
             </div>
           </div>
-          {selectedLargeCount ? (
+          {selectedLargeCount || selectedUnassignedCount ? (
             <div className={styles.metaBar}>
-              <span className={styles.warnPill}>
-                <AlertTriangle size={14} aria-hidden="true" />
-                {selectedLargeCount} selected large file{selectedLargeCount === 1 ? "" : "s"}
-              </span>
+              {selectedLargeCount ? (
+                <span className={styles.warnPill}>
+                  <AlertTriangle size={14} aria-hidden="true" />
+                  {selectedLargeCount} selected large file{selectedLargeCount === 1 ? "" : "s"}
+                </span>
+              ) : null}
               {selectedTooLargeCount ? <span className={styles.warnPill}>{selectedTooLargeCount} over max</span> : null}
+              {selectedUnassignedCount ? (
+                <span className={styles.warnPill}>
+                  <AlertTriangle size={14} aria-hidden="true" />
+                  {selectedUnassignedCount} selected without a property
+                </span>
+              ) : null}
             </div>
           ) : null}
           <div className={styles.rowList}>
             {documents.length === 0 ? (
-              <div className={styles.empty}>{searchResult ? "No property-linked documents found." : "Run a manual pull to load Gmail candidates."}</div>
+              <div className={styles.empty}>
+                {searchResult
+                  ? allPropertiesMode
+                    ? "No deal-document attachments found in this window."
+                    : "No property-linked documents found."
+                  : "Run a manual pull to load Gmail candidates."}
+              </div>
             ) : (
               documents.map((document) => {
                 const selected = selection[document.id]?.selected ?? false;
                 const category = selection[document.id]?.category ?? document.suggestedCategory;
+                const assignedPropertyId = selection[document.id]?.propertyId ?? fallbackDocumentPropertyId(document);
                 return (
                   <article key={document.id} className={styles.documentRow}>
                     <button
@@ -586,23 +714,47 @@ export default function BrokerOmEmailSearchPage() {
                         <span className={document.large ? styles.warnPill : styles.mutedPill}>{formatBytes(document.sizeBytes)}</span>
                         <span className={styles.mutedPill}>{document.mimeType}</span>
                         <span className={styles.mutedPill}>{document.classificationConfidence}</span>
+                        {allPropertiesMode ? (
+                          document.matchedProperty ? (
+                            <span className={styles.okPill}>{shortAddress(document.matchedProperty.canonicalAddress)}</span>
+                          ) : (
+                            <span className={styles.warnPill}>No property match</span>
+                          )
+                        ) : null}
                         {document.tooLarge ? <span className={styles.warnPill}>Over import max</span> : null}
                       </div>
                       <p className={styles.emailMeta}>
                         {document.fromAddress ?? "Unknown sender"} | {formatDate(document.receivedAt)} | {document.subject ?? "No subject"}
                       </p>
                     </div>
-                    <select
-                      className={styles.select}
-                      value={category}
-                      onChange={(event) => updateDocumentSelection(document, { category: event.target.value as DocumentCategory })}
-                    >
-                      {CATEGORY_OPTIONS.map((option) => (
-                        <option key={option} value={option}>
-                          {option}
-                        </option>
-                      ))}
-                    </select>
+                    <div className={styles.rowSelects}>
+                      <select
+                        className={styles.select}
+                        value={category}
+                        onChange={(event) => updateDocumentSelection(document, { category: event.target.value as DocumentCategory })}
+                      >
+                        {CATEGORY_OPTIONS.map((option) => (
+                          <option key={option} value={option}>
+                            {option}
+                          </option>
+                        ))}
+                      </select>
+                      {allPropertiesMode ? (
+                        <select
+                          className={styles.select}
+                          value={assignedPropertyId}
+                          aria-label={`Assign property for ${document.filename}`}
+                          onChange={(event) => updateDocumentSelection(document, { propertyId: event.target.value })}
+                        >
+                          <option value="">Unassigned</option>
+                          {properties.map((property) => (
+                            <option key={property.id} value={property.id}>
+                              {shortAddress(property.canonicalAddress)}
+                            </option>
+                          ))}
+                        </select>
+                      ) : null}
+                    </div>
                     <div className={styles.rowActions}>
                       <button type="button" className={styles.secondaryButton} onClick={() => setPreview(document)}>
                         <Eye size={15} aria-hidden="true" />
@@ -613,6 +765,17 @@ export default function BrokerOmEmailSearchPage() {
                           <ExternalLink size={15} aria-hidden="true" />
                           <span>Gmail</span>
                         </a>
+                      ) : null}
+                      {allPropertiesMode && !assignedPropertyId ? (
+                        <button
+                          type="button"
+                          className={styles.secondaryButton}
+                          onClick={() => void createPropertyFromAttachment(document)}
+                          disabled={!isPdfCandidate(document) || document.tooLarge || creatingPropertyId === document.id}
+                        >
+                          <FilePlus2 size={15} aria-hidden="true" />
+                          <span>{creatingPropertyId === document.id ? "Creating..." : "Create property"}</span>
+                        </button>
                       ) : null}
                     </div>
                   </article>
@@ -652,6 +815,7 @@ export default function BrokerOmEmailSearchPage() {
         </aside>
       </div>
 
+      {allPropertiesMode ? null : (
       <section className={styles.panel}>
         <div className={styles.sectionHeader}>
           <div>
@@ -711,6 +875,7 @@ export default function BrokerOmEmailSearchPage() {
           </div>
         )}
       </section>
+      )}
     </main>
   );
 }
