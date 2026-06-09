@@ -98,6 +98,18 @@ export type { PropertyOutreachFlagRepoOptions } from "./repos/PropertyOutreachFl
 export { PropertyActionItemRepo } from "./repos/PropertyActionItemRepo.js";
 export type { PropertyActionItemRepoOptions } from "./repos/PropertyActionItemRepo.js";
 export { PropertyPipelineEventRepo } from "./repos/PropertyPipelineEventRepo.js";
+export {
+  StageTransitionRepo,
+  DEAL_STAGES,
+  isDealStage,
+  isDealState,
+} from "./repos/StageTransitionRepo.js";
+export type {
+  DealStage,
+  DealState,
+  StageTransition,
+  RecordStageTransitionParams,
+} from "./repos/StageTransitionRepo.js";
 export type {
   CreatePropertyPipelineEventParams,
   ListPropertyPipelineEventsOptions,

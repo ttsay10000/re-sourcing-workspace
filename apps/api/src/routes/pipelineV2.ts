@@ -16,6 +16,9 @@ import {
   OmIngestionRunRepo,
   PropertyActionItemRepo,
   PropertyPipelineEventRepo,
+  StageTransitionRepo,
+  isDealStage,
+  isDealState,
   PropertyRepo,
   PropertyRejectionRepo,
   PropertyUploadedDocumentRepo,
@@ -3221,6 +3224,85 @@ router.post("/ui-v2/properties/:id/merge-into", async (req: Request, res: Respon
     res.status(503).json({ error: "Failed to merge properties.", details: message });
   } finally {
     client.release();
+  }
+});
+
+router.post("/ui-v2/properties/:id/stage", async (req: Request, res: Response) => {
+  const propertyId = String(req.params.id ?? "").trim();
+  if (!propertyId) {
+    res.status(400).json({ error: "Property id is required." });
+    return;
+  }
+  const state = req.body?.state ?? "active";
+  const stage = req.body?.stage;
+  if (!isDealState(state)) {
+    res.status(422).json({ error: "state must be one of: active, dead, closed." });
+    return;
+  }
+  if (!isDealStage(stage)) {
+    res.status(422).json({ error: "stage is not a recognized deal stage." });
+    return;
+  }
+  const reason = typeof req.body?.reason === "string" ? req.body.reason.trim() || null : null;
+  const actor = typeof req.body?.actorName === "string" ? req.body.actorName.trim() || null : null;
+  try {
+    const pool = getPool();
+    const repo = new StageTransitionRepo({ pool });
+    const transition = await repo.recordTransition({
+      propertyId,
+      toState: state,
+      toStage: stage,
+      actor,
+      source: typeof req.body?.source === "string" ? req.body.source : "ui",
+      reason,
+      metadata: null,
+    });
+    if (transition) {
+      await new PropertyPipelineEventRepo({ pool })
+        .create({
+          propertyId,
+          eventType: "stage_changed",
+          actor,
+          source: "user",
+          title: `Stage: ${transition.fromStage ?? "unset"} -> ${transition.toStage}`,
+          body: reason,
+          metadata: {
+            fromState: transition.fromState,
+            fromStage: transition.fromStage,
+            toState: transition.toState,
+            toStage: transition.toStage,
+          },
+        })
+        .catch((err) => console.warn("[ui-v2 stage] event log failed", err));
+    }
+    res.json({ ok: true, transition, changed: transition != null });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (message === "Property not found") {
+      res.status(404).json({ error: message });
+      return;
+    }
+    console.error("[ui-v2 stage]", err);
+    res.status(500).json({ error: "Failed to update deal stage.", details: message });
+  }
+});
+
+router.get("/ui-v2/properties/:id/stage-history", async (req: Request, res: Response) => {
+  const propertyId = String(req.params.id ?? "").trim();
+  if (!propertyId) {
+    res.status(400).json({ error: "Property id is required." });
+    return;
+  }
+  try {
+    const repo = new StageTransitionRepo({ pool: getPool() });
+    const [transitions, agingDays] = await Promise.all([
+      repo.listByPropertyId(propertyId),
+      repo.stageAgingDays(propertyId),
+    ]);
+    res.json({ transitions, agingDays });
+  } catch (err) {
+    console.error("[ui-v2 stage-history]", err);
+    res.status(500).json({ error: "Failed to load stage history." });
   }
 });
 
