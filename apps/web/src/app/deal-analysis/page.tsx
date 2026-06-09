@@ -2150,10 +2150,16 @@ function DealAnalysisPageContent() {
         </div>
 
         <div style={{ ...cardStyle, padding: "1.2rem" }}>
-          <strong style={{ color: "#18231e", fontSize: "1rem" }}>2. Analysis workspace</strong>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: "0.75rem", flexWrap: "wrap" }}>
+            <strong style={{ color: "#18231e", fontSize: "1rem" }}>2. Analysis workspace</strong>
+            <a href="/yield-map" style={{ fontSize: "0.8rem", fontWeight: 800, color: "#0f766e" }}>
+              Compare in Yield Map →
+            </a>
+          </div>
           <div style={{ marginTop: "0.3rem", color: "#68736d", fontSize: "0.9rem", lineHeight: 1.55 }}>
             Once the OM is parsed, this page will populate current state, unit-level rows, sensitivities,
-            assumptions, and the deal dossier PDF.
+            assumptions, and the deal dossier PDF. Extracted yields feed the living comps database on the
+            Yield Map automatically.
           </div>
           {hasFreshUploadNeedsReview ? (
             <div
