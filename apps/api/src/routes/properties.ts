@@ -2241,6 +2241,130 @@ router.post("/properties/from-listings", async (req: Request, res: Response) => 
   }
 });
 
+/** POST /api/properties/refresh-listings - refresh only existing StreetEasy/RapidAPI listing records for selected canonical properties. */
+router.post("/properties/refresh-listings", async (req: Request, res: Response) => {
+  let workflowRunId: string | null = null;
+  const workflowStartedAt = new Date().toISOString();
+  try {
+    const raw = req.body?.propertyIds;
+    const propertyIds = Array.isArray(raw)
+      ? Array.from(
+          new Set(
+            (raw as unknown[])
+              .filter((id): id is string => typeof id === "string" && id.trim().length > 0)
+              .map((id) => id.trim())
+          )
+        )
+      : [];
+    if (propertyIds.length === 0) {
+      res.status(400).json({ error: "propertyIds required (non-empty array)." });
+      return;
+    }
+
+    workflowRunId = await createWorkflowRun({
+      runType: "refresh_listings",
+      displayName: "Refresh listings",
+      scopeLabel: `${propertyIds.length} propert${propertyIds.length === 1 ? "y" : "ies"}`,
+      triggerSource: "manual",
+      totalItems: propertyIds.length,
+      metadata: { propertyIds },
+      steps: [
+        {
+          stepKey: "streeteasy_refresh",
+          totalItems: propertyIds.length,
+          status: "running",
+          startedAt: workflowStartedAt,
+          lastMessage: `Refreshing listing activity for ${propertyIds.length} propert${propertyIds.length === 1 ? "y" : "ies"}`,
+        },
+      ],
+    });
+
+    const pool = getPool();
+    const streetEasyRefresh = {
+      attempted: 0,
+      success: 0,
+      failed: 0,
+      skipped: 0,
+      priceChanged: 0,
+      unavailable: 0,
+      errors: [] as string[],
+    };
+    const results: Array<{
+      propertyId: string;
+      attempted: boolean;
+      ok: boolean;
+      priceChanged: boolean;
+      unavailable: boolean;
+      listingStatus?: string | null;
+      error?: string;
+    }> = [];
+
+    for (let i = 0; i < propertyIds.length; i++) {
+      const propertyId = propertyIds[i]!;
+      const result = await refreshStreetEasyListingForProperty(propertyId, pool);
+      results.push({ propertyId, ...result });
+      if (!result.attempted) streetEasyRefresh.skipped++;
+      else if (result.ok) {
+        streetEasyRefresh.attempted++;
+        streetEasyRefresh.success++;
+        if (result.priceChanged) streetEasyRefresh.priceChanged++;
+        if (result.unavailable) streetEasyRefresh.unavailable++;
+      } else {
+        streetEasyRefresh.attempted++;
+        streetEasyRefresh.failed++;
+        if (result.error) streetEasyRefresh.errors.push(`${propertyId}: ${result.error}`);
+      }
+
+      await upsertWorkflowStep(workflowRunId, {
+        stepKey: "streeteasy_refresh",
+        totalItems: propertyIds.length,
+        completedItems: streetEasyRefresh.success,
+        failedItems: streetEasyRefresh.failed,
+        skippedItems: streetEasyRefresh.skipped,
+        status: deriveWorkflowStatusFromCounts({
+          totalItems: propertyIds.length,
+          completedItems: streetEasyRefresh.success,
+          failedItems: streetEasyRefresh.failed,
+          skippedItems: streetEasyRefresh.skipped,
+        }),
+        startedAt: workflowStartedAt,
+        finishedAt:
+          streetEasyRefresh.success + streetEasyRefresh.failed + streetEasyRefresh.skipped >= propertyIds.length
+            ? new Date().toISOString()
+            : null,
+        lastMessage:
+          streetEasyRefresh.unavailable > 0
+            ? `${streetEasyRefresh.unavailable} unavailable listing${streetEasyRefresh.unavailable === 1 ? "" : "s"} flagged`
+            : streetEasyRefresh.priceChanged > 0
+              ? `${streetEasyRefresh.priceChanged} ask change${streetEasyRefresh.priceChanged === 1 ? "" : "s"} found`
+              : `${streetEasyRefresh.success}/${propertyIds.length} listing refreshes completed`,
+        lastError: result.ok || !result.error ? null : result.error,
+      });
+
+      if (i < propertyIds.length - 1 && ENRICHMENT_RATE_LIMIT_DELAY_MS > 0) {
+        await new Promise((resolve) => setTimeout(resolve, ENRICHMENT_RATE_LIMIT_DELAY_MS));
+      }
+    }
+
+    await mergeWorkflowRunMetadata(workflowRunId, { propertyIds, results, streetEasyRefresh });
+    await updateWorkflowRun(workflowRunId, {
+      status: streetEasyRefresh.failed > 0 ? "partial" : "completed",
+      finishedAt: new Date().toISOString(),
+    });
+
+    res.json({ ok: true, results, streetEasyRefresh });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[properties refresh-listings]", err);
+    await mergeWorkflowRunMetadata(workflowRunId, { error: message });
+    await updateWorkflowRun(workflowRunId, {
+      status: "failed",
+      finishedAt: new Date().toISOString(),
+    });
+    res.status(503).json({ error: "Listing refresh failed.", details: message });
+  }
+});
+
 /** POST /api/properties/run-enrichment - re-run enrichment for existing canonical properties only. Body: { propertyIds: string[] }. Assumes BBL/details are already set; runs same pipeline (BBL resolve → Phase 1 → permits → 7 modules) and updates data. Returns same permitEnrichment shape as from-listings. */
 router.post("/properties/run-enrichment", async (req: Request, res: Response) => {
   let workflowRunId: string | null = null;

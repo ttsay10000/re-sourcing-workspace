@@ -19,6 +19,8 @@ import {
   type UiV2ActionSurface,
   type UiV2BrokerBlock,
   type UiV2CrmContactPayload,
+  type UiV2DealPathDecision,
+  type UiV2DealPathState,
   type UiV2ImageAsset,
   type UiV2MarketType,
   type UiV2OutreachComposerPayload,
@@ -101,10 +103,13 @@ const COMMON_PIPELINE_TAGS = [
   "follow_up",
   "partner_review",
   "toured",
+  "tour_scheduled",
+  "tour_inputs_needed",
+  "offer_candidate",
   "duplicate",
 ] as const;
 
-const SHEET_TABS = ["Overview", "Enrichment", "OM / Docs", "Market / Comps", "Underwriting", "Activity"] as const;
+const SHEET_TABS = ["Overview", "Deal Path", "Enrichment", "OM / Docs", "Market / Comps", "Underwriting", "Activity"] as const;
 
 type SheetTab = (typeof SHEET_TABS)[number];
 type SortDirection = "asc" | "desc";
@@ -113,6 +118,7 @@ function tabFromParam(value: string | null): SheetTab | null {
   if (!value) return null;
   const normalized = value.toLowerCase().replace(/[^a-z]/g, "");
   if (normalized === "overview") return "Overview";
+  if (normalized === "dealpath" || normalized === "tour" || normalized === "tours") return "Deal Path";
   if (normalized === "enrichment") return "Enrichment";
   if (normalized === "om" || normalized === "omdocs" || normalized === "docs") return "OM / Docs";
   if (normalized === "market" || normalized === "marketcomps" || normalized === "comps") return "Market / Comps";
@@ -218,6 +224,21 @@ interface DossierGenerateResponse {
   details?: string;
 }
 
+interface ListingRefreshResponse {
+  ok?: boolean;
+  streetEasyRefresh?: {
+    attempted?: number;
+    success?: number;
+    failed?: number;
+    skipped?: number;
+    priceChanged?: number;
+    unavailable?: number;
+    errors?: string[];
+  };
+  error?: string;
+  details?: string;
+}
+
 interface BrokerCompPackagesResponse {
   propertyId?: string;
   packages?: unknown[];
@@ -248,6 +269,19 @@ interface SourceFactsFormState {
   listingStatus: string;
   propertyType: string;
   yearBuilt: string;
+}
+
+interface DealPathFormState {
+  tourScheduledAt: string;
+  tourNotes: string;
+  postTourDecision: UiV2DealPathDecision;
+  targetPrice: string;
+  offerAmount: string;
+  offerNotes: string;
+  loiContingenciesText: string;
+  loiContingencyNotes: string;
+  rejectionReasonCode: UiV2RejectionReasonCode | "";
+  rejectionNotes: string;
 }
 
 interface RejectState {
@@ -329,6 +363,18 @@ function formatDate(value: string | null | undefined): string {
   return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
+function formatDateTime(value: string | null | undefined): string {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "-";
+  return date.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
 function askActivityDisplay(row: UiV2PipelineRow): { label: string; title: string; tone: "cut" | "raise" | "neutral" } | null {
   const activity = row.listingActivity;
   if (!activity) return null;
@@ -342,7 +388,7 @@ function askActivityDisplay(row: UiV2PipelineRow): { label: string; title: strin
     const pct = activity.latestPriceChangePercent != null ? ` (${Math.abs(activity.latestPriceChangePercent).toFixed(1)}%)` : "";
     const eventDate = formatDate(activity.latestPriceChangeDate);
     return {
-      label: `${isCut ? "Cut" : "Raised"} ${formatCurrency(amount, false)}${pct}`,
+      label: `${isCut ? "Cut" : "Raised"} ${formatCurrency(amount, false)}${pct} · ${eventDate}`,
       title: `${isCut ? "Price cut" : "Price increase"} on ${eventDate}`,
       tone: isCut ? "cut" : "raise",
     };
@@ -352,9 +398,11 @@ function askActivityDisplay(row: UiV2PipelineRow): { label: string; title: strin
     activity.currentDiscountFromOriginalAskAmount >= 1 &&
     activity.currentDiscountFromOriginalAskPct != null
   ) {
+    const discountDate = activity.latestPriceDecreaseDate ?? activity.latestPriceChangeDate ?? activity.lastActivityDate;
+    const dateSuffix = discountDate ? ` · ${formatDate(discountDate)}` : "";
     return {
-      label: `${activity.currentDiscountFromOriginalAskPct.toFixed(1)}% below original`,
-      title: `${formatCurrency(activity.currentDiscountFromOriginalAskAmount, false)} below original ask`,
+      label: `${activity.currentDiscountFromOriginalAskPct.toFixed(1)}% below original${dateSuffix}`,
+      title: `${formatCurrency(activity.currentDiscountFromOriginalAskAmount, false)} below original ask${discountDate ? ` as of ${formatDate(discountDate)}` : ""}`,
       tone: "cut",
     };
   }
@@ -458,6 +506,9 @@ function tagToneClass(tag: string): string {
   if (["mtr_candidate", "broker_relationship", "toured", "partner_review"].includes(normalized)) {
     return styles.tagRelationship;
   }
+  if (["tour_scheduled", "tour_inputs_needed", "offer_candidate", "post_tour_info_needed"].includes(normalized)) {
+    return styles.tagRelationship;
+  }
   if (["needs_om", "needs_rent_roll", "needs_city_data", "follow_up"].includes(normalized)) {
     return styles.tagAction;
   }
@@ -488,6 +539,24 @@ function statusToneClass(tone: UiV2StatusChipTone | undefined): string {
 
 function statusLabel(status: string): string {
   return UI_V2_PIPELINE_STATUS_OPTIONS.find((option) => option.status === status)?.label ?? titleize(status);
+}
+
+function dealPathToneClass(dealPath: UiV2DealPathState | null | undefined): string {
+  switch (dealPath?.status) {
+    case "tour_scheduled":
+      return styles.toneInfo;
+    case "tour_completed_awaiting_inputs":
+    case "need_more_info":
+      return styles.toneWarning;
+    case "offer_candidate":
+      return styles.toneSuccess;
+    case "rejected_after_tour":
+    case "canceled":
+      return styles.toneDanger;
+    case "not_scheduled":
+    default:
+      return styles.toneNeutral;
+  }
 }
 
 function calculateYieldOnCost(row: Pick<UiV2PipelineRow, "underwriting" | "askingPrice">, basis: "ltr" | "mtr"): number | null {
@@ -719,6 +788,47 @@ function sourceFactsPayload(form: SourceFactsFormState): SourceFactsFormState {
   };
 }
 
+function datetimeLocalFromIso(value: string | null | undefined): string {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 16);
+}
+
+function dealPathFormFromState(dealPath: UiV2DealPathState | null | undefined): DealPathFormState {
+  return {
+    tourScheduledAt: datetimeLocalFromIso(dealPath?.tourScheduledAt),
+    tourNotes: dealPath?.tourNotes ?? "",
+    postTourDecision: dealPath?.postTourDecision ?? "pending",
+    targetPrice: formValue(dealPath?.targetPrice),
+    offerAmount: formValue(dealPath?.offerAmount),
+    offerNotes: dealPath?.offerNotes ?? "",
+    loiContingenciesText: (dealPath?.loiContingencies ?? []).join("\n"),
+    loiContingencyNotes: dealPath?.loiContingencyNotes ?? "",
+    rejectionReasonCode: dealPath?.rejectionReasonCode ?? "",
+    rejectionNotes: dealPath?.rejectionNotes ?? "",
+  };
+}
+
+function dealPathPayload(form: DealPathFormState): Record<string, unknown> {
+  return {
+    tourScheduledAt: form.tourScheduledAt.trim() || null,
+    tourNotes: form.tourNotes.trim() || null,
+    postTourDecision: form.postTourDecision,
+    targetPrice: form.targetPrice.trim() || null,
+    offerAmount: form.offerAmount.trim() || null,
+    offerNotes: form.offerNotes.trim() || null,
+    loiContingencies: form.loiContingenciesText
+      .split(/\n|,/)
+      .map((value) => value.trim())
+      .filter(Boolean),
+    loiContingencyNotes: form.loiContingencyNotes.trim() || null,
+    rejectionReasonCode: form.postTourDecision === "reject" ? form.rejectionReasonCode : null,
+    rejectionNotes: form.postTourDecision === "reject" ? form.rejectionNotes.trim() || null : null,
+  };
+}
+
 function rowFromProperty(row: PipelineRow, property: FlexiblePropertyDetail): PipelineRow {
   const gallery = extractGallery(property, row);
   const latestActivity = property.activityTimeline[0]?.createdAt ?? row.lastActivityAt ?? null;
@@ -743,6 +853,7 @@ function rowFromProperty(row: PipelineRow, property: FlexiblePropertyDetail): Pi
     underwriting: property.underwriting,
     openActionItemCount: property.actionItems.filter((item) => item.status === "open").length,
     savedDeal: property.savedDeal ?? row.savedDeal ?? null,
+    dealPath: property.dealPath ?? row.dealPath ?? null,
     lastActivityAt: latestActivity,
     updatedAt: new Date().toISOString(),
     gallery,
@@ -814,6 +925,7 @@ export default function PipelineClient() {
   const [brokerForm, setBrokerForm] = useState<BrokerFormState>(brokerFormFromBlock(null));
   const [sourceFactsEditOpen, setSourceFactsEditOpen] = useState(false);
   const [sourceFactsForm, setSourceFactsForm] = useState<SourceFactsFormState>(sourceFactsFormFromProperty(null));
+  const [dealPathForm, setDealPathForm] = useState<DealPathFormState>(dealPathFormFromState(null));
   const [newTag, setNewTag] = useState("");
   const [rejectState, setRejectState] = useState<RejectState | null>(null);
   const [composer, setComposer] = useState<ComposerState | null>(null);
@@ -853,6 +965,10 @@ export default function PipelineClient() {
       }),
     [selectedRows]
   );
+
+  useEffect(() => {
+    setDealPathForm(dealPathFormFromState(selectedProperty?.dealPath ?? selectedRow?.dealPath ?? null));
+  }, [selectedId, selectedProperty?.dealPath, selectedRow?.dealPath]);
 
   const filterValues = useMemo(
     () => ({
@@ -1282,6 +1398,48 @@ export default function PipelineClient() {
     }
   }
 
+  async function refreshSelectedListings() {
+    if (selectedIds.length === 0) return;
+    setBusyAction("bulk:listings");
+    setNotice(null);
+    setError(null);
+    try {
+      const propertyIds = [...selectedIds];
+      const payload = await apiFetch<ListingRefreshResponse>(`${API_BASE}/api/properties/refresh-listings`, {
+        method: "POST",
+        body: JSON.stringify({ propertyIds }),
+      });
+      const summary = payload.streetEasyRefresh ?? {};
+      const attempted = Number(summary.attempted ?? 0);
+      const success = Number(summary.success ?? 0);
+      const failed = Number(summary.failed ?? 0);
+      const skipped = Number(summary.skipped ?? 0);
+      const priceChanged = Number(summary.priceChanged ?? 0);
+      const unavailable = Number(summary.unavailable ?? 0);
+      const details = [
+        priceChanged > 0 ? `${priceChanged} ask change${priceChanged === 1 ? "" : "s"}` : null,
+        unavailable > 0 ? `${unavailable} unavailable listing${unavailable === 1 ? "" : "s"} flagged` : null,
+        skipped > 0 ? `${skipped} skipped` : null,
+        failed > 0 ? `${failed} failed` : null,
+      ].filter(Boolean);
+      setNotice(
+        `Listing refresh completed: ${success}/${attempted || propertyIds.length} refreshed${
+          details.length ? `; ${details.join(", ")}` : ""
+        }.`
+      );
+      const response = await apiFetch<PipelineResponse>(
+        `${API_BASE}/api/ui-v2/pipeline?${buildPipelineQueryString(queryString)}`
+      );
+      setRows(response.pipeline.rows as PipelineRow[]);
+      setTotal(response.pipeline.total);
+      if (selectedId) await loadPropertyDetail(selectedId).catch(() => null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to refresh listing activity.");
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
   async function refreshSelectedEnrichment() {
     if (selectedIds.length === 0) return;
     setBusyAction("bulk:refresh");
@@ -1601,6 +1759,47 @@ export default function PipelineClient() {
 
   function updateSourceFactsField(field: keyof SourceFactsFormState, value: string) {
     setSourceFactsForm((current) => ({ ...current, [field]: value }));
+  }
+
+  function updateDealPathField<K extends keyof DealPathFormState>(field: K, value: DealPathFormState[K]) {
+    setDealPathForm((current) => ({ ...current, [field]: value }));
+  }
+
+  async function saveDealPath(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedId) return;
+    if (dealPathForm.postTourDecision === "reject" && !dealPathForm.rejectionReasonCode) {
+      setError("Choose a rejection reason before rejecting after a tour.");
+      return;
+    }
+    setBusyAction(`${selectedId}:deal-path`);
+    setNotice(null);
+    setError(null);
+    try {
+      const response = await apiFetch<PropertyResponse>(`${API_BASE}/api/ui-v2/properties/${selectedId}/deal-path`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          dealPath: dealPathPayload(dealPathForm),
+          actorName: "ui-v2",
+          source: "property_sheet",
+        }),
+      });
+      const property = normalizePropertyDetail(response.property);
+      if (property) {
+        setSelectedProperty(property);
+        setDealPathForm(dealPathFormFromState(property.dealPath));
+        applyProperty(property);
+      }
+      setNotice(
+        dealPathForm.postTourDecision === "reject"
+          ? "Property rejected after tour."
+          : "Deal path updated."
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update deal path.");
+    } finally {
+      setBusyAction(null);
+    }
   }
 
   async function addTag(event: FormEvent<HTMLFormElement>) {
@@ -2189,6 +2388,7 @@ export default function PipelineClient() {
   const sheetBroker = selectedProperty?.broker ?? selectedRow?.broker ?? null;
   const sheetStatus = selectedProperty?.statusChip ?? selectedRow?.statusChip ?? null;
   const sheetTags = selectedProperty?.tags ?? selectedRow?.tags ?? [];
+  const selectedDealPath = selectedProperty?.dealPath ?? selectedRow?.dealPath ?? null;
   const sheetMarketType = selectedProperty?.overview.marketType ?? selectedRow?.marketType ?? "unknown";
   const sheetDocuments = selectedProperty?.documents ?? [];
   const sheetEnrichmentModules = selectedProperty?.enrichmentDetails?.modules ?? [];
@@ -2347,6 +2547,15 @@ export default function PipelineClient() {
         <div className={styles.bulkActions}>
           <button className={styles.ghostButton} type="button" onClick={toggleAllVisible}>
             {allVisibleSelected ? "Clear selection" : "Select visible"}
+          </button>
+          <button
+            className={styles.secondaryButton}
+            type="button"
+            title="Refresh only existing StreetEasy/RapidAPI listing records for selected properties to capture ask changes, price history, and unavailable flags."
+            disabled={selectedIds.length === 0 || busyAction?.startsWith("bulk:")}
+            onClick={refreshSelectedListings}
+          >
+            {busyAction === "bulk:listings" ? "Refreshing listings..." : "Refresh listings"}
           </button>
           <button
             className={styles.secondaryButton}
@@ -3136,6 +3345,164 @@ export default function PipelineClient() {
                     </div>
                   </section>
                 </div>
+              ) : null}
+
+              {sheetTab === "Deal Path" ? (
+                <section className={styles.sheetPanel}>
+                  <div className={styles.sectionHeading}>
+                    <h3>Deal Path</h3>
+                    <span className={cx(styles.statusPill, dealPathToneClass(selectedDealPath))}>
+                      {selectedDealPath?.statusLabel ?? "Not Scheduled"}
+                    </span>
+                  </div>
+                  <div className={styles.dealPathSummary}>
+                    <div>
+                      <span>Tour</span>
+                      <strong>{formatDateTime(selectedDealPath?.tourScheduledAt)}</strong>
+                    </div>
+                    <div>
+                      <span>Decision</span>
+                      <strong>{titleize(selectedDealPath?.postTourDecision ?? "pending")}</strong>
+                    </div>
+                    <div>
+                      <span>Target</span>
+                      <strong>{formatCurrency(selectedDealPath?.targetPrice, false)}</strong>
+                    </div>
+                    <div>
+                      <span>Offer</span>
+                      <strong>{formatCurrency(selectedDealPath?.offerAmount, false)}</strong>
+                    </div>
+                  </div>
+                  {selectedDealPath?.status === "tour_completed_awaiting_inputs" ? (
+                    <div className={styles.dealPathNotice}>
+                      Tour date has passed. Add notes, offer intent, target pricing, contingencies, or a rejection reason.
+                    </div>
+                  ) : null}
+                  <form className={styles.dealPathForm} onSubmit={saveDealPath}>
+                    <label>
+                      Tour date and time
+                      <input
+                        type="datetime-local"
+                        value={dealPathForm.tourScheduledAt}
+                        onChange={(event) => updateDealPathField("tourScheduledAt", event.target.value)}
+                      />
+                    </label>
+                    <label>
+                      Post-tour decision
+                      <select
+                        value={dealPathForm.postTourDecision}
+                        onChange={(event) =>
+                          updateDealPathField("postTourDecision", event.target.value as UiV2DealPathDecision)
+                        }
+                      >
+                        <option value="pending">Pending inputs</option>
+                        <option value="move_forward">Move forward with offer</option>
+                        <option value="need_more_info">Need more information</option>
+                        <option value="reject">Reject after tour</option>
+                      </select>
+                    </label>
+                    <label>
+                      Target price
+                      <input
+                        inputMode="numeric"
+                        value={dealPathForm.targetPrice}
+                        onChange={(event) => updateDealPathField("targetPrice", event.target.value)}
+                        placeholder="12000000"
+                      />
+                    </label>
+                    <label>
+                      Offer amount
+                      <input
+                        inputMode="numeric"
+                        value={dealPathForm.offerAmount}
+                        onChange={(event) => updateDealPathField("offerAmount", event.target.value)}
+                        placeholder="11250000"
+                      />
+                    </label>
+                    <label className={styles.formSpanTwo}>
+                      Tour notes
+                      <textarea
+                        rows={4}
+                        value={dealPathForm.tourNotes}
+                        onChange={(event) => updateDealPathField("tourNotes", event.target.value)}
+                        placeholder="Tour takeaways, condition, broker comments, follow-up questions"
+                      />
+                    </label>
+                    <label className={styles.formSpanTwo}>
+                      Offer notes
+                      <textarea
+                        rows={3}
+                        value={dealPathForm.offerNotes}
+                        onChange={(event) => updateDealPathField("offerNotes", event.target.value)}
+                        placeholder="Rationale for offer, pricing read, partner feedback"
+                      />
+                    </label>
+                    <label className={styles.formSpanTwo}>
+                      LOI contingencies
+                      <textarea
+                        rows={4}
+                        value={dealPathForm.loiContingenciesText}
+                        onChange={(event) => updateDealPathField("loiContingenciesText", event.target.value)}
+                        placeholder="Financing contingency&#10;Due diligence period&#10;Rent roll verification"
+                      />
+                    </label>
+                    <label className={styles.formSpanTwo}>
+                      LOI contingency notes
+                      <textarea
+                        rows={3}
+                        value={dealPathForm.loiContingencyNotes}
+                        onChange={(event) => updateDealPathField("loiContingencyNotes", event.target.value)}
+                        placeholder="Timing, diligence needs, third-party reports, deposit terms"
+                      />
+                    </label>
+                    {dealPathForm.postTourDecision === "reject" ? (
+                      <>
+                        <label>
+                          Rejection reason
+                          <select
+                            value={dealPathForm.rejectionReasonCode}
+                            onChange={(event) =>
+                              updateDealPathField("rejectionReasonCode", event.target.value as UiV2RejectionReasonCode | "")
+                            }
+                            required
+                          >
+                            <option value="">Select reason</option>
+                            {UI_V2_REJECTION_REASON_OPTIONS.map((option) => (
+                              <option key={option.code} value={option.code}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label>
+                          Rejection notes
+                          <textarea
+                            rows={3}
+                            value={dealPathForm.rejectionNotes}
+                            onChange={(event) => updateDealPathField("rejectionNotes", event.target.value)}
+                            placeholder="Why we are passing after the tour"
+                          />
+                        </label>
+                      </>
+                    ) : null}
+                    <div className={styles.sourceFactsFormActions}>
+                      <button
+                        className={styles.secondaryButton}
+                        type="button"
+                        onClick={() => setDealPathForm(dealPathFormFromState(selectedDealPath))}
+                      >
+                        Reset
+                      </button>
+                      <button className={styles.primaryButton} type="submit" disabled={busyAction === `${selectedId}:deal-path`}>
+                        {busyAction === `${selectedId}:deal-path`
+                          ? "Saving..."
+                          : dealPathForm.postTourDecision === "reject"
+                            ? "Reject after tour"
+                            : "Save deal path"}
+                      </button>
+                    </div>
+                  </form>
+                </section>
               ) : null}
 
               {sheetTab === "Enrichment" ? (

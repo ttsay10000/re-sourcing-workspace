@@ -68,6 +68,9 @@
 .brokerForm input,
 .brokerForm textarea,
 .sourceFactsForm input,
+.dealPathForm input,
+.dealPathForm select,
+.dealPathForm textarea,
 .addTagForm input,
 .modal input,
 .modal select,
@@ -91,6 +94,9 @@
 .brokerForm input:focus,
 .brokerForm textarea:focus,
 .sourceFactsForm input:focus,
+.dealPathForm input:focus,
+.dealPathForm select:focus,
+.dealPathForm textarea:focus,
 .addTagForm input:focus,
 .modal input:focus,
 .modal select:focus,
@@ -1635,6 +1641,71 @@
   color: #1f2b34;
 }
 
+.statusPill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.65rem;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  padding: 0.18rem 0.62rem;
+  font-size: 0.72rem;
+  font-weight: 650;
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+
+.dealPathSummary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0;
+  margin-bottom: 0.85rem;
+  border-top: 1px solid var(--app-line, #e4e4e7);
+  border-bottom: 1px solid var(--app-line, #e4e4e7);
+}
+
+.dealPathSummary div {
+  min-width: 0;
+  padding: 0.7rem 0.85rem;
+  border-right: 1px solid var(--app-line, #e4e4e7);
+}
+
+.dealPathSummary div:last-child {
+  border-right: 0;
+}
+
+.dealPathSummary span,
+.dealPathSummary strong {
+  display: block;
+}
+
+.dealPathSummary span {
+  color: var(--app-muted, #71717a);
+  font-size: 0.66rem;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.dealPathSummary strong {
+  margin-top: 0.18rem;
+  color: var(--app-ink, #18181b);
+  font-size: 0.92rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.dealPathNotice {
+  margin-bottom: 0.8rem;
+  border: 1px solid #ecd29a;
+  border-radius: 8px;
+  padding: 0.62rem 0.75rem;
+  background: #fff8e7;
+  color: #6f4a15;
+  font-size: 0.82rem;
+  line-height: 1.42;
+}
+
 .metricGrid,
 .detailList {
   display: grid;
@@ -1681,7 +1752,8 @@
   flex-direction: column;
 }
 
-.sourceFactsForm {
+.sourceFactsForm,
+.dealPathForm {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0.65rem;
@@ -1692,7 +1764,13 @@
   background: #f8fbf9;
 }
 
-.sourceFactsForm label {
+.dealPathForm {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 0;
+}
+
+.sourceFactsForm label,
+.dealPathForm label {
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
@@ -1704,9 +1782,21 @@
   text-transform: uppercase;
 }
 
-.sourceFactsForm input {
+.sourceFactsForm input,
+.dealPathForm input,
+.dealPathForm select {
   min-height: 2rem;
   font-size: 0.82rem;
+}
+
+.dealPathForm textarea {
+  min-height: 5.4rem;
+  resize: vertical;
+  line-height: 1.42;
+}
+
+.formSpanTwo {
+  grid-column: span 2;
 }
 
 .sourceFactsFormActions {
@@ -2524,11 +2614,26 @@
   .highlightGrid,
   .inlineDetailList,
 	  .sourceFactsForm,
+  .dealPathForm,
+  .dealPathSummary,
 	  .sheetScreeningBar,
 	  .propertyDataSection .moduleItems,
 	  .propertyFactGrid {
 	    grid-template-columns: 1fr;
 	  }
+
+  .dealPathSummary div {
+    border-right: 0;
+    border-bottom: 1px solid var(--app-line, #e4e4e7);
+  }
+
+  .dealPathSummary div:last-child {
+    border-bottom: 0;
+  }
+
+  .formSpanTwo {
+    grid-column: span 1;
+  }
 
   .templateToolbar {
     grid-template-columns: 1fr;

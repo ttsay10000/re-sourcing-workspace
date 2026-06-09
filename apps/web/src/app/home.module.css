@@ -289,7 +289,7 @@
 
 .stageStrip {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(8, minmax(0, 1fr));
   border: 1px solid var(--app-line, #e4e4e7);
   border-radius: var(--radius-md, 8px);
   background: var(--app-surface, #ffffff);
@@ -858,7 +858,7 @@
   }
 
   .stageStrip {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 }
 

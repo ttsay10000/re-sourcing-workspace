@@ -6,6 +6,7 @@ import { Suspense, useEffect, useMemo, useState } from "react";
 import type { UiV2PipelineListPayload, UiV2PipelineRow } from "@re-sourcing/contracts";
 import {
   AlertTriangle,
+  CalendarClock,
   FileQuestion,
   MailX,
   Minus,
@@ -100,6 +101,8 @@ const SAVED_STAGE_GROUPS = [
   { key: "sourced", label: "Sourced", statuses: ["new", "screening", "interesting", "saved"] },
   { key: "om_requested", label: "OM Requested", statuses: ["outreach", "awaiting_broker"] },
   { key: "underwriting", label: "Underwriting", statuses: ["underwriting", "om_received", "dossier_generated"] },
+  { key: "tour_scheduled", label: "Tour Scheduled", statuses: ["tour_scheduled"] },
+  { key: "tour_completed_awaiting_inputs", label: "Awaiting Inputs", statuses: ["tour_completed_awaiting_inputs"] },
   { key: "loi_sent", label: "LOI Sent", statuses: ["offer_review"] },
   { key: "negotiation", label: "Negotiation", statuses: ["negotiation"] },
   { key: "contract_signed", label: "Contract Signed", statuses: ["contract_signed"] },
@@ -107,8 +110,16 @@ const SAVED_STAGE_GROUPS = [
 
 type SavedStageKey = (typeof SAVED_STAGE_GROUPS)[number]["key"];
 
-const WORKLIST_STAGE_KEYS = new Set<SavedStageKey>(["underwriting", "loi_sent", "negotiation", "contract_signed"]);
-const LATER_STAGE_STATUSES = new Set(["offer_review", "negotiation", "contract_signed"]);
+const WORKLIST_STAGE_KEYS = new Set<SavedStageKey>([
+  "underwriting",
+  "tour_scheduled",
+  "tour_completed_awaiting_inputs",
+  "loi_sent",
+  "negotiation",
+  "contract_signed",
+]);
+const TOUR_STAGE_STATUSES = new Set(["tour_scheduled", "tour_completed_awaiting_inputs"]);
+const LATER_STAGE_STATUSES = new Set(["tour_scheduled", "tour_completed_awaiting_inputs", "offer_review", "negotiation", "contract_signed"]);
 const CLOSED_STATUSES = new Set(["deal_closed", "archived", "closed"]);
 const REJECTED_STATUSES = new Set(["rejected"]);
 const OM_REQUESTED_STATUSES = new Set(["outreach", "awaiting_broker"]);
@@ -211,8 +222,11 @@ function rowHasDossier(row: SavedDealRow): boolean {
 function savedStageKeyForRow(row: SavedDealRow): SavedStageKey | null {
   const status = normalizedSavedStatus(row);
   if (CLOSED_STATUSES.has(status) || REJECTED_STATUSES.has(status) || row.rejection) return null;
+  const explicitStage = SAVED_STAGE_GROUPS.find((stage) => (stage.statuses as readonly string[]).includes(status))?.key;
+  if (explicitStage && explicitStage !== "sourced") return explicitStage;
+  if (TOUR_STAGE_STATUSES.has(status)) return explicitStage ?? "underwriting";
   if (rowHasOm(row) && !LATER_STAGE_STATUSES.has(status)) return "underwriting";
-  return SAVED_STAGE_GROUPS.find((stage) => (stage.statuses as readonly string[]).includes(status))?.key ?? "sourced";
+  return explicitStage ?? "sourced";
 }
 
 function pipelineStatus(row: UiV2PipelineRow): string {
@@ -338,6 +352,8 @@ function HomePageContent() {
       pipelineHasOmEvidence(row) &&
       !LATER_STAGE_STATUSES.has(pipelineStatus(row))
     ).length;
+    const tourScheduled = pipelineRows.filter((row) => pipelineStatus(row) === "tour_scheduled").length;
+    const awaitingInputs = pipelineRows.filter((row) => pipelineStatus(row) === "tour_completed_awaiting_inputs").length;
     const loiSent = pipelineRows.filter((row) => pipelineStatus(row) === "offer_review").length;
     const negotiation = pipelineRows.filter((row) => pipelineStatus(row) === "negotiation").length;
     const contractSigned = pipelineRows.filter((row) => pipelineStatus(row) === "contract_signed").length;
@@ -351,6 +367,8 @@ function HomePageContent() {
       },
       { key: "om_requested", label: "OM Requested", count: omRequested, href: "/pipeline" },
       { key: "underwriting", label: "Underwriting", count: underwriting, href: "/pipeline" },
+      { key: "tour_scheduled", label: "Tour Scheduled", count: tourScheduled, href: "/pipeline?status=tour_scheduled" },
+      { key: "tour_completed_awaiting_inputs", label: "Awaiting Inputs", count: awaitingInputs, href: "/pipeline?status=tour_completed_awaiting_inputs" },
       { key: "loi_sent", label: "LOI Sent", count: loiSent, href: "/pipeline" },
       { key: "negotiation", label: "Negotiation", count: negotiation, href: "/pipeline" },
       { key: "contract_signed", label: "Contract Signed", count: contractSigned, href: "/pipeline" },
@@ -359,10 +377,12 @@ function HomePageContent() {
 
   const attentionItems = useMemo<AttentionGroup[]>(() => {
     const missingEnrichment = pipelineRows.filter((row) => row.enrichmentState?.status !== "complete").slice(0, 5);
+    const tourInputsNeeded = pipelineRows.filter((row) => pipelineStatus(row) === "tour_completed_awaiting_inputs");
     const missingDocs = pipelineRows.filter((row) => !row.documentStatus?.hasOm).slice(0, 5);
     const missingBroker = pipelineRows.filter((row) => !row.broker?.email).slice(0, 5);
     return [
       { label: "Missing enrichment", icon: AlertTriangle, tone: "warning", count: missingEnrichment.length, rows: missingEnrichment },
+      { label: "Tour inputs needed", icon: CalendarClock, tone: "warning", count: tourInputsNeeded.length, rows: tourInputsNeeded.slice(0, 5) },
       { label: "Missing rental flow", icon: RefreshCcw, tone: "neutral", count: pipelineRows.filter((row) => row.openActionItemCount).length, rows: progressRows.slice(0, 5) },
       { label: "Missing broker contact", icon: MailX, tone: "danger", count: missingBroker.length, rows: missingBroker },
       { label: "Needs OM request", icon: FileQuestion, tone: "warning", count: missingDocs.length, rows: missingDocs },

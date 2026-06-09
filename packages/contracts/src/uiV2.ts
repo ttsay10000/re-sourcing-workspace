@@ -52,6 +52,8 @@ export type UiV2PipelineStatus =
   | "interesting"
   | "saved"
   | "underwriting"
+  | "tour_scheduled"
+  | "tour_completed_awaiting_inputs"
   | "outreach"
   | "awaiting_broker"
   | "om_received"
@@ -94,6 +96,34 @@ export type UiV2PropertyActionId =
   | "mark_om_requested"
   | "mark_om_received"
   | "move_to_underwriting";
+
+export type UiV2DealPathDecision = "pending" | "move_forward" | "need_more_info" | "reject";
+
+export type UiV2DealPathStatus =
+  | "not_scheduled"
+  | "tour_scheduled"
+  | "tour_completed_awaiting_inputs"
+  | "offer_candidate"
+  | "need_more_info"
+  | "rejected_after_tour"
+  | "canceled";
+
+export interface UiV2DealPathState {
+  status: UiV2DealPathStatus;
+  statusLabel: string;
+  tourScheduledAt?: string | null;
+  tourCompletedAt?: string | null;
+  tourNotes?: string | null;
+  postTourDecision?: UiV2DealPathDecision | null;
+  targetPrice?: number | null;
+  offerAmount?: number | null;
+  offerNotes?: string | null;
+  loiContingencies?: string[];
+  loiContingencyNotes?: string | null;
+  rejectionReasonCode?: UiV2RejectionReasonCode | null;
+  rejectionNotes?: string | null;
+  updatedAt?: string | null;
+}
 
 export interface UiV2PropertyAction {
   id: UiV2PropertyActionId | string;
@@ -166,6 +196,24 @@ export const UI_V2_PIPELINE_STATUS_OPTIONS = [
     tone: "warning",
     editable: true,
     description: "Underwriting or deal analysis is active.",
+    tableActions: ["open_property", "edit_status", "run_underwriting", "reject_deal"],
+    sheetActions: ["email_broker", "run_underwriting", "reject_deal", "add_tag"],
+  },
+  {
+    status: "tour_scheduled",
+    label: "Tour Scheduled",
+    tone: "info",
+    editable: true,
+    description: "A tour is scheduled while the deal remains under active underwriting.",
+    tableActions: ["open_property", "edit_status", "run_underwriting", "reject_deal"],
+    sheetActions: ["email_broker", "run_underwriting", "reject_deal", "add_tag"],
+  },
+  {
+    status: "tour_completed_awaiting_inputs",
+    label: "Tour Completed - Awaiting Inputs",
+    tone: "warning",
+    editable: true,
+    description: "The scheduled tour date has passed and the post-tour decision still needs to be recorded.",
     tableActions: ["open_property", "edit_status", "run_underwriting", "reject_deal"],
     sheetActions: ["email_broker", "run_underwriting", "reject_deal", "add_tag"],
   },
@@ -674,6 +722,7 @@ export interface UiV2PipelineRow {
   brokerComps?: BrokerCompMarketSummary | null;
   openActionItemCount?: number;
   savedDeal?: SavedDeal | null;
+  dealPath?: UiV2DealPathState | null;
   listingActivity?: ListingActivitySummary | null;
   lastActivityAt?: string | null;
   newness?: UiV2PipelineNewness | null;
@@ -739,6 +788,7 @@ export interface UiV2PropertyDetailPayload {
   enrichmentDetails?: UiV2EnrichmentDetailPayload | null;
   underwriting: UiV2UnderwritingSummary | null;
   brokerComps?: BrokerCompMarketSummary | null;
+  dealPath?: UiV2DealPathState | null;
   sourcingUpdate?: PropertySourcingUpdate | null;
   activityTimeline: UiV2ActivityTimelineItem[];
   actionItems: PropertyActionItem[];

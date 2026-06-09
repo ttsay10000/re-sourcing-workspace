@@ -40,6 +40,9 @@ import type {
   SavedDeal,
   UiV2ActivityTimelineItem,
   UiV2BrokerBlock,
+  UiV2DealPathDecision,
+  UiV2DealPathState,
+  UiV2DealPathStatus,
   UiV2DetailItem,
   UiV2DocumentStatus,
   UiV2EnrichmentDetailPayload,
@@ -86,6 +89,8 @@ const UI_V2_STATUSES = new Set<UiV2PipelineStatus>([
   "interesting",
   "saved",
   "underwriting",
+  "tour_scheduled",
+  "tour_completed_awaiting_inputs",
   "outreach",
   "awaiting_broker",
   "om_received",
@@ -147,6 +152,8 @@ type LegacyPipelineStatus =
   | "follow_up_needed"
   | "om_received"
   | "underwriting"
+  | "tour_scheduled"
+  | "tour_completed_awaiting_inputs"
   | "saved_watchlist"
   | "loi_sent"
   | "negotiation"
@@ -175,8 +182,32 @@ interface PipelineDetailsState {
   source?: string | null;
   sourceLinks?: Record<string, unknown>;
   lastActivityAt?: string | null;
+  dealPath?: UiV2DealPathState | null;
   [key: string]: unknown;
 }
+
+const DEAL_PATH_DECISIONS = new Set<UiV2DealPathDecision>(["pending", "move_forward", "need_more_info", "reject"]);
+const DEAL_PATH_STATUSES = new Set<UiV2DealPathStatus>([
+  "not_scheduled",
+  "tour_scheduled",
+  "tour_completed_awaiting_inputs",
+  "offer_candidate",
+  "need_more_info",
+  "rejected_after_tour",
+  "canceled",
+]);
+const DEAL_PATH_DERIVED_PIPELINE_STATUSES = new Set<UiV2PipelineStatus>([
+  "tour_scheduled",
+  "tour_completed_awaiting_inputs",
+]);
+const DEAL_PATH_OVERRIDE_BLOCKING_STATUSES = new Set<UiV2PipelineStatus>([
+  "offer_review",
+  "negotiation",
+  "contract_signed",
+  "deal_closed",
+  "rejected",
+  "archived",
+]);
 
 interface PipelineBaseRow {
   property_id: string;
@@ -333,6 +364,90 @@ function toPositiveNumber(value: unknown): number | null {
 
 function stringOrNull(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function nullableIsoDateTime(value: unknown): string | null {
+  const raw = stringOrNull(value);
+  if (!raw) return null;
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
+
+function parseDealPathDecision(value: unknown): UiV2DealPathDecision | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase();
+  return DEAL_PATH_DECISIONS.has(normalized as UiV2DealPathDecision)
+    ? (normalized as UiV2DealPathDecision)
+    : null;
+}
+
+function parseDealPathStatus(value: unknown): UiV2DealPathStatus | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase();
+  return DEAL_PATH_STATUSES.has(normalized as UiV2DealPathStatus)
+    ? (normalized as UiV2DealPathStatus)
+    : null;
+}
+
+function dealPathStatusLabel(status: UiV2DealPathStatus): string {
+  const labels: Record<UiV2DealPathStatus, string> = {
+    not_scheduled: "Not Scheduled",
+    tour_scheduled: "Tour Scheduled",
+    tour_completed_awaiting_inputs: "Tour Completed - Awaiting Inputs",
+    offer_candidate: "Offer Candidate",
+    need_more_info: "Need More Info",
+    rejected_after_tour: "Rejected After Tour",
+    canceled: "Canceled",
+  };
+  return labels[status];
+}
+
+function deriveDealPathStatus(input: {
+  rawStatus?: UiV2DealPathStatus | null;
+  tourScheduledAt?: string | null;
+  tourCompletedAt?: string | null;
+  postTourDecision?: UiV2DealPathDecision | null;
+}): UiV2DealPathStatus {
+  if (input.rawStatus === "canceled") return "canceled";
+  if (input.postTourDecision === "reject") return "rejected_after_tour";
+  if (input.postTourDecision === "move_forward") return "offer_candidate";
+  if (input.postTourDecision === "need_more_info") return "need_more_info";
+  if (input.tourCompletedAt) return "tour_completed_awaiting_inputs";
+  if (input.tourScheduledAt) {
+    const scheduledMs = Date.parse(input.tourScheduledAt);
+    return Number.isFinite(scheduledMs) && scheduledMs <= Date.now()
+      ? "tour_completed_awaiting_inputs"
+      : "tour_scheduled";
+  }
+  return "not_scheduled";
+}
+
+function normalizeDealPathState(input: unknown): UiV2DealPathState | null {
+  if (!isPlainRecord(input)) return null;
+  const tourScheduledAt = nullableIsoDateTime(input.tourScheduledAt);
+  const tourCompletedAt = nullableIsoDateTime(input.tourCompletedAt);
+  const postTourDecision = parseDealPathDecision(input.postTourDecision);
+  const rawStatus = parseDealPathStatus(input.status);
+  const status = deriveDealPathStatus({ rawStatus, tourScheduledAt, tourCompletedAt, postTourDecision });
+  const loiContingencies = uniqueStrings(Array.isArray(input.loiContingencies) ? input.loiContingencies : [])
+    .map((value) => value.slice(0, 120))
+    .slice(0, 20);
+  return {
+    status,
+    statusLabel: dealPathStatusLabel(status),
+    tourScheduledAt,
+    tourCompletedAt,
+    tourNotes: stringOrNull(input.tourNotes),
+    postTourDecision,
+    targetPrice: toFiniteNumber(input.targetPrice),
+    offerAmount: toFiniteNumber(input.offerAmount),
+    offerNotes: stringOrNull(input.offerNotes),
+    loiContingencies,
+    loiContingencyNotes: stringOrNull(input.loiContingencyNotes),
+    rejectionReasonCode: parseRejectionReasonCode(input.rejectionReasonCode),
+    rejectionNotes: stringOrNull(input.rejectionNotes),
+    updatedAt: nullableIsoDateTime(input.updatedAt),
+  };
 }
 
 function normalizeTag(value: unknown): string | null {
@@ -553,6 +668,7 @@ function readPipelineState(details: PropertyDetails | null | undefined): Pipelin
     source: stringOrNull(rawPipeline.source),
     sourceLinks: isPlainRecord(rawPipeline.sourceLinks) ? rawPipeline.sourceLinks : {},
     lastActivityAt: stringOrNull(rawPipeline.lastActivityAt),
+    dealPath: normalizeDealPathState(rawPipeline.dealPath),
   };
 }
 
@@ -596,6 +712,8 @@ function mapLegacyStatus(status: string): UiV2PipelineStatus {
     follow_up_needed: "awaiting_broker",
     om_received: "om_received",
     underwriting: "underwriting",
+    tour_scheduled: "tour_scheduled",
+    tour_completed_awaiting_inputs: "tour_completed_awaiting_inputs",
     saved_watchlist: "saved",
     loi_sent: "offer_review",
     negotiation: "negotiation",
@@ -614,6 +732,8 @@ function legacyStatusFromUiV2Status(status: UiV2PipelineStatus): LegacyPipelineS
     interesting: "enrichment_complete",
     saved: "saved_watchlist",
     underwriting: "underwriting",
+    tour_scheduled: "underwriting",
+    tour_completed_awaiting_inputs: "underwriting",
     outreach: "om_requested",
     awaiting_broker: "follow_up_needed",
     om_received: "om_received",
@@ -635,6 +755,8 @@ function statusLabel(status: UiV2PipelineStatus): string {
     interesting: "Interesting",
     saved: "Saved",
     underwriting: "Underwriting",
+    tour_scheduled: "Tour Scheduled",
+    tour_completed_awaiting_inputs: "Tour Completed - Awaiting Inputs",
     outreach: "OM Requested",
     awaiting_broker: "OM Requested",
     om_received: "OM Received",
@@ -656,6 +778,8 @@ function statusTone(status: UiV2PipelineStatus): UiV2StatusChipTone {
     interesting: "warning",
     saved: "success",
     underwriting: "warning",
+    tour_scheduled: "info",
+    tour_completed_awaiting_inputs: "warning",
     outreach: "info",
     awaiting_broker: "warning",
     om_received: "success",
@@ -675,6 +799,14 @@ function deriveUiV2Status(row: PipelineBaseRow): UiV2PipelineStatus {
   const pipeline = readPipelineState(details);
   if (pipeline.status === "rejected_removed" || pipeline.rejectedAt != null) return "rejected";
   const explicitStatus = pipeline.uiV2Status;
+  const dealPathStatus = pipeline.dealPath?.status;
+  if (
+    dealPathStatus &&
+    DEAL_PATH_DERIVED_PIPELINE_STATUSES.has(dealPathStatus as UiV2PipelineStatus) &&
+    !DEAL_PATH_OVERRIDE_BLOCKING_STATUSES.has(explicitStatus ?? mapLegacyStatus(pipeline.status))
+  ) {
+    return dealPathStatus as UiV2PipelineStatus;
+  }
   if (explicitStatus != null) return explicitStatus;
   if (row.saved_deal_status === "dossier_generated") return "dossier_generated";
   if (row.saved_deal_status === "rejected") return "rejected";
@@ -1888,6 +2020,7 @@ function buildPipelineRow(row: PipelineBaseRow, userId: string): UiV2PipelineRow
   const pipeline = readPipelineState(row.details);
   const status = listingStatus(row);
   const listingActivity = buildListingActivitySummary(row);
+  const dealPath = pipeline.dealPath ?? null;
   const tags = uniqueStrings([
     ...pipeline.tags,
     isUnavailableListingStatus(status) ? "listing_unavailable" : null,
@@ -1914,6 +2047,7 @@ function buildPipelineRow(row: PipelineBaseRow, userId: string): UiV2PipelineRow
     underwriting: buildUnderwriting(row),
     openActionItemCount: Number(row.open_action_item_count ?? 0),
     savedDeal: savedDealFromRow(row, userId),
+    dealPath,
     listingActivity,
     lastActivityAt: pipeline.lastActivityAt ?? optionalIso(row.property_updated_at),
     newness: buildPipelineNewness(row),
@@ -2188,6 +2322,7 @@ function buildPropertyDetail(row: PipelineBaseRow, collections: DetailCollection
     enrichmentDetails: buildEnrichmentDetails(row),
     underwriting: buildUnderwriting(row),
     brokerComps: buildBrokerCompMarketSummary(collections),
+    dealPath: readPipelineState(row.details).dealPath ?? null,
     sourcingUpdate: row.details?.sourcingUpdate ?? null,
     activityTimeline: buildActivityTimeline(row, collections),
     actionItems: collections.actionItems,
@@ -2780,6 +2915,132 @@ router.get("/ui-v2/properties/:id", async (req: Request, res: Response) => {
 
 router.patch("/ui-v2/properties/:id/status", handleStatusUpdate);
 router.post("/ui-v2/properties/:id/status", handleStatusUpdate);
+
+function dealPathStatusForPipeline(status: UiV2DealPathStatus): UiV2PipelineStatus | null {
+  return DEAL_PATH_DERIVED_PIPELINE_STATUSES.has(status as UiV2PipelineStatus)
+    ? (status as UiV2PipelineStatus)
+    : null;
+}
+
+async function handleDealPathUpdate(req: Request, res: Response): Promise<void> {
+  try {
+    const propertyId = req.params.id;
+    if (!propertyId) {
+      res.status(400).json({ error: "property id required." });
+      return;
+    }
+    const body = isPlainRecord(req.body) ? req.body : {};
+    const input = isPlainRecord(body.dealPath) ? body.dealPath : body;
+    const pool = getPool();
+    const propertyRepo = new PropertyRepo({ pool });
+    const property = await propertyRepo.byId(propertyId);
+    if (!property) {
+      res.status(404).json({ error: "Property not found.", propertyId });
+      return;
+    }
+
+    const existing = readPipelineState(property.details);
+    const now = new Date().toISOString();
+    const actorName = stringOrNull(body.actorName) ?? "ui-v2";
+    const nextDealPath = normalizeDealPathState({
+      ...(existing.dealPath ?? {}),
+      ...input,
+      updatedAt: now,
+    }) ?? {
+      status: "not_scheduled",
+      statusLabel: dealPathStatusLabel("not_scheduled"),
+      loiContingencies: [],
+      updatedAt: now,
+    };
+
+    if (nextDealPath.postTourDecision === "reject" && !nextDealPath.rejectionReasonCode) {
+      res.status(400).json({
+        error: "Rejection reason required for post-tour rejection.",
+        reasonCodes: [...REJECTION_REASON_CODES],
+      });
+      return;
+    }
+
+    const currentPipelineStatus = existing.uiV2Status ?? mapLegacyStatus(existing.status);
+    const derivedPipelineStatus = dealPathStatusForPipeline(nextDealPath.status);
+    const patch: Partial<PipelineDetailsState> = {
+      dealPath: nextDealPath,
+      lastActivityAt: now,
+    };
+    if (!DEAL_PATH_OVERRIDE_BLOCKING_STATUSES.has(currentPipelineStatus)) {
+      if (derivedPipelineStatus) {
+        patch.status = "underwriting";
+        patch.uiV2Status = derivedPipelineStatus;
+      } else if (DEAL_PATH_DERIVED_PIPELINE_STATUSES.has(currentPipelineStatus)) {
+        patch.status = "underwriting";
+        patch.uiV2Status = "underwriting";
+      }
+    }
+
+    const dealPathSystemTags = new Set(["tour_scheduled", "tour_inputs_needed", "offer_candidate", "post_tour_info_needed"]);
+    const baseTags = existing.tags.filter((tag) => {
+      const normalized = normalizeTag(tag);
+      return normalized == null || !dealPathSystemTags.has(normalized);
+    });
+    const tagsToAdd = [
+      nextDealPath.status === "tour_scheduled" ? "tour_scheduled" : null,
+      nextDealPath.status === "tour_completed_awaiting_inputs" ? "tour_inputs_needed" : null,
+      nextDealPath.status === "offer_candidate" ? "offer_candidate" : null,
+      nextDealPath.status === "need_more_info" ? "post_tour_info_needed" : null,
+    ].filter((tag): tag is string => Boolean(tag));
+    if (tagsToAdd.length > 0 || baseTags.length !== existing.tags.length) {
+      patch.tags = uniqueStrings([...baseTags, ...tagsToAdd]);
+    }
+
+    if (nextDealPath.postTourDecision === "reject" && nextDealPath.rejectionReasonCode) {
+      const rejection: UiV2RejectionReason = {
+        reasonCode: nextDealPath.rejectionReasonCode,
+        note: nextDealPath.rejectionNotes ?? null,
+      };
+      patch.status = "rejected_removed";
+      patch.uiV2Status = "rejected";
+      patch.previousStatus = existing.status === "rejected_removed" ? existing.previousStatus : existing.status;
+      patch.previousUiV2Status = existing.uiV2Status === "rejected" ? existing.previousUiV2Status : existing.uiV2Status;
+      patch.rejectedAt = now;
+      patch.rejectionReason = formatRejectionReason(rejection);
+      patch.rejection = { ...rejection, rejectedAt: now };
+      patch.tags = uniqueStrings([...(patch.tags ?? existing.tags), "rejected", "rejected_after_tour"]);
+      await new PropertyRejectionRepo({ pool }).reject({
+        propertyId,
+        reasonCode: rejection.reasonCode,
+        reasonLabel: REJECTION_REASON_LABELS[rejection.reasonCode],
+        note: rejection.note ?? null,
+        actor: actorName,
+        source: "deal_path",
+        metadata: {
+          previousStatus: existing.uiV2Status ?? mapLegacyStatus(existing.status),
+          dealPath: nextDealPath,
+        },
+      });
+    }
+
+    await updatePipelineState(pool, propertyId, patch);
+    await new PropertyPipelineEventRepo({ pool }).create({
+      propertyId,
+      eventType: "deal_path_updated",
+      actor: actorName,
+      source: "ui-v2",
+      title: "Deal path updated",
+      body: nextDealPath.statusLabel,
+      metadata: { dealPath: nextDealPath },
+    });
+    const userId = await getDefaultUserId(pool);
+    const detail = await loadDetailForProperty(pool, userId, propertyId);
+    res.json({ property: detail } satisfies { property: UiV2PropertyDetailPayload | null });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[pipelineV2 deal path]", err);
+    res.status(503).json({ error: "Failed to update deal path.", details: message });
+  }
+}
+
+router.patch("/ui-v2/properties/:id/deal-path", handleDealPathUpdate);
+router.post("/ui-v2/properties/:id/deal-path", handleDealPathUpdate);
 
 async function handleSourceFactsUpdate(req: Request, res: Response): Promise<void> {
   try {

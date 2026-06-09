@@ -33,10 +33,24 @@ const UI_V2_STATUSES = new Set<UiV2PipelineStatus>([
   "interesting",
   "saved",
   "underwriting",
+  "tour_scheduled",
+  "tour_completed_awaiting_inputs",
   "outreach",
   "awaiting_broker",
   "om_received",
   "dossier_generated",
+  "offer_review",
+  "negotiation",
+  "contract_signed",
+  "deal_closed",
+  "rejected",
+  "archived",
+]);
+const DEAL_PATH_PIPELINE_STATUSES = new Set<UiV2PipelineStatus>([
+  "tour_scheduled",
+  "tour_completed_awaiting_inputs",
+]);
+const DEAL_PATH_BLOCKING_STATUSES = new Set<UiV2PipelineStatus>([
   "offer_review",
   "negotiation",
   "contract_signed",
@@ -153,7 +167,15 @@ interface ProgressPropertyRow {
 }
 
 interface ProgressSection {
-  id: "saved" | "underwriting" | "outreach" | "awaiting_broker" | "om_received" | "rejected";
+  id:
+    | "saved"
+    | "underwriting"
+    | "tour_scheduled"
+    | "tour_completed_awaiting_inputs"
+    | "outreach"
+    | "awaiting_broker"
+    | "om_received"
+    | "rejected";
   label: string;
   count: number;
   rows: ProgressPropertyRow[];
@@ -274,6 +296,27 @@ function parseStatusFilter(value: unknown): DealStatus[] {
 
 function readPipeline(details: JsonRecord | null): JsonRecord {
   return isJsonRecord(details?.pipeline) ? details.pipeline : {};
+}
+
+function deriveDealPathPipelineStatus(pipeline: JsonRecord, currentStatus: UiV2PipelineStatus | null): UiV2PipelineStatus | null {
+  if (currentStatus != null && DEAL_PATH_BLOCKING_STATUSES.has(currentStatus)) return null;
+  const dealPath = isJsonRecord(pipeline.dealPath) ? pipeline.dealPath : null;
+  if (dealPath == null) return null;
+  const postTourDecision = stringOrNull(dealPath.postTourDecision);
+  if (postTourDecision === "reject" || postTourDecision === "move_forward" || postTourDecision === "need_more_info") return null;
+  const rawStatus = stringOrNull(dealPath.status);
+  const tourCompletedAt = stringOrNull(dealPath.tourCompletedAt);
+  const tourScheduledAt = stringOrNull(dealPath.tourScheduledAt);
+  if (tourCompletedAt || rawStatus === "tour_completed_awaiting_inputs") return "tour_completed_awaiting_inputs";
+  if (tourScheduledAt) {
+    const scheduledMs = Date.parse(tourScheduledAt);
+    return Number.isFinite(scheduledMs) && scheduledMs <= Date.now()
+      ? "tour_completed_awaiting_inputs"
+      : "tour_scheduled";
+  }
+  return rawStatus != null && DEAL_PATH_PIPELINE_STATUSES.has(rawStatus as UiV2PipelineStatus)
+    ? (rawStatus as UiV2PipelineStatus)
+    : null;
 }
 
 function readTags(details: JsonRecord | null): string[] {
@@ -464,7 +507,12 @@ function deriveStatus(row: SavedProgressBaseRow): UiV2PipelineStatus {
     return "rejected";
   }
   const uiStatus = stringOrNull(pipeline.uiV2Status);
-  if (uiStatus != null && UI_V2_STATUSES.has(uiStatus as UiV2PipelineStatus)) return uiStatus as UiV2PipelineStatus;
+  const currentStatus = uiStatus != null && UI_V2_STATUSES.has(uiStatus as UiV2PipelineStatus)
+    ? (uiStatus as UiV2PipelineStatus)
+    : null;
+  const dealPathStatus = deriveDealPathPipelineStatus(pipeline, currentStatus);
+  if (dealPathStatus != null) return dealPathStatus;
+  if (currentStatus != null) return currentStatus;
   if (row.saved_deal_status === "dossier_generated") return "dossier_generated";
   if (row.saved_deal_status === "rejected") return "rejected";
   if (row.saved_deal_status === "saved") return "saved";
@@ -929,6 +977,8 @@ function buildProgressSections(rows: ProgressPropertyRow[]): ProgressSection[] {
   const sectionLabels: Record<ProgressSection["id"], string> = {
     saved: "Saved Deals",
     underwriting: "Underwriting",
+    tour_scheduled: "Tour Scheduled",
+    tour_completed_awaiting_inputs: "Tour Completed - Awaiting Inputs",
     outreach: "OM Requested",
     awaiting_broker: "OM Requested",
     om_received: "OM Received",
