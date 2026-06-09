@@ -26,6 +26,7 @@ import { computeDealScore } from "../deal/dealScoringEngine.js";
 import { resolveEffectiveDealScore } from "../deal/effectiveDealScore.js";
 import { computeYieldSignals } from "../deal/yieldSignals.js";
 import { isGeminiAuthoritativeOmSnapshot, resolvePreferredOmUnitCount } from "../om/authoritativeOm.js";
+import { NO_OM_DOCUMENTS_ERROR, refreshAuthoritativeOmForProperty } from "../om/ingestAuthoritativeOm.js";
 import { resolveCurrentFinancialsFromDetails } from "../rental/currentFinancials.js";
 import { resolveDossierAssumptions, type DossierAssumptionOverrides } from "../deal/underwritingModel.js";
 import { hasBrokerEmailNotes } from "../deal/brokerDossierNotes.js";
@@ -602,6 +603,7 @@ router.post("/dossier/generate", async (req: Request, res: Response) => {
       });
       const assumptions = parseAssumptionOverrides(req.body?.assumptions);
       const dossierFormat = parseDossierFormat(req.body?.dossierFormat);
+      const refreshOm = req.body?.refreshOm === true;
       const rawScoringProfile = req.body?.scoringProfile ?? req.body?.scoringProfileKey;
       const scoringProfile = parseScoringProfile(rawScoringProfile);
       if (
@@ -615,26 +617,79 @@ router.post("/dossier/generate", async (req: Request, res: Response) => {
         });
         return;
       }
-      const propertyDetails = (property.details ?? null) as PropertyDetails | null;
-      const requiresStructuredSource =
-        !isGeminiAuthoritativeOmSnapshot(propertyDetails) && !hasBrokerEmailNotes(propertyDetails);
       workflowRunId = await createWorkflowRun({
         runType: "generate_dossier",
         displayName: "Generate dossier",
         scopeLabel: property.canonicalAddress,
         triggerSource: "manual",
         totalItems: 1,
-        metadata: { propertyIds: [propertyId] },
+        metadata: { propertyIds: [propertyId], refreshOm },
         steps: [
+          ...(refreshOm
+            ? [
+                {
+                  stepKey: "om_refresh",
+                  totalItems: 1,
+                  status: "running" as const,
+                  startedAt: workflowStartedAt,
+                  lastMessage: "Re-running OM analysis before dossier generation",
+                },
+              ]
+            : []),
           {
             stepKey: "dossier",
             totalItems: 1,
-            status: "running",
-            startedAt: workflowStartedAt,
-            lastMessage: "Generating dossier",
+            status: refreshOm ? ("pending" as const) : ("running" as const),
+            startedAt: refreshOm ? null : workflowStartedAt,
+            lastMessage: refreshOm ? "Waiting for OM analysis refresh" : "Generating dossier",
           },
         ],
       });
+
+      // Re-run OM analysis first so the dossier/Excel are built from the latest promoted OM extraction.
+      let omRefresh: { status: "promoted" | "skipped" | "failed"; error?: string } | null = null;
+      let propertyDetails = (property.details ?? null) as PropertyDetails | null;
+      if (refreshOm) {
+        try {
+          const omResult = await refreshAuthoritativeOmForProperty(propertyId, pool, {
+            autoPromote: true,
+            triggerDossier: false,
+          });
+          if (omResult.status === "promoted") {
+            omRefresh = { status: "promoted" };
+            const refreshedProperty = await propertyRepo.byId(propertyId);
+            if (refreshedProperty) {
+              propertyDetails = (refreshedProperty.details ?? null) as PropertyDetails | null;
+            }
+          } else if (omResult.error === NO_OM_DOCUMENTS_ERROR) {
+            omRefresh = { status: "skipped", error: omResult.error };
+          } else {
+            omRefresh = { status: "failed", error: omResult.error ?? `OM refresh ended with status ${omResult.status ?? "unknown"}` };
+          }
+        } catch (omError) {
+          omRefresh = { status: "failed", error: omError instanceof Error ? omError.message : String(omError) };
+        }
+        await upsertWorkflowStep(workflowRunId, {
+          stepKey: "om_refresh",
+          totalItems: 1,
+          completedItems: omRefresh.status === "promoted" ? 1 : 0,
+          failedItems: omRefresh.status === "failed" ? 1 : 0,
+          skippedItems: omRefresh.status === "skipped" ? 1 : 0,
+          status: omRefresh.status === "failed" ? "failed" : "completed",
+          startedAt: workflowStartedAt,
+          finishedAt: new Date().toISOString(),
+          lastError: omRefresh.error ?? null,
+          lastMessage:
+            omRefresh.status === "promoted"
+              ? "OM analysis refreshed and promoted"
+              : omRefresh.status === "skipped"
+                ? "No OM documents to re-run; using existing inputs"
+                : "OM analysis refresh failed; dossier will use the existing OM analysis",
+        });
+        await mergeWorkflowRunMetadata(workflowRunId, { omRefresh });
+      }
+      const requiresStructuredSource =
+        !isGeminiAuthoritativeOmSnapshot(propertyDetails) && !hasBrokerEmailNotes(propertyDetails);
       if (requiresStructuredSource) {
         const failedAt = new Date().toISOString();
         const failedGeneration: PropertyDealDossierGeneration = {
@@ -679,6 +734,16 @@ router.post("/dossier/generate", async (req: Request, res: Response) => {
         return;
       }
       const dossierStartedAtMs = Date.now();
+      const dossierStepStartedAt = refreshOm ? new Date().toISOString() : workflowStartedAt;
+      if (refreshOm) {
+        await upsertWorkflowStep(workflowRunId, {
+          stepKey: "dossier",
+          totalItems: 1,
+          status: "running",
+          startedAt: dossierStepStartedAt,
+          lastMessage: "Generating dossier",
+        });
+      }
       const result = await runGenerateDossier(propertyId, assumptions, {
         sendEmail: false,
         dossierFormat,
@@ -695,7 +760,7 @@ router.post("/dossier/generate", async (req: Request, res: Response) => {
         completedItems: 1,
         failedItems: 0,
         status: "completed",
-        startedAt: workflowStartedAt,
+        startedAt: dossierStepStartedAt,
         finishedAt: new Date().toISOString(),
         lastMessage: "Dossier ready",
       });
@@ -708,7 +773,7 @@ router.post("/dossier/generate", async (req: Request, res: Response) => {
         excelDocumentId: result.excelDoc?.id ?? null,
       });
       await updateWorkflowRun(workflowRunId, {
-        status: "completed",
+        status: omRefresh?.status === "failed" ? "partial" : "completed",
         finishedAt: new Date().toISOString(),
       });
       console.info("[dossier generate] Completed", {
@@ -718,6 +783,7 @@ router.post("/dossier/generate", async (req: Request, res: Response) => {
         queueWaitMs: requestStartedAtMs - queuedAt,
         queuedBehind,
         emailSent: result.emailSent ?? false,
+        omRefreshStatus: omRefresh?.status ?? null,
       });
       res.status(201).json({
         ok: true,
@@ -728,6 +794,7 @@ router.post("/dossier/generate", async (req: Request, res: Response) => {
         emailSent: result.emailSent ?? false,
         dossierFormat,
         scoringProfile: scoringProfile ?? "legacy_v3",
+        omRefresh,
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

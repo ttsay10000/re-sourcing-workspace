@@ -1026,6 +1026,7 @@ export async function refreshOmFinancialsForProperty(
   options?: {
     autoPromote?: boolean;
     triggerDossier?: boolean;
+    refreshUnderwritingSummary?: boolean;
   }
 ): Promise<{
   documentsProcessed: number;
@@ -1035,6 +1036,7 @@ export async function refreshOmFinancialsForProperty(
   authoritativeSnapshotId: string | null;
   status: "needs_review" | "promoted" | "failed" | null;
   reviewRequired: boolean;
+  underwritingRefreshed: boolean;
   error?: string;
 }> {
   const result = await refreshAuthoritativeOmForProperty(propertyId, pool, options);
@@ -1046,6 +1048,7 @@ export async function refreshOmFinancialsForProperty(
     authoritativeSnapshotId: result.authoritativeSnapshotId ?? result.snapshotId ?? null,
     status: result.status ?? null,
     reviewRequired: result.reviewRequired === true,
+    underwritingRefreshed: result.underwritingRefreshed === true,
     error: result.error,
   };
 }
@@ -2776,6 +2779,8 @@ router.post("/properties/:id/refresh-om-financials", async (req: Request, res: R
     const result = await refreshOmFinancialsForProperty(propertyId.trim(), pool, {
       autoPromote,
       triggerDossier,
+      // Keep pipeline yield numbers in sync with the freshly promoted OM + latest user inputs.
+      refreshUnderwritingSummary: autoPromote,
     });
     if (result.error) {
       await upsertWorkflowStep(workflowRunId, {
@@ -2805,7 +2810,11 @@ router.post("/properties/:id/refresh-om-financials", async (req: Request, res: R
       status: "completed",
       startedAt: workflowStartedAt,
       finishedAt: new Date().toISOString(),
-      lastMessage: result.reviewRequired ? "OM extraction ready for review" : "OM financials refreshed",
+      lastMessage: result.reviewRequired
+        ? "OM extraction ready for review"
+        : result.underwritingRefreshed
+          ? "OM financials refreshed and yield numbers updated"
+          : "OM financials refreshed",
     });
     await mergeWorkflowRunMetadata(workflowRunId, {
       documentsProcessed: result.documentsProcessed,
@@ -2815,6 +2824,7 @@ router.post("/properties/:id/refresh-om-financials", async (req: Request, res: R
       authoritativeSnapshotId: result.authoritativeSnapshotId,
       status: result.status,
       reviewRequired: result.reviewRequired,
+      underwritingRefreshed: result.underwritingRefreshed,
     });
     await updateWorkflowRun(workflowRunId, {
       status: "completed",
@@ -2832,6 +2842,7 @@ router.post("/properties/:id/refresh-om-financials", async (req: Request, res: R
       authoritativeSnapshotId: result.authoritativeSnapshotId,
       status: result.status,
       reviewRequired: result.reviewRequired,
+      underwritingRefreshed: result.underwritingRefreshed,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -2901,6 +2912,8 @@ router.post("/properties/:id/om-review-runs/:runId/promote", async (req: Request
       propertyId,
       runId,
       triggerDossier: req.body?.triggerDossier === true,
+      // Keep pipeline yield numbers in sync when the operator promotes without a full dossier rerun.
+      refreshUnderwritingSummary: true,
       pool: getPool(),
     });
     if (!result.ok) {
@@ -5534,6 +5547,8 @@ router.post("/properties/run-rental-flow", async (req: Request, res: Response) =
       ? (req.body.propertyIds as string[]).filter((id: unknown) => typeof id === "string" && id.trim().length > 0)
       : (await propertyRepo.list({ limit: 200 })).map((p) => p.id);
     const shouldRefreshStreetEasy = req.body?.refreshStreetEasy !== false;
+    // Callers that just ran /properties/run-enrichment pass runEnrichment: false to avoid re-running the full enrichment pipeline.
+    const shouldRunEnrichment = req.body?.runEnrichment !== false;
     workflowRunId = await createWorkflowRun({
       runType: "rerun_rental_flow",
       displayName: "Re-run rental flow",
@@ -5623,15 +5638,17 @@ router.post("/properties/run-rental-flow", async (req: Request, res: Response) =
 
     for (const propertyId of propertyIds) {
       let enrichmentStatus: PropertyJobStatus | undefined;
-      try {
-        await getBBLForProperty(propertyId, { appToken });
-        const enrichment = await runEnrichmentForProperty(propertyId, undefined, {
-          appToken,
-          rateLimitDelayMs: ENRICHMENT_RATE_LIMIT_DELAY_MS,
-        });
-        enrichmentStatus = enrichment.ok ? "complete" : "failed";
-      } catch {
-        enrichmentStatus = "failed";
+      if (shouldRunEnrichment) {
+        try {
+          await getBBLForProperty(propertyId, { appToken });
+          const enrichment = await runEnrichmentForProperty(propertyId, undefined, {
+            appToken,
+            rateLimitDelayMs: ENRICHMENT_RATE_LIMIT_DELAY_MS,
+          });
+          enrichmentStatus = enrichment.ok ? "complete" : "failed";
+        } catch {
+          enrichmentStatus = "failed";
+        }
       }
       try {
         const result = await runRentalFlowForProperty(propertyId, pool);

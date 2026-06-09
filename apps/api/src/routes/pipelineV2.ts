@@ -1431,7 +1431,29 @@ function sourceUnitCount(row: PipelineBaseRow): number | null {
   ]);
 }
 
+function listingExtraInContract(row: PipelineBaseRow): boolean {
+  const extra = row.listing_extra;
+  const raw = isPlainRecord(extra)
+    ? extra.inContract ?? extra.in_contract ?? extra.isInContract ?? extra.is_in_contract
+    : null;
+  if (typeof raw === "boolean") return raw;
+  if (typeof raw === "string") return ["true", "yes", "1"].includes(raw.trim().toLowerCase());
+  return false;
+}
+
 function listingStatus(row: PipelineBaseRow): string | null {
+  const fromExtra = readFirstStringPath(row.listing_extra, [
+    ["status"],
+    ["listingStatus"],
+    ["listing_status"],
+    ["saleStatus"],
+    ["sale_status"],
+  ]);
+  // Refresh-driven unavailable signals (StreetEasy status, in-contract flag, missing lifecycle)
+  // outrank manual/OM statuses so flagged listings cannot be masked by stale document data.
+  if (fromExtra && isUnavailableListingStatus(fromExtra)) return fromExtra;
+  if (listingExtraInContract(row)) return "in_contract";
+  if (row.listing_lifecycle_state === "missing") return "missing";
   const fromManual = readFirstStringPath(row.details, [
     ["manualSourceFacts", "listingStatus"],
     ["manualSourceFacts", "status"],
@@ -1443,15 +1465,7 @@ function listingStatus(row: PipelineBaseRow): string | null {
     ["rentalFinancials", "omAnalysis", "propertyInfo", "listingStatus"],
   ]);
   if (fromOm) return fromOm;
-  const fromExtra = readFirstStringPath(row.listing_extra, [
-    ["status"],
-    ["listingStatus"],
-    ["listing_status"],
-    ["saleStatus"],
-    ["sale_status"],
-  ]);
-  if (fromExtra) return fromExtra;
-  return row.listing_lifecycle_state === "missing" ? "missing" : null;
+  return fromExtra;
 }
 
 function isUnavailableListingStatus(status: string | null | undefined): boolean {
