@@ -298,8 +298,14 @@ describe("buildDealAnalysisWorkbook", () => {
     expect(summary?.getCell("B20").numFmt).toBe("0.00%;[Red](0.00%);-");
     expect((summary?.getCell("C5").value as ExcelJS.CellFormulaValue).formula).toBe("'Assumptions'!$C$5");
     expect((summary?.getCell("C20").value as ExcelJS.CellFormulaValue).formula).toBe("CashFlowModel!C6");
-    expect((summary?.getCell("H14").value as ExcelJS.CellFormulaValue).formula).toBe(
+    expect((summary?.getCell("H13").value as ExcelJS.CellFormulaValue).formula).toBe(
       "CashFlowModel!$B$49"
+    );
+    expect((summary?.getCell("C12").value as ExcelJS.CellFormulaValue).formula).toBe(
+      "IF('Assumptions'!$C$13=0,\"\",'Assumptions'!$C$26/'Assumptions'!$C$13)"
+    );
+    expect((summary?.getCell("H14").value as ExcelJS.CellFormulaValue).formula).toContain(
+      "-'Assumptions'!$C$26)/'Assumptions'!$C$13"
     );
     const calculatedAverageCashOnCashRow = findRowByLabel(cashFlow, "Calculated average cash-on-cash");
     expect(calculatedAverageCashOnCashRow).not.toBeNull();
@@ -330,8 +336,8 @@ describe("buildDealAnalysisWorkbook", () => {
     const summary = workbook.getWorksheet("Summary");
     const assumptions = workbook.getWorksheet("Assumptions");
 
-    expect((summary?.getCell("C12").value as ExcelJS.CellFormulaValue).formula).toBe("'Assumptions'!$C$26");
-    expect((summary?.getCell("C12").value as ExcelJS.CellFormulaValue).result).toBe(80_000);
+    expect((summary?.getCell("C11").value as ExcelJS.CellFormulaValue).formula).toBe("'Assumptions'!$C$26");
+    expect((summary?.getCell("C11").value as ExcelJS.CellFormulaValue).result).toBe(80_000);
     expect((assumptions?.getCell("C26").value as ExcelJS.CellFormulaValue).result).toBe(80_000);
   });
 });

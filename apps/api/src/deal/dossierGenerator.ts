@@ -1,5 +1,6 @@
 import type { UnderwritingContext } from "./underwritingContext.js";
 import { defaultAnnualPropertyTaxGrowthPctFromNycTaxCode } from "./underwritingModel.js";
+import { computeYieldSignals } from "./yieldSignals.js";
 
 function num(value: number | null | undefined): number {
   return value != null && Number.isFinite(value) ? value : 0;
@@ -931,6 +932,17 @@ export function buildDossierStructuredText(ctx: UnderwritingContext): string {
   lines.push("----------------");
   if (ctx.dealScore != null) lines.push(`• Deal score: ${ctx.dealScore}/100`);
   if (ctx.adjustedCapRate != null) lines.push(`• Stabilized cap rate: ${ctx.adjustedCapRate.toFixed(2)}%`);
+  const takeawayYieldSignals = computeYieldSignals({
+    ltrYieldPct: ctx.assetCapRate,
+    mtrYieldPct: ctx.adjustedCapRate,
+  });
+  if (takeawayYieldSignals.calloutLabel) {
+    lines.push(`• Yield check: ${takeawayYieldSignals.calloutLabel}`);
+  } else if (takeawayYieldSignals.spreadPctPoints != null) {
+    lines.push(
+      `• MTR vs LTR spread: +${takeawayYieldSignals.spreadPctPoints.toFixed(2)}pt (LTR ${takeawayYieldSignals.ltrYieldPct?.toFixed(2)}% → MTR ${takeawayYieldSignals.mtrYieldPct?.toFixed(2)}%)`
+    );
+  }
   if (ctx.returns.irrPct != null) lines.push(`• Projected IRR: ${(ctx.returns.irrPct * 100).toFixed(2)}%`);
   if (ctx.recommendedOffer?.discountToAskingPct != null && ctx.recommendedOffer.discountToAskingPct > 0) {
     lines.push(

@@ -136,7 +136,9 @@ function isSupportedDealAnalysisUpload(file: Express.Multer.File): boolean {
   if (isPdfUpload(file)) return true;
   const extension = dealAnalysisUploadExtension(file);
   if (["xls", "xlsx", "xlsm", "csv", "txt", "text"].includes(extension)) return true;
+  if (["png", "jpg", "jpeg", "webp", "heic", "heif", "gif"].includes(extension)) return true;
   const mimeType = file.mimetype?.toLowerCase() ?? "";
+  if (mimeType.startsWith("image/")) return true;
   return (
     mimeType.includes("spreadsheet") ||
     mimeType.includes("excel") ||
@@ -533,7 +535,7 @@ router.post(
       const unsupportedFile = files.find((file) => !isSupportedDealAnalysisUpload(file));
       if (unsupportedFile) {
         res.status(422).json({
-          error: `Unsupported OM / broker financial file. '${unsupportedFile.originalname}' must be a PDF, Excel workbook, CSV, or text file.`,
+          error: `Unsupported OM / broker financial file. '${unsupportedFile.originalname}' must be a PDF, Excel workbook, CSV, text file, or image/screenshot.`,
         });
         return;
       }
@@ -558,6 +560,55 @@ router.post(
     }
   }
 );
+
+router.post("/deal-analysis/analyze-notes", async (req: Request, res: Response) => {
+  const rawNotes = typeof req.body?.notes === "string" ? req.body.notes.trim() : "";
+  const addressHint = typeof req.body?.addressHint === "string" ? req.body.addressHint.trim() : "";
+  if (rawNotes.length < 20) {
+    res.status(400).json({
+      error: "notes is required - paste the broker's rent/expense details (at least 20 characters).",
+    });
+    return;
+  }
+  if (rawNotes.length > 20_000) {
+    res.status(413).json({ error: "notes is too long (20,000 character max)." });
+    return;
+  }
+
+  try {
+    const stamp = new Date().toISOString().slice(0, 10);
+    const noteBody = addressHint ? `Property address: ${addressHint}\n\n${rawNotes}` : rawNotes;
+    const buffer = Buffer.from(noteBody, "utf-8");
+    const result = await analyzeAndPersistDealAnalysisOmDocuments({
+      documents: [
+        {
+          filename: `broker-notes-${stamp}.txt`,
+          mimeType: "text/plain",
+          buffer,
+          sizeBytes: buffer.length,
+        },
+      ],
+      sourceType: "deal_analysis_upload",
+      sourceLabel: "Broker notes",
+      propertyContext: [
+        "Source: broker notes pasted by the operator (text message / call notes / email snippet).",
+        addressHint ? `Operator-provided address hint: ${addressHint}` : null,
+        "Treat stated rents, unit details, and expenses as broker-reported current figures.",
+      ]
+        .filter((line): line is string => Boolean(line))
+        .join("\n"),
+      sourceMetadata: {
+        sourceType: "deal_analysis_upload",
+        intakeKind: "broker_notes",
+        addressHint: addressHint || null,
+      },
+    });
+    res.status(result.createdProperty ? 201 : 200).json(result);
+  } catch (err) {
+    console.error("[deal-analysis analyze-notes]", err);
+    sendDealAnalysisOmImportError(res, "Failed to analyze broker notes.", err);
+  }
+});
 
 router.post("/deal-analysis/analyze-link", async (req: Request, res: Response) => {
   const omUrl = normalizeOmUrl(req.body?.omUrl ?? req.body?.url);
@@ -784,7 +835,7 @@ router.post(
       const unsupportedFile = files.find((file) => !isSupportedDealAnalysisUpload(file));
       if (unsupportedFile) {
         res.status(422).json({
-          error: `Unsupported OM / broker financial file. '${unsupportedFile.originalname}' must be a PDF, Excel workbook, CSV, or text file.`,
+          error: `Unsupported OM / broker financial file. '${unsupportedFile.originalname}' must be a PDF, Excel workbook, CSV, text file, or image/screenshot.`,
         });
         return;
       }

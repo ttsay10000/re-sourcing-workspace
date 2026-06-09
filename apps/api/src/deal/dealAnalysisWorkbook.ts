@@ -8,6 +8,7 @@ import {
   type DealAnalysisWorkbookBlueprint,
 } from "./dealAnalysisExcelBlueprintLlm.js";
 import { computeIrr } from "./irrCalculation.js";
+import { computeYieldSignals } from "./yieldSignals.js";
 import type {
   ExpenseRow,
   UnderwritingContext,
@@ -1948,6 +1949,27 @@ function summaryMetricDefinitions(
       result: num(ctx.assumptions.targetIrrPct) / 100,
       numFmt: PERCENT_FMT,
     },
+    ltr_yield: {
+      label: "LTR yield (current cap)",
+      formula: `IF(${assumptionRef("purchasePrice")}=0,"",${assumptionRef("currentNoi")}/${assumptionRef("purchasePrice")})`,
+      result: ctx.assetCapRate != null ? ctx.assetCapRate / 100 : undefined,
+      numFmt: PERCENT_FMT,
+    },
+    mtr_yield: {
+      label: "MTR yield (stabilized cap)",
+      formula: `IF(${assumptionRef("purchasePrice")}=0,"",CashFlowModel!$B$${artifacts.cashFlowRows.calculatedStabilizedNoi}/${assumptionRef("purchasePrice")})`,
+      result: ctx.adjustedCapRate != null ? ctx.adjustedCapRate / 100 : undefined,
+      numFmt: PERCENT_FMT,
+    },
+    mtr_spread: {
+      label: "MTR vs LTR spread",
+      formula: `IF(${assumptionRef("purchasePrice")}=0,"",(CashFlowModel!$B$${artifacts.cashFlowRows.calculatedStabilizedNoi}-${assumptionRef("currentNoi")})/${assumptionRef("purchasePrice")})`,
+      result:
+        ctx.assetCapRate != null && ctx.adjustedCapRate != null
+          ? (ctx.adjustedCapRate - ctx.assetCapRate) / 100
+          : undefined,
+      numFmt: PERCENT_FMT,
+    },
   };
 }
 
@@ -2045,6 +2067,19 @@ function buildSummarySheet(
       alignment: { wrapText: true },
     }
   );
+
+  const summaryYieldSignals = computeYieldSignals({
+    ltrYieldPct: ctx.assetCapRate,
+    mtrYieldPct: ctx.adjustedCapRate,
+  });
+  if (summaryYieldSignals.calloutLabel) {
+    worksheet.mergeCells("A17:J17");
+    setSheetCell(worksheet, "A17", `Yield check: ${summaryYieldSignals.calloutLabel}`, {
+      fill: SOFT_FILL,
+      font: NOTE_FONT,
+      alignment: { wrapText: true },
+    });
+  }
 
   worksheet.mergeCells("A18:J18");
   setSheetCell(worksheet, "A18", blueprint.cashFlowHeading, {

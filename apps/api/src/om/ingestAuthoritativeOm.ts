@@ -22,7 +22,7 @@ import { resolveInquiryFilePath } from "../inquiry/storage.js";
 import { runGenerateDossier } from "../deal/runGenerateDossier.js";
 import {
   type OmInputDocument,
-  isPdfLikeOmInputDocument,
+  isGeminiNativeOmInputDocument,
 } from "./omAnalysisShared.js";
 import { extractOmAnalysisFromGeminiPdfOnly, resolveGeminiOmModel } from "./extractOmAnalysisFromGeminiPdfOnly.js";
 import {
@@ -920,7 +920,7 @@ export async function ingestAuthoritativeOm(
   try {
     const { preparedDocuments, skippedNoFile } = await buildDocumentPayloads(candidateDocuments, pool);
     const geminiDocuments: OmInputDocument[] = preparedDocuments
-      .filter((doc) => isPdfLikeOmInputDocument(doc))
+      .filter((doc) => isGeminiNativeOmInputDocument(doc))
       .map((doc) => ({
         filename: doc.filename,
         mimeType: doc.mimeType ?? "application/pdf",
@@ -929,7 +929,7 @@ export async function ingestAuthoritativeOm(
     const nonPdfTextContext = (
       await Promise.all(
         preparedDocuments
-          .filter((doc) => !isPdfLikeOmInputDocument(doc))
+          .filter((doc) => !isGeminiNativeOmInputDocument(doc))
           .map(async (doc) => {
             const text = await extractTextFromBuffer(doc.buffer, doc.filename);
             if (!text.trim()) return null;
@@ -953,7 +953,7 @@ export async function ingestAuthoritativeOm(
         model: geminiModel,
         documentCount: geminiDocuments.length,
         documentFilenames: geminiDocuments.map((doc) => doc.filename),
-        textContextDocumentCount: preparedDocuments.filter((doc) => !isPdfLikeOmInputDocument(doc)).length,
+        textContextDocumentCount: preparedDocuments.filter((doc) => !isGeminiNativeOmInputDocument(doc)).length,
       },
     };
     const unreadableFileError =

@@ -24,6 +24,7 @@ import {
 } from "../deal/dealScoringProfiles.js";
 import { computeDealScore } from "../deal/dealScoringEngine.js";
 import { resolveEffectiveDealScore } from "../deal/effectiveDealScore.js";
+import { computeYieldSignals } from "../deal/yieldSignals.js";
 import { isGeminiAuthoritativeOmSnapshot, resolvePreferredOmUnitCount } from "../om/authoritativeOm.js";
 import { resolveCurrentFinancialsFromDetails } from "../rental/currentFinancials.js";
 import { resolveDossierAssumptions, type DossierAssumptionOverrides } from "../deal/underwritingModel.js";
@@ -434,16 +435,21 @@ async function refreshScoreFromLatestSignals(params: {
     scoringProfile: params.scoringProfile,
   });
   const calculatedDealScore = scoringResult.isScoreable ? scoringResult.dealScore : null;
+  const toFinitePct = (value: unknown): number | null => {
+    const numeric = typeof value === "string" ? Number(value) : value;
+    return typeof numeric === "number" && Number.isFinite(numeric) ? numeric : null;
+  };
+  const refreshYieldSignals = computeYieldSignals({
+    ltrYieldPct: scoringResult.assetCapRate ?? toFinitePct(latest.assetCapRate),
+    mtrYieldPct: scoringResult.adjustedCapRate ?? toFinitePct(latest.adjustedCapRate),
+  });
   const inserted = await params.signalsRepo.insert({
     propertyId: params.propertyId,
     pricePerUnit: latest.pricePerUnit,
     pricePsf: latest.pricePsf,
     assetCapRate: scoringResult.assetCapRate ?? latest.assetCapRate,
     adjustedCapRate: scoringResult.adjustedCapRate ?? latest.adjustedCapRate,
-    yieldSpread:
-      scoringResult.adjustedCapRate != null && scoringResult.assetCapRate != null
-        ? scoringResult.adjustedCapRate - scoringResult.assetCapRate
-        : latest.yieldSpread,
+    yieldSpread: refreshYieldSignals.spreadPctPoints ?? latest.yieldSpread,
     rentUpside: latest.rentUpside,
     rentPsfRatio: latest.rentPsfRatio,
     expenseRatio: latest.expenseRatio,
@@ -459,7 +465,9 @@ async function refreshScoreFromLatestSignals(params: {
     adjustedNoi: latest.adjustedNoi,
     scoreBreakdown: scoringResult.scoreBreakdown,
     riskProfile: scoringResult.riskProfile,
-    riskFlags: scoringResult.riskFlags,
+    riskFlags: refreshYieldSignals.calloutLabel
+      ? [...scoringResult.riskFlags, refreshYieldSignals.calloutLabel]
+      : scoringResult.riskFlags,
     capReasons: scoringResult.capReasons,
     confidenceScore: scoringResult.confidenceScore,
     scoreSensitivity: latest.scoreSensitivity,
