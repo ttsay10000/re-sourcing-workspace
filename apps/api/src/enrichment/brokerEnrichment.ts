@@ -3,9 +3,20 @@
  * from broker/agent names. Used when listings are ingested into property data.
  */
 
-import type { AgentEnrichmentEntry, ListingNormalized } from "@re-sourcing/contracts";
+import type {
+  AgentEnrichmentCandidate,
+  AgentEnrichmentEntry,
+  ListingNormalized,
+} from "@re-sourcing/contracts";
 import OpenAI from "openai";
-import { getBrokerLookupModel } from "./openaiModels.js";
+import { getBrokerLookupModel, getBrokerLookupSearchContextSize } from "./openaiModels.js";
+
+/** Lookup contacts at or above this confidence (and firm-compatible) auto-promote to sendable. */
+export const BROKER_LOOKUP_PROMOTION_CONFIDENCE = 70;
+/** Below this confidence a retained candidate is tiered "rejected" rather than "needs_review". */
+export const BROKER_LOOKUP_REVIEW_CONFIDENCE = 40;
+/** Relaxed-pass results can never clear the promotion bar. */
+export const BROKER_LOOKUP_RELAXED_CONFIDENCE_CAP = 65;
 
 const BROKER_LOOKUP_SCHEMA = {
   type: "object",
@@ -42,17 +53,19 @@ export interface BrokerLookupContext {
   agentFacts?: AgentEnrichmentEntry[] | null;
 }
 
-const NYC_WEB_SEARCH_TOOL = {
-  type: "web_search_preview",
-  search_context_size: "medium",
-  user_location: {
-    type: "approximate",
-    city: "New York",
-    region: "New York",
-    country: "US",
-    timezone: "America/New_York",
-  },
-} as const;
+function buildNycWebSearchTool(contextSize: "low" | "medium" | "high") {
+  return {
+    type: "web_search_preview",
+    search_context_size: contextSize,
+    user_location: {
+      type: "approximate",
+      city: "New York",
+      region: "New York",
+      country: "US",
+      timezone: "America/New_York",
+    },
+  } as const;
+}
 
 function getApiKey(): string | null {
   const raw = process.env.OPENAI_API_KEY;
@@ -97,6 +110,28 @@ function cleanSourceUrl(value: unknown): string | null {
   return /^https?:\/\//i.test(normalized) ? normalized : null;
 }
 
+function cleanTier(value: unknown): AgentEnrichmentEntry["verificationTier"] {
+  return value === "verified" || value === "needs_review" || value === "rejected" ? value : null;
+}
+
+function cleanCandidate(value: unknown): AgentEnrichmentCandidate | null {
+  if (!value || typeof value !== "object") return null;
+  const raw = value as Record<string, unknown>;
+  const reason =
+    raw.reason === "low_confidence" || raw.reason === "firm_mismatch" ? raw.reason : null;
+  if (!reason) return null;
+  const candidate: AgentEnrichmentCandidate = {
+    email: cleanEmail(raw.email),
+    phone: cleanNullableString(raw.phone),
+    firm: cleanNullableString(raw.firm),
+    confidence: cleanConfidence(raw.confidence),
+    evidence: cleanNullableString(raw.evidence),
+    sourceUrl: cleanSourceUrl(raw.sourceUrl),
+    reason,
+  };
+  return candidate.email || candidate.phone ? candidate : null;
+}
+
 function normalizeEntry(name: string, raw: unknown): AgentEnrichmentEntry {
   if (!raw || typeof raw !== "object") {
     return { name, firm: null, email: null, phone: null };
@@ -112,10 +147,12 @@ function normalizeEntry(name: string, raw: unknown): AgentEnrichmentEntry {
     evidence: cleanNullableString(entry.evidence),
     sourceUrl: cleanSourceUrl(entry.sourceUrl ?? entry.source_url ?? entry.url),
     needsReview: cleanBoolean(entry.needsReview ?? entry.needs_review),
+    verificationTier: cleanTier(entry.verificationTier),
+    rejectedCandidate: cleanCandidate(entry.rejectedCandidate),
   };
 }
 
-function normalizeFirmKey(value: string | null | undefined): string | null {
+export function normalizeFirmKey(value: string | null | undefined): string | null {
   const cleaned = cleanNullableString(value)?.toLowerCase() ?? null;
   if (!cleaned) return null;
   const withoutNoise = cleaned
@@ -126,7 +163,7 @@ function normalizeFirmKey(value: string | null | undefined): string | null {
   return withoutNoise || cleaned.replace(/[^a-z0-9]+/g, "");
 }
 
-function firmsCompatible(sourceFirm: string | null | undefined, candidateFirm: string | null | undefined): boolean {
+export function firmsCompatible(sourceFirm: string | null | undefined, candidateFirm: string | null | undefined): boolean {
   const source = normalizeFirmKey(sourceFirm);
   const candidate = normalizeFirmKey(candidateFirm);
   if (!source || !candidate) return true;
@@ -135,7 +172,7 @@ function firmsCompatible(sourceFirm: string | null | undefined, candidateFirm: s
 
 function isMeaningfulBrokerEntry(entry: AgentEnrichmentEntry | null | undefined): boolean {
   if (!entry) return false;
-  return Boolean(entry.firm || entry.email || entry.phone);
+  return Boolean(entry.firm || entry.email || entry.phone || entry.rejectedCandidate);
 }
 
 export function hasMeaningfulBrokerEnrichment(
@@ -229,7 +266,7 @@ export function mergeBrokerEnrichment(
     if (name) lookupByName.set(name.toLowerCase(), normalizeEntry(name, entry));
   }
 
-  const merged = agentNames.map((agentName) => {
+  const merged = agentNames.map((agentName): AgentEnrichmentEntry => {
     const key = agentName.trim().toLowerCase();
     const source =
       sourceByName.get(key) ??
@@ -247,20 +284,52 @@ export function mergeBrokerEnrichment(
     const lookupAllowed = firmsCompatible(sourceFirm, lookupFirm);
     const sourceHasContact = Boolean(source?.email || source?.phone);
     const lookupConfidence = lookup?.confidence ?? null;
-    const lookupHasUsableEvidence = lookupAllowed && (lookupConfidence == null || lookupConfidence >= 70);
-    const lookupEmail = lookupHasUsableEvidence ? lookup?.email ?? null : null;
-    const lookupPhone = lookupHasUsableEvidence ? lookup?.phone ?? null : null;
+    const lookupHasContact = Boolean(lookup?.email || lookup?.phone);
+    const lookupPromotable =
+      lookupAllowed && (lookupConfidence == null || lookupConfidence >= BROKER_LOOKUP_PROMOTION_CONFIDENCE);
+    const lookupEmail = lookupPromotable ? lookup?.email ?? null : null;
+    const lookupPhone = lookupPromotable ? lookup?.phone ?? null : null;
     const usedLookupContact = !sourceHasContact && Boolean(lookupEmail || lookupPhone);
+
+    // Contacts that miss the promotion bar used to be discarded silently; keep
+    // them visible for manual confirmation instead of populating send fields.
+    const retainedCandidate: AgentEnrichmentCandidate | null =
+      !sourceHasContact && lookupHasContact && !lookupPromotable
+        ? {
+            email: lookup?.email ?? null,
+            phone: lookup?.phone ?? null,
+            firm: lookupFirm,
+            confidence: lookupConfidence,
+            evidence: lookup?.evidence ?? null,
+            sourceUrl: lookup?.sourceUrl ?? null,
+            reason: lookupAllowed ? "low_confidence" : "firm_mismatch",
+          }
+        : null;
+    const verificationTier: AgentEnrichmentEntry["verificationTier"] = sourceHasContact
+      ? "verified"
+      : usedLookupContact
+        ? lookup?.needsReview
+          ? "needs_review"
+          : "verified"
+        : retainedCandidate
+          ? retainedCandidate.reason === "low_confidence" &&
+            (lookupConfidence ?? 0) < BROKER_LOOKUP_REVIEW_CONFIDENCE
+            ? "rejected"
+            : "needs_review"
+          : null;
+
     return {
       name: source?.name ?? lookup?.name ?? agentName,
       firm: source?.firm ?? (lookupAllowed ? lookup?.firm ?? null : sourceFirm),
       email: source?.email ?? lookupEmail,
       phone: source?.phone ?? lookupPhone,
-      source: sourceHasContact ? "source" : usedLookupContact ? "llm" : source?.source ?? lookup?.source ?? null,
-      confidence: sourceHasContact ? 100 : lookupHasUsableEvidence ? lookupConfidence : null,
+      source: sourceHasContact ? "source" : usedLookupContact ? lookup?.source ?? "llm" : source?.source ?? lookup?.source ?? null,
+      confidence: sourceHasContact ? 100 : lookupPromotable ? lookupConfidence : null,
       evidence: sourceHasContact ? source?.evidence ?? "Broker contact provided by source listing payload." : lookup?.evidence ?? null,
       sourceUrl: sourceHasContact ? source?.sourceUrl ?? normalizedContext?.listingUrl ?? null : lookup?.sourceUrl ?? null,
-      needsReview: sourceHasContact ? false : Boolean(usedLookupContact || lookup?.needsReview),
+      needsReview: sourceHasContact ? false : Boolean(usedLookupContact || lookup?.needsReview || retainedCandidate),
+      verificationTier,
+      rejectedCandidate: retainedCandidate,
     };
   });
 
@@ -323,27 +392,50 @@ function buildLookupInput(agentNames: string[], contextInput?: string | BrokerLo
   ].join("\n");
 }
 
+interface BrokerLookupRequestOptions {
+  /** Allow current-firm contacts when listing-time verification fails; results are review-capped. */
+  relaxed?: boolean;
+  searchContextSize?: "low" | "medium" | "high";
+}
+
+const STRICT_LOOKUP_INSTRUCTIONS = [
+  "You look up actual broker contact info for NYC real estate listings.",
+  "You must use web search before answering.",
+  "The caller supplies the listing broker name and listing-time brokerage. Never invent, replace, or infer a different contact name.",
+  "Listing-time brokerage matters more than a broker's current firm.",
+  "If evidence points to a different current agency than the listing-time agency, leave contact fields null.",
+  "Return confidence, evidence, sourceUrl, and needsReview for every entry.",
+  "Return only JSON matching the provided schema.",
+  "Do not infer or guess contact details.",
+].join(" ");
+
+const RELAXED_LOOKUP_INSTRUCTIONS = [
+  "You look up actual broker contact info for NYC real estate listings.",
+  "You must use web search before answering.",
+  "The caller supplies the listing broker name and listing-time brokerage. Never invent, replace, or infer a different contact name.",
+  "A strict listing-time-brokerage search already failed for these names; this is a fallback pass.",
+  "You MAY return the broker's contact info at their CURRENT firm when you cannot verify them at the listing-time agency, as long as you are confident it is the same person (matching name, NYC market, plausibly the same career history).",
+  "Always set needsReview to true and explain in evidence which firm the contact belongs to and why you believe it is the same person.",
+  "Return confidence, evidence, sourceUrl, and needsReview for every entry.",
+  "Return only JSON matching the provided schema.",
+  "Never fabricate or pattern-guess email addresses or phone numbers; only return contact details you can see in search results or on official pages.",
+].join(" ");
+
 async function requestBrokerLookup(
   openai: OpenAI,
   model: string,
   agentNames: string[],
-  propertyContext?: string | BrokerLookupContext | null
+  propertyContext?: string | BrokerLookupContext | null,
+  options?: BrokerLookupRequestOptions
 ): Promise<AgentEnrichmentEntry[] | null> {
+  const relaxed = options?.relaxed === true;
+  const searchTool = buildNycWebSearchTool(options?.searchContextSize ?? getBrokerLookupSearchContextSize());
   const response = await openai.responses.create({
     model,
-    instructions: [
-      "You look up actual broker contact info for NYC real estate listings.",
-      "You must use web search before answering.",
-      "The caller supplies the listing broker name and listing-time brokerage. Never invent, replace, or infer a different contact name.",
-      "Listing-time brokerage matters more than a broker's current firm.",
-      "If evidence points to a different current agency than the listing-time agency, leave contact fields null.",
-      "Return confidence, evidence, sourceUrl, and needsReview for every entry.",
-      "Return only JSON matching the provided schema.",
-      "Do not infer or guess contact details.",
-    ].join(" "),
+    instructions: relaxed ? RELAXED_LOOKUP_INSTRUCTIONS : STRICT_LOOKUP_INSTRUCTIONS,
     input: buildLookupInput(agentNames, propertyContext),
-    tools: [NYC_WEB_SEARCH_TOOL],
-    tool_choice: { type: NYC_WEB_SEARCH_TOOL.type },
+    tools: [searchTool],
+    tool_choice: { type: searchTool.type },
     parallel_tool_calls: false,
     max_output_tokens: Math.max(700, agentNames.length * 260),
     text: {
@@ -368,19 +460,32 @@ async function requestBrokerLookup(
   }
 
   const rows = Array.isArray(parsed.entries) ? parsed.entries : [];
-  return agentNames.map((name, index) => ({ ...normalizeEntry(name, rows[index]), name }));
+  return agentNames.map((name, index) => {
+    const entry = { ...normalizeEntry(name, rows[index]), name };
+    if (relaxed) {
+      // Relaxed results must route through manual review; cap them below the
+      // promotion bar regardless of the model's self-reported confidence.
+      entry.confidence = Math.min(
+        entry.confidence ?? BROKER_LOOKUP_RELAXED_CONFIDENCE_CAP,
+        BROKER_LOOKUP_RELAXED_CONFIDENCE_CAP
+      );
+      entry.needsReview = true;
+    }
+    return entry;
+  });
 }
 
 async function requestBrokerLookupWithRetry(
   openai: OpenAI,
   model: string,
   agentNames: string[],
-  propertyContext?: string | BrokerLookupContext | null
+  propertyContext?: string | BrokerLookupContext | null,
+  options?: BrokerLookupRequestOptions
 ): Promise<AgentEnrichmentEntry[] | null> {
   let lastError: string | null = null;
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
-      const entries = await requestBrokerLookup(openai, model, agentNames, propertyContext);
+      const entries = await requestBrokerLookup(openai, model, agentNames, propertyContext, options);
       if (entries) return entries;
     } catch (err) {
       lastError = err instanceof Error ? err.message : String(err);
@@ -392,13 +497,32 @@ async function requestBrokerLookupWithRetry(
   return null;
 }
 
+export interface EnrichBrokersOptions {
+  /**
+   * Run a relaxed fallback search for names the strict pass cannot resolve
+   * (current-firm contacts allowed, confidence-capped into manual review).
+   * Defaults from BROKER_LOOKUP_RELAXED_SECOND_PASS (on unless set to 0/false).
+   */
+  relaxedSecondPass?: boolean;
+  /** Use high search context (slower, more thorough) — the manual "deep" refresh. */
+  deep?: boolean;
+}
+
+function relaxedSecondPassEnabledByEnv(): boolean {
+  const raw = process.env.BROKER_LOOKUP_RELAXED_SECOND_PASS;
+  if (raw == null) return true;
+  const normalized = raw.trim().toLowerCase();
+  return !(normalized === "0" || normalized === "false" || normalized === "off");
+}
+
 /**
  * Use OpenAI web search to find contact info for each broker/agent name and return
  * one entry per input name in the same order.
  */
 export async function enrichBrokers(
   agentNames: string[] | null | undefined,
-  propertyContext?: string | BrokerLookupContext | null
+  propertyContext?: string | BrokerLookupContext | null,
+  options?: EnrichBrokersOptions
 ): Promise<AgentEnrichmentEntry[] | null> {
   const key = getApiKey();
   if (!key) {
@@ -413,9 +537,13 @@ export async function enrichBrokers(
 
   const openai = new OpenAI({ apiKey: key });
   const model = getBrokerLookupModel();
+  const searchContextSize = options?.deep ? "high" : undefined;
+  const relaxedSecondPass = options?.relaxedSecondPass ?? relaxedSecondPassEnabledByEnv();
 
   try {
-    const initial = await requestBrokerLookupWithRetry(openai, model, names, propertyContext);
+    const initial = await requestBrokerLookupWithRetry(openai, model, names, propertyContext, {
+      searchContextSize,
+    });
     if (!initial) return null;
 
     const unresolvedIndexes = initial
@@ -423,9 +551,26 @@ export async function enrichBrokers(
       .filter((index) => index >= 0);
 
     for (const index of unresolvedIndexes) {
-      const retried = await requestBrokerLookupWithRetry(openai, model, [names[index]!], propertyContext);
+      const retried = await requestBrokerLookupWithRetry(openai, model, [names[index]!], propertyContext, {
+        searchContextSize,
+      });
       if (retried?.[0] && isMeaningfulBrokerEntry(retried[0])) {
         initial[index] = retried[0];
+      }
+    }
+
+    if (relaxedSecondPass) {
+      const stillUnresolved = initial
+        .map((entry, index) => (!entry.email && !entry.rejectedCandidate ? index : -1))
+        .filter((index) => index >= 0);
+      for (const index of stillUnresolved) {
+        const relaxed = await requestBrokerLookupWithRetry(openai, model, [names[index]!], propertyContext, {
+          relaxed: true,
+          searchContextSize,
+        });
+        if (relaxed?.[0]?.email || relaxed?.[0]?.phone) {
+          initial[index] = relaxed[0];
+        }
       }
     }
 

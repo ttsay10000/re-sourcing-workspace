@@ -127,17 +127,38 @@ export interface ListingSourceAdapterOutput<
   warnings?: ListingAdapterWarning[];
 }
 
+/** Verification tier for a broker lookup result. */
+export type AgentEnrichmentTier = "verified" | "needs_review" | "rejected";
+
+/**
+ * A lookup result that did not clear the auto-promotion bar (low confidence or
+ * firm mismatch). Retained for manual review instead of being discarded.
+ */
+export interface AgentEnrichmentCandidate {
+  email?: string | null;
+  phone?: string | null;
+  firm?: string | null;
+  confidence?: number | null;
+  evidence?: string | null;
+  sourceUrl?: string | null;
+  reason: "low_confidence" | "firm_mismatch";
+}
+
 /** Single enriched agent entry (firm, email, phone). */
 export interface AgentEnrichmentEntry {
   name: string;
   firm?: string | null;
   email?: string | null;
   phone?: string | null;
-  source?: "source" | "llm" | "manual" | string | null;
+  source?: "source" | "llm" | "directory" | "manual" | string | null;
   confidence?: number | null;
   evidence?: string | null;
   sourceUrl?: string | null;
   needsReview?: boolean | null;
+  /** How trustworthy the populated contact fields are. Absent on legacy rows. */
+  verificationTier?: AgentEnrichmentTier | null;
+  /** Unpromoted lookup result kept visible for one-click manual confirmation. */
+  rejectedCandidate?: AgentEnrichmentCandidate | null;
 }
 
 /** Single price history row (from Property history section). */

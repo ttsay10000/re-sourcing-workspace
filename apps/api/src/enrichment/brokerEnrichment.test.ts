@@ -65,7 +65,159 @@ describe("broker enrichment", () => {
         evidence: "Brokerage profile lists Jane Broker at Example Realty.",
         sourceUrl: "https://example.com/jane-broker",
         needsReview: true,
+        verificationTier: "needs_review",
+        rejectedCandidate: null,
       },
     ]);
+  });
+
+  it("promotes a high-confidence firm-verified lookup as verified", () => {
+    const merged = mergeBrokerEnrichment(
+      ["Jane Broker"],
+      [{ name: "Jane Broker", firm: "Example Realty", email: null, phone: null, source: "source" }],
+      [
+        {
+          name: "Jane Broker",
+          firm: "Example Realty",
+          email: "jane@example-realty.com",
+          phone: null,
+          source: "llm",
+          confidence: 88,
+          evidence: "Agent page ties Jane Broker to Example Realty and this listing.",
+          sourceUrl: "https://example.com/jane",
+          needsReview: false,
+        },
+      ],
+      { brokerageName: "Example Realty" }
+    );
+
+    expect(merged?.[0]?.email).toBe("jane@example-realty.com");
+    expect(merged?.[0]?.verificationTier).toBe("verified");
+    expect(merged?.[0]?.rejectedCandidate).toBeNull();
+  });
+
+  it("retains a mid-confidence contact as a needs-review candidate instead of discarding it", () => {
+    const merged = mergeBrokerEnrichment(
+      ["Jane Broker"],
+      [{ name: "Jane Broker", firm: "Example Realty", email: null, phone: null, source: "source" }],
+      [
+        {
+          name: "Jane Broker",
+          firm: "Example Realty",
+          email: "jane@example-realty.com",
+          phone: null,
+          source: "llm",
+          confidence: 55,
+          evidence: "Name matches but the page does not mention the listing.",
+          sourceUrl: "https://example.com/jane",
+          needsReview: true,
+        },
+      ],
+      { brokerageName: "Example Realty" }
+    );
+
+    const entry = merged?.[0];
+    expect(entry?.email).toBeNull();
+    expect(entry?.verificationTier).toBe("needs_review");
+    expect(entry?.needsReview).toBe(true);
+    expect(entry?.rejectedCandidate).toEqual({
+      email: "jane@example-realty.com",
+      phone: null,
+      firm: "Example Realty",
+      confidence: 55,
+      evidence: "Name matches but the page does not mention the listing.",
+      sourceUrl: "https://example.com/jane",
+      reason: "low_confidence",
+    });
+  });
+
+  it("retains a firm-mismatched contact for review without populating send fields", () => {
+    const merged = mergeBrokerEnrichment(
+      ["Jane Broker"],
+      [{ name: "Jane Broker", firm: "Example Realty", email: null, phone: null, source: "source" }],
+      [
+        {
+          name: "Jane Broker",
+          firm: "Other Brokerage Group",
+          email: "jane@other-brokerage.com",
+          phone: null,
+          source: "llm",
+          confidence: 90,
+          evidence: "Jane Broker appears to have moved to Other Brokerage Group.",
+          sourceUrl: "https://example.com/jane-now",
+          needsReview: true,
+        },
+      ],
+      { brokerageName: "Example Realty" }
+    );
+
+    const entry = merged?.[0];
+    expect(entry?.email).toBeNull();
+    expect(entry?.firm).toBe("Example Realty");
+    expect(entry?.verificationTier).toBe("needs_review");
+    expect(entry?.rejectedCandidate?.reason).toBe("firm_mismatch");
+    expect(entry?.rejectedCandidate?.email).toBe("jane@other-brokerage.com");
+  });
+
+  it("tiers very low confidence contacts as rejected while still retaining them", () => {
+    const merged = mergeBrokerEnrichment(
+      ["Jane Broker"],
+      null,
+      [
+        {
+          name: "Jane Broker",
+          firm: "Example Realty",
+          email: "maybe-jane@example-realty.com",
+          phone: null,
+          source: "llm",
+          confidence: 25,
+          evidence: "Weak match.",
+          sourceUrl: null,
+          needsReview: true,
+        },
+      ],
+      { brokerageName: "Example Realty" }
+    );
+
+    const entry = merged?.[0];
+    expect(entry?.email).toBeNull();
+    expect(entry?.verificationTier).toBe("rejected");
+    expect(entry?.rejectedCandidate?.email).toBe("maybe-jane@example-realty.com");
+  });
+
+  it("keeps source-payload contacts verified and untouched by lookup candidates", () => {
+    const merged = mergeBrokerEnrichment(
+      ["Jane Broker"],
+      [
+        {
+          name: "Jane Broker",
+          firm: "Example Realty",
+          email: "jane.direct@example-realty.com",
+          phone: null,
+          source: "source",
+        },
+      ],
+      [
+        {
+          name: "Jane Broker",
+          firm: "Example Realty",
+          email: "jane.other@example-realty.com",
+          phone: null,
+          source: "llm",
+          confidence: 50,
+          evidence: "Alternate address.",
+          sourceUrl: null,
+          needsReview: true,
+        },
+      ],
+      { brokerageName: "Example Realty" }
+    );
+
+    const entry = merged?.[0];
+    expect(entry?.email).toBe("jane.direct@example-realty.com");
+    expect(entry?.verificationTier).toBe("verified");
+    expect(entry?.confidence).toBe(100);
+    expect(entry?.needsReview).toBe(false);
+    expect(entry?.rejectedCandidate).toBeNull();
   });
 });

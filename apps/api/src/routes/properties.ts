@@ -60,6 +60,7 @@ import {
   hasMeaningfulBrokerEnrichment,
   mergeBrokerEnrichment,
 } from "../enrichment/brokerEnrichment.js";
+import { refreshBrokerEnrichmentForProperty } from "../enrichment/refreshBrokerEnrichment.js";
 import { resolveEffectiveDealScore } from "../deal/effectiveDealScore.js";
 import { getPersistedDossierSignals } from "../deal/persistedDossierSignals.js";
 import {
@@ -2432,6 +2433,148 @@ router.post("/properties/refresh-listings", async (req: Request, res: Response) 
       finishedAt: new Date().toISOString(),
     });
     res.status(503).json({ error: "Listing refresh failed.", details: message });
+  }
+});
+
+/**
+ * POST /api/properties/refresh-broker-enrichment — re-run ONLY the broker
+ * contact lookup for the given properties (directory pre-pass, strict web
+ * search, relaxed fallback). Body: { propertyIds: string[], force?, deep? }.
+ * Independent of the full enrichment pipeline.
+ */
+router.post("/properties/refresh-broker-enrichment", async (req: Request, res: Response) => {
+  let workflowRunId: string | null = null;
+  const workflowStartedAt = new Date().toISOString();
+  try {
+    const raw = req.body?.propertyIds;
+    const propertyIds = Array.isArray(raw)
+      ? Array.from(
+          new Set(
+            (raw as unknown[])
+              .filter((id): id is string => typeof id === "string" && id.trim().length > 0)
+              .map((id) => id.trim())
+          )
+        )
+      : [];
+    if (propertyIds.length === 0) {
+      res.status(400).json({ error: "propertyIds required (non-empty array)." });
+      return;
+    }
+    const force = req.body?.force === true;
+    const deep = req.body?.deep === true;
+
+    workflowRunId = await createWorkflowRun({
+      runType: "refresh_broker_enrichment",
+      displayName: "Refresh broker contacts",
+      scopeLabel: `${propertyIds.length} propert${propertyIds.length === 1 ? "y" : "ies"}`,
+      triggerSource: "manual",
+      totalItems: propertyIds.length,
+      metadata: { propertyIds, force, deep },
+      steps: [
+        {
+          stepKey: "broker_lookup",
+          totalItems: propertyIds.length,
+          status: "running",
+          startedAt: workflowStartedAt,
+          lastMessage: `Searching broker contacts for ${propertyIds.length} propert${propertyIds.length === 1 ? "y" : "ies"}`,
+        },
+      ],
+    });
+
+    const pool = getPool();
+    const counts = { updated: 0, unchanged: 0, skipped: 0, failed: 0 };
+    const results: Array<{
+      propertyId: string;
+      status: string;
+      resolution?: { fromDirectory: number; verified: number; needsReview: number; rejected: number };
+      error?: string;
+    }> = [];
+
+    for (let i = 0; i < propertyIds.length; i++) {
+      const propertyId = propertyIds[i]!;
+      try {
+        const result = await refreshBrokerEnrichmentForProperty(propertyId, pool, { force, deep });
+        results.push({ propertyId, status: result.status, resolution: result.resolution });
+        if (result.status === "updated") {
+          counts.updated++;
+          await refreshPropertyPipelineMetadata(propertyId, pool);
+        } else if (result.status === "unchanged" || result.status === "already_has_email") {
+          counts.unchanged++;
+        } else {
+          counts.skipped++;
+        }
+      } catch (err) {
+        counts.failed++;
+        const message = err instanceof Error ? err.message : String(err);
+        results.push({ propertyId, status: "failed", error: message });
+      }
+
+      await upsertWorkflowStep(workflowRunId, {
+        stepKey: "broker_lookup",
+        totalItems: propertyIds.length,
+        completedItems: counts.updated + counts.unchanged,
+        failedItems: counts.failed,
+        skippedItems: counts.skipped,
+        status: deriveWorkflowStatusFromCounts({
+          totalItems: propertyIds.length,
+          completedItems: counts.updated + counts.unchanged,
+          failedItems: counts.failed,
+          skippedItems: counts.skipped,
+        }),
+        startedAt: workflowStartedAt,
+        finishedAt:
+          counts.updated + counts.unchanged + counts.skipped + counts.failed >= propertyIds.length
+            ? new Date().toISOString()
+            : null,
+        lastMessage: `${counts.updated} updated, ${counts.unchanged} unchanged, ${counts.skipped} skipped`,
+        lastError: results[results.length - 1]?.error ?? null,
+      });
+    }
+
+    await mergeWorkflowRunMetadata(workflowRunId, { results, counts });
+    await updateWorkflowRun(workflowRunId, {
+      status: counts.failed > 0 ? "partial" : "completed",
+      finishedAt: new Date().toISOString(),
+    });
+
+    res.json({ ok: true, results, counts });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[properties refresh-broker-enrichment]", err);
+    await mergeWorkflowRunMetadata(workflowRunId, { error: message });
+    await updateWorkflowRun(workflowRunId, {
+      status: "failed",
+      finishedAt: new Date().toISOString(),
+    });
+    res.status(503).json({ error: "Broker contact refresh failed.", details: message });
+  }
+});
+
+/**
+ * POST /api/properties/:id/refresh-broker-enrichment — single-property broker
+ * contact refresh. Body: { force?, deep? }. Returns the refreshed entries with
+ * verification tiers so the UI can render needs-review candidates.
+ */
+router.post("/properties/:id/refresh-broker-enrichment", async (req: Request, res: Response) => {
+  try {
+    const propertyId = req.params.id;
+    if (!propertyId) {
+      res.status(400).json({ error: "Property ID required." });
+      return;
+    }
+    const pool = getPool();
+    const result = await refreshBrokerEnrichmentForProperty(propertyId, pool, {
+      force: req.body?.force === true,
+      deep: req.body?.deep === true,
+    });
+    if (result.status === "updated") {
+      await refreshPropertyPipelineMetadata(propertyId, pool);
+    }
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[properties refresh-broker-enrichment single]", err);
+    res.status(503).json({ error: "Broker contact refresh failed.", details: message });
   }
 });
 

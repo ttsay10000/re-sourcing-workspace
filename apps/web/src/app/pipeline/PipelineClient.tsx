@@ -13,7 +13,7 @@ import {
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { MailPlus, Star, X } from "lucide-react";
-import { BrokerContactDialog, FileDropzone, StageChip } from "@/components/ui";
+import { BrokerContactDialog, FileDropzone, StageChip, type BrokerSearchCandidate } from "@/components/ui";
 import { useProcessBanner } from "@/components/ProcessBanner";
 import {
   UI_V2_PIPELINE_STATUS_OPTIONS,
@@ -1368,6 +1368,9 @@ export default function PipelineClient() {
     name: string;
     email: string;
     saving: boolean;
+    searching?: boolean;
+    searchMessage?: string | null;
+    candidates?: BrokerSearchCandidate[] | null;
   } | null>(null);
   const [keyboardRowId, setKeyboardRowId] = useState<string | null>(null);
   const [brokerCompPayloads, setBrokerCompPayloads] = useState<Record<string, unknown>>({});
@@ -2559,6 +2562,167 @@ export default function PipelineClient() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save the broker contact.");
       setBrokerPrompt((current) => (current ? { ...current, saving: false } : current));
+    }
+  }
+
+  function brokerCandidatesFromEntries(entries: unknown): BrokerSearchCandidate[] {
+    const candidates: BrokerSearchCandidate[] = [];
+    if (!Array.isArray(entries)) return candidates;
+    for (const raw of entries) {
+      const entry = raw as {
+        name?: string | null;
+        firm?: string | null;
+        email?: string | null;
+        phone?: string | null;
+        confidence?: number | null;
+        evidence?: string | null;
+        sourceUrl?: string | null;
+        verificationTier?: string | null;
+        rejectedCandidate?: {
+          email?: string | null;
+          phone?: string | null;
+          firm?: string | null;
+          confidence?: number | null;
+          evidence?: string | null;
+          sourceUrl?: string | null;
+        } | null;
+      };
+      if (entry?.email) {
+        candidates.push({
+          name: entry.name ?? null,
+          email: entry.email,
+          phone: entry.phone ?? null,
+          firm: entry.firm ?? null,
+          confidence: entry.confidence ?? null,
+          evidence: entry.evidence ?? null,
+          sourceUrl: entry.sourceUrl ?? null,
+          tier: entry.verificationTier === "needs_review" ? "needs_review" : "verified",
+        });
+      }
+      const retained = entry?.rejectedCandidate;
+      if (retained && (retained.email || retained.phone)) {
+        candidates.push({
+          name: entry.name ?? null,
+          email: retained.email ?? null,
+          phone: retained.phone ?? null,
+          firm: retained.firm ?? null,
+          confidence: retained.confidence ?? null,
+          evidence: retained.evidence ?? null,
+          sourceUrl: retained.sourceUrl ?? null,
+          tier: entry.verificationTier === "rejected" ? "rejected" : "needs_review",
+        });
+      }
+    }
+    return candidates;
+  }
+
+  async function searchBrokerContact() {
+    if (!brokerPrompt || brokerPrompt.searching) return;
+    const propertyId = brokerPrompt.propertyId;
+    setBrokerPrompt((current) =>
+      current ? { ...current, searching: true, searchMessage: "Searching the web for this listing's brokers…", candidates: null } : current
+    );
+    try {
+      const response = await fetch(
+        `${API_BASE}/api/properties/${encodeURIComponent(propertyId)}/refresh-broker-enrichment`,
+        {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ force: true, deep: true }),
+        }
+      );
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(payload.error || payload.details || "Broker search failed.");
+      }
+      const candidates = brokerCandidatesFromEntries(payload.entries);
+      const verified = candidates.find((candidate) => candidate.tier === "verified" && candidate.email);
+      if (verified?.email) {
+        setRows((currentRows) =>
+          currentRows.map((row) =>
+            row.propertyId === propertyId
+              ? {
+                  ...row,
+                  broker: {
+                    ...(row.broker ?? {}),
+                    email: verified.email,
+                    name: verified.name ?? row.broker?.name ?? null,
+                  },
+                }
+              : row
+          ) as PipelineRow[]
+        );
+      }
+      const message =
+        payload.status === "no_listing"
+          ? "No linked listing — add the broker manually or link a StreetEasy listing first."
+          : payload.status === "no_agent_names"
+            ? "The listing has no agent names to search for."
+            : candidates.length === 0
+              ? "No contacts found. Try again later or add the broker manually."
+              : verified
+                ? "Verified contact found and saved to the property. You can still pick a different candidate below."
+                : "No verified contact, but review the candidates below — Use fills the form, Save confirms it.";
+      setBrokerPrompt((current) =>
+        current && current.propertyId === propertyId
+          ? {
+              ...current,
+              searching: false,
+              searchMessage: message,
+              candidates,
+              email: current.email || verified?.email || "",
+              name: current.name || verified?.name || "",
+            }
+          : current
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Broker search failed.";
+      setBrokerPrompt((current) =>
+        current && current.propertyId === propertyId
+          ? { ...current, searching: false, searchMessage: message }
+          : current
+      );
+    }
+  }
+
+  async function refreshSelectedBrokerContacts() {
+    if (selectedIds.length === 0) return;
+    setBusyAction("bulk:broker");
+    setNotice(null);
+    setError(null);
+    const banner = processBanner.start("Broker contact refresh", {
+      message: `Searching broker contacts for ${selectedIds.length} propert${selectedIds.length === 1 ? "y" : "ies"}…`,
+    });
+    try {
+      const propertyIds = [...selectedIds];
+      const response = await fetch(`${API_BASE}/api/properties/refresh-broker-enrichment`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ propertyIds }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(payload.error || payload.details || "Failed to refresh broker contacts.");
+      }
+      const counts = payload.counts ?? {};
+      const summary = `Broker contacts: ${counts.updated ?? 0} updated, ${counts.unchanged ?? 0} unchanged, ${counts.skipped ?? 0} skipped${
+        counts.failed ? `, ${counts.failed} failed` : ""
+      }.`;
+      setNotice(summary);
+      banner.succeed(summary);
+      const refreshed = await apiFetch<PipelineResponse>(
+        `${API_BASE}/api/ui-v2/pipeline?${buildPipelineQueryString(queryString)}`
+      );
+      setRows(refreshed.pipeline.rows as PipelineRow[]);
+      setTotal(refreshed.pipeline.total);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to refresh broker contacts.";
+      banner.fail(message);
+      setError(message);
+    } finally {
+      setBusyAction(null);
     }
   }
 
@@ -3801,6 +3965,15 @@ export default function PipelineClient() {
           <button
             className={styles.secondaryButton}
             type="button"
+            title="Re-run ONLY the broker contact lookup (directory + web search) for the selection. Skips properties that already have a sendable email."
+            disabled={selectedIds.length === 0 || busyAction?.startsWith("bulk:")}
+            onClick={refreshSelectedBrokerContacts}
+          >
+            {busyAction === "bulk:broker" ? "Finding brokers..." : "Refresh broker contacts"}
+          </button>
+          <button
+            className={styles.secondaryButton}
+            type="button"
             title={
               selectedRowsWithOm.length === 0
                 ? "Select at least one property with an uploaded OM."
@@ -4874,6 +5047,7 @@ export default function PipelineClient() {
         onClose={() => setBrokerPrompt(null)}
         onChange={(patch) => setBrokerPrompt((current) => (current ? { ...current, ...patch } : current))}
         onSubmit={() => void submitBrokerPrompt()}
+        onSearch={() => void searchBrokerContact()}
       />
 
       {rejectState ? (

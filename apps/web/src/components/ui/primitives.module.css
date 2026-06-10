@@ -794,6 +794,72 @@ button.statCard:hover {
   padding-block: 0.5rem;
 }
 
+.dialogHint {
+  margin: 0;
+  font-size: var(--text-2xs);
+  color: var(--app-muted);
+}
+
+.dialogCandidateList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.5rem;
+  max-height: 16rem;
+  overflow-y: auto;
+}
+
+.dialogCandidate {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--app-line);
+  border-radius: var(--radius-md);
+  background: var(--app-surface-raised);
+}
+
+.dialogCandidateBody {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.dialogCandidateBody strong {
+  font-size: var(--text-xs);
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  word-break: break-all;
+}
+
+.dialogCandidateBody strong em {
+  font-style: normal;
+  font-size: var(--text-2xs);
+  font-weight: 650;
+  padding: 0.05rem 0.4rem;
+  border-radius: var(--radius-pill, 999px);
+  background: var(--app-surface-sunken, var(--app-surface));
+  color: var(--app-muted);
+}
+
+.dialogCandidateBody strong em[data-tier="verified"] {
+  color: var(--app-positive, #15803d);
+}
+
+.dialogCandidateBody strong em[data-tier="needs_review"] {
+  color: var(--app-warning, #b45309);
+}
+
+.dialogCandidateBody small {
+  font-size: var(--text-2xs);
+  color: var(--app-muted);
+  overflow-wrap: anywhere;
+}
+
 /* ─── FileDropzone ────────────────────────────────────────────── */
 
 .dropzoneRoot {

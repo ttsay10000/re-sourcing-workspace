@@ -71,6 +71,13 @@ export function getBrokerLookupModel(): string {
   return DEFAULT_MODEL;
 }
 
+/** Web-search context size for broker lookups; "high" is slower but finds more obscure agent pages. */
+export function getBrokerLookupSearchContextSize(): "low" | "medium" | "high" {
+  const raw = (process.env.OPENAI_BROKER_SEARCH_CONTEXT ?? "").trim().toLowerCase();
+  if (raw === "low" || raw === "medium" || raw === "high") return raw;
+  return "medium";
+}
+
 /** Vision/multimodal property condition review; defaults to gpt-4o for broad image support. */
 export function getPropertyConditionModel(): string {
   const model = getModelFromEnv("OPENAI_PROPERTY_CONDITION_MODEL");

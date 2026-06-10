@@ -1,6 +1,6 @@
 export { AgingChip } from "./AgingChip";
 export { Badge, type BadgeTone } from "./Badge";
-export { BrokerContactDialog, type BrokerContactDraft } from "./BrokerContactDialog";
+export { BrokerContactDialog, type BrokerContactDraft, type BrokerSearchCandidate } from "./BrokerContactDialog";
 export { Button, type ButtonSize, type ButtonVariant } from "./Button";
 export { ConfirmDialog, Dialog } from "./Dialog";
 export { EmptyState } from "./EmptyState";
