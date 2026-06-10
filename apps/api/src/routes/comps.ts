@@ -12,6 +12,7 @@
 
 import { Router, type Request, type Response } from "express";
 import { getPool } from "@re-sourcing/db";
+import { resolveOperatingYield, sanitizeRatePct, type OperatingYieldFlag } from "../deal/operatingYield.js";
 
 const router = Router();
 
@@ -34,8 +35,11 @@ interface OperatingCompRow {
   expenseRatioPct: number | null;
   dealScore: number | null;
   signalAt: string | null;
-  /** "signal" = stored deal_signals row; "derived" = NOI ÷ ask computed at read time. */
-  yieldSource: "signal" | "derived";
+  /** "signal" = stored deal_signals row; "derived" = NOI ÷ ask computed at read time; null when flagged. */
+  yieldSource: "signal" | "derived" | null;
+  /** Set when the deal's yield data is untrustworthy (0%/negative cap, $0 NOI); excluded from all stats. */
+  yieldFlag: OperatingYieldFlag | null;
+  yieldFlagDetail: string | null;
 }
 
 function toNumber(value: unknown): number | null {
@@ -49,6 +53,8 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
   const minYield = toNumber(req.query.minYield);
   const maxYield = toNumber(req.query.maxYield);
   const limit = Math.max(1, Math.min(toNumber(req.query.limit) ?? 500, 1000));
+  // flagged=1 → only deals with yield data-quality flags (home-page follow-ups).
+  const flaggedOnly = req.query.flagged === "1";
 
   try {
     const pool = getPool();
@@ -131,10 +137,11 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
           toNumber(row.fallback_noi_om) ?? toNumber(row.fallback_noi_analysis) ?? toNumber(row.fallback_noi_llm);
         const fallbackAsk =
           toNumber(row.fallback_ask_manual) ?? toNumber(row.fallback_ask_om) ?? toNumber(row.listing_price);
-        const derivedLtr =
-          fallbackNoi != null && fallbackAsk != null && fallbackAsk > 0 ? (fallbackNoi / fallbackAsk) * 100 : null;
-        const ltrYieldPct = signalLtr ?? derivedLtr;
-        if (ltrYieldPct == null) return null;
+        const resolved = resolveOperatingYield({ signalLtrPct: signalLtr, fallbackNoi, fallbackAsk });
+        // Rows with neither a usable yield nor a data-quality flag carry no
+        // information for this view; flagged rows stay visible for follow-up.
+        if (resolved.ltrYieldPct == null && resolved.flag == null) return null;
+        const mtrYieldPct = resolved.flag == null ? sanitizeRatePct(toNumber(row.adjusted_cap_rate)) : null;
         const comp: OperatingCompRow = {
           propertyId: String(row.property_id),
           canonicalAddress: String(row.canonical_address),
@@ -145,22 +152,25 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
           lat: toNumber(row.lat),
           lng: toNumber(row.lng),
           units: toNumber(row.units),
-          ltrYieldPct,
-          mtrYieldPct: toNumber(row.adjusted_cap_rate),
-          yieldSpreadPct: toNumber(row.yield_spread),
+          ltrYieldPct: resolved.ltrYieldPct,
+          mtrYieldPct,
+          yieldSpreadPct: mtrYieldPct != null ? toNumber(row.yield_spread) : null,
           currentNoi: toNumber(row.current_noi) ?? fallbackNoi,
           pricePerUnit: toNumber(row.price_per_unit),
           pricePsf: toNumber(row.price_psf),
           expenseRatioPct: toNumber(row.expense_ratio),
           dealScore: toNumber(row.deal_score),
           signalAt: row.signal_at instanceof Date ? row.signal_at.toISOString() : (row.signal_at as string | null),
-          yieldSource: signalLtr != null ? "signal" : "derived",
+          yieldSource: resolved.yieldSource,
+          yieldFlag: resolved.flag,
+          yieldFlagDetail: resolved.flagDetail,
         };
         return comp;
       })
       .filter((row): row is OperatingCompRow => row != null)
       .sort((a, b) => (b.ltrYieldPct ?? -Infinity) - (a.ltrYieldPct ?? -Infinity));
 
+    if (flaggedOnly) rows = rows.filter((row) => row.yieldFlag != null);
     if (borough) rows = rows.filter((row) => (row.borough ?? "").toLowerCase().includes(borough));
     if (minYield != null) rows = rows.filter((row) => row.ltrYieldPct != null && row.ltrYieldPct >= minYield);
     if (maxYield != null) rows = rows.filter((row) => row.ltrYieldPct != null && row.ltrYieldPct <= maxYield);
@@ -196,6 +206,8 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
       summary: {
         count: rows.length,
         withCoordinates: rows.filter((row) => row.lat != null && row.lng != null).length,
+        // Flagged rows carry null yields, so every aggregate below already excludes them.
+        flaggedCount: rows.filter((row) => row.yieldFlag != null).length,
         averageLtrYieldPct: average,
         medianLtrYieldPct: median,
         boroughStats,

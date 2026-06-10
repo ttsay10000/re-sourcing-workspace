@@ -105,7 +105,9 @@ function normalizeCompositeScore(rawCompositeScore: number, profile: DealScoring
 }
 
 function assetCapRateAtAsk(inputs: DealScoringInputs): number | null {
-  return inputs.purchasePrice != null && inputs.purchasePrice > 0 && inputs.noi != null && inputs.noi >= 0
+  // NOI must be strictly positive: a $0 NOI is an extraction gap, not a real
+  // 0% cap rate, and a stored 0% signal would pollute yield-map medians.
+  return inputs.purchasePrice != null && inputs.purchasePrice > 0 && inputs.noi != null && inputs.noi > 0
     ? (inputs.noi / inputs.purchasePrice) * 100
     : null;
 }
