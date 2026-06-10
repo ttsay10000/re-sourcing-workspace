@@ -76,7 +76,7 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
          ds.price_psf,
          ds.expense_ratio,
          ds.deal_score,
-         ds.created_at AS signal_at,
+         ds.generated_at AS signal_at,
          lst.listing_price,
          p.details#>>'{omData,authoritative,currentFinancials,noi}' AS fallback_noi_om,
          p.details#>>'{rentalFinancials,omAnalysis,currentFinancials,noi}' AS fallback_noi_analysis,
@@ -88,7 +88,7 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
          SELECT *
          FROM deal_signals s
          WHERE s.property_id = p.id
-         ORDER BY s.created_at DESC
+         ORDER BY s.generated_at DESC
          LIMIT 1
        ) ds ON TRUE
        LEFT JOIN LATERAL (
@@ -189,9 +189,11 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
     console.error("[comps operating]", err);
     const pgCode = (err as { code?: string } | null)?.code;
     const message = err instanceof Error ? err.message : String(err);
-    // 42703/42P01 = missing column/relation: the deployed DB is behind on migrations.
+    // Only show the migration hint when the missing object is part of migration 056.
+    const missingMigration056Column =
+      pgCode === "42703" && /\b(deal_state|deal_stage|stage_order|stage_entered_at|lat|lng|geocode_source|geocoded_at)\b/i.test(message);
     const migrationHint =
-      pgCode === "42703" || pgCode === "42P01"
+      missingMigration056Column || pgCode === "42P01"
         ? " The database schema is behind — run `npm run db:migrate` (migration 056 adds deal_stage/lat/lng)."
         : "";
     res.status(500).json({ error: `Failed to load operating comps.${migrationHint}`, details: message });
