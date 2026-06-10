@@ -283,6 +283,40 @@
   color: var(--app-ink);
 }
 
+.runFlags {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.runFlagWarning,
+.runFlagInfo {
+  margin: 0;
+  display: flex;
+  gap: 0.45rem;
+  align-items: baseline;
+  border: 1px solid var(--app-line);
+  border-radius: var(--radius-md);
+  background: var(--app-surface-raised);
+  color: var(--app-muted);
+  font-size: var(--text-2xs);
+  padding: 0.4rem 0.6rem;
+}
+
+.runFlagWarning {
+  border-color: var(--app-amber-border);
+  background: var(--app-amber-soft);
+  color: var(--app-amber);
+}
+
+.runFlagWarning strong,
+.runFlagInfo strong {
+  font-size: 0.62rem;
+  font-weight: 650;
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+
 .promoteForm {
   display: grid;
   gap: 0.7rem;
