@@ -26,6 +26,7 @@ import notificationsRouter from "./routes/notifications.js";
 import brokerCompsRouter from "./routes/brokerComps.js";
 import brokerOmRouter from "./routes/brokerOm.js";
 import compsRouter from "./routes/comps.js";
+import marketDocsRouter from "./routes/marketDocs.js";
 
 const PORT = Number(process.env.PORT) || 4000;
 const version = process.env.npm_package_version || "1.0.0";
@@ -79,6 +80,7 @@ app.use("/api", propertiesRouter);
 app.use("/api", profileRouter);
 app.use("/api", dossierRouter);
 app.use("/api", compsRouter);
+app.use("/api", marketDocsRouter);
 app.use("/api", dealsRouter);
 app.use("/api", savedSearchesRouter);
 app.use("/api", salesMetricsRouter);
