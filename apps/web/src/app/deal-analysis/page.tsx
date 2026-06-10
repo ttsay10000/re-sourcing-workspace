@@ -790,8 +790,10 @@ function DealAnalysisPageContent() {
     [calculation]
   );
 
-  const loadSavedWorkspaces = useCallback(async () => {
-    setSavedWorkspacesLoading(true);
+  const loadSavedWorkspaces = useCallback(async (options?: { background?: boolean }) => {
+    // Background refreshes (dropdown focus, post-upload) skip the loading
+    // state so the select stays enabled and open while the list updates.
+    if (!options?.background) setSavedWorkspacesLoading(true);
     try {
       const res = await fetch(`${API_BASE}/api/deal-analysis/workspaces?limit=80`);
       const data = (await res.json().catch(() => ({}))) as Partial<SavedWorkspacesResponse> & {
@@ -802,9 +804,9 @@ function DealAnalysisPageContent() {
       }
       setSavedWorkspaces(data.workspaces ?? []);
     } catch {
-      setSavedWorkspaces([]);
+      if (!options?.background) setSavedWorkspaces([]);
     } finally {
-      setSavedWorkspacesLoading(false);
+      if (!options?.background) setSavedWorkspacesLoading(false);
     }
   }, []);
 
@@ -1031,6 +1033,9 @@ function DealAnalysisPageContent() {
       setBatchResults(data.results);
       setPendingFiles([]);
       setFreshUploadReview(null);
+      // Each batch file just created/updated a workspace — refresh the
+      // dropdown so the new properties are selectable without a reload.
+      void loadSavedWorkspaces({ background: true });
       setNotice(
         `${data.succeeded ?? data.results.filter((row) => row.ok).length} of ${data.total ?? fileCount} OMs analyzed into separate property workspaces. Each one needs review before its numbers are trusted.`
       );
@@ -1536,6 +1541,11 @@ function DealAnalysisPageContent() {
                   return;
                 }
                 router.replace(`/deal-analysis?property_id=${encodeURIComponent(nextPropertyId)}`);
+              }}
+              // Re-pull the list when the user opens the dropdown so uploads
+              // finished in another tab/session are always selectable.
+              onFocus={() => {
+                if (!savedWorkspacesLoading) void loadSavedWorkspaces({ background: true });
               }}
               disabled={savedWorkspacesLoading || filteredSavedWorkspaces.length === 0}
               style={inputStyle}

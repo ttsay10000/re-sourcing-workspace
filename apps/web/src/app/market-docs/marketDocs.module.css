@@ -1,0 +1,113 @@
+.page {
+  display: grid;
+  gap: 1rem;
+  padding: 0.25rem 0;
+}
+
+.headerLink {
+  color: var(--brand-strong, #115e59);
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.headerLink:hover {
+  text-decoration: underline;
+}
+
+.uploadRow {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  margin-top: 0.8rem;
+}
+
+.uploadError {
+  color: #991b1b;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.sectionTitle {
+  display: block;
+  font-size: 0.82rem;
+  font-weight: 800;
+  color: var(--app-ink-secondary);
+  margin-bottom: 0.6rem;
+}
+
+.reportList {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.reportCard {
+  display: grid;
+  gap: 0.3rem;
+  border: 1px solid var(--app-line);
+  border-radius: var(--radius-md, 8px);
+  padding: 0.6rem 0.8rem;
+  font-size: 0.78rem;
+  color: var(--app-ink-secondary);
+}
+
+.reportHeadline {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.reportWarning {
+  color: #92400e;
+  font-weight: 650;
+}
+
+.reportFlags {
+  color: var(--app-muted);
+  font-size: 0.72rem;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.table th {
+  text-align: left;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--app-muted);
+  padding: 0.4rem 0.6rem 0.4rem 0;
+  border-bottom: 1px solid var(--app-line);
+}
+
+.table td {
+  padding: 0.5rem 0.6rem 0.5rem 0;
+  font-size: 0.8rem;
+  color: var(--app-ink-secondary);
+  border-bottom: 1px solid var(--app-line);
+  vertical-align: top;
+}
+
+.docCell {
+  display: grid;
+  gap: 0.1rem;
+}
+
+.docName {
+  color: var(--app-ink);
+  font-weight: 650;
+}
+
+.docMeta {
+  font-size: 0.7rem;
+  color: var(--app-muted);
+}
+
+.emptyRow {
+  text-align: center;
+  color: var(--app-muted);
+  padding: 1.2rem 0 !important;
+}

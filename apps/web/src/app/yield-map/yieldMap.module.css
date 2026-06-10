@@ -318,3 +318,224 @@
   background: var(--brand) !important;
   color: var(--brand-on, #ffffff) !important;
 }
+
+/* ─── Market context layer ────────────────────────────────────── */
+
+.headerActions {
+  display: flex;
+  align-items: end;
+  gap: 0.9rem;
+}
+
+.headerLink {
+  color: var(--brand-strong, #115e59);
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-decoration: none;
+  padding-bottom: 0.5rem;
+}
+
+.headerLink:hover {
+  text-decoration: underline;
+}
+
+.hollowPin {
+  width: 14px;
+  height: 14px;
+  border: 2.5px solid #7c3aed;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.85);
+  box-shadow: 0 1px 4px rgba(24, 24, 27, 0.3);
+  cursor: pointer;
+  padding: 0;
+  transition: transform 120ms ease;
+}
+
+.hollowPin:hover {
+  transform: scale(1.25);
+}
+
+.legendHatch {
+  width: 14px;
+  height: 10px;
+  border: 1px solid var(--app-line);
+  border-radius: 2px;
+  background: repeating-linear-gradient(
+    -45deg,
+    rgba(100, 116, 139, 0.55),
+    rgba(100, 116, 139, 0.55) 2px,
+    transparent 2px,
+    transparent 5px
+  );
+}
+
+.legendHollow {
+  width: 10px;
+  height: 10px;
+  border: 2px solid #7c3aed;
+  border-radius: 50%;
+  background: transparent;
+}
+
+/* ─── Neighborhood popup ──────────────────────────────────────── */
+
+.hoodPopup {
+  display: grid;
+  gap: 0.45rem;
+  font-family: var(--font-geist), system-ui, sans-serif;
+  min-width: 250px;
+}
+
+.hoodPopupHeader {
+  display: grid;
+  gap: 0.1rem;
+}
+
+.hoodPopupHeader strong {
+  color: var(--app-ink, #18181b);
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.hoodPopupHeader span {
+  color: var(--app-ink-secondary, #52525b);
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.hoodPopupHero {
+  color: var(--brand-strong, #115e59);
+  font-size: 0.92rem;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+}
+
+.hoodPopupHeroMuted {
+  color: var(--app-muted, #71717a);
+  font-size: 0.74rem;
+  font-weight: 600;
+  font-style: italic;
+}
+
+.hoodPopupTable {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.hoodPopupTable td {
+  padding: 0.16rem 0.3rem 0.16rem 0;
+  font-size: 0.7rem;
+  color: var(--app-ink-secondary, #52525b);
+  font-variant-numeric: tabular-nums;
+  border-top: 1px solid var(--app-line, #e4e4e7);
+  white-space: nowrap;
+}
+
+.hoodPopupTable td:first-child {
+  color: var(--app-ink, #18181b);
+  font-weight: 650;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hoodPopupBadges {
+  display: flex;
+  gap: 0.2rem;
+  align-items: center;
+}
+
+.chipResearch,
+.chipBroker {
+  display: inline-block;
+  border-radius: 4px;
+  font-size: 0.58rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  padding: 0.08rem 0.3rem;
+  line-height: 1.2;
+}
+
+.chipResearch {
+  background: #0f766e;
+  color: #ffffff;
+}
+
+.chipBroker {
+  background: #ede9fe;
+  color: #6d28d9;
+  border: 1px solid #c4b5fd;
+}
+
+.hoodPopupBullets {
+  margin: 0;
+  padding-left: 1rem;
+  display: grid;
+  gap: 0.2rem;
+}
+
+.hoodPopupBullets li {
+  font-size: 0.7rem;
+  color: var(--app-ink-secondary, #52525b);
+}
+
+.hoodPopupFallback {
+  font-size: 0.68rem;
+  font-style: italic;
+  color: var(--app-muted, #71717a);
+  border-left: 2px solid var(--app-line, #e4e4e7);
+  padding-left: 0.5rem;
+}
+
+.hoodPopupSpread {
+  font-size: 0.72rem;
+  font-weight: 750;
+  color: var(--app-ink, #18181b);
+  background: var(--app-surface-2, #f4f4f5);
+  border-radius: 6px;
+  padding: 0.3rem 0.45rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.hoodPopupSources {
+  font-size: 0.62rem;
+  color: var(--app-muted, #71717a);
+  border-top: 1px solid var(--app-line, #e4e4e7);
+  padding-top: 0.3rem;
+}
+
+.hoodPopupShell {
+  z-index: 5;
+}
+
+.refreshButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  border: 1px solid var(--app-line);
+  border-radius: var(--radius-md, 8px);
+  background: var(--app-surface);
+  color: var(--app-ink-secondary);
+  font-size: 0.78rem;
+  font-weight: 700;
+  padding: 0.4rem 0.7rem;
+  cursor: pointer;
+  margin-bottom: 0.35rem;
+  transition: background 130ms ease, color 130ms ease;
+}
+
+.refreshButton:hover:not(:disabled) {
+  color: var(--brand-strong, #115e59);
+}
+
+.refreshButton:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.refreshStamp {
+  font-weight: 600;
+  font-size: 0.68rem;
+  color: var(--app-muted);
+  font-variant-numeric: tabular-nums;
+}

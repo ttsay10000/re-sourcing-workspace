@@ -152,4 +152,22 @@ export type {
   UpsertOmExtractedSnapshotParams,
 } from "./repos/OmExtractedSnapshotRepo.js";
 
+export {
+  MarketCompRepo,
+  MarketDocumentRepo,
+  MarketLlmOutputRepo,
+  MarketStatRepo,
+  NeighborhoodRepo,
+  NeighborhoodSummaryRepo,
+} from "./repos/MarketContextRepos.js";
+export type {
+  InsertMarketDocumentParams,
+  InsertMarketLlmOutputParams,
+  InsertMarketStatParams,
+  ListMarketCompsFilters,
+  MarketContextRepoOptions,
+  UpsertMarketCompParams,
+  UpsertNeighborhoodSummaryParams,
+} from "./repos/MarketContextRepos.js";
+
 export { runMigrations, type RunMigrationsResult } from "./runMigrations.js";
