@@ -26,6 +26,7 @@ import {
 } from "./omAnalysisShared.js";
 import { extractOmAnalysisFromGeminiPdfOnly, resolveGeminiOmModel } from "./extractOmAnalysisFromGeminiPdfOnly.js";
 import { extractOmAnalysisFromOpenAiText, resolveOpenAiOmModel } from "./extractOmAnalysisFromOpenAiText.js";
+import { buildOmValidationFlags } from "./omValidationFlags.js";
 import {
   type ResolvedCurrentFinancials,
   resolveCurrentFinancialsFromOmAnalysis,
@@ -317,51 +318,6 @@ function toAuthoritativeCurrentFinancials(
     reportedOccupancyPct: current.reportedOccupancyPct,
     reportedVacancyPct: current.reportedVacancyPct,
   };
-}
-
-function buildMissingDataFlags(snapshot: OmAuthoritativeSnapshot): OmValidationFlag[] {
-  const flags: OmValidationFlag[] = Array.isArray(snapshot.validationFlags) ? [...snapshot.validationFlags] : [];
-  const current = snapshot.currentFinancials ?? null;
-  const coverage = buildCoverage(snapshot);
-
-  if (!coverage.rentRollExtracted) {
-    flags.push({
-      flagType: "missing_om_field",
-      field: "rentRoll",
-      severity: "warning",
-      source: "authoritative_om",
-      message: "Rent roll not extracted from OM; review source document and request an updated rent roll if needed.",
-    });
-  }
-  if (toFiniteNumber(current?.grossRentalIncome) == null) {
-    flags.push({
-      flagType: "missing_om_field",
-      field: "grossRentalIncome",
-      severity: "warning",
-      source: "authoritative_om",
-      message: "Gross rental income is missing from the OM extraction and remains null.",
-    });
-  }
-  if (toFiniteNumber(current?.operatingExpenses) == null) {
-    flags.push({
-      flagType: "missing_om_field",
-      field: "operatingExpenses",
-      severity: "warning",
-      source: "authoritative_om",
-      message: "Operating expenses are missing from the OM extraction and remain null.",
-    });
-  }
-  if (toFiniteNumber(current?.noi) == null) {
-    flags.push({
-      flagType: "missing_om_field",
-      field: "noi",
-      severity: "warning",
-      source: "authoritative_om",
-      message: "NOI is missing from the OM extraction and remains null.",
-    });
-  }
-
-  return flags;
 }
 
 async function loadDocumentBuffer(
@@ -1242,7 +1198,7 @@ export async function ingestAuthoritativeOm(
     };
     const snapshot: OmAuthoritativeSnapshot = {
       ...snapshotBase,
-      validationFlags: buildMissingDataFlags(snapshotBase),
+      validationFlags: buildOmValidationFlags({ snapshot: snapshotBase, omAnalysis: sanitizedOmAnalysis }),
     };
 
     const extractedSnapshot = await extractedSnapshotRepo.upsert({

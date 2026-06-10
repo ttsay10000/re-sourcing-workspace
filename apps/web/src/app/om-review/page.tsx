@@ -363,6 +363,20 @@ export default function OmReviewPage() {
                   <p className={styles.runError}>No extracted snapshot is attached to this run.</p>
                 )}
 
+                {run.validationFlags.length > 0 ? (
+                  <div className={styles.runFlags}>
+                    {run.validationFlags.map((flag, index) => (
+                      <p
+                        key={`${flag.field ?? "flag"}-${index}`}
+                        className={flag.severity === "info" ? styles.runFlagInfo : styles.runFlagWarning}
+                      >
+                        <strong>{flag.severity === "info" ? "Note" : "Flag"}</strong>
+                        <span>{flag.message}</span>
+                      </p>
+                    ))}
+                  </div>
+                ) : null}
+
                 <div className={styles.itemActions}>
                   {run.status === "needs_review" && run.hasSnapshot ? (
                     <Button variant="primary" size="sm" onClick={() => openPromote(run)} disabled={busyRunId === run.runId}>
