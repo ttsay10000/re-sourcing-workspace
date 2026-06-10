@@ -130,19 +130,16 @@ const NAV_LINKS: NavLink[] = [
     label: "Profile",
     shortLabel: "U",
     icon: User,
-    matches: (pathname: string, section: string | null) =>
-      (pathname === "/profile" || pathname.startsWith("/profile/") || pathname === "/profiles") &&
-      section !== "saved-deals",
+    matches: (pathname: string) =>
+      pathname === "/profile" || pathname.startsWith("/profile/") || pathname === "/profiles",
   },
   {
     href: "/saved",
     label: "Saved Deals",
     shortLabel: "S",
     icon: Bookmark,
-    matches: (pathname: string, section: string | null) =>
-      pathname === "/saved" ||
-      pathname.startsWith("/saved/") ||
-      ((pathname === "/profile" || pathname.startsWith("/profile/")) && section === "saved-deals"),
+    matches: (pathname: string) =>
+      pathname === "/saved" || pathname.startsWith("/saved/"),
   },
 ];
 

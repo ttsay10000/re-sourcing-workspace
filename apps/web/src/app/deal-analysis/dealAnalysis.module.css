@@ -1,0 +1,119 @@
+/* ─── Deal-analysis intake section only ─────────────────────────────────────
+   Covers the "1. Add OM / financial files or link" card and its sub-cards.
+   All other page styles remain inline as-is.
+   ─────────────────────────────────────────────────────────────────────────── */
+
+.intakeSectionHeading {
+  margin: 0;
+  font-size: var(--text-lg, 1.125rem);
+  font-weight: 600;
+  color: var(--app-ink, #18231e);
+  line-height: 1.25;
+}
+
+.intakeSectionDesc {
+  margin: 0.3rem 0 0;
+  font-size: 0.88rem;
+  color: var(--app-muted, #68736d);
+  line-height: 1.5;
+}
+
+/* ─── Intake sub-cards (files / link / broker notes) ────────────────────── */
+
+.intakeCard {
+  margin-top: 0.65rem;
+  border: 1px solid var(--app-line, #e4e4e7);
+  border-radius: 10px;
+  padding: 1rem;
+  background: #ffffff;
+  display: grid;
+  gap: 0.65rem;
+}
+
+/* ─── Micro-label (uppercase, 0.68 rem) ─────────────────────────────────── */
+
+.microLabel {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--app-muted, #68736d);
+}
+
+/* ─── Intake action row (checkbox + analyze button) ─────────────────────── */
+
+.intakeActionRow {
+  margin-top: 0.5rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.85rem;
+  flex-wrap: wrap;
+}
+
+.separateCheckLabel {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--app-ink, #303832);
+  font-size: 0.84rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+/* ─── Inline card row (for OM link and broker notes sub-cards) ──────────── */
+
+.intakeCardRow {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.intakeCardHint {
+  color: var(--app-muted, #68736d);
+  font-size: 0.84rem;
+  line-height: 1.5;
+}
+
+/* ─── Form fields inside intake cards ───────────────────────────────────── */
+
+.intakeInput {
+  min-height: 2.45rem;
+  border: 1px solid var(--app-line-strong, rgba(38, 47, 44, 0.26));
+  border-radius: 8px;
+  padding: 0.52rem 0.68rem;
+  color: var(--app-ink, #18231e);
+  background: var(--app-surface, #ffffff);
+  font-size: 0.88rem;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.intakeTextarea {
+  min-height: 108px;
+  border: 1px solid var(--app-line-strong, rgba(38, 47, 44, 0.26));
+  border-radius: 8px;
+  padding: 0.52rem 0.68rem;
+  color: var(--app-ink, #18231e);
+  background: var(--app-surface, #ffffff);
+  font-size: 0.88rem;
+  font-family: inherit;
+  resize: vertical;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.intakeFieldLabel {
+  display: grid;
+  gap: 0.35rem;
+}
+
+/* ─── Replace-workspace notice ──────────────────────────────────────────── */
+
+.replaceNotice {
+  color: #92400e;
+  font-size: 0.82rem;
+  line-height: 1.45;
+}

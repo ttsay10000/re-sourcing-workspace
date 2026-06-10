@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
-import { EmptyState, PageHeader, StatCard } from "@/components/ui";
+import { Button, EmptyState, PageHeader, StatCard } from "@/components/ui";
 import { API_BASE } from "@/lib/api";
 import styles from "./saved.module.css";
 
@@ -60,6 +60,8 @@ type SavedDealsResponse = {
   error?: string;
   details?: string;
 };
+
+type ViewMode = "grid" | "table";
 
 function formatCurrency(value: number | null | undefined): string {
   if (value == null || Number.isNaN(value)) return "—";
@@ -260,6 +262,9 @@ function SavedPageContent() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<ViewMode>("grid");
+  const [includeRejected, setIncludeRejected] = useState(false);
+  const [unsavingIds, setUnsavingIds] = useState<Set<string>>(new Set());
 
   const loadSavedDeals = useCallback(async (mode: "initial" | "refresh" = "initial") => {
     if (mode === "initial") setLoading(true);
@@ -286,13 +291,34 @@ function SavedPageContent() {
     void loadSavedDeals();
   }, [loadSavedDeals]);
 
+  const handleUnsave = useCallback(async (propertyId: string) => {
+    setUnsavingIds((prev) => new Set([...prev, propertyId]));
+    try {
+      await fetch(`${API_BASE}/api/profile/saved-deals/${encodeURIComponent(propertyId)}`, { method: "DELETE" });
+      setRows((prev) => prev.filter((row) => row.propertyId !== propertyId));
+    } catch {
+      // ignore
+    } finally {
+      setUnsavingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(propertyId);
+        return next;
+      });
+    }
+  }, []);
+
   const filteredRows = useMemo(() => {
-    if (!query) return rows;
-    return rows.filter((row) => searchableText(row).includes(query));
-  }, [query, rows]);
+    let result = rows;
+    if (!includeRejected) {
+      result = result.filter((row) => !isRejected(row));
+    }
+    if (!query) return result;
+    return result.filter((row) => searchableText(row).includes(query));
+  }, [query, rows, includeRejected]);
+
+  const rejectedCount = useMemo(() => rows.filter(isRejected).length, [rows]);
 
   const metrics = useMemo(() => {
-    const rejectedCount = rows.filter(isRejected).length;
     const scored = rows.map((row) => row.dealScore).filter((score): score is number => typeof score === "number");
     const averageScore = scored.length > 0 ? scored.reduce((sum, score) => sum + score, 0) / scored.length : null;
     const withDocs = rows.filter((row) => (row.documentCount ?? 0) > 0).length;
@@ -302,7 +328,7 @@ function SavedPageContent() {
       averageScore,
       withDocs,
     };
-  }, [rows]);
+  }, [rows, rejectedCount]);
 
   return (
     <div className={styles.page}>
@@ -345,17 +371,46 @@ function SavedPageContent() {
       <section className={styles.tablePanel}>
         <div className={styles.panelHeader}>
           <div>
-            <h2>Saved Pipeline</h2>
+            <h2>{viewMode === "grid" ? "Saved Pipeline" : "Saved Pipeline — Table"}</h2>
             <p>{filteredRows.length} visible row{filteredRows.length === 1 ? "" : "s"}</p>
           </div>
-          <button
-            type="button"
-            className={styles.refreshButton}
-            onClick={() => void loadSavedDeals("refresh")}
-            disabled={loading || refreshing}
-          >
-            {refreshing ? "Refreshing..." : "Refresh"}
-          </button>
+          <div className={styles.panelHeaderActions}>
+            {rejectedCount > 0 && (
+              <button
+                type="button"
+                className={`${styles.toggleButton} ${includeRejected ? styles.toggleButtonActive : ""}`}
+                onClick={() => setIncludeRejected((v) => !v)}
+              >
+                {includeRejected ? `Hide rejected (${rejectedCount})` : `Include rejected (${rejectedCount})`}
+              </button>
+            )}
+            <div className={styles.viewToggle} role="group" aria-label="View mode">
+              <button
+                type="button"
+                className={`${styles.viewToggleBtn} ${viewMode === "grid" ? styles.viewToggleBtnActive : ""}`}
+                onClick={() => setViewMode("grid")}
+                aria-pressed={viewMode === "grid"}
+              >
+                Grid
+              </button>
+              <button
+                type="button"
+                className={`${styles.viewToggleBtn} ${viewMode === "table" ? styles.viewToggleBtnActive : ""}`}
+                onClick={() => setViewMode("table")}
+                aria-pressed={viewMode === "table"}
+              >
+                Table
+              </button>
+            </div>
+            <button
+              type="button"
+              className={styles.refreshButton}
+              onClick={() => void loadSavedDeals("refresh")}
+              disabled={loading || refreshing}
+            >
+              {refreshing ? "Refreshing..." : "Refresh"}
+            </button>
+          </div>
         </div>
 
         {error ? <div className={styles.error}>{error}</div> : null}
@@ -367,6 +422,131 @@ function SavedPageContent() {
             title={rows.length === 0 ? "No saved deals yet." : "No saved deals match the current search."}
             description={rows.length === 0 ? "Save a deal from the pipeline to see it here." : undefined}
           />
+        ) : viewMode === "grid" ? (
+          <div className={styles.cardGrid}>
+            {filteredRows.map((row) => {
+              const rejected = isRejected(row);
+              const displayStatus = rejected ? "rejected" : row.status || row.savedDeal?.dealStatus || "saved";
+              const savedDate = row.savedDeal?.createdAt ?? row.updatedAt;
+              const address = row.displayAddress || row.canonicalAddress || row.propertyId;
+              const propertyId = row.propertyId;
+              const isUnsaving = unsavingIds.has(propertyId);
+
+              return (
+                <article
+                  key={`${row.savedDeal?.id ?? propertyId}-${propertyId}`}
+                  className={`${styles.dealCard} ${rejected ? styles.dealCardRejected : ""}`}
+                >
+                  {/* Photo */}
+                  <div className={styles.dealCardPhoto} aria-hidden="true">
+                    {row.firstImageUrl ? (
+                      <img src={row.firstImageUrl} alt="" loading="lazy" />
+                    ) : (
+                      <span className={styles.dealCardPhotoInitial}>
+                        {address.slice(0, 1).toUpperCase()}
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Body */}
+                  <div className={styles.dealCardBody}>
+                    {/* Title + meta */}
+                    <div className={styles.dealCardHead}>
+                      <h3 className={styles.dealCardAddress}>
+                        <Link href={`/pipeline?propertyId=${encodeURIComponent(propertyId)}`} className={styles.dealCardAddressLink}>
+                          {address}
+                        </Link>
+                      </h3>
+                      <div className={styles.dealCardMeta}>
+                        <span className={statusClass(displayStatus)}>{labelFromKey(displayStatus)}</span>
+                        {savedDate ? <small>Saved {formatDate(savedDate)}</small> : null}
+                      </div>
+                    </div>
+
+                    {/* Financials band — prominent hero */}
+                    <div className={styles.financialsBand}>
+                      <div className={styles.financialStat}>
+                        <span className={styles.financialLabel}>Cap Rate</span>
+                        <strong className={styles.financialValue}>
+                          {row.capRate != null ? formatPercent(row.capRate) : "—"}
+                        </strong>
+                      </div>
+                      <div className={styles.financialStat}>
+                        <span className={styles.financialLabel}>Upside</span>
+                        <strong className={styles.financialValue}>
+                          {row.rentUpside != null ? formatPercent(row.rentUpside) : "—"}
+                        </strong>
+                      </div>
+                      <div className={styles.financialStat}>
+                        <span className={styles.financialLabel}>IRR</span>
+                        <strong className={styles.financialValue}>
+                          {row.irrPct != null ? formatPercent(row.irrPct) : "—"}
+                        </strong>
+                      </div>
+                      {row.cocPct != null && (
+                        <div className={styles.financialStat}>
+                          <span className={styles.financialLabel}>CoC</span>
+                          <strong className={styles.financialValue}>
+                            {formatPercent(row.cocPct)}
+                          </strong>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Secondary line: price / units / $SF / score */}
+                    <div className={styles.dealCardStats}>
+                      <div className={styles.dealCardStat}>
+                        <span>Price</span>
+                        <strong>{formatCurrency(row.price)}</strong>
+                      </div>
+                      <div className={styles.dealCardStat}>
+                        <span>Units</span>
+                        <strong>{row.units != null ? String(row.units) : "—"}</strong>
+                      </div>
+                      <div className={styles.dealCardStat}>
+                        <span>$/SF</span>
+                        <strong>{row.pricePerSqft != null ? formatPerCurrency(row.pricePerSqft) : "—"}</strong>
+                      </div>
+                      <div className={styles.dealCardStat}>
+                        <span>Score</span>
+                        <strong>
+                          <span className={scoreClass(row.dealScore)}>
+                            {row.dealScore != null ? `${Math.round(row.dealScore)}` : "—"}
+                          </span>
+                        </strong>
+                      </div>
+                    </div>
+
+                    {/* Actions */}
+                    <div className={styles.dealCardActions}>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => { window.location.href = `/pipeline?propertyId=${encodeURIComponent(propertyId)}`; }}
+                      >
+                        View property
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => { window.location.href = `/pipeline?propertyId=${encodeURIComponent(propertyId)}&tab=underwriting`; }}
+                      >
+                        View docs
+                      </Button>
+                      <Button
+                        variant="destructive"
+                        size="sm"
+                        onClick={() => void handleUnsave(propertyId)}
+                        disabled={isUnsaving}
+                      >
+                        {isUnsaving ? "Removing…" : "Unsave"}
+                      </Button>
+                    </div>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
         ) : (
           <div className={styles.tableWrap}>
             <table className={styles.table}>

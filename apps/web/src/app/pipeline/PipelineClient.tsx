@@ -13,7 +13,7 @@ import {
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { MailPlus, Star, X } from "lucide-react";
-import { BrokerContactDialog, StageChip } from "@/components/ui";
+import { BrokerContactDialog, FileDropzone, StageChip } from "@/components/ui";
 import {
   UI_V2_PIPELINE_STATUS_OPTIONS,
   UI_V2_REJECTION_REASON_OPTIONS,
@@ -1272,6 +1272,7 @@ export default function PipelineClient() {
     email: string;
     saving: boolean;
   } | null>(null);
+  const [keyboardRowId, setKeyboardRowId] = useState<string | null>(null);
   const [brokerCompPayloads, setBrokerCompPayloads] = useState<Record<string, unknown>>({});
   const [brokerCompLoading, setBrokerCompLoading] = useState<Record<string, boolean>>({});
   const [brokerCompUploading, setBrokerCompUploading] = useState<Record<string, boolean>>({});
@@ -2092,6 +2093,48 @@ export default function PipelineClient() {
     setEmailQueue(propertyIds.slice(1));
     await emailBroker(propertyIds[0]!, "pipeline_table");
   }
+
+  // Table keyboard triage: j/k row focus, enter opens the sheet, e emails.
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      const target = event.target as HTMLElement | null;
+      if (target && (/^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName) || target.isContentEditable)) return;
+      if (selectedId || rejectState || composer || brokerPrompt) return;
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      if (rows.length === 0) return;
+
+      const currentIndex = rows.findIndex((row) => row.propertyId === keyboardRowId);
+      if (event.key === "j" || event.key === "ArrowDown") {
+        event.preventDefault();
+        const next = rows[Math.min(currentIndex + 1, rows.length - 1)] ?? rows[0];
+        setKeyboardRowId(next.propertyId);
+        return;
+      }
+      if (event.key === "k" || event.key === "ArrowUp") {
+        event.preventDefault();
+        const next = currentIndex <= 0 ? rows[0] : rows[currentIndex - 1];
+        setKeyboardRowId(next.propertyId);
+        return;
+      }
+      const focused = currentIndex >= 0 ? rows[currentIndex] : null;
+      if (!focused) return;
+      if (event.key === "Enter") {
+        event.preventDefault();
+        openProperty(focused);
+        return;
+      }
+      if (event.key === "e") {
+        event.preventDefault();
+        if (focused.broker?.email) void emailBroker(focused.propertyId, "pipeline_table");
+        else openBrokerPrompt(focused);
+        return;
+      }
+      if (event.key === "Escape") setKeyboardRowId(null);
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- handlers are stable function declarations in this component
+  }, [rows, keyboardRowId, selectedId, rejectState, composer, brokerPrompt]);
 
   // $/SF sanity: flag values more than 3σ from the visible rows' average.
   const psfStats = useMemo(() => {
@@ -3513,7 +3556,8 @@ export default function PipelineClient() {
               return (
                 <tr
                   key={row.propertyId}
-                  className={cx(isSelected && styles.selectedRow, isUnavailable && styles.unavailableRow) || undefined}
+                  ref={keyboardRowId === row.propertyId ? (node) => node?.scrollIntoView({ block: "nearest" }) : undefined}
+                  className={cx(isSelected && styles.selectedRow, isUnavailable && styles.unavailableRow, keyboardRowId === row.propertyId && styles.keyboardRow) || undefined}
                   title={
                     isUnavailable
                       ? "Listing refresh flagged this property as unavailable (in contract, delisted, or sold) — review and remove if needed."
@@ -4271,21 +4315,16 @@ export default function PipelineClient() {
                       if (selectedId) void uploadPropertyDocuments(selectedId, documentUploadFiles);
                     }}
                   >
-                    <label>
-                      <span>Upload OMs / related docs</span>
-                      <input
-                        type="file"
-                        multiple
-                        accept=".pdf,.txt,.csv,.xls,.xlsx"
-                        onChange={(event) => setDocumentUploadFiles(Array.from(event.target.files ?? []))}
-                      />
-                    </label>
+                    <FileDropzone
+                      files={documentUploadFiles}
+                      onChange={setDocumentUploadFiles}
+                      accept=".pdf,.txt,.csv,.xls,.xlsx"
+                      disabled={documentUploading}
+                      label="Drag & drop OMs / related docs"
+                    />
                     <button className={styles.secondaryButton} type="submit" disabled={documentUploadFiles.length === 0 || documentUploading}>
                       {documentUploading ? "Reading..." : `Upload${documentUploadFiles.length ? ` ${documentUploadFiles.length}` : ""}`}
                     </button>
-                    {documentUploadFiles.length > 0 ? (
-                      <small>{documentUploadFiles.map((file) => file.name).join(" / ")}</small>
-                    ) : null}
                     {documentUploadError ? <p className={styles.dataNote}>{documentUploadError}</p> : null}
                   </form>
                   <div className={styles.documentList}>

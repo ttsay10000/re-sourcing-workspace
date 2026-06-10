@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import React, { Suspense, useCallback, useEffect, useMemo, useState } from "react";
-import { Badge, Button, PageHeader, StatCard } from "@/components/ui";
+import { Button, PageHeader, StatCard } from "@/components/ui";
 import { API_BASE } from "@/lib/api";
 import styles from "./profile.module.css";
 
@@ -162,24 +162,6 @@ interface UserProfile {
   updatedAt: string;
 }
 
-interface ProfileSavedDealRow {
-  savedDeal?: {
-    id: string;
-    propertyId: string;
-    dealStatus: string;
-    createdAt: string;
-  };
-  propertyId?: string;
-  address?: string;
-  canonicalAddress?: string;
-  price: number | null;
-  units: number | null;
-  buildingSqft?: number | null;
-  pricePerSqft?: number | null;
-  dealScore: number | null;
-  imageUrl?: string | null;
-}
-
 interface SavedSearch {
   id: string;
   name: string;
@@ -277,14 +259,6 @@ function formatDateTime(value: string | null | undefined): string {
   return Number.isNaN(parsed.getTime()) ? "Never" : parsed.toLocaleString();
 }
 
-function formatShortDate(value: string | null | undefined): string {
-  if (!value) return "—";
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime())
-    ? "—"
-    : parsed.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-}
-
 function formatSavedSearchAreas(search: SavedSearch): string {
   if (search.locationMode === "single" && search.singleLocationSlug) return search.singleLocationSlug;
   const areaCodes = Array.isArray(search.areaCodes) ? search.areaCodes : [];
@@ -324,26 +298,6 @@ function formatSavedSearchFilters(search: SavedSearch): string {
   return filters.join(" | ");
 }
 
-function profileSavedDealPropertyId(row: ProfileSavedDealRow): string {
-  return row.savedDeal?.propertyId ?? row.propertyId ?? "";
-}
-
-function profileSavedDealId(row: ProfileSavedDealRow): string {
-  return row.savedDeal?.id ?? profileSavedDealPropertyId(row) ?? row.address ?? row.canonicalAddress ?? "saved-deal";
-}
-
-function profileSavedDealAddress(row: ProfileSavedDealRow): string {
-  return row.address ?? row.canonicalAddress ?? "—";
-}
-
-function profileSavedDealStatus(row: ProfileSavedDealRow): string {
-  return row.savedDeal?.dealStatus ?? "saved";
-}
-
-function profileSavedDealCreatedAt(row: ProfileSavedDealRow): string | null {
-  return row.savedDeal?.createdAt ?? null;
-}
-
 function labelFromKey(value: string | null | undefined): string {
   if (!value) return "Unknown";
   return value
@@ -351,31 +305,6 @@ function labelFromKey(value: string | null | undefined): string {
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
-}
-
-function scoreBadgeClass(score: number | null | undefined): string {
-  if (score == null || Number.isNaN(score)) return `${styles.scoreBadge} ${styles.scoreBadgeEmpty}`;
-  if (score >= 70) return `${styles.scoreBadge} ${styles.scoreBadgeStrong}`;
-  if (score >= 50) return `${styles.scoreBadge} ${styles.scoreBadgeWatch}`;
-  return `${styles.scoreBadge} ${styles.scoreBadgeWeak}`;
-}
-
-function dealStatusTone(status: string | null | undefined): "danger" | "success" | "warning" | "info" | "neutral" {
-  if (status === "rejected") return "danger";
-  if (
-    status === "saved" ||
-    status === "om_received" ||
-    status === "dossier_generated" ||
-    status === "contract_signed" ||
-    status === "deal_closed"
-  ) {
-    return "success";
-  }
-  if (status === "underwriting" || status === "offer_review" || status === "negotiation" || status === "awaiting_broker") {
-    return "warning";
-  }
-  if (status === "outreach" || status === "screening") return "info";
-  return "neutral";
 }
 
 function matchesSearchQuery(values: Array<string | number | boolean | null | undefined>, query: string): boolean {
@@ -449,9 +378,6 @@ function ProfilePageContent() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState<Partial<UserProfile>>({});
-  const [savedDeals, setSavedDeals] = useState<ProfileSavedDealRow[]>([]);
-  const [savedDealsLoading, setSavedDealsLoading] = useState(false);
-  const [refreshingScoreScope, setRefreshingScoreScope] = useState<"saved" | "all" | null>(null);
   const [savedSearches, setSavedSearches] = useState<SavedSearch[]>([]);
   const [savedSearchesLoading, setSavedSearchesLoading] = useState(true);
   const [savedSearchDraft, setSavedSearchDraft] = useState<SavedSearchDraft>(DEFAULT_SAVED_SEARCH_DRAFT);
@@ -632,24 +558,6 @@ function ProfilePageContent() {
     }
   };
 
-  const fetchSavedDeals = useCallback(async () => {
-    setSavedDealsLoading(true);
-    try {
-      const res = await fetch(`${API_BASE}/api/profile/saved-deals`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error || data?.details || "Failed to load");
-      setSavedDeals(data.savedDeals ?? []);
-    } catch {
-      setSavedDeals([]);
-    } finally {
-      setSavedDealsLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchSavedDeals();
-  }, [fetchSavedDeals]);
-
   const fetchSavedSearches = useCallback(async () => {
     setSavedSearchesLoading(true);
     setSavedSearchError(null);
@@ -669,36 +577,6 @@ function ProfilePageContent() {
   useEffect(() => {
     void fetchSavedSearches();
   }, [fetchSavedSearches]);
-
-  const handleUnsave = async (propertyId: string) => {
-    try {
-      await fetch(`${API_BASE}/api/profile/saved-deals/${encodeURIComponent(propertyId)}`, { method: "DELETE" });
-      setSavedDeals((prev) => prev.filter((row) => profileSavedDealPropertyId(row) !== propertyId));
-    } catch {
-      // ignore
-    }
-  };
-
-  const handleRefreshScores = async (scope: "saved" | "all") => {
-    setRefreshingScoreScope(scope);
-    setError(null);
-    try {
-      const res = await fetch(`${API_BASE}/api/dossier/refresh-scores`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ scope }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || data?.error) {
-        throw new Error(data?.details || data?.error || "Failed to refresh scores");
-      }
-      await fetchSavedDeals();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to refresh scores");
-    } finally {
-      setRefreshingScoreScope(null);
-    }
-  };
 
   const handleGenerateStandardLeverage = async () => {
     setSaving(true);
@@ -826,25 +704,6 @@ function ProfilePageContent() {
     );
   }, [globalQuery, savedSearches]);
 
-  const filteredSavedDeals = useMemo(() => {
-    if (!globalQuery) return savedDeals;
-    return savedDeals.filter((row) =>
-      matchesSearchQuery(
-        [
-          profileSavedDealAddress(row),
-          profileSavedDealPropertyId(row),
-          profileSavedDealStatus(row),
-          row.price,
-          row.units,
-          row.dealScore,
-          row.imageUrl,
-          profileSavedDealCreatedAt(row),
-        ],
-        globalQuery
-      )
-    );
-  }, [globalQuery, savedDeals]);
-
   if (loading) {
     return (
       <div className={styles.page} style={{ padding: "1.5rem" }}>
@@ -861,27 +720,27 @@ function ProfilePageContent() {
         title="Profile"
         subtitle="Keep underwriting defaults tidy here so deal-specific inputs only need lightweight edits downstream."
         actions={
-          <div className={styles.statStrip}>
-            <StatCard
-              label="Account fields"
-              value={profileFields.length}
-              tone="neutral"
-            />
-            <StatCard
-              label="Assumptions"
-              value={assumptionSections.reduce((total, section) => total + section.fields.length, 0)}
-              tone="neutral"
-            />
-            <StatCard
-              label="Saved searches"
-              value={savedSearches.length}
-              tone="brand"
-            />
-            <StatCard
-              label="Saved deals"
-              value={savedDeals.length}
-              tone="brand"
-            />
+          <div className={styles.profileHeaderActions}>
+            <div className={styles.statStrip}>
+              <StatCard
+                label="Account fields"
+                value={profileFields.length}
+                tone="neutral"
+              />
+              <StatCard
+                label="Assumptions"
+                value={assumptionSections.reduce((total, section) => total + section.fields.length, 0)}
+                tone="neutral"
+              />
+              <StatCard
+                label="Saved searches"
+                value={savedSearches.length}
+                tone="brand"
+              />
+            </div>
+            <Link href="/saved" className={styles.savedDealsLink}>
+              Saved Deals →
+            </Link>
           </div>
         }
       />
@@ -891,7 +750,7 @@ function ProfilePageContent() {
           <span>Filtered by global search</span>
           <strong>{searchParams.get("q")}</strong>
           <span>
-            {filteredSavedSearches.length} search{filteredSavedSearches.length === 1 ? "" : "es"} · {filteredSavedDeals.length} deal{filteredSavedDeals.length === 1 ? "" : "s"}
+            {filteredSavedSearches.length} search{filteredSavedSearches.length === 1 ? "" : "es"}
           </span>
         </div>
       )}
@@ -1429,106 +1288,6 @@ function ProfilePageContent() {
         )}
       </section>
 
-      {/* ── Saved deals section ── */}
-      <section className={styles.section}>
-        <div className={styles.sectionHeading}>
-          <div>
-            <h2>Saved deals</h2>
-            <p>
-              Deals you saved from Pipeline. Dossier download still routes through the property view after generation.
-            </p>
-          </div>
-          <div className={styles.actionsRow}>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => { void handleRefreshScores("saved"); }}
-              disabled={refreshingScoreScope != null}
-            >
-              {refreshingScoreScope === "saved" ? "Refreshing…" : "Refresh saved scores"}
-            </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => { void handleRefreshScores("all"); }}
-              disabled={refreshingScoreScope != null}
-            >
-              {refreshingScoreScope === "all" ? "Refreshing…" : "Refresh all scores"}
-            </Button>
-          </div>
-        </div>
-        {savedDealsLoading ? (
-          <p className={styles.mutedCopy}>Loading saved deals…</p>
-        ) : savedDeals.length === 0 ? (
-          <p className={styles.mutedCopy}>No saved deals. Save a property from Pipeline to see it here.</p>
-        ) : filteredSavedDeals.length === 0 ? (
-          <p className={styles.mutedCopy}>No saved deals match the current search.</p>
-        ) : (
-          <div className={styles.savedDealsGrid}>
-            {filteredSavedDeals.map((row) => (
-              <article key={profileSavedDealId(row)} className={styles.savedDealCard}>
-                <div className={styles.savedDealPhoto} aria-hidden="true">
-                  {row.imageUrl ? (
-                    <img src={row.imageUrl} alt="" loading="lazy" />
-                  ) : (
-                    <span className={styles.savedDealPhotoInitial}>{profileSavedDealAddress(row).slice(0, 1).toUpperCase()}</span>
-                  )}
-                </div>
-                <div className={styles.savedDealBody}>
-                  <div className={styles.savedDealMain}>
-                    <h3 className={styles.savedDealAddress}>{profileSavedDealAddress(row)}</h3>
-                    <div className={styles.savedDealMeta}>
-                      <Badge tone={dealStatusTone(profileSavedDealStatus(row))}>
-                        {labelFromKey(profileSavedDealStatus(row))}
-                      </Badge>
-                      {profileSavedDealCreatedAt(row) ? (
-                        <small>Saved {formatShortDate(profileSavedDealCreatedAt(row))}</small>
-                      ) : null}
-                    </div>
-                    <div className={styles.savedDealStats}>
-                      <div className={styles.savedDealStat}>
-                        <span>Price</span>
-                        <strong>{row.price != null ? currencyFormatter.format(row.price) : "—"}</strong>
-                      </div>
-                      <div className={styles.savedDealStat}>
-                        <span>Units</span>
-                        <strong>{row.units != null ? String(row.units) : "—"}</strong>
-                      </div>
-                      <div className={styles.savedDealStat}>
-                        <span>$/SF</span>
-                        <strong>{row.pricePerSqft != null ? currencyFormatter.format(row.pricePerSqft) : "—"}</strong>
-                      </div>
-                      <div className={styles.savedDealStat}>
-                        <span>Score</span>
-                        <strong>
-                          <span className={scoreBadgeClass(row.dealScore)}>
-                            {row.dealScore != null ? `${Math.round(row.dealScore)} / 100` : "—"}
-                          </span>
-                        </strong>
-                      </div>
-                    </div>
-                  </div>
-                  <div className={styles.actionsRow}>
-                    <Link href={`/pipeline?propertyId=${profileSavedDealPropertyId(row)}`} className={styles.actionLink}>
-                      View property
-                    </Link>
-                    <Link href={`/pipeline?propertyId=${profileSavedDealPropertyId(row)}`} className={styles.actionLink}>
-                      View docs
-                    </Link>
-                    <Button
-                      variant="destructive"
-                      size="sm"
-                      onClick={() => handleUnsave(profileSavedDealPropertyId(row))}
-                    >
-                      Unsave
-                    </Button>
-                  </div>
-                </div>
-              </article>
-            ))}
-          </div>
-        )}
-      </section>
     </div>
   );
 }

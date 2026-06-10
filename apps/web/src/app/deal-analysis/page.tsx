@@ -3,7 +3,7 @@
 import type { PropertyDetails } from "@re-sourcing/contracts";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import {
   OM_CALC_NUMERIC_FIELDS,
   OmCalculationPanel,
@@ -14,6 +14,8 @@ import {
   type OmCalculationTextField,
   type OmCalculationUnitModelRow,
 } from "../property-data/OmCalculationPanel";
+import { Button, FileDropzone } from "@/components/ui";
+import intakeStyles from "./dealAnalysis.module.css";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
 const OM_IMPORT_MAX_BYTES = 10 * 1024 * 1024;
@@ -587,7 +589,6 @@ function DealAnalysisPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const propertyId = searchParams.get("property_id")?.trim() || null;
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [omUrl, setOmUrl] = useState("");
   const [workspaceFiles, setWorkspaceFiles] = useState<File[]>([]);
@@ -876,7 +877,6 @@ function DealAnalysisPageContent() {
         setCalculation(nextCalculation);
         setDraft(nextDraft);
         setBaselineDraft(nextDraft);
-        if (fileInputRef.current) fileInputRef.current.value = "";
         setNotice("Prior OM workspace loaded from the saved property record.");
       } catch (err) {
         if (cancelled || abortController.signal.aborted) return;
@@ -910,7 +910,6 @@ function DealAnalysisPageContent() {
     setError(null);
     setNotice(null);
     setCreateResult(null);
-    if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
   function resetWorkspace() {
@@ -954,7 +953,6 @@ function DealAnalysisPageContent() {
     if (data.propertyId) {
       setPendingFiles([]);
       setOmUrl("");
-      if (fileInputRef.current) fileInputRef.current.value = "";
       const createSummary: CreatePropertyResponse = {
         ok: true,
         propertyId: data.propertyId,
@@ -1019,7 +1017,6 @@ function DealAnalysisPageContent() {
       setBatchResults(data.results);
       setPendingFiles([]);
       setFreshUploadReview(null);
-      if (fileInputRef.current) fileInputRef.current.value = "";
       setNotice(
         `${data.succeeded ?? data.results.filter((row) => row.ok).length} of ${data.total ?? fileCount} OMs analyzed into separate property workspaces. Each one needs review before its numbers are trusted.`
       );
@@ -1811,92 +1808,43 @@ function DealAnalysisPageContent() {
         }}
       >
         <div style={{ ...cardStyle, padding: "1.2rem" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap" }}>
-            <div>
-              <strong style={{ color: "#18231e", fontSize: "1rem" }}>1. Add OM / financial files or link</strong>
-              <div style={{ marginTop: "0.3rem", color: "#68736d", fontSize: "0.9rem", lineHeight: 1.5 }}>
-                Start from file uploads, rent roll/T-12 workbooks, or a directly downloadable OM link, then pull prior builds back from
-                the saved workspace list above.
-              </div>
-            </div>
-          </div>
+          <h2 className={intakeStyles.intakeSectionHeading}>1. Add OM / financial files or link</h2>
+          <p className={intakeStyles.intakeSectionDesc}>
+            Start from file uploads, rent roll/T-12 workbooks, or a directly downloadable OM link, then pull prior builds back from
+            the saved workspace list above.
+          </p>
 
-          <div
-            style={{
-              marginTop: "1rem",
-              border: "1px dashed rgba(47, 111, 82, 0.34)",
-              borderRadius: "8px",
-              padding: "1rem",
-              background: "#f7fbf8",
-            }}
-          >
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept={OM_PACKAGE_ACCEPT}
-              multiple
-              onChange={(event) => {
-                const selectedFiles = Array.from(event.target.files ?? []);
-                if (selectedFiles.length > OM_IMPORT_MAX_FILES) {
-                  setPendingFiles([]);
-                  setFreshUploadReview(null);
-                  setNotice(null);
-                  setError(
-                    `Upload up to ${OM_IMPORT_MAX_FILES} OM / broker financial files at a time. ${selectedFiles.length} files selected; choose ${OM_IMPORT_MAX_FILES} or fewer.`
-                  );
-                  if (fileInputRef.current) fileInputRef.current.value = "";
-                  return;
-                }
-                setPendingFiles(selectedFiles);
+          {/* ── Files card ── */}
+          <div className={intakeStyles.intakeCard}>
+            <span className={intakeStyles.microLabel}>OM / financial files</span>
+            <FileDropzone
+              files={pendingFiles}
+              onChange={(files) => {
+                setPendingFiles(files);
                 setFreshUploadReview(null);
                 setNotice(
-                  workspaceDetails != null
+                  files.length > 0 && workspaceDetails != null
                     ? "New OM files selected. Analyze uploads to replace the current workspace."
                     : null
                 );
-                const oversized = selectedFiles.filter((file) => file.size > OM_IMPORT_MAX_BYTES);
-                if (oversized.length > 0) {
-                  setError(`Each OM / broker financial file must be ${formatBytes(OM_IMPORT_MAX_BYTES)} or smaller.`);
-                } else {
-                  setError(null);
-                }
+                setError(null);
               }}
-              style={{ display: "block", width: "100%" }}
+              accept={OM_PACKAGE_ACCEPT}
+              maxFiles={OM_IMPORT_MAX_FILES}
+              maxBytes={OM_IMPORT_MAX_BYTES}
+              disabled={uploading || linkAnalyzing}
+              label="Drag & drop OM files here"
+              hint={`PDF, Excel, CSV, TXT, images · up to ${OM_IMPORT_MAX_FILES} files, ${formatBytes(OM_IMPORT_MAX_BYTES)} each`}
             />
-            <div style={{ marginTop: "0.7rem", color: "#68736d", fontSize: "0.84rem", lineHeight: 1.5 }}>
-              Upload OM PDFs, rent roll workbooks, T-12s, broker financial models, CSVs, text notes, or screenshots/photos of rents and expenses (texts from brokers work).
-              The analysis will combine them into one underwriting workspace. Up to {OM_IMPORT_MAX_FILES} files, max{" "}
-              {formatBytes(OM_IMPORT_MAX_BYTES)} per file.
-            </div>
-            <div style={{ marginTop: "0.9rem", display: "grid", gap: "0.55rem" }}>
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  gap: "0.75rem",
-                  flexWrap: "wrap",
-                  color: "#303832",
-                  fontSize: "0.8rem",
-                  fontWeight: 850,
-                }}
-              >
-                <span>Selected intake files</span>
-                <span style={{ color: pendingFiles.length > OM_IMPORT_MAX_FILES ? "#b91c1c" : "#68736d" }}>
-                  {pendingFiles.length}/{OM_IMPORT_MAX_FILES}
-                </span>
-              </div>
-              <OmIntakeReviewList rows={pendingFileReviewRows} emptyText="No files selected yet." />
-            </div>
             {pendingSelectionReplacesWorkspace ? (
-              <div style={{ marginTop: "0.7rem", color: "#92400e", fontSize: "0.82rem" }}>
+              <p className={intakeStyles.replaceNotice}>
                 These pending files are not in the active workspace yet. Run analysis again to replace the
                 current OM workspace.
-              </div>
+              </p>
             ) : null}
             {freshUploadReviewRows.length > 0 ? (
               <div
                 style={{
-                  marginTop: "0.95rem",
                   paddingTop: "0.95rem",
                   borderTop: "1px solid rgba(38, 47, 44, 0.12)",
                   display: "grid",
@@ -1923,64 +1871,39 @@ function DealAnalysisPageContent() {
                 </div>
               </div>
             ) : null}
-          </div>
-          <div
-            style={{
-              marginTop: "0.85rem",
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-              gap: "0.85rem",
-              flexWrap: "wrap",
-            }}
-          >
-            <label
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "0.45rem",
-                color: "#303832",
-                fontSize: "0.84rem",
-                fontWeight: 700,
-                cursor: "pointer",
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={separateProperties}
-                onChange={(event) => setSeparateProperties(event.target.checked)}
-                style={{ width: "15px", height: "15px", accentColor: "#0f766e" }}
-              />
-              Each file is a separate property (one analysis per OM)
-            </label>
-            <button
-              type="button"
-              onClick={analyzeUploads}
-              disabled={!canAnalyze || uploading || linkAnalyzing}
-              style={{
-                ...primaryButtonStyle,
-                cursor: !canAnalyze || uploading || linkAnalyzing ? "not-allowed" : "pointer",
-                border: canAnalyze ? primaryButtonStyle.border : "1px solid var(--app-line)",
-                background: canAnalyze ? primaryButtonStyle.background : "var(--app-surface-strong)",
-                color: canAnalyze ? "#ffffff" : "var(--app-muted)",
-                opacity: uploading || linkAnalyzing ? 0.65 : 1,
-              }}
-            >
-              {uploading
-                ? separateProperties
-                  ? "Running separate analyses..."
-                  : "Analyzing uploaded files..."
-                : separateProperties
-                  ? `Run ${pendingFiles.length || ""} separate analyses`.replace("  ", " ")
-                  : "Analyze uploaded files"}
-            </button>
-          </div>
-          {separateProperties ? (
-            <div style={{ marginTop: "0.45rem", color: "#68736d", fontSize: "0.8rem", lineHeight: 1.5 }}>
-              Each file gets its own Gemini extraction, property match-or-create, and review-required
-              workspace. Files run one at a time - keep this tab open for large batches.
+            <div className={intakeStyles.intakeActionRow}>
+              <label className={intakeStyles.separateCheckLabel}>
+                <input
+                  type="checkbox"
+                  checked={separateProperties}
+                  onChange={(event) => setSeparateProperties(event.target.checked)}
+                  style={{ width: "15px", height: "15px", accentColor: "#0f766e" }}
+                />
+                Each file is a separate property (one analysis per OM)
+              </label>
+              <Button
+                type="button"
+                variant={canAnalyze ? "primary" : "secondary"}
+                size="sm"
+                onClick={analyzeUploads}
+                disabled={!canAnalyze || uploading || linkAnalyzing}
+              >
+                {uploading
+                  ? separateProperties
+                    ? "Running separate analyses..."
+                    : "Analyzing uploaded files..."
+                  : separateProperties
+                    ? `Run ${pendingFiles.length || ""} separate analyses`.replace("  ", " ")
+                    : "Analyze uploaded files"}
+              </Button>
             </div>
-          ) : null}
+            {separateProperties ? (
+              <div style={{ color: "#68736d", fontSize: "0.8rem", lineHeight: 1.5 }}>
+                Each file gets its own Gemini extraction, property match-or-create, and review-required
+                workspace. Files run one at a time - keep this tab open for large batches.
+              </div>
+            ) : null}
+          </div>
 
           {batchResults ? (
             <div
@@ -2048,19 +1971,10 @@ function DealAnalysisPageContent() {
             </div>
           ) : null}
 
-          <div
-            style={{
-              marginTop: "1rem",
-              border: "1px solid rgba(38, 47, 44, 0.12)",
-              borderRadius: "8px",
-              padding: "1rem",
-              background: "#ffffff",
-              display: "grid",
-              gap: "0.7rem",
-            }}
-          >
-            <label style={{ display: "grid", gap: "0.35rem", color: "#303832", fontSize: "0.8rem", fontWeight: 800 }}>
-              OM PDF link
+          {/* ── OM PDF link card ── */}
+          <div className={intakeStyles.intakeCard}>
+            <span className={intakeStyles.microLabel}>OM PDF link</span>
+            <label className={intakeStyles.intakeFieldLabel}>
               <input
                 value={omUrl}
                 onChange={(event) => {
@@ -2068,42 +1982,29 @@ function DealAnalysisPageContent() {
                   setError(null);
                 }}
                 placeholder="https://.../offering-memorandum.pdf"
-                style={inputStyle}
+                className={intakeStyles.intakeInput}
               />
             </label>
-            <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", flexWrap: "wrap", alignItems: "center" }}>
-              <div style={{ color: "#68736d", fontSize: "0.84rem", lineHeight: 1.5 }}>
+            <div className={intakeStyles.intakeCardRow}>
+              <span className={intakeStyles.intakeCardHint}>
                 Link imports use the same OM analysis prompt and save back to the matched property workspace.
-              </div>
-              <button
+              </span>
+              <Button
                 type="button"
+                variant="secondary"
+                size="sm"
                 onClick={analyzeOmLink}
                 disabled={!canAnalyzeLink || uploading || linkAnalyzing}
-                style={{
-                  ...secondaryButtonStyle,
-                  background: canAnalyzeLink ? "#fff" : "#f2f6f4",
-                  cursor: !canAnalyzeLink || uploading || linkAnalyzing ? "not-allowed" : "pointer",
-                  opacity: !canAnalyzeLink ? 0.65 : 1,
-                }}
               >
                 {linkAnalyzing ? "Analyzing OM link..." : "Analyze OM link"}
-              </button>
+              </Button>
             </div>
           </div>
 
-          <div
-            style={{
-              marginTop: "1rem",
-              border: "1px solid rgba(38, 47, 44, 0.12)",
-              borderRadius: "8px",
-              padding: "1rem",
-              background: "#ffffff",
-              display: "grid",
-              gap: "0.7rem",
-            }}
-          >
-            <label style={{ display: "grid", gap: "0.35rem", color: "#303832", fontSize: "0.8rem", fontWeight: 800 }}>
-              Broker notes (texts, calls, email snippets)
+          {/* ── Broker notes card ── */}
+          <div className={intakeStyles.intakeCard}>
+            <span className={intakeStyles.microLabel}>Broker notes</span>
+            <label className={intakeStyles.intakeFieldLabel}>
               <textarea
                 value={brokerNotes}
                 onChange={(event) => {
@@ -2112,39 +2013,32 @@ function DealAnalysisPageContent() {
                 }}
                 placeholder={"Paste what the broker shared, e.g.\n6 units at 412 E 9th St. Unit 1: $3,400/mo, Unit 2: $2,950 stabilized...\nTaxes $48k, insurance $12k, water/sewer $9k."}
                 rows={5}
-                style={{ ...inputStyle, resize: "vertical", minHeight: "108px", fontFamily: "inherit" }}
+                className={intakeStyles.intakeTextarea}
               />
             </label>
-            <label style={{ display: "grid", gap: "0.35rem", color: "#303832", fontSize: "0.8rem", fontWeight: 800 }}>
-              Address hint (optional, helps match or create the right property)
+            <label className={intakeStyles.intakeFieldLabel}>
+              <span className={intakeStyles.microLabel}>Address hint (optional)</span>
               <input
                 value={notesAddressHint}
                 onChange={(event) => setNotesAddressHint(event.target.value)}
                 placeholder="412 East 9th Street, Manhattan"
-                style={inputStyle}
+                className={intakeStyles.intakeInput}
               />
             </label>
-            <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", flexWrap: "wrap", alignItems: "center" }}>
-              <div style={{ color: "#68736d", fontSize: "0.84rem", lineHeight: 1.5 }}>
+            <div className={intakeStyles.intakeCardRow}>
+              <span className={intakeStyles.intakeCardHint}>
                 Notes run through the same extraction as OMs: rents, unit details, and expenses become
                 broker-reported current figures on the matched or newly created property, flagged for review.
-              </div>
-              <button
+              </span>
+              <Button
                 type="button"
+                variant="secondary"
+                size="sm"
                 onClick={analyzeBrokerNotes}
                 disabled={brokerNotes.trim().length < 20 || uploading || linkAnalyzing || notesAnalyzing}
-                style={{
-                  ...secondaryButtonStyle,
-                  background: brokerNotes.trim().length >= 20 ? "#fff" : "#f2f6f4",
-                  cursor:
-                    brokerNotes.trim().length < 20 || uploading || linkAnalyzing || notesAnalyzing
-                      ? "not-allowed"
-                      : "pointer",
-                  opacity: brokerNotes.trim().length < 20 ? 0.65 : 1,
-                }}
               >
                 {notesAnalyzing ? "Analyzing notes..." : "Analyze broker notes"}
-              </button>
+              </Button>
             </div>
           </div>
         </div>

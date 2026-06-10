@@ -1575,3 +1575,51 @@
   font-size: var(--text-2xs);
   color: var(--app-red);
 }
+
+/* Keyboard focus + stepper/source affordances */
+
+.miniRowFocused {
+  border-color: var(--brand) !important;
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.16) !important;
+}
+
+.nextActionsSource {
+  align-self: center;
+  border: 1px solid var(--app-line);
+  border-radius: var(--radius-pill);
+  background: var(--app-surface-strong);
+  color: var(--app-muted);
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 0.18rem 0.5rem;
+  cursor: help;
+}
+
+.shortcutList {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0;
+}
+
+.shortcutList div {
+  display: grid;
+  grid-template-columns: 6rem 1fr;
+  gap: 0.6rem;
+  align-items: baseline;
+}
+
+.shortcutList dt {
+  margin: 0;
+  font-family: var(--font-geist-mono, monospace);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  color: var(--brand-strong);
+}
+
+.shortcutList dd {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--app-ink-secondary);
+}

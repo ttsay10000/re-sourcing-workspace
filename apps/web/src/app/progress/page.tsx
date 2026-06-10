@@ -23,7 +23,8 @@ import {
   type UiV2PipelineStatus,
   type UiV2RejectionReasonCode,
 } from "@re-sourcing/contracts";
-import { BrokerContactDialog, Button, Dialog, PageHeader, PromptMenu, PropertyThumb, StatCard } from "@/components/ui";
+import { BrokerContactDialog, Button, Dialog, FileDropzone, PageHeader, PromptMenu, PropertyThumb, StatCard } from "@/components/ui";
+import { RecommendationStepper, type StepperKind, type StepperRow } from "./RecommendationStepper";
 import { API_BASE, apiFetch } from "@/lib/api";
 import styles from "./progress.module.css";
 const BULK_STAGE_MOVE_ID = "__bulk_stage_move__";
@@ -782,6 +783,9 @@ function ProgressPageContent() {
   const [moveStageState, setMoveStageState] = useState<MoveStageDialogState | null>(null);
   const [recommendations, setRecommendations] = useState<RecommendationsState>({ data: null, loading: true });
   const [boardFocus, setBoardFocus] = useState<BoardFocus | null>(null);
+  const [stepper, setStepper] = useState<{ kind: StepperKind; rows: StepperRow[] } | null>(null);
+  const [focusedCardId, setFocusedCardId] = useState<string | null>(null);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
 
   const loadProgress = useCallback(async (mode: "initial" | "refresh" = "initial") => {
     if (mode === "initial") setLoading(true);
@@ -844,13 +848,38 @@ function ProgressPageContent() {
     void loadRecommendations();
   }, [loadRecommendations]);
 
-  const applyRecommendation = useCallback((item: DealFlowRecommendation) => {
-    setBoardFocus({
-      label: item.title,
-      propertyIds: new Set(item.propertyIds),
-      stageId: item.stageId,
-    });
-  }, []);
+  const applyRecommendation = useCallback(
+    (item: DealFlowRecommendation) => {
+      if (item.id === "missing_broker_email" || item.id === "request_oms") {
+        const wanted = new Set(item.propertyIds);
+        const rows = sections
+          .flatMap((section) => section.rows ?? [])
+          .filter((row) => wanted.has(row.propertyId));
+        const seen = new Set<string>();
+        const stepperRows: StepperRow[] = [];
+        for (const row of rows) {
+          if (seen.has(row.propertyId)) continue;
+          seen.add(row.propertyId);
+          stepperRows.push({
+            propertyId: row.propertyId,
+            address: row.displayAddress || row.canonicalAddress || row.propertyId,
+            brokerName: row.brokerName ?? null,
+            brokerEmail: row.brokerEmail ?? null,
+          });
+        }
+        if (stepperRows.length > 0) {
+          setStepper({ kind: item.id, rows: stepperRows });
+          return;
+        }
+      }
+      setBoardFocus({
+        label: item.title,
+        propertyIds: new Set(item.propertyIds),
+        stageId: item.stageId,
+      });
+    },
+    [sections]
+  );
 
   const openEmailComposer = useCallback(async (row: DealFlowRow, intent: ComposerDialogState["intent"]) => {
     const address = row.displayAddress || row.canonicalAddress || row.propertyId;
@@ -1127,6 +1156,7 @@ function ProgressPageContent() {
     if (row) moveRowToSectionId(row, moveStageState.targetSectionId);
   }, [moveRowToSectionId, moveStageState, sections]);
 
+
   const filteredSections = useMemo(() => {
     if (!query && !boardFocus) return sections;
     return sections.map((section) => ({
@@ -1138,6 +1168,107 @@ function ProgressPageContent() {
   }, [boardFocus, query, sections]);
 
   const flowRows = useMemo(() => sections.flatMap((section) => section.rows ?? []), [sections]);
+  const navigableRows = useMemo(
+    () =>
+      filteredSections.flatMap((section, sectionIndex) =>
+        (section.rows ?? []).map((row, rowIndex) => ({ row: row as DealFlowRow, sectionIndex, rowIndex, sectionId: section.id }))
+      ),
+    [filteredSections]
+  );
+
+  // Keyboard triage: j/k through cards, h/l across columns, enter/e/m act on
+  // the focused card, ? shows the cheat sheet. Suppressed while typing or
+  // while any prompt is open.
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      const target = event.target as HTMLElement | null;
+      if (target && (/^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName) || target.isContentEditable)) return;
+      if (composerState || brokerEmailState || moveStageState || rejectState || stepper || editingDealPathId) return;
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+
+      if (event.key === "?") {
+        event.preventDefault();
+        setShortcutsOpen((open) => !open);
+        return;
+      }
+      if (shortcutsOpen) {
+        if (event.key === "Escape") setShortcutsOpen(false);
+        return;
+      }
+      if (navigableRows.length === 0) return;
+
+      const currentIndex = navigableRows.findIndex((entry) => entry.row.propertyId === focusedCardId);
+
+      if (event.key === "j" || event.key === "ArrowDown") {
+        event.preventDefault();
+        const next = navigableRows[Math.min(currentIndex + 1, navigableRows.length - 1)] ?? navigableRows[0];
+        setFocusedCardId(next.row.propertyId);
+        return;
+      }
+      if (event.key === "k" || event.key === "ArrowUp") {
+        event.preventDefault();
+        const next = currentIndex <= 0 ? navigableRows[0] : navigableRows[currentIndex - 1];
+        setFocusedCardId(next.row.propertyId);
+        return;
+      }
+      if (event.key === "h" || event.key === "l") {
+        event.preventDefault();
+        const current = currentIndex >= 0 ? navigableRows[currentIndex] : navigableRows[0];
+        const sectionIndexes = [...new Set(navigableRows.map((entry) => entry.sectionIndex))].sort((a, b) => a - b);
+        const position = sectionIndexes.indexOf(current.sectionIndex);
+        const targetSection = sectionIndexes[position + (event.key === "l" ? 1 : -1)];
+        if (targetSection == null) return;
+        const candidates = navigableRows.filter((entry) => entry.sectionIndex === targetSection);
+        const next = candidates[Math.min(current.rowIndex, candidates.length - 1)];
+        if (next) setFocusedCardId(next.row.propertyId);
+        return;
+      }
+
+      const focused = currentIndex >= 0 ? navigableRows[currentIndex] : null;
+      if (!focused) {
+        if (event.key === "Escape") setFocusedCardId(null);
+        return;
+      }
+      if (event.key === "Enter") {
+        event.preventDefault();
+        startDealPathEdit(focused.row);
+        return;
+      }
+      if (event.key === "e") {
+        event.preventDefault();
+        if (focused.row.brokerEmail) void openEmailComposer(focused.row, "email");
+        else openBrokerEmailDialog(focused.row);
+        return;
+      }
+      if (event.key === "m") {
+        event.preventDefault();
+        setMoveStageState({
+          propertyId: focused.row.propertyId,
+          address: focused.row.displayAddress || focused.row.canonicalAddress || focused.row.propertyId,
+          targetSectionId: focused.sectionId === "sourced" ? "om_requested" : focused.sectionId,
+        });
+        return;
+      }
+      if (event.key === "Escape") {
+        setFocusedCardId(null);
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [
+    brokerEmailState,
+    composerState,
+    editingDealPathId,
+    focusedCardId,
+    moveStageState,
+    navigableRows,
+    openBrokerEmailDialog,
+    openEmailComposer,
+    rejectState,
+    shortcutsOpen,
+    startDealPathEdit,
+    stepper,
+  ]);
   const filteredFlowRows = useMemo(() => filteredSections.flatMap((section) => section.rows ?? []), [filteredSections]);
   const editingDealPathRow = useMemo(
     () => flowRows.find((row) => row.propertyId === editingDealPathId) ?? null,
@@ -1514,6 +1645,14 @@ function ProgressPageContent() {
                 : recommendations.data?.headline ?? "Recommendations are unavailable right now."}
             </p>
           </div>
+          {recommendations.data?.source === "rules" ? (
+            <span
+              className={styles.nextActionsSource}
+              title="Generated by the rule engine — set OPENAI_API_KEY to enable LLM phrasing and prioritization."
+            >
+              rule-based
+            </span>
+          ) : null}
           <button
             type="button"
             className={styles.nextActionsRefresh}
@@ -1701,6 +1840,7 @@ function ProgressPageContent() {
                   targetSectionId: section.id === "sourced" ? "om_requested" : section.id,
                 })
               }
+              focusedCardId={focusedCardId}
             />
           ))}
         </div>
@@ -1826,6 +1966,37 @@ function ProgressPageContent() {
         onChange={(patch) => setBrokerEmailState((current) => (current ? { ...current, ...patch } : current))}
         onSubmit={() => void submitBrokerEmail()}
       />
+
+      {stepper ? (
+        <RecommendationStepper
+          kind={stepper.kind}
+          rows={stepper.rows}
+          onClose={(didWork) => {
+            setStepper(null);
+            if (didWork) {
+              void loadProgress("refresh");
+              void loadRecommendations(true);
+            }
+          }}
+        />
+      ) : null}
+
+      <Dialog
+        open={shortcutsOpen}
+        onClose={() => setShortcutsOpen(false)}
+        title="Keyboard shortcuts"
+        size="sm"
+      >
+        <dl className={styles.shortcutList}>
+          <div><dt>j / k</dt><dd>Next / previous card</dd></div>
+          <div><dt>h / l</dt><dd>Previous / next column</dd></div>
+          <div><dt>Enter</dt><dd>Open deal inputs</dd></div>
+          <div><dt>e</dt><dd>Email broker (or add email)</dd></div>
+          <div><dt>m</dt><dd>Move to stage…</dd></div>
+          <div><dt>Esc</dt><dd>Clear focus / close</dd></div>
+          <div><dt>?</dt><dd>Toggle this help</dd></div>
+        </dl>
+      </Dialog>
 
       <Dialog
         open={moveStageState != null}
@@ -2013,15 +2184,15 @@ function DealPathModal({
                   placeholder="Broker, seller, or recipient email"
                 />
               </label>
-              <label>
-                <span>Upload LOI PDF</span>
-                <input
-                  type="file"
-                  accept="application/pdf,.pdf"
-                  onChange={(event) => onLoiFileChange(event.target.files?.[0] ?? null)}
+              <div>
+                <span style={{ display: "block", marginBottom: "0.35rem" }}>Upload LOI PDF</span>
+                <FileDropzone
+                  files={loiFile ? [loiFile] : []}
+                  onChange={(files) => onLoiFileChange(files[0] ?? null)}
+                  accept=".pdf,.doc,.docx"
+                  maxFiles={1}
                 />
-                {loiFile ? <small>{loiFile.name}</small> : null}
-              </label>
+              </div>
               <GenerateLoiButton
                 propertyId={row.propertyId}
                 offerAmount={form.offerAmount}
@@ -2240,6 +2411,7 @@ function SavedDealMiniSection({
   onEmailBroker,
   onAddBrokerEmail,
   onMoveStage,
+  focusedCardId = null,
 }: {
   section: SavedDealSection;
   loading: boolean;
@@ -2261,6 +2433,7 @@ function SavedDealMiniSection({
   onEmailBroker?: (row: DealFlowRow, intent: "email" | "request_om") => void;
   onAddBrokerEmail?: (row: DealFlowRow) => void;
   onMoveStage?: (row: DealFlowRow) => void;
+  focusedCardId?: string | null;
 }) {
   const visibleRows = compact ? section.rows.slice(0, 5) : section.rows;
   const isEmpty = !loading && visibleRows.length === 0;
@@ -2300,12 +2473,14 @@ function SavedDealMiniSection({
               onEmailBroker,
               onAddBrokerEmail,
             });
+            const keyboardFocused = focusedCardId === row.propertyId;
             return (
               <article
                 key={`${section.id}-${row.propertyId}`}
+                ref={keyboardFocused ? (node) => node?.scrollIntoView({ block: "nearest", inline: "nearest" }) : undefined}
                 className={`${styles.miniRow} ${selected ? styles.miniRowSelected : ""} ${busy ? styles.miniRowBusy : ""} ${
                   tourNeedsInputs ? styles.miniRowNeedsInput : ""
-                }`}
+                } ${keyboardFocused ? styles.miniRowFocused : ""}`}
                 draggable={enableMoves && !compact && !busy}
                 aria-selected={selected}
                 onDragStart={
