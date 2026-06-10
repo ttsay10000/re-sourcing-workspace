@@ -7,9 +7,13 @@ export interface EquityReturnInputs {
   operatingCashFlows?: number[];
 }
 
+export type IrrNullReason = "no_sign_change" | "did_not_converge";
+
 export interface IrrResult {
   /** Internal rate of return as decimal (e.g. 0.12 = 12%). */
   irr: number | null;
+  /** Why irr is null, when it is. */
+  irrNullReason?: IrrNullReason;
   /** Equity multiple = total positive cash received / |year 0 equity|. */
   equityMultiple: number;
   /** Year 1 cash-on-cash return. */
@@ -44,6 +48,19 @@ export function computeIrr(inputs: EquityReturnInputs): IrrResult {
       ? operatingFlows.reduce((sum, value) => sum + value, 0) / operatingFlows.length / initialEquity
       : null;
 
+  // IRR only exists when the series changes sign (money out, then money in).
+  const hasNegative = flows.some((value) => value < 0);
+  const hasPositive = flows.some((value) => value > 0);
+  if (!hasNegative || !hasPositive) {
+    return {
+      irr: null,
+      irrNullReason: "no_sign_change",
+      equityMultiple,
+      year1CashOnCashReturn,
+      averageCashOnCashReturn,
+    };
+  }
+
   let rate = 0.1;
   const maxIter = 100;
   const tol = 1e-7;
@@ -65,6 +82,7 @@ export function computeIrr(inputs: EquityReturnInputs): IrrResult {
   }
   return {
     irr: null,
+    irrNullReason: "did_not_converge",
     equityMultiple,
     year1CashOnCashReturn,
     averageCashOnCashReturn,

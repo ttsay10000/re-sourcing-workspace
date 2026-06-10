@@ -279,11 +279,13 @@ export interface OmCalculationSnapshot {
     annualDebtService: number | null;
     holdPeriodYears: number | null;
     irrPct: number | null;
+    irrNullReason?: "no_sign_change" | "did_not_converge" | null;
     averageCashOnCashReturn: number | null;
     year1CashOnCashReturn: number | null;
     year1EquityYield: number | null;
     equityMultiple: number | null;
   };
+  currentNoiOverridden?: boolean;
   yieldSignals?: {
     ltrYieldPct: number | null;
     mtrYieldPct: number | null;
@@ -2463,6 +2465,23 @@ export function OmCalculationPanel({
                   Front-page property, acquisition, rent mix, and return outputs from the latest OM run.
                 </div>
               </div>
+              {calculation.currentNoiOverridden ? (
+                <div
+                  style={{
+                    margin: "0.75rem 0 0",
+                    border: "1px solid #fde68a",
+                    borderRadius: "10px",
+                    background: "#fffbeb",
+                    color: "#b45309",
+                    fontSize: "0.8rem",
+                    fontWeight: 600,
+                    padding: "0.55rem 0.8rem",
+                  }}
+                >
+                  NOI override active — current NOI is user-set, so the expense rows below are informational and do
+                  not feed this number. Clear the override in assumptions to recalculate from expenses.
+                </div>
+              ) : null}
               <div
                 style={{
                   display: "grid",
@@ -2574,7 +2593,14 @@ export function OmCalculationPanel({
                       calculation.topLineMetrics.holdPeriodYears != null
                         ? `Projected ${formatNumber(calculation.topLineMetrics.holdPeriodYears)}-year IRR`
                         : "Projected IRR",
-                    value: formatRatioPercent(calculation.topLineMetrics.irrPct, 1),
+                    value:
+                      calculation.topLineMetrics.irrPct != null
+                        ? formatRatioPercent(calculation.topLineMetrics.irrPct, 1)
+                        : calculation.topLineMetrics.irrNullReason === "no_sign_change"
+                          ? "— (cash flows never turn positive)"
+                          : calculation.topLineMetrics.irrNullReason === "did_not_converge"
+                            ? "— (solver did not converge)"
+                            : formatRatioPercent(null, 1),
                   },
                   {
                     label: "Avg cash-on-cash",

@@ -292,6 +292,7 @@ export interface OmCalculationSnapshot {
     annualDebtService: number | null;
     holdPeriodYears: number | null;
     irrPct: number | null;
+    irrNullReason: "no_sign_change" | "did_not_converge" | null;
     averageCashOnCashReturn: number | null;
     year1CashOnCashReturn: number | null;
     year1EquityYield: number | null;
@@ -626,6 +627,7 @@ export function buildOmCalculationSnapshotFromInputs(params: {
       annualDebtService: projection.financing.annualDebtService,
       holdPeriodYears: assumptions.holdPeriodYears,
       irrPct: projection.returns.irr,
+      irrNullReason: projection.returns.irrNullReason ?? null,
       averageCashOnCashReturn: projection.returns.averageCashOnCashReturn,
       year1CashOnCashReturn: projection.returns.year1CashOnCashReturn,
       year1EquityYield: projection.returns.year1EquityYield,
