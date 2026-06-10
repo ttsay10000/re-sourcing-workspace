@@ -3,6 +3,7 @@ export { BrokerContactDialog, type BrokerContactDraft } from "./BrokerContactDia
 export { Button, type ButtonSize, type ButtonVariant } from "./Button";
 export { ConfirmDialog, Dialog } from "./Dialog";
 export { EmptyState } from "./EmptyState";
+export { FileDropzone } from "./FileDropzone";
 export { IconButton } from "./IconButton";
 export { KeyValueList, type KeyValueItem } from "./KeyValueList";
 export { PageHeader } from "./PageHeader";

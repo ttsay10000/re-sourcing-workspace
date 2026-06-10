@@ -3097,6 +3097,14 @@ async function handleStatusUpdate(req: Request, res: Response): Promise<void> {
       }
     }
     await updatePipelineState(pool, propertyId, patch);
+    const userId = await getDefaultUserId(pool);
+    const savedDealsRepo = new SavedDealsRepo({ pool });
+    const savedDeal = await savedDealsRepo.get(userId, propertyId);
+    if (status === "rejected" && savedDeal && savedDeal.dealStatus !== "rejected") {
+      await savedDealsRepo.updateStatus(userId, propertyId, "rejected");
+    } else if (status !== "rejected" && savedDeal?.dealStatus === "rejected") {
+      await savedDealsRepo.updateStatus(userId, propertyId, "saved");
+    }
     await new PropertyPipelineEventRepo({ pool }).create({
       propertyId,
       eventType: status === "rejected" ? "rejected" : "status_changed",
@@ -3110,7 +3118,6 @@ async function handleStatusUpdate(req: Request, res: Response): Promise<void> {
         ...(rejection ? { rejection } : {}),
       },
     });
-    const userId = await getDefaultUserId(pool);
     const detail = await loadDetailForProperty(pool, userId, propertyId);
     res.json({ property: detail } satisfies { property: UiV2PropertyDetailPayload | null });
   } catch (err) {
@@ -3823,6 +3830,11 @@ router.post("/ui-v2/properties/:id/restore", async (req: Request, res: Response)
       metadata: { status: restoredUiStatus },
     });
     const userId = await getDefaultUserId(pool);
+    const savedDealsRepo = new SavedDealsRepo({ pool });
+    const savedDeal = await savedDealsRepo.get(userId, propertyId);
+    if (savedDeal?.dealStatus === "rejected") {
+      await savedDealsRepo.updateStatus(userId, propertyId, "saved");
+    }
     const detail = await loadDetailForProperty(pool, userId, propertyId);
     res.json({ property: detail } satisfies { property: UiV2PropertyDetailPayload | null });
   } catch (err) {
