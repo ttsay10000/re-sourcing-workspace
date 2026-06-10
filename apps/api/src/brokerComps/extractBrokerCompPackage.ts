@@ -7,9 +7,55 @@ import {
   extractTextMetadataFromBuffer,
   type ExtractedTextMetadata,
 } from "../upload/extractTextFromUploadedFile.js";
-import { extractBrokerCompPackageFromGeminiPdf } from "./extractBrokerCompPackageFromGemini.js";
+import {
+  describeGeminiBrokerCompSkipReason,
+  extractBrokerCompPackageFromGeminiPdf,
+  type GeminiBrokerCompExtractionResult,
+} from "./extractBrokerCompPackageFromGemini.js";
+import {
+  extractBrokerCompPackageFromOpenAiText,
+  type OpenAiBrokerCompExtractionResult,
+} from "./extractBrokerCompPackageFromOpenAi.js";
 
-const PARSER_VERSION = "broker-comp-mvp-v1";
+const PARSER_VERSION = "broker-comp-mvp-v2";
+
+/** How the package buffer should be routed: PDF → Gemini vision, spreadsheet → OpenAI text, text → heuristics only. */
+export type BrokerCompSourceKind = "pdf" | "spreadsheet" | "text";
+
+const SPREADSHEET_EXTENSION_PATTERN = /\.(xls|xlsx|xlsm|csv)$/i;
+
+/**
+ * Decide the extraction route from the filename extension, falling back to the
+ * upload content type and finally the buffer's magic bytes, so files with a
+ * missing/wrong extension still route to the right extractor.
+ */
+export function detectBrokerCompSourceKind(filename: string, mimetype?: string | null, buffer?: Buffer): BrokerCompSourceKind {
+  const name = filename.trim().toLowerCase();
+  if (name.endsWith(".pdf")) return "pdf";
+  if (SPREADSHEET_EXTENSION_PATTERN.test(name)) return "spreadsheet";
+  if (/\.(txt|text)$/.test(name)) return "text";
+
+  const mime = (mimetype ?? "").toLowerCase();
+  if (mime.includes("pdf")) return "pdf";
+  if (mime.includes("spreadsheet") || mime.includes("ms-excel") || mime.includes("csv")) return "spreadsheet";
+  if (mime.startsWith("text/")) return "text";
+
+  if (buffer && buffer.length >= 4) {
+    if (buffer.subarray(0, 5).toString("latin1").startsWith("%PDF")) return "pdf";
+    // XLSX = zip container (PK..), XLS = OLE compound document (D0 CF 11 E0).
+    if (buffer[0] === 0x50 && buffer[1] === 0x4b && buffer[2] === 0x03 && buffer[3] === 0x04) return "spreadsheet";
+    if (buffer[0] === 0xd0 && buffer[1] === 0xcf && buffer[2] === 0x11 && buffer[3] === 0xe0) return "spreadsheet";
+  }
+  return "text";
+}
+
+/** Filename whose extension matches the detected kind, so extractTextMetadataFromBuffer parses the right format. */
+function filenameForTextExtraction(filename: string, sourceKind: BrokerCompSourceKind): string {
+  const name = filename.trim().toLowerCase();
+  if (sourceKind === "pdf" && !name.endsWith(".pdf")) return `${filename}.pdf`;
+  if (sourceKind === "spreadsheet" && !SPREADSHEET_EXTENSION_PATTERN.test(name)) return `${filename}.xlsx`;
+  return filename;
+}
 
 type JsonRecord = Record<string, unknown>;
 
@@ -374,21 +420,22 @@ function extractPricingOpinion(text: string): { raw: JsonRecord; normalized: Jso
   };
 }
 
-function buildPages(metadata: ExtractedTextMetadata, filename: string): BrokerCompPageInput[] {
+function buildPages(metadata: ExtractedTextMetadata, sourceKind: BrokerCompSourceKind): BrokerCompPageInput[] {
   const pageMetas = metadata.pages && metadata.pages.length > 0
     ? metadata.pages
     : [{ pageNumber: 1, textSample: metadata.text.slice(0, 2_000), textChars: metadata.text.length, textItems: 0 }];
+  const extractionMethod = sourceKind === "spreadsheet" ? "spreadsheet" : "text";
   return pageMetas.map((page) => {
     const { pageType, confidence } = classifyPage(page.textSample, page.pageNumber);
     return {
       pageNumber: page.pageNumber,
       pageType,
-      extractionMethod: filename.toLowerCase().match(/\.(xls|xlsx|csv)$/) ? "spreadsheet" : "text",
+      extractionMethod,
       pageRef: `Page ${page.pageNumber}`,
       rawTextExcerpt: page.textSample,
       normalizedPayload: {
         pageType,
-        extractionMethod: filename.toLowerCase().match(/\.(xls|xlsx|csv)$/) ? "spreadsheet" : "text",
+        extractionMethod,
         textChars: page.textChars,
         textItems: page.textItems,
         imageHeavy: page.textChars < 80 && pageType !== "cover",
@@ -399,10 +446,28 @@ function buildPages(metadata: ExtractedTextMetadata, filename: string): BrokerCo
   });
 }
 
-export async function extractBrokerCompPackageDraft(buffer: Buffer, filename: string): Promise<BrokerCompExtractionDraft> {
-  const metadata = await extractTextMetadataFromBuffer(buffer, filename);
+/** One package-level extraction warning (model fallback, empty spreadsheet text, ...). Stored in packageMeta.extractionWarnings. */
+function extractionWarning(code: string, message: string): JsonRecord {
+  return {
+    code,
+    field: code,
+    label: code,
+    severity: "warning",
+    message,
+    source: "broker_comp_parser",
+    resolved: false,
+  };
+}
+
+export async function extractBrokerCompPackageDraft(
+  buffer: Buffer,
+  filename: string,
+  mimetype?: string | null
+): Promise<BrokerCompExtractionDraft> {
+  const sourceKind = detectBrokerCompSourceKind(filename, mimetype, buffer);
+  const metadata = await extractTextMetadataFromBuffer(buffer, filenameForTextExtraction(filename, sourceKind));
   const packageType = inferPackageType(filename, metadata.text);
-  const pages = buildPages(metadata, filename);
+  const pages = buildPages(metadata, sourceKind);
   let extractedItems: BrokerCompExtractedItemInput[] = [];
 
   for (const page of pages) {
@@ -476,20 +541,64 @@ export async function extractBrokerCompPackageDraft(buffer: Buffer, filename: st
     });
   }
 
-  const geminiExtraction = await extractBrokerCompPackageFromGeminiPdf({
-    buffer,
-    filename,
-    textPreview: metadata.text,
-    pageCount: metadata.pageCount ?? pages.length,
-  }).catch((error) => {
-    console.warn("[extractBrokerCompPackageDraft] Gemini broker comp extraction failed.", {
+  // Model extraction routing: PDFs go to Gemini PDF vision, spreadsheets go to
+  // OpenAI over the parsed workbook text. Failures fall back to the text
+  // heuristics above and surface a warning instead of silently degrading.
+  const extractionWarnings: JsonRecord[] = [];
+  let geminiExtraction: GeminiBrokerCompExtractionResult | null = null;
+  let openAiExtraction: OpenAiBrokerCompExtractionResult | null = null;
+  if (sourceKind === "pdf") {
+    const skipReason = describeGeminiBrokerCompSkipReason({ filename, byteLength: buffer.length, assumePdf: true });
+    if (skipReason) {
+      extractionWarnings.push(extractionWarning("gemini_extraction_skipped", `${skipReason} Falling back to text heuristics.`));
+    } else {
+      geminiExtraction = await extractBrokerCompPackageFromGeminiPdf({
+        buffer,
+        filename,
+        textPreview: metadata.text,
+        pageCount: metadata.pageCount ?? pages.length,
+        assumePdf: true,
+      }).catch((error) => {
+        console.warn("[extractBrokerCompPackageDraft] Gemini broker comp extraction failed.", {
+          filename,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return null;
+      });
+      if (!geminiExtraction) {
+        extractionWarnings.push(
+          extractionWarning(
+            "gemini_extraction_failed",
+            "Gemini PDF vision comp extraction failed; this package only carries text-heuristic results. Re-run the upload or review the source PDF manually."
+          )
+        );
+      }
+    }
+    if (geminiExtraction?.extractedItems.length) {
+      extractedItems = mergeExtractedItems(extractedItems, geminiExtraction.extractedItems);
+    }
+  } else if (sourceKind === "spreadsheet") {
+    openAiExtraction = await extractBrokerCompPackageFromOpenAiText({
+      textContent: metadata.text,
       filename,
-      error: error instanceof Error ? error.message : String(error),
+    }).catch((error) => {
+      console.warn("[extractBrokerCompPackageDraft] OpenAI broker comp extraction failed.", {
+        filename,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
     });
-    return null;
-  });
-  if (geminiExtraction?.extractedItems.length) {
-    extractedItems = mergeExtractedItems(extractedItems, geminiExtraction.extractedItems);
+    if (!openAiExtraction || openAiExtraction.error) {
+      extractionWarnings.push(
+        extractionWarning(
+          "openai_extraction_failed",
+          `${openAiExtraction?.error ?? "OpenAI spreadsheet comp extraction failed."} This package only carries text-heuristic results.`
+        )
+      );
+    }
+    if (openAiExtraction?.extractedItems.length) {
+      extractedItems = mergeExtractedItems(extractedItems, openAiExtraction.extractedItems);
+    }
   }
 
   if (extractedItems.length === 0 && metadata.text.trim()) {
@@ -499,7 +608,7 @@ export async function extractBrokerCompPackageDraft(buffer: Buffer, filename: st
       normalizedPayload: {
         note: "Package text extracted but no structured comp rows were confidently detected. Review manually.",
         packageFlavor: packageType,
-        missingDataFlags: missingDataFlags(["structuredComps"], "broker_comp_parser"),
+        missingDataFlags: [...missingDataFlags(["structuredComps"], "broker_comp_parser"), ...extractionWarnings],
       },
       pageRefs: [{ pageNumber: 1, label: "Page 1" }],
       confidence: 0.25,
@@ -522,6 +631,12 @@ export async function extractBrokerCompPackageDraft(buffer: Buffer, filename: st
     return data.capRatePct == null && (data.pricePerSqft != null || data.soldPpsf != null || data.askingPpsf != null);
   }).length;
 
+  const openAiSucceeded = openAiExtraction != null && openAiExtraction.error == null;
+  const extractionMethod = geminiExtraction ? "pdf_gemini" : openAiSucceeded ? "spreadsheet_openai" : "text_heuristics";
+  const subjectAddress =
+    stringValue(geminiExtraction?.packageMeta.subjectAddress) ??
+    stringValue(openAiExtraction?.packageMeta.subjectAddress);
+
   return {
     packageType,
     pages,
@@ -529,6 +644,7 @@ export async function extractBrokerCompPackageDraft(buffer: Buffer, filename: st
     packageMeta: {
       parserVersion: PARSER_VERSION,
       packageType,
+      sourceKind,
       textChars: metadata.text.length,
       pageCount: metadata.pageCount ?? pages.length,
       extractedItemCount: extractedItems.length,
@@ -536,7 +652,16 @@ export async function extractBrokerCompPackageDraft(buffer: Buffer, filename: st
       compsWithCapRate,
       psfOnlyComps,
       psfOnlyPackage: compItems.length > 0 && compsWithCapRate === 0,
-      extractionMode: geminiExtraction ? "hybrid_gemini_text" : filename.toLowerCase().match(/\.(xls|xlsx|csv)$/) ? "spreadsheet" : "text",
+      extractionMethod,
+      extractionMode: geminiExtraction
+        ? "hybrid_gemini_text"
+        : openAiSucceeded
+          ? "hybrid_openai_spreadsheet"
+          : sourceKind === "spreadsheet"
+            ? "spreadsheet"
+            : "text",
+      extractionWarnings,
+      subjectAddress: subjectAddress ?? null,
       gemini: geminiExtraction
         ? {
             provider: "gemini",
@@ -545,6 +670,16 @@ export async function extractBrokerCompPackageDraft(buffer: Buffer, filename: st
             itemCount: geminiExtraction.extractedItems.length,
             summary: geminiExtraction.summary,
             ...(geminiExtraction.packageMeta ?? {}),
+          }
+        : null,
+      openai: openAiSucceeded && openAiExtraction
+        ? {
+            provider: "openai",
+            model: openAiExtraction.model,
+            finishReason: openAiExtraction.finishReason,
+            itemCount: openAiExtraction.extractedItems.length,
+            summary: openAiExtraction.summary,
+            ...(openAiExtraction.packageMeta ?? {}),
           }
         : null,
     },

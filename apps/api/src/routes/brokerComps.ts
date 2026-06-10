@@ -493,6 +493,8 @@ async function saveCompPackageForProperty(params: {
         ? "Broker comp package extracted for analyst review."
         : "Broker comp package uploaded. Structured comp rows were not detected yet.",
     },
+    pageCount: params.draft.pageCount,
+    parserVersion: params.draft.parserVersion,
     packageMeta: {
       ...params.draft.packageMeta,
       documentCategory: params.category,
@@ -505,7 +507,11 @@ async function saveCompPackageForProperty(params: {
   return { document, details };
 }
 
-/** Subject address from an extraction draft: the subject pricing item is authoritative; the filename is the fallback. */
+/**
+ * Subject address from an extraction draft: the subject pricing item is
+ * authoritative, then the model-reported subject address in packageMeta
+ * (set even when the package has no projected-pricing rows), then the filename.
+ */
 function subjectAddressFromDraft(draft: BrokerCompExtractionDraft, filename: string): string | null {
   for (const item of draft.extractedItems) {
     if (item.itemType !== "subject_projected_pricing") continue;
@@ -513,10 +519,47 @@ function subjectAddressFromDraft(draft: BrokerCompExtractionDraft, filename: str
     const address = typeof payload.address === "string" ? payload.address.trim() : "";
     if (address) return address;
   }
+  const metaAddress = draft.packageMeta.subjectAddress;
+  if (typeof metaAddress === "string" && metaAddress.trim()) return metaAddress.trim();
   // Filenames like "210 East 39th St - Sale Comps.pdf" carry the subject address.
   const stem = filename.replace(/\.[a-z0-9]+$/i, "");
   const match = stem.match(/^\s*(\d+[\w-]*\s+[A-Za-z][^,_–-]*)/);
   return match?.[1]?.trim() || null;
+}
+
+/** "210 E 39th St" → "210 East 39th Street": expand common abbreviations so subject auto-match hits canonical addresses. */
+function expandAddressAbbreviations(addressLine: string): string {
+  const replacements: Array<[RegExp, string]> = [
+    [/\bSt\.?$/i, "Street"],
+    [/\bAve\.?$/i, "Avenue"],
+    [/\bBlvd\.?$/i, "Boulevard"],
+    [/\bRd\.?$/i, "Road"],
+    [/\bDr\.?$/i, "Drive"],
+    [/\bPl\.?$/i, "Place"],
+    [/\bLn\.?$/i, "Lane"],
+    [/\bPkwy\.?$/i, "Parkway"],
+    [/\bTer\.?$/i, "Terrace"],
+    [/\bCt\.?$/i, "Court"],
+    [/(^|\s)E\.?\s+/i, "$1East "],
+    [/(^|\s)W\.?\s+/i, "$1West "],
+    [/(^|\s)N\.?\s+/i, "$1North "],
+    [/(^|\s)S\.?\s+/i, "$1South "],
+  ];
+  let expanded = addressLine.trim();
+  for (const [pattern, replacement] of replacements) {
+    expanded = expanded.replace(pattern, replacement);
+  }
+  return expanded.replace(/\s+/g, " ").trim();
+}
+
+/** Match a package's subject address to a canonical property, retrying with expanded street abbreviations. */
+async function findPropertyBySubjectAddress(propertyRepo: PropertyRepo, subjectAddress: string) {
+  const normalized = normalizeAddressLineForDisplay(subjectAddress.split(",")[0] ?? subjectAddress);
+  const direct = await propertyRepo.findByAddressFirstLine(normalized);
+  if (direct) return direct;
+  const expanded = expandAddressAbbreviations(normalized);
+  if (expanded.toLowerCase() === normalized.toLowerCase()) return null;
+  return propertyRepo.findByAddressFirstLine(expanded);
 }
 
 router.post(
@@ -538,7 +581,7 @@ router.post(
       }
 
       const filename = file.originalname?.trim() || "broker-comp-package";
-      const draft = await extractBrokerCompPackageDraft(file.buffer, filename);
+      const draft = await extractBrokerCompPackageDraft(file.buffer, filename, file.mimetype);
       const requestedType = parsePackageType(req.body?.packageType ?? req.body?.package_type);
       if (requestedType.error) {
         res.status(400).json({ error: requestedType.error });
@@ -611,10 +654,8 @@ router.post(
       const pool = getPool();
       const propertyRepo = new PropertyRepo({ pool });
       const filename = file.originalname?.trim() || "broker-comp-package";
-      const draft = await extractBrokerCompPackageDraft(file.buffer, filename);
-      const packageType = requestedType.value ?? draft.packageType;
-      const subjectAddress = subjectAddressFromDraft(draft, filename);
 
+      // When the property is preselected, validate it before paying for extraction.
       let property = null;
       let matchSource: "explicit" | "subject_address" | null = null;
       if (explicitPropertyId?.value) {
@@ -624,20 +665,33 @@ router.post(
           return;
         }
         matchSource = "explicit";
-      } else if (subjectAddress) {
-        const normalized = normalizeAddressLineForDisplay(subjectAddress.split(",")[0] ?? subjectAddress);
-        property = await propertyRepo.findByAddressFirstLine(normalized);
+      }
+
+      const draft = await extractBrokerCompPackageDraft(file.buffer, filename, file.mimetype);
+      const packageType = requestedType.value ?? draft.packageType;
+      const subjectAddress = subjectAddressFromDraft(draft, filename);
+      if (!property && subjectAddress) {
+        property = await findPropertyBySubjectAddress(propertyRepo, subjectAddress);
         if (property) matchSource = "subject_address";
       }
 
       const meta = draft.packageMeta as Record<string, unknown>;
+      const extractionWarnings = Array.isArray(meta.extractionWarnings)
+        ? meta.extractionWarnings.flatMap((entry) =>
+            entry != null && typeof entry === "object" && typeof (entry as { message?: unknown }).message === "string"
+              ? [(entry as { message: string }).message]
+              : []
+          )
+        : [];
       const extractionSummary = {
         packageType,
+        extractionMethod: typeof meta.extractionMethod === "string" ? meta.extractionMethod : null,
         itemCount: draft.extractedItems.length,
         compCount: typeof meta.compCount === "number" ? meta.compCount : null,
         compsWithCapRate: typeof meta.compsWithCapRate === "number" ? meta.compsWithCapRate : null,
         psfOnlyComps: typeof meta.psfOnlyComps === "number" ? meta.psfOnlyComps : null,
         psfOnlyPackage: meta.psfOnlyPackage === true,
+        warnings: extractionWarnings,
       };
 
       if (!property) {

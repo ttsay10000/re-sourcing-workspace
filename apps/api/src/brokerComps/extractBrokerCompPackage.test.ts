@@ -1,5 +1,103 @@
-import { describe, expect, it } from "vitest";
-import { extractBrokerCompPackageDraft } from "./extractBrokerCompPackage.js";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  detectBrokerCompSourceKind,
+  extractBrokerCompPackageDraft,
+} from "./extractBrokerCompPackage.js";
+
+const MODEL_ENV_KEYS = ["OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"] as const;
+const savedEnv: Partial<Record<(typeof MODEL_ENV_KEYS)[number], string | undefined>> = {};
+
+beforeEach(() => {
+  // Keep these tests hermetic: no model calls even when keys exist in the env.
+  for (const key of MODEL_ENV_KEYS) {
+    savedEnv[key] = process.env[key];
+    delete process.env[key];
+  }
+});
+
+afterEach(() => {
+  for (const key of MODEL_ENV_KEYS) {
+    if (savedEnv[key] == null) delete process.env[key];
+    else process.env[key] = savedEnv[key];
+  }
+});
+
+describe("detectBrokerCompSourceKind", () => {
+  it("routes by filename extension first", () => {
+    expect(detectBrokerCompSourceKind("comps.pdf")).toBe("pdf");
+    expect(detectBrokerCompSourceKind("Comps.PDF")).toBe("pdf");
+    expect(detectBrokerCompSourceKind("comps.xlsx")).toBe("spreadsheet");
+    expect(detectBrokerCompSourceKind("comps.xls")).toBe("spreadsheet");
+    expect(detectBrokerCompSourceKind("comps.xlsm")).toBe("spreadsheet");
+    expect(detectBrokerCompSourceKind("comps.csv")).toBe("spreadsheet");
+    expect(detectBrokerCompSourceKind("comps.txt")).toBe("text");
+  });
+
+  it("falls back to the upload content type when the extension is missing", () => {
+    expect(detectBrokerCompSourceKind("broker-comp-package", "application/pdf")).toBe("pdf");
+    expect(
+      detectBrokerCompSourceKind(
+        "broker-comp-package",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      )
+    ).toBe("spreadsheet");
+    expect(detectBrokerCompSourceKind("broker-comp-package", "application/vnd.ms-excel")).toBe("spreadsheet");
+    expect(detectBrokerCompSourceKind("broker-comp-package", "text/csv")).toBe("spreadsheet");
+    expect(detectBrokerCompSourceKind("broker-comp-package", "text/plain")).toBe("text");
+  });
+
+  it("sniffs magic bytes when extension and content type are unusable", () => {
+    expect(detectBrokerCompSourceKind("package", null, Buffer.from("%PDF-1.7\n...", "latin1"))).toBe("pdf");
+    expect(detectBrokerCompSourceKind("package", null, Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00]))).toBe("spreadsheet");
+    expect(detectBrokerCompSourceKind("package", null, Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1]))).toBe("spreadsheet");
+    expect(detectBrokerCompSourceKind("package", null, Buffer.from("plain text", "utf-8"))).toBe("text");
+  });
+});
+
+describe("extractBrokerCompPackageDraft routing", () => {
+  it("marks spreadsheet packages, parses workbook text, and surfaces a warning when OpenAI is unavailable", async () => {
+    const XLSX = await import("xlsx");
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(
+      workbook,
+      XLSX.utils.aoa_to_sheet([
+        ["Address", "Sale Price", "Cap Rate", "NOI"],
+        ["410 West 24th Street", "$12,500,000", "5.25%", "$656,250"],
+      ]),
+      "Sale Comps"
+    );
+    const buffer = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" }) as Buffer;
+
+    const draft = await extractBrokerCompPackageDraft(buffer, "sale-comps.xlsx");
+
+    expect(draft.packageMeta.sourceKind).toBe("spreadsheet");
+    expect(draft.pages[0]?.extractionMethod).toBe("spreadsheet");
+    expect(draft.textChars).toBeGreaterThan(0);
+    // No OPENAI_API_KEY in tests → heuristics-only fallback with an explicit warning.
+    expect(draft.packageMeta.extractionMethod).toBe("text_heuristics");
+    const warnings = draft.packageMeta.extractionWarnings as Array<Record<string, unknown>>;
+    expect(warnings.some((warning) => warning.code === "openai_extraction_failed")).toBe(true);
+    const note = draft.extractedItems.find((item) => item.itemType === "broker_note");
+    const noteFlags = (note?.normalizedPayload?.missingDataFlags ?? []) as Array<Record<string, unknown>>;
+    expect(noteFlags.some((flag) => flag.code === "openai_extraction_failed")).toBe(true);
+  });
+
+  it("surfaces a warning instead of silently skipping Gemini for PDFs", async () => {
+    const draft = await extractBrokerCompPackageDraft(Buffer.from("%PDF-1.4 not really a pdf", "latin1"), "comps.pdf");
+
+    expect(draft.packageMeta.sourceKind).toBe("pdf");
+    expect(draft.packageMeta.extractionMethod).toBe("text_heuristics");
+    const warnings = draft.packageMeta.extractionWarnings as Array<Record<string, unknown>>;
+    expect(warnings.some((warning) => warning.code === "gemini_extraction_skipped")).toBe(true);
+  });
+
+  it("keeps plain-text packages on heuristics without model warnings", async () => {
+    const draft = await extractBrokerCompPackageDraft(Buffer.from("just notes, nothing structured", "utf-8"), "notes.txt");
+
+    expect(draft.packageMeta.sourceKind).toBe("text");
+    expect(draft.packageMeta.extractionWarnings).toEqual([]);
+  });
+});
 
 describe("extractBrokerCompPackageDraft", () => {
   it("extracts project profile fields and bedroom breakdown rows from market-analysis text", async () => {
