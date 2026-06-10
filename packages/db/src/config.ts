@@ -35,6 +35,10 @@ export const dbConfig = {
   max: 20,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 5000,
+  // TCP keepalive so idle pooled connections aren't silently reaped by
+  // intermediate network infra, which surfaces later as idle client errors.
+  keepAlive: true,
+  keepAliveInitialDelayMillis: 10000,
 };
 
 export function getDatabaseUrl(): string {
