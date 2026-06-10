@@ -432,10 +432,6 @@
   border-bottom: 0;
 }
 
-.miniRow:hover {
-  background: var(--app-accent-teal-soft);
-}
-
 .miniRowSelected {
   background: color-mix(in srgb, var(--app-accent-teal) 11%, var(--app-surface));
   box-shadow: inset 2px 0 0 var(--app-accent-teal);
@@ -465,7 +461,13 @@
 }
 
 .miniRowLink:hover strong {
-  color: var(--app-accent-teal);
+  color: var(--brand-strong, var(--app-accent-teal));
+}
+
+.miniRowLink:focus-visible {
+  outline: 2px solid var(--brand, #0f766e);
+  outline-offset: 2px;
+  border-radius: 6px;
 }
 
 .miniRow strong,
@@ -480,39 +482,43 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 0.75rem;
-  line-height: 1.18;
+  font-size: 0.8rem;
+  font-weight: 650;
+  line-height: 1.3;
+  color: var(--app-ink, #18181b);
 }
 
 .miniRow span,
 .miniRowLink span {
-  margin-top: 0.08rem;
+  margin-top: 0.14rem;
   color: var(--app-muted);
-  font-size: 0.65rem;
-  line-height: 1.18;
+  font-size: 0.66rem;
+  line-height: 1.2;
 }
 
+/* One row of label-over-value metric blocks, evenly spread and centered. */
 .cardMetrics {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0.28rem;
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 0.3rem;
+  padding: 0.45rem 0 0.1rem;
+  border-top: 1px dashed var(--app-line-subtle, #f1f0ee);
 }
 
 .cardMetrics span {
   display: grid;
-  gap: 0.15rem;
+  gap: 0.18rem;
+  flex: 1 1 0;
   min-width: 0;
-  padding: 0.34rem 0.4rem;
-  border: 1px solid var(--app-line);
-  border-radius: 6px;
-  background: var(--app-surface-raised);
+  text-align: center;
 }
 
 .cardMetrics small {
   overflow: hidden;
   color: var(--app-muted);
-  font-size: 0.52rem;
-  font-weight: 860;
+  font-size: 0.56rem;
+  font-weight: 700;
+  letter-spacing: 0.07em;
   line-height: 1;
   text-overflow: ellipsis;
   text-transform: uppercase;
@@ -522,11 +528,17 @@
 .cardMetrics strong {
   overflow: hidden;
   color: var(--app-ink);
-  font-size: 0.68rem;
-  font-weight: 820;
-  line-height: 1.05;
+  font-size: 0.8rem;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.cardMetrics .metricDanger small,
+.cardMetrics .metricDanger strong {
+  color: var(--app-red, #dc2626);
 }
 
 .tourInputNotice {
@@ -893,6 +905,7 @@
 .emptyState {
   padding: 0.9rem 1.05rem;
   border-radius: 8px;
+  text-align: center;
 }
 
 .notice {
@@ -1193,9 +1206,16 @@
     grid-template-columns: 1fr;
   }
 
-  .dealPathModalGrid,
-  .cardMetrics {
+  .dealPathModalGrid {
     grid-template-columns: 1fr;
+  }
+
+  .cardMetrics {
+    flex-wrap: wrap;
+  }
+
+  .cardMetrics span {
+    flex: 1 1 40%;
   }
 }
 
@@ -1226,27 +1246,6 @@
 .miniRow:hover {
   border-color: var(--app-line-strong);
   box-shadow: 0 4px 14px rgba(15, 23, 42, 0.08);
-}
-
-.cardMetrics {
-  gap: 0.45rem 0.7rem;
-  padding: 0.15rem 0;
-}
-
-.cardMetrics span {
-  padding: 0;
-  border: 0;
-  background: transparent;
-}
-
-.cardMetrics small {
-  font-size: 0.56rem;
-  letter-spacing: 0.06em;
-}
-
-.cardMetrics strong {
-  font-size: 0.78rem;
-  font-variant-numeric: tabular-nums;
 }
 
 .workflowBadges span {
@@ -1716,47 +1715,12 @@
   box-shadow: 0 6px 18px rgba(15, 23, 42, 0.1);
 }
 
+.miniRow:not(.miniRowSelected):not(.miniRowNeedsInput):hover {
+  background: color-mix(in srgb, var(--brand, #0f766e) 3%, var(--app-surface, #ffffff));
+}
+
 .miniRowMain {
   gap: 0.55rem;
-}
-
-.miniRowLink strong {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 0.8rem;
-  font-weight: 650;
-  line-height: 1.3;
-  color: var(--app-ink, #18181b);
-}
-
-.miniRowLink span {
-  display: block;
-  margin-top: 0.14rem;
-  font-size: 0.66rem;
-  color: var(--app-muted, #71717a);
-}
-
-.cardMetrics {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0.5rem 0.8rem;
-  padding: 0.45rem 0 0.1rem;
-  border-top: 1px dashed var(--app-line-subtle, #f1f0ee);
-}
-
-.cardMetrics small {
-  font-size: 0.58rem;
-  font-weight: 650;
-  letter-spacing: 0.07em;
-  color: var(--app-muted, #71717a);
-}
-
-.cardMetrics strong {
-  font-size: 0.8rem;
-  font-weight: 650;
-  font-variant-numeric: tabular-nums;
-  color: var(--app-ink, #18181b);
 }
 
 .workflowBadges {

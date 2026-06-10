@@ -320,6 +320,12 @@ function formatUnitLabel(value: number | null | undefined): string | null {
   return `${formatted} ${formatted === "1" ? "unit" : "units"}`;
 }
 
+/** Board cards show only the street line; the full address stays in tooltips/modals. */
+function streetAddressOnly(address: string): string {
+  const street = address.split(",")[0]?.trim();
+  return street || address;
+}
+
 function formatDate(value: string | null | undefined): string {
   if (!value) return "—";
   const date = new Date(value);
@@ -2359,15 +2365,21 @@ export default function ProgressPage() {
   );
 }
 
-function cardMetricsForRow(row: DealFlowRow): Array<{ label: string; value: string }> {
+type CardMetric = { label: string; value: string; tone?: "danger" };
+
+function cardMetricsForRow(row: DealFlowRow): CardMetric[] {
   return [
-    row.ltrYocPct != null ? { label: "LTR Yield", value: formatPercent(row.ltrYocPct) } : null,
-    row.mtrYocPct != null ? { label: "MTR Yield", value: formatPercent(row.mtrYocPct) } : null,
+    row.ltrYocPct != null
+      ? { label: "LTR Yield", value: formatPercent(row.ltrYocPct), ...(row.ltrYocPct <= 0 ? { tone: "danger" as const } : {}) }
+      : null,
+    row.mtrYocPct != null
+      ? { label: "MTR Yield", value: formatPercent(row.mtrYocPct), ...(row.mtrYocPct <= 0 ? { tone: "danger" as const } : {}) }
+      : null,
     row.pricePerSqft != null ? { label: "$/SF", value: formatWholeCurrency(row.pricePerSqft) } : null,
     row.sqft != null ? { label: "SF", value: formatCompactNumber(row.sqft) } : null,
     row.price != null ? { label: "Ask", value: formatCurrency(row.price) } : null,
     row.units != null ? { label: "Units", value: formatCompactNumber(row.units) } : null,
-  ].filter((metric): metric is { label: string; value: string } => metric != null);
+  ].filter((metric): metric is CardMetric => metric != null);
 }
 
 type PrimaryCardAction = { label: string; run: () => void };
@@ -2498,7 +2510,9 @@ function SavedDealMiniSection({
             const tourNeedsInputs = needsTourInputs(row);
             const metrics = cardMetricsForRow(row).slice(0, 4);
             const address = row.displayAddress || row.canonicalAddress || row.propertyId;
-            const locationLine = [row.neighborhood, formatUnitLabel(row.units)].filter(Boolean).join(" · ");
+            const locationLine = [row.neighborhood ? labelFromKey(row.neighborhood) : null, formatUnitLabel(row.units)]
+              .filter(Boolean)
+              .join(" · ");
             const primaryAction = primaryActionForCard(section.id, row, {
               onStartDealPathEdit,
               onEmailBroker,
@@ -2542,9 +2556,9 @@ function SavedDealMiniSection({
                     type="button"
                     className={styles.miniRowLink}
                     onClick={() => onStartDealPathEdit?.(row)}
-                    title="Review progress details"
+                    title={address}
                   >
-                    <strong>{address}</strong>
+                    <strong>{streetAddressOnly(address)}</strong>
                     <span>{locationLine || (row.source ? labelFromKey(row.source) : "No source")}</span>
                   </button>
                   <div className={styles.miniMeta}>
@@ -2572,7 +2586,7 @@ function SavedDealMiniSection({
                 {metrics.length > 0 ? (
                   <div className={styles.cardMetrics} aria-label="Property metrics">
                     {metrics.map((metric) => (
-                      <span key={metric.label}>
+                      <span key={metric.label} className={metric.tone === "danger" ? styles.metricDanger : undefined}>
                         <small>{metric.label}</small>
                         <strong>{metric.value}</strong>
                       </span>
