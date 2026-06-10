@@ -17,11 +17,12 @@ import {
 } from "@re-sourcing/db";
 import type {
   MarketComp,
+  MarketDocBatchItem,
   MarketHeadlinesResponse,
   MarketKnowledgeResponse,
   NeighborhoodSummaryWithGeo,
 } from "@re-sourcing/contracts";
-import { ingestMarketDocument } from "../marketContext/ingestMarketDocument.js";
+import { ingestMarketDocumentBatch } from "../marketContext/ingestMarketDocument.js";
 import { PgMarketContextStore } from "../marketContext/store.js";
 import { computeMarketHeadlines } from "../marketContext/knowledge.js";
 import { computeNeighborhoodRollup, effectiveSourceType, withReadTimeFallback } from "../marketContext/rollup.js";
@@ -30,46 +31,68 @@ import { fallbackSubmarketsFor } from "../marketContext/neighborhoodResolve.js";
 const router = Router();
 
 const MARKET_DOC_MAX_BYTES = 50 * 1024 * 1024;
+const MARKET_DOC_MAX_FILES = 10;
 const uploadMemory = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: MARKET_DOC_MAX_BYTES },
+  limits: { fileSize: MARKET_DOC_MAX_BYTES, files: MARKET_DOC_MAX_FILES },
 });
 
 function handleMarketDocMulterError(_req: Request, res: Response, next: (err?: unknown) => void) {
   return (err: unknown) => {
-    if (err && typeof err === "object" && "code" in err && (err as { code: string }).code === "LIMIT_FILE_SIZE") {
+    const code = err && typeof err === "object" && "code" in err ? (err as { code: string }).code : null;
+    if (code === "LIMIT_FILE_SIZE") {
       res.status(413).json({ error: "File too large", details: "Max 50 MB per market document.", maxBytes: MARKET_DOC_MAX_BYTES });
+      return;
+    }
+    if (code === "LIMIT_FILE_COUNT") {
+      res.status(413).json({ error: "Too many files", details: `Max ${MARKET_DOC_MAX_FILES} market documents per upload.`, maxFiles: MARKET_DOC_MAX_FILES });
       return;
     }
     next(err);
   };
 }
 
-// Upload → classify → extract → synthesize; returns the ingest report.
+/**
+ * Upload one or more market documents (multipart fields 'file' or 'files').
+ * The whole upload ingests as one batch — classify/extract LLM calls fan out
+ * concurrently, then dedupe/synthesis/knowledge folds run in upload order.
+ * Returns per-file results; `report` is kept for single-file callers.
+ */
 router.post(
   "/market-docs",
   (req, res, next) => {
-    uploadMemory.single("file")(req, res, handleMarketDocMulterError(req, res, next));
+    uploadMemory.any()(req, res, handleMarketDocMulterError(req, res, next));
   },
   async (req: Request, res: Response) => {
     try {
-      const file = (req as Request & { file?: { buffer: Buffer; originalname?: string; mimetype?: string } }).file;
-      if (!file?.buffer) {
-        res.status(400).json({ error: "Missing file. Send multipart/form-data with field 'file'." });
+      const uploaded = Array.isArray(req.files)
+        ? (req.files as Array<{ buffer: Buffer; originalname?: string; mimetype?: string }>)
+        : [];
+      const files = uploaded.filter((file) => file?.buffer);
+      if (files.length === 0) {
+        res.status(400).json({ error: "Missing file. Send multipart/form-data with field 'file' (or 'files' for a batch)." });
         return;
       }
       const store = new PgMarketContextStore(getPool());
-      const report = await ingestMarketDocument({
-        filename: file.originalname?.trim() || "market-document.pdf",
-        contentType: file.mimetype || null,
-        buffer: file.buffer,
+      const reports: MarketDocBatchItem[] = await ingestMarketDocumentBatch({
+        files: files.map((file) => ({
+          filename: file.originalname?.trim() || "market-document.pdf",
+          contentType: file.mimetype || null,
+          buffer: file.buffer,
+        })),
         store,
       });
-      res.status(201).json({ report });
+      const succeeded = reports.filter((item) => item.report != null);
+      if (succeeded.length === 0) {
+        const details = reports.map((item) => `${item.filename}: ${item.error ?? "unknown error"}`).join("; ");
+        res.status(503).json({ error: "Failed to ingest market documents.", details, reports });
+        return;
+      }
+      res.status(201).json({ report: succeeded[0].report, reports });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error("[market-docs upload]", err);
-      res.status(503).json({ error: "Failed to ingest market document.", details: message });
+      res.status(503).json({ error: "Failed to ingest market documents.", details: message });
     }
   }
 );

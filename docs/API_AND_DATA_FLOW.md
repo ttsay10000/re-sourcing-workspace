@@ -217,17 +217,19 @@ Priority rule:
 
 ## Market Knowledge Base And Headlines
 
-The market-context layer (market-docs page → Yield Map) maintains a living, cumulative market narrative on top of the per-document ingest pipeline.
+The market-context layer (`/pipeline/market-docs` page → Yield Map) maintains a living, cumulative market narrative on top of the per-document ingest pipeline.
 
 Pipeline (per upload, after rollup/synthesis):
 
 1. classify → extract → dedupe comps → store stats → neighborhood rollups (existing stages)
 2. analyst brief + knowledge merge (prompt `knowledge_v1`): the model receives the current knowledge base, this upload's comps/stats, and prior stats + rollups for the same metrics/geographies, and returns `{document_brief, knowledge}`. When no LLM key is configured or output fails validation, a deterministic numbers-only brief + merge runs instead — ingest never blocks on a model.
 
+Multi-file uploads ingest as one batch: every document row is created up-front (so the ingest log shows the whole batch while it processes), classify/extract LLM calls fan out concurrently (`MARKET_INGEST_MAX_CONCURRENCY`, default 3), then dedupe/synthesis/knowledge folds run sequentially in upload order so cross-document dedupe and knowledge versioning match one-at-a-time uploads. Per-file failures are isolated — one bad document never sinks the batch.
+
 Endpoints:
 
-- `POST /api/market-docs` — ingest report now includes `brief` (per-upload analyst brief) and `knowledgeVersion`
-- `GET /api/market-docs` — document rows now carry `documentBrief`
+- `POST /api/market-docs` — accepts one or more files per request (multipart `file` or `files`, max 10 × 50 MB); responds with per-file `reports: [{ filename, documentId, report, error }]` (plus `report` for single-file callers); each ingest report includes `brief` (per-upload analyst brief) and `knowledgeVersion`
+- `GET /api/market-docs` — document rows carry `documentBrief`; non-terminal `status` values (`uploaded` → `classified` → `extracted`) surface in-flight ingests, which the market-docs page polls while processing
 - `GET /api/market-knowledge` — `{ knowledge: { version, updatedAt, narrative, latestBrief, documentId } | null }`; narrative groups per-submarket direction (with bps/$PSF/% numbers), asset-type attention (free-market sub-9-unit, RS share, north vs south of 96th St), cap-rate/$PSF movements, open discrepancies, and publisher+period citations
 - `GET /api/market-headlines` — `{ headlines: [{ id, text, tone: up|down|neutral|watch, scope, source, asOf }], generatedAt, knowledgeVersion }`; top 3-6 numbered bullets from the knowledge base, with a rule-based fallback computed from `neighborhood_summaries`/`market_stats` deltas when the knowledge base is empty; never returns 500
 

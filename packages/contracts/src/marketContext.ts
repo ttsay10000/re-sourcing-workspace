@@ -186,6 +186,19 @@ export interface MarketDocIngestReport {
   knowledgeVersion?: number | null;
 }
 
+/**
+ * Per-file outcome of a multi-document upload (POST /api/market-docs accepts
+ * several files per request; LLM classification/extraction runs as a batch).
+ */
+export interface MarketDocBatchItem {
+  filename: string;
+  /** Null only when the document row itself could not be created. */
+  documentId: string | null;
+  /** Null when this file failed before producing an ingest report. */
+  report: MarketDocIngestReport | null;
+  error: string | null;
+}
+
 // ---------------------------------------------------------------------------
 // Living market knowledge base (market_knowledge_entries) + per-upload briefs.
 // ---------------------------------------------------------------------------

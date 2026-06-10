@@ -1,18 +1,26 @@
 /**
- * End-to-end ingest for one uploaded market PDF:
+ * End-to-end ingest for uploaded market PDFs:
  *   classify → extract (provenance injected) → resolve neighborhoods →
  *   dedupe/upsert comps → store stats → rollup + synthesize affected
  *   neighborhoods → analyst brief + knowledge-base merge → ingest report.
+ *
+ * Multi-file uploads go through ingestMarketDocumentBatch: every document row
+ * is created up-front (so the ingest log shows the whole batch as processing),
+ * the per-document LLM stages (classify + extract) fan out as a concurrency-
+ * limited batch, and the store-mutating stages run sequentially in upload
+ * order so cross-document dedupe and the versioned knowledge ledger behave
+ * exactly as they would for one-at-a-time uploads.
  *
  * Raw LLM output is persisted per stage keyed by document + prompt version.
  * Unresolved neighborhood names go to the review queue (comps kept with
  * neighborhood_id = null) — never silently dropped.
  */
-import type { MarketDocIngestReport, MarketStat } from "@re-sourcing/contracts";
+import type { MarketDocBatchItem, MarketDocIngestReport, MarketDocument, MarketStat } from "@re-sourcing/contracts";
 import type { UpsertMarketCompParams } from "@re-sourcing/db";
+import { createAsyncTaskQueue } from "../asyncTaskQueue.js";
 import { extractTextMetadataFromBuffer } from "../upload/extractTextFromUploadedFile.js";
 import { classifyMarketDocument } from "./classify.js";
-import { extractMarketDocument } from "./extract.js";
+import { extractMarketDocument, type ExtractMarketDocumentResult } from "./extract.js";
 import { runMarketLlm, type MarketLlmRunner } from "./llmAdapter.js";
 import {
   buildNeighborhoodIndex,
@@ -35,6 +43,30 @@ export interface IngestMarketDocumentParams {
   llm?: MarketLlmRunner;
   /** Rollup reference date (tests pin this; defaults to now). */
   asOf?: Date;
+}
+
+export interface MarketDocBatchFile {
+  filename: string;
+  contentType: string | null;
+  buffer: Buffer;
+}
+
+export interface IngestMarketDocumentBatchParams {
+  files: MarketDocBatchFile[];
+  store: MarketContextStore;
+  llm?: MarketLlmRunner;
+  asOf?: Date;
+  /** Parallelism for the classify/extract LLM phase; defaults from MARKET_INGEST_MAX_CONCURRENCY. */
+  maxConcurrency?: number;
+}
+
+const DEFAULT_MARKET_INGEST_MAX_CONCURRENCY = 3;
+
+export function resolveMarketIngestMaxConcurrency(raw = process.env.MARKET_INGEST_MAX_CONCURRENCY): number {
+  if (typeof raw !== "string" || raw.trim() === "") return DEFAULT_MARKET_INGEST_MAX_CONCURRENCY;
+  const parsed = Number(raw.trim());
+  if (!Number.isFinite(parsed) || parsed < 1) return DEFAULT_MARKET_INGEST_MAX_CONCURRENCY;
+  return Math.floor(parsed);
 }
 
 function compToUpsertParams(comp: MergedComp, documentId: string | null): UpsertMarketCompParams {
@@ -124,16 +156,29 @@ export async function resynthesizeNeighborhoods(params: {
   }
 }
 
-export async function ingestMarketDocument(params: IngestMarketDocumentParams): Promise<MarketDocIngestReport> {
-  const { store } = params;
-  const llm = params.llm ?? runMarketLlm;
-  const document = await store.insertDocument({
-    filename: params.filename,
-    contentType: params.contentType,
-    fileContent: params.buffer,
-  });
+/** Output of the LLM-heavy stage 1 (classify + extract); safe to compute concurrently across documents. */
+interface PreparedMarketDocument {
+  document: MarketDocument;
+  classification: Awaited<ReturnType<typeof classifyMarketDocument>>["classification"];
+  flagForReview: boolean;
+  extraction: ExtractMarketDocumentResult;
+  flags: string[];
+}
 
-  const textMetadata = await extractTextMetadataFromBuffer(params.buffer, params.filename);
+/**
+ * Stage 1 for one document: text extraction + classify + extract. Only writes
+ * per-document rows (LLM outputs, classification), never shared state, so a
+ * batch can run several documents through this phase concurrently.
+ */
+async function prepareMarketDocument(params: {
+  document: MarketDocument;
+  buffer: Buffer;
+  store: MarketContextStore;
+  llm: MarketLlmRunner;
+}): Promise<PreparedMarketDocument> {
+  const { store, document } = params;
+
+  const textMetadata = await extractTextMetadataFromBuffer(params.buffer, document.filename);
   const pages = textMetadata.pages ?? [];
   const fullText =
     pages.length > 0
@@ -141,8 +186,8 @@ export async function ingestMarketDocument(params: IngestMarketDocumentParams): 
       : textMetadata.text;
 
   // Stage 1a: classify.
-  const pdf = { buffer: params.buffer, filename: params.filename };
-  const classifyResult = await classifyMarketDocument({ pdf, pages, llm });
+  const pdf = { buffer: params.buffer, filename: document.filename };
+  const classifyResult = await classifyMarketDocument({ pdf, pages, llm: params.llm });
   await store.saveLlmOutput({
     documentId: document.id,
     stage: "classify",
@@ -161,7 +206,7 @@ export async function ingestMarketDocument(params: IngestMarketDocumentParams): 
     documentText: fullText || null,
     classification,
     documentId: document.id,
-    llm,
+    llm: params.llm,
   });
   await store.saveLlmOutput({
     documentId: document.id,
@@ -176,6 +221,22 @@ export async function ingestMarketDocument(params: IngestMarketDocumentParams): 
   const flags = [...extraction.flags];
   if (classifyResult.flagForReview) flags.push("classifier confidence low — flagged for review");
 
+  return { document, classification, flagForReview: classifyResult.flagForReview, extraction, flags };
+}
+
+/**
+ * Stage 2+ for one document: dedupe/upsert comps, stats, neighborhood
+ * synthesis, knowledge fold, ingest report. Mutates shared store state, so a
+ * batch runs this sequentially in upload order.
+ */
+async function finalizeMarketDocument(
+  prepared: PreparedMarketDocument,
+  params: { store: MarketContextStore; llm: MarketLlmRunner; asOf?: Date }
+): Promise<MarketDocIngestReport> {
+  const { store } = params;
+  const { document, classification, extraction } = prepared;
+  const flags = [...prepared.flags];
+
   if (extraction.llm.parsed == null) {
     const error = extraction.llm.error ?? "extraction returned no parseable JSON";
     flags.push(`extraction failed: ${error}`);
@@ -186,7 +247,7 @@ export async function ingestMarketDocument(params: IngestMarketDocumentParams): 
       documentClass: classification.document_class,
       publisher: classification.publisher,
       classifierConfidence: classification.classifier_confidence,
-      flagForReview: classifyResult.flagForReview,
+      flagForReview: prepared.flagForReview,
       nComps: 0,
       nCompsMerged: 0,
       nStats: 0,
@@ -266,7 +327,7 @@ export async function ingestMarketDocument(params: IngestMarketDocumentParams): 
   await resynthesizeNeighborhoods({
     neighborhoodIds: [...affected],
     store,
-    llm,
+    llm: params.llm,
     documentId: document.id,
     asOf: params.asOf,
   });
@@ -278,7 +339,7 @@ export async function ingestMarketDocument(params: IngestMarketDocumentParams): 
     documentClass: classification.document_class,
     publisher: classification.publisher,
     classifierConfidence: classification.classifier_confidence,
-    flagForReview: classifyResult.flagForReview,
+    flagForReview: prepared.flagForReview,
     nComps: incoming.length,
     nCompsMerged: merged,
     nStats: savedStats.length,
@@ -297,7 +358,7 @@ export async function ingestMarketDocument(params: IngestMarketDocumentParams): 
       comps: incoming,
       stats: savedStats,
       store,
-      llm,
+      llm: params.llm,
       asOf: params.asOf,
     });
     report.brief = knowledge.brief;
@@ -310,6 +371,87 @@ export async function ingestMarketDocument(params: IngestMarketDocumentParams): 
 
   await store.saveIngestReport(document.id, report);
   return report;
+}
+
+export async function ingestMarketDocument(params: IngestMarketDocumentParams): Promise<MarketDocIngestReport> {
+  const { store } = params;
+  const llm = params.llm ?? runMarketLlm;
+  const document = await store.insertDocument({
+    filename: params.filename,
+    contentType: params.contentType,
+    fileContent: params.buffer,
+  });
+  const prepared = await prepareMarketDocument({ document, buffer: params.buffer, store, llm });
+  return finalizeMarketDocument(prepared, { store, llm, asOf: params.asOf });
+}
+
+/**
+ * Ingest several uploaded documents as one batch. Per-file failures are
+ * isolated: the failing document is marked failed and the rest of the batch
+ * still ingests; the returned items preserve upload order.
+ */
+export async function ingestMarketDocumentBatch(
+  params: IngestMarketDocumentBatchParams
+): Promise<MarketDocBatchItem[]> {
+  const { store } = params;
+  const llm = params.llm ?? runMarketLlm;
+
+  // Phase 0: create every document row first so GET /api/market-docs shows the
+  // whole batch (status "uploaded") while earlier files are still processing.
+  const inserted: Array<{ file: MarketDocBatchFile; document: MarketDocument | null; error: string | null }> = [];
+  for (const file of params.files) {
+    try {
+      const document = await store.insertDocument({
+        filename: file.filename,
+        contentType: file.contentType,
+        fileContent: file.buffer,
+      });
+      inserted.push({ file, document, error: null });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[marketContext batch] insert failed for ${file.filename}:`, err);
+      inserted.push({ file, document: null, error: message });
+    }
+  }
+
+  // Phase 1 (batched LLM): classify + extract fan out with bounded concurrency.
+  const queue = createAsyncTaskQueue(params.maxConcurrency ?? resolveMarketIngestMaxConcurrency());
+  const preparedEntries = await Promise.all(
+    inserted.map((entry) =>
+      queue.run(async (): Promise<{ entry: (typeof inserted)[number]; prepared: PreparedMarketDocument | null; error: string | null }> => {
+        if (!entry.document) return { entry, prepared: null, error: entry.error };
+        try {
+          const prepared = await prepareMarketDocument({ document: entry.document, buffer: entry.file.buffer, store, llm });
+          return { entry, prepared, error: null };
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          console.error(`[marketContext batch] prepare failed for ${entry.file.filename}:`, err);
+          await store.setDocumentStatus(entry.document.id, "failed", message).catch(() => undefined);
+          return { entry, prepared: null, error: message };
+        }
+      })
+    )
+  );
+
+  // Phase 2 (sequential, upload order): comps/stats writes, synthesis, and the
+  // versioned knowledge folds — order-dependent shared state.
+  const items: MarketDocBatchItem[] = [];
+  for (const { entry, prepared, error } of preparedEntries) {
+    if (!prepared) {
+      items.push({ filename: entry.file.filename, documentId: entry.document?.id ?? null, report: null, error });
+      continue;
+    }
+    try {
+      const report = await finalizeMarketDocument(prepared, { store, llm, asOf: params.asOf });
+      items.push({ filename: entry.file.filename, documentId: prepared.document.id, report, error: null });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[marketContext batch] finalize failed for ${entry.file.filename}:`, err);
+      await store.setDocumentStatus(prepared.document.id, "failed", message).catch(() => undefined);
+      items.push({ filename: entry.file.filename, documentId: prepared.document.id, report: null, error: message });
+    }
+  }
+  return items;
 }
 
 export { MARKET_PROMPT_VERSIONS };

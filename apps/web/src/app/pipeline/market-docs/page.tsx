@@ -1,7 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type {
+  MarketDocBatchItem,
+  MarketDocIngestReport,
   MarketDocumentBrief,
   MarketKnowledgeResponse,
   MarketKnowledgeState,
@@ -10,23 +12,6 @@ import type {
 import { Badge, Button, FileDropzone, PageHeader, Panel } from "@/components/ui";
 import { API_BASE } from "@/lib/api";
 import styles from "./marketDocs.module.css";
-
-interface IngestReport {
-  documentId: string;
-  sourceType: "broker_provided" | "market_research";
-  documentClass: string;
-  publisher: string | null;
-  classifierConfidence: "high" | "medium" | "low";
-  flagForReview: boolean;
-  nComps: number;
-  nCompsMerged: number;
-  nStats: number;
-  unresolvedNeighborhoods: string[];
-  affectedNeighborhoods: string[];
-  flags: string[];
-  brief?: MarketDocumentBrief | null;
-  knowledgeVersion?: number | null;
-}
 
 interface MarketDocRow {
   id: string;
@@ -41,12 +26,28 @@ interface MarketDocRow {
   classifier_confidence: "high" | "medium" | "low";
   flagForReview: boolean;
   error: string | null;
-  ingestReport: IngestReport | null;
+  ingestReport: MarketDocIngestReport | null;
   documentBrief?: MarketDocumentBrief | null;
   createdAt: string;
 }
 
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
+
+/** Non-terminal document statuses, labeled with the stage currently running. */
+const PROCESSING_STAGE: Record<string, string> = {
+  uploaded: "classifying…",
+  classified: "extracting…",
+  extracted: "synthesizing…",
+};
+
+/** Rows stuck non-terminal past this age (e.g. server restart mid-ingest) stop driving auto-refresh. */
+const PROCESSING_STALE_MS = 30 * 60 * 1000;
+
+function isProcessing(doc: Pick<MarketDocRow, "status" | "createdAt">): boolean {
+  if (!(doc.status in PROCESSING_STAGE)) return false;
+  const created = new Date(doc.createdAt).getTime();
+  return Number.isNaN(created) || Date.now() - created < PROCESSING_STALE_MS;
+}
 
 function sourceBadge(doc: Pick<MarketDocRow, "source_type" | "publisher">) {
   return doc.source_type === "market_research" ? (
@@ -73,7 +74,7 @@ export default function MarketDocsPage() {
   const [files, setFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
-  const [lastReports, setLastReports] = useState<IngestReport[]>([]);
+  const [lastReports, setLastReports] = useState<MarketDocIngestReport[]>([]);
   const [documents, setDocuments] = useState<MarketDocRow[]>([]);
   const [listError, setListError] = useState<string | null>(null);
   const [knowledge, setKnowledge] = useState<MarketKnowledgeState | null>(null);
@@ -100,28 +101,51 @@ export default function MarketDocsPage() {
     refresh();
   }, [refresh]);
 
+  const processingCount = useMemo(() => documents.filter(isProcessing).length, [documents]);
+
+  // Live-refresh the ingest log while an upload is in flight or rows are still
+  // working through classify → extract → synthesize.
+  useEffect(() => {
+    if (!uploading && processingCount === 0) return;
+    const interval = setInterval(refresh, 3000);
+    return () => clearInterval(interval);
+  }, [uploading, processingCount, refresh]);
+
   async function uploadAll() {
     if (files.length === 0 || uploading) return;
     setUploading(true);
     setUploadError(null);
-    const reports: IngestReport[] = [];
     try {
-      for (const file of files) {
-        const body = new FormData();
-        body.append("file", file);
-        const res = await fetch(`${API_BASE}/api/market-docs`, {
-          method: "POST",
-          credentials: "include",
-          body,
-        });
-        const payload = (await res.json().catch(() => ({}))) as { report?: IngestReport; error?: string };
-        if (!res.ok || !payload.report) {
-          throw new Error(payload.error || `HTTP ${res.status} for ${file.name}`);
-        }
-        reports.push(payload.report);
+      // One request for the whole selection — the API ingests it as a batch
+      // (classify/extract fan out to the LLM concurrently server-side).
+      const body = new FormData();
+      for (const file of files) body.append("files", file);
+      const res = await fetch(`${API_BASE}/api/market-docs`, {
+        method: "POST",
+        credentials: "include",
+        body,
+      });
+      const payload = (await res.json().catch(() => ({}))) as {
+        reports?: MarketDocBatchItem[];
+        report?: MarketDocIngestReport;
+        error?: string;
+      };
+      const items: MarketDocBatchItem[] =
+        payload.reports ??
+        (payload.report
+          ? [{ filename: files[0]?.name ?? "document", documentId: payload.report.documentId, report: payload.report, error: null }]
+          : []);
+      if (items.length === 0) throw new Error(payload.error || `HTTP ${res.status}`);
+
+      const succeeded = items.flatMap((item) => (item.report ? [item.report] : []));
+      const failed = items.filter((item) => item.report == null);
+      if (succeeded.length > 0) setLastReports(succeeded);
+      // Keep failed files selected for retry; clear the ingested ones.
+      const failedNames = new Set(failed.map((item) => item.filename));
+      setFiles((current) => current.filter((file) => failedNames.has(file.name)));
+      if (failed.length > 0) {
+        setUploadError(failed.map((item) => `${item.filename}: ${item.error ?? "ingest failed"}`).join(" · "));
       }
-      setLastReports(reports);
-      setFiles([]);
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : "Upload failed.");
     } finally {
@@ -156,7 +180,7 @@ export default function MarketDocsPage() {
           maxBytes={MAX_UPLOAD_BYTES}
           disabled={uploading}
           label="Drag & drop market report PDFs here"
-          hint="General research reports (Avison Young, Ariel, Alpha quarterlies — the good stuff) and broker deal materials · up to 50 MB each"
+          hint="General research reports (Avison Young, Ariel, Alpha quarterlies — the good stuff) and broker deal materials · up to 50 MB each · multiple files ingest as one batch"
         />
         <div className={styles.uploadRow}>
           <Button onClick={() => void uploadAll()} disabled={files.length === 0 || uploading}>
@@ -338,7 +362,17 @@ export default function MarketDocsPage() {
       </Panel>
 
       <Panel>
-        <span className={styles.sectionTitle}>Ingest log</span>
+        <div className={styles.knowledgeHeader}>
+          <span className={styles.sectionTitle}>Ingest log</span>
+          {uploading || processingCount > 0 ? (
+            <>
+              <Badge tone="info">
+                {processingCount > 0 ? `${processingCount} processing` : "uploading…"}
+              </Badge>
+              <span className={styles.knowledgeMeta}>refreshing automatically</span>
+            </>
+          ) : null}
+        </div>
         {listError ? <div className={styles.uploadError}>{listError}</div> : null}
         <table className={styles.table}>
           <thead>
@@ -365,10 +399,12 @@ export default function MarketDocsPage() {
                     </span>
                   ) : null}
                 </td>
-                <td>{sourceBadge(doc)}</td>
-                <td>{doc.document_class}</td>
+                <td>{doc.status === "uploaded" ? "—" : sourceBadge(doc)}</td>
+                <td>{doc.status === "uploaded" ? "—" : doc.document_class}</td>
                 <td>
-                  {doc.flagForReview ? (
+                  {doc.status === "uploaded" ? (
+                    "—"
+                  ) : doc.flagForReview ? (
                     <Badge tone="warning">low — review</Badge>
                   ) : (
                     <Badge tone={doc.classifier_confidence === "high" ? "success" : "neutral"}>
@@ -381,6 +417,8 @@ export default function MarketDocsPage() {
                 <td>
                   {doc.status === "failed" ? (
                     <Badge tone="danger" title={doc.error ?? undefined}>failed</Badge>
+                  ) : PROCESSING_STAGE[doc.status] ? (
+                    <Badge tone="info">{PROCESSING_STAGE[doc.status]}</Badge>
                   ) : (
                     <Badge tone={doc.status === "synthesized" ? "success" : "neutral"}>{doc.status}</Badge>
                   )}

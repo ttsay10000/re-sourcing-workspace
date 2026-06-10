@@ -13,6 +13,7 @@ import {
   Home,
   KanbanSquare,
   Menu,
+  Newspaper,
   Plus,
   Scale,
   Search,
@@ -68,7 +69,8 @@ const NAV_LINKS: NavLink[] = [
             pathname.startsWith("/property-data/") ||
             pathname.startsWith("/property/")) &&
           !pathname.startsWith("/pipeline/yield-map") &&
-          !pathname.startsWith("/pipeline/comp-analysis"),
+          !pathname.startsWith("/pipeline/comp-analysis") &&
+          !pathname.startsWith("/pipeline/market-docs"),
       },
       {
         href: "/pipeline/yield-map",
@@ -83,6 +85,13 @@ const NAV_LINKS: NavLink[] = [
         shortLabel: "C",
         icon: Scale,
         matches: (pathname: string) => pathname.startsWith("/pipeline/comp-analysis"),
+      },
+      {
+        href: "/pipeline/market-docs",
+        label: "Market Docs",
+        shortLabel: "M",
+        icon: Newspaper,
+        matches: (pathname: string) => pathname.startsWith("/pipeline/market-docs"),
       },
     ],
   },

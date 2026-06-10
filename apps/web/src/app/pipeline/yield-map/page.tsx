@@ -1116,7 +1116,7 @@ export default function YieldMapPage() {
                 </span>
               ) : null}
             </button>
-            <a href="/market-docs" className={styles.headerLink}>
+            <a href="/pipeline/market-docs" className={styles.headerLink}>
               Market docs →
             </a>
             <label className={styles.filterLabel}>
@@ -1253,7 +1253,7 @@ export default function YieldMapPage() {
                   </li>
                 ))}
               </ul>
-              <a href="/market-docs" className={styles.headlineLink}>
+              <a href="/pipeline/market-docs" className={styles.headlineLink}>
                 Knowledge base →
               </a>
             </div>

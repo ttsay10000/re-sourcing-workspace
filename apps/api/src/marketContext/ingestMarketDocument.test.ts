@@ -6,7 +6,8 @@
  */
 import { beforeAll, describe, expect, it } from "vitest";
 import type { MarketComp, MarketDocIngestReport } from "@re-sourcing/contracts";
-import { ingestMarketDocument } from "./ingestMarketDocument.js";
+import { ingestMarketDocument, ingestMarketDocumentBatch } from "./ingestMarketDocument.js";
+import type { MarketLlmRunner } from "./llmAdapter.js";
 import { InMemoryMarketContextStore } from "./store.js";
 import { FIXTURE_AS_OF, MARKET_DOC_FIXTURES, fixtureLlmRunner } from "./fixtures.js";
 import { loadSeedNeighborhoods } from "./seedNeighborhoods.js";
@@ -264,5 +265,108 @@ describe("acceptance 7 — popup payload (n split + per-comp source badges)", ()
       expect(["market_research", "broker_provided"]).toContain(comp.provenance.source_type);
     }
     expect(summary.sources.join(" ")).toContain("Manhattan Monthly");
+  });
+});
+
+describe("batch ingest (multi-file upload)", () => {
+  function fixtureBatchFiles(ids?: string[]) {
+    const picked = ids ? ids.map(fixture) : MARKET_DOC_FIXTURES;
+    return picked.map((doc) => ({
+      filename: doc.filename,
+      contentType: "text/plain",
+      buffer: Buffer.from(doc.text, "utf-8"),
+    }));
+  }
+
+  it("fans classify/extract out concurrently but matches sequential ingest results", async () => {
+    const batchStore = new InMemoryMarketContextStore(loadSeedNeighborhoods());
+    const base = fixtureLlmRunner();
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const llm: MarketLlmRunner = async (request) => {
+      if (request.stage !== "classify" && request.stage !== "extract") return base(request);
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      try {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        return await base(request);
+      } finally {
+        inFlight -= 1;
+      }
+    };
+
+    const items = await ingestMarketDocumentBatch({
+      files: fixtureBatchFiles(),
+      store: batchStore,
+      llm,
+      asOf: FIXTURE_AS_OF,
+      maxConcurrency: 3,
+    });
+
+    expect(items.map((item) => item.filename)).toEqual(MARKET_DOC_FIXTURES.map((doc) => doc.filename));
+    for (const item of items) {
+      expect(item.error).toBeNull();
+      expect(item.report).not.toBeNull();
+      expect(item.documentId).not.toBeNull();
+    }
+    // The LLM phase actually batched (more than one doc in flight), bounded by maxConcurrency.
+    expect(maxInFlight).toBeGreaterThan(1);
+    expect(maxInFlight).toBeLessThanOrEqual(3);
+
+    // Every document row is created up-front and ends terminal.
+    expect(batchStore.documents).toHaveLength(MARKET_DOC_FIXTURES.length);
+    for (const doc of batchStore.documents) expect(doc.status).toBe("synthesized");
+
+    // Cross-document dedupe still applies inside one batch (210 Sherman Ave).
+    const sherman = batchStore.comps.filter((comp) => normalizeCompAddress(comp.address) === "210 sherman avenue");
+    expect(sherman).toHaveLength(1);
+    expect(sherman[0].provenanceList.map((p) => p.publisher).sort()).toEqual([
+      "Alpha Realty",
+      "Ariel Property Advisors",
+    ]);
+    expect(items.at(-1)!.report!.nCompsMerged).toBe(1);
+
+    // Knowledge ledger folds one document per version, in upload order.
+    expect(items.map((item) => item.report!.knowledgeVersion)).toEqual([1, 2, 3, 4, 5]);
+
+    // Rollups match the sequential pipeline (acceptance 1 medians).
+    const nolita = batchStore.summaries.get("nolita")!;
+    expect(nolita.compCount12mo).toBe(4);
+    expect(nolita.medianCapRate).toBeCloseTo(0.0596, 4);
+  });
+
+  it("isolates a hard per-document failure without sinking the rest of the batch", async () => {
+    const batchStore = new InMemoryMarketContextStore(loadSeedNeighborhoods());
+    const base = fixtureLlmRunner();
+    const poisonMarker = fixture("unbranded_comp_table").marker;
+    const llm: MarketLlmRunner = async (request) => {
+      const haystack = request.documentText ?? request.pdf?.buffer.toString("utf-8") ?? "";
+      if (request.stage === "extract" && haystack.includes(poisonMarker)) {
+        throw new Error("simulated provider outage");
+      }
+      return base(request);
+    };
+
+    const items = await ingestMarketDocumentBatch({
+      files: fixtureBatchFiles(["ay_monthly_jan_feb_2026", "unbranded_comp_table", "alpha_market_trends_q1_2026"]),
+      store: batchStore,
+      llm,
+      asOf: FIXTURE_AS_OF,
+      maxConcurrency: 2,
+    });
+
+    expect(items).toHaveLength(3);
+    expect(items[0].report).not.toBeNull();
+    expect(items[2].report).not.toBeNull();
+    expect(items[1].report).toBeNull();
+    expect(items[1].error).toContain("simulated provider outage");
+
+    const failedDoc = batchStore.documents.find((doc) => doc.id === items[1].documentId)!;
+    expect(failedDoc.status).toBe("failed");
+    expect(failedDoc.error).toContain("simulated provider outage");
+
+    // The surviving documents still folded into the knowledge base in order.
+    expect(items[0].report!.knowledgeVersion).toBe(1);
+    expect(items[2].report!.knowledgeVersion).toBe(2);
   });
 });
