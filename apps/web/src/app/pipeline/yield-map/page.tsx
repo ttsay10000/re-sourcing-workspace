@@ -47,7 +47,48 @@ interface CompRow {
   yieldTrend: YieldTrend;
   /** True when the numbers come from an unpromoted OM extraction awaiting review. */
   pendingReview: boolean;
+  yearBuilt: number | null;
+  occupancyPct: number | null;
+  propertyType: string | null;
+  /** Server-derived strategy bucket (occupancy + OM language); null = unknown. */
+  dealType: "development" | "lease_up" | "value_add" | "stabilized" | null;
 }
+
+/** Which yield the map reads: in-place, pro forma (MTR), or closed deals only. */
+type YieldBasis = "current" | "proforma" | "closed";
+
+const YIELD_BASIS_OPTIONS: Array<{ value: YieldBasis; label: string; title: string }> = [
+  { value: "current", label: "Current", title: "In-place yield: extracted current NOI ÷ price." },
+  { value: "proforma", label: "Pro forma", title: "Stabilized/MTR yield from underwriting (adjusted cap rate)." },
+  { value: "closed", label: "Closed deals", title: "Current yield, restricted to deals whose stage is Closed." },
+];
+
+const DEAL_TYPE_OPTIONS = [
+  { value: "", label: "All deal types" },
+  { value: "value_add", label: "Value-Add" },
+  { value: "lease_up", label: "Lease-Up (vacant)" },
+  { value: "development", label: "Development" },
+  { value: "stabilized", label: "Stabilized" },
+  { value: "unknown", label: "Unknown" },
+];
+
+const VINTAGE_OPTIONS = [
+  { value: "", label: "Any vintage", min: -Infinity, max: Infinity },
+  { value: "2010+", label: "2010 – Current", min: 2010, max: Infinity },
+  { value: "2000s", label: "2000 – 2009", min: 2000, max: 2009 },
+  { value: "1990s", label: "1990 – 1999", min: 1990, max: 1999 },
+  { value: "1970-89", label: "1970 – 1989", min: 1970, max: 1989 },
+  { value: "pre1970", label: "Pre-1970", min: -Infinity, max: 1969 },
+  { value: "unknown", label: "Unknown vintage", min: NaN, max: NaN },
+];
+
+const UNIT_COUNT_OPTIONS = [
+  { value: "", label: "Any unit count", min: -Infinity, max: Infinity },
+  { value: "sub5", label: "Sub 5 units", min: 0, max: 4 },
+  { value: "5-10", label: "5 – 10 units", min: 5, max: 10 },
+  { value: "10-20", label: "10 – 20 units", min: 10, max: 20 },
+  { value: "20+", label: "20+ units", min: 20, max: Infinity },
+];
 
 interface CompsResponse {
   comps: CompRow[];
@@ -467,6 +508,10 @@ export default function YieldMapPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [boroughFilter, setBoroughFilter] = useState("");
+  const [dealTypeFilter, setDealTypeFilter] = useState("");
+  const [vintageFilter, setVintageFilter] = useState("");
+  const [unitCountFilter, setUnitCountFilter] = useState("");
+  const [yieldBasis, setYieldBasis] = useState<YieldBasis>("current");
   const [colorBy, setColorBy] = useState<"yield" | "psf" | "stage" | "vsMarket">("yield");
   const [showAreas, setShowAreas] = useState(true);
   const [includePending, setIncludePending] = useState(false);
@@ -620,12 +665,38 @@ export default function YieldMapPage() {
     return () => controller.abort();
   }, []);
 
+  /** A deal is "closed" for the closed-yield basis when its stage/board status says so. */
+  const isClosedDeal = useCallback(
+    (row: CompRow) => row.dealStage === "closed" || row.savedStatus === "deal_closed" || row.dealState === "closed",
+    []
+  );
+
   const rows = useMemo(() => {
     let all = data?.comps ?? [];
     if (!includePending) all = all.filter((row) => !row.pendingReview);
-    if (!boroughFilter) return all;
-    return all.filter((row) => (row.borough ?? "Unknown") === boroughFilter);
-  }, [data, boroughFilter, includePending]);
+    if (boroughFilter) all = all.filter((row) => (row.borough ?? "Unknown") === boroughFilter);
+    if (dealTypeFilter) {
+      all = all.filter((row) => (dealTypeFilter === "unknown" ? row.dealType == null : row.dealType === dealTypeFilter));
+    }
+    if (vintageFilter) {
+      const band = VINTAGE_OPTIONS.find((option) => option.value === vintageFilter);
+      if (band) {
+        all = all.filter((row) =>
+          vintageFilter === "unknown"
+            ? row.yearBuilt == null
+            : row.yearBuilt != null && row.yearBuilt >= band.min && row.yearBuilt <= band.max
+        );
+      }
+    }
+    if (unitCountFilter) {
+      const band = UNIT_COUNT_OPTIONS.find((option) => option.value === unitCountFilter);
+      if (band) {
+        all = all.filter((row) => row.units != null && row.units >= band.min && row.units <= band.max);
+      }
+    }
+    if (yieldBasis === "closed") all = all.filter(isClosedDeal);
+    return all;
+  }, [data, boroughFilter, includePending, dealTypeFilter, vintageFilter, unitCountFilter, yieldBasis, isClosedDeal]);
 
   const pendingAvailable = useMemo(
     () => (data?.comps ?? []).filter((row) => row.pendingReview).length,
@@ -684,7 +755,13 @@ export default function YieldMapPage() {
   }, []);
 
   const flaggedRows = useMemo(() => rows.filter((row) => row.yieldFlag != null), [rows]);
-  const yieldRows = useMemo(() => rows.filter((row) => row.ltrYieldPct != null), [rows]);
+  /** Yield accessor for the active basis (current/closed read LTR; pro forma reads MTR). */
+  const basisYieldOf = useCallback(
+    (row: CompRow) => (yieldBasis === "proforma" ? row.mtrYieldPct : row.ltrYieldPct),
+    [yieldBasis]
+  );
+  const yieldRows = useMemo(() => rows.filter((row) => basisYieldOf(row) != null), [rows, basisYieldOf]);
+  const yieldBasisLabel = yieldBasis === "proforma" ? "pro forma" : yieldBasis === "closed" ? "closed-deal" : "LTR";
 
   const summaries = useMemo(() => (marketLayerOn ? market?.summaries ?? [] : []), [market, marketLayerOn]);
   const summaryById = useMemo(
@@ -913,16 +990,19 @@ export default function YieldMapPage() {
     };
   }, [summaryById, ourYieldByHood]);
 
-  const dealMetricValue = useMemo(
-    () => (metric === "psf" ? (row: CompRow) => row.pricePsf : (row: CompRow) => row.ltrYieldPct),
-    [metric]
-  );
+  const dealMetricValue = useMemo(() => {
+    if (metric === "psf") return (row: CompRow) => row.pricePsf;
+    // "Closed deals" keeps the current-yield read, just on the closed subset
+    // (rows is already filtered); "pro forma" swaps to the MTR/adjusted cap.
+    if (yieldBasis === "proforma") return (row: CompRow) => row.mtrYieldPct;
+    return (row: CompRow) => row.ltrYieldPct;
+  }, [metric, yieldBasis]);
   const metricColor = metric === "psf" ? psfColor : yieldColor;
   const fmtMetric = (value: number | null) => (metric === "psf" ? fmtPsf(value) : fmtPct(value, 2));
 
   // Headline stats follow the borough filter (the API summary covers all boroughs).
   const stats = useMemo(() => {
-    const yields = rows.map((row) => row.ltrYieldPct).filter((v): v is number => v != null);
+    const yields = rows.map(basisYieldOf).filter((v): v is number => v != null);
     const psfs = rows.map((row) => row.pricePsf).filter((v): v is number => v != null);
     return {
       medianYieldPct: median(yields),
@@ -933,7 +1013,7 @@ export default function YieldMapPage() {
       downCount: rows.filter((row) => row.yieldTrend === "down").length,
       flatCount: rows.filter((row) => row.yieldTrend === "flat").length,
     };
-  }, [rows]);
+  }, [rows, basisYieldOf]);
 
   const neighborhoodStats = useMemo(
     () => groupStats(rows, displayHood, dealMetricValue),
@@ -959,7 +1039,10 @@ export default function YieldMapPage() {
       const deltas = members.map((m) => m.yieldDeltaPct).filter((v): v is number => v != null);
       const medianDeltaPct = metric === "capRate" ? median(deltas) : null;
       const trend = metric === "capRate" ? trendOfDelta(medianDeltaPct) : null;
-      const valueLabel = metric === "psf" ? `${fmtPsf(medianValue)}/SF` : `${medianValue.toFixed(2)}%`;
+      const metricLabel = metric === "psf" ? `${fmtPsf(medianValue)}/SF` : `${medianValue.toFixed(2)}%`;
+      // Submarket bubble reads "YoC / deals shown" so the n behind every
+      // median is visible at a glance (e.g. "4.71% / 12").
+      const valueLabel = `${metricLabel} / ${values.length}`;
       const deltaText =
         medianDeltaPct != null
           ? ` · Δ ${medianDeltaPct >= 0 ? "+" : ""}${medianDeltaPct.toFixed(2)}pp since first sourced`
@@ -971,7 +1054,7 @@ export default function YieldMapPage() {
         labelPoint: featureLabelPoint(feature),
         count: values.length,
         valueLabel,
-        titleLabel: `${feature.properties.name} (${feature.properties.borough}) — median ${valueLabel} across ${values.length} mapped ${
+        titleLabel: `${feature.properties.name} (${feature.properties.borough}) — median ${metricLabel} across ${values.length} mapped ${
           values.length === 1 ? "deal" : "deals"
         }${deltaText}`,
         trend,
@@ -1132,6 +1215,45 @@ export default function YieldMapPage() {
                 ))}
               </select>
             </label>
+            <label
+              className={styles.filterLabel}
+              title="Strategy bucket derived from OM facts: explicit development/conversion language wins, then occupancy splits Lease-Up (≤50%), Value-Add (50–90%), Stabilized (≥90%)."
+            >
+              Deal type
+              <select
+                className={styles.filterSelect}
+                value={dealTypeFilter}
+                onChange={(event) => setDealTypeFilter(event.target.value)}
+              >
+                {DEAL_TYPE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </label>
+            <label className={styles.filterLabel}>
+              Vintage
+              <select
+                className={styles.filterSelect}
+                value={vintageFilter}
+                onChange={(event) => setVintageFilter(event.target.value)}
+              >
+                {VINTAGE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </label>
+            <label className={styles.filterLabel}>
+              Units
+              <select
+                className={styles.filterSelect}
+                value={unitCountFilter}
+                onChange={(event) => setUnitCountFilter(event.target.value)}
+              >
+                {UNIT_COUNT_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </label>
           </div>
         }
       />
@@ -1166,13 +1288,13 @@ export default function YieldMapPage() {
             />
             <StatCard
               tone="brand"
-              label={metric === "psf" ? "Median sale $/SF" : "Median LTR yield"}
+              label={metric === "psf" ? "Median sale $/SF" : `Median ${yieldBasisLabel} yield`}
               value={metric === "psf" ? `${fmtPsf(stats.medianPsf)}/SF` : formatPercent(stats.medianYieldPct, 2)}
               sub={boroughFilter ? boroughFilter : "all boroughs"}
             />
             <StatCard
               tone="warning"
-              label={metric === "psf" ? "Deals with $/SF" : "Average LTR yield"}
+              label={metric === "psf" ? "Deals with $/SF" : `Average ${yieldBasisLabel} yield`}
               value={metric === "psf" ? stats.psfCount : formatPercent(stats.averageYieldPct, 2)}
               sub={
                 metric === "psf"
@@ -1182,7 +1304,7 @@ export default function YieldMapPage() {
               title={
                 metric === "psf"
                   ? undefined
-                  : `Average over the ${yieldRows.length} deals with a usable LTR yield. Deals flagged for 0%/negative cap signals are excluded from the median and average until their extraction is fixed.`
+                  : `Average over the ${yieldRows.length} deals with a usable ${yieldBasisLabel} yield. Deals flagged for 0%/negative cap signals are excluded from the median and average until their extraction is fixed.`
               }
             />
             <StatCard
@@ -1265,6 +1387,19 @@ export default function YieldMapPage() {
                 Deal map — pins colored by {colorBy === "yield" ? "cap rate" : colorBy === "psf" ? "sale $/SF" : "deal stage"}
               </span>
               <div className={styles.mapControls}>
+                <div className={styles.colorToggle} role="group" aria-label="Yield basis">
+                  {YIELD_BASIS_OPTIONS.map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      className={yieldBasis === option.value ? styles.colorToggleActive : undefined}
+                      title={option.title}
+                      onClick={() => setYieldBasis(option.value)}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
                 <div className={styles.colorToggle} role="group" aria-label="Color pins by">
                   <button
                     type="button"

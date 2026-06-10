@@ -53,7 +53,7 @@ import {
 } from "../property-data/brokerComps";
 import styles from "./PipelinePage.module.css";
 import { API_BASE, apiFetch } from "@/lib/api";
-import { EMPTY_VALUE, formatPercent } from "@/lib/format";
+import { EMPTY_VALUE, formatMoneyShort, formatPercent } from "@/lib/format";
 
 const PIPELINE_PATH = "/pipeline";
 
@@ -442,13 +442,17 @@ function propertyDetailHasOm(property: FlexiblePropertyDetail | null | undefined
   return property?.documentStatus?.hasOm === true;
 }
 
+/**
+ * Compact money reads $X.XXM / $XXXK (per v6 notes) so adjacent asks stay
+ * distinguishable; exact mode stays full dollars for detail surfaces.
+ */
 function formatCurrency(value: number | null | undefined, compact = true): string {
   if (value == null || !Number.isFinite(value)) return EMPTY_VALUE;
+  if (compact) return formatMoneyShort(value);
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
-    notation: compact ? "compact" : "standard",
-    maximumFractionDigits: compact ? 1 : 0,
+    maximumFractionDigits: 0,
   }).format(value);
 }
 
@@ -489,8 +493,9 @@ function askActivityDisplay(row: UiV2PipelineRow): { label: string; title: strin
     const pct = activity.latestPriceChangePercent != null ? ` (${Math.abs(activity.latestPriceChangePercent).toFixed(1)}%)` : "";
     const eventDate = formatDate(activity.latestPriceChangeDate);
     return {
-      label: `${isCut ? "Cut" : "Raised"} ${formatCurrency(amount, false)}${pct} · ${eventDate}`,
-      title: `${isCut ? "Price cut" : "Price increase"} on ${eventDate}`,
+      // Short money in the chip ($4.45M, not $4,450,000); the tooltip keeps exact dollars.
+      label: `${isCut ? "Cut" : "Raised"} ${formatCurrency(amount)}${pct} · ${eventDate}`,
+      title: `${isCut ? "Price cut" : "Price increase"} of ${formatCurrency(amount, false)} on ${eventDate}`,
       tone: isCut ? "cut" : "raise",
     };
   }

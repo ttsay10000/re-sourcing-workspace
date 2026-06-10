@@ -61,6 +61,31 @@ interface OperatingCompRow {
   yieldHistory: Array<{ rate: number; at: string }>;
   /** True when the yield comes from an unpromoted OM extraction run still awaiting manual review. */
   pendingReview: boolean;
+  /** Construction year (manual facts → OM → listing), for vintage filters. */
+  yearBuilt: number | null;
+  /** OM-reported occupancy %, when extracted. */
+  occupancyPct: number | null;
+  /** OM property type string (multifamily / mixed-use / development …). */
+  propertyType: string | null;
+  /** Derived strategy bucket — see deriveDealType. Null when undeterminable. */
+  dealType: "development" | "lease_up" | "value_add" | "stabilized" | null;
+}
+
+/**
+ * Strategy bucket from OM facts: explicit development/conversion language
+ * wins; otherwise occupancy splits Lease-Up (≤50% — vacant deals), Stabilized
+ * (≥90%), and Value-Add in between. Null when neither signal exists, so the
+ * UI can offer an honest "Unknown" bucket instead of guessing.
+ */
+export function deriveDealType(
+  propertyType: string | null,
+  occupancyPct: number | null
+): OperatingCompRow["dealType"] {
+  if (propertyType && /develop|conversion|land|ground.?up/i.test(propertyType)) return "development";
+  if (occupancyPct == null || !Number.isFinite(occupancyPct)) return null;
+  if (occupancyPct <= 50) return "lease_up";
+  if (occupancyPct >= 90) return "stabilized";
+  return "value_add";
 }
 
 /** NYC BBL borough digit → display name; backfills boroughs enrichment hasn't resolved yet. */
@@ -335,7 +360,27 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
          p.details#>>'{rentalFinancials,omAnalysis,currentFinancials,noi}' AS fallback_noi_analysis,
          p.details#>>'{rentalFinancials,fromLlm,noi}' AS fallback_noi_llm,
          p.details#>>'{manualSourceFacts,askingPrice}' AS fallback_ask_manual,
-         p.details#>>'{omData,authoritative,propertyInfo,askingPrice}' AS fallback_ask_om
+         p.details#>>'{omData,authoritative,propertyInfo,askingPrice}' AS fallback_ask_om,
+         COALESCE(
+           p.details#>>'{manualSourceFacts,yearBuilt}',
+           p.details#>>'{manualSourceFacts,builtIn}',
+           p.details#>>'{omData,authoritative,propertyInfo,yearBuilt}',
+           p.details#>>'{omData,authoritative,propertyInfo,builtIn}',
+           p.details#>>'{rentalFinancials,omAnalysis,propertyInfo,yearBuilt}',
+           p.details->>'yearBuilt',
+           p.details->>'year_built',
+           lst.listing_extra->>'yearBuilt',
+           lst.listing_extra->>'year_built',
+           lst.listing_extra->>'built'
+         ) AS year_built,
+         COALESCE(
+           p.details#>>'{omData,authoritative,income,reportedOccupancyPct}',
+           p.details#>>'{rentalFinancials,omAnalysis,income,reportedOccupancyPct}'
+         ) AS occupancy_pct,
+         COALESCE(
+           p.details#>>'{omData,authoritative,propertyInfo,propertyType}',
+           p.details#>>'{rentalFinancials,omAnalysis,propertyInfo,propertyType}'
+         ) AS property_type
        FROM properties p
        LEFT JOIN LATERAL (
          SELECT *
@@ -460,6 +505,10 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
           yieldTrend,
           yieldHistory,
           pendingReview: false,
+          yearBuilt: toNumber(row.year_built),
+          occupancyPct: toNumber(row.occupancy_pct),
+          propertyType: (row.property_type as string | null) ?? null,
+          dealType: deriveDealType((row.property_type as string | null) ?? null, toNumber(row.occupancy_pct)),
         };
         return comp;
       })
@@ -532,9 +581,12 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
           propertyInfo?: Record<string, unknown> | null;
           currentFinancials?: Record<string, unknown> | null;
           expenses?: Record<string, unknown> | null;
+          income?: Record<string, unknown> | null;
         } | null;
         const info = snapshot?.propertyInfo ?? null;
         const current = snapshot?.currentFinancials ?? null;
+        const pendingOccupancy = toNumber(snapshot?.income?.reportedOccupancyPct);
+        const pendingPropertyType = typeof info?.propertyType === "string" ? info.propertyType : null;
         const gross = toNumber(current?.grossRentalIncome);
         const expenses = toNumber(snapshot?.expenses?.totalExpenses) ?? toNumber(current?.operatingExpenses);
         const reconstructedNoi =
@@ -579,6 +631,10 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
           yieldTrend: null,
           yieldHistory: [],
           pendingReview: true,
+          yearBuilt: toNumber(info?.yearBuilt) ?? toNumber(info?.builtIn),
+          occupancyPct: pendingOccupancy,
+          propertyType: pendingPropertyType,
+          dealType: deriveDealType(pendingPropertyType, pendingOccupancy),
         });
       }
     }

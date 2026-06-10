@@ -34,7 +34,11 @@
   /* Borders */
   --app-line: #e4e4e7;
   --app-line-strong: #d4d4d8;
-  --app-line-subtle: #f4f4f5;
+  /* Row dividers: dark enough to actually delineate rows on white (v6 note —
+     the old #f4f4f5 was invisible on most monitors). */
+  --app-line-subtle: #e8e8ea;
+  /* Zebra fill for dense tables; pairs with --app-line-subtle dividers. */
+  --app-row-alt: #f6f6f4;
 
   /* Sidebar (dark) */
   --app-navy: #09111f;
@@ -6201,14 +6205,16 @@ button:active:not(:disabled) {
    Global on purpose so CSS-module tables can compose them.
 ────────────────────────────────────────────────────────────────── */
 
+/* Tint + left accent instead of a full inset ring: the ring read as a
+   floating box that didn't line up with row borders (v6 note). */
 .cell-flag-warn {
   background: var(--app-amber-soft);
-  box-shadow: inset 0 0 0 1px var(--app-amber-border);
+  box-shadow: inset 2.5px 0 0 var(--app-amber);
 }
 
 .cell-flag-danger {
   background: var(--app-red-soft);
-  box-shadow: inset 0 0 0 1px var(--app-red-border);
+  box-shadow: inset 2.5px 0 0 var(--app-red);
 }
 
 .value-flag-warn {

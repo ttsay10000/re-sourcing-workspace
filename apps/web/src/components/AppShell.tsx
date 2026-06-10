@@ -105,40 +105,13 @@ const NAV_LINKS: NavLink[] = [
       pathname === "/rental-analysis" || pathname.startsWith("/rental-analysis/"),
   },
   {
+    // v6 IA note: Broker CRM keeps only the CRM itself; email review moved
+    // into Deal Progress, where that workflow actually runs.
     href: "/crm",
     label: "Broker CRM",
     shortLabel: "B",
     icon: Contact,
-    matches: (pathname: string) =>
-      pathname === "/crm" ||
-      pathname.startsWith("/crm/") ||
-      pathname === "/om-review" ||
-      pathname.startsWith("/om-review/") ||
-      pathname === "/broker-om" ||
-      pathname.startsWith("/broker-om/"),
-    children: [
-      {
-        href: "/crm",
-        label: "CRM",
-        shortLabel: "C",
-        icon: Contact,
-        matches: (pathname: string) => pathname === "/crm" || pathname.startsWith("/crm/"),
-      },
-      {
-        href: "/om-review",
-        label: "Review Queue",
-        shortLabel: "R",
-        icon: FileText,
-        matches: (pathname: string) => pathname === "/om-review" || pathname.startsWith("/om-review/"),
-      },
-      {
-        href: "/broker-om/email-search",
-        label: "Find OMs in Email",
-        shortLabel: "F",
-        icon: Search,
-        matches: (pathname: string) => pathname === "/broker-om/email-search",
-      },
-    ],
+    matches: (pathname: string) => pathname === "/crm" || pathname.startsWith("/crm/"),
   },
   {
     href: "/progress",
@@ -152,6 +125,10 @@ const NAV_LINKS: NavLink[] = [
       pathname.startsWith("/deal-analysis/") ||
       pathname === "/activity" ||
       pathname.startsWith("/activity/") ||
+      pathname === "/om-review" ||
+      pathname.startsWith("/om-review/") ||
+      pathname === "/broker-om" ||
+      pathname.startsWith("/broker-om/") ||
       pathname.startsWith("/dossier-"),
     children: [
       {
@@ -167,6 +144,20 @@ const NAV_LINKS: NavLink[] = [
         shortLabel: "O",
         icon: FileText,
         matches: (pathname: string) => pathname === "/deal-analysis" || pathname.startsWith("/deal-analysis/"),
+      },
+      {
+        href: "/om-review",
+        label: "Review Queue",
+        shortLabel: "R",
+        icon: FileText,
+        matches: (pathname: string) => pathname === "/om-review" || pathname.startsWith("/om-review/"),
+      },
+      {
+        href: "/broker-om/email-search",
+        label: "Find OMs in Email",
+        shortLabel: "F",
+        icon: Search,
+        matches: (pathname: string) => pathname === "/broker-om/email-search",
       },
       {
         href: "/activity",

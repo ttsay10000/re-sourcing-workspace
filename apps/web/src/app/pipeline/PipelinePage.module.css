@@ -474,7 +474,8 @@
   position: sticky;
   right: 0;
   z-index: 6;
-  background: #fff;
+  /* Inherit so zebra/hover/selected row tints carry into the pinned column. */
+  background: inherit;
   box-shadow: -10px 0 16px rgba(24, 24, 27, 0.08);
 }
 
@@ -520,9 +521,11 @@
 .headerLabel {
   flex: 1 1 auto;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  /* Wrap instead of ellipsizing: "YoC LTR" / "Date Listed" must never
+     collapse to "YOC L…" — narrow columns get a clean two-line title. */
+  white-space: normal;
+  overflow-wrap: break-word;
+  line-height: 1.18;
 }
 
 .headerState {
@@ -2994,6 +2997,12 @@
 /* Sticky select/star/address columns so the row identity never scrolls away. */
 .pipelineTable tbody tr {
   background: #fff;
+}
+
+/* Zebra striping (v6 readability pass). Sticky identity cells use
+   background: inherit, so the stripe carries through them too. */
+.pipelineTable tbody tr:nth-child(even) {
+  background: var(--app-row-alt, #f6f6f4);
 }
 
 .pipelineTable th:nth-child(-n + 3),

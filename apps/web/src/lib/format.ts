@@ -16,6 +16,19 @@ export function formatCurrencyCompact(value: number | null | undefined): string 
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(value);
 }
 
+/**
+ * $6.80M / $850K — table money: two decimals in the millions so asks don't
+ * collapse together, whole K under $1M, exact dollars under $1K.
+ */
+export function formatMoneyShort(value: number | null | undefined): string {
+  if (isMissing(value)) return EMPTY_VALUE;
+  const abs = Math.abs(value);
+  const sign = value < 0 ? "−" : "";
+  if (abs >= 1_000_000) return `${sign}$${(abs / 1_000_000).toFixed(2)}M`;
+  if (abs >= 1_000) return `${sign}$${Math.round(abs / 1_000)}K`;
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(value);
+}
+
 /** $8,250,000 — exact for detail surfaces. */
 export function formatCurrencyExact(value: number | null | undefined): string {
   if (isMissing(value)) return EMPTY_VALUE;
