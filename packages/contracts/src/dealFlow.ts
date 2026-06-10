@@ -6,6 +6,54 @@
  * match the section ids returned by `GET /api/ui-v2/deal-progress`, so a
  * stage count rendered anywhere always agrees with the board.
  */
+/**
+ * Canonical persistence stages (migration 056, `properties.deal_stage`).
+ * Coarser than the display flow: several display stages share one canonical
+ * stage. Mirrored from @re-sourcing/db's DEAL_STAGES (db depends on
+ * contracts, so the literal union is duplicated here and equality is
+ * asserted by a test in apps/api).
+ */
+export type CanonicalDealStage =
+  | "inbox"
+  | "screening"
+  | "pursuing"
+  | "outreach"
+  | "om_review"
+  | "underwriting"
+  | "tour"
+  | "offer_loi"
+  | "contract_dd"
+  | "closed";
+
+export type CanonicalDealState = "active" | "dead" | "closed";
+
+/** Saved-deal status → canonical stage/state written to properties.deal_stage. */
+export const STATUS_TO_CANONICAL: Record<string, { stage: CanonicalDealStage; state: CanonicalDealState }> = {
+  new: { stage: "inbox", state: "active" },
+  screening: { stage: "screening", state: "active" },
+  interesting: { stage: "screening", state: "active" },
+  saved: { stage: "pursuing", state: "active" },
+  outreach: { stage: "outreach", state: "active" },
+  awaiting_broker: { stage: "outreach", state: "active" },
+  om_received: { stage: "om_review", state: "active" },
+  underwriting: { stage: "underwriting", state: "active" },
+  dossier_generated: { stage: "underwriting", state: "active" },
+  tour_scheduled: { stage: "tour", state: "active" },
+  tour_completed_awaiting_inputs: { stage: "tour", state: "active" },
+  offer_review: { stage: "offer_loi", state: "active" },
+  negotiation: { stage: "offer_loi", state: "active" },
+  contract_signed: { stage: "contract_dd", state: "active" },
+  deal_closed: { stage: "closed", state: "closed" },
+  archived: { stage: "closed", state: "closed" },
+  rejected: { stage: "screening", state: "dead" },
+};
+
+/** Aging thresholds (days in stage) shared by chips and recommendation rules. */
+export const STAGE_AGING = {
+  warnDays: 7,
+  dangerDays: 14,
+} as const;
+
 export type DealFlowStageId =
   | "sourced"
   | "om_requested"
@@ -132,6 +180,8 @@ export type DealFlowRecommendationKind =
   | "confirm_tours"
   | "missing_broker_email"
   | "request_oms"
+  | "om_request_stale"
+  | "underwriting_stale"
   | "underwriting_review"
   | "loi_followup";
 

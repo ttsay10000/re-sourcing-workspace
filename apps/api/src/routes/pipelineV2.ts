@@ -78,6 +78,7 @@ import {
   getPropertyDossierSummary,
 } from "../deal/propertyDossierState.js";
 import { resolveEffectiveDealScore } from "../deal/effectiveDealScore.js";
+import { recordDealStageChange } from "../deal/recordDealStageChange.js";
 import { resolveOmAskingPriceFromDetails } from "../deal/omAskingPrice.js";
 import { computeYieldSignals } from "../deal/yieldSignals.js";
 import { buildLoiFileName, buildLoiPdf } from "../deal/loiGenerator.js";
@@ -3097,6 +3098,7 @@ async function handleStatusUpdate(req: Request, res: Response): Promise<void> {
       }
     }
     await updatePipelineState(pool, propertyId, patch);
+    void recordDealStageChange(pool, propertyId, status, { actor: actorName, source: "ui-v2-status" });
     const userId = await getDefaultUserId(pool);
     const savedDealsRepo = new SavedDealsRepo({ pool });
     const savedDeal = await savedDealsRepo.get(userId, propertyId);
@@ -3750,6 +3752,7 @@ router.post("/ui-v2/properties/:id/save", async (req: Request, res: Response) =>
     }
     const userId = await getDefaultUserId(pool);
     await new SavedDealsRepo({ pool }).save(userId, propertyId, "saved");
+    void recordDealStageChange(pool, propertyId, "saved", { source: "ui-v2-save" });
     const existing = readPipelineState(property.details);
     await updatePipelineState(pool, propertyId, {
       status: "saved_watchlist",
@@ -3835,6 +3838,7 @@ router.post("/ui-v2/properties/:id/restore", async (req: Request, res: Response)
     if (savedDeal?.dealStatus === "rejected") {
       await savedDealsRepo.updateStatus(userId, propertyId, "saved");
     }
+    void recordDealStageChange(pool, propertyId, String(restoredUiStatus), { actor: actorName, source: "ui-v2-restore" });
     const detail = await loadDetailForProperty(pool, userId, propertyId);
     res.json({ property: detail } satisfies { property: UiV2PropertyDetailPayload | null });
   } catch (err) {

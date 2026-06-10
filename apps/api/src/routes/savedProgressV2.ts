@@ -117,6 +117,7 @@ interface SavedProgressBaseRow {
   manual_broker_email: string | null;
   recipient_contact_email: string | null;
   broker_display_name: string | null;
+  stage_entered_at: Date | string | null;
   rejection_reason_code?: string | null;
   rejection_reason_label?: string | null;
   rejection_note?: string | null;
@@ -194,6 +195,8 @@ interface ProgressPropertyRow {
   firstImageUrl: string | null;
   brokerName: string | null;
   brokerEmail: string | null;
+  stageEnteredAt: string | null;
+  latestOutreachAt: string | null;
   updatedAt: string;
 }
 
@@ -908,6 +911,8 @@ function mapProgressRow(row: SavedProgressBaseRow): ProgressPropertyRow {
     firstImageUrl: saved.firstImageUrl,
     brokerName: row.manual_broker_name ?? row.broker_display_name,
     brokerEmail: row.manual_broker_email ?? row.recipient_contact_email,
+    stageEnteredAt: toIsoOrNull(row.stage_entered_at),
+    latestOutreachAt: toIsoOrNull(row.latest_inquiry_sent_at),
     updatedAt: saved.updatedAt,
   };
 }
@@ -919,6 +924,16 @@ async function getDefaultUserId(): Promise<string> {
 
 async function hasTable(pool: Pool, tableName: string): Promise<boolean> {
   const result = await pool.query<{ exists: boolean }>("SELECT to_regclass($1) IS NOT NULL AS exists", [tableName]);
+  return result.rows[0]?.exists === true;
+}
+
+async function hasColumn(pool: Pool, tableName: string, columnName: string): Promise<boolean> {
+  const result = await pool.query<{ exists: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1 FROM information_schema.columns WHERE table_name = $1 AND column_name = $2
+     ) AS exists`,
+    [tableName, columnName]
+  );
   return result.rows[0]?.exists === true;
 }
 
@@ -971,7 +986,7 @@ function brokerJoin(includeBroker: boolean): string {
      LEFT JOIN broker_contacts bc ON bc.id = rr.contact_id`;
 }
 
-function baseSelectSql(hasRejections: boolean, savedOnly: boolean, includeBroker = false): string {
+function baseSelectSql(hasRejections: boolean, savedOnly: boolean, includeBroker = false, includeStage = false): string {
   return `SELECT
        sd.id AS saved_deal_id,
        sd.user_id AS saved_user_id,
@@ -1014,6 +1029,7 @@ function baseSelectSql(hasRejections: boolean, savedOnly: boolean, includeBroker
        COALESCE(ai.open_action_item_count, 0) AS open_action_item_count,
        pis.sent_at AS latest_inquiry_sent_at,
        ${brokerSelect(includeBroker)}
+       ${includeStage ? "p.stage_entered_at," : "NULL::timestamptz AS stage_entered_at,"}
        ${rejectionSelect(hasRejections)}
      FROM ${savedOnly ? "saved_deals sd INNER JOIN properties p ON p.id = sd.property_id" : "properties p LEFT JOIN saved_deals sd ON sd.property_id = p.id AND sd.user_id = $1"}${brokerJoin(includeBroker)}
      LEFT JOIN LATERAL (
@@ -1118,9 +1134,9 @@ async function fetchSavedRows(
   };
 }
 
-async function fetchProgressRows(pool: Pool, userId: string, hasRejections: boolean): Promise<SavedProgressBaseRow[]> {
+async function fetchProgressRows(pool: Pool, userId: string, hasRejections: boolean, hasStageColumns = false): Promise<SavedProgressBaseRow[]> {
   const result = await pool.query<SavedProgressBaseRow>(
-    `${baseSelectSql(hasRejections, false, true)}
+    `${baseSelectSql(hasRejections, false, true, hasStageColumns)}
      ORDER BY p.updated_at DESC`,
     [userId]
   );
@@ -1239,9 +1255,12 @@ router.get("/ui-v2/deal-progress", async (_req: Request, res: Response) => {
   try {
     const userId = await getDefaultUserId();
     const pool = getPool();
-    const hasRejections = await hasTable(pool, "property_rejections");
+    const [hasRejections, hasStageColumns] = await Promise.all([
+      hasTable(pool, "property_rejections"),
+      hasColumn(pool, "properties", "stage_entered_at"),
+    ]);
     const [baseRows, rejectionReasons] = await Promise.all([
-      fetchProgressRows(pool, userId, hasRejections),
+      fetchProgressRows(pool, userId, hasRejections, hasStageColumns),
       fetchRejectionReasonCounts(pool, hasRejections),
     ]);
     const rows = baseRows.map(mapProgressRow);
@@ -1296,8 +1315,11 @@ router.get("/ui-v2/deal-progress/recommendations", async (req: Request, res: Res
     }
     const userId = await getDefaultUserId();
     const pool = getPool();
-    const hasRejections = await hasTable(pool, "property_rejections");
-    const baseRows = await fetchProgressRows(pool, userId, hasRejections);
+    const [hasRejections, hasStageColumns] = await Promise.all([
+      hasTable(pool, "property_rejections"),
+      hasColumn(pool, "properties", "stage_entered_at"),
+    ]);
+    const baseRows = await fetchProgressRows(pool, userId, hasRejections, hasStageColumns);
     const rows = baseRows.map(mapProgressRow);
     const sections = buildProgressSections(rows);
 
@@ -1313,6 +1335,8 @@ router.get("/ui-v2/deal-progress/recommendations", async (req: Request, res: Res
         postTourDecision: row.dealPath?.postTourDecision ?? null,
         underwritingReviewRequired: row.underwritingReviewRequired,
         underwritingReviewCompleted: row.underwritingReviewCompleted,
+        stageEnteredAt: row.stageEnteredAt,
+        latestOutreachAt: row.latestOutreachAt,
       }))
     );
 

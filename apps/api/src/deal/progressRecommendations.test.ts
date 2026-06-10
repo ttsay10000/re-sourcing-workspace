@@ -72,3 +72,33 @@ describe("buildRuleBasedRecommendations", () => {
     expect(review?.detail).toContain("+2 more");
   });
 });
+
+describe("staleness rules", () => {
+  const daysAgo = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString();
+
+  it("flags OM requests quiet for 10+ days", () => {
+    const items = buildRuleBasedRecommendations([
+      row({ propertyId: "a", sectionId: "om_requested", latestOutreachAt: daysAgo(11) }),
+      row({ propertyId: "b", sectionId: "om_requested", latestOutreachAt: daysAgo(2) }),
+      row({ propertyId: "c", sectionId: "om_requested", stageEnteredAt: daysAgo(12) }),
+    ]);
+    const stale = items.find((item) => item.id === "om_request_stale");
+    expect(stale?.propertyIds.sort()).toEqual(["a", "c"]);
+  });
+
+  it("prefers outreach recency over stage age", () => {
+    const items = buildRuleBasedRecommendations([
+      row({ propertyId: "a", sectionId: "om_requested", latestOutreachAt: daysAgo(1), stageEnteredAt: daysAgo(30) }),
+    ]);
+    expect(items.find((item) => item.id === "om_request_stale")).toBeUndefined();
+  });
+
+  it("flags underwriting reviews stuck past the danger threshold", () => {
+    const items = buildRuleBasedRecommendations([
+      row({ propertyId: "a", sectionId: "underwriting_awaiting_review", stageEnteredAt: daysAgo(15), underwritingReviewRequired: true }),
+      row({ propertyId: "b", sectionId: "underwriting_awaiting_review", stageEnteredAt: daysAgo(3), underwritingReviewRequired: true }),
+    ]);
+    const stuck = items.find((item) => item.id === "underwriting_stale");
+    expect(stuck?.propertyIds).toEqual(["a"]);
+  });
+});

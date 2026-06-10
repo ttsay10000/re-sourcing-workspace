@@ -5,7 +5,7 @@ import { Button, Dialog } from "@/components/ui";
 import { apiFetch } from "@/lib/api";
 import styles from "./progress.module.css";
 
-export type StepperKind = "missing_broker_email" | "request_oms";
+export type StepperKind = "missing_broker_email" | "request_oms" | "om_request_stale";
 
 export type StepperRow = {
   propertyId: string;
@@ -156,7 +156,8 @@ export function RecommendationStepper({
       ? step.email.trim().length > 3
       : Boolean(step.draft.toAddress.trim() && step.draft.subject.trim() && step.draft.body.trim());
 
-  const title = kind === "missing_broker_email" ? "Add broker emails" : "Request OMs";
+  const title =
+    kind === "missing_broker_email" ? "Add broker emails" : kind === "om_request_stale" ? "Send follow-ups" : "Request OMs";
 
   return (
     <Dialog
@@ -168,7 +169,7 @@ export function RecommendationStepper({
           ? `Done — ${step.completed} saved, ${step.skipped} skipped.`
           : `${step.index + 1} of ${rows.length} · ${current?.address ?? ""}`
       }
-      size={kind === "request_oms" ? "lg" : "sm"}
+      size={kind === "missing_broker_email" ? "sm" : "lg"}
       footer={
         step.finished ? (
           <Button variant="primary" size="sm" onClick={() => onClose(didWork)}>

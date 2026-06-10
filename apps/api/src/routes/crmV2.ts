@@ -28,6 +28,7 @@ import {
   PropertyPipelineEventRepo,
   PropertyRepo,
 } from "@re-sourcing/db";
+import { recordDealStageChange } from "../deal/recordDealStageChange.js";
 import {
   getPrimaryListingForProperty,
   overwriteManualBrokerResolution,
@@ -232,6 +233,7 @@ async function markOmRequestedFromOutreach(
       trigger: "broker_outreach",
     },
   });
+  void recordDealStageChange(pool, propertyId, "outreach", { actor, source });
 }
 
 function parseLimit(value: unknown, fallback = 50): number {

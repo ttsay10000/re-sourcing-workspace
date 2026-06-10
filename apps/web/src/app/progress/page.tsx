@@ -23,7 +23,7 @@ import {
   type UiV2PipelineStatus,
   type UiV2RejectionReasonCode,
 } from "@re-sourcing/contracts";
-import { BrokerContactDialog, Button, Dialog, FileDropzone, PageHeader, PromptMenu, PropertyThumb, StatCard } from "@/components/ui";
+import { AgingChip, BrokerContactDialog, Button, Dialog, FileDropzone, PageHeader, PromptMenu, PropertyThumb, StatCard } from "@/components/ui";
 import { RecommendationStepper, type StepperKind, type StepperRow } from "./RecommendationStepper";
 import { API_BASE, apiFetch } from "@/lib/api";
 import styles from "./progress.module.css";
@@ -71,6 +71,7 @@ type ProgressRow = {
   firstImageUrl?: string | null;
   brokerName?: string | null;
   brokerEmail?: string | null;
+  stageEnteredAt?: string | null;
   updatedAt?: string | null;
 };
 
@@ -850,7 +851,7 @@ function ProgressPageContent() {
 
   const applyRecommendation = useCallback(
     (item: DealFlowRecommendation) => {
-      if (item.id === "missing_broker_email" || item.id === "request_oms") {
+      if (item.id === "missing_broker_email" || item.id === "request_oms" || item.id === "om_request_stale") {
         const wanted = new Set(item.propertyIds);
         const rows = sections
           .flatMap((section) => section.rows ?? [])
@@ -868,7 +869,7 @@ function ProgressPageContent() {
           });
         }
         if (stepperRows.length > 0) {
-          setStepper({ kind: item.id, rows: stepperRows });
+          setStepper({ kind: item.id as StepperKind, rows: stepperRows });
           return;
         }
       }
@@ -2453,6 +2454,10 @@ function SavedDealMiniSection({
       <div className={styles.miniSectionHeader} title={section.description}>
         <h3>{section.label}</h3>
         <span>{section.rows.length}</span>
+        {(() => {
+          const askTotal = section.rows.reduce((sum, row) => sum + (row.price ?? 0), 0);
+          return askTotal > 0 ? <small className={styles.miniSectionTotal}>{formatCurrency(askTotal)}</small> : null;
+        })()}
       </div>
       {loading ? (
         <div className={styles.emptyState}>Loading deal path...</div>
@@ -2520,6 +2525,7 @@ function SavedDealMiniSection({
                     <small className={scoreClass(row.dealScore)}>
                       {row.dealScore == null ? "—" : Math.round(row.dealScore)}
                     </small>
+                    <AgingChip since={row.stageEnteredAt} className={styles.agingChip} />
                     {!row.brokerEmail ? (
                       <button
                         type="button"

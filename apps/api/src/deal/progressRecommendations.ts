@@ -13,6 +13,7 @@ import type {
   DealFlowRecommendationsResponse,
   DealFlowStageId,
 } from "@re-sourcing/contracts";
+import { STAGE_AGING } from "@re-sourcing/contracts";
 import { getDealScoringModel } from "../enrichment/openaiModels.js";
 
 export interface RecommendationInputRow {
@@ -26,6 +27,19 @@ export interface RecommendationInputRow {
   postTourDecision: string | null;
   underwritingReviewRequired: boolean;
   underwritingReviewCompleted: boolean;
+  /** When the deal entered its current canonical stage (null pre-migration). */
+  stageEnteredAt?: string | null;
+  /** Most recent broker outreach send. */
+  latestOutreachAt?: string | null;
+}
+
+const STALE_OM_REQUEST_DAYS = 10;
+
+function daysSince(iso: string | null | undefined): number | null {
+  if (!iso) return null;
+  const time = new Date(iso).getTime();
+  if (Number.isNaN(time)) return null;
+  return Math.floor((Date.now() - time) / 86_400_000);
 }
 
 const EXAMPLE_LIMIT = 4;
@@ -121,6 +135,40 @@ export function buildRuleBasedRecommendations(rows: RecommendationInputRow[]): D
         needsOmRequest,
         `Email ${needsOmRequest.length} ${pluralize(needsOmRequest.length, "broker")} to request OMs`,
         "sourced"
+      )
+    );
+  }
+
+  const staleOmRequests = rows.filter((row) => {
+    if (row.sectionId !== "om_requested") return false;
+    const sinceOutreach = daysSince(row.latestOutreachAt);
+    const sinceStage = daysSince(row.stageEnteredAt);
+    const age = sinceOutreach ?? sinceStage;
+    return age != null && age >= STALE_OM_REQUEST_DAYS;
+  });
+  if (staleOmRequests.length > 0) {
+    items.push(
+      recommendation(
+        "om_request_stale",
+        staleOmRequests,
+        `Follow up on ${staleOmRequests.length} stale OM ${pluralize(staleOmRequests.length, "request")} (${STALE_OM_REQUEST_DAYS}+ days quiet)`,
+        "om_requested"
+      )
+    );
+  }
+
+  const staleUnderwriting = rows.filter((row) => {
+    if (row.sectionId !== "underwriting_awaiting_review") return false;
+    const age = daysSince(row.stageEnteredAt);
+    return age != null && age >= STAGE_AGING.dangerDays;
+  });
+  if (staleUnderwriting.length > 0) {
+    items.push(
+      recommendation(
+        "underwriting_stale",
+        staleUnderwriting,
+        `Clear ${staleUnderwriting.length} underwriting ${pluralize(staleUnderwriting.length, "review")} stuck ${STAGE_AGING.dangerDays}+ days`,
+        "underwriting_awaiting_review"
       )
     );
   }
