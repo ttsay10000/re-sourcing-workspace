@@ -11,6 +11,7 @@ import {
 } from "@re-sourcing/contracts";
 import {
   getAuthoritativeOmSnapshot,
+  resolveBrokerStatedCapRatePct,
   resolvePreferredOmExpenseTable,
   resolvePreferredOmPropertyInfo,
   resolvePreferredOmUnitCount,
@@ -30,7 +31,7 @@ import {
 } from "./dealScoringEngine.js";
 import type { DealScoringProfile, DealScoringProfileKey } from "./dealScoringProfiles.js";
 import { resolveDossierPackageContext } from "./dossierPropertyContext.js";
-import { computeYieldSignals } from "./yieldSignals.js";
+import { computeBrokerYieldComparison, computeYieldSignals } from "./yieldSignals.js";
 import type { InsertDealSignalsParams } from "@re-sourcing/db";
 
 export interface PropertyListingInput {
@@ -303,6 +304,15 @@ export function computeDealSignals(input: ComputeDealSignalsInput): ComputeDealS
     mtrYieldPct: scoringResult.adjustedCapRate,
   });
   const yieldSpread = yieldSignals.spreadPctPoints;
+  const brokerYieldComparison = computeBrokerYieldComparison({
+    brokerNoi: currentFinancials.noi,
+    brokerStatedCapRatePct: resolveBrokerStatedCapRatePct(details),
+    reconstructedNoi: input.assetCapRateNoi ?? null,
+    purchasePrice: price,
+  });
+  const calloutRiskFlags = [yieldSignals.calloutLabel, brokerYieldComparison.calloutLabel].filter(
+    (flag): flag is string => flag != null
+  );
   const expenseRatio =
     currentFinancials.operatingExpenses != null &&
     currentFinancials.effectiveGrossIncome != null &&
@@ -326,9 +336,10 @@ export function computeDealSignals(input: ComputeDealSignalsInput): ComputeDealS
     dealScore: scoringResult.isScoreable ? scoringResult.dealScore : undefined,
     scoreBreakdown: scoringResult.scoreBreakdown,
     riskProfile: scoringResult.riskProfile,
-    riskFlags: yieldSignals.calloutLabel
-      ? [...scoringResult.riskFlags, yieldSignals.calloutLabel]
-      : scoringResult.riskFlags,
+    riskFlags:
+      calloutRiskFlags.length > 0
+        ? [...scoringResult.riskFlags, ...calloutRiskFlags]
+        : scoringResult.riskFlags,
     capReasons: scoringResult.capReasons,
     confidenceScore: scoringResult.confidenceScore,
     scoreSensitivity: input.scoreSensitivity ?? undefined,

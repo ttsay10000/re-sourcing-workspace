@@ -666,6 +666,13 @@ export interface UiV2UnderwritingSummary {
   yocSpreadPct?: number | null;
   mtrCalloutCode?: "mtr_below_ltr" | "mtr_weak_uplift" | null;
   mtrCalloutLabel?: string | null;
+  /** Cap rate as the broker listed it (or implied by the broker-stated NOI). */
+  brokerCapRatePct?: number | null;
+  brokerCapRateSource?: "om_stated" | "implied_from_broker_noi" | null;
+  /** Broker cap rate minus the reconstructed-actuals cap rate, in percentage points. */
+  brokerVsReconstructedPctPoints?: number | null;
+  brokerCapCalloutCode?: "broker_cap_above_reconstructed" | "broker_cap_below_reconstructed" | null;
+  brokerCapCalloutLabel?: string | null;
   riskFlags?: string[];
   capReasons?: string[];
   targetIrrPct?: number | null;

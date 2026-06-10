@@ -294,6 +294,17 @@ export interface OmCalculationSnapshot {
     calloutCode: "mtr_below_ltr" | "mtr_weak_uplift" | null;
     calloutLabel: string | null;
   } | null;
+  brokerYieldComparison?: {
+    brokerNoi: number | null;
+    brokerCapRatePct: number | null;
+    brokerCapRateSource: "om_stated" | "implied_from_broker_noi" | null;
+    reconstructedNoi: number | null;
+    reconstructedCapRatePct: number | null;
+    deltaPctPoints: number | null;
+    minFlagDeltaPctPoints: number;
+    calloutCode: "broker_cap_above_reconstructed" | "broker_cap_below_reconstructed" | null;
+    calloutLabel: string | null;
+  } | null;
   rentRoll: OmCalculationRentRollRow[];
   expenseRows: OmCalculationExpenseRow[];
   unitModelRows: OmCalculationUnitModelRow[];

@@ -768,6 +768,17 @@ function DealAnalysisPageContent() {
                   ? `${calculation.yieldSignals.mtrYieldPct.toFixed(1)}%`
                   : "—",
             },
+            ...(calculation.brokerYieldComparison?.brokerCapRatePct != null
+              ? [
+                  {
+                    label:
+                      calculation.brokerYieldComparison.brokerCapRateSource === "om_stated"
+                        ? "Broker cap (as listed)"
+                        : "Broker cap (from OM NOI)",
+                    value: `${calculation.brokerYieldComparison.brokerCapRatePct.toFixed(1)}%`,
+                  },
+                ]
+              : []),
             {
               label:
                 calculation.topLineMetrics.holdPeriodYears != null
@@ -2211,6 +2222,25 @@ function DealAnalysisPageContent() {
                   </div>
                 )}
               </div>
+              {calculation?.brokerYieldComparison?.calloutLabel ? (
+                <div
+                  style={{
+                    marginTop: "0.55rem",
+                    padding: "0.5rem 0.6rem",
+                    borderRadius: "6px",
+                    border: "1px solid #fde68a",
+                    background: "#fffbeb",
+                    color: "#92400e",
+                    fontSize: "0.78rem",
+                    lineHeight: 1.45,
+                  }}
+                >
+                  <strong style={{ display: "block", marginBottom: "0.15rem" }}>
+                    Broker cap rate differs from actuals
+                  </strong>
+                  {calculation.brokerYieldComparison.calloutLabel}
+                </div>
+              ) : null}
             </div>
             {calculation ? (
               <div

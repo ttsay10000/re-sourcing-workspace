@@ -14,7 +14,7 @@ import {
   PropertyRepo,
   UserProfileRepo,
 } from "@re-sourcing/db";
-import { getAuthoritativeOmSnapshot, resolvePreferredOmExpenseTable, resolvePreferredOmExpenseTotal, resolvePreferredOmPropertyInfo, resolvePreferredOmRentRoll, resolvePreferredOmUnitCount } from "../om/authoritativeOm.js";
+import { getAuthoritativeOmSnapshot, resolveBrokerStatedCapRatePct, resolvePreferredOmExpenseTable, resolvePreferredOmExpenseTotal, resolvePreferredOmPropertyInfo, resolvePreferredOmRentRoll, resolvePreferredOmUnitCount } from "../om/authoritativeOm.js";
 import { resolveCurrentFinancialsFromDetails } from "../rental/currentFinancials.js";
 import {
   extractBrokerDossierNotes,
@@ -45,7 +45,12 @@ import {
 import { buildRentBreakdown as buildSharedRentBreakdown } from "./rentBreakdown.js";
 import { buildSensitivityAnalyses, type SensitivityAnalysis } from "./sensitivityAnalysis.js";
 import { resolveOmAskingPriceFromDetails } from "./omAskingPrice.js";
-import { computeYieldSignals, type YieldSignals } from "./yieldSignals.js";
+import {
+  computeBrokerYieldComparison,
+  computeYieldSignals,
+  type BrokerYieldComparison,
+  type YieldSignals,
+} from "./yieldSignals.js";
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value != null && typeof value === "object" && !Array.isArray(value)
@@ -299,6 +304,7 @@ export interface OmCalculationSnapshot {
     equityMultiple: number | null;
   };
   yieldSignals: YieldSignals;
+  brokerYieldComparison: BrokerYieldComparison;
   rentRoll: OmRentRollRow[];
   expenseRows: ExpenseLineItem[];
   unitModelRows: ResolvedUnitModelRow[];
@@ -567,6 +573,15 @@ export function buildOmCalculationSnapshotFromInputs(params: {
     ltrYieldPct: currentCapRatePct,
     mtrYieldPct: stabilizedCapRatePct,
   });
+  const brokerYieldComparison = computeBrokerYieldComparison({
+    brokerNoi: extractedCurrentFinancials.noi,
+    brokerStatedCapRatePct: resolveBrokerStatedCapRatePct(details),
+    reconstructedNoi: currentNoiBasis,
+    purchasePrice: modeledPurchasePrice,
+  });
+  const calloutMessages = [yieldSignals.calloutLabel, brokerYieldComparison.calloutLabel].filter(
+    (message): message is string => message != null
+  );
 
   return {
     property: {
@@ -634,6 +649,7 @@ export function buildOmCalculationSnapshotFromInputs(params: {
       equityMultiple: projection.returns.equityMultiple,
     },
     yieldSignals,
+    brokerYieldComparison,
     rentRoll: rentRollRows(details),
     expenseRows: expenseRows(details),
     unitModelRows: detailedModel.unitModelRows,
@@ -646,9 +662,7 @@ export function buildOmCalculationSnapshotFromInputs(params: {
     exit: projection.exit,
     returns: projection.returns,
     recommendedOffer,
-    validationMessages: yieldSignals.calloutLabel
-      ? [...validationMessages(details), yieldSignals.calloutLabel]
-      : validationMessages(details),
+    validationMessages: [...validationMessages(details), ...calloutMessages],
   };
 }
 

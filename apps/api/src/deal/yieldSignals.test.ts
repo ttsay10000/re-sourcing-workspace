@@ -1,13 +1,17 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  DEFAULT_MIN_BROKER_CAP_DELTA_PCT_POINTS,
   DEFAULT_MIN_MTR_SPREAD_PCT_POINTS,
+  computeBrokerYieldComparison,
   computeYieldSignals,
+  resolveMinBrokerCapDeltaPctPoints,
   resolveMinHealthyMtrSpreadPctPoints,
 } from "./yieldSignals.js";
 
 afterEach(() => {
   delete process.env.MTR_MIN_YIELD_SPREAD_PCT;
+  delete process.env.BROKER_CAP_MIN_DELTA_PCT;
 });
 
 describe("computeYieldSignals", () => {
@@ -58,5 +62,78 @@ describe("computeYieldSignals", () => {
 
     process.env.MTR_MIN_YIELD_SPREAD_PCT = "not-a-number";
     expect(resolveMinHealthyMtrSpreadPctPoints()).toBe(DEFAULT_MIN_MTR_SPREAD_PCT_POINTS);
+  });
+});
+
+describe("computeBrokerYieldComparison", () => {
+  it("flags a broker NOI that nets out vacancy below the reconstructed basis", () => {
+    // Mirrors 219-221 E 59th: rent 1,009,922 − expenses 241,672 = 768,250 basis,
+    // broker NOI 737,952 after a ~3% vacancy allowance, ask $12.5M.
+    const comparison = computeBrokerYieldComparison({
+      brokerNoi: 737_952,
+      reconstructedNoi: 768_250,
+      purchasePrice: 12_500_000,
+    });
+    expect(comparison.brokerCapRatePct).toBeCloseTo(5.9, 1);
+    expect(comparison.brokerCapRateSource).toBe("implied_from_broker_noi");
+    expect(comparison.reconstructedCapRatePct).toBeCloseTo(6.146, 3);
+    expect(comparison.deltaPctPoints).toBeCloseTo(-0.2424, 3);
+    expect(comparison.calloutCode).toBe("broker_cap_below_reconstructed");
+    expect(comparison.calloutLabel).toContain("below");
+    expect(comparison.calloutLabel).toContain("reconstructed");
+  });
+
+  it("flags an OM-stated cap rate built on pro forma rents above the reconstructed basis", () => {
+    const comparison = computeBrokerYieldComparison({
+      brokerNoi: 800_000,
+      brokerStatedCapRatePct: 7.2,
+      reconstructedNoi: 768_250,
+      purchasePrice: 12_500_000,
+    });
+    expect(comparison.brokerCapRatePct).toBe(7.2);
+    expect(comparison.brokerCapRateSource).toBe("om_stated");
+    expect(comparison.calloutCode).toBe("broker_cap_above_reconstructed");
+    expect(comparison.calloutLabel).toContain("pro forma");
+  });
+
+  it("stays quiet when broker and reconstructed yields agree within the threshold", () => {
+    const comparison = computeBrokerYieldComparison({
+      brokerNoi: 768_000,
+      reconstructedNoi: 768_250,
+      purchasePrice: 12_500_000,
+    });
+    expect(comparison.deltaPctPoints).not.toBeNull();
+    expect(comparison.calloutCode).toBeNull();
+    expect(comparison.calloutLabel).toBeNull();
+  });
+
+  it("returns nulls without a callout when price or either NOI is missing", () => {
+    expect(
+      computeBrokerYieldComparison({ brokerNoi: 700_000, reconstructedNoi: 750_000, purchasePrice: null })
+        .calloutCode
+    ).toBeNull();
+    expect(
+      computeBrokerYieldComparison({ brokerNoi: null, reconstructedNoi: 750_000, purchasePrice: 10_000_000 })
+        .calloutCode
+    ).toBeNull();
+    expect(
+      computeBrokerYieldComparison({ brokerNoi: 700_000, reconstructedNoi: null, purchasePrice: 10_000_000 })
+        .calloutCode
+    ).toBeNull();
+  });
+
+  it("honors an explicit threshold and the env override", () => {
+    const relaxed = computeBrokerYieldComparison({
+      brokerNoi: 700_000,
+      reconstructedNoi: 750_000,
+      purchasePrice: 10_000_000,
+      minDeltaPctPoints: 1,
+    });
+    expect(relaxed.calloutCode).toBeNull();
+
+    process.env.BROKER_CAP_MIN_DELTA_PCT = "2";
+    expect(resolveMinBrokerCapDeltaPctPoints()).toBe(2);
+    process.env.BROKER_CAP_MIN_DELTA_PCT = "not-a-number";
+    expect(resolveMinBrokerCapDeltaPctPoints()).toBe(DEFAULT_MIN_BROKER_CAP_DELTA_PCT_POINTS);
   });
 });

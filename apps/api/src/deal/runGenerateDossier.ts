@@ -21,6 +21,7 @@ import {
 import { randomUUID } from "crypto";
 import {
   getAuthoritativeOmSnapshot,
+  resolveBrokerStatedCapRatePct,
   resolvePreferredOmExpenseTable,
   resolvePreferredOmExpenseTotal,
   resolvePreferredOmPropertyInfo,
@@ -28,6 +29,7 @@ import {
   resolvePreferredOmRevenueComposition,
   resolvePreferredOmUnitCount,
 } from "../om/authoritativeOm.js";
+import { computeBrokerYieldComparison } from "./yieldSignals.js";
 import { resolveCurrentFinancialsFromDetails } from "../rental/currentFinancials.js";
 import { computeDealSignals } from "./computeDealSignals.js";
 import { buildDealScoreSensitivity } from "./dealScoreSensitivity.js";
@@ -610,6 +612,15 @@ export async function runGenerateDossier(
         })} conservative projected rent for delivered-vacant residential unit(s)`
       );
     }
+    const brokerYieldComparison = computeBrokerYieldComparison({
+      brokerNoi: extractedCurrentFinancials.noi,
+      brokerStatedCapRatePct: resolveBrokerStatedCapRatePct(details),
+      reconstructedNoi: assetCapRateNoiBasis,
+      purchasePrice: assumptions.acquisition.purchasePrice,
+    });
+    if (brokerYieldComparison.calloutLabel) {
+      financialFlags.push(brokerYieldComparison.calloutLabel);
+    }
     const listingActivitySummary = describeListingActivity(listingActivity);
     if (listingActivitySummary) {
       financialFlags.push(`Last market activity: ${listingActivitySummary}`);
@@ -1003,8 +1014,10 @@ export async function runGenerateDossier(
       equityMultiple: projection.returns.equityMultiple ?? null,
       cocPct: projection.returns.averageCashOnCashReturn ?? null,
       holdYears: projection.assumptions.holdPeriodYears,
-      currentNoi: currentNoi ?? null,
-      adjustedNoi: projection.operating.stabilizedNoi ?? currentNoi ?? null,
+      // Persist the reconstructed basis, not the broker-stated NOI, so every
+      // downstream consumer (pipeline YoC, comps, deals) divides the same numerator.
+      currentNoi: assetCapRateNoiBasis ?? currentNoi ?? null,
+      adjustedNoi: projection.operating.stabilizedNoi ?? assetCapRateNoiBasis ?? currentNoi ?? null,
     });
 
     const previousSummary = getPropertyDossierSummary(rawDetails);
@@ -1032,8 +1045,8 @@ export async function runGenerateDossier(
         purchasePrice: assumptions.acquisition.purchasePrice,
         recommendedOffer,
         projection,
-        currentNoi: currentNoi ?? null,
-        adjustedNoi: projection.operating.stabilizedNoi ?? currentNoi ?? null,
+        currentNoi: assetCapRateNoiBasis ?? currentNoi ?? null,
+        adjustedNoi: projection.operating.stabilizedNoi ?? assetCapRateNoiBasis ?? currentNoi ?? null,
         finalScore,
         calculatedScore,
         holdYears: projection.assumptions.holdPeriodYears,

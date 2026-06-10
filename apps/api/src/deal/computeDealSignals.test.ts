@@ -294,6 +294,60 @@ describe("computeDealSignals", () => {
     expect(result.insertParams.assetCapRate).toBe(7.48);
   });
 
+  it("adds a risk flag when the broker NOI diverges from the reconstructed cap-rate basis", () => {
+    const result = computeDealSignals({
+      propertyId: "property-5d",
+      canonicalAddress: "219-221 East 59th Street, Manhattan, NY 10022",
+      primaryListing: {
+        price: 12_500_000,
+        city: "Manhattan",
+      },
+      assetCapRateNoi: 768_250,
+      details: {
+        omData: {
+          authoritative: {
+            currentFinancials: {
+              noi: 737_952,
+              grossRentalIncome: 1_009_922,
+              operatingExpenses: 241_672,
+            },
+          },
+        },
+      },
+    });
+
+    expect(
+      result.insertParams.riskFlags?.some((flag) => flag.includes("reconstructed from actuals"))
+    ).toBe(true);
+  });
+
+  it("does not add the broker-yield risk flag when broker NOI matches the reconstructed basis", () => {
+    const result = computeDealSignals({
+      propertyId: "property-5e",
+      canonicalAddress: "219-221 East 59th Street, Manhattan, NY 10022",
+      primaryListing: {
+        price: 12_500_000,
+        city: "Manhattan",
+      },
+      assetCapRateNoi: 768_250,
+      details: {
+        omData: {
+          authoritative: {
+            currentFinancials: {
+              noi: 768_250,
+              grossRentalIncome: 1_009_922,
+              operatingExpenses: 241_672,
+            },
+          },
+        },
+      },
+    });
+
+    expect(
+      result.insertParams.riskFlags?.some((flag) => flag.includes("reconstructed from actuals"))
+    ).toBe(false);
+  });
+
   it("does not derive unit count from legacy OM data without an authoritative snapshot", () => {
     const result = computeDealSignals({
       propertyId: "property-6",
