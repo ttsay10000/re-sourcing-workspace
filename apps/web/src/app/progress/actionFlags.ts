@@ -658,6 +658,12 @@ export function suggestedSubjectFor(flagItem: ActionFlag, address: string): stri
   }
 }
 
+/** Email queue exclusion: OM on file + UW review done means we're already in
+ *  contact with the broker — nagging to email again is noise. */
+export function excludedFromEmailQueue(row: FlagInputRow): boolean {
+  return row.hasOm === true && row.underwritingReviewCompleted === true;
+}
+
 export function buildEmailQueue(
   sections: Array<{ id: string; rows?: FlagInputRow[] | null }>,
   flagsByProperty: ReadonlyMap<string, ActionFlag[]>,
@@ -666,6 +672,9 @@ export function buildEmailQueue(
   const items: EmailQueueItem[] = [];
   for (const section of sections) {
     for (const row of section.rows ?? []) {
+      if (excludedFromEmailQueue(row)) continue;
+      // Properties without a broker email live in the Flags queue instead.
+      if (!row.brokerEmail) continue;
       const flags = flagsByProperty.get(row.propertyId) ?? [];
       const emailFlag = flags.find(isEmailFlag);
       if (!emailFlag) continue;
@@ -693,6 +702,41 @@ export function buildEmailQueue(
   );
 }
 
+/* ── Flags queue: every property without a broker email attached ─────────── */
+
+export type FlaggedContactItem = {
+  propertyId: string;
+  address: string;
+  stageId: string;
+  stageLabel: string;
+  /** Existing missing_contact flag when the stage rules raised one. */
+  flag: ActionFlag | null;
+  ageDays: number | null;
+};
+
+export function buildFlagsQueue(
+  sections: Array<{ id: string; rows?: FlagInputRow[] | null }>,
+  flagsByProperty: ReadonlyMap<string, ActionFlag[]>,
+  now = Date.now()
+): FlaggedContactItem[] {
+  const items: FlaggedContactItem[] = [];
+  for (const section of sections) {
+    for (const row of section.rows ?? []) {
+      if (row.brokerEmail) continue;
+      const flags = flagsByProperty.get(row.propertyId) ?? [];
+      items.push({
+        propertyId: row.propertyId,
+        address: row.displayAddress || row.canonicalAddress || row.propertyId,
+        stageId: section.id,
+        stageLabel: STAGE_LABEL_BY_ID.get(section.id) ?? section.id,
+        flag: flags.find((item) => item.type === "missing_contact") ?? null,
+        ageDays: stageAgeDays(row, now),
+      });
+    }
+  }
+  return items.sort((left, right) => (right.ageDays ?? 0) - (left.ageDays ?? 0));
+}
+
 /* ── Action summary strip (§11) ──────────────────────────────────────────── */
 
 export type SummaryActionKind = "focus" | "email_queue" | "broker_stepper" | "followup_stepper" | "needs_action";
@@ -711,13 +755,13 @@ export function buildActionSummary(
   sections: Array<{ id: string; rows?: FlagInputRow[] | null }>,
   flagsByProperty: ReadonlyMap<string, ActionFlag[]>
 ): ActionSummaryItem[] {
-  const collect = (predicate: (item: ActionFlag) => boolean): { ids: string[]; stageIds: Set<string> } => {
+  const collect = (predicate: (item: ActionFlag, row: FlagInputRow) => boolean): { ids: string[]; stageIds: Set<string> } => {
     const ids: string[] = [];
     const stageIds = new Set<string>();
     for (const section of sections) {
       for (const row of section.rows ?? []) {
         const flags = flagsByProperty.get(row.propertyId) ?? [];
-        if (flags.some(predicate)) {
+        if (flags.some((item) => predicate(item, row))) {
           ids.push(row.propertyId);
           stageIds.add(section.id);
         }
@@ -732,7 +776,7 @@ export function buildActionSummary(
     label: (count: number) => string,
     severity: FlagSeverity,
     action: SummaryActionKind,
-    predicate: (item: ActionFlag) => boolean
+    predicate: (item: ActionFlag, row: FlagInputRow) => boolean
   ) => {
     const { ids, stageIds } = collect(predicate);
     if (ids.length === 0) {
@@ -750,8 +794,14 @@ export function buildActionSummary(
     });
   };
 
-  push("emails_due", (n) => `${n} email${n === 1 ? "" : "s"} due`, "high", "email_queue", (item) => isEmailFlag(item) && item.type !== "missing_contact");
-  push("missing_broker", (n) => `${n} missing broker email`, "high", "broker_stepper", (item) => item.type === "missing_contact");
+  push(
+    "emails_due",
+    (n) => `${n} email${n === 1 ? "" : "s"} due`,
+    "high",
+    "email_queue",
+    (item, row) => isEmailFlag(item) && item.type !== "missing_contact" && Boolean(row.brokerEmail) && !excludedFromEmailQueue(row)
+  );
+  push("missing_broker", (n) => `${n} missing broker email`, "high", "broker_stepper", (item, row) => item.type === "missing_contact" || !row.brokerEmail);
   push("post_tour", (n) => `${n} tour outcome${n === 1 ? "" : "s"} missing`, "high", "focus", (item) => item.type === "post_tour_notes");
   push("uw_stale", (n) => `${n} UW review${n === 1 ? "" : "s"} stale`, "medium", "focus", (item) => item.type === "underwriting_review" && (item.dueInDays ?? 0) < 0);
   push("likely_reject", (n) => `${n} likely reject${n === 1 ? "" : "s"}`, "medium", "focus", (item) => item.type === "likely_reject" && item.severity === "high");

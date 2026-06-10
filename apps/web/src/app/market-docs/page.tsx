@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type {
   MarketDocumentBrief,
   MarketKnowledgeResponse,
@@ -69,6 +69,46 @@ function formatWhen(iso: string | null | undefined): string {
   return Number.isNaN(date.getTime()) ? "—" : date.toLocaleString();
 }
 
+type IngestSortField = "document" | "source" | "class" | "confidence" | "comps" | "stats" | "status" | "created";
+type IngestSortDirection = "asc" | "desc";
+
+const CONFIDENCE_RANK: Record<string, number> = { high: 3, medium: 2, low: 1 };
+
+const INGEST_SORT_VALUES: Record<IngestSortField, (doc: MarketDocRow) => string | number | null> = {
+  document: (doc) => (doc.report_title ?? doc.filename).toLowerCase(),
+  source: (doc) => `${doc.source_type} ${doc.publisher ?? ""}`.toLowerCase(),
+  class: (doc) => doc.document_class,
+  confidence: (doc) => (doc.flagForReview ? 0 : CONFIDENCE_RANK[doc.classifier_confidence] ?? 0),
+  comps: (doc) => doc.ingestReport?.nComps ?? null,
+  stats: (doc) => doc.ingestReport?.nStats ?? null,
+  status: (doc) => doc.status,
+  created: (doc) => doc.createdAt,
+};
+
+function IngestSortHeader({
+  label,
+  field,
+  activeField,
+  direction,
+  onSort,
+}: {
+  label: string;
+  field: IngestSortField;
+  activeField: IngestSortField | null;
+  direction: IngestSortDirection;
+  onSort: (field: IngestSortField) => void;
+}) {
+  const active = activeField === field;
+  return (
+    <button type="button" className={styles.sortHeader} onClick={() => onSort(field)} title={`Sort by ${label}`}>
+      <span>{label}</span>
+      <span className={styles.sortIndicator} aria-hidden="true">
+        {active ? (direction === "asc" ? "▲" : "▼") : ""}
+      </span>
+    </button>
+  );
+}
+
 export default function MarketDocsPage() {
   const [files, setFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -77,6 +117,20 @@ export default function MarketDocsPage() {
   const [documents, setDocuments] = useState<MarketDocRow[]>([]);
   const [listError, setListError] = useState<string | null>(null);
   const [knowledge, setKnowledge] = useState<MarketKnowledgeState | null>(null);
+  const [ingestSearch, setIngestSearch] = useState("");
+  const [ingestSortField, setIngestSortField] = useState<IngestSortField | null>(null);
+  const [ingestSortDirection, setIngestSortDirection] = useState<IngestSortDirection>("desc");
+
+  const requestIngestSort = useCallback((field: IngestSortField) => {
+    setIngestSortField((currentField) => {
+      if (currentField === field) {
+        setIngestSortDirection((currentDirection) => (currentDirection === "asc" ? "desc" : "asc"));
+        return currentField;
+      }
+      setIngestSortDirection(field === "document" || field === "source" || field === "class" || field === "status" ? "asc" : "desc");
+      return field;
+    });
+  }, []);
 
   const refresh = useCallback(() => {
     fetch(`${API_BASE}/api/market-docs`, { credentials: "include" })
@@ -133,6 +187,34 @@ export default function MarketDocsPage() {
   // Latest analyzed upload: prefer the just-ingested report's brief, else the knowledge base copy.
   const latestBrief: MarketDocumentBrief | null =
     [...lastReports].reverse().find((report) => report.brief)?.brief ?? knowledge?.latestBrief ?? null;
+
+  // Ingest log rows after the text filter and the active header sort
+  // (default: API order, newest ingests first).
+  const visibleDocuments = useMemo(() => {
+    let result = documents;
+    const query = ingestSearch.trim().toLowerCase();
+    if (query) {
+      result = result.filter((doc) =>
+        [doc.report_title, doc.filename, doc.publisher, doc.document_class, doc.status, doc.source_type]
+          .filter(Boolean)
+          .some((value) => String(value).toLowerCase().includes(query))
+      );
+    }
+    if (!ingestSortField) return result;
+    const valueOf = INGEST_SORT_VALUES[ingestSortField];
+    const factor = ingestSortDirection === "asc" ? 1 : -1;
+    return [...result].sort((a, b) => {
+      const aValue = valueOf(a);
+      const bValue = valueOf(b);
+      if (aValue == null && bValue == null) return 0;
+      if (aValue == null) return 1;
+      if (bValue == null) return -1;
+      if (typeof aValue === "string" || typeof bValue === "string") {
+        return String(aValue).localeCompare(String(bValue)) * factor;
+      }
+      return (aValue - bValue) * factor;
+    });
+  }, [documents, ingestSearch, ingestSortField, ingestSortDirection]);
 
   return (
     <div className={styles.page}>
@@ -338,22 +420,32 @@ export default function MarketDocsPage() {
       </Panel>
 
       <Panel>
-        <span className={styles.sectionTitle}>Ingest log</span>
+        <div className={styles.ingestLogHeader}>
+          <span className={styles.sectionTitle}>Ingest log</span>
+          <input
+            type="search"
+            className={styles.ingestSearchInput}
+            value={ingestSearch}
+            onChange={(event) => setIngestSearch(event.target.value)}
+            placeholder="Filter by title, publisher, class, status…"
+            aria-label="Filter ingest log"
+          />
+        </div>
         {listError ? <div className={styles.uploadError}>{listError}</div> : null}
         <table className={styles.table}>
           <thead>
             <tr>
-              <th>Document</th>
-              <th>Source</th>
-              <th>Class</th>
-              <th>Confidence</th>
-              <th>Comps</th>
-              <th>Stats</th>
-              <th>Status</th>
+              <th><IngestSortHeader label="Document" field="document" activeField={ingestSortField} direction={ingestSortDirection} onSort={requestIngestSort} /></th>
+              <th><IngestSortHeader label="Source" field="source" activeField={ingestSortField} direction={ingestSortDirection} onSort={requestIngestSort} /></th>
+              <th><IngestSortHeader label="Class" field="class" activeField={ingestSortField} direction={ingestSortDirection} onSort={requestIngestSort} /></th>
+              <th><IngestSortHeader label="Confidence" field="confidence" activeField={ingestSortField} direction={ingestSortDirection} onSort={requestIngestSort} /></th>
+              <th><IngestSortHeader label="Comps" field="comps" activeField={ingestSortField} direction={ingestSortDirection} onSort={requestIngestSort} /></th>
+              <th><IngestSortHeader label="Stats" field="stats" activeField={ingestSortField} direction={ingestSortDirection} onSort={requestIngestSort} /></th>
+              <th><IngestSortHeader label="Status" field="status" activeField={ingestSortField} direction={ingestSortDirection} onSort={requestIngestSort} /></th>
             </tr>
           </thead>
           <tbody>
-            {documents.map((doc) => (
+            {visibleDocuments.map((doc) => (
               <tr key={doc.id}>
                 <td className={styles.docCell}>
                   <span className={styles.docName}>{doc.report_title ?? doc.filename}</span>
@@ -387,10 +479,12 @@ export default function MarketDocsPage() {
                 </td>
               </tr>
             ))}
-            {documents.length === 0 && !listError ? (
+            {visibleDocuments.length === 0 && !listError ? (
               <tr>
                 <td colSpan={7} className={styles.emptyRow}>
-                  No market documents ingested yet — drop the first research report or broker package above.
+                  {documents.length === 0
+                    ? "No market documents ingested yet — drop the first research report or broker package above."
+                    : "No ingested documents match the filter."}
                 </td>
               </tr>
             ) : null}

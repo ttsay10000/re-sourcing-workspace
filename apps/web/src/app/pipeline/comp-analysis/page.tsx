@@ -48,6 +48,61 @@ interface MarketCompsResponse {
 
 type MetricFilter = "all" | "capRate" | "psfOnly";
 
+type CompSortField =
+  | "name"
+  | "capRate"
+  | "psf"
+  | "salePrice"
+  | "perUnit"
+  | "units"
+  | "noi"
+  | "year"
+  | "sold"
+  | "subject"
+  | "package";
+type SortDirection = "asc" | "desc";
+
+/** Text columns open A→Z; every numeric/date column opens high/new-to-low. */
+const TEXT_SORT_FIELDS: ReadonlySet<CompSortField> = new Set(["name", "subject", "package"]);
+
+const COMP_SORT_VALUES: Record<CompSortField, (comp: MarketComp) => string | number | null> = {
+  name: (comp) => compName(comp).toLowerCase(),
+  capRate: (comp) => comp.capRatePct,
+  psf: (comp) => comp.pricePsf,
+  salePrice: (comp) => comp.salePrice,
+  perUnit: (comp) => comp.pricePerUnit,
+  units: (comp) => comp.units,
+  noi: (comp) => comp.noi,
+  year: (comp) => comp.yearCompleted,
+  sold: (comp) => comp.saleDate,
+  subject: (comp) => comp.subjectAddress.toLowerCase(),
+  package: (comp) => comp.packageType,
+};
+
+function SortHeader({
+  label,
+  field,
+  activeField,
+  direction,
+  onSort,
+}: {
+  label: string;
+  field: CompSortField;
+  activeField: CompSortField;
+  direction: SortDirection;
+  onSort: (field: CompSortField) => void;
+}) {
+  const active = activeField === field;
+  return (
+    <button type="button" className={styles.sortHeader} onClick={() => onSort(field)} title={`Sort by ${label}`}>
+      <span>{label}</span>
+      <span className={styles.sortIndicator} aria-hidden="true">
+        {active ? (direction === "asc" ? "▲" : "▼") : ""}
+      </span>
+    </button>
+  );
+}
+
 function fmtPct(value: number | null | undefined, digits = 2): string {
   return value != null && Number.isFinite(value) ? `${value.toFixed(digits)}%` : EMPTY_VALUE;
 }
@@ -75,6 +130,19 @@ export default function CompAnalysisPage() {
   const [metricFilter, setMetricFilter] = useState<MetricFilter>("all");
   const [typeFilter, setTypeFilter] = useState("");
   const [search, setSearch] = useState("");
+  const [sortField, setSortField] = useState<CompSortField>("capRate");
+  const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
+
+  const requestSort = (field: CompSortField) => {
+    setSortField((currentField) => {
+      if (currentField === field) {
+        setSortDirection((currentDirection) => (currentDirection === "asc" ? "desc" : "asc"));
+        return currentField;
+      }
+      setSortDirection(TEXT_SORT_FIELDS.has(field) ? "asc" : "desc");
+      return field;
+    });
+  };
 
   useEffect(() => {
     const controller = new AbortController();
@@ -112,14 +180,22 @@ export default function CompAnalysisPage() {
           .some((value) => (value as string).toLowerCase().includes(query))
       );
     }
-    // Cap-rate-bearing comps first (highest cap rate leading), PSF-only after.
+    // Sort by the active header; comps missing the value always sink to the
+    // bottom (default: cap rate high→low, so PSF-only comps trail).
+    const valueOf = COMP_SORT_VALUES[sortField];
+    const factor = sortDirection === "asc" ? 1 : -1;
     return [...all].sort((a, b) => {
-      if (a.capRatePct != null && b.capRatePct != null) return b.capRatePct - a.capRatePct;
-      if (a.capRatePct != null) return -1;
-      if (b.capRatePct != null) return 1;
-      return (b.pricePsf ?? -Infinity) - (a.pricePsf ?? -Infinity);
+      const aValue = valueOf(a);
+      const bValue = valueOf(b);
+      if (aValue == null && bValue == null) return 0;
+      if (aValue == null) return 1;
+      if (bValue == null) return -1;
+      if (typeof aValue === "string" || typeof bValue === "string") {
+        return String(aValue).localeCompare(String(bValue)) * factor;
+      }
+      return (aValue - bValue) * factor;
     });
-  }, [data, metricFilter, typeFilter, search]);
+  }, [data, metricFilter, typeFilter, search, sortField, sortDirection]);
 
   const summary = data?.summary;
   const capRateShare =
@@ -222,17 +298,17 @@ export default function CompAnalysisPage() {
               <table className={styles.table}>
                 <thead>
                   <tr>
-                    <th>Comp</th>
-                    <th>Cap rate</th>
-                    <th>$/PSF</th>
-                    <th>Sale price</th>
-                    <th>$/Unit</th>
-                    <th>Units</th>
-                    <th>NOI</th>
-                    <th>Year</th>
-                    <th>Sold</th>
-                    <th>Subject deal</th>
-                    <th>Package</th>
+                    <th><SortHeader label="Comp" field="name" activeField={sortField} direction={sortDirection} onSort={requestSort} /></th>
+                    <th><SortHeader label="Cap rate" field="capRate" activeField={sortField} direction={sortDirection} onSort={requestSort} /></th>
+                    <th><SortHeader label="$/PSF" field="psf" activeField={sortField} direction={sortDirection} onSort={requestSort} /></th>
+                    <th><SortHeader label="Sale price" field="salePrice" activeField={sortField} direction={sortDirection} onSort={requestSort} /></th>
+                    <th><SortHeader label="$/Unit" field="perUnit" activeField={sortField} direction={sortDirection} onSort={requestSort} /></th>
+                    <th><SortHeader label="Units" field="units" activeField={sortField} direction={sortDirection} onSort={requestSort} /></th>
+                    <th><SortHeader label="NOI" field="noi" activeField={sortField} direction={sortDirection} onSort={requestSort} /></th>
+                    <th><SortHeader label="Year" field="year" activeField={sortField} direction={sortDirection} onSort={requestSort} /></th>
+                    <th><SortHeader label="Sold" field="sold" activeField={sortField} direction={sortDirection} onSort={requestSort} /></th>
+                    <th><SortHeader label="Subject deal" field="subject" activeField={sortField} direction={sortDirection} onSort={requestSort} /></th>
+                    <th><SortHeader label="Package" field="package" activeField={sortField} direction={sortDirection} onSort={requestSort} /></th>
                   </tr>
                 </thead>
                 <tbody>

@@ -127,11 +127,19 @@ export default function OmReviewPage() {
   const [busyRunId, setBusyRunId] = useState<string | null>(null);
   const [promoteState, setPromoteState] = useState<PromoteDialogState | null>(null);
   const [rejectState, setRejectState] = useState<RejectDialogState | null>(null);
+  const [runSearch, setRunSearch] = useState("");
 
-  const loadRuns = useCallback(async () => {
+  // Default view: the active review queue. With an address typed, search every
+  // run regardless of status (latest per property) so reviewed/promoted
+  // workspaces — e.g. from multi-uploads — can be recalled.
+  const loadRuns = useCallback(async (search?: string) => {
     setRunsLoading(true);
     try {
-      const data = await apiFetch<{ runs?: ExtractionRun[] }>(`/api/om-review/extraction-runs?statuses=needs_review,failed`);
+      const query = (search ?? "").trim();
+      const url = query
+        ? `/api/om-review/extraction-runs?statuses=needs_review,failed,promoted,rejected,queued,processing&latest_per_property=1&limit=100&q=${encodeURIComponent(query)}`
+        : `/api/om-review/extraction-runs?statuses=needs_review,failed&limit=200`;
+      const data = await apiFetch<{ runs?: ExtractionRun[] }>(url);
       setRuns(data.runs ?? []);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load extraction runs");
@@ -142,8 +150,11 @@ export default function OmReviewPage() {
   }, []);
 
   useEffect(() => {
-    void loadRuns();
-  }, [loadRuns]);
+    const timer = window.setTimeout(() => {
+      void loadRuns(runSearch);
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [loadRuns, runSearch]);
 
   const openPromote = (run: ExtractionRun) => {
     setPromoteState({
@@ -192,7 +203,7 @@ export default function OmReviewPage() {
           ? `Promoted ${run.address} with ${Object.keys(corrections).length} correction${Object.keys(corrections).length === 1 ? "" : "s"}.`
           : `Promoted ${run.address}.`
       );
-      await loadRuns();
+      await loadRuns(runSearch);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to promote the extraction.");
       setPromoteState((current) => (current ? { ...current, saving: false } : current));
@@ -210,7 +221,7 @@ export default function OmReviewPage() {
       );
       setRejectState(null);
       setNotice(`Rejected the extraction for ${rejectState.run.address}.`);
-      await loadRuns();
+      await loadRuns(runSearch);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to reject the extraction.");
       setRejectState((current) => (current ? { ...current, saving: false } : current));
@@ -226,7 +237,7 @@ export default function OmReviewPage() {
         body: JSON.stringify({ autoPromote: false }),
       });
       setNotice(`Re-extraction queued for ${run.address} — it will reappear here when ready.`);
-      await loadRuns();
+      await loadRuns(runSearch);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to queue the re-extraction.");
     } finally {
@@ -287,7 +298,7 @@ export default function OmReviewPage() {
               size="sm"
               onClick={() => {
                 void loadQueue();
-                void loadRuns();
+                void loadRuns(runSearch);
               }}
             >
               Refresh
@@ -309,14 +320,33 @@ export default function OmReviewPage() {
         <div className={styles.sectionHeading}>
           <div className={styles.sectionHeadingCopy}>
             <h2>OM extraction runs</h2>
-            <p>Extractions awaiting your review. Check the numbers, correct anything wrong, then promote.</p>
+            <p>
+              Extractions awaiting your review. Check the numbers, correct anything wrong, then promote. Type an
+              address to search every run — including already-reviewed ones — and recall its workspace.
+            </p>
           </div>
+          <input
+            type="search"
+            className={styles.runSearchInput}
+            value={runSearch}
+            onChange={(event) => setRunSearch(event.target.value)}
+            placeholder="Search any run by address…"
+            aria-label="Search extraction runs by address"
+            title="Searches all extraction runs by property address — with a search active, reviewed/promoted runs show too (latest per property)."
+          />
         </div>
 
         {runsLoading ? (
           <SkeletonRows count={3} />
         ) : runs.length === 0 ? (
-          <EmptyState title="No extractions waiting" description="New OM uploads and re-runs land here when they need review." />
+          runSearch.trim() ? (
+            <EmptyState
+              title="No runs match that address"
+              description="No extraction run exists for that address yet — upload its OM from the OM workspace to create one."
+            />
+          ) : (
+            <EmptyState title="No extractions waiting" description="New OM uploads and re-runs land here when they need review." />
+          )
         ) : (
           <div className={styles.runList}>
             {runs.map((run) => (
@@ -396,6 +426,9 @@ export default function OmReviewPage() {
                   >
                     Reject
                   </Button>
+                  <Link href={`/deal-analysis?property_id=${encodeURIComponent(run.propertyId)}`}>
+                    <Button variant="ghost" size="sm">OM workspace</Button>
+                  </Link>
                   <Link href={`/pipeline?propertyId=${encodeURIComponent(run.propertyId)}`}>
                     <Button variant="ghost" size="sm">Open property</Button>
                   </Link>

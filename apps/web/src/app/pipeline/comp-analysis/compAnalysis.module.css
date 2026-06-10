@@ -211,3 +211,30 @@
   color: var(--app-ink-secondary);
   font-size: 0.8rem;
 }
+
+/* Click-to-sort column headers (▲/▼ marks the active sort). */
+.sortHeader {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.sortHeader:hover {
+  color: var(--brand-strong, #115e59);
+}
+
+.sortIndicator {
+  font-size: 0.6rem;
+  line-height: 1;
+  min-width: 0.7em;
+}

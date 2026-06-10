@@ -47,6 +47,15 @@ interface CompRow {
   yieldTrend: YieldTrend;
   /** True when the numbers come from an unpromoted OM extraction awaiting review. */
   pendingReview: boolean;
+  /** Latest broker whisper price (pricing opinion / pricing color), if one is on file. */
+  whisperPrice: number | null;
+  /** Yield on the same NOI basis over the whisper price instead of the listed/ask price. */
+  whisperLtrYieldPct: number | null;
+  /** $/SF using the whisper price over the same square footage basis as pricePsf. */
+  whisperPricePsf: number | null;
+  /** (listed − whisper) ÷ listed × 100. */
+  whisperDiscountPct: number | null;
+  whisperObservedAt: string | null;
 }
 
 interface CompsResponse {
@@ -56,10 +65,14 @@ interface CompsResponse {
     withCoordinates: number;
     flaggedCount?: number;
     pendingCount?: number;
+    whisperCount?: number;
     averageLtrYieldPct: number | null;
     medianLtrYieldPct: number | null;
   };
 }
+
+/** Listed = ask/listing price everywhere; whisper = broker pricing color where available, listed otherwise. */
+type PriceBasis = "listed" | "whisper";
 
 /** One line of GET /api/market-headlines — LLM/rule-written movement notes for the map. */
 interface MarketHeadline {
@@ -468,6 +481,7 @@ export default function YieldMapPage() {
   const [error, setError] = useState<string | null>(null);
   const [boroughFilter, setBoroughFilter] = useState("");
   const [colorBy, setColorBy] = useState<"yield" | "psf" | "stage" | "vsMarket">("yield");
+  const [priceBasis, setPriceBasis] = useState<PriceBasis>("listed");
   const [showAreas, setShowAreas] = useState(true);
   const [includePending, setIncludePending] = useState(false);
   const [quickViewId, setQuickViewId] = useState<string | null>(null);
@@ -913,17 +927,39 @@ export default function YieldMapPage() {
     };
   }, [summaryById, ourYieldByHood]);
 
+  // Price-basis-aware reads: on the whisper basis, deals with broker pricing
+  // color use it; everything else falls back to the listed price so the map
+  // never goes sparse. Every average/median/pin/table sort flows from these.
+  const effectiveYield = useCallback(
+    (row: CompRow): number | null =>
+      priceBasis === "whisper" && row.whisperLtrYieldPct != null ? row.whisperLtrYieldPct : row.ltrYieldPct,
+    [priceBasis]
+  );
+  const effectivePsf = useCallback(
+    (row: CompRow): number | null =>
+      priceBasis === "whisper" && row.whisperPricePsf != null ? row.whisperPricePsf : row.pricePsf,
+    [priceBasis]
+  );
+  const usesWhisper = useCallback(
+    (row: CompRow): boolean => priceBasis === "whisper" && row.whisperPrice != null,
+    [priceBasis]
+  );
+
   const dealMetricValue = useMemo(
-    () => (metric === "psf" ? (row: CompRow) => row.pricePsf : (row: CompRow) => row.ltrYieldPct),
-    [metric]
+    () => (metric === "psf" ? effectivePsf : effectiveYield),
+    [metric, effectivePsf, effectiveYield]
   );
   const metricColor = metric === "psf" ? psfColor : yieldColor;
   const fmtMetric = (value: number | null) => (metric === "psf" ? fmtPsf(value) : fmtPct(value, 2));
 
-  // Headline stats follow the borough filter (the API summary covers all boroughs).
+  const whisperAvailable = useMemo(() => rows.filter((row) => row.whisperPrice != null).length, [rows]);
+
+  // Headline stats follow the borough filter (the API summary covers all
+  // boroughs) and the active price basis — switching to whisper recalculates
+  // every average/median on this page.
   const stats = useMemo(() => {
-    const yields = rows.map((row) => row.ltrYieldPct).filter((v): v is number => v != null);
-    const psfs = rows.map((row) => row.pricePsf).filter((v): v is number => v != null);
+    const yields = rows.map(effectiveYield).filter((v): v is number => v != null);
+    const psfs = rows.map(effectivePsf).filter((v): v is number => v != null);
     return {
       medianYieldPct: median(yields),
       averageYieldPct: yields.length > 0 ? yields.reduce((sum, v) => sum + v, 0) / yields.length : null,
@@ -933,7 +969,7 @@ export default function YieldMapPage() {
       downCount: rows.filter((row) => row.yieldTrend === "down").length,
       flatCount: rows.filter((row) => row.yieldTrend === "flat").length,
     };
-  }, [rows]);
+  }, [rows, effectiveYield, effectivePsf]);
 
   const neighborhoodStats = useMemo(
     () => groupStats(rows, displayHood, dealMetricValue),
@@ -1009,7 +1045,12 @@ export default function YieldMapPage() {
         lng: row.lng!,
         color,
         lines: [
-          `Cap rate ${fmtPct(row.ltrYieldPct, 2)} · ${fmtPsf(row.pricePsf)}/SF`,
+          usesWhisper(row)
+            ? `Whisper cap ${fmtPct(row.whisperLtrYieldPct, 2)} · ${fmtPsf(row.whisperPricePsf)}/SF (listed ${fmtPct(row.ltrYieldPct, 2)})`
+            : `Cap rate ${fmtPct(row.ltrYieldPct, 2)} · ${fmtPsf(row.pricePsf)}/SF`,
+          ...(row.whisperPrice != null && !usesWhisper(row)
+            ? [`Whisper ${formatCurrencyExact(row.whisperPrice)} → cap ${fmtPct(row.whisperLtrYieldPct, 2)}`]
+            : []),
           `MTR ${fmtPct(row.mtrYieldPct, 2)} · NOI ${formatCurrencyExact(row.currentNoi)} · ${row.units ?? EMPTY_VALUE} units`,
           ...(vsMarketLine ? [vsMarketLine] : []),
           row.yieldDeltaPct != null
@@ -1048,7 +1089,7 @@ export default function YieldMapPage() {
     }));
 
     return [...dealPins, ...compPins];
-  }, [colorBy, geoRows, geoComps, metric, metricColor, dealMetricValue, vsMarketByPropertyId, displayHood, boardStageLabel]);
+  }, [colorBy, geoRows, geoComps, metric, metricColor, dealMetricValue, usesWhisper, vsMarketByPropertyId, displayHood, boardStageLabel]);
 
   // Comps slot into the deal list ordered by the active metric: cap rates rank
   // high-to-low, $/SF cheap-to-expensive (the buyer's read in both cases).
@@ -1160,7 +1201,7 @@ export default function YieldMapPage() {
               }
               title={
                 geoRows.length < yieldRows.length
-                  ? "Mapped deals have coordinates. Deals missing a geocode still count in the stats — run enrichment on them to place them on the map."
+                  ? "Mapped deals have coordinates. Deals missing a geocode still count in the stats — select them on the Pipeline page and hit Refresh (enrichment → geocode → analysis) to resolve coordinates and place them on the map."
                   : "Every deal with a usable yield is geocoded and on the map."
               }
             />
@@ -1168,7 +1209,17 @@ export default function YieldMapPage() {
               tone="brand"
               label={metric === "psf" ? "Median sale $/SF" : "Median LTR yield"}
               value={metric === "psf" ? `${fmtPsf(stats.medianPsf)}/SF` : formatPercent(stats.medianYieldPct, 2)}
-              sub={boroughFilter ? boroughFilter : "all boroughs"}
+              sub={[
+                boroughFilter ? boroughFilter : "all boroughs",
+                priceBasis === "whisper" ? `whisper basis (${whisperAvailable} with color)` : null,
+              ]
+                .filter(Boolean)
+                .join(" · ")}
+              title={
+                priceBasis === "whisper"
+                  ? "Whisper basis: deals with broker pricing color use it; the rest keep their listed-price numbers."
+                  : undefined
+              }
             />
             <StatCard
               tone="warning"
@@ -1177,12 +1228,12 @@ export default function YieldMapPage() {
               sub={
                 metric === "psf"
                   ? `across ${rows.length} deals`
-                  : `across ${yieldRows.length} usable yield${yieldRows.length === 1 ? "" : "s"}`
+                  : `across ${yieldRows.length} usable yield${yieldRows.length === 1 ? "" : "s"}${priceBasis === "whisper" ? " · whisper basis" : ""}`
               }
               title={
                 metric === "psf"
                   ? undefined
-                  : `Average over the ${yieldRows.length} deals with a usable LTR yield. Deals flagged for 0%/negative cap signals are excluded from the median and average until their extraction is fixed.`
+                  : `Average over the ${yieldRows.length} deals with a usable LTR yield${priceBasis === "whisper" ? ", using whisper pricing where brokers have given color" : ""}. Deals flagged for 0%/negative cap signals are excluded from the median and average until their extraction is fixed.`
               }
             />
             <StatCard
@@ -1294,6 +1345,28 @@ export default function YieldMapPage() {
                     title="Color each deal by whether its cap rate sits above or below the comps we hold for its neighborhood (market layer + broker packages)."
                   >
                     Vs comps
+                  </button>
+                </div>
+                <div className={styles.colorToggle} role="group" aria-label="Price basis">
+                  <button
+                    type="button"
+                    className={priceBasis === "listed" ? styles.colorToggleActive : undefined}
+                    onClick={() => setPriceBasis("listed")}
+                    title="Yields and $/SF computed on the listed/ask price."
+                  >
+                    Listed price
+                  </button>
+                  <button
+                    type="button"
+                    className={priceBasis === "whisper" ? styles.colorToggleActive : undefined}
+                    onClick={() => setPriceBasis("whisper")}
+                    title={
+                      whisperAvailable > 0
+                        ? `Yields and $/SF computed on broker whisper pricing where available (${whisperAvailable} deal${whisperAvailable === 1 ? "" : "s"}); deals without pricing color keep their listed-price numbers. Every average on this page recalculates.`
+                        : "No deals carry broker whisper pricing yet — add a pricing opinion under the property's Market/Comps tab and it appears here."
+                    }
+                  >
+                    Whisper price{whisperAvailable > 0 ? ` (${whisperAvailable})` : ""}
                   </button>
                 </div>
                 <div className={styles.colorToggle} role="group" aria-label="Neighborhood overlay">
@@ -1418,8 +1491,10 @@ export default function YieldMapPage() {
               </>
             ) : (
               <div className={styles.mapEmpty}>
-                No geocoded deals to plot yet ({geoRows.length} with coordinates). Coordinates backfill
-                from matched listings automatically; the table below shows every yield-bearing deal regardless.
+                No geocoded deals to plot yet ({geoRows.length} with coordinates). Coordinates backfill from
+                matched listings automatically; for OM-sourced properties, select them on the Pipeline page and
+                hit Refresh (its geocode stage resolves addresses via Geoclient). The table below shows every
+                yield-bearing deal regardless.
               </div>
             )}
           </div>
@@ -1518,6 +1593,9 @@ export default function YieldMapPage() {
                   <tr>
                     <th>Address</th>
                     <th>Cap rate</th>
+                    <th title="Yield on the same NOI over the broker's whisper price (pricing color), where one is on file. Hover a value for the whisper price and discount to ask.">
+                      Whisper yield
+                    </th>
                     <th title="Move since the yield was first produced; refreshes that change the cap rate add a new observation.">
                       Trend
                     </th>
@@ -1567,6 +1645,28 @@ export default function YieldMapPage() {
                             fmtPct(entry.deal.ltrYieldPct, 2)
                           )}
                         </td>
+                        <td
+                          className={styles.yieldCell}
+                          style={
+                            entry.deal.whisperLtrYieldPct != null
+                              ? {
+                                  color: yieldColor(entry.deal.whisperLtrYieldPct),
+                                  fontWeight: priceBasis === "whisper" ? 750 : undefined,
+                                }
+                              : undefined
+                          }
+                          title={
+                            entry.deal.whisperPrice != null
+                              ? `Whisper price ${formatCurrencyExact(entry.deal.whisperPrice)}${
+                                  entry.deal.whisperDiscountPct != null
+                                    ? ` · ${entry.deal.whisperDiscountPct >= 0 ? "" : "+"}${Math.abs(entry.deal.whisperDiscountPct).toFixed(1)}% ${entry.deal.whisperDiscountPct >= 0 ? "below" : "above"} ask`
+                                    : ""
+                                }${entry.deal.whisperPricePsf != null ? ` · ${fmtPsf(entry.deal.whisperPricePsf)}/SF` : ""}`
+                              : "No broker pricing color on file — add one under the property's Market/Comps tab."
+                          }
+                        >
+                          {entry.deal.whisperLtrYieldPct != null ? fmtPct(entry.deal.whisperLtrYieldPct, 2) : EMPTY_VALUE}
+                        </td>
                         <td>
                           <TrendIndicator row={entry.deal} />
                         </td>
@@ -1613,6 +1713,7 @@ export default function YieldMapPage() {
                         <td className={styles.yieldCell} style={{ color: yieldColor(entry.comp.capRatePct) }}>
                           {fmtPct(entry.comp.capRatePct, 2)}
                         </td>
+                        <td>{EMPTY_VALUE}</td>
                         <td>
                           {entry.comp.psfOnly ? (
                             <span className={styles.psfOnlyChip} title="This comp carries $/PSF only — no cap rate was in the package.">
@@ -1635,7 +1736,7 @@ export default function YieldMapPage() {
                   )}
                   {tableEntries.length === 0 ? (
                     <tr className={styles.emptyRow}>
-                      <td colSpan={9}>
+                      <td colSpan={10}>
                         No deals with calculated yields yet — run OM analysis or compute scores to populate the living database.
                       </td>
                     </tr>
@@ -1665,7 +1766,7 @@ export default function YieldMapPage() {
               </a>
               <a
                 className={styles.quickViewActionSecondary}
-                href={`/deal-analysis?propertyId=${encodeURIComponent(quickViewRow.propertyId)}`}
+                href={`/deal-analysis?property_id=${encodeURIComponent(quickViewRow.propertyId)}`}
               >
                 OM workspace →
               </a>
@@ -1697,6 +1798,28 @@ export default function YieldMapPage() {
                 <dt>Ask</dt>
                 <dd>{formatCurrencyCompact(quickViewRow.askingPrice)}</dd>
               </div>
+              {quickViewRow.whisperPrice != null ? (
+                <div>
+                  <dt>Whisper price</dt>
+                  <dd
+                    title={
+                      quickViewRow.whisperDiscountPct != null
+                        ? `${Math.abs(quickViewRow.whisperDiscountPct).toFixed(1)}% ${quickViewRow.whisperDiscountPct >= 0 ? "below" : "above"} ask`
+                        : undefined
+                    }
+                  >
+                    {formatCurrencyCompact(quickViewRow.whisperPrice)}
+                  </dd>
+                </div>
+              ) : null}
+              {quickViewRow.whisperLtrYieldPct != null ? (
+                <div>
+                  <dt>Whisper yield</dt>
+                  <dd style={{ color: yieldColor(quickViewRow.whisperLtrYieldPct) }}>
+                    {fmtPct(quickViewRow.whisperLtrYieldPct, 2)}
+                  </dd>
+                </div>
+              ) : null}
               <div>
                 <dt>NOI</dt>
                 <dd>{formatCurrencyExact(quickViewRow.currentNoi)}</dd>

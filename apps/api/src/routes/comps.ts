@@ -61,6 +61,16 @@ interface OperatingCompRow {
   yieldHistory: Array<{ rate: number; at: string }>;
   /** True when the yield comes from an unpromoted OM extraction run still awaiting manual review. */
   pendingReview: boolean;
+  /** Latest broker whisper price (pricing opinion / pricing color), if one is on file. */
+  whisperPrice: number | null;
+  /** Yield on the same NOI basis but over the whisper price instead of the listed/ask price. */
+  whisperLtrYieldPct: number | null;
+  /** $/SF using the whisper price over the same square footage basis as pricePsf. */
+  whisperPricePsf: number | null;
+  /** (listed − whisper) ÷ listed × 100 — how far below the ask the broker's color sits. */
+  whisperDiscountPct: number | null;
+  /** When the whisper price was observed/entered. */
+  whisperObservedAt: string | null;
 }
 
 /** NYC BBL borough digit → display name; backfills boroughs enrichment hasn't resolved yet. */
@@ -115,6 +125,45 @@ function toIsoString(value: unknown): string | null {
 
 function median(sortedAscending: number[]): number | null {
   return sortedAscending.length > 0 ? sortedAscending[Math.floor((sortedAscending.length - 1) / 2)] : null;
+}
+
+/** SQL fragment: latest non-rejected broker pricing opinion (whisper price) for the property. */
+const WHISPER_PRICE_LATERAL = `
+       LEFT JOIN LATERAL (
+         SELECT
+           COALESCE(i.reviewed_payload, i.normalized_payload) ->> 'amount' AS whisper_amount,
+           COALESCE(i.reviewed_payload, i.normalized_payload) ->> 'observedAt' AS whisper_observed_at,
+           i.created_at AS whisper_created_at
+         FROM broker_comp_extracted_items i
+         WHERE i.property_id = p.id
+           AND i.item_type = 'pricing_opinion'
+           AND COALESCE(i.review_status, 'pending') <> 'rejected'
+         ORDER BY i.created_at DESC
+         LIMIT 1
+       ) wp ON TRUE`;
+
+/** Whisper-price metrics on the same NOI / SF bases as the listed-price ones. */
+function whisperMetrics(input: {
+  whisperPrice: number | null;
+  noi: number | null;
+  askingPrice: number | null;
+  pricePsf: number | null;
+}): Pick<OperatingCompRow, "whisperPrice" | "whisperLtrYieldPct" | "whisperPricePsf" | "whisperDiscountPct"> {
+  const { whisperPrice, noi, askingPrice, pricePsf } = input;
+  if (whisperPrice == null || whisperPrice <= 0) {
+    return { whisperPrice: null, whisperLtrYieldPct: null, whisperPricePsf: null, whisperDiscountPct: null };
+  }
+  return {
+    whisperPrice,
+    whisperLtrYieldPct: noi != null && noi > 0 ? (noi / whisperPrice) * 100 : null,
+    // pricePsf = ask ÷ SF, so whisper ÷ SF = pricePsf × (whisper ÷ ask) — no SF column needed.
+    whisperPricePsf:
+      pricePsf != null && pricePsf > 0 && askingPrice != null && askingPrice > 0
+        ? pricePsf * (whisperPrice / askingPrice)
+        : null,
+    whisperDiscountPct:
+      askingPrice != null && askingPrice > 0 ? ((askingPrice - whisperPrice) / askingPrice) * 100 : null,
+  };
 }
 
 
@@ -327,6 +376,9 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
          hist.yield_obs_count,
          hist.yield_history,
          lst.listing_price,
+         wp.whisper_amount,
+         wp.whisper_observed_at,
+         wp.whisper_created_at,
          p.details#>>'{omData,authoritative,currentFinancials,grossRentalIncome}' AS fallback_rent_om,
          p.details#>>'{omData,authoritative,currentFinancials,otherIncome}' AS fallback_other_income_om,
          p.details#>>'{omData,authoritative,expenses,totalExpenses}' AS fallback_expense_total_om,
@@ -375,6 +427,7 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
            WHERE h.property_id = p.id AND h.asset_cap_rate IS NOT NULL AND h.asset_cap_rate > 0
          ) t
        ) hist ON TRUE
+       ${WHISPER_PRICE_LATERAL}
        WHERE ds.asset_cap_rate IS NOT NULL
           OR p.details#>>'{omData,authoritative,currentFinancials,noi}' IS NOT NULL
           OR p.details#>>'{rentalFinancials,omAnalysis,currentFinancials,noi}' IS NOT NULL
@@ -427,6 +480,14 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
             yieldDeltaPct > TREND_FLAT_EPSILON_PP ? "up" : yieldDeltaPct < -TREND_FLAT_EPSILON_PP ? "down" : "flat";
         }
 
+        const currentNoi = toNumber(row.current_noi) ?? fallbackNoi;
+        const pricePsf = toNumber(row.price_psf);
+        const whisper = whisperMetrics({
+          whisperPrice: toNumber(row.whisper_amount),
+          noi: currentNoi,
+          askingPrice: fallbackAsk,
+          pricePsf,
+        });
         const comp: OperatingCompRow = {
           propertyId: String(row.property_id),
           canonicalAddress: String(row.canonical_address),
@@ -444,9 +505,9 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
           ltrYieldPct: resolved.ltrYieldPct,
           mtrYieldPct,
           yieldSpreadPct: mtrYieldPct != null ? toNumber(row.yield_spread) : null,
-          currentNoi: toNumber(row.current_noi) ?? fallbackNoi,
+          currentNoi,
           pricePerUnit: toNumber(row.price_per_unit),
-          pricePsf: toNumber(row.price_psf),
+          pricePsf,
           expenseRatioPct: toNumber(row.expense_ratio),
           dealScore: toNumber(row.deal_score),
           signalAt: toIsoString(row.signal_at),
@@ -460,6 +521,8 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
           yieldTrend,
           yieldHistory,
           pendingReview: false,
+          ...whisper,
+          whisperObservedAt: toIsoString(row.whisper_observed_at) ?? toIsoString(row.whisper_created_at),
         };
         return comp;
       })
@@ -493,7 +556,10 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
            run.status AS run_status,
            run.started_at AS run_started_at,
            snap.snapshot,
-           lst.listing_price
+           lst.listing_price,
+           wp.whisper_amount,
+           wp.whisper_observed_at,
+           wp.whisper_created_at
          FROM properties p
          JOIN LATERAL (
            SELECT r.id, r.status, r.started_at
@@ -520,6 +586,7 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
            ORDER BY (m.status = 'accepted') DESC, m.confidence DESC NULLS LAST, m.created_at DESC
            LIMIT 1
          ) lst ON TRUE
+         ${WHISPER_PRICE_LATERAL}
          ORDER BY run.started_at DESC
          LIMIT $1`,
         [limit]
@@ -545,6 +612,13 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
         if (resolved.ltrYieldPct == null && resolved.flag == null) continue;
         const units = toNumber(info?.totalUnits);
         const gsf = toNumber(info?.grossSquareFeet) ?? toNumber(info?.grossSf) ?? toNumber(info?.squareFootage);
+        const pendingPsf = ask != null && gsf != null && gsf > 0 ? ask / gsf : null;
+        const whisper = whisperMetrics({
+          whisperPrice: toNumber(row.whisper_amount),
+          noi,
+          askingPrice: ask,
+          pricePsf: pendingPsf,
+        });
         seen.add(propertyId);
         rows.push({
           propertyId,
@@ -565,7 +639,7 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
           yieldSpreadPct: null,
           currentNoi: noi,
           pricePerUnit: ask != null && units != null && units > 0 ? ask / units : null,
-          pricePsf: ask != null && gsf != null && gsf > 0 ? ask / gsf : null,
+          pricePsf: pendingPsf,
           expenseRatioPct: null,
           dealScore: null,
           signalAt: null,
@@ -579,6 +653,8 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
           yieldTrend: null,
           yieldHistory: [],
           pendingReview: true,
+          ...whisper,
+          whisperObservedAt: toIsoString(row.whisper_observed_at) ?? toIsoString(row.whisper_created_at),
         });
       }
     }
@@ -680,6 +756,7 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
         // Flagged rows carry null yields, so every aggregate below already excludes them.
         flaggedCount: rows.filter((row) => row.yieldFlag != null).length,
         pendingCount: rows.filter((row) => row.pendingReview).length,
+        whisperCount: rows.filter((row) => row.whisperPrice != null).length,
         averageLtrYieldPct: average,
         medianLtrYieldPct: medianYield,
         boroughStats,

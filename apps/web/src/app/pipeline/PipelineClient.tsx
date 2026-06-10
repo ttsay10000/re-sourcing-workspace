@@ -297,6 +297,54 @@ interface ListingRefreshResponse {
   details?: string;
 }
 
+interface EnrichmentRunResponse {
+  ok?: boolean;
+  permitEnrichment?: {
+    success?: number;
+    failed?: number;
+    moduleStats?: Record<string, { completed?: number; failed?: number; skipped?: number }>;
+    moduleErrors?: Record<string, string>;
+    failures?: Array<{ propertyId: string; failedModules?: string[] }>;
+  };
+  error?: string;
+  details?: string;
+}
+
+interface GeocodeRunResponse {
+  ok?: boolean;
+  attempted?: number;
+  geocoded?: number;
+  alreadyGeocoded?: number;
+  failed?: number;
+  bySource?: Record<string, number>;
+  errors?: Array<{ propertyId: string; error: string }>;
+  error?: string;
+  details?: string;
+}
+
+/**
+ * Turn the per-module enrichment stats into a human line saying where in the
+ * flow it failed and for how many properties — e.g.
+ * "2 of 12 properties failed: permits ×2 (HTTP 429 from DOB API), hpdViolations ×1".
+ * Returns null when every module completed (or was skipped for missing BBL).
+ */
+function describeEnrichmentIssues(payload: EnrichmentRunResponse): string | null {
+  const enrichment = payload.permitEnrichment;
+  if (!enrichment) return null;
+  const failedProperties = Number(enrichment.failed ?? 0);
+  if (failedProperties === 0) return null;
+  const total = Number(enrichment.success ?? 0) + failedProperties;
+  const moduleParts = Object.entries(enrichment.moduleStats ?? {})
+    .filter(([, stats]) => Number(stats.failed ?? 0) > 0)
+    .sort((a, b) => Number(b[1].failed ?? 0) - Number(a[1].failed ?? 0))
+    .map(([name, stats]) => {
+      const firstError = enrichment.moduleErrors?.[name];
+      return `${name} ×${stats.failed}${firstError ? ` (${firstError})` : ""}`;
+    });
+  const where = moduleParts.length > 0 ? `: ${moduleParts.slice(0, 4).join(", ")}${moduleParts.length > 4 ? ", …" : ""}` : "";
+  return `${failedProperties} of ${total} propert${total === 1 ? "y" : "ies"} failed${where}`;
+}
+
 interface BrokerCompPackagesResponse {
   propertyId?: string;
   packages?: unknown[];
@@ -1306,7 +1354,7 @@ export default function PipelineClient() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
-  // Opt-in RapidAPI listing-details stage for the composite "Refresh listings"
+  // Opt-in RapidAPI listing-details stage for the composite "Refresh"
   // action; sticky across sessions because it spends API credits.
   const [includeListingPull, setIncludeListingPull] = useState(false);
   useEffect(() => {
@@ -1890,13 +1938,15 @@ export default function PipelineClient() {
   }
 
   /**
-   * "Refresh listings" composite: enrichment → rental flow → OM analysis →
-   * dossier generation for the selection, each stage as its own dismissible
-   * banner. The RapidAPI listing-details pull (GET DETAILS via the stored
-   * source link) is opt-in through the toggle so refreshes don't spend
-   * listing credits by default. Stage failures are collected, not fatal.
+   * THE pipeline refresh: enrichment → geocode → analysis (rental flow, OM
+   * analysis, dossier generation) for the selection, each stage as its own
+   * dismissible banner. This is the single refresh flow for properties — the
+   * old per-stage bulk buttons collapsed into it. The RapidAPI listing-details
+   * pull (GET DETAILS via the stored source link) is opt-in through the
+   * toggle so refreshes don't spend listing credits by default. Stage
+   * failures are collected, not fatal.
    */
-  async function refreshSelectedListings() {
+  async function runPipelineRefresh() {
     if (selectedIds.length === 0) return;
     const propertyIds = [...selectedIds];
     const omRows = selectedRowsWithOm;
@@ -1946,15 +1996,63 @@ export default function PipelineClient() {
         // The listing pull is its own opt-in stage above; never double-pull here.
         body: JSON.stringify({ propertyIds, refreshStreetEasy: false }),
       });
-      const enrichmentPayload = await enrichmentResponse.json().catch(() => ({}));
+      const enrichmentPayload = (await enrichmentResponse.json().catch(() => ({}))) as EnrichmentRunResponse;
       if (!enrichmentResponse.ok) {
         throw new Error(enrichmentPayload.error || enrichmentPayload.details || "Enrichment refresh failed.");
       }
-      enrichmentBanner.succeed(`Enrichment refreshed for ${propertyIds.length} propert${propertyIds.length === 1 ? "y" : "ies"}.`);
+      const enrichmentIssues = describeEnrichmentIssues(enrichmentPayload);
+      if (enrichmentIssues) {
+        enrichmentBanner.fail(`Enrichment finished with issues — ${enrichmentIssues}`);
+        stageFailures.push(`enrichment (${enrichmentIssues})`);
+      } else {
+        enrichmentBanner.succeed(`Enrichment refreshed for ${propertyIds.length} propert${propertyIds.length === 1 ? "y" : "ies"}.`);
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Enrichment refresh failed.";
       enrichmentBanner.fail(message);
       stageFailures.push(`enrichment (${message})`);
+    }
+
+    // Geocode stage: fill the lat/lng columns the yield map plots. BBL resolves
+    // store coordinates in details JSONB only, so OM-sourced properties stay
+    // unmapped until this promotes them (or Geoclient resolves the address).
+    const geocodeBanner = processBanner.start("Geocoding", {
+      message: `Resolving map coordinates for ${propertyIds.length} propert${propertyIds.length === 1 ? "y" : "ies"}…`,
+    });
+    try {
+      const geocodeResponse = await fetch(`${API_BASE}/api/properties/geocode`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ propertyIds }),
+      });
+      const geocodePayload = (await geocodeResponse.json().catch(() => ({}))) as GeocodeRunResponse;
+      if (!geocodeResponse.ok) {
+        throw new Error(geocodePayload.error || geocodePayload.details || "Geocoding failed.");
+      }
+      const geocoded = Number(geocodePayload.geocoded ?? 0);
+      const alreadyGeocoded = Number(geocodePayload.alreadyGeocoded ?? 0);
+      const geocodeFailed = Number(geocodePayload.failed ?? 0);
+      if (geocodeFailed > 0) {
+        const firstError = geocodePayload.errors?.[0];
+        const firstDetail = firstError
+          ? ` First: ${addressById.get(firstError.propertyId) ?? firstError.propertyId} — ${firstError.error}`
+          : "";
+        geocodeBanner.fail(
+          `Geocoded ${geocoded}; ${geocodeFailed} still missing coordinates (won't appear on the yield map).${firstDetail}`
+        );
+        stageFailures.push(`geocoding (${geocodeFailed} unresolved)`);
+      } else {
+        geocodeBanner.succeed(
+          geocoded > 0
+            ? `Geocoded ${geocoded} propert${geocoded === 1 ? "y" : "ies"} for the yield map; ${alreadyGeocoded} already had coordinates.`
+            : `All ${alreadyGeocoded} propert${alreadyGeocoded === 1 ? "y" : "ies"} already had map coordinates.`
+        );
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Geocoding failed.";
+      geocodeBanner.fail(message);
+      stageFailures.push(`geocoding (${message})`);
     }
 
     const rentalBanner = processBanner.start("Rental flow", {
@@ -2063,57 +2161,6 @@ export default function PipelineClient() {
     setBusyAction(null);
   }
 
-  async function refreshSelectedEnrichment() {
-    if (selectedIds.length === 0) return;
-    setBusyAction("bulk:refresh");
-    setNotice(null);
-    setError(null);
-    const banner = processBanner.start("Enrichment refresh", {
-      message: `Running enrichment + rental flow for ${selectedIds.length} propert${selectedIds.length === 1 ? "y" : "ies"}…`,
-    });
-    try {
-      const propertyIds = [...selectedIds];
-      const enrichmentResponse = await fetch(`${API_BASE}/api/properties/run-enrichment`, {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ propertyIds }),
-      });
-      const enrichmentPayload = await enrichmentResponse.json().catch(() => ({}));
-      if (!enrichmentResponse.ok) {
-        throw new Error(enrichmentPayload.error || enrichmentPayload.details || "Failed to refresh enrichment.");
-      }
-      const rentalResponse = await fetch(`${API_BASE}/api/properties/run-rental-flow`, {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        // StreetEasy + enrichment already ran in run-enrichment above; only the rental flow remains.
-        body: JSON.stringify({ propertyIds, refreshStreetEasy: false, runEnrichment: false }),
-      });
-      const rentalPayload = await rentalResponse.json().catch(() => ({}));
-      if (!rentalResponse.ok) {
-        throw new Error(rentalPayload.error || rentalPayload.details || "Enrichment refreshed, but rental flow failed.");
-      }
-      const priceChanged = Number(enrichmentPayload?.streetEasyRefresh?.priceChanged ?? 0);
-      const enrichmentSummary = `Refresh completed for ${propertyIds.length} propert${propertyIds.length === 1 ? "y" : "ies"}${
-        priceChanged > 0 ? `; ${priceChanged} ask change${priceChanged === 1 ? "" : "s"} found` : ""
-      }.`;
-      setNotice(enrichmentSummary);
-      banner.succeed(enrichmentSummary);
-      const response = await apiFetch<PipelineResponse>(
-        `${API_BASE}/api/ui-v2/pipeline?${buildPipelineQueryString(queryString)}`
-      );
-      setRows(response.pipeline.rows as PipelineRow[]);
-      setTotal(response.pipeline.total);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to refresh selected properties.";
-      banner.fail(message);
-      setError(message);
-    } finally {
-      setBusyAction(null);
-    }
-  }
-
   async function refreshOmAnalysisForProperty(propertyId: string) {
     const row = rows.find((candidate) => candidate.propertyId === propertyId) ?? null;
     const detailHasOm = selectedId === propertyId && propertyDetailHasOm(selectedProperty);
@@ -2185,164 +2232,6 @@ export default function PipelineClient() {
       const message = err instanceof Error ? err.message : "Failed to rerun deal dossier.";
       banner.fail(message);
       setError(message);
-    } finally {
-      setBusyAction(null);
-    }
-  }
-
-  async function refreshSelectedOmAnalysis() {
-    if (selectedIds.length === 0) return;
-    const rowsToRefresh = selectedRowsWithOm;
-    if (rowsToRefresh.length === 0) {
-      setError("Select at least one property with an uploaded OM before refreshing OM analysis.");
-      return;
-    }
-    const skipped = selectedIds.length - rowsToRefresh.length;
-    const addressById = new Map(
-      rows.map((row) => [row.propertyId, row.displayAddress ?? row.canonicalAddress ?? row.propertyId])
-    );
-    let completed = 0;
-    let yieldsRefreshed = 0;
-    const failures: Array<{ propertyId: string; address: string; message: string }> = [];
-    setBusyAction("bulk:om-analysis");
-    setNotice(
-      `Updating OM analysis for ${rowsToRefresh.length} propert${rowsToRefresh.length === 1 ? "y" : "ies"}${
-        skipped > 0 ? `; ${skipped} selected without OM skipped` : ""
-      }...`
-    );
-    setError(null);
-    const banner = processBanner.start("OM analysis refresh", {
-      message: `Updating ${rowsToRefresh.length} propert${rowsToRefresh.length === 1 ? "y" : "ies"}…`,
-    });
-    try {
-      for (let index = 0; index < rowsToRefresh.length; index++) {
-        const propertyId = rowsToRefresh[index]!.propertyId;
-        const progressMessage = `Updating OM analysis ${index + 1} of ${rowsToRefresh.length}: ${
-          addressById.get(propertyId) ?? "selected property"
-        }`;
-        setNotice(progressMessage);
-        banner.update(progressMessage, Math.round((index / rowsToRefresh.length) * 100));
-        try {
-          const payload = await apiFetch<OmRefreshResponse>(`${API_BASE}/api/properties/${propertyId}/refresh-om-financials`, {
-            method: "POST",
-            body: JSON.stringify({ autoPromote: true }),
-          });
-          if (payload.underwritingRefreshed) yieldsRefreshed++;
-          completed++;
-        } catch (err) {
-          failures.push({
-            propertyId,
-            address: addressById.get(propertyId) ?? propertyId,
-            message: err instanceof Error ? err.message : "Failed to refresh OM analysis.",
-          });
-        }
-      }
-
-      await reloadPipelineRows();
-      if (selectedId) await loadPropertyDetail(selectedId).catch(() => null);
-
-      const skippedMessage = skipped > 0 ? ` ${skipped} selected without OM skipped.` : "";
-      const yieldsMessage =
-        yieldsRefreshed > 0
-          ? ` Yield numbers recalculated for ${yieldsRefreshed} propert${yieldsRefreshed === 1 ? "y" : "ies"}.`
-          : "";
-      const omSummary =
-        failures.length === 0
-          ? `OM analysis updated for ${completed} propert${completed === 1 ? "y" : "ies"}.${skippedMessage}${yieldsMessage}`
-          : `OM analysis updated for ${completed} of ${rowsToRefresh.length} eligible properties.${skippedMessage}${yieldsMessage}`;
-      setNotice(omSummary);
-      if (failures.length > 0) {
-        banner.fail(omSummary);
-        setError(
-          `${failures.length} OM analysis refresh${failures.length === 1 ? "" : "es"} failed. First issue: ${
-            failures[0]!.address
-          } - ${failures[0]!.message}`
-        );
-      } else {
-        banner.succeed(omSummary);
-      }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to refresh selected OM analysis.";
-      banner.fail(message);
-      setError(message);
-    } finally {
-      setBusyAction(null);
-    }
-  }
-
-  async function rerunSelectedDossiers() {
-    if (selectedIds.length === 0) return;
-    const rowsToRerun = selectedRowsWithOm;
-    if (rowsToRerun.length === 0) {
-      setError("Select at least one property with an uploaded OM before rerunning dossiers.");
-      return;
-    }
-    const propertyIds = rowsToRerun.map((row) => row.propertyId);
-    const skipped = selectedIds.length - rowsToRerun.length;
-    const addressById = new Map(
-      rows.map((row) => [row.propertyId, row.displayAddress ?? row.canonicalAddress ?? row.propertyId])
-    );
-    let completed = 0;
-    let omRefreshFailures = 0;
-    const failures: Array<{ propertyId: string; address: string; message: string }> = [];
-    setBusyAction("bulk:dossier");
-    setNotice(
-      `Rerunning OM analysis + dossier generation for ${propertyIds.length} propert${propertyIds.length === 1 ? "y" : "ies"}${
-        skipped > 0 ? `; ${skipped} selected without OM skipped` : ""
-      }...`
-    );
-    setError(null);
-    try {
-      for (let index = 0; index < propertyIds.length; index++) {
-        const propertyId = propertyIds[index]!;
-        setNotice(
-          `Rerunning OM analysis + dossier ${index + 1} of ${propertyIds.length}: ${
-            addressById.get(propertyId) ?? "selected property"
-          }`
-        );
-        try {
-          const response = await fetch(`${API_BASE}/api/dossier/generate`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ propertyId, refreshOm: true }),
-          });
-          const payload = (await response.json().catch(() => ({}))) as DossierGenerateResponse;
-          if (!response.ok) {
-            throw new Error(payload.details || payload.error || `Request failed with ${response.status}`);
-          }
-          if (payload.omRefresh?.status === "failed") omRefreshFailures++;
-          completed++;
-        } catch (err) {
-          failures.push({
-            propertyId,
-            address: addressById.get(propertyId) ?? propertyId,
-            message: err instanceof Error ? err.message : "Failed to generate dossier.",
-          });
-        }
-      }
-
-      await reloadPipelineRows();
-      if (selectedId) await loadPropertyDetail(selectedId).catch(() => null);
-
-      const skippedMessage = skipped > 0 ? ` ${skipped} selected without OM skipped.` : "";
-      const omRefreshMessage =
-        omRefreshFailures > 0
-          ? ` OM analysis re-run failed for ${omRefreshFailures} propert${omRefreshFailures === 1 ? "y" : "ies"} (existing OM analysis used).`
-          : "";
-      setNotice(
-        failures.length === 0
-          ? `Dossiers and Excel regenerated for ${completed} propert${completed === 1 ? "y" : "ies"} from refreshed OM analysis.${skippedMessage}${omRefreshMessage}`
-          : `Dossiers and Excel regenerated for ${completed} of ${propertyIds.length} eligible properties.${skippedMessage}${omRefreshMessage}`
-      );
-      if (failures.length > 0) {
-        setError(
-          `${failures.length} dossier rerun${failures.length === 1 ? "" : "s"} failed. First issue: ${
-            failures[0]!.address
-          } - ${failures[0]!.message}`
-        );
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to rerun dossier generation.");
     } finally {
       setBusyAction(null);
     }
@@ -3772,15 +3661,15 @@ export default function PipelineClient() {
           <button
             className={styles.secondaryButton}
             type="button"
-            title="Full refresh for the selection: enrichment, rental flow, OM analysis, and dossier generation — each stage tracked in its own banner. The RapidAPI listing-details pull only runs when the toggle next to this button is on."
+            title="The one refresh for the selection — runs enrichment → geocode → analysis (rental flow, OM analysis, dossier) with each stage tracked in its own banner. The RapidAPI listing-details pull only runs when the toggle next to this button is on."
             disabled={selectedIds.length === 0 || busyAction?.startsWith("bulk:")}
-            onClick={refreshSelectedListings}
+            onClick={runPipelineRefresh}
           >
-            {busyAction === "bulk:listings" ? "Refreshing listings..." : "Refresh listings"}
+            {busyAction === "bulk:listings" ? "Refreshing..." : "Refresh"}
           </button>
           <label
             className={styles.bulkToggle}
-            title="When on, Refresh listings also sends each property's stored source link through the RapidAPI GET DETAILS endpoint (1 credit per listing) to capture ask changes and unavailable flags."
+            title="When on, Refresh also sends each property's stored source link through the RapidAPI GET DETAILS endpoint (1 credit per listing) to capture ask changes and unavailable flags."
           >
             <input
               type="checkbox"
@@ -3790,40 +3679,6 @@ export default function PipelineClient() {
             />
             <span>+ listing pull</span>
           </label>
-          <button
-            className={styles.secondaryButton}
-            type="button"
-            disabled={selectedIds.length === 0 || busyAction?.startsWith("bulk:")}
-            onClick={refreshSelectedEnrichment}
-          >
-            {busyAction === "bulk:refresh" ? "Refreshing..." : "Refresh latest + rental"}
-          </button>
-          <button
-            className={styles.secondaryButton}
-            type="button"
-            title={
-              selectedRowsWithOm.length === 0
-                ? "Select at least one property with an uploaded OM."
-                : "Refresh and promote OM extraction for selected properties, then recalculate yield numbers from the latest user inputs and underwriting."
-            }
-            disabled={selectedRowsWithOm.length === 0 || busyAction?.startsWith("bulk:")}
-            onClick={refreshSelectedOmAnalysis}
-          >
-            {busyAction === "bulk:om-analysis" ? "Updating OM..." : "Update OM analysis"}
-          </button>
-          <button
-            className={styles.secondaryButton}
-            type="button"
-            title={
-              selectedRowsWithOm.length === 0
-                ? "Select at least one property with an uploaded OM."
-                : "Re-run OM analysis, then regenerate and replace the deal dossier PDFs and Excel workbooks using saved assumptions."
-            }
-            disabled={selectedRowsWithOm.length === 0 || busyAction?.startsWith("bulk:")}
-            onClick={rerunSelectedDossiers}
-          >
-            {busyAction === "bulk:dossier" ? "Rerunning dossiers..." : "Rerun dossiers"}
-          </button>
           <button
             className={styles.primaryButton}
             type="button"

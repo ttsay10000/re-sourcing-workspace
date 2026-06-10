@@ -245,9 +245,44 @@ function normalizeRows(data: SavedDealsResponse): SavedDealRow[] {
     }));
 }
 
+type SavedSortField = "address" | "status" | "score" | "price" | "updated";
+type SavedSortDirection = "asc" | "desc";
+
+const SAVED_SORT_VALUES: Record<SavedSortField, (row: SavedDealRow) => string | number | null> = {
+  address: (row) => (row.displayAddress || row.canonicalAddress || row.propertyId).toLowerCase(),
+  status: (row) => (isRejected(row) ? "rejected" : row.status || row.savedDeal?.dealStatus || "saved"),
+  score: (row) => row.dealScore ?? null,
+  price: (row) => row.price ?? null,
+  updated: (row) => row.updatedAt ?? row.savedDeal?.createdAt ?? null,
+};
+
+function SavedSortHeader({
+  label,
+  field,
+  activeField,
+  direction,
+  onSort,
+}: {
+  label: string;
+  field: SavedSortField;
+  activeField: SavedSortField | null;
+  direction: SavedSortDirection;
+  onSort: (field: SavedSortField) => void;
+}) {
+  const active = activeField === field;
+  return (
+    <button type="button" className={styles.sortHeader} onClick={() => onSort(field)} title={`Sort by ${label}`}>
+      <span>{label}</span>
+      <span className={styles.sortIndicator} aria-hidden="true">
+        {active ? (direction === "asc" ? "▲" : "▼") : ""}
+      </span>
+    </button>
+  );
+}
+
 function SavedPageContent() {
   const searchParams = useSearchParams();
-  const query = (searchParams.get("q") ?? "").trim().toLowerCase();
+  const queryParam = (searchParams.get("q") ?? "").trim();
   const [rows, setRows] = useState<SavedDealRow[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -256,6 +291,25 @@ function SavedPageContent() {
   const [viewMode, setViewMode] = useState<ViewMode>("grid");
   const [includeRejected, setIncludeRejected] = useState(false);
   const [unsavingIds, setUnsavingIds] = useState<Set<string>>(new Set());
+  const [searchInput, setSearchInput] = useState(queryParam);
+  const [sortField, setSortField] = useState<SavedSortField | null>(null);
+  const [sortDirection, setSortDirection] = useState<SavedSortDirection>("desc");
+  // Global search (?q=) pre-populates the on-page filter; typing then refines it.
+  useEffect(() => {
+    setSearchInput(queryParam);
+  }, [queryParam]);
+  const query = searchInput.trim().toLowerCase();
+
+  const requestSort = useCallback((field: SavedSortField) => {
+    setSortField((currentField) => {
+      if (currentField === field) {
+        setSortDirection((currentDirection) => (currentDirection === "asc" ? "desc" : "asc"));
+        return currentField;
+      }
+      setSortDirection(field === "address" || field === "status" ? "asc" : "desc");
+      return field;
+    });
+  }, []);
 
   const loadSavedDeals = useCallback(async (mode: "initial" | "refresh" = "initial") => {
     if (mode === "initial") setLoading(true);
@@ -303,9 +357,24 @@ function SavedPageContent() {
     if (!includeRejected) {
       result = result.filter((row) => !isRejected(row));
     }
-    if (!query) return result;
-    return result.filter((row) => searchableText(row).includes(query));
-  }, [query, rows, includeRejected]);
+    if (query) {
+      result = result.filter((row) => searchableText(row).includes(query));
+    }
+    if (!sortField) return result;
+    const valueOf = SAVED_SORT_VALUES[sortField];
+    const factor = sortDirection === "asc" ? 1 : -1;
+    return [...result].sort((a, b) => {
+      const aValue = valueOf(a);
+      const bValue = valueOf(b);
+      if (aValue == null && bValue == null) return 0;
+      if (aValue == null) return 1;
+      if (bValue == null) return -1;
+      if (typeof aValue === "string" || typeof bValue === "string") {
+        return String(aValue).localeCompare(String(bValue)) * factor;
+      }
+      return (aValue - bValue) * factor;
+    });
+  }, [query, rows, includeRejected, sortField, sortDirection]);
 
   const rejectedCount = useMemo(() => rows.filter(isRejected).length, [rows]);
 
@@ -335,10 +404,10 @@ function SavedPageContent() {
         }
       />
 
-      {query ? (
+      {queryParam ? (
         <div className={styles.filterNotice}>
           <span>Filtered by global search</span>
-          <strong>{searchParams.get("q")}</strong>
+          <strong>{queryParam}</strong>
           <span>{filteredRows.length} of {rows.length} saved deal{rows.length === 1 ? "" : "s"}</span>
         </div>
       ) : null}
@@ -366,6 +435,35 @@ function SavedPageContent() {
             <p>{filteredRows.length} visible row{filteredRows.length === 1 ? "" : "s"}</p>
           </div>
           <div className={styles.panelHeaderActions}>
+            <input
+              type="search"
+              className={styles.searchInput}
+              value={searchInput}
+              onChange={(event) => setSearchInput(event.target.value)}
+              placeholder="Search address, area, or tag…"
+              aria-label="Search saved deals"
+            />
+            <select
+              className={styles.sortSelect}
+              aria-label="Sort saved deals"
+              value={sortField ?? ""}
+              onChange={(event) => {
+                const value = event.target.value as SavedSortField | "";
+                if (!value) {
+                  setSortField(null);
+                  return;
+                }
+                setSortField(value);
+                setSortDirection(value === "address" || value === "status" ? "asc" : "desc");
+              }}
+            >
+              <option value="">Sort: recently saved</option>
+              <option value="score">Sort: score</option>
+              <option value="price">Sort: price</option>
+              <option value="updated">Sort: last updated</option>
+              <option value="address">Sort: address A–Z</option>
+              <option value="status">Sort: status</option>
+            </select>
             {rejectedCount > 0 && (
               <button
                 type="button"
@@ -543,11 +641,11 @@ function SavedPageContent() {
             <table className={styles.table}>
               <thead>
                 <tr>
-                  <th>Property</th>
-                  <th>Status</th>
-                  <th>Score</th>
-                  <th>Economics</th>
-                  <th>Activity</th>
+                  <th><SavedSortHeader label="Property" field="address" activeField={sortField} direction={sortDirection} onSort={requestSort} /></th>
+                  <th><SavedSortHeader label="Status" field="status" activeField={sortField} direction={sortDirection} onSort={requestSort} /></th>
+                  <th><SavedSortHeader label="Score" field="score" activeField={sortField} direction={sortDirection} onSort={requestSort} /></th>
+                  <th><SavedSortHeader label="Economics" field="price" activeField={sortField} direction={sortDirection} onSort={requestSort} /></th>
+                  <th><SavedSortHeader label="Activity" field="updated" activeField={sortField} direction={sortDirection} onSort={requestSort} /></th>
                   <th>Actions</th>
                 </tr>
               </thead>

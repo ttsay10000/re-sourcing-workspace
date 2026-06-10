@@ -5,7 +5,9 @@
    - .boardScroller is the single horizontal scroll container for the kanban.
    - .statusColumn is a fixed-width flex column; its .columnBody scrolls
      vertically and the .columnHeader stays pinned.
-   - .propertyCard never exceeds its column width; all text truncates.
+   - .propertyCard never exceeds its column width; long text clamps at rest
+     and fully expands while the card is hovered (cards grow vertically in
+     the scrolling column, never horizontally).
 ============================================================================ */
 
 .page {
@@ -507,9 +509,9 @@
 }
 
 .statusColumn {
-  flex: 0 0 300px;
-  min-width: 300px;
-  max-width: 300px;
+  flex: 0 0 340px;
+  min-width: 340px;
+  max-width: 340px;
   height: min(calc(100vh - 230px), 58rem);
   min-height: 22rem;
   display: flex;
@@ -635,9 +637,41 @@
   background: #f9fafb;
 }
 
+/* Hovering a card expands it in place: clamps and truncation lift so the
+   title, metrics, flags, and CTA are fully readable before acting. */
 .propertyCard:hover {
   border-color: var(--app-line-strong, #9ca3af);
-  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.08);
+  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.16);
+}
+
+.propertyCard:hover .cardTitle {
+  -webkit-line-clamp: unset;
+  max-height: none;
+}
+
+.propertyCard:hover .cardMeta,
+.propertyCard:hover .cardTouchLine,
+.propertyCard:hover .flagChip,
+.propertyCard:hover .cardActionButton {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+}
+
+.propertyCard:hover .cardMetrics {
+  flex-wrap: wrap;
+  row-gap: 0.4rem;
+}
+
+.propertyCard:hover .cardMetrics span {
+  flex: 1 1 28%;
+}
+
+.propertyCard:hover .cardMetrics small,
+.propertyCard:hover .cardMetrics strong {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
 }
 
 .propertyCardSelected {
@@ -686,14 +720,16 @@
 }
 
 .cardTitle {
-  display: block;
-  font-size: 0.76rem;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  font-size: 0.8rem;
   font-weight: 700;
   line-height: 1.25;
   color: var(--app-ink, #18181b);
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
   overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .cardTitleBlock:hover .cardTitle {

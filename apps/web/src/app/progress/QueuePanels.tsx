@@ -3,7 +3,7 @@
 import { AlarmClock, BellOff, Flag, MailPlus, MailWarning, PenLine } from "lucide-react";
 import { StageChip } from "@/components/ui";
 import type { DealFlowStageId } from "@re-sourcing/contracts";
-import { formatDue, type ActionFlag, type EmailQueueItem } from "./actionFlags";
+import { formatDue, type ActionFlag, type EmailQueueItem, type FlaggedContactItem } from "./actionFlags";
 import { formatDaysAgo, streetAddressOnly } from "./format";
 import styles from "./progress.module.css";
 
@@ -154,6 +154,79 @@ export function EmailQueuePanel({
           ))}
         </ul>
       )}
+    </div>
+  );
+}
+
+/* ── Flags queue: every property without a broker email attached ─────────── */
+
+export function FlagsPanel({
+  items,
+  busy,
+  onOpen,
+  onAddBroker,
+  onBatchBroker,
+}: {
+  items: FlaggedContactItem[];
+  busy: boolean;
+  onOpen: (item: FlaggedContactItem) => void;
+  onAddBroker: (item: FlaggedContactItem) => void;
+  onBatchBroker: (items: FlaggedContactItem[]) => void;
+}) {
+  if (items.length === 0) {
+    return <div className={styles.emptyState}>Every property on the board has a broker email attached.</div>;
+  }
+  return (
+    <div className={styles.queuePanel} aria-label="Flags queue">
+      <div className={styles.queueToolbar}>
+        <strong>
+          {items.length} propert{items.length === 1 ? "y" : "ies"} without a broker email
+        </strong>
+        <div className={styles.queueToolbarActions}>
+          <button
+            type="button"
+            className={styles.queuePrimaryButton}
+            disabled={busy}
+            title="Step through every flagged property and attach a broker email."
+            onClick={() => onBatchBroker(items)}
+          >
+            Add {items.length} broker emails
+          </button>
+        </div>
+      </div>
+      <ul className={styles.queueList}>
+        {items.map((item) => (
+          <li key={item.propertyId} className={styles.queueRow}>
+            <span className={`${styles.queueIcon} ${styles[`severity_${item.flag?.severity ?? "medium"}`]}`} aria-hidden="true">
+              <Flag size={14} strokeWidth={2} />
+            </span>
+            <div className={styles.queueMain}>
+              <button type="button" className={styles.queueAddress} title={item.address} onClick={() => onOpen(item)}>
+                {streetAddressOnly(item.address)}
+              </button>
+              <div className={styles.queueMetaLine}>
+                <StageChip stage={item.stageId as DealFlowStageId} />
+                {item.ageDays != null && item.ageDays >= 1 ? (
+                  <span className={styles.queueAge}>
+                    <AlarmClock size={11} strokeWidth={2} aria-hidden="true" /> {item.ageDays}d in stage
+                  </span>
+                ) : null}
+              </div>
+              <div className={styles.queueSubject}>
+                {item.flag?.reason ?? "No broker email attached — outreach and OM requests are blocked."}
+              </div>
+            </div>
+            <div className={styles.queueContact}>
+              <span className={styles.queueMissingBroker}>No broker email</span>
+            </div>
+            <div className={styles.queueActions}>
+              <button type="button" className={styles.queuePrimaryButton} disabled={busy} onClick={() => onAddBroker(item)}>
+                <MailPlus size={12} strokeWidth={2} aria-hidden="true" /> Add email
+              </button>
+            </div>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

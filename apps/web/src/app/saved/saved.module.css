@@ -878,3 +878,55 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+/* Saved-table search, sort select, and click-to-sort headers. */
+.searchInput {
+  min-width: 14rem;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--app-line);
+  border-radius: 8px;
+  background: var(--app-surface);
+  color: var(--app-ink);
+  font-size: 0.82rem;
+}
+
+.searchInput:focus-visible {
+  outline: 2px solid var(--brand, #0f766e);
+  outline-offset: 1px;
+}
+
+.sortSelect {
+  padding: 0.4rem 0.55rem;
+  border: 1px solid var(--app-line);
+  border-radius: 8px;
+  background: var(--app-surface);
+  color: var(--app-ink-secondary);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.sortHeader {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.sortHeader:hover {
+  color: var(--brand-strong, #115e59);
+}
+
+.sortIndicator {
+  font-size: 0.6rem;
+  line-height: 1;
+  min-width: 0.7em;
+}

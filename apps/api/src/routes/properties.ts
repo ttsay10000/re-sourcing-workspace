@@ -46,7 +46,7 @@ import { findBrokerPropertyConversationHistory } from "../inquiry/gmailConversat
 import { buildBrokerTeamRecords, findBrokerTeamOverlapMatches } from "../inquiry/brokerTeamOverlap.js";
 import type { PropertyDetails, RentalFinancials, RentalFinancialsFromLlm } from "@re-sourcing/contracts";
 import { runEnrichmentForProperty } from "../enrichment/runEnrichment.js";
-import { normalizeAddressLineForDisplay, getBBLForProperty } from "../enrichment/resolvePropertyBBL.js";
+import { normalizeAddressLineForDisplay, getBBLForProperty, geocodePropertyCoordinates } from "../enrichment/resolvePropertyBBL.js";
 import { runRentalApiStep } from "../rental/rentalApiClient.js";
 import { extractRentalFinancialsFromListing } from "../rental/extractRentalFinancialsFromListing.js";
 import { suggestRentalDataGaps } from "../rental/suggestRentalDataGaps.js";
@@ -2538,6 +2538,10 @@ router.post("/properties/run-enrichment", async (req: Request, res: Response) =>
       await getBBLForProperty(propertyIds[i]!, { appToken });
     }
     const byModule: Record<string, number> = {};
+    // Per-module failure detail so the UI can say where in the flow (and for
+    // how many properties) an enrichment refresh failed, not just that it did.
+    const moduleErrors: Record<string, string> = {};
+    const failedProperties: Array<{ propertyId: string; failedModules: string[] }> = [];
     let success = 0;
     let failed = 0;
     for (let i = 0; i < propertyIds.length; i++) {
@@ -2551,9 +2555,18 @@ router.post("/properties/run-enrichment", async (req: Request, res: Response) =>
         enrichmentStatus: out.ok ? "complete" : "failed",
       });
       if (out.ok) success++;
-      else failed++;
+      else {
+        failed++;
+        failedProperties.push({
+          propertyId: propertyIds[i]!,
+          failedModules: Object.entries(out.results)
+            .filter(([, r]) => !r.ok && !r.skipped)
+            .map(([name]) => name),
+        });
+      }
       for (const [name, r] of Object.entries(out.results)) {
         byModule[name] = (byModule[name] ?? 0) + (r.ok ? 1 : 0);
+        if (!r.ok && !r.skipped && r.error && !moduleErrors[name]) moduleErrors[name] = r.error;
         if (!(name in enrichmentProgress)) continue;
         if (r.ok) enrichmentProgress[name].completed++;
         else if (r.skipped) enrichmentProgress[name].skipped++;
@@ -2666,6 +2679,11 @@ router.post("/properties/run-enrichment", async (req: Request, res: Response) =>
         success,
         failed,
         byModule,
+        // Stage-level detail: which modules failed/skipped, for how many
+        // properties, and the first error seen per module.
+        moduleStats: enrichmentProgress,
+        moduleErrors,
+        failures: failedProperties.slice(0, 25),
       },
       omFinancialsRefresh: {
         documentsProcessed: omFinancialsProcessed,
@@ -2681,6 +2699,57 @@ router.post("/properties/run-enrichment", async (req: Request, res: Response) =>
       finishedAt: new Date().toISOString(),
     });
     res.status(503).json({ error: "Failed to run enrichment.", details: message });
+  }
+});
+
+/**
+ * POST /api/properties/geocode - fill the top-level lat/lng columns (the ones
+ * the yield map plots) for properties that are missing them. Body:
+ * { propertyIds: string[] }. Coordinates come from details JSONB (earlier BBL
+ * resolves), the best matched listing, or a Geoclient address lookup.
+ */
+router.post("/properties/geocode", async (req: Request, res: Response) => {
+  try {
+    const raw = req.body?.propertyIds;
+    const propertyIds = Array.isArray(raw)
+      ? (raw as unknown[]).filter((id): id is string => typeof id === "string" && id.trim().length > 0).map((id) => id.trim())
+      : [];
+    if (propertyIds.length === 0) {
+      res.status(400).json({ error: "propertyIds required (non-empty array)." });
+      return;
+    }
+
+    let geocoded = 0;
+    let alreadyGeocoded = 0;
+    let failed = 0;
+    const bySource: Record<string, number> = {};
+    const errors: Array<{ propertyId: string; error: string }> = [];
+    for (let i = 0; i < propertyIds.length; i++) {
+      if (i > 0) await new Promise((r) => setTimeout(r, ENRICHMENT_RATE_LIMIT_DELAY_MS));
+      const result = await geocodePropertyCoordinates(propertyIds[i]!);
+      if (result.ok && result.alreadyGeocoded) alreadyGeocoded++;
+      else if (result.ok) {
+        geocoded++;
+        if (result.source) bySource[result.source] = (bySource[result.source] ?? 0) + 1;
+      } else {
+        failed++;
+        errors.push({ propertyId: result.propertyId, error: result.error ?? "Unknown geocode failure." });
+      }
+    }
+
+    res.json({
+      ok: failed === 0,
+      attempted: propertyIds.length,
+      geocoded,
+      alreadyGeocoded,
+      failed,
+      bySource,
+      errors: errors.slice(0, 25),
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[properties geocode]", err);
+    res.status(503).json({ error: "Failed to geocode properties.", details: message });
   }
 });
 
@@ -3007,7 +3076,13 @@ function toFiniteOrNull(value: unknown): number | null {
   return typeof numeric === "number" && Number.isFinite(numeric) ? numeric : null;
 }
 
-/** GET /api/om-review/extraction-runs — tear-sheet queue: runs awaiting review or failed. */
+/**
+ * GET /api/om-review/extraction-runs — tear-sheet queue: runs awaiting review
+ * or failed. Pass q=<address fragment> to search runs by property address
+ * (used to recall any workspace, including promoted ones from multi-uploads);
+ * latest_per_property=1 collapses to each property's most recent run so a
+ * recall search shows one workspace per property.
+ */
 router.get("/om-review/extraction-runs", async (req: Request, res: Response) => {
   try {
     const statusesParam = String(req.query.statuses ?? "needs_review,failed");
@@ -3017,14 +3092,16 @@ router.get("/om-review/extraction-runs", async (req: Request, res: Response) => 
       .map((value) => value.trim().toLowerCase())
       .filter((value) => allowed.has(value));
     const limit = Math.max(1, Math.min(Number(req.query.limit) || 50, 200));
+    const q = String(req.query.q ?? "").trim().slice(0, 200);
+    const latestPerProperty = req.query.latest_per_property === "1";
     if (statuses.length === 0) {
       res.json({ runs: [] });
       return;
     }
 
     const pool = getPool();
-    const result = await pool.query(
-      `SELECT r.id AS run_id,
+    const baseSelect = `SELECT ${latestPerProperty ? "DISTINCT ON (r.property_id)" : ""}
+              r.id AS run_id,
               r.property_id,
               r.status,
               r.started_at,
@@ -3039,9 +3116,17 @@ router.get("/om-review/extraction-runs", async (req: Request, res: Response) => 
          SELECT snapshot FROM om_extracted_snapshots es WHERE es.run_id = r.id LIMIT 1
        ) s ON true
        WHERE r.status = ANY($1)
+         AND ($3 = '' OR p.canonical_address ILIKE '%' || $3 || '%')`;
+    const result = await pool.query(
+      latestPerProperty
+        ? `SELECT * FROM (${baseSelect}
+           ORDER BY r.property_id, r.started_at DESC NULLS LAST) latest
+           ORDER BY latest.started_at DESC NULLS LAST
+           LIMIT $2`
+        : `${baseSelect}
        ORDER BY r.started_at DESC NULLS LAST
        LIMIT $2`,
-      [statuses, limit]
+      [statuses, limit, q]
     );
 
     const runs = result.rows.map((row) => {

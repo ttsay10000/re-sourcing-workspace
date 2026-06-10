@@ -44,6 +44,7 @@ import { useProcessBanner } from "@/components/ProcessBanner";
 import {
   buildActionSummary,
   buildEmailQueue,
+  buildFlagsQueue,
   columnStats,
   computeRowFlags,
   dataCompleteness,
@@ -56,10 +57,11 @@ import {
   type ActionSummaryItem,
   type EmailQueueItem,
   type FlagActionKind,
+  type FlaggedContactItem,
   type PrimaryCta,
 } from "./actionFlags";
 import { DealWizardDrawer, type DealPathFormState, type DealPathPromptMode } from "./DealWizardDrawer";
-import { EmailQueuePanel, NeedsActionPanel, type NeedsActionRow } from "./QueuePanels";
+import { EmailQueuePanel, FlagsPanel, NeedsActionPanel, type NeedsActionRow } from "./QueuePanels";
 import { RejectedPanel } from "./RejectedPanel";
 import {
   formatCurrency,
@@ -234,7 +236,7 @@ type BoardFocus = {
   stageId: string | null;
 };
 
-type BoardMode = "board" | "needs_action" | "email_queue";
+type BoardMode = "board" | "needs_action" | "email_queue" | "flags";
 
 // Columns come from the shared deal-flow constant so this board, the home
 // funnel, and stage chips elsewhere always show the same steps.
@@ -1055,11 +1057,20 @@ function ProgressPageContent() {
     [emailQueueItems, showSnoozed]
   );
 
+  const flagsQueueItems = useMemo<FlaggedContactItem[]>(
+    () => buildFlagsQueue(filteredSections as Array<{ id: string; rows?: DealFlowRow[] }>, flagsByProperty),
+    [filteredSections, flagsByProperty]
+  );
+
   const needsActionRows = useMemo<NeedsActionRow[]>(() => {
     const rows: NeedsActionRow[] = [];
     for (const section of filteredSections) {
       for (const row of section.rows ?? []) {
-        const flags = effectiveFlagsByProperty.get(row.propertyId) ?? [];
+        // Missing-contact-only properties live in the Flags tab; Needs Action
+        // is reserved for items that need a user review or decision.
+        const flags = (effectiveFlagsByProperty.get(row.propertyId) ?? []).filter(
+          (item) => item.type !== "missing_contact"
+        );
         if (flags.length === 0) continue;
         rows.push({
           propertyId: row.propertyId,
@@ -1860,6 +1871,17 @@ function ProgressPageContent() {
               Email Queue
               {emailQueueDueCount > 0 ? <span className={styles.boardTabCount}>{emailQueueDueCount}</span> : null}
             </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={boardMode === "flags"}
+              className={`${styles.boardTab} ${boardMode === "flags" ? styles.boardTabActive : ""}`}
+              onClick={() => setBoardMode("flags")}
+            >
+              <Flag size={14} strokeWidth={2} aria-hidden="true" />
+              Flags
+              {flagsQueueItems.length > 0 ? <span className={styles.boardTabCount}>{flagsQueueItems.length}</span> : null}
+            </button>
           </div>
           <div className={styles.savedFlowHeaderRight}>
             <p>
@@ -2001,6 +2023,17 @@ function ProgressPageContent() {
               const dealRow = rowById.get(row.propertyId);
               if (dealRow) runBoardAction(dealRow, row.flag.actionKind);
             }}
+          />
+        ) : boardMode === "flags" ? (
+          <FlagsPanel
+            items={flagsQueueItems}
+            busy={bulkControlsBusy}
+            onOpen={(item) => handleQueueOpen(item.propertyId)}
+            onAddBroker={(item) => {
+              const row = rowById.get(item.propertyId);
+              if (row) openBrokerEmailDialog(row);
+            }}
+            onBatchBroker={(items) => openStepperFor("missing_broker_email", items.map((item) => item.propertyId))}
           />
         ) : (
           <EmailQueuePanel

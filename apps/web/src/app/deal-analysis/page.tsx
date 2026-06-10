@@ -810,12 +810,15 @@ function DealAnalysisPageContent() {
     [calculation]
   );
 
-  const loadSavedWorkspaces = useCallback(async (options?: { background?: boolean }) => {
+  const loadSavedWorkspaces = useCallback(async (options?: { background?: boolean; q?: string }) => {
     // Background refreshes (dropdown focus, post-upload) skip the loading
     // state so the select stays enabled and open while the list updates.
     if (!options?.background) setSavedWorkspacesLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/api/deal-analysis/workspaces?limit=80`);
+      const query = options?.q?.trim();
+      const res = await fetch(
+        `${API_BASE}/api/deal-analysis/workspaces?limit=${query ? 100 : 80}${query ? `&q=${encodeURIComponent(query)}` : ""}`
+      );
       const data = (await res.json().catch(() => ({}))) as Partial<SavedWorkspacesResponse> & {
         error?: string;
       };
@@ -833,6 +836,16 @@ function DealAnalysisPageContent() {
   useEffect(() => {
     void loadSavedWorkspaces();
   }, [loadSavedWorkspaces]);
+
+  // Typing an address re-queries the server (debounced) so any workspace is
+  // findable — the recall list only carries the most recent ones otherwise.
+  useEffect(() => {
+    const query = workspaceSearch.trim();
+    const timer = window.setTimeout(() => {
+      void loadSavedWorkspaces({ background: true, q: query || undefined });
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [workspaceSearch, loadSavedWorkspaces]);
 
   useEffect(() => {
     if (!propertyId) return;
@@ -1634,13 +1647,16 @@ function DealAnalysisPageContent() {
             </select>
           </label>
 
-          <label style={{ display: "grid", gap: "0.32rem", color: "var(--app-ink-secondary)", fontSize: "0.78rem", fontWeight: 800 }}>
+          <label
+            style={{ display: "grid", gap: "0.32rem", color: "var(--app-ink-secondary)", fontSize: "0.78rem", fontWeight: 800 }}
+            title="Searches every saved workspace by address (server-side), not just the recent ones listed below — type to recall any property, including batch uploads."
+          >
             Search
             <input
               type="search"
               value={workspaceSearch}
               onChange={(event) => setWorkspaceSearch(event.target.value)}
-              placeholder="Address or file name"
+              placeholder="Type an address to recall any workspace"
               style={inputStyle}
             />
           </label>

@@ -397,16 +397,21 @@ function mergeAssumptionsPatch(
 router.get("/deal-analysis/workspaces", async (req: Request, res: Response) => {
   try {
     const limit = parsePositiveInteger(req.query.limit, 48, 100);
+    // q=<address fragment> searches the whole properties table server-side so
+    // any workspace is recallable even when it has aged off the recency caps.
+    const q = typeof req.query.q === "string" ? req.query.q.trim().slice(0, 200) : "";
     const pool = getPool();
     const propertyRepo = new PropertyRepo({ pool });
-    const [recentProperties, latestUploadedDocRows] = await Promise.all([
-      propertyRepo.list({ limit: Math.max(limit * 8, 120) }),
+    const [recentProperties, latestUploadedDocRows, omRunRows, searchRows] = await Promise.all([
+      q ? Promise.resolve([] as Property[]) : propertyRepo.list({ limit: Math.max(limit * 8, 120) }),
       pool.query<{
         property_id: string;
         filename: string | null;
         category: string | null;
         created_at: string | null;
       }>(
+        // Every deal-analysis upload category counts — multi-uploads can land
+        // as "Other"/"Broker Notes" and must still recall their workspace.
         `WITH latest_docs AS (
            SELECT DISTINCT ON (u.property_id)
              u.property_id::text AS property_id,
@@ -414,14 +419,32 @@ router.get("/deal-analysis/workspaces", async (req: Request, res: Response) => {
              u.category,
              u.created_at::text AS created_at
            FROM property_uploaded_documents u
-           WHERE u.category IN ('OM', 'Brochure', 'Rent Roll', 'Financial Model', 'T12 / Operating Summary')
+           WHERE u.category IN ('OM', 'Brochure', 'Rent Roll', 'Financial Model', 'T12 / Operating Summary', 'Broker Notes', 'Other')
            ORDER BY u.property_id, u.created_at DESC
          )
          SELECT property_id, filename, category, created_at
          FROM latest_docs
          ORDER BY created_at DESC
-         LIMIT 250`
+         LIMIT 600`
       ),
+      // Properties with any OM extraction run have a workspace by definition —
+      // this is how batch (multi-upload) properties stay findable here.
+      pool.query<{ property_id: string }>(
+        `SELECT r.property_id::text AS property_id
+         FROM om_ingestion_runs r
+         GROUP BY r.property_id
+         ORDER BY MAX(r.started_at) DESC NULLS LAST
+         LIMIT 600`
+      ),
+      q
+        ? pool.query<{ id: string }>(
+            `SELECT id::text AS id FROM properties
+             WHERE canonical_address ILIKE '%' || $1 || '%'
+             ORDER BY updated_at DESC
+             LIMIT 150`,
+            [q]
+          )
+        : Promise.resolve(null),
     ]);
     const latestUploadedDocs = latestUploadedDocRows.rows.reduce<Map<string, LatestUploadedWorkspaceDocument>>(
       (acc, row) => {
@@ -435,18 +458,19 @@ router.get("/deal-analysis/workspaces", async (req: Request, res: Response) => {
       },
       new Map()
     );
+    const omRunPropertyIds = new Set(omRunRows.rows.map((row) => row.property_id));
     const propertiesById = new Map<string, Property>();
     for (const property of recentProperties) {
       propertiesById.set(property.id, property);
     }
-    const uploadedOnlyPropertyIds = Array.from(latestUploadedDocs.keys()).filter(
-      (propertyId) => !propertiesById.has(propertyId)
-    );
-    if (uploadedOnlyPropertyIds.length > 0) {
-      const uploadedOnlyProperties = await Promise.all(
-        uploadedOnlyPropertyIds.map((propertyId) => propertyRepo.byId(propertyId))
+    const extraCandidateIds = q
+      ? (searchRows?.rows.map((row) => row.id) ?? [])
+      : [...latestUploadedDocs.keys(), ...omRunPropertyIds].filter((propertyId) => !propertiesById.has(propertyId));
+    if (extraCandidateIds.length > 0) {
+      const extraProperties = await Promise.all(
+        [...new Set(extraCandidateIds)].map((propertyId) => propertyRepo.byId(propertyId))
       );
-      for (const property of uploadedOnlyProperties) {
+      for (const property of extraProperties) {
         if (property) propertiesById.set(property.id, property);
       }
     }
@@ -467,7 +491,8 @@ router.get("/deal-analysis/workspaces", async (req: Request, res: Response) => {
           assumptionsUpdatedAt != null ||
           workspaceUpdatedAt != null ||
           savedAssumptions != null ||
-          details?.omData?.authoritative != null;
+          details?.omData?.authoritative != null ||
+          omRunPropertyIds.has(property.id);
         if (!hasSavedWorkspace) return [];
         const sortTimestamp =
           [assumptionsUpdatedAt, workspaceUpdatedAt, omImportedAt, uploadedOmAt, trimmedString(property.updatedAt)].find(
