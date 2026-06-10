@@ -214,3 +214,25 @@ Priority rule:
 - StreetEasy Agent run state is still in memory
 - raw listings / canonical properties / enrichment / docs are persisted in Postgres
 - inquiry attachments, uploaded property docs, and generated docs store file bytes in the DB so unified downloads can work even on ephemeral disk environments
+
+## Market Knowledge Base And Headlines
+
+The market-context layer (market-docs page → Yield Map) maintains a living, cumulative market narrative on top of the per-document ingest pipeline.
+
+Pipeline (per upload, after rollup/synthesis):
+
+1. classify → extract → dedupe comps → store stats → neighborhood rollups (existing stages)
+2. analyst brief + knowledge merge (prompt `knowledge_v1`): the model receives the current knowledge base, this upload's comps/stats, and prior stats + rollups for the same metrics/geographies, and returns `{document_brief, knowledge}`. When no LLM key is configured or output fails validation, a deterministic numbers-only brief + merge runs instead — ingest never blocks on a model.
+
+Endpoints:
+
+- `POST /api/market-docs` — ingest report now includes `brief` (per-upload analyst brief) and `knowledgeVersion`
+- `GET /api/market-docs` — document rows now carry `documentBrief`
+- `GET /api/market-knowledge` — `{ knowledge: { version, updatedAt, narrative, latestBrief, documentId } | null }`; narrative groups per-submarket direction (with bps/$PSF/% numbers), asset-type attention (free-market sub-9-unit, RS share, north vs south of 96th St), cap-rate/$PSF movements, open discrepancies, and publisher+period citations
+- `GET /api/market-headlines` — `{ headlines: [{ id, text, tone: up|down|neutral|watch, scope, source, asOf }], generatedAt, knowledgeVersion }`; top 3-6 numbered bullets from the knowledge base, with a rule-based fallback computed from `neighborhood_summaries`/`market_stats` deltas when the knowledge base is empty; never returns 500
+
+Tables (migration `060_market_knowledge.sql`):
+
+- `market_knowledge_entries` — append-only, versioned; each ingest appends one row with the FULL updated narrative + the triggering document's brief (auditable history; latest version = current state)
+- `market_documents.document_brief` — JSONB analyst brief per upload ({ title, whatItSays, comparedToPrior, discrepancies, incorporatedAt })
+- `market_llm_outputs` — raw model output for the merge step persisted under the new `knowledge` stage (prompt version `knowledge_v1`)

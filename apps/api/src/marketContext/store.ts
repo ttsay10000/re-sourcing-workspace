@@ -8,10 +8,12 @@ import type { Pool } from "pg";
 import {
   MarketCompRepo,
   MarketDocumentRepo,
+  MarketKnowledgeRepo,
   MarketLlmOutputRepo,
   MarketStatRepo,
   NeighborhoodRepo,
   NeighborhoodSummaryRepo,
+  type AppendMarketKnowledgeEntryParams,
   type InsertMarketLlmOutputParams,
   type InsertMarketStatParams,
   type UpsertMarketCompParams,
@@ -22,8 +24,11 @@ import type {
   MarketDocClassification,
   MarketDocIngestReport,
   MarketDocument,
+  MarketDocumentBrief,
+  MarketKnowledgeEntry,
   MarketStat,
   NeighborhoodRecord,
+  NeighborhoodSummary,
 } from "@re-sourcing/contracts";
 
 export interface MarketContextStore {
@@ -39,7 +44,17 @@ export interface MarketContextStore {
   listCompsByNeighborhoods(neighborhoodIds: string[]): Promise<MarketComp[]>;
   insertStat(params: InsertMarketStatParams): Promise<MarketStat>;
   listStatsBySubmarkets(submarketIds: string[]): Promise<MarketStat[]>;
+  /** All stored stats (knowledge step compares this doc against prior periods/publishers). */
+  listAllStats(): Promise<MarketStat[]>;
   upsertSummary(params: UpsertNeighborhoodSummaryParams): Promise<void>;
+  /** Stored rollups for brief comparisons + headline fallbacks. */
+  listAllSummaries(): Promise<Array<Omit<NeighborhoodSummary, "updatedAt">>>;
+  /** Per-upload analyst brief persisted on the document row. */
+  saveDocumentBrief(id: string, brief: MarketDocumentBrief): Promise<void>;
+  /** Current knowledge-base state (highest version), or null when empty. */
+  getLatestKnowledgeEntry(): Promise<MarketKnowledgeEntry | null>;
+  /** Append the next knowledge-base version (append-only audit trail). */
+  appendKnowledgeEntry(params: AppendMarketKnowledgeEntryParams): Promise<MarketKnowledgeEntry>;
   /** Coordinates for market comps resolved by matching existing pipeline properties (no external geocoder). */
   matchPropertyCoordinates(addressesNormalized: string[]): Promise<Map<string, { lat: number; lng: number }>>;
 }
@@ -51,6 +66,7 @@ export class PgMarketContextStore implements MarketContextStore {
   private readonly stats: MarketStatRepo;
   private readonly summaries: NeighborhoodSummaryRepo;
   private readonly llmOutputs: MarketLlmOutputRepo;
+  private readonly knowledge: MarketKnowledgeRepo;
 
   constructor(private readonly pool: Pool) {
     this.neighborhoods = new NeighborhoodRepo({ pool });
@@ -59,6 +75,7 @@ export class PgMarketContextStore implements MarketContextStore {
     this.stats = new MarketStatRepo({ pool });
     this.summaries = new NeighborhoodSummaryRepo({ pool });
     this.llmOutputs = new MarketLlmOutputRepo({ pool });
+    this.knowledge = new MarketKnowledgeRepo({ pool });
   }
 
   listNeighborhoods() {
@@ -109,8 +126,28 @@ export class PgMarketContextStore implements MarketContextStore {
     return this.stats.listBySubmarkets(submarketIds);
   }
 
+  listAllStats() {
+    return this.stats.list(2000);
+  }
+
   upsertSummary(params: UpsertNeighborhoodSummaryParams) {
     return this.summaries.upsert(params);
+  }
+
+  listAllSummaries() {
+    return this.summaries.listAll();
+  }
+
+  saveDocumentBrief(id: string, brief: MarketDocumentBrief) {
+    return this.documents.saveBrief(id, brief);
+  }
+
+  getLatestKnowledgeEntry() {
+    return this.knowledge.latest();
+  }
+
+  appendKnowledgeEntry(params: AppendMarketKnowledgeEntryParams) {
+    return this.knowledge.append(params);
   }
 
   async matchPropertyCoordinates(addressesNormalized: string[]): Promise<Map<string, { lat: number; lng: number }>> {
@@ -138,6 +175,7 @@ export class InMemoryMarketContextStore implements MarketContextStore {
   stats: MarketStat[] = [];
   summaries = new Map<string, UpsertNeighborhoodSummaryParams>();
   llmOutputs: InsertMarketLlmOutputParams[] = [];
+  knowledgeEntries: MarketKnowledgeEntry[] = [];
   propertyCoordinates = new Map<string, { lat: number; lng: number }>();
 
   constructor(private readonly neighborhoods: NeighborhoodRecord[]) {}
@@ -171,6 +209,7 @@ export class InMemoryMarketContextStore implements MarketContextStore {
       evidence: [],
       flagForReview: false,
       ingestReport: null,
+      documentBrief: null,
       error: null,
       createdAt: new Date().toISOString(),
     };
@@ -279,8 +318,41 @@ export class InMemoryMarketContextStore implements MarketContextStore {
     return this.stats.filter((stat) => stat.submarketId != null && submarketIds.includes(stat.submarketId));
   }
 
+  async listAllStats() {
+    return this.stats;
+  }
+
   async upsertSummary(params: UpsertNeighborhoodSummaryParams) {
     this.summaries.set(params.neighborhoodId, params);
+  }
+
+  async listAllSummaries() {
+    return [...this.summaries.values()];
+  }
+
+  async saveDocumentBrief(id: string, brief: MarketDocumentBrief) {
+    const doc = this.documents.find((d) => d.id === id);
+    if (doc) doc.documentBrief = brief;
+  }
+
+  async getLatestKnowledgeEntry() {
+    return this.knowledgeEntries.at(-1) ?? null;
+  }
+
+  async appendKnowledgeEntry(params: AppendMarketKnowledgeEntryParams) {
+    const entry: MarketKnowledgeEntry = {
+      id: this.nextId("knowledge"),
+      version: (this.knowledgeEntries.at(-1)?.version ?? 0) + 1,
+      documentId: params.documentId,
+      narrative: params.narrative,
+      brief: params.brief,
+      promptVersion: params.promptVersion,
+      provider: params.provider,
+      model: params.model,
+      createdAt: new Date().toISOString(),
+    };
+    this.knowledgeEntries.push(entry);
+    return entry;
   }
 
   async matchPropertyCoordinates(addressesNormalized: string[]) {

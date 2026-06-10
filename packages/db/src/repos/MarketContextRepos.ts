@@ -9,6 +9,7 @@ import type {
   MarketDocClassification,
   MarketDocIngestReport,
   MarketDocument,
+  MarketDocumentBrief,
   MarketProvenance,
   MarketStat,
   NeighborhoodRecord,
@@ -81,6 +82,7 @@ function mapMarketDocument(row: Row): MarketDocument {
     evidence: jsonArray<string>(row.classifier_evidence),
     flagForReview: Boolean(row.flag_for_review),
     ingestReport: (row.ingest_report as MarketDocIngestReport | null) ?? null,
+    documentBrief: (row.document_brief as MarketDocumentBrief | null) ?? null,
     error: str(row.error),
     createdAt: iso(row.created_at),
   };
@@ -193,7 +195,7 @@ export class MarketDocumentRepo {
        VALUES ($1, $2, $3)
        RETURNING id, filename, content_type, status, source_type, publisher, branded, document_class,
                  report_title, period_covered, geo_scope, subject_property, classifier_confidence,
-                 classifier_evidence, flag_for_review, ingest_report, error, created_at`,
+                 classifier_evidence, flag_for_review, ingest_report, document_brief, error, created_at`,
       [params.filename, params.contentType ?? null, params.fileContent ?? null]
     );
     return mapMarketDocument(r.rows[0]);
@@ -242,11 +244,18 @@ export class MarketDocumentRepo {
     ]);
   }
 
+  async saveBrief(id: string, brief: MarketDocumentBrief): Promise<void> {
+    await this.client.query("UPDATE market_documents SET document_brief = $2::jsonb WHERE id = $1", [
+      id,
+      JSON.stringify(brief),
+    ]);
+  }
+
   async byId(id: string): Promise<MarketDocument | null> {
     const r = await this.client.query(
       `SELECT id, filename, content_type, status, source_type, publisher, branded, document_class,
               report_title, period_covered, geo_scope, subject_property, classifier_confidence,
-              classifier_evidence, flag_for_review, ingest_report, error, created_at
+              classifier_evidence, flag_for_review, ingest_report, document_brief, error, created_at
        FROM market_documents WHERE id = $1`,
       [id]
     );
@@ -257,7 +266,7 @@ export class MarketDocumentRepo {
     const r = await this.client.query(
       `SELECT id, filename, content_type, status, source_type, publisher, branded, document_class,
               report_title, period_covered, geo_scope, subject_property, classifier_confidence,
-              classifier_evidence, flag_for_review, ingest_report, error, created_at
+              classifier_evidence, flag_for_review, ingest_report, document_brief, error, created_at
        FROM market_documents ORDER BY created_at DESC LIMIT $1`,
       [limit]
     );
@@ -598,7 +607,7 @@ export class NeighborhoodSummaryRepo {
 export interface InsertMarketLlmOutputParams {
   documentId: string | null;
   neighborhoodId?: string | null;
-  stage: "classify" | "extract" | "synthesize";
+  stage: "classify" | "extract" | "synthesize" | "knowledge";
   promptVersion: string;
   provider: string | null;
   model: string | null;

@@ -17,7 +17,7 @@ import { parseCompletionJsonContent } from "../om/omAnalysisShared.js";
 import { DEFAULT_GEMINI_OM_MODEL } from "../om/extractOmAnalysisFromGeminiPdfOnly.js";
 
 export interface MarketLlmRequest {
-  stage: "classify" | "extract" | "synthesize";
+  stage: "classify" | "extract" | "synthesize" | "knowledge";
   prompt: string;
   /** Native document input for providers with PDF vision (Gemini inline data). */
   pdf?: { buffer: Buffer; filename: string } | null;

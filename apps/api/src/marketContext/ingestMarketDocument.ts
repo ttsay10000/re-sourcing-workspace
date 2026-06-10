@@ -2,7 +2,7 @@
  * End-to-end ingest for one uploaded market PDF:
  *   classify → extract (provenance injected) → resolve neighborhoods →
  *   dedupe/upsert comps → store stats → rollup + synthesize affected
- *   neighborhoods → ingest report.
+ *   neighborhoods → analyst brief + knowledge-base merge → ingest report.
  *
  * Raw LLM output is persisted per stage keyed by document + prompt version.
  * Unresolved neighborhood names go to the review queue (comps kept with
@@ -23,6 +23,7 @@ import {
 import { isSameDeal, mergeComps, normalizeCompAddress, type MergedComp } from "./dedupe.js";
 import { computeNeighborhoodRollup } from "./rollup.js";
 import { synthesizeNeighborhood } from "./synthesize.js";
+import { updateMarketKnowledge } from "./knowledge.js";
 import { MARKET_PROMPT_VERSIONS } from "./prompts.js";
 import type { MarketContextStore } from "./store.js";
 
@@ -285,6 +286,28 @@ export async function ingestMarketDocument(params: IngestMarketDocumentParams): 
     affectedNeighborhoods: [...affected],
     flags,
   };
+
+  // Stage 3: analyst brief for this upload + fold it into the living knowledge
+  // base (versioned). Failures never sink an otherwise successful ingest.
+  try {
+    const knowledge = await updateMarketKnowledge({
+      document,
+      classification,
+      report,
+      comps: incoming,
+      stats: savedStats,
+      store,
+      llm,
+      asOf: params.asOf,
+    });
+    report.brief = knowledge.brief;
+    report.knowledgeVersion = knowledge.entry.version;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[marketContext knowledge]", err);
+    report.flags.push(`knowledge update failed: ${message}`);
+  }
+
   await store.saveIngestReport(document.id, report);
   return report;
 }
