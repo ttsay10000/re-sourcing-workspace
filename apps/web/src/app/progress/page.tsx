@@ -39,6 +39,7 @@ import {
 import { AgingChip, BrokerContactDialog, Button, Dialog, PageHeader, PromptMenu, PropertyThumb, StatCard } from "@/components/ui";
 import { RecommendationStepper, type StepperKind, type StepperRow } from "./RecommendationStepper";
 import { API_BASE, apiFetch } from "@/lib/api";
+import { runBulkPropertyAction } from "@/lib/bulkPropertyActions";
 import { scoreTone } from "@/lib/format";
 import { useProcessBanner } from "@/components/ProcessBanner";
 import {
@@ -1508,52 +1509,30 @@ function ProgressPageContent() {
       return;
     }
     const skipped = selectedSavedDeals.length - selectedSavedDealsWithOm.length;
-    let completed = 0;
-    const failures: Array<{ address: string; message: string }> = [];
     setBulkWorkflowBusy(OM_ANALYSIS_BULK_ID);
-    setNotice(
-      `Updating OM analysis for ${selectedSavedDealsWithOm.length} deal${selectedSavedDealsWithOm.length === 1 ? "" : "s"}${
-        skipped > 0 ? `; ${skipped} selected without OM skipped` : ""
-      }...`
-    );
     setError(null);
     const banner = processBanner.start("OM analysis refresh", {
       message: `Re-reading OMs for ${selectedSavedDealsWithOm.length} deal${selectedSavedDealsWithOm.length === 1 ? "" : "s"} (AI extraction)…`,
     });
     try {
-      for (let index = 0; index < selectedSavedDealsWithOm.length; index++) {
-        const row = selectedSavedDealsWithOm[index]!;
-        const address = row.displayAddress ?? row.canonicalAddress ?? row.propertyId;
-        const progressMessage = `Updating OM analysis ${index + 1} of ${selectedSavedDealsWithOm.length}: ${address}`;
-        setNotice(progressMessage);
-        banner.update(progressMessage, Math.round((index / selectedSavedDealsWithOm.length) * 100));
-        try {
-          await refreshPropertyOmAnalysis(row.propertyId);
-          completed++;
-        } catch (err) {
-          failures.push({
-            address,
-            message: err instanceof Error ? err.message : "Failed to refresh OM analysis.",
-          });
-        }
-      }
+      const summary = await runBulkPropertyAction({
+        rows: selectedSavedDealsWithOm.map((row) => ({
+          propertyId: row.propertyId,
+          address: row.displayAddress ?? row.canonicalAddress ?? row.propertyId,
+        })),
+        skippedCount: skipped,
+        noun: "deal",
+        progressVerb: "Updating OM analysis",
+        successVerb: "OM analysis updated",
+        failureNoun: "OM analysis refresh",
+        banner,
+        onProgress: setNotice,
+        runOne: async ({ propertyId }) => {
+          await refreshPropertyOmAnalysis(propertyId);
+        },
+      });
       await loadProgress("refresh");
-      const skippedMessage = skipped > 0 ? ` ${skipped} selected without OM skipped.` : "";
-      const summaryMessage =
-        failures.length === 0
-          ? `OM analysis updated for ${completed} deal${completed === 1 ? "" : "s"}.${skippedMessage}`
-          : `OM analysis updated for ${completed} of ${selectedSavedDealsWithOm.length} eligible deals.${skippedMessage}`;
-      setNotice(summaryMessage);
-      if (failures.length > 0) {
-        banner.fail(summaryMessage);
-        setError(
-          `${failures.length} OM analysis refresh${failures.length === 1 ? "" : "es"} failed. First issue: ${
-            failures[0]!.address
-          } - ${failures[0]!.message}`
-        );
-      } else {
-        banner.succeed(summaryMessage);
-      }
+      if (summary.errorMessage) setError(summary.errorMessage);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to refresh selected OM analysis.";
       banner.fail(message);
@@ -1570,52 +1549,30 @@ function ProgressPageContent() {
       return;
     }
     const skipped = selectedSavedDeals.length - selectedSavedDealsWithOm.length;
-    let completed = 0;
-    const failures: Array<{ address: string; message: string }> = [];
     setBulkWorkflowBusy(DOSSIER_BULK_ID);
-    setNotice(
-      `Rerunning dossiers for ${selectedSavedDealsWithOm.length} deal${selectedSavedDealsWithOm.length === 1 ? "" : "s"}${
-        skipped > 0 ? `; ${skipped} selected without OM skipped` : ""
-      }...`
-    );
     setError(null);
     const banner = processBanner.start("Dossier rerun", {
       message: `Re-running OM analysis + dossiers for ${selectedSavedDealsWithOm.length} deal${selectedSavedDealsWithOm.length === 1 ? "" : "s"}…`,
     });
     try {
-      for (let index = 0; index < selectedSavedDealsWithOm.length; index++) {
-        const row = selectedSavedDealsWithOm[index]!;
-        const address = row.displayAddress ?? row.canonicalAddress ?? row.propertyId;
-        const progressMessage = `Rerunning dossiers ${index + 1} of ${selectedSavedDealsWithOm.length}: ${address}`;
-        setNotice(progressMessage);
-        banner.update(progressMessage, Math.round((index / selectedSavedDealsWithOm.length) * 100));
-        try {
-          await rerunPropertyDossier(row.propertyId);
-          completed++;
-        } catch (err) {
-          failures.push({
-            address,
-            message: err instanceof Error ? err.message : "Failed to rerun dossier.",
-          });
-        }
-      }
+      const summary = await runBulkPropertyAction({
+        rows: selectedSavedDealsWithOm.map((row) => ({
+          propertyId: row.propertyId,
+          address: row.displayAddress ?? row.canonicalAddress ?? row.propertyId,
+        })),
+        skippedCount: skipped,
+        noun: "deal",
+        progressVerb: "Rerunning dossiers",
+        successVerb: "Dossiers rerun",
+        failureNoun: "dossier rerun",
+        banner,
+        onProgress: setNotice,
+        runOne: async ({ propertyId }) => {
+          await rerunPropertyDossier(propertyId);
+        },
+      });
       await loadProgress("refresh");
-      const skippedMessage = skipped > 0 ? ` ${skipped} selected without OM skipped.` : "";
-      const summaryMessage =
-        failures.length === 0
-          ? `Dossiers rerun for ${completed} deal${completed === 1 ? "" : "s"}.${skippedMessage}`
-          : `Dossiers rerun for ${completed} of ${selectedSavedDealsWithOm.length} eligible deals.${skippedMessage}`;
-      setNotice(summaryMessage);
-      if (failures.length > 0) {
-        banner.fail(summaryMessage);
-        setError(
-          `${failures.length} dossier rerun${failures.length === 1 ? "" : "s"} failed. First issue: ${
-            failures[0]!.address
-          } - ${failures[0]!.message}`
-        );
-      } else {
-        banner.succeed(summaryMessage);
-      }
+      if (summary.errorMessage) setError(summary.errorMessage);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to rerun selected dossiers.";
       banner.fail(message);

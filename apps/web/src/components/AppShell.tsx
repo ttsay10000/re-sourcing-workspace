@@ -55,7 +55,9 @@ const NAV_LINKS: NavLink[] = [
       pathname.startsWith("/pipeline/") ||
       pathname === "/property-data" ||
       pathname.startsWith("/property-data/") ||
-      pathname.startsWith("/property/"),
+      pathname.startsWith("/property/") ||
+      pathname === "/market-docs" ||
+      pathname.startsWith("/market-docs/"),
     children: [
       {
         href: "/pipeline",
@@ -83,6 +85,13 @@ const NAV_LINKS: NavLink[] = [
         shortLabel: "C",
         icon: Scale,
         matches: (pathname: string) => pathname.startsWith("/pipeline/comp-analysis"),
+      },
+      {
+        href: "/market-docs",
+        label: "Market Docs",
+        shortLabel: "M",
+        icon: FileText,
+        matches: (pathname: string) => pathname === "/market-docs" || pathname.startsWith("/market-docs/"),
       },
     ],
   },

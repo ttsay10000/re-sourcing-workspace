@@ -2553,6 +2553,100 @@ router.post("/properties/refresh-broker-enrichment", async (req: Request, res: R
 });
 
 /**
+ * POST /api/properties/:id/link-streeteasy — attach a StreetEasy listing to an
+ * EXISTING property (typically one created from an OM upload, which otherwise
+ * has no listing match and can never be refreshed from StreetEasy).
+ * Body: { streetEasyUrl }. Fetches the listing, enriches brokers, creates the
+ * listing-property match, and merges listing facts into property details.
+ */
+router.post("/properties/:id/link-streeteasy", async (req: Request, res: Response) => {
+  try {
+    const propertyId = req.params.id;
+    const rawUrl = typeof req.body?.streetEasyUrl === "string" ? req.body.streetEasyUrl.trim() : "";
+    if (!propertyId || !rawUrl) {
+      res.status(400).json({ error: "Property ID and streetEasyUrl required." });
+      return;
+    }
+    const normalizedUrl = normalizeStreeteasyUrl(rawUrl);
+    if (!normalizedUrl || !/streeteasy\.com/i.test(normalizedUrl)) {
+      res.status(400).json({ error: "Provide a valid StreetEasy listing URL." });
+      return;
+    }
+    const pool = getPool();
+    const propertyRepo = new PropertyRepo({ pool });
+    const property = await propertyRepo.byId(propertyId);
+    if (!property) {
+      res.status(404).json({ error: "Property not found." });
+      return;
+    }
+
+    const raw = await fetchSaleDetailsByUrl(normalizedUrl);
+    const normalized = normalizeStreetEasySaleDetails(
+      {
+        ...raw,
+        id: raw.id ?? raw.listing_id ?? extractStreetEasySaleIdFromUrl(normalizedUrl),
+        _fetchUrl: normalizedUrl,
+      },
+      0
+    );
+
+    const sourceAgentEnrichment = normalized.agentEnrichment ?? null;
+    if (Array.isArray(normalized.agentNames) && normalized.agentNames.length > 0) {
+      try {
+        const context = brokerLookupContextFromListing(normalized);
+        const lookedUp = await enrichBrokers(normalized.agentNames, context);
+        const merged = mergeBrokerEnrichment(normalized.agentNames, sourceAgentEnrichment, lookedUp, context);
+        if (hasMeaningfulBrokerEnrichment(merged)) normalized.agentEnrichment = merged;
+      } catch {
+        if (hasMeaningfulBrokerEnrichment(sourceAgentEnrichment)) normalized.agentEnrichment = sourceAgentEnrichment;
+      }
+    }
+
+    const listingRepo = new ListingRepo({ pool });
+    const matchRepo = new MatchRepo({ pool });
+    const upserted = await listingRepo.upsert(normalized, { uploadedRunId: null });
+    const { matches } = await matchRepo.list({ listingId: upserted.listing.id, limit: 25 });
+    if (!matches.some((match) => match.propertyId === propertyId)) {
+      await matchRepo.create({
+        listingId: upserted.listing.id,
+        propertyId,
+        confidence: 1,
+        reasons: {
+          addressMatch: true,
+          normalizedAddressDistance: 0,
+          other: ["manual_link_streeteasy"],
+        },
+      });
+    }
+
+    const detailsMerge = buildPropertyDetailsMergeFromListing(upserted.listing);
+    detailsMerge.manualSourceLinks = mergeManualSourceLinks(property.details, {
+      streetEasyUrl: normalizedUrl,
+      addedAt: new Date().toISOString(),
+    });
+    await propertyRepo.mergeDetails(propertyId, detailsMerge);
+    await syncPropertySourcingWorkflow(propertyId, { pool }).catch(() => {});
+    await refreshPropertyPipelineMetadata(propertyId, pool);
+
+    res.json({
+      ok: true,
+      propertyId,
+      listingId: upserted.listing.id,
+      listingUrl: normalized.url,
+      address: normalized.address,
+      agentNames: normalized.agentNames ?? [],
+      brokerEmailFound: hasMeaningfulBrokerEnrichment(normalized.agentEnrichment)
+        ? (normalized.agentEnrichment ?? []).some((entry) => Boolean(entry.email))
+        : false,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[properties link-streeteasy]", err);
+    res.status(503).json({ error: "Failed to link the StreetEasy listing.", details: message });
+  }
+});
+
+/**
  * POST /api/properties/:id/refresh-broker-enrichment — single-property broker
  * contact refresh. Body: { force?, deep? }. Returns the refreshed entries with
  * verification tiers so the UI can render needs-review candidates.

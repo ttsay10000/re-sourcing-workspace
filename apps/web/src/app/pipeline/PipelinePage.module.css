@@ -1472,6 +1472,21 @@
   background: var(--brand-soft, #f0fdfa);
 }
 
+.linkListingForm {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.7rem;
+}
+
+.linkListingForm input {
+  min-width: 18rem;
+  font-size: 0.78rem;
+  padding: 0.3rem 0.55rem;
+  border: 1px solid var(--app-line-strong, #d4d4d8);
+  border-radius: 6px;
+}
+
 .propertyGallery {
   display: grid;
   grid-template-columns: minmax(0, 1.55fr) minmax(13rem, 0.8fr);

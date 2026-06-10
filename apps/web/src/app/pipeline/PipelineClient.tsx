@@ -15,6 +15,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { MailPlus, Star, X } from "lucide-react";
 import { BrokerContactDialog, FileDropzone, StageChip, type BrokerSearchCandidate } from "@/components/ui";
 import { useProcessBanner } from "@/components/ProcessBanner";
+import { runBulkPropertyAction } from "@/lib/bulkPropertyActions";
 import {
   UI_V2_PIPELINE_STATUS_OPTIONS,
   UI_V2_REJECTION_REASON_OPTIONS,
@@ -1383,6 +1384,7 @@ export default function PipelineClient() {
     batches: OutreachPreviewBatch[];
     skipped: OutreachPreviewSkipped[];
   } | null>(null);
+  const [linkListingDraft, setLinkListingDraft] = useState<{ url: string; saving: boolean } | null>(null);
   const [headerMenu, setHeaderMenu] = useState<PipelineHeaderMenuId | null>(null);
   const [rowMenu, setRowMenu] = useState<RowActionMenuState | null>(null);
   const [brokerPrompt, setBrokerPrompt] = useState<{
@@ -2236,66 +2238,44 @@ export default function PipelineClient() {
     const addressById = new Map(
       rows.map((row) => [row.propertyId, row.displayAddress ?? row.canonicalAddress ?? row.propertyId])
     );
-    let completed = 0;
     let yieldsRefreshed = 0;
-    const failures: Array<{ propertyId: string; address: string; message: string }> = [];
     setBusyAction("bulk:om-analysis");
-    setNotice(
-      `Updating OM analysis for ${rowsToRefresh.length} propert${rowsToRefresh.length === 1 ? "y" : "ies"}${
-        skipped > 0 ? `; ${skipped} selected without OM skipped` : ""
-      }...`
-    );
     setError(null);
     const banner = processBanner.start("OM analysis refresh", {
       message: `Updating ${rowsToRefresh.length} propert${rowsToRefresh.length === 1 ? "y" : "ies"}…`,
     });
     try {
-      for (let index = 0; index < rowsToRefresh.length; index++) {
-        const propertyId = rowsToRefresh[index]!.propertyId;
-        const progressMessage = `Updating OM analysis ${index + 1} of ${rowsToRefresh.length}: ${
-          addressById.get(propertyId) ?? "selected property"
-        }`;
-        setNotice(progressMessage);
-        banner.update(progressMessage, Math.round((index / rowsToRefresh.length) * 100));
-        try {
-          const payload = await apiFetch<OmRefreshResponse>(`${API_BASE}/api/properties/${propertyId}/refresh-om-financials`, {
-            method: "POST",
-            body: JSON.stringify({ autoPromote: true }),
-          });
+      const summary = await runBulkPropertyAction({
+        rows: rowsToRefresh.map((row) => ({
+          propertyId: row.propertyId,
+          address: addressById.get(row.propertyId) ?? row.propertyId,
+        })),
+        skippedCount: skipped,
+        noun: "property",
+        progressVerb: "Updating OM analysis",
+        successVerb: "OM analysis updated",
+        failureNoun: "OM analysis refresh",
+        banner,
+        onProgress: setNotice,
+        runOne: async ({ propertyId }) => {
+          const payload = await apiFetch<OmRefreshResponse>(
+            `${API_BASE}/api/properties/${propertyId}/refresh-om-financials`,
+            {
+              method: "POST",
+              body: JSON.stringify({ autoPromote: true }),
+            }
+          );
           if (payload.underwritingRefreshed) yieldsRefreshed++;
-          completed++;
-        } catch (err) {
-          failures.push({
-            propertyId,
-            address: addressById.get(propertyId) ?? propertyId,
-            message: err instanceof Error ? err.message : "Failed to refresh OM analysis.",
-          });
-        }
-      }
+        },
+        extraSummary: () =>
+          yieldsRefreshed > 0
+            ? ` Yield numbers recalculated for ${yieldsRefreshed} propert${yieldsRefreshed === 1 ? "y" : "ies"}.`
+            : "",
+      });
 
       await reloadPipelineRows();
       if (selectedId) await loadPropertyDetail(selectedId).catch(() => null);
-
-      const skippedMessage = skipped > 0 ? ` ${skipped} selected without OM skipped.` : "";
-      const yieldsMessage =
-        yieldsRefreshed > 0
-          ? ` Yield numbers recalculated for ${yieldsRefreshed} propert${yieldsRefreshed === 1 ? "y" : "ies"}.`
-          : "";
-      const omSummary =
-        failures.length === 0
-          ? `OM analysis updated for ${completed} propert${completed === 1 ? "y" : "ies"}.${skippedMessage}${yieldsMessage}`
-          : `OM analysis updated for ${completed} of ${rowsToRefresh.length} eligible properties.${skippedMessage}${yieldsMessage}`;
-      setNotice(omSummary);
-      if (failures.length > 0) {
-        banner.fail(omSummary);
-        setError(
-          `${failures.length} OM analysis refresh${failures.length === 1 ? "" : "es"} failed. First issue: ${
-            failures[0]!.address
-          } - ${failures[0]!.message}`
-        );
-      } else {
-        banner.succeed(omSummary);
-      }
+      if (summary.errorMessage) setError(summary.errorMessage);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to refresh selected OM analysis.";
       banner.fail(message);
@@ -2312,30 +2292,31 @@ export default function PipelineClient() {
       setError("Select at least one property with an uploaded OM before rerunning dossiers.");
       return;
     }
-    const propertyIds = rowsToRerun.map((row) => row.propertyId);
     const skipped = selectedIds.length - rowsToRerun.length;
     const addressById = new Map(
       rows.map((row) => [row.propertyId, row.displayAddress ?? row.canonicalAddress ?? row.propertyId])
     );
-    let completed = 0;
     let omRefreshFailures = 0;
-    const failures: Array<{ propertyId: string; address: string; message: string }> = [];
+    let auditIssues = 0;
     setBusyAction("bulk:dossier");
-    setNotice(
-      `Rerunning OM analysis + dossier generation for ${propertyIds.length} propert${propertyIds.length === 1 ? "y" : "ies"}${
-        skipped > 0 ? `; ${skipped} selected without OM skipped` : ""
-      }...`
-    );
     setError(null);
+    const banner = processBanner.start("Dossier rerun", {
+      message: `Re-running OM analysis + dossiers for ${rowsToRerun.length} propert${rowsToRerun.length === 1 ? "y" : "ies"}…`,
+    });
     try {
-      for (let index = 0; index < propertyIds.length; index++) {
-        const propertyId = propertyIds[index]!;
-        setNotice(
-          `Rerunning OM analysis + dossier ${index + 1} of ${propertyIds.length}: ${
-            addressById.get(propertyId) ?? "selected property"
-          }`
-        );
-        try {
+      const summary = await runBulkPropertyAction({
+        rows: rowsToRerun.map((row) => ({
+          propertyId: row.propertyId,
+          address: addressById.get(row.propertyId) ?? row.propertyId,
+        })),
+        skippedCount: skipped,
+        noun: "property",
+        progressVerb: "Rerunning OM analysis + dossier",
+        successVerb: "Dossiers and Excel regenerated",
+        failureNoun: "dossier rerun",
+        banner,
+        onProgress: setNotice,
+        runOne: async ({ propertyId }) => {
           const response = await fetch(`${API_BASE}/api/dossier/generate`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -2346,38 +2327,26 @@ export default function PipelineClient() {
             throw new Error(payload.details || payload.error || `Request failed with ${response.status}`);
           }
           if (payload.omRefresh?.status === "failed") omRefreshFailures++;
-          completed++;
-        } catch (err) {
-          failures.push({
-            propertyId,
-            address: addressById.get(propertyId) ?? propertyId,
-            message: err instanceof Error ? err.message : "Failed to generate dossier.",
-          });
-        }
-      }
+          if (payload.workbookAudit?.status && payload.workbookAudit.status !== "pass") auditIssues++;
+        },
+        extraSummary: () => {
+          const omRefreshMessage =
+            omRefreshFailures > 0
+              ? ` OM analysis re-run failed for ${omRefreshFailures} propert${omRefreshFailures === 1 ? "y" : "ies"} (existing OM analysis used).`
+              : "";
+          const auditMessage =
+            auditIssues > 0 ? ` Workbook audit raised issues on ${auditIssues} propert${auditIssues === 1 ? "y" : "ies"}.` : "";
+          return `${omRefreshMessage}${auditMessage}`;
+        },
+      });
 
       await reloadPipelineRows();
       if (selectedId) await loadPropertyDetail(selectedId).catch(() => null);
-
-      const skippedMessage = skipped > 0 ? ` ${skipped} selected without OM skipped.` : "";
-      const omRefreshMessage =
-        omRefreshFailures > 0
-          ? ` OM analysis re-run failed for ${omRefreshFailures} propert${omRefreshFailures === 1 ? "y" : "ies"} (existing OM analysis used).`
-          : "";
-      setNotice(
-        failures.length === 0
-          ? `Dossiers and Excel regenerated for ${completed} propert${completed === 1 ? "y" : "ies"} from refreshed OM analysis.${skippedMessage}${omRefreshMessage}`
-          : `Dossiers and Excel regenerated for ${completed} of ${propertyIds.length} eligible properties.${skippedMessage}${omRefreshMessage}`
-      );
-      if (failures.length > 0) {
-        setError(
-          `${failures.length} dossier rerun${failures.length === 1 ? "" : "s"} failed. First issue: ${
-            failures[0]!.address
-          } - ${failures[0]!.message}`
-        );
-      }
+      if (summary.errorMessage) setError(summary.errorMessage);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to rerun dossier generation.");
+      const message = err instanceof Error ? err.message : "Failed to rerun dossier generation.";
+      banner.fail(message);
+      setError(message);
     } finally {
       setBusyAction(null);
     }
@@ -4040,7 +4009,7 @@ export default function PipelineClient() {
             disabled={selectedIds.length === 0 || busyAction?.startsWith("bulk:")}
             onClick={refreshSelectedListings}
           >
-            {busyAction === "bulk:listings" ? "Refreshing listings..." : "Refresh listings"}
+            {busyAction === "bulk:listings" ? "Refreshing..." : "Full refresh"}
           </button>
           <label
             className={styles.bulkToggle}
@@ -4090,7 +4059,7 @@ export default function PipelineClient() {
             title={
               selectedRowsWithOm.length === 0
                 ? "Select at least one property with an uploaded OM."
-                : "Re-run OM analysis, then regenerate and replace the deal dossier PDFs and Excel workbooks using saved assumptions."
+                : "Re-run OM analysis, then regenerate and replace the deal dossier PDFs and Excel workbooks using saved assumptions. Each workbook is audited against the model after rendering."
             }
             disabled={selectedRowsWithOm.length === 0 || busyAction?.startsWith("bulk:")}
             onClick={rerunSelectedDossiers}
@@ -4406,7 +4375,71 @@ export default function PipelineClient() {
                   <a className={styles.sourceLinkButton} href={listingUrl} target="_blank" rel="noreferrer">
                     Open source listing
                   </a>
-                ) : null}
+                ) : linkListingDraft ? (
+                  <form
+                    className={styles.linkListingForm}
+                    onSubmit={async (event) => {
+                      event.preventDefault();
+                      if (!selectedId || !linkListingDraft.url.trim() || linkListingDraft.saving) return;
+                      setLinkListingDraft({ ...linkListingDraft, saving: true });
+                      try {
+                        const response = await fetch(
+                          `${API_BASE}/api/properties/${encodeURIComponent(selectedId)}/link-streeteasy`,
+                          {
+                            method: "POST",
+                            credentials: "include",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ streetEasyUrl: linkListingDraft.url.trim() }),
+                          }
+                        );
+                        const payload = await response.json().catch(() => ({}));
+                        if (!response.ok) {
+                          throw new Error(payload.error || payload.details || "Failed to link the listing.");
+                        }
+                        setLinkListingDraft(null);
+                        setNotice(
+                          `StreetEasy listing linked${payload.brokerEmailFound ? " — broker email found" : ""}. Refreshes and broker lookups are now available for this property.`
+                        );
+                        await loadPropertyDetail(selectedId).catch(() => null);
+                        await reloadPipelineRows();
+                      } catch (err) {
+                        setError(err instanceof Error ? err.message : "Failed to link the listing.");
+                        setLinkListingDraft((current) => (current ? { ...current, saving: false } : current));
+                      }
+                    }}
+                  >
+                    <input
+                      type="url"
+                      value={linkListingDraft.url}
+                      placeholder="https://streeteasy.com/sale/…"
+                      autoFocus
+                      disabled={linkListingDraft.saving}
+                      onChange={(event) =>
+                        setLinkListingDraft((current) => (current ? { ...current, url: event.target.value } : current))
+                      }
+                    />
+                    <button className={styles.secondaryButton} type="submit" disabled={linkListingDraft.saving}>
+                      {linkListingDraft.saving ? "Linking…" : "Link"}
+                    </button>
+                    <button
+                      className={styles.ghostButton}
+                      type="button"
+                      disabled={linkListingDraft.saving}
+                      onClick={() => setLinkListingDraft(null)}
+                    >
+                      Cancel
+                    </button>
+                  </form>
+                ) : (
+                  <button
+                    className={styles.sourceLinkButton}
+                    type="button"
+                    title="Attach a StreetEasy listing so this property (e.g. created from an OM upload) can use listing refreshes and broker lookups."
+                    onClick={() => setLinkListingDraft({ url: "", saving: false })}
+                  >
+                    Link StreetEasy listing
+                  </button>
+                )}
               </div>
               <div className={styles.sheetWindowActions}>
                 <button
