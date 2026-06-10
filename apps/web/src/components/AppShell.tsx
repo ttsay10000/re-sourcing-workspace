@@ -5,8 +5,10 @@ import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import {
+  BarChart3,
   Bookmark,
   Building2,
+  CalendarRange,
   Contact,
   FileText,
   History,
@@ -68,7 +70,8 @@ const NAV_LINKS: NavLink[] = [
             pathname.startsWith("/property-data/") ||
             pathname.startsWith("/property/")) &&
           !pathname.startsWith("/pipeline/yield-map") &&
-          !pathname.startsWith("/pipeline/comp-analysis"),
+          !pathname.startsWith("/pipeline/comp-analysis") &&
+          !pathname.startsWith("/pipeline/market-comps"),
       },
       {
         href: "/pipeline/yield-map",
@@ -84,7 +87,22 @@ const NAV_LINKS: NavLink[] = [
         icon: Scale,
         matches: (pathname: string) => pathname.startsWith("/pipeline/comp-analysis"),
       },
+      {
+        href: "/pipeline/market-comps",
+        label: "Market Comps",
+        shortLabel: "M",
+        icon: BarChart3,
+        matches: (pathname: string) => pathname.startsWith("/pipeline/market-comps"),
+      },
     ],
+  },
+  {
+    href: "/rental-analysis",
+    label: "Rental Analysis",
+    shortLabel: "R",
+    icon: CalendarRange,
+    matches: (pathname: string) =>
+      pathname === "/rental-analysis" || pathname.startsWith("/rental-analysis/"),
   },
   {
     href: "/crm",

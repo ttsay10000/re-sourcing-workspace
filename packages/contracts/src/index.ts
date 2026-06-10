@@ -18,3 +18,4 @@ export * from "./uiV2.js";
 export * from "./api.js";
 export * from "./dealFlow.js";
 export * from "./marketContext.js";
+export * from "./rentalAnalysis.js";
