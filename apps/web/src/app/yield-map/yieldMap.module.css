@@ -233,3 +233,88 @@
   padding: 0.8rem 0;
   color: var(--app-muted);
 }
+
+/* ─── MapLibre canvas ─────────────────────────────────────────── */
+
+.mapCanvas {
+  width: 100%;
+  height: 540px;
+  border: 1px solid var(--app-line);
+  border-radius: var(--radius-lg, 10px);
+  overflow: hidden;
+}
+
+.pin {
+  width: 16px;
+  height: 16px;
+  border: 2px solid #ffffff;
+  border-radius: 50%;
+  box-shadow: 0 1px 4px rgba(24, 24, 27, 0.35);
+  cursor: pointer;
+  padding: 0;
+  transition: transform 120ms ease;
+}
+
+.pin:hover {
+  transform: scale(1.25);
+}
+
+.popup {
+  display: grid;
+  gap: 0.25rem;
+  font-family: var(--font-geist), system-ui, sans-serif;
+}
+
+.popup strong {
+  color: var(--app-ink, #18181b);
+  font-size: 0.82rem;
+  font-weight: 650;
+}
+
+.popup span {
+  color: var(--app-ink-secondary, #52525b);
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.popup a {
+  margin-top: 0.2rem;
+  color: var(--brand-strong, #115e59);
+  font-size: 0.72rem;
+  font-weight: 650;
+  text-decoration: none;
+}
+
+.popup a:hover {
+  text-decoration: underline;
+}
+
+.mapControls {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.colorToggle {
+  display: inline-flex;
+  border: 1px solid var(--app-line);
+  border-radius: var(--radius-md, 8px);
+  overflow: hidden;
+}
+
+.colorToggle button {
+  border: 0;
+  background: var(--app-surface);
+  color: var(--app-ink-secondary);
+  font-size: var(--text-2xs);
+  font-weight: 650;
+  padding: 0.32rem 0.7rem;
+  cursor: pointer;
+  transition: background 130ms ease, color 130ms ease;
+}
+
+.colorToggleActive {
+  background: var(--brand) !important;
+  color: var(--brand-on, #ffffff) !important;
+}

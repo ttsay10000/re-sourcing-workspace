@@ -12,6 +12,7 @@
   "dependencies": {
     "@re-sourcing/contracts": "*",
     "lucide-react": "^1.17.0",
+    "maplibre-gl": "^5.24.0",
     "next": "^15.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"

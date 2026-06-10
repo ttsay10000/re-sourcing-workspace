@@ -5,6 +5,7 @@ import { PageHeader, StatCard } from "@/components/ui";
 import { API_BASE } from "@/lib/api";
 import { formatPercent, formatCurrencyExact, EMPTY_VALUE } from "@/lib/format";
 import styles from "./yieldMap.module.css";
+import { YieldMapCanvas, type MapPin } from "./YieldMapCanvas";
 
 interface CompRow {
   propertyId: string;
@@ -65,11 +66,38 @@ function fmtPct(value: number | null | undefined, digits = 1): string {
   return value != null && Number.isFinite(value) ? `${value.toFixed(digits)}%` : EMPTY_VALUE;
 }
 
+const STAGE_PIN_COLORS: Record<string, string> = {
+  inbox: "#94a3b8",
+  screening: "#94a3b8",
+  pursuing: "#64748b",
+  outreach: "#2563eb",
+  om_review: "#0ea5e9",
+  underwriting: "#d97706",
+  tour: "#7c3aed",
+  offer_loi: "#0f766e",
+  contract_dd: "#16a34a",
+  closed: "#15803d",
+};
+
+const STAGE_LEGEND = [
+  { label: "Sourcing", color: "#94a3b8" },
+  { label: "Outreach / OM", color: "#2563eb" },
+  { label: "Underwriting", color: "#d97706" },
+  { label: "Tour", color: "#7c3aed" },
+  { label: "Offer / Contract", color: "#0f766e" },
+  { label: "Closed", color: "#15803d" },
+];
+
+function stagePinColor(stage: string | null): string {
+  return (stage && STAGE_PIN_COLORS[stage]) || "#cbd5e1";
+}
+
 export default function YieldMapPage() {
   const [data, setData] = useState<CompsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [boroughFilter, setBoroughFilter] = useState("");
+  const [colorBy, setColorBy] = useState<"yield" | "stage">("yield");
 
   useEffect(() => {
     const controller = new AbortController();
@@ -97,18 +125,22 @@ export default function YieldMapPage() {
 
   const geoRows = useMemo(() => rows.filter((row) => row.lat != null && row.lng != null), [rows]);
 
-  const bounds = useMemo(() => {
-    if (geoRows.length < 2) return null;
-    const lats = geoRows.map((row) => row.lat!);
-    const lngs = geoRows.map((row) => row.lng!);
-    const pad = 0.004;
-    return {
-      minLat: Math.min(...lats) - pad,
-      maxLat: Math.max(...lats) + pad,
-      minLng: Math.min(...lngs) - pad,
-      maxLng: Math.max(...lngs) + pad,
-    };
-  }, [geoRows]);
+  const pins = useMemo<MapPin[]>(
+    () =>
+      geoRows.map((row) => ({
+        propertyId: row.propertyId,
+        address: row.canonicalAddress,
+        lat: row.lat!,
+        lng: row.lng!,
+        color: colorBy === "yield" ? yieldColor(row.ltrYieldPct) : stagePinColor(row.dealStage),
+        lines: [
+          `LTR ${fmtPct(row.ltrYieldPct, 2)} · MTR ${fmtPct(row.mtrYieldPct, 2)}`,
+          `NOI ${formatCurrencyExact(row.currentNoi)} · ${row.units ?? EMPTY_VALUE} units`,
+          row.dealStage ? `Stage: ${row.dealStage.replace(/_/g, " ")}` : "Stage: not set",
+        ],
+      })),
+    [colorBy, geoRows]
+  );
 
   const boroughOptions = useMemo(
     () => [...new Set((data?.comps ?? []).map((row) => row.borough ?? "Unknown"))].sort(),
@@ -172,40 +204,41 @@ export default function YieldMapPage() {
 
           <div className={styles.panel}>
             <div className={styles.mapHeader}>
-              <span className={styles.mapTitle}>Deal map — pins colored by LTR yield</span>
-              <div className={styles.legendList}>
-                {YIELD_BANDS.map((band) => (
-                  <span key={band.label} className={styles.legendItem}>
-                    <span className={styles.legendDot} style={{ background: band.color }} />
-                    {band.label}
-                  </span>
-                ))}
+              <span className={styles.mapTitle}>
+                Deal map — pins colored by {colorBy === "yield" ? "LTR yield" : "deal stage"}
+              </span>
+              <div className={styles.mapControls}>
+                <div className={styles.colorToggle} role="group" aria-label="Color pins by">
+                  <button
+                    type="button"
+                    className={colorBy === "yield" ? styles.colorToggleActive : undefined}
+                    onClick={() => setColorBy("yield")}
+                  >
+                    Yield
+                  </button>
+                  <button
+                    type="button"
+                    className={colorBy === "stage" ? styles.colorToggleActive : undefined}
+                    onClick={() => setColorBy("stage")}
+                  >
+                    Stage
+                  </button>
+                </div>
+                <div className={styles.legendList}>
+                  {(colorBy === "yield" ? YIELD_BANDS : STAGE_LEGEND).map((band) => (
+                    <span key={band.label} className={styles.legendItem}>
+                      <span className={styles.legendDot} style={{ background: band.color }} />
+                      {band.label}
+                    </span>
+                  ))}
+                </div>
               </div>
             </div>
-            {bounds ? (
-              <svg
-                viewBox="0 0 860 540"
-                className={styles.mapSvg}
-                role="img"
-                aria-label="Scatter map of deals colored by LTR yield"
-              >
-                {geoRows.map((row) => {
-                  const x = 24 + ((row.lng! - bounds.minLng) / (bounds.maxLng - bounds.minLng)) * (860 - 48);
-                  const y = 24 + (1 - (row.lat! - bounds.minLat) / (bounds.maxLat - bounds.minLat)) * (540 - 48);
-                  return (
-                    <a key={row.propertyId} href={`/deal-analysis?propertyId=${encodeURIComponent(row.propertyId)}`}>
-                      <circle cx={x} cy={y} r={7.5} fill={yieldColor(row.ltrYieldPct)} fillOpacity={0.88} stroke="#ffffff" strokeWidth={1.6}>
-                        <title>
-                          {`${row.canonicalAddress}\nLTR yield ${fmtPct(row.ltrYieldPct, 2)} · MTR ${fmtPct(row.mtrYieldPct, 2)}\nNOI ${formatCurrencyExact(row.currentNoi)} · ${row.units ?? EMPTY_VALUE} units · ${row.dealStage ?? row.dealState ?? "unstaged"}`}
-                        </title>
-                      </circle>
-                    </a>
-                  );
-                })}
-              </svg>
+            {geoRows.length > 0 ? (
+              <YieldMapCanvas pins={pins} />
             ) : (
               <div className={styles.mapEmpty}>
-                Not enough geocoded deals to plot yet ({geoRows.length} with coordinates). Coordinates backfill
+                No geocoded deals to plot yet ({geoRows.length} with coordinates). Coordinates backfill
                 from matched listings automatically; the table below shows every yield-bearing deal regardless.
               </div>
             )}
