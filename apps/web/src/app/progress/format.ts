@@ -22,10 +22,7 @@ export function formatCompactNumber(value: number | null | undefined): string {
   return new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(value);
 }
 
-export function formatPercent(value: number | null | undefined): string {
-  if (value == null || !Number.isFinite(value)) return "—";
-  return `${value.toFixed(1)}%`;
-}
+export { formatPercent, labelFromKey } from "@/lib/format";
 
 export function formatUnitLabel(value: number | null | undefined): string | null {
   const formatted = formatNumber(value);
@@ -63,30 +60,3 @@ export function formatDaysAgo(value: string | null | undefined): string {
   return `${days}d ago`;
 }
 
-export function labelFromKey(value: string | null | undefined): string {
-  if (!value) return "Unknown";
-  const normalized = value.trim().toLowerCase();
-  const specialLabels: Record<string, string> = {
-    awaiting_broker: "OM Requested",
-    contract_signed: "Contract Signed",
-    deal_closed: "Deal Closed",
-    dossier_generated: "Dossier Generated",
-    loopnet: "LoopNet",
-    offer_review: "LOI Offered",
-    sourced: "Sourced",
-    om_received: "OM Received",
-    streeteasy: "StreetEasy",
-    tour_requested: "Tour Requested",
-    tour_scheduled: "Tour Scheduled",
-    tour_completed_awaiting_inputs: "Tour Completed",
-    underwriting_awaiting_review: "Underwriting - Awaiting User Review",
-    underwriting_review_completed: "Underwriting - Review Completed",
-  };
-  if (specialLabels[normalized]) return specialLabels[normalized];
-  return normalized
-    .split("_")
-    .flatMap((part) => part.split("-"))
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
-}

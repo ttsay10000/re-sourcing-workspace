@@ -39,7 +39,7 @@ import {
 import { AgingChip, BrokerContactDialog, Button, Dialog, PageHeader, PromptMenu, PropertyThumb, StatCard } from "@/components/ui";
 import { RecommendationStepper, type StepperKind, type StepperRow } from "./RecommendationStepper";
 import { API_BASE, apiFetch } from "@/lib/api";
-import { formatPercent, labelFromKey, scoreTone } from "@/lib/format";
+import { scoreTone } from "@/lib/format";
 import { useProcessBanner } from "@/components/ProcessBanner";
 import {
   buildActionSummary,
