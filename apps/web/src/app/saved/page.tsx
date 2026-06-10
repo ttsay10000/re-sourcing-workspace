@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { Building2 } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { Button, EmptyState, PageHeader, StatCard } from "@/components/ui";
@@ -564,7 +565,7 @@ function SavedPageContent() {
                           {row.firstImageUrl ? (
                             <img src={row.firstImageUrl} alt="" className={styles.thumbnail} />
                           ) : (
-                            <div className={styles.thumbnailFallback}>{(row.displayAddress || row.canonicalAddress || "?").charAt(0)}</div>
+                            <div className={styles.thumbnailFallback} aria-hidden="true"><Building2 size={15} strokeWidth={1.7} /></div>
                           )}
                           <div className={styles.propertyText}>
                             <Link href={`/pipeline?propertyId=${encodeURIComponent(row.propertyId)}`} className={styles.addressLink}>

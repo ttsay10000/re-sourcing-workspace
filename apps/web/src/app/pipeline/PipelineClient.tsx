@@ -114,6 +114,8 @@ const COMMON_PIPELINE_TAGS = [
 
 const SHEET_TABS = ["Overview", "Enrichment", "OM / Docs", "Market / Comps", "Underwriting", "Activity"] as const;
 
+const LISTING_PULL_TOGGLE_KEY = "sourcing-os.pipeline.include-listing-pull";
+
 type SheetTab = (typeof SHEET_TABS)[number];
 type SortDirection = "asc" | "desc";
 
@@ -734,6 +736,13 @@ function propertyDocumentFileUrl(propertyId: string, documentId: string): string
   return `${API_BASE}/api/properties/${encodeURIComponent(propertyId)}/documents/${encodeURIComponent(documentId)}/file`;
 }
 
+/** Force attachment disposition on our own file endpoint so Download buttons save instead of opening a tab. */
+function asDownloadUrl(url: string | null): string | null {
+  if (!url) return null;
+  if (!url.includes("/documents/") || !url.includes("/file")) return url;
+  return `${url}${url.includes("?") ? "&" : "?"}download=1`;
+}
+
 function normalizedSearchText(values: Array<string | null | undefined>): string {
   return values.filter(Boolean).join(" ").toLowerCase();
 }
@@ -831,10 +840,19 @@ function rowDownloadActions(row: PipelineRow): RowDownloadAction[] {
   const excelDocumentId = rowExcelDocumentId(row);
   const compSourceDocumentId = brokerCompSourceDocumentId(row);
 
-  const omUrl = resolvedDocumentUrl(omDocument);
-  const compsUrl = resolvedDocumentUrl(compDocument) ?? (compSourceDocumentId ? propertyDocumentFileUrl(row.propertyId, compSourceDocumentId) : null);
-  const dossierUrl = resolvedDocumentUrl(dossierDocument) ?? (dossierDocumentId ? propertyDocumentFileUrl(row.propertyId, dossierDocumentId) : null);
-  const excelUrl = resolvedDocumentUrl(excelDocument) ?? (excelDocumentId ? propertyDocumentFileUrl(row.propertyId, excelDocumentId) : null);
+  const omDocumentId = row.documentStatus?.omDocumentId ?? null;
+  const omUrl = asDownloadUrl(
+    resolvedDocumentUrl(omDocument) ?? (omDocumentId ? propertyDocumentFileUrl(row.propertyId, omDocumentId) : null)
+  );
+  const compsUrl = asDownloadUrl(
+    resolvedDocumentUrl(compDocument) ?? (compSourceDocumentId ? propertyDocumentFileUrl(row.propertyId, compSourceDocumentId) : null)
+  );
+  const dossierUrl = asDownloadUrl(
+    resolvedDocumentUrl(dossierDocument) ?? (dossierDocumentId ? propertyDocumentFileUrl(row.propertyId, dossierDocumentId) : null)
+  );
+  const excelUrl = asDownloadUrl(
+    resolvedDocumentUrl(excelDocument) ?? (excelDocumentId ? propertyDocumentFileUrl(row.propertyId, excelDocumentId) : null)
+  );
 
   return [
     {
@@ -845,7 +863,7 @@ function rowDownloadActions(row: PipelineRow): RowDownloadAction[] {
       title: omUrl
         ? "Download the latest available OM or brochure."
         : row.documentStatus?.hasOm
-          ? "OM is present, but this row does not include a document URL yet. Open the property to load document details."
+          ? "OM data exists, but no document file is stored for this property (e.g. numbers promoted from notes or email text)."
           : "No OM document is available for this property.",
     },
     {
@@ -1279,6 +1297,24 @@ export default function PipelineClient() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
+  // Opt-in RapidAPI listing-details stage for the composite "Refresh listings"
+  // action; sticky across sessions because it spends API credits.
+  const [includeListingPull, setIncludeListingPull] = useState(false);
+  useEffect(() => {
+    try {
+      setIncludeListingPull(window.localStorage.getItem(LISTING_PULL_TOGGLE_KEY) === "1");
+    } catch {
+      // localStorage unavailable: default stays off
+    }
+  }, []);
+  const setIncludeListingPullPersisted = useCallback((next: boolean) => {
+    setIncludeListingPull(next);
+    try {
+      window.localStorage.setItem(LISTING_PULL_TOGGLE_KEY, next ? "1" : "0");
+    } catch {
+      // non-fatal
+    }
+  }, []);
   const processBanner = useProcessBanner();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedProperty, setSelectedProperty] = useState<FlexiblePropertyDetail | null>(null);
@@ -1844,51 +1880,178 @@ export default function PipelineClient() {
     }
   }
 
+  /**
+   * "Refresh listings" composite: enrichment → rental flow → OM analysis →
+   * dossier generation for the selection, each stage as its own dismissible
+   * banner. The RapidAPI listing-details pull (GET DETAILS via the stored
+   * source link) is opt-in through the toggle so refreshes don't spend
+   * listing credits by default. Stage failures are collected, not fatal.
+   */
   async function refreshSelectedListings() {
     if (selectedIds.length === 0) return;
+    const propertyIds = [...selectedIds];
+    const omRows = selectedRowsWithOm;
+    const omSkipped = propertyIds.length - omRows.length;
+    const addressById = new Map(
+      rows.map((row) => [row.propertyId, row.displayAddress ?? row.canonicalAddress ?? row.propertyId])
+    );
+    const stageFailures: string[] = [];
     setBusyAction("bulk:listings");
     setNotice(null);
     setError(null);
-    const banner = processBanner.start("Listing refresh", {
-      message: `Refreshing ${selectedIds.length} listing${selectedIds.length === 1 ? "" : "s"}…`,
+
+    if (includeListingPull) {
+      const listingBanner = processBanner.start("Listing details (RapidAPI)", {
+        message: `Pulling latest details for ${propertyIds.length} listing${propertyIds.length === 1 ? "" : "s"} via stored source links…`,
+      });
+      try {
+        const payload = await apiFetch<ListingRefreshResponse>(`${API_BASE}/api/properties/refresh-listings`, {
+          method: "POST",
+          body: JSON.stringify({ propertyIds }),
+        });
+        const summary = payload.streetEasyRefresh ?? {};
+        const success = Number(summary.success ?? 0);
+        const attempted = Number(summary.attempted ?? 0);
+        const priceChanged = Number(summary.priceChanged ?? 0);
+        const unavailable = Number(summary.unavailable ?? 0);
+        listingBanner.succeed(
+          `Listing details refreshed: ${success}/${attempted || propertyIds.length}${
+            priceChanged > 0 ? `; ${priceChanged} ask change${priceChanged === 1 ? "" : "s"}` : ""
+          }${unavailable > 0 ? `; ${unavailable} unavailable flagged` : ""}.`
+        );
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Listing details refresh failed.";
+        listingBanner.fail(message);
+        stageFailures.push(`listing details (${message})`);
+      }
+    }
+
+    const enrichmentBanner = processBanner.start("Enrichment refresh", {
+      message: `Running enrichment for ${propertyIds.length} propert${propertyIds.length === 1 ? "y" : "ies"}…`,
     });
     try {
-      const propertyIds = [...selectedIds];
-      const payload = await apiFetch<ListingRefreshResponse>(`${API_BASE}/api/properties/refresh-listings`, {
+      const enrichmentResponse = await fetch(`${API_BASE}/api/properties/run-enrichment`, {
         method: "POST",
-        body: JSON.stringify({ propertyIds }),
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        // The listing pull is its own opt-in stage above; never double-pull here.
+        body: JSON.stringify({ propertyIds, refreshStreetEasy: false }),
       });
-      const summary = payload.streetEasyRefresh ?? {};
-      const attempted = Number(summary.attempted ?? 0);
-      const success = Number(summary.success ?? 0);
-      const failed = Number(summary.failed ?? 0);
-      const skipped = Number(summary.skipped ?? 0);
-      const priceChanged = Number(summary.priceChanged ?? 0);
-      const unavailable = Number(summary.unavailable ?? 0);
-      const details = [
-        priceChanged > 0 ? `${priceChanged} ask change${priceChanged === 1 ? "" : "s"}` : null,
-        unavailable > 0 ? `${unavailable} unavailable listing${unavailable === 1 ? "" : "s"} flagged` : null,
-        skipped > 0 ? `${skipped} skipped` : null,
-        failed > 0 ? `${failed} failed` : null,
-      ].filter(Boolean);
-      const listingSummary = `Listing refresh completed: ${success}/${attempted || propertyIds.length} refreshed${
-        details.length ? `; ${details.join(", ")}` : ""
-      }.`;
-      setNotice(listingSummary);
-      banner.succeed(listingSummary);
-      const response = await apiFetch<PipelineResponse>(
-        `${API_BASE}/api/ui-v2/pipeline?${buildPipelineQueryString(queryString)}`
-      );
-      setRows(response.pipeline.rows as PipelineRow[]);
-      setTotal(response.pipeline.total);
-      if (selectedId) await loadPropertyDetail(selectedId).catch(() => null);
+      const enrichmentPayload = await enrichmentResponse.json().catch(() => ({}));
+      if (!enrichmentResponse.ok) {
+        throw new Error(enrichmentPayload.error || enrichmentPayload.details || "Enrichment refresh failed.");
+      }
+      enrichmentBanner.succeed(`Enrichment refreshed for ${propertyIds.length} propert${propertyIds.length === 1 ? "y" : "ies"}.`);
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to refresh listing activity.";
-      banner.fail(message);
-      setError(message);
-    } finally {
-      setBusyAction(null);
+      const message = err instanceof Error ? err.message : "Enrichment refresh failed.";
+      enrichmentBanner.fail(message);
+      stageFailures.push(`enrichment (${message})`);
     }
+
+    const rentalBanner = processBanner.start("Rental flow", {
+      message: `Refreshing rental comps + MTR inputs for ${propertyIds.length} propert${propertyIds.length === 1 ? "y" : "ies"}…`,
+    });
+    try {
+      const rentalResponse = await fetch(`${API_BASE}/api/properties/run-rental-flow`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ propertyIds, refreshStreetEasy: false, runEnrichment: false }),
+      });
+      const rentalPayload = await rentalResponse.json().catch(() => ({}));
+      if (!rentalResponse.ok) {
+        throw new Error(rentalPayload.error || rentalPayload.details || "Rental flow failed.");
+      }
+      rentalBanner.succeed(`Rental flow refreshed for ${propertyIds.length} propert${propertyIds.length === 1 ? "y" : "ies"}.`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Rental flow failed.";
+      rentalBanner.fail(message);
+      stageFailures.push(`rental flow (${message})`);
+    }
+
+    let omCompleted = 0;
+    let omFailed = 0;
+    if (omRows.length > 0) {
+      const omBanner = processBanner.start("OM analysis refresh", {
+        message: `Updating OM analysis for ${omRows.length} propert${omRows.length === 1 ? "y" : "ies"}…`,
+      });
+      for (let index = 0; index < omRows.length; index++) {
+        const propertyId = omRows[index]!.propertyId;
+        omBanner.update(
+          `Updating OM analysis ${index + 1} of ${omRows.length}: ${addressById.get(propertyId) ?? "selected property"}`,
+          Math.round((index / omRows.length) * 100)
+        );
+        try {
+          await apiFetch<OmRefreshResponse>(`${API_BASE}/api/properties/${propertyId}/refresh-om-financials`, {
+            method: "POST",
+            body: JSON.stringify({ autoPromote: true }),
+          });
+          omCompleted++;
+        } catch {
+          omFailed++;
+        }
+      }
+      if (omFailed > 0) {
+        omBanner.fail(`OM analysis updated for ${omCompleted} of ${omRows.length}; ${omFailed} failed.`);
+        stageFailures.push(`OM analysis (${omFailed} failed)`);
+      } else {
+        omBanner.succeed(`OM analysis updated for ${omCompleted} propert${omCompleted === 1 ? "y" : "ies"}.`);
+      }
+    }
+
+    let dossierCompleted = 0;
+    let dossierFailed = 0;
+    if (omRows.length > 0) {
+      const dossierBanner = processBanner.start("Dossier generation", {
+        message: `Rerunning dossiers for ${omRows.length} propert${omRows.length === 1 ? "y" : "ies"}…`,
+      });
+      for (let index = 0; index < omRows.length; index++) {
+        const propertyId = omRows[index]!.propertyId;
+        dossierBanner.update(
+          `Generating dossier ${index + 1} of ${omRows.length}: ${addressById.get(propertyId) ?? "selected property"}`,
+          Math.round((index / omRows.length) * 100)
+        );
+        try {
+          const response = await fetch(`${API_BASE}/api/dossier/generate`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            // OM analysis already refreshed in the previous stage.
+            body: JSON.stringify({ propertyId, refreshOm: false }),
+          });
+          if (!response.ok) {
+            const payload = (await response.json().catch(() => ({}))) as DossierGenerateResponse;
+            throw new Error(payload.details || payload.error || `Request failed with ${response.status}`);
+          }
+          dossierCompleted++;
+        } catch {
+          dossierFailed++;
+        }
+      }
+      if (dossierFailed > 0) {
+        dossierBanner.fail(`Dossiers generated for ${dossierCompleted} of ${omRows.length}; ${dossierFailed} failed.`);
+        stageFailures.push(`dossiers (${dossierFailed} failed)`);
+      } else {
+        dossierBanner.succeed(`Dossiers + Excel regenerated for ${dossierCompleted} propert${dossierCompleted === 1 ? "y" : "ies"}.`);
+      }
+    }
+
+    try {
+      await reloadPipelineRows();
+      if (selectedId) await loadPropertyDetail(selectedId).catch(() => null);
+    } catch {
+      // Stage banners already carry per-stage outcomes.
+    }
+
+    const summaryParts = [
+      `Full refresh finished for ${propertyIds.length} propert${propertyIds.length === 1 ? "y" : "ies"}`,
+      omSkipped > 0 ? `${omSkipped} without OM skipped OM/dossier stages` : null,
+      includeListingPull ? "listing details included" : "listing details pull off",
+    ].filter(Boolean);
+    if (stageFailures.length > 0) {
+      setError(`Some refresh stages had issues: ${stageFailures.join("; ")}.`);
+    }
+    setNotice(`${summaryParts.join("; ")}.`);
+    setBusyAction(null);
   }
 
   async function refreshSelectedEnrichment() {
@@ -3509,12 +3672,24 @@ export default function PipelineClient() {
           <button
             className={styles.secondaryButton}
             type="button"
-            title="Refresh only existing StreetEasy/RapidAPI listing records for selected properties to capture ask changes, price history, and unavailable flags."
+            title="Full refresh for the selection: enrichment, rental flow, OM analysis, and dossier generation — each stage tracked in its own banner. The RapidAPI listing-details pull only runs when the toggle next to this button is on."
             disabled={selectedIds.length === 0 || busyAction?.startsWith("bulk:")}
             onClick={refreshSelectedListings}
           >
             {busyAction === "bulk:listings" ? "Refreshing listings..." : "Refresh listings"}
           </button>
+          <label
+            className={styles.bulkToggle}
+            title="When on, Refresh listings also sends each property's stored source link through the RapidAPI GET DETAILS endpoint (1 credit per listing) to capture ask changes and unavailable flags."
+          >
+            <input
+              type="checkbox"
+              checked={includeListingPull}
+              onChange={(event) => setIncludeListingPullPersisted(event.target.checked)}
+              disabled={busyAction?.startsWith("bulk:") ?? false}
+            />
+            <span>+ listing pull</span>
+          </label>
           <button
             className={styles.secondaryButton}
             type="button"

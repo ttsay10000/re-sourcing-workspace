@@ -17,6 +17,7 @@ import {
   DealSignalsRepo,
   DealScoreOverridesRepo,
   DocumentRepo,
+  PropertyPipelineEventRepo,
 } from "@re-sourcing/db";
 import { randomUUID } from "crypto";
 import {
@@ -1056,6 +1057,24 @@ export async function runGenerateDossier(
     );
 
     const emailSent = false;
+
+    // Activity log entry for full generations (numbers-only refreshes would
+    // flood the feed); never let logging break the generation result.
+    if (!skipDocuments) {
+      try {
+        await new PropertyPipelineEventRepo({ pool }).create({
+          propertyId,
+          eventType: "dossier_generated",
+          actor: "system",
+          source: "dossier_generation",
+          title: `Dossier generated${finalScore != null ? ` — score ${Math.round(finalScore)}/100` : ""}`,
+          body: property.canonicalAddress,
+          metadata: { dossierDocumentId, excelDocumentId, dealScore: finalScore ?? null },
+        });
+      } catch (err) {
+        console.warn("[runGenerateDossier] activity event failed", err instanceof Error ? err.message : err);
+      }
+    }
 
     if (!skipDocuments && dossierDoc && excelDoc) {
       await setGenerationState({

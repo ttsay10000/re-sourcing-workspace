@@ -20,6 +20,7 @@ import type {
 } from "@re-sourcing/contracts";
 import { getPool, UserProfileRepo } from "@re-sourcing/db";
 import { resolveEffectiveDealScore } from "../deal/effectiveDealScore.js";
+import { returnRateToPctPoints } from "../deal/irrCalculation.js";
 import {
   buildProgressRecommendations,
   type RecommendationInputRow,
@@ -848,8 +849,8 @@ function mapSavedRow(row: SavedProgressBaseRow): SavedDealV2Row {
     pricePerSqft: price != null && sqft != null && sqft > 0 ? Math.round(price / sqft) : null,
     capRate: allowSignalFallback ? toNumber(row.latest_signal_adjusted_cap_rate) ?? toNumber(row.latest_signal_asset_cap_rate) : null,
     rentUpside: allowSignalFallback ? toNumber(row.latest_signal_rent_upside) : null,
-    irrPct: allowSignalFallback ? toNumber(row.latest_signal_irr_pct) : null,
-    cocPct: allowSignalFallback ? toNumber(row.latest_signal_coc_pct) : null,
+    irrPct: allowSignalFallback ? returnRateToPctPoints(toNumber(row.latest_signal_irr_pct)) : null,
+    cocPct: allowSignalFallback ? returnRateToPctPoints(toNumber(row.latest_signal_coc_pct)) : null,
     dealScore: resolveDealScore(row),
     ltrYocPct: getNoiYieldOnCost(row, currentNoi, allowSignalFallback ? row.latest_signal_asset_cap_rate : null),
     mtrYocPct: getNoiYieldOnCost(row, adjustedNoi, allowSignalFallback ? row.latest_signal_adjusted_cap_rate : null),

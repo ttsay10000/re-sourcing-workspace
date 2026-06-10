@@ -278,16 +278,16 @@ function assumptionPenalty(
 
   if (blendedRentUpliftPct > config.blendedRentUpliftPct.veryHigh.above) {
     value += config.blendedRentUpliftPct.veryHigh.penalty;
-    flags.push(`${config.blendedRentUpliftPct.veryHigh.label} (${blendedRentUpliftPct.toFixed(1)}%)`);
+    flags.push(`${config.blendedRentUpliftPct.veryHigh.label} (${blendedRentUpliftPct.toFixed(1)}% above in-place rents)`);
   } else if (blendedRentUpliftPct > config.blendedRentUpliftPct.aggressive.above) {
     value += config.blendedRentUpliftPct.aggressive.penalty;
-    flags.push(`${config.blendedRentUpliftPct.aggressive.label} (${blendedRentUpliftPct.toFixed(1)}%)`);
+    flags.push(`${config.blendedRentUpliftPct.aggressive.label} (${blendedRentUpliftPct.toFixed(1)}% above in-place rents)`);
   } else if (blendedRentUpliftPct > config.blendedRentUpliftPct.elevated.above) {
     value += config.blendedRentUpliftPct.elevated.penalty;
-    flags.push(`${config.blendedRentUpliftPct.elevated.label} (${blendedRentUpliftPct.toFixed(1)}%)`);
+    flags.push(`${config.blendedRentUpliftPct.elevated.label} (${blendedRentUpliftPct.toFixed(1)}% above in-place rents)`);
   } else if (blendedRentUpliftPct > config.blendedRentUpliftPct.meaningful.above) {
     value += config.blendedRentUpliftPct.meaningful.penalty;
-    flags.push(`${config.blendedRentUpliftPct.meaningful.label} (${blendedRentUpliftPct.toFixed(1)}%)`);
+    flags.push(`${config.blendedRentUpliftPct.meaningful.label} (${blendedRentUpliftPct.toFixed(1)}% above in-place rents)`);
   }
 
   if (rentRollCoveragePct != null && rentRollCoveragePct < config.rentRollCoverage.below) {
@@ -310,19 +310,21 @@ function assumptionPenalty(
     if (diffBps > config.exitCapSpread.adjustedCapSevereBps) {
       value += config.exitCapSpread.penalty;
       flags.push(
-        `Exit cap ${exitCapRatePct.toFixed(2)}% is over 25 bps below stabilized entry cap ${adjustedCapRatePct.toFixed(2)}%`
+        `Aggressive exit assumption: exit cap ${exitCapRatePct.toFixed(2)}% sits ${Math.round(diffBps)} bps below the stabilized yield-on-cost ${adjustedCapRatePct.toFixed(2)}%, so the model assumes the sale prices well above the stabilized basis`
       );
     } else if (diffBps > config.exitCapSpread.adjustedCapAnyBps) {
       value += config.exitCapSpread.penalty;
       flags.push(
-        `Exit cap ${exitCapRatePct.toFixed(2)}% is at/below stabilized entry cap ${adjustedCapRatePct.toFixed(2)}%`
+        `Exit cap ${exitCapRatePct.toFixed(2)}% is at/below the stabilized yield-on-cost ${adjustedCapRatePct.toFixed(2)}% — exit value depends on holding that pricing`
       );
     }
   } else if (assetCapRate != null && exitCapRatePct != null) {
     const diffBps = (assetCapRate - exitCapRatePct) * 100;
     if (diffBps > config.exitCapSpread.assetCapBps) {
       value += config.exitCapSpread.penalty;
-      flags.push(`Exit cap ${exitCapRatePct.toFixed(2)}% is tighter than current cap ${assetCapRate.toFixed(2)}%`);
+      flags.push(
+        `Aggressive exit assumption: exit cap ${exitCapRatePct.toFixed(2)}% is ${Math.round(diffBps)} bps tighter than the current cap ${assetCapRate.toFixed(2)}%`
+      );
     }
   }
 
@@ -337,7 +339,7 @@ function assumptionPenalty(
   if (stabilizedToCurrentNoiRatio != null) {
     if (stabilizedToCurrentNoiRatio > config.stabilizedNoiRatioAbove) {
       value += config.stabilizedNoiRatioPenalty;
-      flags.push(`Stabilized NOI is ${(stabilizedToCurrentNoiRatio * 100).toFixed(0)}% of current NOI`);
+      flags.push(`Underwriting assumes stabilized NOI reaches ${(stabilizedToCurrentNoiRatio * 100).toFixed(0)}% of current NOI — large uplift to verify`);
     }
   }
 
@@ -355,10 +357,10 @@ function structuralPenalty(riskProfile: DealRiskProfile, profile: DealScoringPro
     const rsPct = rsShare * 100;
     if (rsShare > config.rentStabilizedRevenueSharePct.severeAbove) {
       value += config.rentStabilizedRevenueSharePct.severePenalty;
-      flags.push(`Rent-stabilized revenue share ${rsPct.toFixed(1)}%`);
+      flags.push(`Rent-stabilized revenue share ${rsPct.toFixed(1)}% (regulated-rent exposure)`);
     } else if (rsShare > config.rentStabilizedRevenueSharePct.elevatedAbove) {
       value += config.rentStabilizedRevenueSharePct.elevatedPenalty;
-      flags.push(`Rent-stabilized revenue share ${rsPct.toFixed(1)}%`);
+      flags.push(`Rent-stabilized revenue share ${rsPct.toFixed(1)}% (regulated-rent exposure)`);
     } else if (rsShare > config.rentStabilizedRevenueSharePct.anyAbove) {
       value += config.rentStabilizedRevenueSharePct.anyPenalty;
       flags.push(`Any rent-stabilized revenue exposure (${rsPct.toFixed(1)}%)`);
@@ -370,13 +372,13 @@ function structuralPenalty(riskProfile: DealRiskProfile, profile: DealScoringPro
     const commercialPct = commercialShare * 100;
     if (commercialShare > config.commercialRevenueSharePct.severeAbove) {
       value += config.commercialRevenueSharePct.severePenalty;
-      flags.push(`Commercial revenue share ${commercialPct.toFixed(1)}%`);
+      flags.push(`Commercial revenue share ${commercialPct.toFixed(1)}% (commercial income concentration)`);
     } else if (commercialShare >= config.commercialRevenueSharePct.elevatedAtLeast) {
       value += config.commercialRevenueSharePct.elevatedPenalty;
-      flags.push(`Commercial revenue share ${commercialPct.toFixed(1)}%`);
+      flags.push(`Commercial revenue share ${commercialPct.toFixed(1)}% (commercial income concentration)`);
     } else if (commercialShare >= config.commercialRevenueSharePct.moderateAtLeast) {
       value += config.commercialRevenueSharePct.moderatePenalty;
-      flags.push(`Commercial revenue share ${commercialPct.toFixed(1)}%`);
+      flags.push(`Commercial revenue share ${commercialPct.toFixed(1)}% (commercial income concentration)`);
     }
   }
 
@@ -388,13 +390,13 @@ function structuralPenalty(riskProfile: DealRiskProfile, profile: DealScoringPro
     const largestPct = largestUnitShare * 100;
     if (largestUnitShare > config.largestUnitRevenueSharePct.severeAbove) {
       value += config.largestUnitRevenueSharePct.severePenalty;
-      flags.push(`Largest unit contributes ${largestPct.toFixed(1)}% of rent`);
+      flags.push(`Largest unit contributes ${largestPct.toFixed(1)}% of rent (single-unit concentration)`);
     } else if (largestUnitShare > config.largestUnitRevenueSharePct.elevatedAbove) {
       value += config.largestUnitRevenueSharePct.elevatedPenalty;
-      flags.push(`Largest unit contributes ${largestPct.toFixed(1)}% of rent`);
+      flags.push(`Largest unit contributes ${largestPct.toFixed(1)}% of rent (single-unit concentration)`);
     } else if (largestUnitShare >= config.largestUnitRevenueSharePct.moderateAtLeast) {
       value += config.largestUnitRevenueSharePct.moderatePenalty;
-      flags.push(`Largest unit contributes ${largestPct.toFixed(1)}% of rent`);
+      flags.push(`Largest unit contributes ${largestPct.toFixed(1)}% of rent (single-unit concentration)`);
     }
   }
 
@@ -403,10 +405,10 @@ function structuralPenalty(riskProfile: DealRiskProfile, profile: DealScoringPro
     const rolloverPct = rolloverShare * 100;
     if (rolloverShare > config.rollover12moRevenueSharePct.severeAbove) {
       value += config.rollover12moRevenueSharePct.severePenalty;
-      flags.push(`Lease rollover within 12 months is ${rolloverPct.toFixed(1)}% of rent`);
+      flags.push(`Lease rollover within 12 months is ${rolloverPct.toFixed(1)}% of rent (near-term re-leasing risk)`);
     } else if (rolloverShare >= config.rollover12moRevenueSharePct.elevatedAtLeast) {
       value += config.rollover12moRevenueSharePct.elevatedPenalty;
-      flags.push(`Lease rollover within 12 months is ${rolloverPct.toFixed(1)}% of rent`);
+      flags.push(`Lease rollover within 12 months is ${rolloverPct.toFixed(1)}% of rent (near-term re-leasing risk)`);
     }
   }
 

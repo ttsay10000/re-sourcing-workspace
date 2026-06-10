@@ -1232,6 +1232,33 @@
   justify-content: flex-end;
 }
 
+/* Opt-in RapidAPI listing pull rider on the Refresh listings composite. */
+.bulkToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.3rem 0.55rem;
+  border: 1px solid rgba(38, 47, 44, 0.16);
+  border-radius: 999px;
+  font-size: 0.74rem;
+  font-weight: 700;
+  color: var(--app-ink-secondary, #68736d);
+  background: var(--app-surface, #fff);
+  cursor: pointer;
+  user-select: none;
+}
+
+.bulkToggle input {
+  accent-color: var(--brand-strong, #2f6f52);
+  margin: 0;
+}
+
+.bulkToggle:has(input:checked) {
+  border-color: var(--brand-strong, #2f6f52);
+  color: var(--brand-strong, #2f6f52);
+  background: #f1f7f3;
+}
+
 .tableOverlay {
   position: absolute;
   inset: 2.1rem 0 0;

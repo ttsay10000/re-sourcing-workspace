@@ -2445,6 +2445,9 @@ router.post("/properties/run-enrichment", async (req: Request, res: Response) =>
       res.status(400).json({ error: "propertyIds required (non-empty array)." });
       return;
     }
+    // refreshStreetEasy=false skips the RapidAPI listing pull so callers can
+    // run enrichment-only refreshes without spending listing-details credits.
+    const shouldRefreshListings = req.body?.refreshStreetEasy !== false;
 
     const enrichmentStepKeys = ["permits", ...ENRICHMENT_MODULES.map((module) => module.key)];
     const enrichmentProgress = Object.fromEntries(
@@ -2454,9 +2457,12 @@ router.post("/properties/run-enrichment", async (req: Request, res: Response) =>
       {
         stepKey: "streeteasy_refresh",
         totalItems: propertyIds.length,
-        status: "running",
+        status: shouldRefreshListings ? "running" : "completed",
         startedAt: workflowStartedAt,
-        lastMessage: `Refreshing StreetEasy asks for ${propertyIds.length} propert${propertyIds.length === 1 ? "y" : "ies"}`,
+        finishedAt: shouldRefreshListings ? null : workflowStartedAt,
+        lastMessage: shouldRefreshListings
+          ? `Refreshing StreetEasy asks for ${propertyIds.length} propert${propertyIds.length === 1 ? "y" : "ies"}`
+          : "Skipped (listing pull off)",
       },
       ...enrichmentStepKeys.map((stepKey, index): WorkflowRunStepSeed => ({
         stepKey,
@@ -2485,7 +2491,7 @@ router.post("/properties/run-enrichment", async (req: Request, res: Response) =>
     const appToken = process.env.SOCRATA_APP_TOKEN ?? null;
     const sourcingPool = getPool();
     const streetEasyRefresh = { attempted: 0, success: 0, failed: 0, skipped: 0, priceChanged: 0, unavailable: 0, errors: [] as string[] };
-    for (let i = 0; i < propertyIds.length; i++) {
+    for (let i = 0; shouldRefreshListings && i < propertyIds.length; i++) {
       if (i > 0) await new Promise((r) => setTimeout(r, ENRICHMENT_RATE_LIMIT_DELAY_MS));
       const propertyId = propertyIds[i]!;
       const result = await refreshStreetEasyListingForProperty(propertyId, sourcingPool);
@@ -3681,6 +3687,10 @@ router.delete("/properties/:id/documents/:docId", async (req: Request, res: Resp
 router.get("/properties/:id/documents/:docId/file", async (req: Request, res: Response) => {
   try {
     const { id: propertyId, docId } = req.params;
+    // ?download=1 forces attachment disposition so row-level Download buttons
+    // save the file instead of opening a tab.
+    const forceDownload = req.query.download === "1" || req.query.download === "true";
+    const disposition = (kind: "inline" | "attachment") => (forceDownload ? "attachment" : kind);
     const pool = getPool();
     const propertyRepo = new PropertyRepo({ pool });
     const property = await propertyRepo.byId(propertyId);
@@ -3713,13 +3723,13 @@ router.get("/properties/:id/documents/:docId/file", async (req: Request, res: Re
     if (inquiryDoc && inquiryDoc.propertyId === propertyId) {
       const fileContent = await inquiryDocRepo.getFileContent(docId);
       if (fileContent && fileContent.length > 0) {
-        res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(inquiryDoc.filename)}"`);
+        res.setHeader("Content-Disposition", `${disposition("inline")}; filename="${encodeURIComponent(inquiryDoc.filename)}"`);
         if (inquiryDoc.contentType) res.setHeader("Content-Type", inquiryDoc.contentType);
         res.send(fileContent);
         return;
       }
       const absolutePath = resolveInquiryFilePath(inquiryDoc.filePath);
-      res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(inquiryDoc.filename)}"`);
+      res.setHeader("Content-Disposition", `${disposition("inline")}; filename="${encodeURIComponent(inquiryDoc.filename)}"`);
       res.sendFile(absolutePath, (err) => {
         if (err && !res.headersSent) {
           console.error("[documents/file] sendFile failed (inquiry):", err instanceof Error ? err.message : err);
@@ -3733,7 +3743,7 @@ router.get("/properties/:id/documents/:docId/file", async (req: Request, res: Re
     if (uploadedDoc && uploadedDoc.propertyId === propertyId) {
       const fileContent = await uploadedDocRepo.getFileContent(docId);
       if (fileContent && fileContent.length > 0) {
-        res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(uploadedDoc.filename)}"`);
+        res.setHeader("Content-Disposition", `${disposition("inline")}; filename="${encodeURIComponent(uploadedDoc.filename)}"`);
         if (uploadedDoc.contentType) res.setHeader("Content-Type", uploadedDoc.contentType);
         res.send(fileContent);
         return;
@@ -3743,7 +3753,7 @@ router.get("/properties/:id/documents/:docId/file", async (req: Request, res: Re
         return;
       }
       const absolutePath = resolveUploadedDocFilePath(uploadedDoc.filePath);
-      res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(uploadedDoc.filename)}"`);
+      res.setHeader("Content-Disposition", `${disposition("inline")}; filename="${encodeURIComponent(uploadedDoc.filename)}"`);
       res.sendFile(absolutePath, (err) => {
         if (err && !res.headersSent) {
           console.error("[documents/file] sendFile failed (uploaded):", err instanceof Error ? err.message : err);

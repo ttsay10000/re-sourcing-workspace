@@ -484,6 +484,6 @@ describe("dealScoringEngine", () => {
     expect(strategy.scoringProfileLabel).toBe("Value-add multifamily / furnished monthly rental");
     expect(strategy.scoreBreakdown.assumptionPenalty).toBeLessThan(legacy.scoreBreakdown.assumptionPenalty);
     expect(strategy.dealScore).toBeGreaterThan(legacy.dealScore);
-    expect(strategy.riskFlags).toContain("Elevated furnished-rent uplift (72.0%)");
+    expect(strategy.riskFlags).toContain("Elevated furnished-rent uplift underwritten (72.0% above in-place rents)");
   });
 });

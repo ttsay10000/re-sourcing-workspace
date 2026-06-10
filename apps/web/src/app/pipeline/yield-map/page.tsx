@@ -1153,7 +1153,16 @@ export default function YieldMapPage() {
               tone="neutral"
               label="Deals with yield"
               value={yieldRows.length}
-              sub={`${geoRows.length} mapped`}
+              sub={
+                geoRows.length < yieldRows.length
+                  ? `${geoRows.length} mapped · ${yieldRows.length - geoRows.length} missing geocode`
+                  : `${geoRows.length} mapped`
+              }
+              title={
+                geoRows.length < yieldRows.length
+                  ? "Mapped deals have coordinates. Deals missing a geocode still count in the stats — run enrichment on them to place them on the map."
+                  : "Every deal with a usable yield is geocoded and on the map."
+              }
             />
             <StatCard
               tone="brand"
@@ -1165,7 +1174,16 @@ export default function YieldMapPage() {
               tone="warning"
               label={metric === "psf" ? "Deals with $/SF" : "Average LTR yield"}
               value={metric === "psf" ? stats.psfCount : formatPercent(stats.averageYieldPct, 2)}
-              sub={`across ${rows.length} deals`}
+              sub={
+                metric === "psf"
+                  ? `across ${rows.length} deals`
+                  : `across ${yieldRows.length} usable yield${yieldRows.length === 1 ? "" : "s"}`
+              }
+              title={
+                metric === "psf"
+                  ? undefined
+                  : `Average over the ${yieldRows.length} deals with a usable LTR yield. Deals flagged for 0%/negative cap signals are excluded from the median and average until their extraction is fixed.`
+              }
             />
             <StatCard
               tone={trendTone}

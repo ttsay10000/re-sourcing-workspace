@@ -81,6 +81,7 @@ import { resolveEffectiveDealScore } from "../deal/effectiveDealScore.js";
 import { recordDealStageChange } from "../deal/recordDealStageChange.js";
 import { resolveOmAskingPriceFromDetails } from "../deal/omAskingPrice.js";
 import { computeBrokerYieldComparison, computeYieldSignals } from "../deal/yieldSignals.js";
+import { returnRateToPctPoints } from "../deal/irrCalculation.js";
 import { buildLoiFileName, buildLoiPdf } from "../deal/loiGenerator.js";
 import { saveGeneratedDocument } from "../deal/generatedDocStorage.js";
 import { resolveReconstructedNoiBasisFromDetails } from "../deal/reconstructedNoiBasis.js";
@@ -275,6 +276,7 @@ interface PipelineBaseRow {
   broker_notes: string | null;
   uploaded_doc_count: number | string | null;
   uploaded_categories: PropertyDocumentCategory[] | null;
+  latest_om_document_id: string | null;
   uploaded_last_updated_at: Date | string | null;
   inquiry_doc_count: number | string | null;
   inquiry_filenames: string[] | null;
@@ -1400,8 +1402,14 @@ function buildDocumentStatus(row: PipelineBaseRow, collections?: DetailCollectio
     : hasOm(row);
   const pipeline = readPipelineState(row.details);
   const latestRequestAt = optionalIso(row.latest_inquiry_sent_at);
+  const omDocumentId = collections
+    ? uploadedDocs.find((doc) => doc.category === "OM" || doc.category === "Brochure")?.id ??
+      inquiryDocs.find((doc) => looksLikeOmStyleFilename(doc.filename))?.id ??
+      null
+    : row.latest_om_document_id ?? null;
   return {
     hasOm: hasOmDocument,
+    omDocumentId,
     omStatus: normalizeOmStatus(row.latest_om_status ?? pipeline.omStatus, hasOmDocument, latestRequestAt != null),
     latestOmRunId: row.latest_om_run_id,
     latestRequestAt,
@@ -1964,8 +1972,8 @@ function buildUnderwriting(row: PipelineBaseRow): UiV2UnderwritingSummary | null
       ? (row.latest_signal_cap_reasons as unknown[]).filter((flag): flag is string => typeof flag === "string")
       : [],
     targetIrrPct: summary?.targetIrrPct ?? assumptions?.targetIrrPct ?? null,
-    irrPct: summary?.irrPct ?? (allowSignalFallback ? toFiniteNumber(row.latest_signal_irr_pct) : null),
-    cocPct: summary?.cocPct ?? (allowSignalFallback ? toFiniteNumber(row.latest_signal_coc_pct) : null),
+    irrPct: returnRateToPctPoints(summary?.irrPct ?? (allowSignalFallback ? toFiniteNumber(row.latest_signal_irr_pct) : null)),
+    cocPct: returnRateToPctPoints(summary?.cocPct ?? (allowSignalFallback ? toFiniteNumber(row.latest_signal_coc_pct) : null)),
     currentNoi,
     adjustedNoi,
     summary,
@@ -2494,6 +2502,7 @@ async function fetchPipelineRows(pool: Pool, userId: string): Promise<PipelineBa
        COALESCE(ud.uploaded_doc_count, 0) AS uploaded_doc_count,
        ud.uploaded_categories,
        ud.uploaded_last_updated_at,
+       omdoc.latest_om_document_id,
        COALESCE(idoc.inquiry_doc_count, 0) AS inquiry_doc_count,
        idoc.inquiry_filenames,
        idoc.inquiry_last_updated_at,
@@ -2545,6 +2554,19 @@ async function fetchPipelineRows(pool: Pool, userId: string): Promise<PipelineBa
        FROM property_uploaded_documents
        WHERE property_id = p.id
      ) ud ON true
+     LEFT JOIN LATERAL (
+       -- Newest OM-style document id so list rows can offer a direct download
+       -- without opening the property (matches looksLikeOmStyleFilename).
+       SELECT COALESCE(
+         (SELECT d2.id::text FROM property_uploaded_documents d2
+           WHERE d2.property_id = p.id AND d2.category IN ('OM', 'Brochure')
+           ORDER BY d2.created_at DESC LIMIT 1),
+         (SELECT i2.id::text FROM property_inquiry_documents i2
+           WHERE i2.property_id = p.id
+             AND i2.filename ~* '(offering|memorandum|(^|[^a-z])om([^a-z]|$)|brochure|rent[ _-]?roll)'
+           ORDER BY i2.created_at DESC LIMIT 1)
+       ) AS latest_om_document_id
+     ) omdoc ON true
      LEFT JOIN LATERAL (
        SELECT
          COUNT(*)::int AS inquiry_doc_count,

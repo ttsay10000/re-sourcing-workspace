@@ -858,6 +858,10 @@ export async function promoteReviewedOmDetailsForProperty(params: {
   sourceDocumentId?: string | null;
   sourceType: AuthoritativeOmSourceType;
   sourceMeta?: Record<string, unknown> | null;
+  /** Run full dossier generation (documents + deal signals) after promotion. */
+  triggerDossier?: boolean;
+  /** Recompute deal signals without re-rendering documents (skipDocuments path). */
+  refreshUnderwritingSummary?: boolean;
   pool?: Pool;
 }): Promise<PromoteOmExtractionResult> {
   const pool = params.pool ?? getPool();
@@ -930,6 +934,10 @@ export async function promoteReviewedOmDetailsForProperty(params: {
     snapshot,
   });
 
+  // OM arrival counts for the board stage on this path too (deal-analysis
+  // uploads, Gmail pulls), not just ingestAuthoritativeOm runs.
+  await advancePipelineOnOmArrival(params.propertyId, pool);
+
   return promoteSnapshotForProperty({
     propertyId: params.propertyId,
     runId: run.id,
@@ -937,7 +945,8 @@ export async function promoteReviewedOmDetailsForProperty(params: {
     snapshot,
     omAnalysis,
     fromLlm,
-    triggerDossier: false,
+    triggerDossier: params.triggerDossier ?? false,
+    refreshUnderwritingSummary: params.refreshUnderwritingSummary ?? false,
     pool,
   });
 }

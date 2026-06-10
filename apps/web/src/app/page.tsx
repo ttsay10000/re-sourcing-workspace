@@ -6,6 +6,7 @@ import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { DEAL_FLOW_STAGES, type UiV2PipelineListPayload, type UiV2PipelineRow } from "@re-sourcing/contracts";
 import {
   AlertTriangle,
+  Building2,
   CalendarClock,
   FileQuestion,
   FileSearch,
@@ -572,7 +573,7 @@ function HomePageContent() {
                       const subtitle = [locationSubtitle(row), unitLabel(row.units)].filter(Boolean).join(" · ");
                       return (
                         <Link key={row.propertyId} href={`/pipeline?propertyId=${encodeURIComponent(row.propertyId)}`} className={styles.savedDealRow}>
-                          {row.firstImageUrl ? <img src={row.firstImageUrl} alt="" /> : <span className={styles.thumbnailFallback}>{rowAddress(row).charAt(0)}</span>}
+                          {row.firstImageUrl ? <img src={row.firstImageUrl} alt="" /> : <span className={styles.thumbnailFallback} aria-hidden="true"><Building2 size={16} strokeWidth={1.7} /></span>}
                           <span className={styles.savedDealTitle}>
                             <strong>{rowAddress(row)}</strong>
                             <small>{subtitle || titleize(row.source)}</small>

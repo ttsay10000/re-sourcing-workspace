@@ -4,6 +4,7 @@ import {
   getPool,
   PropertyRepo,
   PropertyUploadedDocumentRepo,
+  PropertyPipelineEventRepo,
 } from "@re-sourcing/db";
 import type {
   Property,
@@ -225,6 +226,13 @@ export async function analyzeAndPersistDealAnalysisOmDocuments(params: {
   targetPropertyId?: string | null;
   propertyContext?: string | null;
   sourceMetadata?: JsonRecord | null;
+  /**
+   * Run full dossier generation (deal signals + PDF/Excel) right after the OM
+   * promotes, so MTR yield and the dossier reach the pipeline/home without a
+   * manual refresh. Defaults on; generation failures fall back to a
+   * numbers-only signals refresh inside promotion and never fail the upload.
+   */
+  runDossier?: boolean;
   pool?: Pool;
 }) {
   if (params.documents.length === 0) {
@@ -444,6 +452,41 @@ export async function analyzeAndPersistDealAnalysisOmDocuments(params: {
     });
   }
 
+  // Activity log: uploads and new properties are the events the user sorts
+  // for most; failures here must never block the import.
+  try {
+    const eventRepo = new PropertyPipelineEventRepo({ pool });
+    if (createdProperty) {
+      await eventRepo.create({
+        propertyId,
+        eventType: "property_created",
+        actor: "user",
+        source: params.sourceType,
+        title: `Property created from ${params.sourceLabel}`,
+        body: canonicalAddress,
+        metadata: { matchStrategy, sourceType: params.sourceType },
+      });
+    }
+    if (persistedDocuments.length > 0) {
+      await eventRepo.create({
+        propertyId,
+        eventType: "om_uploaded",
+        actor: "user",
+        source: params.sourceType,
+        title: `OM package uploaded (${persistedDocuments.length} file${persistedDocuments.length === 1 ? "" : "s"})`,
+        body: persistedDocuments.map((document) => document.fileName).join(", "),
+        metadata: {
+          sourceType: params.sourceType,
+          sourceLabel: params.sourceLabel,
+          documentIds: persistedDocuments.map((document) => document.id),
+          createdProperty,
+        },
+      });
+    }
+  } catch (err) {
+    console.warn("[dealAnalysisOmImport] activity event failed", err instanceof Error ? err.message : err);
+  }
+
   const primaryUploadedDocument = persistedDocuments[0] ?? null;
   const promotedOm = primaryUploadedDocument
     ? await promoteReviewedOmDetailsForProperty({
@@ -451,6 +494,8 @@ export async function analyzeAndPersistDealAnalysisOmDocuments(params: {
         details,
         sourceDocumentId: primaryUploadedDocument.id,
         sourceType: "uploaded_document",
+        triggerDossier: params.runDossier !== false,
+        refreshUnderwritingSummary: true,
         sourceMeta: {
           sourceType: params.sourceType,
           workspaceStatus: "draft",
