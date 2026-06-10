@@ -14,6 +14,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { MailPlus, Star, X } from "lucide-react";
 import { BrokerContactDialog, FileDropzone, StageChip } from "@/components/ui";
+import { useProcessBanner } from "@/components/ProcessBanner";
 import {
   UI_V2_PIPELINE_STATUS_OPTIONS,
   UI_V2_REJECTION_REASON_OPTIONS,
@@ -1244,6 +1245,7 @@ export default function PipelineClient() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
+  const processBanner = useProcessBanner();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedProperty, setSelectedProperty] = useState<FlexiblePropertyDetail | null>(null);
   const [sheetTab, setSheetTab] = useState<SheetTab>("Overview");
@@ -1790,6 +1792,9 @@ export default function PipelineClient() {
     setBusyAction("bulk:listings");
     setNotice(null);
     setError(null);
+    const banner = processBanner.start("Listing refresh", {
+      message: `Refreshing ${selectedIds.length} listing${selectedIds.length === 1 ? "" : "s"}…`,
+    });
     try {
       const propertyIds = [...selectedIds];
       const payload = await apiFetch<ListingRefreshResponse>(`${API_BASE}/api/properties/refresh-listings`, {
@@ -1809,11 +1814,11 @@ export default function PipelineClient() {
         skipped > 0 ? `${skipped} skipped` : null,
         failed > 0 ? `${failed} failed` : null,
       ].filter(Boolean);
-      setNotice(
-        `Listing refresh completed: ${success}/${attempted || propertyIds.length} refreshed${
-          details.length ? `; ${details.join(", ")}` : ""
-        }.`
-      );
+      const listingSummary = `Listing refresh completed: ${success}/${attempted || propertyIds.length} refreshed${
+        details.length ? `; ${details.join(", ")}` : ""
+      }.`;
+      setNotice(listingSummary);
+      banner.succeed(listingSummary);
       const response = await apiFetch<PipelineResponse>(
         `${API_BASE}/api/ui-v2/pipeline?${buildPipelineQueryString(queryString)}`
       );
@@ -1821,7 +1826,9 @@ export default function PipelineClient() {
       setTotal(response.pipeline.total);
       if (selectedId) await loadPropertyDetail(selectedId).catch(() => null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to refresh listing activity.");
+      const message = err instanceof Error ? err.message : "Failed to refresh listing activity.";
+      banner.fail(message);
+      setError(message);
     } finally {
       setBusyAction(null);
     }
@@ -1832,6 +1839,9 @@ export default function PipelineClient() {
     setBusyAction("bulk:refresh");
     setNotice(null);
     setError(null);
+    const banner = processBanner.start("Enrichment refresh", {
+      message: `Running enrichment + rental flow for ${selectedIds.length} propert${selectedIds.length === 1 ? "y" : "ies"}…`,
+    });
     try {
       const propertyIds = [...selectedIds];
       const enrichmentResponse = await fetch(`${API_BASE}/api/properties/run-enrichment`, {
@@ -1856,18 +1866,20 @@ export default function PipelineClient() {
         throw new Error(rentalPayload.error || rentalPayload.details || "Enrichment refreshed, but rental flow failed.");
       }
       const priceChanged = Number(enrichmentPayload?.streetEasyRefresh?.priceChanged ?? 0);
-      setNotice(
-        `Refresh completed for ${propertyIds.length} propert${propertyIds.length === 1 ? "y" : "ies"}${
-          priceChanged > 0 ? `; ${priceChanged} ask change${priceChanged === 1 ? "" : "s"} found` : ""
-        }.`
-      );
+      const enrichmentSummary = `Refresh completed for ${propertyIds.length} propert${propertyIds.length === 1 ? "y" : "ies"}${
+        priceChanged > 0 ? `; ${priceChanged} ask change${priceChanged === 1 ? "" : "s"} found` : ""
+      }.`;
+      setNotice(enrichmentSummary);
+      banner.succeed(enrichmentSummary);
       const response = await apiFetch<PipelineResponse>(
         `${API_BASE}/api/ui-v2/pipeline?${buildPipelineQueryString(queryString)}`
       );
       setRows(response.pipeline.rows as PipelineRow[]);
       setTotal(response.pipeline.total);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to refresh selected properties.");
+      const message = err instanceof Error ? err.message : "Failed to refresh selected properties.";
+      banner.fail(message);
+      setError(message);
     } finally {
       setBusyAction(null);
     }
@@ -1883,6 +1895,9 @@ export default function PipelineClient() {
     setBusyAction(`${propertyId}:om-analysis`);
     setNotice(null);
     setError(null);
+    const banner = processBanner.start("OM analysis refresh", {
+      message: row?.displayAddress ?? row?.canonicalAddress ?? "Re-running OM extraction…",
+    });
     try {
       const payload = await apiFetch<OmRefreshResponse>(`${API_BASE}/api/properties/${propertyId}/refresh-om-financials`, {
         method: "POST",
@@ -1891,13 +1906,15 @@ export default function PipelineClient() {
       await reloadPipelineRows();
       if (selectedId === propertyId) await loadPropertyDetail(propertyId).catch(() => null);
       const processed = Number(payload.documentsProcessed ?? 0);
-      setNotice(
-        `OM analysis ${payload.status === "promoted" ? "updated" : "refreshed"}${
-          processed > 0 ? ` from ${processed} document${processed === 1 ? "" : "s"}` : ""
-        }${payload.underwritingRefreshed ? "; yield numbers recalculated" : ""}.`
-      );
+      const omRefreshSummary = `OM analysis ${payload.status === "promoted" ? "updated" : "refreshed"}${
+        processed > 0 ? ` from ${processed} document${processed === 1 ? "" : "s"}` : ""
+      }${payload.underwritingRefreshed ? "; yield numbers recalculated" : ""}.`;
+      setNotice(omRefreshSummary);
+      banner.succeed(omRefreshSummary);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to refresh OM analysis.");
+      const message = err instanceof Error ? err.message : "Failed to refresh OM analysis.";
+      banner.fail(message);
+      setError(message);
     } finally {
       setBusyAction(null);
     }
@@ -1913,6 +1930,9 @@ export default function PipelineClient() {
     setBusyAction(`${propertyId}:dossier`);
     setNotice(null);
     setError(null);
+    const banner = processBanner.start("Dossier rerun", {
+      message: row?.displayAddress ?? row?.canonicalAddress ?? "Re-running OM analysis + dossier…",
+    });
     try {
       const payload = await apiFetch<DossierGenerateResponse>(`${API_BASE}/api/dossier/generate`, {
         method: "POST",
@@ -1929,9 +1949,13 @@ export default function PipelineClient() {
           : payload.omRefresh?.status === "failed"
             ? " OM analysis re-run failed; existing OM analysis was used."
             : "";
-      setNotice(`Deal dossier rerun completed.${score}${omNote}`);
+      const dossierSummary = `Deal dossier rerun completed.${score}${omNote}`;
+      setNotice(dossierSummary);
+      banner.succeed(dossierSummary);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to rerun deal dossier.");
+      const message = err instanceof Error ? err.message : "Failed to rerun deal dossier.";
+      banner.fail(message);
+      setError(message);
     } finally {
       setBusyAction(null);
     }
@@ -1958,14 +1982,17 @@ export default function PipelineClient() {
       }...`
     );
     setError(null);
+    const banner = processBanner.start("OM analysis refresh", {
+      message: `Updating ${rowsToRefresh.length} propert${rowsToRefresh.length === 1 ? "y" : "ies"}…`,
+    });
     try {
       for (let index = 0; index < rowsToRefresh.length; index++) {
         const propertyId = rowsToRefresh[index]!.propertyId;
-        setNotice(
-          `Updating OM analysis ${index + 1} of ${rowsToRefresh.length}: ${
-            addressById.get(propertyId) ?? "selected property"
-          }`
-        );
+        const progressMessage = `Updating OM analysis ${index + 1} of ${rowsToRefresh.length}: ${
+          addressById.get(propertyId) ?? "selected property"
+        }`;
+        setNotice(progressMessage);
+        banner.update(progressMessage, Math.round((index / rowsToRefresh.length) * 100));
         try {
           const payload = await apiFetch<OmRefreshResponse>(`${API_BASE}/api/properties/${propertyId}/refresh-om-financials`, {
             method: "POST",
@@ -1990,20 +2017,25 @@ export default function PipelineClient() {
         yieldsRefreshed > 0
           ? ` Yield numbers recalculated for ${yieldsRefreshed} propert${yieldsRefreshed === 1 ? "y" : "ies"}.`
           : "";
-      setNotice(
+      const omSummary =
         failures.length === 0
           ? `OM analysis updated for ${completed} propert${completed === 1 ? "y" : "ies"}.${skippedMessage}${yieldsMessage}`
-          : `OM analysis updated for ${completed} of ${rowsToRefresh.length} eligible properties.${skippedMessage}${yieldsMessage}`
-      );
+          : `OM analysis updated for ${completed} of ${rowsToRefresh.length} eligible properties.${skippedMessage}${yieldsMessage}`;
+      setNotice(omSummary);
       if (failures.length > 0) {
+        banner.fail(omSummary);
         setError(
           `${failures.length} OM analysis refresh${failures.length === 1 ? "" : "es"} failed. First issue: ${
             failures[0]!.address
           } - ${failures[0]!.message}`
         );
+      } else {
+        banner.succeed(omSummary);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to refresh selected OM analysis.");
+      const message = err instanceof Error ? err.message : "Failed to refresh selected OM analysis.";
+      banner.fail(message);
+      setError(message);
     } finally {
       setBusyAction(null);
     }

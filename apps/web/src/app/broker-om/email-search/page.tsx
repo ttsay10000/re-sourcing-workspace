@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { EmptyState, PageHeader } from "@/components/ui";
 import { API_BASE } from "@/lib/api";
+import { useProcessBanner } from "@/components/ProcessBanner";
 import styles from "./page.module.css";
 
 const CATEGORY_OPTIONS = [
@@ -106,6 +107,8 @@ interface SearchResponse {
   largeAttachmentBytes: number;
   maxAttachmentBytes: number;
   documents: GmailDocumentCandidate[];
+  /** True when the scan stopped at its server-side time budget — pull again to continue. */
+  truncated?: boolean;
   newPropertyCandidates: NewPropertyEmailCandidate[];
 }
 
@@ -215,6 +218,7 @@ export default function BrokerOmEmailSearchPage() {
   const [stateLoading, setStateLoading] = useState(false);
   const [searching, setSearching] = useState(false);
   const [importing, setImporting] = useState(false);
+  const processBanner = useProcessBanner();
   const [creatingPropertyId, setCreatingPropertyId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -295,6 +299,9 @@ export default function BrokerOmEmailSearchPage() {
     setNotice(null);
     setError(null);
     setPreview(null);
+    const banner = processBanner.start("Email pull", {
+      message: propertyId ? "Scanning Gmail for this property…" : "Scanning Gmail for deal documents…",
+    });
     try {
       const url = propertyId
         ? `${API_BASE}/api/broker-om/properties/${encodeURIComponent(propertyId)}/email-search`
@@ -324,13 +331,18 @@ export default function BrokerOmEmailSearchPage() {
         maxAttachmentBytes: result.maxAttachmentBytes,
       });
       const matchedCount = result.documents.filter((document) => document.matchedProperty).length;
-      setNotice(
-        propertyId
-          ? `Pull complete: ${result.documents.length} property document${result.documents.length === 1 ? "" : "s"} found.`
-          : `Pull complete: ${result.documents.length} deal document${result.documents.length === 1 ? "" : "s"} found, ${matchedCount} matched to existing properties.`
-      );
+      const truncatedNote = result.truncated
+        ? " Partial pull — the scan hit its time budget; pull again to continue."
+        : "";
+      const summary = propertyId
+        ? `Pull complete: ${result.documents.length} property document${result.documents.length === 1 ? "" : "s"} found.${truncatedNote}`
+        : `Pull complete: ${result.documents.length} deal document${result.documents.length === 1 ? "" : "s"} found, ${matchedCount} matched to existing properties.${truncatedNote}`;
+      setNotice(summary);
+      banner.succeed(summary);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to search Gmail");
+      const message = err instanceof Error ? err.message : "Failed to search Gmail";
+      banner.fail(message);
+      setError(message);
     } finally {
       setSearching(false);
     }
@@ -411,6 +423,9 @@ export default function BrokerOmEmailSearchPage() {
     setImporting(true);
     setNotice(null);
     setError(null);
+    const banner = processBanner.start("Importing email documents", {
+      message: `Uploading ${selectedDocuments.length} document${selectedDocuments.length === 1 ? "" : "s"} from Gmail…`,
+    });
     try {
       const url = propertyId
         ? `${API_BASE}/api/broker-om/properties/${encodeURIComponent(propertyId)}/import-email-documents`
@@ -435,12 +450,15 @@ export default function BrokerOmEmailSearchPage() {
       const importedCount = data.imported?.length ?? 0;
       const skippedCount = data.skipped?.length ?? 0;
       const errorCount = data.errors?.length ?? 0;
-      setNotice(
-        `Imported ${importedCount} document${importedCount === 1 ? "" : "s"}${skippedCount ? `, skipped ${skippedCount}` : ""}${errorCount ? `, ${errorCount} failed` : ""}.`
-      );
+      const summary = `Imported ${importedCount} document${importedCount === 1 ? "" : "s"}${skippedCount ? `, skipped ${skippedCount}` : ""}${errorCount ? `, ${errorCount} failed` : ""}.`;
+      setNotice(summary);
+      if (errorCount > 0) banner.fail(summary);
+      else banner.succeed(summary);
       clearSelection();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to import selected documents");
+      const message = err instanceof Error ? err.message : "Failed to import selected documents";
+      banner.fail(message);
+      setError(message);
     } finally {
       setImporting(false);
     }

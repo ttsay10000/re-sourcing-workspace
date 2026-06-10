@@ -119,7 +119,7 @@ router.post("/cron/process-inbox", async (req: Request, res: Response) => {
           : "completed",
       startedAt: workflowStartedAt,
       finishedAt: new Date().toISOString(),
-      lastMessage: `${result.saved} email${result.saved === 1 ? "" : "s"} saved from ${result.processed} processed${batchNote}${actionNote}`,
+      lastMessage: `${result.saved} email${result.saved === 1 ? "" : "s"} saved from ${result.processed} processed${batchNote}${actionNote}${result.truncated ? " (time budget reached — next run continues from the overlap window)" : ""}`,
       lastError: result.errors[0] ?? null,
     });
     await mergeWorkflowRunMetadata(workflowRunId, result as unknown as Record<string, unknown>);

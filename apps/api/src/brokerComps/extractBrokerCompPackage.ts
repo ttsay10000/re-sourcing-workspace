@@ -239,9 +239,9 @@ function normalizedPayload(item: BrokerCompExtractedItemInput): JsonRecord {
 function extractedItemDedupeKey(item: BrokerCompExtractedItemInput): string | null {
   const data = normalizedPayload(item);
   if (item.itemType === "subject_projected_pricing") return "subject_projected_pricing";
-  if (item.itemType === "pricing_comp") {
+  if (item.itemType === "pricing_comp" || item.itemType === "sale_comp") {
     const address = stringValue(data.address ?? data.propertyAddress);
-    return address ? `pricing_comp:${address.toLowerCase()}` : null;
+    return address ? `${item.itemType}:${address.toLowerCase()}` : null;
   }
   if (item.itemType === "unit_breakdown_row") {
     const address = stringValue(data.address ?? data.propertyAddress);
@@ -507,6 +507,21 @@ export async function extractBrokerCompPackageDraft(buffer: Buffer, filename: st
     });
   }
 
+  // Cap-rate coverage: the whole point of comp packages is cap rates for comp
+  // analysis. Flag packages whose comps only carry $/PSF so the analyst knows
+  // to push the broker for investment-sale comps.
+  const compItems = extractedItems.filter(
+    (item) => item.itemType === "sale_comp" || item.itemType === "pricing_comp"
+  );
+  const compsWithCapRate = compItems.filter((item) => {
+    const data = item.normalizedPayload ?? {};
+    return data.capRatePct != null;
+  }).length;
+  const psfOnlyComps = compItems.filter((item) => {
+    const data = item.normalizedPayload ?? {};
+    return data.capRatePct == null && (data.pricePerSqft != null || data.soldPpsf != null || data.askingPpsf != null);
+  }).length;
+
   return {
     packageType,
     pages,
@@ -517,6 +532,10 @@ export async function extractBrokerCompPackageDraft(buffer: Buffer, filename: st
       textChars: metadata.text.length,
       pageCount: metadata.pageCount ?? pages.length,
       extractedItemCount: extractedItems.length,
+      compCount: compItems.length,
+      compsWithCapRate,
+      psfOnlyComps,
+      psfOnlyPackage: compItems.length > 0 && compsWithCapRate === 0,
       extractionMode: geminiExtraction ? "hybrid_gemini_text" : filename.toLowerCase().match(/\.(xls|xlsx|csv)$/) ? "spreadsheet" : "text",
       gemini: geminiExtraction
         ? {

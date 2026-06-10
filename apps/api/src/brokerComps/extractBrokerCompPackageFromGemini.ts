@@ -278,6 +278,24 @@ function normalizeCompPayload(comp: JsonRecord): JsonRecord {
   const bedroomBreakdown = recordArray(comp.bedroomBreakdown ?? comp.unitBreakdown ?? comp.bedroomMix)
     .map(normalizeBedroomRow)
     .filter((row) => stringValue(row.bedroomType) || row.count != null);
+
+  // Investment-sale financials — what comp analysis actually needs. Cap rate is
+  // the priority; when only PSF figures exist the item gets flagged psfOnly.
+  const units = numberValue(comp.units ?? comp.unitCount);
+  const capRatePct = percentValue(comp.capRatePct ?? comp.capRate ?? comp.cap_rate);
+  const noi = moneyValue(comp.noi ?? comp.netOperatingIncome ?? comp.net_operating_income);
+  const salePrice = moneyValue(comp.salePrice ?? comp.soldPrice ?? comp.closingPrice ?? comp.sale_price);
+  const saleDate = stringValue(comp.saleDate ?? comp.closingDate ?? comp.soldDate ?? comp.sale_date);
+  const buildingSqft = numberValue(comp.buildingSqft ?? comp.grossSqft ?? comp.gsf ?? comp.building_sf);
+  const salePsf =
+    moneyValue(comp.salePsf ?? comp.pricePsf ?? comp.price_psf) ??
+    (salePrice != null && buildingSqft != null && buildingSqft > 0 ? Math.round(salePrice / buildingSqft) : null);
+  const pricePerUnit =
+    moneyValue(comp.pricePerUnit ?? comp.price_per_unit) ??
+    (salePrice != null && units != null && units > 0 ? Math.round(salePrice / units) : null);
+  const pricePerSqft = salePsf ?? soldPpsf ?? askingPpsf;
+  const psfOnly = capRatePct == null && pricePerSqft != null;
+
   return {
     propertyName: stringValue(comp.propertyName ?? comp.projectName ?? comp.name),
     address: stringValue(comp.address ?? comp.propertyAddress),
@@ -287,14 +305,25 @@ function normalizeCompPayload(comp: JsonRecord): JsonRecord {
     designer: stringValue(comp.designer),
     yearCompleted: numberValue(comp.yearCompleted ?? comp.completedYear),
     floors: numberValue(comp.floors ?? comp.floorCount),
-    units: numberValue(comp.units ?? comp.unitCount),
+    units,
     salesBegan: stringValue(comp.salesBegan ?? comp.salesStart),
     percentSoldPct: percentValue(comp.percentSold ?? comp.percentSoldPct),
     averageUnitSqft,
     averageUnitSf: averageUnitSqft,
     askingPpsf,
     soldPpsf,
-    pricePerSqft: soldPpsf ?? askingPpsf,
+    pricePerSqft,
+    capRatePct,
+    noi,
+    salePrice,
+    saleDate,
+    buildingSqft,
+    pricePerUnit,
+    propertyType: stringValue(comp.propertyType ?? comp.assetType ?? comp.asset_type),
+    metricFlags: {
+      hasCapRate: capRatePct != null,
+      psfOnly,
+    },
     averageAskingUnitPrice:
       averageUnitSqft != null && askingPpsf != null
         ? Math.round(averageUnitSqft * askingPpsf)
@@ -304,7 +333,7 @@ function normalizeCompPayload(comp: JsonRecord): JsonRecord {
     priceRangeHigh: priceRange.high,
     bedroomTypes: bedroomBreakdown.map((row) => row.bedroomType).filter(Boolean),
     bedroomBreakdown,
-    packageFlavor: "pricing_sellout",
+    packageFlavor: capRatePct != null || salePrice != null || noi != null ? "investment_sale" : "pricing_sellout",
     sourceType: "gemini_pdf",
   };
 }
@@ -349,6 +378,13 @@ Top-level JSON shape:
       "askingPpsf": number|null,
       "soldPpsf": number|null,
       "priceRange": string|null,
+      "salePrice": number|null,
+      "saleDate": string|null,
+      "capRatePct": number|null,
+      "noi": number|null,
+      "pricePerUnit": number|null,
+      "buildingSqft": number|null,
+      "propertyType": string|null,
       "bedroomBreakdown": [
         {"bedroomType": string|null, "bedrooms": number|null, "count": number|null, "avgSizeSqft": number|null, "avgAskingPpsf": number|null, "avgSoldPpsf": number|null, "avgCommonChargesMonthly": number|null, "priceRange": string|null}
       ],
@@ -364,6 +400,8 @@ Top-level JSON shape:
 Rules:
 - Preserve exact values from the PDF. Do not invent sale prices, cap rates, NOI, expenses, or rent data when absent.
 - Convert dollar values, percentages, square feet, and monthly common charges to numbers where possible.
+- INVESTMENT-SALE COMPS ARE TOP PRIORITY: for each comparable in a sale-comp grid or profile, extract salePrice, saleDate, capRatePct, noi, pricePerUnit, buildingSqft, and propertyType whenever they appear. capRatePct is a percentage number (e.g. 5.25 for a 5.25% cap rate, never 0.0525).
+- If a comparable shows only $/SF pricing with NO cap rate, still extract it, leave capRatePct null, and add a missingDataFlags entry {"field": "capRate", "severity": "warning"} for that comp.
 - For condo/new-development packages, asking PPSF, sold PPSF, percent sold, price range, and bedroom mix are high-priority.
 - Extract subject projected pricing rows even if they are image-only.
 - Keep comps separated by bedroom type so a 1-bed row can be compared with other 1-bed rows, etc.
@@ -407,8 +445,10 @@ function itemsFromParsedJson(parsed: JsonRecord): BrokerCompExtractedItemInput[]
   for (const comp of recordArray(parsed.comparables ?? parsed.comps ?? parsed.projects)) {
     const normalized = normalizeCompPayload(comp);
     const pageRefs = pageRefsFromRecord(comp, 1);
+    const isSaleComp =
+      normalized.capRatePct != null || normalized.salePrice != null || normalized.noi != null;
     items.push({
-      itemType: "pricing_comp",
+      itemType: isSaleComp ? "sale_comp" : "pricing_comp",
       rawPayload: comp,
       normalizedPayload: normalized,
       pageRefs,

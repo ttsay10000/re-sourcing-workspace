@@ -2095,7 +2095,7 @@ function DealAnalysisPageContent() {
                 </span>
               )}
             </span>
-            <a href="/yield-map" style={{ fontSize: "0.8rem", fontWeight: 800, color: "#0f766e" }}>
+            <a href="/pipeline/yield-map" style={{ fontSize: "0.8rem", fontWeight: 800, color: "#0f766e" }}>
               Compare in Yield Map →
             </a>
           </div>

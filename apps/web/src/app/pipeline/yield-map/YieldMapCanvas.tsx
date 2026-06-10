@@ -7,7 +7,11 @@ import styles from "./yieldMap.module.css";
 import type { NeighborhoodCollection } from "./geo";
 
 export type MapPin = {
+  /** Unique across deals AND comps (deals use propertyId, comps use comp:<itemId>). */
+  id: string;
+  /** Subject property to open for this pin (the comp's subject for comps). */
   propertyId: string;
+  kind: "deal" | "comp";
   address: string;
   lat: number;
   lng: number;
@@ -24,9 +28,10 @@ export type AreaStat = {
   /** [lng, lat] badge anchor. */
   labelPoint: [number, number];
   count: number;
-  medianYieldPct: number;
-  /** Median of per-deal yield moves since first sourced; null when no deal has history yet. */
-  medianDeltaPct: number | null;
+  /** Formatted metric for the badge, e.g. "5.43%" or "$612/SF". */
+  valueLabel: string;
+  /** Hover tooltip for the badge. */
+  titleLabel: string;
   trend: "up" | "down" | "flat" | null;
   color: string;
 };
@@ -58,6 +63,13 @@ function popupNode(pin: MapPin): HTMLElement {
   const root = document.createElement("div");
   root.className = styles.popup;
 
+  if (pin.kind === "comp") {
+    const tag = document.createElement("span");
+    tag.className = styles.popupCompTag;
+    tag.textContent = "Comp";
+    root.appendChild(tag);
+  }
+
   const address = document.createElement("strong");
   address.textContent = pin.address;
   root.appendChild(address);
@@ -70,7 +82,7 @@ function popupNode(pin: MapPin): HTMLElement {
 
   const link = document.createElement("a");
   link.href = `/pipeline?propertyId=${encodeURIComponent(pin.propertyId)}`;
-  link.textContent = "Open in pipeline →";
+  link.textContent = pin.kind === "comp" ? "Open subject deal →" : "Open in pipeline →";
   root.appendChild(link);
 
   return root;
@@ -91,7 +103,7 @@ function badgeNode(area: AreaStat): HTMLElement {
   const value = document.createElement("span");
   value.className = styles.areaBadgeValue;
   value.style.color = area.color;
-  value.textContent = `${area.medianYieldPct.toFixed(2)}%`;
+  value.textContent = area.valueLabel;
   if (area.trend) {
     const trend = document.createElement("span");
     trend.className =
@@ -101,43 +113,52 @@ function badgeNode(area: AreaStat): HTMLElement {
   }
   root.appendChild(value);
 
-  const deltaText =
-    area.medianDeltaPct != null
-      ? ` · Δ ${area.medianDeltaPct >= 0 ? "+" : ""}${area.medianDeltaPct.toFixed(2)}pp since first sourced`
-      : "";
-  root.title = `${area.name} (${area.borough}) — median ${area.medianYieldPct.toFixed(2)}% across ${area.count} mapped ${
-    area.count === 1 ? "deal" : "deals"
-  }${deltaText}`;
+  root.title = area.titleLabel;
   return root;
 }
 
-/** Data-driven fill: tint each aggregated neighborhood with its yield-band color. */
+/** Data-driven fill: tint each aggregated neighborhood with its metric-band color. */
 function areaFillColor(areas: AreaStat[]): maplibregl.ExpressionSpecification | string {
   if (areas.length === 0) return TRANSPARENT;
   const branches = areas.flatMap((area) => [area.code, area.color]);
   return ["match", ["get", "code"], ...branches, TRANSPARENT] as unknown as maplibregl.ExpressionSpecification;
 }
 
+interface MarkerEntry {
+  marker: maplibregl.Marker;
+  element: HTMLElement;
+  popup: maplibregl.Popup;
+}
+
 /**
- * MapLibre canvas: neighborhood delineations + median-yield badges under
- * one marker per geocoded comp, fit to the visible set.
+ * MapLibre canvas: neighborhood delineations + metric badges under one marker
+ * per geocoded deal (dots) and comp (diamonds), fit to the visible set.
+ * Popups open on hover (sticky on click); `highlightedId` enlarges a pin so
+ * table-row hover can point at the map.
  */
 export function YieldMapCanvas({
   pins,
   boundaries,
   areas,
   showAreas,
+  highlightedId,
+  onPinHover,
 }: {
   pins: MapPin[];
   boundaries: NeighborhoodCollection | null;
   areas: AreaStat[];
   showAreas: boolean;
+  highlightedId?: string | null;
+  onPinHover?: (id: string | null) => void;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
-  const markersRef = useRef<maplibregl.Marker[]>([]);
+  const markersRef = useRef<Map<string, MarkerEntry>>(new Map());
   const badgesRef = useRef<maplibregl.Marker[]>([]);
   const styleReadyRef = useRef(false);
+  const lastFitKeyRef = useRef<string>("");
+  const onPinHoverRef = useRef(onPinHover);
+  onPinHoverRef.current = onPinHover;
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
@@ -153,8 +174,11 @@ export function YieldMapCanvas({
     });
     mapRef.current = map;
     return () => {
-      markersRef.current.forEach((marker) => marker.remove());
-      markersRef.current = [];
+      markersRef.current.forEach((entry) => {
+        entry.popup.remove();
+        entry.marker.remove();
+      });
+      markersRef.current.clear();
       badgesRef.current.forEach((marker) => marker.remove());
       badgesRef.current = [];
       map.remove();
@@ -163,7 +187,7 @@ export function YieldMapCanvas({
     };
   }, []);
 
-  // Boundary polygons + yield fills (canvas layers, under the DOM markers).
+  // Boundary polygons + metric fills (canvas layers, under the DOM markers).
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
@@ -202,7 +226,7 @@ export function YieldMapCanvas({
     };
   }, [boundaries, areas, showAreas]);
 
-  // Median-yield badges at neighborhood label points (DOM markers, under pins).
+  // Metric badges at neighborhood label points (DOM markers, under pins).
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
@@ -217,23 +241,68 @@ export function YieldMapCanvas({
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
-    markersRef.current.forEach((marker) => marker.remove());
-    markersRef.current = pins.map((pin) => {
+    markersRef.current.forEach((entry) => {
+      entry.popup.remove();
+      entry.marker.remove();
+    });
+    markersRef.current.clear();
+
+    for (const pin of pins) {
       const element = document.createElement("button");
       element.type = "button";
-      element.className = styles.pin;
+      element.className = pin.kind === "comp" ? `${styles.pin} ${styles.pinComp}` : styles.pin;
       element.style.background = pin.color;
-      element.setAttribute("aria-label", pin.address);
-      const popup = new maplibregl.Popup({ offset: 12, closeButton: false, maxWidth: "280px" }).setDOMContent(popupNode(pin));
-      return new maplibregl.Marker({ element }).setLngLat([pin.lng, pin.lat]).setPopup(popup).addTo(map);
-    });
+      element.setAttribute("aria-label", pin.kind === "comp" ? `Comp: ${pin.address}` : pin.address);
 
-    if (pins.length > 0) {
+      const popup = new maplibregl.Popup({ offset: 12, closeButton: false, maxWidth: "300px" })
+        .setDOMContent(popupNode(pin))
+        .setLngLat([pin.lng, pin.lat]);
+
+      // Hover shows the popup; click pins it open until the next map click.
+      let sticky = false;
+      popup.on("close", () => {
+        sticky = false;
+      });
+      element.addEventListener("mouseenter", () => {
+        onPinHoverRef.current?.(pin.id);
+        if (!popup.isOpen()) popup.addTo(map);
+      });
+      element.addEventListener("mouseleave", () => {
+        onPinHoverRef.current?.(null);
+        if (!sticky) popup.remove();
+      });
+      element.addEventListener("click", (event) => {
+        event.stopPropagation();
+        sticky = !sticky;
+        if (sticky && !popup.isOpen()) popup.addTo(map);
+        if (!sticky) popup.remove();
+      });
+
+      const marker = new maplibregl.Marker({ element }).setLngLat([pin.lng, pin.lat]).addTo(map);
+      markersRef.current.set(pin.id, { marker, element, popup });
+    }
+
+    // Refit only when the visible set changes — recoloring shouldn't move the camera.
+    const fitKey = pins
+      .map((pin) => pin.id)
+      .sort()
+      .join("|");
+    if (pins.length > 0 && fitKey !== lastFitKeyRef.current) {
+      lastFitKeyRef.current = fitKey;
       const bounds = new maplibregl.LngLatBounds();
       pins.forEach((pin) => bounds.extend([pin.lng, pin.lat]));
       map.fitBounds(bounds, { padding: 56, maxZoom: 14.5, duration: 0 });
     }
   }, [pins]);
+
+  // Table-row hover → enlarge + ring the matching pin.
+  useEffect(() => {
+    markersRef.current.forEach((entry, id) => {
+      const highlighted = id === highlightedId;
+      entry.element.classList.toggle(styles.pinHighlighted, highlighted);
+      entry.element.style.zIndex = highlighted ? "5" : "";
+    });
+  }, [highlightedId, pins]);
 
   return <div ref={containerRef} className={styles.mapCanvas} />;
 }

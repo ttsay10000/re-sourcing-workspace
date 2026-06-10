@@ -415,3 +415,134 @@
   background: var(--brand) !important;
   color: var(--brand-on, #ffffff) !important;
 }
+
+/* ─── Comps overlay ───────────────────────────────────────────── */
+
+/* Broker-package comps render as diamonds (rotated squares) with a violet
+   ring so they read instantly against the round deal dots. */
+.pinComp {
+  border-radius: 3px;
+  transform: rotate(45deg);
+  border-color: #ffffff;
+  box-shadow: 0 0 0 1.5px #7c3aed, 0 1px 4px rgba(24, 24, 27, 0.35);
+}
+
+.pinComp:hover {
+  transform: rotate(45deg) scale(1.25);
+}
+
+/* Table-row hover spotlight: enlarge + brand ring (composes with the comp rotation). */
+.pinHighlighted {
+  transform: scale(1.7);
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.45), 0 2px 8px rgba(24, 24, 27, 0.5);
+}
+
+.pinComp.pinHighlighted {
+  transform: rotate(45deg) scale(1.7);
+  box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.5), 0 2px 8px rgba(24, 24, 27, 0.5);
+}
+
+.compToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: var(--text-2xs, 0.72rem);
+  font-weight: 650;
+  color: var(--app-ink-secondary);
+  cursor: pointer;
+  border: 1px solid var(--app-line);
+  border-radius: var(--radius-md, 8px);
+  padding: 0.3rem 0.6rem;
+  background: var(--app-surface);
+}
+
+.compToggle input {
+  accent-color: #7c3aed;
+  margin: 0;
+}
+
+.compToggleNote {
+  color: var(--app-muted);
+  font-weight: 500;
+}
+
+.legendDiamond {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  transform: rotate(45deg);
+  background: #ffffff;
+  box-shadow: 0 0 0 1.5px #7c3aed;
+  flex-shrink: 0;
+}
+
+/* Comp rows interleave with deals: violet left rail + tinted background. */
+.compRow td {
+  background: #f8f6ff;
+}
+
+.compRow td:first-child {
+  box-shadow: inset 3px 0 0 #7c3aed;
+}
+
+.compRowHead {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.compLink {
+  font-weight: 750;
+  color: #6d28d9;
+  text-decoration: none;
+}
+
+.compLink:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.compChip {
+  display: inline-block;
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #6d28d9;
+  background: #ede9fe;
+  border: 1px solid #ddd6fe;
+  border-radius: var(--radius-pill, 999px);
+  padding: 0.05rem 0.4rem;
+}
+
+.psfOnlyChip {
+  display: inline-block;
+  font-size: 0.66rem;
+  font-weight: 750;
+  color: #92400e;
+  background: #fef3c7;
+  border: 1px solid #fde68a;
+  border-radius: var(--radius-pill, 999px);
+  padding: 0.08rem 0.45rem;
+  white-space: nowrap;
+}
+
+/* Hover-linked highlight for both deal and comp rows (map pin ↔ table row). */
+.rowActive td {
+  background: var(--brand-soft, #f0fdfa) !important;
+}
+
+.popupCompTag {
+  display: inline-block;
+  width: fit-content;
+  font-size: 0.6rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #6d28d9;
+  background: #ede9fe;
+  border-radius: var(--radius-pill, 999px);
+  padding: 0.05rem 0.4rem;
+  margin-bottom: 0.1rem;
+}

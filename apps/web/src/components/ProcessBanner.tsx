@@ -52,6 +52,8 @@ export interface ProcessHandle {
 
 interface ProcessBannerContextValue {
   start: (label: string, options?: { message?: string; workflowRunId?: string | null }) => ProcessHandle;
+  entries: ProcessEntry[];
+  dismiss: (id: string) => void;
 }
 
 const ProcessBannerContext = createContext<ProcessBannerContextValue | null>(null);
@@ -195,53 +197,56 @@ export function ProcessBannerProvider({ children }: { children: ReactNode }) {
     };
   }, [entries, patchEntry]);
 
-  const contextValue = useMemo(() => ({ start }), [start]);
+  const contextValue = useMemo(() => ({ start, entries, dismiss: removeEntry }), [start, entries, removeEntry]);
 
+  return <ProcessBannerContext.Provider value={contextValue}>{children}</ProcessBannerContext.Provider>;
+}
+
+/** Slim banner stack — place directly under the app topbar. */
+export function ProcessBannerViewport() {
+  const context = useContext(ProcessBannerContext);
+  if (!context || context.entries.length === 0) return null;
+  const { entries, dismiss } = context;
   return (
-    <ProcessBannerContext.Provider value={contextValue}>
-      {entries.length > 0 ? (
-        <div className={styles.viewport} role="status" aria-live="polite">
-          {entries.map((entry) => (
-            <div
-              key={entry.id}
-              className={`${styles.banner} ${
-                entry.status === "success" ? styles.bannerSuccess : entry.status === "error" ? styles.bannerError : styles.bannerRunning
-              }`}
-            >
-              <span className={styles.icon} aria-hidden="true">
-                {entry.status === "running" ? (
-                  <Loader2 size={15} strokeWidth={2.2} className={styles.spinner} />
-                ) : entry.status === "success" ? (
-                  <CheckCircle2 size={15} strokeWidth={2.2} />
-                ) : (
-                  <AlertTriangle size={15} strokeWidth={2.2} />
-                )}
+    <div className={styles.viewport} role="status" aria-live="polite">
+      {entries.map((entry) => (
+        <div
+          key={entry.id}
+          className={`${styles.banner} ${
+            entry.status === "success" ? styles.bannerSuccess : entry.status === "error" ? styles.bannerError : styles.bannerRunning
+          }`}
+        >
+          <span className={styles.icon} aria-hidden="true">
+            {entry.status === "running" ? (
+              <Loader2 size={15} strokeWidth={2.2} className={styles.spinner} />
+            ) : entry.status === "success" ? (
+              <CheckCircle2 size={15} strokeWidth={2.2} />
+            ) : (
+              <AlertTriangle size={15} strokeWidth={2.2} />
+            )}
+          </span>
+          <span className={styles.label}>{entry.label}</span>
+          {entry.message ? <span className={styles.message}>{entry.message}</span> : null}
+          {entry.status === "running" && entry.progressPct != null ? (
+            <span className={styles.progress}>
+              <span className={styles.progressTrack}>
+                <span className={styles.progressFill} style={{ width: `${entry.progressPct}%` }} />
               </span>
-              <span className={styles.label}>{entry.label}</span>
-              {entry.message ? <span className={styles.message}>{entry.message}</span> : null}
-              {entry.status === "running" && entry.progressPct != null ? (
-                <span className={styles.progress}>
-                  <span className={styles.progressTrack}>
-                    <span className={styles.progressFill} style={{ width: `${entry.progressPct}%` }} />
-                  </span>
-                  <span className={styles.progressPct}>{entry.progressPct}%</span>
-                </span>
-              ) : null}
-              <button
-                type="button"
-                className={styles.dismiss}
-                onClick={() => removeEntry(entry.id)}
-                aria-label={`Dismiss ${entry.label} notification`}
-                title={entry.status === "running" ? "Hide — the process keeps running" : "Dismiss"}
-              >
-                <X size={13} strokeWidth={2.4} />
-              </button>
-            </div>
-          ))}
+              <span className={styles.progressPct}>{entry.progressPct}%</span>
+            </span>
+          ) : null}
+          <button
+            type="button"
+            className={styles.dismiss}
+            onClick={() => dismiss(entry.id)}
+            aria-label={`Dismiss ${entry.label} notification`}
+            title={entry.status === "running" ? "Hide — the process keeps running" : "Dismiss"}
+          >
+            <X size={13} strokeWidth={2.4} />
+          </button>
         </div>
-      ) : null}
-      {children}
-    </ProcessBannerContext.Provider>
+      ))}
+    </div>
   );
 }
 
@@ -254,7 +259,7 @@ const NOOP_HANDLE: ProcessHandle = {
   fail: () => {},
 };
 
-export function useProcessBanner(): ProcessBannerContextValue {
+export function useProcessBanner(): Pick<ProcessBannerContextValue, "start"> {
   const context = useContext(ProcessBannerContext);
   return context ?? { start: () => NOOP_HANDLE };
 }
