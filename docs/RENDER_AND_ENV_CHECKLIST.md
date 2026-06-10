@@ -157,6 +157,8 @@ If `PROCESS_INBOX_CRON_SECRET` is set, include either:
 ## Migrate on boot (added 2026-06-10)
 
 Set `MIGRATE_ON_BOOT=1` on the API service (Render → service → Environment).
+`render.yaml` now sets it on `re-sourcing-api`, so a blueprint Apply/Sync enables
+it automatically; set it manually only on a service that predates the sync.
 On every deploy/restart the API applies pending `packages/db/migrations/*.sql`
 (tracked in `schema_migrations`, idempotent) before it starts listening, then
 the boot schema guard verifies sentinel tables/columns. Manual alternative:
