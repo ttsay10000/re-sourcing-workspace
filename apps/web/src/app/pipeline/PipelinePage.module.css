@@ -2004,10 +2004,11 @@
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
-  border: 1px solid #dbe5df;
-  border-left: 3px solid #4f8f73;
-  border-radius: 6px;
-  padding: 0.75rem;
+  border: 1px solid var(--app-line, #e4e4e7);
+  border-left: 3px solid var(--brand, #0f766e);
+  border-radius: var(--radius-md, 8px);
+  background: var(--app-surface, #ffffff);
+  padding: 0.6rem 0.75rem;
   background: linear-gradient(90deg, #f6fbf7 0%, #ffffff 100%);
 }
 
@@ -2018,18 +2019,18 @@
 }
 
 .enrichmentLead strong {
-  color: #17252f;
+  color: var(--app-ink, #18181b);
   font-family: var(--font-display);
-  font-size: 1.05rem;
-  font-weight: 500;
+  font-size: var(--text-md, 1rem);
+  font-weight: 600;
 }
 
 .enrichmentLead span:not(.tinyChip),
 .enrichmentSections small,
 .enrichmentSections p {
-  color: #64717b;
-  font-size: 0.76rem;
-  line-height: 1.35;
+  color: var(--app-muted, #71717a);
+  font-size: 0.74rem;
+  line-height: 1.4;
 }
 
 .enrichmentError {
@@ -2072,17 +2073,26 @@
 
 .enrichmentSections {
   display: grid;
-  gap: 0.45rem;
+  grid-template-columns: repeat(auto-fill, minmax(19rem, 1fr));
+  gap: 0.6rem;
   margin: 0;
   padding: 0;
   list-style: none;
+  align-items: start;
 }
 
 .enrichmentSections > li {
-  border: 1px solid #e2e8e4;
-  border-radius: 6px;
-  padding: 0.75rem;
-  background: #fbfcfa;
+  border: 1px solid var(--app-line, #e4e4e7);
+  border-radius: var(--radius-lg, 10px);
+  padding: 0.8rem 0.9rem;
+  background: var(--app-surface, #ffffff);
+  box-shadow: var(--app-shadow-xs);
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+
+.enrichmentSections > li:hover {
+  border-color: var(--brand-border, #99f6e4);
+  box-shadow: var(--app-shadow-soft);
 }
 
 .enrichmentSectionHeader {
@@ -2094,8 +2104,9 @@
 }
 
 .enrichmentSectionHeader strong {
-  color: #1d2b34;
-  font-size: 0.88rem;
+  color: var(--app-ink, #18181b);
+  font-size: 0.85rem;
+  font-weight: 650;
 }
 
 .enrichmentBullets {
@@ -2114,19 +2125,20 @@
 }
 
 .enrichmentBullets span {
-  color: #6a756f;
-  font-size: 0.7rem;
-  font-weight: 700;
-  letter-spacing: 0.05em;
+  color: var(--app-muted, #71717a);
+  font-size: 0.66rem;
+  font-weight: 650;
+  letter-spacing: var(--tracking-label, 0.08em);
   text-transform: uppercase;
 }
 
 .enrichmentBullets strong {
   min-width: 0;
-  color: #1f2b34;
+  color: var(--app-ink, #18181b);
   font-size: 0.82rem;
   font-weight: 600;
   line-height: 1.35;
+  font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
 }
 
@@ -2932,4 +2944,45 @@
 .pipelineTable thead th:nth-child(-n + 3) {
   z-index: 9;
   background: var(--app-surface-strong, #f4f4f3);
+}
+
+
+/* ─── Overhaul pass: OM-aware empty states in the property sheet ── */
+
+.screeningPending {
+  color: var(--app-placeholder, #d4d4d8) !important;
+  font-weight: 400 !important;
+}
+
+.omPendingCallout {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  border: 1px dashed var(--app-line-strong, #d4d4d8);
+  border-radius: var(--radius-lg, 10px);
+  background: var(--app-surface-raised, #fafaf9);
+  padding: 0.9rem 1.1rem;
+}
+
+.omPendingCallout strong {
+  display: block;
+  color: var(--app-ink, #18181b);
+  font-size: 0.92rem;
+  font-weight: 650;
+}
+
+.omPendingCallout p {
+  margin: 0.2rem 0 0;
+  color: var(--app-muted, #71717a);
+  font-size: 0.8rem;
+  line-height: 1.45;
+  max-width: 30rem;
+}
+
+.omPendingActions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
 }

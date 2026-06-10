@@ -52,6 +52,7 @@ import {
 } from "../property-data/brokerComps";
 import styles from "./PipelinePage.module.css";
 import { API_BASE, apiFetch } from "@/lib/api";
+import { EMPTY_VALUE } from "@/lib/format";
 
 const PIPELINE_PATH = "/pipeline";
 
@@ -420,7 +421,7 @@ function propertyDetailHasOm(property: FlexiblePropertyDetail | null | undefined
 }
 
 function formatCurrency(value: number | null | undefined, compact = true): string {
-  if (value == null || !Number.isFinite(value)) return "-";
+  if (value == null || !Number.isFinite(value)) return EMPTY_VALUE;
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
@@ -430,26 +431,26 @@ function formatCurrency(value: number | null | undefined, compact = true): strin
 }
 
 function formatNumber(value: number | null | undefined): string {
-  if (value == null || !Number.isFinite(value)) return "-";
+  if (value == null || !Number.isFinite(value)) return EMPTY_VALUE;
   return new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(value);
 }
 
 function formatPercent(value: number | null | undefined): string {
-  if (value == null || !Number.isFinite(value)) return "-";
+  if (value == null || !Number.isFinite(value)) return EMPTY_VALUE;
   return `${value.toFixed(1)}%`;
 }
 
 function formatDate(value: string | null | undefined): string {
-  if (!value) return "-";
+  if (!value) return EMPTY_VALUE;
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "-";
+  if (Number.isNaN(date.getTime())) return EMPTY_VALUE;
   return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
 function formatDateTime(value: string | null | undefined): string {
-  if (!value) return "-";
+  if (!value) return EMPTY_VALUE;
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "-";
+  if (Number.isNaN(date.getTime())) return EMPTY_VALUE;
   return date.toLocaleString(undefined, {
     month: "short",
     day: "numeric",
@@ -525,7 +526,7 @@ function renderTemplateText(
 }
 
 function titleize(value: string | null | undefined): string {
-  if (!value) return "-";
+  if (!value) return EMPTY_VALUE;
   return value
     .replace(/[_-]+/g, " ")
     .replace(/\s+/g, " ")
@@ -560,7 +561,7 @@ function locationLabels(row: PipelineRow): string[] {
 }
 
 function sourceLabel(value: string | null | undefined): string {
-  if (!value) return "-";
+  if (!value) return EMPTY_VALUE;
   const normalized = value.toLowerCase();
   return SOURCE_LABELS[normalized] ?? "Other";
 }
@@ -680,7 +681,7 @@ function omLabel(row: UiV2PipelineRow): string {
 
 function newBadgeTitle(row: UiV2PipelineRow): string {
   const at = row.newness?.occurredAt ? formatDate(row.newness.occurredAt) : formatDate(row.createdAt);
-  const suffix = at !== "-" ? ` (${at})` : "";
+  const suffix = at !== EMPTY_VALUE ? ` (${at})` : "";
   if (row.newness?.reason === "saved_search_run") return `New from latest saved search run${suffix}`;
   if (row.newness?.reason === "saved_search_upload") return `New from saved search upload${suffix}`;
   if (row.newness?.reason === "manual_import") return `New manual/imported property${suffix}`;
@@ -705,7 +706,7 @@ function scoreTone(score: number | null | undefined): string {
 }
 
 function scoreLabel(score: number | null | undefined): string {
-  return score == null || !Number.isFinite(score) ? "-" : `${Math.round(score)} / 100`;
+  return score == null || !Number.isFinite(score) ? EMPTY_VALUE : `${Math.round(score)} / 100`;
 }
 
 function documentUrl(document: UiV2PropertyDocumentItem): string {
@@ -933,11 +934,11 @@ function rowTrackerItems(row: PipelineRow): PipelineTrackerItem[] {
 }
 
 function displayDetailValue(item: UiV2DetailItem): string {
-  if (item.value == null || item.value === "") return "-";
+  if (item.value == null || item.value === "") return EMPTY_VALUE;
   if (typeof item.value === "boolean") return item.value ? "Yes" : "No";
   if (typeof item.value === "number") return String(item.value);
   const raw = String(item.value).trim();
-  if (!raw) return "-";
+  if (!raw) return EMPTY_VALUE;
   const label = item.label.toLowerCase();
   if (
     (label.includes("date") || label.includes("refreshed") || label.includes("updated") || label.includes("listed")) &&
@@ -3743,13 +3744,13 @@ export default function PipelineClient() {
             <dl className={styles.sheetScreeningBar} aria-label="Screening yield summary">
               <div className={styles.screeningMetricPrimary}>
                 <dt>YoC MTR</dt>
-                <dd>{formatPercent(sheetMtrYoc)}</dd>
-                <small>Adjusted NOI</small>
+                <dd className={sheetMtrYoc == null ? styles.screeningPending : undefined}>{formatPercent(sheetMtrYoc)}</dd>
+                <small>{sheetMtrYoc == null && !sheetHasOm ? "Awaiting OM" : "Adjusted NOI"}</small>
               </div>
               <div>
                 <dt>YoC LTR</dt>
-                <dd>{formatPercent(sheetLtrYoc)}</dd>
-                <small>Current NOI</small>
+                <dd className={sheetLtrYoc == null ? styles.screeningPending : undefined}>{formatPercent(sheetLtrYoc)}</dd>
+                <small>{sheetCurrentNoi != null ? `${formatCurrency(sheetCurrentNoi, false)} current NOI` : "Current NOI"}</small>
               </div>
               <div>
                 <dt>Ask</dt>
@@ -3758,23 +3759,26 @@ export default function PipelineClient() {
               </div>
               <div>
                 <dt>MTR NOI</dt>
-                <dd>{formatCurrency(sheetAdjustedNoi, false)}</dd>
-                <small>Adjusted NOI</small>
+                <dd className={sheetAdjustedNoi == null ? styles.screeningPending : undefined}>{formatCurrency(sheetAdjustedNoi, false)}</dd>
+                <small>{sheetAdjustedNoi == null && !sheetHasOm ? "Awaiting OM" : "Adjusted NOI"}</small>
               </div>
               <div>
                 <dt>Market cap</dt>
-                <dd>{formatPercent(sheetMarketCapRate)}</dd>
-                <small>Broker data pending</small>
+                <dd className={sheetMarketCapRate == null ? styles.screeningPending : undefined}>{formatPercent(sheetMarketCapRate)}</dd>
+                <small>{sheetMarketCapRate == null ? "Broker data pending" : "From broker comps"}</small>
               </div>
               <div>
                 <dt>MTR spread</dt>
                 <dd
                   className={
-                    sheetMtrCalloutCode === "mtr_below_ltr"
-                      ? styles.yocFlagDanger
-                      : sheetMtrCalloutCode === "mtr_weak_uplift"
-                        ? styles.yocFlagWarn
-                        : undefined
+                    cx(
+                      sheetYoCSpread == null && styles.screeningPending,
+                      sheetMtrCalloutCode === "mtr_below_ltr"
+                        ? styles.yocFlagDanger
+                        : sheetMtrCalloutCode === "mtr_weak_uplift"
+                          ? styles.yocFlagWarn
+                          : false
+                    ) || undefined
                   }
                 >
                   {formatPercent(sheetYoCSpread)}
@@ -3784,7 +3788,9 @@ export default function PipelineClient() {
                     ? "Below LTR — source as LTR"
                     : sheetMtrCalloutCode === "mtr_weak_uplift"
                       ? "Weak MTR bump"
-                      : "YoC MTR less YoC LTR"}
+                      : sheetYoCSpread == null && !sheetHasOm
+                        ? "Awaiting OM"
+                        : "YoC MTR less YoC LTR"}
                 </small>
               </div>
             </dl>
@@ -3973,42 +3979,18 @@ export default function PipelineClient() {
 	                      </div>
 	                    </div>
 	                    <dl className={styles.metricGrid}>
-	                      <div>
-	                        <dt>Ask</dt>
-	                        <dd>{formatCurrency(selectedProperty?.overview.askingPrice ?? selectedRow?.askingPrice, false)}</dd>
-                      </div>
                       <div>
                         <dt>Units</dt>
                         <dd>{formatNumber(selectedProperty?.overview.units ?? selectedRow?.units)}</dd>
                       </div>
                       <div>
-                        <dt>$/SF</dt>
-                        <dd>{formatCurrency(selectedProperty?.overview.pricePerSqft ?? selectedRow?.pricePerSqft, false)}</dd>
+                        <dt>Sqft</dt>
+                        <dd>{formatNumber(selectedProperty?.overview.buildingSqft ?? selectedRow?.buildingSqft)}</dd>
                       </div>
-	                      <div>
-	                        <dt>YoC LTR</dt>
-	                        <dd>{formatPercent(sheetLtrYoc)}</dd>
-	                      </div>
-	                      <div>
-	                        <dt>YoC MTR</dt>
-	                        <dd>{formatPercent(sheetMtrYoc)}</dd>
-	                      </div>
                       <div>
                         <dt>Type</dt>
                         <dd>{marketTypeLabel(sheetMarketType)}</dd>
                       </div>
-                      <div>
-                        <dt>Sqft</dt>
-                        <dd>{formatNumber(selectedProperty?.overview.buildingSqft ?? selectedRow?.buildingSqft)}</dd>
-                      </div>
-	                      <div>
-	                        <dt>Market cap</dt>
-	                        <dd>{formatPercent(sheetMarketCapRate)}</dd>
-	                      </div>
-	                      <div>
-	                        <dt>MTR spread</dt>
-	                        <dd>{formatPercent(sheetYoCSpread)}</dd>
-	                      </div>
                       <div>
                         <dt>Score</dt>
                         <dd>
@@ -4142,42 +4124,26 @@ export default function PipelineClient() {
 	                    {selectedProperty?.overview.description ? <p className={styles.description}>{selectedProperty.overview.description}</p> : null}
 	                  </section>
 
-	                  <section className={styles.highlightSection}>
-	                    <div className={styles.sectionHeading}>
-	                      <h3>Screening Highlights</h3>
-	                      <span>{sheetUnderwriting?.generationStatus ? titleize(sheetUnderwriting.generationStatus) : "Live inputs"}</span>
-	                    </div>
-	                    <div className={styles.highlightGrid}>
+	                  {!sheetHasOm ? (
+	                    <section className={styles.omPendingCallout}>
 	                      <div>
-	                        <span>YoC MTR</span>
-	                        <strong>{formatPercent(sheetMtrYoc)}</strong>
+	                        <strong>No OM on file yet</strong>
+	                        <p>Mid-term yields, NOI, and spread populate once an offering memorandum is ingested.</p>
 	                      </div>
-	                      <div>
-	                        <span>YoC LTR</span>
-	                        <strong>{formatPercent(sheetLtrYoc)}</strong>
+	                      <div className={styles.omPendingActions}>
+	                        <button
+	                          className={styles.primaryButton}
+	                          type="button"
+	                          onClick={(event) => emailBroker(selectedId, "property_sheet", event)}
+	                        >
+	                          Request from broker
+	                        </button>
+	                        <button className={styles.secondaryButton} type="button" onClick={() => setSheetTab("OM / Docs")}>
+	                          Upload documents
+	                        </button>
 	                      </div>
-	                      <div>
-	                        <span>Ask price</span>
-	                        <strong>{formatCurrency(sheetListedPrice, false)}</strong>
-	                      </div>
-	                      <div>
-	                        <span>Current NOI</span>
-	                        <strong>{formatCurrency(sheetCurrentNoi, false)}</strong>
-	                      </div>
-	                      <div>
-	                        <span>MTR NOI</span>
-	                        <strong>{formatCurrency(sheetAdjustedNoi, false)}</strong>
-	                      </div>
-	                      <div>
-	                        <span>Market cap</span>
-	                        <strong>{formatPercent(sheetMarketCapRate)}</strong>
-	                      </div>
-	                      <div>
-	                        <span>MTR spread</span>
-	                        <strong>{formatPercent(sheetYoCSpread)}</strong>
-	                      </div>
-	                    </div>
-	                  </section>
+	                    </section>
+	                  ) : null}
 
                   <section className={styles.overviewSection}>
                     <div className={styles.sectionHeading}>
@@ -4199,10 +4165,24 @@ export default function PipelineClient() {
                       </form>
                     ) : (
                       <dl className={styles.inlineDetailList}>
-                        <div><dt>Name</dt><dd>{sheetBroker?.name ?? "-"}</dd></div>
-                        <div><dt>Email</dt><dd>{sheetBroker?.email ?? "Needs email"}</dd></div>
-                        <div><dt>Phone</dt><dd>{sheetBroker?.phone ?? "-"}</dd></div>
-                        <div><dt>Firm</dt><dd>{sheetBroker?.firm ?? "-"}</dd></div>
+                        <div><dt>Name</dt><dd>{sheetBroker?.name ?? EMPTY_VALUE}</dd></div>
+                        <div>
+                          <dt>Email</dt>
+                          <dd>
+                            {sheetBroker?.email ?? (
+                              selectedRow ? (
+                                <button type="button" className={styles.brokerMissingChip} onClick={(event) => openBrokerPrompt(selectedRow, event)}>
+                                  <MailPlus size={11} strokeWidth={2.2} aria-hidden="true" />
+                                  <span>Add email</span>
+                                </button>
+                              ) : (
+                                EMPTY_VALUE
+                              )
+                            )}
+                          </dd>
+                        </div>
+                        <div><dt>Phone</dt><dd>{sheetBroker?.phone ?? EMPTY_VALUE}</dd></div>
+                        <div><dt>Firm</dt><dd>{sheetBroker?.firm ?? EMPTY_VALUE}</dd></div>
                       </dl>
                     )}
                   </section>
@@ -4721,7 +4701,7 @@ function EnrichmentReport({
   const pending = state?.pendingKeys ?? [];
   const failed = state?.failedKeys ?? [];
   const visibleModules = modules.length > 0 ? modules : [];
-  const modulesWithData = visibleModules.filter((module) => moduleItems(module).some((item) => displayDetailValue(item) !== "-")).length;
+  const modulesWithData = visibleModules.filter((module) => moduleItems(module).some((item) => displayDetailValue(item) !== EMPTY_VALUE)).length;
   const status = titleize(state?.status ?? (visibleModules.length > 0 ? "available" : "not started"));
   const lastRefreshed = formatDate(state?.lastRefreshedAt);
 
@@ -4734,7 +4714,7 @@ function EnrichmentReport({
       <div className={styles.enrichmentLead}>
         <div>
           <strong>{status}</strong>
-          <span>{lastRefreshed !== "-" ? `Last refreshed ${lastRefreshed}` : "Refresh this property to pull city, rental, and sourcing data."}</span>
+          <span>{lastRefreshed !== EMPTY_VALUE ? `Last refreshed ${lastRefreshed}` : "Refresh this property to pull city, rental, and sourcing data."}</span>
         </div>
         <span className={`${styles.tinyChip} ${moduleToneClass(state?.status)}`}>
           {modulesWithData} of {Math.max(visibleModules.length, modulesWithData)} modules with data
@@ -4749,7 +4729,7 @@ function EnrichmentReport({
       <ul className={styles.enrichmentSections}>
         {visibleModules.map((module) => {
           const items = moduleItems(module)
-            .filter((item) => displayDetailValue(item) !== "-")
+            .filter((item) => displayDetailValue(item) !== EMPTY_VALUE)
             .slice(0, 6);
           const updatedAt = moduleUpdatedAt(module);
           return (
@@ -4835,13 +4815,13 @@ function moduleItemValue(module: UiV2EnrichmentModuleDetail | null | undefined, 
   const wanted = labels.map((label) => label.toLowerCase());
   const item = moduleItems(module).find((candidate) => wanted.includes(candidate.label.toLowerCase()));
   const value = item ? displayDetailValue(item) : null;
-  return value && value !== "-" ? value : null;
+  return value && value !== EMPTY_VALUE ? value : null;
 }
 
 function compactModuleLine(module: UiV2EnrichmentModuleDetail): string {
   const items = moduleItems(module)
     .map((item) => `${titleize(item.label)} ${displayDetailValue(item)}`)
-    .filter((item) => !item.endsWith(" -"))
+    .filter((item) => !item.endsWith(` ${EMPTY_VALUE}`))
     .slice(0, 3);
   return items.length > 0 ? items.join(" · ") : "No source fields populated yet";
 }
@@ -4870,7 +4850,7 @@ function factsFromListing(facts: UiV2ListingFactsPayload | null | undefined): Ui
     { label: "Built", value: facts.builtIn ?? null },
     { label: "Monthly HOA", value: formatCurrency(facts.monthlyHoa, false) },
     { label: "Monthly tax", value: formatCurrency(facts.monthlyTax, false) },
-  ].filter((item) => item.value != null && item.value !== "-");
+  ].filter((item) => item.value != null && item.value !== EMPTY_VALUE);
 }
 
 function statusBadgeLabel(status: string | null | undefined): string {
@@ -5146,12 +5126,12 @@ function BrokerCompsSheetPanel({
     return formatted === "-" ? formatted : `${formatted}/mo`;
   };
   const formatSignedMoney = (value: number | null | undefined): string => {
-    if (value == null || !Number.isFinite(value)) return "-";
+    if (value == null || !Number.isFinite(value)) return EMPTY_VALUE;
     const sign = value > 0 ? "+" : value < 0 ? "-" : "";
     return `${sign}${formatCurrency(Math.abs(value), false)}`;
   };
   const formatSignedPercent = (value: number | null | undefined): string => {
-    if (value == null || !Number.isFinite(value)) return "-";
+    if (value == null || !Number.isFinite(value)) return EMPTY_VALUE;
     const sign = value > 0 ? "+" : "";
     return `${sign}${value.toFixed(Math.abs(value) >= 10 ? 0 : 1)}%`;
   };
@@ -5618,7 +5598,7 @@ function PropertyDataPanel({ details, modules }: { details?: UiV2EnrichmentDetai
 }
 
 function DetailItems({ items }: { items: UiV2DetailItem[] }) {
-  if (items.length === 0) return <span className={styles.subtle}>-</span>;
+  if (items.length === 0) return <span className={styles.subtle}>{EMPTY_VALUE}</span>;
   return (
     <dl className={styles.moduleItems}>
       {items.map((item) => (

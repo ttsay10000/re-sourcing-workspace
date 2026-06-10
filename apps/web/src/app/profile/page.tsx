@@ -3,8 +3,10 @@
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import React, { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { Badge, Button, PageHeader, StatCard } from "@/components/ui";
+import { API_BASE } from "@/lib/api";
+import styles from "./profile.module.css";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
 const currencyFormatter = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
 const DEFAULT_SAVED_SEARCH_AREAS = ["all-downtown", "all-midtown"] as const;
 const DEFAULT_SAVED_SEARCH_TIMEZONE = "America/New_York";
@@ -351,15 +353,15 @@ function labelFromKey(value: string | null | undefined): string {
     .join(" ");
 }
 
-function profileSavedDealScoreClass(score: number | null | undefined): string {
-  if (score == null || Number.isNaN(score)) return "profile-saved-deals-score profile-saved-deals-score--empty";
-  if (score >= 70) return "profile-saved-deals-score profile-saved-deals-score--strong";
-  if (score >= 50) return "profile-saved-deals-score profile-saved-deals-score--watch";
-  return "profile-saved-deals-score profile-saved-deals-score--weak";
+function scoreBadgeClass(score: number | null | undefined): string {
+  if (score == null || Number.isNaN(score)) return `${styles.scoreBadge} ${styles.scoreBadgeEmpty}`;
+  if (score >= 70) return `${styles.scoreBadge} ${styles.scoreBadgeStrong}`;
+  if (score >= 50) return `${styles.scoreBadge} ${styles.scoreBadgeWatch}`;
+  return `${styles.scoreBadge} ${styles.scoreBadgeWeak}`;
 }
 
-function profileSavedDealStatusClass(status: string | null | undefined): string {
-  if (status === "rejected") return "profile-mini-status profile-mini-status--danger";
+function dealStatusTone(status: string | null | undefined): "danger" | "success" | "warning" | "info" | "neutral" {
+  if (status === "rejected") return "danger";
   if (
     status === "saved" ||
     status === "om_received" ||
@@ -367,13 +369,13 @@ function profileSavedDealStatusClass(status: string | null | undefined): string 
     status === "contract_signed" ||
     status === "deal_closed"
   ) {
-    return "profile-mini-status profile-mini-status--success";
+    return "success";
   }
   if (status === "underwriting" || status === "offer_review" || status === "negotiation" || status === "awaiting_broker") {
-    return "profile-mini-status profile-mini-status--warning";
+    return "warning";
   }
-  if (status === "outreach" || status === "screening") return "profile-mini-status profile-mini-status--info";
-  return "profile-mini-status profile-mini-status--neutral";
+  if (status === "outreach" || status === "screening") return "info";
+  return "neutral";
 }
 
 function matchesSearchQuery(values: Array<string | number | boolean | null | undefined>, query: string): boolean {
@@ -845,7 +847,7 @@ function ProfilePageContent() {
 
   if (loading) {
     return (
-      <div className="profile-page profile-v2 profile-v2-loading" style={{ padding: "1.5rem" }}>
+      <div className={styles.page} style={{ padding: "1.5rem" }}>
         <h1 className="page-title">Profile</h1>
         <p>Loading…</p>
       </div>
@@ -853,36 +855,39 @@ function ProfilePageContent() {
   }
 
   return (
-    <div className="profile-page profile-page--holistic profile-v2">
-      <header className="profile-page-header">
-        <div>
-          <p className="profile-page-kicker">Profile workspace</p>
-          <h1 className="page-title profile-page-title">Profile</h1>
-          <p className="profile-page-intro">
-            Keep underwriting defaults tidy here so deal-specific inputs only need lightweight edits downstream.
-          </p>
-        </div>
-        <div className="profile-page-summary">
-          <div className="profile-page-summary-item">
-            <span>Account fields</span>
-            <strong>{profileFields.length}</strong>
+    <div className={styles.page}>
+      <PageHeader
+        eyebrow="Account"
+        title="Profile"
+        subtitle="Keep underwriting defaults tidy here so deal-specific inputs only need lightweight edits downstream."
+        actions={
+          <div className={styles.statStrip}>
+            <StatCard
+              label="Account fields"
+              value={profileFields.length}
+              tone="neutral"
+            />
+            <StatCard
+              label="Assumptions"
+              value={assumptionSections.reduce((total, section) => total + section.fields.length, 0)}
+              tone="neutral"
+            />
+            <StatCard
+              label="Saved searches"
+              value={savedSearches.length}
+              tone="brand"
+            />
+            <StatCard
+              label="Saved deals"
+              value={savedDeals.length}
+              tone="brand"
+            />
           </div>
-          <div className="profile-page-summary-item">
-            <span>Assumptions</span>
-            <strong>{assumptionSections.reduce((total, section) => total + section.fields.length, 0)}</strong>
-          </div>
-          <div className="profile-page-summary-item">
-            <span>Saved searches</span>
-            <strong>{savedSearches.length}</strong>
-          </div>
-          <div className="profile-page-summary-item">
-            <span>Saved deals</span>
-            <strong>{savedDeals.length}</strong>
-          </div>
-        </div>
-      </header>
+        }
+      />
+
       {globalQuery && (
-        <div className="profile-v2-query">
+        <div className={styles.queryNotice}>
           <span>Filtered by global search</span>
           <strong>{searchParams.get("q")}</strong>
           <span>
@@ -890,53 +895,57 @@ function ProfilePageContent() {
           </span>
         </div>
       )}
-      {error && <p className="profile-page-error">{error}</p>}
 
-      <section className="profile-section profile-identity-section">
-        <div className="profile-section-heading">
+      {error && <p className={styles.errorBanner}>{error}</p>}
+
+      {/* ── Account section ── */}
+      <section className={styles.section}>
+        <div className={styles.sectionHeading}>
           <div>
             <h2>Account</h2>
             <p>Core profile details used across sourcing, underwriting, and dossier workflows.</p>
           </div>
-          <button type="button" onClick={handleSaveProfile} disabled={saving} className="profile-primary-button">
+          <Button variant="primary" size="sm" onClick={handleSaveProfile} disabled={saving}>
             {saving ? "Saving…" : "Save account"}
-          </button>
+          </Button>
         </div>
-        <div className="profile-form-grid profile-form-grid--compact">
+        <div className={styles.formGridCompact}>
           {profileFields.map((field) => (
-            <label key={field.key} className="profile-field">
+            <label key={field.key} className={styles.field}>
               <span>{field.label}</span>
               <input
                 type={field.type}
                 value={draft[field.key] ?? ""}
                 onChange={(e) => setDraft((prev) => ({ ...prev, [field.key]: e.target.value }))}
-                className="profile-input"
+                className={styles.input}
               />
             </label>
           ))}
         </div>
       </section>
 
-      <section className="profile-section">
-        <div className="profile-section-heading">
+      {/* ── Email automation section ── */}
+      <section className={styles.section}>
+        <div className={styles.sectionHeading}>
           <div>
             <h2>Email automation</h2>
             <p>Saved-search broker outreach controls. Initial OM requests are off unless you explicitly enable them.</p>
           </div>
-          <button
-            type="button"
+          <Button
+            variant="primary"
+            size="sm"
             onClick={handleSaveAutomationSettings}
             disabled={saving}
-            className="profile-primary-button"
           >
             {saving ? "Saving…" : "Save automation"}
-          </button>
+          </Button>
         </div>
-        <div className="profile-form-grid profile-form-grid--compact">
-          <label className="profile-field">
+        <div className={styles.formGridCompact}>
+          <label className={styles.field}>
             <span>Pause all scheduled automation</span>
             <input
               type="checkbox"
+              className={styles.checkboxInput}
               checked={draft.automationPaused === true}
               onChange={(e) =>
                 setDraft((prev) => ({
@@ -951,30 +960,33 @@ function ProfilePageContent() {
               }
             />
           </label>
-          <label className="profile-field">
+          <label className={styles.field}>
             <span>Auto-send initial OM requests</span>
             <input
               type="checkbox"
+              className={styles.checkboxInput}
               checked={draft.automationInitialEmailEnabled === true}
               onChange={(e) =>
                 setDraft((prev) => ({ ...prev, automationInitialEmailEnabled: e.target.checked }))
               }
             />
           </label>
-          <label className="profile-field">
+          <label className={styles.field}>
             <span>Auto-send replies</span>
             <input
               type="checkbox"
+              className={styles.checkboxInput}
               checked={draft.automationReplyEmailEnabled === true}
               onChange={(e) =>
                 setDraft((prev) => ({ ...prev, automationReplyEmailEnabled: e.target.checked }))
               }
             />
           </label>
-          <label className="profile-field">
+          <label className={styles.field}>
             <span>Auto-handle ambiguous actions</span>
             <input
               type="checkbox"
+              className={styles.checkboxInput}
               checked={draft.automationAmbiguousActionHandlingEnabled === true}
               onChange={(e) =>
                 setDraft((prev) => ({
@@ -985,34 +997,35 @@ function ProfilePageContent() {
             />
           </label>
         </div>
-        <p className="profile-section-note">
+        <p className={styles.sectionNote} style={{ marginTop: "0.75rem" }}>
           Auto-send initial OM requests applies to eligible new properties from saved-search runs. The global server env gate must also be enabled. Pause all scheduled automation stops saved-search cron, inbox processing, and outreach cron. Reply automation and ambiguous-action handling are configuration only right now; no automatic replies or promotion paths are enabled.
         </p>
       </section>
 
-      <section className="profile-section">
-        <div className="profile-section-heading">
+      {/* ── Underwriting assumptions section ── */}
+      <section className={styles.section}>
+        <div className={styles.sectionHeading}>
           <div>
             <h2>Underwriting assumptions</h2>
             <p>Reusable defaults for dossier underwriting. Deal-specific purchase, renovation, and furnishing costs still live on the property dossier flow.</p>
           </div>
-          <button type="button" onClick={handleSaveAssumptions} disabled={saving} className="profile-primary-button">
+          <Button variant="primary" size="sm" onClick={handleSaveAssumptions} disabled={saving}>
             {saving ? "Saving…" : "Save assumptions"}
-          </button>
+          </Button>
         </div>
-        <p className="profile-section-note profile-section-note--callout">
+        <p className={styles.sectionNoteCallout}>
           Property-tax growth is auto-derived from NYC tax class when available. The fallback field below is only used when the property tax class is missing or not recognized.
         </p>
-        <div className="profile-assumption-groups">
+        <div className={styles.assumptionGroups}>
           {assumptionSections.map((section) => (
-            <section key={section.title} className="profile-assumption-group">
-              <div className="profile-assumption-group-header">
+            <section key={section.title} className={styles.assumptionGroup}>
+              <div className={styles.assumptionGroupHeader}>
                 <h3>{section.title}</h3>
                 <p>{section.description}</p>
               </div>
-              <div className="profile-form-grid profile-form-grid--grouped">
+              <div className={styles.formGridGrouped}>
                 {section.fields.map((field) => (
-                  <label key={field.key} className="profile-field">
+                  <label key={field.key} className={styles.field}>
                     <span>{field.label}</span>
                     <input
                       type="number"
@@ -1026,7 +1039,7 @@ function ProfilePageContent() {
                           [field.key]: e.target.value ? Number(e.target.value) : undefined,
                         }))
                       }
-                      className="profile-input"
+                      className={styles.input}
                     />
                   </label>
                 ))}
@@ -1034,13 +1047,13 @@ function ProfilePageContent() {
             </section>
           ))}
         </div>
-        <section className="profile-assumption-group profile-assumption-group--scoring">
-          <div className="profile-assumption-group-header">
+        <section className={`${styles.assumptionGroup} ${styles.assumptionGroupScoring}`}>
+          <div className={styles.assumptionGroupHeader}>
             <h3>Scoring preferences</h3>
             <p>Defaults for the overall deal score. Neighborhood context remains presentation-only.</p>
           </div>
-          <div className="profile-form-grid profile-form-grid--grouped">
-            <label className="profile-field">
+          <div className={styles.formGridGrouped}>
+            <label className={styles.field}>
               <span>Target IRR score anchor (%)</span>
               <input
                 type="number"
@@ -1057,10 +1070,10 @@ function ProfilePageContent() {
                     },
                   }))
                 }
-                className="profile-input"
+                className={styles.input}
               />
             </label>
-            <label className="profile-field">
+            <label className={styles.field}>
               <span>Good cash-on-cash (%)</span>
               <input
                 type="number"
@@ -1077,10 +1090,10 @@ function ProfilePageContent() {
                     },
                   }))
                 }
-                className="profile-input"
+                className={styles.input}
               />
             </label>
-            <label className="profile-field">
+            <label className={styles.field}>
               <span>Default scoring family</span>
               <select
                 value={draft.scoringPreferences?.scoringProfileKey ?? DEFAULT_SCORING_PREFERENCES.scoringProfileKey}
@@ -1093,16 +1106,17 @@ function ProfilePageContent() {
                     },
                   }))
                 }
-                className="profile-input"
+                className={styles.input}
               >
                 <option value="legacy_v3">Deterministic v3</option>
                 <option value="value_add_furnished_monthly_rental">Value-add / furnished monthly rental</option>
               </select>
             </label>
-            <label className="profile-field profile-field--checkbox">
+            <label className={`${styles.field} ${styles.fieldCheckbox}`}>
               <span>Rent stabilization/control do-not-buy</span>
               <input
                 type="checkbox"
+                className={styles.checkboxInput}
                 checked={draft.scoringPreferences?.rentStabilizationDoNotBuy === true}
                 onChange={(e) =>
                   setDraft((prev) => ({
@@ -1117,147 +1131,146 @@ function ProfilePageContent() {
             </label>
           </div>
         </section>
-        <div className="profile-assumptions-toolbar">
-          <button
-            type="button"
+        <div className={styles.assumptionsToolbar}>
+          <Button
+            variant="secondary"
+            size="sm"
             onClick={handleGenerateStandardLeverage}
             disabled={saving}
-            className="profile-secondary-button"
           >
             Generate standard leverage
-          </button>
+          </Button>
           <span>LTV 65%, interest 6.5%, amortization 30 years.</span>
         </div>
       </section>
 
-      <section className="profile-section">
-        <div className="profile-section-heading">
+      {/* ── Saved searches section ── */}
+      <section className={styles.section}>
+        <div className={styles.sectionHeading}>
           <div>
             <h2>Saved searches</h2>
             <p>Manage the automated sourcing searches that feed daily ingestion. Cron reads this list fresh on each scheduled run, so edits here apply to the next due execution.</p>
           </div>
-          <Link href="/runs" className="profile-secondary-button">
-            View run history
-          </Link>
+          <Link href="/runs" className={styles.actionLink}>View run history</Link>
         </div>
-        {savedSearchError && <p className="profile-page-error profile-page-message">{savedSearchError}</p>}
-        {savedSearchNotice && <p className="profile-page-success profile-page-message">{savedSearchNotice}</p>}
-        <div className="profile-v2-form-panel">
-          <div className="profile-section-heading profile-section-heading--nested">
+        {savedSearchError && <p className={styles.errorBanner}>{savedSearchError}</p>}
+        {savedSearchNotice && <p className={styles.successBanner}>{savedSearchNotice}</p>}
+        <div className={styles.formPanel}>
+          <div className={styles.formPanelHeading}>
             <div>
               <h3>{editingSavedSearchId ? "Edit saved search" : "Add saved search"}</h3>
-              <p>
+              <p className={styles.sectionNote} style={{ marginBottom: 0 }}>
                 Use area slugs separated by commas, for example `all-downtown, all-midtown` or a single slug like `upper-east-side`.
               </p>
             </div>
-            <div className="profile-form-actions">
-              <button type="button" onClick={handleSaveSavedSearch} disabled={savingSavedSearch} className="profile-primary-button">
+            <div className={styles.formActions}>
+              <Button variant="primary" size="sm" onClick={handleSaveSavedSearch} disabled={savingSavedSearch}>
                 {savingSavedSearch ? "Saving…" : editingSavedSearchId ? "Update search" : "Create search"}
-              </button>
-              <button type="button" onClick={() => handleResetSavedSearchDraft()} disabled={savingSavedSearch} className="profile-secondary-button">
+              </Button>
+              <Button variant="secondary" size="sm" onClick={() => handleResetSavedSearchDraft()} disabled={savingSavedSearch}>
                 {editingSavedSearchId ? "Cancel edit" : "Reset"}
-              </button>
+              </Button>
             </div>
           </div>
-          <div className="profile-form-grid">
-            <label className="profile-field">
+          <div className={styles.formGrid}>
+            <label className={styles.field}>
               <span>Name</span>
               <input
                 type="text"
                 value={savedSearchDraft.name}
                 onChange={(e) => setSavedSearchDraft((prev) => ({ ...prev, name: e.target.value }))}
-                className="profile-input"
+                className={styles.input}
               />
             </label>
-            <label className="profile-field">
+            <label className={styles.field}>
               <span>Areas / slugs</span>
               <input
                 type="text"
                 value={savedSearchDraft.areaInput}
                 onChange={(e) => setSavedSearchDraft((prev) => ({ ...prev, areaInput: e.target.value }))}
-                className="profile-input"
+                className={styles.input}
                 placeholder={DEFAULT_SAVED_SEARCH_AREAS.join(", ")}
               />
             </label>
-            <label className="profile-field">
+            <label className={styles.field}>
               <span>Min price</span>
               <input
                 type="number"
                 value={savedSearchDraft.minPrice}
                 onChange={(e) => setSavedSearchDraft((prev) => ({ ...prev, minPrice: e.target.value }))}
-                className="profile-input"
+                className={styles.input}
               />
             </label>
-            <label className="profile-field">
+            <label className={styles.field}>
               <span>Max price</span>
               <input
                 type="number"
                 value={savedSearchDraft.maxPrice}
                 onChange={(e) => setSavedSearchDraft((prev) => ({ ...prev, maxPrice: e.target.value }))}
-                className="profile-input"
+                className={styles.input}
               />
             </label>
-            <label className="profile-field">
+            <label className={styles.field}>
               <span>Min beds</span>
               <input
                 type="number"
                 value={savedSearchDraft.minBeds}
                 onChange={(e) => setSavedSearchDraft((prev) => ({ ...prev, minBeds: e.target.value }))}
-                className="profile-input"
+                className={styles.input}
               />
             </label>
-            <label className="profile-field">
+            <label className={styles.field}>
               <span>Max beds</span>
               <input
                 type="number"
                 value={savedSearchDraft.maxBeds}
                 onChange={(e) => setSavedSearchDraft((prev) => ({ ...prev, maxBeds: e.target.value }))}
-                className="profile-input"
+                className={styles.input}
               />
             </label>
-            <label className="profile-field">
+            <label className={styles.field}>
               <span>Min baths</span>
               <input
                 type="number"
                 step="0.5"
                 value={savedSearchDraft.minBaths}
                 onChange={(e) => setSavedSearchDraft((prev) => ({ ...prev, minBaths: e.target.value }))}
-                className="profile-input"
+                className={styles.input}
               />
             </label>
-            <label className="profile-field">
+            <label className={styles.field}>
               <span>Max HOA</span>
               <input
                 type="number"
                 value={savedSearchDraft.maxHoa}
                 onChange={(e) => setSavedSearchDraft((prev) => ({ ...prev, maxHoa: e.target.value }))}
-                className="profile-input"
+                className={styles.input}
               />
             </label>
-            <label className="profile-field">
+            <label className={styles.field}>
               <span>Max tax</span>
               <input
                 type="number"
                 value={savedSearchDraft.maxTax}
                 onChange={(e) => setSavedSearchDraft((prev) => ({ ...prev, maxTax: e.target.value }))}
-                className="profile-input"
+                className={styles.input}
               />
             </label>
-            <label className="profile-field">
+            <label className={styles.field}>
               <span>Result limit</span>
               <input
                 type="number"
                 value={savedSearchDraft.resultLimit}
                 onChange={(e) => setSavedSearchDraft((prev) => ({ ...prev, resultLimit: e.target.value }))}
-                className="profile-input"
+                className={styles.input}
               />
             </label>
-            <label className="profile-field">
+            <label className={styles.field}>
               <span>Cadence</span>
               <select
                 value={savedSearchDraft.scheduleCadence}
                 onChange={(e) => setSavedSearchDraft((prev) => ({ ...prev, scheduleCadence: e.target.value as SearchCadence }))}
-                className="profile-input"
+                className={styles.input}
               >
                 <option value="manual">Manual</option>
                 <option value="daily">Daily</option>
@@ -1265,33 +1278,33 @@ function ProfilePageContent() {
                 <option value="monthly">Monthly</option>
               </select>
             </label>
-            <label className="profile-field">
+            <label className={styles.field}>
               <span>Timezone</span>
               <input
                 type="text"
                 value={savedSearchDraft.timezone}
                 onChange={(e) => setSavedSearchDraft((prev) => ({ ...prev, timezone: e.target.value }))}
-                className="profile-input"
+                className={styles.input}
               />
             </label>
             {savedSearchDraft.scheduleCadence !== "manual" && (
-              <label className="profile-field">
+              <label className={styles.field}>
                 <span>Run time</span>
                 <input
                   type="time"
                   value={savedSearchDraft.runTimeLocal}
                   onChange={(e) => setSavedSearchDraft((prev) => ({ ...prev, runTimeLocal: e.target.value }))}
-                  className="profile-input"
+                  className={styles.input}
                 />
               </label>
             )}
             {savedSearchDraft.scheduleCadence === "weekly" && (
-              <label className="profile-field">
+              <label className={styles.field}>
                 <span>Weekly day</span>
                 <select
                   value={savedSearchDraft.weeklyRunDay}
                   onChange={(e) => setSavedSearchDraft((prev) => ({ ...prev, weeklyRunDay: e.target.value }))}
-                  className="profile-input"
+                  className={styles.input}
                 >
                   {SAVED_SEARCH_WEEKDAY_OPTIONS.map((option) => (
                     <option key={option.value} value={option.value}>{option.label}</option>
@@ -1300,7 +1313,7 @@ function ProfilePageContent() {
               </label>
             )}
             {savedSearchDraft.scheduleCadence === "monthly" && (
-              <label className="profile-field">
+              <label className={styles.field}>
                 <span>Monthly day</span>
                 <input
                   type="number"
@@ -1308,37 +1321,39 @@ function ProfilePageContent() {
                   max={28}
                   value={savedSearchDraft.monthlyRunDay}
                   onChange={(e) => setSavedSearchDraft((prev) => ({ ...prev, monthlyRunDay: e.target.value }))}
-                  className="profile-input"
+                  className={styles.input}
                 />
               </label>
             )}
-            <label className="profile-field profile-field--checkbox">
+            <label className={`${styles.field} ${styles.fieldCheckbox}`}>
               <span>Enabled</span>
               <input
                 type="checkbox"
+                className={styles.checkboxInput}
                 checked={savedSearchDraft.enabled}
                 onChange={(e) => setSavedSearchDraft((prev) => ({ ...prev, enabled: e.target.checked }))}
               />
             </label>
-            <label className="profile-field profile-field--full">
+            <label className={`${styles.field} ${styles.fieldFull}`}>
               <span>Amenities (comma-separated)</span>
               <input
                 type="text"
                 value={savedSearchDraft.amenities}
                 onChange={(e) => setSavedSearchDraft((prev) => ({ ...prev, amenities: e.target.value }))}
-                className="profile-input"
+                className={styles.input}
                 placeholder="doorman, laundry_in_unit"
               />
             </label>
-            <div className="profile-field profile-field--full">
-              <span>Property types</span>
-              <div className="profile-checkbox-row">
+            <div className={`${styles.field} ${styles.fieldFull}`}>
+              <span className={styles.fieldLabel}>Property types</span>
+              <div className={styles.checkboxRow}>
                 {SAVED_SEARCH_TYPE_OPTIONS.map((option) => {
                   const checked = savedSearchDraft.propertyTypes.includes(option.value);
                   return (
-                    <label key={option.value} className="profile-checkbox-pill">
+                    <label key={option.value} className={styles.checkboxPill}>
                       <input
                         type="checkbox"
+                        className={styles.checkboxInput}
                         checked={checked}
                         onChange={() =>
                           setSavedSearchDraft((prev) => ({
@@ -1358,55 +1373,55 @@ function ProfilePageContent() {
           </div>
         </div>
         {savedSearchesLoading ? (
-          <p className="profile-muted-copy">Loading saved searches…</p>
+          <p className={styles.mutedCopy}>Loading saved searches…</p>
         ) : savedSearches.length === 0 ? (
-          <p className="profile-muted-copy">No saved searches yet.</p>
+          <p className={styles.mutedCopy}>No saved searches yet.</p>
         ) : filteredSavedSearches.length === 0 ? (
-          <p className="profile-muted-copy">No saved searches match the current search.</p>
+          <p className={styles.mutedCopy}>No saved searches match the current search.</p>
         ) : (
-          <div className="profile-saved-search-list">
+          <div className={styles.savedSearchList}>
             {filteredSavedSearches.map((search) => (
-              <article key={search.id} className="profile-saved-search-card">
-                <div className="profile-saved-search-main">
-                  <div className="profile-saved-search-header">
+              <article key={search.id} className={styles.savedSearchCard}>
+                <div className={styles.savedSearchMain}>
+                  <div className={styles.savedSearchHeader}>
                     <div>
-                      <h3 className="profile-saved-search-title">{search.name}</h3>
-                      <p className={search.enabled ? "profile-saved-search-state profile-saved-search-state--enabled" : "profile-saved-search-state profile-saved-search-state--paused"}>
+                      <h3 className={styles.savedSearchTitle}>{search.name}</h3>
+                      <p className={`${styles.savedSearchState} ${search.enabled ? styles.savedSearchStateEnabled : styles.savedSearchStatePaused}`}>
                         {search.enabled ? "Enabled" : "Paused"} · {formatSavedSearchSchedule(search)}
                       </p>
                     </div>
-                    <div className="profile-saved-search-times">
+                    <div className={styles.savedSearchTimes}>
                       <span><b>Next</b>{formatDateTime(search.nextRunAt)}</span>
                       <span><b>Last</b>{formatDateTime(search.lastRunAt)}</span>
                       <span><b>Success</b>{formatDateTime(search.lastSuccessAt)}</span>
                     </div>
                   </div>
-                  <p className="profile-saved-search-filters">{formatSavedSearchFilters(search)}</p>
+                  <p className={styles.savedSearchFilters}>{formatSavedSearchFilters(search)}</p>
                 </div>
-                <div className="profile-saved-deals-actions profile-saved-deals-actions--row">
-                  <button
-                    type="button"
+                <div className={styles.actionsRow}>
+                  <Button
+                    variant="secondary"
+                    size="sm"
                     onClick={() => handleEditSavedSearch(search)}
-                    className="profile-saved-deals-action"
                   >
                     Edit
-                  </button>
-                  <button
-                    type="button"
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="sm"
                     onClick={() => void handleRunSavedSearchNow(search.id)}
                     disabled={runningSavedSearchId === search.id}
-                    className="profile-saved-deals-action"
                   >
                     {runningSavedSearchId === search.id ? "Starting…" : "Run now"}
-                  </button>
-                  <button
-                    type="button"
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    size="sm"
                     onClick={() => void handleDeleteSavedSearch(search.id)}
                     disabled={deletingSavedSearchId === search.id}
-                    className="profile-saved-deals-action profile-saved-deals-action--danger"
                   >
                     {deletingSavedSearchId === search.id ? "Deleting…" : "Delete"}
-                  </button>
+                  </Button>
                 </div>
               </article>
             ))}
@@ -1414,98 +1429,99 @@ function ProfilePageContent() {
         )}
       </section>
 
-      <section className="profile-section profile-saved-deals-section">
-        <div className="profile-section-heading">
+      {/* ── Saved deals section ── */}
+      <section className={styles.section}>
+        <div className={styles.sectionHeading}>
           <div>
             <h2>Saved deals</h2>
-            <p className="profile-saved-deals-intro">
+            <p>
               Deals you saved from Pipeline. Dossier download still routes through the property view after generation.
             </p>
           </div>
-          <div className="profile-saved-deals-actions profile-saved-deals-actions--row">
-            <button
-              type="button"
+          <div className={styles.actionsRow}>
+            <Button
+              variant="secondary"
+              size="sm"
               onClick={() => { void handleRefreshScores("saved"); }}
               disabled={refreshingScoreScope != null}
-              className="profile-secondary-button"
             >
               {refreshingScoreScope === "saved" ? "Refreshing…" : "Refresh saved scores"}
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
               onClick={() => { void handleRefreshScores("all"); }}
               disabled={refreshingScoreScope != null}
-              className="profile-secondary-button"
             >
               {refreshingScoreScope === "all" ? "Refreshing…" : "Refresh all scores"}
-            </button>
+            </Button>
           </div>
         </div>
         {savedDealsLoading ? (
-          <p className="profile-muted-copy">Loading saved deals…</p>
+          <p className={styles.mutedCopy}>Loading saved deals…</p>
         ) : savedDeals.length === 0 ? (
-          <p className="profile-muted-copy">No saved deals. Save a property from Pipeline to see it here.</p>
+          <p className={styles.mutedCopy}>No saved deals. Save a property from Pipeline to see it here.</p>
         ) : filteredSavedDeals.length === 0 ? (
-          <p className="profile-muted-copy">No saved deals match the current search.</p>
+          <p className={styles.mutedCopy}>No saved deals match the current search.</p>
         ) : (
-          <div className="profile-saved-deals-grid">
+          <div className={styles.savedDealsGrid}>
             {filteredSavedDeals.map((row) => (
-              <article key={profileSavedDealId(row)} className="profile-saved-deal-card">
-                <div className="profile-saved-deal-photo" aria-hidden="true">
+              <article key={profileSavedDealId(row)} className={styles.savedDealCard}>
+                <div className={styles.savedDealPhoto} aria-hidden="true">
                   {row.imageUrl ? (
                     <img src={row.imageUrl} alt="" loading="lazy" />
                   ) : (
-                    <span>{profileSavedDealAddress(row).slice(0, 1).toUpperCase()}</span>
+                    <span className={styles.savedDealPhotoInitial}>{profileSavedDealAddress(row).slice(0, 1).toUpperCase()}</span>
                   )}
                 </div>
-                <div className="profile-saved-deal-body">
-                  <div className="profile-saved-deal-main">
-                    <h3 className="profile-saved-deal-address">{profileSavedDealAddress(row)}</h3>
-                    <div className="profile-saved-deal-meta">
-                      <span className={profileSavedDealStatusClass(profileSavedDealStatus(row))}>
+                <div className={styles.savedDealBody}>
+                  <div className={styles.savedDealMain}>
+                    <h3 className={styles.savedDealAddress}>{profileSavedDealAddress(row)}</h3>
+                    <div className={styles.savedDealMeta}>
+                      <Badge tone={dealStatusTone(profileSavedDealStatus(row))}>
                         {labelFromKey(profileSavedDealStatus(row))}
-                      </span>
+                      </Badge>
                       {profileSavedDealCreatedAt(row) ? (
                         <small>Saved {formatShortDate(profileSavedDealCreatedAt(row))}</small>
                       ) : null}
                     </div>
-                    <div className="profile-saved-deal-stats">
-                      <div className="profile-saved-deal-stat">
+                    <div className={styles.savedDealStats}>
+                      <div className={styles.savedDealStat}>
                         <span>Price</span>
                         <strong>{row.price != null ? currencyFormatter.format(row.price) : "—"}</strong>
                       </div>
-                      <div className="profile-saved-deal-stat">
+                      <div className={styles.savedDealStat}>
                         <span>Units</span>
                         <strong>{row.units != null ? String(row.units) : "—"}</strong>
                       </div>
-                      <div className="profile-saved-deal-stat">
+                      <div className={styles.savedDealStat}>
                         <span>$/SF</span>
                         <strong>{row.pricePerSqft != null ? currencyFormatter.format(row.pricePerSqft) : "—"}</strong>
                       </div>
-                      <div className="profile-saved-deal-stat">
-                        <span>Deal score</span>
+                      <div className={styles.savedDealStat}>
+                        <span>Score</span>
                         <strong>
-                          <span className={profileSavedDealScoreClass(row.dealScore)}>
+                          <span className={scoreBadgeClass(row.dealScore)}>
                             {row.dealScore != null ? `${Math.round(row.dealScore)} / 100` : "—"}
                           </span>
                         </strong>
                       </div>
                     </div>
                   </div>
-                  <div className="profile-saved-deals-actions profile-saved-deals-actions--row">
-                    <Link href={`/pipeline?propertyId=${profileSavedDealPropertyId(row)}`} className="profile-saved-deals-action">
+                  <div className={styles.actionsRow}>
+                    <Link href={`/pipeline?propertyId=${profileSavedDealPropertyId(row)}`} className={styles.actionLink}>
                       View property
                     </Link>
-                    <Link href={`/pipeline?propertyId=${profileSavedDealPropertyId(row)}`} className="profile-saved-deals-action">
+                    <Link href={`/pipeline?propertyId=${profileSavedDealPropertyId(row)}`} className={styles.actionLink}>
                       View docs
                     </Link>
-                    <button
-                      type="button"
+                    <Button
+                      variant="destructive"
+                      size="sm"
                       onClick={() => handleUnsave(profileSavedDealPropertyId(row))}
-                      className="profile-saved-deals-action profile-saved-deals-action--danger"
                     >
                       Unsave
-                    </button>
+                    </Button>
                   </div>
                 </div>
               </article>
@@ -1513,675 +1529,13 @@ function ProfilePageContent() {
           </div>
         )}
       </section>
-
-      <style jsx global>{`
-        .profile-v2.profile-page--holistic {
-          max-width: none;
-          padding: 0;
-          gap: 1.15rem;
-          color: var(--app-ink);
-          font-family: var(--font-ui);
-          font-variant-numeric: tabular-nums;
-        }
-
-        .profile-v2 .profile-page-header {
-          align-items: flex-end;
-          padding: 1.1rem 0 0.35rem;
-          gap: 1.1rem;
-        }
-
-        .profile-v2 .profile-page-kicker {
-          margin-bottom: 0.35rem;
-          color: var(--app-muted);
-          font-size: 0.74rem;
-          font-weight: 780;
-          letter-spacing: var(--tracking-label);
-          text-transform: uppercase;
-        }
-
-        .profile-v2 .profile-page-title {
-          margin: 0;
-          color: var(--app-ink);
-          font-size: var(--text-3xl);
-          font-weight: 560;
-          line-height: var(--leading-tight);
-        }
-
-        .profile-v2 .profile-page-intro {
-          max-width: 44rem;
-          margin-top: 0.55rem;
-          color: var(--app-ink-secondary);
-          font-size: 0.98rem;
-          line-height: 1.55;
-        }
-
-        .profile-v2 .profile-page-summary {
-          grid-template-columns: repeat(4, minmax(7.5rem, 1fr));
-          min-width: min(100%, 34rem);
-          gap: 0.7rem;
-        }
-
-        .profile-v2 .profile-page-summary-item {
-          padding: 0.84rem 1rem;
-          border: 1px solid var(--app-line);
-          border-radius: 8px;
-          background: var(--app-surface);
-          box-shadow: var(--app-shadow);
-          transition:
-            border-color 150ms ease,
-            box-shadow 150ms ease,
-            transform 150ms ease;
-        }
-
-        .profile-v2 .profile-page-summary-item:hover {
-          border-color: var(--app-line-strong);
-          box-shadow: var(--app-shadow-md);
-          transform: translateY(-1px);
-        }
-
-        .profile-v2 .profile-page-summary-item span {
-          margin-bottom: 0.42rem;
-          color: var(--app-muted);
-          font-size: 0.72rem;
-          font-weight: 800;
-          letter-spacing: 0.03em;
-          text-transform: uppercase;
-        }
-
-        .profile-v2 .profile-page-summary-item strong {
-          color: var(--app-ink);
-          font-size: 1.45rem;
-          line-height: 1;
-        }
-
-        .profile-v2-query {
-          display: flex;
-          flex-wrap: wrap;
-          align-items: center;
-          gap: 0.5rem;
-          padding: 0.75rem 1rem;
-          border: 1px solid var(--app-blue-border);
-          border-radius: 8px;
-          background: var(--app-blue-soft);
-          color: var(--app-blue);
-          font-size: 0.88rem;
-        }
-
-        .profile-v2-query strong {
-          padding: 0.2rem 0.58rem;
-          border-radius: 999px;
-          background: var(--app-surface);
-          color: var(--app-blue);
-        }
-
-        .profile-v2 .profile-page-error {
-          border-radius: 8px;
-          border: 1px solid var(--app-red-border);
-          background: var(--app-red-soft);
-          color: var(--app-red);
-        }
-
-        .profile-v2 .profile-section {
-          padding: 1.2rem 1.3rem;
-          border: 1px solid var(--app-line);
-          border-radius: 8px;
-          background: var(--app-surface);
-          box-shadow: var(--app-shadow-md);
-        }
-
-        .profile-v2 .profile-section-heading {
-          align-items: center;
-          gap: 1rem;
-          margin-bottom: 1.1rem;
-        }
-
-        .profile-v2 .profile-section-heading h2 {
-          margin-bottom: 0.25rem;
-          color: var(--app-ink);
-          font-size: 1.05rem;
-          font-weight: 760;
-        }
-
-        .profile-v2 .profile-section-heading h3 {
-          margin: 0;
-          color: var(--app-ink);
-          font-size: 0.98rem;
-          font-weight: 760;
-        }
-
-        .profile-v2 .profile-section-heading p,
-        .profile-v2 .profile-section-note {
-          color: var(--app-muted);
-          font-size: 0.88rem;
-          line-height: 1.52;
-        }
-
-        .profile-v2 .profile-form-grid {
-          gap: 0.95rem 1rem;
-        }
-
-        .profile-v2 .profile-field {
-          gap: 0.45rem;
-          min-width: 0;
-        }
-
-        .profile-v2 .profile-field--full {
-          grid-column: 1 / -1;
-        }
-
-        .profile-v2 .profile-field--checkbox {
-          justify-content: end;
-          min-height: 4.2rem;
-        }
-
-        .profile-v2 .profile-field--checkbox input[type="checkbox"] {
-          margin-top: 0.25rem;
-        }
-
-        .profile-v2 .profile-field span {
-          color: var(--app-ink-secondary);
-          font-size: 0.78rem;
-          font-weight: 780;
-          line-height: 1.25;
-        }
-
-        .profile-v2 .profile-input {
-          min-height: 2.55rem;
-          padding: 0.64rem 0.9rem;
-          border: 1px solid var(--app-line-strong);
-          border-radius: 8px;
-          background: linear-gradient(180deg, #ffffff 0%, var(--app-surface-raised) 100%);
-          color: var(--app-ink);
-          box-shadow: var(--app-control-shadow);
-          font-size: 0.94rem;
-          line-height: 1.25;
-        }
-
-        .profile-v2 .profile-input:focus {
-          border-color: var(--brand-border);
-          background: var(--app-surface);
-          box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12), var(--app-control-shadow);
-        }
-
-        .profile-v2 input[type="checkbox"] {
-          width: 1rem;
-          height: 1rem;
-          accent-color: var(--brand);
-        }
-
-        .profile-v2 .profile-primary-button,
-        .profile-v2 .profile-secondary-button,
-        .profile-v2 .profile-saved-deals-action {
-          min-height: 2rem;
-          padding: 0.42rem 0.8rem;
-          border-radius: 7px;
-          font-size: 0.82rem;
-          font-weight: 750;
-          line-height: 1.1;
-          white-space: nowrap;
-          box-shadow: var(--app-control-shadow);
-          transition:
-            background 150ms ease,
-            border-color 150ms ease,
-            color 150ms ease,
-            transform 150ms ease;
-        }
-
-        .profile-v2 .profile-primary-button {
-          border-color: var(--brand);
-          background: var(--brand);
-          color: var(--brand-on);
-        }
-
-        .profile-v2 .profile-secondary-button {
-          border-color: var(--app-line-strong);
-          background: var(--app-surface);
-          color: var(--brand-strong);
-        }
-
-        .profile-v2 .profile-primary-button:hover,
-        .profile-v2 .profile-secondary-button:hover,
-        .profile-v2 .profile-saved-deals-action:hover {
-          transform: translateY(-1px);
-        }
-
-        .profile-v2 .profile-section-note--callout,
-        .profile-v2-form-panel {
-          border: 1px solid var(--app-line);
-          border-radius: 8px;
-          background: var(--app-surface-raised);
-        }
-
-        .profile-v2 .profile-section-note--callout {
-          padding: 0.85rem 1rem;
-          border-left: 3px solid var(--brand);
-        }
-
-        .profile-v2-form-panel {
-          margin-bottom: 1.05rem;
-          padding: 1.15rem 1.25rem;
-        }
-
-        .profile-v2 .profile-assumption-groups {
-          gap: 0.95rem;
-        }
-
-        .profile-v2 .profile-assumption-group {
-          padding: 1.1rem 1.2rem;
-          border: 1px solid var(--app-line);
-          border-radius: 8px;
-          background: var(--app-surface);
-          box-shadow: var(--app-shadow);
-        }
-
-        .profile-v2 .profile-assumption-group--scoring {
-          margin-top: 1rem;
-        }
-
-        .profile-v2 .profile-assumption-group-header h3,
-        .profile-v2 .profile-saved-deal-address {
-          color: var(--app-ink);
-        }
-
-        .profile-v2 .profile-assumption-group-header p {
-          color: var(--app-muted);
-          font-size: 0.84rem;
-          line-height: 1.5;
-        }
-
-        .profile-v2 .profile-assumptions-toolbar {
-          margin-top: 1rem;
-          padding-top: 1rem;
-          border-top: 1px solid var(--app-line);
-        }
-
-        .profile-v2 .profile-assumptions-toolbar span {
-          color: var(--app-ink-secondary);
-          font-size: 0.88rem;
-        }
-
-        .profile-v2 .profile-saved-deals-grid {
-          grid-template-columns: repeat(auto-fit, minmax(22rem, 1fr));
-          gap: 0.85rem;
-        }
-
-        .profile-v2 .profile-saved-deal-card {
-          overflow: hidden;
-          padding: 0;
-          border: 1px solid var(--app-line);
-          border-radius: 8px;
-          background: var(--app-surface);
-          box-shadow: var(--app-shadow);
-          transition:
-            border-color 150ms ease,
-            box-shadow 150ms ease,
-            transform 150ms ease;
-        }
-
-        .profile-v2 .profile-saved-deal-card:hover {
-          border-color: var(--app-line-strong);
-          box-shadow: var(--app-shadow-md);
-          transform: translateY(-1px);
-        }
-
-        .profile-v2 .profile-saved-deal-photo {
-          display: grid;
-          width: 100%;
-          aspect-ratio: 16 / 9;
-          place-items: center;
-          overflow: hidden;
-          background: linear-gradient(135deg, var(--brand-soft), var(--app-surface-raised));
-          color: var(--brand-strong);
-        }
-
-        .profile-v2 .profile-saved-deals-grid .profile-saved-deal-photo {
-          aspect-ratio: 5 / 3;
-        }
-
-        .profile-v2 .profile-saved-deal-photo img {
-          display: block;
-          width: 100%;
-          height: 100%;
-          object-fit: cover;
-        }
-
-        .profile-v2 .profile-saved-deal-photo span {
-          display: grid;
-          width: 3.2rem;
-          height: 3.2rem;
-          place-items: center;
-          border: 1px solid var(--brand-border);
-          border-radius: 999px;
-          background: var(--app-surface);
-          color: var(--brand-strong);
-          font-size: 1.45rem;
-          font-weight: 850;
-        }
-
-        .profile-v2 .profile-saved-deal-body {
-          display: grid;
-          gap: 0.82rem;
-          padding: 1rem 1.05rem;
-        }
-
-        .profile-v2 .profile-saved-deal-main {
-          gap: 0.65rem;
-        }
-
-        .profile-v2 .profile-saved-deal-meta {
-          display: flex;
-          align-items: center;
-          gap: 0.45rem;
-          flex-wrap: wrap;
-        }
-
-        .profile-v2 .profile-saved-deal-meta small {
-          color: var(--app-muted);
-          font-size: 0.78rem;
-          font-weight: 650;
-        }
-
-        .profile-v2 .profile-mini-status {
-          display: inline-flex;
-          align-items: center;
-          min-height: 1.35rem;
-          padding: 0.18rem 0.58rem;
-          border-radius: 999px;
-          font-size: 0.72rem;
-          font-weight: 800;
-          line-height: 1;
-        }
-
-        .profile-v2 .profile-mini-status--neutral {
-          border: 1px solid var(--app-line);
-          background: var(--app-surface-strong);
-          color: var(--app-ink-secondary);
-        }
-
-        .profile-v2 .profile-mini-status--info {
-          border: 1px solid var(--app-blue-border);
-          background: var(--app-blue-soft);
-          color: var(--app-blue);
-        }
-
-        .profile-v2 .profile-mini-status--success {
-          border: 1px solid var(--app-green-border);
-          background: var(--app-green-soft);
-          color: var(--app-green);
-        }
-
-        .profile-v2 .profile-mini-status--warning {
-          border: 1px solid var(--app-amber-border);
-          background: var(--app-amber-soft);
-          color: var(--app-amber);
-        }
-
-        .profile-v2 .profile-mini-status--danger {
-          border: 1px solid var(--app-red-border);
-          background: var(--app-red-soft);
-          color: var(--app-red);
-        }
-
-        .profile-v2 .profile-saved-deal-stat span {
-          color: var(--app-muted);
-          letter-spacing: 0.03em;
-          text-transform: uppercase;
-        }
-
-        .profile-v2 .profile-saved-deals-action {
-          flex: 0 0 auto;
-          border-color: var(--app-line-strong);
-          background: var(--app-surface);
-          color: var(--brand-strong);
-          padding: 0.36rem 0.68rem;
-        }
-
-        .profile-v2 .profile-saved-deals-action--danger {
-          border-color: var(--app-red-border);
-          background: var(--app-red-soft);
-          color: var(--app-red);
-        }
-
-        .profile-v2 .profile-saved-deals-actions--row {
-          flex-wrap: wrap;
-          overflow: visible;
-          gap: 0.45rem;
-        }
-
-        .profile-v2 .profile-saved-deals-score {
-          min-width: 4.75rem;
-          border: 1px solid var(--app-line);
-          background: var(--app-surface-strong);
-          color: var(--app-muted);
-          font-size: 0.76rem;
-          font-weight: 850;
-        }
-
-        .profile-section-heading--nested {
-          margin-bottom: 1.05rem;
-        }
-
-        .profile-form-actions {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 0.65rem;
-          justify-content: flex-end;
-        }
-
-        .profile-checkbox-row {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 0.55rem;
-          margin-top: 0.25rem;
-        }
-
-        .profile-checkbox-pill {
-          display: inline-flex;
-          align-items: center;
-          gap: 0.45rem;
-          min-height: 1.9rem;
-          padding: 0.34rem 0.62rem;
-          border: 1px solid var(--app-line);
-          border-radius: 999px;
-          background: var(--app-surface);
-          color: var(--app-ink-secondary);
-          font-size: 0.82rem;
-          font-weight: 720;
-          box-shadow: var(--app-control-shadow);
-        }
-
-        .profile-muted-copy,
-        .profile-page-message {
-          margin: 0.1rem 0 1rem;
-          color: var(--app-muted);
-          font-size: 0.9rem;
-          line-height: 1.5;
-        }
-
-        .profile-page-success {
-          padding: 0.75rem 1rem;
-          border: 1px solid var(--app-green-border);
-          border-radius: 8px;
-          background: var(--app-green-soft);
-          color: var(--app-green);
-          font-weight: 650;
-        }
-
-        .profile-saved-search-list {
-          display: grid;
-          gap: 0.85rem;
-        }
-
-        .profile-saved-search-card {
-          display: grid;
-          grid-template-columns: minmax(0, 1fr) auto;
-          gap: 1rem;
-          align-items: start;
-          padding: 1rem 1.1rem;
-          border: 1px solid var(--app-line);
-          border-radius: 8px;
-          background: var(--app-surface);
-          box-shadow: var(--app-shadow);
-          transition:
-            border-color 150ms ease,
-            box-shadow 150ms ease,
-            transform 150ms ease;
-        }
-
-        .profile-saved-search-card:hover {
-          border-color: var(--app-line-strong);
-          box-shadow: var(--app-shadow-md);
-          transform: translateY(-1px);
-        }
-
-        .profile-saved-search-main {
-          display: grid;
-          gap: 0.82rem;
-          min-width: 0;
-        }
-
-        .profile-saved-search-header {
-          display: flex;
-          align-items: flex-start;
-          justify-content: space-between;
-          gap: 1rem;
-        }
-
-        .profile-saved-search-title {
-          margin: 0;
-          color: var(--app-ink);
-          font-size: 1rem;
-          font-weight: 760;
-          line-height: 1.25;
-        }
-
-        .profile-saved-search-state {
-          margin: 0.35rem 0 0;
-          font-size: 0.84rem;
-          font-weight: 760;
-        }
-
-        .profile-saved-search-state--enabled {
-          color: var(--app-green);
-        }
-
-        .profile-saved-search-state--paused {
-          color: var(--app-amber);
-        }
-
-        .profile-saved-search-times {
-          display: grid;
-          gap: 0.3rem;
-          min-width: 13rem;
-          color: var(--app-ink-secondary);
-          font-size: 0.8rem;
-          line-height: 1.25;
-          text-align: right;
-        }
-
-        .profile-saved-search-times span {
-          display: flex;
-          justify-content: flex-end;
-          gap: 0.35rem;
-        }
-
-        .profile-saved-search-times b {
-          color: var(--app-muted);
-          font-size: 0.68rem;
-          font-weight: 800;
-          letter-spacing: 0.03em;
-          text-transform: uppercase;
-        }
-
-        .profile-saved-search-filters {
-          margin: 0;
-          padding-top: 0.8rem;
-          border-top: 1px solid var(--app-line-subtle);
-          color: var(--app-ink-secondary);
-          font-size: 0.9rem;
-          line-height: 1.55;
-        }
-
-        .profile-v2 .profile-saved-deals-score--strong {
-          border-color: var(--app-green-border);
-          background: var(--app-green-soft);
-          color: var(--app-green);
-        }
-
-        .profile-v2 .profile-saved-deals-score--watch {
-          border-color: var(--app-amber-border);
-          background: var(--app-amber-soft);
-          color: var(--app-amber);
-        }
-
-        .profile-v2 .profile-saved-deals-score--weak {
-          border-color: var(--app-red-border);
-          background: var(--app-red-soft);
-          color: var(--app-red);
-        }
-
-        .profile-v2 .profile-saved-deals-score--empty {
-          border-color: var(--app-line);
-          background: var(--app-surface-strong);
-          color: var(--app-muted);
-        }
-
-        @media (max-width: 980px) {
-          .profile-v2 .profile-page-header {
-            align-items: flex-start;
-            flex-direction: column;
-          }
-
-          .profile-v2 .profile-page-summary {
-            width: 100%;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-          }
-
-          .profile-v2 .profile-assumption-groups {
-            grid-template-columns: 1fr;
-          }
-
-          .profile-saved-search-card {
-            grid-template-columns: 1fr;
-          }
-
-          .profile-saved-search-header {
-            flex-direction: column;
-          }
-
-          .profile-saved-search-times {
-            width: 100%;
-            min-width: 0;
-            text-align: left;
-          }
-
-          .profile-saved-search-times span {
-            justify-content: flex-start;
-          }
-        }
-
-        @media (max-width: 640px) {
-          .profile-v2 .profile-section-heading {
-            align-items: flex-start;
-            flex-direction: column;
-          }
-
-          .profile-v2 .profile-page-summary {
-            grid-template-columns: 1fr;
-          }
-
-          .profile-v2 .profile-saved-deal-stats {
-            grid-template-columns: 1fr;
-          }
-        }
-      `}</style>
     </div>
   );
 }
 
 export default function ProfilePage() {
   return (
-    <Suspense fallback={<div className="profile-page--holistic">Loading profile...</div>}>
+    <Suspense fallback={<div>Loading profile...</div>}>
       <ProfilePageContent />
     </Suspense>
   );
