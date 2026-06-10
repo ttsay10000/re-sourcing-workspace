@@ -6206,12 +6206,12 @@ button:active:not(:disabled) {
 ────────────────────────────────────────────────────────────────── */
 
 .cell-flag-warn {
-  background: var(--app-amber-soft) !important;
+  background: var(--app-amber-soft);
   box-shadow: inset 0 0 0 1px var(--app-amber-border);
 }
 
 .cell-flag-danger {
-  background: var(--app-red-soft) !important;
+  background: var(--app-red-soft);
   box-shadow: inset 0 0 0 1px var(--app-red-border);
 }
 

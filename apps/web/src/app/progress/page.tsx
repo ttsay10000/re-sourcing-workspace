@@ -23,7 +23,7 @@ import {
   type UiV2PipelineStatus,
   type UiV2RejectionReasonCode,
 } from "@re-sourcing/contracts";
-import { Button, Dialog, PageHeader, PromptMenu, PropertyThumb, StatCard } from "@/components/ui";
+import { BrokerContactDialog, Button, Dialog, PageHeader, PromptMenu, PropertyThumb, StatCard } from "@/components/ui";
 import { API_BASE, apiFetch } from "@/lib/api";
 import styles from "./progress.module.css";
 const BULK_STAGE_MOVE_ID = "__bulk_stage_move__";
@@ -250,96 +250,32 @@ const SECTION_ORDER: ProgressSection[] = DEAL_FLOW_STAGES.map((stage) => ({
   rows: [],
 }));
 
-const SAVED_STATUS_GROUPS: SavedStatusGroup[] = [
-  {
-    id: "sourced",
-    label: "Sourced",
-    description: "Sourced properties where the OM request has not started.",
-    statuses: [],
-    targetStatus: "saved",
-    moveLabel: "Sourced",
-  },
-  {
-    id: "om_requested",
-    label: "OM Requested",
-    description: "OMs and related materials requested from brokers.",
-    statuses: ["outreach", "awaiting_broker"],
-    targetStatus: "awaiting_broker",
-    moveLabel: "OM Requested",
-  },
-  {
-    id: "underwriting_awaiting_review",
-    label: "Underwriting - Awaiting User Review",
-    description: "OM uploaded or underwriting generated; user review is still required.",
-    statuses: ["saved", "underwriting", "om_received", "dossier_generated"],
-    targetStatus: "underwriting",
-    moveLabel: "Underwriting - Awaiting Review",
-  },
-  {
-    id: "underwriting_review_completed",
-    label: "Underwriting - Review Completed",
-    description: "User-reviewed underwriting and completed workups.",
-    statuses: ["underwriting", "om_received", "dossier_generated"],
-    targetStatus: "underwriting",
-    moveLabel: "Underwriting - Review Completed",
-  },
-  {
-    id: "tour_requested",
-    label: "Tour Requested",
-    description: "Tour requested and waiting for a confirmed time.",
-    statuses: ["tour_scheduled"],
-    targetStatus: "tour_scheduled",
-    moveLabel: "Tour Requested",
-  },
-  {
-    id: "tour_scheduled",
-    label: "Tour Scheduled",
-    description: "Tour date is confirmed; waiting on visit.",
-    statuses: [],
-    targetStatus: "tour_scheduled",
-    moveLabel: "Tour Scheduled",
-  },
-  {
-    id: "tour_completed_awaiting_inputs",
-    label: "Tour Completed",
-    description: "Tour date has passed; notes and post-tour decision needed.",
-    statuses: ["tour_completed_awaiting_inputs"],
-    targetStatus: "tour_completed_awaiting_inputs",
-    moveLabel: "Tour Completed",
-  },
-  {
-    id: "offer_review",
-    label: "LOI Offered",
-    description: "Offer has been sent or is ready to track.",
-    statuses: ["offer_review"],
-    targetStatus: "offer_review",
-    moveLabel: "LOI Offered",
-  },
-  {
-    id: "negotiation",
-    label: "Negotiation",
-    description: "Pricing, terms, and counterparty negotiation.",
-    statuses: ["negotiation"],
-    targetStatus: "negotiation",
-    moveLabel: "Negotiation",
-  },
-  {
-    id: "contract_signed",
-    label: "Contract Signed/Diligence",
-    description: "Contract signed with diligence underway.",
-    statuses: ["contract_signed"],
-    targetStatus: "contract_signed",
-    moveLabel: "Contract Signed/Diligence",
-  },
-  {
-    id: "deal_closed",
-    label: "Deal Closed",
-    description: "Closed deals and archived active pursuits.",
-    statuses: ["deal_closed", "archived"],
-    targetStatus: "deal_closed",
-    moveLabel: "Deal Closed",
-  },
-];
+// Stage membership/labels/targets come from the shared constant; only the
+// board-specific helper copy lives here.
+const STAGE_DESCRIPTIONS: Record<string, string> = {
+  sourced: "Sourced properties where the OM request has not started.",
+  om_requested: "OMs and related materials requested from brokers.",
+  underwriting_awaiting_review: "OM uploaded or underwriting generated; user review is still required.",
+  underwriting_review_completed: "User-reviewed underwriting and completed workups.",
+  tour_requested: "Tour requested and waiting for a confirmed time.",
+  tour_scheduled: "Tour date is confirmed; waiting on visit.",
+  tour_completed_awaiting_inputs: "Tour date has passed; notes and post-tour decision needed.",
+  offer_review: "Offer has been sent or is ready to track.",
+  negotiation: "Pricing, terms, and counterparty negotiation.",
+  contract_signed: "Contract signed with diligence underway.",
+  deal_closed: "Closed deals and archived active pursuits.",
+};
+
+const SAVED_STATUS_GROUPS: SavedStatusGroup[] = DEAL_FLOW_STAGES.map((stage) => ({
+  id: stage.id,
+  label: stage.label,
+  description: STAGE_DESCRIPTIONS[stage.id] ?? "",
+  // The board's sourced/tour-scheduled columns intentionally claim no statuses
+  // directly; the server assigns rows to them via deal-path state.
+  statuses: stage.id === "sourced" || stage.id === "tour_scheduled" ? [] : [...stage.statuses],
+  targetStatus: stage.targetStatus as UiV2PipelineStatus,
+  moveLabel: stage.label,
+}));
 
 const MOVE_STAGE_OPTIONS = SAVED_STATUS_GROUPS
   .filter((group): group is MovableSavedStatusGroup =>
@@ -973,7 +909,7 @@ function ProgressPageContent() {
           : `Broker email queued for ${composerState.address}.`
       );
       await loadProgress("refresh");
-      void loadRecommendations();
+      void loadRecommendations(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to queue the email.");
       setComposerState((current) => (current ? { ...current, submitting: false } : current));
@@ -1006,7 +942,7 @@ function ProgressPageContent() {
       setBrokerEmailState(null);
       setNotice(`Broker contact saved for ${brokerEmailState.address}.`);
       await loadProgress("refresh");
-      void loadRecommendations();
+      void loadRecommendations(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save the broker email.");
       setBrokerEmailState((current) => (current ? { ...current, saving: false } : current));
@@ -1884,52 +1820,12 @@ function ProgressPageContent() {
         ) : null}
       </Dialog>
 
-      <Dialog
-        open={brokerEmailState != null}
+      <BrokerContactDialog
+        state={brokerEmailState}
         onClose={() => setBrokerEmailState(null)}
-        title="Add broker contact"
-        description={brokerEmailState?.address}
-        size="sm"
-        footer={
-          <>
-            <Button variant="ghost" size="sm" onClick={() => setBrokerEmailState(null)} disabled={brokerEmailState?.saving}>
-              Cancel
-            </Button>
-            <Button
-              variant="primary"
-              size="sm"
-              onClick={() => void submitBrokerEmail()}
-              disabled={brokerEmailState == null || brokerEmailState.saving || !brokerEmailState.email.trim()}
-            >
-              {brokerEmailState?.saving ? "Saving…" : "Save contact"}
-            </Button>
-          </>
-        }
-      >
-        {brokerEmailState ? (
-          <div className={styles.dialogForm}>
-            <label className={styles.dialogField}>
-              <span>Broker name</span>
-              <input
-                type="text"
-                value={brokerEmailState.name}
-                onChange={(event) => setBrokerEmailState((current) => (current ? { ...current, name: event.target.value } : current))}
-                placeholder="Optional"
-              />
-            </label>
-            <label className={styles.dialogField}>
-              <span>Broker email</span>
-              <input
-                type="email"
-                value={brokerEmailState.email}
-                onChange={(event) => setBrokerEmailState((current) => (current ? { ...current, email: event.target.value } : current))}
-                placeholder="broker@firm.com"
-                autoFocus
-              />
-            </label>
-          </div>
-        ) : null}
-      </Dialog>
+        onChange={(patch) => setBrokerEmailState((current) => (current ? { ...current, ...patch } : current))}
+        onSubmit={() => void submitBrokerEmail()}
+      />
 
       <Dialog
         open={moveStageState != null}

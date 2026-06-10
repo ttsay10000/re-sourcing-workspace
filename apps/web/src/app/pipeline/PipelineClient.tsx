@@ -13,7 +13,7 @@ import {
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { MailPlus, Star, X } from "lucide-react";
-import { Button, Dialog, StageChip } from "@/components/ui";
+import { BrokerContactDialog, StageChip } from "@/components/ui";
 import {
   UI_V2_PIPELINE_STATUS_OPTIONS,
   UI_V2_REJECTION_REASON_OPTIONS,
@@ -3507,6 +3507,9 @@ export default function PipelineClient() {
               const trackerItems = rowTrackerItems(row);
               const isUnavailable = rowListingUnavailable(row);
               const displayTags = orderedRowTags(row);
+              const psfFlag = psfFlagFor(row);
+              const ltrFlag = ltrYieldFlag(rowLtrYoc);
+              const mtrFlag = mtrYieldFlag(row, rowLtrYoc, rowMtrYoc);
               return (
                 <tr
                   key={row.propertyId}
@@ -3602,34 +3605,20 @@ export default function PipelineClient() {
                       </span>
                     ) : null}
                   </td>
-                  <td
-                    className={cx(styles.numericCell, flagCellClass(psfFlagFor(row)))}
-                    title={psfFlagFor(row)?.title}
-                  >
+                  <td className={cx(styles.numericCell, flagCellClass(psfFlag))} title={psfFlag?.title}>
                     {formatCurrency(row.pricePerSqft, false)}
                   </td>
-                  <td
-                    className={cx(styles.numericCell, styles.yocCell, flagCellClass(ltrYieldFlag(rowLtrYoc)))}
-                    title={ltrYieldFlag(rowLtrYoc)?.title}
-                  >
+                  <td className={cx(styles.numericCell, styles.yocCell, flagCellClass(ltrFlag))} title={ltrFlag?.title}>
                     <strong>{formatPercent(rowLtrYoc)}</strong>
                   </td>
-                  {(() => {
-                    const mtrFlag = mtrYieldFlag(row, rowLtrYoc, rowMtrYoc);
-                    return (
-                      <td
-                        className={cx(styles.numericCell, styles.yocCell, flagCellClass(mtrFlag))}
-                        title={mtrFlag?.title}
-                      >
-                        <strong>{formatPercent(rowMtrYoc)}</strong>
-                        {mtrFlag ? (
-                          <span className={cx(styles.yocFlag, mtrFlag.severity === "danger" ? styles.yocFlagDanger : styles.yocFlagWarn)}>
-                            {mtrFlag.label}
-                          </span>
-                        ) : null}
-                      </td>
-                    );
-                  })()}
+                  <td className={cx(styles.numericCell, styles.yocCell, flagCellClass(mtrFlag))} title={mtrFlag?.title}>
+                    <strong>{formatPercent(rowMtrYoc)}</strong>
+                    {mtrFlag ? (
+                      <span className={cx(styles.yocFlag, mtrFlag.severity === "danger" ? styles.yocFlagDanger : styles.yocFlagWarn)}>
+                        {mtrFlag.label}
+                      </span>
+                    ) : null}
+                  </td>
                   <td className={styles.numericCell}>{formatNumber(row.units)}</td>
                   <td className={styles.numericCell}>{formatNumber(row.buildingSqft)}</td>
                   <td className={styles.scoreCell}>
@@ -4441,52 +4430,12 @@ export default function PipelineClient() {
         </div>
       ) : null}
 
-      <Dialog
-        open={brokerPrompt != null}
+      <BrokerContactDialog
+        state={brokerPrompt}
         onClose={() => setBrokerPrompt(null)}
-        title="Add broker contact"
-        description={brokerPrompt?.address}
-        size="sm"
-        footer={
-          <>
-            <Button variant="ghost" size="sm" onClick={() => setBrokerPrompt(null)} disabled={brokerPrompt?.saving}>
-              Cancel
-            </Button>
-            <Button
-              variant="primary"
-              size="sm"
-              onClick={() => void submitBrokerPrompt()}
-              disabled={brokerPrompt == null || brokerPrompt.saving || !brokerPrompt.email.trim()}
-            >
-              {brokerPrompt?.saving ? "Saving…" : "Save contact"}
-            </Button>
-          </>
-        }
-      >
-        {brokerPrompt ? (
-          <div className={styles.brokerPromptForm}>
-            <label>
-              <span>Broker name</span>
-              <input
-                type="text"
-                value={brokerPrompt.name}
-                placeholder="Optional"
-                onChange={(event) => setBrokerPrompt((current) => (current ? { ...current, name: event.target.value } : current))}
-              />
-            </label>
-            <label>
-              <span>Broker email</span>
-              <input
-                type="email"
-                value={brokerPrompt.email}
-                placeholder="broker@firm.com"
-                autoFocus
-                onChange={(event) => setBrokerPrompt((current) => (current ? { ...current, email: event.target.value } : current))}
-              />
-            </label>
-          </div>
-        ) : null}
-      </Dialog>
+        onChange={(patch) => setBrokerPrompt((current) => (current ? { ...current, ...patch } : current))}
+        onSubmit={() => void submitBrokerPrompt()}
+      />
 
       {rejectState ? (
         <div className={styles.modalOverlay}>
@@ -4948,7 +4897,7 @@ function RentalUnitTable({ units }: { units: RentalUnitItem[] }) {
                 <td>
                   {[unit.beds != null ? `${formatNumber(unit.beds)} bd` : null, unit.baths != null ? `${formatNumber(unit.baths)} ba` : null, unit.sqft != null ? `${formatNumber(unit.sqft)} sf` : null]
                     .filter(Boolean)
-                    .join(" · ") || "-"}
+                    .join(" · ") || EMPTY_VALUE}
                 </td>
                 <td>{formatCurrency(unit.rentalPrice, false)}</td>
                 <td>{titleize(unit.status)}</td>
@@ -4981,15 +4930,15 @@ function RentRollTable({ rows }: { rows: RentRollItem[] }) {
           {rows.slice(0, 80).map((row, index) => (
             <tr key={`${row.unit ?? row.tenantName ?? "row"}:${index}`}>
               <td>{row.unit ?? row.building ?? `Row ${index + 1}`}</td>
-              <td>{row.unitCategory ?? row.rentType ?? "-"}</td>
+              <td>{row.unitCategory ?? row.rentType ?? EMPTY_VALUE}</td>
               <td>{formatCurrency(row.monthlyTotalRent ?? row.monthlyRent ?? row.monthlyBaseRent, false)}</td>
               <td>
                 {[row.beds != null ? `${formatNumber(row.beds)} bd` : null, row.baths != null ? `${formatNumber(row.baths)} ba` : null]
                   .filter(Boolean)
-                  .join(" · ") || "-"}
+                  .join(" · ") || EMPTY_VALUE}
               </td>
-              <td>{row.sqft != null ? `${formatNumber(row.sqft)} sf` : "-"}</td>
-              <td>{[row.tenantName, typeof row.occupied === "boolean" ? (row.occupied ? "Occupied" : "Vacant") : row.occupied, row.tenantStatus].filter(Boolean).join(" · ") || "-"}</td>
+              <td>{row.sqft != null ? `${formatNumber(row.sqft)} sf` : EMPTY_VALUE}</td>
+              <td>{[row.tenantName, typeof row.occupied === "boolean" ? (row.occupied ? "Occupied" : "Vacant") : row.occupied, row.tenantStatus].filter(Boolean).join(" · ") || EMPTY_VALUE}</td>
             </tr>
           ))}
         </tbody>
@@ -5118,12 +5067,12 @@ function BrokerCompsSheetPanel({
 
   const formatSqft = (value: number | null | undefined): string => {
     const formatted = formatNumber(value);
-    return formatted === "-" ? formatted : `${formatted} SF`;
+    return formatted === EMPTY_VALUE ? formatted : `${formatted} SF`;
   };
   const formatPpsf = (value: number | null | undefined): string => formatCurrency(value, false);
   const formatMonthlyCurrency = (value: number | null | undefined): string => {
     const formatted = formatCurrency(value, false);
-    return formatted === "-" ? formatted : `${formatted}/mo`;
+    return formatted === EMPTY_VALUE ? formatted : `${formatted}/mo`;
   };
   const formatSignedMoney = (value: number | null | undefined): string => {
     if (value == null || !Number.isFinite(value)) return EMPTY_VALUE;
@@ -5181,10 +5130,10 @@ function BrokerCompsSheetPanel({
     if (low != null && high != null) return `${formatCurrency(low, false)} - ${formatCurrency(high, false)}`;
     if (low != null) return formatCurrency(low, false);
     if (high != null) return formatCurrency(high, false);
-    return "-";
+    return EMPTY_VALUE;
   };
   const renderPpsfSpread = (subjectValue: number | null, compValue: number | null) => {
-    if (subjectValue == null || compValue == null || !Number.isFinite(subjectValue) || !Number.isFinite(compValue) || compValue <= 0) return "-";
+    if (subjectValue == null || compValue == null || !Number.isFinite(subjectValue) || !Number.isFinite(compValue) || compValue <= 0) return EMPTY_VALUE;
     const diff = subjectValue - compValue;
     const pct = (diff / compValue) * 100;
     return `${formatSignedMoney(diff)} (${formatSignedPercent(pct)})`;
@@ -5374,11 +5323,11 @@ function BrokerCompsSheetPanel({
                       <strong>{row.propertyName ?? row.address ?? "Unlabeled comp"}</strong>
                       <span>{row.address ?? ""}</span>
                     </td>
-                    <td>{row.neighborhood ?? "-"}</td>
+                    <td>{row.neighborhood ?? EMPTY_VALUE}</td>
                     <td>{formatNumber(row.yearCompleted)}</td>
                     <td>{formatNumber(row.floors)}</td>
                     <td>{formatNumber(row.units)}</td>
-                    <td>{row.salesBegan ?? "-"}</td>
+                    <td>{row.salesBegan ?? EMPTY_VALUE}</td>
                     <td>{formatPercent(row.percentSoldPct)}</td>
                     <td>{formatSqft(row.averageUnitSqft)}</td>
                     <td>{formatPpsf(row.askingPpsf ?? row.pricePerSqft)}</td>
@@ -5465,13 +5414,13 @@ function BrokerCompsSheetPanel({
               <tbody>
                 {surface.subjectUnitPricingRows.map((row) => (
                   <tr key={row.id}>
-                    <td><strong>{row.unitLabel ?? "-"}</strong></td>
-                    <td>{[row.bedrooms != null ? `${row.bedrooms} Bed` : null, row.bathrooms != null ? `${row.bathrooms} Bath` : null].filter(Boolean).join(" / ") || "-"}</td>
+                    <td><strong>{row.unitLabel ?? EMPTY_VALUE}</strong></td>
+                    <td>{[row.bedrooms != null ? `${row.bedrooms} Bed` : null, row.bathrooms != null ? `${row.bathrooms} Bath` : null].filter(Boolean).join(" / ") || EMPTY_VALUE}</td>
                     <td>{formatSqft(row.interiorSqft)}</td>
                     <td>{formatSqft(row.exteriorSqft)}</td>
                     <td>{formatCurrency(row.price, false)}</td>
                     <td>{formatPpsf(row.ppsf)}</td>
-                    <td>{row.notes ?? "-"}</td>
+                    <td>{row.notes ?? EMPTY_VALUE}</td>
                   </tr>
                 ))}
               </tbody>
@@ -5517,7 +5466,7 @@ function BrokerCompsSheetPanel({
                           <strong>{row.propertyName ?? row.address ?? "Unlabeled comp"}</strong>
                           <span>{row.address ?? ""}</span>
                         </td>
-                        <td>{[row.bedroomType ?? (row.bedrooms != null ? `${row.bedrooms} Bed` : null), row.bathrooms != null ? `${row.bathrooms} Bath` : null].filter(Boolean).join(" / ") || "-"}</td>
+                        <td>{[row.bedroomType ?? (row.bedrooms != null ? `${row.bedrooms} Bed` : null), row.bathrooms != null ? `${row.bathrooms} Bath` : null].filter(Boolean).join(" / ") || EMPTY_VALUE}</td>
                         <td>{formatNumber(row.count)}</td>
                         <td>{formatSqft(row.avgSizeSqft)}</td>
                         <td>{formatPpsf(row.avgAskingPpsf)}</td>

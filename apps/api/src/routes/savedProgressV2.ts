@@ -7,6 +7,7 @@
 
 import { Router, type Request, type Response } from "express";
 import type { Pool } from "pg";
+import { DEAL_FLOW_STAGES } from "@re-sourcing/contracts";
 import type {
   DealFlowRecommendationsResponse,
   DealStatus,
@@ -948,7 +949,29 @@ function rejectionJoin(hasRejections: boolean): string {
      ) pr ON true`;
 }
 
-function baseSelectSql(hasRejections: boolean, savedOnly: boolean): string {
+function brokerSelect(includeBroker: boolean): string {
+  if (!includeBroker) {
+    return `
+       NULL::text AS manual_broker_name,
+       NULL::text AS manual_broker_email,
+       NULL::text AS recipient_contact_email,
+       NULL::text AS broker_display_name,`;
+  }
+  return `
+       rr.manual_broker_name,
+       rr.manual_broker_email,
+       rr.contact_email AS recipient_contact_email,
+       bc.display_name AS broker_display_name,`;
+}
+
+function brokerJoin(includeBroker: boolean): string {
+  if (!includeBroker) return "";
+  return `
+     LEFT JOIN property_recipient_resolution rr ON rr.property_id = p.id
+     LEFT JOIN broker_contacts bc ON bc.id = rr.contact_id`;
+}
+
+function baseSelectSql(hasRejections: boolean, savedOnly: boolean, includeBroker = false): string {
   return `SELECT
        sd.id AS saved_deal_id,
        sd.user_id AS saved_user_id,
@@ -990,14 +1013,9 @@ function baseSelectSql(hasRejections: boolean, savedOnly: boolean): string {
        COALESCE(bcp.broker_comp_package_count, 0) AS broker_comp_package_count,
        COALESCE(ai.open_action_item_count, 0) AS open_action_item_count,
        pis.sent_at AS latest_inquiry_sent_at,
-       rr.manual_broker_name,
-       rr.manual_broker_email,
-       rr.contact_email AS recipient_contact_email,
-       bc.display_name AS broker_display_name,
+       ${brokerSelect(includeBroker)}
        ${rejectionSelect(hasRejections)}
-     FROM ${savedOnly ? "saved_deals sd INNER JOIN properties p ON p.id = sd.property_id" : "properties p LEFT JOIN saved_deals sd ON sd.property_id = p.id AND sd.user_id = $1"}
-     LEFT JOIN property_recipient_resolution rr ON rr.property_id = p.id
-     LEFT JOIN broker_contacts bc ON bc.id = rr.contact_id
+     FROM ${savedOnly ? "saved_deals sd INNER JOIN properties p ON p.id = sd.property_id" : "properties p LEFT JOIN saved_deals sd ON sd.property_id = p.id AND sd.user_id = $1"}${brokerJoin(includeBroker)}
      LEFT JOIN LATERAL (
        SELECT l.*
        FROM listing_property_matches m
@@ -1102,7 +1120,7 @@ async function fetchSavedRows(
 
 async function fetchProgressRows(pool: Pool, userId: string, hasRejections: boolean): Promise<SavedProgressBaseRow[]> {
   const result = await pool.query<SavedProgressBaseRow>(
-    `${baseSelectSql(hasRejections, false)}
+    `${baseSelectSql(hasRejections, false, true)}
      ORDER BY p.updated_at DESC`,
     [userId]
   );
@@ -1110,19 +1128,10 @@ async function fetchProgressRows(pool: Pool, userId: string, hasRejections: bool
 }
 
 function buildProgressSections(rows: ProgressPropertyRow[]): ProgressSection[] {
-  const sectionLabels: Record<ProgressSection["id"], string> = {
-    sourced: "Sourced",
-    om_requested: "OM Requested",
-    underwriting_awaiting_review: "Underwriting - Awaiting User Review",
-    underwriting_review_completed: "Underwriting - Review Completed",
-    tour_requested: "Tour Requested",
-    tour_scheduled: "Tour Scheduled",
-    tour_completed_awaiting_inputs: "Tour Completed",
-    offer_review: "LOI Offered",
-    negotiation: "Negotiation",
-    contract_signed: "Contract Signed/Diligence",
-    deal_closed: "Deal Closed",
-  };
+  // Single source of truth for stage labels lives in @re-sourcing/contracts.
+  const sectionLabels: Record<ProgressSection["id"], string> = Object.fromEntries(
+    DEAL_FLOW_STAGES.map((stage) => [stage.id, stage.label])
+  ) as Record<ProgressSection["id"], string>;
   const ids: ProgressSection["id"][] = [
     "sourced",
     "om_requested",
@@ -1269,10 +1278,22 @@ router.get("/ui-v2/deal-progress", async (_req: Request, res: Response) => {
 });
 
 const RECOMMENDATIONS_TTL_MS = 10 * 60 * 1000;
-let recommendationsCache: { key: string; expiresAt: number; payload: DealFlowRecommendationsResponse } | null = null;
+/** Within this window the cached answer is served without re-querying the board. */
+const RECOMMENDATIONS_SOFT_TTL_MS = 45 * 1000;
+let recommendationsCache: {
+  key: string;
+  builtAt: number;
+  expiresAt: number;
+  payload: DealFlowRecommendationsResponse;
+} | null = null;
 
 router.get("/ui-v2/deal-progress/recommendations", async (req: Request, res: Response) => {
   try {
+    const force = String(req.query.refresh ?? "") === "1";
+    if (!force && recommendationsCache && Date.now() - recommendationsCache.builtAt < RECOMMENDATIONS_SOFT_TTL_MS) {
+      res.json(recommendationsCache.payload);
+      return;
+    }
     const userId = await getDefaultUserId();
     const pool = getPool();
     const hasRejections = await hasTable(pool, "property_rejections");
@@ -1295,18 +1316,18 @@ router.get("/ui-v2/deal-progress/recommendations", async (req: Request, res: Res
       }))
     );
 
-    // Board state digest: same inputs within the TTL serve the cached answer.
+    // Board state digest: an unchanged board reuses the LLM answer until the TTL.
     const cacheKey = JSON.stringify(
       inputRows.map((row) => [row.sectionId, row.propertyId, row.brokerEmail != null, row.postTourDecision ?? ""])
     );
-    const force = String(req.query.refresh ?? "") === "1";
-    if (!force && recommendationsCache && recommendationsCache.key === cacheKey && recommendationsCache.expiresAt > Date.now()) {
+    if (recommendationsCache && recommendationsCache.key === cacheKey && recommendationsCache.expiresAt > Date.now()) {
+      recommendationsCache.builtAt = Date.now();
       res.json(recommendationsCache.payload);
       return;
     }
 
     const payload = await buildProgressRecommendations(inputRows);
-    recommendationsCache = { key: cacheKey, expiresAt: Date.now() + RECOMMENDATIONS_TTL_MS, payload };
+    recommendationsCache = { key: cacheKey, builtAt: Date.now(), expiresAt: Date.now() + RECOMMENDATIONS_TTL_MS, payload };
     res.json(payload);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

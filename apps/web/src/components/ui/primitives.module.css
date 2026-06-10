@@ -766,3 +766,30 @@ button.statCard:hover {
   font-size: var(--text-2xs);
   font-weight: 450;
 }
+
+/* ─── Dialog form fields (shared by prompt dialogs) ───────────── */
+
+.dialogFieldStack {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.dialogFieldGroup {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.dialogFieldGroup span {
+  font-size: var(--text-2xs);
+  font-weight: 650;
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--app-muted);
+}
+
+.dialogFieldGroup input,
+.dialogFieldGroup select,
+.dialogFieldGroup textarea {
+  font-size: var(--text-xs);
+  padding-block: 0.5rem;
+}

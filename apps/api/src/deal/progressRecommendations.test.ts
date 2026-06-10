@@ -34,7 +34,7 @@ describe("buildRuleBasedRecommendations", () => {
 
   it("does not flag tour inputs once a post-tour decision exists", () => {
     const items = buildRuleBasedRecommendations([
-      row({ propertyId: "a", sectionId: "tour_completed_awaiting_inputs", postTourDecision: "offer" }),
+      row({ propertyId: "a", sectionId: "tour_completed_awaiting_inputs", postTourDecision: "move_forward" }),
     ]);
     expect(items.find((item) => item.id === "tour_inputs")).toBeUndefined();
   });
