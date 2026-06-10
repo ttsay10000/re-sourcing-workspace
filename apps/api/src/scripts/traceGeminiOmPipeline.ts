@@ -26,7 +26,7 @@ import { buildDealScoreSensitivity } from "../deal/dealScoreSensitivity.js";
 import { resolveDossierPackageContext, propertyOverviewFromDetails } from "../deal/dossierPropertyContext.js";
 import { buildDossierStructuredText } from "../deal/dossierGenerator.js";
 import { dossierTextToPdf } from "../deal/dossierToPdf.js";
-import { buildExcelProForma } from "../deal/excelProForma.js";
+import { buildDealAnalysisWorkbook } from "../deal/dealAnalysisWorkbook.js";
 import { analyzePropertyConditionReview } from "../deal/propertyConditionReview.js";
 import type { UnderwritingContext } from "../deal/underwritingContext.js";
 import {
@@ -457,7 +457,7 @@ async function traceProperty(canonicalAddress: string): Promise<TraceResult> {
   };
   const dossierText = buildDossierStructuredText(ctx);
   const dossierPdf = await dossierTextToPdf(dossierText);
-  const excel = buildExcelProForma(ctx);
+  const excel = (await buildDealAnalysisWorkbook(ctx, { useLlmBlueprint: false })).buffer;
 
   const issues: string[] = [];
   const nestedKeys = summarizeNestedGeminiFields(geminiOm as Record<string, unknown>);
