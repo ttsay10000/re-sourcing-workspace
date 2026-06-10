@@ -10,6 +10,7 @@ import {
   formatListingEventLabel,
   type ListingActivitySummary,
 } from "@re-sourcing/contracts";
+import { useProcessBanner } from "@/components/ProcessBanner";
 import { PropertyDetailCollapsible } from "./PropertyDetailCollapsible";
 import { CanonicalPropertyDetail, type CanonicalProperty } from "./CanonicalPropertyDetail";
 import { AREA_OPTIONS, cityToArea, cityFromCanonicalAddress } from "./areas";
@@ -491,6 +492,7 @@ function isRejectedProperty(prop: CanonicalProperty): boolean {
 }
 
 function PropertyDataContent() {
+  const processBanner = useProcessBanner();
   const [activeTab, setActiveTab] = useState<TabId>("canonical");
   const [listings, setListings] = useState<ListingRow[]>([]);
   const [total, setTotal] = useState(0);
@@ -1365,6 +1367,11 @@ function PropertyDataContent() {
     setLastEnrichmentResult(null);
     setPipelineStatsOpen(true);
     fetchWorkflowBoard();
+    const banner = processBanner.start("Send to canonical", {
+      message: `Creating canonical properties from ${toSend} listing${toSend === 1 ? "" : "s"} and running enrichment…`,
+      estimateKind: "send-to-canonical",
+      estimateItems: toSend,
+    });
     const body =
       selectedListingIds.size > 0
         ? { listingIds: Array.from(selectedListingIds) }
@@ -1394,13 +1401,20 @@ function PropertyDataContent() {
             rentalFlow: data.rentalFlow,
           });
         }
+        banner.succeed(
+          `Canonical properties created from ${toSend} listing${toSend === 1 ? "" : "s"} — enrichment finished.`
+        );
         setSelectedListingIds(new Set());
         fetchCanonicalProperties();
         fetchPipelineStats(true);
         fetchWorkflowBoard();
         setActiveTab("canonical");
       })
-      .catch((e) => setError(e.message || "Failed to send to canonical"))
+      .catch((e) => {
+        const message = e instanceof Error && e.message ? e.message : "Failed to send to canonical";
+        banner.fail(message);
+        setError(message);
+      })
       .finally(() => setSendingToCanonical(false));
   };
 
@@ -1422,10 +1436,19 @@ function PropertyDataContent() {
     setManualAddSubmitting(true);
     setManualAddError(null);
     setError(null);
+    const banner = processBanner.start("Manual property add", {
+      message: `Importing ${streetEasyInputs.length} StreetEasy listing${streetEasyInputs.length === 1 ? "" : "s"}…`,
+      estimateKind: "manual-property-add",
+      estimateItems: streetEasyInputs.length,
+    });
     try {
       const results: ManualAddResponse[] = [];
       const failures: string[] = [];
-      for (const streetEasyInput of streetEasyInputs) {
+      for (const [inputIndex, streetEasyInput] of streetEasyInputs.entries()) {
+        banner.update(
+          `Importing ${inputIndex + 1} of ${streetEasyInputs.length}: ${streetEasyInput}`,
+          Math.round((inputIndex / streetEasyInputs.length) * 100)
+        );
         const isSaleId = /^\d+$/.test(streetEasyInput);
         const res = await fetch(`${API_BASE}/api/properties/manual-add`, {
           method: "POST",
@@ -1485,6 +1508,7 @@ function PropertyDataContent() {
         fallbackWarnings.length > 0
           ? ` ${fallbackWarnings.length} used URL fallback after ID lookup failed.`
           : "";
+      const noticeMessage = `${batchMessage}${omMessage}${enrichmentMessage}${warningMessage}${failureMessage}`.trim();
       setManualAddNotice({
         type:
           failures.length > 0 ||
@@ -1492,8 +1516,13 @@ function PropertyDataContent() {
           (payload.enrichment?.attempted && !payload.enrichment?.ok)
             ? "error"
             : "success",
-        message: `${batchMessage}${omMessage}${enrichmentMessage}${warningMessage}${failureMessage}`.trim(),
+        message: noticeMessage,
       });
+      if (failures.length > 0) {
+        banner.fail(noticeMessage);
+      } else {
+        banner.succeed(noticeMessage);
+      }
       setManualAddDraft({ streetEasyInput: "", omUrl: "" });
       setManualAddModalOpen(false);
       setActiveTab("canonical");
@@ -1503,7 +1532,9 @@ function PropertyDataContent() {
       fetchPipelineStats(true);
       fetchWorkflowBoard();
     } catch (err) {
-      setManualAddError(err instanceof Error ? err.message : "Failed to add property.");
+      const message = err instanceof Error ? err.message : "Failed to add property.";
+      banner.fail(message);
+      setManualAddError(message);
     } finally {
       setManualAddSubmitting(false);
     }
@@ -1552,6 +1583,11 @@ function PropertyDataContent() {
     setLastEnrichmentResult(null);
     setPipelineStatsOpen(true);
     fetchWorkflowBoard();
+    const banner = processBanner.start("Enrichment refresh", {
+      message: `Refreshing NYC Open Data for ${propertyIds.length} propert${propertyIds.length === 1 ? "y" : "ies"}…`,
+      estimateKind: "enrichment-refresh",
+      estimateItems: propertyIds.length,
+    });
     fetch(`${API_BASE}/api/properties/run-enrichment`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1588,11 +1624,26 @@ function PropertyDataContent() {
             omFinancialsSkippedNoFile: data.omFinancialsRefresh?.documentsSkippedNoFile,
           });
         }
+        const success = data.permitEnrichment?.success ?? 0;
+        const failed = data.permitEnrichment?.failed ?? 0;
+        if (failed > 0) {
+          banner.fail(`Enrichment refreshed — ${success} succeeded, ${failed} failed.`);
+        } else {
+          banner.succeed(
+            data.permitEnrichment?.ran
+              ? `Enrichment refreshed for ${success} propert${success === 1 ? "y" : "ies"}.`
+              : "Enrichment refresh completed."
+          );
+        }
         fetchCanonicalProperties();
         fetchPipelineStats(true);
         fetchWorkflowBoard();
       })
-      .catch((e) => setError(e.message || "Failed to re-run enrichment"))
+      .catch((e) => {
+        const message = e instanceof Error && e.message ? e.message : "Failed to re-run enrichment";
+        banner.fail(message);
+        setError(message);
+      })
       .finally(() => setRerunningEnrichment(false));
   };
 
@@ -1603,6 +1654,11 @@ function PropertyDataContent() {
     setRunningRentalFlow(true);
     setError(null);
     fetchWorkflowBoard();
+    const banner = processBanner.start("Rental flow refresh", {
+      message: `Fetching rental data + LLM financials for ${propertyIds.length} propert${propertyIds.length === 1 ? "y" : "ies"}…`,
+      estimateKind: "rental-flow-refresh",
+      estimateItems: propertyIds.length,
+    });
     fetch(`${API_BASE}/api/properties/run-rental-flow`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1615,9 +1671,15 @@ function PropertyDataContent() {
         fetchWorkflowBoard();
         const withUnits = (data.results ?? []).filter((r: { rentalUnitsCount?: number }) => (r.rentalUnitsCount ?? 0) > 0).length;
         const withLlm = (data.results ?? []).filter((r: { hasLlmFinancials?: boolean }) => r.hasLlmFinancials).length;
-        alert(`Done. ${withUnits} propert${withUnits === 1 ? "y" : "ies"} with rental units; ${withLlm} with LLM financials.`);
+        banner.succeed(
+          `${withUnits} propert${withUnits === 1 ? "y" : "ies"} with rental units; ${withLlm} with LLM financials.`
+        );
       })
-      .catch((e) => setError(e.message || "Run rental flow failed"))
+      .catch((e) => {
+        const message = e instanceof Error && e.message ? e.message : "Run rental flow failed";
+        banner.fail(message);
+        setError(message);
+      })
       .finally(() => setRunningRentalFlow(false));
   };
 

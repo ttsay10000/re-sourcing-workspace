@@ -1035,6 +1035,8 @@ function DealAnalysisPageContent() {
     setCreateResult(null);
     const banner = processBanner.start("OM analysis", {
       message: `Reading ${fileCount} OM${fileCount === 1 ? "" : "s"} with AI — each becomes its own property workspace…`,
+      estimateKind: "om-analysis-batch",
+      estimateItems: fileCount,
     });
     try {
       const formData = new FormData();
@@ -1091,6 +1093,8 @@ function DealAnalysisPageContent() {
     setCreateResult(null);
     const banner = processBanner.start("OM analysis", {
       message: `Reading ${pendingFiles.length} file${pendingFiles.length === 1 ? "" : "s"} with AI extraction…`,
+      estimateKind: "om-analysis",
+      estimateItems: pendingFiles.length,
     });
     try {
       const formData = new FormData();
@@ -1124,7 +1128,10 @@ function DealAnalysisPageContent() {
     setError(null);
     setNotice(null);
     setCreateResult(null);
-    const banner = processBanner.start("OM analysis", { message: "Downloading and reading the OM link with AI…" });
+    const banner = processBanner.start("OM analysis", {
+      message: "Downloading and reading the OM link with AI…",
+      estimateKind: "om-analysis-link",
+    });
     try {
       const res = await fetch(`${API_BASE}/api/deal-analysis/analyze-link`, {
         method: "POST",

@@ -8,6 +8,7 @@ import type {
   MarketTrendDirection,
 } from "@re-sourcing/contracts";
 import { Badge, Button, FileDropzone, PageHeader, Panel } from "@/components/ui";
+import { useProcessBanner } from "@/components/ProcessBanner";
 import { API_BASE } from "@/lib/api";
 import styles from "./marketDocs.module.css";
 
@@ -70,6 +71,7 @@ function formatWhen(iso: string | null | undefined): string {
 }
 
 export default function MarketDocsPage() {
+  const processBanner = useProcessBanner();
   const [files, setFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -102,11 +104,21 @@ export default function MarketDocsPage() {
 
   async function uploadAll() {
     if (files.length === 0 || uploading) return;
+    const batch = [...files];
     setUploading(true);
     setUploadError(null);
+    const banner = processBanner.start("Market docs ingest", {
+      message: `Classifying and extracting ${batch.length} document${batch.length === 1 ? "" : "s"}…`,
+      estimateKind: "market-docs-ingest",
+      estimateItems: batch.length,
+    });
     const reports: IngestReport[] = [];
     try {
-      for (const file of files) {
+      for (const [index, file] of batch.entries()) {
+        banner.update(
+          `Ingesting ${index + 1} of ${batch.length}: ${file.name}`,
+          Math.round((index / batch.length) * 100)
+        );
         const body = new FormData();
         body.append("file", file);
         const res = await fetch(`${API_BASE}/api/market-docs`, {
@@ -122,8 +134,15 @@ export default function MarketDocsPage() {
       }
       setLastReports(reports);
       setFiles([]);
+      banner.succeed(
+        `${reports.length} document${reports.length === 1 ? "" : "s"} folded into the market knowledge base.`
+      );
     } catch (err) {
-      setUploadError(err instanceof Error ? err.message : "Upload failed.");
+      const message = err instanceof Error ? err.message : "Upload failed.";
+      banner.fail(
+        reports.length > 0 ? `${reports.length} of ${batch.length} ingested, then failed: ${message}` : message
+      );
+      setUploadError(message);
     } finally {
       setUploading(false);
       refresh();

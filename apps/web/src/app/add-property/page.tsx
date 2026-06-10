@@ -807,6 +807,8 @@ export default function AddPropertyPage() {
     setNotice(null);
     const banner = processBanner.start("StreetEasy import", {
       message: `Importing ${urls.length} listing${urls.length === 1 ? "" : "s"}…`,
+      estimateKind: "streeteasy-import",
+      estimateItems: urls.length,
     });
     const successes: UiV2ImportJobPayload[] = [];
     const failures: Array<{ url: string; message: string }> = [];

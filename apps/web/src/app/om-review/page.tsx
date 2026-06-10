@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { Badge, Button, Dialog, EmptyState, PageHeader, SkeletonRows } from "@/components/ui";
+import { useProcessBanner } from "@/components/ProcessBanner";
 import { API_BASE, apiFetch } from "@/lib/api";
 import { EMPTY_VALUE, formatCurrencyExact, formatDateShort, formatNumber } from "@/lib/format";
 import styles from "./omReview.module.css";
@@ -117,6 +118,7 @@ function priorityTone(priority: string) {
 }
 
 export default function OmReviewPage() {
+  const processBanner = useProcessBanner();
   const [groups, setGroups] = useState<ReviewQueueGroup[]>([]);
   const [loading, setLoading] = useState(true);
   const [runningActionId, setRunningActionId] = useState<string | null>(null);
@@ -220,15 +222,22 @@ export default function OmReviewPage() {
   const retryRun = async (run: ExtractionRun) => {
     setBusyRunId(run.runId);
     setError(null);
+    const banner = processBanner.start("OM financials refresh", {
+      message: `Re-extracting OM financials for ${run.address}…`,
+      estimateKind: "om-financials-refresh",
+    });
     try {
       await apiFetch(`/api/properties/${encodeURIComponent(run.propertyId)}/refresh-om-financials`, {
         method: "POST",
         body: JSON.stringify({ autoPromote: false }),
       });
-      setNotice(`Re-extraction queued for ${run.address} — it will reappear here when ready.`);
+      setNotice(`Re-extraction finished for ${run.address} — review the fresh run below.`);
+      banner.succeed(`OM financials re-extracted for ${run.address} — ready for review.`);
       await loadRuns();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to queue the re-extraction.");
+      const message = err instanceof Error ? err.message : "Failed to run the re-extraction.";
+      banner.fail(message);
+      setError(message);
     } finally {
       setBusyRunId(null);
     }
@@ -258,6 +267,10 @@ export default function OmReviewPage() {
     setRunningActionId(item.id);
     setNotice(null);
     setError(null);
+    const banner = processBanner.start("OM review run", {
+      message: `Extracting the OM attachment for ${item.canonicalAddress}…`,
+      estimateKind: "om-review-run",
+    });
     try {
       const res = await fetch(
         `${API_BASE}/api/properties/${encodeURIComponent(item.propertyId)}/action-items/${encodeURIComponent(item.id)}/create-om-review-run`,
@@ -266,9 +279,12 @@ export default function OmReviewPage() {
       const data = await res.json();
       if (!res.ok || data?.ok === false) throw new Error(data?.error || data?.details || "Failed to create review run");
       setNotice(`Review run created for ${item.canonicalAddress}.`);
+      banner.succeed(`Review run created for ${item.canonicalAddress}.`);
       await loadQueue();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create review run");
+      const message = err instanceof Error ? err.message : "Failed to create review run";
+      banner.fail(message);
+      setError(message);
     } finally {
       setRunningActionId(null);
     }
