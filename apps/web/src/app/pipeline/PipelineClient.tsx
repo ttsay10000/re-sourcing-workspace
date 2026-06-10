@@ -143,6 +143,22 @@ type FlexiblePropertyDetail = UiV2PropertyDetailPayload & {
   overview: UiV2PropertyDetailPayload["overview"] & { gallery?: UiV2ImageAsset[] };
 };
 
+type OutreachPreviewBatch = {
+  toAddress: string;
+  contactName: string | null;
+  propertyIds: string[];
+  addresses: string[];
+  subject: string;
+  body: string;
+};
+
+type OutreachPreviewSkipped = {
+  propertyId: string;
+  canonicalAddress: string;
+  reasonCode: string;
+  reason: string;
+};
+
 type RowActionMenuState = {
   propertyId: string;
   top: number;
@@ -1360,6 +1376,12 @@ export default function PipelineClient() {
   const [sheetFullscreen, setSheetFullscreen] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [emailQueue, setEmailQueue] = useState<string[]>([]);
+  const [outreachPreview, setOutreachPreview] = useState<{
+    loading: boolean;
+    sending: boolean;
+    batches: OutreachPreviewBatch[];
+    skipped: OutreachPreviewSkipped[];
+  } | null>(null);
   const [headerMenu, setHeaderMenu] = useState<PipelineHeaderMenuId | null>(null);
   const [rowMenu, setRowMenu] = useState<RowActionMenuState | null>(null);
   const [brokerPrompt, setBrokerPrompt] = useState<{
@@ -2351,11 +2373,79 @@ export default function PipelineClient() {
     }
   }
 
-  async function queueSelectedEmails() {
+  async function openGroupedEmailPreview() {
     const propertyIds = selectedRows.map((row) => row.propertyId);
     if (propertyIds.length === 0) return;
-    setEmailQueue(propertyIds.slice(1));
-    await emailBroker(propertyIds[0]!, "pipeline_table");
+    setBusyAction("bulk:email-preview");
+    setOutreachPreview({ loading: true, sending: false, batches: [], skipped: [] });
+    try {
+      const response = await fetch(`${API_BASE}/api/properties/preview-bulk-inquiry-emails`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ propertyIds }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(payload.error || payload.details || "Failed to preview broker emails.");
+      }
+      setOutreachPreview({
+        loading: false,
+        sending: false,
+        batches: Array.isArray(payload.batches) ? (payload.batches as OutreachPreviewBatch[]) : [],
+        skipped: Array.isArray(payload.skipped) ? (payload.skipped as OutreachPreviewSkipped[]) : [],
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to preview broker emails.";
+      setOutreachPreview(null);
+      setError(message);
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function sendGroupedEmails() {
+    if (!outreachPreview || outreachPreview.sending || outreachPreview.batches.length === 0) return;
+    setOutreachPreview({ ...outreachPreview, sending: true });
+    const banner = processBanner.start("Broker emails", {
+      message: `Sending ${outreachPreview.batches.length} grouped email${outreachPreview.batches.length === 1 ? "" : "s"}…`,
+    });
+    try {
+      const response = await fetch(`${API_BASE}/api/properties/send-bulk-inquiry-emails`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mode: "grouped",
+          batches: outreachPreview.batches.map((batch) => ({
+            toAddress: batch.toAddress,
+            propertyIds: batch.propertyIds,
+            subject: batch.subject,
+            body: batch.body,
+          })),
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(payload.error || payload.details || "Failed to send broker emails.");
+      }
+      const summary = `Broker emails: ${payload.sent ?? 0} sent${payload.failed ? `, ${payload.failed} failed` : ""}${
+        payload.skippedProperties ? `, ${payload.skippedProperties} propert${payload.skippedProperties === 1 ? "y" : "ies"} skipped by guards` : ""
+      }.`;
+      banner.succeed(summary);
+      setNotice(summary);
+      setOutreachPreview(null);
+      const refreshed = await apiFetch<PipelineResponse>(
+        `${API_BASE}/api/ui-v2/pipeline?${buildPipelineQueryString(queryString)}`
+      );
+      setRows(refreshed.pipeline.rows as PipelineRow[]);
+      setTotal(refreshed.pipeline.total);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to send broker emails.";
+      banner.fail(message);
+      setOutreachPreview((current) => (current ? { ...current, sending: false } : current));
+      setError(message);
+    }
   }
 
   // Table keyboard triage: j/k row focus, enter opens the sheet, e emails.
@@ -4000,10 +4090,11 @@ export default function PipelineClient() {
           <button
             className={styles.primaryButton}
             type="button"
+            title="Preview one email per broker covering all of their selected properties, edit the drafts, then send. Guard checks (prior sends, OM received, Gmail history) run before anything goes out."
             disabled={selectedIds.length === 0 || busyAction?.startsWith("bulk:") || busyAction?.includes(":composer")}
-            onClick={queueSelectedEmails}
+            onClick={openGroupedEmailPreview}
           >
-            Queue broker emails
+            {busyAction === "bulk:email-preview" ? "Preparing drafts..." : "Email brokers"}
           </button>
           <button
             className={styles.dangerButton}
@@ -5049,6 +5140,153 @@ export default function PipelineClient() {
         onSubmit={() => void submitBrokerPrompt()}
         onSearch={() => void searchBrokerContact()}
       />
+
+      {outreachPreview ? (
+        <div className={styles.modalOverlay}>
+          <div className={`${styles.modal} ${styles.outreachPreviewModal}`}>
+            <div className={styles.modalHeader}>
+              <div>
+                <span className={styles.kicker}>Email brokers</span>
+                <h2>
+                  {outreachPreview.loading
+                    ? "Preparing drafts…"
+                    : `${outreachPreview.batches.length} email${outreachPreview.batches.length === 1 ? "" : "s"} ready`}
+                </h2>
+              </div>
+              <button
+                className={styles.closeButton}
+                type="button"
+                onClick={() => setOutreachPreview(null)}
+                disabled={outreachPreview.sending}
+                aria-label="Close email preview"
+              >
+                <X size={16} strokeWidth={2} aria-hidden="true" />
+              </button>
+            </div>
+            {outreachPreview.loading ? (
+              <p className={styles.outreachPreviewHint}>Resolving recipients and running send guards…</p>
+            ) : (
+              <div className={styles.outreachPreviewBody}>
+                {outreachPreview.batches.length === 0 ? (
+                  <p className={styles.outreachPreviewHint}>
+                    Nothing is sendable — every selected property was skipped (see below).
+                  </p>
+                ) : null}
+                {outreachPreview.batches.map((batch, index) => (
+                  <section key={batch.toAddress} className={styles.outreachPreviewCard}>
+                    <header>
+                      <strong>{batch.toAddress}</strong>
+                      <small>
+                        {batch.addresses.length} propert{batch.addresses.length === 1 ? "y" : "ies"}
+                        {batch.contactName ? ` — ${batch.contactName}` : ""}
+                      </small>
+                    </header>
+                    <label>
+                      <span>Subject</span>
+                      <input
+                        type="text"
+                        value={batch.subject}
+                        disabled={outreachPreview.sending}
+                        onChange={(event) =>
+                          setOutreachPreview((current) =>
+                            current
+                              ? {
+                                  ...current,
+                                  batches: current.batches.map((candidate, candidateIndex) =>
+                                    candidateIndex === index ? { ...candidate, subject: event.target.value } : candidate
+                                  ),
+                                }
+                              : current
+                          )
+                        }
+                      />
+                    </label>
+                    <label>
+                      <span>Body</span>
+                      <textarea
+                        rows={Math.min(14, 8 + batch.addresses.length)}
+                        value={batch.body}
+                        disabled={outreachPreview.sending}
+                        onChange={(event) =>
+                          setOutreachPreview((current) =>
+                            current
+                              ? {
+                                  ...current,
+                                  batches: current.batches.map((candidate, candidateIndex) =>
+                                    candidateIndex === index ? { ...candidate, body: event.target.value } : candidate
+                                  ),
+                                }
+                              : current
+                          )
+                        }
+                      />
+                    </label>
+                  </section>
+                ))}
+                {outreachPreview.skipped.length > 0 ? (
+                  <section className={styles.outreachPreviewSkipped}>
+                    <header>
+                      <strong>Skipped ({outreachPreview.skipped.length})</strong>
+                    </header>
+                    <ul>
+                      {outreachPreview.skipped.map((item) => (
+                        <li key={item.propertyId}>
+                          <div>
+                            <strong>{item.canonicalAddress}</strong>
+                            <small>{item.reason}</small>
+                          </div>
+                          {item.reasonCode === "missing_recipient" ? (
+                            <button
+                              type="button"
+                              className={styles.secondaryButton}
+                              disabled={outreachPreview.sending}
+                              onClick={() => {
+                                const row = rows.find((candidate) => candidate.propertyId === item.propertyId);
+                                if (row) openBrokerPrompt(row);
+                              }}
+                            >
+                              Find broker email
+                            </button>
+                          ) : null}
+                        </li>
+                      ))}
+                    </ul>
+                  </section>
+                ) : null}
+              </div>
+            )}
+            <div className={styles.modalActions}>
+              <button
+                className={styles.ghostButton}
+                type="button"
+                onClick={() => setOutreachPreview(null)}
+                disabled={outreachPreview.sending}
+              >
+                Cancel
+              </button>
+              <button
+                className={styles.secondaryButton}
+                type="button"
+                disabled={outreachPreview.loading || outreachPreview.sending}
+                onClick={() => void openGroupedEmailPreview()}
+                title="Re-resolve recipients and guards (use after adding a missing broker email)."
+              >
+                Re-check
+              </button>
+              <button
+                className={styles.primaryButton}
+                type="button"
+                disabled={outreachPreview.loading || outreachPreview.sending || outreachPreview.batches.length === 0}
+                onClick={() => void sendGroupedEmails()}
+              >
+                {outreachPreview.sending
+                  ? "Sending…"
+                  : `Send ${outreachPreview.batches.length} email${outreachPreview.batches.length === 1 ? "" : "s"}`}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {rejectState ? (
         <div className={styles.modalOverlay}>

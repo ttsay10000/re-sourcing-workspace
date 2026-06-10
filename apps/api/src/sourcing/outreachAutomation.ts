@@ -199,7 +199,7 @@ async function loadHistoricalAddressKeys(
   return { addressKeys, unresolvedHistory };
 }
 
-function buildSubject(addresses: string[]): string {
+export function buildSubject(addresses: string[]): string {
   if (addresses.length === 1) return `OM Request - ${addresses[0]}`;
   if (addresses.length === 2) return `OM Request - ${addresses[0]} and ${addresses[1]}`;
   return `OM Request - ${addresses.length} properties`;

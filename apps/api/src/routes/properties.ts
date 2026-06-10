@@ -18,6 +18,7 @@ import {
   InquiryEmailRepo,
   InquiryDocumentRepo,
   InquirySendRepo,
+  OutreachBatchRepo,
   PropertyUploadedDocumentRepo,
   DealSignalsRepo,
   DealScoreOverridesRepo,
@@ -42,6 +43,7 @@ import { randomUUID } from "crypto";
 import { resolveInquiryFilePath } from "../inquiry/storage.js";
 import { saveUploadedDocument, resolveUploadedDocFilePath, deleteUploadedDocumentFile, uploadedDocFileExists } from "../upload/uploadedDocStorage.js";
 import { sendMessage as gmailSendMessage } from "../inquiry/gmailClient.js";
+import { buildInquiryDraft, groupInquiryRecipients } from "../inquiry/bulkInquiryGrouping.js";
 import { findBrokerPropertyConversationHistory } from "../inquiry/gmailConversationHistory.js";
 import { buildBrokerTeamRecords, findBrokerTeamOverlapMatches } from "../inquiry/brokerTeamOverlap.js";
 import type { PropertyDetails, RentalFinancials, RentalFinancialsFromLlm } from "@re-sourcing/contracts";
@@ -4493,33 +4495,6 @@ class InquirySendBlockedError extends Error {
   }
 }
 
-function buildInquiryDraft(input: {
-  canonicalAddress: string;
-  recipientName?: string | null;
-  to?: string | null;
-}): { to: string; subject: string; body: string } {
-  const addressLine = input.canonicalAddress.split(",")[0]?.trim() || input.canonicalAddress;
-  const firstName = input.recipientName?.trim() ? input.recipientName.trim().split(/\s+/)[0] ?? null : null;
-  const greeting = firstName ? `Hi ${firstName},` : "Hi,";
-
-  return {
-    to: input.to?.trim() ?? "",
-    subject: `Inquiry about ${addressLine}`,
-    body: `${greeting}
-
-My name is Tyler Tsay, and I'm reaching out on behalf of a client regarding the property at ${addressLine} currently on the market. We are evaluating the building and would appreciate the opportunity to review further.
-
-Would you be able to share the OM, T-12/operating statement, current rent roll, and expense detail? If available, we would also appreciate any broker comp package or market analysis, sale/rent comps, NOI/cap-rate support, and whisper pricing color.
-
-Thanks in advance - looking forward to taking a look.
-
-Best,
-Tyler Tsay
-617 306 3336
-tyler@stayhaus.co`,
-  };
-}
-
 function extractInquiryErrorMessage(err: unknown): string {
   if (err instanceof Error) {
     const g = err as Error & {
@@ -4589,6 +4564,91 @@ async function resolveBulkInquiryRecipient(
   };
 }
 
+interface InquirySendGuardCheck {
+  normalizedTo: string | null;
+  guard: InquiryGuardState | null;
+  blocked: { code: string; message: string; gmailHistory?: unknown } | null;
+}
+
+/**
+ * Run every inquiry-send guard without throwing, so the bulk preview and the
+ * send path share one implementation. `force` skips the dedupe guards but
+ * never the address validation.
+ */
+async function checkInquirySendGuards(params: {
+  pool: import("pg").Pool;
+  propertyId: string;
+  canonicalAddress: string;
+  toAddress: string;
+  force?: boolean;
+}): Promise<InquirySendGuardCheck> {
+  const normalizedTo = normalizeRecipientEmail(params.toAddress);
+  if (!normalizedTo) {
+    return {
+      normalizedTo: null,
+      guard: null,
+      blocked: { code: "invalid_recipient", message: "Missing or invalid 'to' address." },
+    };
+  }
+  const guard = await getInquiryGuardState(params.pool, params.propertyId, normalizedTo);
+  if (params.force) {
+    return { normalizedTo, guard, blocked: null };
+  }
+  if (guard.hasOmDocument) {
+    return {
+      normalizedTo,
+      guard,
+      blocked: { code: "om_already_received", message: "OM already received for this property. Inquiry email blocked." },
+    };
+  }
+  if (guard.lastInquirySentAt) {
+    return {
+      normalizedTo,
+      guard,
+      blocked: {
+        code: "inquiry_already_sent",
+        message: "An inquiry has already been logged for this property. Inquiry email blocked until you confirm a resend.",
+      },
+    };
+  }
+  if (guard.sameRecipientOtherProperties.length > 0) {
+    return {
+      normalizedTo,
+      guard,
+      blocked: {
+        code: "recipient_contacted_elsewhere",
+        message: "This broker email has already been contacted for another property. Inquiry email blocked until you confirm.",
+      },
+    };
+  }
+  if (guard.sameBrokerTeamOtherProperties.length > 0) {
+    return {
+      normalizedTo,
+      guard,
+      blocked: {
+        code: "broker_team_contacted_elsewhere",
+        message: "A broker on this listing team was already contacted on another property. Inquiry email blocked until you confirm.",
+      },
+    };
+  }
+  const gmailHistory = await findBrokerPropertyConversationHistory({
+    toAddress: normalizedTo,
+    canonicalAddress: params.canonicalAddress,
+  });
+  if (gmailHistory.matches.length > 0) {
+    return {
+      normalizedTo,
+      guard,
+      blocked: {
+        code: "gmail_history_exists",
+        message: "A Gmail conversation already exists for this broker and property. Inquiry email blocked until you confirm a resend.",
+        gmailHistory,
+      },
+    };
+  }
+  return { normalizedTo, guard, blocked: null };
+}
+
 async function prepareInquirySend(params: {
   pool: import("pg").Pool;
   propertyId: string;
@@ -4596,54 +4656,19 @@ async function prepareInquirySend(params: {
   toAddress: string;
   force?: boolean;
 }): Promise<PreparedInquirySend> {
-  const normalizedTo = normalizeRecipientEmail(params.toAddress);
-  if (!normalizedTo) {
-    throw new Error("Missing or invalid 'to' address.");
+  const check = await checkInquirySendGuards(params);
+  if (!check.normalizedTo) {
+    throw new Error(check.blocked?.message ?? "Missing or invalid 'to' address.");
   }
-  const guard = await getInquiryGuardState(params.pool, params.propertyId, normalizedTo);
-  if (guard.hasOmDocument && !params.force) {
+  if (check.blocked && check.guard) {
     throw new InquirySendBlockedError(
-      "OM already received for this property. Inquiry email blocked.",
-      "om_already_received",
-      guard
+      check.blocked.message,
+      check.blocked.code,
+      check.guard,
+      check.blocked.gmailHistory
     );
   }
-  if (guard.lastInquirySentAt && !params.force) {
-    throw new InquirySendBlockedError(
-      "An inquiry has already been logged for this property. Inquiry email blocked until you confirm a resend.",
-      "inquiry_already_sent",
-      guard
-    );
-  }
-  if (guard.sameRecipientOtherProperties.length > 0 && !params.force) {
-    throw new InquirySendBlockedError(
-      "This broker email has already been contacted for another property. Inquiry email blocked until you confirm.",
-      "recipient_contacted_elsewhere",
-      guard
-    );
-  }
-  if (guard.sameBrokerTeamOtherProperties.length > 0 && !params.force) {
-    throw new InquirySendBlockedError(
-      "A broker on this listing team was already contacted on another property. Inquiry email blocked until you confirm.",
-      "broker_team_contacted_elsewhere",
-      guard
-    );
-  }
-  if (!params.force) {
-    const gmailHistory = await findBrokerPropertyConversationHistory({
-      toAddress: normalizedTo,
-      canonicalAddress: params.canonicalAddress,
-    });
-    if (gmailHistory.matches.length > 0) {
-      throw new InquirySendBlockedError(
-        "A Gmail conversation already exists for this broker and property. Inquiry email blocked until you confirm a resend.",
-        "gmail_history_exists",
-        guard,
-        gmailHistory
-      );
-    }
-  }
-  return { normalizedTo, guard };
+  return { normalizedTo: check.normalizedTo, guard: check.guard! };
 }
 
 async function completeInquirySend(params: {
@@ -4915,8 +4940,346 @@ router.post("/properties/:id/mark-inquiry-sent", async (req: Request, res: Respo
   }
 });
 
-/** POST /api/properties/send-bulk-inquiry-emails - send inquiry emails for selected properties using manual override first, then listing broker order. */
+/**
+ * POST /api/properties/preview-bulk-inquiry-emails — resolve recipients and
+ * run every send guard for the selection WITHOUT sending, then group the
+ * sendable properties by broker email into editable drafts.
+ * Body: { propertyIds: string[] }.
+ */
+router.post("/properties/preview-bulk-inquiry-emails", async (req: Request, res: Response) => {
+  try {
+    const rawPropertyIds: unknown[] = Array.isArray(req.body?.propertyIds) ? (req.body.propertyIds as unknown[]) : [];
+    const propertyIds = [
+      ...new Set(
+        rawPropertyIds.filter(
+          (value: unknown): value is string => typeof value === "string" && value.trim().length > 0
+        )
+      ),
+    ];
+    if (propertyIds.length === 0) {
+      res.status(400).json({ error: "Provide at least one property ID." });
+      return;
+    }
+
+    const pool = getPool();
+    const propertyRepo = new PropertyRepo({ pool });
+    const sendable: Array<{ propertyId: string; canonicalAddress: string; email: string; name: string | null }> = [];
+    const skipped: Array<{
+      propertyId: string;
+      canonicalAddress: string;
+      reasonCode: string;
+      reason: string;
+    }> = [];
+
+    for (const propertyId of propertyIds) {
+      const property = await propertyRepo.byId(propertyId);
+      if (!property) {
+        skipped.push({
+          propertyId,
+          canonicalAddress: propertyId,
+          reasonCode: "property_not_found",
+          reason: "Property not found.",
+        });
+        continue;
+      }
+      const recipient = await resolveBulkInquiryRecipient(propertyId, pool);
+      if (!recipient.email) {
+        skipped.push({
+          propertyId,
+          canonicalAddress: property.canonicalAddress,
+          reasonCode: "missing_recipient",
+          reason: "No broker email is available for this property.",
+        });
+        continue;
+      }
+      const check = await checkInquirySendGuards({
+        pool,
+        propertyId,
+        canonicalAddress: property.canonicalAddress,
+        toAddress: recipient.email,
+      });
+      if (!check.normalizedTo || check.blocked) {
+        skipped.push({
+          propertyId,
+          canonicalAddress: property.canonicalAddress,
+          reasonCode: check.blocked?.code ?? "invalid_recipient",
+          reason: check.blocked?.message ?? "Invalid recipient address.",
+        });
+        continue;
+      }
+      sendable.push({
+        propertyId,
+        canonicalAddress: property.canonicalAddress,
+        email: check.normalizedTo,
+        name: recipient.name,
+      });
+    }
+
+    res.json({ ok: true, batches: groupInquiryRecipients(sendable), skipped });
+  } catch (err) {
+    const message = extractInquiryErrorMessage(err);
+    console.error("[properties preview-bulk-inquiry-emails]", err);
+    res.status(503).json({ error: "Failed to preview bulk inquiry emails.", details: message });
+  }
+});
+
+interface GroupedSendBatchInput {
+  toAddress: string;
+  propertyIds: string[];
+  subject: string;
+  body: string;
+}
+
+function parseGroupedSendBatches(raw: unknown): GroupedSendBatchInput[] | null {
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  const batches: GroupedSendBatchInput[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") return null;
+    const candidate = entry as Record<string, unknown>;
+    const toAddress = typeof candidate.toAddress === "string" ? candidate.toAddress.trim() : "";
+    const subject = typeof candidate.subject === "string" ? candidate.subject.trim() : "";
+    const body = typeof candidate.body === "string" ? candidate.body : "";
+    const propertyIds = Array.isArray(candidate.propertyIds)
+      ? [
+          ...new Set(
+            candidate.propertyIds.filter(
+              (id): id is string => typeof id === "string" && id.trim().length > 0
+            )
+          ),
+        ]
+      : [];
+    if (!toAddress || !subject || !body.trim() || propertyIds.length === 0) return null;
+    batches.push({ toAddress, propertyIds, subject, body });
+  }
+  return batches;
+}
+
+/**
+ * Grouped manual send: one Gmail message per broker covering all of their
+ * selected properties (drafts come from the preview endpoint and may be
+ * edited). Re-runs every guard at send time and records an outreach_batches
+ * row with canonical addresses so the automation path's historical dedupe
+ * sees these sends without Gmail fetches. { dryRun: true } verifies without
+ * sending.
+ */
+async function handleGroupedBulkInquirySend(req: Request, res: Response): Promise<void> {
+  let workflowRunId: string | null = null;
+  const workflowStartedAt = new Date().toISOString();
+  const dryRun = req.body?.dryRun === true;
+  try {
+    const batches = parseGroupedSendBatches(req.body?.batches);
+    if (!batches) {
+      res.status(400).json({
+        error: "Provide batches: [{ toAddress, propertyIds, subject, body }] — usually from preview-bulk-inquiry-emails.",
+      });
+      return;
+    }
+    const totalProperties = batches.reduce((sum, batch) => sum + batch.propertyIds.length, 0);
+    const pool = getPool();
+    const propertyRepo = new PropertyRepo({ pool });
+    const batchRepo = new OutreachBatchRepo({ pool });
+    const inquirySendRepo = new InquirySendRepo({ pool });
+
+    if (!dryRun) {
+      workflowRunId = await createWorkflowRun({
+        runType: "send_bulk_inquiry_email",
+        displayName: "Send grouped inquiry emails",
+        scopeLabel: `${batches.length} broker email${batches.length === 1 ? "" : "s"} / ${totalProperties} propert${totalProperties === 1 ? "y" : "ies"}`,
+        triggerSource: "manual",
+        totalItems: batches.length,
+        metadata: { mode: "grouped", batchCount: batches.length, totalProperties },
+        steps: [
+          {
+            stepKey: "inquiry",
+            totalItems: batches.length,
+            status: "running",
+            startedAt: workflowStartedAt,
+            lastMessage: `Sending ${batches.length} grouped inquiry email${batches.length === 1 ? "" : "s"}`,
+          },
+        ],
+      });
+    }
+
+    let sent = 0;
+    let failed = 0;
+    let skippedProperties = 0;
+    const results: Array<{
+      toAddress: string;
+      status: "sent" | "skipped" | "failed" | "would_send";
+      propertyIds: string[];
+      addresses: string[];
+      skipped: Array<{ propertyId: string; canonicalAddress: string; reasonCode: string; reason: string }>;
+      messageId?: string | null;
+      threadId?: string | null;
+      batchId?: string | null;
+      error?: string | null;
+    }> = [];
+
+    for (const batch of batches) {
+      const sendable: Array<{ propertyId: string; canonicalAddress: string }> = [];
+      const skipped: Array<{ propertyId: string; canonicalAddress: string; reasonCode: string; reason: string }> = [];
+      for (const propertyId of batch.propertyIds) {
+        const property = await propertyRepo.byId(propertyId);
+        if (!property) {
+          skipped.push({ propertyId, canonicalAddress: propertyId, reasonCode: "property_not_found", reason: "Property not found." });
+          continue;
+        }
+        const check = await checkInquirySendGuards({
+          pool,
+          propertyId,
+          canonicalAddress: property.canonicalAddress,
+          toAddress: batch.toAddress,
+        });
+        if (!check.normalizedTo || check.blocked) {
+          skipped.push({
+            propertyId,
+            canonicalAddress: property.canonicalAddress,
+            reasonCode: check.blocked?.code ?? "invalid_recipient",
+            reason: check.blocked?.message ?? "Invalid recipient address.",
+          });
+          continue;
+        }
+        sendable.push({ propertyId, canonicalAddress: property.canonicalAddress });
+      }
+      skippedProperties += skipped.length;
+
+      if (sendable.length === 0) {
+        results.push({
+          toAddress: batch.toAddress,
+          status: "skipped",
+          propertyIds: [],
+          addresses: [],
+          skipped,
+        });
+        continue;
+      }
+
+      if (dryRun) {
+        results.push({
+          toAddress: batch.toAddress,
+          status: "would_send",
+          propertyIds: sendable.map((item) => item.propertyId),
+          addresses: sendable.map((item) => item.canonicalAddress),
+          skipped,
+        });
+        continue;
+      }
+
+      try {
+        const outreachBatch = await batchRepo.create({
+          contactId: null,
+          toAddress: batch.toAddress.trim().toLowerCase(),
+          status: "queued",
+          createdBy: "manual_bulk",
+          reviewReason: null,
+          metadata: {
+            propertyIds: sendable.map((item) => item.propertyId),
+            canonicalAddresses: sendable.map((item) => item.canonicalAddress),
+          },
+          propertyIds: sendable.map((item) => item.propertyId),
+        });
+        const sendResult = await gmailSendMessage(batch.toAddress, batch.subject, batch.body);
+        await batchRepo.updateStatus(outreachBatch.id, {
+          status: "sent",
+          gmailMessageId: sendResult.id,
+          gmailThreadId: sendResult.threadId,
+          sentAt: new Date().toISOString(),
+        });
+        for (const item of sendable) {
+          await inquirySendRepo.create(item.propertyId, sendResult.id, {
+            toAddress: batch.toAddress.trim().toLowerCase(),
+            source: "manual_bulk",
+            gmailThreadId: sendResult.threadId,
+            batchId: outreachBatch.id,
+          });
+          await syncPropertySourcingWorkflow(item.propertyId, { pool }).catch(() => {});
+        }
+        sent++;
+        results.push({
+          toAddress: batch.toAddress,
+          status: "sent",
+          propertyIds: sendable.map((item) => item.propertyId),
+          addresses: sendable.map((item) => item.canonicalAddress),
+          skipped,
+          messageId: sendResult.id,
+          threadId: sendResult.threadId,
+          batchId: outreachBatch.id,
+        });
+      } catch (err) {
+        failed++;
+        results.push({
+          toAddress: batch.toAddress,
+          status: "failed",
+          propertyIds: sendable.map((item) => item.propertyId),
+          addresses: sendable.map((item) => item.canonicalAddress),
+          skipped,
+          error: extractInquiryErrorMessage(err),
+        });
+      }
+
+      if (workflowRunId) {
+        await upsertWorkflowStep(workflowRunId, {
+          stepKey: "inquiry",
+          totalItems: batches.length,
+          completedItems: sent,
+          failedItems: failed,
+          skippedItems: results.filter((result) => result.status === "skipped").length,
+          status: deriveWorkflowStatusFromCounts({
+            totalItems: batches.length,
+            completedItems: sent,
+            failedItems: failed,
+            skippedItems: results.filter((result) => result.status === "skipped").length,
+          }),
+          startedAt: workflowStartedAt,
+          finishedAt: null,
+          lastMessage: `${sent} sent, ${failed} failed`,
+          lastError: results.find((result) => result.status === "failed")?.error ?? null,
+        });
+      }
+    }
+
+    if (workflowRunId) {
+      const skippedBatches = results.filter((result) => result.status === "skipped").length;
+      const status = deriveWorkflowStatusFromCounts({
+        totalItems: batches.length,
+        completedItems: sent,
+        failedItems: failed,
+        skippedItems: skippedBatches,
+      });
+      await upsertWorkflowStep(workflowRunId, {
+        stepKey: "inquiry",
+        totalItems: batches.length,
+        completedItems: sent,
+        failedItems: failed,
+        skippedItems: skippedBatches,
+        status,
+        startedAt: workflowStartedAt,
+        finishedAt: new Date().toISOString(),
+        lastMessage: `${sent} sent, ${skippedBatches} skipped, ${failed} failed (${skippedProperties} properties skipped by guards)`,
+        lastError: results.find((result) => result.status === "failed")?.error ?? null,
+      });
+      await mergeWorkflowRunMetadata(workflowRunId, { results, sent, failed, skippedProperties });
+      await updateWorkflowRun(workflowRunId, { status, finishedAt: new Date().toISOString() });
+    }
+
+    res.json({ ok: true, dryRun, sent, failed, skippedProperties, results });
+  } catch (err) {
+    const message = extractInquiryErrorMessage(err);
+    console.error("[properties send-bulk-inquiry-emails grouped]", err);
+    if (workflowRunId) {
+      await mergeWorkflowRunMetadata(workflowRunId, { error: message });
+      await updateWorkflowRun(workflowRunId, { status: "failed", finishedAt: new Date().toISOString() });
+    }
+    res.status(503).json({ error: "Failed to send grouped inquiry emails.", details: message });
+  }
+}
+
+/** POST /api/properties/send-bulk-inquiry-emails - send inquiry emails for selected properties using manual override first, then listing broker order. Pass { mode: "grouped", batches } for one-email-per-broker sends. */
 router.post("/properties/send-bulk-inquiry-emails", async (req: Request, res: Response) => {
+  if (req.body?.mode === "grouped") {
+    await handleGroupedBulkInquirySend(req, res);
+    return;
+  }
   let workflowRunId: string | null = null;
   const workflowStartedAt = new Date().toISOString();
   try {
