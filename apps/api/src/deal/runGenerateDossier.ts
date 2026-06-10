@@ -81,6 +81,7 @@ import {
   type DossierAssumptionOverrides,
 } from "./underwritingModel.js";
 import { buildUnderwritingValidationFlags } from "./underwritingValidationFlags.js";
+import { auditDealAnalysisWorkbook, type WorkbookAuditResult } from "./workbookAudit.js";
 import type {
   ExpenseRow,
   GrossRentRow,
@@ -94,6 +95,8 @@ export interface GenerateDossierResult {
   dealScore: number | null;
   /** Legacy field retained for API compatibility; browser-triggered dossier runs no longer send email. */
   emailSent?: boolean;
+  /** Tie-out audit of the rendered Excel workbook; null when documents were skipped or the audit errored. */
+  workbookAudit?: WorkbookAuditResult | null;
 }
 
 export interface RunGenerateDossierOptions {
@@ -954,6 +957,7 @@ export async function runGenerateDossier(
 
     let dossierDoc: { id: string; fileName: string; storagePath: string } | null = null;
     let excelDoc: { id: string; fileName: string; storagePath: string } | null = null;
+    let workbookAudit: WorkbookAuditResult | null = null;
 
     if (!skipDocuments) {
       const scoredDossierText = buildDossierStructuredText(ctx);
@@ -992,6 +996,28 @@ export async function runGenerateDossier(
         dossierBytes: dossierBuffer.length,
         excelBytes: excelBuffer.length,
       });
+
+      // Audit the rendered workbook against the engine; failures flag, never block.
+      try {
+        workbookAudit = await auditDealAnalysisWorkbook({ buffer: excelBuffer, ctx });
+        await propertyRepo.updateDetails(
+          propertyId,
+          "dealDossier.workbookAudit",
+          workbookAudit as unknown as Record<string, unknown>
+        );
+        if (workbookAudit.status !== "pass") {
+          console.warn("[runGenerateDossier] Workbook audit", {
+            propertyId,
+            status: workbookAudit.status,
+            issues: workbookAudit.checks.filter((check) => check.status !== "pass").map((check) => check.key),
+          });
+        }
+      } catch (err) {
+        console.warn(
+          "[runGenerateDossier] Workbook audit failed to run:",
+          err instanceof Error ? err.message : err
+        );
+      }
 
       await setGenerationState(runningGenerationState(startedAt, "Saving documents"));
       const dossierDocId = randomUUID();
@@ -1142,6 +1168,7 @@ export async function runGenerateDossier(
         : null,
       dealScore: finalScore,
       emailSent,
+      workbookAudit,
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

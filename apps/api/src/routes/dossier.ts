@@ -795,6 +795,7 @@ router.post("/dossier/generate", async (req: Request, res: Response) => {
         dossierFormat,
         scoringProfile: scoringProfile ?? "legacy_v3",
         omRefresh,
+        workbookAudit: result.workbookAudit ?? null,
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -833,6 +834,37 @@ router.post("/dossier/generate", async (req: Request, res: Response) => {
       res.status(503).json({ error: "Failed to generate dossier.", details: message });
     }
   });
+});
+
+/**
+ * GET /api/properties/:id/workbook-audit — the persisted tie-out audit of the
+ * latest generated Excel workbook (written by every dossier generation).
+ * Re-run "Rerun dossier" to refresh both the workbook and its audit.
+ */
+router.get("/properties/:id/workbook-audit", async (req: Request, res: Response) => {
+  try {
+    const propertyId = req.params.id;
+    if (!propertyId) {
+      res.status(400).json({ error: "Property ID required." });
+      return;
+    }
+    const propertyRepo = new PropertyRepo({ pool: getPool() });
+    const property = await propertyRepo.byId(propertyId);
+    if (!property) {
+      res.status(404).json({ error: "Property not found." });
+      return;
+    }
+    const details = (property.details ?? {}) as Record<string, unknown>;
+    const dealDossier =
+      details.dealDossier && typeof details.dealDossier === "object"
+        ? (details.dealDossier as Record<string, unknown>)
+        : {};
+    res.json({ ok: true, propertyId, workbookAudit: dealDossier.workbookAudit ?? null });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[dossier workbook-audit]", err);
+    res.status(503).json({ error: "Failed to load workbook audit.", details: message });
+  }
 });
 
 export default router;

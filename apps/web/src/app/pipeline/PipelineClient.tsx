@@ -283,6 +283,7 @@ interface DossierGenerateResponse {
   propertyId?: string;
   dealScore?: number | null;
   omRefresh?: { status?: "promoted" | "skipped" | "failed"; error?: string } | null;
+  workbookAudit?: { status?: "pass" | "warnings" | "failed" } | null;
   error?: string;
   details?: string;
 }
@@ -2203,7 +2204,16 @@ export default function PipelineClient() {
           : payload.omRefresh?.status === "failed"
             ? " OM analysis re-run failed; existing OM analysis was used."
             : "";
-      const dossierSummary = `Deal dossier rerun completed.${score}${omNote}`;
+      const auditStatus = payload.workbookAudit?.status;
+      const auditNote =
+        auditStatus === "pass"
+          ? " Workbook audit: pass."
+          : auditStatus === "warnings"
+            ? " Workbook audit: warnings — check assumptions."
+            : auditStatus === "failed"
+              ? " Workbook audit FAILED — the Excel may not tie to the model."
+              : "";
+      const dossierSummary = `Deal dossier rerun completed.${score}${omNote}${auditNote}`;
       setNotice(dossierSummary);
       banner.succeed(dossierSummary);
     } catch (err) {

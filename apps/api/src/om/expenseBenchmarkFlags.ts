@@ -73,7 +73,7 @@ export function classifyExpenseLines(snapshot: OmAuthoritativeSnapshot): Classif
   let totalAnnual = 0;
   for (const row of table) {
     if (!row || typeof row !== "object") continue;
-    const record = row as Record<string, unknown>;
+    const record = row as unknown as Record<string, unknown>;
     const lineItem = typeof record.lineItem === "string" ? record.lineItem : "";
     const amount = toFiniteNumber(record.amount);
     if (!lineItem.trim() || amount == null || amount <= 0) continue;
