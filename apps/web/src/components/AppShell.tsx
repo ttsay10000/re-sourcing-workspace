@@ -17,6 +17,7 @@ import {
   Upload,
   User,
   X,
+  Map as MapIcon,
   type LucideIcon,
 } from "lucide-react";
 
@@ -51,6 +52,13 @@ const NAV_LINKS: NavLink[] = [
       pathname === "/property-data" ||
       pathname.startsWith("/property-data/") ||
       pathname.startsWith("/property/"),
+  },
+  {
+    href: "/yield-map",
+    label: "Yield Map",
+    shortLabel: "Y",
+    icon: MapIcon,
+    matches: (pathname: string) => pathname === "/yield-map" || pathname.startsWith("/yield-map/"),
   },
   {
     href: "/crm",
