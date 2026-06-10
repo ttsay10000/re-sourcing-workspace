@@ -5340,10 +5340,28 @@ router.put("/properties/:id/dossier-settings", async (req: Request, res: Respons
       );
     }
     await repo.updateDetails(propertyId, "dealDossier.assumptions", assumptionsPatch);
+
+    // Saved workspace edits must reach the pipeline/home numbers without the
+    // user regenerating documents: recompute the persisted deal signals on the
+    // numbers-only path. Dossier PDF/Excel stay untouched by design — the user
+    // regenerates those explicitly once the workspace numbers settle.
+    let underwritingRefreshed = false;
+    try {
+      await runGenerateDossier(propertyId, undefined, { sendEmail: false, skipDocuments: true });
+      underwritingRefreshed = true;
+    } catch (refreshErr) {
+      console.warn(
+        "[properties dossier settings] signals refresh skipped",
+        propertyId,
+        refreshErr instanceof Error ? refreshErr.message : refreshErr
+      );
+    }
+
     res.json({
       ok: true,
       propertyId,
       assumptions: assumptionsPatch,
+      underwritingRefreshed,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

@@ -11,8 +11,13 @@
  */
 
 import { Router, type Request, type Response } from "express";
-import { getPool } from "@re-sourcing/db";
+import { getPool, NeighborhoodRepo } from "@re-sourcing/db";
 import { resolveOperatingYield, sanitizeRatePct, type OperatingYieldFlag } from "../deal/operatingYield.js";
+import {
+  buildNeighborhoodIndex,
+  normalizeNeighborhoodName,
+  resolveNeighborhoodId,
+} from "../marketContext/neighborhoodResolve.js";
 
 const router = Router();
 
@@ -111,6 +116,160 @@ function toIsoString(value: unknown): string | null {
 function median(sortedAscending: number[]): number | null {
   return sortedAscending.length > 0 ? sortedAscending[Math.floor((sortedAscending.length - 1) / 2)] : null;
 }
+
+
+/** No neighborhood data yet: anything at/above this sale $/SF flags as high end. */
+const DEFAULT_HIGH_PSF = 2000;
+
+interface NeighborhoodPsfEntry {
+  /** Canonical neighborhood id when resolvable, else the normalized raw name. */
+  key: string;
+  name: string;
+  borough: string | null;
+  /** Names the client can match listing/StreetEasy area labels against. */
+  aliases: string[];
+  medianPsf: number;
+  count: number;
+  dealCount: number;
+  compCount: number;
+}
+
+/**
+ * GET /api/comps/neighborhood-psf — median sale $/SF per neighborhood, blended
+ * from our own deals (latest signals; ask/GSF fallback) and ingested market
+ * research comps. StreetEasy/listing area labels resolve through the same
+ * alias map the market layer uses, so publisher and listing names converge on
+ * one polygon. Powers neighborhood-aware $/SF highlighting on the pipeline.
+ */
+router.get("/comps/neighborhood-psf", async (_req: Request, res: Response) => {
+  try {
+    const pool = getPool();
+    const neighborhoods = await new NeighborhoodRepo({ pool }).listAll().catch(() => []);
+    const index = buildNeighborhoodIndex(neighborhoods);
+    const recordById = new Map(neighborhoods.map((hood) => [hood.id, hood]));
+
+    const dealRows = await pool.query(
+      `SELECT
+         COALESCE(
+           p.details#>>'{neighborhood,primary,name}',
+           p.details#>>'{neighborhood,primary,neighborhood}',
+           l.extra->>'neighborhood',
+           l.extra->>'neighborhoodName',
+           l.extra->>'area',
+           l.extra->>'area_name'
+         ) AS neighborhood_raw,
+         p.details#>>'{neighborhood,primary,borough}' AS borough,
+         COALESCE(
+           ds.price_psf,
+           CASE WHEN l.price > 0 AND l.sqft > 0 THEN l.price / l.sqft END
+         ) AS price_psf
+       FROM properties p
+       LEFT JOIN LATERAL (
+         SELECT li.price, li.sqft, li.extra
+         FROM listing_property_matches m
+         INNER JOIN listings li ON li.id = m.listing_id
+         WHERE m.property_id = p.id
+         ORDER BY (m.status = 'accepted') DESC, m.confidence DESC, m.created_at DESC
+         LIMIT 1
+       ) l ON true
+       LEFT JOIN LATERAL (
+         SELECT price_psf FROM deal_signals
+         WHERE property_id = p.id
+         ORDER BY generated_at DESC
+         LIMIT 1
+       ) ds ON true`
+    );
+
+    const compRows = await pool.query(
+      `SELECT neighborhood_id, neighborhood_raw, price_psf
+       FROM market_comps
+       WHERE price_psf IS NOT NULL AND price_psf > 0`
+    );
+
+    interface Bucket {
+      key: string;
+      name: string;
+      borough: string | null;
+      aliases: Set<string>;
+      psfs: number[];
+      dealCount: number;
+      compCount: number;
+    }
+    const buckets = new Map<string, Bucket>();
+    const add = (
+      rawName: string | null,
+      resolvedId: string | null,
+      borough: string | null,
+      psf: number | null,
+      source: "deal" | "comp"
+    ) => {
+      if (psf == null || !Number.isFinite(psf) || psf <= 0) return;
+      const id = resolvedId ?? (rawName ? resolveNeighborhoodId(rawName, index) : null);
+      const record = id ? recordById.get(id) : undefined;
+      const key = id ?? (rawName ? normalizeNeighborhoodName(rawName) : "");
+      if (!key) return;
+      let bucket = buckets.get(key);
+      if (!bucket) {
+        bucket = {
+          key,
+          name: record?.name ?? rawName?.trim() ?? key,
+          borough: record?.borough ?? titleCaseBorough(borough),
+          aliases: new Set(record ? [record.name, ...record.aliases] : rawName ? [rawName.trim()] : []),
+          psfs: [],
+          dealCount: 0,
+          compCount: 0,
+        };
+        buckets.set(key, bucket);
+      }
+      if (rawName) bucket.aliases.add(rawName.trim());
+      bucket.psfs.push(psf);
+      if (source === "deal") bucket.dealCount++;
+      else bucket.compCount++;
+    };
+
+    for (const row of dealRows.rows) {
+      add(
+        (row.neighborhood_raw as string | null) ?? null,
+        null,
+        (row.borough as string | null) ?? null,
+        toNumber(row.price_psf),
+        "deal"
+      );
+    }
+    for (const row of compRows.rows) {
+      add(
+        (row.neighborhood_raw as string | null) ?? null,
+        (row.neighborhood_id as string | null) ?? null,
+        null,
+        toNumber(row.price_psf),
+        "comp"
+      );
+    }
+
+    const entries: NeighborhoodPsfEntry[] = [...buckets.values()]
+      .map((bucket) => {
+        const sorted = [...bucket.psfs].sort((a, b) => a - b);
+        return {
+          key: bucket.key,
+          name: bucket.name,
+          borough: bucket.borough,
+          aliases: [...bucket.aliases],
+          medianPsf: median(sorted) ?? 0,
+          count: bucket.psfs.length,
+          dealCount: bucket.dealCount,
+          compCount: bucket.compCount,
+        };
+      })
+      .filter((entry) => entry.medianPsf > 0)
+      .sort((a, b) => b.count - a.count);
+
+    res.json({ neighborhoods: entries, defaultHighPsf: DEFAULT_HIGH_PSF });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[comps neighborhood-psf]", err);
+    res.status(503).json({ error: "Failed to compute neighborhood $/SF medians.", details: message });
+  }
+});
 
 router.get("/comps/operating", async (req: Request, res: Response) => {
   const borough = typeof req.query.borough === "string" ? req.query.borough.trim().toLowerCase() : "";

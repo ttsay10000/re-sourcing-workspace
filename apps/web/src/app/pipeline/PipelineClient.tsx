@@ -736,6 +736,15 @@ function propertyDocumentFileUrl(propertyId: string, documentId: string): string
   return `${API_BASE}/api/properties/${encodeURIComponent(propertyId)}/documents/${encodeURIComponent(documentId)}/file`;
 }
 
+/** Mirror of the API's normalizeNeighborhoodName: "Hell's Kitchen" → "hellskitchen". */
+function normalizeAreaName(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+}
+
 /** Force attachment disposition on our own file endpoint so Download buttons save instead of opening a tab. */
 function asDownloadUrl(url: string | null): string | null {
   if (!url) return null;
@@ -2400,10 +2409,101 @@ export default function PipelineClient() {
     return sd > 0 ? { mean, sd } : null;
   }, [rows]);
 
+  // Neighborhood $/SF context (deals + ingested research comps) keyed by every
+  // known alias, so listing/StreetEasy area labels match the market layer's
+  // polygons. Non-fatal: without it the flags fall back to defaults below.
+  const [neighborhoodPsf, setNeighborhoodPsf] = useState<{
+    byAlias: Map<string, { name: string; medianPsf: number; count: number; dealCount: number; compCount: number }>;
+    defaultHighPsf: number;
+  } | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const payload = await apiFetch<{
+          neighborhoods?: Array<{
+            name: string;
+            aliases?: string[];
+            medianPsf: number;
+            count: number;
+            dealCount?: number;
+            compCount?: number;
+          }>;
+          defaultHighPsf?: number;
+        }>(`${API_BASE}/api/comps/neighborhood-psf`);
+        if (cancelled) return;
+        const byAlias = new Map<string, { name: string; medianPsf: number; count: number; dealCount: number; compCount: number }>();
+        for (const entry of payload.neighborhoods ?? []) {
+          const value = {
+            name: entry.name,
+            medianPsf: entry.medianPsf,
+            count: entry.count,
+            dealCount: entry.dealCount ?? 0,
+            compCount: entry.compCount ?? 0,
+          };
+          for (const alias of [entry.name, ...(entry.aliases ?? [])]) {
+            const key = normalizeAreaName(alias);
+            if (key && !byAlias.has(key)) byAlias.set(key, value);
+          }
+        }
+        setNeighborhoodPsf({ byAlias, defaultHighPsf: payload.defaultHighPsf ?? 2000 });
+      } catch {
+        // Highlighting falls back to the default threshold + 3σ rule.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  /**
+   * $/SF highlight precedence: (1) the deal's neighborhood median when we have
+   * enough observations (±25%), (2) the $2,000/SF default high-end threshold
+   * when the neighborhood is unknown or thin, (3) the 3σ outlier rule against
+   * visible rows as the catch-all.
+   */
   const psfFlagFor = useCallback(
     (row: PipelineRow): YieldFlag | null => {
-      if (!psfStats || row.pricePerSqft == null || !Number.isFinite(row.pricePerSqft)) return null;
-      const z = (row.pricePerSqft - psfStats.mean) / psfStats.sd;
+      const psf = row.pricePerSqft;
+      if (psf == null || !Number.isFinite(psf) || psf <= 0) return null;
+
+      const areaEntry = (() => {
+        if (!neighborhoodPsf) return null;
+        for (const candidate of [row.neighborhood, row.borough]) {
+          if (typeof candidate !== "string" || !candidate.trim()) continue;
+          const match = neighborhoodPsf.byAlias.get(normalizeAreaName(candidate));
+          if (match) return match;
+        }
+        return null;
+      })();
+
+      if (areaEntry && areaEntry.count >= 3 && areaEntry.medianPsf > 0) {
+        const ratio = psf / areaEntry.medianPsf;
+        if (ratio >= 1.25 || ratio <= 0.75) {
+          const pct = Math.abs(Math.round((ratio - 1) * 100));
+          return {
+            severity: "warn",
+            label: ratio > 1 ? "High" : "Low",
+            title: `$/SF is ${pct}% ${ratio > 1 ? "above" : "below"} the ${areaEntry.name} median (${formatCurrency(
+              areaEntry.medianPsf,
+              false
+            )}/SF across ${areaEntry.count} deal${areaEntry.count === 1 ? "" : "s"} + research comps).`,
+          };
+        }
+        return null;
+      }
+
+      const defaultHigh = neighborhoodPsf?.defaultHighPsf ?? 2000;
+      if (psf >= defaultHigh) {
+        return {
+          severity: "warn",
+          label: "High",
+          title: `$/SF is at/above the ${formatCurrency(defaultHigh, false)}/SF default high-end threshold — no neighborhood comp context yet for this area.`,
+        };
+      }
+
+      if (!psfStats) return null;
+      const z = (psf - psfStats.mean) / psfStats.sd;
       if (Math.abs(z) < 3) return null;
       return {
         severity: "warn",
@@ -2411,7 +2511,7 @@ export default function PipelineClient() {
         title: `$/SF is ${Math.abs(z).toFixed(1)}σ ${z > 0 ? "above" : "below"} the visible average (${formatCurrency(psfStats.mean, false)}).`,
       };
     },
-    [psfStats]
+    [psfStats, neighborhoodPsf]
   );
 
   function openBrokerPrompt(row: PipelineRow, event?: MouseEvent<HTMLButtonElement>) {
