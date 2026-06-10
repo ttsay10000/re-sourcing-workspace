@@ -12,7 +12,8 @@ import {
 } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Star, X } from "lucide-react";
+import { MailPlus, Star, X } from "lucide-react";
+import { Button, Dialog, StageChip } from "@/components/ui";
 import {
   UI_V2_PIPELINE_STATUS_OPTIONS,
   UI_V2_REJECTION_REASON_OPTIONS,
@@ -172,6 +173,7 @@ const EMPTY_ENRICHMENT_STATE: UiV2EnrichmentState = {
 
 type PipelineHeaderMenuId =
   | "address"
+  | "stage"
   | "source"
   | "propertyType"
   | "marketType"
@@ -367,6 +369,46 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function cx(...values: Array<string | false | null | undefined>): string {
   return values.filter(Boolean).join(" ");
+}
+
+type YieldFlag = { severity: "warn" | "danger"; label: string; title: string };
+
+/** Data-sanity flag for the MTR yield cell: server callouts first, then client guards. */
+function mtrYieldFlag(row: PipelineRow, ltr: number | null, mtr: number | null): YieldFlag | null {
+  const code = row.underwriting?.mtrCalloutCode;
+  if (code === "mtr_below_ltr") {
+    return {
+      severity: "danger",
+      label: "Below LTR",
+      title: row.underwriting?.mtrCalloutLabel ?? "MTR yield is below LTR — the mid-term numbers don't make sense.",
+    };
+  }
+  if (code) {
+    return {
+      severity: "warn",
+      label: "Weak bump",
+      title: row.underwriting?.mtrCalloutLabel ?? "MTR uplift over LTR is unusually small.",
+    };
+  }
+  if (mtr != null && mtr < 0) {
+    return { severity: "danger", label: "Negative", title: "Negative MTR yield — check NOI inputs." };
+  }
+  if (ltr != null && mtr != null && mtr < ltr) {
+    return { severity: "danger", label: "Below LTR", title: "MTR yield is below LTR — the mid-term numbers don't make sense." };
+  }
+  return null;
+}
+
+function ltrYieldFlag(ltr: number | null): YieldFlag | null {
+  if (ltr != null && ltr < 0) {
+    return { severity: "danger", label: "Negative", title: "Negative LTR yield — check NOI inputs." };
+  }
+  return null;
+}
+
+function flagCellClass(flag: YieldFlag | null): string | false {
+  if (!flag) return false;
+  return flag.severity === "danger" ? "cell-flag-danger" : "cell-flag-warn";
 }
 
 function pipelineRowHasOm(row: Pick<PipelineRow, "documentStatus"> | null | undefined): boolean {
@@ -1222,6 +1264,13 @@ export default function PipelineClient() {
   const [emailQueue, setEmailQueue] = useState<string[]>([]);
   const [headerMenu, setHeaderMenu] = useState<PipelineHeaderMenuId | null>(null);
   const [rowMenu, setRowMenu] = useState<RowActionMenuState | null>(null);
+  const [brokerPrompt, setBrokerPrompt] = useState<{
+    propertyId: string;
+    address: string;
+    name: string;
+    email: string;
+    saving: boolean;
+  } | null>(null);
   const [brokerCompPayloads, setBrokerCompPayloads] = useState<Record<string, unknown>>({});
   const [brokerCompLoading, setBrokerCompLoading] = useState<Record<string, boolean>>({});
   const [brokerCompUploading, setBrokerCompUploading] = useState<Record<string, boolean>>({});
@@ -2041,6 +2090,80 @@ export default function PipelineClient() {
     if (propertyIds.length === 0) return;
     setEmailQueue(propertyIds.slice(1));
     await emailBroker(propertyIds[0]!, "pipeline_table");
+  }
+
+  // $/SF sanity: flag values more than 3σ from the visible rows' average.
+  const psfStats = useMemo(() => {
+    const values = rows
+      .map((row) => row.pricePerSqft)
+      .filter((value): value is number => value != null && Number.isFinite(value) && value > 0);
+    if (values.length < 8) return null;
+    const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
+    const variance = values.reduce((sum, value) => sum + (value - mean) ** 2, 0) / values.length;
+    const sd = Math.sqrt(variance);
+    return sd > 0 ? { mean, sd } : null;
+  }, [rows]);
+
+  const psfFlagFor = useCallback(
+    (row: PipelineRow): YieldFlag | null => {
+      if (!psfStats || row.pricePerSqft == null || !Number.isFinite(row.pricePerSqft)) return null;
+      const z = (row.pricePerSqft - psfStats.mean) / psfStats.sd;
+      if (Math.abs(z) < 3) return null;
+      return {
+        severity: "warn",
+        label: z > 0 ? "High" : "Low",
+        title: `$/SF is ${Math.abs(z).toFixed(1)}σ ${z > 0 ? "above" : "below"} the visible average (${formatCurrency(psfStats.mean, false)}).`,
+      };
+    },
+    [psfStats]
+  );
+
+  function openBrokerPrompt(row: PipelineRow, event?: MouseEvent<HTMLButtonElement>) {
+    event?.stopPropagation();
+    setBrokerPrompt({
+      propertyId: row.propertyId,
+      address: row.displayAddress ?? row.canonicalAddress,
+      name: row.broker?.name ?? "",
+      email: row.broker?.email ?? "",
+      saving: false,
+    });
+  }
+
+  async function submitBrokerPrompt() {
+    if (!brokerPrompt || brokerPrompt.saving) return;
+    setBrokerPrompt({ ...brokerPrompt, saving: true });
+    try {
+      await apiFetch(`${API_BASE}/api/ui-v2/properties/${encodeURIComponent(brokerPrompt.propertyId)}/broker`, {
+        method: "PUT",
+        body: JSON.stringify({
+          email: brokerPrompt.email.trim(),
+          name: brokerPrompt.name.trim() || null,
+          actorName: "pipeline_table",
+        }),
+      });
+      const savedEmail = brokerPrompt.email.trim();
+      const savedName = brokerPrompt.name.trim();
+      setRows((currentRows) =>
+        currentRows.map((row) =>
+          row.propertyId === brokerPrompt.propertyId
+            ? {
+                ...row,
+                broker: {
+                  ...(row.broker ?? {}),
+                  email: savedEmail || row.broker?.email || null,
+                  name: savedName || row.broker?.name || null,
+                },
+              }
+            : row
+        ) as PipelineRow[]
+      );
+      setBrokerPrompt(null);
+      setNotice(`Broker contact saved for ${brokerPrompt.address}.`);
+      if (selectedId === brokerPrompt.propertyId) await refreshSelected();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save the broker contact.");
+      setBrokerPrompt((current) => (current ? { ...current, saving: false } : current));
+    }
   }
 
   function openBulkRejectModal() {
@@ -3312,6 +3435,7 @@ export default function PipelineClient() {
             <col className={styles.colSelect} />
             <col className={styles.colStar} />
             <col className={styles.colAddress} />
+            <col className={styles.colStage} />
             <col className={styles.colSource} />
             <col className={styles.colPropertyType} />
             <col className={styles.colType} />
@@ -3344,6 +3468,7 @@ export default function PipelineClient() {
               </th>
               <th className={styles.starColumn} aria-label="Saved deal" />
               <th>{renderHeader("address", "Address")}</th>
+              <th>{renderHeader("stage", "Stage")}</th>
               <th>{renderHeader("source", "Source")}</th>
               <th>{renderHeader("propertyType", "Property Type")}</th>
               <th>{renderHeader("marketType", "Market")}</th>
@@ -3426,8 +3551,22 @@ export default function PipelineClient() {
                         ) : (
                           <span>No location tagged</span>
                         )}
+                        {!row.broker?.email && !isTerminal ? (
+                          <button
+                            type="button"
+                            className={styles.brokerMissingChip}
+                            title="No broker email on file — click to add it without leaving the table."
+                            onClick={(event) => openBrokerPrompt(row, event)}
+                          >
+                            <MailPlus size={11} strokeWidth={2.2} aria-hidden="true" />
+                            <span>No broker email</span>
+                          </button>
+                        ) : null}
                       </div>
                     </div>
+                  </td>
+                  <td className={styles.stageCell}>
+                    <StageChip status={status} />
                   </td>
                   <td>{sourceLabel(String(row.source ?? ""))}</td>
                   <td className={styles.propertyTypeCell}>{titleize(row.propertyType)}</td>
@@ -3462,24 +3601,34 @@ export default function PipelineClient() {
                       </span>
                     ) : null}
                   </td>
-                  <td className={styles.numericCell}>{formatCurrency(row.pricePerSqft, false)}</td>
-                  <td className={cx(styles.numericCell, styles.yocCell)}>
+                  <td
+                    className={cx(styles.numericCell, flagCellClass(psfFlagFor(row)))}
+                    title={psfFlagFor(row)?.title}
+                  >
+                    {formatCurrency(row.pricePerSqft, false)}
+                  </td>
+                  <td
+                    className={cx(styles.numericCell, styles.yocCell, flagCellClass(ltrYieldFlag(rowLtrYoc)))}
+                    title={ltrYieldFlag(rowLtrYoc)?.title}
+                  >
                     <strong>{formatPercent(rowLtrYoc)}</strong>
                   </td>
-                  <td className={cx(styles.numericCell, styles.yocCell)}>
-                    <strong>{formatPercent(rowMtrYoc)}</strong>
-                    {row.underwriting?.mtrCalloutCode ? (
-                      <span
-                        className={cx(
-                          styles.yocFlag,
-                          row.underwriting.mtrCalloutCode === "mtr_below_ltr" ? styles.yocFlagDanger : styles.yocFlagWarn
-                        )}
-                        title={row.underwriting.mtrCalloutLabel ?? undefined}
+                  {(() => {
+                    const mtrFlag = mtrYieldFlag(row, rowLtrYoc, rowMtrYoc);
+                    return (
+                      <td
+                        className={cx(styles.numericCell, styles.yocCell, flagCellClass(mtrFlag))}
+                        title={mtrFlag?.title}
                       >
-                        {row.underwriting.mtrCalloutCode === "mtr_below_ltr" ? "Below LTR" : "Weak bump"}
-                      </span>
-                    ) : null}
-                  </td>
+                        <strong>{formatPercent(rowMtrYoc)}</strong>
+                        {mtrFlag ? (
+                          <span className={cx(styles.yocFlag, mtrFlag.severity === "danger" ? styles.yocFlagDanger : styles.yocFlagWarn)}>
+                            {mtrFlag.label}
+                          </span>
+                        ) : null}
+                      </td>
+                    );
+                  })()}
                   <td className={styles.numericCell}>{formatNumber(row.units)}</td>
                   <td className={styles.numericCell}>{formatNumber(row.buildingSqft)}</td>
                   <td className={styles.scoreCell}>
@@ -4311,6 +4460,53 @@ export default function PipelineClient() {
           </aside>
         </div>
       ) : null}
+
+      <Dialog
+        open={brokerPrompt != null}
+        onClose={() => setBrokerPrompt(null)}
+        title="Add broker contact"
+        description={brokerPrompt?.address}
+        size="sm"
+        footer={
+          <>
+            <Button variant="ghost" size="sm" onClick={() => setBrokerPrompt(null)} disabled={brokerPrompt?.saving}>
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => void submitBrokerPrompt()}
+              disabled={brokerPrompt == null || brokerPrompt.saving || !brokerPrompt.email.trim()}
+            >
+              {brokerPrompt?.saving ? "Saving…" : "Save contact"}
+            </Button>
+          </>
+        }
+      >
+        {brokerPrompt ? (
+          <div className={styles.brokerPromptForm}>
+            <label>
+              <span>Broker name</span>
+              <input
+                type="text"
+                value={brokerPrompt.name}
+                placeholder="Optional"
+                onChange={(event) => setBrokerPrompt((current) => (current ? { ...current, name: event.target.value } : current))}
+              />
+            </label>
+            <label>
+              <span>Broker email</span>
+              <input
+                type="email"
+                value={brokerPrompt.email}
+                placeholder="broker@firm.com"
+                autoFocus
+                onChange={(event) => setBrokerPrompt((current) => (current ? { ...current, email: event.target.value } : current))}
+              />
+            </label>
+          </div>
+        ) : null}
+      </Dialog>
 
       {rejectState ? (
         <div className={styles.modalOverlay}>

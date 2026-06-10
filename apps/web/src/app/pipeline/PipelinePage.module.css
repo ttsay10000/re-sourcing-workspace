@@ -373,7 +373,7 @@
 
 .pipelineTable {
   width: 100%;
-  min-width: 2240px;
+  min-width: 2356px;
   border-collapse: collapse;
   table-layout: fixed;
   font-size: 0.78rem;
@@ -2844,4 +2844,92 @@
   padding-left: 1rem;
   display: grid;
   gap: 0.2rem;
+}
+
+
+/* ─── Overhaul pass: stage column, broker chip, sticky address ──── */
+
+.colStage {
+  width: 7.25rem;
+}
+
+.stageCell {
+  white-space: nowrap;
+}
+
+.brokerMissingChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.26rem;
+  margin-top: 0.28rem;
+  border: 1px solid var(--app-amber-border, #fde68a);
+  border-radius: 999px;
+  background: var(--app-amber-soft, #fffbeb);
+  color: var(--app-amber, #d97706);
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  padding: 0.14rem 0.46rem;
+  cursor: pointer;
+  transition: border-color 130ms ease, background 130ms ease;
+}
+
+.brokerMissingChip:hover {
+  border-color: var(--app-amber, #d97706);
+}
+
+.brokerPromptForm {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.brokerPromptForm label {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.brokerPromptForm span {
+  font-size: 0.6875rem;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--app-muted, #71717a);
+}
+
+.brokerPromptForm input {
+  font-size: 0.78rem;
+  padding-block: 0.5rem;
+}
+
+/* Sticky select/star/address columns so the row identity never scrolls away. */
+.pipelineTable tbody tr {
+  background: #fff;
+}
+
+.pipelineTable th:nth-child(-n + 3),
+.pipelineTable td:nth-child(-n + 3) {
+  position: sticky;
+  z-index: 5;
+  background: inherit;
+}
+
+.pipelineTable th:nth-child(1),
+.pipelineTable td:nth-child(1) {
+  left: 0;
+}
+
+.pipelineTable th:nth-child(2),
+.pipelineTable td:nth-child(2) {
+  left: 2.35rem;
+}
+
+.pipelineTable th:nth-child(3),
+.pipelineTable td:nth-child(3) {
+  left: 4.9rem;
+  box-shadow: 10px 0 16px rgba(24, 24, 27, 0.05);
+}
+
+.pipelineTable thead th:nth-child(-n + 3) {
+  z-index: 9;
+  background: var(--app-surface-strong, #f4f4f3);
 }
