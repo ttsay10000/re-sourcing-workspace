@@ -2,8 +2,9 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
+import { Badge, Button, EmptyState, PageHeader, SkeletonRows } from "@/components/ui";
+import { API_BASE } from "@/lib/api";
+import styles from "./omReview.module.css";
 
 interface ReviewAttachmentCandidate {
   id?: string | null;
@@ -40,6 +41,12 @@ function attachmentLabel(candidate: ReviewAttachmentCandidate): string {
   const confidence = candidate.classificationConfidence ? `, ${candidate.classificationConfidence}` : "";
   const role = candidate.reviewRole === "supporting" ? ", supporting" : "";
   return `${category}${confidence}${role}`;
+}
+
+function priorityTone(priority: string) {
+  if (priority === "high") return "warning" as const;
+  if (priority === "urgent") return "danger" as const;
+  return "neutral" as const;
 }
 
 export default function OmReviewPage() {
@@ -90,83 +97,92 @@ export default function OmReviewPage() {
   };
 
   return (
-    <div className="profile-page profile-page--holistic">
-      <header className="profile-page-header">
-        <div>
-          <p className="profile-page-kicker">Manual document review</p>
-          <h1 className="page-title profile-page-title">Email Review Queue</h1>
-          <p className="profile-page-intro">
-            Triage broker email attachments and create extraction review runs. Ambiguous batch replies stay grouped for
-            human review. For uploading and analyzing OM packages, use the OM Workspace under Deal Progress.
-          </p>
-        </div>
-        <Link href="/property-data" className="profile-secondary-button">
-          Property Data
-        </Link>
-        <Link href="/broker-om/email-search" className="profile-secondary-button">
-          Manual Gmail Pull
-        </Link>
-      </header>
+    <div className={styles.page}>
+      <PageHeader
+        eyebrow="Broker OM"
+        title="Email Review Queue"
+        subtitle="Triage broker email attachments and create extraction review runs. Ambiguous batch replies stay grouped for human review. For uploading and analyzing OM packages, use the OM Workspace under Deal Progress."
+        actions={
+          <>
+            <Button variant="secondary" size="sm" onClick={() => void loadQueue()}>
+              Refresh
+            </Button>
+            <Link href="/property-data">
+              <Button variant="secondary" size="sm">Property Data</Button>
+            </Link>
+            <Link href="/broker-om/email-search">
+              <Button variant="secondary" size="sm">Manual Gmail Pull</Button>
+            </Link>
+          </>
+        }
+      />
 
-      {error && <p className="profile-page-error">{error}</p>}
-      {notice && <p style={{ color: "#166534", marginTop: 0 }}>{notice}</p>}
+      {error && <p className={styles.error}>{error}</p>}
+      {notice && <p className={styles.notice}>{notice}</p>}
 
-      <section className="profile-section">
-        <div className="profile-section-heading">
-          <div>
+      <section className={styles.section}>
+        <div className={styles.sectionHeading}>
+          <div className={styles.sectionHeadingCopy}>
             <h2>Broker attachments</h2>
             <p>Each action creates a needs-review extraction run only. Promotion remains separate.</p>
           </div>
-          <button type="button" onClick={() => void loadQueue()} className="profile-secondary-button">
-            Refresh
-          </button>
         </div>
 
         {loading ? (
-          <p>Loading review queue...</p>
+          <SkeletonRows count={4} />
         ) : groups.length === 0 ? (
-          <p className="profile-section-note">No broker attachment review actions are open.</p>
+          <EmptyState
+            title="Queue is clear"
+            description="No broker attachment review actions are open."
+          />
         ) : (
-          <div style={{ display: "grid", gap: "1rem" }}>
+          <div className={styles.groupList}>
             {groups.map((group) => (
-              <section key={group.groupKey} className="profile-assumption-group">
-                <div className="profile-assumption-group-header">
-                  <h3>{group.isAmbiguous ? "Batch review" : "Single-property review"}</h3>
-                  <p>{group.items.length} propert{group.items.length === 1 ? "y" : "ies"} linked to this broker reply.</p>
+              <section key={group.groupKey} className={styles.group}>
+                <div className={styles.groupHeader}>
+                  <div>
+                    <h3>{group.isAmbiguous ? "Batch review" : "Single-property review"}</h3>
+                    <p>{group.items.length} propert{group.items.length === 1 ? "y" : "ies"} linked to this broker reply.</p>
+                  </div>
+                  {group.isAmbiguous && <Badge tone="warning">Ambiguous</Badge>}
                 </div>
-                <div style={{ display: "grid", gap: "0.75rem" }}>
+                <div className={styles.groupItems}>
                   {group.items.map((item) => {
                     const attachments = item.details.attachmentCandidates ?? [];
                     return (
-                      <article key={item.id} className="profile-saved-deal-card">
-                        <div className="profile-saved-deal-main">
-                          <h4 className="profile-saved-deal-address">{item.canonicalAddress}</h4>
-                          <p style={{ margin: "0.35rem 0", color: "#57534e" }}>
+                      <article key={item.id} className={styles.item}>
+                        <div className={styles.itemMain}>
+                          <h4 className={styles.itemAddress}>{item.canonicalAddress}</h4>
+                          <p className={styles.itemSummary}>
                             {item.summary ?? "Create document review run"}
                           </p>
-                          <p style={{ margin: 0, color: "#737373", fontSize: "0.9rem" }}>
-                            {item.details.fromAddress ?? "Unknown sender"} {item.details.subject ? `| ${item.details.subject}` : ""}
+                          <p className={styles.itemMeta}>
+                            {item.details.fromAddress ?? "Unknown sender"}
+                            {item.details.subject ? ` | ${item.details.subject}` : ""}
                           </p>
-                          <div style={{ display: "grid", gap: "0.35rem", marginTop: "0.85rem" }}>
-                            {attachments.map((attachment, index) => (
-                              <div key={`${attachment.id ?? attachment.filename ?? index}`} style={{ color: "#44403c" }}>
-                                <strong>{attachment.filename ?? "Attachment"}</strong> - {attachmentLabel(attachment)}
-                              </div>
-                            ))}
-                          </div>
+                          {attachments.length > 0 && (
+                            <div className={styles.attachmentList}>
+                              {attachments.map((attachment, index) => (
+                                <div key={`${attachment.id ?? attachment.filename ?? index}`} className={styles.attachment}>
+                                  <span className={styles.attachmentName}>{attachment.filename ?? "Attachment"}</span>
+                                  <Badge tone={priorityTone(item.priority)}>{attachmentLabel(attachment)}</Badge>
+                                </div>
+                              ))}
+                            </div>
+                          )}
                         </div>
-                        <div className="profile-saved-deals-actions profile-saved-deals-actions--row">
-                          <Link href={`/property-data?expand=${item.propertyId}`} className="profile-saved-deals-action">
-                            View property
+                        <div className={styles.itemActions}>
+                          <Link href={`/property-data?expand=${item.propertyId}`}>
+                            <Button variant="secondary" size="sm">View property</Button>
                           </Link>
-                          <button
-                            type="button"
+                          <Button
+                            variant="primary"
+                            size="sm"
                             onClick={() => void createReviewRun(item)}
                             disabled={runningActionId === item.id}
-                            className="profile-saved-deals-action"
                           >
-                            {runningActionId === item.id ? "Creating..." : "Create review run"}
-                          </button>
+                            {runningActionId === item.id ? "Creating…" : "Create review run"}
+                          </Button>
                         </div>
                       </article>
                     );

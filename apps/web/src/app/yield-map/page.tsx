@@ -1,8 +1,10 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-
-const API_BASE = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000").replace(/\/$/, "");
+import { PageHeader, StatCard } from "@/components/ui";
+import { API_BASE } from "@/lib/api";
+import { formatPercent, formatCurrencyExact, EMPTY_VALUE } from "@/lib/format";
+import styles from "./yieldMap.module.css";
 
 interface CompRow {
   propertyId: string;
@@ -58,37 +60,10 @@ function yieldColor(value: number | null): string {
   return "#cbd5e1";
 }
 
+/** Page-local formatter: percentage with configurable digits and em-dash fallback. */
 function fmtPct(value: number | null | undefined, digits = 1): string {
-  return value != null && Number.isFinite(value) ? `${value.toFixed(digits)}%` : "—";
+  return value != null && Number.isFinite(value) ? `${value.toFixed(digits)}%` : EMPTY_VALUE;
 }
-
-function fmtMoney(value: number | null | undefined): string {
-  if (value == null || !Number.isFinite(value)) return "—";
-  return value.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
-}
-
-const card: React.CSSProperties = {
-  background: "var(--app-surface, #fff)",
-  border: "1px solid var(--app-line, #e4e4e7)",
-  borderRadius: "14px",
-  padding: "1.1rem 1.2rem",
-  boxShadow: "0 8px 24px rgba(15, 23, 42, 0.05)",
-};
-
-const kpiLabel: React.CSSProperties = {
-  fontSize: "0.68rem",
-  fontWeight: 800,
-  letterSpacing: "0.08em",
-  textTransform: "uppercase",
-  color: "var(--app-muted, #71717a)",
-};
-
-const kpiValue: React.CSSProperties = {
-  fontSize: "1.55rem",
-  fontWeight: 850,
-  color: "var(--app-ink, #18181b)",
-  fontVariantNumeric: "tabular-nums",
-};
 
 export default function YieldMapPage() {
   const [data, setData] = useState<CompsResponse | null>(null);
@@ -141,66 +116,67 @@ export default function YieldMapPage() {
   );
 
   return (
-    <div style={{ display: "grid", gap: "1rem", padding: "0.25rem 0" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: "1rem", flexWrap: "wrap" }}>
-        <div>
-          <p style={{ ...kpiLabel, margin: 0 }}>Living database</p>
-          <h1 style={{ margin: "0.15rem 0 0", fontSize: "1.45rem", fontWeight: 850, color: "var(--app-ink)" }}>
-            Yield Map
-          </h1>
-          <p style={{ margin: "0.3rem 0 0", color: "var(--app-muted)", fontSize: "0.9rem", lineHeight: 1.5 }}>
-            Every deal with a calculated LTR yield (extracted NOI ÷ price) from OMs, broker docs, and notes —
-            active, dead, or closed. This is the market-research layer building itself as you source.
-          </p>
-        </div>
-        <label style={{ display: "grid", gap: "0.25rem", fontSize: "0.78rem", fontWeight: 800, color: "var(--app-ink-secondary)" }}>
-          Borough
-          <select
-            value={boroughFilter}
-            onChange={(event) => setBoroughFilter(event.target.value)}
-            style={{ padding: "0.45rem 0.6rem", borderRadius: "9px", border: "1px solid var(--app-line)", background: "#fff", fontSize: "0.85rem" }}
-          >
-            <option value="">All boroughs</option>
-            {boroughOptions.map((name) => (
-              <option key={name} value={name}>{name}</option>
-            ))}
-          </select>
-        </label>
-      </div>
+    <div className={styles.page}>
+      <PageHeader
+        eyebrow="Living comps"
+        title="Yield Map"
+        subtitle="Every deal with a calculated LTR yield (extracted NOI ÷ price) from OMs, broker docs, and notes — active, dead, or closed. This is the market-research layer building itself as you source."
+        actions={
+          <label className={styles.filterLabel}>
+            Borough
+            <select
+              className={styles.filterSelect}
+              value={boroughFilter}
+              onChange={(event) => setBoroughFilter(event.target.value)}
+            >
+              <option value="">All boroughs</option>
+              {boroughOptions.map((name) => (
+                <option key={name} value={name}>{name}</option>
+              ))}
+            </select>
+          </label>
+        }
+      />
 
       {error ? (
-        <div style={{ ...card, borderColor: "#fecaca", background: "#fef2f2", color: "#991b1b", fontSize: "0.9rem" }}>{error}</div>
+        <div className={styles.errorBanner}>{error}</div>
       ) : null}
-      {loading ? <div style={{ ...card, color: "var(--app-muted)" }}>Loading yield data…</div> : null}
+      {loading ? (
+        <div className={styles.loadingBanner}>Loading yield data…</div>
+      ) : null}
 
       {!loading && data ? (
         <>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: "0.8rem" }}>
-            <div style={{ ...card, borderLeft: "4px solid #0f766e" }}>
-              <div style={kpiLabel}>Deals with yield</div>
-              <div style={kpiValue}>{rows.length}</div>
-            </div>
-            <div style={{ ...card, borderLeft: "4px solid #16a34a" }}>
-              <div style={kpiLabel}>Median LTR yield</div>
-              <div style={kpiValue}>{fmtPct(data.summary.medianLtrYieldPct, 2)}</div>
-            </div>
-            <div style={{ ...card, borderLeft: "4px solid #d97706" }}>
-              <div style={kpiLabel}>Average LTR yield</div>
-              <div style={kpiValue}>{fmtPct(data.summary.averageLtrYieldPct, 2)}</div>
-            </div>
-            <div style={{ ...card, borderLeft: "4px solid #64748b" }}>
-              <div style={kpiLabel}>Mapped</div>
-              <div style={kpiValue}>{geoRows.length}</div>
-            </div>
+          <div className={styles.kpiStrip}>
+            <StatCard
+              tone="neutral"
+              label="Deals with yield"
+              value={rows.length}
+            />
+            <StatCard
+              tone="brand"
+              label="Median LTR yield"
+              value={formatPercent(data.summary.medianLtrYieldPct, 2)}
+            />
+            <StatCard
+              tone="warning"
+              label="Average LTR yield"
+              value={formatPercent(data.summary.averageLtrYieldPct, 2)}
+            />
+            <StatCard
+              tone="neutral"
+              label="Mapped"
+              value={geoRows.length}
+            />
           </div>
 
-          <div style={card}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "1rem", flexWrap: "wrap", marginBottom: "0.6rem" }}>
-              <strong style={{ fontSize: "0.92rem", color: "var(--app-ink)" }}>Deal map — pins colored by LTR yield</strong>
-              <div style={{ display: "flex", gap: "0.7rem", flexWrap: "wrap" }}>
+          <div className={styles.panel}>
+            <div className={styles.mapHeader}>
+              <span className={styles.mapTitle}>Deal map — pins colored by LTR yield</span>
+              <div className={styles.legendList}>
                 {YIELD_BANDS.map((band) => (
-                  <span key={band.label} style={{ display: "inline-flex", alignItems: "center", gap: "0.3rem", fontSize: "0.74rem", fontWeight: 700, color: "var(--app-ink-secondary)" }}>
-                    <span style={{ width: 10, height: 10, borderRadius: 999, background: band.color, display: "inline-block" }} />
+                  <span key={band.label} className={styles.legendItem}>
+                    <span className={styles.legendDot} style={{ background: band.color }} />
                     {band.label}
                   </span>
                 ))}
@@ -209,7 +185,7 @@ export default function YieldMapPage() {
             {bounds ? (
               <svg
                 viewBox="0 0 860 540"
-                style={{ width: "100%", height: "auto", background: "#f8fafc", borderRadius: "12px", border: "1px solid var(--app-line-subtle, #f4f4f5)" }}
+                className={styles.mapSvg}
                 role="img"
                 aria-label="Scatter map of deals colored by LTR yield"
               >
@@ -220,7 +196,7 @@ export default function YieldMapPage() {
                     <a key={row.propertyId} href={`/deal-analysis?propertyId=${encodeURIComponent(row.propertyId)}`}>
                       <circle cx={x} cy={y} r={7.5} fill={yieldColor(row.ltrYieldPct)} fillOpacity={0.88} stroke="#ffffff" strokeWidth={1.6}>
                         <title>
-                          {`${row.canonicalAddress}\nLTR yield ${fmtPct(row.ltrYieldPct, 2)} · MTR ${fmtPct(row.mtrYieldPct, 2)}\nNOI ${fmtMoney(row.currentNoi)} · ${row.units ?? "—"} units · ${row.dealStage ?? row.dealState ?? "unstaged"}`}
+                          {`${row.canonicalAddress}\nLTR yield ${fmtPct(row.ltrYieldPct, 2)} · MTR ${fmtPct(row.mtrYieldPct, 2)}\nNOI ${formatCurrencyExact(row.currentNoi)} · ${row.units ?? EMPTY_VALUE} units · ${row.dealStage ?? row.dealState ?? "unstaged"}`}
                         </title>
                       </circle>
                     </a>
@@ -228,20 +204,20 @@ export default function YieldMapPage() {
                 })}
               </svg>
             ) : (
-              <div style={{ color: "var(--app-muted)", fontSize: "0.88rem", lineHeight: 1.5 }}>
+              <div className={styles.mapEmpty}>
                 Not enough geocoded deals to plot yet ({geoRows.length} with coordinates). Coordinates backfill
                 from matched listings automatically; the table below shows every yield-bearing deal regardless.
               </div>
             )}
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "minmax(260px, 0.8fr) minmax(0, 1.6fr)", gap: "1rem", alignItems: "start" }}>
-            <div style={card}>
-              <strong style={{ fontSize: "0.92rem", color: "var(--app-ink)" }}>Cap rates by borough</strong>
-              <table style={{ width: "100%", marginTop: "0.6rem", borderCollapse: "collapse", fontSize: "0.84rem" }}>
+          <div className={styles.dataGrid}>
+            <div className={styles.panel}>
+              <span className={styles.tableTitle}>Cap rates by borough</span>
+              <table className={styles.table}>
                 <thead>
-                  <tr style={{ textAlign: "left", color: "var(--app-muted)", fontSize: "0.72rem", textTransform: "uppercase", letterSpacing: "0.06em" }}>
-                    <th style={{ padding: "0.3rem 0" }}>Borough</th>
+                  <tr>
+                    <th>Borough</th>
                     <th>Deals</th>
                     <th>Median</th>
                     <th>Range</th>
@@ -249,23 +225,25 @@ export default function YieldMapPage() {
                 </thead>
                 <tbody>
                   {data.summary.boroughStats.map((stat) => (
-                    <tr key={stat.borough} style={{ borderTop: "1px solid var(--app-line-subtle)" }}>
-                      <td style={{ padding: "0.45rem 0", fontWeight: 700 }}>{stat.borough}</td>
+                    <tr key={stat.borough}>
+                      <td className={styles.boroughName}>{stat.borough}</td>
                       <td>{stat.count}</td>
-                      <td style={{ fontWeight: 800, color: yieldColor(stat.medianLtrYieldPct) }}>{fmtPct(stat.medianLtrYieldPct, 2)}</td>
-                      <td style={{ color: "var(--app-muted)" }}>{fmtPct(stat.minLtrYieldPct)}–{fmtPct(stat.maxLtrYieldPct)}</td>
+                      <td className={styles.boroughMedian} style={{ color: yieldColor(stat.medianLtrYieldPct) }}>
+                        {fmtPct(stat.medianLtrYieldPct, 2)}
+                      </td>
+                      <td className={styles.boroughRange}>{fmtPct(stat.minLtrYieldPct)}–{fmtPct(stat.maxLtrYieldPct)}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
 
-            <div style={{ ...card, overflowX: "auto" }}>
-              <strong style={{ fontSize: "0.92rem", color: "var(--app-ink)" }}>All yield-bearing deals</strong>
-              <table style={{ width: "100%", marginTop: "0.6rem", borderCollapse: "collapse", fontSize: "0.84rem", fontVariantNumeric: "tabular-nums" }}>
+            <div className={`${styles.panel} ${styles.tablePanel}`}>
+              <span className={styles.tableTitle}>All yield-bearing deals</span>
+              <table className={styles.table}>
                 <thead>
-                  <tr style={{ textAlign: "left", color: "var(--app-muted)", fontSize: "0.72rem", textTransform: "uppercase", letterSpacing: "0.06em" }}>
-                    <th style={{ padding: "0.3rem 0.4rem 0.3rem 0" }}>Address</th>
+                  <tr>
+                    <th>Address</th>
                     <th>LTR yield</th>
                     <th>MTR</th>
                     <th>NOI</th>
@@ -277,25 +255,30 @@ export default function YieldMapPage() {
                 </thead>
                 <tbody>
                   {rows.map((row) => (
-                    <tr key={row.propertyId} style={{ borderTop: "1px solid var(--app-line-subtle)" }}>
-                      <td style={{ padding: "0.45rem 0.4rem 0.45rem 0" }}>
-                        <a href={`/deal-analysis?propertyId=${encodeURIComponent(row.propertyId)}`} style={{ fontWeight: 750, color: "var(--app-ink)" }}>
+                    <tr key={row.propertyId}>
+                      <td className={styles.dealAddressCell}>
+                        <a
+                          href={`/deal-analysis?propertyId=${encodeURIComponent(row.propertyId)}`}
+                          className={styles.dealLink}
+                        >
                           {row.canonicalAddress.split(",")[0]}
                         </a>
-                        <div style={{ fontSize: "0.72rem", color: "var(--app-muted)" }}>{row.neighborhood ?? row.borough ?? ""}</div>
+                        <div className={styles.dealNeighborhood}>{row.neighborhood ?? row.borough ?? ""}</div>
                       </td>
-                      <td style={{ fontWeight: 850, color: yieldColor(row.ltrYieldPct) }}>{fmtPct(row.ltrYieldPct, 2)}</td>
+                      <td className={styles.yieldCell} style={{ color: yieldColor(row.ltrYieldPct) }}>
+                        {fmtPct(row.ltrYieldPct, 2)}
+                      </td>
                       <td>{fmtPct(row.mtrYieldPct, 2)}</td>
-                      <td>{fmtMoney(row.currentNoi)}</td>
-                      <td>{row.units ?? "—"}</td>
-                      <td>{fmtMoney(row.pricePerUnit)}</td>
-                      <td>{fmtMoney(row.pricePsf)}</td>
-                      <td style={{ color: "var(--app-muted)", fontSize: "0.78rem" }}>{row.dealStage ?? row.dealState ?? "—"}</td>
+                      <td>{formatCurrencyExact(row.currentNoi)}</td>
+                      <td>{row.units ?? EMPTY_VALUE}</td>
+                      <td>{formatCurrencyExact(row.pricePerUnit)}</td>
+                      <td>{formatCurrencyExact(row.pricePsf)}</td>
+                      <td className={styles.stageCell}>{row.dealStage ?? row.dealState ?? EMPTY_VALUE}</td>
                     </tr>
                   ))}
                   {rows.length === 0 ? (
-                    <tr>
-                      <td colSpan={8} style={{ padding: "0.8rem 0", color: "var(--app-muted)" }}>
+                    <tr className={styles.emptyRow}>
+                      <td colSpan={8}>
                         No deals with calculated yields yet — run OM analysis or compute scores to populate the living database.
                       </td>
                     </tr>

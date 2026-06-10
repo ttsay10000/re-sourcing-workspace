@@ -1,0 +1,195 @@
+/* ─── Page layout ─────────────────────────────────────────────── */
+
+.page {
+  display: grid;
+  gap: 1.75rem;
+  width: min(100%, 1440px);
+  margin: 0 auto;
+  color: var(--app-ink);
+}
+
+/* ─── Notices ─────────────────────────────────────────────────── */
+
+.notice {
+  border: 1px solid var(--app-green-border);
+  padding: 0.65rem 0.9rem;
+  border-radius: var(--radius-md);
+  background: var(--app-green-soft);
+  color: #15803d;
+  font-size: 0.86rem;
+  margin-top: 0;
+}
+
+.error {
+  border: 1px solid var(--app-red-border);
+  padding: 0.65rem 0.9rem;
+  border-radius: var(--radius-md);
+  background: var(--app-red-soft);
+  color: #b91c1c;
+  font-size: 0.86rem;
+}
+
+/* ─── Section ─────────────────────────────────────────────────── */
+
+.section {
+  display: grid;
+  gap: 1rem;
+}
+
+.sectionHeading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.sectionHeadingCopy {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.sectionHeadingCopy h2 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--text-xl);
+  font-weight: 560;
+  color: var(--app-ink);
+  line-height: var(--leading-tight);
+}
+
+.sectionHeadingCopy p {
+  margin: 0;
+  color: var(--app-muted);
+  font-size: 0.85rem;
+}
+
+/* ─── Group card ──────────────────────────────────────────────── */
+
+.groupList {
+  display: grid;
+  gap: 1rem;
+}
+
+.group {
+  border: 1px solid var(--app-line);
+  border-radius: var(--radius-lg);
+  background: var(--app-surface);
+  box-shadow: var(--app-shadow-xs);
+  overflow: hidden;
+}
+
+.groupHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  padding: 0.85rem 1.1rem;
+  border-bottom: 1px solid var(--app-line);
+  background: var(--app-surface-raised);
+}
+
+.groupHeader h3 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--text-sm);
+  font-weight: 650;
+  color: var(--app-ink);
+}
+
+.groupHeader p {
+  margin: 0;
+  color: var(--app-muted);
+  font-size: 0.82rem;
+}
+
+.groupItems {
+  display: grid;
+  gap: 0;
+}
+
+/* ─── Item card ───────────────────────────────────────────────── */
+
+.item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.1rem;
+  border-bottom: 1px solid var(--app-line-subtle);
+  flex-wrap: wrap;
+}
+
+.item:last-child {
+  border-bottom: 0;
+}
+
+.itemMain {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 0;
+  flex: 1;
+}
+
+.itemAddress {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 700;
+  color: var(--app-ink);
+  line-height: var(--leading-snug);
+}
+
+.itemSummary {
+  margin: 0;
+  color: var(--app-ink-secondary);
+  font-size: 0.88rem;
+  line-height: var(--leading-normal);
+}
+
+.itemMeta {
+  margin: 0;
+  color: var(--app-muted);
+  font-size: 0.82rem;
+  line-height: var(--leading-normal);
+}
+
+.attachmentList {
+  display: grid;
+  gap: 0.3rem;
+  margin-top: 0.55rem;
+}
+
+.attachment {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--app-ink-secondary);
+  font-size: 0.84rem;
+  flex-wrap: wrap;
+}
+
+.attachmentName {
+  font-weight: 700;
+  color: var(--app-ink);
+}
+
+/* ─── Item actions ────────────────────────────────────────────── */
+
+.itemActions {
+  display: flex;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  flex-shrink: 0;
+}
+
+/* ─── Priority badge ──────────────────────────────────────────── */
+
+.priorityHigh {
+  /* uses Badge tone="warning" — no extra needed */
+}
+
+.priorityLow {
+  /* uses Badge tone="neutral" */
+}

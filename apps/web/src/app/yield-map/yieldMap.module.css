@@ -1,0 +1,235 @@
+/* ─── Page layout ─────────────────────────────────────────────── */
+
+.page {
+  display: grid;
+  gap: 1rem;
+  padding: 0.25rem 0;
+}
+
+/* ─── Error / loading banners ─────────────────────────────────── */
+
+.errorBanner {
+  border: 1px solid var(--app-red-border);
+  border-radius: var(--radius-md);
+  padding: 0.75rem 1rem;
+  background: var(--app-red-soft);
+  color: #991b1b;
+  font-size: 0.9rem;
+}
+
+.loadingBanner {
+  border: 1px solid var(--app-line);
+  border-radius: var(--radius-md);
+  padding: 0.75rem 1rem;
+  background: var(--app-surface);
+  color: var(--app-muted);
+  box-shadow: var(--app-shadow-xs);
+}
+
+/* ─── Borough filter label ────────────────────────────────────── */
+
+.filterLabel {
+  display: grid;
+  gap: 0.25rem;
+  font-size: 0.78rem;
+  font-weight: 800;
+  color: var(--app-ink-secondary);
+}
+
+.filterSelect {
+  /* inherits global input styles — radius/border/bg */
+  font-size: 0.85rem;
+  padding: 0.45rem 0.6rem;
+}
+
+/* ─── KPI strip ───────────────────────────────────────────────── */
+
+.kpiStrip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 0.8rem;
+}
+
+/* ─── Panel (white card) ──────────────────────────────────────── */
+
+.panel {
+  background: var(--app-surface);
+  border: 1px solid var(--app-line);
+  border-radius: var(--radius-lg);
+  padding: 1.1rem 1.2rem;
+  box-shadow: var(--app-shadow-xs);
+}
+
+/* ─── Map panel ───────────────────────────────────────────────── */
+
+.mapHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.6rem;
+}
+
+.mapTitle {
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: var(--app-ink);
+}
+
+.legendList {
+  display: flex;
+  gap: 0.7rem;
+  flex-wrap: wrap;
+}
+
+.legendItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.74rem;
+  font-weight: 700;
+  color: var(--app-ink-secondary);
+}
+
+.legendDot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: var(--radius-pill);
+  flex-shrink: 0;
+}
+
+.mapSvg {
+  width: 100%;
+  height: auto;
+  background: #f8fafc;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--app-line-subtle);
+}
+
+.mapEmpty {
+  color: var(--app-muted);
+  font-size: 0.88rem;
+  line-height: var(--leading-relaxed);
+}
+
+/* ─── Two-column data grid ────────────────────────────────────── */
+
+.dataGrid {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.8fr) minmax(0, 1.6fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .dataGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ─── Tables ──────────────────────────────────────────────────── */
+
+.tablePanel {
+  overflow-x: auto;
+}
+
+.tableTitle {
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: var(--app-ink);
+  display: block;
+  margin-bottom: 0.6rem;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.84rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.table th {
+  text-align: left;
+  color: var(--app-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 0.3rem 0;
+  border-bottom: 1px solid var(--app-line);
+}
+
+.table th:not(:first-child) {
+  padding-left: 0.4rem;
+}
+
+.table td {
+  padding: 0.45rem 0;
+  border-top: 1px solid var(--app-line-subtle);
+  vertical-align: middle;
+}
+
+.table td:not(:first-child) {
+  padding-left: 0.4rem;
+}
+
+/* Borough table */
+
+.boroughName {
+  font-weight: 700;
+}
+
+.boroughMedian {
+  font-weight: 800;
+}
+
+.boroughRange {
+  color: var(--app-muted);
+}
+
+/* Deals table */
+
+.table tbody tr {
+  transition: background 140ms ease;
+}
+
+.table tbody tr:hover {
+  background: var(--brand-soft);
+}
+
+.dealAddressCell {
+  padding-right: 0.4rem;
+}
+
+.dealLink {
+  font-weight: 750;
+  color: var(--app-ink);
+  text-decoration: none;
+}
+
+.dealLink:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.dealNeighborhood {
+  font-size: 0.72rem;
+  color: var(--app-muted);
+  margin-top: 0.1rem;
+}
+
+.yieldCell {
+  font-weight: 850;
+}
+
+.stageCell {
+  color: var(--app-muted);
+  font-size: 0.78rem;
+}
+
+.emptyRow td {
+  padding: 0.8rem 0;
+  color: var(--app-muted);
+}
