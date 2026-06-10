@@ -29,6 +29,7 @@ import compsRouter from "./routes/comps.js";
 import marketDocsRouter from "./routes/marketDocs.js";
 import compMarketRouter from "./routes/compMarket.js";
 import workflowRunsRouter from "./routes/workflowRuns.js";
+import activityRouter from "./routes/activity.js";
 
 const PORT = Number(process.env.PORT) || 4000;
 const version = process.env.npm_package_version || "1.0.0";
@@ -85,6 +86,7 @@ app.use("/api", compsRouter);
 app.use("/api", marketDocsRouter);
 app.use("/api", compMarketRouter);
 app.use("/api", workflowRunsRouter);
+app.use("/api", activityRouter);
 app.use("/api", dealsRouter);
 app.use("/api", savedSearchesRouter);
 app.use("/api", salesMetricsRouter);

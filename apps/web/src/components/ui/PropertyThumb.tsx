@@ -1,9 +1,10 @@
+import { Building2 } from "lucide-react";
 import styles from "./primitives.module.css";
 import { cx } from "./utils";
 
 type PropertyThumbProps = {
   src?: string | null;
-  /** Address or name; first character seeds the letter-tile fallback. */
+  /** Address or name; kept for img alt semantics even though the fallback is an icon. */
   alt: string;
   size?: "sm" | "md" | "lg" | "xl";
   className?: string;
@@ -16,7 +17,13 @@ const sizeClass = {
   xl: styles.propertyThumbXl,
 } as const;
 
-/** Property photo with a letter-tile fallback so cards never show a broken box. */
+const iconSize = { sm: 13, md: 16, lg: 20, xl: 26 } as const;
+
+/**
+ * Property photo with a building-icon fallback so cards never show a broken
+ * box — and never a stray letter/digit (street numbers made the old letter
+ * tile read like a data value).
+ */
 export function PropertyThumb({ src, alt, size = "md", className }: PropertyThumbProps) {
   if (src) {
     return (
@@ -25,8 +32,12 @@ export function PropertyThumb({ src, alt, size = "md", className }: PropertyThum
     );
   }
   return (
-    <span aria-hidden="true" className={cx(styles.propertyThumb, styles.propertyThumbFallback, sizeClass[size], className)}>
-      {(alt.trim().charAt(0) || "•").toUpperCase()}
+    <span
+      aria-hidden="true"
+      title={alt || undefined}
+      className={cx(styles.propertyThumb, styles.propertyThumbFallback, sizeClass[size], className)}
+    >
+      <Building2 size={iconSize[size]} strokeWidth={1.7} />
     </span>
   );
 }

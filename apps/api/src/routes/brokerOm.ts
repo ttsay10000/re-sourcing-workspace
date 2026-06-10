@@ -48,6 +48,7 @@ const VALID_DOCUMENT_CATEGORIES: PropertyDocumentCategory[] = [
   "Rent Comp Package",
   "Expense Comp Package",
   "Market Analysis",
+  "Broker Notes",
   "Other",
 ];
 

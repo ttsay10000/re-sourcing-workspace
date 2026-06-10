@@ -6,6 +6,7 @@ import { Router, type Request, type Response } from "express";
 import { deriveListingActivitySummary, type PriceHistoryEntry, type PropertyDetails } from "@re-sourcing/contracts";
 import { getPool } from "@re-sourcing/db";
 import { analyzePropertyForUnderwriting } from "../deal/propertyAssumptions.js";
+import { returnRateToPctPoints } from "../deal/irrCalculation.js";
 import { getPropertyDossierSummary } from "../deal/propertyDossierState.js";
 import { resolvePreferredOmRentRoll, resolvePreferredOmUnitCount } from "../om/authoritativeOm.js";
 
@@ -226,9 +227,9 @@ router.get("/deals", async (req: Request, res: Response) => {
         assetCapRate: row.asset_cap_rate != null ? Number(row.asset_cap_rate) : null,
         adjustedCapRate: row.adjusted_cap_rate != null ? Number(row.adjusted_cap_rate) : null,
         rentUpside: row.rent_upside != null ? Number(row.rent_upside) : null,
-        irrPct: dossierSummary?.irrPct ?? (row.irr_pct != null ? Number(row.irr_pct) : null),
+        irrPct: returnRateToPctPoints(dossierSummary?.irrPct ?? (row.irr_pct != null ? Number(row.irr_pct) : null)),
         equityMultiple: dossierSummary?.equityMultiple ?? (row.equity_multiple != null ? Number(row.equity_multiple) : null),
-        cocPct: dossierSummary?.cocPct ?? (row.coc_pct != null ? Number(row.coc_pct) : null),
+        cocPct: returnRateToPctPoints(dossierSummary?.cocPct ?? (row.coc_pct != null ? Number(row.coc_pct) : null)),
         holdYears: dossierSummary?.holdYears ?? (row.hold_years != null ? Number(row.hold_years) : null),
         currentNoi: dossierSummary?.currentNoi ?? (row.current_noi != null ? Number(row.current_noi) : null),
         adjustedNoi: dossierSummary?.adjustedNoi ?? (row.adjusted_noi != null ? Number(row.adjusted_noi) : null),

@@ -169,5 +169,6 @@ export type {
   UpsertMarketCompParams,
   UpsertNeighborhoodSummaryParams,
 } from "./repos/MarketContextRepos.js";
+export { MarketKnowledgeRepo, type AppendMarketKnowledgeEntryParams } from "./repos/MarketKnowledgeRepo.js";
 
 export { runMigrations, type RunMigrationsResult } from "./runMigrations.js";

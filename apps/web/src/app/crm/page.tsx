@@ -20,6 +20,7 @@ import type {
   UiV2PropertyDetailPayload,
 } from "@re-sourcing/contracts";
 import styles from "./CrmPage.module.css";
+import { ConfirmDialog } from "@/components/ui";
 import { API_BASE, apiFetch } from "@/lib/api";
 import { labelFromKey } from "@/lib/format";
 
@@ -753,6 +754,8 @@ function CrmPageContent() {
   const [responseDrafts, setResponseDrafts] = useState<Record<string, BrokerResponseDraft>>({});
   const [savingResponseId, setSavingResponseId] = useState<string | null>(null);
   const [rejectingPropertyId, setRejectingPropertyId] = useState<string | null>(null);
+  /** Row pending reject confirmation — drives the ConfirmDialog popup. */
+  const [rejectPrompt, setRejectPrompt] = useState<UiV2CrmPropertyRowPayload | null>(null);
   const [composer, setComposer] = useState<UiV2OutreachComposerPayload | null>(null);
   const [draftForm, setDraftForm] = useState<DraftFormState>(emptyDraftForm());
   const [loadingComposer, setLoadingComposer] = useState(false);
@@ -1241,7 +1244,6 @@ function CrmPageContent() {
           : draft.status === "wrong_contact" || draft.status === "inefficient"
             ? "data_quality_issue"
             : "other";
-      if (!window.confirm(`Reject ${row.displayAddress ?? row.canonicalAddress}?`)) return;
       setRejectingPropertyId(row.propertyId);
       try {
         await apiFetch<PropertyDetailResponse>(`/api/ui-v2/properties/${encodeURIComponent(row.propertyId)}/reject`, {
@@ -1784,7 +1786,7 @@ function CrmPageContent() {
                             <button
                               className={styles.tableButtonDanger}
                               type="button"
-                              onClick={() => void handleRejectPropertyFromCrm(row)}
+                              onClick={() => setRejectPrompt(row)}
                               disabled={rejectingPropertyId === row.propertyId || row.uiV2Status === "rejected"}
                             >
                               {rejectingPropertyId === row.propertyId ? "Rejecting" : "Reject"}
@@ -1984,6 +1986,25 @@ function CrmPageContent() {
           </aside>
         </div>
       ) : null}
+
+      <ConfirmDialog
+        open={rejectPrompt != null}
+        onClose={() => setRejectPrompt(null)}
+        onConfirm={() => {
+          const row = rejectPrompt;
+          setRejectPrompt(null);
+          if (row) void handleRejectPropertyFromCrm(row);
+        }}
+        title="Reject property"
+        description={
+          rejectPrompt
+            ? `${rejectPrompt.displayAddress ?? rejectPrompt.canonicalAddress} comes off the active pipeline; the broker response note is kept as the rejection reason.`
+            : undefined
+        }
+        confirmLabel="Reject"
+        destructive
+        busy={rejectPrompt != null && rejectingPropertyId === rejectPrompt.propertyId}
+      />
     </div>
   );
 }

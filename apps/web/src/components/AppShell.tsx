@@ -9,6 +9,7 @@ import {
   Building2,
   Contact,
   FileText,
+  History,
   Home,
   KanbanSquare,
   Menu,
@@ -131,6 +132,8 @@ const NAV_LINKS: NavLink[] = [
       pathname.startsWith("/progress/") ||
       pathname === "/deal-analysis" ||
       pathname.startsWith("/deal-analysis/") ||
+      pathname === "/activity" ||
+      pathname.startsWith("/activity/") ||
       pathname.startsWith("/dossier-"),
     children: [
       {
@@ -146,6 +149,13 @@ const NAV_LINKS: NavLink[] = [
         shortLabel: "O",
         icon: FileText,
         matches: (pathname: string) => pathname === "/deal-analysis" || pathname.startsWith("/deal-analysis/"),
+      },
+      {
+        href: "/activity",
+        label: "Activity Log",
+        shortLabel: "A",
+        icon: History,
+        matches: (pathname: string) => pathname === "/activity" || pathname.startsWith("/activity/"),
       },
     ],
   },

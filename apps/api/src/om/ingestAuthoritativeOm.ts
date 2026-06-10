@@ -38,6 +38,7 @@ import {
 import { resolveUploadedDocFilePath } from "../upload/uploadedDocStorage.js";
 import { extractTextFromBuffer } from "../upload/extractTextFromUploadedFile.js";
 import { syncPropertySourcingWorkflow } from "../sourcing/workflow.js";
+import { recordDealStageChange } from "../deal/recordDealStageChange.js";
 import { getPropertyDossierAssumptions } from "../deal/propertyDossierState.js";
 import { resolveOmAskingPriceFromDetails } from "../deal/omAskingPrice.js";
 
@@ -857,6 +858,10 @@ export async function promoteReviewedOmDetailsForProperty(params: {
   sourceDocumentId?: string | null;
   sourceType: AuthoritativeOmSourceType;
   sourceMeta?: Record<string, unknown> | null;
+  /** Run full dossier generation (documents + deal signals) after promotion. */
+  triggerDossier?: boolean;
+  /** Recompute deal signals without re-rendering documents (skipDocuments path). */
+  refreshUnderwritingSummary?: boolean;
   pool?: Pool;
 }): Promise<PromoteOmExtractionResult> {
   const pool = params.pool ?? getPool();
@@ -929,6 +934,10 @@ export async function promoteReviewedOmDetailsForProperty(params: {
     snapshot,
   });
 
+  // OM arrival counts for the board stage on this path too (deal-analysis
+  // uploads, Gmail pulls), not just ingestAuthoritativeOm runs.
+  await advancePipelineOnOmArrival(params.propertyId, pool);
+
   return promoteSnapshotForProperty({
     propertyId: params.propertyId,
     runId: run.id,
@@ -936,9 +945,41 @@ export async function promoteReviewedOmDetailsForProperty(params: {
     snapshot,
     omAnalysis,
     fromLlm,
-    triggerDossier: false,
+    triggerDossier: params.triggerDossier ?? false,
+    refreshUnderwritingSummary: params.refreshUnderwritingSummary ?? false,
     pool,
   });
+}
+
+/** Funnel positions an arriving OM should advance past (everything before the board's "UW · Awaiting Review"). */
+const PRE_OM_PIPELINE_STATUSES = new Set(["new", "screening", "interesting", "saved", "outreach", "awaiting_broker"]);
+
+/**
+ * First OM upload for a deal moves it onto the deal-progress board's
+ * "Underwriting · Awaiting Review" column (status om_received) so the queue
+ * and home-page review flag light up the moment the document lands. Deals
+ * already further along — or rejected — are left where they are, and any
+ * failure here must never block the ingestion itself.
+ */
+async function advancePipelineOnOmArrival(propertyId: string, pool: Pool): Promise<void> {
+  try {
+    const propertyRepo = new PropertyRepo({ pool });
+    const property = await propertyRepo.byId(propertyId);
+    if (!property) return;
+    const details = isPlainObject(property.details) ? (property.details as Record<string, unknown>) : {};
+    const pipeline = isPlainObject(details.pipeline) ? (details.pipeline as Record<string, unknown>) : {};
+    if (pipeline.rejectedAt != null) return;
+    const uiStatus = typeof pipeline.uiV2Status === "string" ? pipeline.uiV2Status : null;
+    const legacyStatus = typeof pipeline.status === "string" ? pipeline.status : null;
+    const current = uiStatus ?? legacyStatus;
+    if (current != null && !PRE_OM_PIPELINE_STATUSES.has(current)) return;
+    await propertyRepo.mergeDetails(propertyId, {
+      pipeline: { ...pipeline, uiV2Status: "om_received" },
+    });
+    await recordDealStageChange(pool, propertyId, "om_received", { source: "om_upload" });
+  } catch (err) {
+    console.warn("[advancePipelineOnOmArrival]", err instanceof Error ? err.message : err);
+  }
 }
 
 export async function ingestAuthoritativeOm(
@@ -1054,6 +1095,7 @@ export async function ingestAuthoritativeOm(
       completedAt: unreadableFileError ? new Date().toISOString() : null,
     });
     runId = run.id;
+    if (!unreadableFileError) await advancePipelineOnOmArrival(params.propertyId, pool);
 
     if (preparedDocuments.length === 0) {
       return {

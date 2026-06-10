@@ -335,10 +335,10 @@ export const LEGACY_V3_DEAL_SCORING_PROFILE: DealScoringProfile = {
   },
   assumptionPenalties: {
     blendedRentUpliftPct: {
-      veryHigh: { above: 80, penalty: 3, label: "Very high blended rent uplift" },
-      aggressive: { above: 60, penalty: 2, label: "Aggressive blended rent uplift" },
-      elevated: { above: 45, penalty: 1, label: "Elevated blended rent uplift" },
-      meaningful: { above: 30, penalty: 1, label: "Meaningful blended rent uplift" },
+      veryHigh: { above: 80, penalty: 3, label: "Very high blended rent uplift underwritten" },
+      aggressive: { above: 60, penalty: 2, label: "Aggressive blended rent uplift underwritten" },
+      elevated: { above: 45, penalty: 1, label: "Elevated blended rent uplift underwritten" },
+      meaningful: { above: 30, penalty: 1, label: "Meaningful blended rent uplift underwritten" },
     },
     rentRollCoverage: { below: 0.75, penalty: 2, label: "Rent-roll coverage only" },
     vacancyPct: {
@@ -533,10 +533,10 @@ export const VALUE_ADD_FURNISHED_MONTHLY_RENTAL_SCORING_PROFILE: DealScoringProf
   assumptionPenalties: {
     ...LEGACY_V3_DEAL_SCORING_PROFILE.assumptionPenalties,
     blendedRentUpliftPct: {
-      veryHigh: { above: 100, penalty: 3, label: "Very high furnished-rent uplift" },
-      aggressive: { above: 80, penalty: 2, label: "Aggressive furnished-rent uplift" },
-      elevated: { above: 60, penalty: 1, label: "Elevated furnished-rent uplift" },
-      meaningful: { above: 40, penalty: 1, label: "Meaningful furnished-rent uplift" },
+      veryHigh: { above: 100, penalty: 3, label: "Very high furnished-rent uplift underwritten" },
+      aggressive: { above: 80, penalty: 2, label: "Aggressive furnished-rent uplift underwritten" },
+      elevated: { above: 60, penalty: 1, label: "Elevated furnished-rent uplift underwritten" },
+      meaningful: { above: 40, penalty: 1, label: "Meaningful furnished-rent uplift underwritten" },
     },
     vacancyPct: {
       veryLow: { below: 5, penalty: 2, label: "Furnished-rental vacancy assumption below 5%" },

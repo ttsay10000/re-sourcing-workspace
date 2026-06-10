@@ -69,6 +69,8 @@ export interface MarketDocument extends MarketDocClassification {
   flagForReview: boolean;
   error: string | null;
   ingestReport: MarketDocIngestReport | null;
+  /** Analyst brief for this upload (knowledge-base step; null before it runs). */
+  documentBrief?: MarketDocumentBrief | null;
   createdAt: string;
 }
 
@@ -178,6 +180,128 @@ export interface MarketDocIngestReport {
   unresolvedNeighborhoods: string[];
   affectedNeighborhoods: string[];
   flags: string[];
+  /** Analyst brief for this upload (set after the knowledge-base step). */
+  brief?: MarketDocumentBrief | null;
+  /** Knowledge-base version this document was folded into. */
+  knowledgeVersion?: number | null;
+}
+
+// ---------------------------------------------------------------------------
+// Living market knowledge base (market_knowledge_entries) + per-upload briefs.
+// ---------------------------------------------------------------------------
+
+export type MarketTrendDirection = "up" | "down" | "flat" | "mixed";
+
+/** One cited claim: a number plus its publisher + period. Never inferred. */
+export interface MarketKnowledgeClaim {
+  /** ≤120 chars, always contains the number and the source, e.g. "Avg $986/SF — Manhattan below 96th St FM (Ariel, trailing 6-mo)". */
+  text: string;
+  /** e.g. "avg_price_psf", "cap_rate", "dollar_volume". */
+  metric: string | null;
+  value: number | null;
+  /** "%", "$/SF", "bps", "trades", … */
+  unit: string | null;
+  /** Publisher; null when the document is unbranded. */
+  source: string | null;
+  /** e.g. "Q1 2026", "trailing_6mo". */
+  period: string | null;
+}
+
+export interface MarketKnowledgeSubmarketTrend {
+  /** Verbatim geography ("Manhattan below 96th St", "Northern Manhattan", "UWS"). */
+  scope: string;
+  direction: MarketTrendDirection;
+  claims: MarketKnowledgeClaim[];
+}
+
+export interface MarketKnowledgeAttentionNote {
+  /** e.g. "free-market sub-9-unit buildings", "rent-stabilized ≥50% share". */
+  segment: string;
+  attention: "more" | "less" | "steady";
+  /** ≤120 chars with number + source. */
+  note: string;
+}
+
+export interface MarketKnowledgeDiscrepancy {
+  topic: string;
+  /** Both conflicting numbers cited with publisher + period. */
+  detail: string;
+  sources: string[];
+  status: "open" | "resolved";
+}
+
+/** Cumulative structured market narrative; grows with every ingested document. */
+export interface MarketKnowledgeNarrative {
+  /** Latest period covered, e.g. "Q1 2026". */
+  asOf: string | null;
+  submarketTrends: MarketKnowledgeSubmarketTrend[];
+  assetTypeAttention: MarketKnowledgeAttentionNote[];
+  capRatePsfMovements: MarketKnowledgeClaim[];
+  discrepancies: MarketKnowledgeDiscrepancy[];
+  /** "Publisher — period" for every report folded in. */
+  sources: string[];
+}
+
+/** Per-upload analyst brief persisted on market_documents.document_brief. */
+export interface MarketDocumentBrief {
+  /** Report title, else filename. */
+  title: string;
+  /** 3-6 bullets with numbers. */
+  whatItSays: string[];
+  /** This doc vs knowledge base / prior stats for the same metric/geo/segment. */
+  comparedToPrior: string[];
+  /** Explicit conflicts with prior data or within this document. */
+  discrepancies: string[];
+  incorporatedAt: string;
+  promptVersion: string;
+}
+
+/** Append-only versioned knowledge-base row (market_knowledge_entries). */
+export interface MarketKnowledgeEntry {
+  id: string;
+  version: number;
+  documentId: string | null;
+  narrative: MarketKnowledgeNarrative;
+  brief: MarketDocumentBrief | null;
+  promptVersion: string | null;
+  provider: string | null;
+  model: string | null;
+  createdAt: string;
+}
+
+/** GET /api/market-knowledge response. */
+export interface MarketKnowledgeState {
+  version: number;
+  updatedAt: string;
+  narrative: MarketKnowledgeNarrative;
+  latestBrief: MarketDocumentBrief | null;
+  documentId: string | null;
+}
+
+export interface MarketKnowledgeResponse {
+  knowledge: MarketKnowledgeState | null;
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/market-headlines (Yield Map ticker).
+// ---------------------------------------------------------------------------
+
+export type MarketHeadlineTone = "up" | "down" | "neutral" | "watch";
+
+export interface MarketHeadline {
+  id: string;
+  /** Short headline with numbers, e.g. "UWS cap rates +20bps QoQ — Avison Young Q1". */
+  text: string;
+  tone: MarketHeadlineTone;
+  scope: string | null;
+  source: string | null;
+  asOf: string | null;
+}
+
+export interface MarketHeadlinesResponse {
+  headlines: MarketHeadline[];
+  generatedAt: string | null;
+  knowledgeVersion: number | null;
 }
 
 /** GET /api/neighborhood-summaries response row (summary + polygon + popup payload). */

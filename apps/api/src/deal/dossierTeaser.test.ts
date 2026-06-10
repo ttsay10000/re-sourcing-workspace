@@ -394,7 +394,7 @@ describe("dossierTeaser", () => {
     expect(teaser.cashFlowSummary.rows.some((row) => row.label === "Cash-on-cash return")).toBe(true);
     expect(teaser.mitigants.some((line) => line.includes("floor-by-floor vacancy"))).toBe(true);
     expect(teaser.sponsor.organization).toBe("Acme Capital");
-    expect(teaser.risks).toContain("Elevated furnished-rent uplift (72.0%)");
+    expect(teaser.risks).toContain("Elevated furnished-rent uplift underwritten (72.0% above in-place rents)");
     expect(teaser.risks.some((risk) => risk.includes("O5"))).toBe(true);
     expect(teaser.risks.some((risk) => risk.includes("Floor 3 current rent is missing"))).toBe(true);
     expect(teaser.provenance.some((line) => line.includes("value-add-furnished-monthly-rental"))).toBe(true);

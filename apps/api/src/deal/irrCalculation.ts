@@ -22,6 +22,17 @@ export interface IrrResult {
   averageCashOnCashReturn: number | null;
 }
 
+/**
+ * Persisted return metrics (deal_signals.irr_pct/coc_pct, dossier summary irrPct/cocPct)
+ * hold decimal rates (0.12 = 12%) despite the Pct suffix. UI surfaces render percent
+ * points, so convert at the API read boundary. Values above 1.5 are assumed to already
+ * be percent points (a 150%+ return is implausible; this guards odd legacy rows).
+ */
+export function returnRateToPctPoints(value: number | null | undefined): number | null {
+  if (value == null || !Number.isFinite(value)) return null;
+  return Math.abs(value) > 1.5 ? value : value * 100;
+}
+
 function npv(rate: number, flows: number[]): number {
   let sum = 0;
   for (let t = 0; t < flows.length; t++) {

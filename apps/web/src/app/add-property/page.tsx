@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import type {
   SearchProfile,
   UiV2ImportJobPayload,
@@ -79,15 +79,19 @@ interface StreetEasyFormState {
 interface PropertyOption {
   id: string;
   canonicalAddress: string;
+  neighborhood?: string | null;
+  borough?: string | null;
 }
 
 interface CompImportExtraction {
   packageType?: string;
+  extractionMethod?: string | null;
   itemCount?: number;
   compCount?: number | null;
   compsWithCapRate?: number | null;
   psfOnlyComps?: number | null;
   psfOnlyPackage?: boolean;
+  warnings?: string[];
 }
 
 interface CompImportResult {
@@ -186,6 +190,9 @@ const MODE_GROUPS: Array<{
   },
 ];
 
+/** Max rows in the subject-property typeahead dropdown (the canonical list can hold hundreds). */
+const COMP_SUGGESTION_LIMIT = 8;
+
 const DEFAULT_ENDPOINTS: Record<CapabilityKey, string> = {
   manualEntry: "/api/ui-v2/import/manual-entry",
   streetEasyUrl: "/api/ui-v2/import/streeteasy-url",
@@ -254,6 +261,36 @@ function splitList(value: string): string[] {
     .split(/[\n,]/g)
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+/** Best-effort neighborhood/borough subtitle from a canonical property row's details blob. */
+function propertyLocationFromDetails(details: unknown): { neighborhood: string | null; borough: string | null } {
+  if (details == null || typeof details !== "object" || Array.isArray(details)) {
+    return { neighborhood: null, borough: null };
+  }
+  const container = (details as Record<string, unknown>).neighborhood;
+  if (typeof container === "string" && container.trim()) {
+    return { neighborhood: container.trim(), borough: null };
+  }
+  if (container == null || typeof container !== "object" || Array.isArray(container)) {
+    return { neighborhood: null, borough: null };
+  }
+  const primary = (container as Record<string, unknown>).primary;
+  if (primary == null || typeof primary !== "object" || Array.isArray(primary)) {
+    return { neighborhood: null, borough: null };
+  }
+  const record = primary as Record<string, unknown>;
+  return {
+    neighborhood: typeof record.name === "string" && record.name.trim() ? record.name.trim() : null,
+    borough: typeof record.borough === "string" && record.borough.trim() ? record.borough.trim() : null,
+  };
+}
+
+function propertyOptionSubtitle(option: PropertyOption): string | null {
+  const parts = [option.neighborhood, option.borough].filter(
+    (part): part is string => typeof part === "string" && part.length > 0
+  );
+  return parts.length > 0 ? parts.join(" · ") : null;
 }
 
 function titleizeSlug(value: string | null | undefined): string {
@@ -383,9 +420,12 @@ export default function AddPropertyPage() {
   const [compFiles, setCompFiles] = useState<File[]>([]);
   const [compPropertyId, setCompPropertyId] = useState("");
   const [compPropertyQuery, setCompPropertyQuery] = useState("");
+  const [compDropdownOpen, setCompDropdownOpen] = useState(false);
+  const [compActiveIndex, setCompActiveIndex] = useState(0);
   const [propertyOptions, setPropertyOptions] = useState<PropertyOption[]>([]);
   const [compResult, setCompResult] = useState<CompImportResult | null>(null);
   const [compUnmatched, setCompUnmatched] = useState<string | null>(null);
+  const compPropertyInputRef = useRef<HTMLInputElement | null>(null);
   const processBanner = useProcessBanner();
 
   const streetEasyEnabledSearches = useMemo(
@@ -449,6 +489,7 @@ export default function AddPropertyPage() {
             .map((row: Record<string, unknown>) => ({
               id: String(row.id ?? ""),
               canonicalAddress: String(row.canonicalAddress ?? row.canonical_address ?? ""),
+              ...propertyLocationFromDetails(row.details),
             }))
             .filter((row: PropertyOption) => row.id && row.canonicalAddress)
         );
@@ -459,13 +500,88 @@ export default function AddPropertyPage() {
     };
   }, [activeMode, propertyOptions.length]);
 
-  const filteredPropertyOptions = useMemo(() => {
+  // Typeahead suggestions: address substring match, startsWith ranked first, capped at 8 rows.
+  const compSuggestions = useMemo(() => {
     const query = compPropertyQuery.trim().toLowerCase();
-    const matches = query
-      ? propertyOptions.filter((option) => option.canonicalAddress.toLowerCase().includes(query))
-      : propertyOptions;
-    return matches.slice(0, 50);
+    if (!query) return propertyOptions.slice(0, COMP_SUGGESTION_LIMIT);
+    const startsWith: PropertyOption[] = [];
+    const contains: PropertyOption[] = [];
+    for (const option of propertyOptions) {
+      const address = option.canonicalAddress.toLowerCase();
+      if (address.startsWith(query)) startsWith.push(option);
+      else if (address.includes(query)) contains.push(option);
+      if (startsWith.length >= COMP_SUGGESTION_LIMIT) break;
+    }
+    return [...startsWith, ...contains].slice(0, COMP_SUGGESTION_LIMIT);
   }, [propertyOptions, compPropertyQuery]);
+
+  const selectedCompProperty = useMemo(
+    () => (compPropertyId ? propertyOptions.find((option) => option.id === compPropertyId) ?? null : null),
+    [compPropertyId, propertyOptions]
+  );
+
+  // Row 0 is the pinned "Auto-match by subject address" option; suggestions follow.
+  const compOptionRowCount = compSuggestions.length + 1;
+
+  const selectCompAutoMatch = useCallback(() => {
+    setCompPropertyId("");
+    setCompPropertyQuery("");
+    setCompDropdownOpen(false);
+    setCompActiveIndex(0);
+  }, []);
+
+  const selectCompProperty = useCallback((option: PropertyOption) => {
+    setCompPropertyId(option.id);
+    setCompPropertyQuery(option.canonicalAddress);
+    setCompDropdownOpen(false);
+    setCompActiveIndex(0);
+  }, []);
+
+  const handleCompPropertyInput = useCallback(
+    (value: string) => {
+      setCompPropertyQuery(value);
+      setCompDropdownOpen(true);
+      setCompActiveIndex(value.trim() ? 1 : 0);
+      // Editing the text releases a forced link back to auto-match.
+      if (compPropertyId) setCompPropertyId("");
+    },
+    [compPropertyId]
+  );
+
+  const handleCompPropertyKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLInputElement>) => {
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        if (!compDropdownOpen) {
+          setCompDropdownOpen(true);
+          return;
+        }
+        setCompActiveIndex((index) => Math.min(index + 1, compOptionRowCount - 1));
+        return;
+      }
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        if (!compDropdownOpen) return;
+        setCompActiveIndex((index) => Math.max(index - 1, 0));
+        return;
+      }
+      if (event.key === "Enter") {
+        if (!compDropdownOpen) return;
+        event.preventDefault();
+        if (compActiveIndex <= 0) selectCompAutoMatch();
+        else {
+          const option = compSuggestions[compActiveIndex - 1];
+          if (option) selectCompProperty(option);
+        }
+        return;
+      }
+      if (event.key === "Escape" && compDropdownOpen) {
+        event.preventDefault();
+        setCompDropdownOpen(false);
+      }
+    },
+    [compActiveIndex, compDropdownOpen, compOptionRowCount, compSuggestions, selectCompAutoMatch, selectCompProperty]
+  );
 
   const capabilityFor = useCallback(
     (key: CapabilityKey): ImportCapability | null => capabilities?.modes?.[key] ?? null,
@@ -817,7 +933,13 @@ export default function AddPropertyPage() {
       if (data.matched === false) {
         const message = data.message ?? "No canonical property matched the package's subject address.";
         setCompUnmatched(message);
-        if (data.subjectAddress) setCompPropertyQuery(data.subjectAddress);
+        if (data.subjectAddress) {
+          // Pre-fill the typeahead with the parsed subject address and open it so the user can pick.
+          setCompPropertyQuery(data.subjectAddress);
+          setCompDropdownOpen(true);
+          setCompActiveIndex(1);
+          compPropertyInputRef.current?.focus();
+        }
         banner.fail("No property matched — pick the subject property and resubmit.");
         updateImportActivity(activityId, { status: "failed", message });
         setNotice({ type: "info", title: "Pick the subject property", message });
@@ -827,19 +949,24 @@ export default function AddPropertyPage() {
       setCompResult(data);
       const extraction = data.extraction ?? {};
       const compCount = extraction.compCount ?? extraction.itemCount ?? 0;
+      const extractionWarnings = Array.isArray(extraction.warnings) ? extraction.warnings.filter(Boolean) : [];
       const summaryText = `${compCount} comp${compCount === 1 ? "" : "s"} extracted · ${extraction.compsWithCapRate ?? 0} with cap rate${
         extraction.psfOnlyComps ? ` · ${extraction.psfOnlyComps} $/PSF-only` : ""
       }`;
       banner.succeed(`${data.property?.canonicalAddress ?? "Linked"} — ${summaryText}`);
       updateImportActivity(activityId, { status: "completed", message: summaryText });
       setNotice({
-        type: extraction.psfOnlyPackage ? "info" : "success",
+        type: extraction.psfOnlyPackage || extractionWarnings.length > 0 ? "info" : "success",
         title: `Comp package linked to ${data.property?.canonicalAddress ?? "property"}`,
-        message: extraction.psfOnlyPackage
-          ? `${summaryText}. No cap rates were found in this package — it prices on $/PSF only, so consider requesting investment-sale comps from the broker.`
-          : `${summaryText}. Review them in the property's Market/Comps tab or on the Comp Analysis page.`,
+        message: extractionWarnings.length > 0
+          ? `${summaryText}. ${extractionWarnings[0]}`
+          : extraction.psfOnlyPackage
+            ? `${summaryText}. No cap rates were found in this package — it prices on $/PSF only, so consider requesting investment-sale comps from the broker.`
+            : `${summaryText}. Review them in the property's Market/Comps tab or on the Comp Analysis page.`,
       });
       setCompFiles([]);
+      setCompPropertyId("");
+      setCompPropertyQuery("");
     } catch (err) {
       const message = err instanceof Error ? err.message : "Comp import failed";
       banner.fail(message);
@@ -1349,32 +1476,106 @@ export default function AddPropertyPage() {
                   hint="PDF or spreadsheet, up to 50 MB. The comp reader extracts each comparable with cap rate, $/PSF, sale price, NOI, and units, then links the package to the matched canonical property."
                 />
 
-                <div className={styles.twoColumn}>
-                  <Field
-                    label="Subject property"
-                    hint="Leave on auto-match to link by the package's subject address; type to filter and pick one to force the link."
-                  >
+                {/* Plain div (not Field's <label>) so clicks on option buttons don't re-focus the input and reopen the list. */}
+                <div className={styles.field}>
+                  <span className={styles.fieldLabel} id="comp-property-label">
+                    Subject property
+                  </span>
+                  <div className={styles.comboboxWrap}>
                     <input
+                      ref={compPropertyInputRef}
                       className={styles.input}
+                      role="combobox"
+                      aria-expanded={compDropdownOpen}
+                      aria-controls="comp-property-listbox"
+                      aria-autocomplete="list"
+                      aria-labelledby="comp-property-label"
+                      aria-activedescendant={compDropdownOpen ? `comp-property-option-${compActiveIndex}` : undefined}
                       value={compPropertyQuery}
-                      onChange={(event) => setCompPropertyQuery(event.target.value)}
-                      placeholder="Filter properties by address…"
+                      onChange={(event) => handleCompPropertyInput(event.target.value)}
+                      onFocus={() => setCompDropdownOpen(true)}
+                      onClick={() => setCompDropdownOpen(true)}
+                      onBlur={() => setCompDropdownOpen(false)}
+                      onKeyDown={handleCompPropertyKeyDown}
+                      placeholder="Auto-match by subject address — type to pick a property"
+                      disabled={submitting === "comp-upload"}
                     />
-                  </Field>
-                  <Field label="Link to">
-                    <select
-                      className={styles.input}
-                      value={compPropertyId}
-                      onChange={(event) => setCompPropertyId(event.target.value)}
-                    >
-                      <option value="">Auto-match by subject address</option>
-                      {filteredPropertyOptions.map((option) => (
-                        <option key={option.id} value={option.id}>
-                          {option.canonicalAddress}
-                        </option>
-                      ))}
-                    </select>
-                  </Field>
+                    {compDropdownOpen ? (
+                      <div
+                        className={styles.comboboxList}
+                        id="comp-property-listbox"
+                        role="listbox"
+                        aria-label="Subject property suggestions"
+                        // Keep focus in the input while scrolling/clicking inside the list.
+                        onMouseDown={(event) => event.preventDefault()}
+                      >
+                        <button
+                          type="button"
+                          role="option"
+                          id="comp-property-option-0"
+                          aria-selected={!compPropertyId}
+                          className={`${styles.comboboxOption} ${styles.comboboxOptionPinned} ${
+                            compActiveIndex === 0 ? styles.comboboxOptionActive : ""
+                          }`}
+                          onMouseDown={(event) => event.preventDefault()}
+                          onMouseEnter={() => setCompActiveIndex(0)}
+                          onClick={selectCompAutoMatch}
+                        >
+                          <span className={styles.comboboxOptionTitle}>Auto-match by subject address</span>
+                          <span className={styles.comboboxOptionSub}>
+                            Link using the address extracted from the package
+                          </span>
+                        </button>
+                        {compSuggestions.map((option, index) => {
+                          const rowIndex = index + 1;
+                          const subtitle = propertyOptionSubtitle(option);
+                          return (
+                            <button
+                              type="button"
+                              role="option"
+                              id={`comp-property-option-${rowIndex}`}
+                              aria-selected={compPropertyId === option.id}
+                              key={option.id}
+                              className={`${styles.comboboxOption} ${
+                                compActiveIndex === rowIndex ? styles.comboboxOptionActive : ""
+                              }`}
+                              onMouseDown={(event) => event.preventDefault()}
+                              onMouseEnter={() => setCompActiveIndex(rowIndex)}
+                              onClick={() => selectCompProperty(option)}
+                            >
+                              <span className={styles.comboboxOptionTitle}>{option.canonicalAddress}</span>
+                              {subtitle ? <span className={styles.comboboxOptionSub}>{subtitle}</span> : null}
+                            </button>
+                          );
+                        })}
+                        {compSuggestions.length === 0 ? (
+                          <p className={styles.comboboxEmpty}>
+                            {propertyOptions.length === 0
+                              ? "Loading canonical properties…"
+                              : `No canonical property matches "${compPropertyQuery.trim()}".`}
+                          </p>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
+                  {selectedCompProperty ? (
+                    <span className={styles.selectionChip}>
+                      Linking to {selectedCompProperty.canonicalAddress}
+                      <button
+                        type="button"
+                        className={styles.selectionChipClear}
+                        aria-label="Clear forced property link"
+                        onClick={selectCompAutoMatch}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ) : (
+                    <span className={styles.fieldHint}>
+                      Leave on auto-match to link by the package&apos;s subject address; start typing and pick a
+                      canonical property to force the link.
+                    </span>
+                  )}
                 </div>
 
                 {compUnmatched ? <p className={styles.inlineError}>{compUnmatched}</p> : null}
@@ -1396,6 +1597,8 @@ export default function AddPropertyPage() {
                       setCompUnmatched(null);
                       setCompPropertyId("");
                       setCompPropertyQuery("");
+                      setCompDropdownOpen(false);
+                      setCompActiveIndex(0);
                     }}
                   >
                     Clear

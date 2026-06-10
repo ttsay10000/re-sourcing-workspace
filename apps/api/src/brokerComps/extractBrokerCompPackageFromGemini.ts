@@ -45,6 +45,8 @@ export interface GeminiBrokerCompExtractionParams {
   filename: string;
   textPreview?: string | null;
   pageCount?: number | null;
+  /** Skip the filename extension check when content sniffing already proved the buffer is a PDF. */
+  assumePdf?: boolean;
 }
 
 const geminiHttpsAgent = new https.Agent({ keepAlive: true });
@@ -270,7 +272,7 @@ function pageRefsFromRecord(record: JsonRecord, fallbackPage: number): Array<{ p
   return [{ pageNumber, label: `Page ${pageNumber}` }];
 }
 
-function normalizeCompPayload(comp: JsonRecord): JsonRecord {
+function normalizeCompPayload(comp: JsonRecord, sourceType: string): JsonRecord {
   const priceRange = moneyRange(comp.priceRange ?? comp.range, comp.priceRangeLow ?? comp.lowPrice, comp.priceRangeHigh ?? comp.highPrice);
   const askingPpsf = moneyValue(comp.askingPpsf ?? comp.averageAskingPpsf ?? comp.avgAskingPpsf);
   const soldPpsf = moneyValue(comp.soldPpsf ?? comp.averageSoldPpsf ?? comp.avgSoldPpsf);
@@ -334,24 +336,17 @@ function normalizeCompPayload(comp: JsonRecord): JsonRecord {
     bedroomTypes: bedroomBreakdown.map((row) => row.bedroomType).filter(Boolean),
     bedroomBreakdown,
     packageFlavor: capRatePct != null || salePrice != null || noi != null ? "investment_sale" : "pricing_sellout",
-    sourceType: "gemini_pdf",
+    sourceType,
   };
 }
 
-function buildPrompt(params: GeminiBrokerCompExtractionParams): string {
-  const textPreview = params.textPreview?.trim()
-    ? `\n\nSelectable text preview from the PDF parser:\n${params.textPreview.slice(0, 20_000)}`
-    : "";
-  const pageCount = params.pageCount != null ? `${params.pageCount}` : "unknown";
-  return `You are extracting broker market comps from a real estate PDF package.
-
-Attached PDF: ${params.filename}
-Page count: ${pageCount}
-
-Read the entire attached PDF directly, including image-only pages and visual tables. Return one JSON object only.
-
-Top-level JSON shape:
-{
+/**
+ * Top-level JSON shape shared by every broker comp model extractor (Gemini PDF
+ * vision and OpenAI spreadsheet text). Both prompts must reference this exact
+ * shape so brokerCompItemsFromParsedJson yields identical item payloads and
+ * downstream merge/review/promote code stays provider-agnostic.
+ */
+export const BROKER_COMP_EXTRACTION_JSON_SHAPE = `{
   "subject": {
     "address": string|null,
     "projectedSellout": number|null,
@@ -395,20 +390,46 @@ Top-level JSON shape:
   "missingDataFlags": [{"field": string, "label": string|null, "severity": "info"|"warning"|"error", "message": string|null, "source": string|null}],
   "marketTakeaways": string[],
   "sourceCoverage": {"usedPdfGraphics": boolean, "imageOnlyPagesRead": number|null, "coverageGaps": string[]}
-}
+}`;
 
-Rules:
-- Preserve exact values from the PDF. Do not invent sale prices, cap rates, NOI, expenses, or rent data when absent.
+/** Extraction rules shared by the Gemini PDF and OpenAI spreadsheet broker comp prompts. */
+export const BROKER_COMP_EXTRACTION_RULES = `- Preserve exact values from the source document. Do not invent sale prices, cap rates, NOI, expenses, or rent data when absent.
 - Convert dollar values, percentages, square feet, and monthly common charges to numbers where possible.
 - INVESTMENT-SALE COMPS ARE TOP PRIORITY: for each comparable in a sale-comp grid or profile, extract salePrice, saleDate, capRatePct, noi, pricePerUnit, buildingSqft, and propertyType whenever they appear. capRatePct is a percentage number (e.g. 5.25 for a 5.25% cap rate, never 0.0525).
 - If a comparable shows only $/SF pricing with NO cap rate, still extract it, leave capRatePct null, and add a missingDataFlags entry {"field": "capRate", "severity": "warning"} for that comp.
 - For condo/new-development packages, asking PPSF, sold PPSF, percent sold, price range, and bedroom mix are high-priority.
-- Extract subject projected pricing rows even if they are image-only.
 - Keep comps separated by bedroom type so a 1-bed row can be compared with other 1-bed rows, etc.
-- If cap rate, NOI, sale comp, or rent/expense data is not present, add a missingDataFlags entry rather than guessing.${textPreview}`;
+- If cap rate, NOI, sale comp, or rent/expense data is not present, add a missingDataFlags entry rather than guessing.`;
+
+function buildPrompt(params: GeminiBrokerCompExtractionParams): string {
+  const textPreview = params.textPreview?.trim()
+    ? `\n\nSelectable text preview from the PDF parser:\n${params.textPreview.slice(0, 20_000)}`
+    : "";
+  const pageCount = params.pageCount != null ? `${params.pageCount}` : "unknown";
+  return `You are extracting broker market comps from a real estate PDF package.
+
+Attached PDF: ${params.filename}
+Page count: ${pageCount}
+
+Read the entire attached PDF directly, including image-only pages and visual tables. Return one JSON object only.
+
+Top-level JSON shape:
+${BROKER_COMP_EXTRACTION_JSON_SHAPE}
+
+Rules:
+${BROKER_COMP_EXTRACTION_RULES}
+- Extract subject projected pricing rows even if they are image-only.${textPreview}`;
 }
 
-function itemsFromParsedJson(parsed: JsonRecord): BrokerCompExtractedItemInput[] {
+/**
+ * Map one parsed model response (the shared JSON shape above) to extracted
+ * items. sourceType tags each payload with its provenance ("gemini_pdf",
+ * "openai_spreadsheet", ...) without changing any other field name.
+ */
+export function brokerCompItemsFromParsedJson(
+  parsed: Record<string, unknown>,
+  sourceType: string
+): BrokerCompExtractedItemInput[] {
   const items: BrokerCompExtractedItemInput[] = [];
   const subject = recordValue(parsed.subject);
   if (subject) {
@@ -431,7 +452,7 @@ function itemsFromParsedJson(parsed: JsonRecord): BrokerCompExtractedItemInput[]
           unitPricingRows: unitRows,
           sourceType: "package",
           packageFlavor: "projected_pricing",
-          note: "Subject projected pricing extracted from broker market analysis PDF.",
+          note: "Subject projected pricing extracted from broker market analysis package.",
         },
         pageRefs: [{ pageNumber, label: `Page ${pageNumber}` }],
         confidence: 0.82,
@@ -443,7 +464,7 @@ function itemsFromParsedJson(parsed: JsonRecord): BrokerCompExtractedItemInput[]
   }
 
   for (const comp of recordArray(parsed.comparables ?? parsed.comps ?? parsed.projects)) {
-    const normalized = normalizeCompPayload(comp);
+    const normalized = normalizeCompPayload(comp, sourceType);
     const pageRefs = pageRefsFromRecord(comp, 1);
     const isSaleComp =
       normalized.capRatePct != null || normalized.salePrice != null || normalized.noi != null;
@@ -472,7 +493,7 @@ function itemsFromParsedJson(parsed: JsonRecord): BrokerCompExtractedItemInput[]
           compSoldPpsf: normalized.soldPpsf ?? null,
           compAverageUnitSqft: normalized.averageUnitSqft ?? null,
           packageFlavor: "pricing_sellout",
-          sourceType: "gemini_pdf",
+          sourceType,
         },
         pageRefs: [{ ...pageRefs[0], label: `${pageRefs[0]?.label ?? "Page"} / Bedroom row ${index + 1}` }],
         confidence: 0.84,
@@ -525,13 +546,36 @@ function itemsFromParsedJson(parsed: JsonRecord): BrokerCompExtractedItemInput[]
   return items;
 }
 
+/**
+ * Preflight reasons Gemini broker comp extraction would be skipped before any
+ * request is made. Lets the orchestrator surface a precise warning instead of
+ * silently falling back to text heuristics.
+ */
+export function describeGeminiBrokerCompSkipReason(params: {
+  filename: string;
+  byteLength: number;
+  assumePdf?: boolean;
+}): string | null {
+  if (!getGeminiApiKey()) {
+    return "GEMINI_API_KEY is missing or invalid; PDF vision comp extraction was skipped.";
+  }
+  if (!params.assumePdf && !isPdfFilename(params.filename)) {
+    return `"${params.filename}" is not a PDF, so Gemini PDF vision comp extraction was skipped.`;
+  }
+  const maxBytes = getGeminiBrokerCompInlineMaxBytes();
+  if (params.byteLength > maxBytes) {
+    return `PDF is ${Math.round(params.byteLength / 1024 / 1024)} MB, over the ${Math.round(maxBytes / 1024 / 1024)} MB inline Gemini limit; vision comp extraction was skipped.`;
+  }
+  return null;
+}
+
 export async function extractBrokerCompPackageFromGeminiPdf(
   params: GeminiBrokerCompExtractionParams
 ): Promise<GeminiBrokerCompExtractionResult | null> {
   const apiKey = getGeminiApiKey();
   const model = resolveGeminiBrokerCompModel();
   if (!apiKey) return null;
-  if (!isPdfFilename(params.filename)) return null;
+  if (!params.assumePdf && !isPdfFilename(params.filename)) return null;
   const maxBytes = getGeminiBrokerCompInlineMaxBytes();
   if (params.buffer.length > maxBytes) {
     console.warn("[extractBrokerCompPackageFromGeminiPdf] PDF too large for inline Gemini broker comp extraction.", {
@@ -615,7 +659,7 @@ export async function extractBrokerCompPackageFromGeminiPdf(
       return null;
     }
 
-    const extractedItems = itemsFromParsedJson(parsed);
+    const extractedItems = brokerCompItemsFromParsedJson(parsed, "gemini_pdf");
     console.info("[extractBrokerCompPackageFromGeminiPdf] Gemini broker comp extraction completed.", {
       model,
       filename: params.filename,
@@ -636,6 +680,7 @@ export async function extractBrokerCompPackageFromGeminiPdf(
         provider: "gemini",
         model,
         extractionMethod: "pdf_vision",
+        subjectAddress: stringValue(recordValue(parsed.subject)?.address),
         sourceCoverage: recordValue(parsed.sourceCoverage),
         missingDataFlags: recordArray(parsed.missingDataFlags),
       },

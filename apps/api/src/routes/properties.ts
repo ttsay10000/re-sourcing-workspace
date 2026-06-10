@@ -451,6 +451,7 @@ async function refreshStreetEasyListingForProperty(
     const detailsMerge = buildPropertyDetailsMergeFromListing(normalized);
     if (Object.keys(detailsMerge).length > 0) await propertyRepo.mergeDetails(propertyId, detailsMerge);
     await refreshPropertyPipelineMetadata(propertyId, pool);
+    if (priceChanged) await handleAskPriceChange(propertyId, pool, { oldPrice, newPrice });
     return { attempted: true, ok: true, priceChanged, unavailable: listingUnavailable, listingStatus };
   } catch (error) {
     return {
@@ -460,6 +461,63 @@ async function refreshStreetEasyListingForProperty(
       unavailable: false,
       error: error instanceof Error ? error.message : String(error),
     };
+  }
+}
+
+/**
+ * Ask-price move during a listing refresh: the underwriting numbers must
+ * follow the new basis without the user chasing them. Recompute the persisted
+ * deal signals (the same summary refresh an OM promotion runs), then leave a
+ * repricing action item so the home page shows what moved and where to look.
+ * Never throws — the listing refresh result stands on its own.
+ */
+async function handleAskPriceChange(
+  propertyId: string,
+  pool: import("pg").Pool,
+  prices: { oldPrice: number; newPrice: number }
+): Promise<void> {
+  const fmtAsk = (value: number) =>
+    Number.isFinite(value) ? `$${Math.round(value).toLocaleString("en-US")}` : "—";
+  const moveSummary = `Ask moved ${fmtAsk(prices.oldPrice)} → ${fmtAsk(prices.newPrice)}`;
+  let recomputed = false;
+  try {
+    const property = await new PropertyRepo({ pool }).byId(propertyId);
+    const details = (property?.details ?? null) as Record<string, unknown> | null;
+    const hasUnderwriting = hasAnyRecordValue(details, [
+      ["omData", "authoritative"],
+      ["rentalFinancials", "omAnalysis"],
+      ["dealDossier"],
+    ]);
+    if (hasUnderwriting) {
+      await runGenerateDossier(propertyId, undefined, { sendEmail: false, skipDocuments: true });
+      recomputed = true;
+    }
+  } catch (err) {
+    console.warn(
+      "[handleAskPriceChange] signal recompute failed",
+      propertyId,
+      err instanceof Error ? err.message : err
+    );
+  }
+  try {
+    await new PropertyActionItemRepo({ pool }).upsertOpen(propertyId, "review_repricing", {
+      priority: recomputed ? "medium" : "high",
+      summary: recomputed
+        ? `${moveSummary}; yields recomputed on the new basis — sanity-check assumptions`
+        : `${moveSummary}; no underwriting to recompute yet — numbers update once an OM is promoted`,
+      details: {
+        oldPrice: Number.isFinite(prices.oldPrice) ? prices.oldPrice : null,
+        newPrice: Number.isFinite(prices.newPrice) ? prices.newPrice : null,
+        recomputed,
+        source: "streeteasy_refresh",
+      },
+    });
+  } catch (err) {
+    console.warn(
+      "[handleAskPriceChange] action item upsert failed",
+      propertyId,
+      err instanceof Error ? err.message : err
+    );
   }
 }
 
@@ -2387,6 +2445,9 @@ router.post("/properties/run-enrichment", async (req: Request, res: Response) =>
       res.status(400).json({ error: "propertyIds required (non-empty array)." });
       return;
     }
+    // refreshStreetEasy=false skips the RapidAPI listing pull so callers can
+    // run enrichment-only refreshes without spending listing-details credits.
+    const shouldRefreshListings = req.body?.refreshStreetEasy !== false;
 
     const enrichmentStepKeys = ["permits", ...ENRICHMENT_MODULES.map((module) => module.key)];
     const enrichmentProgress = Object.fromEntries(
@@ -2396,9 +2457,12 @@ router.post("/properties/run-enrichment", async (req: Request, res: Response) =>
       {
         stepKey: "streeteasy_refresh",
         totalItems: propertyIds.length,
-        status: "running",
+        status: shouldRefreshListings ? "running" : "completed",
         startedAt: workflowStartedAt,
-        lastMessage: `Refreshing StreetEasy asks for ${propertyIds.length} propert${propertyIds.length === 1 ? "y" : "ies"}`,
+        finishedAt: shouldRefreshListings ? null : workflowStartedAt,
+        lastMessage: shouldRefreshListings
+          ? `Refreshing StreetEasy asks for ${propertyIds.length} propert${propertyIds.length === 1 ? "y" : "ies"}`
+          : "Skipped (listing pull off)",
       },
       ...enrichmentStepKeys.map((stepKey, index): WorkflowRunStepSeed => ({
         stepKey,
@@ -2427,7 +2491,7 @@ router.post("/properties/run-enrichment", async (req: Request, res: Response) =>
     const appToken = process.env.SOCRATA_APP_TOKEN ?? null;
     const sourcingPool = getPool();
     const streetEasyRefresh = { attempted: 0, success: 0, failed: 0, skipped: 0, priceChanged: 0, unavailable: 0, errors: [] as string[] };
-    for (let i = 0; i < propertyIds.length; i++) {
+    for (let i = 0; shouldRefreshListings && i < propertyIds.length; i++) {
       if (i > 0) await new Promise((r) => setTimeout(r, ENRICHMENT_RATE_LIMIT_DELAY_MS));
       const propertyId = propertyIds[i]!;
       const result = await refreshStreetEasyListingForProperty(propertyId, sourcingPool);
@@ -2617,6 +2681,39 @@ router.post("/properties/run-enrichment", async (req: Request, res: Response) =>
       finishedAt: new Date().toISOString(),
     });
     res.status(503).json({ error: "Failed to run enrichment.", details: message });
+  }
+});
+
+/** GET /api/properties/attention-items - open action items (repricing, unavailable listings, …) for the home "needs attention" rail. */
+router.get("/properties/attention-items", async (req: Request, res: Response) => {
+  try {
+    const pool = getPool();
+    const limitRaw = Number(req.query.limit);
+    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(limitRaw, 200)) : 100;
+    const r = await pool.query(
+      `SELECT a.id, a.property_id, a.action_type, a.priority, a.summary, a.created_at, p.canonical_address
+       FROM property_action_items a
+       JOIN properties p ON p.id = a.property_id
+       WHERE a.status = 'open'
+       ORDER BY (a.priority = 'high') DESC, a.created_at DESC
+       LIMIT $1`,
+      [limit]
+    );
+    res.json({
+      items: r.rows.map((row) => ({
+        id: String(row.id),
+        propertyId: String(row.property_id),
+        address: String(row.canonical_address ?? ""),
+        actionType: String(row.action_type),
+        priority: String(row.priority ?? "medium"),
+        summary: (row.summary as string | null) ?? null,
+        createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : ((row.created_at as string | null) ?? null),
+      })),
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[properties attention-items]", err);
+    res.status(503).json({ error: "Failed to load attention items.", details: message });
   }
 });
 
@@ -3163,6 +3260,7 @@ const VALID_UPLOAD_CATEGORIES: PropertyDocumentCategory[] = [
   "Rent Comp Package",
   "Expense Comp Package",
   "Market Analysis",
+  "Broker Notes",
   "Other",
 ];
 
@@ -3589,6 +3687,10 @@ router.delete("/properties/:id/documents/:docId", async (req: Request, res: Resp
 router.get("/properties/:id/documents/:docId/file", async (req: Request, res: Response) => {
   try {
     const { id: propertyId, docId } = req.params;
+    // ?download=1 forces attachment disposition so row-level Download buttons
+    // save the file instead of opening a tab.
+    const forceDownload = req.query.download === "1" || req.query.download === "true";
+    const disposition = (kind: "inline" | "attachment") => (forceDownload ? "attachment" : kind);
     const pool = getPool();
     const propertyRepo = new PropertyRepo({ pool });
     const property = await propertyRepo.byId(propertyId);
@@ -3621,13 +3723,13 @@ router.get("/properties/:id/documents/:docId/file", async (req: Request, res: Re
     if (inquiryDoc && inquiryDoc.propertyId === propertyId) {
       const fileContent = await inquiryDocRepo.getFileContent(docId);
       if (fileContent && fileContent.length > 0) {
-        res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(inquiryDoc.filename)}"`);
+        res.setHeader("Content-Disposition", `${disposition("inline")}; filename="${encodeURIComponent(inquiryDoc.filename)}"`);
         if (inquiryDoc.contentType) res.setHeader("Content-Type", inquiryDoc.contentType);
         res.send(fileContent);
         return;
       }
       const absolutePath = resolveInquiryFilePath(inquiryDoc.filePath);
-      res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(inquiryDoc.filename)}"`);
+      res.setHeader("Content-Disposition", `${disposition("inline")}; filename="${encodeURIComponent(inquiryDoc.filename)}"`);
       res.sendFile(absolutePath, (err) => {
         if (err && !res.headersSent) {
           console.error("[documents/file] sendFile failed (inquiry):", err instanceof Error ? err.message : err);
@@ -3641,7 +3743,7 @@ router.get("/properties/:id/documents/:docId/file", async (req: Request, res: Re
     if (uploadedDoc && uploadedDoc.propertyId === propertyId) {
       const fileContent = await uploadedDocRepo.getFileContent(docId);
       if (fileContent && fileContent.length > 0) {
-        res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(uploadedDoc.filename)}"`);
+        res.setHeader("Content-Disposition", `${disposition("inline")}; filename="${encodeURIComponent(uploadedDoc.filename)}"`);
         if (uploadedDoc.contentType) res.setHeader("Content-Type", uploadedDoc.contentType);
         res.send(fileContent);
         return;
@@ -3651,7 +3753,7 @@ router.get("/properties/:id/documents/:docId/file", async (req: Request, res: Re
         return;
       }
       const absolutePath = resolveUploadedDocFilePath(uploadedDoc.filePath);
-      res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(uploadedDoc.filename)}"`);
+      res.setHeader("Content-Disposition", `${disposition("inline")}; filename="${encodeURIComponent(uploadedDoc.filename)}"`);
       res.sendFile(absolutePath, (err) => {
         if (err && !res.headersSent) {
           console.error("[documents/file] sendFile failed (uploaded):", err instanceof Error ? err.message : err);
@@ -5238,10 +5340,28 @@ router.put("/properties/:id/dossier-settings", async (req: Request, res: Respons
       );
     }
     await repo.updateDetails(propertyId, "dealDossier.assumptions", assumptionsPatch);
+
+    // Saved workspace edits must reach the pipeline/home numbers without the
+    // user regenerating documents: recompute the persisted deal signals on the
+    // numbers-only path. Dossier PDF/Excel stay untouched by design — the user
+    // regenerates those explicitly once the workspace numbers settle.
+    let underwritingRefreshed = false;
+    try {
+      await runGenerateDossier(propertyId, undefined, { sendEmail: false, skipDocuments: true });
+      underwritingRefreshed = true;
+    } catch (refreshErr) {
+      console.warn(
+        "[properties dossier settings] signals refresh skipped",
+        propertyId,
+        refreshErr instanceof Error ? refreshErr.message : refreshErr
+      );
+    }
+
     res.json({
       ok: true,
       propertyId,
       assumptions: assumptionsPatch,
+      underwritingRefreshed,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

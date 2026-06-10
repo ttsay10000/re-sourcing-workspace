@@ -1,14 +1,29 @@
 /**
  * Market context API: upload + ingest market PDFs (broker docs and research
- * reports), read neighborhood summaries for the Yield Map overlay, and query
- * extracted market comps by provenance.
+ * reports), read neighborhood summaries for the Yield Map overlay, query
+ * extracted market comps by provenance, and serve the living knowledge base
+ * (GET /api/market-knowledge) + Yield Map headlines (GET /api/market-headlines).
  */
 import { Router, type Request, type Response } from "express";
 import multer from "multer";
-import { getPool, MarketCompRepo, MarketDocumentRepo, NeighborhoodRepo, NeighborhoodSummaryRepo, MarketStatRepo } from "@re-sourcing/db";
-import type { MarketComp, NeighborhoodSummaryWithGeo } from "@re-sourcing/contracts";
+import {
+  getPool,
+  MarketCompRepo,
+  MarketDocumentRepo,
+  MarketKnowledgeRepo,
+  NeighborhoodRepo,
+  NeighborhoodSummaryRepo,
+  MarketStatRepo,
+} from "@re-sourcing/db";
+import type {
+  MarketComp,
+  MarketHeadlinesResponse,
+  MarketKnowledgeResponse,
+  NeighborhoodSummaryWithGeo,
+} from "@re-sourcing/contracts";
 import { ingestMarketDocument } from "../marketContext/ingestMarketDocument.js";
 import { PgMarketContextStore } from "../marketContext/store.js";
+import { computeMarketHeadlines } from "../marketContext/knowledge.js";
 import { computeNeighborhoodRollup, effectiveSourceType, withReadTimeFallback } from "../marketContext/rollup.js";
 import { fallbackSubmarketsFor } from "../marketContext/neighborhoodResolve.js";
 
@@ -169,6 +184,53 @@ router.get("/neighborhood-summaries", async (req: Request, res: Response) => {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[neighborhood-summaries]", err);
     res.status(503).json({ error: "Failed to load neighborhood summaries.", details: message });
+  }
+});
+
+// Current knowledge-base state for the market-docs page panel.
+router.get("/market-knowledge", async (_req: Request, res: Response) => {
+  try {
+    const repo = new MarketKnowledgeRepo({ pool: getPool() });
+    const entry = await repo.latest();
+    const payload: MarketKnowledgeResponse = {
+      knowledge: entry
+        ? {
+            version: entry.version,
+            updatedAt: entry.createdAt,
+            narrative: entry.narrative,
+            latestBrief: entry.brief,
+            documentId: entry.documentId,
+          }
+        : null,
+    };
+    res.json(payload);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[market-knowledge]", err);
+    res.status(503).json({ error: "Failed to load market knowledge base.", details: message });
+  }
+});
+
+/**
+ * Yield Map headlines: top current bullets from the knowledge base; when the
+ * knowledge base is empty (or unreachable) a rule-based fallback is computed
+ * from neighborhood_summaries / market_stats deltas. Never returns a 500 —
+ * worst case is an empty list.
+ */
+router.get("/market-headlines", async (_req: Request, res: Response) => {
+  try {
+    const pool = getPool();
+    const [knowledge, summaries, stats, neighborhoods] = await Promise.all([
+      new MarketKnowledgeRepo({ pool }).latest().catch(() => null),
+      new NeighborhoodSummaryRepo({ pool }).listAll().catch(() => []),
+      new MarketStatRepo({ pool }).list(1000).catch(() => []),
+      new NeighborhoodRepo({ pool }).listAll().catch(() => []),
+    ]);
+    res.json(computeMarketHeadlines({ knowledge, summaries, stats, neighborhoods }));
+  } catch (err) {
+    console.error("[market-headlines]", err);
+    const empty: MarketHeadlinesResponse = { headlines: [], generatedAt: null, knowledgeVersion: null };
+    res.json(empty);
   }
 });
 

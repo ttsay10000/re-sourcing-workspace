@@ -770,6 +770,13 @@ function DealAnalysisPageContent() {
                   ? `${calculation.yieldSignals.mtrYieldPct.toFixed(1)}%`
                   : "—",
             },
+            {
+              label: "MTR bump (vs LTR)",
+              value:
+                calculation.yieldSignals?.spreadPctPoints != null
+                  ? `${calculation.yieldSignals.spreadPctPoints >= 0 ? "+" : ""}${calculation.yieldSignals.spreadPctPoints.toFixed(2)}pp`
+                  : "—",
+            },
             ...(calculation.brokerYieldComparison?.brokerCapRatePct != null
               ? [
                   {
@@ -996,7 +1003,7 @@ function DealAnalysisPageContent() {
       };
       setCreateResult(createSummary);
       void loadSavedWorkspaces();
-      router.replace(`/deal-analysis?property_id=${encodeURIComponent(data.propertyId)}`);
+      router.replace(`/deal-analysis?property_id=${encodeURIComponent(data.propertyId)}`, { scroll: false });
       setNotice(
         createSummary.createdProperty
           ? `Draft property workspace created from the ${sourceLabel} and sent through enrichment.`
@@ -1483,7 +1490,7 @@ function DealAnalysisPageContent() {
       const result = data as CreatePropertyResponse;
       setCreateResult(result);
       void loadSavedWorkspaces();
-      router.replace(`/deal-analysis?property_id=${encodeURIComponent(result.propertyId)}`);
+      router.replace(`/deal-analysis?property_id=${encodeURIComponent(result.propertyId)}`, { scroll: false });
       const createSummary = result.createdProperty
         ? "Property record created from the OM address and sent through enrichment."
         : "Existing property matched from the extracted address and updated with the uploaded package.";
@@ -1602,7 +1609,7 @@ function DealAnalysisPageContent() {
                   resetWorkspace();
                   return;
                 }
-                router.replace(`/deal-analysis?property_id=${encodeURIComponent(nextPropertyId)}`);
+                router.replace(`/deal-analysis?property_id=${encodeURIComponent(nextPropertyId)}`, { scroll: false });
               }}
               // Re-pull the list when the user opens the dropdown so uploads
               // finished in another tab/session are always selectable.
@@ -1743,7 +1750,7 @@ function DealAnalysisPageContent() {
                   key={workspace.propertyId}
                   type="button"
                   onClick={() =>
-                    router.replace(`/deal-analysis?property_id=${encodeURIComponent(workspace.propertyId)}`)
+                    router.replace(`/deal-analysis?property_id=${encodeURIComponent(workspace.propertyId)}`, { scroll: false })
                   }
                   disabled={savedWorkspaceLoading && isActive}
                   style={{
@@ -2044,12 +2051,30 @@ function DealAnalysisPageContent() {
                       >
                         Needs review
                       </span>
-                      <a
-                        href={`/deal-analysis?propertyId=${encodeURIComponent(row.propertyId)}`}
-                        style={{ fontSize: "0.8rem", fontWeight: 800, color: "#0f766e" }}
+                      <button
+                        type="button"
+                        // In-place navigation (right param + no scroll reset):
+                        // the old <a href="?propertyId=..."> full-reloaded the page,
+                        // dropped the param the page reads (property_id), and
+                        // bounced the user back to the top with nothing loaded.
+                        onClick={() =>
+                          router.replace(`/deal-analysis?property_id=${encodeURIComponent(row.propertyId!)}`, {
+                            scroll: false,
+                          })
+                        }
+                        style={{
+                          fontSize: "0.8rem",
+                          fontWeight: 800,
+                          color: "#0f766e",
+                          background: "none",
+                          border: "none",
+                          padding: 0,
+                          cursor: "pointer",
+                          textDecoration: "underline",
+                        }}
                       >
                         Open workspace
-                      </a>
+                      </button>
                     </div>
                   ) : null}
                 </div>
@@ -2176,6 +2201,50 @@ function DealAnalysisPageContent() {
             assumptions, and the deal dossier PDF. Extracted yields feed the living comps database on the
             Yield Map automatically.
           </div>
+          {propertyId && uploadedDocuments.length > 0 ? (
+            // Cross-check lane: open the original OM/rent roll next to the
+            // extracted numbers, spot what didn't pull in, type it in below.
+            <div style={{ marginTop: "0.7rem", display: "flex", flexWrap: "wrap", alignItems: "center", gap: "0.45rem" }}>
+              <span style={{ fontSize: "0.72rem", color: "#65736b", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 850 }}>
+                Source documents
+              </span>
+              {uploadedDocuments.map((doc) =>
+                doc.id ? (
+                  <a
+                    key={doc.id}
+                    href={`${API_BASE}/api/properties/${encodeURIComponent(propertyId)}/documents/${encodeURIComponent(doc.id)}/file`}
+                    target="_blank"
+                    rel="noreferrer"
+                    title={`Open ${doc.fileName} in a new tab to cross-check fields that did not pull in.`}
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: "0.3rem",
+                      padding: "0.22rem 0.6rem",
+                      borderRadius: "999px",
+                      border: "1px solid #bfdbfe",
+                      background: "#eff6ff",
+                      color: "#1d4ed8",
+                      fontSize: "0.76rem",
+                      fontWeight: 700,
+                      textDecoration: "none",
+                      maxWidth: "260px",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {doc.fileName}
+                    {doc.category ? ` · ${doc.category}` : ""} ↗
+                  </a>
+                ) : (
+                  <span key={doc.fileName} style={{ fontSize: "0.76rem", color: "#68736d" }}>
+                    {doc.fileName}
+                  </span>
+                )
+              )}
+            </div>
+          ) : null}
           {hasFreshUploadNeedsReview ? (
             <div
               style={{
@@ -2273,6 +2342,25 @@ function DealAnalysisPageContent() {
                   </div>
                 )}
               </div>
+              {calculation?.yieldSignals?.calloutLabel ? (
+                <div
+                  style={{
+                    marginTop: "0.55rem",
+                    padding: "0.5rem 0.6rem",
+                    borderRadius: "6px",
+                    border: "1px solid #fde68a",
+                    background: "#fffbeb",
+                    color: "#92400e",
+                    fontSize: "0.78rem",
+                    lineHeight: 1.45,
+                  }}
+                >
+                  <strong style={{ display: "block", marginBottom: "0.15rem" }}>
+                    LTR → MTR bump flagged
+                  </strong>
+                  {calculation.yieldSignals.calloutLabel}
+                </div>
+              ) : null}
               {calculation?.brokerYieldComparison?.calloutLabel ? (
                 <div
                   style={{
@@ -2471,6 +2559,23 @@ function DealAnalysisPageContent() {
               <div style={{ marginTop: "0.75rem", display: "grid", gap: "0.45rem", fontSize: "0.86rem" }}>
                 <div style={{ color: "#18231e" }}>
                   Uploaded OM docs: <strong>{uploadedDocuments.length || workspaceFiles.length}</strong>
+                  {propertyId && uploadedDocuments.some((doc) => doc.id) ? (
+                    <span style={{ marginLeft: "0.4rem" }}>
+                      {uploadedDocuments
+                        .filter((doc) => doc.id)
+                        .map((doc, index) => (
+                          <a
+                            key={doc.id}
+                            href={`${API_BASE}/api/properties/${encodeURIComponent(propertyId)}/documents/${encodeURIComponent(doc.id!)}/file`}
+                            target="_blank"
+                            rel="noreferrer"
+                            style={{ color: "#1d4ed8", fontWeight: 700, marginLeft: index === 0 ? 0 : "0.5rem" }}
+                          >
+                            {doc.fileName}
+                          </a>
+                        ))}
+                    </span>
+                  ) : null}
                 </div>
                 {hasFreshUploadNeedsReview ? (
                   <div style={{ color: "#92400e", fontWeight: 800 }}>

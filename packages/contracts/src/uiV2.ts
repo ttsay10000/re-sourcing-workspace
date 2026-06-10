@@ -556,6 +556,8 @@ export interface UiV2BrokerOverwriteInput {
 
 export interface UiV2DocumentStatus {
   hasOm: boolean;
+  /** Newest OM/brochure document id, so list rows can build a direct download URL. */
+  omDocumentId?: string | null;
   omStatus?: OmIngestionRunStatus | "not_requested" | "requested" | "available" | "missing" | null;
   latestOmRunId?: string | null;
   latestRequestAt?: string | null;
@@ -683,7 +685,9 @@ export interface UiV2UnderwritingSummary {
   riskFlags?: string[];
   capReasons?: string[];
   targetIrrPct?: number | null;
+  /** Percent points (14.5 = 14.5%); persisted signals store decimals, converted at the API. */
   irrPct?: number | null;
+  /** Percent points (14.5 = 14.5%); persisted signals store decimals, converted at the API. */
   cocPct?: number | null;
   currentNoi?: number | null;
   adjustedNoi?: number | null;

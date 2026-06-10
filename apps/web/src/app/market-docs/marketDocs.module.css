@@ -111,3 +111,180 @@
   color: var(--app-muted);
   padding: 1.2rem 0 !important;
 }
+
+/* --- New upload analysis (latest document brief) --- */
+
+.calloutCard {
+  display: grid;
+  gap: 0.7rem;
+  border: 1px solid var(--brand-strong, #115e59);
+  border-radius: var(--radius-md, 8px);
+  padding: 0.8rem 0.9rem;
+  background: rgba(17, 94, 89, 0.04);
+}
+
+.calloutHeadline {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.calloutTitle {
+  color: var(--app-ink);
+  font-size: 0.88rem;
+  font-weight: 800;
+}
+
+.calloutMeta {
+  margin-left: auto;
+  font-size: 0.7rem;
+  color: var(--app-muted);
+}
+
+.briefColumns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 0.8rem;
+}
+
+.briefGroup {
+  display: grid;
+  gap: 0.3rem;
+  align-content: start;
+}
+
+.briefGroupTitle {
+  font-size: 0.68rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--app-muted);
+}
+
+.briefList {
+  margin: 0;
+  padding-left: 1rem;
+  display: grid;
+  gap: 0.25rem;
+  font-size: 0.78rem;
+  color: var(--app-ink-secondary);
+}
+
+/* Amber treatment for discrepancy flags. */
+.discrepancyBox {
+  display: grid;
+  gap: 0.3rem;
+  border: 1px solid #f59e0b;
+  border-radius: var(--radius-md, 8px);
+  background: #fffbeb;
+  padding: 0.55rem 0.7rem;
+}
+
+.discrepancyTitle {
+  font-size: 0.68rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #92400e;
+}
+
+.discrepancyList {
+  margin: 0;
+  padding-left: 1rem;
+  display: grid;
+  gap: 0.25rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #92400e;
+}
+
+.docDiscrepancy {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: #92400e;
+}
+
+/* --- Market knowledge base panel --- */
+
+.knowledgeHeader {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.6rem;
+}
+
+.knowledgeHeader .sectionTitle {
+  margin-bottom: 0;
+}
+
+.knowledgeMeta {
+  font-size: 0.72rem;
+  color: var(--app-muted);
+}
+
+.knowledgeBody {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.trendGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 0.6rem;
+}
+
+.trendCard {
+  display: grid;
+  gap: 0.4rem;
+  align-content: start;
+  border: 1px solid var(--app-line);
+  border-radius: var(--radius-md, 8px);
+  padding: 0.6rem 0.7rem;
+}
+
+.trendHeadline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+}
+
+.trendScope {
+  color: var(--app-ink);
+  font-size: 0.8rem;
+  font-weight: 750;
+}
+
+.knowledgeGroup {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.attentionList {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.attentionRow {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-size: 0.78rem;
+  color: var(--app-ink-secondary);
+}
+
+.sourcesLine {
+  font-size: 0.7rem;
+  color: var(--app-muted);
+}
+
+.emptyNote {
+  font-size: 0.76rem;
+  color: var(--app-muted);
+  font-style: italic;
+}

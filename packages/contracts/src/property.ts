@@ -635,6 +635,7 @@ export type PropertyDocumentCategory =
   | "Rent Comp Package"
   | "Expense Comp Package"
   | "Market Analysis"
+  | "Broker Notes"
   | "Other";
 
 /** User-uploaded document row (OM, brochure, rent roll, etc.). */
