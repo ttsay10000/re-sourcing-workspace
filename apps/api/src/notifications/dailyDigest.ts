@@ -374,7 +374,7 @@ async function collectDigestRows(sinceIso: string, pool: Pool): Promise<DigestPr
   }));
 }
 
-async function buildDailyDigestSummary(since: Date, until: Date, pool: Pool): Promise<DailyDigestSummary> {
+export async function buildDailyDigestSummary(since: Date, until: Date, pool: Pool): Promise<DailyDigestSummary> {
   const rows = await collectDigestRows(since.toISOString(), pool);
   const newByBorough = new Map<string, DigestPropertyRow[]>();
   const updatedByBorough = new Map<string, Array<{ row: DigestPropertyRow; flags: string[] }>>();

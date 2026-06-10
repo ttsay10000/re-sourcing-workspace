@@ -946,3 +946,8 @@
 .panelSkeleton {
   padding: 1rem 1.25rem;
 }
+
+.digestLine {
+  color: var(--brand-strong, #115e59);
+  font-weight: 600;
+}

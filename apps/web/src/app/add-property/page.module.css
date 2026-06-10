@@ -9,12 +9,6 @@
 
 /* ─── Page header ─────────────────────────────────────────────── */
 
-.headerBand {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 1.25rem;
-}
 
 .headerCopy {
   display: grid;
@@ -37,15 +31,6 @@
   font-size: 0.88rem;
 }
 
-.eyebrow,
-.panelKicker {
-  margin: 0;
-  color: var(--app-muted, #71717a);
-  font-size: var(--text-2xs);
-  font-weight: 600;
-  letter-spacing: var(--tracking-label);
-  text-transform: uppercase;
-}
 
 .headerActions,
 .formActions,
@@ -59,58 +44,14 @@
 
 .primaryLink,
 .secondaryLink,
-.primaryButton,
-.secondaryButton,
-.inlineButton,
-.closeButton,
-.noticeLink {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 2.25rem;
-  border-radius: 8px;
-  padding: 0.5rem 1rem;
-  border: 1px solid transparent;
-  font-size: 0.84rem;
-  font-weight: 500;
-  text-decoration: none;
-  cursor: pointer;
-  transition: background 140ms ease, border-color 140ms ease, color 140ms ease;
-  white-space: nowrap;
-}
 
 .primaryLink,
-.primaryButton {
-  background: var(--brand, #0f766e);
-  color: #ffffff;
-  border-color: var(--brand, #0f766e);
-  box-shadow: var(--app-control-shadow);
-}
 
 .primaryLink:hover,
-.primaryButton:hover {
-  background: var(--brand-strong, #115e59);
-  border-color: var(--brand-strong, #115e59);
-}
 
 .secondaryLink,
-.secondaryButton,
-.inlineButton,
-.noticeLink {
-  background: var(--app-surface, #ffffff);
-  color: var(--app-ink-secondary, #52525b);
-  border-color: var(--app-line, #e4e4e7);
-  box-shadow: var(--app-control-shadow);
-}
 
 .secondaryLink:hover,
-.secondaryButton:hover,
-.inlineButton:hover,
-.noticeLink:hover {
-  border-color: var(--app-line-strong, #d4d4d8);
-  background: var(--app-surface-strong, #f4f4f3);
-  color: var(--app-ink, #18181b);
-}
 
 .closeButton {
   background: transparent;
@@ -127,12 +68,6 @@
   border-color: var(--app-line-strong, #d4d4d8);
 }
 
-.primaryButton:disabled,
-.secondaryButton:disabled,
-.inlineButton:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
 
 /* ─── Health status row ───────────────────────────────────────── */
 

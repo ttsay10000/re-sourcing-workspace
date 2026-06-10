@@ -28,10 +28,18 @@ type SavedDealsResponse = {
   details?: string;
 };
 type ProgressResponse = {
-  summary?: Record<string, number | null | undefined>;
+  summary?: { updatedAt?: string | null } & Record<string, number | string | null | undefined>;
   sections?: HomeProgressSection[];
   error?: string;
   details?: string;
+};
+
+type DigestPreview = {
+  newProperties?: number;
+  updatedProperties?: number;
+  omGeneratedCount?: number;
+  dossierGeneratedCount?: number;
+  error?: string;
 };
 type SavedDealRow = {
   savedDeal?: {
@@ -224,6 +232,8 @@ function HomePageContent() {
   const [savedRows, setSavedRows] = useState<SavedDealRow[]>([]);
   const [pipelineTotal, setPipelineTotal] = useState(0);
   const [progressSections, setProgressSections] = useState<HomeProgressSection[]>([]);
+  const [dataUpdatedAt, setDataUpdatedAt] = useState<string | null>(null);
+  const [digest, setDigest] = useState<DigestPreview | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [terminalCounter, setTerminalCounter] = useState<"closed" | "rejected">("closed");
@@ -251,6 +261,7 @@ function HomePageContent() {
         setPipelineTotal(pipelineData.pipeline?.total ?? 0);
         setSavedRows(savedData.savedDeals?.rows ?? []);
         setProgressSections(progressData.sections ?? []);
+        setDataUpdatedAt(typeof progressData.summary?.updatedAt === "string" ? progressData.summary.updatedAt : null);
       } catch (err) {
         if (!ignore) setError(err instanceof Error ? err.message : "Failed to load home dashboard.");
       } finally {
@@ -258,6 +269,16 @@ function HomePageContent() {
       }
     }
     void loadHome();
+    async function loadDigest() {
+      try {
+        const response = await fetch(`${API_BASE}/api/notifications/digest-preview`, { credentials: "include" });
+        const data = (await response.json().catch(() => ({}))) as DigestPreview;
+        if (!ignore && response.ok && !data.error) setDigest(data);
+      } catch {
+        // strip simply doesn't render
+      }
+    }
+    void loadDigest();
     return () => {
       ignore = true;
     };
@@ -371,8 +392,26 @@ function HomePageContent() {
           </p>
         </div>
         <div className={styles.headerMeta}>
-          <div>Last refresh · {new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}</div>
+          <div>
+            Data updated ·{" "}
+            {dataUpdatedAt
+              ? new Date(dataUpdatedAt).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
+              : "—"}
+          </div>
           <div>Source: StreetEasy · broker network · city data</div>
+          {digest && ((digest.newProperties ?? 0) > 0 || (digest.updatedProperties ?? 0) > 0 || (digest.omGeneratedCount ?? 0) > 0) ? (
+            <div className={styles.digestLine}>
+              Last 24h ·{" "}
+              {[
+                digest.newProperties ? `${digest.newProperties} new` : null,
+                digest.updatedProperties ? `${digest.updatedProperties} updated` : null,
+                digest.omGeneratedCount ? `${digest.omGeneratedCount} OM${digest.omGeneratedCount === 1 ? "" : "s"} analyzed` : null,
+                digest.dossierGeneratedCount ? `${digest.dossierGeneratedCount} dossier${digest.dossierGeneratedCount === 1 ? "" : "s"}` : null,
+              ]
+                .filter(Boolean)
+                .join(" · ")}
+            </div>
+          ) : null}
         </div>
       </header>
 

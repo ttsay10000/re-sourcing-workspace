@@ -22,6 +22,7 @@ import pipelineV2Router from "./routes/pipelineV2.js";
 import crmV2Router from "./routes/crmV2.js";
 import importV2Router from "./routes/importV2.js";
 import savedProgressV2Router from "./routes/savedProgressV2.js";
+import notificationsRouter from "./routes/notifications.js";
 import brokerCompsRouter from "./routes/brokerComps.js";
 import brokerOmRouter from "./routes/brokerOm.js";
 import compsRouter from "./routes/comps.js";
@@ -87,6 +88,7 @@ app.use("/api", pipelineV2Router);
 app.use("/api", crmV2Router);
 app.use("/api", importV2Router);
 app.use("/api", savedProgressV2Router);
+app.use("/api", notificationsRouter);
 
 // Optional: read DATABASE_URL for future routes; do not connect at startup
 const databaseUrl = process.env.DATABASE_URL;

@@ -174,8 +174,7 @@ a[class*="Button"] {
 
 h1,
 h2,
-.page-title,
-.profile-page-title {
+.page-title {
   font-family: var(--font-display);
   line-height: var(--leading-tight);
   font-weight: 560;
@@ -720,9 +719,6 @@ h2,
   color: #5f6f67;
 }
 
-.profile-page-title {
-  margin-bottom: 0.45rem;
-}
 
 .profile-page-intro {
   margin: 0;
