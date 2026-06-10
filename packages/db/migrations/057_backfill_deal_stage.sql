@@ -2,15 +2,19 @@
 -- starts from a sane baseline. stage_entered_at uses the property's
 -- updated_at — the best timestamp available without mining free-text events.
 -- Additive/idempotent: only touches rows where deal_stage is still NULL.
+--
+-- deal_status_enum only contains the legacy values (new, interesting, saved,
+-- dossier_generated, rejected); compare as text so the extended status names
+-- below don't fail enum input coercion. Unmatched names simply never match.
 
 UPDATE properties p
 SET deal_state = CASE
       WHEN pr.id IS NOT NULL THEN 'dead'
-      WHEN sd.deal_status IN ('deal_closed', 'archived') THEN 'closed'
-      WHEN sd.deal_status = 'rejected' THEN 'dead'
+      WHEN sd.deal_status::text IN ('deal_closed', 'archived') THEN 'closed'
+      WHEN sd.deal_status::text = 'rejected' THEN 'dead'
       ELSE 'active'
     END,
-    deal_stage = CASE sd.deal_status
+    deal_stage = CASE sd.deal_status::text
       WHEN 'new' THEN 'inbox'
       WHEN 'screening' THEN 'screening'
       WHEN 'interesting' THEN 'screening'
