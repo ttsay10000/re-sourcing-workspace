@@ -151,3 +151,5 @@ export type {
   OmExtractedSnapshotRepoOptions,
   UpsertOmExtractedSnapshotParams,
 } from "./repos/OmExtractedSnapshotRepo.js";
+
+export { runMigrations, type RunMigrationsResult } from "./runMigrations.js";

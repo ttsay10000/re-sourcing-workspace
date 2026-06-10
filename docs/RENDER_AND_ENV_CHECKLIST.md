@@ -153,3 +153,11 @@ If `PROCESS_INBOX_CRON_SECRET` is set, include either:
    - send inquiry email works
    - inbox cron can run successfully
    - saved-search cron can start due searches successfully
+
+## Migrate on boot (added 2026-06-10)
+
+Set `MIGRATE_ON_BOOT=1` on the API service (Render → service → Environment).
+On every deploy/restart the API applies pending `packages/db/migrations/*.sql`
+(tracked in `schema_migrations`, idempotent) before it starts listening, then
+the boot schema guard verifies sentinel tables/columns. Manual alternative:
+`npm run db:migrate` with `DATABASE_URL` set.

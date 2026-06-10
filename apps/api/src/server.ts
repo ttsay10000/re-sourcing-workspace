@@ -31,6 +31,7 @@ const PORT = Number(process.env.PORT) || 4000;
 const version = process.env.npm_package_version || "1.0.0";
 const env = process.env.NODE_ENV || "development";
 
+import { getPool, runMigrations } from "@re-sourcing/db";
 import { assertSchemaCurrent } from "./db/schemaGuard.js";
 
 const app = express();
@@ -98,9 +99,27 @@ if (databaseUrl) {
   console.log("[api] DATABASE_URL not set; server runs without DB.");
 }
 
+async function migrateOnBoot(): Promise<void> {
+  if (process.env.MIGRATE_ON_BOOT !== "1") return;
+  if (!process.env.DATABASE_URL) {
+    console.warn("[api] MIGRATE_ON_BOOT=1 but DATABASE_URL is not set — skipping.");
+    return;
+  }
+  try {
+    console.log("[api] MIGRATE_ON_BOOT=1 — applying pending migrations…");
+    await runMigrations(getPool());
+  } catch (err) {
+    // Surface loudly but keep serving: a failed migration shouldn't take the
+    // whole API down harder than the missing schema already would.
+    console.error("[api] migrate-on-boot FAILED:", err instanceof Error ? err.message : err);
+  }
+}
+
 export function start(): void {
-  app.listen(PORT, () => {
-    console.log(`[api] listening on port ${PORT} (env=${env})`);
-    void assertSchemaCurrent();
+  void migrateOnBoot().then(() => {
+    app.listen(PORT, () => {
+      console.log(`[api] listening on port ${PORT} (env=${env})`);
+      void assertSchemaCurrent();
+    });
   });
 }

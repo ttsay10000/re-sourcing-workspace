@@ -131,7 +131,7 @@ const NAV_LINKS: NavLink[] = [
     shortLabel: "U",
     icon: User,
     matches: (pathname: string) =>
-      pathname === "/profile" || pathname.startsWith("/profile/") || pathname === "/profiles",
+      pathname === "/profile" || pathname.startsWith("/profile/"),
   },
   {
     href: "/saved",
