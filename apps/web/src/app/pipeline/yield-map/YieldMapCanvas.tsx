@@ -13,6 +13,10 @@ export type MapPin = {
   propertyId: string;
   kind: "deal" | "comp";
   address: string;
+  /** Neighborhood (· borough) tag rendered directly under the address. */
+  neighborhood?: string | null;
+  /** Dashed ring: numbers come from an OM extraction still awaiting review. */
+  pending?: boolean;
   lat: number;
   lng: number;
   color: string;
@@ -100,6 +104,13 @@ function popupNode(pin: MapPin): HTMLElement {
   const address = document.createElement("strong");
   address.textContent = pin.address;
   root.appendChild(address);
+
+  if (pin.neighborhood) {
+    const hood = document.createElement("span");
+    hood.className = styles.popupHood;
+    hood.textContent = pin.neighborhood;
+    root.appendChild(hood);
+  }
 
   for (const line of pin.lines) {
     const row = document.createElement("span");
@@ -249,6 +260,9 @@ export function YieldMapCanvas({
   const hoodPopupRef = useRef<maplibregl.Popup | null>(null);
   const hoodPopupPinnedRef = useRef(false);
   const hoveredHoodRef = useRef<string | null>(null);
+  // One pin popup at a time: the screenshot failure mode was several hover
+  // popups + neighborhood cards stacking into an unreadable pile.
+  const openPinPopupRef = useRef<maplibregl.Popup | null>(null);
   const styleReadyRef = useRef(false);
   const lastFitKeyRef = useRef<string>("");
   const onPinHoverRef = useRef(onPinHover);
@@ -402,7 +416,12 @@ export function YieldMapCanvas({
       element.className = styles.hollowPin;
       element.style.borderColor = pin.color;
       element.setAttribute("aria-label", `${pin.address} (asking)`);
-      const popup = new maplibregl.Popup({ offset: 12, closeButton: false, maxWidth: "280px" }).setDOMContent(hollowPopupNode(pin));
+      const popup = new maplibregl.Popup({
+        offset: 12,
+        closeButton: false,
+        maxWidth: "280px",
+        className: styles.pinPopupShell,
+      }).setDOMContent(hollowPopupNode(pin));
       return new maplibregl.Marker({ element }).setLngLat([pin.lng, pin.lat]).setPopup(popup).addTo(map);
     });
   }, [hollowPins]);
@@ -470,22 +489,40 @@ export function YieldMapCanvas({
     for (const pin of pins) {
       const element = document.createElement("button");
       element.type = "button";
-      element.className = pin.kind === "comp" ? `${styles.pin} ${styles.pinComp}` : styles.pin;
+      const classes = [styles.pin];
+      if (pin.kind === "comp") classes.push(styles.pinComp);
+      if (pin.pending) classes.push(styles.pinPending);
+      element.className = classes.join(" ");
       element.style.background = pin.color;
       element.setAttribute("aria-label", pin.kind === "comp" ? `Comp: ${pin.address}` : pin.address);
 
-      const popup = new maplibregl.Popup({ offset: 12, closeButton: false, maxWidth: "300px" })
+      const popup = new maplibregl.Popup({
+        offset: 12,
+        closeButton: false,
+        maxWidth: "300px",
+        // The info card always floats above pins, badges, and hood cards —
+        // the dots stay visible underneath.
+        className: styles.pinPopupShell,
+      })
         .setDOMContent(popupNode(pin))
         .setLngLat([pin.lng, pin.lat]);
+
+      const openExclusive = () => {
+        if (openPinPopupRef.current && openPinPopupRef.current !== popup) openPinPopupRef.current.remove();
+        if (!hoodPopupPinnedRef.current) hoodPopupRef.current?.remove();
+        if (!popup.isOpen()) popup.addTo(map);
+        openPinPopupRef.current = popup;
+      };
 
       // Hover shows the popup; click pins it open until the next map click.
       let sticky = false;
       popup.on("close", () => {
         sticky = false;
+        if (openPinPopupRef.current === popup) openPinPopupRef.current = null;
       });
       element.addEventListener("mouseenter", () => {
         onPinHoverRef.current?.(pin.id);
-        if (!popup.isOpen()) popup.addTo(map);
+        openExclusive();
       });
       element.addEventListener("mouseleave", () => {
         onPinHoverRef.current?.(null);
@@ -494,7 +531,7 @@ export function YieldMapCanvas({
       element.addEventListener("click", (event) => {
         event.stopPropagation();
         sticky = !sticky;
-        if (sticky && !popup.isOpen()) popup.addTo(map);
+        if (sticky) openExclusive();
         if (!sticky) popup.remove();
       });
 

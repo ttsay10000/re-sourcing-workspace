@@ -1,9 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Badge, PageHeader, StatCard } from "@/components/ui";
+import { Badge, Dialog, PageHeader, StatCard } from "@/components/ui";
+import { dealFlowStageForStatus } from "@re-sourcing/contracts";
 import { API_BASE } from "@/lib/api";
-import { formatPercent, formatCurrencyExact, EMPTY_VALUE } from "@/lib/format";
+import { formatPercent, formatCurrencyCompact, formatCurrencyExact, labelFromKey, EMPTY_VALUE } from "@/lib/format";
 import styles from "./yieldMap.module.css";
 import { YieldMapCanvas, type MapPin, type AreaStat, type HollowPin, type MarketHood } from "./YieldMapCanvas";
 import {
@@ -23,9 +24,11 @@ interface CompRow {
   neighborhood: string | null;
   dealState: string | null;
   dealStage: string | null;
+  savedStatus: string | null;
   lat: number | null;
   lng: number | null;
   units: number | null;
+  askingPrice: number | null;
   ltrYieldPct: number | null;
   mtrYieldPct: number | null;
   yieldSpreadPct: number | null;
@@ -42,6 +45,8 @@ interface CompRow {
   firstYieldAt: string | null;
   yieldDeltaPct: number | null;
   yieldTrend: YieldTrend;
+  /** True when the numbers come from an unpromoted OM extraction awaiting review. */
+  pendingReview: boolean;
 }
 
 interface CompsResponse {
@@ -50,9 +55,20 @@ interface CompsResponse {
     count: number;
     withCoordinates: number;
     flaggedCount?: number;
+    pendingCount?: number;
     averageLtrYieldPct: number | null;
     medianLtrYieldPct: number | null;
   };
+}
+
+/** One line of GET /api/market-headlines — LLM/rule-written movement notes for the map. */
+interface MarketHeadline {
+  id: string;
+  text: string;
+  tone: "up" | "down" | "neutral" | "watch";
+  scope: string | null;
+  source: string | null;
+  asOf: string | null;
 }
 
 /** Provenance tag carried by every market comp/stat (see contracts/marketContext). */
@@ -163,6 +179,49 @@ const PSF_BANDS = [
 ];
 
 const COMP_ACCENT = "#7c3aed";
+
+/**
+ * "Vs market" mode: pin color reads the deal against the comps we hold for its
+ * area (market layer + broker packages), not an absolute band. Cap-rate mode:
+ * above-market yield = cheap for the area (teal); below = paying up (red).
+ * $/PSF mode mirrors with cheap = teal.
+ */
+const VS_MARKET_BANDS = [
+  { label: "≥ +50bps vs comps", color: "#0f766e" },
+  { label: "0 to +50bps", color: "#16a34a" },
+  { label: "0 to −50bps", color: "#d97706" },
+  { label: "≤ −50bps", color: "#dc2626" },
+  { label: "no area comps", color: "#94a3b8" },
+];
+
+function vsMarketCapColor(deltaPp: number | null): string {
+  if (deltaPp == null) return "#94a3b8";
+  if (deltaPp >= 0.5) return "#0f766e";
+  if (deltaPp >= 0) return "#16a34a";
+  if (deltaPp >= -0.5) return "#d97706";
+  return "#dc2626";
+}
+
+/** $/PSF read: percentage above/below the area median (cheaper = better). */
+function vsMarketPsfColor(deltaPct: number | null): string {
+  if (deltaPct == null) return "#94a3b8";
+  if (deltaPct <= -10) return "#0f766e";
+  if (deltaPct <= 0) return "#16a34a";
+  if (deltaPct <= 10) return "#d97706";
+  return "#dc2626";
+}
+
+/** Ray-cast point-in-ring test for the market layer's simplified polygons. */
+function pointInRing(lng: number, lat: number, ring: [number, number][]): boolean {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, yi] = ring[i];
+    const [xj, yj] = ring[j];
+    const intersects = yi > lat !== yj > lat && lng < ((xj - xi) * (lat - yi)) / (yj - yi) + xi;
+    if (intersects) inside = !inside;
+  }
+  return inside;
+}
 
 function yieldColor(value: number | null): string {
   if (value == null) return "#cbd5e1";
@@ -408,8 +467,11 @@ export default function YieldMapPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [boroughFilter, setBoroughFilter] = useState("");
-  const [colorBy, setColorBy] = useState<"yield" | "psf" | "stage">("yield");
+  const [colorBy, setColorBy] = useState<"yield" | "psf" | "stage" | "vsMarket">("yield");
   const [showAreas, setShowAreas] = useState(true);
+  const [includePending, setIncludePending] = useState(false);
+  const [quickViewId, setQuickViewId] = useState<string | null>(null);
+  const [headlines, setHeadlines] = useState<MarketHeadline[]>([]);
   const [boundaries, setBoundaries] = useState<NeighborhoodCollection | null>(null);
   const [showComps, setShowComps] = useState(false);
   const [marketComps, setMarketComps] = useState<MarketCompsResponse | null>(null);
@@ -428,7 +490,8 @@ export default function YieldMapPage() {
   const loadDeals = useCallback(async (options?: { signal?: AbortSignal; initial?: boolean }) => {
     if (options?.initial) setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/api/comps/operating`, {
+      // Pending (awaiting-review) rows always come back; the toggle filters client-side.
+      const res = await fetch(`${API_BASE}/api/comps/operating?include_pending=1`, {
         credentials: "include",
         signal: options?.signal,
       });
@@ -544,11 +607,30 @@ export default function YieldMapPage() {
     return () => controller.abort();
   }, []);
 
+  // Market-movement headlines (knowledge base + ingested reports). The strip
+  // simply stays hidden when the endpoint has nothing or isn't deployed yet.
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch(`${API_BASE}/api/market-headlines`, { credentials: "include", signal: controller.signal })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((payload: { headlines?: MarketHeadline[] } | null) => {
+        if (Array.isArray(payload?.headlines)) setHeadlines(payload.headlines.slice(0, 6));
+      })
+      .catch(() => {});
+    return () => controller.abort();
+  }, []);
+
   const rows = useMemo(() => {
-    const all = data?.comps ?? [];
+    let all = data?.comps ?? [];
+    if (!includePending) all = all.filter((row) => !row.pendingReview);
     if (!boroughFilter) return all;
     return all.filter((row) => (row.borough ?? "Unknown") === boroughFilter);
-  }, [data, boroughFilter]);
+  }, [data, boroughFilter, includePending]);
+
+  const pendingAvailable = useMemo(
+    () => (data?.comps ?? []).filter((row) => row.pendingReview).length,
+    [data]
+  );
 
   const compRows = useMemo(() => {
     if (!showComps) return [];
@@ -559,6 +641,47 @@ export default function YieldMapPage() {
 
   const geoRows = useMemo(() => rows.filter((row) => row.lat != null && row.lng != null), [rows]);
   const geoComps = useMemo(() => compRows.filter((comp) => comp.lat != null && comp.lng != null), [compRows]);
+
+  const featureBBoxes = useMemo(() => {
+    const out = new Map<string, FeatureBBox>();
+    for (const feature of boundaries?.features ?? []) out.set(feature.properties.code, featureBBox(feature));
+    return out;
+  }, [boundaries]);
+
+  // Neighborhood names the rest of the page shows should match the map: deals
+  // with coordinates take the NTA polygon they fall inside; the enrichment
+  // name (title-cased) covers the rest. Eliminates "GREENWICH VILLAGE-CENTRAL"
+  // vs "Greenwich Village" mismatches between the tables and the map.
+  const hoodNameByPropertyId = useMemo(() => {
+    const out = new Map<string, string>();
+    if (!boundaries) return out;
+    for (const row of data?.comps ?? []) {
+      if (row.lat == null || row.lng == null) continue;
+      for (const feature of boundaries.features) {
+        if (feature.properties.park) continue;
+        const bbox = featureBBoxes.get(feature.properties.code);
+        if (pointInFeature(row.lng, row.lat, feature, bbox)) {
+          out.set(row.propertyId, feature.properties.name);
+          break;
+        }
+      }
+    }
+    return out;
+  }, [boundaries, featureBBoxes, data]);
+
+  const displayHood = useCallback(
+    (row: CompRow): string | null =>
+      hoodNameByPropertyId.get(row.propertyId) ?? (row.neighborhood ? labelFromKey(row.neighborhood) : null),
+    [hoodNameByPropertyId]
+  );
+
+  /** Board stage chip text — the same stage the deal-progress board shows for this status. */
+  const boardStageLabel = useCallback((row: CompRow): string => {
+    const stage = dealFlowStageForStatus(row.savedStatus);
+    if (stage) return stage.shortLabel;
+    if (row.dealStage) return labelFromKey(row.dealStage);
+    return row.dealState ? labelFromKey(row.dealState) : EMPTY_VALUE;
+  }, []);
 
   const flaggedRows = useMemo(() => rows.filter((row) => row.yieldFlag != null), [rows]);
   const yieldRows = useMemo(() => rows.filter((row) => row.ltrYieldPct != null), [rows]);
@@ -579,8 +702,10 @@ export default function YieldMapPage() {
     }
     const grouped = new Map<string, number[]>();
     for (const row of data?.comps ?? []) {
-      if (!row.neighborhood || row.ltrYieldPct == null) continue;
-      const hoodId = aliasToHood.get(normalizeHoodName(row.neighborhood));
+      if (row.ltrYieldPct == null) continue;
+      const hoodName = hoodNameByPropertyId.get(row.propertyId) ?? row.neighborhood;
+      if (!hoodName) continue;
+      const hoodId = aliasToHood.get(normalizeHoodName(hoodName));
       if (!hoodId) continue;
       const bucket = grouped.get(hoodId) ?? [];
       bucket.push(row.ltrYieldPct);
@@ -592,7 +717,66 @@ export default function YieldMapPage() {
       if (value != null) result.set(hoodId, { median: value, count: values.length });
     }
     return result;
-  }, [data, summaries]);
+  }, [data, summaries, hoodNameByPropertyId]);
+
+  /**
+   * Per-deal read against area comps for the "Vs market" pin mode and popup
+   * line. Benchmark preference: the market-layer hood median (research +
+   * broker uploads), else the median of broker-package comps falling in the
+   * same hood polygon. Deals locate by point-in-polygon, falling back to
+   * alias-matched neighborhood names for unmapped rows.
+   */
+  const vsMarketByPropertyId = useMemo(() => {
+    const out = new Map<
+      string,
+      { hoodName: string; capDeltaPp: number | null; psfDeltaPct: number | null; marketCapPct: number | null; marketPsf: number | null }
+    >();
+    if (summaries.length === 0) return out;
+    const aliasToHood = new Map<string, NeighborhoodSummaryRow>();
+    for (const summary of summaries) {
+      aliasToHood.set(normalizeHoodName(summary.neighborhoodId), summary);
+      aliasToHood.set(normalizeHoodName(summary.name), summary);
+      for (const alias of summary.aliases) aliasToHood.set(normalizeHoodName(alias), summary);
+    }
+    const hoodOfDeal = (row: CompRow): NeighborhoodSummaryRow | null => {
+      if (row.lat != null && row.lng != null) {
+        for (const summary of summaries) {
+          if (summary.polygon.length >= 3 && pointInRing(row.lng, row.lat, summary.polygon)) return summary;
+        }
+      }
+      return row.neighborhood ? aliasToHood.get(normalizeHoodName(row.neighborhood)) ?? null : null;
+    };
+    // Broker-package comps grouped per hood (fallback benchmark when the
+    // market layer has no median for that hood yet).
+    const packageCompsByHood = new Map<string, { caps: number[]; psfs: number[] }>();
+    for (const comp of geoComps) {
+      for (const summary of summaries) {
+        if (summary.polygon.length < 3 || !pointInRing(comp.lng!, comp.lat!, summary.polygon)) continue;
+        const bucket = packageCompsByHood.get(summary.neighborhoodId) ?? { caps: [], psfs: [] };
+        if (comp.capRatePct != null) bucket.caps.push(comp.capRatePct);
+        if (comp.pricePsf != null) bucket.psfs.push(comp.pricePsf);
+        packageCompsByHood.set(summary.neighborhoodId, bucket);
+        break;
+      }
+    }
+    for (const row of data?.comps ?? []) {
+      const hood = hoodOfDeal(row);
+      if (!hood) continue;
+      const packageBucket = packageCompsByHood.get(hood.neighborhoodId);
+      const marketCapPct =
+        hood.medianCapRate != null ? hood.medianCapRate * 100 : median(packageBucket?.caps ?? []);
+      const marketPsf = hood.medianPsf ?? median(packageBucket?.psfs ?? []);
+      const capDeltaPp =
+        row.ltrYieldPct != null && marketCapPct != null ? row.ltrYieldPct - marketCapPct : null;
+      const psfDeltaPct =
+        row.pricePsf != null && marketPsf != null && marketPsf > 0
+          ? ((row.pricePsf - marketPsf) / marketPsf) * 100
+          : null;
+      if (capDeltaPp == null && psfDeltaPct == null) continue;
+      out.set(row.propertyId, { hoodName: hood.name, capDeltaPp, psfDeltaPct, marketCapPct, marketPsf });
+    }
+    return out;
+  }, [data, summaries, geoComps]);
 
   const marketHoods = useMemo<MarketHood[]>(() => {
     if (!marketLayerOn) return [];
@@ -752,19 +936,13 @@ export default function YieldMapPage() {
   }, [rows]);
 
   const neighborhoodStats = useMemo(
-    () => groupStats(rows, (row) => row.neighborhood, dealMetricValue),
-    [rows, dealMetricValue]
+    () => groupStats(rows, displayHood, dealMetricValue),
+    [rows, displayHood, dealMetricValue]
   );
   const boroughStats = useMemo(
     () => groupStats(rows, (row) => row.borough, dealMetricValue),
     [rows, dealMetricValue]
   );
-
-  const featureBBoxes = useMemo(() => {
-    const out = new Map<string, FeatureBBox>();
-    for (const feature of boundaries?.features ?? []) out.set(feature.properties.code, featureBBox(feature));
-    return out;
-  }, [boundaries]);
 
   // Geometric roll-up for the map: assign mapped deals to the NTA polygon they
   // fall inside, then badge each area with its median for the active metric.
@@ -804,37 +982,56 @@ export default function YieldMapPage() {
   }, [boundaries, featureBBoxes, geoRows, dealMetricValue, metric, metricColor]);
 
   const pins = useMemo<MapPin[]>(() => {
-    const dealPins: MapPin[] = geoRows.map((row) => ({
-      id: row.propertyId,
-      propertyId: row.propertyId,
-      kind: "deal" as const,
-      address: row.canonicalAddress,
-      lat: row.lat!,
-      lng: row.lng!,
-      color:
+    const dealPins: MapPin[] = geoRows.map((row) => {
+      const vsMarket = vsMarketByPropertyId.get(row.propertyId) ?? null;
+      const color =
         colorBy === "stage"
           ? stagePinColor(row.dealStage)
-          : metricColor(dealMetricValue(row)),
-      lines: [
-        `Cap rate ${fmtPct(row.ltrYieldPct, 2)} · ${fmtPsf(row.pricePsf)}/SF`,
-        `MTR ${fmtPct(row.mtrYieldPct, 2)} · NOI ${formatCurrencyExact(row.currentNoi)} · ${row.units ?? EMPTY_VALUE} units`,
-        row.yieldDeltaPct != null
-          ? `Yield ${fmtDeltaPp(row.yieldDeltaPct)} since first sourced ${fmtDateMDY(row.firstYieldAt)}`
-          : `First sourced ${fmtDateMDY(row.firstYieldAt ?? row.sourcedAt)}`,
-        row.dealStage ? `Stage: ${row.dealStage.replace(/_/g, " ")}` : "Stage: not set",
-        ...(row.yieldFlagDetail ? [`⚠ ${row.yieldFlagDetail}`] : []),
-      ],
-    }));
+          : colorBy === "vsMarket"
+            ? metric === "psf"
+              ? vsMarketPsfColor(vsMarket?.psfDeltaPct ?? null)
+              : vsMarketCapColor(vsMarket?.capDeltaPp ?? null)
+            : metricColor(dealMetricValue(row));
+      const vsMarketLine =
+        vsMarket?.capDeltaPp != null
+          ? `${vsMarket.capDeltaPp >= 0 ? "+" : ""}${Math.round(vsMarket.capDeltaPp * 100)} bps vs ${vsMarket.hoodName} comps (${fmtPct(vsMarket.marketCapPct, 2)})`
+          : vsMarket?.psfDeltaPct != null
+            ? `${vsMarket.psfDeltaPct >= 0 ? "+" : ""}${vsMarket.psfDeltaPct.toFixed(0)}% vs ${vsMarket.hoodName} $/SF (${fmtPsf(vsMarket.marketPsf)})`
+            : null;
+      return {
+        id: row.propertyId,
+        propertyId: row.propertyId,
+        kind: "deal" as const,
+        address: row.canonicalAddress.split(",")[0],
+        neighborhood: [displayHood(row), row.borough].filter(Boolean).join(" · ") || null,
+        pending: row.pendingReview,
+        lat: row.lat!,
+        lng: row.lng!,
+        color,
+        lines: [
+          `Cap rate ${fmtPct(row.ltrYieldPct, 2)} · ${fmtPsf(row.pricePsf)}/SF`,
+          `MTR ${fmtPct(row.mtrYieldPct, 2)} · NOI ${formatCurrencyExact(row.currentNoi)} · ${row.units ?? EMPTY_VALUE} units`,
+          ...(vsMarketLine ? [vsMarketLine] : []),
+          row.yieldDeltaPct != null
+            ? `Yield ${fmtDeltaPp(row.yieldDeltaPct)} since first sourced ${fmtDateMDY(row.firstYieldAt)}`
+            : `First sourced ${fmtDateMDY(row.firstYieldAt ?? row.sourcedAt)}`,
+          `Stage: ${boardStageLabel(row)}`,
+          ...(row.pendingReview ? ["⏳ OM extraction awaiting review — promote it to confirm these numbers"] : []),
+          ...(row.yieldFlagDetail ? [`⚠ ${row.yieldFlagDetail}`] : []),
+        ],
+      };
+    });
 
     const compPins: MapPin[] = geoComps.map((comp) => ({
       id: `comp:${comp.itemId}`,
       propertyId: comp.subjectPropertyId,
       kind: "comp" as const,
       address: compDisplayName(comp),
+      neighborhood: [comp.neighborhood, comp.borough ? labelFromKey(comp.borough) : null].filter(Boolean).join(" · ") || null,
       lat: comp.lat!,
       lng: comp.lng!,
       color:
-        colorBy === "stage"
+        colorBy === "stage" || colorBy === "vsMarket"
           ? COMP_ACCENT
           : metricColor(metric === "psf" ? comp.pricePsf : comp.capRatePct),
       lines: [
@@ -851,7 +1048,7 @@ export default function YieldMapPage() {
     }));
 
     return [...dealPins, ...compPins];
-  }, [colorBy, geoRows, geoComps, metric, metricColor, dealMetricValue]);
+  }, [colorBy, geoRows, geoComps, metric, metricColor, dealMetricValue, vsMarketByPropertyId, displayHood, boardStageLabel]);
 
   // Comps slot into the deal list ordered by the active metric: cap rates rank
   // high-to-low, $/SF cheap-to-expensive (the buyer's read in both cases).
@@ -883,7 +1080,19 @@ export default function YieldMapPage() {
 
   const trendTone = stats.upCount > stats.downCount ? "success" : "neutral";
   const metricNoun = metric === "psf" ? "Sale $/SF" : "Cap rates";
-  const legendBands = colorBy === "stage" ? STAGE_LEGEND : colorBy === "psf" ? PSF_BANDS : YIELD_BANDS;
+  const legendBands =
+    colorBy === "stage"
+      ? STAGE_LEGEND
+      : colorBy === "vsMarket"
+        ? VS_MARKET_BANDS
+        : colorBy === "psf"
+          ? PSF_BANDS
+          : YIELD_BANDS;
+
+  const quickViewRow = useMemo(
+    () => (quickViewId ? rows.find((row) => row.propertyId === quickViewId) ?? null : null),
+    [quickViewId, rows]
+  );
 
   return (
     <div className={styles.page}>
@@ -998,6 +1207,40 @@ export default function YieldMapPage() {
             ) : null}
           </div>
 
+          {headlines.length > 0 ? (
+            <div className={styles.headlineStrip} aria-label="Market movement headlines">
+              <span className={styles.headlineKicker}>Market headlines</span>
+              <ul className={styles.headlineList}>
+                {headlines.map((headline) => (
+                  <li key={headline.id} className={styles.headlineItem}>
+                    <span
+                      className={
+                        headline.tone === "up"
+                          ? styles.headlineDotUp
+                          : headline.tone === "down"
+                            ? styles.headlineDotDown
+                            : headline.tone === "watch"
+                              ? styles.headlineDotWatch
+                              : styles.headlineDotNeutral
+                      }
+                    />
+                    <span className={styles.headlineText}>{headline.text}</span>
+                    {headline.scope || headline.source ? (
+                      <span className={styles.headlineMeta}>
+                        {[headline.scope, headline.source, headline.asOf ? fmtMonthYear(headline.asOf) : null]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </span>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+              <a href="/market-docs" className={styles.headlineLink}>
+                Knowledge base →
+              </a>
+            </div>
+          ) : null}
+
           <div className={styles.panel}>
             <div className={styles.mapHeader}>
               <span className={styles.mapTitle}>
@@ -1026,6 +1269,14 @@ export default function YieldMapPage() {
                   >
                     Stage
                   </button>
+                  <button
+                    type="button"
+                    className={colorBy === "vsMarket" ? styles.colorToggleActive : undefined}
+                    onClick={() => setColorBy("vsMarket")}
+                    title="Color each deal by whether its cap rate sits above or below the comps we hold for its neighborhood (market layer + broker packages)."
+                  >
+                    Vs comps
+                  </button>
                 </div>
                 <div className={styles.colorToggle} role="group" aria-label="Neighborhood overlay">
                   <button
@@ -1037,12 +1288,24 @@ export default function YieldMapPage() {
                     Neighborhoods
                   </button>
                 </div>
-                <div className={styles.colorToggle} role="group" aria-label="Market comp sources">
+                <div
+                  className={styles.colorToggle}
+                  role="group"
+                  aria-label="Market comp sources"
+                  title="Where the market layer's comps come from: Research = published reports ingested on Market docs (Avison Young, Ariel, …); Broker = comps inside broker-provided OMs/BOVs/comp packages."
+                >
                   {MARKET_SOURCE_OPTIONS.map((option) => (
                     <button
                       key={option.value}
                       type="button"
                       className={marketSource === option.value && marketLayerOn ? styles.colorToggleActive : undefined}
+                      title={
+                        option.value === "market_research"
+                          ? "Only comps from published market reports (uploaded on the Market docs page)."
+                          : option.value === "broker_provided"
+                            ? "Only comps that arrived inside broker-provided documents (OMs, BOVs, comp packages)."
+                            : "Blend both comp sources."
+                      }
                       onClick={() => {
                         setMarketSource(option.value);
                         setMarketLayerOn(true);
@@ -1067,6 +1330,18 @@ export default function YieldMapPage() {
                   />
                   Show comps
                   {compsLoading ? <span className={styles.compToggleNote}>loading…</span> : null}
+                </label>
+                <label
+                  className={styles.compToggle}
+                  title="Underwritten properties whose OM extraction is still awaiting your review don't normally count. Toggle them into the map and the deal list — marked with a dashed ring until promoted."
+                >
+                  <input
+                    type="checkbox"
+                    checked={includePending}
+                    onChange={(event) => setIncludePending(event.target.checked)}
+                  />
+                  Awaiting review
+                  {pendingAvailable > 0 ? <span className={styles.compToggleNote}>{pendingAvailable}</span> : null}
                 </label>
                 <div className={styles.legendList}>
                   {legendBands.map((band) => (
@@ -1118,6 +1393,9 @@ export default function YieldMapPage() {
                     : ""}
                   Hover a table row to spotlight its pin; hover a pin for cap rate and $/PSF
                   {showComps ? "; diamonds are broker-package comps" : ""}.
+                  {marketLayerOn
+                    ? " Sources: Research = published market reports ingested on Market docs; Broker = comps from broker-provided documents."
+                    : ""}
                 </p>
               </>
             ) : (
@@ -1243,14 +1521,16 @@ export default function YieldMapPage() {
                         onMouseLeave={() => setActivePinId(null)}
                       >
                         <td className={styles.dealAddressCell}>
-                          <a
-                            href={`/deal-analysis?propertyId=${encodeURIComponent(entry.deal.propertyId)}`}
+                          <button
+                            type="button"
                             className={styles.dealLink}
+                            onClick={() => setQuickViewId(entry.deal.propertyId)}
+                            title="Open the property wizard"
                           >
                             {entry.deal.canonicalAddress.split(",")[0]}
-                          </a>
+                          </button>
                           <div className={styles.dealNeighborhood}>
-                            {entry.deal.neighborhood ?? entry.deal.borough ?? ""}
+                            {[displayHood(entry.deal), entry.deal.borough].filter(Boolean).join(" · ")}
                           </div>
                         </td>
                         <td className={styles.yieldCell} style={{ color: yieldColor(entry.deal.ltrYieldPct) }}>
@@ -1258,6 +1538,13 @@ export default function YieldMapPage() {
                             <Badge tone="danger" title={entry.deal.yieldFlagDetail ?? undefined}>
                               review
                             </Badge>
+                          ) : entry.deal.pendingReview ? (
+                            <span
+                              className={styles.pendingChip}
+                              title="From an OM extraction still awaiting review — promote it in OM review to confirm."
+                            >
+                              {fmtPct(entry.deal.ltrYieldPct, 2)} ⏳
+                            </span>
                           ) : (
                             fmtPct(entry.deal.ltrYieldPct, 2)
                           )}
@@ -1272,8 +1559,14 @@ export default function YieldMapPage() {
                         <td style={metric === "psf" ? { color: psfColor(entry.deal.pricePsf), fontWeight: 750 } : undefined}>
                           {formatCurrencyExact(entry.deal.pricePsf)}
                         </td>
-                        <td className={styles.stageCell}>
-                          {entry.deal.dealStage ?? entry.deal.dealState ?? EMPTY_VALUE}
+                        <td className={styles.stageCell} title="Mirrors the deal-progress board stage for this property.">
+                          {entry.deal.pendingReview ? (
+                            <Badge tone="warning" title="OM extraction awaiting review">
+                              awaiting review
+                            </Badge>
+                          ) : (
+                            boardStageLabel(entry.deal)
+                          )}
                         </td>
                       </tr>
                     ) : (
@@ -1295,7 +1588,7 @@ export default function YieldMapPage() {
                             <span className={styles.compChip}>Comp</span>
                           </span>
                           <div className={styles.dealNeighborhood}>
-                            {entry.comp.neighborhood ?? entry.comp.borough ?? ""}
+                            {entry.comp.neighborhood ?? (entry.comp.borough ? labelFromKey(entry.comp.borough) : "")}
                             {entry.comp.saleDate ? ` · sold ${entry.comp.saleDate}` : ""}
                           </div>
                         </td>
@@ -1335,6 +1628,102 @@ export default function YieldMapPage() {
           </div>
         </>
       ) : null}
+
+      <Dialog
+        open={quickViewRow != null}
+        onClose={() => setQuickViewId(null)}
+        title={quickViewRow ? quickViewRow.canonicalAddress.split(",")[0] : ""}
+        description={
+          quickViewRow
+            ? [displayHood(quickViewRow), quickViewRow.borough].filter(Boolean).join(" · ") || undefined
+            : undefined
+        }
+        size="md"
+        footer={
+          quickViewRow ? (
+            <>
+              <a className={styles.quickViewAction} href={`/pipeline?propertyId=${encodeURIComponent(quickViewRow.propertyId)}`}>
+                Open property wizard →
+              </a>
+              <a
+                className={styles.quickViewActionSecondary}
+                href={`/deal-analysis?propertyId=${encodeURIComponent(quickViewRow.propertyId)}`}
+              >
+                OM workspace →
+              </a>
+            </>
+          ) : undefined
+        }
+      >
+        {quickViewRow ? (
+          <div className={styles.quickView}>
+            {quickViewRow.pendingReview ? (
+              <div className={styles.quickViewNotice}>
+                ⏳ Numbers come from an OM extraction awaiting review — promote or reject it in{" "}
+                <a href="/om-review">OM review</a>.
+              </div>
+            ) : null}
+            {quickViewRow.yieldFlagDetail ? (
+              <div className={styles.quickViewNotice}>⚠ {quickViewRow.yieldFlagDetail}</div>
+            ) : null}
+            <dl className={styles.quickViewGrid}>
+              <div>
+                <dt>Cap rate (LTR)</dt>
+                <dd style={{ color: yieldColor(quickViewRow.ltrYieldPct) }}>{fmtPct(quickViewRow.ltrYieldPct, 2)}</dd>
+              </div>
+              <div>
+                <dt>MTR</dt>
+                <dd>{fmtPct(quickViewRow.mtrYieldPct, 2)}</dd>
+              </div>
+              <div>
+                <dt>Ask</dt>
+                <dd>{formatCurrencyCompact(quickViewRow.askingPrice)}</dd>
+              </div>
+              <div>
+                <dt>NOI</dt>
+                <dd>{formatCurrencyExact(quickViewRow.currentNoi)}</dd>
+              </div>
+              <div>
+                <dt>Units</dt>
+                <dd>{quickViewRow.units ?? EMPTY_VALUE}</dd>
+              </div>
+              <div>
+                <dt>$/Unit</dt>
+                <dd>{formatCurrencyExact(quickViewRow.pricePerUnit)}</dd>
+              </div>
+              <div>
+                <dt>$/SF</dt>
+                <dd>{formatCurrencyExact(quickViewRow.pricePsf)}</dd>
+              </div>
+              <div>
+                <dt>Deal score</dt>
+                <dd>{quickViewRow.dealScore ?? EMPTY_VALUE}</dd>
+              </div>
+              <div>
+                <dt>Stage</dt>
+                <dd>{boardStageLabel(quickViewRow)}</dd>
+              </div>
+              <div>
+                <dt>First sourced</dt>
+                <dd>{fmtDateMDY(quickViewRow.firstYieldAt ?? quickViewRow.sourcedAt)}</dd>
+              </div>
+            </dl>
+            {(() => {
+              const vsMarket = vsMarketByPropertyId.get(quickViewRow.propertyId);
+              if (!vsMarket) return null;
+              return (
+                <p className={styles.quickViewMarket}>
+                  {vsMarket.capDeltaPp != null
+                    ? `${vsMarket.capDeltaPp >= 0 ? "+" : ""}${Math.round(vsMarket.capDeltaPp * 100)} bps vs ${vsMarket.hoodName} comps (median cap ${fmtPct(vsMarket.marketCapPct, 2)})`
+                    : vsMarket.psfDeltaPct != null
+                      ? `${vsMarket.psfDeltaPct >= 0 ? "+" : ""}${vsMarket.psfDeltaPct.toFixed(0)}% vs ${vsMarket.hoodName} median $/SF (${fmtPsf(vsMarket.marketPsf)})`
+                      : null}
+                </p>
+              );
+            })()}
+          </div>
+        ) : null}
+      </Dialog>
     </div>
   );
 }

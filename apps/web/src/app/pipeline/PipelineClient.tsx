@@ -1291,6 +1291,22 @@ export default function PipelineClient() {
   const [dealPathForm, setDealPathForm] = useState<DealPathFormState>(dealPathFormFromState(null));
   const [newTag, setNewTag] = useState("");
   const [rejectState, setRejectState] = useState<RejectState | null>(null);
+  const rejectOpen = rejectState != null;
+  // The reject popup behaves like a real modal: background scroll locks and
+  // Escape dismisses, so the user lands in the dialog instead of the page.
+  useEffect(() => {
+    if (!rejectOpen) return;
+    const { overflow } = document.body.style;
+    document.body.style.overflow = "hidden";
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setRejectState(null);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.body.style.overflow = overflow;
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [rejectOpen]);
   const [composer, setComposer] = useState<ComposerState | null>(null);
   const [templates, setTemplates] = useState<UiV2OutreachTemplatePayload[]>([]);
   const [loadingTemplates, setLoadingTemplates] = useState(false);
@@ -4602,6 +4618,7 @@ export default function PipelineClient() {
             <label>
               <span>Reason</span>
               <select
+                autoFocus
                 value={rejectState.reasonCode}
                 onChange={(event) =>
                   setRejectState({ ...rejectState, reasonCode: event.target.value as UiV2RejectionReasonCode })
