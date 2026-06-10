@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { SkeletonRows } from "@/components/ui";
 import { API_BASE } from "@/lib/api";
+import { formatPercent, scoreTone } from "@/lib/format";
 import styles from "./home.module.css";
 
 type PipelineResponse = { pipeline?: UiV2PipelineListPayload; error?: string; details?: string };
@@ -143,11 +144,6 @@ function formatCurrency(value: number | null | undefined): string {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(value);
 }
 
-function formatPercent(value: number | null | undefined): string {
-  if (value == null || Number.isNaN(value)) return "-";
-  return `${value.toFixed(1)}%`;
-}
-
 function titleize(value: string | null | undefined): string {
   if (!value) return "-";
   return value
@@ -192,10 +188,14 @@ function locationSubtitle(row: Pick<UiV2PipelineRow, "neighborhood" | "borough">
   return parts.join(" · ");
 }
 
+/** Shared 70/50 banding from lib/format — home previously read ≥50 as "good". */
 function scoreClass(score: number | null | undefined): string {
-  if (score == null || Number.isNaN(score)) return styles.scoreMuted;
-  if (score >= 50) return styles.scoreGood;
-  return styles.scoreBad;
+  return {
+    strong: styles.scoreGood,
+    watch: styles.scoreWatch,
+    weak: styles.scoreBad,
+    empty: styles.scoreMuted,
+  }[scoreTone(score)];
 }
 
 function rowScore(row: UiV2PipelineRow | HomeProgressRow | SavedDealRow): number | null {

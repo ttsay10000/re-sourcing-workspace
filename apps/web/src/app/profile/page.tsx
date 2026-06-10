@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import React, { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { Button, PageHeader, StatCard } from "@/components/ui";
 import { API_BASE } from "@/lib/api";
+import { labelFromKey } from "@/lib/format";
 import styles from "./profile.module.css";
 
 const currencyFormatter = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
@@ -296,15 +297,6 @@ function formatSavedSearchFilters(search: SavedSearch): string {
   if (requiredAmenities.length > 0) filters.push(`Amenities: ${requiredAmenities.join(", ")}`);
   if (search.resultLimit != null) filters.push(`Limit: ${search.resultLimit}`);
   return filters.join(" | ");
-}
-
-function labelFromKey(value: string | null | undefined): string {
-  if (!value) return "Unknown";
-  return value
-    .split("_")
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
 }
 
 function matchesSearchQuery(values: Array<string | number | boolean | null | undefined>, query: string): boolean {

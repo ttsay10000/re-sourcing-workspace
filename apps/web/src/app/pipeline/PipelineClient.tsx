@@ -53,7 +53,7 @@ import {
 } from "../property-data/brokerComps";
 import styles from "./PipelinePage.module.css";
 import { API_BASE, apiFetch } from "@/lib/api";
-import { EMPTY_VALUE } from "@/lib/format";
+import { EMPTY_VALUE, formatPercent } from "@/lib/format";
 
 const PIPELINE_PATH = "/pipeline";
 
@@ -453,11 +453,6 @@ function formatCurrency(value: number | null | undefined, compact = true): strin
 function formatNumber(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(value)) return EMPTY_VALUE;
   return new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(value);
-}
-
-function formatPercent(value: number | null | undefined): string {
-  if (value == null || !Number.isFinite(value)) return EMPTY_VALUE;
-  return `${value.toFixed(1)}%`;
 }
 
 function formatDate(value: string | null | undefined): string {

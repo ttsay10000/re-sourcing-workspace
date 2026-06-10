@@ -27,6 +27,7 @@ import {
 import { AgingChip, BrokerContactDialog, Button, Dialog, FileDropzone, PageHeader, PromptMenu, PropertyThumb, StatCard } from "@/components/ui";
 import { RecommendationStepper, type StepperKind, type StepperRow } from "./RecommendationStepper";
 import { API_BASE, apiFetch } from "@/lib/api";
+import { formatPercent, labelFromKey, scoreTone } from "@/lib/format";
 import { useProcessBanner } from "@/components/ProcessBanner";
 import styles from "./progress.module.css";
 const BULK_STAGE_MOVE_ID = "__bulk_stage_move__";
@@ -310,11 +311,6 @@ function formatCompactNumber(value: number | null | undefined): string {
   return new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(value);
 }
 
-function formatPercent(value: number | null | undefined): string {
-  if (value == null || !Number.isFinite(value)) return "—";
-  return `${value.toFixed(1)}%`;
-}
-
 function formatUnitLabel(value: number | null | undefined): string | null {
   const formatted = formatNumber(value);
   if (formatted === "—") return null;
@@ -470,34 +466,6 @@ function hasScheduledTour(row: ProgressRow): boolean {
   return Boolean(row.dealPath?.tourScheduledAt);
 }
 
-function labelFromKey(value: string | null | undefined): string {
-  if (!value) return "Unknown";
-  const normalized = value.trim().toLowerCase();
-  const specialLabels: Record<string, string> = {
-    awaiting_broker: "OM Requested",
-    contract_signed: "Contract Signed",
-    deal_closed: "Deal Closed",
-    dossier_generated: "Dossier Generated",
-    loopnet: "LoopNet",
-    offer_review: "LOI Offered",
-    sourced: "Sourced",
-    om_received: "OM Received",
-    streeteasy: "StreetEasy",
-    tour_requested: "Tour Requested",
-    tour_scheduled: "Tour Scheduled",
-    tour_completed_awaiting_inputs: "Tour Completed",
-    underwriting_awaiting_review: "Underwriting - Awaiting User Review",
-    underwriting_review_completed: "Underwriting - Review Completed",
-  };
-  if (specialLabels[normalized]) return specialLabels[normalized];
-  return normalized
-    .split("_")
-    .flatMap((part) => part.split("-"))
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
-}
-
 function normalizeTag(value: string): string {
   return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_");
 }
@@ -623,11 +591,15 @@ function statusClass(status: string | null | undefined): string {
   return `${styles.statusPill} ${styles.statusNeutral}`;
 }
 
+/** Shared 70/50 banding from lib/format, mapped onto this page's pill classes. */
 function scoreClass(score: number | null | undefined): string {
-  if (score == null || Number.isNaN(score)) return `${styles.scorePill} ${styles.scoreEmpty}`;
-  if (score >= 70) return `${styles.scorePill} ${styles.scoreStrong}`;
-  if (score >= 50) return `${styles.scorePill} ${styles.scoreWatch}`;
-  return `${styles.scorePill} ${styles.scoreWeak}`;
+  const toneClass = {
+    strong: styles.scoreStrong,
+    watch: styles.scoreWatch,
+    weak: styles.scoreWeak,
+    empty: styles.scoreEmpty,
+  }[scoreTone(score)];
+  return `${styles.scorePill} ${toneClass}`;
 }
 
 function rowStatus(row: DealFlowRow): string {

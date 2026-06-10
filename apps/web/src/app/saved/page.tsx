@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { Button, EmptyState, PageHeader, StatCard } from "@/components/ui";
 import { API_BASE } from "@/lib/api";
+import { formatPercent, labelFromKey, scoreTone } from "@/lib/format";
 import styles from "./saved.module.css";
 
 type SavedDealRow = {
@@ -105,26 +106,11 @@ function availableEconomics(row: SavedDealRow): string[] {
   ].filter((value): value is string => Boolean(value));
 }
 
-function formatPercent(value: number | null | undefined): string {
-  if (value == null || Number.isNaN(value)) return "—";
-  return `${Number(value).toFixed(1)}%`;
-}
-
 function formatDate(value: string | null | undefined): string {
   if (!value) return "—";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "—";
   return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-}
-
-function labelFromKey(value: string | null | undefined): string {
-  if (!value) return "Unknown";
-  return value
-    .split("_")
-    .flatMap((part) => part.split("-"))
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
 }
 
 const AREA_LABELS: Record<string, string> = {
@@ -208,11 +194,15 @@ function statusClass(status: string | null | undefined): string {
   return `${styles.statusPill} ${styles.statusNeutral}`;
 }
 
+/** Shared 70/50 banding from lib/format, mapped onto this page's pill classes. */
 function scoreClass(score: number | null | undefined): string {
-  if (score == null || Number.isNaN(score)) return `${styles.scorePill} ${styles.scoreEmpty}`;
-  if (score >= 70) return `${styles.scorePill} ${styles.scoreStrong}`;
-  if (score >= 50) return `${styles.scorePill} ${styles.scoreWatch}`;
-  return `${styles.scorePill} ${styles.scoreWeak}`;
+  const toneClass = {
+    strong: styles.scoreStrong,
+    watch: styles.scoreWatch,
+    weak: styles.scoreWeak,
+    empty: styles.scoreEmpty,
+  }[scoreTone(score)];
+  return `${styles.scorePill} ${toneClass}`;
 }
 
 function isRejected(row: SavedDealRow): boolean {

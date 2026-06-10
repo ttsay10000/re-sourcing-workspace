@@ -951,3 +951,6 @@
   color: var(--brand-strong, #115e59);
   font-weight: 600;
 }
+
+/* 50–69 scores: watch tier, matching the saved/progress pill banding. */
+.scoreWatch strong { color: #d97706; }

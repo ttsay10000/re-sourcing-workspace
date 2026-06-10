@@ -7,6 +7,7 @@ import type {
   PropertyDealDossierUnitModelRow,
 } from "@re-sourcing/contracts";
 import React from "react";
+import { formatPercent } from "@/lib/format";
 
 export const OM_CALC_NUMERIC_FIELDS = [
   "buildingSqft",
@@ -490,11 +491,6 @@ function formatAccountingCurrency(value: number | null | undefined): string {
   if (value == null || Number.isNaN(value)) return "—";
   const absoluteValue = formatCurrency(Math.abs(value));
   return value < -0.004 ? `(${absoluteValue})` : absoluteValue;
-}
-
-function formatPercent(value: number | null | undefined, digits = 1): string {
-  if (value == null || Number.isNaN(value)) return "—";
-  return `${value.toFixed(digits)}%`;
 }
 
 function formatRatioPercent(value: number | null | undefined, digits = 1): string {

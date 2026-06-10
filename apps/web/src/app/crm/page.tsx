@@ -21,6 +21,7 @@ import type {
 } from "@re-sourcing/contracts";
 import styles from "./CrmPage.module.css";
 import { API_BASE, apiFetch } from "@/lib/api";
+import { labelFromKey } from "@/lib/format";
 
 const CRM_LIMIT = 100;
 const PROPERTY_LABEL_PREFETCH_LIMIT = 200;
@@ -262,14 +263,6 @@ function contactFlags(contact: BrokerContact): Array<{ label: string; tone: "war
 function responseStatusLabel(value: string | null | undefined): string {
   const match = BROKER_RESPONSE_OPTIONS.find((option) => option.value === value);
   return match?.label ?? labelFromKey(value ?? "none");
-}
-
-function labelFromKey(value: string): string {
-  return value
-    .replace(/[_-]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 function propertyFlags(row: UiV2CrmPropertyRowPayload): Array<{ label: string; tone: "warning" | "danger" | "neutral" | "success" }> {

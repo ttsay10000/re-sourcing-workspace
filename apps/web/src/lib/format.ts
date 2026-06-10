@@ -61,3 +61,45 @@ export function titleize(value: string | null | undefined): string {
     .replace(/\bLoi\b/g, "LOI")
     .replace(/\bUw\b/g, "UW");
 }
+
+/**
+ * Canonical display names for stage/status/source keys whose Title Case form
+ * is wrong or off-brand. Everything else falls through to `titleize`.
+ */
+const SPECIAL_KEY_LABELS: Record<string, string> = {
+  awaiting_broker: "OM Requested",
+  contract_signed: "Contract Signed",
+  deal_closed: "Deal Closed",
+  dossier_generated: "Dossier Generated",
+  loopnet: "LoopNet",
+  offer_review: "LOI Offered",
+  sourced: "Sourced",
+  om_received: "OM Received",
+  streeteasy: "StreetEasy",
+  tour_requested: "Tour Requested",
+  tour_scheduled: "Tour Scheduled",
+  tour_completed_awaiting_inputs: "Tour Completed",
+  underwriting_awaiting_review: "Underwriting - Awaiting User Review",
+  underwriting_review_completed: "Underwriting - Review Completed",
+};
+
+/** Domain-aware key → label: canonical stage/source names first, then Title Case. */
+export function labelFromKey(value: string | null | undefined, emptyLabel = "Unknown"): string {
+  if (!value || !value.trim()) return emptyLabel;
+  const special = SPECIAL_KEY_LABELS[value.trim().toLowerCase()];
+  if (special) return special;
+  return titleize(value.trim());
+}
+
+export type ScoreTone = "strong" | "watch" | "weak" | "empty";
+
+/**
+ * One deal-score banding for every page: ≥70 strong, 50–69 watch, <50 weak.
+ * Pages map the tone onto their own CSS-module classes.
+ */
+export function scoreTone(score: number | null | undefined): ScoreTone {
+  if (score == null || Number.isNaN(score)) return "empty";
+  if (score >= 70) return "strong";
+  if (score >= 50) return "watch";
+  return "weak";
+}

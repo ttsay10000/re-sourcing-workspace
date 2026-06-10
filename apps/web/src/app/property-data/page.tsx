@@ -3,6 +3,7 @@
 import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
+import { labelFromKey } from "@/lib/format";
 import {
   deriveListingActivitySummary,
   describeListingActivity,
@@ -453,15 +454,6 @@ const DEFAULT_PROPERTY_TAGS = [
   "duplicate",
   "partner_review_needed",
 ];
-
-function labelFromKey(value: string | null | undefined): string {
-  if (!value) return "—";
-  return value
-    .split("_")
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
-}
 
 function getPropertyTags(prop: CanonicalProperty): string[] {
   const details = prop.details as Record<string, unknown> | null | undefined;
