@@ -307,7 +307,7 @@ router.get("/comps/market", async (req: Request, res: Response) => {
     const message = err instanceof Error ? err.message : String(err);
     const migrationHint =
       pgCode === "42P01" && /comp_address_geocodes/i.test(message)
-        ? " The database schema is behind — run `npm run db:migrate` (migration 058 adds comp_address_geocodes)."
+        ? " The database schema is behind — run `npm run db:migrate` (migration 059 adds comp_address_geocodes)."
         : "";
     res.status(500).json({ error: `Failed to load market comps.${migrationHint}`, details: message });
   }

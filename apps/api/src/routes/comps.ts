@@ -168,7 +168,7 @@ router.get("/comps/neighborhood-psf", async (_req: Request, res: Response) => {
          SELECT li.price, li.sqft, li.extra
          FROM listing_property_matches m
          INNER JOIN listings li ON li.id = m.listing_id
-         WHERE m.property_id = p.id
+         WHERE m.property_id = p.id AND m.status <> 'rejected'
          ORDER BY (m.status = 'accepted') DESC, m.confidence DESC, m.created_at DESC
          LIMIT 1
        ) l ON true
