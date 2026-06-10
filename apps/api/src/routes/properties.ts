@@ -2905,15 +2905,115 @@ router.get("/properties/:id/om-review-runs", async (req: Request, res: Response)
 });
 
 /** POST /api/properties/:id/om-review-runs/:runId/promote - mark a reviewed extraction authoritative. */
+function toFiniteOrNull(value: unknown): number | null {
+  const numeric = typeof value === "string" ? Number(value) : value;
+  return typeof numeric === "number" && Number.isFinite(numeric) ? numeric : null;
+}
+
+/** GET /api/om-review/extraction-runs — tear-sheet queue: runs awaiting review or failed. */
+router.get("/om-review/extraction-runs", async (req: Request, res: Response) => {
+  try {
+    const statusesParam = String(req.query.statuses ?? "needs_review,failed");
+    const allowed = new Set(["needs_review", "failed", "promoted", "rejected", "queued", "processing"]);
+    const statuses = statusesParam
+      .split(",")
+      .map((value) => value.trim().toLowerCase())
+      .filter((value) => allowed.has(value));
+    const limit = Math.max(1, Math.min(Number(req.query.limit) || 50, 200));
+    if (statuses.length === 0) {
+      res.json({ runs: [] });
+      return;
+    }
+
+    const pool = getPool();
+    const result = await pool.query(
+      `SELECT r.id AS run_id,
+              r.property_id,
+              r.status,
+              r.started_at,
+              r.completed_at,
+              r.last_error,
+              r.source_type,
+              p.canonical_address,
+              s.snapshot
+       FROM om_ingestion_runs r
+       JOIN properties p ON p.id = r.property_id
+       LEFT JOIN LATERAL (
+         SELECT snapshot FROM om_extracted_snapshots es WHERE es.run_id = r.id LIMIT 1
+       ) s ON true
+       WHERE r.status = ANY($1)
+       ORDER BY r.started_at DESC NULLS LAST
+       LIMIT $2`,
+      [statuses, limit]
+    );
+
+    const runs = result.rows.map((row) => {
+      const snapshot = (row.snapshot ?? null) as {
+        propertyInfo?: Record<string, unknown> | null;
+        currentFinancials?: Record<string, unknown> | null;
+        rentRoll?: unknown[] | null;
+        validationFlags?: Array<Record<string, unknown>> | null;
+      } | null;
+      const propertyInfo = snapshot?.propertyInfo ?? null;
+      const current = snapshot?.currentFinancials ?? null;
+      return {
+        runId: String(row.run_id),
+        propertyId: String(row.property_id),
+        address: String(row.canonical_address ?? ""),
+        status: String(row.status),
+        sourceType: (row.source_type as string | null) ?? null,
+        startedAt: row.started_at instanceof Date ? row.started_at.toISOString() : (row.started_at as string | null),
+        completedAt: row.completed_at instanceof Date ? row.completed_at.toISOString() : (row.completed_at as string | null),
+        lastError: (row.last_error as string | null) ?? null,
+        hasSnapshot: snapshot != null,
+        fields: {
+          askingPrice: toFiniteOrNull(propertyInfo?.askingPrice),
+          totalUnits: toFiniteOrNull(propertyInfo?.totalUnits),
+          noi: toFiniteOrNull(current?.noi),
+          grossRentalIncome: toFiniteOrNull(current?.grossRentalIncome),
+          operatingExpenses: toFiniteOrNull(current?.operatingExpenses),
+          rentRollCount: Array.isArray(snapshot?.rentRoll) ? snapshot.rentRoll.length : 0,
+        },
+        validationFlags: Array.isArray(snapshot?.validationFlags)
+          ? snapshot.validationFlags.map((flag) => ({
+              field: typeof flag.field === "string" ? flag.field : null,
+              severity: typeof flag.severity === "string" ? flag.severity : "warning",
+              message: typeof flag.message === "string" ? flag.message : "",
+            }))
+          : [],
+      };
+    });
+
+    res.json({ runs });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[om-review extraction-runs]", err);
+    res.status(503).json({ error: "Failed to load extraction runs.", details: message });
+  }
+});
+
 router.post("/properties/:id/om-review-runs/:runId/promote", async (req: Request, res: Response) => {
   try {
     const { id: propertyId, runId } = req.params;
+    const rawCorrections = req.body?.corrections;
+    const corrections =
+      rawCorrections && typeof rawCorrections === "object" && !Array.isArray(rawCorrections)
+        ? {
+            askingPrice: toFiniteOrNull(rawCorrections.askingPrice),
+            totalUnits: toFiniteOrNull(rawCorrections.totalUnits),
+            noi: toFiniteOrNull(rawCorrections.noi),
+            grossRentalIncome: toFiniteOrNull(rawCorrections.grossRentalIncome),
+            operatingExpenses: toFiniteOrNull(rawCorrections.operatingExpenses),
+          }
+        : null;
     const result = await promoteOmExtractionForProperty({
       propertyId,
       runId,
       triggerDossier: req.body?.triggerDossier === true,
       // Keep pipeline yield numbers in sync when the operator promotes without a full dossier rerun.
       refreshUnderwritingSummary: true,
+      corrections,
+      correctionNote: typeof req.body?.note === "string" ? req.body.note : null,
       pool: getPool(),
     });
     if (!result.ok) {

@@ -193,3 +193,123 @@
 .priorityLow {
   /* uses Badge tone="neutral" */
 }
+
+/* ─── OM extraction tear sheets ───────────────────────────────── */
+
+.runList {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.runCard {
+  display: grid;
+  gap: 0.7rem;
+  border: 1px solid var(--app-line);
+  border-radius: var(--radius-lg, 10px);
+  background: var(--app-surface);
+  box-shadow: var(--app-shadow-xs);
+  padding: 0.9rem 1rem;
+}
+
+.runHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.runHeading h3 {
+  margin: 0;
+  font-size: var(--text-md, 1rem);
+  font-weight: 650;
+  color: var(--app-ink);
+}
+
+.runHeading p {
+  margin: 0.15rem 0 0;
+  font-size: var(--text-2xs);
+  color: var(--app-muted);
+}
+
+.runError {
+  margin: 0;
+  border: 1px solid var(--app-red-border);
+  border-radius: var(--radius-md);
+  background: var(--app-red-soft);
+  color: var(--app-red);
+  font-size: var(--text-2xs);
+  padding: 0.45rem 0.65rem;
+}
+
+.runFields {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr));
+  gap: 0.5rem;
+}
+
+.runField,
+.runFieldFlagged {
+  display: grid;
+  gap: 0.2rem;
+  border: 1px solid var(--app-line);
+  border-radius: var(--radius-md);
+  background: var(--app-surface-raised);
+  padding: 0.5rem 0.65rem;
+}
+
+.runFieldFlagged {
+  border-color: var(--app-amber-border);
+  background: var(--app-amber-soft);
+}
+
+.runField span,
+.runFieldFlagged span {
+  font-size: 0.62rem;
+  font-weight: 650;
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--app-muted);
+}
+
+.runFieldFlagged span {
+  color: var(--app-amber);
+}
+
+.runField strong,
+.runFieldFlagged strong {
+  font-size: var(--text-sm);
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  color: var(--app-ink);
+}
+
+.promoteForm {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.promoteHint {
+  margin: 0;
+  font-size: var(--text-2xs);
+  color: var(--app-muted);
+  line-height: var(--leading-normal);
+}
+
+.promoteField {
+  display: grid;
+  gap: 0.28rem;
+}
+
+.promoteField span {
+  font-size: var(--text-2xs);
+  font-weight: 650;
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--app-muted);
+}
+
+.promoteField input {
+  font-size: var(--text-xs);
+  padding-block: 0.5rem;
+  font-variant-numeric: tabular-nums;
+}

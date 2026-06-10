@@ -698,11 +698,69 @@ async function promoteSnapshotForProperty(params: {
   };
 }
 
+export interface OmReviewCorrections {
+  askingPrice?: number | null;
+  totalUnits?: number | null;
+  noi?: number | null;
+  grossRentalIncome?: number | null;
+  operatingExpenses?: number | null;
+}
+
+/** Apply reviewer corrections to a snapshot copy, recording each as an info flag. */
+function applyReviewCorrections(
+  snapshot: OmAuthoritativeSnapshot,
+  corrections: OmReviewCorrections,
+  note: string | null
+): OmAuthoritativeSnapshot {
+  const next: OmAuthoritativeSnapshot = JSON.parse(JSON.stringify(snapshot)) as OmAuthoritativeSnapshot;
+  const flags: OmValidationFlag[] = Array.isArray(next.validationFlags) ? [...next.validationFlags] : [];
+
+  const record = (field: string, before: unknown, after: number) => {
+    flags.push({
+      flagType: "manual_correction",
+      field,
+      severity: "info",
+      source: "om_review",
+      message: `Corrected at review: ${field} ${before ?? "—"} → ${after}${note ? ` (${note})` : ""}`,
+    });
+  };
+
+  const propertyInfo = (next.propertyInfo ?? {}) as Record<string, unknown>;
+  if (corrections.askingPrice != null && Number.isFinite(corrections.askingPrice)) {
+    record("askingPrice", propertyInfo.askingPrice, corrections.askingPrice);
+    propertyInfo.askingPrice = corrections.askingPrice;
+  }
+  if (corrections.totalUnits != null && Number.isFinite(corrections.totalUnits)) {
+    record("totalUnits", propertyInfo.totalUnits, corrections.totalUnits);
+    propertyInfo.totalUnits = corrections.totalUnits;
+  }
+  next.propertyInfo = propertyInfo as OmAuthoritativeSnapshot["propertyInfo"];
+
+  const current = { ...(next.currentFinancials ?? {}) } as NonNullable<OmAuthoritativeSnapshot["currentFinancials"]>;
+  if (corrections.noi != null && Number.isFinite(corrections.noi)) {
+    record("noi", current.noi, corrections.noi);
+    current.noi = corrections.noi;
+  }
+  if (corrections.grossRentalIncome != null && Number.isFinite(corrections.grossRentalIncome)) {
+    record("grossRentalIncome", current.grossRentalIncome, corrections.grossRentalIncome);
+    current.grossRentalIncome = corrections.grossRentalIncome;
+  }
+  if (corrections.operatingExpenses != null && Number.isFinite(corrections.operatingExpenses)) {
+    record("operatingExpenses", current.operatingExpenses, corrections.operatingExpenses);
+    current.operatingExpenses = corrections.operatingExpenses;
+  }
+  next.currentFinancials = current;
+  next.validationFlags = flags;
+  return next;
+}
+
 export async function promoteOmExtractionForProperty(params: {
   propertyId: string;
   runId: string;
   triggerDossier?: boolean;
   refreshUnderwritingSummary?: boolean;
+  corrections?: OmReviewCorrections | null;
+  correctionNote?: string | null;
   pool?: Pool;
 }): Promise<PromoteOmExtractionResult> {
   const pool = params.pool ?? getPool();
@@ -731,11 +789,17 @@ export async function promoteOmExtractionForProperty(params: {
     };
   }
 
+  const hasCorrections =
+    params.corrections != null && Object.values(params.corrections).some((value) => value != null && Number.isFinite(value));
+  const snapshotForPromotion = hasCorrections
+    ? applyReviewCorrections(extracted.snapshot, params.corrections!, params.correctionNote?.trim() || null)
+    : extracted.snapshot;
+
   return promoteSnapshotForProperty({
     propertyId: params.propertyId,
     runId: params.runId,
     sourceDocumentId: run.sourceDocumentId ?? extracted.snapshot.sourceDocumentId ?? null,
-    snapshot: extracted.snapshot,
+    snapshot: snapshotForPromotion,
     triggerDossier: params.triggerDossier ?? false,
     refreshUnderwritingSummary: params.refreshUnderwritingSummary ?? false,
     pool,
