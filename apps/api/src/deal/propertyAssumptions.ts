@@ -59,6 +59,9 @@ const DEFAULT_FURNISHING_BEDROOMS_PER_UNIT = 1;
 const DEFAULT_FURNISHING_BATHS_PER_UNIT = 1;
 const DEFAULT_FURNISHING_UNIT_SQFT = 900;
 const MAX_FURNISHING_COST_PER_UNIT = 30_000;
+// A studio still needs a bed, sofa, and full kitchen/linen setup; the
+// bedroom-count formula otherwise prices it below a 1BR.
+const MIN_FURNISHING_COST_PER_STUDIO = 12_000;
 
 function toFiniteNumber(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -493,6 +496,14 @@ export function analyzePropertyForUnderwriting(
   const avgEligibleUnitSqft =
     furnishingEligibleUnits > 0 ? estimatedEligibleSqft / furnishingEligibleUnits : null;
   const sqftPremium = furnishingEligibleUnits * furnishingSqftPremiumPerUnit(avgEligibleUnitSqft);
+  // Known studios (beds === 0) contribute nothing through the bedroom term,
+  // pricing them below a 1BR; top each one up to the studio minimum.
+  const studioTopUp = rowEligibleUnits.reduce((sum, row) => {
+    if (row.beds == null || Math.round(row.beds) !== 0) return sum;
+    const baths = row.baths != null ? Math.max(0, row.baths) : DEFAULT_FURNISHING_BATHS_PER_UNIT;
+    const baseEstimate = DEFAULT_FURNISHING_BASE_PER_UNIT + baths * DEFAULT_FURNISHING_BATHROOM_COST;
+    return sum + Math.max(0, MIN_FURNISHING_COST_PER_STUDIO - baseEstimate);
+  }, 0);
   const furnishingSetupCostEstimate =
     furnishingEligibleUnits > 0
       ? roundCurrency(
@@ -501,7 +512,8 @@ export function analyzePropertyForUnderwriting(
             furnishingEligibleUnits * DEFAULT_FURNISHING_BASE_PER_UNIT +
               totalEligibleBedrooms * DEFAULT_FURNISHING_BEDROOM_COST +
               totalEligibleBathrooms * DEFAULT_FURNISHING_BATHROOM_COST +
-              sqftPremium
+              sqftPremium +
+              studioTopUp
           )
         )
       : 0;

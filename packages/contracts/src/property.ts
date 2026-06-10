@@ -560,6 +560,8 @@ export interface PropertyDealDossierSummary {
   dealSignalsGeneratedAt?: string | null;
   dossierDocumentId?: string | null;
   excelDocumentId?: string | null;
+  /** Structured deal-level validation flags computed with the projection (DSCR floor, exit-cap-vs-entry, tax load, model-shape warnings). */
+  validationFlags?: OmValidationFlag[] | null;
 }
 
 export interface PropertyDealDossier {

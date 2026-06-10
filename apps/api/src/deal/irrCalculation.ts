@@ -42,6 +42,51 @@ function npv(rate: number, flows: number[]): number {
 }
 
 /**
+ * Bisection fallback for when Newton-Raphson diverges (typically deeply
+ * negative IRRs, where the year-0 flow dominates and Newton overshoots past
+ * rate = -1). Scans a rate grid for an NPV sign change, then bisects.
+ */
+function solveIrrByBisection(flows: number[]): number | null {
+  const grid: number[] = [];
+  for (let rate = -0.99; rate < -0.5; rate += 0.01) grid.push(rate);
+  for (let rate = -0.5; rate < 1; rate += 0.025) grid.push(rate);
+  for (let rate = 1; rate <= 10; rate += 0.25) grid.push(rate);
+
+  let lo: number | null = null;
+  let hi: number | null = null;
+  let prevRate = grid[0]!;
+  let prevNpv = npv(prevRate, flows);
+  for (let i = 1; i < grid.length; i++) {
+    const rate = grid[i]!;
+    const value = npv(rate, flows);
+    if (Number.isFinite(prevNpv) && Number.isFinite(value) && prevNpv * value <= 0) {
+      lo = prevRate;
+      hi = rate;
+      break;
+    }
+    prevRate = rate;
+    prevNpv = value;
+  }
+  if (lo == null || hi == null) return null;
+
+  let low: number = lo;
+  let high: number = hi;
+  let lowNpv = npv(low, flows);
+  for (let i = 0; i < 200; i++) {
+    const mid = (low + high) / 2;
+    const midNpv = npv(mid, flows);
+    if (Math.abs(midNpv) < 1e-7 || (high - low) / 2 < 1e-9) return mid;
+    if (lowNpv * midNpv <= 0) {
+      high = mid;
+    } else {
+      low = mid;
+      lowNpv = midNpv;
+    }
+  }
+  return (low + high) / 2;
+}
+
+/**
  * Compute IRR using Newton-Raphson over the supplied equity cash flow series.
  */
 export function computeIrr(inputs: EquityReturnInputs): IrrResult {
@@ -90,6 +135,18 @@ export function computeIrr(inputs: EquityReturnInputs): IrrResult {
     if (Math.abs(dv) < 1e-12) break;
     rate = rate - v / dv;
     if (rate <= -1 || rate > 10) break;
+  }
+
+  // Newton diverged; money-losing deals have real (negative) IRRs that should
+  // render as numbers rather than null.
+  const bisected = solveIrrByBisection(flows);
+  if (bisected != null) {
+    return {
+      irr: bisected,
+      equityMultiple,
+      year1CashOnCashReturn,
+      averageCashOnCashReturn,
+    };
   }
   return {
     irr: null,

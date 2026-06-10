@@ -3,6 +3,7 @@
  */
 
 import type {
+  OmValidationFlag,
   PropertyDealDossierGeneration,
   PropertyDealDossierSummary,
   PropertyDetails,
@@ -79,6 +80,7 @@ import {
   resolveDossierAssumptions,
   type DossierAssumptionOverrides,
 } from "./underwritingModel.js";
+import { buildUnderwritingValidationFlags } from "./underwritingValidationFlags.js";
 import type {
   ExpenseRow,
   GrossRentRow,
@@ -137,6 +139,7 @@ function buildPersistedDossierSummary(params: {
   finalScore: number | null;
   calculatedScore: number | null;
   holdYears: number;
+  validationFlags: OmValidationFlag[];
 }): PropertyDealDossierSummary {
   return {
     generatedAt: params.generatedAt,
@@ -163,6 +166,7 @@ function buildPersistedDossierSummary(params: {
     dealSignalsGeneratedAt: params.dealSignalsGeneratedAt,
     dossierDocumentId: params.dossierDocumentId,
     excelDocumentId: params.excelDocumentId,
+    validationFlags: params.validationFlags.length > 0 ? params.validationFlags : null,
   };
 }
 
@@ -682,6 +686,23 @@ export async function runGenerateDossier(
         ? (adjustedNoiForCtx / assumptions.acquisition.purchasePrice) * 100
         : null;
 
+    const currentTaxExpenseAnnual = detailedModel.expenseModelRows
+      .filter((row) => row.amount != null && /tax/i.test(row.lineItem))
+      .reduce((sum, row) => sum + Math.max(0, row.amount ?? 0), 0);
+    const underwritingValidationFlags = buildUnderwritingValidationFlags({
+      projection,
+      entryCapRatePct: assetCapRateForCtx,
+      egiBasisAnnual:
+        currentGrossRent != null ? currentGrossRent + Math.max(0, currentOtherIncome ?? 0) : null,
+      taxExpenseAnnual: currentTaxExpenseAnnual > 0 ? currentTaxExpenseAnnual : null,
+      unitCount,
+    });
+    for (const flag of underwritingValidationFlags) {
+      if (flag.message && !financialFlags.includes(flag.message)) {
+        financialFlags.push(flag.message);
+      }
+    }
+
     const amortizationSchedule =
       projection.financing.amortizationSchedule.length > 0
         ? projection.financing.amortizationSchedule.map((row) => ({
@@ -1053,6 +1074,7 @@ export async function runGenerateDossier(
         holdYears: projection.assumptions.holdPeriodYears,
         dealSignalsId: persistedSignals.id,
         dealSignalsGeneratedAt: persistedSignals.generatedAt,
+        validationFlags: underwritingValidationFlags,
       }) as Record<string, unknown>
     );
 

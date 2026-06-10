@@ -31,7 +31,9 @@ export const DEFAULT_LEAD_TIME_MONTHS = 2;
 export const DEFAULT_ANNUAL_RENT_GROWTH_PCT = 1;
 export const DEFAULT_ANNUAL_COMMERCIAL_RENT_GROWTH_PCT = 1.5;
 export const DEFAULT_ANNUAL_OTHER_INCOME_GROWTH_PCT = 0;
-export const DEFAULT_ANNUAL_EXPENSE_GROWTH_PCT = 0;
+// NYC opex (insurance, labor, utilities) has been compounding well above zero;
+// holding expenses flat over the hold period overstates outer-year NOI.
+export const DEFAULT_ANNUAL_EXPENSE_GROWTH_PCT = 3;
 export const DEFAULT_ANNUAL_PROPERTY_TAX_GROWTH_PCT = 6;
 export const DEFAULT_RECURRING_CAPEX_ANNUAL = 1_200;
 export const DEFAULT_RECURRING_CAPEX_PER_ELIGIBLE_UNIT_ANNUAL = 2_000;
@@ -186,6 +188,15 @@ export interface UnderwritingProjectionYearly {
   leveredCashFlow: number[];
 }
 
+export interface UnderwritingProjectionWarning {
+  code:
+    | "property_mix_assumed_free_market"
+    | "tax_escalation_not_applied"
+    | "stabilized_noi_includes_lease_up"
+    | "lead_time_exceeds_modeled_year";
+  message: string;
+}
+
 export interface UnderwritingProjection {
   assumptions: ResolvedDossierAssumptions;
   acquisition: {
@@ -240,6 +251,8 @@ export interface UnderwritingProjection {
     year1EquityYield: number | null;
     averageEquityYield: number | null;
   };
+  /** Silent-assumption and model-shape caveats surfaced to the dossier and flags. */
+  warnings: UnderwritingProjectionWarning[];
 }
 
 export interface RecommendedOfferAnalysis {
@@ -793,6 +806,7 @@ export function computeUnderwritingProjection(
     conservativeProjectedLeaseUpRent,
     protectedProjectedLeaseUpRent,
   } = input;
+  const warnings: UnderwritingProjectionWarning[] = [];
   const normalizedUnitRows = Array.isArray(unitRows)
     ? unitRows.filter(
         (row): row is ProjectedUnitInputRow =>
@@ -917,44 +931,45 @@ export function computeUnderwritingProjection(
     expenseRows,
   });
 
-  const currentGrossBreakdownBase = detailedUnitModelActive
-    ? scaleGrossRentBreakdownToTotal(
-        {
-          freeMarketResidential: normalizedUnitRows.reduce((sum, row) => {
-            if (row.includeInUnderwriting === false || row.isCommercial === true || row.isProtected === true) {
-              return sum;
-            }
-            return sum + Math.max(0, safeNumber(row.currentAnnualRent, 0));
-          }, 0),
-          protectedResidential: normalizedUnitRows.reduce((sum, row) => {
-            if (row.includeInUnderwriting === false || row.isCommercial === true || row.isProtected !== true) {
-              return sum;
-            }
-            return sum + Math.max(0, safeNumber(row.currentAnnualRent, 0));
-          }, 0),
-          commercial: normalizedUnitRows.reduce((sum, row) => {
-            if (row.includeInUnderwriting === false || row.isCommercial !== true) return sum;
-            return sum + Math.max(0, safeNumber(row.currentAnnualRent, 0));
-          }, 0),
-        },
-        currentRent
-      )
-    : (() => {
-        const mixFreeMarket = Math.max(0, safeNumber(assumptions.propertyMix.freeMarketAnnualRent, 0));
-        const mixProtectedResidential = Math.max(
-          0,
-          safeNumber(assumptions.propertyMix.rentStabilizedAnnualRent, 0)
-        );
-        const mixCommercial = Math.max(0, safeNumber(assumptions.propertyMix.commercialAnnualRent, 0));
-        return scaleGrossRentBreakdownToTotal(
-          {
-            freeMarketResidential: mixFreeMarket,
-            protectedResidential: mixProtectedResidential,
-            commercial: mixCommercial,
-          },
-          currentRent
-        );
-      })();
+  const grossBreakdownInput: GrossRentBreakdown = detailedUnitModelActive
+    ? {
+        freeMarketResidential: normalizedUnitRows.reduce((sum, row) => {
+          if (row.includeInUnderwriting === false || row.isCommercial === true || row.isProtected === true) {
+            return sum;
+          }
+          return sum + Math.max(0, safeNumber(row.currentAnnualRent, 0));
+        }, 0),
+        protectedResidential: normalizedUnitRows.reduce((sum, row) => {
+          if (row.includeInUnderwriting === false || row.isCommercial === true || row.isProtected !== true) {
+            return sum;
+          }
+          return sum + Math.max(0, safeNumber(row.currentAnnualRent, 0));
+        }, 0),
+        commercial: normalizedUnitRows.reduce((sum, row) => {
+          if (row.includeInUnderwriting === false || row.isCommercial !== true) return sum;
+          return sum + Math.max(0, safeNumber(row.currentAnnualRent, 0));
+        }, 0),
+      }
+    : {
+        freeMarketResidential: Math.max(0, safeNumber(assumptions.propertyMix.freeMarketAnnualRent, 0)),
+        protectedResidential: Math.max(0, safeNumber(assumptions.propertyMix.rentStabilizedAnnualRent, 0)),
+        commercial: Math.max(0, safeNumber(assumptions.propertyMix.commercialAnnualRent, 0)),
+      };
+  const grossBreakdownInputTotal =
+    grossBreakdownInput.freeMarketResidential +
+    grossBreakdownInput.protectedResidential +
+    grossBreakdownInput.commercial;
+  // With no usable unit mix the entire rent lands in the free-market bucket
+  // and receives the full uplift — fine for true free-market walk-ups, badly
+  // wrong for mixed-use or rent-stabilized buildings, so always say it.
+  if (grossBreakdownInputTotal <= 0 && currentRent > 0) {
+    warnings.push({
+      code: "property_mix_assumed_free_market",
+      message:
+        "No usable unit mix was available, so 100% of current rent is treated as free-market residential and receives the full rent uplift. Verify stabilization status and commercial share before trusting upside.",
+    });
+  }
+  const currentGrossBreakdownBase = scaleGrossRentBreakdownToTotal(grossBreakdownInput, currentRent);
 
   const eligibleRevenueShare = clampUnitShare(
     assumptions.propertyMix.eligibleRevenueSharePct,
@@ -1148,6 +1163,18 @@ export function computeUnderwritingProjection(
             (yearlyProtectedOccupiedRentalIncome[year] ?? 0)
         )
   );
+  // Detailed rows escalate per line (/tax/i rows get the tax growth rate); a
+  // detailed statement with no tax line therefore never sees tax escalation.
+  if (
+    normalizedExpenseInputs.expenseRowsExManagement.length > 0 &&
+    !normalizedExpenseInputs.expenseRowsExManagement.some((row) => /tax/i.test(row.lineItem)) &&
+    assumptions.operating.annualPropertyTaxGrowthPct > assumptions.operating.annualExpenseGrowthPct
+  ) {
+    warnings.push({
+      code: "tax_escalation_not_applied",
+      message: `Detailed expenses have no property-tax line, so the ${assumptions.operating.annualPropertyTaxGrowthPct}%/yr property-tax escalation is not being applied to any expense line (other lines grow at ${assumptions.operating.annualExpenseGrowthPct}%/yr).`,
+    });
+  }
   const expenseLineItems: UnderwritingProjectionExpenseLine[] = [
     ...projectExpenseLines({
       assumptions,
@@ -1396,9 +1423,25 @@ export function computeUnderwritingProjection(
     yearlyNetSaleToEquity[assumptions.holdPeriodYears] ??
     yearlyNetSaleToEquity[yearlyNetSaleToEquity.length - 1] ??
     0;
+  // First operating year fully clear of lease-up drag. Lead time is modeled as
+  // a year-1 income haircut, so any lead time pushes stabilization to year 2;
+  // lead times beyond 12 months exceed what the year-1 haircut can represent.
+  const leadTimeMonthsForStabilization = Math.max(0, assumptions.operating.leadTimeMonths);
   const stabilizedYearIndex =
-    assumptions.operating.leadTimeMonths > 0 && assumptions.holdPeriodYears > 1 ? 2 : 1;
+    leadTimeMonthsForStabilization > 0 ? Math.floor(leadTimeMonthsForStabilization / 12) + 2 : 1;
   const stabilizedIndex = Math.min(assumptions.holdPeriodYears, stabilizedYearIndex);
+  if (stabilizedIndex < stabilizedYearIndex) {
+    warnings.push({
+      code: "stabilized_noi_includes_lease_up",
+      message: `Hold period (${assumptions.holdPeriodYears} yr) ends before stabilization (year ${stabilizedYearIndex}); "stabilized" NOI is the year-${stabilizedIndex} figure and still includes ${leadTimeMonthsForStabilization} month(s) of lease-up drag.`,
+    });
+  }
+  if (leadTimeMonthsForStabilization > 12) {
+    warnings.push({
+      code: "lead_time_exceeds_modeled_year",
+      message: `Lead time of ${leadTimeMonthsForStabilization} months exceeds the single year-1 haircut the model applies; year-1 income loss is overstated and later-year drag is not modeled.`,
+    });
+  }
 
   return {
     assumptions,
@@ -1497,6 +1540,7 @@ export function computeUnderwritingProjection(
       year1EquityYield,
       averageEquityYield,
     },
+    warnings,
   };
 }
 
