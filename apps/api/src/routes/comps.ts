@@ -298,7 +298,14 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
          LEFT(p.details->>'bbl', 1) AS bbl_borough_digit,
          COALESCE(
            p.details#>>'{neighborhood,primary,name}',
-           p.details#>>'{neighborhood,primary,neighborhood}'
+           p.details#>>'{neighborhood,primary,neighborhood}',
+           p.details#>>'{omData,authoritative,propertyInfo,neighborhood}',
+           p.details#>>'{rentalFinancials,omAnalysis,propertyInfo,neighborhood}',
+           lst.listing_extra->>'neighborhood',
+           lst.listing_extra->>'neighborhoodName',
+           lst.listing_extra->>'neighborhood_name',
+           lst.listing_extra->>'area',
+           lst.listing_extra->>'area_name'
          ) AS neighborhood,
          CASE
            WHEN p.details#>>'{omData,authoritative,propertyInfo,totalUnits}' ~ '^[0-9]+(\\.[0-9]+)?$'
@@ -345,7 +352,7 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
          LIMIT 1
        ) sd ON TRUE
        LEFT JOIN LATERAL (
-         SELECT l.price AS listing_price
+         SELECT l.price AS listing_price, l.extra AS listing_extra
          FROM listing_property_matches m
          INNER JOIN listings l ON l.id = m.listing_id
          WHERE m.property_id = p.id AND m.status <> 'rejected'
@@ -473,7 +480,14 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
            LEFT(p.details->>'bbl', 1) AS bbl_borough_digit,
            COALESCE(
              p.details#>>'{neighborhood,primary,name}',
-             p.details#>>'{neighborhood,primary,neighborhood}'
+             p.details#>>'{neighborhood,primary,neighborhood}',
+             p.details#>>'{omData,authoritative,propertyInfo,neighborhood}',
+             p.details#>>'{rentalFinancials,omAnalysis,propertyInfo,neighborhood}',
+             lst.listing_extra->>'neighborhood',
+             lst.listing_extra->>'neighborhoodName',
+             lst.listing_extra->>'neighborhood_name',
+             lst.listing_extra->>'area',
+             lst.listing_extra->>'area_name'
            ) AS neighborhood,
            p.created_at AS sourced_at,
            run.status AS run_status,
@@ -499,7 +513,7 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
            LIMIT 1
          ) sd ON TRUE
          LEFT JOIN LATERAL (
-           SELECT l.price AS listing_price
+           SELECT l.price AS listing_price, l.extra AS listing_extra
            FROM listing_property_matches m
            INNER JOIN listings l ON l.id = m.listing_id
            WHERE m.property_id = p.id AND m.status <> 'rejected'
@@ -570,6 +584,26 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
     }
 
     rows = rows.sort((a, b) => (b.ltrYieldPct ?? -Infinity) - (a.ltrYieldPct ?? -Infinity));
+
+    // Canonicalize neighborhood labels through the market layer's alias map so
+    // enrichment names, StreetEasy area labels, and OM-derived strings all land
+    // on the same polygon names the map renders ("kips-bay"/"Kips Bay NoMad"
+    // variants stop fragmenting the per-hood stats into Unknowns).
+    try {
+      const hoods = await new NeighborhoodRepo({ pool }).listAll();
+      if (hoods.length > 0) {
+        const index = buildNeighborhoodIndex(hoods);
+        const nameById = new Map(hoods.map((hood) => [hood.id, hood.name]));
+        for (const row of rows) {
+          if (!row.neighborhood) continue;
+          const id = resolveNeighborhoodId(row.neighborhood, index);
+          const canonical = id ? nameById.get(id) : null;
+          if (canonical) row.neighborhood = canonical;
+        }
+      }
+    } catch (err) {
+      console.warn("[comps operating] neighborhood canonicalization skipped", err instanceof Error ? err.message : err);
+    }
 
     if (flaggedOnly) rows = rows.filter((row) => row.yieldFlag != null);
     if (borough) rows = rows.filter((row) => (row.borough ?? "").toLowerCase().includes(borough));
