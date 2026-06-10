@@ -37,6 +37,47 @@
   color: #991b1b;
 }
 
+/* Page reloaded mid-run: outcome unknown until the user verifies. */
+.bannerInterrupted {
+  background: #fffbeb;
+  border-bottom-color: #fde68a;
+  color: #92400e;
+}
+
+.stamp {
+  flex: 0 0 auto;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.75;
+  white-space: nowrap;
+}
+
+.clearAllRow {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0.15rem 1rem;
+  background: rgba(255, 255, 255, 0.92);
+  border-bottom: 1px solid var(--app-line);
+}
+
+.clearAll {
+  border: 0;
+  background: transparent;
+  color: var(--app-ink-secondary);
+  font-size: 0.72rem;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 0.15rem 0.3rem;
+  border-radius: 6px;
+}
+
+.clearAll:hover {
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--app-ink);
+}
+
 .icon {
   display: inline-grid;
   place-items: center;

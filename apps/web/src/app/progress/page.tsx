@@ -27,6 +27,7 @@ import {
 import { AgingChip, BrokerContactDialog, Button, Dialog, FileDropzone, PageHeader, PromptMenu, PropertyThumb, StatCard } from "@/components/ui";
 import { RecommendationStepper, type StepperKind, type StepperRow } from "./RecommendationStepper";
 import { API_BASE, apiFetch } from "@/lib/api";
+import { useProcessBanner } from "@/components/ProcessBanner";
 import styles from "./progress.module.css";
 const BULK_STAGE_MOVE_ID = "__bulk_stage_move__";
 const OM_ANALYSIS_BULK_ID = "__bulk_om_analysis__";
@@ -769,6 +770,7 @@ function ProgressPageContent() {
   const [error, setError] = useState<string | null>(null);
   const [stageMoveBusy, setStageMoveBusy] = useState<string | null>(null);
   const [bulkWorkflowBusy, setBulkWorkflowBusy] = useState<typeof OM_ANALYSIS_BULK_ID | typeof DOSSIER_BULK_ID | null>(null);
+  const processBanner = useProcessBanner();
   const [bulkTargetSectionId, setBulkTargetSectionId] = useState<string>(DEFAULT_BULK_STAGE_ID);
   const [selectedDealIds, setSelectedDealIds] = useState<Set<string>>(() => new Set());
   const [draggedDeal, setDraggedDeal] = useState<DealFlowRow | null>(null);
@@ -1508,11 +1510,16 @@ function ProgressPageContent() {
       }...`
     );
     setError(null);
+    const banner = processBanner.start("OM analysis refresh", {
+      message: `Re-reading OMs for ${selectedSavedDealsWithOm.length} deal${selectedSavedDealsWithOm.length === 1 ? "" : "s"} (AI extraction)…`,
+    });
     try {
       for (let index = 0; index < selectedSavedDealsWithOm.length; index++) {
         const row = selectedSavedDealsWithOm[index]!;
         const address = row.displayAddress ?? row.canonicalAddress ?? row.propertyId;
-        setNotice(`Updating OM analysis ${index + 1} of ${selectedSavedDealsWithOm.length}: ${address}`);
+        const progressMessage = `Updating OM analysis ${index + 1} of ${selectedSavedDealsWithOm.length}: ${address}`;
+        setNotice(progressMessage);
+        banner.update(progressMessage, Math.round((index / selectedSavedDealsWithOm.length) * 100));
         try {
           await refreshPropertyOmAnalysis(row.propertyId);
           completed++;
@@ -1525,24 +1532,29 @@ function ProgressPageContent() {
       }
       await loadProgress("refresh");
       const skippedMessage = skipped > 0 ? ` ${skipped} selected without OM skipped.` : "";
-      setNotice(
+      const summary =
         failures.length === 0
           ? `OM analysis updated for ${completed} deal${completed === 1 ? "" : "s"}.${skippedMessage}`
-          : `OM analysis updated for ${completed} of ${selectedSavedDealsWithOm.length} eligible deals.${skippedMessage}`
-      );
+          : `OM analysis updated for ${completed} of ${selectedSavedDealsWithOm.length} eligible deals.${skippedMessage}`;
+      setNotice(summary);
       if (failures.length > 0) {
+        banner.fail(summary);
         setError(
           `${failures.length} OM analysis refresh${failures.length === 1 ? "" : "es"} failed. First issue: ${
             failures[0]!.address
           } - ${failures[0]!.message}`
         );
+      } else {
+        banner.succeed(summary);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to refresh selected OM analysis.");
+      const message = err instanceof Error ? err.message : "Failed to refresh selected OM analysis.";
+      banner.fail(message);
+      setError(message);
     } finally {
       setBulkWorkflowBusy(null);
     }
-  }, [loadProgress, selectedSavedDeals, selectedSavedDealsWithOm]);
+  }, [loadProgress, processBanner, selectedSavedDeals, selectedSavedDealsWithOm]);
 
   const rerunSelectedDossiers = useCallback(async () => {
     if (selectedSavedDeals.length === 0) return;
@@ -1560,11 +1572,16 @@ function ProgressPageContent() {
       }...`
     );
     setError(null);
+    const banner = processBanner.start("Dossier rerun", {
+      message: `Re-running OM analysis + dossiers for ${selectedSavedDealsWithOm.length} deal${selectedSavedDealsWithOm.length === 1 ? "" : "s"}…`,
+    });
     try {
       for (let index = 0; index < selectedSavedDealsWithOm.length; index++) {
         const row = selectedSavedDealsWithOm[index]!;
         const address = row.displayAddress ?? row.canonicalAddress ?? row.propertyId;
-        setNotice(`Rerunning dossiers ${index + 1} of ${selectedSavedDealsWithOm.length}: ${address}`);
+        const progressMessage = `Rerunning dossiers ${index + 1} of ${selectedSavedDealsWithOm.length}: ${address}`;
+        setNotice(progressMessage);
+        banner.update(progressMessage, Math.round((index / selectedSavedDealsWithOm.length) * 100));
         try {
           await rerunPropertyDossier(row.propertyId);
           completed++;
@@ -1577,24 +1594,29 @@ function ProgressPageContent() {
       }
       await loadProgress("refresh");
       const skippedMessage = skipped > 0 ? ` ${skipped} selected without OM skipped.` : "";
-      setNotice(
+      const summary =
         failures.length === 0
           ? `Dossiers rerun for ${completed} deal${completed === 1 ? "" : "s"}.${skippedMessage}`
-          : `Dossiers rerun for ${completed} of ${selectedSavedDealsWithOm.length} eligible deals.${skippedMessage}`
-      );
+          : `Dossiers rerun for ${completed} of ${selectedSavedDealsWithOm.length} eligible deals.${skippedMessage}`;
+      setNotice(summary);
       if (failures.length > 0) {
+        banner.fail(summary);
         setError(
           `${failures.length} dossier rerun${failures.length === 1 ? "" : "s"} failed. First issue: ${
             failures[0]!.address
           } - ${failures[0]!.message}`
         );
+      } else {
+        banner.succeed(summary);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to rerun selected dossiers.");
+      const message = err instanceof Error ? err.message : "Failed to rerun selected dossiers.";
+      banner.fail(message);
+      setError(message);
     } finally {
       setBulkWorkflowBusy(null);
     }
-  }, [loadProgress, selectedSavedDeals, selectedSavedDealsWithOm]);
+  }, [loadProgress, processBanner, selectedSavedDeals, selectedSavedDealsWithOm]);
 
   const savedStatusSections = useMemo(
     () =>

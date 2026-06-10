@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useState, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
+import { useProcessBanner } from "@/components/ProcessBanner";
 import styles from "./dossierAssumptions.module.css";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
@@ -126,6 +127,7 @@ function DossierAssumptionsContent() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [generating, setGenerating] = useState(false);
+  const processBanner = useProcessBanner();
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState<DossierAssumptionsDraft>({});
   const [mixSummary, setMixSummary] = useState<PropertyMixSummary | null>(null);
@@ -249,6 +251,9 @@ function DossierAssumptionsContent() {
     setGenerationElapsedMs(0);
     setGenerationProgressPct(3);
     setError(null);
+    const banner = processBanner.start("Dossier generation", {
+      message: "Running the model, drafting the memo, rendering PDF + Excel (~90s)…",
+    });
     try {
       const res = await fetch(`${API_BASE}/api/dossier/generate`, {
         method: "POST",
@@ -295,10 +300,15 @@ function DossierAssumptionsContent() {
       setGenerationStartedAt(null);
       setGenerationElapsedMs(Date.now() - startedAt);
       setGenerationProgressPct(100);
+      banner.succeed(
+        `Dossier generated${data.dealScore != null && !Number.isNaN(data.dealScore) ? ` — score ${Math.round(data.dealScore)}/100` : ""}.`
+      );
       await new Promise((resolve) => window.setTimeout(resolve, 300));
       window.location.href = `/dossier-success?${params.toString()}`;
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to generate dossier");
+      const message = e instanceof Error ? e.message : "Failed to generate dossier";
+      banner.fail(message);
+      setError(message);
       setGenerating(false);
       setGenerationStartedAt(null);
       setGenerationElapsedMs(0);

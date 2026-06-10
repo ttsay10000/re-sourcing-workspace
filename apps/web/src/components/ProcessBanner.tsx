@@ -4,13 +4,16 @@
  * Global long-running-process banner.
  *
  * Pages register a process via useProcessBanner().start(label) and the banner
- * renders across the top of the workspace (under the topbar) until the process
- * finishes or the user dismisses it with ✕. Dismissing only hides the banner —
- * the underlying request keeps running. Handles live on the provider, so a
- * process started from a page keeps reporting even if the user navigates away.
+ * renders across the top of the workspace (under the topbar) until the user
+ * dismisses it with ✕ — completed and failed banners stay put through
+ * navigation AND full page reloads (state persists to localStorage).
+ * Dismissing only hides the banner — the underlying request keeps running.
  *
- * Entries with a workflowRunId are polled against GET /api/workflow/runs?ids=
- * so server-side step progress (e.g. inbox processing) streams into the label.
+ * Refresh semantics: a banner backed by a server workflow run (workflowRunId)
+ * resumes polling after a reload and picks up the real outcome. A banner owned
+ * by an in-page fetch can't recover its promise after a reload, so it flips to
+ * an "interrupted" state — the server usually kept working; the banner says so
+ * and stays until the user confirms and ✕'s it.
  */
 
 import {
@@ -23,11 +26,11 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { Loader2, X, CheckCircle2, AlertTriangle } from "lucide-react";
+import { Loader2, X, CheckCircle2, AlertTriangle, Info } from "lucide-react";
 import { API_BASE } from "@/lib/api";
 import styles from "./ProcessBanner.module.css";
 
-export type ProcessStatus = "running" | "success" | "error";
+export type ProcessStatus = "running" | "success" | "error" | "interrupted";
 
 export interface ProcessEntry {
   id: string;
@@ -35,6 +38,10 @@ export interface ProcessEntry {
   message: string | null;
   status: ProcessStatus;
   startedAt: number;
+  /** Last time the owning page reported progress (drives the stalled check). */
+  updatedAt: number;
+  /** When the entry reached a terminal state; null while running. */
+  finishedAt: number | null;
   workflowRunId: string | null;
   /** 0-100 when a step total is known, otherwise null (indeterminate). */
   progressPct: number | null;
@@ -44,7 +51,7 @@ export interface ProcessHandle {
   id: string;
   /** Update the live message (and optional 0-100 progress) while running. */
   update: (message: string, progressPct?: number | null) => void;
-  /** Attach a server workflow run so the banner polls step progress. */
+  /** Attach a server workflow run so the banner polls step progress (and survives reloads). */
   attachWorkflowRun: (runId: string) => void;
   succeed: (message?: string) => void;
   fail: (message?: string) => void;
@@ -54,18 +61,76 @@ interface ProcessBannerContextValue {
   start: (label: string, options?: { message?: string; workflowRunId?: string | null }) => ProcessHandle;
   entries: ProcessEntry[];
   dismiss: (id: string) => void;
+  dismissAll: () => void;
 }
 
 const ProcessBannerContext = createContext<ProcessBannerContextValue | null>(null);
 
-const SUCCESS_AUTO_DISMISS_MS = 6_000;
-const STALE_RUNNING_EXPIRE_MS = 30 * 60 * 1000;
+const STORAGE_KEY = "sourcing-os.process-banners.v1";
+const MAX_ENTRIES = 10;
 const WORKFLOW_POLL_INTERVAL_MS = 4_000;
+/** A running fetch-owned entry that hasn't reported progress for this long is presumed orphaned. */
+const RUNNING_STALL_MS = 30 * 60 * 1000;
+
+const INTERRUPTED_MESSAGE =
+  "The page reloaded while this was running. The server usually finishes anyway — check the results (or re-run), then dismiss.";
 
 function makeId(): string {
   return typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
     ? crypto.randomUUID()
     : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function isProcessStatus(value: unknown): value is ProcessStatus {
+  return value === "running" || value === "success" || value === "error" || value === "interrupted";
+}
+
+/** Rehydrate persisted entries; fetch-owned "running" entries become "interrupted". */
+function loadPersistedEntries(): ProcessEntry[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    const now = Date.now();
+    return parsed
+      .filter((entry): entry is Record<string, unknown> => entry != null && typeof entry === "object")
+      .map((entry): ProcessEntry | null => {
+        const id = typeof entry.id === "string" ? entry.id : null;
+        const label = typeof entry.label === "string" ? entry.label : null;
+        if (!id || !label || !isProcessStatus(entry.status)) return null;
+        const workflowRunId = typeof entry.workflowRunId === "string" ? entry.workflowRunId : null;
+        const wasRunning = entry.status === "running";
+        // Pollable runs resume; fetch-owned runs lost their promise in the reload.
+        const status: ProcessStatus = wasRunning && !workflowRunId ? "interrupted" : entry.status;
+        return {
+          id,
+          label,
+          message:
+            status === "interrupted" && wasRunning
+              ? INTERRUPTED_MESSAGE
+              : typeof entry.message === "string"
+                ? entry.message
+                : null,
+          status,
+          startedAt: typeof entry.startedAt === "number" ? entry.startedAt : now,
+          updatedAt: typeof entry.updatedAt === "number" ? entry.updatedAt : now,
+          finishedAt:
+            typeof entry.finishedAt === "number"
+              ? entry.finishedAt
+              : status === "interrupted"
+                ? now
+                : null,
+          workflowRunId,
+          progressPct: typeof entry.progressPct === "number" ? entry.progressPct : null,
+        };
+      })
+      .filter((entry): entry is ProcessEntry => entry != null)
+      .slice(-MAX_ENTRIES);
+  } catch {
+    return [];
+  }
 }
 
 interface WorkflowRunStepLike {
@@ -87,72 +152,96 @@ export function ProcessBannerProvider({ children }: { children: ReactNode }) {
   const [entries, setEntries] = useState<ProcessEntry[]>([]);
   const entriesRef = useRef<ProcessEntry[]>([]);
   entriesRef.current = entries;
+  const hydratedRef = useRef(false);
+
+  // Rehydrate persisted banners once on mount (client only — no SSR markup drift).
+  useEffect(() => {
+    hydratedRef.current = true;
+    const persisted = loadPersistedEntries();
+    if (persisted.length > 0) {
+      setEntries((current) => {
+        const currentIds = new Set(current.map((entry) => entry.id));
+        return [...persisted.filter((entry) => !currentIds.has(entry.id)), ...current].slice(-MAX_ENTRIES);
+      });
+    }
+  }, []);
+
+  // Persist on every change so navigation/refresh can't lose a banner.
+  useEffect(() => {
+    if (!hydratedRef.current || typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(entries));
+    } catch {
+      // storage full/blocked — banners simply won't survive a reload
+    }
+  }, [entries]);
 
   const patchEntry = useCallback((id: string, patch: Partial<ProcessEntry>) => {
-    setEntries((current) => current.map((entry) => (entry.id === id ? { ...entry, ...patch } : entry)));
+    setEntries((current) =>
+      current.map((entry) => (entry.id === id ? { ...entry, ...patch, updatedAt: Date.now() } : entry))
+    );
   }, []);
 
   const removeEntry = useCallback((id: string) => {
     setEntries((current) => current.filter((entry) => entry.id !== id));
   }, []);
 
+  const dismissAll = useCallback(() => {
+    // Keep live (still-running) work visible; clear everything terminal.
+    setEntries((current) => current.filter((entry) => entry.status === "running"));
+  }, []);
+
   const start = useCallback<ProcessBannerContextValue["start"]>(
     (label, options) => {
       const id = makeId();
+      const now = Date.now();
       const entry: ProcessEntry = {
         id,
         label,
         message: options?.message ?? null,
         status: "running",
-        startedAt: Date.now(),
+        startedAt: now,
+        updatedAt: now,
+        finishedAt: null,
         workflowRunId: options?.workflowRunId ?? null,
         progressPct: null,
       };
-      // Keep at most 4 banners; oldest drop off first.
-      setEntries((current) => [...current.slice(-3), entry]);
+      setEntries((current) => [...current.slice(-(MAX_ENTRIES - 1)), entry]);
       return {
         id,
         update: (message, progressPct) =>
           patchEntry(id, { message, ...(progressPct !== undefined ? { progressPct } : {}) }),
         attachWorkflowRun: (runId) => patchEntry(id, { workflowRunId: runId }),
-        succeed: (message) => patchEntry(id, { status: "success", message: message ?? null, progressPct: 100 }),
-        fail: (message) => patchEntry(id, { status: "error", message: message ?? null }),
+        succeed: (message) =>
+          patchEntry(id, { status: "success", message: message ?? null, progressPct: 100, finishedAt: Date.now() }),
+        fail: (message) => patchEntry(id, { status: "error", message: message ?? null, finishedAt: Date.now() }),
       };
     },
     [patchEntry]
   );
 
-  // Track when an entry flipped to success so auto-dismiss is relative to completion.
-  const successAtRef = useRef<Map<string, number>>(new Map());
+  // Safety net: a fetch-owned entry that stopped reporting (e.g. its page
+  // unmounted and the closure died) flips to "interrupted" instead of
+  // spinning forever. Nothing is ever auto-removed — only ✕ does that.
   useEffect(() => {
-    for (const entry of entries) {
-      if (entry.status === "success" && !successAtRef.current.has(entry.id)) {
-        successAtRef.current.set(entry.id, Date.now());
-      }
-    }
-    for (const id of [...successAtRef.current.keys()]) {
-      if (!entries.some((entry) => entry.id === id)) successAtRef.current.delete(id);
-    }
-  }, [entries]);
-
-  // Auto-dismiss successes after a few seconds; expire stale running entries.
-  useEffect(() => {
-    if (entries.length === 0) return;
+    if (!entries.some((entry) => entry.status === "running" && !entry.workflowRunId)) return;
     const timer = setInterval(() => {
       const now = Date.now();
       setEntries((current) =>
-        current.filter((entry) => {
-          if (entry.status === "error") return true; // errors persist until dismissed
-          if (entry.status === "success") {
-            const completedAt = successAtRef.current.get(entry.id) ?? now;
-            return now - completedAt < SUCCESS_AUTO_DISMISS_MS;
-          }
-          return now - entry.startedAt < STALE_RUNNING_EXPIRE_MS;
-        })
+        current.map((entry) =>
+          entry.status === "running" && !entry.workflowRunId && now - entry.updatedAt > RUNNING_STALL_MS
+            ? {
+                ...entry,
+                status: "interrupted" as const,
+                message: "No progress reported for 30 minutes — verify the result, then dismiss.",
+                finishedAt: now,
+              }
+            : entry
+        )
       );
-    }, 2_000);
+    }, 60_000);
     return () => clearInterval(timer);
-  }, [entries.length]);
+  }, [entries]);
 
   // Poll server workflow runs for entries that have one attached.
   useEffect(() => {
@@ -176,11 +265,15 @@ export function ProcessBannerProvider({ children }: { children: ReactNode }) {
           const progressPct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : null;
           const message = step?.lastMessage ?? entry.message;
           if (run.status === "completed") {
-            patchEntry(entry.id, { status: "success", message, progressPct: 100 });
+            patchEntry(entry.id, { status: "success", message, progressPct: 100, finishedAt: Date.now() });
           } else if (run.status === "failed") {
-            patchEntry(entry.id, { status: "error", message: message ?? "Run failed." });
+            patchEntry(entry.id, { status: "error", message: message ?? "Run failed.", finishedAt: Date.now() });
           } else if (run.status === "partial") {
-            patchEntry(entry.id, { status: "success", message: message ?? "Completed with some issues." });
+            patchEntry(entry.id, {
+              status: "success",
+              message: message ?? "Completed with some issues.",
+              finishedAt: Date.now(),
+            });
           } else {
             patchEntry(entry.id, { message, progressPct });
           }
@@ -197,35 +290,53 @@ export function ProcessBannerProvider({ children }: { children: ReactNode }) {
     };
   }, [entries, patchEntry]);
 
-  const contextValue = useMemo(() => ({ start, entries, dismiss: removeEntry }), [start, entries, removeEntry]);
+  const contextValue = useMemo(
+    () => ({ start, entries, dismiss: removeEntry, dismissAll }),
+    [start, entries, removeEntry, dismissAll]
+  );
 
   return <ProcessBannerContext.Provider value={contextValue}>{children}</ProcessBannerContext.Provider>;
+}
+
+function statusIcon(status: ProcessStatus) {
+  if (status === "running") return <Loader2 size={15} strokeWidth={2.2} className={styles.spinner} />;
+  if (status === "success") return <CheckCircle2 size={15} strokeWidth={2.2} />;
+  if (status === "interrupted") return <Info size={15} strokeWidth={2.2} />;
+  return <AlertTriangle size={15} strokeWidth={2.2} />;
+}
+
+function statusClass(status: ProcessStatus): string {
+  if (status === "success") return styles.bannerSuccess;
+  if (status === "error") return styles.bannerError;
+  if (status === "interrupted") return styles.bannerInterrupted;
+  return styles.bannerRunning;
+}
+
+function finishedStamp(entry: ProcessEntry): string | null {
+  if (!entry.finishedAt) return null;
+  return new Date(entry.finishedAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
 }
 
 /** Slim banner stack — place directly under the app topbar. */
 export function ProcessBannerViewport() {
   const context = useContext(ProcessBannerContext);
   if (!context || context.entries.length === 0) return null;
-  const { entries, dismiss } = context;
+  const { entries, dismiss, dismissAll } = context;
+  const terminalCount = entries.filter((entry) => entry.status !== "running").length;
   return (
     <div className={styles.viewport} role="status" aria-live="polite">
       {entries.map((entry) => (
-        <div
-          key={entry.id}
-          className={`${styles.banner} ${
-            entry.status === "success" ? styles.bannerSuccess : entry.status === "error" ? styles.bannerError : styles.bannerRunning
-          }`}
-        >
+        <div key={entry.id} className={`${styles.banner} ${statusClass(entry.status)}`}>
           <span className={styles.icon} aria-hidden="true">
-            {entry.status === "running" ? (
-              <Loader2 size={15} strokeWidth={2.2} className={styles.spinner} />
-            ) : entry.status === "success" ? (
-              <CheckCircle2 size={15} strokeWidth={2.2} />
-            ) : (
-              <AlertTriangle size={15} strokeWidth={2.2} />
-            )}
+            {statusIcon(entry.status)}
           </span>
           <span className={styles.label}>{entry.label}</span>
+          {entry.status !== "running" && finishedStamp(entry) ? (
+            <span className={styles.stamp}>
+              {entry.status === "success" ? "done" : entry.status === "error" ? "failed" : "interrupted"} at{" "}
+              {finishedStamp(entry)}
+            </span>
+          ) : null}
           {entry.message ? <span className={styles.message}>{entry.message}</span> : null}
           {entry.status === "running" && entry.progressPct != null ? (
             <span className={styles.progress}>
@@ -246,6 +357,13 @@ export function ProcessBannerViewport() {
           </button>
         </div>
       ))}
+      {terminalCount >= 3 ? (
+        <div className={styles.clearAllRow}>
+          <button type="button" className={styles.clearAll} onClick={dismissAll}>
+            Clear {terminalCount} finished
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }

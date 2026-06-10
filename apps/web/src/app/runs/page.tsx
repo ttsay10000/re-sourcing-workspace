@@ -3,6 +3,7 @@
 import { Fragment, useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import Link from "next/link";
 import { BOROUGH_TABS, isIncludedByParent, type AreaNode } from "./areas";
+import { useProcessBanner } from "@/components/ProcessBanner";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
 const DEFAULT_AREAS = ["all-downtown", "all-midtown"] as const;
@@ -546,6 +547,7 @@ export default function RunsPage() {
   const [startingManualRun, setStartingManualRun] = useState(false);
   const [savingSearch, setSavingSearch] = useState(false);
   const [runningSavedSearchId, setRunningSavedSearchId] = useState<string | null>(null);
+  const processBanner = useProcessBanner();
   const [deletingSavedSearchId, setDeletingSavedSearchId] = useState<string | null>(null);
   const [sendingRunId, setSendingRunId] = useState<string | null>(null);
   const [sendTimerSeconds, setSendTimerSeconds] = useState(0);
@@ -934,10 +936,29 @@ export default function RunsPage() {
     }
   };
 
+  /** Latest run's workflowRunId so the global banner can poll a run to completion (survives reloads). */
+  const findLatestWorkflowRunId = async (savedSearchId: string): Promise<string | null> => {
+    try {
+      const res = await fetch(`${API_BASE}/api/saved-searches/${savedSearchId}/runs`);
+      const data = await res.json().catch(() => ({}));
+      const runs = Array.isArray(data?.runs) ? data.runs : [];
+      const withWorkflow = runs.find(
+        (run: Record<string, unknown>) => typeof run.workflowRunId === "string" && run.workflowRunId
+      );
+      return withWorkflow ? String(withWorkflow.workflowRunId) : null;
+    } catch {
+      return null;
+    }
+  };
+
   const handleRunSavedSearchNow = async (savedSearchId: string) => {
     setError(null);
     setNotice(null);
     setRunningSavedSearchId(savedSearchId);
+    const searchName = savedSearches.find((savedSearch) => savedSearch.id === savedSearchId)?.name ?? "Saved search";
+    const banner = processBanner.start(`Saved-search run: ${searchName}`, {
+      message: "Starting StreetEasy search…",
+    });
     try {
       const res = await fetch(`${API_BASE}/api/saved-searches/${savedSearchId}/run-now`, {
         method: "POST",
@@ -947,6 +968,10 @@ export default function RunsPage() {
       if (res.status === 409 || data?.code === "already_running") {
         setExpandedSavedSearchId(savedSearchId);
         setNotice("Saved search is already running. Open Property Data for the live workflow tracker while it continues ingesting and enrichment catches up.");
+        banner.update("Already running — attaching to the live run…");
+        const existingWorkflowRunId = await findLatestWorkflowRunId(savedSearchId);
+        if (existingWorkflowRunId) banner.attachWorkflowRun(existingWorkflowRunId);
+        else banner.succeed("Already running — see Property Data for the live workflow tracker.");
         window.setTimeout(() => {
           void fetchSavedSearches();
           void fetchSavedSearchRuns(savedSearchId);
@@ -956,12 +981,22 @@ export default function RunsPage() {
       if (!res.ok) throw new Error(data?.error || data?.details || "Failed to start saved search run");
       setExpandedSavedSearchId(savedSearchId);
       setNotice("Saved search run started. Open Property Data for the live workflow tracker while it ingests, enriches, and evaluates outreach.");
+      banner.update("Run started — ingesting listings, then enrichment…");
       window.setTimeout(() => {
         void fetchSavedSearches();
         void fetchSavedSearchRuns(savedSearchId);
       }, 1200);
+      // Attach the server workflow run so progress streams into the banner.
+      window.setTimeout(() => {
+        void findLatestWorkflowRunId(savedSearchId).then((workflowRunId) => {
+          if (workflowRunId) banner.attachWorkflowRun(workflowRunId);
+          else banner.succeed("Run started — see Property Data for the live workflow tracker.");
+        });
+      }, 1500);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to start saved search run");
+      const message = err instanceof Error ? err.message : "Failed to start saved search run";
+      banner.fail(message);
+      setError(message);
     } finally {
       setRunningSavedSearchId(null);
     }
@@ -1012,6 +1047,9 @@ export default function RunsPage() {
     setSendingRunId(runId);
     setError(null);
     setNotice(null);
+    const banner = processBanner.start("Send to property data", {
+      message: "Creating canonical properties and running enrichment + rental flow — this can take several minutes…",
+    });
     try {
       const res = await fetch(`${API_BASE}/api/test-agent/runs/${runId}/send-to-property-data`, {
         method: "POST",
@@ -1028,9 +1066,12 @@ export default function RunsPage() {
         (data?.created ?? 0) > 0 || (data?.updated ?? 0) > 0
           ? `${data?.created ?? 0} created, ${data?.updated ?? 0} updated.${runNumber}`
           : runNumber || "Sent.";
+      banner.succeed(`Sent to property data: ${message}`);
       window.location.href = `/property-data?sent=${encodeURIComponent(message)}`;
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to send to property data");
+      const message = err instanceof Error ? err.message : "Failed to send to property data";
+      banner.fail(message);
+      setError(message);
       setSendingRunId(null);
     }
   };

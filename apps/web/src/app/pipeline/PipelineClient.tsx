@@ -1527,6 +1527,9 @@ export default function PipelineClient() {
     async (propertyId: string, file: File): Promise<void> => {
       setBrokerCompUploading((current) => ({ ...current, [propertyId]: true }));
       setBrokerCompError((current) => ({ ...current, [propertyId]: null }));
+      const banner = processBanner.start("Comp package upload", {
+        message: `Reading ${file.name} with the comp extractor…`,
+      });
       try {
         const form = new FormData();
         form.append("file", file);
@@ -1543,17 +1546,20 @@ export default function PipelineClient() {
         setBrokerCompPayloads((current) => ({ ...current, [propertyId]: payload }));
         await loadBrokerComps(propertyId);
         setNotice(`Broker comp package uploaded: ${file.name}`);
+        banner.succeed(`Broker comp package extracted: ${file.name}`);
         if (selectedId === propertyId) await loadPropertyDetail(propertyId);
       } catch (err) {
+        const message = err instanceof Error ? err.message : "Failed to upload broker comp package.";
+        banner.fail(message);
         setBrokerCompError((current) => ({
           ...current,
-          [propertyId]: err instanceof Error ? err.message : "Failed to upload broker comp package.",
+          [propertyId]: message,
         }));
       } finally {
         setBrokerCompUploading((current) => ({ ...current, [propertyId]: false }));
       }
     },
-    [loadBrokerComps, loadPropertyDetail, selectedId]
+    [loadBrokerComps, loadPropertyDetail, processBanner, selectedId]
   );
 
   const uploadPropertyDocuments = useCallback(
@@ -1562,6 +1568,9 @@ export default function PipelineClient() {
       setDocumentUploading(true);
       setDocumentUploadError(null);
       setNotice(null);
+      const banner = processBanner.start("Document upload", {
+        message: `Uploading ${files.length} file${files.length === 1 ? "" : "s"} — OMs are read and routed by address (AI extraction)…`,
+      });
       try {
         const form = new FormData();
         for (const file of files) form.append("files", file);
@@ -1586,15 +1595,11 @@ export default function PipelineClient() {
         const enrichmentCount = typeof addressAware?.enrichmentComplete === "number" ? addressAware.enrichmentComplete : 0;
         const dossierCount = typeof addressAware?.dossierGenerated === "number" ? addressAware.dossierGenerated : 0;
         setDocumentUploadFiles([]);
-        if (addressAware) {
-          setNotice(
-            `${files.length} document${files.length === 1 ? "" : "s"} uploaded; ${importedCount} OM PDF${importedCount === 1 ? "" : "s"} routed by address${createdCount ? `, ${createdCount} new propert${createdCount === 1 ? "y" : "ies"}` : ""}${enrichmentCount ? `, ${enrichmentCount} enriched` : ""}${dossierCount ? `, ${dossierCount} dossier${dossierCount === 1 ? "" : "s"} generated` : ""}${failedCount ? `, ${failedCount} need review` : ""}.`
-          );
-        } else {
-          setNotice(
-            `${files.length} document${files.length === 1 ? "" : "s"} uploaded${classified.length ? ` and classified` : ""}${omStatus ? `; OM extraction ${omStatus}` : ""}.`
-          );
-        }
+        const uploadSummary = addressAware
+          ? `${files.length} document${files.length === 1 ? "" : "s"} uploaded; ${importedCount} OM PDF${importedCount === 1 ? "" : "s"} routed by address${createdCount ? `, ${createdCount} new propert${createdCount === 1 ? "y" : "ies"}` : ""}${enrichmentCount ? `, ${enrichmentCount} enriched` : ""}${dossierCount ? `, ${dossierCount} dossier${dossierCount === 1 ? "" : "s"} generated` : ""}${failedCount ? `, ${failedCount} need review` : ""}.`
+          : `${files.length} document${files.length === 1 ? "" : "s"} uploaded${classified.length ? ` and classified` : ""}${omStatus ? `; OM extraction ${omStatus}` : ""}.`;
+        setNotice(uploadSummary);
+        banner.succeed(uploadSummary);
         await loadPropertyDetail(propertyId);
         const pipelineResponse = await apiFetch<PipelineResponse>(
           `${API_BASE}/api/ui-v2/pipeline?${buildPipelineQueryString(queryString)}`
@@ -1602,12 +1607,14 @@ export default function PipelineClient() {
         setRows(pipelineResponse.pipeline.rows as PipelineRow[]);
         setTotal(pipelineResponse.pipeline.total);
       } catch (err) {
-        setDocumentUploadError(err instanceof Error ? err.message : "Failed to upload documents.");
+        const message = err instanceof Error ? err.message : "Failed to upload documents.";
+        banner.fail(message);
+        setDocumentUploadError(message);
       } finally {
         setDocumentUploading(false);
       }
     },
-    [documentUploading, loadPropertyDetail, queryString]
+    [documentUploading, loadPropertyDetail, processBanner, queryString]
   );
 
   const reviewBrokerCompItem = useCallback(
