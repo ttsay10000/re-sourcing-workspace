@@ -28,7 +28,8 @@ async function extractWorkbookText(buffer: Buffer): Promise<string> {
     if (!sheet) return "";
     const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: "" }) as unknown[][];
     const lines = rows
-      .map((row) => row.map((cell) => String(cell ?? "").trim()).filter(Boolean).join(" | "))
+      // Flatten newlines inside cells so each sheet row stays one delimited line for the LLM.
+      .map((row) => row.map((cell) => String(cell ?? "").replace(/\s*\n\s*/g, " ").trim()).filter(Boolean).join(" | "))
       .filter(Boolean);
     if (lines.length === 0) return "";
     return `${sheetName}\n${lines.join("\n")}`;

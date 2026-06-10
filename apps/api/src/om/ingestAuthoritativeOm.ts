@@ -25,6 +25,7 @@ import {
   isGeminiNativeOmInputDocument,
 } from "./omAnalysisShared.js";
 import { extractOmAnalysisFromGeminiPdfOnly, resolveGeminiOmModel } from "./extractOmAnalysisFromGeminiPdfOnly.js";
+import { extractOmAnalysisFromOpenAiText, resolveOpenAiOmModel } from "./extractOmAnalysisFromOpenAiText.js";
 import {
   type ResolvedCurrentFinancials,
   resolveCurrentFinancialsFromOmAnalysis,
@@ -116,6 +117,32 @@ export interface RejectOmExtractionResult {
 }
 
 const GEMINI_OM_EXTRACTION_METHOD: OmExtractionMethod = "hybrid";
+
+/** Per-document cap on extracted spreadsheet/text characters fed to the LLM. */
+const MAX_TEXT_CONTEXT_CHARS_PER_DOCUMENT = 60_000;
+
+export interface OmParserPlan {
+  provider: "gemini" | "openai";
+  mode: "pdf_only" | "pdf_plus_text_context" | "text_only";
+}
+
+/**
+ * PDFs/images go to Gemini via its native Files API; packages containing only
+ * spreadsheet/text content go to OpenAI (OPENAI_OM_MODEL, default gpt-5.5),
+ * which handles delimited table text more reliably.
+ */
+export function resolveOmParserPlan(params: {
+  geminiNativeDocumentCount: number;
+  hasTextContext: boolean;
+}): OmParserPlan {
+  if (params.geminiNativeDocumentCount === 0 && params.hasTextContext) {
+    return { provider: "openai", mode: "text_only" };
+  }
+  return {
+    provider: "gemini",
+    mode: params.hasTextContext ? "pdf_plus_text_context" : "pdf_only",
+  };
+}
 
 export const NO_OM_DOCUMENTS_ERROR =
   "No OM, brochure, rent roll, or operating statement documents are available for ingestion.";
@@ -221,9 +248,9 @@ function buildManualOverrideReviewMetadata(params: {
   };
 }
 
-function looksLikeOmStyleFilename(filename: string | null | undefined): boolean {
+export function looksLikeOmStyleFilename(filename: string | null | undefined): boolean {
   if (!filename || typeof filename !== "string") return false;
-  return /(offering|memorandum|(^|[^a-z])om([^a-z]|$)|brochure|rent[ _-]?roll|t-?12|operating)/i.test(filename);
+  return /(offering|memorandum|(^|[^a-z])om([^a-z]|$)|brochure|rent[ _-]?roll|t-?12|operating|expense)/i.test(filename);
 }
 
 function looksLikeFinancialModelSource(doc: OmAutomationDocument): boolean {
@@ -241,6 +268,7 @@ function scoreDocument(doc: OmAutomationDocument): number {
   if ((doc.category ?? "").toLowerCase() === "t12 / operating summary") score += 8;
   if ((doc.category ?? "").toLowerCase() === "financial model") score += 4;
   if (filename.includes("rent roll")) score += 14;
+  if (filename.includes("expense")) score += 6;
   if (filename.includes("offering")) score += 12;
   if (filename.includes("memorandum")) score += 12;
   if (/(^|[^a-z])om([^a-z]|$)/.test(filename)) score += 10;
@@ -1028,20 +1056,24 @@ export async function ingestAuthoritativeOm(
               `Document: ${doc.filename}`,
               `Category: ${doc.category ?? "Unclassified"}`,
               `Source: ${doc.source ?? doc.origin}`,
-              text.slice(0, 24_000),
+              text.slice(0, MAX_TEXT_CONTEXT_CHARS_PER_DOCUMENT),
             ].join("\n");
           })
       )
     )
       .filter((section): section is string => Boolean(section))
       .join("\n\n---\n\n");
-    const geminiModel = resolveGeminiOmModel();
+    const parserPlan = resolveOmParserPlan({
+      geminiNativeDocumentCount: geminiDocuments.length,
+      hasTextContext: nonPdfTextContext.trim().length > 0,
+    });
+    const parserModel = parserPlan.provider === "openai" ? resolveOpenAiOmModel() : resolveGeminiOmModel();
     const sourceMeta = {
       documents: candidateDocumentSourceMeta,
       parser: {
-        provider: "gemini",
-        mode: nonPdfTextContext ? "pdf_plus_text_context" : "pdf_only",
-        model: geminiModel,
+        provider: parserPlan.provider,
+        mode: parserPlan.mode,
+        model: parserModel,
         documentCount: geminiDocuments.length,
         documentFilenames: geminiDocuments.map((doc) => doc.filename),
         textContextDocumentCount: preparedDocuments.filter((doc) => !isGeminiNativeOmInputDocument(doc)).length,
@@ -1079,7 +1111,7 @@ export async function ingestAuthoritativeOm(
       };
     }
     if (geminiDocuments.length === 0 && !nonPdfTextContext) {
-      const error = "Authoritative OM ingestion requires at least one readable PDF document or extractable spreadsheet/text document for Gemini parsing.";
+      const error = "Authoritative OM ingestion requires at least one readable PDF document or extractable spreadsheet/text document.";
       await ingestionRunRepo.update(run.id, {
         status: "failed",
         extractionMethod: GEMINI_OM_EXTRACTION_METHOD,
@@ -1101,23 +1133,32 @@ export async function ingestAuthoritativeOm(
       };
     }
 
-    const extracted = await extractOmAnalysisFromGeminiPdfOnly({
-      documents: geminiDocuments,
-      propertyContext: [
-        property.canonicalAddress ?? property.id,
-        candidateDocumentSourceMeta.length > 0
-          ? `Candidate documents:\n${candidateDocumentSourceMeta
-              .map((doc) => `- ${doc.filename} (${doc.category ?? "unclassified"}, ${doc.origin})`)
-              .join("\n")}`
-          : null,
-      ].filter(Boolean).join("\n\n"),
-      enrichmentContext: nonPdfTextContext || null,
-      model: geminiModel,
-    });
+    const propertyContext = [
+      property.canonicalAddress ?? property.id,
+      candidateDocumentSourceMeta.length > 0
+        ? `Candidate documents:\n${candidateDocumentSourceMeta
+            .map((doc) => `- ${doc.filename} (${doc.category ?? "unclassified"}, ${doc.origin})`)
+            .join("\n")}`
+        : null,
+    ].filter(Boolean).join("\n\n");
+    const extracted =
+      parserPlan.provider === "openai"
+        ? await extractOmAnalysisFromOpenAiText({
+            textContext: nonPdfTextContext,
+            propertyContext,
+            model: parserModel,
+          })
+        : await extractOmAnalysisFromGeminiPdfOnly({
+            documents: geminiDocuments,
+            propertyContext,
+            enrichmentContext: nonPdfTextContext || null,
+            model: parserModel,
+          });
     if (!extracted.omAnalysis) {
+      const providerLabel = parserPlan.provider === "openai" ? `OpenAI (${parserModel})` : "Gemini";
       const error = extracted.parseError
-        ? `Gemini authoritative OM extraction failed: ${extracted.parseError}`
-        : "Gemini authoritative OM extraction returned no structured OM analysis.";
+        ? `${providerLabel} authoritative OM extraction failed: ${extracted.parseError}`
+        : `${providerLabel} authoritative OM extraction returned no structured OM analysis.`;
       await ingestionRunRepo.update(run.id, {
         status: "failed",
         extractionMethod: GEMINI_OM_EXTRACTION_METHOD,

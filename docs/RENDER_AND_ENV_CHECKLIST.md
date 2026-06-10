@@ -40,7 +40,8 @@ Optional env:
 Notes:
 
 - `UPLOADED_DOCS_PATH` defaults to `uploads/property-docs`
-- authoritative OM parsing now runs through Gemini PDF ingestion; set `GEMINI_API_KEY` on the API service and keep `GEMINI_OM_MODEL=gemini-3-flash-preview` unless you are intentionally testing another model
+- authoritative OM parsing runs through Gemini PDF ingestion when the package contains PDFs/images; set `GEMINI_API_KEY` on the API service and keep `GEMINI_OM_MODEL=gemini-3-flash-preview` unless you are intentionally testing another model
+- spreadsheet/text-only OM packages (e.g. an `.xlsx` expense statement or rent roll with no PDF) are extracted by OpenAI instead, using `OPENAI_OM_MODEL` (default `gpt-5.5`, reasoning effort via `OPENAI_OM_REASONING_EFFORT`); this requires `OPENAI_API_KEY`, which the API service already needs for dossier/scoring
 - dossier generation is serialized per API process; Gemini OM parsing is also serialized by default with `GEMINI_OM_MAX_CONCURRENCY=1`
 - Gemini 3 OM extraction defaults to `GEMINI_OM_THINKING_LEVEL=low` unless you override it
 - inquiry attachments, uploaded property docs, and generated docs store file bytes in the DB, so new files can still be downloaded on ephemeral disks

@@ -25,8 +25,69 @@ export interface OmAnalysisExtractionResult {
   omAnalysis?: OmAnalysis | null;
 }
 
+/** Provider-agnostic guidance on what the OM source package may contain. */
+export const OM_SOURCE_PACKAGE_RULES = `- The source package may contain an OM, rent roll, T-12/operating statement, expense backup, marketing brochure, financial model, or a combination of these.
+- Classify each source document by its contents before extracting data. Use the OM for property/valuation narrative, rent roll documents for unit rows, and T-12/expense documents for current income and expense lines.
+- Preserve exact current figures shown in the document. Prefer CURRENT over PRO FORMA when both appear.
+- Return one JSON object only.`;
+
+/** Provider-agnostic structured-output rules shared by the Gemini and OpenAI OM extractors. */
+export const OM_STRUCTURED_RESPONSE_RULES = `RESPONSE RULES:
+- Keep these keys at the TOP LEVEL only: propertyInfo, rentRoll, income, expenses, revenueComposition, financialMetrics, valuationMetrics, underwritingMetrics, nycRegulatorySummary, furnishedModel, reportedDiscrepancies, sourceCoverage, investmentTakeaways, recommendedOfferAnalysis, uiFinancialSummary, dossierMemo, noiReported.
+- sourceCoverage may contain ONLY coverage diagnostics and documentClassifications. Do not place uiFinancialSummary, investmentTakeaways, recommendedOfferAnalysis, or dossierMemo inside sourceCoverage.
+- sourceCoverage.documentClassifications should be an array of { filename, documentType, confidence, relevantSections } when filenames or source labels are available.
+- noiReported must be the CURRENT in-place NOI if the OM explicitly states NOI. If the OM does not explicitly state NOI, set noiReported to null and still compute uiFinancialSummary.noi from current income and expenses.
+- uiFinancialSummary must contain current grossRent, noi, capRate, expenseRatio, and breakEvenOccupancy whenever they can be derived from the OM.
+- propertyInfo.totalUnits must be the selected unit count after reconciliation. rentRoll must still include every rent-bearing row, even if one tenant leases multiple spaces and rentRoll rows exceed totalUnits.
+- propertyInfo.packageAddress/address/addressLine must be the building's street address, not a unit, suite, deal name, asset type, or subtitle. Prefer the OM cover page/property summary address. Normalize common NYC forms for matching: title case, expand E/W/N/S to East/West/North/South, expand St/Ave/Blvd/Rd/Pl/Ct/etc. to full street suffixes, keep ZIP in propertyInfo.zip when shown, and do not append ZIP to addressLine.
+- If a narrative/unit summary conflicts with the detailed rent roll, choose one value for calculations, record the conflict in reportedDiscrepancies, and explain exactly why.
+- Use exact CURRENT / IN-PLACE figures. Do not put pro forma numbers into income, noiReported, uiFinancialSummary, or valuationMetrics.
+- In rent-roll tables with adjacent columns like "Rent ($) PSF", "Monthly", and "Annual", never map the rent PSF value into monthlyRent/monthlyBaseRent/monthlyTotalRent. Put the actual monthly dollar column into monthly rent fields, put the annual dollar column into annual rent fields, and preserve the PSF value only as rentPsf or in notes.
+- Gross rent / LTR calculations must sum actual monthly or annual rents, not annual rent per square foot values. If only rent PSF and square footage are available, derive annual rent as rentPsf * sqft and monthly rent as annual / 12, and state that derivation in notes.
+- Preserve exact dollar amounts from the OM. Do not shift decimals or simplify values.`;
+
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return value != null && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasFiniteNumber(value: unknown): boolean {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+/** Fill in sourceCoverage booleans the model omitted, inferred from what was actually returned. */
+export function applyInferredSourceCoverage(parsed: Record<string, unknown>): Record<string, unknown> {
+  const propertyInfo = isPlainObject(parsed.propertyInfo) ? parsed.propertyInfo : {};
+  const income = isPlainObject(parsed.income) ? parsed.income : {};
+  const expenses = isPlainObject(parsed.expenses) ? parsed.expenses : {};
+  const existingCoverage = isPlainObject(parsed.sourceCoverage) ? parsed.sourceCoverage : {};
+  const rentRoll = Array.isArray(parsed.rentRoll) ? parsed.rentRoll : [];
+  const expensesTable = Array.isArray(expenses.expensesTable) ? expenses.expensesTable : [];
+  const uiFinancialSummary = isPlainObject(parsed.uiFinancialSummary) ? parsed.uiFinancialSummary : {};
+  const currentFinancialsExtracted =
+    hasFiniteNumber(income.grossRentActual) ||
+    hasFiniteNumber(income.grossRentPotential) ||
+    hasFiniteNumber(income.effectiveGrossIncome) ||
+    hasFiniteNumber(uiFinancialSummary.grossRent) ||
+    hasFiniteNumber(uiFinancialSummary.noi);
+
+  return {
+    ...parsed,
+    sourceCoverage: {
+      ...existingCoverage,
+      propertyInfoExtracted:
+        existingCoverage.propertyInfoExtracted ?? Object.keys(propertyInfo).length > 0,
+      rentRollExtracted:
+        existingCoverage.rentRollExtracted ?? rentRoll.length > 0,
+      incomeStatementExtracted:
+        existingCoverage.incomeStatementExtracted ?? Object.keys(income).length > 0,
+      expensesExtracted:
+        existingCoverage.expensesExtracted ?? (expensesTable.length > 0 || hasFiniteNumber(expenses.totalExpenses)),
+      currentFinancialsExtracted:
+        existingCoverage.currentFinancialsExtracted ?? currentFinancialsExtracted,
+      unitCountExtracted:
+        existingCoverage.unitCountExtracted ?? (hasFiniteNumber(propertyInfo.totalUnits) || rentRoll.length > 0),
+    },
+  };
 }
 
 function getReportedTotalUnits(omAnalysis: OmAnalysis | null | undefined): number | null {

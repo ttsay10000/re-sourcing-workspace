@@ -1,9 +1,41 @@
 import { describe, expect, it } from "vitest";
 import type { OmAnalysis, OmAuthoritativeSnapshot, PropertyDetails } from "@re-sourcing/contracts";
 import {
+  looksLikeOmStyleFilename,
   mergePropertyOmDetails,
   mergePropertyOmReviewDetails,
+  resolveOmParserPlan,
 } from "./ingestAuthoritativeOm.js";
+
+describe("resolveOmParserPlan", () => {
+  it("routes spreadsheet/text-only packages to OpenAI text extraction", () => {
+    expect(resolveOmParserPlan({ geminiNativeDocumentCount: 0, hasTextContext: true })).toEqual({
+      provider: "openai",
+      mode: "text_only",
+    });
+  });
+
+  it("keeps packages with PDFs/images on Gemini, with or without text context", () => {
+    expect(resolveOmParserPlan({ geminiNativeDocumentCount: 2, hasTextContext: true })).toEqual({
+      provider: "gemini",
+      mode: "pdf_plus_text_context",
+    });
+    expect(resolveOmParserPlan({ geminiNativeDocumentCount: 1, hasTextContext: false })).toEqual({
+      provider: "gemini",
+      mode: "pdf_only",
+    });
+  });
+});
+
+describe("looksLikeOmStyleFilename", () => {
+  it("selects expense statements alongside OM/rent-roll/operating documents", () => {
+    expect(looksLikeOmStyleFilename("325_West_22nd_St._3yr_annual_expense.xlsx")).toBe(true);
+    expect(looksLikeOmStyleFilename("Offering Memorandum.pdf")).toBe(true);
+    expect(looksLikeOmStyleFilename("rent_roll_2026.xlsx")).toBe(true);
+    expect(looksLikeOmStyleFilename("T-12 Operating Statement.pdf")).toBe(true);
+    expect(looksLikeOmStyleFilename("vacation_photos.zip")).toBe(false);
+  });
+});
 
 describe("OM authoritative review state", () => {
   it("marks a new extraction as pending review without replacing the active authoritative snapshot", () => {
