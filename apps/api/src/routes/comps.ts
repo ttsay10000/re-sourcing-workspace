@@ -2,8 +2,12 @@
  * Operating comps ("living database") read API.
  *
  * Every property that has a calculated LTR yield (asset cap rate from the
- * latest deal signals — derived from extracted OM/doc NOI over price) is a
+ * latest deal signals — the reconstructed-actuals NOI basis over price) is a
  * comp row, regardless of pipeline state. Dead deals stay queryable.
+ *
+ * The derived fallback (no signal yet) mirrors the same basis: reconstruct NOI
+ * from extracted gross rent + other income − expenses, and only fall back to
+ * the broker-stated NOI when reconstruction is impossible.
  */
 
 import { Router, type Request, type Response } from "express";
@@ -78,6 +82,10 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
          ds.deal_score,
          ds.generated_at AS signal_at,
          lst.listing_price,
+         p.details#>>'{omData,authoritative,currentFinancials,grossRentalIncome}' AS fallback_rent_om,
+         p.details#>>'{omData,authoritative,currentFinancials,otherIncome}' AS fallback_other_income_om,
+         p.details#>>'{omData,authoritative,expenses,totalExpenses}' AS fallback_expense_total_om,
+         p.details#>>'{omData,authoritative,currentFinancials,operatingExpenses}' AS fallback_expenses_om,
          p.details#>>'{omData,authoritative,currentFinancials,noi}' AS fallback_noi_om,
          p.details#>>'{rentalFinancials,omAnalysis,currentFinancials,noi}' AS fallback_noi_analysis,
          p.details#>>'{rentalFinancials,fromLlm,noi}' AS fallback_noi_llm,
@@ -111,7 +119,15 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
     let rows: OperatingCompRow[] = result.rows
       .map((row) => {
         const signalLtr = toNumber(row.asset_cap_rate);
+        const fallbackRent = toNumber(row.fallback_rent_om);
+        const fallbackExpenses =
+          toNumber(row.fallback_expense_total_om) ?? toNumber(row.fallback_expenses_om);
+        const reconstructedNoi =
+          fallbackRent != null && fallbackExpenses != null
+            ? fallbackRent + (toNumber(row.fallback_other_income_om) ?? 0) - fallbackExpenses
+            : null;
         const fallbackNoi =
+          reconstructedNoi ??
           toNumber(row.fallback_noi_om) ?? toNumber(row.fallback_noi_analysis) ?? toNumber(row.fallback_noi_llm);
         const fallbackAsk =
           toNumber(row.fallback_ask_manual) ?? toNumber(row.fallback_ask_om) ?? toNumber(row.listing_price);

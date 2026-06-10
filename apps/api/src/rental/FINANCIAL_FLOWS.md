@@ -69,13 +69,26 @@ The property UI prefers OM-style analysis when present and falls back to rental-
 ## Return Metric Definitions
 
 - Cash-on-cash (year 1 and average) = (NOI − debt service) / initial equity. Recurring capex is intentionally excluded from the CoC numerator; it is included in unlevered cash flow ("CF after reserves") and in IRR via the levered cash flow series. The dossier Excel (`excelProForma.ts`) and the deal-analysis workbook (`dealAnalysisWorkbook.ts`) use the same definition (debt service is stored as a negative value in the sheets, so `NOI + debtService` is a subtraction).
-- LTR yield = current NOI / purchase basis (the asset cap rate at ask). MTR yield = stabilized / rent-uplift NOI / purchase basis (the adjusted cap rate).
+- LTR yield = reconstructed current NOI / purchase basis (the asset cap rate at ask). MTR yield = stabilized / rent-uplift NOI / purchase basis (the adjusted cap rate).
 
-## LTR vs MTR Yield Callouts
+## Reconstructed NOI Basis (everywhere)
 
-`apps/api/src/deal/yieldSignals.ts` is the single comparison point for LTR vs MTR yields. Whenever an analysis runs it computes the spread (MTR − LTR, in percentage points) and classifies it:
+The LTR-yield numerator is always the **reconstructed basis** from `resolveAssetCapRateNoiBasis` (`underwritingModel.ts`): actual gross rent + other income (+ conservative projected lease-up rent) − expenses. The broker-stated NOI from the OM is only used when reconstruction is impossible (no rent or expense totals) or when an operator manually overrides current NOI.
+
+This basis is used consistently by: the OM workspace calculation (`buildOmCalculation.ts`), the dossier + Excel (`runGenerateDossier.ts`, which also persists the basis into `dealDossier.summary.currentNoi` and the `deal_signals.current_noi` column), the pipeline screening API (`pipelineV2.ts` reconstructs live per row for `ltrYocPct`), and the operating-comps fallback (`routes/comps.ts` reconstructs from extracted rent/expenses before falling back to the broker NOI). Summaries persisted before this change still hold the broker NOI until the property is re-analyzed, but the pipeline's live reconstruction takes priority over the persisted summary, so the table is correct immediately.
+
+## Yield Callouts
+
+`apps/api/src/deal/yieldSignals.ts` is the single comparison point for yield callouts.
+
+LTR vs MTR — whenever an analysis runs it computes the spread (MTR − LTR, in percentage points) and classifies it:
 
 - `mtr_below_ltr` — MTR yield is below the LTR yield; the deal should be underwritten as an LTR play on its cap rate.
 - `mtr_weak_uplift` — MTR beats LTR by less than the healthy-spread threshold (default 0.75 pt; override with env `MTR_MIN_YIELD_SPREAD_PCT`).
 
-The callout is surfaced in three places: the OM calculation snapshot (`yieldSignals` field + validation messages, shown in the OM workspace), deal signals (`yield_spread` column plus a risk-flag entry), and the pipeline screening API (`yocSpreadPct`, `mtrCalloutCode`, `mtrCalloutLabel` on the underwriting summary; the table flags the YoC MTR cell). The pipeline list also supports a `minLtrYoc` filter for sourcing on LTR yield.
+Broker vs reconstructed (`computeBrokerYieldComparison`) — compares the broker's cap rate (OM-stated when listed, otherwise broker NOI ÷ purchase basis) against the reconstructed-actuals cap rate, and flags any divergence of at least 0.1 pt (override with env `BROKER_CAP_MIN_DELTA_PCT`):
+
+- `broker_cap_above_reconstructed` — broker yield runs hot; typically the broker built it on pro forma rents while we underwrite off actuals.
+- `broker_cap_below_reconstructed` — broker NOI nets out items (e.g. vacancy/credit loss) that the actuals basis does not.
+
+The callouts are surfaced in the same three places: the OM calculation snapshot (`yieldSignals` + `brokerYieldComparison` fields + validation messages, shown in the OM workspace and the deal-analysis "Current outputs" card), deal signals (`yield_spread` column plus risk-flag entries; the dossier also records the broker comparison as a financial flag), and the pipeline screening API (`yocSpreadPct`/`mtrCallout*` and `brokerCapRatePct`/`brokerCapCallout*` on the underwriting summary; the table flags the YoC MTR and YoC LTR cells). The pipeline list also supports a `minLtrYoc` filter for sourcing on LTR yield.

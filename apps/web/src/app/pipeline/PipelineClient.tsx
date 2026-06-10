@@ -400,9 +400,19 @@ function mtrYieldFlag(row: PipelineRow, ltr: number | null, mtr: number | null):
   return null;
 }
 
-function ltrYieldFlag(ltr: number | null): YieldFlag | null {
+function ltrYieldFlag(row: PipelineRow, ltr: number | null): YieldFlag | null {
   if (ltr != null && ltr < 0) {
     return { severity: "danger", label: "Negative", title: "Negative LTR yield — check NOI inputs." };
+  }
+  const brokerCode = row.underwriting?.brokerCapCalloutCode;
+  if (brokerCode) {
+    return {
+      severity: "warn",
+      label: brokerCode === "broker_cap_above_reconstructed" ? "Broker high" : "Broker low",
+      title:
+        row.underwriting?.brokerCapCalloutLabel ??
+        "Broker cap rate differs from the yield reconstructed from actuals.",
+    };
   }
   return null;
 }
@@ -3269,6 +3279,12 @@ export default function PipelineClient() {
     sheetUnderwriting?.mtrCalloutCode ?? selectedRow?.underwriting?.mtrCalloutCode ?? null;
   const sheetMtrCalloutLabel =
     sheetUnderwriting?.mtrCalloutLabel ?? selectedRow?.underwriting?.mtrCalloutLabel ?? null;
+  const sheetBrokerCapPct =
+    sheetUnderwriting?.brokerCapRatePct ?? selectedRow?.underwriting?.brokerCapRatePct ?? null;
+  const sheetBrokerCapCalloutCode =
+    sheetUnderwriting?.brokerCapCalloutCode ?? selectedRow?.underwriting?.brokerCapCalloutCode ?? null;
+  const sheetBrokerCapCalloutLabel =
+    sheetUnderwriting?.brokerCapCalloutLabel ?? selectedRow?.underwriting?.brokerCapCalloutLabel ?? null;
   const sheetCurrentNoi = sheetUnderwriting?.currentNoi ?? null;
   const sheetAdjustedNoi = sheetUnderwriting?.adjustedNoi ?? null;
   const sheetNoiUpliftPct =
@@ -3551,7 +3567,7 @@ export default function PipelineClient() {
               const isUnavailable = rowListingUnavailable(row);
               const displayTags = orderedRowTags(row);
               const psfFlag = psfFlagFor(row);
-              const ltrFlag = ltrYieldFlag(rowLtrYoc);
+              const ltrFlag = ltrYieldFlag(row, rowLtrYoc);
               const mtrFlag = mtrYieldFlag(row, rowLtrYoc, rowMtrYoc);
               return (
                 <tr
@@ -3654,6 +3670,11 @@ export default function PipelineClient() {
                   </td>
                   <td className={cx(styles.numericCell, styles.yocCell, flagCellClass(ltrFlag))} title={ltrFlag?.title}>
                     <strong>{formatPercent(rowLtrYoc)}</strong>
+                    {ltrFlag ? (
+                      <span className={cx(styles.yocFlag, ltrFlag.severity === "danger" ? styles.yocFlagDanger : styles.yocFlagWarn)}>
+                        {ltrFlag.label}
+                      </span>
+                    ) : null}
                   </td>
                   <td className={cx(styles.numericCell, styles.yocCell, flagCellClass(mtrFlag))} title={mtrFlag?.title}>
                     <strong>{formatPercent(rowMtrYoc)}</strong>
@@ -3782,8 +3803,23 @@ export default function PipelineClient() {
               </div>
               <div>
                 <dt>YoC LTR</dt>
-                <dd className={sheetLtrYoc == null ? styles.screeningPending : undefined}>{formatPercent(sheetLtrYoc)}</dd>
-                <small>{sheetCurrentNoi != null ? `${formatCurrency(sheetCurrentNoi, false)} current NOI` : "Current NOI"}</small>
+                <dd
+                  className={
+                    cx(
+                      sheetLtrYoc == null && styles.screeningPending,
+                      sheetBrokerCapCalloutCode != null && styles.yocFlagWarn
+                    ) || undefined
+                  }
+                >
+                  {formatPercent(sheetLtrYoc)}
+                </dd>
+                <small title={sheetBrokerCapCalloutLabel ?? undefined}>
+                  {sheetBrokerCapCalloutCode != null && sheetBrokerCapPct != null
+                    ? `Broker cap ${formatPercent(sheetBrokerCapPct)} — pro forma?`
+                    : sheetCurrentNoi != null
+                      ? `${formatCurrency(sheetCurrentNoi, false)} current NOI`
+                      : "Current NOI"}
+                </small>
               </div>
               <div>
                 <dt>Ask</dt>
@@ -4393,6 +4429,15 @@ export default function PipelineClient() {
 	                    <div>
 	                      <dt>YoC MTR</dt>
 	                      <dd>{formatPercent(sheetMtrYoc)}</dd>
+	                    </div>
+	                    <div>
+	                      <dt>Broker cap</dt>
+	                      <dd
+	                        className={sheetBrokerCapCalloutCode != null ? styles.yocFlagWarn : undefined}
+	                        title={sheetBrokerCapCalloutLabel ?? undefined}
+	                      >
+	                        {formatPercent(sheetBrokerCapPct)}
+	                      </dd>
 	                    </div>
 	                    <div>
 	                      <dt>Market cap</dt>

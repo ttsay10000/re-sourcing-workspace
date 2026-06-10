@@ -91,6 +91,29 @@ export function resolvePreferredOmExpenseTable(
   return snapshot ? sanitizeExpenseTableRows(snapshot.expenses?.expensesTable ?? []) : [];
 }
 
+/**
+ * Cap rate (%) as the broker listed it, preferring the authoritative snapshot
+ * and falling back to legacy OM-analysis/LLM extractions. This is the broker's
+ * own figure (often built on pro forma rents) — never the reconstructed basis.
+ */
+export function resolveBrokerStatedCapRatePct(
+  details: PropertyDetails | null | undefined
+): number | null {
+  const authoritative = getAuthoritativeOmSnapshot(details);
+  const authoritativeValuation = asRecord(authoritative?.valuationMetrics);
+  const authoritativeUiSummary = asRecord(authoritative?.uiFinancialSummary);
+  const omAnalysis = asRecord(details?.rentalFinancials?.omAnalysis);
+  const analysisValuation = asRecord(omAnalysis?.valuationMetrics);
+  return (
+    toFiniteNumber(authoritativeValuation?.capRate) ??
+    toFiniteNumber(authoritativeValuation?.currentCapRate) ??
+    toFiniteNumber(authoritativeUiSummary?.capRate) ??
+    toFiniteNumber(analysisValuation?.capRate) ??
+    toFiniteNumber(analysisValuation?.currentCapRate) ??
+    toFiniteNumber(details?.rentalFinancials?.fromLlm?.capRate)
+  );
+}
+
 export function resolvePreferredOmExpenseTotal(
   details: PropertyDetails | null | undefined
 ): number | null {

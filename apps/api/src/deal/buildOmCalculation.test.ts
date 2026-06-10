@@ -216,6 +216,15 @@ describe("buildOmCalculationSnapshotFromInputs", () => {
     expect(snapshot.topLineMetrics.currentNoi).toBe(80_000);
     expect(snapshot.topLineMetrics.currentCapRatePct).toBe(8);
     expect(snapshot.topLineMetrics.stabilizedNoiIncreasePct).toBe(25);
+    expect(snapshot.brokerYieldComparison.brokerNoi).toBe(70_000);
+    expect(snapshot.brokerYieldComparison.brokerCapRatePct).toBeCloseTo(7, 9);
+    expect(snapshot.brokerYieldComparison.brokerCapRateSource).toBe("implied_from_broker_noi");
+    expect(snapshot.brokerYieldComparison.reconstructedCapRatePct).toBe(8);
+    expect(snapshot.brokerYieldComparison.deltaPctPoints).toBe(-1);
+    expect(snapshot.brokerYieldComparison.calloutCode).toBe("broker_cap_below_reconstructed");
+    expect(
+      snapshot.validationMessages.some((message) => message.includes("reconstructed from actuals"))
+    ).toBe(true);
   });
 
   it("uses a manual NOI override for the displayed current NOI basis", () => {

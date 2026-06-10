@@ -80,10 +80,17 @@ import {
 import { resolveEffectiveDealScore } from "../deal/effectiveDealScore.js";
 import { recordDealStageChange } from "../deal/recordDealStageChange.js";
 import { resolveOmAskingPriceFromDetails } from "../deal/omAskingPrice.js";
-import { computeYieldSignals } from "../deal/yieldSignals.js";
+import { computeBrokerYieldComparison, computeYieldSignals } from "../deal/yieldSignals.js";
 import { buildLoiFileName, buildLoiPdf } from "../deal/loiGenerator.js";
 import { saveGeneratedDocument } from "../deal/generatedDocStorage.js";
-import { resolvePreferredOmUnitCount } from "../om/authoritativeOm.js";
+import { resolveAssetCapRateNoiBasis } from "../deal/underwritingModel.js";
+import { resolveProjectedResidentialLeaseUpRentSummary } from "../deal/propertyAssumptions.js";
+import { resolveCurrentFinancialsFromDetails } from "../rental/currentFinancials.js";
+import {
+  resolveBrokerStatedCapRatePct,
+  resolvePreferredOmExpenseTotal,
+  resolvePreferredOmUnitCount,
+} from "../om/authoritativeOm.js";
 
 const router = Router();
 
@@ -1833,45 +1840,53 @@ function getCalculatedDealScore(row: PipelineBaseRow): number | null {
 }
 
 function getCapRate(row: PipelineBaseRow): number | null {
-  const details = row.details;
-  const summary = getCurrentDossierSummary(row);
-  const allowSignalFallback = hasCurrentUnderwritingSource(row);
-  const explicit =
-    readFirstNumericPath(details, [
-      ["omData", "authoritative", "valuationMetrics", "capRate"],
-      ["omData", "authoritative", "valuationMetrics", "currentCapRate"],
-      ["omData", "authoritative", "uiFinancialSummary", "capRate"],
-      ["rentalFinancials", "omAnalysis", "valuationMetrics", "capRate"],
-      ["rentalFinancials", "omAnalysis", "valuationMetrics", "currentCapRate"],
-      ["rentalFinancials", "fromLlm", "capRate"],
-    ]);
+  const explicit = resolveBrokerStatedCapRatePct(row.details);
   if (explicit != null) return explicit;
-  const noi =
-    readNumericPath(details, ["omData", "authoritative", "currentFinancials", "noi"]) ??
-    readNumericPath(details, ["omData", "authoritative", "currentFinancials", "netOperatingIncome"]) ??
-    readNumericPath(details, ["rentalFinancials", "omAnalysis", "currentFinancials", "noi"]) ??
-    readNumericPath(details, ["rentalFinancials", "omAnalysis", "currentFinancials", "netOperatingIncome"]) ??
-    readNumericPath(details, ["rentalFinancials", "fromLlm", "noi"]) ??
-    summary?.currentNoi ??
-    (allowSignalFallback ? toFiniteNumber(row.latest_signal_current_noi) : null) ??
-    summary?.adjustedNoi ??
-    (allowSignalFallback ? toFiniteNumber(row.latest_signal_adjusted_noi) : null);
+  const noi = getCurrentNoi(row) ?? getAdjustedNoi(row);
   const price = getAskingPrice(row);
   if (noi == null || price == null || price <= 0) return null;
   return (noi / price) * 100;
 }
 
-function getCurrentNoi(row: PipelineBaseRow): number | null {
+/** Broker-stated NOI exactly as extracted from the OM/docs — pro forma territory. */
+function getBrokerReportedNoi(row: PipelineBaseRow): number | null {
   const details = row.details;
-  const summary = getCurrentDossierSummary(row);
-  const allowSignalFallback = hasCurrentUnderwritingSource(row);
   return (
-    summary?.currentNoi ??
     readNumericPath(details, ["omData", "authoritative", "currentFinancials", "noi"]) ??
     readNumericPath(details, ["omData", "authoritative", "currentFinancials", "netOperatingIncome"]) ??
     readNumericPath(details, ["rentalFinancials", "omAnalysis", "currentFinancials", "noi"]) ??
     readNumericPath(details, ["rentalFinancials", "omAnalysis", "currentFinancials", "netOperatingIncome"]) ??
-    readNumericPath(details, ["rentalFinancials", "fromLlm", "noi"]) ??
+    readNumericPath(details, ["rentalFinancials", "fromLlm", "noi"])
+  );
+}
+
+/**
+ * Live reconstructed NOI basis matching the OM workspace: actual gross rent +
+ * other income (+ projected lease-up) − expenses, with a manual NOI override
+ * winning. Null when there is no authoritative OM to reconstruct from.
+ */
+function getReconstructedNoiBasis(row: PipelineBaseRow): number | null {
+  const details = row.details;
+  const extracted = resolveCurrentFinancialsFromDetails(details);
+  const overrideNoi = toFiniteNumber(getPropertyDossierAssumptions(details)?.currentNoi);
+  const leaseUpRent = resolveProjectedResidentialLeaseUpRentSummary(details).totalAnnualRent;
+  return resolveAssetCapRateNoiBasis({
+    currentNoi: overrideNoi ?? extracted.noi,
+    currentGrossRent: extracted.grossRentalIncome,
+    currentOtherIncome: extracted.otherIncome,
+    currentExpensesTotal: resolvePreferredOmExpenseTotal(details) ?? extracted.operatingExpenses,
+    preferProvidedCurrentNoi: overrideNoi != null,
+    conservativeProjectedLeaseUpRent: leaseUpRent != null && leaseUpRent > 0 ? leaseUpRent : null,
+  });
+}
+
+function getCurrentNoi(row: PipelineBaseRow): number | null {
+  const summary = getCurrentDossierSummary(row);
+  const allowSignalFallback = hasCurrentUnderwritingSource(row);
+  return (
+    getReconstructedNoiBasis(row) ??
+    summary?.currentNoi ??
+    getBrokerReportedNoi(row) ??
     (allowSignalFallback ? toFiniteNumber(row.latest_signal_current_noi) : null)
   );
 }
@@ -1898,6 +1913,12 @@ function buildUnderwriting(row: PipelineBaseRow): UiV2UnderwritingSummary | null
   const ltrYocPct = getNoiYieldOnCost(row, currentNoi, allowSignalFallback ? row.latest_signal_asset_cap_rate : null);
   const mtrYocPct = getNoiYieldOnCost(row, adjustedNoi, allowSignalFallback ? row.latest_signal_adjusted_cap_rate : null);
   const yieldSignals = computeYieldSignals({ ltrYieldPct: ltrYocPct, mtrYieldPct: mtrYocPct });
+  const brokerYieldComparison = computeBrokerYieldComparison({
+    brokerNoi: getBrokerReportedNoi(row),
+    brokerStatedCapRatePct: resolveBrokerStatedCapRatePct(details),
+    reconstructedNoi: getReconstructedNoiBasis(row),
+    purchasePrice: getAskingPrice(row),
+  });
   const hasAnyUnderwriting =
     summary != null ||
     assumptions != null ||
@@ -1922,6 +1943,11 @@ function buildUnderwriting(row: PipelineBaseRow): UiV2UnderwritingSummary | null
     yocSpreadPct: yieldSignals.spreadPctPoints,
     mtrCalloutCode: yieldSignals.calloutCode,
     mtrCalloutLabel: yieldSignals.calloutLabel,
+    brokerCapRatePct: brokerYieldComparison.brokerCapRatePct,
+    brokerCapRateSource: brokerYieldComparison.brokerCapRateSource,
+    brokerVsReconstructedPctPoints: brokerYieldComparison.deltaPctPoints,
+    brokerCapCalloutCode: brokerYieldComparison.calloutCode,
+    brokerCapCalloutLabel: brokerYieldComparison.calloutLabel,
     riskFlags: allowSignalFallback && Array.isArray(row.latest_signal_risk_flags)
       ? (row.latest_signal_risk_flags as unknown[]).filter((flag): flag is string => typeof flag === "string")
       : [],
