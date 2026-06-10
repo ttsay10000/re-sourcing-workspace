@@ -114,11 +114,24 @@
   line-height: var(--leading-relaxed);
 }
 
+.mapFootnote {
+  margin: 0.55rem 0 0;
+  color: var(--app-muted);
+  font-size: 0.74rem;
+  line-height: var(--leading-relaxed, 1.5);
+}
+
 /* ─── Two-column data grid ────────────────────────────────────── */
 
 .dataGrid {
   display: grid;
-  grid-template-columns: minmax(260px, 0.8fr) minmax(0, 1.6fr);
+  grid-template-columns: minmax(300px, 0.9fr) minmax(0, 1.5fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+.sideColumn {
+  display: grid;
   gap: 1rem;
   align-items: start;
 }
@@ -229,6 +242,54 @@
   font-size: 0.78rem;
 }
 
+.sinceCell {
+  color: var(--app-muted);
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
+/* ─── Trend indicators (▲ / ▼ / flat) ─────────────────────────── */
+
+.trendUp,
+.trendDown,
+.trendFlat,
+.trendNone {
+  font-size: 0.78rem;
+  font-weight: 750;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.trendUp {
+  color: #0f766e;
+}
+
+.trendDown {
+  color: #b91c1c;
+}
+
+.trendFlat {
+  color: var(--app-muted);
+}
+
+.trendNone {
+  color: var(--app-line);
+}
+
+/* KPI-sized variants for the "Cap-rate moves" card value. */
+.kpiTrendUp {
+  color: #0f766e;
+}
+
+.kpiTrendDown {
+  color: #b91c1c;
+}
+
+.kpiTrendSep {
+  color: var(--app-muted);
+  font-weight: 400;
+}
+
 .emptyRow td {
   padding: 0.8rem 0;
   color: var(--app-muted);
@@ -253,10 +314,46 @@
   cursor: pointer;
   padding: 0;
   transition: transform 120ms ease;
+  z-index: 2;
 }
 
 .pin:hover {
   transform: scale(1.25);
+}
+
+/* ─── Neighborhood median badges ──────────────────────────────── */
+
+/* Marker elements stack by DOM order; keep badges under deal pins. */
+.areaBadge {
+  display: grid;
+  justify-items: center;
+  gap: 0;
+  padding: 0.18rem 0.5rem 0.22rem;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1.5px solid;
+  border-radius: var(--radius-pill, 999px);
+  box-shadow: 0 1px 5px rgba(24, 24, 27, 0.22);
+  z-index: 1;
+  pointer-events: auto;
+}
+
+.areaBadgeName {
+  max-width: 15ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--app-muted, #71717a);
+}
+
+.areaBadgeValue {
+  font-size: 0.8rem;
+  font-weight: 850;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
 }
 
 .popup {
