@@ -83,12 +83,9 @@ import { resolveOmAskingPriceFromDetails } from "../deal/omAskingPrice.js";
 import { computeBrokerYieldComparison, computeYieldSignals } from "../deal/yieldSignals.js";
 import { buildLoiFileName, buildLoiPdf } from "../deal/loiGenerator.js";
 import { saveGeneratedDocument } from "../deal/generatedDocStorage.js";
-import { resolveAssetCapRateNoiBasis } from "../deal/underwritingModel.js";
-import { resolveProjectedResidentialLeaseUpRentSummary } from "../deal/propertyAssumptions.js";
-import { resolveCurrentFinancialsFromDetails } from "../rental/currentFinancials.js";
+import { resolveReconstructedNoiBasisFromDetails } from "../deal/reconstructedNoiBasis.js";
 import {
   resolveBrokerStatedCapRatePct,
-  resolvePreferredOmExpenseTotal,
   resolvePreferredOmUnitCount,
 } from "../om/authoritativeOm.js";
 
@@ -1860,31 +1857,11 @@ function getBrokerReportedNoi(row: PipelineBaseRow): number | null {
   );
 }
 
-/**
- * Live reconstructed NOI basis matching the OM workspace: actual gross rent +
- * other income (+ projected lease-up) − expenses, with a manual NOI override
- * winning. Null when there is no authoritative OM to reconstruct from.
- */
-function getReconstructedNoiBasis(row: PipelineBaseRow): number | null {
-  const details = row.details;
-  const extracted = resolveCurrentFinancialsFromDetails(details);
-  const overrideNoi = toFiniteNumber(getPropertyDossierAssumptions(details)?.currentNoi);
-  const leaseUpRent = resolveProjectedResidentialLeaseUpRentSummary(details).totalAnnualRent;
-  return resolveAssetCapRateNoiBasis({
-    currentNoi: overrideNoi ?? extracted.noi,
-    currentGrossRent: extracted.grossRentalIncome,
-    currentOtherIncome: extracted.otherIncome,
-    currentExpensesTotal: resolvePreferredOmExpenseTotal(details) ?? extracted.operatingExpenses,
-    preferProvidedCurrentNoi: overrideNoi != null,
-    conservativeProjectedLeaseUpRent: leaseUpRent != null && leaseUpRent > 0 ? leaseUpRent : null,
-  });
-}
-
 function getCurrentNoi(row: PipelineBaseRow): number | null {
   const summary = getCurrentDossierSummary(row);
   const allowSignalFallback = hasCurrentUnderwritingSource(row);
   return (
-    getReconstructedNoiBasis(row) ??
+    resolveReconstructedNoiBasisFromDetails(row.details) ??
     summary?.currentNoi ??
     getBrokerReportedNoi(row) ??
     (allowSignalFallback ? toFiniteNumber(row.latest_signal_current_noi) : null)
@@ -1916,7 +1893,7 @@ function buildUnderwriting(row: PipelineBaseRow): UiV2UnderwritingSummary | null
   const brokerYieldComparison = computeBrokerYieldComparison({
     brokerNoi: getBrokerReportedNoi(row),
     brokerStatedCapRatePct: resolveBrokerStatedCapRatePct(details),
-    reconstructedNoi: getReconstructedNoiBasis(row),
+    reconstructedNoi: resolveReconstructedNoiBasisFromDetails(details),
     purchasePrice: getAskingPrice(row),
   });
   const hasAnyUnderwriting =

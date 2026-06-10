@@ -11,6 +11,7 @@ import { DEAL_FLOW_STAGES } from "@re-sourcing/contracts";
 import type {
   DealFlowRecommendationsResponse,
   DealStatus,
+  PropertyDetails,
   SavedDeal,
   UiV2DealProgressSummaryResponse,
   UiV2DealPathState,
@@ -30,6 +31,7 @@ import {
   hasCompletedDealDossier,
 } from "../deal/propertyDossierState.js";
 import { resolvePreferredOmUnitCount } from "../om/authoritativeOm.js";
+import { resolveReconstructedNoiBasisFromDetails } from "../deal/reconstructedNoiBasis.js";
 
 const router = Router();
 
@@ -739,6 +741,9 @@ function getSavedCurrentNoi(row: SavedProgressBaseRow): number | null {
   const summary = getCurrentDossierSummary(row);
   const allowSignalFallback = hasCurrentUnderwritingSource(row);
   return (
+    // Same numerator as the pipeline and OM workspace: reconstructed actuals
+    // basis first, broker-stated NOI only as a fallback.
+    resolveReconstructedNoiBasisFromDetails(details as PropertyDetails | null) ??
     summary?.currentNoi ??
     readNumericPath(details, ["omData", "authoritative", "currentFinancials", "noi"]) ??
     readNumericPath(details, ["omData", "authoritative", "currentFinancials", "netOperatingIncome"]) ??
