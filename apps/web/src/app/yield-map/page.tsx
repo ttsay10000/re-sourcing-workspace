@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { PageHeader, StatCard } from "@/components/ui";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Badge, PageHeader, StatCard } from "@/components/ui";
 import { API_BASE } from "@/lib/api";
 import { formatPercent, formatCurrencyExact, EMPTY_VALUE } from "@/lib/format";
 import styles from "./yieldMap.module.css";
@@ -25,6 +25,9 @@ interface CompRow {
   pricePsf: number | null;
   expenseRatioPct: number | null;
   dealScore: number | null;
+  /** Set when yield data is untrustworthy (0%/negative cap, $0 NOI); excluded from stats. */
+  yieldFlag: string | null;
+  yieldFlagDetail: string | null;
 }
 
 interface BoroughStat {
@@ -40,6 +43,7 @@ interface CompsResponse {
   summary: {
     count: number;
     withCoordinates: number;
+    flaggedCount?: number;
     averageLtrYieldPct: number | null;
     medianLtrYieldPct: number | null;
     boroughStats: BoroughStat[];
@@ -213,41 +217,85 @@ export default function YieldMapPage() {
   const [marketError, setMarketError] = useState<string | null>(null);
   const [marketSource, setMarketSource] = useState<MarketSourceFilter>("all");
   const [marketLayerOn, setMarketLayerOn] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null);
 
-  useEffect(() => {
-    const controller = new AbortController();
-    setLoading(true);
-    fetch(`${API_BASE}/api/comps/operating`, { credentials: "include", signal: controller.signal })
-      .then(async (res) => {
-        const payload = (await res.json().catch(() => ({}))) as CompsResponse & { error?: string };
-        if (!res.ok || payload.error) throw new Error(payload.error || `HTTP ${res.status}`);
-        setData(payload);
-        setError(null);
-      })
-      .catch((err) => {
-        if (err instanceof DOMException && err.name === "AbortError") return;
-        setError(err instanceof Error ? err.message : "Failed to load yield map.");
-      })
-      .finally(() => setLoading(false));
-    return () => controller.abort();
+  const loadDeals = useCallback(async (options?: { signal?: AbortSignal; initial?: boolean }) => {
+    if (options?.initial) setLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/comps/operating`, {
+        credentials: "include",
+        signal: options?.signal,
+      });
+      const payload = (await res.json().catch(() => ({}))) as CompsResponse & { error?: string };
+      if (!res.ok || payload.error) throw new Error(payload.error || `HTTP ${res.status}`);
+      setData(payload);
+      setError(null);
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      setError(err instanceof Error ? err.message : "Failed to load yield map.");
+    } finally {
+      if (options?.initial) setLoading(false);
+    }
   }, []);
 
-  useEffect(() => {
-    const controller = new AbortController();
-    const query = marketSource === "all" ? "" : `?source_type=${marketSource}`;
-    fetch(`${API_BASE}/api/neighborhood-summaries${query}`, { credentials: "include", signal: controller.signal })
-      .then(async (res) => {
+  const loadMarket = useCallback(
+    async (options?: { signal?: AbortSignal }) => {
+      const query = marketSource === "all" ? "" : `?source_type=${marketSource}`;
+      try {
+        const res = await fetch(`${API_BASE}/api/neighborhood-summaries${query}`, {
+          credentials: "include",
+          signal: options?.signal,
+        });
         const payload = (await res.json().catch(() => ({}))) as MarketSummariesResponse & { error?: string };
         if (!res.ok || payload.error) throw new Error(payload.error || `HTTP ${res.status}`);
         setMarket(payload);
         setMarketError(null);
-      })
-      .catch((err) => {
+      } catch (err) {
         if (err instanceof DOMException && err.name === "AbortError") return;
         setMarketError(err instanceof Error ? err.message : "Failed to load market layer.");
-      });
+      }
+    },
+    [marketSource]
+  );
+
+  const refreshAll = useCallback(async () => {
+    setRefreshing(true);
+    await Promise.allSettled([loadDeals(), loadMarket()]);
+    setLastRefreshedAt(new Date());
+    setRefreshing(false);
+  }, [loadDeals, loadMarket]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void loadDeals({ signal: controller.signal, initial: true }).then(() => setLastRefreshedAt(new Date()));
     return () => controller.abort();
-  }, [marketSource]);
+  }, [loadDeals]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void loadMarket({ signal: controller.signal });
+    return () => controller.abort();
+  }, [loadMarket]);
+
+  // New uploads land via async extraction, so the map re-pulls from the
+  // database automatically: every 60s while the tab is visible, and whenever
+  // the user returns to the tab.
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === "visible") void refreshAll();
+    }, 60_000);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void refreshAll();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
+    };
+  }, [refreshAll]);
 
   const rows = useMemo(() => {
     const all = data?.comps ?? [];
@@ -269,10 +317,14 @@ export default function YieldMapPage() {
           `LTR ${fmtPct(row.ltrYieldPct, 2)} · MTR ${fmtPct(row.mtrYieldPct, 2)}`,
           `NOI ${formatCurrencyExact(row.currentNoi)} · ${row.units ?? EMPTY_VALUE} units`,
           row.dealStage ? `Stage: ${row.dealStage.replace(/_/g, " ")}` : "Stage: not set",
+          ...(row.yieldFlagDetail ? [`⚠ ${row.yieldFlagDetail}`] : []),
         ],
       })),
     [colorBy, geoRows]
   );
+
+  const flaggedRows = useMemo(() => rows.filter((row) => row.yieldFlag != null), [rows]);
+  const yieldRows = useMemo(() => rows.filter((row) => row.ltrYieldPct != null), [rows]);
 
   const boroughOptions = useMemo(
     () => [...new Set((data?.comps ?? []).map((row) => row.borough ?? "Unknown"))].sort(),
@@ -453,6 +505,20 @@ export default function YieldMapPage() {
         subtitle="Deal-level LTR yield (extracted NOI ÷ price) from our own pipeline, layered over market context from ingested broker materials and published research — with provenance on every number."
         actions={
           <div className={styles.headerActions}>
+            <button
+              type="button"
+              className={styles.refreshButton}
+              onClick={() => void refreshAll()}
+              disabled={refreshing}
+              title="Re-pull deals and market layer from the database. Auto-refreshes every 60s and on tab focus."
+            >
+              {refreshing ? "Refreshing…" : "Refresh"}
+              {lastRefreshedAt ? (
+                <span className={styles.refreshStamp}>
+                  {lastRefreshedAt.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}
+                </span>
+              ) : null}
+            </button>
             <a href="/market-docs" className={styles.headerLink}>
               Market docs →
             </a>
@@ -489,7 +555,7 @@ export default function YieldMapPage() {
             <StatCard
               tone="neutral"
               label="Deals with yield"
-              value={rows.length}
+              value={yieldRows.length}
             />
             <StatCard
               tone="brand"
@@ -506,6 +572,14 @@ export default function YieldMapPage() {
               label="Market comps (12mo)"
               value={summaries.reduce((sum, summary) => sum + summary.compCount12mo, 0)}
             />
+            {flaggedRows.length > 0 ? (
+              <StatCard
+                tone="danger"
+                label="Yield data flags"
+                value={flaggedRows.length}
+                sub="0% / $0 NOI — excluded from stats"
+              />
+            ) : null}
           </div>
 
           <div className={styles.panel}>
@@ -643,7 +717,13 @@ export default function YieldMapPage() {
                         <div className={styles.dealNeighborhood}>{row.neighborhood ?? row.borough ?? ""}</div>
                       </td>
                       <td className={styles.yieldCell} style={{ color: yieldColor(row.ltrYieldPct) }}>
-                        {fmtPct(row.ltrYieldPct, 2)}
+                        {row.yieldFlag ? (
+                          <Badge tone="danger" title={row.yieldFlagDetail ?? undefined}>
+                            review
+                          </Badge>
+                        ) : (
+                          fmtPct(row.ltrYieldPct, 2)
+                        )}
                       </td>
                       <td>{fmtPct(row.mtrYieldPct, 2)}</td>
                       <td>{formatCurrencyExact(row.currentNoi)}</td>

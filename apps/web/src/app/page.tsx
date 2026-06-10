@@ -238,6 +238,7 @@ function HomePageContent() {
   const [error, setError] = useState<string | null>(null);
   const [terminalCounter, setTerminalCounter] = useState<"closed" | "rejected">("closed");
   const [openAttentionGroups, setOpenAttentionGroups] = useState<Record<string, boolean>>({});
+  const [yieldFlagRows, setYieldFlagRows] = useState<HomeProgressRow[]>([]);
 
   useEffect(() => {
     let ignore = false;
@@ -279,6 +280,27 @@ function HomePageContent() {
       }
     }
     void loadDigest();
+    async function loadYieldFlags() {
+      try {
+        const response = await fetch(`${API_BASE}/api/comps/operating?flagged=1`, { credentials: "include" });
+        const data = (await response.json().catch(() => ({}))) as {
+          comps?: Array<{ propertyId: string; canonicalAddress: string; neighborhood?: string | null; yieldFlagDetail?: string | null }>;
+          error?: string;
+        };
+        if (ignore || !response.ok || data.error) return;
+        setYieldFlagRows(
+          (data.comps ?? []).map((comp) => ({
+            propertyId: comp.propertyId,
+            canonicalAddress: comp.canonicalAddress,
+            displayAddress: comp.canonicalAddress,
+            neighborhood: comp.neighborhood ?? null,
+          }))
+        );
+      } catch {
+        // group simply doesn't render
+      }
+    }
+    void loadYieldFlags();
     return () => {
       ignore = true;
     };
@@ -373,13 +395,15 @@ function HomePageContent() {
     const missingBroker = pipelineRows.filter((row) => !row.broker?.email).slice(0, 5);
     const openActionRows = pipelineRows.filter((row) => row.openActionItemCount);
     return [
+      // 0%/negative cap or $0 NOI: excluded from Yield Map stats until the extraction is fixed.
+      { label: "Yield data flags", icon: AlertTriangle, tone: "danger", count: yieldFlagRows.length, rows: yieldFlagRows.slice(0, 5) },
       { label: "Missing enrichment", icon: AlertTriangle, tone: "warning", count: missingEnrichment.length, rows: missingEnrichment },
       { label: "Tour inputs needed", icon: CalendarClock, tone: "warning", count: tourInputsNeeded.length, rows: tourInputsNeeded.slice(0, 5) },
       { label: "Open action items", icon: RefreshCcw, tone: "neutral", count: openActionRows.length, rows: openActionRows.slice(0, 5) },
       { label: "Missing broker contact", icon: MailX, tone: "danger", count: missingBroker.length, rows: missingBroker },
       { label: "Needs OM request", icon: FileQuestion, tone: "warning", count: missingDocs.length, rows: missingDocs },
     ];
-  }, [pipelineRows]);
+  }, [pipelineRows, yieldFlagRows]);
 
   return (
     <main className={styles.page}>

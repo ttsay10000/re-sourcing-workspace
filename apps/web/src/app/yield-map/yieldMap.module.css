@@ -507,3 +507,35 @@
 .hoodPopupShell {
   z-index: 5;
 }
+
+.refreshButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  border: 1px solid var(--app-line);
+  border-radius: var(--radius-md, 8px);
+  background: var(--app-surface);
+  color: var(--app-ink-secondary);
+  font-size: 0.78rem;
+  font-weight: 700;
+  padding: 0.4rem 0.7rem;
+  cursor: pointer;
+  margin-bottom: 0.35rem;
+  transition: background 130ms ease, color 130ms ease;
+}
+
+.refreshButton:hover:not(:disabled) {
+  color: var(--brand-strong, #115e59);
+}
+
+.refreshButton:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.refreshStamp {
+  font-weight: 600;
+  font-size: 0.68rem;
+  color: var(--app-muted);
+  font-variant-numeric: tabular-nums;
+}
