@@ -1,6 +1,10 @@
 # UI Overhaul — Phase 2 Execution Plan (Consolidated)
 
-**Date:** 2026-06-10 (v2, consolidated with live-app feedback) · **Baseline:** main @ `32147ed` (`npm run check` 244/244 green) · **Status:** ARMED — do not execute until Tyler gives GO.
+**Date:** 2026-06-10 (v2, consolidated with live-app feedback) · **Baseline:** main @ `32147ed` · **Status:** GO received — executed on `claude/blissful-newton-r2dbxs`.
+
+**Execution status:** R0 ✅ (card overlap fix, schema guard + migration hints, derived-yield comps population) · R7 ✅ (reject⇒unsave + restore symmetry, /saved card grid with financials band + include-rejected toggle, profile slimmed, AppShell cleanup) · R8 ✅ (FileDropzone everywhere, OM intake restyled) · R6 ✅ (real freshness timestamp, digest-preview strip, dead CSS pruned, rule-based tag; hidden-route decisions still await Tyler) · R2 ✅ (broker-email/OM-request/follow-up steppers, board + pipeline keyboard triage with ? overlay) · R1 ✅ (canonical stage recording wired into all status writes, migration 057 backfill, guarded stageEnteredAt, AgingChip + column ask totals) · R2-staleness ✅ (stale OM requests 10d+, stuck underwriting 14d+, tested) · R3 ✅ (MapLibre map, yield/stage pin coloring, popups, auto-fit) · R4 ✅ (IRR null reasons, NOI-override banner, cap-basis labels verified) · **R5 ◻ remaining** — promote/reject run endpoints exist (`properties.ts:2908`) but have no UI surface; the tear-sheet (edit-before-promote dialog, per-field confidence chips, retry) is a fresh surface and needs its own session as sized.
+
+**Ops still required:** run `npm run db:migrate` against the deployed DATABASE_URL (056 + 057). The boot schema guard and comps error hints will call this out loudly until done.
 
 v2 consolidates the post-overhaul recommendations (R1–R6) with Tyler's screenshot review of the deployed app: Yield Map load failure + population question, progress-card layout overlap, reject-should-unsave, saved-deals consolidation (profile grid → Saved tab with prominent financials), button-spacing tidy-up, and a real drag-and-drop multi-file upload. CRM v2 (WS8) stays out of scope.
 
