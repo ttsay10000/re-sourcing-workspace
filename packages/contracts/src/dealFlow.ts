@@ -124,3 +124,34 @@ export function dealFlowStageForStatus(status: string | null | undefined): DealF
   if (!normalized) return null;
   return DEAL_FLOW_STAGES.find((stage) => stage.statuses.includes(normalized)) ?? null;
 }
+
+/* ── "What to do next" recommendations (GET /api/ui-v2/deal-progress/recommendations) ── */
+
+export type DealFlowRecommendationKind =
+  | "tour_inputs"
+  | "confirm_tours"
+  | "missing_broker_email"
+  | "request_oms"
+  | "underwriting_review"
+  | "loi_followup";
+
+export type DealFlowRecommendation = {
+  id: DealFlowRecommendationKind;
+  /** Action phrased for the user, e.g. "Add tour outcomes for 2 properties". */
+  title: string;
+  /** Short supporting line listing example addresses. */
+  detail: string | null;
+  count: number;
+  /** Board stage the action chip should filter to. */
+  stageId: DealFlowStageId | null;
+  propertyIds: string[];
+};
+
+export type DealFlowRecommendationsResponse = {
+  /** One-sentence summary line above the items. */
+  headline: string;
+  items: DealFlowRecommendation[];
+  generatedAt: string;
+  /** Whether the LLM produced the phrasing/ordering or the rule engine did. */
+  source: "llm" | "rules";
+};

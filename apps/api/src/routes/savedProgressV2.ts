@@ -8,6 +8,7 @@
 import { Router, type Request, type Response } from "express";
 import type { Pool } from "pg";
 import type {
+  DealFlowRecommendationsResponse,
   DealStatus,
   SavedDeal,
   UiV2DealProgressSummaryResponse,
@@ -17,6 +18,10 @@ import type {
 } from "@re-sourcing/contracts";
 import { getPool, UserProfileRepo } from "@re-sourcing/db";
 import { resolveEffectiveDealScore } from "../deal/effectiveDealScore.js";
+import {
+  buildProgressRecommendations,
+  type RecommendationInputRow,
+} from "../deal/progressRecommendations.js";
 import { resolveOmAskingPriceFromDetails } from "../deal/omAskingPrice.js";
 import {
   getPropertyDossierAssumptions,
@@ -107,6 +112,10 @@ interface SavedProgressBaseRow {
   broker_comp_package_count: number | string | null;
   open_action_item_count: number | string | null;
   latest_inquiry_sent_at: Date | string | null;
+  manual_broker_name: string | null;
+  manual_broker_email: string | null;
+  recipient_contact_email: string | null;
+  broker_display_name: string | null;
   rejection_reason_code?: string | null;
   rejection_reason_label?: string | null;
   rejection_note?: string | null;
@@ -179,6 +188,11 @@ interface ProgressPropertyRow {
   underwritingReviewCompleted: boolean;
   dealPath: UiV2DealPathState | null;
   openActionItemCount: number;
+  neighborhood: string | null;
+  borough: string | null;
+  firstImageUrl: string | null;
+  brokerName: string | null;
+  brokerEmail: string | null;
   updatedAt: string;
 }
 
@@ -888,6 +902,11 @@ function mapProgressRow(row: SavedProgressBaseRow): ProgressPropertyRow {
     underwritingReviewCompleted: underwritingReview.completed,
     dealPath: readDealPath(row.details),
     openActionItemCount: saved.openActionItemCount,
+    neighborhood: saved.neighborhood,
+    borough: saved.borough,
+    firstImageUrl: saved.firstImageUrl,
+    brokerName: row.manual_broker_name ?? row.broker_display_name,
+    brokerEmail: row.manual_broker_email ?? row.recipient_contact_email,
     updatedAt: saved.updatedAt,
   };
 }
@@ -971,8 +990,14 @@ function baseSelectSql(hasRejections: boolean, savedOnly: boolean): string {
        COALESCE(bcp.broker_comp_package_count, 0) AS broker_comp_package_count,
        COALESCE(ai.open_action_item_count, 0) AS open_action_item_count,
        pis.sent_at AS latest_inquiry_sent_at,
+       rr.manual_broker_name,
+       rr.manual_broker_email,
+       rr.contact_email AS recipient_contact_email,
+       bc.display_name AS broker_display_name,
        ${rejectionSelect(hasRejections)}
      FROM ${savedOnly ? "saved_deals sd INNER JOIN properties p ON p.id = sd.property_id" : "properties p LEFT JOIN saved_deals sd ON sd.property_id = p.id AND sd.user_id = $1"}
+     LEFT JOIN property_recipient_resolution rr ON rr.property_id = p.id
+     LEFT JOIN broker_contacts bc ON bc.id = rr.contact_id
      LEFT JOIN LATERAL (
        SELECT l.*
        FROM listing_property_matches m
@@ -1240,6 +1265,53 @@ router.get("/ui-v2/deal-progress", async (_req: Request, res: Response) => {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[ui-v2 deal-progress]", err);
     res.status(503).json({ error: "Failed to load v2 deal progress.", details: message });
+  }
+});
+
+const RECOMMENDATIONS_TTL_MS = 10 * 60 * 1000;
+let recommendationsCache: { key: string; expiresAt: number; payload: DealFlowRecommendationsResponse } | null = null;
+
+router.get("/ui-v2/deal-progress/recommendations", async (req: Request, res: Response) => {
+  try {
+    const userId = await getDefaultUserId();
+    const pool = getPool();
+    const hasRejections = await hasTable(pool, "property_rejections");
+    const baseRows = await fetchProgressRows(pool, userId, hasRejections);
+    const rows = baseRows.map(mapProgressRow);
+    const sections = buildProgressSections(rows);
+
+    const inputRows: RecommendationInputRow[] = sections.flatMap((section) =>
+      section.rows.map((row) => ({
+        sectionId: section.id,
+        propertyId: row.propertyId,
+        displayAddress: row.displayAddress || row.canonicalAddress,
+        brokerEmail: row.brokerEmail,
+        hasOm: row.hasOm,
+        omStatus: row.omStatus,
+        tourScheduledAt: row.dealPath?.tourScheduledAt ?? null,
+        postTourDecision: row.dealPath?.postTourDecision ?? null,
+        underwritingReviewRequired: row.underwritingReviewRequired,
+        underwritingReviewCompleted: row.underwritingReviewCompleted,
+      }))
+    );
+
+    // Board state digest: same inputs within the TTL serve the cached answer.
+    const cacheKey = JSON.stringify(
+      inputRows.map((row) => [row.sectionId, row.propertyId, row.brokerEmail != null, row.postTourDecision ?? ""])
+    );
+    const force = String(req.query.refresh ?? "") === "1";
+    if (!force && recommendationsCache && recommendationsCache.key === cacheKey && recommendationsCache.expiresAt > Date.now()) {
+      res.json(recommendationsCache.payload);
+      return;
+    }
+
+    const payload = await buildProgressRecommendations(inputRows);
+    recommendationsCache = { key: cacheKey, expiresAt: Date.now() + RECOMMENDATIONS_TTL_MS, payload };
+    res.json(payload);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[ui-v2 deal-progress recommendations]", err);
+    res.status(503).json({ error: "Failed to build recommendations.", details: message });
   }
 });
 
