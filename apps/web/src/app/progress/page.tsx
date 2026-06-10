@@ -4,15 +4,28 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useMemo, useState, type DragEvent, type FormEvent } from "react";
 import {
+  ArrowRightLeft,
+  CalendarCheck,
+  Mail,
+  MailPlus,
+  MoreHorizontal,
+  PenLine,
+  Sparkles,
+  XCircle,
+} from "lucide-react";
+import {
+  DEAL_FLOW_STAGES,
   UI_V2_REJECTION_REASON_OPTIONS,
+  type DealFlowRecommendation,
+  type DealFlowRecommendationsResponse,
   type UiV2DealPathDecision,
   type UiV2DealPathState,
   type UiV2PipelineStatus,
   type UiV2RejectionReasonCode,
 } from "@re-sourcing/contracts";
+import { Button, Dialog, PageHeader, PromptMenu, PropertyThumb, StatCard } from "@/components/ui";
+import { API_BASE, apiFetch } from "@/lib/api";
 import styles from "./progress.module.css";
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
 const BULK_STAGE_MOVE_ID = "__bulk_stage_move__";
 const OM_ANALYSIS_BULK_ID = "__bulk_om_analysis__";
 const DOSSIER_BULK_ID = "__bulk_dossier__";
@@ -52,6 +65,11 @@ type ProgressRow = {
   underwritingReviewCompleted?: boolean;
   dealPath?: UiV2DealPathState | null;
   openActionItemCount?: number | null;
+  neighborhood?: string | null;
+  borough?: string | null;
+  firstImageUrl?: string | null;
+  brokerName?: string | null;
+  brokerEmail?: string | null;
   updatedAt?: string | null;
 };
 
@@ -186,19 +204,51 @@ type RejectFormState = {
   note: string;
 };
 
-const SECTION_ORDER: ProgressSection[] = [
-  { id: "sourced", label: "Sourced", count: 0, rows: [] },
-  { id: "om_requested", label: "OM Requested", count: 0, rows: [] },
-  { id: "underwriting_awaiting_review", label: "Underwriting - Awaiting User Review", count: 0, rows: [] },
-  { id: "underwriting_review_completed", label: "Underwriting - Review Completed", count: 0, rows: [] },
-  { id: "tour_requested", label: "Tour Requested", count: 0, rows: [] },
-  { id: "tour_scheduled", label: "Tour Scheduled", count: 0, rows: [] },
-  { id: "tour_completed_awaiting_inputs", label: "Tour Completed", count: 0, rows: [] },
-  { id: "offer_review", label: "LOI Offered", count: 0, rows: [] },
-  { id: "negotiation", label: "Negotiation", count: 0, rows: [] },
-  { id: "contract_signed", label: "Contract Signed/Diligence", count: 0, rows: [] },
-  { id: "deal_closed", label: "Deal Closed", count: 0, rows: [] },
-];
+type ComposerDialogState = {
+  propertyId: string;
+  address: string;
+  /** "request_om" also moves the deal to OM Requested after queueing the email. */
+  intent: "email" | "request_om";
+  toAddress: string;
+  subject: string;
+  body: string;
+  loading: boolean;
+  submitting: boolean;
+};
+
+type BrokerEmailDialogState = {
+  propertyId: string;
+  address: string;
+  name: string;
+  email: string;
+  saving: boolean;
+};
+
+type MoveStageDialogState = {
+  propertyId: string;
+  address: string;
+  targetSectionId: string;
+};
+
+type RecommendationsState = {
+  data: DealFlowRecommendationsResponse | null;
+  loading: boolean;
+};
+
+type BoardFocus = {
+  label: string;
+  propertyIds: Set<string>;
+  stageId: string | null;
+};
+
+// Columns come from the shared deal-flow constant so this board, the home
+// funnel, and stage chips elsewhere always show the same steps.
+const SECTION_ORDER: ProgressSection[] = DEAL_FLOW_STAGES.map((stage) => ({
+  id: stage.id,
+  label: stage.label,
+  count: 0,
+  rows: [],
+}));
 
 const SAVED_STATUS_GROUPS: SavedStatusGroup[] = [
   {
@@ -554,7 +604,8 @@ function normalizeSections(data: DealProgressResponse): ProgressSection[] {
     return {
       ...base,
       ...incoming,
-      label: incoming?.label || base.label,
+      // Prefer the shared deal-flow label so columns match the home funnel.
+      label: base.label || incoming?.label,
       count,
       rows,
     };
@@ -790,6 +841,11 @@ function ProgressPageContent() {
   const [dealPathSavingId, setDealPathSavingId] = useState<string | null>(null);
   const [rejectState, setRejectState] = useState<RejectFormState | null>(null);
   const [rejectSavingId, setRejectSavingId] = useState<string | null>(null);
+  const [composerState, setComposerState] = useState<ComposerDialogState | null>(null);
+  const [brokerEmailState, setBrokerEmailState] = useState<BrokerEmailDialogState | null>(null);
+  const [moveStageState, setMoveStageState] = useState<MoveStageDialogState | null>(null);
+  const [recommendations, setRecommendations] = useState<RecommendationsState>({ data: null, loading: true });
+  const [boardFocus, setBoardFocus] = useState<BoardFocus | null>(null);
 
   const loadProgress = useCallback(async (mode: "initial" | "refresh" = "initial") => {
     if (mode === "initial") setLoading(true);
@@ -834,6 +890,128 @@ function ProgressPageContent() {
     setDealPathPromptMode("general");
     setLoiUploadFiles({});
   }, []);
+
+  const loadRecommendations = useCallback(async (force = false) => {
+    setRecommendations((current) => ({ ...current, loading: true }));
+    try {
+      const data = await apiFetch<DealFlowRecommendationsResponse>(
+        `/api/ui-v2/deal-progress/recommendations${force ? "?refresh=1" : ""}`
+      );
+      setRecommendations({ data, loading: false });
+    } catch {
+      // The panel is advisory; the board stays fully usable without it.
+      setRecommendations((current) => ({ data: current.data, loading: false }));
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadRecommendations();
+  }, [loadRecommendations]);
+
+  const applyRecommendation = useCallback((item: DealFlowRecommendation) => {
+    setBoardFocus({
+      label: item.title,
+      propertyIds: new Set(item.propertyIds),
+      stageId: item.stageId,
+    });
+  }, []);
+
+  const openEmailComposer = useCallback(async (row: DealFlowRow, intent: ComposerDialogState["intent"]) => {
+    const address = row.displayAddress || row.canonicalAddress || row.propertyId;
+    setComposerState({
+      propertyId: row.propertyId,
+      address,
+      intent,
+      toAddress: row.brokerEmail ?? "",
+      subject: "",
+      body: "",
+      loading: true,
+      submitting: false,
+    });
+    try {
+      const response = await apiFetch<{ composer?: { to?: string | null; subject?: string | null; body?: string | null; broker?: { email?: string | null } | null } }>(
+        `/api/ui-v2/properties/${encodeURIComponent(row.propertyId)}/outreach-composer`
+      );
+      const composer = response.composer ?? {};
+      setComposerState((current) =>
+        current && current.propertyId === row.propertyId
+          ? {
+              ...current,
+              toAddress: current.toAddress || composer.broker?.email || composer.to || "",
+              subject: composer.subject ?? "",
+              body: composer.body ?? "",
+              loading: false,
+            }
+          : current
+      );
+    } catch (err) {
+      setComposerState((current) =>
+        current && current.propertyId === row.propertyId ? { ...current, loading: false } : current
+      );
+      setError(err instanceof Error ? err.message : "Failed to load the email draft.");
+    }
+  }, []);
+
+  const submitComposer = useCallback(async () => {
+    if (!composerState || composerState.submitting) return;
+    setComposerState({ ...composerState, submitting: true });
+    setError(null);
+    try {
+      await apiFetch(`/api/ui-v2/outreach-drafts`, {
+        method: "POST",
+        body: JSON.stringify({
+          propertyId: composerState.propertyId,
+          toAddress: composerState.toAddress,
+          subject: composerState.subject,
+          body: composerState.body,
+        }),
+      });
+      setComposerState(null);
+      setNotice(
+        composerState.intent === "request_om"
+          ? `OM request queued for ${composerState.address}.`
+          : `Broker email queued for ${composerState.address}.`
+      );
+      await loadProgress("refresh");
+      void loadRecommendations();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to queue the email.");
+      setComposerState((current) => (current ? { ...current, submitting: false } : current));
+    }
+  }, [composerState, loadProgress, loadRecommendations]);
+
+  const openBrokerEmailDialog = useCallback((row: DealFlowRow) => {
+    setBrokerEmailState({
+      propertyId: row.propertyId,
+      address: row.displayAddress || row.canonicalAddress || row.propertyId,
+      name: row.brokerName ?? "",
+      email: row.brokerEmail ?? "",
+      saving: false,
+    });
+  }, []);
+
+  const submitBrokerEmail = useCallback(async () => {
+    if (!brokerEmailState || brokerEmailState.saving) return;
+    setBrokerEmailState({ ...brokerEmailState, saving: true });
+    setError(null);
+    try {
+      await apiFetch(`/api/ui-v2/properties/${encodeURIComponent(brokerEmailState.propertyId)}/broker`, {
+        method: "PUT",
+        body: JSON.stringify({
+          email: brokerEmailState.email.trim(),
+          name: brokerEmailState.name.trim() || null,
+          actorName: "progress_board",
+        }),
+      });
+      setBrokerEmailState(null);
+      setNotice(`Broker contact saved for ${brokerEmailState.address}.`);
+      await loadProgress("refresh");
+      void loadRecommendations();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save the broker email.");
+      setBrokerEmailState((current) => (current ? { ...current, saving: false } : current));
+    }
+  }, [brokerEmailState, loadProgress, loadRecommendations]);
 
   const moveSavedDeals = useCallback(
     async (rows: DealFlowRow[], nextStatus: UiV2PipelineStatus, options?: { clearSelection?: boolean }) => {
@@ -979,13 +1157,49 @@ function ProgressPageContent() {
     [draggedDeal, moveDealsToTourRequested, moveSavedDeals, sections, selectedDealIds, startDealPathEdit]
   );
 
+  // Same stage-specific behavior as drag-and-drop, but reachable from the
+  // card's quick-action menu (tour/LOI stages open their guided prompts).
+  const moveRowToSectionId = useCallback(
+    (row: DealFlowRow, sectionId: string) => {
+      const group = MOVE_STAGE_OPTIONS.find((option) => option.id === sectionId);
+      if (!group) return;
+      if (sectionId === "tour_requested") {
+        void moveDealsToTourRequested([row]);
+        return;
+      }
+      if (sectionId === "tour_scheduled") {
+        startDealPathEdit(row, { mode: "tour_scheduled" });
+        return;
+      }
+      if (sectionId === "tour_completed_awaiting_inputs") {
+        startDealPathEdit(row, { mode: "tour_completed" });
+        return;
+      }
+      if (sectionId === "offer_review") {
+        startDealPathEdit(row, { mode: "loi_offered" });
+        return;
+      }
+      void moveSavedDeals([row], group.targetStatus);
+    },
+    [moveDealsToTourRequested, moveSavedDeals, startDealPathEdit]
+  );
+
+  const submitMoveStage = useCallback(() => {
+    if (!moveStageState) return;
+    const row = sections.flatMap((section) => section.rows ?? []).find((candidate) => candidate.propertyId === moveStageState.propertyId);
+    setMoveStageState(null);
+    if (row) moveRowToSectionId(row, moveStageState.targetSectionId);
+  }, [moveRowToSectionId, moveStageState, sections]);
+
   const filteredSections = useMemo(() => {
-    if (!query) return sections;
+    if (!query && !boardFocus) return sections;
     return sections.map((section) => ({
       ...section,
-      rows: (section.rows ?? []).filter((row) => searchableText(row).includes(query)),
+      rows: (section.rows ?? [])
+        .filter((row) => !query || searchableText(row).includes(query))
+        .filter((row) => !boardFocus || boardFocus.propertyIds.has(row.propertyId)),
     }));
-  }, [query, sections]);
+  }, [boardFocus, query, sections]);
 
   const flowRows = useMemo(() => sections.flatMap((section) => section.rows ?? []), [sections]);
   const filteredFlowRows = useMemo(() => filteredSections.flatMap((section) => section.rows ?? []), [filteredSections]);
@@ -1329,21 +1543,77 @@ function ProgressPageContent() {
 
   const totalCount = flowRows.length;
 
+  const recommendationItems = recommendations.data?.items ?? [];
+
   return (
     <div className={styles.page}>
-      <header className={styles.header}>
-        <div>
-          <p className={styles.eyebrow}>Deal movement</p>
-          <h1 className={styles.title}>Progress</h1>
-          <p className={styles.subtitle}>
-            Track OM requests, underwriting, tours, LOIs, negotiation, diligence, and close without leaving the progress board.
-          </p>
+      <PageHeader
+        eyebrow="Deal movement"
+        title="Deal Progress"
+        subtitle="Move every saved deal from OM request to close — same stages as the home funnel."
+        meta={
+          <>
+            <div>{totalCount} deals on the board</div>
+            <div>Updated {formatDate(summary?.updatedAt)}</div>
+          </>
+        }
+        actions={
+          <>
+            <Link href="/saved" className={styles.secondaryLink}>Saved Deals</Link>
+            <Link href="/pipeline" className={styles.primaryLink}>Pipeline</Link>
+          </>
+        }
+      />
+
+      <section className={styles.nextActions} aria-label="What to do next">
+        <div className={styles.nextActionsHeader}>
+          <span className={styles.nextActionsIcon} aria-hidden="true">
+            <Sparkles size={15} strokeWidth={2} />
+          </span>
+          <div className={styles.nextActionsCopy}>
+            <h2>What to do next</h2>
+            <p>
+              {recommendations.loading && !recommendations.data
+                ? "Reviewing the board…"
+                : recommendations.data?.headline ?? "Recommendations are unavailable right now."}
+            </p>
+          </div>
+          <button
+            type="button"
+            className={styles.nextActionsRefresh}
+            onClick={() => void loadRecommendations(true)}
+            disabled={recommendations.loading}
+          >
+            {recommendations.loading ? "Refreshing…" : "Refresh"}
+          </button>
         </div>
-        <div className={styles.headerActions}>
-          <Link href="/saved" className={styles.secondaryLink}>Saved Deals</Link>
-          <Link href="/pipeline" className={styles.primaryLink}>Pipeline</Link>
+        {recommendationItems.length > 0 ? (
+          <div className={styles.nextActionsItems}>
+            {recommendationItems.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                className={`${styles.nextActionChip} ${boardFocus?.label === item.title ? styles.nextActionChipActive : ""}`}
+                title={item.detail ?? undefined}
+                onClick={() => applyRecommendation(item)}
+              >
+                <strong>{item.title}</strong>
+                <span>{item.count}</span>
+              </button>
+            ))}
+          </div>
+        ) : null}
+      </section>
+
+      {boardFocus ? (
+        <div className={styles.filterNotice}>
+          <span>Focused on</span>
+          <strong>{boardFocus.label}</strong>
+          <button type="button" className={styles.focusClear} onClick={() => setBoardFocus(null)}>
+            Clear focus
+          </button>
         </div>
-      </header>
+      ) : null}
 
       {query ? (
         <div className={styles.filterNotice}>
@@ -1356,12 +1626,20 @@ function ProgressPageContent() {
       {notice ? <div className={styles.notice}>{notice}</div> : null}
 
       <section className={styles.metrics} aria-label="Deal progress summary">
-        {savedStatusSections.map((section) => (
-          <article className={styles.metric} key={section.id}>
-            <span>{section.label}</span>
-            <strong>{savedStageCounts.get(section.id) ?? section.rows.length}</strong>
-          </article>
-        ))}
+        {savedStatusSections.map((section) => {
+          const stage = DEAL_FLOW_STAGES.find((candidate) => candidate.id === section.id);
+          const count = savedStageCounts.get(section.id) ?? section.rows.length;
+          return (
+            <StatCard
+              key={section.id}
+              label={stage?.shortLabel ?? section.label}
+              value={count}
+              tone={section.id === "tour_completed_awaiting_inputs" && count > 0 ? "warning" : "neutral"}
+              title={section.label}
+              className={styles.metricCard}
+            />
+          );
+        })}
       </section>
 
       <section className={styles.savedFlowPanel} aria-label="Deal path by status">
@@ -1478,6 +1756,15 @@ function ProgressPageContent() {
               onStartDealPathEdit={startDealPathEdit}
               onCancelDealPathEdit={closeDealPathEdit}
               onStartReject={startReject}
+              onEmailBroker={(row, intent) => void openEmailComposer(row, intent)}
+              onAddBrokerEmail={openBrokerEmailDialog}
+              onMoveStage={(row) =>
+                setMoveStageState({
+                  propertyId: row.propertyId,
+                  address: row.displayAddress || row.canonicalAddress || row.propertyId,
+                  targetSectionId: section.id === "sourced" ? "om_requested" : section.id,
+                })
+              }
             />
           ))}
         </div>
@@ -1525,6 +1812,165 @@ function ProgressPageContent() {
         />
       ) : null}
 
+      <Dialog
+        open={composerState != null}
+        onClose={() => setComposerState(null)}
+        title={composerState?.intent === "request_om" ? "Request the OM" : "Email broker"}
+        description={composerState ? composerState.address : undefined}
+        size="lg"
+        footer={
+          <>
+            <Button variant="ghost" size="sm" onClick={() => setComposerState(null)} disabled={composerState?.submitting}>
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => void submitComposer()}
+              disabled={
+                composerState == null ||
+                composerState.loading ||
+                composerState.submitting ||
+                !composerState.toAddress.trim() ||
+                !composerState.subject.trim() ||
+                !composerState.body.trim()
+              }
+            >
+              {composerState?.submitting ? "Queueing…" : "Queue email"}
+            </Button>
+          </>
+        }
+      >
+        {composerState ? (
+          composerState.loading ? (
+            <p className={styles.dialogHint}>Preparing a draft…</p>
+          ) : (
+            <div className={styles.dialogForm}>
+              {!composerState.toAddress ? (
+                <p className={styles.dialogWarning}>
+                  No broker email on file — add one below or save it from the card menu first.
+                </p>
+              ) : null}
+              <label className={styles.dialogField}>
+                <span>To</span>
+                <input
+                  type="email"
+                  value={composerState.toAddress}
+                  onChange={(event) => setComposerState((current) => (current ? { ...current, toAddress: event.target.value } : current))}
+                  placeholder="broker@firm.com"
+                />
+              </label>
+              <label className={styles.dialogField}>
+                <span>Subject</span>
+                <input
+                  type="text"
+                  value={composerState.subject}
+                  onChange={(event) => setComposerState((current) => (current ? { ...current, subject: event.target.value } : current))}
+                />
+              </label>
+              <label className={styles.dialogField}>
+                <span>Message</span>
+                <textarea
+                  rows={9}
+                  value={composerState.body}
+                  onChange={(event) => setComposerState((current) => (current ? { ...current, body: event.target.value } : current))}
+                />
+              </label>
+              <p className={styles.dialogHint}>
+                Queued emails go to the outreach review queue before sending{composerState.intent === "request_om" ? " and the deal moves to OM Requested" : ""}.
+              </p>
+            </div>
+          )
+        ) : null}
+      </Dialog>
+
+      <Dialog
+        open={brokerEmailState != null}
+        onClose={() => setBrokerEmailState(null)}
+        title="Add broker contact"
+        description={brokerEmailState?.address}
+        size="sm"
+        footer={
+          <>
+            <Button variant="ghost" size="sm" onClick={() => setBrokerEmailState(null)} disabled={brokerEmailState?.saving}>
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => void submitBrokerEmail()}
+              disabled={brokerEmailState == null || brokerEmailState.saving || !brokerEmailState.email.trim()}
+            >
+              {brokerEmailState?.saving ? "Saving…" : "Save contact"}
+            </Button>
+          </>
+        }
+      >
+        {brokerEmailState ? (
+          <div className={styles.dialogForm}>
+            <label className={styles.dialogField}>
+              <span>Broker name</span>
+              <input
+                type="text"
+                value={brokerEmailState.name}
+                onChange={(event) => setBrokerEmailState((current) => (current ? { ...current, name: event.target.value } : current))}
+                placeholder="Optional"
+              />
+            </label>
+            <label className={styles.dialogField}>
+              <span>Broker email</span>
+              <input
+                type="email"
+                value={brokerEmailState.email}
+                onChange={(event) => setBrokerEmailState((current) => (current ? { ...current, email: event.target.value } : current))}
+                placeholder="broker@firm.com"
+                autoFocus
+              />
+            </label>
+          </div>
+        ) : null}
+      </Dialog>
+
+      <Dialog
+        open={moveStageState != null}
+        onClose={() => setMoveStageState(null)}
+        title="Move deal to stage"
+        description={moveStageState?.address}
+        size="sm"
+        footer={
+          <>
+            <Button variant="ghost" size="sm" onClick={() => setMoveStageState(null)}>
+              Cancel
+            </Button>
+            <Button variant="primary" size="sm" onClick={submitMoveStage} disabled={moveStageState == null}>
+              Move deal
+            </Button>
+          </>
+        }
+      >
+        {moveStageState ? (
+          <div className={styles.dialogForm}>
+            <label className={styles.dialogField}>
+              <span>Stage</span>
+              <select
+                value={moveStageState.targetSectionId}
+                onChange={(event) =>
+                  setMoveStageState((current) => (current ? { ...current, targetSectionId: event.target.value } : current))
+                }
+              >
+                {MOVE_STAGE_OPTIONS.map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {option.moveLabel}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <p className={styles.dialogHint}>
+              Tour and LOI stages open their guided prompt so dates, notes, and offers land with the move.
+            </p>
+          </div>
+        ) : null}
+      </Dialog>
     </div>
   );
 }
@@ -1841,6 +2287,42 @@ function cardMetricsForRow(row: DealFlowRow): Array<{ label: string; value: stri
   ].filter((metric): metric is { label: string; value: string } => metric != null);
 }
 
+type PrimaryCardAction = { label: string; run: () => void };
+
+function primaryActionForCard(
+  sectionId: string,
+  row: DealFlowRow,
+  handlers: {
+    onStartDealPathEdit?: (row: DealFlowRow, options?: { mode?: DealPathPromptMode }) => void;
+    onEmailBroker?: (row: DealFlowRow, intent: "email" | "request_om") => void;
+    onAddBrokerEmail?: (row: DealFlowRow) => void;
+  }
+): PrimaryCardAction {
+  if (sectionId === "sourced") {
+    return row.brokerEmail
+      ? { label: "Request OM", run: () => handlers.onEmailBroker?.(row, "request_om") }
+      : { label: "Add broker email", run: () => handlers.onAddBrokerEmail?.(row) };
+  }
+  if (sectionId === "om_requested") {
+    return row.brokerEmail
+      ? { label: "Follow up", run: () => handlers.onEmailBroker?.(row, "email") }
+      : { label: "Add broker email", run: () => handlers.onAddBrokerEmail?.(row) };
+  }
+  if (sectionId === "tour_requested") {
+    return { label: "Confirm tour", run: () => handlers.onStartDealPathEdit?.(row, { mode: "tour_scheduled" }) };
+  }
+  if (sectionId === "tour_scheduled") {
+    return { label: "Mark toured", run: () => handlers.onStartDealPathEdit?.(row, { mode: "tour_completed" }) };
+  }
+  if (sectionId === "tour_completed_awaiting_inputs") {
+    return { label: "Add outcomes", run: () => handlers.onStartDealPathEdit?.(row, { mode: "tour_completed" }) };
+  }
+  if (sectionId === "offer_review") {
+    return { label: "Update LOI", run: () => handlers.onStartDealPathEdit?.(row, { mode: "loi_offered" }) };
+  }
+  return { label: "Update inputs", run: () => handlers.onStartDealPathEdit?.(row) };
+}
+
 function SavedDealMiniSection({
   section,
   loading,
@@ -1859,6 +2341,9 @@ function SavedDealMiniSection({
   onStartDealPathEdit,
   onCancelDealPathEdit,
   onStartReject,
+  onEmailBroker,
+  onAddBrokerEmail,
+  onMoveStage,
 }: {
   section: SavedDealSection;
   loading: boolean;
@@ -1874,14 +2359,18 @@ function SavedDealMiniSection({
   onDragOverSection?: (event: DragEvent<HTMLElement>) => void;
   onDropOnSection?: () => void;
   editingPropertyId?: string | null;
-  onStartDealPathEdit?: (row: DealFlowRow) => void;
+  onStartDealPathEdit?: (row: DealFlowRow, options?: { mode?: DealPathPromptMode }) => void;
   onCancelDealPathEdit?: () => void;
   onStartReject?: (row: DealFlowRow) => void;
+  onEmailBroker?: (row: DealFlowRow, intent: "email" | "request_om") => void;
+  onAddBrokerEmail?: (row: DealFlowRow) => void;
+  onMoveStage?: (row: DealFlowRow) => void;
 }) {
   const visibleRows = compact ? section.rows.slice(0, 5) : section.rows;
+  const isEmpty = !loading && visibleRows.length === 0;
   return (
     <section
-      className={`${styles.miniSection} ${dragOver ? styles.miniSectionDropTarget : ""}`}
+      className={`${styles.miniSection} ${dragOver ? styles.miniSectionDropTarget : ""} ${isEmpty ? styles.miniSectionEmpty : ""}`}
       onDragOver={enableMoves ? onDragOverSection : undefined}
       onDrop={
         enableMoves
@@ -1892,17 +2381,14 @@ function SavedDealMiniSection({
           : undefined
       }
     >
-      <div className={styles.miniSectionHeader}>
-        <div>
-          <h3>{section.label}</h3>
-          {section.description ? <p>{section.description}</p> : null}
-        </div>
+      <div className={styles.miniSectionHeader} title={section.description}>
+        <h3>{section.label}</h3>
         <span>{section.rows.length}</span>
       </div>
       {loading ? (
         <div className={styles.emptyState}>Loading deal path...</div>
       ) : visibleRows.length === 0 ? (
-        <div className={styles.emptyState}>No properties in this stage.</div>
+        <div className={styles.emptyState}>Empty</div>
       ) : (
         <div className={styles.miniRows}>
           {visibleRows.map((row) => {
@@ -1910,13 +2396,14 @@ function SavedDealMiniSection({
             const busy = bulkMoving || movingPropertyId === row.propertyId;
             const editing = editingPropertyId === row.propertyId;
             const tourNeedsInputs = needsTourInputs(row);
-            const metrics = cardMetricsForRow(row);
-            const statusLabel =
-              section.id === "tour_requested"
-                ? "Tour Requested"
-                : section.id === "tour_scheduled"
-                  ? "Tour Scheduled"
-                  : labelFromKey(rowStatus(row));
+            const metrics = cardMetricsForRow(row).slice(0, 4);
+            const address = row.displayAddress || row.canonicalAddress || row.propertyId;
+            const locationLine = [row.neighborhood, formatUnitLabel(row.units)].filter(Boolean).join(" · ");
+            const primaryAction = primaryActionForCard(section.id, row, {
+              onStartDealPathEdit,
+              onEmailBroker,
+              onAddBrokerEmail,
+            });
             return (
               <article
                 key={`${section.id}-${row.propertyId}`}
@@ -1941,27 +2428,41 @@ function SavedDealMiniSection({
                     <input
                       type="checkbox"
                       className={styles.miniSelect}
-                      aria-label={`Select ${row.displayAddress || row.canonicalAddress || "property"}`}
+                      aria-label={`Select ${address}`}
                       checked={selected}
                       disabled={busy}
                       onChange={(event) => onToggleSelected?.(row.propertyId, event.target.checked)}
                       onClick={(event) => event.stopPropagation()}
                     />
                   ) : null}
+                  <PropertyThumb src={row.firstImageUrl} alt={address} size="lg" className={styles.miniThumb} />
                   <button
                     type="button"
                     className={styles.miniRowLink}
                     onClick={() => onStartDealPathEdit?.(row)}
                     title="Review progress details"
                   >
-                    <strong>{row.displayAddress || row.canonicalAddress || row.propertyId}</strong>
-                    <span>{row.source ? labelFromKey(row.source) : "No source"}</span>
+                    <strong>{address}</strong>
+                    <span>{locationLine || (row.source ? labelFromKey(row.source) : "No source")}</span>
                   </button>
                   <div className={styles.miniMeta}>
-                    <span className={statusClass(rowStatus(row))}>{statusLabel}</span>
                     <small className={scoreClass(row.dealScore)}>
                       {row.dealScore == null ? "—" : Math.round(row.dealScore)}
                     </small>
+                    {!row.brokerEmail ? (
+                      <button
+                        type="button"
+                        className={styles.brokerMissing}
+                        title="No broker email on file — click to add"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onAddBrokerEmail?.(row);
+                        }}
+                      >
+                        <MailPlus size={12} strokeWidth={2} aria-hidden="true" />
+                        <span>No broker email</span>
+                      </button>
+                    ) : null}
                   </div>
                 </div>
                 {tourNeedsInputs ? <div className={styles.tourInputNotice}>Tour completed. Add notes, decision, and offer inputs.</div> : null}
@@ -1987,19 +2488,67 @@ function SavedDealMiniSection({
                       type="button"
                       className={`${styles.cardActionButton} ${editing ? styles.cardActionActive : ""}`}
                       disabled={busy}
-                      title="Edit tour, offer, and LOI inputs"
-                      onClick={() => (editing ? onCancelDealPathEdit?.() : onStartDealPathEdit?.(row))}
+                      title={primaryAction.label}
+                      onClick={() => (editing ? onCancelDealPathEdit?.() : primaryAction.run())}
                     >
-                      Update inputs
+                      {primaryAction.label}
                     </button>
-                    <button
-                      type="button"
-                      className={styles.cardRejectButton}
-                      disabled={busy}
-                      onClick={() => onStartReject?.(row)}
-                    >
-                      Reject
-                    </button>
+                    <PromptMenu
+                      align="end"
+                      heading={address}
+                      trigger={(triggerProps) => (
+                        <button
+                          {...triggerProps}
+                          type="button"
+                          className={styles.cardMenuButton}
+                          disabled={busy}
+                          title="More actions"
+                        >
+                          <MoreHorizontal size={15} strokeWidth={2} aria-hidden="true" />
+                        </button>
+                      )}
+                      items={[
+                        row.brokerEmail
+                          ? {
+                              label: "Email broker",
+                              hint: row.brokerEmail,
+                              icon: Mail,
+                              onSelect: () => onEmailBroker?.(row, "email"),
+                            }
+                          : {
+                              label: "Add broker email",
+                              icon: MailPlus,
+                              onSelect: () => onAddBrokerEmail?.(row),
+                            },
+                        ...(section.id === "sourced" && row.brokerEmail
+                          ? [
+                              {
+                                label: "Request OM",
+                                hint: "Queues the email and moves to OM Requested",
+                                icon: CalendarCheck,
+                                onSelect: () => onEmailBroker?.(row, "request_om"),
+                              },
+                            ]
+                          : []),
+                        {
+                          label: "Move to stage…",
+                          icon: ArrowRightLeft,
+                          onSelect: () => onMoveStage?.(row),
+                        },
+                        {
+                          label: "Update inputs",
+                          hint: "Tour dates, offers, LOI",
+                          icon: PenLine,
+                          onSelect: () => onStartDealPathEdit?.(row),
+                        },
+                        {
+                          label: "Reject deal",
+                          icon: XCircle,
+                          tone: "danger" as const,
+                          onSelect: () => onStartReject?.(row),
+                        },
+                      ]}
+                    />
                   </div>
                 ) : null}
               </article>
@@ -2064,37 +2613,22 @@ function GenerateLoiButton({ propertyId, offerAmount, targetPrice, contingencies
   }
 
   return (
-    <div style={{ display: "grid", gap: "0.3rem" }}>
+    <div className={styles.loiGenerate}>
       <button
         type="button"
+        className={styles.loiGenerateButton}
         onClick={generate}
         disabled={!canGenerate || busy}
         title={canGenerate ? "Generate a standard LOI PDF at this offer" : "Enter an offer amount or target price first"}
-        style={{
-          justifySelf: "start",
-          padding: "0.4rem 0.75rem",
-          borderRadius: "8px",
-          border: "1px solid rgba(47, 111, 82, 0.45)",
-          background: canGenerate ? "#f0fdf4" : "#f3f4f6",
-          color: canGenerate ? "#166534" : "#9ca3af",
-          fontSize: "0.78rem",
-          fontWeight: 800,
-          cursor: canGenerate && !busy ? "pointer" : "not-allowed",
-        }}
       >
         {busy ? "Generating LOI..." : "Generate LOI PDF"}
       </button>
       {result ? (
-        <a
-          href={`${API_BASE}${result.downloadPath}`}
-          target="_blank"
-          rel="noreferrer"
-          style={{ fontSize: "0.78rem", fontWeight: 700, color: "#166534" }}
-        >
+        <a href={`${API_BASE}${result.downloadPath}`} target="_blank" rel="noreferrer" className={styles.loiGenerateLink}>
           Download {result.fileName}
         </a>
       ) : null}
-      {error ? <span style={{ fontSize: "0.76rem", color: "#b91c1c" }}>{error}</span> : null}
+      {error ? <span className={styles.loiGenerateError}>{error}</span> : null}
     </div>
   );
 }

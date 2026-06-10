@@ -289,7 +289,7 @@
 
 .stageStrip {
   display: grid;
-  grid-template-columns: repeat(8, minmax(0, 1fr));
+  grid-template-columns: repeat(10, minmax(0, 1fr));
   border: 1px solid var(--app-line, #e4e4e7);
   border-radius: var(--radius-md, 8px);
   background: var(--app-surface, #ffffff);
@@ -932,4 +932,17 @@
   .workflowBadges {
     justify-content: flex-start;
   }
+}
+
+@media (max-width: 1280px) {
+  .stageStrip {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+
+  .stageCell:nth-child(n + 6) {
+    border-top: 1px solid var(--app-line, #e4e4e7);
+  }
+}
+.panelSkeleton {
+  padding: 1rem 1.25rem;
 }

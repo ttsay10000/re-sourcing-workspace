@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useState } from "react";
-import type { UiV2PipelineListPayload, UiV2PipelineRow } from "@re-sourcing/contracts";
+import { DEAL_FLOW_STAGES, type UiV2PipelineListPayload, type UiV2PipelineRow } from "@re-sourcing/contracts";
 import {
   AlertTriangle,
   CalendarClock,
@@ -14,9 +14,9 @@ import {
   RefreshCcw,
   type LucideIcon,
 } from "lucide-react";
+import { SkeletonRows } from "@/components/ui";
+import { API_BASE } from "@/lib/api";
 import styles from "./home.module.css";
-
-const API_BASE = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000").replace(/\/$/, "");
 
 type PipelineResponse = { pipeline?: UiV2PipelineListPayload; error?: string; details?: string };
 type SavedDealsResponse = {
@@ -29,7 +29,7 @@ type SavedDealsResponse = {
 };
 type ProgressResponse = {
   summary?: Record<string, number | null | undefined>;
-  sections?: Array<{ id: string; label?: string; count?: number; rows?: HomeProgressRow[] }>;
+  sections?: HomeProgressSection[];
   error?: string;
   details?: string;
 };
@@ -76,10 +76,25 @@ type HomeProgressRow = {
   dealScore?: number | null;
   status?: string | null;
   omStatus?: string | null;
+  ltrYocPct?: number | null;
+  mtrYocPct?: number | null;
+  hasOm?: boolean | null;
+  hasComps?: boolean | null;
+  hasDossier?: boolean | null;
+  neighborhood?: string | null;
+  borough?: string | null;
+  firstImageUrl?: string | null;
+};
+
+type HomeProgressSection = {
+  id: string;
+  label?: string;
+  count?: number;
+  rows?: HomeProgressRow[];
 };
 
 type FunnelMetric = {
-  key: SavedStageKey;
+  key: string;
   label: string;
   count: number;
   href: string;
@@ -97,33 +112,20 @@ type AttentionGroup = {
   tone: "warning" | "neutral" | "danger";
 };
 
-const SAVED_STAGE_GROUPS = [
-  { key: "sourced", label: "Sourced", statuses: ["new", "screening", "interesting", "saved"] },
-  { key: "om_requested", label: "OM Requested", statuses: ["outreach", "awaiting_broker"] },
-  { key: "underwriting", label: "Underwriting", statuses: ["underwriting", "om_received", "dossier_generated"] },
-  { key: "tour_scheduled", label: "Tour Scheduled", statuses: ["tour_scheduled"] },
-  { key: "tour_completed_awaiting_inputs", label: "Awaiting Inputs", statuses: ["tour_completed_awaiting_inputs"] },
-  { key: "loi_sent", label: "LOI Sent", statuses: ["offer_review"] },
-  { key: "negotiation", label: "Negotiation", statuses: ["negotiation"] },
-  { key: "contract_signed", label: "Contract Signed", statuses: ["contract_signed"] },
-] as const;
-
-type SavedStageKey = (typeof SAVED_STAGE_GROUPS)[number]["key"];
-
-const WORKLIST_STAGE_KEYS = new Set<SavedStageKey>([
-  "underwriting",
+// Same columns as the Deal Progress board (shared constant) — the home
+// funnel and the board always show identical steps and counts.
+const WORKLIST_STAGE_KEYS = new Set<string>([
+  "underwriting_awaiting_review",
+  "underwriting_review_completed",
+  "tour_requested",
   "tour_scheduled",
   "tour_completed_awaiting_inputs",
-  "loi_sent",
+  "offer_review",
   "negotiation",
   "contract_signed",
 ]);
-const TOUR_STAGE_STATUSES = new Set(["tour_scheduled", "tour_completed_awaiting_inputs"]);
-const LATER_STAGE_STATUSES = new Set(["tour_scheduled", "tour_completed_awaiting_inputs", "offer_review", "negotiation", "contract_signed"]);
 const CLOSED_STATUSES = new Set(["deal_closed", "archived", "closed"]);
 const REJECTED_STATUSES = new Set(["rejected"]);
-const OM_REQUESTED_STATUSES = new Set(["outreach", "awaiting_broker"]);
-const OM_EVIDENCE_STATUSES = new Set(["available", "completed", "promoted", "needs_review"]);
 
 function formatCurrency(value: number | null | undefined): string {
   if (value == null || Number.isNaN(value)) return "-";
@@ -205,47 +207,14 @@ function normalizedSavedStatus(row: SavedDealRow): string {
   return String(row.status ?? row.savedDeal?.dealStatus ?? "saved");
 }
 
-function rowHasOm(row: SavedDealRow): boolean {
+function progressRowHasOm(row: HomeProgressRow): boolean {
   if (row.hasOm != null) return row.hasOm;
   const status = String(row.omStatus ?? "").trim().toLowerCase();
   return ["received", "needs_review", "promoted", "complete", "completed"].includes(status);
 }
 
-function rowHasComps(row: SavedDealRow): boolean {
-  return row.hasComps === true;
-}
-
-function rowHasDossier(row: SavedDealRow): boolean {
-  return row.hasDossier === true || normalizedSavedStatus(row) === "dossier_generated";
-}
-
-function savedStageKeyForRow(row: SavedDealRow): SavedStageKey | null {
-  const status = normalizedSavedStatus(row);
-  if (CLOSED_STATUSES.has(status) || REJECTED_STATUSES.has(status) || row.rejection) return null;
-  const explicitStage = SAVED_STAGE_GROUPS.find((stage) => (stage.statuses as readonly string[]).includes(status))?.key;
-  if (explicitStage && explicitStage !== "sourced") return explicitStage;
-  if (TOUR_STAGE_STATUSES.has(status)) return explicitStage ?? "underwriting";
-  if (rowHasOm(row) && !LATER_STAGE_STATUSES.has(status)) return "underwriting";
-  return explicitStage ?? "sourced";
-}
-
 function pipelineStatus(row: UiV2PipelineRow): string {
   return String(row.statusChip?.status ?? "");
-}
-
-function pipelineIsTerminal(row: UiV2PipelineRow): boolean {
-  const status = pipelineStatus(row);
-  return CLOSED_STATUSES.has(status) || REJECTED_STATUSES.has(status) || status === "archived";
-}
-
-function pipelineHasOmRequest(row: UiV2PipelineRow): boolean {
-  const omStatus = String(row.documentStatus?.omStatus ?? "").trim().toLowerCase();
-  return Boolean(row.documentStatus?.latestRequestAt) || omStatus === "requested" || OM_REQUESTED_STATUSES.has(pipelineStatus(row));
-}
-
-function pipelineHasOmEvidence(row: UiV2PipelineRow): boolean {
-  const omStatus = String(row.documentStatus?.omStatus ?? "").trim().toLowerCase();
-  return row.documentStatus?.hasOm === true || OM_EVIDENCE_STATUSES.has(omStatus);
 }
 
 function HomePageContent() {
@@ -254,7 +223,7 @@ function HomePageContent() {
   const [pipelineRows, setPipelineRows] = useState<UiV2PipelineRow[]>([]);
   const [savedRows, setSavedRows] = useState<SavedDealRow[]>([]);
   const [pipelineTotal, setPipelineTotal] = useState(0);
-  const [progressRows, setProgressRows] = useState<HomeProgressRow[]>([]);
+  const [progressSections, setProgressSections] = useState<HomeProgressSection[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [terminalCounter, setTerminalCounter] = useState<"closed" | "rejected">("closed");
@@ -281,7 +250,7 @@ function HomePageContent() {
         setPipelineRows(pipelineData.pipeline?.rows ?? []);
         setPipelineTotal(pipelineData.pipeline?.total ?? 0);
         setSavedRows(savedData.savedDeals?.rows ?? []);
-        setProgressRows((progressData.sections ?? []).flatMap((section) => section.rows ?? []));
+        setProgressSections(progressData.sections ?? []);
       } catch (err) {
         if (!ignore) setError(err instanceof Error ? err.message : "Failed to load home dashboard.");
       } finally {
@@ -318,16 +287,33 @@ function HomePageContent() {
     );
   }, [query, savedRows]);
 
-  const savedStageGroups = useMemo(() => {
-    return SAVED_STAGE_GROUPS.map((stage) => ({
-      ...stage,
-      rows: filteredSavedRows.filter((row) => savedStageKeyForRow(row) === stage.key),
+  // Board sections, filtered by the global search like everything else.
+  const filteredProgressSections = useMemo(() => {
+    if (!query) return progressSections;
+    return progressSections.map((section) => ({
+      ...section,
+      rows: (section.rows ?? []).filter((row) =>
+        [row.propertyId, row.canonicalAddress, row.displayAddress, row.source, row.neighborhood, row.borough, row.status, row.omStatus]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase()
+          .includes(query)
+      ),
     }));
-  }, [filteredSavedRows]);
+  }, [progressSections, query]);
+
+  const progressSectionById = useMemo(
+    () => new Map(filteredProgressSections.map((section) => [section.id, section])),
+    [filteredProgressSections]
+  );
 
   const worklistStageGroups = useMemo(
-    () => savedStageGroups.filter((group) => WORKLIST_STAGE_KEYS.has(group.key)),
-    [savedStageGroups]
+    () =>
+      DEAL_FLOW_STAGES.filter((stage) => WORKLIST_STAGE_KEYS.has(stage.id)).map((stage) => {
+        const section = progressSectionById.get(stage.id);
+        return { key: stage.id, label: stage.label, rows: section?.rows ?? [] };
+      }),
+    [progressSectionById]
   );
   const worklistCount = useMemo(
     () => worklistStageGroups.reduce((sum, group) => sum + group.rows.length, 0),
@@ -340,54 +326,39 @@ function HomePageContent() {
     return { closed, rejected };
   }, [filteredSavedRows]);
 
+  // Funnel cells mirror the Deal Progress board: same stages, same counts.
   const funnelMetrics = useMemo<FunnelMetric[]>(() => {
     const rejected = pipelineRows.filter((row) => REJECTED_STATUSES.has(pipelineStatus(row))).length;
-    const omRequested = pipelineRows.filter((row) =>
-      !pipelineIsTerminal(row) &&
-      pipelineHasOmRequest(row) &&
-      !pipelineHasOmEvidence(row)
-    ).length;
-    const underwriting = pipelineRows.filter((row) =>
-      !pipelineIsTerminal(row) &&
-      pipelineHasOmEvidence(row) &&
-      !LATER_STAGE_STATUSES.has(pipelineStatus(row))
-    ).length;
-    const tourScheduled = pipelineRows.filter((row) => pipelineStatus(row) === "tour_scheduled").length;
-    const awaitingInputs = pipelineRows.filter((row) => pipelineStatus(row) === "tour_completed_awaiting_inputs").length;
-    const loiSent = pipelineRows.filter((row) => pipelineStatus(row) === "offer_review").length;
-    const negotiation = pipelineRows.filter((row) => pipelineStatus(row) === "negotiation").length;
-    const contractSigned = pipelineRows.filter((row) => pipelineStatus(row) === "contract_signed").length;
-    return [
-      {
-        key: "sourced",
-        label: "Sourced",
-        count: pipelineTotal,
-        href: "/pipeline",
-        subMetric: { label: "Rejected", count: rejected, tone: "danger" },
-      },
-      { key: "om_requested", label: "OM Requested", count: omRequested, href: "/pipeline" },
-      { key: "underwriting", label: "Underwriting", count: underwriting, href: "/pipeline" },
-      { key: "tour_scheduled", label: "Tour Scheduled", count: tourScheduled, href: "/pipeline?status=tour_scheduled" },
-      { key: "tour_completed_awaiting_inputs", label: "Awaiting Inputs", count: awaitingInputs, href: "/pipeline?status=tour_completed_awaiting_inputs" },
-      { key: "loi_sent", label: "LOI Sent", count: loiSent, href: "/pipeline" },
-      { key: "negotiation", label: "Negotiation", count: negotiation, href: "/pipeline" },
-      { key: "contract_signed", label: "Contract Signed", count: contractSigned, href: "/pipeline" },
-    ];
-  }, [pipelineRows, pipelineTotal]);
+    return DEAL_FLOW_STAGES.filter((stage) => stage.id !== "deal_closed").map((stage) => {
+      const section = progressSectionById.get(stage.id);
+      const sectionCount = section?.count ?? section?.rows?.length ?? 0;
+      if (stage.id === "sourced") {
+        return {
+          key: stage.id,
+          label: stage.shortLabel,
+          count: pipelineTotal,
+          href: "/pipeline",
+          subMetric: { label: "Rejected", count: rejected, tone: "danger" as const },
+        };
+      }
+      return { key: stage.id, label: stage.shortLabel, count: sectionCount, href: "/progress" };
+    });
+  }, [pipelineRows, pipelineTotal, progressSectionById]);
 
   const attentionItems = useMemo<AttentionGroup[]>(() => {
     const missingEnrichment = pipelineRows.filter((row) => row.enrichmentState?.status !== "complete").slice(0, 5);
     const tourInputsNeeded = pipelineRows.filter((row) => pipelineStatus(row) === "tour_completed_awaiting_inputs");
     const missingDocs = pipelineRows.filter((row) => !row.documentStatus?.hasOm).slice(0, 5);
     const missingBroker = pipelineRows.filter((row) => !row.broker?.email).slice(0, 5);
+    const openActionRows = pipelineRows.filter((row) => row.openActionItemCount);
     return [
       { label: "Missing enrichment", icon: AlertTriangle, tone: "warning", count: missingEnrichment.length, rows: missingEnrichment },
       { label: "Tour inputs needed", icon: CalendarClock, tone: "warning", count: tourInputsNeeded.length, rows: tourInputsNeeded.slice(0, 5) },
-      { label: "Missing rental flow", icon: RefreshCcw, tone: "neutral", count: pipelineRows.filter((row) => row.openActionItemCount).length, rows: progressRows.slice(0, 5) },
+      { label: "Open action items", icon: RefreshCcw, tone: "neutral", count: openActionRows.length, rows: openActionRows.slice(0, 5) },
       { label: "Missing broker contact", icon: MailX, tone: "danger", count: missingBroker.length, rows: missingBroker },
       { label: "Needs OM request", icon: FileQuestion, tone: "warning", count: missingDocs.length, rows: missingDocs },
     ];
-  }, [pipelineRows, progressRows]);
+  }, [pipelineRows]);
 
   return (
     <main className={styles.page}>
@@ -450,8 +421,9 @@ function HomePageContent() {
             <h2>Saved Deal Flow</h2>
             <span>{worklistCount} underwriting+ deal{worklistCount === 1 ? "" : "s"}</span>
           </div>
+          {loading ? <SkeletonRows count={6} className={styles.panelSkeleton} /> : null}
           <div className={styles.savedStageList}>
-            {worklistStageGroups.map((group) => (
+            {!loading && worklistStageGroups.map((group) => (
               <section key={group.key} className={styles.savedStage}>
                 <div className={styles.savedStageHeader}>
                   <h3>{group.label}</h3>
@@ -494,9 +466,9 @@ function HomePageContent() {
                             <em> /100</em>
                           </span>
                           <span className={styles.workflowBadges} aria-label="Deal workup status">
-                            <span className={`${styles.workflowBadge} ${rowHasComps(row) ? styles.badgeReady : styles.badgeMissing}`}>Comps</span>
-                            <span className={`${styles.workflowBadge} ${rowHasOm(row) ? styles.badgeReady : styles.badgeMissing}`}>OM</span>
-                            <span className={`${styles.workflowBadge} ${rowHasDossier(row) ? styles.badgeReady : styles.badgeMissing}`}>UW</span>
+                            <span className={`${styles.workflowBadge} ${row.hasComps === true ? styles.badgeReady : styles.badgeMissing}`}>Comps</span>
+                            <span className={`${styles.workflowBadge} ${progressRowHasOm(row) ? styles.badgeReady : styles.badgeMissing}`}>OM</span>
+                            <span className={`${styles.workflowBadge} ${row.hasDossier === true ? styles.badgeReady : styles.badgeMissing}`}>UW</span>
                           </span>
                         </Link>
                       );
