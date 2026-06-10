@@ -98,7 +98,7 @@ export function normalizeAddressLineForDisplay(addressLine: string): string {
 }
 
 /** Parse canonical_address or listing into houseNumber, street, borough, zip for Geoclient. Strips unit numbers so lookup uses building-level address. */
-function parseAddressForGeoclient(
+export function parseAddressForGeoclient(
   canonicalAddress: string,
   listing: { address?: string | null; city?: string | null; state?: string | null; zip?: string | null } | null
 ): { houseNumber: string; street: string; borough: string; zip: string } | null {

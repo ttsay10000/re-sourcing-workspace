@@ -6,6 +6,7 @@
 import { getPool, PropertyRepo } from "@re-sourcing/db";
 import { enrichPropertyWithPermits } from "./permits/enrichPermits.js";
 import { getBBLForProperty } from "./resolvePropertyBBL.js";
+import { syncPropertyGeocode } from "./syncPropertyGeocode.js";
 import { getBblBaseFromDetails } from "./propertyKeys.js";
 import { resolveCondoBblForQuery } from "./resolveCondoBbl.js";
 import { runOwnerAndTaxCodeStep } from "./ownerAndTaxCode.js";
@@ -103,6 +104,11 @@ export async function runEnrichmentForProperty(
       results[mod.name] = { ok: result.ok, error: result.error };
       await delay();
     }
+
+    // Apply the best resolved coordinates to properties.lat/lng after all
+    // modules ran (BBL resolution and the neighborhood module both cache
+    // coordinate sources in details). Map views read only these columns.
+    await syncPropertyGeocode(propertyId, pool);
   } else {
     for (const mod of modules) {
       if (!mod) continue;

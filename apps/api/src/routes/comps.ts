@@ -292,8 +292,8 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
          p.deal_state,
          p.deal_stage,
          sd.deal_status AS saved_status,
-         p.lat,
-         p.lng,
+         COALESCE(p.lat, CASE WHEN p.details->>'lat' ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN (p.details->>'lat')::double precision END) AS lat,
+         COALESCE(p.lng, CASE WHEN p.details->>'lon' ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN (p.details->>'lon')::double precision END) AS lng,
          p.details#>>'{neighborhood,primary,borough}' AS borough,
          LEFT(p.details->>'bbl', 1) AS bbl_borough_digit,
          COALESCE(
@@ -474,8 +474,8 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
            p.deal_state,
            p.deal_stage,
            sd.deal_status AS saved_status,
-           p.lat,
-           p.lng,
+           COALESCE(p.lat, CASE WHEN p.details->>'lat' ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN (p.details->>'lat')::double precision END) AS lat,
+           COALESCE(p.lng, CASE WHEN p.details->>'lon' ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN (p.details->>'lon')::double precision END) AS lng,
            p.details#>>'{neighborhood,primary,borough}' AS borough,
            LEFT(p.details->>'bbl', 1) AS bbl_borough_digit,
            COALESCE(

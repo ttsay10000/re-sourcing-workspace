@@ -47,6 +47,7 @@ import { buildBrokerTeamRecords, findBrokerTeamOverlapMatches } from "../inquiry
 import type { PropertyDetails, RentalFinancials, RentalFinancialsFromLlm } from "@re-sourcing/contracts";
 import { runEnrichmentForProperty } from "../enrichment/runEnrichment.js";
 import { normalizeAddressLineForDisplay, getBBLForProperty } from "../enrichment/resolvePropertyBBL.js";
+import { syncPropertyGeocode } from "../enrichment/syncPropertyGeocode.js";
 import { runRentalApiStep } from "../rental/rentalApiClient.js";
 import { extractRentalFinancialsFromListing } from "../rental/extractRentalFinancialsFromListing.js";
 import { suggestRentalDataGaps } from "../rental/suggestRentalDataGaps.js";
@@ -450,6 +451,8 @@ async function refreshStreetEasyListingForProperty(
     });
     const detailsMerge = buildPropertyDetailsMergeFromListing(normalized);
     if (Object.keys(detailsMerge).length > 0) await propertyRepo.mergeDetails(propertyId, detailsMerge);
+    // Listing refreshes carry fresh coordinates; keep properties.lat/lng (map views) in sync.
+    await syncPropertyGeocode(propertyId, pool);
     await refreshPropertyPipelineMetadata(propertyId, pool);
     if (priceChanged) await handleAskPriceChange(propertyId, pool, { oldPrice, newPrice });
     return { attempted: true, ok: true, priceChanged, unavailable: listingUnavailable, listingStatus };
