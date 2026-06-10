@@ -106,8 +106,9 @@
 
 .label {
   color: var(--app-muted);
-  font-size: 0.76rem;
-  font-weight: 700;
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  letter-spacing: var(--tracking-label);
   text-transform: uppercase;
 }
 
@@ -243,7 +244,9 @@
 
 .sectionHeader h2 {
   margin: 0;
-  font-size: 1rem;
+  font-size: var(--text-md);
+  font-weight: 600;
+  color: var(--app-ink);
 }
 
 .sectionHeader p {
@@ -376,7 +379,9 @@
 
 .candidateHeader h3 {
   margin: 0;
-  font-size: 0.98rem;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--app-ink);
   overflow-wrap: anywhere;
 }
 

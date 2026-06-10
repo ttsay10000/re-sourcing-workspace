@@ -14,9 +14,9 @@ import {
   Square,
   Upload,
 } from "lucide-react";
+import { EmptyState, PageHeader } from "@/components/ui";
+import { API_BASE } from "@/lib/api";
 import styles from "./page.module.css";
-
-const API_BASE = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000").replace(/\/$/, "");
 
 const CATEGORY_OPTIONS = [
   "OM",
@@ -486,24 +486,25 @@ export default function BrokerOmEmailSearchPage() {
 
   return (
     <main className={styles.page}>
-      <header className={styles.header}>
-        <div>
-          <p className={styles.kicker}>Broker OM</p>
-          <h1 className={styles.title}>Manual Gmail Pull</h1>
-        </div>
-        <div className={styles.headerActions}>
-          <Link href="/om-review" className={styles.secondaryButton}>
-            <FileSearch size={16} aria-hidden="true" />
-            <span>Email review queue</span>
-          </Link>
-          {propertyId ? (
-            <Link href={`/property-data?expand=${encodeURIComponent(propertyId)}`} className={styles.secondaryButton}>
-              <ExternalLink size={16} aria-hidden="true" />
-              <span>Property card</span>
+      <PageHeader
+        eyebrow="Broker OM"
+        title="Find OMs in Email"
+        subtitle="Manually pull Gmail attachments to find OMs, rent rolls, and financial documents — then import them into the property workspace."
+        actions={
+          <div className={styles.headerActions}>
+            <Link href="/om-review" className={styles.secondaryButton}>
+              <FileSearch size={16} aria-hidden="true" />
+              <span>Email review queue</span>
             </Link>
-          ) : null}
-        </div>
-      </header>
+            {propertyId ? (
+              <Link href={`/property-data?expand=${encodeURIComponent(propertyId)}`} className={styles.secondaryButton}>
+                <ExternalLink size={16} aria-hidden="true" />
+                <span>Property card</span>
+              </Link>
+            ) : null}
+          </div>
+        }
+      />
 
       {notice ? <p className={styles.notice}>{notice}</p> : null}
       {error ? <p className={styles.error}>{error}</p> : null}
@@ -685,13 +686,15 @@ export default function BrokerOmEmailSearchPage() {
           ) : null}
           <div className={styles.rowList}>
             {documents.length === 0 ? (
-              <div className={styles.empty}>
-                {searchResult
-                  ? allPropertiesMode
-                    ? "No deal-document attachments found in this window."
-                    : "No property-linked documents found."
-                  : "Run a manual pull to load Gmail candidates."}
-              </div>
+              <EmptyState
+                title={
+                  searchResult
+                    ? allPropertiesMode
+                      ? "No deal-document attachments found in this window."
+                      : "No property-linked documents found."
+                    : "Run a manual pull to load Gmail candidates."
+                }
+              />
             ) : (
               documents.map((document) => {
                 const selected = selection[document.id]?.selected ?? false;
@@ -794,7 +797,7 @@ export default function BrokerOmEmailSearchPage() {
               </div>
             </div>
             {preview == null ? (
-              <div className={styles.previewFallback}>No document selected.</div>
+              <div className={styles.previewFallback}><EmptyState title="No document selected." /></div>
             ) : preview.previewKind === "none" ? (
               <div className={styles.previewFallback}>
                 <div>
@@ -824,7 +827,9 @@ export default function BrokerOmEmailSearchPage() {
           </div>
         </div>
         {searchResult == null || searchResult.newPropertyCandidates.length === 0 ? (
-          <div className={styles.empty}>{searchResult ? "No separate OM or rent roll emails were flagged." : "No flagged emails yet."}</div>
+          <EmptyState
+            title={searchResult ? "No separate OM or rent roll emails were flagged." : "No flagged emails yet."}
+          />
         ) : (
           <div className={styles.candidateList}>
             {searchResult.newPropertyCandidates.map((candidate) => (

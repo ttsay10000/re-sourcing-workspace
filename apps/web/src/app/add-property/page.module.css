@@ -41,9 +41,9 @@
 .panelKicker {
   margin: 0;
   color: var(--app-muted, #71717a);
-  font-size: 0.68rem;
+  font-size: var(--text-2xs);
   font-weight: 600;
-  letter-spacing: 0.08em;
+  letter-spacing: var(--tracking-label);
   text-transform: uppercase;
 }
 
@@ -196,9 +196,9 @@
   margin: 0;
   color: var(--app-muted, #71717a);
   font-family: var(--font-ui);
-  font-size: 0.68rem;
+  font-size: var(--text-2xs);
   font-weight: 600;
-  letter-spacing: 0.08em;
+  letter-spacing: var(--tracking-label);
   text-transform: uppercase;
 }
 
@@ -319,8 +319,8 @@
 .drawerHeader h2 {
   margin: 0;
   font-family: var(--font-display);
-  font-size: var(--text-xl);
-  font-weight: 560;
+  font-size: var(--text-lg);
+  font-weight: 600;
   letter-spacing: 0;
   color: var(--app-ink, #18181b);
 }

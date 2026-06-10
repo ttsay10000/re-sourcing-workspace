@@ -9,9 +9,9 @@ import type {
   UiV2ImportJobStatus,
   UiV2StreetEasyPullOptions,
 } from "@re-sourcing/contracts";
+import { Button, EmptyState, PageHeader } from "@/components/ui";
+import { API_BASE } from "@/lib/api";
 import styles from "./page.module.css";
-
-const API_BASE = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000").replace(/\/$/, "");
 
 type ModeId = "manual" | "streeteasy" | "pull" | "om-upload";
 type ModeCategoryId = "quick" | "market" | "documents";
@@ -724,24 +724,21 @@ export default function AddPropertyPage() {
 
   return (
     <div className={styles.page}>
-      <section className={styles.headerBand}>
-        <div className={styles.headerCopy}>
-          <p className={styles.eyebrow}>Property intake</p>
-          <h1>Add property</h1>
-          <p>
-            Bring a property into the sourcing flow from manual details, StreetEasy URLs, saved-search sourcing,
-            or OM PDF uploads.
-          </p>
-        </div>
-        <div className={styles.headerActions}>
-          <Link href="/pipeline" className={styles.secondaryLink}>
-            Pipeline
-          </Link>
-          <Link href="/deal-analysis" className={styles.primaryLink}>
-            Upload OM PDF
-          </Link>
-        </div>
-      </section>
+      <PageHeader
+        eyebrow="Intake"
+        title="Add property"
+        subtitle="Bring a property into the sourcing flow from manual details, StreetEasy URLs, saved-search sourcing, or OM PDF uploads."
+        actions={
+          <div className={styles.headerActions}>
+            <Link href="/pipeline" className={styles.secondaryLink}>
+              Pipeline
+            </Link>
+            <Link href="/deal-analysis" className={styles.primaryLink}>
+              Upload OM PDF
+            </Link>
+          </div>
+        }
+      />
 
       <div className={styles.healthRow}>
         <div className={styles.healthItem}>
@@ -1002,12 +999,12 @@ export default function AddPropertyPage() {
                 </Field>
 
                 <div className={styles.formActions}>
-                  <button type="submit" className={styles.primaryButton} disabled={!isModeEnabled("manual") || submitting === "manual"}>
+                  <Button type="submit" variant="primary" disabled={!isModeEnabled("manual") || submitting === "manual"}>
                     {submitting === "manual" ? "Importing..." : "Create manual property"}
-                  </button>
-                  <button type="button" className={styles.secondaryButton} onClick={() => setManualForm(INITIAL_MANUAL_FORM)}>
+                  </Button>
+                  <Button type="button" variant="secondary" onClick={() => setManualForm(INITIAL_MANUAL_FORM)}>
                     Clear form
-                  </button>
+                  </Button>
                 </div>
               </form>
             </section>
@@ -1053,16 +1050,16 @@ export default function AddPropertyPage() {
                 </Field>
 
                 <div className={styles.formActions}>
-                  <button
+                  <Button
                     type="submit"
-                    className={styles.primaryButton}
+                    variant="primary"
                     disabled={!isModeEnabled("streeteasy") || submitting === "streeteasy"}
                   >
                     {submitting === "streeteasy" ? "Importing..." : "Import StreetEasy URL(s)"}
-                  </button>
-                  <button type="button" className={styles.secondaryButton} onClick={() => setPullPanelOpen(true)}>
+                  </Button>
+                  <Button type="button" variant="secondary" onClick={() => setPullPanelOpen(true)}>
                     Advanced pull options
-                  </button>
+                  </Button>
                 </div>
               </form>
             </section>
@@ -1133,16 +1130,16 @@ export default function AddPropertyPage() {
                   ) : null}
 
                   <div className={styles.formActions}>
-                    <button
+                    <Button
                       type="submit"
-                      className={styles.primaryButton}
+                      variant="primary"
                       disabled={!isModeEnabled("pull") || submitting === "pull" || streetEasyEnabledSearches.length === 0}
                     >
                       {submitting === "pull" ? "Starting..." : "Run saved search"}
-                    </button>
-                    <button type="button" className={styles.secondaryButton} onClick={() => void fetchSavedSearches()}>
+                    </Button>
+                    <Button type="button" variant="secondary" onClick={() => void fetchSavedSearches()}>
                       Refresh searches
-                    </button>
+                    </Button>
                   </div>
                 </form>
 
@@ -1154,14 +1151,14 @@ export default function AddPropertyPage() {
                       image, building, unit, comp, and sale-history toggles.
                     </p>
                   </div>
-                  <button
+                  <Button
                     type="button"
-                    className={styles.primaryButton}
+                    variant="primary"
                     onClick={() => setPullPanelOpen(true)}
                     disabled={!isModeEnabled("pull")}
                   >
                     Open pull panel
-                  </button>
+                  </Button>
                 </div>
               </div>
             </section>
@@ -1201,7 +1198,10 @@ export default function AddPropertyPage() {
             </span>
           </div>
           {recentImports.length === 0 ? (
-            <p className={styles.emptyState}>Imports will appear here as soon as they start, then update when processing completes.</p>
+            <EmptyState
+              title="No imports yet"
+              description="Imports will appear here as soon as they start, then update when processing completes."
+            />
           ) : (
             <div className={styles.recentList}>
               {recentImports.map((item) => (
@@ -1347,12 +1347,12 @@ export default function AddPropertyPage() {
               </div>
 
               <div className={styles.drawerActions}>
-                <button type="submit" className={styles.primaryButton} disabled={!isModeEnabled("pull") || submitting === "pull"}>
+                <Button type="submit" variant="primary" disabled={!isModeEnabled("pull") || submitting === "pull"}>
                   {submitting === "pull" ? "Running pull..." : "Run full pull"}
-                </button>
-                <button type="button" className={styles.secondaryButton} onClick={() => setPullForm(INITIAL_PULL_FORM)}>
+                </Button>
+                <Button type="button" variant="secondary" onClick={() => setPullForm(INITIAL_PULL_FORM)}>
                   Reset options
-                </button>
+                </Button>
               </div>
             </form>
           </aside>

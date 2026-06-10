@@ -3,9 +3,9 @@
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { EmptyState, PageHeader, StatCard } from "@/components/ui";
+import { API_BASE } from "@/lib/api";
 import styles from "./saved.module.css";
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
 
 type SavedDealRow = {
   savedDeal?: {
@@ -306,19 +306,17 @@ function SavedPageContent() {
 
   return (
     <div className={styles.page}>
-      <header className={styles.header}>
-        <div>
-          <p className={styles.eyebrow}>Saved desk</p>
-          <h1 className={styles.title}>Saved Deals</h1>
-          <p className={styles.subtitle}>
-            Saved opportunities stay visible here through active review, underwriting, and rejection.
-          </p>
-        </div>
-        <div className={styles.headerActions}>
-          <Link href="/pipeline" className={styles.secondaryLink}>Pipeline</Link>
-          <Link href="/progress" className={styles.primaryLink}>Progress</Link>
-        </div>
-      </header>
+      <PageHeader
+        eyebrow="Workspace"
+        title="Saved Deals"
+        subtitle="Saved opportunities stay visible here through active review, underwriting, and rejection."
+        actions={
+          <>
+            <Link href="/pipeline" className={styles.secondaryLink}>Pipeline</Link>
+            <Link href="/progress" className={styles.primaryLink}>Progress</Link>
+          </>
+        }
+      />
 
       {query ? (
         <div className={styles.filterNotice}>
@@ -329,26 +327,19 @@ function SavedPageContent() {
       ) : null}
 
       <section className={styles.metrics} aria-label="Saved deal summary">
-        <article className={styles.metric}>
-          <span>Total Saved</span>
-          <strong>{total || rows.length}</strong>
-        </article>
-        <article className={styles.metric}>
-          <span>Active</span>
-          <strong>{metrics.activeCount}</strong>
-        </article>
-        <article className={`${styles.metric} ${metrics.rejectedCount > 0 ? styles.metricDanger : ""}`}>
-          <span>Rejected</span>
-          <strong>{metrics.rejectedCount}</strong>
-        </article>
-        <article className={styles.metric}>
-          <span>Avg Score</span>
-          <strong>{metrics.averageScore == null ? "—" : Math.round(metrics.averageScore)}</strong>
-        </article>
-        <article className={styles.metric}>
-          <span>With Docs</span>
-          <strong>{metrics.withDocs}</strong>
-        </article>
+        <StatCard label="Total Saved" value={total || rows.length} tone="neutral" />
+        <StatCard label="Active" value={metrics.activeCount} tone="neutral" />
+        <StatCard
+          label="Rejected"
+          value={metrics.rejectedCount}
+          tone={metrics.rejectedCount > 0 ? "danger" : "neutral"}
+        />
+        <StatCard
+          label="Avg Score"
+          value={metrics.averageScore == null ? "—" : Math.round(metrics.averageScore)}
+          tone="neutral"
+        />
+        <StatCard label="With Docs" value={metrics.withDocs} tone="neutral" />
       </section>
 
       <section className={styles.tablePanel}>
@@ -370,11 +361,12 @@ function SavedPageContent() {
         {error ? <div className={styles.error}>{error}</div> : null}
 
         {loading ? (
-          <div className={styles.emptyState}>Loading saved deals...</div>
+          <EmptyState title="Loading saved deals…" />
         ) : filteredRows.length === 0 ? (
-          <div className={styles.emptyState}>
-            {rows.length === 0 ? "No saved deals yet." : "No saved deals match the current search."}
-          </div>
+          <EmptyState
+            title={rows.length === 0 ? "No saved deals yet." : "No saved deals match the current search."}
+            description={rows.length === 0 ? "Save a deal from the pipeline to see it here." : undefined}
+          />
         ) : (
           <div className={styles.tableWrap}>
             <table className={styles.table}>
@@ -432,12 +424,12 @@ function SavedPageContent() {
                           ) : null}
                         </div>
                       </td>
-                      <td>
+                      <td className={styles.numericCell}>
                         <span className={scoreClass(row.dealScore)}>
                           {row.dealScore == null ? "—" : `${Math.round(row.dealScore)} / 100`}
                         </span>
                       </td>
-                      <td>
+                      <td className={styles.numericCell}>
                         <div className={styles.stack}>
                           <span>{formatCurrency(row.price)}</span>
                           {facts.length > 0 ? (
@@ -489,7 +481,7 @@ function SavedPageContent() {
 
 export default function SavedPage() {
   return (
-    <Suspense fallback={<div className={styles.page}>Loading saved deals...</div>}>
+    <Suspense fallback={<div className={styles.page}><EmptyState title="Loading saved deals…" /></div>}>
       <SavedPageContent />
     </Suspense>
   );
