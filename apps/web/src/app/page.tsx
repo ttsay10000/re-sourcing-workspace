@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { Suspense, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { DEAL_FLOW_STAGES, type UiV2PipelineListPayload, type UiV2PipelineRow } from "@re-sourcing/contracts";
 import {
   AlertTriangle,
@@ -241,71 +241,98 @@ function HomePageContent() {
   const [openAttentionGroups, setOpenAttentionGroups] = useState<Record<string, boolean>>({});
   const [yieldFlagRows, setYieldFlagRows] = useState<HomeProgressRow[]>([]);
 
-  useEffect(() => {
-    let ignore = false;
-    async function loadHome() {
+  const loadHome = useCallback(async (options?: { initial?: boolean }) => {
+    if (options?.initial) {
       setLoading(true);
       setError(null);
-      try {
-        const [pipelineResponse, progressResponse, savedResponse] = await Promise.all([
-          fetch(`${API_BASE}/api/ui-v2/pipeline?limit=250&includeRejected=true`, { credentials: "include" }),
-          fetch(`${API_BASE}/api/ui-v2/deal-progress`, { credentials: "include" }),
-          fetch(`${API_BASE}/api/ui-v2/saved-deals?limit=250`, { credentials: "include" }),
-        ]);
-        const pipelineData = (await pipelineResponse.json().catch(() => ({}))) as PipelineResponse;
-        const progressData = (await progressResponse.json().catch(() => ({}))) as ProgressResponse;
-        const savedData = (await savedResponse.json().catch(() => ({}))) as SavedDealsResponse;
-        if (!pipelineResponse.ok) throw new Error(pipelineData.error || pipelineData.details || "Failed to load pipeline.");
-        if (!progressResponse.ok) throw new Error(progressData.error || progressData.details || "Failed to load progress.");
-        if (!savedResponse.ok) throw new Error(savedData.error || savedData.details || "Failed to load saved deals.");
-        if (ignore) return;
-        setPipelineRows(pipelineData.pipeline?.rows ?? []);
-        setPipelineTotal(pipelineData.pipeline?.total ?? 0);
-        setSavedRows(savedData.savedDeals?.rows ?? []);
-        setProgressSections(progressData.sections ?? []);
-        setDataUpdatedAt(typeof progressData.summary?.updatedAt === "string" ? progressData.summary.updatedAt : null);
-      } catch (err) {
-        if (!ignore) setError(err instanceof Error ? err.message : "Failed to load home dashboard.");
-      } finally {
-        if (!ignore) setLoading(false);
-      }
     }
-    void loadHome();
-    async function loadDigest() {
-      try {
-        const response = await fetch(`${API_BASE}/api/notifications/digest-preview`, { credentials: "include" });
-        const data = (await response.json().catch(() => ({}))) as DigestPreview;
-        if (!ignore && response.ok && !data.error) setDigest(data);
-      } catch {
-        // strip simply doesn't render
-      }
+    try {
+      const [pipelineResponse, progressResponse, savedResponse] = await Promise.all([
+        fetch(`${API_BASE}/api/ui-v2/pipeline?limit=250&includeRejected=true`, { credentials: "include" }),
+        fetch(`${API_BASE}/api/ui-v2/deal-progress`, { credentials: "include" }),
+        fetch(`${API_BASE}/api/ui-v2/saved-deals?limit=250`, { credentials: "include" }),
+      ]);
+      const pipelineData = (await pipelineResponse.json().catch(() => ({}))) as PipelineResponse;
+      const progressData = (await progressResponse.json().catch(() => ({}))) as ProgressResponse;
+      const savedData = (await savedResponse.json().catch(() => ({}))) as SavedDealsResponse;
+      if (!pipelineResponse.ok) throw new Error(pipelineData.error || pipelineData.details || "Failed to load pipeline.");
+      if (!progressResponse.ok) throw new Error(progressData.error || progressData.details || "Failed to load progress.");
+      if (!savedResponse.ok) throw new Error(savedData.error || savedData.details || "Failed to load saved deals.");
+      setPipelineRows(pipelineData.pipeline?.rows ?? []);
+      setPipelineTotal(pipelineData.pipeline?.total ?? 0);
+      setSavedRows(savedData.savedDeals?.rows ?? []);
+      setProgressSections(progressData.sections ?? []);
+      setDataUpdatedAt(typeof progressData.summary?.updatedAt === "string" ? progressData.summary.updatedAt : null);
+      setError(null);
+    } catch (err) {
+      // Background refreshes keep showing the last good data; only the
+      // initial load surfaces the error state.
+      if (options?.initial) setError(err instanceof Error ? err.message : "Failed to load home dashboard.");
+    } finally {
+      if (options?.initial) setLoading(false);
     }
-    void loadDigest();
-    async function loadYieldFlags() {
-      try {
-        const response = await fetch(`${API_BASE}/api/comps/operating?flagged=1`, { credentials: "include" });
-        const data = (await response.json().catch(() => ({}))) as {
-          comps?: Array<{ propertyId: string; canonicalAddress: string; neighborhood?: string | null; yieldFlagDetail?: string | null }>;
-          error?: string;
-        };
-        if (ignore || !response.ok || data.error) return;
-        setYieldFlagRows(
-          (data.comps ?? []).map((comp) => ({
-            propertyId: comp.propertyId,
-            canonicalAddress: comp.canonicalAddress,
-            displayAddress: comp.canonicalAddress,
-            neighborhood: comp.neighborhood ?? null,
-          }))
-        );
-      } catch {
-        // group simply doesn't render
-      }
-    }
-    void loadYieldFlags();
-    return () => {
-      ignore = true;
-    };
   }, []);
+
+  const loadDigest = useCallback(async () => {
+    try {
+      const response = await fetch(`${API_BASE}/api/notifications/digest-preview`, { credentials: "include" });
+      const data = (await response.json().catch(() => ({}))) as DigestPreview;
+      if (response.ok && !data.error) setDigest(data);
+    } catch {
+      // strip simply doesn't render
+    }
+  }, []);
+
+  const loadYieldFlags = useCallback(async () => {
+    try {
+      const response = await fetch(`${API_BASE}/api/comps/operating?flagged=1`, { credentials: "include" });
+      const data = (await response.json().catch(() => ({}))) as {
+        comps?: Array<{ propertyId: string; canonicalAddress: string; neighborhood?: string | null; yieldFlagDetail?: string | null }>;
+        error?: string;
+      };
+      if (!response.ok || data.error) return;
+      setYieldFlagRows(
+        (data.comps ?? []).map((comp) => ({
+          propertyId: comp.propertyId,
+          canonicalAddress: comp.canonicalAddress,
+          displayAddress: comp.canonicalAddress,
+          neighborhood: comp.neighborhood ?? null,
+        }))
+      );
+    } catch {
+      // group simply doesn't render
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadHome({ initial: true });
+    void loadDigest();
+    void loadYieldFlags();
+  }, [loadHome, loadDigest, loadYieldFlags]);
+
+  // Dossiers, OM extractions, and inbox pulls land asynchronously, so the
+  // dashboard re-pulls in the background: every 60s while the tab is visible,
+  // and whenever the user returns to the tab (same cadence as the Yield Map).
+  useEffect(() => {
+    const refresh = () => {
+      void loadHome();
+      void loadDigest();
+      void loadYieldFlags();
+    };
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === "visible") refresh();
+    }, 60_000);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") refresh();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
+    };
+  }, [loadHome, loadDigest, loadYieldFlags]);
 
   const filteredSavedRows = useMemo(() => {
     if (!query) return savedRows;

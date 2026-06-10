@@ -562,6 +562,11 @@ export interface UiV2DocumentStatus {
   documentCount?: number;
   categories?: PropertyDocumentCategory[];
   lastUpdatedAt?: string | null;
+  /** Validation flags on the active authoritative OM snapshot, for row-level triage. */
+  omValidationFlagCount?: number | null;
+  omValidationWorstSeverity?: "error" | "warning" | "info" | null;
+  /** First few flag messages (worst first) for tooltips; the sheet shows the full list. */
+  omValidationMessages?: string[];
 }
 
 export interface UiV2PropertyDocumentItem {
@@ -598,6 +603,8 @@ export interface UiV2EnrichmentModuleDetail {
   status?: UiV2EnrichmentState["status"] | "available" | "missing" | "review" | string | null;
   summaryItems?: UiV2DetailItem[];
   detailItems?: UiV2DetailItem[];
+  /** When this module's source data was last pulled (city data, neighborhood, etc.). */
+  lastRefreshedAt?: string | null;
 }
 
 export interface UiV2ListingFactsPayload {

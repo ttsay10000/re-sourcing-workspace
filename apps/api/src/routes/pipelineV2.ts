@@ -85,6 +85,7 @@ import { buildLoiFileName, buildLoiPdf } from "../deal/loiGenerator.js";
 import { saveGeneratedDocument } from "../deal/generatedDocStorage.js";
 import { resolveReconstructedNoiBasisFromDetails } from "../deal/reconstructedNoiBasis.js";
 import {
+  getAuthoritativeOmSnapshot,
   resolveBrokerStatedCapRatePct,
   resolvePreferredOmUnitCount,
 } from "../om/authoritativeOm.js";
@@ -1353,6 +1354,35 @@ function normalizeOmStatus(value: unknown, hasOmDocument: boolean, hasOmRequest:
   return hasOmDocument ? "available" : "missing";
 }
 
+const VALIDATION_SEVERITY_RANK: Record<string, number> = { error: 0, warning: 1, info: 2 };
+
+/**
+ * Row-level digest of the active OM snapshot's validation flags so the
+ * pipeline table can triage extractions without opening the sheet.
+ */
+function summarizeOmValidationFlags(
+  details: PipelineBaseRow["details"]
+): Pick<UiV2DocumentStatus, "omValidationFlagCount" | "omValidationWorstSeverity" | "omValidationMessages"> {
+  const snapshot = getAuthoritativeOmSnapshot(details);
+  const flags = Array.isArray(snapshot?.validationFlags) ? snapshot.validationFlags : [];
+  if (flags.length === 0) {
+    return { omValidationFlagCount: 0, omValidationWorstSeverity: null, omValidationMessages: [] };
+  }
+  const sorted = [...flags].sort(
+    (a, b) =>
+      (VALIDATION_SEVERITY_RANK[a.severity ?? ""] ?? 3) - (VALIDATION_SEVERITY_RANK[b.severity ?? ""] ?? 3)
+  );
+  const worst = sorted[0]?.severity;
+  return {
+    omValidationFlagCount: flags.length,
+    omValidationWorstSeverity: worst === "error" || worst === "warning" || worst === "info" ? worst : null,
+    omValidationMessages: sorted
+      .slice(0, 3)
+      .map((flag) => flag.message)
+      .filter((message): message is string => typeof message === "string" && message.length > 0),
+  };
+}
+
 function buildDocumentStatus(row: PipelineBaseRow, collections?: DetailCollections): UiV2DocumentStatus {
   const uploadedDocs = collections?.uploadedDocs ?? [];
   const inquiryDocs = collections?.inquiryDocs ?? [];
@@ -1378,6 +1408,7 @@ function buildDocumentStatus(row: PipelineBaseRow, collections?: DetailCollectio
     documentCount,
     categories,
     lastUpdatedAt: latestDocUpdatedAt(row),
+    ...summarizeOmValidationFlags(row.details),
   };
 }
 
@@ -1655,7 +1686,8 @@ function buildEnrichmentDetails(row: PipelineBaseRow): UiV2EnrichmentDetailPaylo
     label: string,
     summaryItems: Array<UiV2DetailItem | null | undefined>,
     detailItems: Array<UiV2DetailItem | null | undefined> = [],
-    fallbackStatus?: string | null
+    fallbackStatus?: string | null,
+    lastRefreshedAt?: string | null
   ) => {
     const summary = compactItems(summaryItems);
     const detail = compactItems(detailItems);
@@ -1666,6 +1698,7 @@ function buildEnrichmentDetails(row: PipelineBaseRow): UiV2EnrichmentDetailPaylo
       status: moduleStatus([...summary, ...detail], fallbackStatus),
       summaryItems: summary,
       detailItems: detail,
+      lastRefreshedAt: lastRefreshedAt ?? null,
     });
   };
 
@@ -1683,7 +1716,7 @@ function buildEnrichmentDetails(row: PipelineBaseRow): UiV2EnrichmentDetailPaylo
     detailItem("Walk score", neighborhood?.metrics?.walkScore),
     detailItem("Transit score", neighborhood?.metrics?.transitScore),
     detailItem("Narrative", neighborhood?.narrative),
-  ]);
+  ], null, neighborhood?.lastRefreshedAt ?? null);
   addModule("tax_assessment", "Tax Assessment", [
     detailItem("Tax class", details?.taxClass ?? details?.taxCode),
     detailItem("BBL", details?.buildingLotBlock ?? details?.bbl),
@@ -1710,8 +1743,7 @@ function buildEnrichmentDetails(row: PipelineBaseRow): UiV2EnrichmentDetailPaylo
   ], [
     detailItem("Map number", readStringPath(enrichment, ["zoning", "zoningMapNumber"])),
     detailItem("Map code", readStringPath(enrichment, ["zoning", "zoningMapCode"])),
-    detailItem("Refreshed", readStringPath(enrichment, ["zoning", "lastRefreshedAt"])),
-  ]);
+  ], null, readStringPath(enrichment, ["zoning", "lastRefreshedAt"]));
   addModule("certificate_of_occupancy", "Certificate of Occupancy", [
     detailItem("Status", readStringPath(enrichment, ["certificateOfOccupancy", "status"])),
     detailItem("Job type", readStringPath(enrichment, ["certificateOfOccupancy", "jobType"])),
@@ -1719,15 +1751,15 @@ function buildEnrichmentDetails(row: PipelineBaseRow): UiV2EnrichmentDetailPaylo
   ], [
     detailItem("Filing type", readStringPath(enrichment, ["certificateOfOccupancy", "filingType"])),
     detailItem("Issued", readStringPath(enrichment, ["certificateOfOccupancy", "issuanceDate"])),
-  ]);
+  ], null, readStringPath(enrichment, ["certificateOfOccupancy", "lastRefreshedAt"]));
   addModule("permits", "Permits", [
     detailItem("Count", readNumericPath(enrichment, ["permits_summary", "count"])),
     detailItem("Last issued", readStringPath(enrichment, ["permits_summary", "last_issued_date"])),
-  ]);
+  ], [], null, readStringPath(enrichment, ["permits_summary", "lastRefreshedAt"]));
   addModule("hpd_registration", "HPD Registration", [
     detailItem("Registration ID", readStringPath(enrichment, ["hpdRegistration", "registrationId"])),
     detailItem("Last registration", readStringPath(enrichment, ["hpdRegistration", "lastRegistrationDate"])),
-  ]);
+  ], [], null, readStringPath(enrichment, ["hpdRegistration", "lastRefreshedAt"]));
   addModule("hpd_violations", "HPD Violations", [
     detailItem("Open", readNumericPath(enrichment, ["hpd_violations_summary", "openCount"])),
     detailItem("Closed", readNumericPath(enrichment, ["hpd_violations_summary", "closedCount"])),
@@ -1736,7 +1768,7 @@ function buildEnrichmentDetails(row: PipelineBaseRow): UiV2EnrichmentDetailPaylo
     detailItem("Total", readNumericPath(enrichment, ["hpd_violations_summary", "total"])),
     detailItem("Most recent", readStringPath(enrichment, ["hpd_violations_summary", "mostRecentApprovedDate"])),
     detailItem("By class", isPlainRecord(enrichment.hpd_violations_summary) ? enrichment.hpd_violations_summary.byClass : null),
-  ]);
+  ], null, readStringPath(enrichment, ["hpd_violations_summary", "lastRefreshedAt"]));
   addModule("dob_complaints", "DOB Complaints", [
     detailItem("30 days", readNumericPath(enrichment, ["dob_complaints_summary", "count30"])),
     detailItem("90 days", readNumericPath(enrichment, ["dob_complaints_summary", "count90"])),
@@ -1745,7 +1777,7 @@ function buildEnrichmentDetails(row: PipelineBaseRow): UiV2EnrichmentDetailPaylo
     detailItem("Open", readNumericPath(enrichment, ["dob_complaints_summary", "openCount"])),
     detailItem("Closed", readNumericPath(enrichment, ["dob_complaints_summary", "closedCount"])),
     detailItem("Top categories", isPlainRecord(enrichment.dob_complaints_summary) ? enrichment.dob_complaints_summary.topCategories : null),
-  ]);
+  ], null, readStringPath(enrichment, ["dob_complaints_summary", "lastRefreshedAt"]));
   addModule("housing_litigations", "Housing Litigations", [
     detailItem("Total", readNumericPath(enrichment, ["housing_litigations_summary", "total"])),
     detailItem("Open", readNumericPath(enrichment, ["housing_litigations_summary", "openCount"])),
@@ -1754,7 +1786,7 @@ function buildEnrichmentDetails(row: PipelineBaseRow): UiV2EnrichmentDetailPaylo
     detailItem("Last finding", readStringPath(enrichment, ["housing_litigations_summary", "lastFindingDate"])),
     detailItem("By case type", isPlainRecord(enrichment.housing_litigations_summary) ? enrichment.housing_litigations_summary.byCaseType : null),
     detailItem("By status", isPlainRecord(enrichment.housing_litigations_summary) ? enrichment.housing_litigations_summary.byStatus : null),
-  ]);
+  ], null, readStringPath(enrichment, ["housing_litigations_summary", "lastRefreshedAt"]));
   addModule("affordable_housing", "Affordable Housing", [
     detailItem("Project count", readNumericPath(enrichment, ["affordable_housing_summary", "projectCount"])),
     detailItem("Total units", readNumericPath(enrichment, ["affordable_housing_summary", "totalUnits"])),
@@ -1763,7 +1795,7 @@ function buildEnrichmentDetails(row: PipelineBaseRow): UiV2EnrichmentDetailPaylo
     detailItem("Start", readStringPath(enrichment, ["affordable_housing_summary", "latestProjectStartDate"])),
     detailItem("Completion", readStringPath(enrichment, ["affordable_housing_summary", "latestProjectCompletionDate"])),
     detailItem("By band", isPlainRecord(enrichment.affordable_housing_summary) ? enrichment.affordable_housing_summary.totalAffordableByBand : null),
-  ]);
+  ], null, readStringPath(enrichment, ["affordable_housing_summary", "lastRefreshedAt"]));
 
   const rentalUnits = Array.isArray(rentalFinancials?.rentalUnits) ? rentalFinancials.rentalUnits : [];
   const omRentRoll = Array.isArray(omAnalysis.rentRoll) ? omAnalysis.rentRoll : [];

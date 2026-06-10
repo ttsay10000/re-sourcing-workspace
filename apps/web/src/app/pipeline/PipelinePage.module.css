@@ -2398,6 +2398,17 @@
   line-height: 1.25;
 }
 
+/* "Source data last pulled" stamp; sits between the label and the status chip. */
+.dataModuleStamp {
+  margin-left: auto;
+  color: var(--app-muted, #71717a);
+  font-size: 0.62rem;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  cursor: help;
+}
+
 .dataTableShell {
   max-height: 20rem;
   overflow: auto;

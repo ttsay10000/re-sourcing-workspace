@@ -904,6 +904,9 @@ function rowTrackerItems(row: PipelineRow): PipelineTrackerItem[] {
   const compStatus = typeof row.brokerComps?.status === "string" ? row.brokerComps.status : null;
   const hasCompEvidence = rowHasCompEvidence(row);
   const omStatus = row.documentStatus?.omStatus ?? "missing";
+  const omFlagCount = row.documentStatus?.omValidationFlagCount ?? 0;
+  const omFlagWorst = row.documentStatus?.omValidationWorstSeverity ?? null;
+  const omFlagMessages = row.documentStatus?.omValidationMessages ?? [];
   const generationStatus = row.underwriting?.generationStatus ?? null;
   const hasDossierDocument = Boolean(rowDossierDocumentId(row) || rowExcelDocumentId(row));
   const hasUnderwriting = Boolean(row.underwriting?.dealScore != null || row.underwriting?.summary);
@@ -917,9 +920,23 @@ function rowTrackerItems(row: PipelineRow): PipelineTrackerItem[] {
     },
     {
       key: "om",
-      label: "OM",
-      tone: row.documentStatus?.hasOm ? "complete" : omStatus === "requested" ? "warning" : "pending",
-      title: row.documentStatus?.hasOm ? `OM ${titleize(omStatus)}.` : omStatus === "requested" ? "OM requested from broker." : "OM missing.",
+      label: omFlagCount > 0 ? `OM ⚠${omFlagCount}` : "OM",
+      tone: row.documentStatus?.hasOm
+        ? omFlagCount > 0
+          ? omFlagWorst === "error"
+            ? "failed"
+            : "warning"
+          : "complete"
+        : omStatus === "requested"
+          ? "warning"
+          : "pending",
+      title: row.documentStatus?.hasOm
+        ? omFlagCount > 0
+          ? `OM ${titleize(omStatus)} — ${omFlagCount} validation flag${omFlagCount === 1 ? "" : "s"}: ${omFlagMessages.join(" · ")}`
+          : `OM ${titleize(omStatus)}.`
+        : omStatus === "requested"
+          ? "OM requested from broker."
+          : "OM missing.",
     },
     {
       key: "uw",
@@ -1051,6 +1068,9 @@ function normalizePropertyDetail(property: FlexiblePropertyDetail | null | undef
       documentCount: documentStatus.documentCount ?? (Array.isArray(property.documents) ? property.documents.length : 0),
       categories: Array.isArray(documentStatus.categories) ? documentStatus.categories : [],
       lastUpdatedAt: documentStatus.lastUpdatedAt ?? (documentStatusRecord.updatedAt as string | null | undefined) ?? null,
+      omValidationFlagCount: documentStatus.omValidationFlagCount ?? null,
+      omValidationWorstSeverity: documentStatus.omValidationWorstSeverity ?? null,
+      omValidationMessages: Array.isArray(documentStatus.omValidationMessages) ? documentStatus.omValidationMessages : [],
     },
     documents: Array.isArray(property.documents)
       ? property.documents.map((document) => normalizeDocument(document as Partial<UiV2PropertyDocumentItem> & Record<string, unknown>))
@@ -4974,10 +4994,20 @@ function EnrichmentModuleGrid({
 
 function DataModuleRow({ module }: { module: UiV2EnrichmentModuleDetail }) {
   const items = moduleItems(module).slice(0, 6);
+  const refreshed = module.lastRefreshedAt ? new Date(module.lastRefreshedAt) : null;
+  const refreshedValid = refreshed != null && !Number.isNaN(refreshed.getTime());
   return (
     <article className={styles.dataModuleRow}>
       <div className={styles.dataModuleHeader}>
         <strong>{module.label}</strong>
+        {refreshedValid ? (
+          <span
+            className={styles.dataModuleStamp}
+            title={`Source data last pulled ${refreshed.toLocaleString("en-US")}`}
+          >
+            {refreshed.toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+          </span>
+        ) : null}
         <span className={`${styles.tinyChip} ${moduleToneClass(module.status)}`}>{statusBadgeLabel(module.status)}</span>
       </div>
       <DetailItems items={items} />
