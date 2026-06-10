@@ -20,6 +20,7 @@ import {
   Map as MapIcon,
   type LucideIcon,
 } from "lucide-react";
+import { API_BASE } from "@/lib/api";
 
 type NavChildLink = {
   href: string;
@@ -89,8 +90,8 @@ const NAV_LINKS: NavLink[] = [
       },
       {
         href: "/broker-om/email-search",
-        label: "Gmail Pull",
-        shortLabel: "G",
+        label: "Find OMs in Email",
+        shortLabel: "F",
         icon: Search,
         matches: (pathname: string) => pathname === "/broker-om/email-search",
       },
@@ -106,8 +107,7 @@ const NAV_LINKS: NavLink[] = [
       pathname.startsWith("/progress/") ||
       pathname === "/deal-analysis" ||
       pathname.startsWith("/deal-analysis/") ||
-      pathname.startsWith("/dossier-") ||
-      pathname.startsWith("/rental-analysis"),
+      pathname.startsWith("/dossier-"),
     children: [
       {
         href: "/progress",
@@ -145,7 +145,6 @@ const NAV_LINKS: NavLink[] = [
       ((pathname === "/profile" || pathname.startsWith("/profile/")) && section === "saved-deals"),
   },
 ];
-const API_BASE = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000").replace(/\/$/, "");
 
 function resolveRequestUrl(input: RequestInfo | URL): string | null {
   if (typeof input === "string") return input;

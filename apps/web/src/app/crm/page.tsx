@@ -20,8 +20,8 @@ import type {
   UiV2PropertyDetailPayload,
 } from "@re-sourcing/contracts";
 import styles from "./CrmPage.module.css";
+import { API_BASE, apiFetch } from "@/lib/api";
 
-const API_BASE = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000").replace(/\/$/, "");
 const CRM_LIMIT = 100;
 const PROPERTY_LABEL_PREFETCH_LIMIT = 200;
 const BROKER_RESPONSE_OPTIONS: Array<{ value: UiV2CrmBrokerResponseStatus; label: string }> = [
@@ -146,32 +146,6 @@ interface MergeResponse {
     mergedCount: number;
     affectedPropertyCount: number;
   };
-}
-
-async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const headers = new Headers(init?.headers);
-  if (init?.body && !headers.has("Content-Type")) {
-    headers.set("Content-Type", "application/json");
-  }
-
-  const response = await fetch(`${API_BASE}${path}`, {
-    ...init,
-    headers,
-    credentials: "include",
-  });
-  const data = await response.json().catch(() => null);
-
-  if (!response.ok) {
-    const message =
-      typeof data?.error === "string"
-        ? data.error
-        : typeof data?.details === "string"
-          ? data.details
-          : `Request failed with HTTP ${response.status}`;
-    throw new Error(message);
-  }
-
-  return data as T;
 }
 
 function compactPropertyId(propertyId: string): string {

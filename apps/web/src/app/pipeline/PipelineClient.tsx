@@ -50,8 +50,8 @@ import {
   type BrokerCompUiSurface,
 } from "../property-data/brokerComps";
 import styles from "./PipelinePage.module.css";
+import { API_BASE, apiFetch } from "@/lib/api";
 
-const API_BASE = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000").replace(/\/$/, "");
 const PIPELINE_PATH = "/pipeline";
 
 const SORT_OPTIONS: Array<{ value: UiV2PipelineSortField; label: string }> = [
@@ -367,25 +367,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function cx(...values: Array<string | false | null | undefined>): string {
   return values.filter(Boolean).join(" ");
-}
-
-async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {}),
-    },
-  });
-  const payload = await response.json().catch(() => null);
-  if (!response.ok) {
-    const message =
-      isRecord(payload) && typeof payload.error === "string"
-        ? payload.error
-        : `Request failed with ${response.status}`;
-    throw new Error(message);
-  }
-  return payload as T;
 }
 
 function pipelineRowHasOm(row: Pick<PipelineRow, "documentStatus"> | null | undefined): boolean {

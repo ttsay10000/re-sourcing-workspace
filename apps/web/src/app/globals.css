@@ -6148,3 +6148,79 @@ button:active:not(:disabled) {
     transition: none;
   }
 }
+
+/* ─────────────────────────────────────────────────────────────────
+   Type roles — the only sanctioned text styles. Pages map every text
+   node to one of these instead of inventing per-page rem values.
+────────────────────────────────────────────────────────────────── */
+
+.text-display {
+  font-family: var(--font-display);
+  font-size: var(--text-3xl);
+  font-weight: 560;
+  line-height: var(--leading-tight);
+  color: var(--app-ink);
+}
+
+.text-section {
+  font-family: var(--font-display);
+  font-size: var(--text-lg);
+  font-weight: 600;
+  line-height: var(--leading-snug);
+  color: var(--app-ink);
+}
+
+.text-eyebrow {
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--brand-strong);
+}
+
+.text-micro {
+  font-size: var(--text-2xs);
+  font-weight: 650;
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--app-muted);
+}
+
+.text-metric {
+  font-family: var(--font-display);
+  font-variant-numeric: tabular-nums;
+  font-weight: 440;
+  color: var(--app-ink);
+}
+
+.text-body-muted {
+  font-size: 0.88rem;
+  font-weight: 400;
+  color: var(--app-muted);
+}
+
+/* ─────────────────────────────────────────────────────────────────
+   Data-sanity flags — soft cell fills + chips for suspicious values
+   (LTR ≥ MTR yield, negative yields, outliers, missing contacts).
+   Global on purpose so CSS-module tables can compose them.
+────────────────────────────────────────────────────────────────── */
+
+.cell-flag-warn {
+  background: var(--app-amber-soft) !important;
+  box-shadow: inset 0 0 0 1px var(--app-amber-border);
+}
+
+.cell-flag-danger {
+  background: var(--app-red-soft) !important;
+  box-shadow: inset 0 0 0 1px var(--app-red-border);
+}
+
+.value-flag-warn {
+  color: var(--app-amber);
+  font-weight: 700;
+}
+
+.value-flag-danger {
+  color: var(--app-red);
+  font-weight: 700;
+}
