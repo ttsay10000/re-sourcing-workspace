@@ -706,6 +706,30 @@
   background: #e6f5f3;
 }
 
+/* Red highlight for listings flagged unavailable (in contract, delisted, sold) by the listing refresh. */
+.unavailableRow,
+.pipelineTable tbody tr.unavailableRow,
+.pipelineTable tbody tr.unavailableRow:hover {
+  background: #fef2f2;
+  box-shadow: inset 3px 0 0 #dc2626;
+}
+
+.unavailableRow td:last-child,
+.pipelineTable tbody tr.unavailableRow:hover td:last-child {
+  background: #fef2f2;
+}
+
+.pipelineTable tbody tr.unavailableRow.selectedRow,
+.pipelineTable tbody tr.unavailableRow.selectedRow:hover {
+  background: #fee2e2;
+  box-shadow: inset 3px 0 0 #b91c1c;
+}
+
+.pipelineTable tbody tr.unavailableRow.selectedRow td:last-child,
+.pipelineTable tbody tr.unavailableRow.selectedRow:hover td:last-child {
+  background: #fee2e2;
+}
+
 .selectColumn input {
   width: 1rem;
   height: 1rem;

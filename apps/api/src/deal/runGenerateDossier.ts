@@ -58,6 +58,7 @@ import {
 } from "./brokerDossierNotes.js";
 import {
   getPropertyDossierAssumptions,
+  getPropertyDossierSummary,
   hasManualDossierAssumptionField,
   mergeDossierAssumptionOverrides,
   propertyAssumptionsToOverrides,
@@ -82,8 +83,8 @@ import type {
 } from "./underwritingContext.js";
 
 export interface GenerateDossierResult {
-  dossierDoc: { id: string; fileName: string; storagePath: string };
-  excelDoc: { id: string; fileName: string; storagePath: string };
+  dossierDoc: { id: string; fileName: string; storagePath: string } | null;
+  excelDoc: { id: string; fileName: string; storagePath: string } | null;
   /** Deal score 0–100 from the deterministic scoring engine; included so UI can confirm it flowed through. */
   dealScore: number | null;
   /** Legacy field retained for API compatibility; browser-triggered dossier runs no longer send email. */
@@ -94,6 +95,12 @@ export interface RunGenerateDossierOptions {
   sendEmail?: boolean;
   dossierFormat?: "teaser" | "workpaper";
   scoringProfile?: DealScoringProfileKey | null;
+  /**
+   * Recompute the underwriting model, deal signals, and persisted dossier summary without
+   * rendering or replacing the PDF/Excel documents. Used after OM analysis refreshes so
+   * pipeline yield numbers reflect the latest user inputs and underwriting.
+   */
+  skipDocuments?: boolean;
 }
 
 function runningGenerationState(
@@ -116,8 +123,8 @@ function buildPersistedDossierSummary(params: {
   generatedAt: string;
   dealSignalsId: string;
   dealSignalsGeneratedAt: string;
-  dossierDocumentId: string;
-  excelDocumentId: string;
+  dossierDocumentId: string | null;
+  excelDocumentId: string | null;
   askingPrice: number | null;
   purchasePrice: number | null;
   recommendedOffer: ReturnType<typeof computeRecommendedOffer>;
@@ -413,8 +420,10 @@ export async function runGenerateDossier(
   const property = await propertyRepo.byId(propertyId);
   if (!property) throw new Error("Property not found");
 
+  const skipDocuments = options?.skipDocuments === true;
   const startedAt = new Date().toISOString();
   const setGenerationState = async (state: PropertyDealDossierGeneration): Promise<void> => {
+    if (skipDocuments) return;
     await propertyRepo.updateDetails(
       propertyId,
       "dealDossier.generation",
@@ -910,44 +919,83 @@ export async function runGenerateDossier(
       prependUniqueFlag(financialFlags, `Score upside: ${scoringResult.positiveSignals[0]}`);
     }
 
-    const scoredDossierText = buildDossierStructuredText(ctx);
+    let dossierDoc: { id: string; fileName: string; storagePath: string } | null = null;
+    let excelDoc: { id: string; fileName: string; storagePath: string } | null = null;
 
-    await setGenerationState(runningGenerationState(startedAt, "Rendering PDF and Excel"));
-    const renderStartedAtMs = Date.now();
-    const dossierFormat = options?.dossierFormat ?? "teaser";
-    const dossierBuffer =
-      dossierFormat === "workpaper"
-        ? await dossierTextToPdf(scoredDossierText, {
-            cover: buildDossierPdfCoverData({
-              ctx,
-              details,
-              listing,
-            }),
-          })
-        : await dossierTeaserToPdf(
-            buildDossierTeaserData({
-              ctx,
-              details,
-              listing,
-              scoringResult,
-              sponsor: {
-                name: profile.name ?? null,
-                email: profile.email ?? null,
-                organization: profile.organization ?? null,
-              },
+    if (!skipDocuments) {
+      const scoredDossierText = buildDossierStructuredText(ctx);
+
+      await setGenerationState(runningGenerationState(startedAt, "Rendering PDF and Excel"));
+      const renderStartedAtMs = Date.now();
+      const dossierFormat = options?.dossierFormat ?? "teaser";
+      const dossierBuffer =
+        dossierFormat === "workpaper"
+          ? await dossierTextToPdf(scoredDossierText, {
+              cover: buildDossierPdfCoverData({
+                ctx,
+                details,
+                listing,
+              }),
             })
-          );
-    const excelWorkbook = await buildDealAnalysisWorkbook(ctx, { useLlmBlueprint: false });
-    const excelBuffer = excelWorkbook.buffer;
-    console.info("[runGenerateDossier] Rendered PDF and Excel", {
-      propertyId,
-      dossierFormat,
-      durationMs: Date.now() - renderStartedAtMs,
-      dossierBytes: dossierBuffer.length,
-      excelBytes: excelBuffer.length,
-    });
+          : await dossierTeaserToPdf(
+              buildDossierTeaserData({
+                ctx,
+                details,
+                listing,
+                scoringResult,
+                sponsor: {
+                  name: profile.name ?? null,
+                  email: profile.email ?? null,
+                  organization: profile.organization ?? null,
+                },
+              })
+            );
+      const excelWorkbook = await buildDealAnalysisWorkbook(ctx, { useLlmBlueprint: false });
+      const excelBuffer = excelWorkbook.buffer;
+      console.info("[runGenerateDossier] Rendered PDF and Excel", {
+        propertyId,
+        dossierFormat,
+        durationMs: Date.now() - renderStartedAtMs,
+        dossierBytes: dossierBuffer.length,
+        excelBytes: excelBuffer.length,
+      });
 
-    await setGenerationState(runningGenerationState(startedAt, "Saving documents"));
+      await setGenerationState(runningGenerationState(startedAt, "Saving documents"));
+      const dossierDocId = randomUUID();
+      const excelDocId = randomUUID();
+
+      const dossierStoragePath = await saveGeneratedDocument(
+        propertyId,
+        dossierDocId,
+        dossierFileName,
+        dossierBuffer
+      );
+      const excelStoragePath = await saveGeneratedDocument(
+        propertyId,
+        excelDocId,
+        excelFileName,
+        excelBuffer
+      );
+
+      dossierDoc = await documentRepo.insert({
+        propertyId,
+        fileName: dossierFileName,
+        fileType: "application/pdf",
+        source: "generated_dossier",
+        storagePath: dossierStoragePath,
+        fileContent: dossierBuffer,
+      });
+
+      excelDoc = await documentRepo.insert({
+        propertyId,
+        fileName: excelFileName,
+        fileType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        source: "generated_excel",
+        storagePath: excelStoragePath,
+        fileContent: excelBuffer,
+      });
+    }
+
     const saveStartedAtMs = Date.now();
     const persistedSignals = await signalsRepo.insert({
       ...insertParams,
@@ -959,45 +1007,16 @@ export async function runGenerateDossier(
       adjustedNoi: projection.operating.stabilizedNoi ?? currentNoi ?? null,
     });
 
-    const dossierDocId = randomUUID();
-    const excelDocId = randomUUID();
-
-    const dossierStoragePath = await saveGeneratedDocument(
-      propertyId,
-      dossierDocId,
-      dossierFileName,
-      dossierBuffer
-    );
-    const excelStoragePath = await saveGeneratedDocument(
-      propertyId,
-      excelDocId,
-      excelFileName,
-      excelBuffer
-    );
-
-    const dossierDoc = await documentRepo.insert({
-      propertyId,
-      fileName: dossierFileName,
-      fileType: "application/pdf",
-      source: "generated_dossier",
-      storagePath: dossierStoragePath,
-      fileContent: dossierBuffer,
-    });
-
-    const excelDoc = await documentRepo.insert({
-      propertyId,
-      fileName: excelFileName,
-      fileType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      source: "generated_excel",
-      storagePath: excelStoragePath,
-      fileContent: excelBuffer,
-    });
+    const previousSummary = getPropertyDossierSummary(rawDetails);
+    const dossierDocumentId = dossierDoc?.id ?? previousSummary?.dossierDocumentId ?? null;
+    const excelDocumentId = excelDoc?.id ?? previousSummary?.excelDocumentId ?? null;
 
     console.info("[runGenerateDossier] Persisted dossier outputs", {
       propertyId,
+      skipDocuments,
       durationMs: Date.now() - saveStartedAtMs,
-      dossierDocumentId: dossierDoc.id,
-      excelDocumentId: excelDoc.id,
+      dossierDocumentId,
+      excelDocumentId,
       dealSignalsId: persistedSignals.id,
     });
 
@@ -1007,8 +1026,8 @@ export async function runGenerateDossier(
       "dealDossier.summary",
       buildPersistedDossierSummary({
         generatedAt: completedAt,
-        dossierDocumentId: dossierDoc.id,
-        excelDocumentId: excelDoc.id,
+        dossierDocumentId,
+        excelDocumentId,
         askingPrice: recommendedOffer.askingPrice,
         purchasePrice: assumptions.acquisition.purchasePrice,
         recommendedOffer,
@@ -1024,45 +1043,49 @@ export async function runGenerateDossier(
     );
 
     const emailSent = false;
-    console.info("[runGenerateDossier] Dossier email disabled", {
-      propertyId,
-    });
 
-    await setGenerationState({
-      status: "completed",
-      stageLabel: "Dossier ready",
-      startedAt,
-      completedAt,
-      lastError: null,
-      dealScore: finalScore,
-      dossierDocumentId: dossierDoc.id,
-      excelDocumentId: excelDoc.id,
-    });
-    await deleteSupersededGeneratedDocuments([dossierDoc.id, excelDoc.id]).catch((cleanupError) => {
-      console.warn("[runGenerateDossier] Superseded generated document cleanup failed", {
-        propertyId,
-        retainedDocumentIds: [dossierDoc.id, excelDoc.id],
-        error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+    if (!skipDocuments && dossierDoc && excelDoc) {
+      await setGenerationState({
+        status: "completed",
+        stageLabel: "Dossier ready",
+        startedAt,
+        completedAt,
+        lastError: null,
+        dealScore: finalScore,
+        dossierDocumentId: dossierDoc.id,
+        excelDocumentId: excelDoc.id,
       });
-    });
+      await deleteSupersededGeneratedDocuments([dossierDoc.id, excelDoc.id]).catch((cleanupError) => {
+        console.warn("[runGenerateDossier] Superseded generated document cleanup failed", {
+          propertyId,
+          retainedDocumentIds: [dossierDoc?.id, excelDoc?.id],
+          error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+        });
+      });
+    }
     console.info("[runGenerateDossier] Completed", {
       propertyId,
+      skipDocuments,
       totalDurationMs: Date.now() - generationStartedAtMs,
       emailSent,
       dealScore: finalScore,
     });
 
     return {
-      dossierDoc: {
-        id: dossierDoc.id,
-        fileName: dossierDoc.fileName,
-        storagePath: dossierDoc.storagePath,
-      },
-      excelDoc: {
-        id: excelDoc.id,
-        fileName: excelDoc.fileName,
-        storagePath: excelDoc.storagePath,
-      },
+      dossierDoc: dossierDoc
+        ? {
+            id: dossierDoc.id,
+            fileName: dossierDoc.fileName,
+            storagePath: dossierDoc.storagePath,
+          }
+        : null,
+      excelDoc: excelDoc
+        ? {
+            id: excelDoc.id,
+            fileName: excelDoc.fileName,
+            storagePath: excelDoc.storagePath,
+          }
+        : null,
       dealScore: finalScore,
       emailSent,
     };

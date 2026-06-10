@@ -260,6 +260,7 @@ interface DossierGenerateResponse {
   ok?: boolean;
   propertyId?: string;
   dealScore?: number | null;
+  omRefresh?: { status?: "promoted" | "skipped" | "failed"; error?: string } | null;
   error?: string;
   details?: string;
 }
@@ -270,6 +271,7 @@ interface OmRefreshResponse {
   documentsSkippedNoFile?: number;
   status?: "needs_review" | "promoted" | "failed" | null;
   reviewRequired?: boolean;
+  underwritingRefreshed?: boolean;
   error?: string;
   details?: string;
 }
@@ -544,6 +546,20 @@ function rowIsSaved(row: UiV2PipelineRow): boolean {
   return Boolean(row.savedDeal) || row.statusChip.status === "saved" || row.tags.some((tag) => normalizeTag(tag) === "saved");
 }
 
+/** True when the listing refresh flagged this property as in contract, delisted, sold, or otherwise unavailable. */
+function rowListingUnavailable(row: UiV2PipelineRow): boolean {
+  return row.tags.some((tag) => normalizeTag(tag) === "listing_unavailable");
+}
+
+/** Tags ordered for display: the unavailable flag always surfaces first so it is never truncated. */
+function orderedRowTags(row: UiV2PipelineRow): string[] {
+  return [...row.tags].sort((left, right) => {
+    const leftUnavailable = normalizeTag(left) === "listing_unavailable" ? 0 : 1;
+    const rightUnavailable = normalizeTag(right) === "listing_unavailable" ? 0 : 1;
+    return leftUnavailable - rightUnavailable;
+  });
+}
+
 function marketTypeLabel(value: string | null | undefined): string {
   return MARKET_TYPE_OPTIONS.find((option) => option.value === value)?.label ?? "Unknown";
 }
@@ -570,7 +586,7 @@ function tagToneClass(tag: string): string {
   if (["needs_om", "needs_rent_roll", "needs_city_data", "follow_up"].includes(normalized)) {
     return styles.tagAction;
   }
-  if (["distressed_seller", "rent_stab_risk", "duplicate", "rejected"].includes(normalized)) {
+  if (["distressed_seller", "rent_stab_risk", "duplicate", "rejected", "listing_unavailable"].includes(normalized)) {
     return styles.tagRisk;
   }
   if (["on_market", "off_market", "saved"].includes(normalized)) {
@@ -1800,7 +1816,8 @@ export default function PipelineClient() {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ propertyIds, refreshStreetEasy: false }),
+        // StreetEasy + enrichment already ran in run-enrichment above; only the rental flow remains.
+        body: JSON.stringify({ propertyIds, refreshStreetEasy: false, runEnrichment: false }),
       });
       const rentalPayload = await rentalResponse.json().catch(() => ({}));
       if (!rentalResponse.ok) {
@@ -1845,7 +1862,7 @@ export default function PipelineClient() {
       setNotice(
         `OM analysis ${payload.status === "promoted" ? "updated" : "refreshed"}${
           processed > 0 ? ` from ${processed} document${processed === 1 ? "" : "s"}` : ""
-        }.`
+        }${payload.underwritingRefreshed ? "; yield numbers recalculated" : ""}.`
       );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to refresh OM analysis.");
@@ -1867,14 +1884,20 @@ export default function PipelineClient() {
     try {
       const payload = await apiFetch<DossierGenerateResponse>(`${API_BASE}/api/dossier/generate`, {
         method: "POST",
-        body: JSON.stringify({ propertyId }),
+        body: JSON.stringify({ propertyId, refreshOm: true }),
       });
       await reloadPipelineRows();
       if (selectedId === propertyId) await loadPropertyDetail(propertyId).catch(() => null);
       const score = typeof payload.dealScore === "number" && Number.isFinite(payload.dealScore)
         ? ` Score ${Math.round(payload.dealScore)}/100.`
         : "";
-      setNotice(`Deal dossier rerun completed.${score}`);
+      const omNote =
+        payload.omRefresh?.status === "promoted"
+          ? " OM analysis re-ran first."
+          : payload.omRefresh?.status === "failed"
+            ? " OM analysis re-run failed; existing OM analysis was used."
+            : "";
+      setNotice(`Deal dossier rerun completed.${score}${omNote}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to rerun deal dossier.");
     } finally {
@@ -1894,6 +1917,7 @@ export default function PipelineClient() {
       rows.map((row) => [row.propertyId, row.displayAddress ?? row.canonicalAddress ?? row.propertyId])
     );
     let completed = 0;
+    let yieldsRefreshed = 0;
     const failures: Array<{ propertyId: string; address: string; message: string }> = [];
     setBusyAction("bulk:om-analysis");
     setNotice(
@@ -1911,10 +1935,11 @@ export default function PipelineClient() {
           }`
         );
         try {
-          await apiFetch<OmRefreshResponse>(`${API_BASE}/api/properties/${propertyId}/refresh-om-financials`, {
+          const payload = await apiFetch<OmRefreshResponse>(`${API_BASE}/api/properties/${propertyId}/refresh-om-financials`, {
             method: "POST",
             body: JSON.stringify({ autoPromote: true }),
           });
+          if (payload.underwritingRefreshed) yieldsRefreshed++;
           completed++;
         } catch (err) {
           failures.push({
@@ -1929,10 +1954,14 @@ export default function PipelineClient() {
       if (selectedId) await loadPropertyDetail(selectedId).catch(() => null);
 
       const skippedMessage = skipped > 0 ? ` ${skipped} selected without OM skipped.` : "";
+      const yieldsMessage =
+        yieldsRefreshed > 0
+          ? ` Yield numbers recalculated for ${yieldsRefreshed} propert${yieldsRefreshed === 1 ? "y" : "ies"}.`
+          : "";
       setNotice(
         failures.length === 0
-          ? `OM analysis updated for ${completed} propert${completed === 1 ? "y" : "ies"}.${skippedMessage}`
-          : `OM analysis updated for ${completed} of ${rowsToRefresh.length} eligible properties.${skippedMessage}`
+          ? `OM analysis updated for ${completed} propert${completed === 1 ? "y" : "ies"}.${skippedMessage}${yieldsMessage}`
+          : `OM analysis updated for ${completed} of ${rowsToRefresh.length} eligible properties.${skippedMessage}${yieldsMessage}`
       );
       if (failures.length > 0) {
         setError(
@@ -1961,10 +1990,11 @@ export default function PipelineClient() {
       rows.map((row) => [row.propertyId, row.displayAddress ?? row.canonicalAddress ?? row.propertyId])
     );
     let completed = 0;
+    let omRefreshFailures = 0;
     const failures: Array<{ propertyId: string; address: string; message: string }> = [];
     setBusyAction("bulk:dossier");
     setNotice(
-      `Rerunning dossier generation for ${propertyIds.length} propert${propertyIds.length === 1 ? "y" : "ies"}${
+      `Rerunning OM analysis + dossier generation for ${propertyIds.length} propert${propertyIds.length === 1 ? "y" : "ies"}${
         skipped > 0 ? `; ${skipped} selected without OM skipped` : ""
       }...`
     );
@@ -1973,7 +2003,7 @@ export default function PipelineClient() {
       for (let index = 0; index < propertyIds.length; index++) {
         const propertyId = propertyIds[index]!;
         setNotice(
-          `Rerunning dossiers ${index + 1} of ${propertyIds.length}: ${
+          `Rerunning OM analysis + dossier ${index + 1} of ${propertyIds.length}: ${
             addressById.get(propertyId) ?? "selected property"
           }`
         );
@@ -1981,12 +2011,13 @@ export default function PipelineClient() {
           const response = await fetch(`${API_BASE}/api/dossier/generate`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ propertyId }),
+            body: JSON.stringify({ propertyId, refreshOm: true }),
           });
           const payload = (await response.json().catch(() => ({}))) as DossierGenerateResponse;
           if (!response.ok) {
             throw new Error(payload.details || payload.error || `Request failed with ${response.status}`);
           }
+          if (payload.omRefresh?.status === "failed") omRefreshFailures++;
           completed++;
         } catch (err) {
           failures.push({
@@ -2001,10 +2032,14 @@ export default function PipelineClient() {
       if (selectedId) await loadPropertyDetail(selectedId).catch(() => null);
 
       const skippedMessage = skipped > 0 ? ` ${skipped} selected without OM skipped.` : "";
+      const omRefreshMessage =
+        omRefreshFailures > 0
+          ? ` OM analysis re-run failed for ${omRefreshFailures} propert${omRefreshFailures === 1 ? "y" : "ies"} (existing OM analysis used).`
+          : "";
       setNotice(
         failures.length === 0
-          ? `Dossier generation completed for ${completed} propert${completed === 1 ? "y" : "ies"}.${skippedMessage}`
-          : `Dossier generation completed for ${completed} of ${propertyIds.length} eligible properties.${skippedMessage}`
+          ? `Dossiers and Excel regenerated for ${completed} propert${completed === 1 ? "y" : "ies"} from refreshed OM analysis.${skippedMessage}${omRefreshMessage}`
+          : `Dossiers and Excel regenerated for ${completed} of ${propertyIds.length} eligible properties.${skippedMessage}${omRefreshMessage}`
       );
       if (failures.length > 0) {
         setError(
@@ -3251,7 +3286,7 @@ export default function PipelineClient() {
             title={
               selectedRowsWithOm.length === 0
                 ? "Select at least one property with an uploaded OM."
-                : "Refresh and promote OM extraction for selected properties with uploaded OMs."
+                : "Refresh and promote OM extraction for selected properties, then recalculate yield numbers from the latest user inputs and underwriting."
             }
             disabled={selectedRowsWithOm.length === 0 || busyAction?.startsWith("bulk:")}
             onClick={refreshSelectedOmAnalysis}
@@ -3264,7 +3299,7 @@ export default function PipelineClient() {
             title={
               selectedRowsWithOm.length === 0
                 ? "Select at least one property with an uploaded OM."
-                : "Regenerate the selected properties' deal dossier PDFs and Excel workbooks using saved assumptions."
+                : "Re-run OM analysis, then regenerate and replace the deal dossier PDFs and Excel workbooks using saved assumptions."
             }
             disabled={selectedRowsWithOm.length === 0 || busyAction?.startsWith("bulk:")}
             onClick={rerunSelectedDossiers}
@@ -3363,10 +3398,17 @@ export default function PipelineClient() {
               const askActivity = askActivityDisplay(row);
               const isSaved = rowIsSaved(row);
               const trackerItems = rowTrackerItems(row);
+              const isUnavailable = rowListingUnavailable(row);
+              const displayTags = orderedRowTags(row);
               return (
                 <tr
                   key={row.propertyId}
-                  className={isSelected ? styles.selectedRow : undefined}
+                  className={cx(isSelected && styles.selectedRow, isUnavailable && styles.unavailableRow) || undefined}
+                  title={
+                    isUnavailable
+                      ? "Listing refresh flagged this property as unavailable (in contract, delisted, or sold) — review and remove if needed."
+                      : undefined
+                  }
                   onClick={() => openProperty(row)}
                 >
                   <td className={styles.selectColumn} onClick={stopRowClick}>
@@ -3498,12 +3540,12 @@ export default function PipelineClient() {
                   </td>
                   <td>{flowLabel(row)}</td>
                   <td className={styles.tagsCell}>
-                    {row.tags.slice(0, 3).map((tag) => (
+                    {displayTags.slice(0, 3).map((tag) => (
                       <span className={cx(styles.tagChip, tagToneClass(tag))} key={tag}>
                         {tagLabel(tag)}
                       </span>
                     ))}
-                    {row.tags.length > 3 ? <span className={styles.tagMore}>+{row.tags.length - 3}</span> : null}
+                    {displayTags.length > 3 ? <span className={styles.tagMore}>+{displayTags.length - 3}</span> : null}
                   </td>
                   <td onClick={stopRowClick}>
                     <div className={styles.actionGroup}>
@@ -3718,6 +3760,7 @@ export default function PipelineClient() {
                   <button
                     className={styles.secondaryButton}
                     type="button"
+                    title="Re-run OM extraction from the latest documents and recalculate yield numbers with the current user inputs."
                     disabled={busyAction === `${selectedId}:om-analysis` || busyAction?.startsWith("bulk:")}
                     onClick={() => refreshOmAnalysisForProperty(selectedId)}
                   >
@@ -3726,6 +3769,7 @@ export default function PipelineClient() {
                   <button
                     className={styles.secondaryButton}
                     type="button"
+                    title="Re-run OM analysis, then regenerate and replace the dossier PDF and Excel workbook."
                     disabled={busyAction === `${selectedId}:dossier` || busyAction?.startsWith("bulk:")}
                     onClick={() => rerunDossierForProperty(selectedId)}
                   >

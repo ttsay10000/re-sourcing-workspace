@@ -71,6 +71,8 @@ export interface IngestAuthoritativeOmParams {
   documents: OmAutomationDocument[];
   autoPromote?: boolean;
   triggerDossier?: boolean;
+  /** After a promote, recompute underwriting summary + deal signals (no document regeneration) so yield numbers stay current. Ignored when triggerDossier runs a full generation. */
+  refreshUnderwritingSummary?: boolean;
   pool?: Pool;
 }
 
@@ -84,12 +86,14 @@ export interface RefreshAuthoritativeOmResult {
   status?: "needs_review" | "promoted" | "failed";
   reviewRequired?: boolean;
   dossierGenerated: boolean;
+  underwritingRefreshed?: boolean;
   error?: string;
 }
 
 export interface RefreshAuthoritativeOmOptions {
   autoPromote?: boolean;
   triggerDossier?: boolean;
+  refreshUnderwritingSummary?: boolean;
 }
 
 export interface PromoteOmExtractionResult {
@@ -98,6 +102,7 @@ export interface PromoteOmExtractionResult {
   runId: string;
   snapshotId: string | null;
   dossierGenerated: boolean;
+  underwritingRefreshed?: boolean;
   error?: string;
 }
 
@@ -111,6 +116,9 @@ export interface RejectOmExtractionResult {
 }
 
 const GEMINI_OM_EXTRACTION_METHOD: OmExtractionMethod = "hybrid";
+
+export const NO_OM_DOCUMENTS_ERROR =
+  "No OM, brochure, rent roll, or operating statement documents are available for ingestion.";
 
 interface ManualOmConflict {
   field: string;
@@ -578,6 +586,7 @@ async function promoteSnapshotForProperty(params: {
   omAnalysis?: OmAnalysis | null;
   fromLlm?: RentalFinancials["fromLlm"];
   triggerDossier?: boolean;
+  refreshUnderwritingSummary?: boolean;
   pool: Pool;
 }): Promise<PromoteOmExtractionResult> {
   const {
@@ -588,6 +597,7 @@ async function promoteSnapshotForProperty(params: {
     omAnalysis,
     fromLlm,
     triggerDossier,
+    refreshUnderwritingSummary,
     pool,
   } = params;
   const propertyRepo = new PropertyRepo({ pool });
@@ -664,12 +674,27 @@ async function promoteSnapshotForProperty(params: {
     }
   }
 
+  let underwritingRefreshed = dossierGenerated;
+  if (!dossierGenerated && refreshUnderwritingSummary) {
+    try {
+      await runGenerateDossier(propertyId, undefined, { sendEmail: false, skipDocuments: true });
+      underwritingRefreshed = true;
+    } catch (err) {
+      console.warn(
+        "[promoteSnapshotForProperty] underwriting summary refresh failed",
+        propertyId,
+        err instanceof Error ? err.message : err
+      );
+    }
+  }
+
   return {
     ok: true,
     propertyId,
     runId,
     snapshotId: promoted.id,
     dossierGenerated,
+    underwritingRefreshed,
   };
 }
 
@@ -677,6 +702,7 @@ export async function promoteOmExtractionForProperty(params: {
   propertyId: string;
   runId: string;
   triggerDossier?: boolean;
+  refreshUnderwritingSummary?: boolean;
   pool?: Pool;
 }): Promise<PromoteOmExtractionResult> {
   const pool = params.pool ?? getPool();
@@ -711,6 +737,7 @@ export async function promoteOmExtractionForProperty(params: {
     sourceDocumentId: run.sourceDocumentId ?? extracted.snapshot.sourceDocumentId ?? null,
     snapshot: extracted.snapshot,
     triggerDossier: params.triggerDossier ?? false,
+    refreshUnderwritingSummary: params.refreshUnderwritingSummary ?? false,
     pool,
   });
 }
@@ -904,7 +931,7 @@ export async function ingestAuthoritativeOm(
       snapshotId: null,
       dossierGenerated: false,
       status: "failed",
-      error: "No OM, brochure, rent roll, or operating statement documents are available for ingestion.",
+      error: NO_OM_DOCUMENTS_ERROR,
     };
   }
 
@@ -1128,6 +1155,7 @@ export async function ingestAuthoritativeOm(
         omAnalysis: sanitizedOmAnalysis,
         fromLlm: extracted.fromLlm ?? null,
         triggerDossier: params.triggerDossier !== false,
+        refreshUnderwritingSummary: params.refreshUnderwritingSummary === true,
         pool,
       });
       return {
@@ -1140,6 +1168,7 @@ export async function ingestAuthoritativeOm(
         status: promoted.ok ? "promoted" : "failed",
         reviewRequired: false,
         dossierGenerated: promoted.dossierGenerated,
+        underwritingRefreshed: promoted.underwritingRefreshed === true,
         error: promoted.error,
       };
     }
@@ -1229,5 +1258,6 @@ export async function refreshAuthoritativeOmForProperty(
     pool,
     autoPromote: options?.autoPromote ?? false,
     triggerDossier: options?.triggerDossier ?? false,
+    refreshUnderwritingSummary: options?.refreshUnderwritingSummary ?? false,
   });
 }
