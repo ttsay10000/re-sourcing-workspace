@@ -29,7 +29,7 @@ function formatPct(value: number): string {
   return `${(Math.round(value * 10) / 10).toFixed(1)}%`;
 }
 
-interface ExpectedExpenseCategory {
+export interface ExpectedExpenseCategory {
   key: string;
   label: string;
   pattern: RegExp;
@@ -41,8 +41,9 @@ interface ExpectedExpenseCategory {
  * Categories every NYC multifamily operating statement should show. Missing
  * warning-level lines usually mean the OM understates expenses (and inflates
  * NOI); info-level lines are often legitimately absent on small buildings.
+ * Shared with the expense-benchmark flag engine for line classification.
  */
-const EXPECTED_EXPENSE_CATEGORIES: ExpectedExpenseCategory[] = [
+export const EXPECTED_EXPENSE_CATEGORIES: ExpectedExpenseCategory[] = [
   {
     key: "propertyTaxes",
     label: "Property taxes",

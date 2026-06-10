@@ -78,6 +78,8 @@ export { SavedDealsRepo } from "./repos/SavedDealsRepo.js";
 export type { SavedDealsRepoOptions } from "./repos/SavedDealsRepo.js";
 export { DealSignalsRepo } from "./repos/DealSignalsRepo.js";
 export type { DealSignalsRepoOptions, InsertDealSignalsParams } from "./repos/DealSignalsRepo.js";
+export { ExpenseBenchmarkRepo } from "./repos/ExpenseBenchmarkRepo.js";
+export type { ExpenseBenchmarkRepoOptions, ExpenseBenchmarkRow } from "./repos/ExpenseBenchmarkRepo.js";
 export { BrokerContactRepo } from "./repos/BrokerContactRepo.js";
 export type {
   BrokerContactRepoOptions,

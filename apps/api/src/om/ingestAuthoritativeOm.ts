@@ -10,6 +10,7 @@ import type {
   RentalFinancials,
 } from "@re-sourcing/contracts";
 import {
+  ExpenseBenchmarkRepo,
   getPool,
   InquiryDocumentRepo,
   OmAuthoritativeSnapshotRepo,
@@ -19,6 +20,7 @@ import {
   PropertyUploadedDocumentRepo,
 } from "@re-sourcing/db";
 import { resolveInquiryFilePath } from "../inquiry/storage.js";
+import { buildExpenseBenchmarkFlags, buildingSizeBracketForUnits } from "./expenseBenchmarkFlags.js";
 import { runGenerateDossier } from "../deal/runGenerateDossier.js";
 import {
   type OmInputDocument,
@@ -1238,13 +1240,56 @@ export async function ingestAuthoritativeOm(
       },
       promotedAt: null,
     };
+    // Benchmark comparison rides the same flag channel; failures to load
+    // benchmarks must never break extraction.
+    let benchmarkFlags: OmValidationFlag[] = [];
+    try {
+      const detailsRecord = (property.details ?? {}) as Record<string, unknown>;
+      const infoRecord =
+        snapshotBase.propertyInfo && typeof snapshotBase.propertyInfo === "object"
+          ? (snapshotBase.propertyInfo as Record<string, unknown>)
+          : {};
+      const unitCountRaw = Number(infoRecord.totalUnits ?? infoRecord.unitsTotal ?? detailsRecord.unitCount);
+      const rentRollCount = Array.isArray(snapshotBase.rentRoll) ? snapshotBase.rentRoll.length : 0;
+      const unitCount =
+        Number.isFinite(unitCountRaw) && unitCountRaw > 0
+          ? Math.round(unitCountRaw)
+          : rentRollCount > 0
+            ? rentRollCount
+            : null;
+      const egiRaw = Number(
+        currentFinancials?.effectiveGrossIncome ?? currentFinancials?.grossRentalIncome
+      );
+      const assessedRaw = Number(detailsRecord.assessedTaxBeforeTotal);
+      const benchmarkRepo = new ExpenseBenchmarkRepo({ pool });
+      const benchmarks = await benchmarkRepo.listFor({
+        geography: "nyc",
+        buildingSizeBracket: buildingSizeBracketForUnits(unitCount),
+      });
+      benchmarkFlags = buildExpenseBenchmarkFlags({
+        snapshot: snapshotBase,
+        unitCount,
+        egiAnnual: Number.isFinite(egiRaw) && egiRaw > 0 ? egiRaw : null,
+        benchmarks,
+        assessedTaxableValue: Number.isFinite(assessedRaw) && assessedRaw > 0 ? assessedRaw : null,
+        taxCode: typeof detailsRecord.taxCode === "string" ? detailsRecord.taxCode : null,
+      });
+    } catch (err) {
+      console.warn(
+        "[ingestAuthoritativeOm] expense benchmark flags failed:",
+        err instanceof Error ? err.message : err
+      );
+    }
     const snapshot: OmAuthoritativeSnapshot = {
       ...snapshotBase,
-      validationFlags: buildOmValidationFlags({
-        snapshot: snapshotBase,
-        omAnalysis: sanitizedOmAnalysis,
-        rawRentRoll: extracted.omAnalysis.rentRoll ?? null,
-      }),
+      validationFlags: [
+        ...buildOmValidationFlags({
+          snapshot: snapshotBase,
+          omAnalysis: sanitizedOmAnalysis,
+          rawRentRoll: extracted.omAnalysis.rentRoll ?? null,
+        }),
+        ...benchmarkFlags,
+      ],
     };
 
     const extractedSnapshot = await extractedSnapshotRepo.upsert({
