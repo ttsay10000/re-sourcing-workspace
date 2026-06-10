@@ -14,6 +14,7 @@ import type {
 } from "@re-sourcing/contracts";
 import {
   getPool,
+  PropertyRepo,
   PropertyUploadedDocumentRepo,
 } from "@re-sourcing/db";
 import {
@@ -27,8 +28,9 @@ import {
   type BrokerCompExtractedItemInput,
   type BrokerCompPageInput,
 } from "../brokerComp/service.js";
-import { extractBrokerCompPackageDraft } from "../brokerComps/extractBrokerCompPackage.js";
+import { extractBrokerCompPackageDraft, type BrokerCompExtractionDraft } from "../brokerComps/extractBrokerCompPackage.js";
 import { saveUploadedDocument } from "../upload/uploadedDocStorage.js";
+import { normalizeAddressLineForDisplay } from "../enrichment/resolvePropertyBBL.js";
 
 const router = Router();
 const BROKER_COMP_UPLOAD_MAX_BYTES = 50 * 1024 * 1024;
@@ -443,6 +445,80 @@ async function listBrokerCompPackageDetailsForProperty(propertyId: string, limit
   return { packages, packageDetails };
 }
 
+interface UploadedCompFile {
+  buffer: Buffer;
+  originalname?: string;
+  mimetype?: string;
+}
+
+/** Persist an uploaded comp file + its extraction draft as a package on a property. */
+async function saveCompPackageForProperty(params: {
+  propertyId: string;
+  file: UploadedCompFile;
+  filename: string;
+  draft: BrokerCompExtractionDraft;
+  packageType: BrokerCompPackageType;
+  category: PropertyDocumentCategory;
+  source: string | null;
+  createdBy: string | null;
+}) {
+  const pool = getPool();
+  const documentId = randomUUID();
+  const filePath = await saveUploadedDocument(params.propertyId, documentId, params.filename, params.file.buffer);
+  const documentRepo = new PropertyUploadedDocumentRepo({ pool });
+  const document = await documentRepo.insert({
+    id: documentId,
+    propertyId: params.propertyId,
+    filename: params.filename,
+    contentType: params.file.mimetype || null,
+    filePath,
+    category: params.category,
+    source: params.source,
+    fileContent: params.file.buffer,
+  });
+
+  const details = await createBrokerCompPackage(pool, {
+    propertyId: params.propertyId,
+    sourceDocumentId: document.id,
+    packageType: params.packageType,
+    status: params.draft.extractedItems.length > 0 ? "approved" : "uploaded",
+    replaceExistingForProperty: true,
+    rawPayload: {
+      filename: params.filename,
+      contentType: params.file.mimetype || null,
+      sizeBytes: params.file.buffer.length,
+    },
+    normalizedPayload: {
+      summary: params.draft.extractedItems.length > 0
+        ? "Broker comp package extracted for analyst review."
+        : "Broker comp package uploaded. Structured comp rows were not detected yet.",
+    },
+    packageMeta: {
+      ...params.draft.packageMeta,
+      documentCategory: params.category,
+      source: params.source,
+    },
+    createdBy: params.createdBy,
+    pages: params.draft.pages,
+    extractedItems: params.draft.extractedItems,
+  });
+  return { document, details };
+}
+
+/** Subject address from an extraction draft: the subject pricing item is authoritative; the filename is the fallback. */
+function subjectAddressFromDraft(draft: BrokerCompExtractionDraft, filename: string): string | null {
+  for (const item of draft.extractedItems) {
+    if (item.itemType !== "subject_projected_pricing") continue;
+    const payload = item.normalizedPayload ?? {};
+    const address = typeof payload.address === "string" ? payload.address.trim() : "";
+    if (address) return address;
+  }
+  // Filenames like "210 East 39th St - Sale Comps.pdf" carry the subject address.
+  const stem = filename.replace(/\.[a-z0-9]+$/i, "");
+  const match = stem.match(/^\s*(\d+[\w-]*\s+[A-Za-z][^,_–-]*)/);
+  return match?.[1]?.trim() || null;
+}
+
 router.post(
   ["/properties/:id/broker-comp-packages/upload", "/properties/:id/broker-comps/upload"],
   (req, res, next) => {
@@ -461,7 +537,6 @@ router.post(
         return;
       }
 
-      const pool = getPool();
       const filename = file.originalname?.trim() || "broker-comp-package";
       const draft = await extractBrokerCompPackageDraft(file.buffer, filename);
       const requestedType = parsePackageType(req.body?.packageType ?? req.body?.package_type);
@@ -478,48 +553,130 @@ router.post(
         return;
       }
 
-      const documentId = randomUUID();
-      const filePath = await saveUploadedDocument(propertyId.value ?? "", documentId, filename, file.buffer);
-      const documentRepo = new PropertyUploadedDocumentRepo({ pool });
-      const document = await documentRepo.insert({
-        id: documentId,
+      const { document, details } = await saveCompPackageForProperty({
         propertyId: propertyId.value ?? "",
+        file,
         filename,
-        contentType: file.mimetype || null,
-        filePath,
+        draft,
+        packageType,
         category,
         source,
-        fileContent: file.buffer,
-      });
-
-      const details = await createBrokerCompPackage(pool, {
-        propertyId: propertyId.value ?? "",
-        sourceDocumentId: document.id,
-        packageType,
-        status: draft.extractedItems.length > 0 ? "approved" : "uploaded",
-        replaceExistingForProperty: true,
-        rawPayload: {
-          filename,
-          contentType: file.mimetype || null,
-          sizeBytes: file.buffer.length,
-        },
-        normalizedPayload: {
-          summary: draft.extractedItems.length > 0
-            ? "Broker comp package extracted for analyst review."
-            : "Broker comp package uploaded. Structured comp rows were not detected yet.",
-        },
-        packageMeta: {
-          ...draft.packageMeta,
-          documentCategory: category,
-          source,
-        },
         createdBy: createdBy.value ?? null,
-        pages: draft.pages,
-        extractedItems: draft.extractedItems,
       });
       res.status(201).json({ propertyId: propertyId.value, document, ...details });
     } catch (err) {
       sendError(res, "Failed to upload broker comp package.", err);
+    }
+  }
+);
+
+/**
+ * Import-surface comp upload: no property preselected. Extracts the package,
+ * matches the subject address to a canonical property, and attaches the
+ * package there. When no confident match exists the extraction summary plus
+ * the parsed subject address come back with matched=false so the UI can ask
+ * the user to pick a property and resubmit with propertyId.
+ */
+router.post(
+  "/import/comp-package",
+  (req, res, next) => {
+    uploadMemory.single("file")(req, res, handleBrokerCompUploadMulterError(req, res, next));
+  },
+  async (req: Request, res: Response) => {
+    try {
+      const file = (req as Request & { file?: { buffer: Buffer; originalname?: string; mimetype?: string } }).file;
+      if (!file?.buffer) {
+        res.status(400).json({ error: "Missing file. Send multipart/form-data with field 'file'." });
+        return;
+      }
+      const requestedType = parsePackageType(req.body?.packageType ?? req.body?.package_type);
+      if (requestedType.error) {
+        res.status(400).json({ error: requestedType.error });
+        return;
+      }
+      const createdBy = parseOptionalText(req.body?.createdBy ?? req.body?.created_by, "createdBy", 200);
+      if (createdBy.error) {
+        res.status(400).json({ error: createdBy.error });
+        return;
+      }
+      const explicitPropertyId =
+        typeof req.body?.propertyId === "string" && req.body.propertyId.trim()
+          ? parseUuid(req.body.propertyId, "propertyId")
+          : null;
+      if (explicitPropertyId?.error) {
+        res.status(400).json({ error: explicitPropertyId.error });
+        return;
+      }
+
+      const pool = getPool();
+      const propertyRepo = new PropertyRepo({ pool });
+      const filename = file.originalname?.trim() || "broker-comp-package";
+      const draft = await extractBrokerCompPackageDraft(file.buffer, filename);
+      const packageType = requestedType.value ?? draft.packageType;
+      const subjectAddress = subjectAddressFromDraft(draft, filename);
+
+      let property = null;
+      let matchSource: "explicit" | "subject_address" | null = null;
+      if (explicitPropertyId?.value) {
+        property = await propertyRepo.byId(explicitPropertyId.value);
+        if (!property) {
+          res.status(404).json({ error: "Property not found.", propertyId: explicitPropertyId.value });
+          return;
+        }
+        matchSource = "explicit";
+      } else if (subjectAddress) {
+        const normalized = normalizeAddressLineForDisplay(subjectAddress.split(",")[0] ?? subjectAddress);
+        property = await propertyRepo.findByAddressFirstLine(normalized);
+        if (property) matchSource = "subject_address";
+      }
+
+      const meta = draft.packageMeta as Record<string, unknown>;
+      const extractionSummary = {
+        packageType,
+        itemCount: draft.extractedItems.length,
+        compCount: typeof meta.compCount === "number" ? meta.compCount : null,
+        compsWithCapRate: typeof meta.compsWithCapRate === "number" ? meta.compsWithCapRate : null,
+        psfOnlyComps: typeof meta.psfOnlyComps === "number" ? meta.psfOnlyComps : null,
+        psfOnlyPackage: meta.psfOnlyPackage === true,
+      };
+
+      if (!property) {
+        res.json({
+          ok: true,
+          matched: false,
+          subjectAddress,
+          extraction: extractionSummary,
+          message: subjectAddress
+            ? `No canonical property matched "${subjectAddress}". Pick the subject property and resubmit.`
+            : "No subject address detected in the package. Pick the subject property and resubmit.",
+        });
+        return;
+      }
+
+      const category = parseDocumentCategory(req.body?.category, packageType);
+      const source = typeof req.body?.source === "string" ? req.body.source.trim() || null : "import_comp_upload";
+      const { document, details } = await saveCompPackageForProperty({
+        propertyId: property.id,
+        file,
+        filename,
+        draft,
+        packageType,
+        category,
+        source,
+        createdBy: createdBy.value ?? null,
+      });
+      res.status(201).json({
+        ok: true,
+        matched: true,
+        matchSource,
+        subjectAddress,
+        property: { id: property.id, canonicalAddress: property.canonicalAddress },
+        extraction: extractionSummary,
+        document,
+        ...details,
+      });
+    } catch (err) {
+      sendError(res, "Failed to import comp package.", err);
     }
   }
 );

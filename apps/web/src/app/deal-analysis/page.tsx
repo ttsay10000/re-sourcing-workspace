@@ -15,6 +15,7 @@ import {
   type OmCalculationUnitModelRow,
 } from "../property-data/OmCalculationPanel";
 import { Button, FileDropzone } from "@/components/ui";
+import { useProcessBanner } from "@/components/ProcessBanner";
 import intakeStyles from "./dealAnalysis.module.css";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
@@ -603,6 +604,7 @@ function DealAnalysisPageContent() {
   const [baselineDraft, setBaselineDraft] = useState<OmCalculationDraft>(emptyDraft);
   const [uploading, setUploading] = useState(false);
   const [linkAnalyzing, setLinkAnalyzing] = useState(false);
+  const processBanner = useProcessBanner();
   const [brokerNotes, setBrokerNotes] = useState("");
   const [notesAddressHint, setNotesAddressHint] = useState("");
   const [notesAnalyzing, setNotesAnalyzing] = useState(false);
@@ -1024,6 +1026,9 @@ function DealAnalysisPageContent() {
     setNotice(null);
     setBatchResults(null);
     setCreateResult(null);
+    const banner = processBanner.start("OM analysis", {
+      message: `Reading ${fileCount} OM${fileCount === 1 ? "" : "s"} with AI — each becomes its own property workspace…`,
+    });
     try {
       const formData = new FormData();
       for (const file of pendingFiles) formData.append("files", file);
@@ -1047,11 +1052,13 @@ function DealAnalysisPageContent() {
       // Each batch file just created/updated a workspace — refresh the
       // dropdown so the new properties are selectable without a reload.
       void loadSavedWorkspaces({ background: true });
-      setNotice(
-        `${data.succeeded ?? data.results.filter((row) => row.ok).length} of ${data.total ?? fileCount} OMs analyzed into separate property workspaces. Each one needs review before its numbers are trusted.`
-      );
+      const batchSummary = `${data.succeeded ?? data.results.filter((row) => row.ok).length} of ${data.total ?? fileCount} OMs analyzed into separate property workspaces. Each one needs review before its numbers are trusted.`;
+      setNotice(batchSummary);
+      banner.succeed(batchSummary);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to run separate analyses.");
+      const message = err instanceof Error ? err.message : "Failed to run separate analyses.";
+      banner.fail(message);
+      setError(message);
     } finally {
       setUploading(false);
     }
@@ -1075,6 +1082,9 @@ function DealAnalysisPageContent() {
     setError(null);
     setNotice(null);
     setCreateResult(null);
+    const banner = processBanner.start("OM analysis", {
+      message: `Reading ${pendingFiles.length} file${pendingFiles.length === 1 ? "" : "s"} with AI extraction…`,
+    });
     try {
       const formData = new FormData();
       for (const file of pendingFiles) formData.append("files", file);
@@ -1090,8 +1100,11 @@ function DealAnalysisPageContent() {
         throw new Error(data.details || data.error || "Failed to analyze uploaded OM / broker financial file(s).");
       }
       applyAnalyzedWorkspace(data, pendingFiles, "uploaded package");
+      banner.succeed("OM analyzed — workspace is ready for review.");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to analyze uploaded OM / broker financial file(s).");
+      const message = err instanceof Error ? err.message : "Failed to analyze uploaded OM / broker financial file(s).";
+      banner.fail(message);
+      setError(message);
     } finally {
       setUploading(false);
     }
@@ -1104,6 +1117,7 @@ function DealAnalysisPageContent() {
     setError(null);
     setNotice(null);
     setCreateResult(null);
+    const banner = processBanner.start("OM analysis", { message: "Downloading and reading the OM link with AI…" });
     try {
       const res = await fetch(`${API_BASE}/api/deal-analysis/analyze-link`, {
         method: "POST",
@@ -1118,8 +1132,11 @@ function DealAnalysisPageContent() {
         throw new Error(data.details || data.error || "Failed to analyze OM link.");
       }
       applyAnalyzedWorkspace(data, [], "OM link");
+      banner.succeed("OM link analyzed — workspace is ready for review.");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to analyze OM link.");
+      const message = err instanceof Error ? err.message : "Failed to analyze OM link.";
+      banner.fail(message);
+      setError(message);
     } finally {
       setLinkAnalyzing(false);
     }
@@ -1135,6 +1152,7 @@ function DealAnalysisPageContent() {
     setError(null);
     setNotice(null);
     setCreateResult(null);
+    const banner = processBanner.start("Broker notes analysis", { message: "Reading broker notes with AI…" });
     try {
       const res = await fetch(`${API_BASE}/api/deal-analysis/analyze-notes`, {
         method: "POST",
@@ -1151,8 +1169,11 @@ function DealAnalysisPageContent() {
       setBrokerNotes("");
       setNotesAddressHint("");
       applyAnalyzedWorkspace(data, [], "broker notes");
+      banner.succeed("Broker notes analyzed — workspace is ready for review.");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to analyze broker notes.");
+      const message = err instanceof Error ? err.message : "Failed to analyze broker notes.";
+      banner.fail(message);
+      setError(message);
     } finally {
       setNotesAnalyzing(false);
     }
@@ -1180,6 +1201,9 @@ function DealAnalysisPageContent() {
     if (!workspaceDetails) return;
     setRecalculating(true);
     setError(null);
+    const banner = processBanner.start("Analysis refresh", {
+      message: "Recalculating the deal model with your latest edits…",
+    });
     try {
       const res = await fetch(`${API_BASE}/api/deal-analysis/recalculate`, {
         method: "POST",
@@ -1221,20 +1245,24 @@ function DealAnalysisPageContent() {
         setBaselineDraft(nextDraft);
       }
       if (saveError) {
-        setError(`Analysis refreshed, but the workspace could not be saved: ${saveError}`);
+        const partialMessage = `Analysis refreshed, but the workspace could not be saved: ${saveError}`;
+        banner.fail(partialMessage);
+        setError(partialMessage);
         setNotice(null);
       } else {
-        setNotice(
-          propertyId
-            ? "Analysis refreshed and saved to this property workspace."
-            : "Analysis refreshed with the latest underwriting edits."
-        );
+        const recalcSummary = propertyId
+          ? "Analysis refreshed and saved to this property workspace."
+          : "Analysis refreshed with the latest underwriting edits.";
+        setNotice(recalcSummary);
+        banner.succeed(recalcSummary);
       }
       if (savedToWorkspace) {
         void loadSavedWorkspaces();
       }
     } catch (err) {
-      setError(getErrorMessage(err, "Failed to refresh OM analysis."));
+      const message = getErrorMessage(err, "Failed to refresh OM analysis.");
+      banner.fail(message);
+      setError(message);
     } finally {
       setRecalculating(false);
     }
@@ -1346,8 +1374,14 @@ function DealAnalysisPageContent() {
     if (!workspaceDetails) return;
     setDossierDownloading(true);
     setError(null);
+    const banner = processBanner.start("Dossier generation", {
+      message: "Running the model, drafting the memo, and rendering the PDF…",
+    });
     try {
-      if (propertyId && await generatePersistedDossier("pdf")) return;
+      if (propertyId && await generatePersistedDossier("pdf")) {
+        banner.succeed("Deal dossier PDF generated and downloaded.");
+        return;
+      }
       const res = await fetch(`${API_BASE}/api/deal-analysis/generate-dossier`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1368,8 +1402,11 @@ function DealAnalysisPageContent() {
       const fileNameMatch = disposition.match(/filename="([^"]+)"/i);
       downloadBlob(blob, fileNameMatch?.[1] || "Deal-Dossier.pdf");
       setNotice("Deal dossier PDF generated from the current underwriting inputs.");
+      banner.succeed("Deal dossier PDF generated and downloaded.");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to generate deal dossier PDF.");
+      const message = err instanceof Error ? err.message : "Failed to generate deal dossier PDF.";
+      banner.fail(message);
+      setError(message);
     } finally {
       setDossierDownloading(false);
     }
@@ -1379,8 +1416,14 @@ function DealAnalysisPageContent() {
     if (!workspaceDetails) return;
     setExcelDownloading(true);
     setError(null);
+    const banner = processBanner.start("Excel workbook generation", {
+      message: "Running the model and rendering the Excel workbook…",
+    });
     try {
-      if (propertyId && await generatePersistedDossier("excel")) return;
+      if (propertyId && await generatePersistedDossier("excel")) {
+        banner.succeed("Deal dossier Excel generated and downloaded.");
+        return;
+      }
       const res = await fetch(`${API_BASE}/api/deal-analysis/generate-dossier-excel`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1401,8 +1444,11 @@ function DealAnalysisPageContent() {
       const fileNameMatch = disposition.match(/filename="([^"]+)"/i);
       downloadBlob(blob, fileNameMatch?.[1] || "Deal-Dossier-Workbook.xlsx");
       setNotice("Deal dossier Excel generated from the current underwriting inputs.");
+      banner.succeed("Deal dossier Excel generated and downloaded.");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to generate deal dossier Excel.");
+      const message = err instanceof Error ? err.message : "Failed to generate deal dossier Excel.";
+      banner.fail(message);
+      setError(message);
     } finally {
       setExcelDownloading(false);
     }
@@ -1412,6 +1458,9 @@ function DealAnalysisPageContent() {
     if (!workspaceDetails || workspaceFiles.length === 0) return;
     setPropertyCreating(true);
     setError(null);
+    const banner = processBanner.start("Property creation", {
+      message: "Creating/matching the property from the OM address and running enrichment…",
+    });
     try {
       const formData = new FormData();
       for (const file of workspaceFiles) formData.append("files", file);
@@ -1435,13 +1484,15 @@ function DealAnalysisPageContent() {
       setCreateResult(result);
       void loadSavedWorkspaces();
       router.replace(`/deal-analysis?property_id=${encodeURIComponent(result.propertyId)}`);
-      setNotice(
-        result.createdProperty
-          ? "Property record created from the OM address and sent through enrichment."
-          : "Existing property matched from the extracted address and updated with the uploaded package."
-      );
+      const createSummary = result.createdProperty
+        ? "Property record created from the OM address and sent through enrichment."
+        : "Existing property matched from the extracted address and updated with the uploaded package.";
+      setNotice(createSummary);
+      banner.succeed(createSummary);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create property record from OM.");
+      const message = err instanceof Error ? err.message : "Failed to create property record from OM.";
+      banner.fail(message);
+      setError(message);
     } finally {
       setPropertyCreating(false);
     }
@@ -2116,7 +2167,7 @@ function DealAnalysisPageContent() {
                 </span>
               )}
             </span>
-            <a href="/yield-map" style={{ fontSize: "0.8rem", fontWeight: 800, color: "#0f766e" }}>
+            <a href="/pipeline/yield-map" style={{ fontSize: "0.8rem", fontWeight: 800, color: "#0f766e" }}>
               Compare in Yield Map →
             </a>
           </div>

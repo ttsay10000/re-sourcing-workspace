@@ -343,7 +343,13 @@ async function persistMatchedMessage(
   });
 
   try {
-    const emailSummary = await extractEmailSummary(bodyText, uniqueAttachmentSummaries(savedPaths));
+    // The LLM call is useful but never worth hanging an inbox run for.
+    const emailSummary = await Promise.race([
+      extractEmailSummary(bodyText, uniqueAttachmentSummaries(savedPaths)),
+      new Promise<null>((_, reject) =>
+        setTimeout(() => reject(new Error("email summary timed out after 60s")), 60_000).unref?.()
+      ),
+    ]);
     if (emailSummary) {
       await params.emailRepo.updateLlmFields(emailRow.id, {
         bodySummary: emailSummary.summary,
@@ -404,6 +410,8 @@ export interface ProcessInboxResult {
   /** Manual action items queued for operator-run OM review handoff. */
   omReviewActionsQueued?: number;
   omReviewAttachmentCandidates?: number;
+  /** True when the run stopped at its time budget; the overlap window re-scans the rest next run. */
+  truncated?: boolean;
   errors: string[];
 }
 
@@ -425,7 +433,10 @@ const MAX_THREADS_PER_RUN = 50;
 const INBOX_SYNC_OVERLAP_DAYS = 2;
 const INBOX_INITIAL_SYNC_START = new Date("2026-03-01T00:00:00-05:00");
 
-export async function processInbox(options?: { maxMessages?: number }): Promise<ProcessInboxResult> {
+/** Default wall-clock budget for a full inbox run (subject + broker + thread phases). */
+const PROCESS_INBOX_BUDGET_MS = Number(process.env.PROCESS_INBOX_BUDGET_MS) || 8 * 60 * 1000;
+
+export async function processInbox(options?: { maxMessages?: number; deadlineMs?: number }): Promise<ProcessInboxResult> {
   const result: ProcessInboxResult = {
     processed: 0,
     matched: 0,
@@ -447,6 +458,12 @@ export async function processInbox(options?: { maxMessages?: number }): Promise<
     errors: [],
   };
   const maxMessages = options?.maxMessages ?? 50;
+  const deadlineAt = Date.now() + (options?.deadlineMs ?? PROCESS_INBOX_BUDGET_MS);
+  const budgetSpent = () => {
+    if (Date.now() < deadlineAt) return false;
+    result.truncated = true;
+    return true;
+  };
   const subjectPhaseMessageIds = new Set<string>();
 
   try {
@@ -488,6 +505,7 @@ export async function processInbox(options?: { maxMessages?: number }): Promise<
   const addressFirstLines = await propertyRepo.listAddressFirstLines();
 
   for (const item of list.messages) {
+    if (budgetSpent()) break;
     if (subjectPhaseMessageIds.has(item.id)) continue;
     subjectPhaseMessageIds.add(item.id);
     result.processed++;
@@ -544,6 +562,7 @@ export async function processInbox(options?: { maxMessages?: number }): Promise<
   const brokerMap = await getBrokerEmailToPropertyIdMap(pool);
   const brokerEmails = [...brokerMap.keys()];
   for (const brokerEmail of brokerEmails) {
+    if (budgetSpent()) break;
     const brokerQuery = `in:inbox from:${brokerEmail} after:${afterDate}`;
     let brokerList: Awaited<ReturnType<typeof listMessages>>;
     try {
@@ -553,6 +572,7 @@ export async function processInbox(options?: { maxMessages?: number }): Promise<
       continue;
     }
     for (const item of brokerList.messages) {
+      if (budgetSpent()) break;
       const existing = await emailRepo.byMessageId(item.id);
       if (existing) continue;
       result.processed++;
@@ -610,6 +630,7 @@ export async function processInbox(options?: { maxMessages?: number }): Promise<
   const overlapStartMs = overlapStart.getTime();
 
   for (const [threadId, threadTargets] of threadReplyTargets) {
+    if (budgetSpent()) break;
     let threadMessageIds: string[];
     try {
       threadMessageIds = await getThreadMessageIds(threadId);
@@ -618,6 +639,7 @@ export async function processInbox(options?: { maxMessages?: number }): Promise<
       continue;
     }
     for (const messageId of threadMessageIds) {
+      if (budgetSpent()) break;
       if (ourSentIds.has(messageId)) continue;
       const alreadySaved = await emailRepo.byMessageId(messageId);
       if (alreadySaved) continue;

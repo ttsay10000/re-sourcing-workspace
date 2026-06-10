@@ -13,6 +13,7 @@ import {
   KanbanSquare,
   Menu,
   Plus,
+  Scale,
   Search,
   Upload,
   User,
@@ -21,6 +22,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { API_BASE } from "@/lib/api";
+import { ProcessBannerProvider, ProcessBannerViewport } from "./ProcessBanner";
 
 type NavChildLink = {
   href: string;
@@ -53,13 +55,35 @@ const NAV_LINKS: NavLink[] = [
       pathname === "/property-data" ||
       pathname.startsWith("/property-data/") ||
       pathname.startsWith("/property/"),
-  },
-  {
-    href: "/yield-map",
-    label: "Yield Map",
-    shortLabel: "Y",
-    icon: MapIcon,
-    matches: (pathname: string) => pathname === "/yield-map" || pathname.startsWith("/yield-map/"),
+    children: [
+      {
+        href: "/pipeline",
+        label: "Pipeline",
+        shortLabel: "P",
+        icon: Building2,
+        matches: (pathname: string) =>
+          (pathname === "/pipeline" ||
+            pathname === "/property-data" ||
+            pathname.startsWith("/property-data/") ||
+            pathname.startsWith("/property/")) &&
+          !pathname.startsWith("/pipeline/yield-map") &&
+          !pathname.startsWith("/pipeline/comp-analysis"),
+      },
+      {
+        href: "/pipeline/yield-map",
+        label: "Yield Map",
+        shortLabel: "Y",
+        icon: MapIcon,
+        matches: (pathname: string) => pathname.startsWith("/pipeline/yield-map"),
+      },
+      {
+        href: "/pipeline/comp-analysis",
+        label: "Comp Analysis",
+        shortLabel: "C",
+        icon: Scale,
+        matches: (pathname: string) => pathname.startsWith("/pipeline/comp-analysis"),
+      },
+    ],
   },
   {
     href: "/crm",
@@ -230,6 +254,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   }, []);
 
   return (
+    <ProcessBannerProvider>
     <div className={`app-shell ${sidebarCollapsed ? "app-shell--sidebar-collapsed" : ""}`}>
       <aside className="app-sidebar" aria-label="Workspace navigation">
         <Link href="/" className="app-sidebar-brand" aria-label="Sourcing OS home">
@@ -349,8 +374,10 @@ export function AppShell({ children }: { children: ReactNode }) {
           </div>
         </header>
 
+        <ProcessBannerViewport />
         <main className="app-main">{children}</main>
       </div>
     </div>
+    </ProcessBannerProvider>
   );
 }

@@ -107,7 +107,7 @@ export default function MarketDocsPage() {
         title="Market documents"
         subtitle="Upload broker materials (OMs, setups, comp lists — the default) and published research reports (AY, Ariel, Alpha, M&M forecasts). Each PDF is classified, extracted with provenance, and rolled into the Yield Map's neighborhood layer."
         actions={
-          <a href="/yield-map" className={styles.headerLink}>
+          <a href="/pipeline/yield-map" className={styles.headerLink}>
             ← Yield Map
           </a>
         }

@@ -9,11 +9,12 @@ import type {
   UiV2ImportJobStatus,
   UiV2StreetEasyPullOptions,
 } from "@re-sourcing/contracts";
-import { Button, EmptyState, PageHeader } from "@/components/ui";
+import { Button, EmptyState, FileDropzone, PageHeader } from "@/components/ui";
 import { API_BASE } from "@/lib/api";
+import { useProcessBanner } from "@/components/ProcessBanner";
 import styles from "./page.module.css";
 
-type ModeId = "manual" | "streeteasy" | "pull" | "om-upload";
+type ModeId = "manual" | "streeteasy" | "pull" | "om-upload" | "comp-upload";
 type ModeCategoryId = "quick" | "market" | "documents";
 type CapabilityKey =
   | "manualEntry"
@@ -75,6 +76,28 @@ interface StreetEasyFormState {
   savedSearchId: string;
 }
 
+interface PropertyOption {
+  id: string;
+  canonicalAddress: string;
+}
+
+interface CompImportExtraction {
+  packageType?: string;
+  itemCount?: number;
+  compCount?: number | null;
+  compsWithCapRate?: number | null;
+  psfOnlyComps?: number | null;
+  psfOnlyPackage?: boolean;
+}
+
+interface CompImportResult {
+  matched: boolean;
+  matchSource?: string | null;
+  subjectAddress?: string | null;
+  property?: { id: string; canonicalAddress: string } | null;
+  extraction?: CompImportExtraction;
+}
+
 interface PullFormState {
   propertyId: string;
   url: string;
@@ -121,6 +144,14 @@ const MODE_CARDS: Array<{
     label: "OM PDF upload",
     kicker: "PDF intake",
     description: "Upload OM PDFs into the property-backed analysis workspace.",
+    capabilityKey: "omUpload",
+  },
+  {
+    id: "comp-upload",
+    category: "documents",
+    label: "Comp package upload",
+    kicker: "Comp reader",
+    description: "Upload broker comp packages; comps and cap rates extract and link to the matched property.",
     capabilityKey: "omUpload",
   },
   {
@@ -349,6 +380,13 @@ export default function AddPropertyPage() {
   const [submitting, setSubmitting] = useState<ModeId | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [recentImports, setRecentImports] = useState<RecentImport[]>([]);
+  const [compFiles, setCompFiles] = useState<File[]>([]);
+  const [compPropertyId, setCompPropertyId] = useState("");
+  const [compPropertyQuery, setCompPropertyQuery] = useState("");
+  const [propertyOptions, setPropertyOptions] = useState<PropertyOption[]>([]);
+  const [compResult, setCompResult] = useState<CompImportResult | null>(null);
+  const [compUnmatched, setCompUnmatched] = useState<string | null>(null);
+  const processBanner = useProcessBanner();
 
   const streetEasyEnabledSearches = useMemo(
     () => savedSearches.filter((search) => search.sourceToggles?.streeteasy !== false),
@@ -397,6 +435,38 @@ export default function AddPropertyPage() {
     void fetchSavedSearches();
   }, [fetchCapabilities, fetchSavedSearches]);
 
+  // Canonical properties load lazily the first time the comp-upload panel opens.
+  useEffect(() => {
+    if (activeMode !== "comp-upload" || propertyOptions.length > 0) return;
+    let cancelled = false;
+    fetch(buildApiUrl("/api/properties"))
+      .then(async (response) => {
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || cancelled) return;
+        const rows = Array.isArray(data?.properties) ? data.properties : [];
+        setPropertyOptions(
+          rows
+            .map((row: Record<string, unknown>) => ({
+              id: String(row.id ?? ""),
+              canonicalAddress: String(row.canonicalAddress ?? row.canonical_address ?? ""),
+            }))
+            .filter((row: PropertyOption) => row.id && row.canonicalAddress)
+        );
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [activeMode, propertyOptions.length]);
+
+  const filteredPropertyOptions = useMemo(() => {
+    const query = compPropertyQuery.trim().toLowerCase();
+    const matches = query
+      ? propertyOptions.filter((option) => option.canonicalAddress.toLowerCase().includes(query))
+      : propertyOptions;
+    return matches.slice(0, 50);
+  }, [propertyOptions, compPropertyQuery]);
+
   const capabilityFor = useCallback(
     (key: CapabilityKey): ImportCapability | null => capabilities?.modes?.[key] ?? null,
     [capabilities]
@@ -418,7 +488,7 @@ export default function AddPropertyPage() {
       const card = MODE_CARDS.find((item) => item.id === mode);
       if (!card) return false;
       if (card.placeholderDisabled) return false;
-      if (mode === "om-upload") return true;
+      if (mode === "om-upload" || mode === "comp-upload") return true;
       const keys = Array.isArray(card.capabilityKey) ? card.capabilityKey : [card.capabilityKey];
       return keys.some((key) => isCapabilityEnabled(key));
     },
@@ -504,14 +574,18 @@ export default function AddPropertyPage() {
     async (mode: ModeId, endpoint: string, payload: unknown, label: string): Promise<UiV2ImportJobPayload> => {
       setSubmitting(mode);
       setNotice(null);
+      const banner = processBanner.start(label, { message: "Processing import…" });
       const activityId = startImportActivity(label, "Processing import...");
       try {
         const jobPayload = await submitImportRequest(endpoint, payload);
+        const jobMessage = jobPayload.job.label || getJobMessage(jobPayload.job);
         updateImportActivity(activityId, {
           status: jobPayload.job.status === "failed" ? "failed" : "completed",
-          message: jobPayload.job.label || getJobMessage(jobPayload.job),
+          message: jobMessage,
           job: jobPayload.job,
         });
+        if (jobPayload.job.status === "failed") banner.fail(jobMessage);
+        else banner.succeed(jobMessage);
         setNotice({
           type: jobPayload.job.status === "failed" ? "error" : "success",
           title: jobPayload.job.label || label,
@@ -521,6 +595,7 @@ export default function AddPropertyPage() {
         return jobPayload;
       } catch (err) {
         const message = err instanceof Error ? err.message : "Import request failed";
+        banner.fail(message);
         updateImportActivity(activityId, {
           status: "failed",
           message,
@@ -531,7 +606,7 @@ export default function AddPropertyPage() {
         setSubmitting(null);
       }
     },
-    [startImportActivity, submitImportRequest, updateImportActivity]
+    [processBanner, startImportActivity, submitImportRequest, updateImportActivity]
   );
 
   const updateManualForm = <K extends keyof ManualFormState>(key: K, value: ManualFormState[K]) => {
@@ -614,10 +689,14 @@ export default function AddPropertyPage() {
 
     setSubmitting("streeteasy");
     setNotice(null);
+    const banner = processBanner.start("StreetEasy import", {
+      message: `Importing ${urls.length} listing${urls.length === 1 ? "" : "s"}…`,
+    });
     const successes: UiV2ImportJobPayload[] = [];
     const failures: Array<{ url: string; message: string }> = [];
     try {
-      for (const url of urls) {
+      for (const [index, url] of urls.entries()) {
+        banner.update(`Importing ${index + 1} of ${urls.length}: ${url}`, Math.round((index / urls.length) * 100));
         const activityId = startImportActivity("StreetEasy URL import", `Processing ${url}`);
         try {
           const jobPayload = await submitImportRequest(endpointFor("streetEasyUrl"), { url, savedSearchId });
@@ -638,6 +717,11 @@ export default function AddPropertyPage() {
             message,
           });
         }
+      }
+      if (failures.length > 0) {
+        banner.fail(`${successes.length} of ${urls.length} imported; ${failures.length} failed.`);
+      } else {
+        banner.succeed(`${successes.length} listing${successes.length === 1 ? "" : "s"} imported.`);
       }
     } finally {
       setSubmitting(null);
@@ -705,6 +789,65 @@ export default function AddPropertyPage() {
       },
       "Full StreetEasy pull"
     );
+  };
+
+  const handleCompUpload = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const file = compFiles[0];
+    if (!file) {
+      setNotice({ type: "error", title: "File required", message: "Add a broker comp package (PDF or spreadsheet) first." });
+      return;
+    }
+    setSubmitting("comp-upload");
+    setNotice(null);
+    setCompResult(null);
+    setCompUnmatched(null);
+    const banner = processBanner.start("Comp package upload", { message: file.name });
+    const activityId = startImportActivity("Comp package upload", `Extracting ${file.name}…`);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      if (compPropertyId) form.append("propertyId", compPropertyId);
+      const response = await fetch(buildApiUrl("/api/import/comp-package"), { method: "POST", body: form });
+      const data = (await response.json().catch(() => ({}))) as CompImportResult & { error?: string; details?: string; message?: string };
+      if (!response.ok || data?.error) {
+        throw new Error(data?.error || data?.details || `Comp import failed with HTTP ${response.status}`);
+      }
+
+      if (data.matched === false) {
+        const message = data.message ?? "No canonical property matched the package's subject address.";
+        setCompUnmatched(message);
+        if (data.subjectAddress) setCompPropertyQuery(data.subjectAddress);
+        banner.fail("No property matched — pick the subject property and resubmit.");
+        updateImportActivity(activityId, { status: "failed", message });
+        setNotice({ type: "info", title: "Pick the subject property", message });
+        return;
+      }
+
+      setCompResult(data);
+      const extraction = data.extraction ?? {};
+      const compCount = extraction.compCount ?? extraction.itemCount ?? 0;
+      const summaryText = `${compCount} comp${compCount === 1 ? "" : "s"} extracted · ${extraction.compsWithCapRate ?? 0} with cap rate${
+        extraction.psfOnlyComps ? ` · ${extraction.psfOnlyComps} $/PSF-only` : ""
+      }`;
+      banner.succeed(`${data.property?.canonicalAddress ?? "Linked"} — ${summaryText}`);
+      updateImportActivity(activityId, { status: "completed", message: summaryText });
+      setNotice({
+        type: extraction.psfOnlyPackage ? "info" : "success",
+        title: `Comp package linked to ${data.property?.canonicalAddress ?? "property"}`,
+        message: extraction.psfOnlyPackage
+          ? `${summaryText}. No cap rates were found in this package — it prices on $/PSF only, so consider requesting investment-sale comps from the broker.`
+          : `${summaryText}. Review them in the property's Market/Comps tab or on the Comp Analysis page.`,
+      });
+      setCompFiles([]);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Comp import failed";
+      banner.fail(message);
+      updateImportActivity(activityId, { status: "failed", message });
+      setNotice({ type: "error", title: "Comp package upload failed", message });
+    } finally {
+      setSubmitting(null);
+    }
   };
 
   const handleSavedSearchRun = async (event: FormEvent<HTMLFormElement>) => {
@@ -1182,6 +1325,104 @@ export default function AddPropertyPage() {
                   Open OM PDF upload
                 </Link>
               </div>
+            </section>
+          ) : null}
+
+          {activeMode === "comp-upload" ? (
+            <section className={styles.panel} aria-labelledby="comp-upload-heading">
+              <div className={styles.panelHeader}>
+                <div>
+                  <p className={styles.panelKicker}>Comp package upload</p>
+                  <h2 id="comp-upload-heading">Upload broker comps</h2>
+                </div>
+                <span className={styles.softPill}>Cap rates extracted</span>
+              </div>
+              <form className={styles.formStack} onSubmit={handleCompUpload}>
+                <FileDropzone
+                  files={compFiles}
+                  onChange={setCompFiles}
+                  accept=".pdf,.xlsx,.xls,.csv"
+                  maxFiles={1}
+                  maxBytes={50 * 1024 * 1024}
+                  disabled={submitting === "comp-upload"}
+                  label="Drag & drop a broker comp package"
+                  hint="PDF or spreadsheet, up to 50 MB. The comp reader extracts each comparable with cap rate, $/PSF, sale price, NOI, and units, then links the package to the matched canonical property."
+                />
+
+                <div className={styles.twoColumn}>
+                  <Field
+                    label="Subject property"
+                    hint="Leave on auto-match to link by the package's subject address; type to filter and pick one to force the link."
+                  >
+                    <input
+                      className={styles.input}
+                      value={compPropertyQuery}
+                      onChange={(event) => setCompPropertyQuery(event.target.value)}
+                      placeholder="Filter properties by address…"
+                    />
+                  </Field>
+                  <Field label="Link to">
+                    <select
+                      className={styles.input}
+                      value={compPropertyId}
+                      onChange={(event) => setCompPropertyId(event.target.value)}
+                    >
+                      <option value="">Auto-match by subject address</option>
+                      {filteredPropertyOptions.map((option) => (
+                        <option key={option.id} value={option.id}>
+                          {option.canonicalAddress}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                </div>
+
+                {compUnmatched ? <p className={styles.inlineError}>{compUnmatched}</p> : null}
+
+                <div className={styles.formActions}>
+                  <Button
+                    type="submit"
+                    variant="primary"
+                    disabled={submitting === "comp-upload" || compFiles.length === 0}
+                  >
+                    {submitting === "comp-upload" ? "Extracting comps..." : "Upload & extract comps"}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onClick={() => {
+                      setCompFiles([]);
+                      setCompResult(null);
+                      setCompUnmatched(null);
+                      setCompPropertyId("");
+                      setCompPropertyQuery("");
+                    }}
+                  >
+                    Clear
+                  </Button>
+                </div>
+
+                {compResult?.property ? (
+                  <div className={styles.savedSearchPreview}>
+                    <div>
+                      <strong>Linked to {compResult.property.canonicalAddress}</strong>
+                      <p>
+                        {(compResult.extraction?.compCount ?? compResult.extraction?.itemCount ?? 0)} comps ·{" "}
+                        {compResult.extraction?.compsWithCapRate ?? 0} with cap rate
+                        {compResult.extraction?.psfOnlyComps
+                          ? ` · ${compResult.extraction.psfOnlyComps} $/PSF-only`
+                          : ""}
+                      </p>
+                    </div>
+                    <div className={styles.savedMetaGrid}>
+                      <Link href={`/pipeline?propertyId=${encodeURIComponent(compResult.property.id)}`}>
+                        Open property
+                      </Link>
+                      <Link href="/pipeline/comp-analysis">Comp analysis →</Link>
+                    </div>
+                  </div>
+                ) : null}
+              </form>
             </section>
           ) : null}
         </main>

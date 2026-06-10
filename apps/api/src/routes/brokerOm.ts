@@ -260,10 +260,19 @@ function buildDocumentCandidates(msg: GmailMessage, matchedReason: string): Gmai
     .filter((candidate) => isDocumentAttachment(candidate.filename, candidate.mimeType, candidate.suggestedCategory));
 }
 
-async function listGmailMessages(query: string, maxMessages: number): Promise<GmailMessageListItem[]> {
+/**
+ * Wall-clock budget for a single email scan. Gmail calls are made serially per
+ * message, so without a budget one slow mailbox keeps the HTTP request open
+ * for minutes (the "hung email pull"). When the budget is hit we return what
+ * we have plus truncated=true so the UI can say "partial — pull again".
+ */
+const EMAIL_SEARCH_BUDGET_MS = Number(process.env.BROKER_OM_EMAIL_SEARCH_BUDGET_MS) || 90_000;
+
+async function listGmailMessages(query: string, maxMessages: number, deadlineAtMs?: number): Promise<GmailMessageListItem[]> {
   const messages: GmailMessageListItem[] = [];
   let pageToken: string | undefined;
   while (messages.length < maxMessages) {
+    if (deadlineAtMs != null && Date.now() >= deadlineAtMs) break;
     const page = await listMessages({
       q: query,
       maxResults: Math.min(100, maxMessages - messages.length),
@@ -281,11 +290,18 @@ async function buildCandidatesForQuery(params: {
   baseline: Date;
   maxMessages: number;
   matchedReason: string;
-}): Promise<GmailDocumentCandidate[]> {
-  const ids = await listGmailMessages(params.query, params.maxMessages);
+  deadlineAtMs?: number;
+}): Promise<{ documents: GmailDocumentCandidate[]; truncated: boolean }> {
+  const deadlineAtMs = params.deadlineAtMs ?? Date.now() + EMAIL_SEARCH_BUDGET_MS;
+  const ids = await listGmailMessages(params.query, params.maxMessages, deadlineAtMs);
   const seenAttachments = new Set<string>();
   const candidates: GmailDocumentCandidate[] = [];
+  let truncated = false;
   for (const item of ids) {
+    if (Date.now() >= deadlineAtMs) {
+      truncated = true;
+      break;
+    }
     const msg = await getMessage(item.id);
     const timestamp = messageTimestamp(msg);
     if (timestamp != null && timestamp < params.baseline.getTime()) continue;
@@ -295,7 +311,10 @@ async function buildCandidatesForQuery(params: {
       candidates.push(candidate);
     }
   }
-  return candidates.sort((a, b) => (b.receivedAt ?? "").localeCompare(a.receivedAt ?? ""));
+  return {
+    documents: candidates.sort((a, b) => (b.receivedAt ?? "").localeCompare(a.receivedAt ?? "")),
+    truncated,
+  };
 }
 
 function buildPropertySearchQuery(property: Property, baseline: Date, extraQuery: string | null): string {
@@ -390,13 +409,15 @@ function dealKeywordReason(candidate: GmailDocumentCandidate): string | null {
 async function buildNewPropertyCandidates(params: {
   property: Property;
   maxMessages: number;
+  deadlineAtMs?: number;
 }): Promise<NewPropertyEmailCandidate[]> {
   const query = buildDealKeywordSearchQuery(SYSTEM_START_AT);
-  const documents = await buildCandidatesForQuery({
+  const { documents } = await buildCandidatesForQuery({
     query,
     baseline: SYSTEM_START_AT,
     maxMessages: params.maxMessages,
     matchedReason: "Deal document keyword since March 2026",
+    deadlineAtMs: params.deadlineAtMs,
   });
   const grouped = new Map<string, NewPropertyEmailCandidate>();
   for (const document of documents) {
@@ -506,16 +527,18 @@ router.post("/broker-om/properties/:id/email-search", async (req: Request, res: 
     const extraQuery = typeof req.body?.query === "string" ? req.body.query.trim() || null : null;
     const query = buildPropertySearchQuery(property, baseline, extraQuery);
     const searchRunAt = new Date().toISOString();
+    const deadlineAtMs = Date.now() + EMAIL_SEARCH_BUDGET_MS;
 
-    const [documents, newPropertyCandidates] = await Promise.all([
+    const [searchResult, newPropertyCandidates] = await Promise.all([
       buildCandidatesForQuery({
         query,
         baseline,
         maxMessages,
         matchedReason: extraQuery ? "Property address plus user query" : "Property address",
+        deadlineAtMs,
       }),
       includeNewPropertyCandidates
-        ? buildNewPropertyCandidates({ property, maxMessages: maxNewPropertyMessages })
+        ? buildNewPropertyCandidates({ property, maxMessages: maxNewPropertyMessages, deadlineAtMs })
         : Promise.resolve([]),
     ]);
 
@@ -535,7 +558,8 @@ router.post("/broker-om/properties/:id/email-search", async (req: Request, res: 
       systemStartAt: SYSTEM_START_AT.toISOString(),
       largeAttachmentBytes: LARGE_ATTACHMENT_BYTES,
       maxAttachmentBytes: MAX_ATTACHMENT_BYTES,
-      documents,
+      documents: searchResult.documents,
+      truncated: searchResult.truncated,
       newPropertyCandidates,
     });
   } catch (err) {
@@ -579,7 +603,7 @@ router.post("/broker-om/email-search", async (req: Request, res: Response) => {
     const query = buildDealKeywordSearchQuery(baseline, extraQuery);
     const searchRunAt = new Date().toISOString();
 
-    const [candidates, properties] = await Promise.all([
+    const [searchResult, properties] = await Promise.all([
       buildCandidatesForQuery({
         query,
         baseline,
@@ -590,7 +614,7 @@ router.post("/broker-om/email-search", async (req: Request, res: Response) => {
     ]);
 
     const matchers = buildPropertyMatchers(properties);
-    const documents = candidates.map((candidate) => {
+    const documents = searchResult.documents.map((candidate) => {
       const matches = matchCandidateProperties(candidate, matchers);
       const keywordReason = dealKeywordReason(candidate);
       const matchedReason = matches[0]
@@ -618,6 +642,7 @@ router.post("/broker-om/email-search", async (req: Request, res: Response) => {
       largeAttachmentBytes: LARGE_ATTACHMENT_BYTES,
       maxAttachmentBytes: MAX_ATTACHMENT_BYTES,
       documents,
+      truncated: searchResult.truncated,
       newPropertyCandidates: [],
     });
   } catch (err) {

@@ -53,9 +53,16 @@ function getOAuth2Client() {
   return oauth2;
 }
 
+/**
+ * Per-request timeout for every Gmail API call. Without this, googleapis waits
+ * on a stuck socket indefinitely and any inbox pull that hits one hangs the
+ * whole request (observed in production as a frozen "email pull").
+ */
+const GMAIL_API_TIMEOUT_MS = Number(process.env.GMAIL_API_TIMEOUT_MS) || 30_000;
+
 function getGmail() {
   const auth = getOAuth2Client();
-  return google.gmail({ version: "v1", auth });
+  return google.gmail({ version: "v1", auth, timeout: GMAIL_API_TIMEOUT_MS });
 }
 
 /**
