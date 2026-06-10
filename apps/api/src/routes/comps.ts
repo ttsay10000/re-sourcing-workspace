@@ -30,6 +30,8 @@ interface OperatingCompRow {
   expenseRatioPct: number | null;
   dealScore: number | null;
   signalAt: string | null;
+  /** "signal" = stored deal_signals row; "derived" = NOI ÷ ask computed at read time. */
+  yieldSource: "signal" | "derived";
 }
 
 function toNumber(value: unknown): number | null {
@@ -74,41 +76,74 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
          ds.price_psf,
          ds.expense_ratio,
          ds.deal_score,
-         ds.created_at AS signal_at
+         ds.created_at AS signal_at,
+         lst.listing_price,
+         p.details#>>'{omData,authoritative,currentFinancials,noi}' AS fallback_noi_om,
+         p.details#>>'{rentalFinancials,omAnalysis,currentFinancials,noi}' AS fallback_noi_analysis,
+         p.details#>>'{rentalFinancials,fromLlm,noi}' AS fallback_noi_llm,
+         p.details#>>'{manualSourceFacts,askingPrice}' AS fallback_ask_manual,
+         p.details#>>'{omData,authoritative,propertyInfo,askingPrice}' AS fallback_ask_om
        FROM properties p
-       JOIN LATERAL (
+       LEFT JOIN LATERAL (
          SELECT *
          FROM deal_signals s
          WHERE s.property_id = p.id
          ORDER BY s.created_at DESC
          LIMIT 1
        ) ds ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT l.price AS listing_price
+         FROM listing_property_matches m
+         INNER JOIN listings l ON l.id = m.listing_id
+         WHERE m.property_id = p.id AND m.status <> 'rejected'
+         ORDER BY (m.status = 'accepted') DESC, m.confidence DESC NULLS LAST, m.created_at DESC
+         LIMIT 1
+       ) lst ON TRUE
        WHERE ds.asset_cap_rate IS NOT NULL
-       ORDER BY ds.asset_cap_rate DESC
+          OR p.details#>>'{omData,authoritative,currentFinancials,noi}' IS NOT NULL
+          OR p.details#>>'{rentalFinancials,omAnalysis,currentFinancials,noi}' IS NOT NULL
+          OR p.details#>>'{rentalFinancials,fromLlm,noi}' IS NOT NULL
+       ORDER BY ds.asset_cap_rate DESC NULLS LAST
        LIMIT $1`,
       [limit]
     );
 
-    let rows: OperatingCompRow[] = result.rows.map((row) => ({
-      propertyId: String(row.property_id),
-      canonicalAddress: String(row.canonical_address),
-      borough: (row.borough as string | null) ?? null,
-      neighborhood: (row.neighborhood as string | null) ?? null,
-      dealState: (row.deal_state as string | null) ?? null,
-      dealStage: (row.deal_stage as string | null) ?? null,
-      lat: toNumber(row.lat),
-      lng: toNumber(row.lng),
-      units: toNumber(row.units),
-      ltrYieldPct: toNumber(row.asset_cap_rate),
-      mtrYieldPct: toNumber(row.adjusted_cap_rate),
-      yieldSpreadPct: toNumber(row.yield_spread),
-      currentNoi: toNumber(row.current_noi),
-      pricePerUnit: toNumber(row.price_per_unit),
-      pricePsf: toNumber(row.price_psf),
-      expenseRatioPct: toNumber(row.expense_ratio),
-      dealScore: toNumber(row.deal_score),
-      signalAt: row.signal_at instanceof Date ? row.signal_at.toISOString() : (row.signal_at as string | null),
-    }));
+    let rows: OperatingCompRow[] = result.rows
+      .map((row) => {
+        const signalLtr = toNumber(row.asset_cap_rate);
+        const fallbackNoi =
+          toNumber(row.fallback_noi_om) ?? toNumber(row.fallback_noi_analysis) ?? toNumber(row.fallback_noi_llm);
+        const fallbackAsk =
+          toNumber(row.fallback_ask_manual) ?? toNumber(row.fallback_ask_om) ?? toNumber(row.listing_price);
+        const derivedLtr =
+          fallbackNoi != null && fallbackAsk != null && fallbackAsk > 0 ? (fallbackNoi / fallbackAsk) * 100 : null;
+        const ltrYieldPct = signalLtr ?? derivedLtr;
+        if (ltrYieldPct == null) return null;
+        const comp: OperatingCompRow = {
+          propertyId: String(row.property_id),
+          canonicalAddress: String(row.canonical_address),
+          borough: (row.borough as string | null) ?? null,
+          neighborhood: (row.neighborhood as string | null) ?? null,
+          dealState: (row.deal_state as string | null) ?? null,
+          dealStage: (row.deal_stage as string | null) ?? null,
+          lat: toNumber(row.lat),
+          lng: toNumber(row.lng),
+          units: toNumber(row.units),
+          ltrYieldPct,
+          mtrYieldPct: toNumber(row.adjusted_cap_rate),
+          yieldSpreadPct: toNumber(row.yield_spread),
+          currentNoi: toNumber(row.current_noi) ?? fallbackNoi,
+          pricePerUnit: toNumber(row.price_per_unit),
+          pricePsf: toNumber(row.price_psf),
+          expenseRatioPct: toNumber(row.expense_ratio),
+          dealScore: toNumber(row.deal_score),
+          signalAt: row.signal_at instanceof Date ? row.signal_at.toISOString() : (row.signal_at as string | null),
+          yieldSource: signalLtr != null ? "signal" : "derived",
+        };
+        return comp;
+      })
+      .filter((row): row is OperatingCompRow => row != null)
+      .sort((a, b) => (b.ltrYieldPct ?? -Infinity) - (a.ltrYieldPct ?? -Infinity));
 
     if (borough) rows = rows.filter((row) => (row.borough ?? "").toLowerCase().includes(borough));
     if (minYield != null) rows = rows.filter((row) => row.ltrYieldPct != null && row.ltrYieldPct >= minYield);
@@ -152,7 +187,14 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
     });
   } catch (err) {
     console.error("[comps operating]", err);
-    res.status(500).json({ error: "Failed to load operating comps." });
+    const pgCode = (err as { code?: string } | null)?.code;
+    const message = err instanceof Error ? err.message : String(err);
+    // 42703/42P01 = missing column/relation: the deployed DB is behind on migrations.
+    const migrationHint =
+      pgCode === "42703" || pgCode === "42P01"
+        ? " The database schema is behind — run `npm run db:migrate` (migration 056 adds deal_stage/lat/lng)."
+        : "";
+    res.status(500).json({ error: `Failed to load operating comps.${migrationHint}`, details: message });
   }
 });
 

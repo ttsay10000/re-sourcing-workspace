@@ -30,6 +30,8 @@ const PORT = Number(process.env.PORT) || 4000;
 const version = process.env.npm_package_version || "1.0.0";
 const env = process.env.NODE_ENV || "development";
 
+import { assertSchemaCurrent } from "./db/schemaGuard.js";
+
 const app = express();
 
 // Token-gated browser/extension capture endpoint. Mounted before normal site auth/CORS
@@ -97,5 +99,6 @@ if (databaseUrl) {
 export function start(): void {
   app.listen(PORT, () => {
     console.log(`[api] listening on port ${PORT} (env=${env})`);
+    void assertSchemaCurrent();
   });
 }
