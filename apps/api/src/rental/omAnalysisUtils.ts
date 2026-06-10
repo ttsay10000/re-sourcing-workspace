@@ -199,14 +199,109 @@ function correctRentPsfMonthlyConfusion(row: OmRentRollRow): OmRentRollRow {
   return normalized as OmRentRollRow;
 }
 
-export function sanitizeOmRentRollRows(rows: OmRentRollRow[] | null | undefined): OmRentRollRow[] {
-  if (!Array.isArray(rows)) return [];
-  return rows
+/**
+ * Tokens that carry no unit identity: street-type words and unit prefixes.
+ * Dropping them lets "219 E 59th - 2" and "219 East 59th Street - 2" collapse
+ * to the same key when the extraction lists the same unit under two label styles.
+ */
+const UNIT_KEY_DROP_TOKENS = new Set([
+  "street", "st", "avenue", "ave", "av", "road", "rd", "boulevard", "blvd",
+  "place", "pl", "drive", "dr", "lane", "ln", "court", "ct", "terrace", "ter",
+  "way", "apt", "apartment", "unit", "suite", "ste", "no", "num", "number",
+  "floor", "fl",
+]);
+
+const UNIT_KEY_DIRECTIONS: Record<string, string> = {
+  e: "east",
+  w: "west",
+  n: "north",
+  s: "south",
+};
+
+function normalizedUnitIdentityKey(row: Record<string, unknown>): string | null {
+  const raw = [row.building, row.unit]
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .join(" ");
+  if (!raw) return null;
+  const tokens = normalizedLabel(raw)
+    .split(" ")
+    .map((token) => token.replace(/^(\d+)(?:st|nd|rd|th)$/, "$1"))
+    .map((token) => UNIT_KEY_DIRECTIONS[token] ?? token)
+    .filter((token) => token.length > 0 && !UNIT_KEY_DROP_TOKENS.has(token));
+  const key = tokens.join(" ");
+  return key.length > 0 ? key : null;
+}
+
+const DUPLICATE_FINGERPRINT_RENT_KEYS = [
+  "monthlyRent",
+  "monthlyBaseRent",
+  "monthlyTotalRent",
+  "annualRent",
+  "annualBaseRent",
+  "annualTotalRent",
+] as const;
+
+/**
+ * Identity fingerprint for duplicate detection: the normalized unit label plus
+ * every rent/size/layout figure. Two rows must agree on all of them (null ==
+ * null) to be treated as one unit pulled twice — identical rents on different
+ * unit labels, or same label with different rents, are kept.
+ */
+function duplicateRentRollFingerprint(row: OmRentRollRow): string | null {
+  const record = row as Record<string, unknown>;
+  const unitKey = normalizedUnitIdentityKey(record);
+  if (!unitKey) return null;
+  const hasAnyRent = DUPLICATE_FINGERPRINT_RENT_KEYS.some((key) => toFiniteNumber(record[key]) != null);
+  if (!hasAnyRent) return null;
+  const figures = [
+    ...DUPLICATE_FINGERPRINT_RENT_KEYS.map((key) => toFiniteNumber(record[key])),
+    toFiniteNumber(record.sqft),
+    toFiniteNumber(record.beds),
+    toFiniteNumber(record.baths),
+  ].map((value) => (value == null ? "·" : String(value)));
+  return [unitKey, normalizedLabel(record.tenantName), ...figures].join("|");
+}
+
+export interface OmRentRollSanitizeStats {
+  rows: OmRentRollRow[];
+  /** Rows dropped because the extraction listed the same unit twice. */
+  duplicateRowsRemoved: number;
+  /** Unit labels of removed duplicates (capped), for validation messages. */
+  duplicateExamples: string[];
+}
+
+export function sanitizeOmRentRollRowsWithStats(
+  rows: OmRentRollRow[] | null | undefined
+): OmRentRollSanitizeStats {
+  if (!Array.isArray(rows)) return { rows: [], duplicateRowsRemoved: 0, duplicateExamples: [] };
+  const cleaned = rows
     .filter(
       (row): row is OmRentRollRow =>
         !!row && !isAggregateRentRollRow(row) && !isPlaceholderRentRollRow(row)
     )
     .map((row) => correctRentPsfMonthlyConfusion(row));
+
+  const seen = new Set<string>();
+  const deduped: OmRentRollRow[] = [];
+  const duplicateExamples: string[] = [];
+  let duplicateRowsRemoved = 0;
+  for (const row of cleaned) {
+    const fingerprint = duplicateRentRollFingerprint(row);
+    if (fingerprint != null && seen.has(fingerprint)) {
+      duplicateRowsRemoved += 1;
+      if (duplicateExamples.length < 5 && typeof row.unit === "string" && row.unit.trim()) {
+        duplicateExamples.push(row.unit.trim());
+      }
+      continue;
+    }
+    if (fingerprint != null) seen.add(fingerprint);
+    deduped.push(row);
+  }
+  return { rows: deduped, duplicateRowsRemoved, duplicateExamples };
+}
+
+export function sanitizeOmRentRollRows(rows: OmRentRollRow[] | null | undefined): OmRentRollRow[] {
+  return sanitizeOmRentRollRowsWithStats(rows).rows;
 }
 
 export function sanitizeRentalNumberRows(

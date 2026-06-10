@@ -1198,7 +1198,11 @@ export async function ingestAuthoritativeOm(
     };
     const snapshot: OmAuthoritativeSnapshot = {
       ...snapshotBase,
-      validationFlags: buildOmValidationFlags({ snapshot: snapshotBase, omAnalysis: sanitizedOmAnalysis }),
+      validationFlags: buildOmValidationFlags({
+        snapshot: snapshotBase,
+        omAnalysis: sanitizedOmAnalysis,
+        rawRentRoll: extracted.omAnalysis.rentRoll ?? null,
+      }),
     };
 
     const extractedSnapshot = await extractedSnapshotRepo.upsert({

@@ -1,12 +1,14 @@
 /**
  * Deterministic validation flags computed after OM extraction: missing rents,
- * expected expense categories that didn't appear, and outlier underwriting
- * metrics (cap rate, expense ratio, NOI tie-out). These complement the
- * LLM-reported discrepancies with checks that don't depend on the model
- * noticing the problem itself.
+ * duplicated rent roll rows (the LLM pulling the same units twice), expected
+ * expense categories that didn't appear, and outlier underwriting metrics
+ * (cap rate, expense ratio, NOI tie-out). These complement the LLM-reported
+ * discrepancies with checks that don't depend on the model noticing the
+ * problem itself.
  */
-import type { OmAnalysis, OmAuthoritativeSnapshot, OmValidationFlag } from "@re-sourcing/contracts";
+import type { OmAnalysis, OmAuthoritativeSnapshot, OmRentRollRow, OmValidationFlag } from "@re-sourcing/contracts";
 import { resolveOmAskingPriceFromAnalysis } from "../deal/omAskingPrice.js";
+import { sanitizeOmRentRollRowsWithStats } from "../rental/omAnalysisUtils.js";
 
 const FLAG_SOURCE = "authoritative_om";
 
@@ -107,6 +109,29 @@ function resolveExplicitCapRatePct(omAnalysis: OmAnalysis | null | undefined): n
   return raw <= 1 ? raw * 100 : raw;
 }
 
+function rowAnnualRent(row: OmRentRollRow): number | null {
+  const record = row as Record<string, unknown>;
+  const annual =
+    toFiniteNumber(record.annualRent) ??
+    toFiniteNumber(record.annualTotalRent) ??
+    toFiniteNumber(record.annualBaseRent);
+  if (annual != null) return annual;
+  const monthly =
+    toFiniteNumber(record.monthlyRent) ??
+    toFiniteNumber(record.monthlyTotalRent) ??
+    toFiniteNumber(record.monthlyBaseRent);
+  return monthly != null ? monthly * 12 : null;
+}
+
+function declaredTotalUnits(snapshot: OmAuthoritativeSnapshot): number | null {
+  const info = isPlainObject(snapshot.propertyInfo) ? snapshot.propertyInfo : null;
+  const declared = toFiniteNumber(info?.totalUnits) ?? toFiniteNumber(info?.unitsTotal);
+  return declared != null && declared > 0 ? declared : null;
+}
+
+/** Roll gross at or above this multiple of the stated gross income means rents were double-counted. */
+const ROLL_GROSS_DOUBLE_COUNT_RATIO = 1.7;
+
 /**
  * Build the post-extraction validation flags for a snapshot. Appends to any
  * flags already on the snapshot (e.g. carried over by the extractor).
@@ -114,8 +139,10 @@ function resolveExplicitCapRatePct(omAnalysis: OmAnalysis | null | undefined): n
 export function buildOmValidationFlags(params: {
   snapshot: OmAuthoritativeSnapshot;
   omAnalysis?: OmAnalysis | null;
+  /** Rent roll as the LLM returned it, before sanitize/dedupe — enables the duplicate-extraction flag. */
+  rawRentRoll?: OmRentRollRow[] | null;
 }): OmValidationFlag[] {
-  const { snapshot, omAnalysis } = params;
+  const { snapshot, omAnalysis, rawRentRoll } = params;
   const flags: OmValidationFlag[] = Array.isArray(snapshot.validationFlags) ? [...snapshot.validationFlags] : [];
   const current = snapshot.currentFinancials ?? null;
   const rentRollCount = Array.isArray(snapshot.rentRoll) ? snapshot.rentRoll.length : 0;
@@ -124,6 +151,52 @@ export function buildOmValidationFlags(params: {
   const operatingExpenses = toFiniteNumber(current?.operatingExpenses);
   const noi = toFiniteNumber(current?.noi);
   const expenseLines = expenseLineItemTexts(snapshot);
+
+  // --- Duplicate rent roll rows (LLM pulled the same units twice) ---
+  if (Array.isArray(rawRentRoll)) {
+    const stats = sanitizeOmRentRollRowsWithStats(rawRentRoll);
+    if (stats.duplicateRowsRemoved > 0) {
+      const examples = stats.duplicateExamples.slice(0, 3).join(", ");
+      flags.push({
+        flagType: "duplicate_rent_roll",
+        field: "rentRoll",
+        severity: "warning",
+        source: FLAG_SOURCE,
+        message:
+          `Extraction listed the same units twice — ${stats.duplicateRowsRemoved} duplicate rent roll row${stats.duplicateRowsRemoved === 1 ? "" : "s"} removed` +
+          (examples ? ` (e.g. ${examples})` : "") +
+          ". Verify the remaining roll covers every unit exactly once; duplicated rents inflate the unit model and the MTR/adjusted NOI.",
+      });
+    }
+  }
+
+  const sanitizedRoll = Array.isArray(snapshot.rentRoll) ? snapshot.rentRoll : [];
+  const totalUnits = declaredTotalUnits(snapshot);
+  if (totalUnits != null && totalUnits >= 2 && rentRollCount >= totalUnits * 2) {
+    flags.push({
+      flagType: "duplicate_rent_roll",
+      field: "rentRoll.unitCount",
+      severity: "warning",
+      source: FLAG_SOURCE,
+      message: `Rent roll has ${rentRollCount} rows but the OM declares ${totalUnits} units — the rents were likely extracted twice. Verify the roll before trusting unit-model NOI and MTR yield.`,
+    });
+  }
+
+  const rollAnnualGross = sanitizedRoll.reduce<number>((sum, row) => sum + (rowAnnualRent(row) ?? 0), 0);
+  if (
+    sanitizedRoll.length >= 2 &&
+    grossRentalIncome != null &&
+    grossRentalIncome > 0 &&
+    rollAnnualGross >= grossRentalIncome * ROLL_GROSS_DOUBLE_COUNT_RATIO
+  ) {
+    flags.push({
+      flagType: "duplicate_rent_roll",
+      field: "rentRoll.grossTieOut",
+      severity: "warning",
+      source: FLAG_SOURCE,
+      message: `Rent roll sums to ${Math.round(rollAnnualGross).toLocaleString("en-US")}/yr but the OM states ${Math.round(grossRentalIncome).toLocaleString("en-US")} gross rental income — unit rents look double-counted. Verify the roll; the unit model and MTR/adjusted NOI would be inflated.`,
+    });
+  }
 
   // --- Rents ---
   const noRentsFound = rentRollCount === 0 && grossRentalIncome == null;

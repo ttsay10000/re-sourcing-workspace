@@ -384,6 +384,15 @@ function mtrYieldFlag(row: PipelineRow, ltr: number | null, mtr: number | null):
       title: row.underwriting?.mtrCalloutLabel ?? "MTR yield is below LTR — the mid-term numbers don't make sense.",
     };
   }
+  if (code === "mtr_spread_outlier") {
+    return {
+      severity: "danger",
+      label: "Check rents",
+      title:
+        row.underwriting?.mtrCalloutLabel ??
+        "MTR spread is implausibly high — rents may have been extracted twice; verify the rent roll.",
+    };
+  }
   if (code) {
     return {
       severity: "warn",
@@ -3842,7 +3851,7 @@ export default function PipelineClient() {
                   className={
                     cx(
                       sheetYoCSpread == null && styles.screeningPending,
-                      sheetMtrCalloutCode === "mtr_below_ltr"
+                      sheetMtrCalloutCode === "mtr_below_ltr" || sheetMtrCalloutCode === "mtr_spread_outlier"
                         ? styles.yocFlagDanger
                         : sheetMtrCalloutCode === "mtr_weak_uplift"
                           ? styles.yocFlagWarn
@@ -3857,9 +3866,11 @@ export default function PipelineClient() {
                     ? "Below LTR — source as LTR"
                     : sheetMtrCalloutCode === "mtr_weak_uplift"
                       ? "Weak MTR bump"
-                      : sheetYoCSpread == null && !sheetHasOm
-                        ? "Awaiting OM"
-                        : "YoC MTR less YoC LTR"}
+                      : sheetMtrCalloutCode === "mtr_spread_outlier"
+                        ? "Implausible spread — verify rents"
+                        : sheetYoCSpread == null && !sheetHasOm
+                          ? "Awaiting OM"
+                          : "YoC MTR less YoC LTR"}
                 </small>
               </div>
             </dl>

@@ -18,7 +18,7 @@
  *   typically built on pro forma rents while we underwrite off actuals.
  */
 
-export type YieldCalloutCode = "mtr_below_ltr" | "mtr_weak_uplift";
+export type YieldCalloutCode = "mtr_below_ltr" | "mtr_weak_uplift" | "mtr_spread_outlier";
 
 export interface YieldSignals {
   ltrYieldPct: number | null;
@@ -27,11 +27,20 @@ export interface YieldSignals {
   spreadPctPoints: number | null;
   /** Spread below this threshold (and >= 0) is flagged as a weak uplift. */
   minHealthySpreadPctPoints: number;
+  /** Spread above this threshold is flagged as an implausible uplift (data error). */
+  maxPlausibleSpreadPctPoints: number;
   calloutCode: YieldCalloutCode | null;
   calloutLabel: string | null;
 }
 
 export const DEFAULT_MIN_MTR_SPREAD_PCT_POINTS = 0.75;
+
+/**
+ * No real furnished-conversion underwrite adds this many points over the LTR
+ * yield; spreads beyond it have so far meant double-counted rents (the LLM
+ * extracting the same rent roll twice) or a bad NOI, not a great deal.
+ */
+export const DEFAULT_MAX_MTR_SPREAD_PCT_POINTS = 5;
 
 /** Env override so the weak-uplift threshold can be tuned without a deploy-time code change. */
 export function resolveMinHealthyMtrSpreadPctPoints(): number {
@@ -41,6 +50,16 @@ export function resolveMinHealthyMtrSpreadPctPoints(): number {
     if (Number.isFinite(parsed) && parsed >= 0) return parsed;
   }
   return DEFAULT_MIN_MTR_SPREAD_PCT_POINTS;
+}
+
+/** Env override for the implausible-spread ceiling (percentage points). */
+export function resolveMaxPlausibleMtrSpreadPctPoints(): number {
+  const raw = process.env.MTR_MAX_YIELD_SPREAD_PCT;
+  if (raw != null && raw.trim() !== "") {
+    const parsed = Number(raw);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  return DEFAULT_MAX_MTR_SPREAD_PCT_POINTS;
 }
 
 function toFinite(value: number | null | undefined): number | null {
@@ -61,11 +80,14 @@ export function computeYieldSignals(params: {
   ltrYieldPct: number | null | undefined;
   mtrYieldPct: number | null | undefined;
   minSpreadPctPoints?: number | null;
+  maxSpreadPctPoints?: number | null;
 }): YieldSignals {
   const ltrYieldPct = toFinite(params.ltrYieldPct);
   const mtrYieldPct = toFinite(params.mtrYieldPct);
   const minHealthySpreadPctPoints =
     toFinite(params.minSpreadPctPoints ?? null) ?? resolveMinHealthyMtrSpreadPctPoints();
+  const maxPlausibleSpreadPctPoints =
+    toFinite(params.maxSpreadPctPoints ?? null) ?? resolveMaxPlausibleMtrSpreadPctPoints();
 
   if (ltrYieldPct == null || mtrYieldPct == null) {
     return {
@@ -73,6 +95,7 @@ export function computeYieldSignals(params: {
       mtrYieldPct,
       spreadPctPoints: null,
       minHealthySpreadPctPoints,
+      maxPlausibleSpreadPctPoints,
       calloutCode: null,
       calloutLabel: null,
     };
@@ -86,6 +109,7 @@ export function computeYieldSignals(params: {
       mtrYieldPct,
       spreadPctPoints,
       minHealthySpreadPctPoints,
+      maxPlausibleSpreadPctPoints,
       calloutCode: "mtr_below_ltr",
       calloutLabel: `MTR yield ${formatPct(mtrYieldPct)} is below the LTR yield ${formatPct(
         ltrYieldPct
@@ -99,6 +123,7 @@ export function computeYieldSignals(params: {
       mtrYieldPct,
       spreadPctPoints,
       minHealthySpreadPctPoints,
+      maxPlausibleSpreadPctPoints,
       calloutCode: "mtr_weak_uplift",
       calloutLabel: `MTR adds only +${formatPoints(spreadPctPoints)} over the LTR yield (${formatPct(
         ltrYieldPct
@@ -108,11 +133,28 @@ export function computeYieldSignals(params: {
     };
   }
 
+  if (spreadPctPoints > maxPlausibleSpreadPctPoints) {
+    return {
+      ltrYieldPct,
+      mtrYieldPct,
+      spreadPctPoints,
+      minHealthySpreadPctPoints,
+      maxPlausibleSpreadPctPoints,
+      calloutCode: "mtr_spread_outlier",
+      calloutLabel: `MTR yield ${formatPct(mtrYieldPct)} is +${formatPoints(
+        spreadPctPoints
+      )} over the LTR yield ${formatPct(ltrYieldPct)}, beyond the +${formatPoints(
+        maxPlausibleSpreadPctPoints
+      )} plausibility ceiling — check for double-counted rent roll rows or a bad NOI extraction before trusting the MTR spread.`,
+    };
+  }
+
   return {
     ltrYieldPct,
     mtrYieldPct,
     spreadPctPoints,
     minHealthySpreadPctPoints,
+    maxPlausibleSpreadPctPoints,
     calloutCode: null,
     calloutLabel: null,
   };

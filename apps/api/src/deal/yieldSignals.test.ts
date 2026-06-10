@@ -1,16 +1,19 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  DEFAULT_MAX_MTR_SPREAD_PCT_POINTS,
   DEFAULT_MIN_BROKER_CAP_DELTA_PCT_POINTS,
   DEFAULT_MIN_MTR_SPREAD_PCT_POINTS,
   computeBrokerYieldComparison,
   computeYieldSignals,
+  resolveMaxPlausibleMtrSpreadPctPoints,
   resolveMinBrokerCapDeltaPctPoints,
   resolveMinHealthyMtrSpreadPctPoints,
 } from "./yieldSignals.js";
 
 afterEach(() => {
   delete process.env.MTR_MIN_YIELD_SPREAD_PCT;
+  delete process.env.MTR_MAX_YIELD_SPREAD_PCT;
   delete process.env.BROKER_CAP_MIN_DELTA_PCT;
 });
 
@@ -62,6 +65,34 @@ describe("computeYieldSignals", () => {
 
     process.env.MTR_MIN_YIELD_SPREAD_PCT = "not-a-number";
     expect(resolveMinHealthyMtrSpreadPctPoints()).toBe(DEFAULT_MIN_MTR_SPREAD_PCT_POINTS);
+  });
+
+  it("flags an implausibly large spread as a data outlier", () => {
+    // Mirrors the 219-221 E 59th double-pulled rent roll: LTR 5.9%, MTR 14.6%.
+    const signals = computeYieldSignals({ ltrYieldPct: 5.9, mtrYieldPct: 14.6 });
+    expect(signals.spreadPctPoints).toBeCloseTo(8.7, 6);
+    expect(signals.calloutCode).toBe("mtr_spread_outlier");
+    expect(signals.calloutLabel).toContain("double-counted rent roll");
+  });
+
+  it("treats a spread exactly at the plausibility ceiling as healthy", () => {
+    const signals = computeYieldSignals({
+      ltrYieldPct: 5.0,
+      mtrYieldPct: 5.0 + DEFAULT_MAX_MTR_SPREAD_PCT_POINTS,
+    });
+    expect(signals.calloutCode).toBeNull();
+  });
+
+  it("honors the implausible-spread env override and explicit param", () => {
+    process.env.MTR_MAX_YIELD_SPREAD_PCT = "10";
+    expect(resolveMaxPlausibleMtrSpreadPctPoints()).toBe(10);
+    expect(computeYieldSignals({ ltrYieldPct: 5.9, mtrYieldPct: 14.6 }).calloutCode).toBeNull();
+
+    process.env.MTR_MAX_YIELD_SPREAD_PCT = "not-a-number";
+    expect(resolveMaxPlausibleMtrSpreadPctPoints()).toBe(DEFAULT_MAX_MTR_SPREAD_PCT_POINTS);
+
+    const strict = computeYieldSignals({ ltrYieldPct: 5, mtrYieldPct: 8, maxSpreadPctPoints: 2.5 });
+    expect(strict.calloutCode).toBe("mtr_spread_outlier");
   });
 });
 

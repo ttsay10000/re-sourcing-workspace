@@ -291,7 +291,7 @@ export interface OmCalculationSnapshot {
     mtrYieldPct: number | null;
     spreadPctPoints: number | null;
     minHealthySpreadPctPoints: number;
-    calloutCode: "mtr_below_ltr" | "mtr_weak_uplift" | null;
+    calloutCode: "mtr_below_ltr" | "mtr_weak_uplift" | "mtr_spread_outlier" | null;
     calloutLabel: string | null;
   } | null;
   brokerYieldComparison?: {
@@ -2416,19 +2416,21 @@ export function OmCalculationPanel({
                   padding: "0.85rem 1rem",
                   borderRadius: "12px",
                   border:
-                    calculation.yieldSignals.calloutCode === "mtr_below_ltr"
-                      ? "1px solid #fca5a5"
-                      : "1px solid #fcd34d",
+                    calculation.yieldSignals.calloutCode === "mtr_weak_uplift"
+                      ? "1px solid #fcd34d"
+                      : "1px solid #fca5a5",
                   background:
-                    calculation.yieldSignals.calloutCode === "mtr_below_ltr" ? "#fef2f2" : "#fffbeb",
+                    calculation.yieldSignals.calloutCode === "mtr_weak_uplift" ? "#fffbeb" : "#fef2f2",
                   color:
-                    calculation.yieldSignals.calloutCode === "mtr_below_ltr" ? "#991b1b" : "#92400e",
+                    calculation.yieldSignals.calloutCode === "mtr_weak_uplift" ? "#92400e" : "#991b1b",
                 }}
               >
                 <strong style={{ display: "block", marginBottom: "0.35rem" }}>
                   {calculation.yieldSignals.calloutCode === "mtr_below_ltr"
                     ? "MTR yield below LTR — source as an LTR deal"
-                    : "Weak MTR yield bump"}
+                    : calculation.yieldSignals.calloutCode === "mtr_spread_outlier"
+                      ? "MTR spread implausibly high — check for double-counted rents"
+                      : "Weak MTR yield bump"}
                 </strong>
                 <div style={{ fontSize: "0.88rem", lineHeight: 1.5 }}>
                   {calculation.yieldSignals.calloutLabel}
@@ -2564,7 +2566,9 @@ export function OmCalculationPanel({
                               ? " (below LTR)"
                               : calculation.yieldSignals.calloutCode === "mtr_weak_uplift"
                                 ? " (weak bump)"
-                                : ""
+                                : calculation.yieldSignals.calloutCode === "mtr_spread_outlier"
+                                  ? " (implausible — verify rents)"
+                                  : ""
                           }`
                         : "—",
                   },
