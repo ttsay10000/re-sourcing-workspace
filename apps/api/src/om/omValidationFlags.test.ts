@@ -141,6 +141,67 @@ describe("buildOmValidationFlags", () => {
     expect(noiTie?.message).toContain("doesn't tie");
   });
 
+  it("flags rent rolls the LLM pulled twice via the raw roll", () => {
+    const duplicatedRoll = [
+      { unit: "219 E 59th - Retail", sqft: 2_150, monthlyRent: 23_000 },
+      { unit: "219 E 59th - 2", beds: 4, baths: 2, sqft: 1_386, monthlyRent: 9_000 },
+      { unit: "219 East 59th Street Retail", sqft: 2_150, monthlyRent: 23_000 },
+      { unit: "219 East 59th Street - 2", beds: 4, baths: 2, sqft: 1_386, monthlyRent: 9_000 },
+    ];
+    const snapshot: OmAuthoritativeSnapshot = {
+      rentRoll: duplicatedRoll.slice(0, 2),
+      currentFinancials: { grossRentalIncome: 384_000, operatingExpenses: 150_000, noi: 234_000 },
+      expenses: null,
+    };
+    const flag = buildOmValidationFlags({ snapshot, rawRentRoll: duplicatedRoll }).find(
+      (entry) => entry.flagType === "duplicate_rent_roll" && entry.field === "rentRoll"
+    );
+    expect(flag?.severity).toBe("warning");
+    expect(flag?.message).toContain("2 duplicate rent roll rows removed");
+    expect(flag?.message).toContain("219 East 59th Street Retail");
+  });
+
+  it("flags a roll with 2x the declared unit count and a gross that doesn't tie out", () => {
+    // A double-pulled roll that slipped past exact dedupe (rents drifted slightly).
+    const snapshot: OmAuthoritativeSnapshot = {
+      propertyInfo: { totalUnits: 2 },
+      rentRoll: [
+        { unit: "Retail A", monthlyRent: 23_000 },
+        { unit: "Unit 2", monthlyRent: 9_000 },
+        { unit: "Retail One", monthlyRent: 23_500 },
+        { unit: "Second Unit", monthlyRent: 9_100 },
+      ],
+      currentFinancials: { grossRentalIncome: 384_000, operatingExpenses: 150_000, noi: 234_000 },
+      expenses: null,
+    };
+    const flags = buildOmValidationFlags({ snapshot });
+    const unitCount = flags.find((flag) => flag.field === "rentRoll.unitCount");
+    expect(unitCount?.severity).toBe("warning");
+    expect(unitCount?.message).toContain("4 rows");
+    expect(unitCount?.message).toContain("2 units");
+    const tieOut = flags.find((flag) => flag.field === "rentRoll.grossTieOut");
+    expect(tieOut?.severity).toBe("warning");
+    expect(tieOut?.message).toContain("double-counted");
+  });
+
+  it("does not flag a roll that legitimately exceeds the unit count or ties out", () => {
+    const snapshot: OmAuthoritativeSnapshot = {
+      propertyInfo: { totalUnits: 4 },
+      rentRoll: [
+        { unit: "Retail", monthlyRent: 23_000 },
+        { unit: "2", monthlyRent: 3_000 },
+        { unit: "3", monthlyRent: 3_100 },
+        { unit: "4", monthlyRent: 3_200 },
+        // One tenant leasing a second space — rows may exceed totalUnits.
+        { unit: "Cellar", monthlyRent: 1_500 },
+      ],
+      currentFinancials: { grossRentalIncome: 405_600, operatingExpenses: 150_000, noi: 255_600 },
+      expenses: null,
+    };
+    const flags = buildOmValidationFlags({ snapshot, rawRentRoll: snapshot.rentRoll });
+    expect(flags.filter((flag) => flag.flagType === "duplicate_rent_roll")).toEqual([]);
+  });
+
   it("returns no flags for a complete, in-range extraction", () => {
     const snapshot: OmAuthoritativeSnapshot = {
       rentRoll: [{ unit: "1A", monthlyRent: 2_500 }],

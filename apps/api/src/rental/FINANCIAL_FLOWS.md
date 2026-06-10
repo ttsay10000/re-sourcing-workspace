@@ -77,5 +77,12 @@ The property UI prefers OM-style analysis when present and falls back to rental-
 
 - `mtr_below_ltr` — MTR yield is below the LTR yield; the deal should be underwritten as an LTR play on its cap rate.
 - `mtr_weak_uplift` — MTR beats LTR by less than the healthy-spread threshold (default 0.75 pt; override with env `MTR_MIN_YIELD_SPREAD_PCT`).
+- `mtr_spread_outlier` — MTR beats LTR by more than the plausibility ceiling (default 5 pt; override with env `MTR_MAX_YIELD_SPREAD_PCT`). Spreads this large have meant data errors, not good deals — the known cause is the LLM extracting the same rent roll twice (one OM listed every unit under two label styles, doubling the unit-model gross and pushing MTR YoC to 14.6% against a 5.9% LTR).
 
 The callout is surfaced in three places: the OM calculation snapshot (`yieldSignals` field + validation messages, shown in the OM workspace), deal signals (`yield_spread` column plus a risk-flag entry), and the pipeline screening API (`yocSpreadPct`, `mtrCalloutCode`, `mtrCalloutLabel` on the underwriting summary; the table flags the YoC MTR cell). The pipeline list also supports a `minLtrYoc` filter for sourcing on LTR yield.
+
+## Rent Roll De-duplication
+
+`sanitizeOmRentRollRows` (`apps/api/src/rental/omAnalysisUtils.ts`) drops rent roll rows the extraction pulled twice: rows whose normalized unit identity (street-type words, unit prefixes, and ordinal/direction spelling variants stripped, so "219 E 59th - 2" ≡ "219 East 59th Street - 2") AND rent/sqft/beds/baths figures all match an earlier row. Rows without a unit label or without any rent figure are never deduped, and identical rents on distinct unit labels are kept, so legitimate twin units survive. Because every read path resolves the roll through this sanitizer, already-stored duplicated snapshots heal on the next assumption rebuild or dossier rerun.
+
+Ingestion also writes `duplicate_rent_roll` validation flags (`apps/api/src/om/omValidationFlags.ts`) when duplicates were removed, when the roll has ≥ 2× the declared unit count, or when the roll's summed gross is ≥ 1.7× the stated gross rental income — the last two catch double-pulls that evade exact matching.

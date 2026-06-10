@@ -664,7 +664,7 @@ export interface UiV2UnderwritingSummary {
   yocBasis?: "adjusted_noi" | "current_noi" | "unknown" | null;
   marketCapRatePct?: number | null;
   yocSpreadPct?: number | null;
-  mtrCalloutCode?: "mtr_below_ltr" | "mtr_weak_uplift" | null;
+  mtrCalloutCode?: "mtr_below_ltr" | "mtr_weak_uplift" | "mtr_spread_outlier" | null;
   mtrCalloutLabel?: string | null;
   riskFlags?: string[];
   capReasons?: string[];
