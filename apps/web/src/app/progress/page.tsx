@@ -2,13 +2,26 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { Suspense, useCallback, useEffect, useMemo, useState, type DragEvent, type FormEvent } from "react";
+import {
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type DragEvent,
+  type FormEvent,
+  type MouseEvent as ReactMouseEvent,
+} from "react";
 import {
   ArrowRightLeft,
   CalendarCheck,
-  ChevronRight,
+  Flag,
+  KanbanSquare,
+  ListTodo,
   Mail,
   MailPlus,
+  MailWarning,
   MoreHorizontal,
   PenLine,
   Sparkles,
@@ -17,21 +30,52 @@ import {
 import {
   DEAL_FLOW_STAGES,
   UI_V2_REJECTION_REASON_OPTIONS,
-  type DealFlowRecommendation,
   type DealFlowRecommendationsResponse,
   type UiV2DealPathDecision,
   type UiV2DealPathState,
   type UiV2PipelineStatus,
   type UiV2RejectionReasonCode,
 } from "@re-sourcing/contracts";
-import { AgingChip, BrokerContactDialog, Button, Dialog, FileDropzone, PageHeader, PromptMenu, PropertyThumb, StatCard } from "@/components/ui";
+import { AgingChip, BrokerContactDialog, Button, Dialog, PageHeader, PromptMenu, PropertyThumb, StatCard } from "@/components/ui";
 import { RecommendationStepper, type StepperKind, type StepperRow } from "./RecommendationStepper";
 import { API_BASE, apiFetch } from "@/lib/api";
 import { useProcessBanner } from "@/components/ProcessBanner";
+import {
+  buildActionSummary,
+  buildEmailQueue,
+  columnStats,
+  computeRowFlags,
+  dataCompleteness,
+  followUpState,
+  formatDue,
+  primaryCtaForRow,
+  severityRank,
+  stageAgeDays,
+  type ActionFlag,
+  type ActionSummaryItem,
+  type EmailQueueItem,
+  type FlagActionKind,
+  type PrimaryCta,
+} from "./actionFlags";
+import { DealWizardDrawer, type DealPathFormState, type DealPathPromptMode } from "./DealWizardDrawer";
+import { EmailQueuePanel, NeedsActionPanel, type NeedsActionRow } from "./QueuePanels";
+import { RejectedPanel } from "./RejectedPanel";
+import {
+  formatCurrency,
+  formatCompactNumber,
+  formatDate,
+  formatPercent,
+  formatUnitLabel,
+  formatWholeCurrency,
+  labelFromKey,
+  streetAddressOnly,
+} from "./format";
 import styles from "./progress.module.css";
+
 const BULK_STAGE_MOVE_ID = "__bulk_stage_move__";
 const OM_ANALYSIS_BULK_ID = "__bulk_om_analysis__";
 const DOSSIER_BULK_ID = "__bulk_dossier__";
+const SNOOZE_STORAGE_KEY = "progress.emailSnoozes";
 
 type Summary = {
   savedCount?: number;
@@ -44,7 +88,7 @@ type Summary = {
 };
 
 type ProgressRow = {
-  savedDeal?: SavedDealRow["savedDeal"];
+  savedDeal?: { id?: string; propertyId?: string; dealStatus?: string; createdAt?: string };
   propertyId: string;
   canonicalAddress?: string | null;
   displayAddress?: string | null;
@@ -74,6 +118,7 @@ type ProgressRow = {
   brokerName?: string | null;
   brokerEmail?: string | null;
   stageEnteredAt?: string | null;
+  latestOutreachAt?: string | null;
   updatedAt?: string | null;
 };
 
@@ -96,35 +141,6 @@ type ProgressSection = {
   rows?: ProgressRow[];
 };
 
-type SavedDealRow = {
-  savedDeal?: {
-    id?: string;
-    propertyId?: string;
-    dealStatus?: string;
-    createdAt?: string;
-  };
-  propertyId: string;
-  canonicalAddress?: string | null;
-  displayAddress?: string | null;
-  source?: string | null;
-  price?: number | null;
-  units?: number | null;
-  sqft?: number | null;
-  pricePerSqft?: number | null;
-  dealScore?: number | null;
-  ltrYocPct?: number | null;
-  mtrYocPct?: number | null;
-  status?: string | null;
-  tags?: string[];
-  omStatus?: string | null;
-  hasOm?: boolean;
-  hasComps?: boolean;
-  hasDossier?: boolean;
-  dealPath?: UiV2DealPathState | null;
-  openActionItemCount?: number | null;
-  updatedAt?: string | null;
-};
-
 type DealFlowRow = ProgressRow & {
   propertyId: string;
 };
@@ -133,16 +149,6 @@ type DealProgressResponse = {
   summary?: Summary;
   sections?: ProgressSection[];
   rejectionReasons?: Array<{ reasonCode?: string; count?: number }>;
-  error?: string;
-  details?: string;
-};
-
-type SavedDealsResponse = {
-  savedDeals?: {
-    rows?: SavedDealRow[];
-    deals?: Array<{ id?: string; propertyId?: string; dealStatus?: string; createdAt?: string }>;
-    total?: number;
-  };
   error?: string;
   details?: string;
 };
@@ -182,24 +188,6 @@ type MovableSavedStatusGroup = SavedStatusGroup & {
   targetStatus: UiV2PipelineStatus;
   moveLabel: string;
 };
-
-type DealPathFormState = {
-  tourScheduledAt: string;
-  tourCompletedAt: string;
-  tourBrokerName: string;
-  tourNotes: string;
-  postTourDecision: UiV2DealPathDecision;
-  targetPrice: string;
-  offerAmount: string;
-  loiRecipientEmail: string;
-  offerNotes: string;
-  loiContingenciesText: string;
-  loiContingencyNotes: string;
-  rejectionReasonCode: UiV2RejectionReasonCode | "";
-  rejectionNotes: string;
-};
-
-type DealPathPromptMode = "general" | "tour_scheduled" | "tour_completed" | "loi_offered";
 
 type RejectFormState = {
   propertyId: string;
@@ -245,6 +233,8 @@ type BoardFocus = {
   stageId: string | null;
 };
 
+type BoardMode = "board" | "needs_action" | "email_queue";
+
 // Columns come from the shared deal-flow constant so this board, the home
 // funnel, and stage chips elsewhere always show the same steps.
 const SECTION_ORDER: ProgressSection[] = DEAL_FLOW_STAGES.map((stage) => ({
@@ -287,52 +277,6 @@ const MOVE_STAGE_OPTIONS = SAVED_STATUS_GROUPS
   )
   .filter((group) => group.targetStatus !== "rejected");
 const DEFAULT_BULK_STAGE_ID = MOVE_STAGE_OPTIONS[0]?.id ?? "om_requested";
-
-function formatCurrency(value: number | null | undefined): string {
-  if (value == null || Number.isNaN(value)) return "—";
-  if (Math.abs(value) >= 1_000_000) return `$${(value / 1_000_000).toFixed(1)}M`;
-  if (Math.abs(value) >= 1_000) return `$${(value / 1_000).toFixed(0)}K`;
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(value);
-}
-
-function formatWholeCurrency(value: number | null | undefined): string {
-  if (value == null || Number.isNaN(value)) return "—";
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(value);
-}
-
-function formatNumber(value: number | null | undefined): string {
-  if (value == null || Number.isNaN(value)) return "—";
-  return Number.isInteger(value) ? value.toFixed(0) : value.toFixed(1);
-}
-
-function formatCompactNumber(value: number | null | undefined): string {
-  if (value == null || !Number.isFinite(value)) return "—";
-  return new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(value);
-}
-
-function formatPercent(value: number | null | undefined): string {
-  if (value == null || !Number.isFinite(value)) return "—";
-  return `${value.toFixed(1)}%`;
-}
-
-function formatUnitLabel(value: number | null | undefined): string | null {
-  const formatted = formatNumber(value);
-  if (formatted === "—") return null;
-  return `${formatted} ${formatted === "1" ? "unit" : "units"}`;
-}
-
-/** Board cards show only the street line; the full address stays in tooltips/modals. */
-function streetAddressOnly(address: string): string {
-  const street = address.split(",")[0]?.trim();
-  return street || address;
-}
-
-function formatDate(value: string | null | undefined): string {
-  if (!value) return "—";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "—";
-  return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-}
 
 function dateInputFromIso(value: string | null | undefined): string {
   if (!value) return "";
@@ -462,61 +406,8 @@ function dealPathPayload(form: DealPathFormState, mode: DealPathPromptMode = "ge
   };
 }
 
-function needsTourInputs(row: DealFlowRow): boolean {
-  return row.status === "tour_completed_awaiting_inputs" && (row.dealPath?.postTourDecision == null || row.dealPath.postTourDecision === "pending");
-}
-
 function hasScheduledTour(row: ProgressRow): boolean {
   return Boolean(row.dealPath?.tourScheduledAt);
-}
-
-function labelFromKey(value: string | null | undefined): string {
-  if (!value) return "Unknown";
-  const normalized = value.trim().toLowerCase();
-  const specialLabels: Record<string, string> = {
-    awaiting_broker: "OM Requested",
-    contract_signed: "Contract Signed",
-    deal_closed: "Deal Closed",
-    dossier_generated: "Dossier Generated",
-    loopnet: "LoopNet",
-    offer_review: "LOI Offered",
-    sourced: "Sourced",
-    om_received: "OM Received",
-    streeteasy: "StreetEasy",
-    tour_requested: "Tour Requested",
-    tour_scheduled: "Tour Scheduled",
-    tour_completed_awaiting_inputs: "Tour Completed",
-    underwriting_awaiting_review: "Underwriting - Awaiting User Review",
-    underwriting_review_completed: "Underwriting - Review Completed",
-  };
-  if (specialLabels[normalized]) return specialLabels[normalized];
-  return normalized
-    .split("_")
-    .flatMap((part) => part.split("-"))
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
-}
-
-function normalizeTag(value: string): string {
-  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_");
-}
-
-function tagClass(tag: string): string {
-  const normalized = normalizeTag(tag);
-  if (["high_priority", "mtr_candidate", "tax_advantage", "below_replacement"].includes(normalized)) {
-    return `${styles.tagChip} ${styles.tagOpportunity}`;
-  }
-  if (["broker_relationship", "follow_up", "partner_review", "toured"].includes(normalized)) {
-    return `${styles.tagChip} ${styles.tagRelationship}`;
-  }
-  if (["needs_om", "needs_rent_roll", "needs_city_data", "om_requested"].includes(normalized)) {
-    return `${styles.tagChip} ${styles.tagAction}`;
-  }
-  if (["distressed_seller", "rent_stab_risk", "duplicate", "rejected"].includes(normalized)) {
-    return `${styles.tagChip} ${styles.tagRisk}`;
-  }
-  return `${styles.tagChip} ${styles.tagNeutral}`;
 }
 
 function sectionCount(summary: Summary | null, sectionId: string, fallback: number): number {
@@ -560,19 +451,6 @@ function normalizeSections(data: DealProgressResponse): ProgressSection[] {
   return [...known, ...extras];
 }
 
-function normalizeSavedDeals(data: SavedDealsResponse): SavedDealRow[] {
-  const rows = data.savedDeals?.rows;
-  if (Array.isArray(rows)) return rows;
-  return (data.savedDeals?.deals ?? [])
-    .filter((deal) => typeof deal.propertyId === "string")
-    .map((deal) => ({
-      propertyId: deal.propertyId as string,
-      savedDeal: deal,
-      status: deal.dealStatus ?? "saved",
-      updatedAt: deal.createdAt ?? null,
-    }));
-}
-
 function searchableText(row: ProgressRow): string {
   return [
     row.propertyId,
@@ -587,40 +465,6 @@ function searchableText(row: ProgressRow): string {
     .filter(Boolean)
     .join(" ")
     .toLowerCase();
-}
-
-function searchableSavedDealText(row: SavedDealRow): string {
-  return [
-    row.propertyId,
-    row.canonicalAddress,
-    row.displayAddress,
-    row.source,
-    row.status,
-    row.savedDeal?.dealStatus,
-    row.omStatus,
-    ...(row.tags ?? []),
-  ]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
-}
-
-function statusClass(status: string | null | undefined): string {
-  if (status === "rejected") return `${styles.statusPill} ${styles.statusDanger}`;
-  if (
-    status === "saved" ||
-    status === "om_received" ||
-    status === "dossier_generated" ||
-    status === "contract_signed" ||
-    status === "deal_closed"
-  ) {
-    return `${styles.statusPill} ${styles.statusSuccess}`;
-  }
-  if (status === "underwriting" || status === "offer_review" || status === "negotiation" || status === "awaiting_broker") {
-    return `${styles.statusPill} ${styles.statusWarning}`;
-  }
-  if (status === "outreach" || status === "screening") return `${styles.statusPill} ${styles.statusInfo}`;
-  return `${styles.statusPill} ${styles.statusNeutral}`;
 }
 
 function scoreClass(score: number | null | undefined): string {
@@ -657,46 +501,6 @@ function moveStatusForRow(row: DealFlowRow): UiV2PipelineStatus {
 
 function moveLabelForStatus(status: UiV2PipelineStatus): string {
   return MOVE_STAGE_OPTIONS.find((option) => option.targetStatus === status)?.moveLabel ?? labelFromKey(status);
-}
-
-function buildSavedStatusSections(rows: SavedDealRow[]): SavedDealSection[] {
-  const claimed = new Set<string>();
-  const sections = SAVED_STATUS_GROUPS.map((group) => {
-    const matches = rows.filter((row) => group.statuses.includes(rowStatus(row)));
-    matches.forEach((row) => claimed.add(row.propertyId));
-    return {
-      id: group.id,
-      label: group.label,
-      description: group.description,
-      rows: matches,
-      targetStatus: group.targetStatus,
-      moveLabel: group.moveLabel,
-    };
-  });
-  const otherRows = rows.filter((row) => !claimed.has(row.propertyId));
-  return otherRows.length > 0
-    ? [...sections, { id: "other", label: "Other Saved", description: "Saved deals outside the standard stages.", rows: otherRows }]
-    : sections;
-}
-
-function buildSavedTagSections(rows: SavedDealRow[]): SavedDealSection[] {
-  const byTag = new Map<string, SavedDealRow[]>();
-  for (const row of rows) {
-    for (const tag of row.tags ?? []) {
-      const trimmed = tag.trim();
-      if (!trimmed) continue;
-      const current = byTag.get(trimmed) ?? [];
-      current.push(row);
-      byTag.set(trimmed, current);
-    }
-  }
-  return [...byTag.entries()]
-    .sort((left, right) => right[1].length - left[1].length || left[0].localeCompare(right[0]))
-    .map(([tag, tagRows]) => ({
-      id: tag,
-      label: labelFromKey(tag),
-      rows: tagRows,
-    }));
 }
 
 async function patchSavedDealStatus(propertyId: string, nextStatus: UiV2PipelineStatus): Promise<void> {
@@ -768,7 +572,6 @@ function ProgressPageContent() {
   const query = (searchParams.get("q") ?? "").trim().toLowerCase();
   const [summary, setSummary] = useState<Summary | null>(null);
   const [sections, setSections] = useState<ProgressSection[]>(SECTION_ORDER);
-  const [savedDealRows, setSavedDealRows] = useState<SavedDealRow[]>([]);
   const [rejectionReasons, setRejectionReasons] = useState<Array<{ reasonCode?: string; count?: number }>>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -797,6 +600,11 @@ function ProgressPageContent() {
   const [focusedCardId, setFocusedCardId] = useState<string | null>(null);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [flashColumnId, setFlashColumnId] = useState<string | null>(null);
+  const [boardMode, setBoardMode] = useState<BoardMode>("board");
+  const [snoozes, setSnoozes] = useState<Record<string, string>>({});
+  const [showSnoozed, setShowSnoozed] = useState(false);
+  const [queueSelectedIds, setQueueSelectedIds] = useState<Set<string>>(() => new Set());
+  const boardScrollerRef = useRef<HTMLDivElement | null>(null);
 
   const scrollToColumn = useCallback((sectionId: string) => {
     document.getElementById(`board-column-${sectionId}`)?.scrollIntoView({
@@ -818,13 +626,11 @@ function ProgressPageContent() {
       if (!progressResponse.ok) throw new Error(progressData.error || progressData.details || "Failed to load deal progress");
       setSummary(progressData.summary ?? null);
       setSections(normalizeSections(progressData));
-      setSavedDealRows([]);
       setRejectionReasons(Array.isArray(progressData.rejectionReasons) ? progressData.rejectionReasons : []);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load deal progress");
       setSummary(null);
       setSections(SECTION_ORDER);
-      setSavedDealRows([]);
       setRejectionReasons([]);
     } finally {
       setLoading(false);
@@ -835,6 +641,39 @@ function ProgressPageContent() {
   useEffect(() => {
     void loadProgress();
   }, [loadProgress]);
+
+  // Email snoozes persist locally so dismissed nags stay dismissed per browser.
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(SNOOZE_STORAGE_KEY);
+      if (raw) setSnoozes(JSON.parse(raw) as Record<string, string>);
+    } catch {
+      // Ignore unreadable storage; snoozes just reset.
+    }
+  }, []);
+
+  const setSnooze = useCallback((propertyId: string, days: number | null) => {
+    setSnoozes((current) => {
+      const next = { ...current };
+      if (days == null) delete next[propertyId];
+      else next[propertyId] = new Date(Date.now() + days * 86_400_000).toISOString();
+      try {
+        window.localStorage.setItem(SNOOZE_STORAGE_KEY, JSON.stringify(next));
+      } catch {
+        // Storage may be unavailable (private mode); keep in-memory state.
+      }
+      return next;
+    });
+  }, []);
+
+  const snoozedSet = useMemo(() => {
+    const now = Date.now();
+    return new Set(
+      Object.entries(snoozes)
+        .filter(([, until]) => new Date(until).getTime() > now)
+        .map(([propertyId]) => propertyId)
+    );
+  }, [snoozes]);
 
   const startDealPathEdit = useCallback((row: DealFlowRow, options?: { mode?: DealPathPromptMode }) => {
     const mode = options?.mode ?? "general";
@@ -868,39 +707,6 @@ function ProgressPageContent() {
   useEffect(() => {
     void loadRecommendations();
   }, [loadRecommendations]);
-
-  const applyRecommendation = useCallback(
-    (item: DealFlowRecommendation) => {
-      if (item.id === "missing_broker_email" || item.id === "request_oms" || item.id === "om_request_stale") {
-        const wanted = new Set(item.propertyIds);
-        const rows = sections
-          .flatMap((section) => section.rows ?? [])
-          .filter((row) => wanted.has(row.propertyId));
-        const seen = new Set<string>();
-        const stepperRows: StepperRow[] = [];
-        for (const row of rows) {
-          if (seen.has(row.propertyId)) continue;
-          seen.add(row.propertyId);
-          stepperRows.push({
-            propertyId: row.propertyId,
-            address: row.displayAddress || row.canonicalAddress || row.propertyId,
-            brokerName: row.brokerName ?? null,
-            brokerEmail: row.brokerEmail ?? null,
-          });
-        }
-        if (stepperRows.length > 0) {
-          setStepper({ kind: item.id as StepperKind, rows: stepperRows });
-          return;
-        }
-      }
-      setBoardFocus({
-        label: item.title,
-        propertyIds: new Set(item.propertyIds),
-        stageId: item.stageId,
-      });
-    },
-    [sections]
-  );
 
   const openEmailComposer = useCallback(async (row: DealFlowRow, intent: ComposerDialogState["intent"]) => {
     const address = row.displayAddress || row.canonicalAddress || row.propertyId;
@@ -1177,7 +983,6 @@ function ProgressPageContent() {
     if (row) moveRowToSectionId(row, moveStageState.targetSectionId);
   }, [moveRowToSectionId, moveStageState, sections]);
 
-
   const filteredSections = useMemo(() => {
     if (!query && !boardFocus) return sections;
     return sections.map((section) => ({
@@ -1195,6 +1000,197 @@ function ProgressPageContent() {
         (section.rows ?? []).map((row, rowIndex) => ({ row: row as DealFlowRow, sectionIndex, rowIndex, sectionId: section.id }))
       ),
     [filteredSections]
+  );
+
+  /* ── Workflow intelligence (deterministic; see actionFlags.ts) ── */
+
+  // Full flag set per property, ignoring snoozes (the Email Queue needs both).
+  const flagsByProperty = useMemo(() => {
+    const map = new Map<string, ActionFlag[]>();
+    for (const section of sections) {
+      for (const row of section.rows ?? []) {
+        if (!map.has(row.propertyId)) map.set(row.propertyId, computeRowFlags(section.id, row));
+      }
+    }
+    return map;
+  }, [sections]);
+
+  // What cards, CTAs, and summary counts use: snoozed properties drop email nags.
+  const effectiveFlagsByProperty = useMemo(() => {
+    if (snoozedSet.size === 0) return flagsByProperty;
+    const map = new Map<string, ActionFlag[]>();
+    for (const [propertyId, flags] of flagsByProperty) {
+      map.set(propertyId, snoozedSet.has(propertyId) ? flags.filter((item) => !item.email) : flags);
+    }
+    return map;
+  }, [flagsByProperty, snoozedSet]);
+
+  const sectionIdByProperty = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const section of sections) {
+      for (const row of section.rows ?? []) {
+        if (!map.has(row.propertyId)) map.set(row.propertyId, section.id);
+      }
+    }
+    return map;
+  }, [sections]);
+
+  const summaryItems = useMemo(
+    () => buildActionSummary(sections as Array<{ id: string; rows?: DealFlowRow[] }>, effectiveFlagsByProperty),
+    [sections, effectiveFlagsByProperty]
+  );
+
+  const emailQueueItems = useMemo(
+    () => buildEmailQueue(filteredSections as Array<{ id: string; rows?: DealFlowRow[] }>, flagsByProperty, snoozedSet),
+    [filteredSections, flagsByProperty, snoozedSet]
+  );
+  const emailQueueDueCount = useMemo(() => emailQueueItems.filter((item) => !item.snoozed).length, [emailQueueItems]);
+  const visibleEmailQueueItems = useMemo(
+    () => (showSnoozed ? emailQueueItems : emailQueueItems.filter((item) => !item.snoozed)),
+    [emailQueueItems, showSnoozed]
+  );
+
+  const needsActionRows = useMemo<NeedsActionRow[]>(() => {
+    const rows: NeedsActionRow[] = [];
+    for (const section of filteredSections) {
+      for (const row of section.rows ?? []) {
+        const flags = effectiveFlagsByProperty.get(row.propertyId) ?? [];
+        if (flags.length === 0) continue;
+        rows.push({
+          propertyId: row.propertyId,
+          address: row.displayAddress || row.canonicalAddress || row.propertyId,
+          stageId: section.id,
+          flag: flags[0],
+          flagCount: flags.length,
+          ageDays: stageAgeDays(row),
+        });
+      }
+    }
+    return rows.sort(
+      (left, right) =>
+        severityRank(left.flag.severity) - severityRank(right.flag.severity) ||
+        (left.flag.dueInDays ?? 99) - (right.flag.dueInDays ?? 99) ||
+        (right.ageDays ?? 0) - (left.ageDays ?? 0)
+    );
+  }, [filteredSections, effectiveFlagsByProperty]);
+
+  const rowById = useMemo(() => {
+    const map = new Map<string, DealFlowRow>();
+    for (const row of flowRows) {
+      if (!map.has(row.propertyId)) map.set(row.propertyId, row as DealFlowRow);
+    }
+    return map;
+  }, [flowRows]);
+
+  /** Central router for flag CTAs: every flag click lands in the right workflow. */
+  const runBoardAction = useCallback(
+    (row: DealFlowRow, actionKind: FlagActionKind) => {
+      switch (actionKind) {
+        case "compose_email":
+          if (row.brokerEmail) void openEmailComposer(row, "email");
+          else openBrokerEmailDialog(row);
+          return;
+        case "request_om":
+          if (row.brokerEmail) void openEmailComposer(row, "request_om");
+          else openBrokerEmailDialog(row);
+          return;
+        case "add_broker_email":
+          openBrokerEmailDialog(row);
+          return;
+        case "schedule_tour":
+          startDealPathEdit(row, { mode: "tour_scheduled" });
+          return;
+        case "complete_tour":
+          startDealPathEdit(row, { mode: "tour_completed" });
+          return;
+        case "update_loi":
+          startDealPathEdit(row, { mode: "loi_offered" });
+          return;
+        case "reject":
+          setRejectState({
+            propertyId: row.propertyId,
+            address: row.displayAddress || row.canonicalAddress || row.propertyId,
+            reasonCode: "",
+            note: "",
+          });
+          return;
+        case "move_stage":
+          setMoveStageState({
+            propertyId: row.propertyId,
+            address: row.displayAddress || row.canonicalAddress || row.propertyId,
+            targetSectionId: (() => {
+              const sectionId = sectionIdByProperty.get(row.propertyId);
+              return !sectionId || sectionId === "sourced" ? "om_requested" : sectionId;
+            })(),
+          });
+          return;
+        case "review_underwriting":
+        case "open_inputs":
+        default:
+          startDealPathEdit(row);
+      }
+    },
+    [openBrokerEmailDialog, openEmailComposer, sectionIdByProperty, startDealPathEdit]
+  );
+
+  const openStepperFor = useCallback(
+    (kind: StepperKind, propertyIds: string[]) => {
+      const seen = new Set<string>();
+      const stepperRows: StepperRow[] = [];
+      for (const propertyId of propertyIds) {
+        if (seen.has(propertyId)) continue;
+        seen.add(propertyId);
+        const row = rowById.get(propertyId);
+        if (!row) continue;
+        stepperRows.push({
+          propertyId: row.propertyId,
+          address: row.displayAddress || row.canonicalAddress || row.propertyId,
+          brokerName: row.brokerName ?? null,
+          brokerEmail: row.brokerEmail ?? null,
+        });
+      }
+      if (stepperRows.length > 0) setStepper({ kind, rows: stepperRows });
+    },
+    [rowById]
+  );
+
+  const applySummaryAction = useCallback(
+    (item: ActionSummaryItem) => {
+      switch (item.action) {
+        case "email_queue":
+          setBoardMode("email_queue");
+          return;
+        case "needs_action":
+          setBoardMode("needs_action");
+          return;
+        case "broker_stepper":
+          openStepperFor("missing_broker_email", item.propertyIds);
+          return;
+        case "followup_stepper":
+          openStepperFor("om_request_stale", item.propertyIds);
+          return;
+        case "focus":
+        default:
+          setBoardMode("board");
+          setBoardFocus({ label: item.label, propertyIds: new Set(item.propertyIds), stageId: item.stageId });
+          if (item.stageId) scrollToColumn(item.stageId);
+      }
+    },
+    [openStepperFor, scrollToColumn]
+  );
+
+  // Drag near the board's left/right edge to auto-scroll the kanban (§2B).
+  const handleBoardDragOver = useCallback(
+    (event: DragEvent<HTMLDivElement>) => {
+      if (!draggedDeal) return;
+      const node = boardScrollerRef.current;
+      if (!node) return;
+      const rect = node.getBoundingClientRect();
+      const edge = 90;
+      if (event.clientX < rect.left + edge) node.scrollLeft -= 24;
+      else if (event.clientX > rect.right - edge) node.scrollLeft += 24;
+    },
+    [draggedDeal]
   );
 
   // Keyboard triage: j/k through cards, h/l across columns, enter/e/m act on
@@ -1538,20 +1534,20 @@ function ProgressPageContent() {
       }
       await loadProgress("refresh");
       const skippedMessage = skipped > 0 ? ` ${skipped} selected without OM skipped.` : "";
-      const summary =
+      const summaryMessage =
         failures.length === 0
           ? `OM analysis updated for ${completed} deal${completed === 1 ? "" : "s"}.${skippedMessage}`
           : `OM analysis updated for ${completed} of ${selectedSavedDealsWithOm.length} eligible deals.${skippedMessage}`;
-      setNotice(summary);
+      setNotice(summaryMessage);
       if (failures.length > 0) {
-        banner.fail(summary);
+        banner.fail(summaryMessage);
         setError(
           `${failures.length} OM analysis refresh${failures.length === 1 ? "" : "es"} failed. First issue: ${
             failures[0]!.address
           } - ${failures[0]!.message}`
         );
       } else {
-        banner.succeed(summary);
+        banner.succeed(summaryMessage);
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to refresh selected OM analysis.";
@@ -1600,20 +1596,20 @@ function ProgressPageContent() {
       }
       await loadProgress("refresh");
       const skippedMessage = skipped > 0 ? ` ${skipped} selected without OM skipped.` : "";
-      const summary =
+      const summaryMessage =
         failures.length === 0
           ? `Dossiers rerun for ${completed} deal${completed === 1 ? "" : "s"}.${skippedMessage}`
           : `Dossiers rerun for ${completed} of ${selectedSavedDealsWithOm.length} eligible deals.${skippedMessage}`;
-      setNotice(summary);
+      setNotice(summaryMessage);
       if (failures.length > 0) {
-        banner.fail(summary);
+        banner.fail(summaryMessage);
         setError(
           `${failures.length} dossier rerun${failures.length === 1 ? "" : "s"} failed. First issue: ${
             failures[0]!.address
           } - ${failures[0]!.message}`
         );
       } else {
-        banner.succeed(summary);
+        banner.succeed(summaryMessage);
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to rerun selected dossiers.";
@@ -1651,14 +1647,62 @@ function ProgressPageContent() {
 
   const totalCount = flowRows.length;
 
-  const recommendationItems = recommendations.data?.items ?? [];
+  /* ── Email Queue handlers ── */
+
+  const toggleQueueSelected = useCallback((propertyId: string, selected: boolean) => {
+    setQueueSelectedIds((current) => {
+      const next = new Set(current);
+      if (selected) next.add(propertyId);
+      else next.delete(propertyId);
+      return next;
+    });
+  }, []);
+
+  const toggleQueueSelectAll = useCallback(() => {
+    setQueueSelectedIds((current) => {
+      const selectable = emailQueueItems.filter((item) => !item.snoozed).map((item) => item.propertyId);
+      const allSelected = selectable.length > 0 && selectable.every((propertyId) => current.has(propertyId));
+      return allSelected ? new Set<string>() : new Set(selectable);
+    });
+  }, [emailQueueItems]);
+
+  const handleQueueDraft = useCallback(
+    (item: EmailQueueItem) => {
+      const row = rowById.get(item.propertyId);
+      if (!row) return;
+      runBoardAction(row, item.flag.actionKind);
+    },
+    [rowById, runBoardAction]
+  );
+
+  const handleQueueOpen = useCallback(
+    (propertyId: string) => {
+      const row = rowById.get(propertyId);
+      if (row) startDealPathEdit(row);
+    },
+    [rowById, startDealPathEdit]
+  );
+
+  const handleQueueBatchDraft = useCallback(
+    (items: EmailQueueItem[]) => {
+      openStepperFor("om_request_stale", items.map((item) => item.propertyId));
+    },
+    [openStepperFor]
+  );
+
+  const handleQueueBatchBroker = useCallback(
+    (items: EmailQueueItem[]) => {
+      openStepperFor("missing_broker_email", items.map((item) => item.propertyId));
+    },
+    [openStepperFor]
+  );
 
   return (
     <div className={styles.page}>
       <PageHeader
         eyebrow="Deal movement"
         title="Deal Progress"
-        subtitle="Move every saved deal from OM request to close — same stages as the home funnel."
+        subtitle="The acquisitions command center — every deal shows its stage, owner action, and due date."
         meta={
           <>
             <div>{totalCount} deals on the board</div>
@@ -1673,23 +1717,27 @@ function ProgressPageContent() {
         }
       />
 
-      <section className={styles.nextActions} aria-label="What to do next">
+      {/* Today's Deal Actions: deterministic counts; the LLM only writes the headline. */}
+      <section className={styles.nextActions} aria-label="Today's deal actions">
         <div className={styles.nextActionsHeader}>
           <span className={styles.nextActionsIcon} aria-hidden="true">
             <Sparkles size={15} strokeWidth={2} />
           </span>
           <div className={styles.nextActionsCopy}>
-            <h2>What to do next</h2>
+            <h2>Today&rsquo;s Deal Actions</h2>
             <p>
               {recommendations.loading && !recommendations.data
                 ? "Reviewing the board…"
-                : recommendations.data?.headline ?? "Recommendations are unavailable right now."}
+                : recommendations.data?.headline ??
+                  (summaryItems.length > 0
+                    ? `${summaryItems.reduce((sum, item) => sum + item.count, 0)} actions across the pipeline need attention.`
+                    : "All caught up — no pending actions on the board.")}
             </p>
           </div>
           {recommendations.data?.source === "rules" ? (
             <span
               className={styles.nextActionsSource}
-              title="Generated by the rule engine — set OPENAI_API_KEY to enable LLM phrasing and prioritization."
+              title="Headline generated by the rule engine — set OPENAI_API_KEY to enable LLM phrasing."
             >
               rule-based
             </span>
@@ -1703,17 +1751,27 @@ function ProgressPageContent() {
             {recommendations.loading ? "Refreshing…" : "Refresh"}
           </button>
         </div>
-        {recommendationItems.length > 0 ? (
+        {summaryItems.length > 0 ? (
           <div className={styles.nextActionsItems}>
-            {recommendationItems.map((item) => (
+            {summaryItems.map((item) => (
               <button
                 key={item.id}
                 type="button"
-                className={`${styles.nextActionChip} ${boardFocus?.label === item.title ? styles.nextActionChipActive : ""}`}
-                title={item.detail ?? undefined}
-                onClick={() => applyRecommendation(item)}
+                className={`${styles.nextActionChip} ${styles[`chipSeverity_${item.severity}`]} ${
+                  boardFocus?.label === item.label ? styles.nextActionChipActive : ""
+                }`}
+                title={
+                  item.action === "email_queue"
+                    ? "Open the Email Queue"
+                    : item.action === "broker_stepper"
+                      ? "Step through and add the missing broker emails"
+                      : item.action === "followup_stepper"
+                        ? "Step through drafts and queue them"
+                        : "Focus the board on these deals"
+                }
+                onClick={() => applySummaryAction(item)}
               >
-                <strong>{item.title}</strong>
+                <strong>{item.label}</strong>
                 <span>{item.count}</span>
               </button>
             ))}
@@ -1753,7 +1811,10 @@ function ProgressPageContent() {
               tone={section.id === "tour_completed_awaiting_inputs" && count > 0 ? "warning" : "neutral"}
               title={`${section.label} — jump to column`}
               className={styles.metricCard}
-              onClick={() => scrollToColumn(section.id)}
+              onClick={() => {
+                setBoardMode("board");
+                scrollToColumn(section.id);
+              }}
             />
           );
         })}
@@ -1761,153 +1822,222 @@ function ProgressPageContent() {
 
       <section className={styles.savedFlowPanel} aria-label="Deal path by status">
         <div className={styles.savedFlowHeader}>
-          <div>
-            <h2>Deal Path by Status</h2>
+          <div className={styles.boardTabs} role="tablist" aria-label="Board views">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={boardMode === "board"}
+              className={`${styles.boardTab} ${boardMode === "board" ? styles.boardTabActive : ""}`}
+              onClick={() => setBoardMode("board")}
+            >
+              <KanbanSquare size={14} strokeWidth={2} aria-hidden="true" />
+              Board
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={boardMode === "needs_action"}
+              className={`${styles.boardTab} ${boardMode === "needs_action" ? styles.boardTabActive : ""}`}
+              onClick={() => setBoardMode("needs_action")}
+            >
+              <ListTodo size={14} strokeWidth={2} aria-hidden="true" />
+              Needs Action
+              {needsActionRows.length > 0 ? <span className={styles.boardTabCount}>{needsActionRows.length}</span> : null}
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={boardMode === "email_queue"}
+              className={`${styles.boardTab} ${boardMode === "email_queue" ? styles.boardTabActive : ""}`}
+              onClick={() => setBoardMode("email_queue")}
+            >
+              <MailWarning size={14} strokeWidth={2} aria-hidden="true" />
+              Email Queue
+              {emailQueueDueCount > 0 ? <span className={styles.boardTabCount}>{emailQueueDueCount}</span> : null}
+            </button>
+          </div>
+          <div className={styles.savedFlowHeaderRight}>
             <p>
               {filteredFlowRows.length} loaded propert{filteredFlowRows.length === 1 ? "y" : "ies"} · Updated {formatDate(summary?.updatedAt)}
             </p>
-          </div>
-          <button
-            type="button"
-            className={styles.refreshButton}
-            onClick={() => void loadProgress("refresh")}
-            disabled={loading || refreshing}
-          >
-            {refreshing ? "Refreshing..." : "Refresh"}
-          </button>
-        </div>
-        <div className={styles.bulkToolbar} aria-label="Bulk stage controls">
-          <label className={styles.bulkCheck}>
-            <input
-              type="checkbox"
-              checked={allVisibleSelected}
-              aria-checked={allVisibleSelected ? "true" : someVisibleSelected ? "mixed" : "false"}
-              disabled={filteredFlowRows.length === 0 || bulkControlsBusy}
-              onChange={toggleVisibleSavedDeals}
-            />
-            <span>{allVisibleSelected ? "Unselect visible" : "Select visible"}</span>
-          </label>
-          <strong>{selectedSavedDeals.length} selected</strong>
-          <div className={styles.bulkControls}>
-            <select
-              className={styles.bulkStageSelect}
-              aria-label="Stage for selected deals"
-              value={bulkTargetSectionId}
-              disabled={bulkControlsBusy}
-              onChange={(event) => setBulkTargetSectionId(event.target.value)}
+            <button
+              type="button"
+              className={styles.refreshButton}
+              onClick={() => void loadProgress("refresh")}
+              disabled={loading || refreshing}
             >
-              {MOVE_STAGE_OPTIONS.map((option) => (
-                <option key={option.id} value={option.id}>
-                  {option.moveLabel}
-                </option>
+              {refreshing ? "Refreshing..." : "Refresh"}
+            </button>
+          </div>
+        </div>
+
+        {boardMode === "board" ? (
+          <>
+            <div className={styles.bulkToolbar} aria-label="Bulk stage controls">
+              <label className={styles.bulkCheck}>
+                <input
+                  type="checkbox"
+                  checked={allVisibleSelected}
+                  aria-checked={allVisibleSelected ? "true" : someVisibleSelected ? "mixed" : "false"}
+                  disabled={filteredFlowRows.length === 0 || bulkControlsBusy}
+                  onChange={toggleVisibleSavedDeals}
+                />
+                <span>{allVisibleSelected ? "Unselect visible" : "Select visible"}</span>
+              </label>
+              <strong>{selectedSavedDeals.length} selected</strong>
+              <div className={styles.bulkControls}>
+                <select
+                  className={styles.bulkStageSelect}
+                  aria-label="Stage for selected deals"
+                  value={bulkTargetSectionId}
+                  disabled={bulkControlsBusy}
+                  onChange={(event) => setBulkTargetSectionId(event.target.value)}
+                >
+                  {MOVE_STAGE_OPTIONS.map((option) => (
+                    <option key={option.id} value={option.id}>
+                      {option.moveLabel}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className={styles.bulkMoveButton}
+                  disabled={selectedSavedDeals.length === 0 || bulkControlsBusy || bulkTargetGroup == null}
+                  onClick={moveSelectedToBulkTarget}
+                >
+                  {bulkMoveBusy ? "Moving..." : "Move selected"}
+                </button>
+                <button
+                  type="button"
+                  className={styles.bulkWorkflowButton}
+                  title={
+                    selectedSavedDealsWithOm.length === 0
+                      ? "Select at least one saved deal with an uploaded OM."
+                      : "Refresh and promote OM extraction for selected saved deals with uploaded OMs."
+                  }
+                  disabled={selectedSavedDealsWithOm.length === 0 || bulkControlsBusy}
+                  onClick={() => void refreshSelectedOmAnalysis()}
+                >
+                  {bulkWorkflowBusy === OM_ANALYSIS_BULK_ID ? "Updating OM..." : "Update OM analysis"}
+                </button>
+                <button
+                  type="button"
+                  className={styles.bulkWorkflowButton}
+                  title={
+                    selectedSavedDealsWithOm.length === 0
+                      ? "Select at least one saved deal with an uploaded OM."
+                      : "Regenerate deal dossier PDFs and Excel workbooks for selected saved deals with uploaded OMs."
+                  }
+                  disabled={selectedSavedDealsWithOm.length === 0 || bulkControlsBusy}
+                  onClick={() => void rerunSelectedDossiers()}
+                >
+                  {bulkWorkflowBusy === DOSSIER_BULK_ID ? "Rerunning..." : "Rerun dossiers"}
+                </button>
+                <button
+                  type="button"
+                  className={styles.bulkClearButton}
+                  disabled={selectedSavedDeals.length === 0 || bulkControlsBusy}
+                  onClick={() => setSelectedDealIds(new Set())}
+                >
+                  Clear
+                </button>
+              </div>
+            </div>
+            <div
+              ref={boardScrollerRef}
+              className={styles.boardScroller}
+              onDragOver={handleBoardDragOver}
+            >
+              {savedStatusSections.map((section) => (
+                <StatusColumn
+                  key={section.id}
+                  flash={flashColumnId === section.id}
+                  section={section}
+                  loading={loading}
+                  movingPropertyId={stageMoveBusy}
+                  selectedDealIds={selectedDealIds}
+                  bulkMoving={bulkControlsBusy}
+                  dragOver={dragOverSectionId === section.id}
+                  flagsByProperty={effectiveFlagsByProperty}
+                  onToggleSelected={toggleSavedDealSelected}
+                  onDragStartDeal={setDraggedDeal}
+                  onDragEndDeal={() => {
+                    setDraggedDeal(null);
+                    setDragOverSectionId(null);
+                  }}
+                  onDragOverSection={(event) => {
+                    if (!section.targetStatus || draggedDeal == null) return;
+                    event.preventDefault();
+                    setDragOverSectionId(section.id);
+                  }}
+                  onDropOnSection={() => dropSavedDeal(section)}
+                  onOpenDrawer={startDealPathEdit}
+                  onRunAction={runBoardAction}
+                  onEmailBroker={(row, intent) => void openEmailComposer(row, intent)}
+                  onAddBrokerEmail={openBrokerEmailDialog}
+                  onStartReject={startReject}
+                  onMoveStage={(row) =>
+                    setMoveStageState({
+                      propertyId: row.propertyId,
+                      address: row.displayAddress || row.canonicalAddress || row.propertyId,
+                      targetSectionId: section.id === "sourced" ? "om_requested" : section.id,
+                    })
+                  }
+                  focusedCardId={focusedCardId}
+                />
               ))}
-            </select>
-            <button
-              type="button"
-              className={styles.bulkMoveButton}
-              disabled={selectedSavedDeals.length === 0 || bulkControlsBusy || bulkTargetGroup == null}
-              onClick={moveSelectedToBulkTarget}
-            >
-              {bulkMoveBusy ? "Moving..." : "Move selected"}
-            </button>
-            <button
-              type="button"
-              className={styles.bulkWorkflowButton}
-              title={
-                selectedSavedDealsWithOm.length === 0
-                  ? "Select at least one saved deal with an uploaded OM."
-                  : "Refresh and promote OM extraction for selected saved deals with uploaded OMs."
-              }
-              disabled={selectedSavedDealsWithOm.length === 0 || bulkControlsBusy}
-              onClick={() => void refreshSelectedOmAnalysis()}
-            >
-              {bulkWorkflowBusy === OM_ANALYSIS_BULK_ID ? "Updating OM..." : "Update OM analysis"}
-            </button>
-            <button
-              type="button"
-              className={styles.bulkWorkflowButton}
-              title={
-                selectedSavedDealsWithOm.length === 0
-                  ? "Select at least one saved deal with an uploaded OM."
-                  : "Regenerate deal dossier PDFs and Excel workbooks for selected saved deals with uploaded OMs."
-              }
-              disabled={selectedSavedDealsWithOm.length === 0 || bulkControlsBusy}
-              onClick={() => void rerunSelectedDossiers()}
-            >
-              {bulkWorkflowBusy === DOSSIER_BULK_ID ? "Rerunning..." : "Rerun dossiers"}
-            </button>
-            <button
-              type="button"
-              className={styles.bulkClearButton}
-              disabled={selectedSavedDeals.length === 0 || bulkControlsBusy}
-              onClick={() => setSelectedDealIds(new Set())}
-            >
-              Clear
-            </button>
-          </div>
-        </div>
-        <div className={styles.flowSections}>
-          {savedStatusSections.map((section, sectionIndex) => (
-            <SavedDealMiniSection
-              key={section.id}
-              leadingArrow={sectionIndex > 0}
-              flash={flashColumnId === section.id}
-              section={section}
-              loading={loading}
-              enableMoves
-              movingPropertyId={stageMoveBusy}
-              selectedDealIds={selectedDealIds}
-              bulkMoving={bulkControlsBusy}
-              dragOver={dragOverSectionId === section.id}
-              onToggleSelected={toggleSavedDealSelected}
-              onDragStartDeal={setDraggedDeal}
-              onDragEndDeal={() => {
-                setDraggedDeal(null);
-                setDragOverSectionId(null);
-              }}
-              onDragOverSection={(event) => {
-                if (!section.targetStatus || draggedDeal == null) return;
-                event.preventDefault();
-                setDragOverSectionId(section.id);
-              }}
-              onDropOnSection={() => dropSavedDeal(section)}
-              editingPropertyId={editingDealPathId}
-              onStartDealPathEdit={startDealPathEdit}
-              onCancelDealPathEdit={closeDealPathEdit}
-              onStartReject={startReject}
-              onEmailBroker={(row, intent) => void openEmailComposer(row, intent)}
-              onAddBrokerEmail={openBrokerEmailDialog}
-              onMoveStage={(row) =>
-                setMoveStageState({
-                  propertyId: row.propertyId,
-                  address: row.displayAddress || row.canonicalAddress || row.propertyId,
-                  targetSectionId: section.id === "sourced" ? "om_requested" : section.id,
-                })
-              }
-              focusedCardId={focusedCardId}
-            />
-          ))}
-        </div>
+            </div>
+          </>
+        ) : boardMode === "needs_action" ? (
+          <NeedsActionPanel
+            rows={needsActionRows}
+            onOpen={(row) => handleQueueOpen(row.propertyId)}
+            onAction={(row) => {
+              const dealRow = rowById.get(row.propertyId);
+              if (dealRow) runBoardAction(dealRow, row.flag.actionKind);
+            }}
+          />
+        ) : (
+          <EmailQueuePanel
+            items={visibleEmailQueueItems}
+            snoozedCount={emailQueueItems.length - emailQueueDueCount}
+            showSnoozed={showSnoozed}
+            selectedIds={queueSelectedIds}
+            busy={bulkControlsBusy}
+            onToggleShowSnoozed={() => setShowSnoozed((current) => !current)}
+            onToggleSelected={toggleQueueSelected}
+            onToggleAll={toggleQueueSelectAll}
+            onDraft={handleQueueDraft}
+            onAddBroker={(item) => {
+              const row = rowById.get(item.propertyId);
+              if (row) openBrokerEmailDialog(row);
+            }}
+            onSnooze={(item) => setSnooze(item.propertyId, 7)}
+            onUnsnooze={(propertyId) => setSnooze(propertyId, null)}
+            onOpen={(item) => handleQueueOpen(item.propertyId)}
+            onBatchDraft={handleQueueBatchDraft}
+            onBatchBroker={handleQueueBatchBroker}
+          />
+        )}
       </section>
 
       {error ? <div className={styles.error}>{error}</div> : null}
 
-      {rejectionReasons.length > 0 ? (
-        <section className={styles.reasonStrip} aria-label="Rejection reason counts">
-          <strong className={styles.reasonStripLabel}>Rejected properties:</strong>
-          {rejectionReasons.slice(0, 8).map((reason) => (
-            <span key={reason.reasonCode || "unknown"}>
-              {labelFromKey(reason.reasonCode)} <strong>{reason.count ?? 0}</strong>
-            </span>
-          ))}
-        </section>
-      ) : null}
+      <RejectedPanel
+        reasons={rejectionReasons}
+        onRestored={(address) => {
+          setNotice(`${address} restored to the board.`);
+          void loadProgress("refresh");
+        }}
+      />
 
       {editingDealPathRow ? (
-        <DealPathModal
+        <DealWizardDrawer
           row={editingDealPathRow}
+          sectionId={sectionIdByProperty.get(editingDealPathRow.propertyId) ?? "sourced"}
           form={dealPathForms[editingDealPathRow.propertyId] ?? dealPathFormFromState(editingDealPathRow.dealPath)}
           promptMode={dealPathPromptMode}
+          flags={effectiveFlagsByProperty.get(editingDealPathRow.propertyId) ?? []}
           loiFile={loiUploadFiles[editingDealPathRow.propertyId] ?? null}
           saving={dealPathSavingId === editingDealPathRow.propertyId}
           onUpdate={updateDealPathField}
@@ -1918,7 +2048,21 @@ function ProgressPageContent() {
             }))
           }
           onCancel={closeDealPathEdit}
-          onSave={saveDealPathForRow}
+          onSave={(event) => void saveDealPathForRow(editingDealPathRow, event)}
+          onFlagAction={(flag) => runBoardAction(editingDealPathRow, flag.actionKind)}
+          onEmailBroker={() => void openEmailComposer(editingDealPathRow, "email")}
+          onAddBrokerEmail={() => openBrokerEmailDialog(editingDealPathRow)}
+          onStartReject={() => startReject(editingDealPathRow)}
+          onMoveStage={() =>
+            setMoveStageState({
+              propertyId: editingDealPathRow.propertyId,
+              address: editingDealPathRow.displayAddress || editingDealPathRow.canonicalAddress || editingDealPathRow.propertyId,
+              targetSectionId: (() => {
+                const sectionId = sectionIdByProperty.get(editingDealPathRow.propertyId);
+                return !sectionId || sectionId === "sourced" ? "om_requested" : sectionId;
+              })(),
+            })
+          }
         />
       ) : null}
 
@@ -2018,6 +2162,7 @@ function ProgressPageContent() {
           onClose={(didWork) => {
             setStepper(null);
             if (didWork) {
+              setQueueSelectedIds(new Set());
               void loadProgress("refresh");
               void loadRecommendations(true);
             }
@@ -2034,7 +2179,7 @@ function ProgressPageContent() {
         <dl className={styles.shortcutList}>
           <div><dt>j / k</dt><dd>Next / previous card</dd></div>
           <div><dt>h / l</dt><dd>Previous / next column</dd></div>
-          <div><dt>Enter</dt><dd>Open deal inputs</dd></div>
+          <div><dt>Enter</dt><dd>Open deal workspace</dd></div>
           <div><dt>e</dt><dd>Email broker (or add email)</dd></div>
           <div><dt>m</dt><dd>Move to stage…</dd></div>
           <div><dt>Esc</dt><dd>Clear focus / close</dd></div>
@@ -2086,237 +2231,6 @@ function ProgressPageContent() {
   );
 }
 
-function DealPathModal({
-  row,
-  form,
-  promptMode,
-  loiFile,
-  saving,
-  onUpdate,
-  onLoiFileChange,
-  onCancel,
-  onSave,
-}: {
-  row: DealFlowRow;
-  form: DealPathFormState;
-  promptMode: DealPathPromptMode;
-  loiFile?: File | null;
-  saving: boolean;
-  onUpdate: <K extends keyof DealPathFormState>(propertyId: string, field: K, value: DealPathFormState[K]) => void;
-  onLoiFileChange: (file: File | null) => void;
-  onCancel?: () => void;
-  onSave: (row: DealFlowRow, event: FormEvent<HTMLFormElement>) => void;
-}) {
-  const isTourScheduledPrompt = promptMode === "tour_scheduled";
-  const isTourCompletedPrompt = promptMode === "tour_completed";
-  const isLoiPrompt = promptMode === "loi_offered";
-  const showGeneralTourFields = promptMode === "general";
-  const title =
-    isTourScheduledPrompt ? "Schedule tour" :
-    isTourCompletedPrompt ? "Complete tour" :
-    isLoiPrompt ? "LOI offered" :
-    "Deal path";
-  const submitLabel =
-    saving ? "Saving..." :
-    form.postTourDecision === "reject" ? "Save rejection" :
-    isTourScheduledPrompt ? "Save tour date" :
-    isTourCompletedPrompt ? "Save tour notes" :
-    isLoiPrompt ? "Save LOI details" :
-    "Save deal path";
-  return (
-    <div className={styles.modalOverlay} role="presentation" onMouseDown={onCancel}>
-      <form
-        className={styles.dealPathModal}
-        onSubmit={(event) => onSave(row, event)}
-        onMouseDown={(event) => event.stopPropagation()}
-      >
-        <div className={styles.modalHeader}>
-          <div>
-            <span className={styles.modalKicker}>{title}</span>
-            <h2>{row.displayAddress || row.canonicalAddress || row.propertyId}</h2>
-          </div>
-          <button type="button" className={styles.closeButton} onClick={onCancel} aria-label="Close deal path modal">
-            x
-          </button>
-        </div>
-        <div className={styles.dealPathModalGrid}>
-          {isTourScheduledPrompt || showGeneralTourFields ? (
-          <label>
-            <span>Tour date</span>
-            <input
-              type="date"
-              value={form.tourScheduledAt}
-              required={isTourScheduledPrompt}
-              onChange={(event) => onUpdate(row.propertyId, "tourScheduledAt", event.target.value)}
-            />
-          </label>
-          ) : null}
-          {showGeneralTourFields ? (
-          <label>
-            <span>Tour broker</span>
-            <input
-              value={form.tourBrokerName}
-              onChange={(event) => onUpdate(row.propertyId, "tourBrokerName", event.target.value)}
-              placeholder="Broker or agent name"
-            />
-          </label>
-          ) : null}
-          {isTourCompletedPrompt || showGeneralTourFields ? (
-          <label>
-            <span>Tour completed date</span>
-            <input
-              type="date"
-              value={form.tourCompletedAt}
-              required={isTourCompletedPrompt}
-              onChange={(event) => onUpdate(row.propertyId, "tourCompletedAt", event.target.value)}
-            />
-          </label>
-          ) : null}
-          {isTourCompletedPrompt || showGeneralTourFields ? (
-          <label>
-            <span>Post-tour decision</span>
-            <select
-              value={form.postTourDecision}
-              onChange={(event) => onUpdate(row.propertyId, "postTourDecision", event.target.value as UiV2DealPathDecision)}
-            >
-              <option value="pending">Pending inputs</option>
-              <option value="move_forward">Move forward with offer</option>
-              <option value="need_more_info">Need more information</option>
-              <option value="reject">Reject after tour</option>
-            </select>
-          </label>
-          ) : null}
-          {isLoiPrompt || isTourCompletedPrompt || showGeneralTourFields ? (
-          <label>
-            <span>Target price</span>
-            <input
-              inputMode="numeric"
-              value={form.targetPrice}
-              onChange={(event) => onUpdate(row.propertyId, "targetPrice", event.target.value)}
-              placeholder="Target pricing"
-            />
-          </label>
-          ) : null}
-          {isLoiPrompt || isTourCompletedPrompt || showGeneralTourFields ? (
-          <label>
-            <span>Offer amount</span>
-            <input
-              inputMode="numeric"
-              value={form.offerAmount}
-              onChange={(event) => onUpdate(row.propertyId, "offerAmount", event.target.value)}
-              placeholder="LOI offer"
-            />
-          </label>
-          ) : null}
-          {isTourCompletedPrompt || showGeneralTourFields ? (
-          <label className={styles.dealPathWideField}>
-            <span>Tour notes</span>
-            <textarea
-              value={form.tourNotes}
-              onChange={(event) => onUpdate(row.propertyId, "tourNotes", event.target.value)}
-              placeholder="Tour takeaways, condition, broker comments, follow-up questions"
-            />
-          </label>
-          ) : null}
-          {isLoiPrompt ? (
-            <>
-              <label>
-                <span>LOI recipient / email</span>
-                <input
-                  value={form.loiRecipientEmail}
-                  onChange={(event) => onUpdate(row.propertyId, "loiRecipientEmail", event.target.value)}
-                  placeholder="Broker, seller, or recipient email"
-                />
-              </label>
-              <div>
-                <span style={{ display: "block", marginBottom: "0.35rem" }}>Upload LOI PDF</span>
-                <FileDropzone
-                  files={loiFile ? [loiFile] : []}
-                  onChange={(files) => onLoiFileChange(files[0] ?? null)}
-                  accept=".pdf,.doc,.docx"
-                  maxFiles={1}
-                />
-              </div>
-              <GenerateLoiButton
-                propertyId={row.propertyId}
-                offerAmount={form.offerAmount}
-                targetPrice={form.targetPrice}
-                contingenciesText={form.loiContingenciesText}
-                notes={form.offerNotes}
-              />
-            </>
-          ) : null}
-          {isLoiPrompt || isTourCompletedPrompt || showGeneralTourFields ? (
-          <label className={styles.dealPathWideField}>
-            <span>{isLoiPrompt ? "LOI offer notes" : "Offer notes"}</span>
-            <textarea
-              value={form.offerNotes}
-              onChange={(event) => onUpdate(row.propertyId, "offerNotes", event.target.value)}
-              placeholder="Rationale for offer, pricing read, partner feedback"
-            />
-          </label>
-          ) : null}
-          {isLoiPrompt || showGeneralTourFields ? (
-          <label className={styles.dealPathWideField}>
-            <span>LOI contingencies</span>
-            <textarea
-              value={form.loiContingenciesText}
-              onChange={(event) => onUpdate(row.propertyId, "loiContingenciesText", event.target.value)}
-              placeholder="Financing contingency, diligence period, rent roll verification"
-            />
-          </label>
-          ) : null}
-          {isLoiPrompt || showGeneralTourFields ? (
-          <label className={styles.dealPathWideField}>
-            <span>LOI contingency notes</span>
-            <textarea
-              value={form.loiContingencyNotes}
-              onChange={(event) => onUpdate(row.propertyId, "loiContingencyNotes", event.target.value)}
-              placeholder="Timing, diligence needs, third-party reports, deposit terms"
-            />
-          </label>
-          ) : null}
-          {form.postTourDecision === "reject" ? (
-            <>
-              <label>
-                <span>Reject reason</span>
-                <select
-                  value={form.rejectionReasonCode}
-                  onChange={(event) => onUpdate(row.propertyId, "rejectionReasonCode", event.target.value as UiV2RejectionReasonCode | "")}
-                  required
-                >
-                  <option value="">Choose reason</option>
-                  {UI_V2_REJECTION_REASON_OPTIONS.map((option) => (
-                    <option key={option.code} value={option.code}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className={styles.dealPathWideField}>
-                <span>Reject notes</span>
-                <textarea
-                  value={form.rejectionNotes}
-                  onChange={(event) => onUpdate(row.propertyId, "rejectionNotes", event.target.value)}
-                  placeholder="Why we are passing after the tour"
-                />
-              </label>
-            </>
-          ) : null}
-        </div>
-        <div className={styles.modalActions}>
-          <button type="button" className={styles.bulkClearButton} onClick={onCancel} disabled={saving}>
-            Cancel
-          </button>
-          <button type="submit" className={styles.bulkMoveButton} disabled={saving}>
-            {submitLabel}
-          </button>
-        </div>
-      </form>
-    </div>
-  );
-}
-
 function RejectDealModal({
   state,
   saving,
@@ -2332,7 +2246,14 @@ function RejectDealModal({
 }) {
   return (
     <div className={styles.modalOverlay} role="presentation" onMouseDown={onCancel}>
-      <form className={styles.rejectModal} onSubmit={onSubmit} onMouseDown={(event) => event.stopPropagation()}>
+      <form
+        className={styles.rejectModal}
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Reject ${state.address}`}
+        onSubmit={onSubmit}
+        onMouseDown={(event) => event.stopPropagation()}
+      >
         <div className={styles.modalHeader}>
           <div>
             <span className={styles.modalKicker}>Reject property</span>
@@ -2404,372 +2325,332 @@ function cardMetricsForRow(row: DealFlowRow): CardMetric[] {
   ].filter((metric): metric is CardMetric => metric != null);
 }
 
-type PrimaryCardAction = { label: string; run: () => void };
-
-function primaryActionForCard(
-  sectionId: string,
-  row: DealFlowRow,
-  handlers: {
-    onStartDealPathEdit?: (row: DealFlowRow, options?: { mode?: DealPathPromptMode }) => void;
-    onEmailBroker?: (row: DealFlowRow, intent: "email" | "request_om") => void;
-    onAddBrokerEmail?: (row: DealFlowRow) => void;
-  }
-): PrimaryCardAction {
-  if (sectionId === "sourced") {
-    return row.brokerEmail
-      ? { label: "Request OM", run: () => handlers.onEmailBroker?.(row, "request_om") }
-      : { label: "Add broker email", run: () => handlers.onAddBrokerEmail?.(row) };
-  }
-  if (sectionId === "om_requested") {
-    return row.brokerEmail
-      ? { label: "Follow up", run: () => handlers.onEmailBroker?.(row, "email") }
-      : { label: "Add broker email", run: () => handlers.onAddBrokerEmail?.(row) };
-  }
-  if (sectionId === "tour_requested") {
-    return { label: "Confirm tour", run: () => handlers.onStartDealPathEdit?.(row, { mode: "tour_scheduled" }) };
-  }
-  if (sectionId === "tour_scheduled") {
-    return { label: "Mark toured", run: () => handlers.onStartDealPathEdit?.(row, { mode: "tour_completed" }) };
-  }
-  if (sectionId === "tour_completed_awaiting_inputs") {
-    return { label: "Add outcomes", run: () => handlers.onStartDealPathEdit?.(row, { mode: "tour_completed" }) };
-  }
-  if (sectionId === "offer_review") {
-    return { label: "Update LOI", run: () => handlers.onStartDealPathEdit?.(row, { mode: "loi_offered" }) };
-  }
-  return { label: "Update inputs", run: () => handlers.onStartDealPathEdit?.(row) };
-}
-
-function SavedDealMiniSection({
+function StatusColumn({
   section,
   loading,
-  compact = false,
-  enableMoves = false,
   movingPropertyId = null,
   selectedDealIds,
   bulkMoving = false,
   dragOver = false,
+  flagsByProperty,
   onToggleSelected,
   onDragStartDeal,
   onDragEndDeal,
   onDragOverSection,
   onDropOnSection,
-  editingPropertyId = null,
-  onStartDealPathEdit,
-  onCancelDealPathEdit,
-  onStartReject,
+  onOpenDrawer,
+  onRunAction,
   onEmailBroker,
   onAddBrokerEmail,
+  onStartReject,
   onMoveStage,
   focusedCardId = null,
-  leadingArrow = false,
   flash = false,
 }: {
   section: SavedDealSection;
   loading: boolean;
-  compact?: boolean;
-  enableMoves?: boolean;
   movingPropertyId?: string | null;
   selectedDealIds?: Set<string>;
   bulkMoving?: boolean;
   dragOver?: boolean;
+  flagsByProperty: ReadonlyMap<string, ActionFlag[]>;
   onToggleSelected?: (propertyId: string, selected: boolean) => void;
   onDragStartDeal?: (row: DealFlowRow) => void;
   onDragEndDeal?: () => void;
   onDragOverSection?: (event: DragEvent<HTMLElement>) => void;
   onDropOnSection?: () => void;
-  editingPropertyId?: string | null;
-  onStartDealPathEdit?: (row: DealFlowRow, options?: { mode?: DealPathPromptMode }) => void;
-  onCancelDealPathEdit?: () => void;
-  onStartReject?: (row: DealFlowRow) => void;
+  onOpenDrawer?: (row: DealFlowRow, options?: { mode?: DealPathPromptMode }) => void;
+  onRunAction?: (row: DealFlowRow, actionKind: FlagActionKind) => void;
   onEmailBroker?: (row: DealFlowRow, intent: "email" | "request_om") => void;
   onAddBrokerEmail?: (row: DealFlowRow) => void;
+  onStartReject?: (row: DealFlowRow) => void;
   onMoveStage?: (row: DealFlowRow) => void;
   focusedCardId?: string | null;
-  leadingArrow?: boolean;
   flash?: boolean;
 }) {
-  const visibleRows = compact ? section.rows.slice(0, 5) : section.rows;
-  const isEmpty = !loading && visibleRows.length === 0;
+  const isEmpty = !loading && section.rows.length === 0;
+  const stats = columnStats(section.rows, flagsByProperty);
+  const statsLine = [
+    stats.askTotal > 0 ? formatCurrency(stats.askTotal) : null,
+    stats.actionCount > 0 ? `${stats.actionCount} action${stats.actionCount === 1 ? "" : "s"}` : null,
+    stats.staleCount > 0 ? `${stats.staleCount} stale` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
   return (
-    <>
-    {leadingArrow ? (
-      <span className={styles.flowArrow} aria-hidden="true">
-        <ChevronRight size={17} strokeWidth={2.2} />
-      </span>
-    ) : null}
     <section
       id={`board-column-${section.id}`}
-      className={`${styles.miniSection} ${dragOver ? styles.miniSectionDropTarget : ""} ${isEmpty ? styles.miniSectionEmpty : ""} ${flash ? styles.miniSectionFlash : ""}`}
-      onDragOver={enableMoves ? onDragOverSection : undefined}
-      onDrop={
-        enableMoves
-          ? (event) => {
-              event.preventDefault();
-              onDropOnSection?.();
-            }
-          : undefined
-      }
+      className={`${styles.statusColumn} ${dragOver ? styles.statusColumnDropTarget : ""} ${
+        isEmpty ? styles.statusColumnEmpty : ""
+      } ${flash ? styles.statusColumnFlash : ""}`}
+      onDragOver={onDragOverSection}
+      onDrop={(event) => {
+        event.preventDefault();
+        onDropOnSection?.();
+      }}
     >
-      <div className={styles.miniSectionHeader} title={section.description}>
-        <h3>{section.label}</h3>
-        <span>{section.rows.length}</span>
-        {(() => {
-          const askTotal = section.rows.reduce((sum, row) => sum + (row.price ?? 0), 0);
-          return askTotal > 0 ? <small className={styles.miniSectionTotal}>{formatCurrency(askTotal)}</small> : null;
-        })()}
-      </div>
-      {loading ? (
-        <div className={styles.emptyState}>Loading deal path...</div>
-      ) : visibleRows.length === 0 ? (
-        <div className={styles.emptyState}>Empty</div>
-      ) : (
-        <div className={styles.miniRows}>
-          {visibleRows.map((row) => {
-            const selected = selectedDealIds?.has(row.propertyId) ?? false;
-            const busy = bulkMoving || movingPropertyId === row.propertyId;
-            const editing = editingPropertyId === row.propertyId;
-            const tourNeedsInputs = needsTourInputs(row);
-            const metrics = cardMetricsForRow(row).slice(0, 4);
-            const address = row.displayAddress || row.canonicalAddress || row.propertyId;
-            const locationLine = [row.neighborhood ? labelFromKey(row.neighborhood) : null, formatUnitLabel(row.units)]
-              .filter(Boolean)
-              .join(" · ");
-            const primaryAction = primaryActionForCard(section.id, row, {
-              onStartDealPathEdit,
-              onEmailBroker,
-              onAddBrokerEmail,
-            });
-            const keyboardFocused = focusedCardId === row.propertyId;
-            return (
-              <article
-                key={`${section.id}-${row.propertyId}`}
-                ref={keyboardFocused ? (node) => node?.scrollIntoView({ block: "nearest", inline: "nearest" }) : undefined}
-                className={`${styles.miniRow} ${selected ? styles.miniRowSelected : ""} ${busy ? styles.miniRowBusy : ""} ${
-                  tourNeedsInputs ? styles.miniRowNeedsInput : ""
-                } ${keyboardFocused ? styles.miniRowFocused : ""}`}
-                draggable={enableMoves && !compact && !busy}
-                aria-selected={selected}
-                onDragStart={
-                  enableMoves
-                    ? (event) => {
-                        event.dataTransfer.effectAllowed = "move";
-                        event.dataTransfer.setData("text/plain", row.propertyId);
-                        onDragStartDeal?.(row);
-                      }
-                    : undefined
-                }
-                onDragEnd={enableMoves ? onDragEndDeal : undefined}
-              >
-                <div className={styles.miniRowMain}>
-                  {enableMoves ? (
-                    <input
-                      type="checkbox"
-                      className={styles.miniSelect}
-                      aria-label={`Select ${address}`}
-                      checked={selected}
-                      disabled={busy}
-                      onChange={(event) => onToggleSelected?.(row.propertyId, event.target.checked)}
-                      onClick={(event) => event.stopPropagation()}
-                    />
-                  ) : null}
-                  <PropertyThumb src={row.firstImageUrl} alt={address} size="lg" className={styles.miniThumb} />
-                  <button
-                    type="button"
-                    className={styles.miniRowLink}
-                    onClick={() => onStartDealPathEdit?.(row)}
-                    title={address}
-                  >
-                    <strong>{streetAddressOnly(address)}</strong>
-                    <span>{locationLine || (row.source ? labelFromKey(row.source) : "No source")}</span>
-                  </button>
-                  <div className={styles.miniMeta}>
-                    <small className={scoreClass(row.dealScore)}>
-                      {row.dealScore == null ? "—" : Math.round(row.dealScore)}
-                    </small>
-                    <AgingChip since={row.stageEnteredAt} className={styles.agingChip} />
-                    {!row.brokerEmail ? (
-                      <button
-                        type="button"
-                        className={styles.brokerMissing}
-                        title="No broker email on file — click to add"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          onAddBrokerEmail?.(row);
-                        }}
-                      >
-                        <MailPlus size={12} strokeWidth={2} aria-hidden="true" />
-                        <span>No broker email</span>
-                      </button>
-                    ) : null}
-                  </div>
-                </div>
-                {tourNeedsInputs ? <div className={styles.tourInputNotice}>Tour completed. Add notes, decision, and offer inputs.</div> : null}
-                {metrics.length > 0 ? (
-                  <div className={styles.cardMetrics} aria-label="Property metrics">
-                    {metrics.map((metric) => (
-                      <span key={metric.label} className={metric.tone === "danger" ? styles.metricDanger : undefined}>
-                        <small>{metric.label}</small>
-                        <strong>{metric.value}</strong>
-                      </span>
-                    ))}
-                  </div>
-                ) : null}
-                <div className={styles.workflowBadges}>
-                  <span className={row.hasOm ? styles.workflowBadgeReady : styles.workflowBadgeMuted}>OM</span>
-                  <span className={row.hasComps ? styles.workflowBadgeReady : styles.workflowBadgeMuted}>Comps</span>
-                  <span className={row.hasDossier ? styles.workflowBadgeReady : styles.workflowBadgeMuted}>Dossier</span>
-                  {(row.openActionItemCount ?? 0) > 0 ? <span className={styles.workflowBadgeAction}>{row.openActionItemCount} item{row.openActionItemCount === 1 ? "" : "s"}</span> : null}
-                </div>
-                {!compact ? (
-                  <div className={styles.cardActions}>
-                    <button
-                      type="button"
-                      className={`${styles.cardActionButton} ${editing ? styles.cardActionActive : ""}`}
-                      disabled={busy}
-                      title={primaryAction.label}
-                      onClick={() => (editing ? onCancelDealPathEdit?.() : primaryAction.run())}
-                    >
-                      {primaryAction.label}
-                    </button>
-                    <PromptMenu
-                      align="end"
-                      heading={address}
-                      trigger={(triggerProps) => (
-                        <button
-                          {...triggerProps}
-                          type="button"
-                          className={styles.cardMenuButton}
-                          disabled={busy}
-                          title="More actions"
-                        >
-                          <MoreHorizontal size={15} strokeWidth={2} aria-hidden="true" />
-                        </button>
-                      )}
-                      items={[
-                        row.brokerEmail
-                          ? {
-                              label: "Email broker",
-                              hint: row.brokerEmail,
-                              icon: Mail,
-                              onSelect: () => onEmailBroker?.(row, "email"),
-                            }
-                          : {
-                              label: "Add broker email",
-                              icon: MailPlus,
-                              onSelect: () => onAddBrokerEmail?.(row),
-                            },
-                        ...(section.id === "sourced" && row.brokerEmail
-                          ? [
-                              {
-                                label: "Request OM",
-                                hint: "Queues the email and moves to OM Requested",
-                                icon: CalendarCheck,
-                                onSelect: () => onEmailBroker?.(row, "request_om"),
-                              },
-                            ]
-                          : []),
-                        {
-                          label: "Move to stage…",
-                          icon: ArrowRightLeft,
-                          onSelect: () => onMoveStage?.(row),
-                        },
-                        {
-                          label: "Update inputs",
-                          hint: "Tour dates, offers, LOI",
-                          icon: PenLine,
-                          onSelect: () => onStartDealPathEdit?.(row),
-                        },
-                        {
-                          label: "Reject deal",
-                          icon: XCircle,
-                          tone: "danger" as const,
-                          onSelect: () => onStartReject?.(row),
-                        },
-                      ]}
-                    />
-                  </div>
-                ) : null}
-              </article>
-            );
-          })}
-          {compact && section.rows.length > visibleRows.length ? (
-            <div className={styles.moreRows}>+{section.rows.length - visibleRows.length} more</div>
-          ) : null}
+      <div className={styles.columnHeader} title={section.description}>
+        <div className={styles.columnTitleRow}>
+          <h3>{section.label}</h3>
+          <span className={styles.columnCount}>{section.rows.length}</span>
         </div>
-      )}
+        {statsLine ? <p className={styles.columnStats}>{statsLine}</p> : null}
+      </div>
+      <div className={styles.columnBody}>
+        {loading ? (
+          <div className={styles.emptyState}>Loading deal path...</div>
+        ) : section.rows.length === 0 ? (
+          <div className={styles.emptyState}>Empty</div>
+        ) : (
+          section.rows.map((row) => (
+            <PropertyMiniCard
+              key={`${section.id}-${row.propertyId}`}
+              row={row}
+              sectionId={section.id}
+              flags={flagsByProperty.get(row.propertyId) ?? []}
+              selected={selectedDealIds?.has(row.propertyId) ?? false}
+              busy={bulkMoving || movingPropertyId === row.propertyId}
+              keyboardFocused={focusedCardId === row.propertyId}
+              onToggleSelected={onToggleSelected}
+              onDragStartDeal={onDragStartDeal}
+              onDragEndDeal={onDragEndDeal}
+              onOpenDrawer={onOpenDrawer}
+              onRunAction={onRunAction}
+              onEmailBroker={onEmailBroker}
+              onAddBrokerEmail={onAddBrokerEmail}
+              onStartReject={onStartReject}
+              onMoveStage={onMoveStage}
+            />
+          ))
+        )}
+      </div>
     </section>
-    </>
   );
 }
 
-function GenerateLoiButton({ propertyId, offerAmount, targetPrice, contingenciesText, notes }: {
-  propertyId: string;
-  offerAmount: string;
-  targetPrice: string;
-  contingenciesText: string;
-  notes: string;
+function PropertyMiniCard({
+  row,
+  sectionId,
+  flags,
+  selected,
+  busy,
+  keyboardFocused,
+  onToggleSelected,
+  onDragStartDeal,
+  onDragEndDeal,
+  onOpenDrawer,
+  onRunAction,
+  onEmailBroker,
+  onAddBrokerEmail,
+  onStartReject,
+  onMoveStage,
+}: {
+  row: DealFlowRow;
+  sectionId: string;
+  flags: ActionFlag[];
+  selected: boolean;
+  busy: boolean;
+  keyboardFocused: boolean;
+  onToggleSelected?: (propertyId: string, selected: boolean) => void;
+  onDragStartDeal?: (row: DealFlowRow) => void;
+  onDragEndDeal?: () => void;
+  onOpenDrawer?: (row: DealFlowRow, options?: { mode?: DealPathPromptMode }) => void;
+  onRunAction?: (row: DealFlowRow, actionKind: FlagActionKind) => void;
+  onEmailBroker?: (row: DealFlowRow, intent: "email" | "request_om") => void;
+  onAddBrokerEmail?: (row: DealFlowRow) => void;
+  onStartReject?: (row: DealFlowRow) => void;
+  onMoveStage?: (row: DealFlowRow) => void;
 }) {
-  const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState<{ fileName: string; downloadPath: string } | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const effectiveOffer = Number((offerAmount || targetPrice).replace(/[$,\s]/g, ""));
-  const canGenerate = Number.isFinite(effectiveOffer) && effectiveOffer > 0;
+  const address = row.displayAddress || row.canonicalAddress || row.propertyId;
+  const metrics = cardMetricsForRow(row).slice(0, 4);
+  const topFlag = flags[0] ?? null;
+  const cta: PrimaryCta = primaryCtaForRow(sectionId, row, flags);
+  const completeness = dataCompleteness(sectionId, row);
+  const cadence = sectionId === "om_requested" ? followUpState(row) : null;
+  const locationLine = [row.neighborhood ? labelFromKey(row.neighborhood) : null, formatUnitLabel(row.units)]
+    .filter(Boolean)
+    .join(" · ");
+  const dueLabel = topFlag ? formatDue(topFlag.dueInDays) : null;
+  const FlagIcon = topFlag?.email ? MailWarning : Flag;
 
-  async function generate() {
-    if (!canGenerate || busy) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const response = await fetch(`${API_BASE}/api/ui-v2/properties/${encodeURIComponent(propertyId)}/loi`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({
-          offerAmount: effectiveOffer,
-          contingencies: contingenciesText
-            .split(/\n+/)
-            .map((line) => line.trim())
-            .filter(Boolean),
-          notes: notes.trim() || undefined,
-          actorName: "progress_board",
-        }),
-      });
-      const data = (await response.json().catch(() => ({}))) as {
-        fileName?: string;
-        downloadPath?: string;
-        error?: string;
-        details?: string;
-      };
-      if (!response.ok || data.error || !data.downloadPath) {
-        throw new Error(data.details || data.error || "Failed to generate LOI.");
-      }
-      setResult({ fileName: data.fileName ?? "LOI.pdf", downloadPath: data.downloadPath });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to generate LOI.");
-    } finally {
-      setBusy(false);
-    }
-  }
+  // Clicking anywhere non-interactive on the card opens the in-page drawer.
+  const handleCardClick = (event: ReactMouseEvent<HTMLElement>) => {
+    const target = event.target as HTMLElement;
+    if (target.closest("button, a, input, select, textarea, label")) return;
+    onOpenDrawer?.(row);
+  };
 
   return (
-    <div className={styles.loiGenerate}>
-      <button
-        type="button"
-        className={styles.loiGenerateButton}
-        onClick={generate}
-        disabled={!canGenerate || busy}
-        title={canGenerate ? "Generate a standard LOI PDF at this offer" : "Enter an offer amount or target price first"}
-      >
-        {busy ? "Generating LOI..." : "Generate LOI PDF"}
-      </button>
-      {result ? (
-        <a href={`${API_BASE}${result.downloadPath}`} target="_blank" rel="noreferrer" className={styles.loiGenerateLink}>
-          Download {result.fileName}
-        </a>
+    <article
+      className={`${styles.propertyCard} ${selected ? styles.propertyCardSelected : ""} ${busy ? styles.propertyCardBusy : ""} ${
+        keyboardFocused ? styles.propertyCardFocused : ""
+      }`}
+      ref={keyboardFocused ? (node) => node?.scrollIntoView({ block: "nearest", inline: "nearest" }) : undefined}
+      draggable={!busy}
+      aria-selected={selected}
+      onClick={handleCardClick}
+      onDragStart={(event) => {
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("text/plain", row.propertyId);
+        onDragStartDeal?.(row);
+      }}
+      onDragEnd={onDragEndDeal}
+    >
+      <div className={styles.cardTopRow}>
+        <input
+          type="checkbox"
+          className={styles.miniSelect}
+          aria-label={`Select ${address}`}
+          checked={selected}
+          disabled={busy}
+          onChange={(event) => onToggleSelected?.(row.propertyId, event.target.checked)}
+          onClick={(event) => event.stopPropagation()}
+        />
+        <PropertyThumb src={row.firstImageUrl} alt={address} size="sm" className={styles.cardThumb} />
+        <button
+          type="button"
+          className={styles.cardTitleBlock}
+          onClick={() => onOpenDrawer?.(row)}
+          title={address}
+        >
+          <strong className={styles.cardTitle}>{streetAddressOnly(address)}</strong>
+          <span className={styles.cardMeta}>{locationLine || (row.source ? labelFromKey(row.source) : "No source")}</span>
+        </button>
+        {topFlag ? (
+          <button
+            type="button"
+            className={`${styles.cardFlag} ${styles[`severity_${topFlag.severity}`]}`}
+            title={`${topFlag.label} — ${topFlag.reason}${dueLabel ? ` (${dueLabel})` : ""}`}
+            aria-label={`${topFlag.label}: ${topFlag.recommendedAction}`}
+            onClick={(event) => {
+              event.stopPropagation();
+              onRunAction?.(row, topFlag.actionKind);
+            }}
+          >
+            <FlagIcon size={13} strokeWidth={2.2} aria-hidden="true" />
+          </button>
+        ) : null}
+        <PromptMenu
+          align="end"
+          heading={address}
+          trigger={(triggerProps) => (
+            <button
+              {...triggerProps}
+              type="button"
+              className={styles.cardMenuButton}
+              disabled={busy}
+              title="More actions"
+            >
+              <MoreHorizontal size={14} strokeWidth={2} aria-hidden="true" />
+            </button>
+          )}
+          items={[
+            row.brokerEmail
+              ? {
+                  label: "Email broker",
+                  hint: row.brokerEmail,
+                  icon: Mail,
+                  onSelect: () => onEmailBroker?.(row, "email"),
+                }
+              : {
+                  label: "Add broker email",
+                  icon: MailPlus,
+                  onSelect: () => onAddBrokerEmail?.(row),
+                },
+            ...(sectionId === "sourced" && row.brokerEmail
+              ? [
+                  {
+                    label: "Request OM",
+                    hint: "Queues the email and moves to OM Requested",
+                    icon: CalendarCheck,
+                    onSelect: () => onEmailBroker?.(row, "request_om"),
+                  },
+                ]
+              : []),
+            {
+              label: "Move to stage…",
+              icon: ArrowRightLeft,
+              onSelect: () => onMoveStage?.(row),
+            },
+            {
+              label: "Open workspace",
+              hint: "Tour dates, offers, LOI",
+              icon: PenLine,
+              onSelect: () => onOpenDrawer?.(row),
+            },
+            {
+              label: "Reject deal",
+              icon: XCircle,
+              tone: "danger" as const,
+              onSelect: () => onStartReject?.(row),
+            },
+          ]}
+        />
+      </div>
+
+      {metrics.length > 0 ? (
+        <div className={styles.cardMetrics} aria-label="Property metrics">
+          {metrics.map((metric) => (
+            <span key={metric.label} className={metric.tone === "danger" ? styles.metricDanger : undefined}>
+              <small>{metric.label}</small>
+              <strong>{metric.value}</strong>
+            </span>
+          ))}
+        </div>
       ) : null}
-      {error ? <span className={styles.loiGenerateError}>{error}</span> : null}
-    </div>
+
+      <div className={styles.cardChips}>
+        <span className={row.hasOm ? styles.workflowBadgeReady : styles.workflowBadgeMuted}>OM</span>
+        <span className={row.hasComps ? styles.workflowBadgeReady : styles.workflowBadgeMuted}>Comps</span>
+        <span className={row.hasDossier ? styles.workflowBadgeReady : styles.workflowBadgeMuted}>Dossier</span>
+        <span
+          className={styles.completenessChip}
+          title={completeness.topMissing ? `Missing: ${completeness.topMissing}` : "All tracked data present"}
+        >
+          Data {completeness.done}/{completeness.total}
+        </span>
+        <small className={scoreClass(row.dealScore)}>{row.dealScore == null ? "—" : Math.round(row.dealScore)}</small>
+        <AgingChip since={row.stageEnteredAt} className={styles.agingChip} />
+        {topFlag ? (
+          <span
+            className={`${styles.flagChip} ${styles[`chipSeverity_${topFlag.severity}`]}`}
+            title={topFlag.reason}
+          >
+            {topFlag.label}
+            {dueLabel ? ` · ${dueLabel}` : ""}
+          </span>
+        ) : null}
+      </div>
+
+      {cadence ? (
+        <div className={styles.cardTouchLine}>
+          Last touch {cadence.lastTouchDays == null ? "never" : cadence.lastTouchDays === 0 ? "today" : `${cadence.lastTouchDays}d ago`}
+          {" · "}
+          {cadence.nextStepLabel.toLowerCase()} {formatDue(cadence.dueInDays ?? undefined) ?? "scheduled"}
+        </div>
+      ) : null}
+
+      <div className={styles.cardActions}>
+        <button
+          type="button"
+          className={styles.cardActionButton}
+          disabled={busy}
+          title={topFlag ? topFlag.reason : cta.label}
+          onClick={() => onRunAction?.(row, cta.actionKind)}
+        >
+          {cta.label}
+        </button>
+        <button
+          type="button"
+          className={styles.cardMoveButton}
+          disabled={busy}
+          title="Move to stage…"
+          onClick={() => onMoveStage?.(row)}
+        >
+          <ArrowRightLeft size={11} strokeWidth={2} aria-hidden="true" />
+          Move
+        </button>
+      </div>
+    </article>
   );
 }
-
