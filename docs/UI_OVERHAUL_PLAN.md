@@ -136,6 +136,7 @@ Principles, applied everywhere:
 | C3 Stage column in pipeline | ✅ shipped |
 | C4 sticky identity columns / em-dash empties | ✅ shipped |
 | C5/C6 sheet hero de-dup + no-OM callout + actionable broker email | ✅ shipped |
+| Sheet chrome retokenized: KPI strip as home-style stat cards (accent top borders, semantic warn/danger, no decorative fills), neutral gallery band, anchored action groups, sticky tabs | ✅ shipped |
 | C7 enrichment tab re-tokenized card grid | ✅ shipped |
 | D1 profile rebuild (module css + primitives) | ✅ shipped |
 | D2 home touch-ups (10-cell strip, attention fix, skeletons) | ✅ shipped |

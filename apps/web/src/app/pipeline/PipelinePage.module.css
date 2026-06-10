@@ -1255,9 +1255,28 @@
   height: 100%;
   overflow: auto;
   background: var(--app-surface, #ffffff);
-  box-shadow: -4px 0 24px rgba(0, 0, 0, 0.1);
+  border-left: 1px solid var(--app-line, #e4e4e7);
+  box-shadow: -24px 0 48px rgba(24, 24, 27, 0.14);
   transition: width 180ms ease, box-shadow 180ms ease;
   will-change: width;
+  animation: sheetSlideIn 200ms ease-out;
+}
+
+@keyframes sheetSlideIn {
+  from {
+    transform: translateX(1.25rem);
+    opacity: 0.5;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .propertySheet {
+    animation: none;
+  }
 }
 
 .propertySheetFullscreen {
@@ -1279,13 +1298,13 @@
 
 .sheetHeader h2,
 .modalHeader h2 {
-  margin: 0.25rem 0 0;
+  margin: 0.3rem 0 0;
   color: var(--app-ink, #18181b);
-  font-family: inherit;
-  font-size: 1.36rem;
-  font-weight: 750;
-  line-height: 1.1;
-  letter-spacing: 0;
+  font-family: var(--font-display, Geist, ui-sans-serif, system-ui, sans-serif);
+  font-size: 1.45rem;
+  font-weight: 600;
+  line-height: 1.12;
+  letter-spacing: -0.01em;
 }
 
 .sheetHeader p {
@@ -1306,116 +1325,148 @@
   align-items: center;
   justify-content: center;
   min-height: 2.1rem;
-  border: 1px solid #d4ded8;
+  border: 1px solid var(--app-line, #e4e4e7);
   border-radius: 999px;
   padding: 0.3rem 0.7rem;
-  background: #ffffff;
-  color: #26343d;
+  background: var(--app-surface, #ffffff);
+  color: var(--app-ink-secondary, #52525b);
   font-size: 0.76rem;
-  font-weight: 700;
+  font-weight: 600;
   letter-spacing: 0;
   cursor: pointer;
   transition: background 140ms ease, border-color 140ms ease, color 140ms ease;
 }
 
 .sheetUtilityButton:hover {
-  border-color: #b8c9c0;
-  background: #f6faf8;
-  color: #122a32;
+  border-color: var(--app-line-strong, #d4d4d8);
+  background: var(--app-surface-strong, #f4f4f3);
+  color: var(--app-ink, #18181b);
 }
 
+/* KPI strip — same DNA as the home stat cards: white card, accent top
+   border, quiet uppercase label, big display numeral. No decorative fills. */
 .sheetScreeningBar {
   display: grid;
-  grid-template-columns: 1.1fr repeat(5, minmax(0, 1fr));
-  gap: 0.5rem;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 0.6rem;
   margin: 0;
-  padding: 0.8rem 1.25rem;
-  border-bottom: 1px solid #dfe6e2;
-  background: #fbfcfb;
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid var(--app-line, #e4e4e7);
+  background: var(--app-surface, #ffffff);
 }
 
 .sheetScreeningBar div {
   min-width: 0;
-  border: 1px solid #e0e7e3;
-  border-radius: 8px;
-  padding: 0.62rem 0.72rem;
-  background: #ffffff;
+  border: 1px solid var(--app-line, #e4e4e7);
+  border-top: 2.5px solid var(--app-line-strong, #d4d4d8);
+  border-radius: var(--radius-md, 8px);
+  padding: 0.7rem 0.8rem 0.62rem;
+  background: var(--app-surface, #ffffff);
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+
+.sheetScreeningBar div:hover {
+  box-shadow: var(--app-shadow-xs);
 }
 
 .sheetScreeningBar .screeningMetricPrimary {
-  border-color: #bad7ca;
-  background: #f2faf5;
+  border-top-color: var(--brand, #0f766e);
+}
+
+.sheetScreeningBar .screeningAccentWarn {
+  border-top-color: var(--app-amber, #d97706);
+}
+
+.sheetScreeningBar .screeningAccentDanger {
+  border-top-color: var(--app-red, #dc2626);
+}
+
+.sheetScreeningBar .screeningAccentWarn dd,
+.sheetScreeningBar .screeningAccentWarn small {
+  color: #b45309;
+}
+
+.sheetScreeningBar .screeningAccentDanger dd,
+.sheetScreeningBar .screeningAccentDanger small {
+  color: #b91c1c;
 }
 
 .sheetScreeningBar dt {
-  color: #65737c;
-  font-size: 0.62rem;
-  font-weight: 800;
-  letter-spacing: 0.06em;
+  color: var(--app-muted, #71717a);
+  font-size: 0.64rem;
+  font-weight: 600;
+  letter-spacing: 0.07em;
   text-transform: uppercase;
 }
 
 .sheetScreeningBar dd {
-  margin: 0.18rem 0 0;
-  color: #18242d;
-  font-family: inherit;
-  font-size: 1.08rem;
-  font-weight: 750;
+  margin: 0.3rem 0 0;
+  color: var(--app-ink, #18181b);
+  font-family: var(--font-display, Geist, ui-sans-serif, system-ui, sans-serif);
+  font-size: 1.35rem;
+  font-weight: 500;
+  line-height: 1.05;
   font-variant-numeric: tabular-nums;
 }
 
 .sheetScreeningBar small {
   display: block;
-  margin-top: 0.12rem;
-  color: #77827b;
+  margin-top: 0.26rem;
+  color: var(--app-muted, #71717a);
   font-size: 0.68rem;
-  line-height: 1.2;
+  line-height: 1.25;
 }
 
 .sourceLinkButton {
   display: inline-flex;
   align-items: center;
+  gap: 0.3rem;
   width: fit-content;
   min-height: 1.85rem;
-  margin-top: 0.75rem;
-  border: 1px solid #c9d7d1;
+  margin-top: 0.7rem;
+  border: 1px solid var(--app-line, #e4e4e7);
   border-radius: 999px;
   padding: 0.25rem 0.7rem;
-  background: #f6faf8;
-  color: #174f68;
+  background: var(--app-surface, #ffffff);
+  color: var(--brand-strong, #115e59);
   font-size: 0.76rem;
-  font-weight: 800;
+  font-weight: 600;
   text-decoration: none;
   transition: background 140ms ease, border-color 140ms ease, color 140ms ease;
 }
 
+.sourceLinkButton::after {
+  content: "↗";
+  font-size: 0.85em;
+}
+
 .sourceLinkButton:hover {
-  border-color: #9ebfb2;
-  background: #eaf5f0;
-  color: #123f54;
+  border-color: var(--brand-border, #99f6e4);
+  background: var(--brand-soft, #f0fdfa);
 }
 
 .propertyGallery {
   display: grid;
   grid-template-columns: minmax(0, 1.55fr) minmax(13rem, 0.8fr);
-  gap: 0.55rem;
-  padding: 0.75rem 1.25rem;
-  border-bottom: 1px solid #dce3de;
-  background: #f3f6f4;
+  gap: 0.6rem;
+  padding: 0.9rem 1.25rem 1rem;
+  border-bottom: 1px solid var(--app-line, #e4e4e7);
+  background: var(--app-surface, #ffffff);
 }
 
 .galleryHero,
 .galleryThumbButton {
   position: relative;
   overflow: hidden;
-  border-radius: 8px;
-  background: #dbe3de;
+  border-radius: var(--radius-md, 8px);
+  background: var(--app-surface-strong, #f4f4f3);
   cursor: pointer;
 }
 
 .galleryHero {
   min-height: 16rem;
-  border: 1px solid #d1dad5;
+  border: 1px solid var(--app-line, #e4e4e7);
+  border-radius: var(--radius-lg, 10px);
   padding: 0;
 }
 
@@ -1463,25 +1514,26 @@
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
-  color: #53616b;
+  color: var(--app-muted, #71717a);
   font-size: 0.72rem;
-  font-weight: 800;
+  font-weight: 600;
 }
 
 .galleryRailHeader button {
-  border: 1px solid #cad6cf;
+  border: 1px solid var(--app-line, #e4e4e7);
   border-radius: 999px;
   padding: 0.2rem 0.55rem;
-  background: #ffffff;
-  color: #174f68;
+  background: var(--app-surface, #ffffff);
+  color: var(--brand-strong, #115e59);
   font-size: 0.72rem;
-  font-weight: 800;
+  font-weight: 600;
   cursor: pointer;
+  transition: background 140ms ease, border-color 140ms ease;
 }
 
 .galleryRailHeader button:hover {
-  border-color: #9ebfb2;
-  background: #f2f8f5;
+  border-color: var(--brand-border, #99f6e4);
+  background: var(--brand-soft, #f0fdfa);
 }
 
 .galleryRail {
@@ -1504,8 +1556,8 @@
 }
 
 .galleryThumbButtonActive {
-  border-color: #174f68;
-  box-shadow: 0 0 0 2px rgba(23, 79, 104, 0.16);
+  border-color: var(--brand, #0f766e);
+  box-shadow: 0 0 0 2px rgba(15, 118, 110, 0.16);
 }
 
 .galleryMore {
@@ -1520,23 +1572,23 @@
   justify-items: center;
   min-height: 9.5rem;
   place-items: center;
-  border: 1px dashed #cfd9d4;
-  border-radius: 8px;
+  border: 1px dashed var(--app-line-strong, #d4d4d8);
+  border-radius: var(--radius-lg, 10px);
   padding: 1.4rem;
-  background: repeating-linear-gradient(135deg, #fbfdfc 0, #fbfdfc 10px, #f7faf8 10px, #f7faf8 20px);
-  color: #697580;
+  background: var(--app-surface-raised, #fafaf9);
+  color: var(--app-muted, #71717a);
   text-align: center;
 }
 
 .galleryEmpty strong {
-  color: #33424b;
+  color: var(--app-ink-secondary, #52525b);
   font-size: 0.9rem;
 }
 
 .galleryEmpty span {
   max-width: 28rem;
   margin-top: 0.25rem;
-  color: #6b7881;
+  color: var(--app-muted, #71717a);
   font-size: 0.76rem;
   line-height: 1.35;
 }
@@ -1545,10 +1597,19 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.5rem;
-  padding: 0.75rem 1.25rem;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  padding: 0.8rem 1.25rem;
   border-bottom: 1px solid var(--app-line, #e4e4e7);
   background: var(--app-surface, #ffffff);
+}
+
+.sheetActionsGroup {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
 }
 
 .sheetActions .statusSelect {
@@ -1560,10 +1621,24 @@
   width: 9rem;
 }
 
+.sheetActions .statusSelect,
+.sheetActions .typeSelect {
+  font-weight: 600;
+}
+
+.sheetActions .typeSelect {
+  border-color: var(--app-line-strong, #d4d4d8);
+  color: var(--app-ink-secondary, #52525b);
+}
+
+/* Tabs pin to the top of the drawer so deep scrolls can still switch context. */
 .tabs {
+  position: sticky;
+  top: 0;
+  z-index: 30;
   display: flex;
-  gap: 0;
-  padding: 0 1.25rem;
+  gap: 0.25rem;
+  padding: 0.3rem 1.25rem 0;
   border-bottom: 1px solid var(--app-line, #e4e4e7);
   background: var(--app-surface, #ffffff);
 }
@@ -1575,7 +1650,7 @@
   background: transparent;
   color: var(--app-muted, #71717a);
   font-size: 0.84rem;
-  font-weight: 400;
+  font-weight: 500;
   cursor: pointer;
   transition: color 140ms ease, border-color 140ms ease;
 }
@@ -2959,4 +3034,20 @@
 .keyboardRow td:first-child {
   border-top-left-radius: 6px;
   border-bottom-left-radius: 6px;
+}
+
+
+/* ─── Property sheet uplevel: KPI strip density across widths ──── */
+/* Overrides the generic 1-column collapse above — stat cards stay scannable. */
+
+@media (max-width: 1050px) {
+  .sheetScreeningBar {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 700px) {
+  .sheetScreeningBar {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }

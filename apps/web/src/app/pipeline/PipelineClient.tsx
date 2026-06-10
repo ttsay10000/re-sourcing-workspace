@@ -3844,7 +3844,7 @@ export default function PipelineClient() {
             </div>
 
             <dl className={styles.sheetScreeningBar} aria-label="Screening yield summary">
-              <div className={styles.screeningMetricPrimary}>
+              <div className={sheetMtrYoc != null ? styles.screeningMetricPrimary : undefined}>
                 <dt>YoC MTR</dt>
                 <dd className={sheetMtrYoc == null ? styles.screeningPending : undefined}>{formatPercent(sheetMtrYoc)}</dd>
                 <small>{sheetMtrYoc == null && !sheetHasOm ? "Awaiting OM" : "Adjusted NOI"}</small>
@@ -3869,9 +3869,9 @@ export default function PipelineClient() {
                       : "Current NOI"}
                 </small>
               </div>
-              <div>
+              <div title={sheetListedPrice != null ? formatCurrency(sheetListedPrice, false) : undefined}>
                 <dt>Ask</dt>
-                <dd>{formatCurrency(sheetListedPrice, false)}</dd>
+                <dd>{formatCurrency(sheetListedPrice)}</dd>
                 <small>{formatCurrency(sheetListedPpsf, false)} / SF</small>
               </div>
               <div>
@@ -3884,22 +3884,17 @@ export default function PipelineClient() {
                 <dd className={sheetMarketCapRate == null ? styles.screeningPending : undefined}>{formatPercent(sheetMarketCapRate)}</dd>
                 <small>{sheetMarketCapRate == null ? "Broker data pending" : "From broker comps"}</small>
               </div>
-              <div>
+              <div
+                className={
+                  sheetMtrCalloutCode === "mtr_below_ltr" || sheetMtrCalloutCode === "mtr_spread_outlier"
+                    ? styles.screeningAccentDanger
+                    : sheetMtrCalloutCode === "mtr_weak_uplift"
+                      ? styles.screeningAccentWarn
+                      : undefined
+                }
+              >
                 <dt>MTR spread</dt>
-                <dd
-                  className={
-                    cx(
-                      sheetYoCSpread == null && styles.screeningPending,
-                      sheetMtrCalloutCode === "mtr_below_ltr" || sheetMtrCalloutCode === "mtr_spread_outlier"
-                        ? styles.yocFlagDanger
-                        : sheetMtrCalloutCode === "mtr_weak_uplift"
-                          ? styles.yocFlagWarn
-                          : false
-                    ) || undefined
-                  }
-                >
-                  {formatPercent(sheetYoCSpread)}
-                </dd>
+                <dd className={sheetYoCSpread == null ? styles.screeningPending : undefined}>{formatPercent(sheetYoCSpread)}</dd>
                 <small title={sheetMtrCalloutLabel ?? undefined}>
                   {sheetMtrCalloutCode === "mtr_below_ltr"
                     ? "Below LTR — source as LTR"
@@ -3979,85 +3974,89 @@ export default function PipelineClient() {
             </div>
 
             <div className={styles.sheetActions}>
-              {sheetStatus ? (
-                <select
-                  className={`${styles.statusSelect} ${statusToneClass(sheetStatus.tone)}`}
-                  value={String(sheetStatus.status)}
-                  disabled={!sheetStatus.editable}
-                  onChange={(event) => updateStatus(selectedId, event.target.value as UiV2PipelineStatus, "property_sheet")}
-                >
-                  {UI_V2_PIPELINE_STATUS_OPTIONS.map((option) => (
-                    <option key={option.status} value={option.status}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              ) : null}
-              {selectedRow ? (
-                <select
-                  className={styles.typeSelect}
-                  value={sheetMarketType}
-                  onChange={(event) => updateMarketType(selectedRow, event.target.value as UiV2MarketType)}
-                  aria-label="Property type"
-                >
-                  {MARKET_TYPE_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              ) : null}
-              <button className={styles.primaryButton} type="button" onClick={(event) => emailBroker(selectedId, "property_sheet", event)}>
-                Email broker
-              </button>
-              {sheetHasOm ? (
-                <>
-                  <button
-                    className={styles.secondaryButton}
-                    type="button"
-                    title="Re-run OM extraction from the latest documents and recalculate yield numbers with the current user inputs."
-                    disabled={busyAction === `${selectedId}:om-analysis` || busyAction?.startsWith("bulk:")}
-                    onClick={() => refreshOmAnalysisForProperty(selectedId)}
+              <div className={styles.sheetActionsGroup}>
+                {sheetStatus ? (
+                  <select
+                    className={`${styles.statusSelect} ${statusToneClass(sheetStatus.tone)}`}
+                    value={String(sheetStatus.status)}
+                    disabled={!sheetStatus.editable}
+                    onChange={(event) => updateStatus(selectedId, event.target.value as UiV2PipelineStatus, "property_sheet")}
                   >
-                    {busyAction === `${selectedId}:om-analysis` ? "Updating OM..." : "Update OM analysis"}
-                  </button>
-                  <button
-                    className={styles.secondaryButton}
-                    type="button"
-                    title="Re-run OM analysis, then regenerate and replace the dossier PDF and Excel workbook."
-                    disabled={busyAction === `${selectedId}:dossier` || busyAction?.startsWith("bulk:")}
-                    onClick={() => rerunDossierForProperty(selectedId)}
+                    {UI_V2_PIPELINE_STATUS_OPTIONS.map((option) => (
+                      <option key={option.status} value={option.status}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                ) : null}
+                {selectedRow ? (
+                  <select
+                    className={styles.typeSelect}
+                    value={sheetMarketType}
+                    onChange={(event) => updateMarketType(selectedRow, event.target.value as UiV2MarketType)}
+                    aria-label="Property type"
                   >
-                    {busyAction === `${selectedId}:dossier` ? "Rerunning..." : "Rerun dossier"}
-                  </button>
-                </>
-              ) : null}
-              {terminalStatus ? (
-                <button className={styles.secondaryButton} type="button" onClick={() => restoreDeal(selectedId, "property_sheet")}>
-                  Restore
+                    {MARKET_TYPE_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                ) : null}
+              </div>
+              <div className={styles.sheetActionsGroup}>
+                <button className={styles.primaryButton} type="button" onClick={(event) => emailBroker(selectedId, "property_sheet", event)}>
+                  Email broker
                 </button>
-              ) : (
-                <>
-                  <button className={styles.secondaryButton} type="button" onClick={() => saveDeal(selectedId, "property_sheet")}>
-                    Save deal
+                {sheetHasOm ? (
+                  <>
+                    <button
+                      className={styles.secondaryButton}
+                      type="button"
+                      title="Re-run OM extraction from the latest documents and recalculate yield numbers with the current user inputs."
+                      disabled={busyAction === `${selectedId}:om-analysis` || busyAction?.startsWith("bulk:")}
+                      onClick={() => refreshOmAnalysisForProperty(selectedId)}
+                    >
+                      {busyAction === `${selectedId}:om-analysis` ? "Updating OM..." : "Update OM analysis"}
+                    </button>
+                    <button
+                      className={styles.secondaryButton}
+                      type="button"
+                      title="Re-run OM analysis, then regenerate and replace the dossier PDF and Excel workbook."
+                      disabled={busyAction === `${selectedId}:dossier` || busyAction?.startsWith("bulk:")}
+                      onClick={() => rerunDossierForProperty(selectedId)}
+                    >
+                      {busyAction === `${selectedId}:dossier` ? "Rerunning..." : "Rerun dossier"}
+                    </button>
+                  </>
+                ) : null}
+                {terminalStatus ? (
+                  <button className={styles.secondaryButton} type="button" onClick={() => restoreDeal(selectedId, "property_sheet")}>
+                    Restore
                   </button>
-                  <button
-                    className={styles.dangerButton}
-                    type="button"
-                    onClick={() =>
-                      setRejectState({
-                        propertyId: selectedId,
-                        address: selectedProperty?.overview.displayAddress ?? selectedProperty?.overview.canonicalAddress ?? "Property",
-                        surface: "property_sheet",
-                        reasonCode: "",
-                        note: "",
-                      })
-                    }
-                  >
-                    Reject
-                  </button>
-                </>
-              )}
+                ) : (
+                  <>
+                    <button className={styles.secondaryButton} type="button" onClick={() => saveDeal(selectedId, "property_sheet")}>
+                      Save deal
+                    </button>
+                    <button
+                      className={styles.dangerButton}
+                      type="button"
+                      onClick={() =>
+                        setRejectState({
+                          propertyId: selectedId,
+                          address: selectedProperty?.overview.displayAddress ?? selectedProperty?.overview.canonicalAddress ?? "Property",
+                          surface: "property_sheet",
+                          reasonCode: "",
+                          note: "",
+                        })
+                      }
+                    >
+                      Reject
+                    </button>
+                  </>
+                )}
+              </div>
             </div>
 
             <nav className={styles.tabs}>
