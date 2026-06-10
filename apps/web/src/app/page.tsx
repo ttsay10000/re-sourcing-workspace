@@ -8,6 +8,7 @@ import {
   AlertTriangle,
   CalendarClock,
   FileQuestion,
+  FileSearch,
   MailX,
   Minus,
   Plus,
@@ -394,9 +395,14 @@ function HomePageContent() {
     const missingDocs = pipelineRows.filter((row) => !row.documentStatus?.hasOm).slice(0, 5);
     const missingBroker = pipelineRows.filter((row) => !row.broker?.email).slice(0, 5);
     const openActionRows = pipelineRows.filter((row) => row.openActionItemCount);
+    // New underwriting extracted but not yet trusted — a human has to promote/reject it.
+    const omNeedsReview = pipelineRows.filter(
+      (row) => String(row.documentStatus?.omStatus ?? "").trim().toLowerCase() === "needs_review"
+    );
     return [
       // 0%/negative cap or $0 NOI: excluded from Yield Map stats until the extraction is fixed.
       { label: "Yield data flags", icon: AlertTriangle, tone: "danger", count: yieldFlagRows.length, rows: yieldFlagRows.slice(0, 5) },
+      { label: "OM review pending", icon: FileSearch, tone: "warning", count: omNeedsReview.length, rows: omNeedsReview.slice(0, 5) },
       { label: "Missing enrichment", icon: AlertTriangle, tone: "warning", count: missingEnrichment.length, rows: missingEnrichment },
       { label: "Tour inputs needed", icon: CalendarClock, tone: "warning", count: tourInputsNeeded.length, rows: tourInputsNeeded.slice(0, 5) },
       { label: "Open action items", icon: RefreshCcw, tone: "neutral", count: openActionRows.length, rows: openActionRows.slice(0, 5) },

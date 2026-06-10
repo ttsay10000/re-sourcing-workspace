@@ -19,6 +19,8 @@ const SENTINELS: SchemaSentinel[] = [
   { kind: "table", name: "broker_contacts", migration: "broker CRM migrations" },
   { kind: "table", name: "property_recipient_resolution", migration: "broker CRM migrations" },
   { kind: "table", name: "deal_signals", migration: "026_deal_signals.sql" },
+  { kind: "table", name: "market_comps", migration: "058_market_context_v1.sql" },
+  { kind: "table", name: "comp_address_geocodes", migration: "059_comp_address_geocodes.sql" },
 ];
 
 export async function assertSchemaCurrent(): Promise<void> {
