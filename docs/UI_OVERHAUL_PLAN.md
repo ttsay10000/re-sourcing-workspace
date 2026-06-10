@@ -120,6 +120,28 @@ Principles, applied everywhere:
 
 ---
 
+## Part 3.5 — Execution status on this branch
+
+| Item | Status |
+|---|---|
+| A1–A9 foundation (type roles, PageHeader/StatCard/KeyValueList/Dialog/Popover/PromptMenu/PropertyThumb/StageChip/Skeleton, lib/format, lib/api, flag utilities) | ✅ shipped |
+| WS6 overlap: orphan routes deleted, Gmail Pull → "Find OMs in Email", apiFetch adoption (pipeline/crm/AppShell/home/progress/profile) | ✅ shipped |
+| B1 unified stages (contracts `DEAL_FLOW_STAGES`; board + home funnel + pipeline stage chips) | ✅ shipped |
+| B2/B3 photo cards + progress API fields (image/broker/location) | ✅ shipped |
+| B4 prompt-driven card actions (stage CTA, email composer, add-broker-email, move-stage, reject) | ✅ shipped |
+| B5 LLM "What to do next" panel + `/deal-progress/recommendations` (rules fallback, cached, tested) | ✅ shipped |
+| B6 board layout/typography (PageHeader, StatCards, centered columns, slim empty rails) | ✅ shipped |
+| C1 yield sanity cell fills (MTR callouts + client guards + $/SF 3σ) | ✅ shipped |
+| C2 missing-broker chip + inline add prompt | ✅ shipped |
+| C3 Stage column in pipeline | ✅ shipped |
+| C4 sticky identity columns / em-dash empties | ✅ shipped |
+| C5/C6 sheet hero de-dup + no-OM callout + actionable broker email | ✅ shipped |
+| C7 enrichment tab re-tokenized card grid | ✅ shipped |
+| D1 profile rebuild (module css + primitives) | ✅ shipped |
+| D2 home touch-ups (10-cell strip, attention fix, skeletons) | ✅ shipped |
+| D3 saved / add-property / email-search / om-review / yield-map pass | ✅ shipped |
+| D4/D5 global sweep + QA checklist | ◻ ongoing (each page now on tokens/primitives; remaining: CRM v2 surfaces deferred to WS8) |
+
 ## Part 4 — Sequencing & sizing
 
 1. **Phase A** (foundation) — ~1 session. Nothing user-visible breaks; primitives land unused then pages migrate.
