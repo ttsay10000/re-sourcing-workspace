@@ -451,6 +451,7 @@ async function refreshStreetEasyListingForProperty(
     const detailsMerge = buildPropertyDetailsMergeFromListing(normalized);
     if (Object.keys(detailsMerge).length > 0) await propertyRepo.mergeDetails(propertyId, detailsMerge);
     await refreshPropertyPipelineMetadata(propertyId, pool);
+    if (priceChanged) await handleAskPriceChange(propertyId, pool, { oldPrice, newPrice });
     return { attempted: true, ok: true, priceChanged, unavailable: listingUnavailable, listingStatus };
   } catch (error) {
     return {
@@ -460,6 +461,63 @@ async function refreshStreetEasyListingForProperty(
       unavailable: false,
       error: error instanceof Error ? error.message : String(error),
     };
+  }
+}
+
+/**
+ * Ask-price move during a listing refresh: the underwriting numbers must
+ * follow the new basis without the user chasing them. Recompute the persisted
+ * deal signals (the same summary refresh an OM promotion runs), then leave a
+ * repricing action item so the home page shows what moved and where to look.
+ * Never throws — the listing refresh result stands on its own.
+ */
+async function handleAskPriceChange(
+  propertyId: string,
+  pool: import("pg").Pool,
+  prices: { oldPrice: number; newPrice: number }
+): Promise<void> {
+  const fmtAsk = (value: number) =>
+    Number.isFinite(value) ? `$${Math.round(value).toLocaleString("en-US")}` : "—";
+  const moveSummary = `Ask moved ${fmtAsk(prices.oldPrice)} → ${fmtAsk(prices.newPrice)}`;
+  let recomputed = false;
+  try {
+    const property = await new PropertyRepo({ pool }).byId(propertyId);
+    const details = (property?.details ?? null) as Record<string, unknown> | null;
+    const hasUnderwriting = hasAnyRecordValue(details, [
+      ["omData", "authoritative"],
+      ["rentalFinancials", "omAnalysis"],
+      ["dealDossier"],
+    ]);
+    if (hasUnderwriting) {
+      await runGenerateDossier(propertyId, undefined, { sendEmail: false, skipDocuments: true });
+      recomputed = true;
+    }
+  } catch (err) {
+    console.warn(
+      "[handleAskPriceChange] signal recompute failed",
+      propertyId,
+      err instanceof Error ? err.message : err
+    );
+  }
+  try {
+    await new PropertyActionItemRepo({ pool }).upsertOpen(propertyId, "review_repricing", {
+      priority: recomputed ? "medium" : "high",
+      summary: recomputed
+        ? `${moveSummary}; yields recomputed on the new basis — sanity-check assumptions`
+        : `${moveSummary}; no underwriting to recompute yet — numbers update once an OM is promoted`,
+      details: {
+        oldPrice: Number.isFinite(prices.oldPrice) ? prices.oldPrice : null,
+        newPrice: Number.isFinite(prices.newPrice) ? prices.newPrice : null,
+        recomputed,
+        source: "streeteasy_refresh",
+      },
+    });
+  } catch (err) {
+    console.warn(
+      "[handleAskPriceChange] action item upsert failed",
+      propertyId,
+      err instanceof Error ? err.message : err
+    );
   }
 }
 
@@ -2620,6 +2678,39 @@ router.post("/properties/run-enrichment", async (req: Request, res: Response) =>
   }
 });
 
+/** GET /api/properties/attention-items - open action items (repricing, unavailable listings, …) for the home "needs attention" rail. */
+router.get("/properties/attention-items", async (req: Request, res: Response) => {
+  try {
+    const pool = getPool();
+    const limitRaw = Number(req.query.limit);
+    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(limitRaw, 200)) : 100;
+    const r = await pool.query(
+      `SELECT a.id, a.property_id, a.action_type, a.priority, a.summary, a.created_at, p.canonical_address
+       FROM property_action_items a
+       JOIN properties p ON p.id = a.property_id
+       WHERE a.status = 'open'
+       ORDER BY (a.priority = 'high') DESC, a.created_at DESC
+       LIMIT $1`,
+      [limit]
+    );
+    res.json({
+      items: r.rows.map((row) => ({
+        id: String(row.id),
+        propertyId: String(row.property_id),
+        address: String(row.canonical_address ?? ""),
+        actionType: String(row.action_type),
+        priority: String(row.priority ?? "medium"),
+        summary: (row.summary as string | null) ?? null,
+        createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : ((row.created_at as string | null) ?? null),
+      })),
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[properties attention-items]", err);
+    res.status(503).json({ error: "Failed to load attention items.", details: message });
+  }
+});
+
 /** GET /api/properties/om-attachment-review-queue - grouped manual queue for broker attachment review. */
 router.get("/properties/om-attachment-review-queue", async (_req: Request, res: Response) => {
   try {
@@ -3163,6 +3254,7 @@ const VALID_UPLOAD_CATEGORIES: PropertyDocumentCategory[] = [
   "Rent Comp Package",
   "Expense Comp Package",
   "Market Analysis",
+  "Broker Notes",
   "Other",
 ];
 

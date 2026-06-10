@@ -94,6 +94,8 @@ type HomeProgressRow = {
   neighborhood?: string | null;
   borough?: string | null;
   firstImageUrl?: string | null;
+  /** Free-text line shown under the address (e.g. "Ask moved $1.2M → $1.1M"). */
+  note?: string | null;
 };
 
 type HomeProgressSection = {
@@ -240,6 +242,7 @@ function HomePageContent() {
   const [terminalCounter, setTerminalCounter] = useState<"closed" | "rejected">("closed");
   const [openAttentionGroups, setOpenAttentionGroups] = useState<Record<string, boolean>>({});
   const [yieldFlagRows, setYieldFlagRows] = useState<HomeProgressRow[]>([]);
+  const [actionAlertRows, setActionAlertRows] = useState<HomeProgressRow[]>([]);
 
   const loadHome = useCallback(async (options?: { initial?: boolean }) => {
     if (options?.initial) {
@@ -304,11 +307,37 @@ function HomePageContent() {
     }
   }, []);
 
+  // Repricing / unavailable-listing alerts left by StreetEasy refreshes —
+  // the user sees what moved and lands on the right property in one click.
+  const loadActionAlerts = useCallback(async () => {
+    try {
+      const response = await fetch(`${API_BASE}/api/properties/attention-items?limit=100`, { credentials: "include" });
+      const data = (await response.json().catch(() => ({}))) as {
+        items?: Array<{ propertyId: string; address: string; actionType: string; summary?: string | null }>;
+        error?: string;
+      };
+      if (!response.ok || data.error) return;
+      setActionAlertRows(
+        (data.items ?? [])
+          .filter((item) => item.actionType === "review_repricing" || item.actionType === "review_listing_unavailable")
+          .map((item) => ({
+            propertyId: item.propertyId,
+            canonicalAddress: item.address,
+            displayAddress: item.address,
+            note: item.summary ?? null,
+          }))
+      );
+    } catch {
+      // group simply doesn't render
+    }
+  }, []);
+
   useEffect(() => {
     void loadHome({ initial: true });
     void loadDigest();
     void loadYieldFlags();
-  }, [loadHome, loadDigest, loadYieldFlags]);
+    void loadActionAlerts();
+  }, [loadHome, loadDigest, loadYieldFlags, loadActionAlerts]);
 
   // Dossiers, OM extractions, and inbox pulls land asynchronously, so the
   // dashboard re-pulls in the background: every 60s while the tab is visible,
@@ -318,6 +347,7 @@ function HomePageContent() {
       void loadHome();
       void loadDigest();
       void loadYieldFlags();
+      void loadActionAlerts();
     };
     const interval = window.setInterval(() => {
       if (document.visibilityState === "visible") refresh();
@@ -332,7 +362,7 @@ function HomePageContent() {
       document.removeEventListener("visibilitychange", onVisible);
       window.removeEventListener("focus", onVisible);
     };
-  }, [loadHome, loadDigest, loadYieldFlags]);
+  }, [loadHome, loadDigest, loadYieldFlags, loadActionAlerts]);
 
   const filteredSavedRows = useMemo(() => {
     if (!query) return savedRows;
@@ -429,6 +459,8 @@ function HomePageContent() {
     return [
       // 0%/negative cap or $0 NOI: excluded from Yield Map stats until the extraction is fixed.
       { label: "Yield data flags", icon: AlertTriangle, tone: "danger", count: yieldFlagRows.length, rows: yieldFlagRows.slice(0, 5) },
+      // StreetEasy refresh found a new ask (yields recomputed) or a delisted listing.
+      { label: "Pricing & listing moves", icon: RefreshCcw, tone: "warning", count: actionAlertRows.length, rows: actionAlertRows.slice(0, 5) },
       { label: "OM review pending", icon: FileSearch, tone: "warning", count: omNeedsReview.length, rows: omNeedsReview.slice(0, 5) },
       { label: "Missing enrichment", icon: AlertTriangle, tone: "warning", count: missingEnrichment.length, rows: missingEnrichment },
       { label: "Tour inputs needed", icon: CalendarClock, tone: "warning", count: tourInputsNeeded.length, rows: tourInputsNeeded.slice(0, 5) },
@@ -436,7 +468,7 @@ function HomePageContent() {
       { label: "Missing broker contact", icon: MailX, tone: "danger", count: missingBroker.length, rows: missingBroker },
       { label: "Needs OM request", icon: FileQuestion, tone: "warning", count: missingDocs.length, rows: missingDocs },
     ];
-  }, [pipelineRows, yieldFlagRows]);
+  }, [pipelineRows, yieldFlagRows, actionAlertRows]);
 
   return (
     <main className={styles.page}>
@@ -609,7 +641,13 @@ function HomePageContent() {
                     {group.rows.slice(0, 4).map((row) => (
                       <Link key={row.propertyId} href={`/pipeline?propertyId=${encodeURIComponent(row.propertyId)}`}>
                         <span>{rowAddress(row)}</span>
-                        <small>{"neighborhood" in row ? areaLabel(row.neighborhood) ?? "" : ""}</small>
+                        <small>
+                          {"note" in row && row.note
+                            ? row.note
+                            : "neighborhood" in row
+                              ? areaLabel(row.neighborhood) ?? ""
+                              : ""}
+                        </small>
                       </Link>
                     ))}
                   </div>

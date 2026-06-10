@@ -770,6 +770,13 @@ function DealAnalysisPageContent() {
                   ? `${calculation.yieldSignals.mtrYieldPct.toFixed(1)}%`
                   : "—",
             },
+            {
+              label: "MTR bump (vs LTR)",
+              value:
+                calculation.yieldSignals?.spreadPctPoints != null
+                  ? `${calculation.yieldSignals.spreadPctPoints >= 0 ? "+" : ""}${calculation.yieldSignals.spreadPctPoints.toFixed(2)}pp`
+                  : "—",
+            },
             ...(calculation.brokerYieldComparison?.brokerCapRatePct != null
               ? [
                   {
@@ -2273,6 +2280,25 @@ function DealAnalysisPageContent() {
                   </div>
                 )}
               </div>
+              {calculation?.yieldSignals?.calloutLabel ? (
+                <div
+                  style={{
+                    marginTop: "0.55rem",
+                    padding: "0.5rem 0.6rem",
+                    borderRadius: "6px",
+                    border: "1px solid #fde68a",
+                    background: "#fffbeb",
+                    color: "#92400e",
+                    fontSize: "0.78rem",
+                    lineHeight: 1.45,
+                  }}
+                >
+                  <strong style={{ display: "block", marginBottom: "0.15rem" }}>
+                    LTR → MTR bump flagged
+                  </strong>
+                  {calculation.yieldSignals.calloutLabel}
+                </div>
+              ) : null}
               {calculation?.brokerYieldComparison?.calloutLabel ? (
                 <div
                   style={{

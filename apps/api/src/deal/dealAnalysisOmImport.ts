@@ -84,6 +84,9 @@ function isPdfLikeDealAnalysisDocument(document: DealAnalysisOmInputDocument): b
 
 function classifyDealAnalysisDocumentCategory(document: DealAnalysisOmInputDocument): PropertyDocumentCategory {
   const haystack = lowerDocumentName(document);
+  // Raw pasted broker notes keep their own category so the source text that
+  // seeded canonical numbers stays findable on the property's docs section.
+  if (/\bbroker[ _-]?(notes?|email)\b/i.test(haystack)) return "Broker Notes";
   if (/\b(rent[ _-]?roll|unit[ _-]?mix|tenant[ _-]?schedule)\b/i.test(haystack)) return "Rent Roll";
   if (/\b(t-?12|trailing[ _-]?12|operating|income[ _-]?expense|p\s*&\s*l|profit[ _-]?loss)\b/i.test(haystack)) {
     return "T12 / Operating Summary";
