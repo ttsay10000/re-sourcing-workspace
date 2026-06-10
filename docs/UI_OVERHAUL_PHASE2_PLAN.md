@@ -1,96 +1,96 @@
-# UI Overhaul — Phase 2 Execution Plan (Recommendations)
+# UI Overhaul — Phase 2 Execution Plan (Consolidated)
 
-**Date:** 2026-06-10 · **Baseline:** main @ `32147ed` (overhaul phases A–D merged; `npm run check` 244/244 green) · **Status:** ARMED — prepared for execution on Tyler's GO.
+**Date:** 2026-06-10 (v2, consolidated with live-app feedback) · **Baseline:** main @ `32147ed` (`npm run check` 244/244 green) · **Status:** ARMED — do not execute until Tyler gives GO.
 
-Scope: the six recommendations delivered after the Phase A–D review. CRM v2 (WS8) remains explicitly out of scope and keeps its own phase.
-
----
-
-## R1 — Finish the stage-model migration (aging, durable columns, funnel stats)
-
-**Goal:** the board stops deriving position from saved-deal statuses at read time; stage position is stored, transitions are recorded, and "time in stage" is visible everywhere.
-
-**What exists already (do not rebuild):**
-- `properties.deal_state / deal_stage / stage_order / stage_entered_at` + `stage_transitions` table (`packages/db/migrations/056_deal_stage_and_geo.sql`).
-- `StageTransitionRepo.recordTransition` with canonical `DEAL_STAGES` (10 coarse stages: inbox…closed) and guards `isDealStage/isDealState` (`packages/db/src/repos/StageTransitionRepo.ts`).
-- `POST /api/ui-v2/properties/:id/stage` endpoint validating state/stage (`pipelineV2.ts:3357`).
-
-**Design decision (the one piece of real thinking):** two granularities exist — the display flow (11 stages in `@re-sourcing/contracts` `DEAL_FLOW_STAGES`, what the board/home show) and the canonical persistence stages (10 coarse, migration 056). Mapping: display → canonical is many-to-one (`underwriting_awaiting_review`+`underwriting_review_completed` → `underwriting`; `tour_requested`+`tour_scheduled`+`tour_completed_awaiting_inputs` → `tour`; `offer_review`+`negotiation` → `offer_loi`; `contract_signed` → `contract_dd`; `om_requested` → `outreach`; `sourced` → `screening`; `deal_closed` → closed state). Record transitions at canonical granularity with `metadata.displaySection` carrying the fine-grained section id, so canonical analytics stay clean and display-level aging is still reconstructable.
-
-**Steps:**
-1. `packages/contracts/src/dealFlow.ts`: add `canonicalStage` to each `DealFlowStage` entry (typed to the db `DealStage` union literal values, no import cycle — duplicate the string union in contracts and add a unit test asserting it matches `DEAL_STAGES` from `@re-sourcing/db`).
-2. API write path: in the three mutation sites that move deals (`savedProgressV2` PATCH `/properties/:id/status`, PATCH `/deal-path`, and `crmV2`'s `markOmRequestedFromOutreach`), after the status write, compute the new display section → canonical stage and call `StageTransitionRepo.recordTransition` + update `properties.deal_stage/stage_entered_at` when the canonical stage changed. One shared helper `apps/api/src/deal/recordDealStageChange.ts`.
-3. Backfill script (`tools/` or migration `057`): set `deal_stage`/`stage_entered_at` for existing saved deals from their current derived section (entered_at = best available timestamp: latest matching `property_pipeline_events` row, else `updated_at`).
-4. Read path: `mapProgressRow` adds `stageEnteredAt` (from `properties.stage_entered_at`); progress board cards and pipeline Stage column render an `AgingChip` ("9d in stage"; amber ≥ 7d in pre-tour stages, red ≥ 14d — thresholds in the contracts constant so the recommendation engine reuses them).
-5. Column headers gain per-stage totals: count (exists) + sum of ask (`price`) formatted compact.
-6. Recommendations engine (R2 below) consumes `stageEnteredAt` for staleness rules.
-
-**Verification:** unit tests for the display→canonical mapping and the stage-change helper (no transition recorded when stage unchanged); manual: move a deal across columns, confirm `stage_transitions` rows and aging chip reset.
-**Size:** ~1 session. **Risk:** write-path regressions — keep recordDealStageChange fire-and-forget (log, never block the status write).
-
-## R2 — Recommendation chips finish the job (steppers + staleness rules + keyboard)
-
-**Goal:** acting on a recommendation is one flow, not N card visits.
-
-1. **Stepper dialog** (`apps/web/src/app/progress/RecommendationStepper.tsx`): for `missing_broker_email` and `request_oms`, the chip opens a Dialog that walks the property list one at a time — reusing `BrokerContactDialog` internals for emails and the composer form for OM requests — with Skip / Save & next, progress "3 of 7", and a summary line at the end. Board refresh once at completion (not per item); `loadRecommendations(true)` at the end.
-2. **Staleness rules** (needs R1's `stageEnteredAt`): add `om_request_stale` ("5 OM requests with no reply in 10+ days — send follow-ups", uses `latestOutreachAt` already on saved rows + stage age) and `underwriting_stale` to `progressRecommendations.ts`; both get stepper support (follow-up = composer prefilled with a follow-up template).
-3. **Keyboard triage:** board: `j/k` move card focus within a column, `h/l` across columns, `enter` opens Update inputs, `e` email broker, `m` move-stage dialog; pipeline table: `j/k` row focus, `enter` opens sheet, `e` email. Implement as a small `useKeyboardNav` hook; ignore keystrokes when a dialog/input has focus; document keys in a `?` overlay.
-
-**Size:** ~1 session. **Dependencies:** R1 for staleness rules only — stepper + keyboard can ship first.
-
-## R3 — Map view on Yield Map (MapLibre)
-
-**Goal:** pins on a real map, colored by yield band (existing `YIELD_BANDS`) or stage, with the table as fallback.
-
-1. Add `maplibre-gl` to `apps/web` (no API key; use OSM raster tiles or a free style JSON; pin attribution).
-2. `yield-map/page.tsx`: add a Map/Table toggle (default Map when ≥1 row has coordinates — `summary.withCoordinates` already in the API response). Pins from `comps[].lat/lng`; color via `yieldColor()`; click → popover card (address, units, LTR/MTR, $/unit) with "Open in pipeline" link (`/pipeline?propertyId=`).
-3. Color-by toggle: yield band ↔ deal stage (stage colors from `StageChip` tone map; needs `dealStage` already in `CompRow` — it is).
-4. Geocode worker (only if coverage is poor): migration 056 backfilled lat/lng from listings; check `withCoordinates/count` first — if >80%, skip the Geoclient worker this phase and note the gap.
-5. Optional tie-in: "Confirm tours" recommendation links to the map filtered to those property ids (tour-routing use case).
-
-**Size:** ~1 session. **Risk:** none to existing surfaces — page-local.
-
-## R4 — Numbers trust fixes (M5/M6/M8 from the math register)
-
-1. **M6 cap-rate basis labels:** everywhere a cap rate renders (sheet screening bar "Market cap", OmCalculationPanel, dossier views), suffix the basis: "asset NOI", "year-1 on purchase", "stabilized/exit". Source of truth: a `CAP_RATE_BASIS_LABELS` map in contracts; the API already computes the three variants in `underwritingModel.ts:271-304, 1279-1282, 1314-1317` — expose `basis` alongside each value in the payloads that carry them.
-2. **M8 NOI-override banner:** `OmCalculationPanel.tsx` — when `buildOmCalculation` resolves an active NOI override (`buildOmCalculation.ts:418-435`), surface `noiOverrideActive: true` in the calc payload and render an amber banner "NOI override active — expense rows below are informational" with a jump-link to clear it.
-3. **M5 IRR null reason:** `irrCalculation.ts:64-65` returns null silently; return `{ value: null, reason: "no_sign_change" | "did_not_converge" }` and show the reason in the tooltip instead of a bare em dash.
-
-**Size:** ~0.5–1 session. Server payload changes are additive.
-
-## R5 — OM review queue workflow upgrade (tear sheet, audit I9)
-
-1. **Edit-before-promote:** on `/om-review`, promote opens a Dialog with the extracted snapshot's key fields (price, units, NOI, rents) editable; PATCH corrections into the snapshot before `promote` (API: extend the promote endpoint in `ingestAuthoritativeOm.ts` to accept field overrides recorded as `corrections` metadata).
-2. **Field confidence:** extraction already stores validation flags that aren't rendered (`ingestAuthoritativeOm.ts:286-329`); render per-field confidence/validation chips in the review card (low-confidence = amber outline on the input).
-3. **Retry:** failed runs get a Retry button → re-enqueue the extraction (new endpoint `POST /api/om-ingestion/runs/:id/retry`), with the I4 caveat (in-memory queue) noted — retry is still worth shipping before the queue hardening.
-
-**Size:** ~1–1.5 sessions (the API promote-with-corrections is the meat).
-
-## R6 — Quick wins batch
-
-| # | Item | Where |
-|---|---|---|
-| 1 | Home "Last refresh" shows real data freshness (`summary.updatedAt` from deal-progress / pipeline payloads) instead of `new Date()` | `page.tsx:371` |
-| 2 | Hidden routes decision: `/listings`, `/runs`, `/sales-metrics`, `/property-data`, `/profiles` — propose: keep `/runs` (linked from add-property activity), fold `/sales-metrics` + `/listings` into Yield Map/Pipeline or delete, delete `/profiles` (superseded by `/profile`), keep `/property-data` until WS7 replaces it. Needs Tyler's call per route — list compiled, one-line each | route dirs |
-| 3 | Prune dead CSS left by the restyles (old `.metric`, `.kicker`, `.title` rules in saved/add-property/email-search modules; globals `.profile-page-title` margin rule) | module css files |
-| 4 | Daily digest strip on home ("Since yesterday: 4 new matches · 2 price cuts · 1 broker reply") — read path only: expose `GET /api/notifications/digest-preview` reusing `sendDailyDigest`'s gather step (`dailyDigest.ts:519`) without sending | home + api |
-| 5 | Recommendation panel: surface `source: "rules"` subtly ("rule-based" tooltip) so a missing OPENAI key is diagnosable from the UI | progress page |
-
-**Size:** ~0.5 session total (item 2 awaits per-route answers; default to "leave" where unanswered).
+v2 consolidates the post-overhaul recommendations (R1–R6) with Tyler's screenshot review of the deployed app: Yield Map load failure + population question, progress-card layout overlap, reject-should-unsave, saved-deals consolidation (profile grid → Saved tab with prominent financials), button-spacing tidy-up, and a real drag-and-drop multi-file upload. CRM v2 (WS8) stays out of scope.
 
 ---
 
-## Sequencing
+## R0 — P0 fixes (first commits on GO)
 
-1. **R6** quick wins + **R2** stepper/keyboard (no dependencies) — immediate value.
-2. **R1** stage migration (unlocks aging + staleness).
-3. **R2** staleness rules (after R1) + **R3** map.
-4. **R4** trust labels, then **R5** tear sheet.
+| # | Fix | Root cause (verified) | Where |
+|---|---|---|---|
+| R0.1 | Progress-board card header overlap: photo renders under/over the address text | `.miniRowMain` declares `grid-template-columns: auto minmax(0,1fr) auto` (3 tracks) but the card now has 4 children (checkbox, thumb, title, meta) | `progress.module.css:416-421` — add a track (`auto auto minmax(0,1fr) auto`); also align the meta stack (score pill + "No broker email" chip) into one tidy right column so the floating "—" pill sits with the chip |
+| R0.2 | Yield Map: "Failed to load operating comps." | `/api/comps/operating` selects `p.deal_state/deal_stage/lat/lng` (migration **056**) — deployed DB hasn't run it, so the query 500s | Ops: run `npm run db:migrate` on the deployed env (see `RENDER_AND_ENV_CHECKLIST.md`). Code hardening: surface the server `details` in the page error, and add a startup/migration assertion so a missing migration fails loudly at boot, not per-request |
+| R0.3 | Yield Map population — "shouldn't this show any property with an LTR yield?" | Query filters `WHERE ds.asset_cap_rate IS NOT NULL` from `deal_signals` only; properties whose LTR the pipeline derives live (NOI ÷ ask from details/listing) have no signals row and are invisible | Broaden the query with a fallback LTR computed in SQL from `details` (same paths `getSavedCurrentNoi`/`getSavedAskingPrice` use) when no signal exists, OR (simpler, preferred) ensure signal generation runs for every yield-bearing property as part of the existing refresh actions — decide at implementation after counting how many rows the fallback would add |
 
-Each lands as its own PR-sized commit set; `npm run check` + web build green before each push; main stays releasable between items.
+## R1 — Stage-model migration (aging, durable columns, funnel stats)
 
-## Open questions for Tyler (none block R1–R3)
+Unchanged from v1 — the structural unlock.
 
-- R6#2: keep/kill decisions per hidden route.
-- R3: any preference for map style (default: light OSM raster matching the zinc palette)?
-- R5: is edit-before-promote allowed to overwrite extracted numbers silently, or should corrections require a note? (default: optional note field, stored in metadata.)
+- Display→canonical stage mapping added to `DEAL_FLOW_STAGES` (11 display stages → migration-056's 10 canonical stages; transitions recorded at canonical granularity with `metadata.displaySection`).
+- One shared `recordDealStageChange` helper called from the three mutation paths (`status`, `deal-path`, `markOmRequestedFromOutreach`); fire-and-forget so status writes never block.
+- Backfill (`057`): `deal_stage`/`stage_entered_at` from current derived sections.
+- UI: `AgingChip` ("9d in stage"; amber ≥7d pre-tour, red ≥14d) on board cards + pipeline Stage column; per-column count + ask-total in board headers.
+- Existing infra reused: `StageTransitionRepo.recordTransition`, `POST /ui-v2/properties/:id/stage` (`pipelineV2.ts:3357`).
+
+## R2 — Recommendations finish the job (steppers, staleness, keyboard)
+
+Unchanged from v1.
+
+- **Stepper dialog** for `missing_broker_email` / `request_oms` chips: walk the affected properties one-by-one (BrokerContactDialog / composer form inside), Skip / Save & next, "3 of 7" progress, single board refresh + `loadRecommendations(true)` at the end.
+- **Staleness rules** (needs R1): `om_request_stale` (no broker reply N days after request — uses `latestOutreachAt` + stage age) and `underwriting_stale`; both stepper-capable (follow-up composer template).
+- **Keyboard triage**: board `j/k/h/l` card focus, `enter` inputs, `e` email, `m` move; pipeline `j/k` + `enter`/`e`; `?` overlay; suppressed while dialogs/inputs focused.
+
+## R3 — Yield Map becomes a real map of New York
+
+Merges v1's R3 with Tyler's "how would we build a site map of those around New York?"
+
+1. R0.2/R0.3 land first (data loads, population complete).
+2. `maplibre-gl` + light OSM style matching the zinc palette; Map/Table toggle (Map default when `summary.withCoordinates` is meaningful — 056 already backfilled lat/lng from listings, so coverage should be high; verify the ratio and only then consider a Geoclient geocode worker for the remainder).
+3. Pins colored by yield band (existing `YIELD_BANDS`) with a color-by toggle to deal stage (StageChip tones); click → popover (address, units, LTR/MTR, $/unit) + "Open in pipeline".
+4. Tie-in: "Confirm tours" recommendation deep-links to the map filtered to those properties (tour routing).
+
+## R4 — Numbers trust fixes (M5/M6/M8)
+
+Unchanged from v1: cap-rate basis labels everywhere a cap rate renders (basis exposed in payloads), amber "NOI override active" banner in `OmCalculationPanel`, IRR null reason in the tooltip.
+
+## R5 — OM review tear-sheet upgrade
+
+Unchanged from v1: edit-before-promote (field overrides recorded as corrections, optional note), render the stored-but-hidden validation/confidence flags per field, Retry on failed runs. The intake dropzone from R8 is reused here for re-upload flows.
+
+## R6 — Quick wins + spacing sweep
+
+| # | Item |
+|---|---|
+| 1 | Home "Last refresh" uses real payload `updatedAt`, not `new Date()` (`page.tsx:371`) |
+| 2 | Hidden-route decisions (`/listings`, `/runs`, `/sales-metrics`, `/property-data`, `/profiles`) — needs Tyler's keep/kill call per route; default leave |
+| 3 | Prune dead CSS left by the restyles (old `.metric`/`.kicker`/`.title` rules; unused profile globals rule) |
+| 4 | Daily digest strip on home via read-only `GET /api/notifications/digest-preview` reusing `sendDailyDigest`'s gather step |
+| 5 | Recommendation panel surfaces `source: "rules"` subtly so a missing LLM key is diagnosable |
+| 6 | **Button spacing tidy-up (Tyler):** one action-row standard — 0.5rem gap, equal button heights (`Button size="sm"`), no mixed pill/rect in one row — swept across saved-deal cards (View property / View docs / Unsave), progress cards (CTA + ⋯), property-sheet action bar, om-review actions, profile rows |
+
+## R7 — Saved Deals consolidation (new, from Tyler's review)
+
+**Goal:** one saved-deals surface; rejecting a deal takes it out of the saved workflow.
+
+1. **Reject ⇒ unsave.** Verified today: `POST /ui-v2/properties/:id/reject` (`pipelineV2.ts:3777`) never touches `saved_deals`. Change: inside the reject handler, when a `saved_deals` row exists for the user, set `deal_status = "rejected"` via `SavedDealsRepo.updateStatus` (record-preserving — not a hard delete, so Restore can put it back to `saved`; the restore handler gets the symmetric update). Saved-deals list and profile/home consumers exclude `rejected` by default behind an "Include rejected" toggle (same convention as Pipeline).
+2. **Move the card grid to the Saved tab.** The profile "Saved deals" card grid (the format Tyler likes) becomes the default view of `/saved`: photo card grid with a **prominent financials row — Cap rate, Upside, IRR (+ CoC where present) as the bold middle band of the card** (fields already returned by `/api/ui-v2/saved-deals`: `capRate`, `rentUpside`, `irrPct`, `cocPct`), price/units/$SF/score as the secondary line, View property / View docs / Unsave as the action row (R6.6 spacing). Keep the existing dense table as a Grid/Table toggle. Remove the saved-deals section (and its `section=saved-deals` nav special-casing) from Profile; profile keeps account/automation/assumptions/searches only.
+3. AppShell: drop the `section === "saved-deals"` matcher logic that routed Profile's saved section under the Saved Deals nav item.
+
+## R8 — FileDropzone primitive + intake restyle (new, from Tyler's review)
+
+**Goal:** real drag-and-drop multi-file upload everywhere; the OM workspace intake looks like the rest of the app.
+
+1. **`components/ui/FileDropzone.tsx`:** drop area (drag-over highlight, click to browse, `multiple`), **accumulates across selections** instead of replacing — verified bug: `deal-analysis/page.tsx:1851` `setPendingFiles(selectedFiles)` overwrites the previous selection — dedupes by name+size, per-file rows with size + remove ✕, max-files / max-bytes props with inline validation, disabled state while uploading. Keyboard/AT: the browse control stays a real `<input type="file">`.
+2. **Adopt at every upload site:** deal-analysis intake (10-file OM package), property-sheet OM/Docs upload, Gmail-pull manual upload, LOI upload on the progress board, om-review re-uploads (R5).
+3. **Deal-analysis intake restyle (Tyler's screenshot):** the "1. Add OM / financial files or link" section moves onto tokens — Panel cards, PageHeader-consistent section headings, the numbered-step kickers as `.text-eyebrow`, dropzone replacing the native input band, OM-link and broker-notes blocks as equal-rhythm cards. Behavior (analyze endpoints, separate-properties toggle, link import) unchanged.
+
+---
+
+## Sequencing (revised)
+
+1. **R0** P0 fixes (board card layout, yield-map migration/ops + hardening + population).
+2. **R7 + R8** — the direct UX asks (reject⇒unsave, saved consolidation, dropzone + intake restyle) and **R6** quick wins/spacing.
+3. **R2** stepper + keyboard (no R1 dependency for these parts).
+4. **R1** stage migration → then R2 staleness rules + R3 map.
+5. **R4** trust labels → **R5** tear sheet.
+
+Each phase lands as its own commit set; `npm run check` + web build green before each push; main stays releasable between phases.
+
+## Open questions (none block R0–R8 starts)
+
+- R6#2 hidden-route keep/kill calls.
+- R3 map style preference (default: light OSM raster).
+- R5 corrections: optional note (default) or required?
+- R7: confirm "unsave on reject" should also apply to bulk rejects from the pipeline table (assumed yes).
