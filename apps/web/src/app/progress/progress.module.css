@@ -1636,3 +1636,136 @@
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
+
+/* ---------------------------------------------------------------------------
+   Board polish pass: tinted column wells with flow arrows between them,
+   white cards that pop, strict card text hierarchy, jump-to-column flash.
+--------------------------------------------------------------------------- */
+
+.flowSections {
+  gap: 0.35rem;
+  padding: 0.9rem 0.85rem 1.1rem;
+}
+
+.flowSections > .miniSection {
+  flex: 0 0 21rem;
+}
+
+.flowSections > .miniSectionEmpty {
+  flex-basis: 10.5rem;
+  opacity: 0.78;
+}
+
+.flowArrow {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: stretch;
+  padding: 0 0.05rem;
+  color: var(--app-line-strong, #d4d4d8);
+}
+
+.miniSection {
+  background: var(--app-surface-raised, #fafaf9);
+  border-color: var(--app-line, #e4e4e7);
+  border-radius: 12px;
+}
+
+.miniSectionHeader {
+  padding: 0.7rem 0.8rem;
+  border-bottom: 1px solid var(--app-line, #e4e4e7);
+  background: var(--app-surface, #ffffff);
+  border-radius: 12px 12px 0 0;
+}
+
+.miniSectionHeader h3 {
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--app-ink, #18181b);
+}
+
+.miniSectionFlash {
+  border-color: var(--brand, #0f766e) !important;
+  animation: column-flash 1.6s ease;
+}
+
+@keyframes column-flash {
+  0% { box-shadow: 0 0 0 4px rgba(15, 118, 110, 0.28); }
+  100% { box-shadow: 0 0 0 0 rgba(15, 118, 110, 0); }
+}
+
+/* Cards: white on the tinted well, clear separation, strict hierarchy. */
+
+.miniRows {
+  padding: 0.65rem;
+  gap: 0.65rem;
+}
+
+.miniRow {
+  border-radius: 12px;
+  border: 1px solid var(--app-line, #e4e4e7);
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
+  padding: 0.7rem 0.75rem;
+}
+
+.miniRow:hover {
+  border-color: var(--brand-border, #99f6e4);
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.1);
+}
+
+.miniRowMain {
+  gap: 0.55rem;
+}
+
+.miniRowLink strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.8rem;
+  font-weight: 650;
+  line-height: 1.3;
+  color: var(--app-ink, #18181b);
+}
+
+.miniRowLink span {
+  display: block;
+  margin-top: 0.14rem;
+  font-size: 0.66rem;
+  color: var(--app-muted, #71717a);
+}
+
+.cardMetrics {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.5rem 0.8rem;
+  padding: 0.45rem 0 0.1rem;
+  border-top: 1px dashed var(--app-line-subtle, #f1f0ee);
+}
+
+.cardMetrics small {
+  font-size: 0.58rem;
+  font-weight: 650;
+  letter-spacing: 0.07em;
+  color: var(--app-muted, #71717a);
+}
+
+.cardMetrics strong {
+  font-size: 0.8rem;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  color: var(--app-ink, #18181b);
+}
+
+.workflowBadges {
+  padding-top: 0.1rem;
+}
+
+.cardActions {
+  padding-top: 0.15rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}

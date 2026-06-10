@@ -755,6 +755,20 @@ function DealAnalysisPageContent() {
               value: formatCurrency(calculation.topLineMetrics.projectedYearNoi),
             },
             {
+              label: "LTR Yield",
+              value:
+                calculation.yieldSignals?.ltrYieldPct != null
+                  ? `${calculation.yieldSignals.ltrYieldPct.toFixed(1)}%`
+                  : "—",
+            },
+            {
+              label: "MTR Yield",
+              value:
+                calculation.yieldSignals?.mtrYieldPct != null
+                  ? `${calculation.yieldSignals.mtrYieldPct.toFixed(1)}%`
+                  : "—",
+            },
+            {
               label:
                 calculation.topLineMetrics.holdPeriodYears != null
                   ? `Projected ${formatNumber(calculation.topLineMetrics.holdPeriodYears)}-year IRR`
@@ -2045,7 +2059,42 @@ function DealAnalysisPageContent() {
 
         <div style={{ ...cardStyle, padding: "1.2rem" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: "0.75rem", flexWrap: "wrap" }}>
-            <strong style={{ color: "#18231e", fontSize: "1rem" }}>2. Analysis workspace</strong>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: "0.55rem", flexWrap: "wrap" }}>
+              <strong style={{ color: "#18231e", fontSize: "1rem" }}>2. Analysis workspace</strong>
+              {calculation ? (
+                <span
+                  style={{
+                    border: "1px solid #99f6e4",
+                    borderRadius: "999px",
+                    background: "#f0fdfa",
+                    color: "#115e59",
+                    fontSize: "0.62rem",
+                    fontWeight: 700,
+                    letterSpacing: "0.05em",
+                    textTransform: "uppercase",
+                    padding: "0.18rem 0.55rem",
+                  }}
+                >
+                  Initial analysis complete
+                </span>
+              ) : (
+                <span
+                  style={{
+                    border: "1px solid #e4e4e7",
+                    borderRadius: "999px",
+                    background: "#fafaf9",
+                    color: "#71717a",
+                    fontSize: "0.62rem",
+                    fontWeight: 700,
+                    letterSpacing: "0.05em",
+                    textTransform: "uppercase",
+                    padding: "0.18rem 0.55rem",
+                  }}
+                >
+                  Not analyzed yet
+                </span>
+              )}
+            </span>
             <a href="/yield-map" style={{ fontSize: "0.8rem", fontWeight: 800, color: "#0f766e" }}>
               Compare in Yield Map →
             </a>
@@ -2153,6 +2202,54 @@ function DealAnalysisPageContent() {
                 )}
               </div>
             </div>
+            {calculation ? (
+              <div
+                style={{
+                  padding: "0.8rem 0.9rem",
+                  borderRadius: "8px",
+                  background: "#fafaf9",
+                  border: "1px solid #e4e4e7",
+                }}
+              >
+                <div style={{ fontSize: "0.72rem", color: "#65736b", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 850 }}>
+                  Property summary
+                </div>
+                <div style={{ marginTop: "0.45rem", display: "grid", gap: "0.35rem" }}>
+                  {[
+                    { label: "Asset class", value: calculation.propertyInfo.assetClass ?? "—" },
+                    {
+                      label: "Size",
+                      value:
+                        calculation.propertyInfo.sizeSqft != null
+                          ? `${formatNumber(calculation.propertyInfo.sizeSqft)} SF`
+                          : "—",
+                    },
+                    {
+                      label: "Units",
+                      value:
+                        calculation.propertyInfo.totalUnits != null
+                          ? `${formatNumber(calculation.propertyInfo.totalUnits)} total · ${formatNumber(calculation.propertyInfo.residentialUnits)} resi`
+                          : "—",
+                    },
+                    { label: "Year built", value: calculation.propertyInfo.yearBuilt ?? "—" },
+                    { label: "Zoning", value: calculation.propertyInfo.zoningDistrict ?? "—" },
+                    { label: "Tax code", value: calculation.propertyInfo.taxCode ?? "—" },
+                    { label: "Listed price", value: formatCurrency(calculation.property.askingPrice) },
+                    { label: "Source", value: calculation.source.sourceLabel },
+                  ]
+                    .filter((row) => row.value !== "—")
+                    .map((row) => (
+                      <div
+                        key={row.label}
+                        style={{ display: "flex", justifyContent: "space-between", gap: "0.8rem", fontSize: "0.84rem" }}
+                      >
+                        <span style={{ color: "#68736d" }}>{row.label}</span>
+                        <strong style={{ color: "#18231e", textAlign: "right" }}>{row.value}</strong>
+                      </div>
+                    ))}
+                </div>
+              </div>
+            ) : null}
           </div>
         </div>
       </div>

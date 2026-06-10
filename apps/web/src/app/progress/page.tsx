@@ -6,6 +6,7 @@ import { Suspense, useCallback, useEffect, useMemo, useState, type DragEvent, ty
 import {
   ArrowRightLeft,
   CalendarCheck,
+  ChevronRight,
   Mail,
   MailPlus,
   MoreHorizontal,
@@ -787,6 +788,17 @@ function ProgressPageContent() {
   const [stepper, setStepper] = useState<{ kind: StepperKind; rows: StepperRow[] } | null>(null);
   const [focusedCardId, setFocusedCardId] = useState<string | null>(null);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [flashColumnId, setFlashColumnId] = useState<string | null>(null);
+
+  const scrollToColumn = useCallback((sectionId: string) => {
+    document.getElementById(`board-column-${sectionId}`)?.scrollIntoView({
+      behavior: "smooth",
+      inline: "center",
+      block: "nearest",
+    });
+    setFlashColumnId(sectionId);
+    window.setTimeout(() => setFlashColumnId((current) => (current === sectionId ? null : current)), 1700);
+  }, []);
 
   const loadProgress = useCallback(async (mode: "initial" | "refresh" = "initial") => {
     if (mode === "initial") setLoading(true);
@@ -1711,8 +1723,9 @@ function ProgressPageContent() {
               label={stage?.shortLabel ?? section.label}
               value={count}
               tone={section.id === "tour_completed_awaiting_inputs" && count > 0 ? "warning" : "neutral"}
-              title={section.label}
+              title={`${section.label} — jump to column`}
               className={styles.metricCard}
+              onClick={() => scrollToColumn(section.id)}
             />
           );
         })}
@@ -1806,9 +1819,11 @@ function ProgressPageContent() {
           </div>
         </div>
         <div className={styles.flowSections}>
-          {savedStatusSections.map((section) => (
+          {savedStatusSections.map((section, sectionIndex) => (
             <SavedDealMiniSection
               key={section.id}
+              leadingArrow={sectionIndex > 0}
+              flash={flashColumnId === section.id}
               section={section}
               loading={loading}
               enableMoves
@@ -2413,6 +2428,8 @@ function SavedDealMiniSection({
   onAddBrokerEmail,
   onMoveStage,
   focusedCardId = null,
+  leadingArrow = false,
+  flash = false,
 }: {
   section: SavedDealSection;
   loading: boolean;
@@ -2435,12 +2452,21 @@ function SavedDealMiniSection({
   onAddBrokerEmail?: (row: DealFlowRow) => void;
   onMoveStage?: (row: DealFlowRow) => void;
   focusedCardId?: string | null;
+  leadingArrow?: boolean;
+  flash?: boolean;
 }) {
   const visibleRows = compact ? section.rows.slice(0, 5) : section.rows;
   const isEmpty = !loading && visibleRows.length === 0;
   return (
+    <>
+    {leadingArrow ? (
+      <span className={styles.flowArrow} aria-hidden="true">
+        <ChevronRight size={17} strokeWidth={2.2} />
+      </span>
+    ) : null}
     <section
-      className={`${styles.miniSection} ${dragOver ? styles.miniSectionDropTarget : ""} ${isEmpty ? styles.miniSectionEmpty : ""}`}
+      id={`board-column-${section.id}`}
+      className={`${styles.miniSection} ${dragOver ? styles.miniSectionDropTarget : ""} ${isEmpty ? styles.miniSectionEmpty : ""} ${flash ? styles.miniSectionFlash : ""}`}
       onDragOver={enableMoves ? onDragOverSection : undefined}
       onDrop={
         enableMoves
@@ -2637,6 +2663,7 @@ function SavedDealMiniSection({
         </div>
       )}
     </section>
+    </>
   );
 }
 

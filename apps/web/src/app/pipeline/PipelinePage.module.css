@@ -2179,9 +2179,9 @@
 .moduleRow small,
 .propertyDataHeader p {
   margin: 0.12rem 0 0;
-  color: #64717b;
+  color: var(--app-muted, #71717a);
   font-size: 0.72rem;
-  line-height: 1.35;
+  line-height: 1.4;
 }
 
 .moduleItems {
@@ -2196,10 +2196,10 @@
 }
 
 .moduleItems dt {
-  color: #65727c;
+  color: var(--app-muted, #71717a);
   font-size: 0.64rem;
-  font-weight: 760;
-  letter-spacing: 0.035em;
+  font-weight: 650;
+  letter-spacing: var(--tracking-label, 0.08em);
   line-height: 1.2;
   text-transform: uppercase;
 }
@@ -2228,25 +2228,18 @@
 .propertyDataPanel {
   display: grid;
   gap: 0;
-  overflow: hidden;
-  border: 1px solid #d7e1dc;
-  border-radius: 8px;
-  background: linear-gradient(180deg, #fbfdfb 0%, #ffffff 100%);
 }
 
 .propertyDataSection {
   display: grid;
-  gap: 0.82rem;
-  padding: 1rem 1.05rem;
-  border-top: 1px solid #e4ebe7;
+  gap: 0.85rem;
+  padding: 1.05rem 0;
+  border-top: 1px solid var(--app-line, #e4e4e7);
 }
 
 .propertyDataSection:first-child {
   border-top: 0;
-}
-
-.propertyDataSection:hover {
-  background: #f5faf7;
+  padding-top: 0.2rem;
 }
 
 .propertyDataHeader {
@@ -2258,9 +2251,9 @@
 
 .propertyDataHeader h4 {
   margin: 0;
-  color: #1b2831;
-  font-size: 0.94rem;
-  font-weight: 760;
+  color: var(--app-ink, #18181b);
+  font-size: 0.92rem;
+  font-weight: 650;
   line-height: 1.25;
 }
 
@@ -2312,14 +2305,8 @@
   display: grid;
   gap: 0.55rem;
   min-width: 0;
-  border: 1px solid #e1e8e4;
-  border-radius: 7px;
-  padding: 0.72rem;
-  background: #fff;
-}
-
-.dataModuleRow:hover {
-  background: #f6faf8;
+  padding: 0.65rem 0 0;
+  border-top: 1px dashed var(--app-line-subtle, #f1f0ee);
 }
 
 .dataModuleHeader {
@@ -2330,7 +2317,7 @@
 }
 
 .dataModuleHeader strong {
-  color: #1d2b34;
+  color: var(--app-ink, #18181b);
   font-size: 0.86rem;
   font-weight: 760;
   line-height: 1.25;
