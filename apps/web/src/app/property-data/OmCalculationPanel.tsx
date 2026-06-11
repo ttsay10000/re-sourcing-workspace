@@ -6,8 +6,21 @@ import type {
   PropertyDealDossierExpenseModelRow,
   PropertyDealDossierUnitModelRow,
 } from "@re-sourcing/contracts";
-import React from "react";
+import {
+  Activity,
+  Building2,
+  Calculator,
+  FileSpreadsheet,
+  LayoutDashboard,
+  ListChecks,
+  ReceiptText,
+  SlidersHorizontal,
+  TableProperties,
+} from "lucide-react";
+import { Badge, Button, EmptyState, Panel, SkeletonRows } from "@/components/ui";
+import { cx } from "@/components/ui/utils";
 import { formatPercent } from "@/lib/format";
+import styles from "./omCalc.module.css";
 
 export const OM_CALC_NUMERIC_FIELDS = [
   "buildingSqft",
@@ -433,50 +446,6 @@ const EXPENSE_TREATMENT_OPTIONS: Array<{
   { value: "exclude", label: "Exclude" },
 ];
 
-const tableCellStyle: React.CSSProperties = {
-  padding: "0.4rem 0.5rem",
-  borderBottom: "1px solid var(--app-line-subtle)",
-  verticalAlign: "top",
-};
-
-const sectionCardStyle: React.CSSProperties = {
-  border: "1px solid var(--app-line)",
-  borderRadius: "8px",
-  background: "var(--app-surface)",
-  overflow: "hidden",
-};
-
-const unitTableSubtextStyle: React.CSSProperties = {
-  marginTop: "0.12rem",
-  color: "#64748b",
-  fontSize: "0.71rem",
-  lineHeight: 1.35,
-};
-
-const unitTableAnnualValueStyle: React.CSSProperties = {
-  marginTop: "0.12rem",
-  fontSize: "0.68rem",
-  color: "#64748b",
-  fontStyle: "italic",
-};
-
-const unitTableComputedLabelStyle: React.CSSProperties = {
-  marginTop: "0.18rem",
-  fontSize: "0.62rem",
-  fontWeight: 700,
-  letterSpacing: "0.05em",
-  textTransform: "uppercase",
-  color: "#64748b",
-};
-
-const unitTableComputedValueStyle: React.CSSProperties = {
-  marginTop: "0.06rem",
-  fontSize: "0.69rem",
-  fontWeight: 600,
-  color: "#334155",
-  whiteSpace: "nowrap",
-};
-
 function formatCurrency(value: number | null | undefined): string {
   if (value == null || Number.isNaN(value)) return "—";
   return new Intl.NumberFormat("en-US", {
@@ -550,8 +519,8 @@ function formatCashFlowMultipleValue(
   return value < -0.00005 ? `(${absoluteValue})` : absoluteValue;
 }
 
-function cashFlowValueColor(value: number | null | undefined): string {
-  return value != null && Number.isFinite(value) && value < -0.004 ? "#b42318" : "#0f172a";
+function isNegativeCashFlowValue(value: number | null | undefined): boolean {
+  return value != null && Number.isFinite(value) && value < -0.004;
 }
 
 function sensitivityRangeLabel(range: OmCalculationSensitivityRange | null | undefined): string {
@@ -564,8 +533,8 @@ function nearlyEqual(a: number | null | undefined, b: number | null | undefined,
   return Math.abs(a - b) <= tolerance;
 }
 
-function sensitivityMetricTextColor(value: number | null | undefined): string {
-  return value != null && Number.isFinite(value) && value < 0 ? "#b42318" : "#0f172a";
+function isNegativeSensitivityMetric(value: number | null | undefined): boolean {
+  return value != null && Number.isFinite(value) && value < 0;
 }
 
 function formatDraftValue(draft: OmCalculationDraft, field: FieldConfig): string {
@@ -575,47 +544,17 @@ function formatDraftValue(draft: OmCalculationDraft, field: FieldConfig): string
 
 function summaryRow(label: string, value: string) {
   return (
-    <div
-      key={label}
-      style={{
-        display: "flex",
-        justifyContent: "space-between",
-        gap: "1rem",
-        padding: "0.45rem 0",
-        borderBottom: "1px solid #eef2f7",
-        fontSize: "0.92rem",
-      }}
-    >
-      <span style={{ color: "#64748b" }}>{label}</span>
-      <strong style={{ color: "#0f172a", textAlign: "right" }}>{value}</strong>
+    <div key={label} className={styles.summaryRow}>
+      <span className={styles.summaryLabel}>{label}</span>
+      <strong className={styles.summaryValue}>{value}</strong>
     </div>
   );
 }
 
 function metricCard(title: string, rows: Array<{ label: string; value: string }>) {
   return (
-    <div
-      key={title}
-      style={{
-        border: "1px solid #dbe2ea",
-        borderRadius: "14px",
-        padding: "1rem 1.1rem",
-        background: "#ffffff",
-        boxShadow: "0 8px 24px rgba(15, 23, 42, 0.05)",
-      }}
-    >
-      <div
-        style={{
-          fontSize: "0.75rem",
-          fontWeight: 700,
-          letterSpacing: "0.08em",
-          textTransform: "uppercase",
-          color: "#475569",
-          marginBottom: "0.35rem",
-        }}
-      >
-        {title}
-      </div>
+    <div key={title} className={styles.metricCard}>
+      <div className={cx(styles.kicker, styles.metricCardTitle)}>{title}</div>
       {rows.map((row) => summaryRow(row.label, row.value))}
     </div>
   );
@@ -631,39 +570,11 @@ function AssumptionInput({
   onDraftNumberChange: (field: OmCalculationNumericField, value: number | null) => void;
 }) {
   return (
-    <label
-      style={{
-        display: "grid",
-        gridTemplateColumns: "minmax(0, 1fr) minmax(124px, 144px)",
-        gap: "0.55rem",
-        alignItems: "center",
-      }}
-    >
-      <span style={{ fontSize: "0.77rem", fontWeight: 600, color: "#334155", lineHeight: 1.35 }}>
-        {field.label}
-      </span>
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          border: "1px solid #cbd5e1",
-          borderRadius: "8px",
-          background: "#fff",
-          overflow: "hidden",
-        }}
-      >
+    <label className={styles.fieldRow}>
+      <span className={styles.fieldLabel}>{field.label}</span>
+      <div className={styles.fieldControl}>
         {field.prefix ? (
-          <span
-            style={{
-              padding: "0.4rem 0.5rem",
-              borderRight: "1px solid #e2e8f0",
-              color: "#64748b",
-              background: "#f8fafc",
-              fontSize: "0.8rem",
-            }}
-          >
-            {field.prefix}
-          </span>
+          <span className={cx(styles.fieldAffix, styles.fieldAffixLeft)}>{field.prefix}</span>
         ) : null}
         <input
           type="number"
@@ -675,44 +586,14 @@ function AssumptionInput({
               event.target.value === "" ? null : Number(event.target.value)
             )
           }
-          style={{
-            flex: 1,
-            minWidth: 0,
-            padding: "0.4rem 0.55rem",
-            border: "none",
-            outline: "none",
-            fontSize: "0.84rem",
-            fontVariantNumeric: "tabular-nums",
-          }}
+          className={styles.fieldBareInput}
         />
         {field.suffix ? (
-          <span
-            style={{
-              padding: "0.4rem 0.5rem",
-              borderLeft: "1px solid #e2e8f0",
-              color: "#64748b",
-              background: "#f8fafc",
-              fontSize: "0.78rem",
-            }}
-          >
-            {field.suffix}
-          </span>
+          <span className={cx(styles.fieldAffix, styles.fieldAffixRight)}>{field.suffix}</span>
         ) : null}
       </div>
     </label>
   );
-}
-
-function tableInputStyle(width = "100%"): React.CSSProperties {
-  return {
-    width,
-    minWidth: 0,
-    padding: "0.32rem 0.42rem",
-    border: "1px solid var(--app-line-strong)",
-    borderRadius: "6px",
-    fontSize: "0.76rem",
-    background: "var(--app-surface)",
-  };
 }
 
 function monthlyFromAnnual(value: number | null | undefined): number | null {
@@ -784,57 +665,55 @@ function projectedBoostedAnnualRent(
   return Math.round(row.underwrittenAnnualRent * (1 + uplift / 100) * 100) / 100;
 }
 
-function unitTableRowBackground(row: OmCalculationUnitModelRow, rowIndex: number): string {
-  if (row.includeInUnderwriting === false) return "#f8fafc";
-  return rowIndex % 2 === 0 ? "#ffffff" : "#fbfdff";
+function unitTableRowToneClass(row: OmCalculationUnitModelRow, rowIndex: number): string {
+  if (row.includeInUnderwriting === false) return styles.uToneExcluded;
+  return rowIndex % 2 === 0 ? styles.uToneEven : styles.uToneOdd;
 }
 
-function unitTableCellStyleForRow(
+function unitTableCellClassForRow(
   row: OmCalculationUnitModelRow,
   rowIndex: number,
   options?: {
-    align?: React.CSSProperties["textAlign"];
+    align?: "right" | "center";
     pinned?: boolean;
     metric?: boolean;
     lastColumn?: boolean;
   }
-): React.CSSProperties {
-  const baseBackground = unitTableRowBackground(row, rowIndex);
-  const background = options?.metric
+): string {
+  const baseTone = unitTableRowToneClass(row, rowIndex);
+  // Branches mirror the legacy background ladder. The token palette has a
+  // single blue-soft, so the legacy even/odd zebra nuance inside pinned
+  // columns (and the three excluded grey variants) collapse onto the shared
+  // tone classes (see omCalc.module.css).
+  const tone = options?.metric
     ? row.includeInUnderwriting === false
-      ? "#f2f5f8"
-      : "#f3f8ff"
+      ? styles.uToneExcluded
+      : styles.uToneMetric
     : options?.pinned
       ? row.includeInUnderwriting === false
-        ? "#f4f7fa"
-        : rowIndex % 2 === 0
-          ? "#f8fbff"
-          : "#f2f8ff"
-      : baseBackground;
+        ? styles.uToneExcluded
+        : styles.uTonePinned
+      : baseTone;
 
-  return {
-    ...tableCellStyle,
-    textAlign: options?.align ?? "left",
-    background,
-    borderBottom: "1px solid #dbe5ef",
-    borderRight: options?.lastColumn ? "none" : "1px solid #e6eef5",
-  };
+  return cx(
+    styles.uCell,
+    tone,
+    options?.align === "right" && styles.uCellRight,
+    options?.align === "center" && styles.uCellCenter,
+    options?.lastColumn && styles.uCellLast
+  );
 }
 
-function unitTableHeaderCellStyle(options?: {
-  align?: React.CSSProperties["textAlign"];
+function unitTableHeaderCellClass(options?: {
+  align?: "right" | "center";
   lastColumn?: boolean;
-}): React.CSSProperties {
-  return {
-    ...tableCellStyle,
-    textAlign: options?.align ?? "left",
-    fontWeight: 700,
-    color: "#0f172a",
-    background: "#eef4fb",
-    borderBottom: "1px solid #d8e3ee",
-    borderRight: options?.lastColumn ? "none" : "1px solid #dbe5ef",
-    whiteSpace: "nowrap",
-  };
+}): string {
+  return cx(
+    styles.uTh,
+    options?.align === "right" && styles.uThRight,
+    options?.align === "center" && styles.uThCenter,
+    options?.lastColumn && styles.uThLast
+  );
 }
 
 function nextExpenseRowId(): string {
@@ -1070,16 +949,7 @@ export function OmCalculationPanel({
     const yearLabels = calculation?.yearlyCashFlow.endingLabels ?? [];
     return (
       <tr key={label}>
-        <td
-          colSpan={yearLabels.length + 1}
-          style={{
-            ...tableCellStyle,
-            fontWeight: 700,
-            color: "#1e3a5f",
-            background: "#edf4ff",
-            letterSpacing: "0.02em",
-          }}
-        >
+        <td colSpan={yearLabels.length + 1} className={styles.cfSection}>
           {label}
         </td>
       </tr>
@@ -1102,46 +972,39 @@ export function OmCalculationPanel({
     }
   ) {
     const yearLabels = calculation?.yearlyCashFlow.endingLabels ?? [];
-    const background = options?.highlight ? "#f8fafc" : "#fff";
-    const fontWeight = options?.bold ? 700 : 500;
-    const fontStyle = options?.italic ? "italic" : "normal";
-    const borderTop = options?.doubleTopRule
-      ? "3px double #9fb0c3"
-      : options?.topRule
-        ? "1.5px solid #94a3b8"
-        : tableCellStyle.borderBottom;
-    const borderBottom = options?.bottomRule ? "1.5px solid #94a3b8" : tableCellStyle.borderBottom;
+    // Every legacy style branch becomes a class toggle on the shared cell.
+    const ruleClasses = cx(
+      options?.doubleTopRule ? styles.cfDoubleTopRule : options?.topRule && styles.cfTopRule,
+      options?.bottomRule && styles.cfBottomRule
+    );
+    const emphasisClasses = cx(
+      options?.bold && styles.cfBold,
+      options?.italic && styles.cfItalic,
+      options?.highlight && styles.cfHighlight
+    );
     return (
       <tr key={label}>
         <td
-          style={{
-            ...tableCellStyle,
-            borderTop,
-            borderBottom,
-            fontWeight,
-            fontStyle,
-            color: "#0f172a",
-            background,
-            minWidth: "240px",
-            paddingLeft: options?.indent ? "1.25rem" : tableCellStyle.padding,
-          }}
+          className={cx(
+            styles.cfCell,
+            styles.cfLabel,
+            ruleClasses,
+            emphasisClasses,
+            options?.indent && styles.cfIndent
+          )}
         >
           {label}
         </td>
         {yearLabels.map((yearLabel, index) => (
           <td
             key={`${label}-${yearLabel}`}
-            style={{
-              ...tableCellStyle,
-              borderTop,
-              borderBottom,
-              textAlign: "right",
-              fontWeight,
-              fontStyle,
-              color: cashFlowValueColor(values[index]),
-              background,
-              whiteSpace: "nowrap",
-            }}
+            className={cx(
+              styles.cfCell,
+              styles.cfNum,
+              ruleClasses,
+              emphasisClasses,
+              isNegativeCashFlowValue(values[index]) && styles.negative
+            )}
           >
             {(options?.formatter ?? formatCashFlowCellValue)(
               values[index],
@@ -1170,40 +1033,18 @@ export function OmCalculationPanel({
               : closest;
           }, null));
     return (
-      <div
-        key={sensitivity.key}
-        style={{
-          border: "1px solid #dbe2ea",
-          borderRadius: "16px",
-          padding: "1rem",
-          background: "linear-gradient(180deg, #fcfdff 0%, #f8fbff 100%)",
-          minWidth: 0,
-        }}
-      >
-        <div style={{ display: "flex", justifyContent: "space-between", gap: "0.85rem", flexWrap: "wrap" }}>
+      <div key={sensitivity.key} className={styles.sensCard}>
+        <div className={styles.sensHead}>
           <div>
-            <div style={{ display: "flex", gap: "0.45rem", flexWrap: "wrap", alignItems: "center" }}>
-              <div style={{ fontWeight: 700, color: "#0f172a", fontSize: "0.98rem" }}>{sensitivity.title}</div>
-              <span
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  padding: "0.18rem 0.5rem",
-                  borderRadius: "999px",
-                  background: "#dbeafe",
-                  color: "#1d4ed8",
-                  fontSize: "0.72rem",
-                  fontWeight: 700,
-                }}
-              >
-                Base case highlighted
-              </span>
+            <div className={styles.sensTitleRow}>
+              <div className={styles.sensTitle}>{sensitivity.title}</div>
+              <Badge tone="info">Base case highlighted</Badge>
             </div>
-            <div style={{ marginTop: "0.22rem", fontSize: "0.76rem", color: "#64748b" }}>
+            <div className={styles.sensNote}>
               Base row stays highlighted below; negative values are shown in red.
             </div>
           </div>
-          <div style={{ textAlign: "right", fontSize: "0.76rem", color: "#475569" }}>
+          <div className={styles.sensRanges}>
             <div>IRR range: {sensitivityRangeLabel(sensitivity.ranges.irrPct)}</div>
             <div>
               Equity-yield range:{" "}
@@ -1217,39 +1058,22 @@ export function OmCalculationPanel({
           </div>
         </div>
 
-        <div
-          style={{
-            marginTop: "0.8rem",
-            padding: "0.75rem",
-            borderRadius: "12px",
-            border: "1px solid #bfdbfe",
-            background: "linear-gradient(180deg, #eff6ff 0%, #f8fbff 100%)",
-            display: "grid",
-            gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-            gap: "0.55rem 0.7rem",
-          }}
-        >
+        <div className={styles.sensBaseGrid}>
           <div>
-            <div style={{ fontSize: "0.68rem", textTransform: "uppercase", letterSpacing: "0.08em", color: "#64748b", fontWeight: 700 }}>
-              Base input
-            </div>
-            <div style={{ marginTop: "0.12rem", fontSize: "0.92rem", fontWeight: 700, color: "#0f172a" }}>
+            <div className={styles.sensBaseKicker}>Base input</div>
+            <div className={styles.sensBaseValue}>
               {formatPercent(sensitivity.baseCase.valuePct, 1)}
             </div>
           </div>
           <div>
-            <div style={{ fontSize: "0.68rem", textTransform: "uppercase", letterSpacing: "0.08em", color: "#64748b", fontWeight: 700 }}>
-              Base IRR
-            </div>
-            <div style={{ marginTop: "0.12rem", fontSize: "0.92rem", fontWeight: 700, color: "#0f172a" }}>
+            <div className={styles.sensBaseKicker}>Base IRR</div>
+            <div className={styles.sensBaseValue}>
               {formatRatioPercent(sensitivity.baseCase.irrPct, 1)}
             </div>
           </div>
           <div>
-            <div style={{ fontSize: "0.68rem", textTransform: "uppercase", letterSpacing: "0.08em", color: "#64748b", fontWeight: 700 }}>
-              Base equity yield
-            </div>
-            <div style={{ marginTop: "0.12rem", fontSize: "0.92rem", fontWeight: 700, color: "#0f172a" }}>
+            <div className={styles.sensBaseKicker}>Base equity yield</div>
+            <div className={styles.sensBaseValue}>
               {formatRatioPercent(
                 sensitivity.baseCase.year1EquityYield ?? sensitivity.baseCase.year1CashOnCashReturn,
                 1
@@ -1257,10 +1081,8 @@ export function OmCalculationPanel({
             </div>
           </div>
           <div>
-            <div style={{ fontSize: "0.68rem", textTransform: "uppercase", letterSpacing: "0.08em", color: "#64748b", fontWeight: 700 }}>
-              Base {outputLabel}
-            </div>
-            <div style={{ marginTop: "0.12rem", fontSize: "0.92rem", fontWeight: 700, color: "#0f172a" }}>
+            <div className={styles.sensBaseKicker}>Base {outputLabel}</div>
+            <div className={styles.sensBaseValue}>
               {formatCurrency(
                 baseScenario == null
                   ? null
@@ -1272,87 +1094,54 @@ export function OmCalculationPanel({
           </div>
         </div>
 
-        <div style={{ overflowX: "auto", marginTop: "0.8rem" }}>
-          <table style={{ width: "100%", borderCollapse: "separate", borderSpacing: "0 0.32rem", fontSize: "0.78rem" }}>
-            <thead style={{ background: "#f8fafc" }}>
+        <div className={styles.sensTableWrap}>
+          <table className={styles.sensTable}>
+            <thead className={styles.theadRaised}>
               <tr>
-                <th style={{ ...tableCellStyle, textAlign: "left", fontWeight: 700 }}>
-                  {sensitivity.inputLabel}
-                </th>
-                <th style={{ ...tableCellStyle, textAlign: "right", fontWeight: 700 }}>IRR</th>
-                <th style={{ ...tableCellStyle, textAlign: "right", fontWeight: 700 }}>
-                  Equity yield
-                </th>
-                <th style={{ ...tableCellStyle, textAlign: "right", fontWeight: 700 }}>
-                  {outputLabel}
-                </th>
+                <th className={styles.th}>{sensitivity.inputLabel}</th>
+                <th className={cx(styles.th, styles.thRight)}>IRR</th>
+                <th className={cx(styles.th, styles.thRight)}>Equity yield</th>
+                <th className={cx(styles.th, styles.thRight)}>{outputLabel}</th>
               </tr>
             </thead>
             <tbody>
               {sensitivity.scenarios.map((scenario) => {
                 const isBaseRow = nearlyEqual(scenario.valuePct, sensitivity.baseCase.valuePct);
-                const rowBackground = isBaseRow ? "#eff6ff" : "#ffffff";
-                const rowBorderColor = isBaseRow ? "#93c5fd" : "#e2e8f0";
+                const baseRowClass = isBaseRow ? styles.sensCellBase : undefined;
                 return (
                   <tr key={`${sensitivity.key}-${scenario.valuePct}`}>
                     <td
-                      style={{
-                        ...tableCellStyle,
-                        background: rowBackground,
-                        borderTop: `1px solid ${rowBorderColor}`,
-                        borderBottom: `1px solid ${rowBorderColor}`,
-                        borderLeft: isBaseRow ? "4px solid #2563eb" : `1px solid ${rowBorderColor}`,
-                        borderRight: `1px solid ${rowBorderColor}`,
-                        borderTopLeftRadius: "10px",
-                        borderBottomLeftRadius: "10px",
-                        fontWeight: isBaseRow ? 700 : 600,
-                      }}
+                      className={cx(
+                        styles.sensCell,
+                        styles.sensCellFirst,
+                        baseRowClass,
+                        isBaseRow && styles.sensCellFirstBase
+                      )}
                     >
-                      <div style={{ display: "flex", justifyContent: "space-between", gap: "0.45rem", alignItems: "center" }}>
+                      <div className={styles.sensValueWrap}>
                         <span>{formatPercent(scenario.valuePct, 1)}</span>
-                        {isBaseRow ? (
-                          <span
-                            style={{
-                              display: "inline-flex",
-                              alignItems: "center",
-                              padding: "0.12rem 0.42rem",
-                              borderRadius: "999px",
-                              background: "#dbeafe",
-                              color: "#1d4ed8",
-                              fontSize: "0.68rem",
-                              fontWeight: 700,
-                            }}
-                          >
-                            Base
-                          </span>
-                        ) : null}
+                        {isBaseRow ? <Badge tone="info">Base</Badge> : null}
                       </div>
                     </td>
                     <td
-                      style={{
-                        ...tableCellStyle,
-                        textAlign: "right",
-                        background: rowBackground,
-                        color: sensitivityMetricTextColor(scenario.irrPct),
-                        fontWeight: isBaseRow ? 700 : 600,
-                        borderTop: `1px solid ${rowBorderColor}`,
-                        borderBottom: `1px solid ${rowBorderColor}`,
-                      }}
+                      className={cx(
+                        styles.sensCell,
+                        styles.cellNum,
+                        baseRowClass,
+                        isNegativeSensitivityMetric(scenario.irrPct) && styles.negative
+                      )}
                     >
                       {formatRatioPercent(scenario.irrPct, 1)}
                     </td>
                     <td
-                      style={{
-                        ...tableCellStyle,
-                        textAlign: "right",
-                        background: rowBackground,
-                        color: sensitivityMetricTextColor(
+                      className={cx(
+                        styles.sensCell,
+                        styles.cellNum,
+                        baseRowClass,
+                        isNegativeSensitivityMetric(
                           scenario.year1EquityYield ?? scenario.year1CashOnCashReturn
-                        ),
-                        fontWeight: isBaseRow ? 700 : 600,
-                        borderTop: `1px solid ${rowBorderColor}`,
-                        borderBottom: `1px solid ${rowBorderColor}`,
-                      }}
+                        ) && styles.negative
+                      )}
                     >
                       {formatRatioPercent(
                         scenario.year1EquityYield ?? scenario.year1CashOnCashReturn,
@@ -1360,22 +1149,17 @@ export function OmCalculationPanel({
                       )}
                     </td>
                     <td
-                      style={{
-                        ...tableCellStyle,
-                        textAlign: "right",
-                        background: rowBackground,
-                        color: sensitivityMetricTextColor(
+                      className={cx(
+                        styles.sensCell,
+                        styles.cellNum,
+                        styles.sensCellLast,
+                        baseRowClass,
+                        isNegativeSensitivityMetric(
                           sensitivity.key === "exit_cap_rate"
                             ? scenario.netProceedsToEquity
                             : scenario.stabilizedNoi
-                        ),
-                        fontWeight: isBaseRow ? 700 : 600,
-                        borderTop: `1px solid ${rowBorderColor}`,
-                        borderBottom: `1px solid ${rowBorderColor}`,
-                        borderRight: `1px solid ${rowBorderColor}`,
-                        borderTopRightRadius: "10px",
-                        borderBottomRightRadius: "10px",
-                      }}
+                        ) && styles.negative
+                      )}
                     >
                       {formatCurrency(
                         sensitivity.key === "exit_cap_rate"
@@ -1394,61 +1178,21 @@ export function OmCalculationPanel({
   }
 
   return (
-    <div
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        gap: "1rem",
-        padding: "1rem",
-        border: "1px solid var(--app-line)",
-        borderRadius: "8px",
-        background: "var(--app-surface)",
-        boxShadow: "var(--app-shadow)",
-      }}
-    >
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          gap: "1rem",
-          flexWrap: "wrap",
-          alignItems: "flex-start",
-        }}
-      >
-        <div style={{ maxWidth: "820px" }}>
-          <h3 style={{ margin: 0, fontSize: "1.05rem", color: "var(--app-ink)" }}>OM analysis workspace</h3>
-          <p style={{ margin: "0.35rem 0 0", fontSize: "0.9rem", color: "var(--app-ink-secondary)", lineHeight: 1.55 }}>
+    <Panel padding="md" className={styles.root}>
+      <div className={styles.headerRow}>
+        <div className={styles.headerIntro}>
+          <h3 className={styles.title}>
+            <Calculator size={16} strokeWidth={2} aria-hidden="true" className={styles.titleIcon} />
+            OM analysis workspace
+          </h3>
+          <p className={styles.lede}>
             Work from the uploaded OM the way you would in a live underwrite: tighten the assumptions in a
             compact calculator, adjust unit and expense rows directly, then review the live deal overview,
             cash flow statement, sensitivities, and supporting assumptions that feed the dossier.
           </p>
-          <div style={{ display: "flex", gap: "0.55rem", flexWrap: "wrap", marginTop: "0.55rem" }}>
-            <span
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                padding: "0.28rem 0.58rem",
-                borderRadius: "999px",
-                background: "#dbeafe",
-                color: "#1d4ed8",
-                fontSize: "0.77rem",
-                fontWeight: 700,
-              }}
-            >
-              {effectiveLabel}
-            </span>
-            <span
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                padding: "0.28rem 0.58rem",
-                borderRadius: "999px",
-                background: isDirty ? "#fef3c7" : "#ecfdf5",
-                color: isDirty ? "#92400e" : "#166534",
-                fontSize: "0.77rem",
-                fontWeight: 700,
-              }}
-            >
+          <div className={styles.badgeRow}>
+            <Badge tone="info">{effectiveLabel}</Badge>
+            <Badge tone={isDirty ? "warning" : "success"}>
               {isDirty
                 ? mode === "standalone"
                   ? "Unapplied underwriting edits"
@@ -1456,24 +1200,15 @@ export function OmCalculationPanel({
                 : mode === "standalone"
                   ? "Analysis synced"
                   : "Assumptions synced"}
-            </span>
+            </Badge>
           </div>
         </div>
-        <div style={{ display: "flex", gap: "0.6rem", flexWrap: "wrap" }}>
-          <button
+        <div className={styles.actionRow}>
+          <Button
             type="button"
+            variant="primary"
             onClick={onRunCalculation}
             disabled={running || !canCalculate}
-            style={{
-              padding: "0.58rem 0.85rem",
-              borderRadius: "6px",
-              border: "1px solid var(--app-accent)",
-              background: "var(--app-accent)",
-              color: "#fff",
-              fontWeight: 750,
-              cursor: running || !canCalculate ? "not-allowed" : "pointer",
-              opacity: !canCalculate ? 0.65 : 1,
-            }}
           >
             {running
               ? "Analyzing..."
@@ -1482,149 +1217,90 @@ export function OmCalculationPanel({
                   ? "Refresh analysis"
                   : "Analyze uploaded OMs"
                 : "Analyze OM"}
-          </button>
+          </Button>
           {showPersistenceActions ? (
             <>
-              <button
+              <Button
                 type="button"
+                variant="secondary"
+                className={styles.buttonAccent}
                 onClick={onSave}
                 disabled={saving || running || !isDirty}
-                style={{
-                  padding: "0.58rem 0.85rem",
-                  borderRadius: "6px",
-                  border: "1px solid var(--app-line-strong)",
-                  background: "var(--app-surface)",
-                  color: "var(--app-accent)",
-                  fontWeight: 750,
-                  cursor: saving || running || !isDirty ? "not-allowed" : "pointer",
-                }}
               >
                 {saving ? "Saving..." : "Save assumptions"}
-              </button>
-              <button
+              </Button>
+              <Button
                 type="button"
+                variant="secondary"
                 onClick={onResetToSaved}
                 disabled={saving || running || !isDirty}
-                style={{
-                  padding: "0.58rem 0.85rem",
-                  borderRadius: "6px",
-                  border: "1px solid var(--app-line-strong)",
-                  background: "var(--app-surface-raised)",
-                  color: "var(--app-ink-secondary)",
-                  cursor: saving || running || !isDirty ? "not-allowed" : "pointer",
-                }}
               >
                 Reset edits
-              </button>
-              <button
+              </Button>
+              <Button
                 type="button"
+                variant="destructive"
                 onClick={onClearSaved}
                 disabled={saving || running}
-                style={{
-                  padding: "0.58rem 0.85rem",
-                  borderRadius: "6px",
-                  border: "1px solid var(--app-red-border)",
-                  background: "var(--app-red-soft)",
-                  color: "var(--app-red)",
-                  cursor: saving || running ? "not-allowed" : "pointer",
-                }}
               >
                 Clear saved overrides
-              </button>
+              </Button>
             </>
           ) : null}
         </div>
       </div>
 
       {!canCalculate ? (
-        <div
-          style={{
-            padding: "0.85rem 1rem",
-            borderRadius: "8px",
-            border: "1px solid var(--app-line)",
-            background: "var(--app-surface-raised)",
-            color: "var(--app-ink-secondary)",
-            fontSize: "0.92rem",
-          }}
-        >
+        <div className={styles.notice}>
           {mode === "standalone"
             ? "Upload one or more OM PDFs and run analysis so this workspace can populate current state, unit-level underwriting rows, and dossier outputs."
             : "Upload an OM, build the authoritative OM, or save broker notes first so this workspace has a current revenue and expense base to analyze."}
         </div>
       ) : null}
 
-      {error ? (
-        <div
-          style={{
-            padding: "0.85rem 1rem",
-            borderRadius: "8px",
-            border: "1px solid var(--app-red-border)",
-            background: "var(--app-red-soft)",
-            color: "var(--app-red)",
-            fontSize: "0.92rem",
-          }}
-        >
-          {error}
-        </div>
-      ) : null}
+      {error ? <div className={styles.noticeDanger}>{error}</div> : null}
 
-      <div style={sectionCardStyle}>
-        <div
-          style={{
-            padding: "0.9rem 1rem",
-            borderBottom: "1px solid var(--app-line)",
-            display: "flex",
-            justifyContent: "space-between",
-            gap: "1rem",
-            flexWrap: "wrap",
-            alignItems: "flex-start",
-          }}
-        >
-          <div style={{ maxWidth: "720px" }}>
-            <strong style={{ color: "var(--app-ink)" }}>Assumptions calculator</strong>
-            <div style={{ marginTop: "0.24rem", fontSize: "0.82rem", color: "var(--app-muted)", lineHeight: 1.5 }}>
+      <div className={styles.sectionCard}>
+        <div className={cx(styles.sectionHead, styles.sectionHeadRow)}>
+          <div className={styles.sectionHeadIntro}>
+            <strong className={styles.sectionTitle}>
+              <SlidersHorizontal
+                size={15}
+                strokeWidth={2}
+                aria-hidden="true"
+                className={styles.sectionTitleIcon}
+              />
+              Assumptions calculator
+            </strong>
+            <div className={styles.sectionDesc}>
               All of the core underwriting inputs live here in a tighter calculator layout so it is easier to
               key in and iterate quickly during OM review.
             </div>
           </div>
-          <div style={{ display: "flex", gap: "0.65rem", flexWrap: "wrap", alignItems: "center" }}>
-            <button
+          <div className={styles.sectionActions}>
+            <Button
               type="button"
+              variant="secondary"
+              size="sm"
+              className={styles.buttonAccent}
               onClick={onApplyFormulaDefault}
               disabled={saving || running}
-              style={{
-                padding: "0.48rem 0.72rem",
-                borderRadius: "6px",
-                border: "1px solid var(--app-line-strong)",
-                background: "var(--app-surface-raised)",
-                color: "var(--app-accent)",
-                cursor: saving || running ? "not-allowed" : "pointer",
-              }}
             >
               Use formula FF&E default
-            </button>
-            <div style={{ fontSize: "0.78rem", color: "var(--app-muted)" }}>
+            </Button>
+            <div className={styles.formulaHint}>
               Formula FF&E default: {formatCurrency(formulaFurnishingSetupCosts ?? 0)}
             </div>
           </div>
         </div>
-        <div style={{ padding: "0.95rem 1rem" }}>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-              gap: "0.75rem",
-              marginBottom: "0.9rem",
-            }}
-          >
-            <label style={{ display: "grid", gap: "0.35rem" }}>
-              <span style={{ fontSize: "0.77rem", fontWeight: 600, color: "#334155" }}>
-                Investment profile
-              </span>
+        <div className={styles.sectionBody}>
+          <div className={styles.metaGrid}>
+            <label className={styles.fieldStack}>
+              <span className={styles.fieldLabel}>Investment profile</span>
               <select
                 value={draft.investmentProfile}
                 onChange={(event) => onDraftTextChange("investmentProfile", event.target.value)}
-                style={tableInputStyle()}
+                className={styles.input}
               >
                 <option value="">Select profile</option>
                 <option value="Core">Core</option>
@@ -1634,111 +1310,45 @@ export function OmCalculationPanel({
                 <option value="Opportunistic">Opportunistic</option>
               </select>
             </label>
-            <label style={{ display: "grid", gap: "0.35rem" }}>
-              <span style={{ fontSize: "0.77rem", fontWeight: 600, color: "#334155" }}>
-                Target acquisition date
-              </span>
+            <label className={styles.fieldStack}>
+              <span className={styles.fieldLabel}>Target acquisition date</span>
               <input
                 type="date"
                 value={draft.targetAcquisitionDate}
                 onChange={(event) => onDraftTextChange("targetAcquisitionDate", event.target.value)}
-                style={tableInputStyle()}
+                className={styles.input}
               />
             </label>
           </div>
-          <div
-            style={{
-              marginBottom: "0.9rem",
-              padding: "0.85rem 0.95rem",
-              border: "1px solid #dbeafe",
-              borderRadius: "12px",
-              background: "linear-gradient(180deg, #f8fbff 0%, #eff6ff 100%)",
-              display: "grid",
-              gap: "0.7rem",
-            }}
-          >
-            <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap" }}>
+          <div className={cx(styles.calloutPanel, styles.calloutPanelBlue)}>
+            <div className={styles.calloutHead}>
               <div>
-                <div
-                  style={{
-                    fontSize: "0.74rem",
-                    fontWeight: 700,
-                    letterSpacing: "0.08em",
-                    textTransform: "uppercase",
-                    color: "#1d4ed8",
-                  }}
-                >
-                  Current NOI override
-                </div>
-                <div style={{ marginTop: "0.22rem", fontSize: "0.82rem", color: "#475569", lineHeight: 1.5 }}>
+                <div className={styles.kickerBlue}>Current NOI override</div>
+                <div className={styles.calloutDesc}>
                   If the pulled current NOI is off, replace it here and refresh analysis. Leave blank to
                   keep using the OM value.
                 </div>
               </div>
-              <button
+              <Button
                 type="button"
+                variant="secondary"
+                size="sm"
+                className={styles.buttonBlue}
                 onClick={() => onDraftNumberChange("currentNoi", null)}
                 disabled={saving || running || draft.currentNoi == null}
-                style={{
-                  padding: "0.46rem 0.72rem",
-                  borderRadius: "9px",
-                  border: "1px solid #bfdbfe",
-                  background: "#ffffff",
-                  color: "#1d4ed8",
-                  cursor: saving || running || draft.currentNoi == null ? "not-allowed" : "pointer",
-                }}
               >
                 Use pulled NOI
-              </button>
+              </Button>
             </div>
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-                gap: "0.7rem",
-                alignItems: "end",
-              }}
-            >
-              <div
-                style={{
-                  padding: "0.7rem 0.8rem",
-                  borderRadius: "10px",
-                  background: "#ffffff",
-                  border: "1px solid #dbeafe",
-                }}
-              >
-                <div style={{ fontSize: "0.72rem", color: "#64748b", textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 700 }}>
-                  Pulled NOI
-                </div>
-                <div style={{ marginTop: "0.2rem", fontSize: "1rem", fontWeight: 700, color: "#0f172a" }}>
-                  {formatCurrency(pulledCurrentNoi)}
-                </div>
+            <div className={styles.calloutGrid}>
+              <div className={styles.statBox}>
+                <div className={styles.statKicker}>Pulled NOI</div>
+                <div className={styles.statValue}>{formatCurrency(pulledCurrentNoi)}</div>
               </div>
-              <label style={{ display: "grid", gap: "0.35rem" }}>
-                <span style={{ fontSize: "0.77rem", fontWeight: 600, color: "#334155" }}>
-                  Override current NOI
-                </span>
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    border: "1px solid #cbd5e1",
-                    borderRadius: "8px",
-                    background: "#fff",
-                    overflow: "hidden",
-                  }}
-                >
-                  <span
-                    style={{
-                      padding: "0.4rem 0.5rem",
-                      borderRight: "1px solid #e2e8f0",
-                      color: "#64748b",
-                      background: "#f8fafc",
-                      fontSize: "0.8rem",
-                    }}
-                  >
-                    $
-                  </span>
+              <label className={styles.fieldStack}>
+                <span className={styles.fieldLabel}>Override current NOI</span>
+                <div className={styles.fieldControl}>
+                  <span className={cx(styles.fieldAffix, styles.fieldAffixLeft)}>$</span>
                   <input
                     type="number"
                     step="any"
@@ -1750,85 +1360,28 @@ export function OmCalculationPanel({
                       )
                     }
                     placeholder={pulledCurrentNoi == null ? "No NOI pulled yet" : String(pulledCurrentNoi)}
-                    style={{
-                      flex: 1,
-                      minWidth: 0,
-                      padding: "0.4rem 0.55rem",
-                      border: "none",
-                      outline: "none",
-                      fontSize: "0.84rem",
-                      fontVariantNumeric: "tabular-nums",
-                    }}
+                    className={styles.fieldBareInput}
                   />
                 </div>
               </label>
-              <div
-                style={{
-                  padding: "0.7rem 0.8rem",
-                  borderRadius: "10px",
-                  background: hasCurrentNoiOverrideApplied ? "#ffffff" : "#f8fafc",
-                  border: "1px solid #dbeafe",
-                }}
-              >
-                <div style={{ fontSize: "0.72rem", color: "#64748b", textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 700 }}>
-                  Applied in analysis
-                </div>
-                <div style={{ marginTop: "0.2rem", fontSize: "1rem", fontWeight: 700, color: "#0f172a" }}>
-                  {formatCurrency(appliedCurrentNoi)}
-                </div>
+              <div className={cx(styles.statBox, !hasCurrentNoiOverrideApplied && styles.statBoxMuted)}>
+                <div className={styles.statKicker}>Applied in analysis</div>
+                <div className={styles.statValue}>{formatCurrency(appliedCurrentNoi)}</div>
               </div>
             </div>
           </div>
-          <div
-            style={{
-              marginBottom: "0.9rem",
-              padding: "0.85rem 0.95rem",
-              border: "1px solid #dbeafe",
-              borderRadius: "12px",
-              background: "linear-gradient(180deg, #ffffff 0%, #f8fbff 100%)",
-              display: "grid",
-              gap: "0.7rem",
-            }}
-          >
+          <div className={cx(styles.calloutPanel, styles.calloutPanelBrand)}>
             <div>
-              <div
-                style={{
-                  fontSize: "0.74rem",
-                  fontWeight: 700,
-                  letterSpacing: "0.08em",
-                  textTransform: "uppercase",
-                  color: "#0f766e",
-                }}
-              >
-                Hold period / exit year
-              </div>
-              <div style={{ marginTop: "0.22rem", fontSize: "0.82rem", color: "#475569", lineHeight: 1.5 }}>
+              <div className={styles.kickerBrand}>Hold period / exit year</div>
+              <div className={styles.calloutDesc}>
                 This drives the sale year, the number of cash-flow columns, recommended-offer math, and the
                 projected IRR.
               </div>
             </div>
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-                gap: "0.7rem",
-                alignItems: "end",
-              }}
-            >
-              <label style={{ display: "grid", gap: "0.35rem" }}>
-                <span style={{ fontSize: "0.77rem", fontWeight: 600, color: "#334155" }}>
-                  Hold period
-                </span>
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    border: "1px solid #cbd5e1",
-                    borderRadius: "8px",
-                    background: "#fff",
-                    overflow: "hidden",
-                  }}
-                >
+            <div className={styles.calloutGrid}>
+              <label className={styles.fieldStack}>
+                <span className={styles.fieldLabel}>Hold period</span>
+                <div className={styles.fieldControl}>
                   <input
                     type="number"
                     step={1}
@@ -1841,91 +1394,30 @@ export function OmCalculationPanel({
                       )
                     }
                     placeholder={appliedHoldPeriodYears == null ? "2" : String(appliedHoldPeriodYears)}
-                    style={{
-                      flex: 1,
-                      minWidth: 0,
-                      padding: "0.4rem 0.55rem",
-                      border: "none",
-                      outline: "none",
-                      fontSize: "0.84rem",
-                      fontVariantNumeric: "tabular-nums",
-                    }}
+                    className={styles.fieldBareInput}
                   />
-                  <span
-                    style={{
-                      padding: "0.4rem 0.5rem",
-                      borderLeft: "1px solid #e2e8f0",
-                      color: "#64748b",
-                      background: "#f8fafc",
-                      fontSize: "0.78rem",
-                    }}
-                  >
-                    yrs
-                  </span>
+                  <span className={cx(styles.fieldAffix, styles.fieldAffixRight)}>yrs</span>
                 </div>
               </label>
-              <div
-                style={{
-                  padding: "0.7rem 0.8rem",
-                  borderRadius: "10px",
-                  background: "#ffffff",
-                  border: "1px solid #dbeafe",
-                }}
-              >
-                <div style={{ fontSize: "0.72rem", color: "#64748b", textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 700 }}>
-                  Applied in analysis
-                </div>
-                <div style={{ marginTop: "0.2rem", fontSize: "1rem", fontWeight: 700, color: "#0f172a" }}>
+              <div className={styles.statBox}>
+                <div className={styles.statKicker}>Applied in analysis</div>
+                <div className={styles.statValue}>
                   {appliedHoldPeriodYears != null ? `${formatNumber(appliedHoldPeriodYears)} years` : "—"}
                 </div>
               </div>
-              <div
-                style={{
-                  padding: "0.7rem 0.8rem",
-                  borderRadius: "10px",
-                  background: "#ffffff",
-                  border: "1px solid #dbeafe",
-                }}
-              >
-                <div style={{ fontSize: "0.72rem", color: "#64748b", textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 700 }}>
-                  IRR basis
-                </div>
-                <div style={{ marginTop: "0.2rem", fontSize: "1rem", fontWeight: 700, color: "#0f172a" }}>
+              <div className={styles.statBox}>
+                <div className={styles.statKicker}>IRR basis</div>
+                <div className={styles.statValue}>
                   {appliedHoldPeriodYears != null ? `${formatNumber(appliedHoldPeriodYears)}-year exit` : "Refresh to apply"}
                 </div>
               </div>
             </div>
           </div>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
-              gap: "0.85rem",
-            }}
-          >
+          <div className={styles.groupGrid}>
             {visibleFieldGroups.map((group) => (
-              <div
-                key={group.title}
-                style={{
-                  border: "1px solid #e2e8f0",
-                  borderRadius: "12px",
-                  padding: "0.85rem 0.9rem",
-                  background: "#fbfdff",
-                }}
-              >
-                <div
-                  style={{
-                    fontSize: "0.74rem",
-                    fontWeight: 700,
-                    letterSpacing: "0.08em",
-                    textTransform: "uppercase",
-                    color: "#475569",
-                    marginBottom: "0.7rem",
-                  }}
-                >
-                  {group.title}
-                </div>
-                <div style={{ display: "grid", gap: "0.6rem" }}>
+              <div key={group.title} className={styles.groupCard}>
+                <div className={styles.groupKicker}>{group.title}</div>
+                <div className={styles.groupFields}>
                   {group.fields.map((field) => (
                     <AssumptionInput
                       key={field.key}
@@ -1938,7 +1430,7 @@ export function OmCalculationPanel({
               </div>
             ))}
           </div>
-          <div style={{ marginTop: "0.8rem", fontSize: "0.8rem", color: "#64748b", lineHeight: 1.5 }}>
+          <div className={styles.footnote}>
             {showExpenseFallbackFields
               ? null
               : "Expense amounts, step-ups, and growth now live in the expense model below. Management fee and occupancy tax stay here because they are projected overlays on revenue, not copied from the OM expense table."}
@@ -1950,43 +1442,39 @@ export function OmCalculationPanel({
         </div>
       </div>
 
-      <div style={sectionCardStyle}>
-        <div style={{ padding: "0.9rem 1rem", borderBottom: "1px solid #e2e8f0" }}>
-          <strong style={{ color: "#0f172a" }}>Per-unit monthly rent, FF&amp;E, onboarding, and OpEx</strong>
-          <div style={{ marginTop: "0.22rem", fontSize: "0.75rem", color: "#64748b", lineHeight: 1.45 }}>
+      <div className={styles.sectionCard}>
+        <div className={styles.sectionHead}>
+          <strong className={styles.sectionTitle}>
+            <Building2 size={15} strokeWidth={2} aria-hidden="true" className={styles.sectionTitleIcon} />
+            Per-unit monthly rent, FF&amp;E, onboarding, and OpEx
+          </strong>
+          <div className={styles.sectionDesc}>
             Edit monthly gross rent by unit, then tune uplift, occupancy, FF&amp;E, onboarding labor,
             onboarding other, and recurring unit OpEx. Annual figures stay visible in smaller italic text.
           </div>
-          <div style={{ marginTop: "0.3rem", fontSize: "0.78rem", color: "#0f172a", lineHeight: 1.5 }}>
+          <div className={styles.sectionStatsLine}>
             FF&amp;E: <strong>{formatCurrency(detailedFurnishingTotal)}</strong> • Onboarding:{" "}
             <strong>{formatCurrency(detailedOnboardingTotal)}</strong> • Rec. OpEx / mo:{" "}
             <strong>{formatCurrency(detailedRecurringOpexMonthlyTotal)}</strong> • Weighted occupancy:{" "}
             <strong>{formatPercent(weightedModeledOccupancyPct, 1)}</strong>
           </div>
         </div>
-        <div style={{ overflowX: "auto" }}>
-          <table
-            style={{
-              width: "100%",
-              minWidth: "1540px",
-              borderCollapse: "collapse",
-              fontSize: "0.76rem",
-            }}
-          >
+        <div className={styles.tableScroll}>
+          <table className={styles.unitTable}>
             <thead>
               <tr>
-                <th style={unitTableHeaderCellStyle()}>Unit</th>
-                <th style={unitTableHeaderCellStyle()}>Mix</th>
-                <th style={unitTableHeaderCellStyle({ align: "right" })}>Current / mo</th>
-                <th style={unitTableHeaderCellStyle({ align: "right" })}>Base / mo</th>
-                <th style={unitTableHeaderCellStyle({ align: "right" })}>Uplift %</th>
-                <th style={unitTableHeaderCellStyle({ align: "right" })}>Occ. %</th>
-                <th style={unitTableHeaderCellStyle({ align: "right" })}>FF&amp;E</th>
-                <th style={unitTableHeaderCellStyle({ align: "right" })}>Labor</th>
-                <th style={unitTableHeaderCellStyle({ align: "right" })}>Other</th>
-                <th style={unitTableHeaderCellStyle({ align: "right" })}>OpEx / mo</th>
-                <th style={unitTableHeaderCellStyle({ align: "center" })}>Model</th>
-                <th style={unitTableHeaderCellStyle({ align: "right", lastColumn: true })}>
+                <th className={unitTableHeaderCellClass()}>Unit</th>
+                <th className={unitTableHeaderCellClass()}>Mix</th>
+                <th className={unitTableHeaderCellClass({ align: "right" })}>Current / mo</th>
+                <th className={unitTableHeaderCellClass({ align: "right" })}>Base / mo</th>
+                <th className={unitTableHeaderCellClass({ align: "right" })}>Uplift %</th>
+                <th className={unitTableHeaderCellClass({ align: "right" })}>Occ. %</th>
+                <th className={unitTableHeaderCellClass({ align: "right" })}>FF&amp;E</th>
+                <th className={unitTableHeaderCellClass({ align: "right" })}>Labor</th>
+                <th className={unitTableHeaderCellClass({ align: "right" })}>Other</th>
+                <th className={unitTableHeaderCellClass({ align: "right" })}>OpEx / mo</th>
+                <th className={unitTableHeaderCellClass({ align: "center" })}>Model</th>
+                <th className={unitTableHeaderCellClass({ align: "right", lastColumn: true })}>
                   Modeled / mo
                 </th>
               </tr>
@@ -1998,20 +1486,20 @@ export function OmCalculationPanel({
 
                   return (
                     <tr key={row.rowId}>
-                      <td style={unitTableCellStyleForRow(row, rowIndex, { pinned: true })}>
-                        <div style={{ fontWeight: 600, color: "#0f172a", fontSize: "0.74rem" }}>{row.unitLabel}</div>
-                        <div style={unitTableSubtextStyle}>
+                      <td className={unitTableCellClassForRow(row, rowIndex, { pinned: true })}>
+                        <div className={styles.unitName}>{row.unitLabel}</div>
+                        <div className={styles.unitSub}>
                           {[row.tenantStatus, row.notes].filter(Boolean).join(" · ") || "—"}
                         </div>
                       </td>
-                      <td style={unitTableCellStyleForRow(row, rowIndex, { pinned: true })}>
-                        <div style={{ fontSize: "0.73rem" }}>{row.unitCategory ?? "—"}</div>
-                        <div style={unitTableSubtextStyle}>
+                      <td className={unitTableCellClassForRow(row, rowIndex, { pinned: true })}>
+                        <div>{row.unitCategory ?? "—"}</div>
+                        <div className={styles.unitSub}>
                           {[row.beds != null ? `${formatNumber(row.beds)}Br` : null, row.baths != null ? `${row.baths}Ba` : null, row.sqft != null ? `${formatNumber(row.sqft)} SF` : null]
                             .filter(Boolean)
                             .join(" · ") || "—"}
                         </div>
-                        <div style={{ ...unitTableSubtextStyle, lineHeight: 1.2 }}>
+                        <div className={cx(styles.unitSub, styles.unitSubTight)}>
                           {row.isCommercial
                             ? "Commercial"
                             : row.isRentStabilized
@@ -2023,13 +1511,13 @@ export function OmCalculationPanel({
                                   : "Eligible"}
                         </div>
                       </td>
-                      <td style={unitTableCellStyleForRow(row, rowIndex, { align: "right" })}>
+                      <td className={unitTableCellClassForRow(row, rowIndex, { align: "right" })}>
                         <div>{formatCurrency(monthlyFromAnnual(row.currentAnnualRent))}</div>
-                        <div style={unitTableAnnualValueStyle}>
+                        <div className={styles.unitAnnual}>
                           {formatCurrency(row.currentAnnualRent)} / yr
                         </div>
                       </td>
-                      <td style={unitTableCellStyleForRow(row, rowIndex, { align: "right" })}>
+                      <td className={unitTableCellClassForRow(row, rowIndex, { align: "right" })}>
                         <input
                           type="number"
                           value={displayMonthlyInputValue(row.underwrittenAnnualRent)}
@@ -2039,13 +1527,13 @@ export function OmCalculationPanel({
                                 event.target.value === "" ? null : annualFromMonthly(Number(event.target.value)),
                             })
                           }
-                          style={tableInputStyle("98px")}
+                          className={cx(styles.input, styles.inputNum, styles.w98)}
                         />
-                        <div style={unitTableAnnualValueStyle}>
+                        <div className={styles.unitAnnual}>
                           {formatCurrency(row.underwrittenAnnualRent)} / yr
                         </div>
                       </td>
-                      <td style={unitTableCellStyleForRow(row, rowIndex, { align: "right" })}>
+                      <td className={unitTableCellClassForRow(row, rowIndex, { align: "right" })}>
                         <input
                           type="number"
                           step="0.1"
@@ -2055,14 +1543,14 @@ export function OmCalculationPanel({
                               rentUpliftPct: event.target.value === "" ? null : Number(event.target.value),
                             })
                           }
-                          style={tableInputStyle("74px")}
+                          className={cx(styles.input, styles.inputNum, styles.w74)}
                         />
-                        <div style={unitTableComputedLabelStyle}>Boosted gross</div>
-                        <div style={unitTableComputedValueStyle}>
+                        <div className={styles.unitComputedLabel}>Boosted gross</div>
+                        <div className={styles.unitComputedValue}>
                           {formatCurrency(monthlyFromAnnual(boostedGrossAnnualRent))} / mo
                         </div>
                       </td>
-                      <td style={unitTableCellStyleForRow(row, rowIndex, { align: "right" })}>
+                      <td className={unitTableCellClassForRow(row, rowIndex, { align: "right" })}>
                         <input
                           type="number"
                           step="0.1"
@@ -2072,10 +1560,10 @@ export function OmCalculationPanel({
                               occupancyPct: event.target.value === "" ? null : Number(event.target.value),
                             })
                           }
-                          style={tableInputStyle("74px")}
+                          className={cx(styles.input, styles.inputNum, styles.w74)}
                         />
                       </td>
-                      <td style={unitTableCellStyleForRow(row, rowIndex, { align: "right" })}>
+                      <td className={unitTableCellClassForRow(row, rowIndex, { align: "right" })}>
                         <input
                           type="number"
                           step="100"
@@ -2085,10 +1573,10 @@ export function OmCalculationPanel({
                               furnishingCost: event.target.value === "" ? null : Number(event.target.value),
                             })
                           }
-                          style={tableInputStyle("92px")}
+                          className={cx(styles.input, styles.inputNum, styles.w92)}
                         />
                       </td>
-                      <td style={unitTableCellStyleForRow(row, rowIndex, { align: "right" })}>
+                      <td className={unitTableCellClassForRow(row, rowIndex, { align: "right" })}>
                         <input
                           type="number"
                           step="100"
@@ -2099,10 +1587,10 @@ export function OmCalculationPanel({
                                 event.target.value === "" ? null : Number(event.target.value),
                             })
                           }
-                          style={tableInputStyle("86px")}
+                          className={cx(styles.input, styles.inputNum, styles.w86)}
                         />
                       </td>
-                      <td style={unitTableCellStyleForRow(row, rowIndex, { align: "right" })}>
+                      <td className={unitTableCellClassForRow(row, rowIndex, { align: "right" })}>
                         <input
                           type="number"
                           step="100"
@@ -2113,10 +1601,10 @@ export function OmCalculationPanel({
                                 event.target.value === "" ? null : Number(event.target.value),
                             })
                           }
-                          style={tableInputStyle("86px")}
+                          className={cx(styles.input, styles.inputNum, styles.w86)}
                         />
                       </td>
-                      <td style={unitTableCellStyleForRow(row, rowIndex, { align: "right" })}>
+                      <td className={unitTableCellClassForRow(row, rowIndex, { align: "right" })}>
                         <input
                           type="number"
                           step="10"
@@ -2127,10 +1615,10 @@ export function OmCalculationPanel({
                                 event.target.value === "" ? null : Number(event.target.value),
                             })
                           }
-                          style={tableInputStyle("86px")}
+                          className={cx(styles.input, styles.inputNum, styles.w86)}
                         />
                       </td>
-                      <td style={unitTableCellStyleForRow(row, rowIndex, { align: "center" })}>
+                      <td className={unitTableCellClassForRow(row, rowIndex, { align: "center" })}>
                         <input
                           type="checkbox"
                           checked={row.includeInUnderwriting}
@@ -2140,14 +1628,14 @@ export function OmCalculationPanel({
                         />
                       </td>
                       <td
-                        style={unitTableCellStyleForRow(row, rowIndex, {
+                        className={unitTableCellClassForRow(row, rowIndex, {
                           align: "right",
                           metric: true,
                           lastColumn: true,
                         })}
                       >
-                        <div style={{ fontWeight: 600 }}>{formatCurrency(monthlyFromAnnual(row.modeledAnnualRent))}</div>
-                        <div style={unitTableAnnualValueStyle}>
+                        <div className={styles.semibold}>{formatCurrency(monthlyFromAnnual(row.modeledAnnualRent))}</div>
+                        <div className={styles.unitAnnual}>
                           {formatCurrency(row.modeledAnnualRent)} / yr
                         </div>
                       </td>
@@ -2156,7 +1644,7 @@ export function OmCalculationPanel({
                 })
               ) : (
                 <tr>
-                  <td colSpan={12} style={{ ...tableCellStyle, color: "#64748b" }}>
+                  <td colSpan={12} className={cx(styles.cell, styles.cellMuted)}>
                     Analyze the OM to pull rent roll rows into the underwrite.
                   </td>
                 </tr>
@@ -2166,68 +1654,49 @@ export function OmCalculationPanel({
         </div>
       </div>
 
-      <div style={sectionCardStyle}>
-        <div
-          style={{
-            padding: "0.9rem 1rem",
-            borderBottom: "1px solid #e2e8f0",
-            display: "flex",
-            justifyContent: "space-between",
-            gap: "1rem",
-            flexWrap: "wrap",
-            alignItems: "center",
-          }}
-        >
+      <div className={styles.sectionCard}>
+        <div className={cx(styles.sectionHead, styles.sectionHeadRow, styles.sectionHeadRowCenter)}>
           <div>
-            <strong style={{ color: "#0f172a" }}>Expense model</strong>
-            <div style={{ marginTop: "0.25rem", fontSize: "0.8rem", color: "#64748b", lineHeight: 1.5 }}>
+            <strong className={styles.sectionTitle}>
+              <ReceiptText size={15} strokeWidth={2} aria-hidden="true" className={styles.sectionTitleIcon} />
+              Expense model
+            </strong>
+            <div className={styles.sectionDesc}>
               Expense rows are authoritative for expense amounts and growth. Use <strong>Replace with mgmt fee</strong>{" "}
               when the OM already includes management so the model does not double count it, and use <strong>Exclude</strong>{" "}
               for legacy LTR line items you want to add back or remove from the furnished / MTR case.
             </div>
-            <div style={{ marginTop: "0.2rem", fontSize: "0.78rem", color: "#64748b", lineHeight: 1.45 }}>
+            <div className={styles.sectionDesc}>
               Projected <strong>management fee</strong> and <strong>occupancy tax</strong> still come from the
               operating assumptions above, even if those lines are missing from the current OM expenses.
             </div>
             {replacedManagementRows.length > 0 ? (
-              <div style={{ marginTop: "0.35rem", fontSize: "0.82rem", color: "#0f172a" }}>
+              <div className={styles.sectionNote}>
                 Rows replacing management fee:{" "}
                 <strong>{replacedManagementRows.map((row) => row.lineItem).join(", ")}</strong>
               </div>
             ) : null}
           </div>
-          <button
-            type="button"
-            onClick={addExpenseRow}
-            style={{
-              padding: "0.55rem 0.85rem",
-              borderRadius: "10px",
-              border: "1px solid #cbd5e1",
-              background: "#fff",
-              color: "#0f172a",
-              fontWeight: 600,
-              cursor: "pointer",
-            }}
-          >
+          <Button type="button" variant="secondary" onClick={addExpenseRow}>
             Add expense row
-          </button>
+          </Button>
         </div>
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.84rem" }}>
-            <thead style={{ background: "#f8fafc" }}>
+        <div className={styles.tableScroll}>
+          <table className={styles.table}>
+            <thead className={styles.theadRaised}>
               <tr>
-                <th style={{ ...tableCellStyle, textAlign: "left", fontWeight: 700 }}>Line item</th>
-                <th style={{ ...tableCellStyle, textAlign: "right", fontWeight: 700 }}>Amount</th>
-                <th style={{ ...tableCellStyle, textAlign: "right", fontWeight: 700 }}>Growth %</th>
-                <th style={{ ...tableCellStyle, textAlign: "left", fontWeight: 700 }}>Treatment</th>
-                <th style={{ ...tableCellStyle, textAlign: "center", fontWeight: 700 }}>Remove</th>
+                <th className={styles.th}>Line item</th>
+                <th className={cx(styles.th, styles.thRight)}>Amount</th>
+                <th className={cx(styles.th, styles.thRight)}>Growth %</th>
+                <th className={styles.th}>Treatment</th>
+                <th className={cx(styles.th, styles.thCenter)}>Remove</th>
               </tr>
             </thead>
             <tbody>
               {expenseModelRows.length > 0 ? (
                 expenseModelRows.map((row) => (
                   <tr key={row.rowId}>
-                    <td style={tableCellStyle}>
+                    <td className={styles.cell}>
                       <input
                         type="text"
                         value={row.lineItem}
@@ -2237,10 +1706,10 @@ export function OmCalculationPanel({
                             isManagementLine: /\b(management|mgmt)\b/i.test(event.target.value),
                           })
                         }
-                        style={tableInputStyle()}
+                        className={styles.input}
                       />
                     </td>
-                    <td style={{ ...tableCellStyle, textAlign: "right" }}>
+                    <td className={cx(styles.cell, styles.cellNum)}>
                       <input
                         type="number"
                         step="100"
@@ -2250,10 +1719,10 @@ export function OmCalculationPanel({
                             amount: event.target.value === "" ? null : Number(event.target.value),
                           })
                         }
-                        style={tableInputStyle("120px")}
+                        className={cx(styles.input, styles.inputNum, styles.w120)}
                       />
                     </td>
-                    <td style={{ ...tableCellStyle, textAlign: "right" }}>
+                    <td className={cx(styles.cell, styles.cellNum)}>
                       <input
                         type="number"
                         step="0.1"
@@ -2264,10 +1733,10 @@ export function OmCalculationPanel({
                               event.target.value === "" ? 0 : Number(event.target.value),
                           })
                         }
-                        style={tableInputStyle("92px")}
+                        className={cx(styles.input, styles.inputNum, styles.w92)}
                       />
                     </td>
-                    <td style={tableCellStyle}>
+                    <td className={styles.cell}>
                       <select
                         value={row.treatment}
                         onChange={(event) =>
@@ -2275,7 +1744,7 @@ export function OmCalculationPanel({
                             treatment: event.target.value as PropertyDealDossierExpenseTreatment,
                           })
                         }
-                        style={tableInputStyle("190px")}
+                        className={cx(styles.input, styles.w190)}
                       >
                         {EXPENSE_TREATMENT_OPTIONS.map((option) => (
                           <option key={option.value} value={option.value}>
@@ -2284,27 +1753,21 @@ export function OmCalculationPanel({
                         ))}
                       </select>
                     </td>
-                    <td style={{ ...tableCellStyle, textAlign: "center" }}>
-                      <button
+                    <td className={cx(styles.cell, styles.cellCenter)}>
+                      <Button
                         type="button"
+                        variant="destructive"
+                        size="sm"
                         onClick={() => removeExpenseRow(row.rowId)}
-                        style={{
-                          padding: "0.35rem 0.6rem",
-                          borderRadius: "8px",
-                          border: "1px solid #fecaca",
-                          background: "#fff1f2",
-                          color: "#b91c1c",
-                          cursor: "pointer",
-                        }}
                       >
                         Delete
-                      </button>
+                      </Button>
                     </td>
                   </tr>
                 ))
               ) : (
                 <tr>
-                  <td colSpan={5} style={{ ...tableCellStyle, color: "#64748b" }}>
+                  <td colSpan={5} className={cx(styles.cell, styles.cellMuted)}>
                     Analyze the OM to load expense rows, or add your own manually.
                   </td>
                 </tr>
@@ -2315,189 +1778,85 @@ export function OmCalculationPanel({
       </div>
 
       {loading ? (
-        <div style={{ color: "#64748b", fontSize: "0.92rem" }}>Loading OM analysis...</div>
+        <SkeletonRows count={4} />
       ) : calculation ? (
-        <div style={sectionCardStyle}>
-          <div
-            style={{
-              padding: "0.95rem 1rem",
-              borderBottom: "1px solid #e2e8f0",
-              background: "linear-gradient(180deg, #f8fbff 0%, #ffffff 100%)",
-            }}
-          >
-            <strong style={{ color: "#0f172a" }}>Calculated financials</strong>
-            <div style={{ marginTop: "0.22rem", fontSize: "0.82rem", color: "#64748b", lineHeight: 1.5 }}>
+        <div className={styles.sectionCard}>
+          <div className={styles.calcHead}>
+            <strong className={styles.sectionTitle}>
+              <FileSpreadsheet size={15} strokeWidth={2} aria-hidden="true" className={styles.sectionTitleIcon} />
+              Calculated financials
+            </strong>
+            <div className={styles.sectionDesc}>
               This is the live deal dossier view generated from the latest OM analysis, unit-level edits,
               and underwriting assumptions.
             </div>
           </div>
 
-          <div style={{ padding: "1rem", display: "grid", gap: "1rem" }}>
-            <div
-              style={{
-                padding: "1.1rem 1.15rem",
-                borderRadius: "18px",
-                border: "1px solid #dbeafe",
-                background:
-                  "radial-gradient(circle at top right, rgba(191, 219, 254, 0.42), transparent 32%), linear-gradient(135deg, #eff6ff 0%, #ffffff 78%)",
-                display: "grid",
-                gap: "0.5rem",
-              }}
-            >
-              <div
-                style={{
-                  fontSize: "0.75rem",
-                  fontWeight: 700,
-                  letterSpacing: "0.08em",
-                  textTransform: "uppercase",
-                  color: "#475569",
-                }}
-              >
-                Live dossier preview
-              </div>
-              <div style={{ fontSize: "clamp(1.35rem, 2vw, 2.05rem)", fontWeight: 700, color: "#0f172a" }}>
-                {calculation.property.canonicalAddress}
-              </div>
-              <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-                <span
-                  style={{
-                    display: "inline-flex",
-                    alignItems: "center",
-                    padding: "0.3rem 0.62rem",
-                    borderRadius: "999px",
-                    background: "#dbeafe",
-                    color: "#1d4ed8",
-                    fontSize: "0.76rem",
-                    fontWeight: 700,
-                  }}
-                >
-                  {calculation.source.sourceLabel}
-                </span>
-                <span
-                  style={{
-                    display: "inline-flex",
-                    alignItems: "center",
-                    padding: "0.3rem 0.62rem",
-                    borderRadius: "999px",
-                    background: "#f8fafc",
-                    color: "#334155",
-                    fontSize: "0.76rem",
-                    fontWeight: 600,
-                  }}
-                >
-                  {calculation.property.city ?? "City unavailable"}
-                </span>
+          <div className={styles.calcBody}>
+            <div className={styles.hero}>
+              <div className={styles.kicker}>Live dossier preview</div>
+              <div className={styles.heroAddress}>{calculation.property.canonicalAddress}</div>
+              <div className={styles.heroBadges}>
+                <Badge tone="info">{calculation.source.sourceLabel}</Badge>
+                <Badge tone="neutral">{calculation.property.city ?? "City unavailable"}</Badge>
                 {calculation.property.askingPrice != null ? (
-                  <span
-                    style={{
-                      display: "inline-flex",
-                      alignItems: "center",
-                      padding: "0.3rem 0.62rem",
-                      borderRadius: "999px",
-                      background: "#ecfdf5",
-                      color: "#166534",
-                      fontSize: "0.76rem",
-                      fontWeight: 700,
-                    }}
-                  >
-                    Ask {formatCurrency(calculation.property.askingPrice)}
-                  </span>
+                  <Badge tone="success">Ask {formatCurrency(calculation.property.askingPrice)}</Badge>
                 ) : null}
               </div>
             </div>
 
             {calculation.yieldSignals?.calloutCode ? (
               <div
-                style={{
-                  padding: "0.85rem 1rem",
-                  borderRadius: "12px",
-                  border:
-                    calculation.yieldSignals.calloutCode === "mtr_weak_uplift"
-                      ? "1px solid #fcd34d"
-                      : "1px solid #fca5a5",
-                  background:
-                    calculation.yieldSignals.calloutCode === "mtr_weak_uplift" ? "#fffbeb" : "#fef2f2",
-                  color:
-                    calculation.yieldSignals.calloutCode === "mtr_weak_uplift" ? "#92400e" : "#991b1b",
-                }}
+                className={cx(
+                  styles.callout,
+                  calculation.yieldSignals.calloutCode === "mtr_weak_uplift"
+                    ? styles.calloutWarning
+                    : styles.calloutDanger
+                )}
               >
-                <strong style={{ display: "block", marginBottom: "0.35rem" }}>
+                <strong className={styles.calloutTitle}>
                   {calculation.yieldSignals.calloutCode === "mtr_below_ltr"
                     ? "MTR yield below LTR — source as an LTR deal"
                     : calculation.yieldSignals.calloutCode === "mtr_spread_outlier"
                       ? "MTR spread implausibly high — check for double-counted rents"
                       : "Weak MTR yield bump"}
                 </strong>
-                <div style={{ fontSize: "0.88rem", lineHeight: 1.5 }}>
-                  {calculation.yieldSignals.calloutLabel}
-                </div>
+                <div className={styles.calloutBody}>{calculation.yieldSignals.calloutLabel}</div>
               </div>
             ) : null}
 
             {calculation.validationMessages.filter(
               (message) => message !== calculation.yieldSignals?.calloutLabel
             ).length > 0 ? (
-              <div
-                style={{
-                  padding: "0.85rem 1rem",
-                  borderRadius: "12px",
-                  border: "1px solid #fcd34d",
-                  background: "#fffbeb",
-                  color: "#92400e",
-                }}
-              >
-                <strong style={{ display: "block", marginBottom: "0.35rem" }}>Validation flags</strong>
+              <div className={cx(styles.callout, styles.calloutWarning)}>
+                <strong className={styles.calloutTitle}>Validation flags</strong>
                 {calculation.validationMessages
                   .filter((message) => message !== calculation.yieldSignals?.calloutLabel)
                   .map((message) => (
-                    <div key={message} style={{ fontSize: "0.88rem", lineHeight: 1.5 }}>
+                    <div key={message} className={styles.calloutBody}>
                       {message}
                     </div>
                   ))}
               </div>
             ) : null}
 
-            <div style={{ display: "grid", gap: "0.75rem" }}>
+            <div className={styles.subSection}>
               <div>
-                <div
-                  style={{
-                    fontSize: "0.76rem",
-                    fontWeight: 700,
-                    letterSpacing: "0.08em",
-                    textTransform: "uppercase",
-                    color: "#475569",
-                  }}
-                >
+                <div className={cx(styles.kicker, styles.kickerWithIcon)}>
+                  <LayoutDashboard size={15} strokeWidth={2} aria-hidden="true" className={styles.kickerIcon} />
                   Deal overview
                 </div>
-                <div style={{ marginTop: "0.2rem", fontSize: "0.83rem", color: "#64748b", lineHeight: 1.5 }}>
+                <div className={styles.kickerNote}>
                   Front-page property, acquisition, rent mix, and return outputs from the latest OM run.
                 </div>
               </div>
               {calculation.currentNoiOverridden ? (
-                <div
-                  style={{
-                    margin: "0.75rem 0 0",
-                    border: "1px solid #fde68a",
-                    borderRadius: "10px",
-                    background: "#fffbeb",
-                    color: "#b45309",
-                    fontSize: "0.8rem",
-                    fontWeight: 600,
-                    padding: "0.55rem 0.8rem",
-                  }}
-                >
+                <div className={styles.noiOverrideNote}>
                   NOI override active — current NOI is user-set, so the expense rows below are informational and do
                   not feed this number. Clear the override in assumptions to recalculate from expenses.
                 </div>
               ) : null}
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
-                  gap: "0.9rem",
-                }}
-              >
+              <div className={styles.metricGrid}>
                 {metricCard("Property info", [
                   { label: "Asset class", value: calculation.propertyInfo.assetClass ?? "—" },
                   {
@@ -2691,37 +2050,25 @@ export function OmCalculationPanel({
               </div>
             </div>
 
-            <div style={{ display: "grid", gap: "0.75rem" }}>
+            <div className={styles.subSection}>
               <div>
-                <div
-                  style={{
-                    fontSize: "0.76rem",
-                    fontWeight: 700,
-                    letterSpacing: "0.08em",
-                    textTransform: "uppercase",
-                    color: "#475569",
-                  }}
-                >
+                <div className={cx(styles.kicker, styles.kickerWithIcon)}>
+                  <TableProperties size={15} strokeWidth={2} aria-hidden="true" className={styles.kickerIcon} />
                   Cash flow statement
                 </div>
-                <div style={{ marginTop: "0.2rem", fontSize: "0.83rem", color: "#64748b", lineHeight: 1.5 }}>
+                <div className={styles.kickerNote}>
                   Annual roll-forward of rent, expenses, NOI, financing, and sale proceeds from the current
                   OM baseline through the modeled hold.
                 </div>
               </div>
-              <div style={sectionCardStyle}>
-                <div style={{ overflowX: "auto" }}>
-                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.84rem" }}>
-                    <thead style={{ background: "#f8fafc" }}>
+              <div className={styles.sectionCard}>
+                <div className={styles.tableScroll}>
+                  <table className={styles.table}>
+                    <thead className={styles.theadRaised}>
                       <tr>
-                        <th style={{ ...tableCellStyle, textAlign: "left", fontWeight: 700, minWidth: "240px" }}>
-                          Line item
-                        </th>
+                        <th className={cx(styles.th, styles.cfLabel)}>Line item</th>
                         {calculation.yearlyCashFlow.endingLabels.map((label) => (
-                          <th
-                            key={label}
-                            style={{ ...tableCellStyle, textAlign: "right", fontWeight: 700, whiteSpace: "nowrap" }}
-                          >
+                          <th key={label} className={cx(styles.th, styles.thRight, styles.thNowrap)}>
                             {label}
                           </th>
                         ))}
@@ -2981,40 +2328,28 @@ export function OmCalculationPanel({
               </div>
             </div>
 
-            <div style={{ display: "grid", gap: "0.75rem" }}>
+            <div className={styles.subSection}>
               <div>
-                <div
-                  style={{
-                    fontSize: "0.76rem",
-                    fontWeight: 700,
-                    letterSpacing: "0.08em",
-                    textTransform: "uppercase",
-                    color: "#475569",
-                  }}
-                >
+                <div className={cx(styles.kicker, styles.kickerWithIcon)}>
+                  <Activity size={15} strokeWidth={2} aria-hidden="true" className={styles.kickerIcon} />
                   Sensitivity analyses
                 </div>
-                <div style={{ marginTop: "0.2rem", fontSize: "0.83rem", color: "#64748b", lineHeight: 1.5 }}>
+                <div className={styles.kickerNote}>
                   Primary scenario sweeps behind the deal dossier, with the base row highlighted and negative
                   outcomes called out in red.
                 </div>
               </div>
-              <div style={sectionCardStyle}>
+              <div className={styles.sectionCard}>
                 <div
-                  style={{
-                    padding: "1rem",
-                    display: "grid",
-                    gridTemplateColumns:
-                      sensitivityCards.length > 1 ? "repeat(auto-fit, minmax(340px, 1fr))" : "1fr",
-                    gap: "0.9rem",
-                    maxWidth: "none",
-                    margin: "0 auto",
-                  }}
+                  className={cx(
+                    styles.sensGrid,
+                    sensitivityCards.length > 1 ? styles.sensGridMulti : styles.sensGridSingle
+                  )}
                 >
                   {sensitivityCards.length > 0 ? (
                     sensitivityCards.map((sensitivity) => renderSensitivityCard(sensitivity))
                   ) : (
-                    <div style={{ color: "#64748b", fontSize: "0.9rem" }}>
+                    <div className={styles.emptyNote}>
                       Sensitivity outputs are not available for this run yet.
                     </div>
                   )}
@@ -3022,45 +2357,27 @@ export function OmCalculationPanel({
               </div>
             </div>
 
-            <div style={{ display: "grid", gap: "0.75rem" }}>
+            <div className={styles.subSection}>
               <div>
-                <div
-                  style={{
-                    fontSize: "0.76rem",
-                    fontWeight: 700,
-                    letterSpacing: "0.08em",
-                    textTransform: "uppercase",
-                    color: "#475569",
-                  }}
-                >
+                <div className={cx(styles.kicker, styles.kickerWithIcon)}>
+                  <ListChecks size={15} strokeWidth={2} aria-hidden="true" className={styles.kickerIcon} />
                   Assumptions
                 </div>
-                <div style={{ marginTop: "0.2rem", fontSize: "0.83rem", color: "#64748b", lineHeight: 1.5 }}>
+                <div className={styles.kickerNote}>
                   Source tables and resolved underwriting inputs feeding this live dossier view and the PDF
                   export below.
                 </div>
               </div>
-              <div
-                style={{
-                  display: "grid",
-                  gap: "0.9rem",
-                }}
-              >
-                <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
-                    gap: "0.9rem",
-                  }}
-                >
-                  <div style={sectionCardStyle}>
-                    <div style={{ padding: "0.9rem 1rem", borderBottom: "1px solid #e2e8f0" }}>
-                      <strong style={{ color: "#0f172a" }}>Assumptions used</strong>
-                      <div style={{ marginTop: "0.2rem", fontSize: "0.78rem", color: "#64748b" }}>
+              <div className={styles.assumpStack}>
+                <div className={styles.assumpGrid}>
+                  <div className={styles.sectionCard}>
+                    <div className={styles.sectionHead}>
+                      <strong className={styles.sectionTitle}>Assumptions used</strong>
+                      <div className={styles.sectionDesc}>
                         These are the resolved assumptions from the latest OM analysis run.
                       </div>
                     </div>
-                    <div style={{ padding: "0 1rem 0.4rem" }}>
+                    <div className={styles.listPad}>
                       {summaryRow(
                         "Investment profile",
                         (calculation.acquisitionMetadata.investmentProfile ?? draft.investmentProfile) ||
@@ -3137,14 +2454,14 @@ export function OmCalculationPanel({
                     </div>
                   </div>
 
-                  <div style={sectionCardStyle}>
-                    <div style={{ padding: "0.9rem 1rem", borderBottom: "1px solid #e2e8f0" }}>
-                      <strong style={{ color: "#0f172a" }}>Current OM state</strong>
-                      <div style={{ marginTop: "0.2rem", fontSize: "0.78rem", color: "#64748b" }}>
+                  <div className={styles.sectionCard}>
+                    <div className={styles.sectionHead}>
+                      <strong className={styles.sectionTitle}>Current OM state</strong>
+                      <div className={styles.sectionDesc}>
                         Extracted baseline income, rent basis, and expense context before stabilization is applied.
                       </div>
                     </div>
-                    <div style={{ padding: "0 1rem 0.4rem" }}>
+                    <div className={styles.listPad}>
                       {summaryRow("Source", calculation.source.sourceLabel)}
                       {summaryRow("Detected rent basis", rentBasisLabel)}
                       {summaryRow(
@@ -3197,36 +2514,30 @@ export function OmCalculationPanel({
                   </div>
                 </div>
 
-                <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
-                    gap: "0.9rem",
-                  }}
-                >
-                  <div style={sectionCardStyle}>
-                    <div style={{ padding: "0.9rem 1rem", borderBottom: "1px solid #e2e8f0" }}>
-                      <strong style={{ color: "#0f172a" }}>Source rent roll</strong>
-                      <div style={{ marginTop: "0.2rem", fontSize: "0.78rem", color: "#64748b" }}>
+                <div className={styles.assumpGrid}>
+                  <div className={styles.sectionCard}>
+                    <div className={styles.sectionHead}>
+                      <strong className={styles.sectionTitle}>Source rent roll</strong>
+                      <div className={styles.sectionDesc}>
                         OM-extracted unit rows feeding the monthly underwriting table above.
                       </div>
                     </div>
-                    <div style={{ overflowX: "auto" }}>
-                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.84rem" }}>
-                        <thead style={{ background: "#f8fafc" }}>
+                    <div className={styles.tableScroll}>
+                      <table className={styles.table}>
+                        <thead className={styles.theadRaised}>
                           <tr>
-                            <th style={{ ...tableCellStyle, textAlign: "left", fontWeight: 700 }}>Unit</th>
-                            <th style={{ ...tableCellStyle, textAlign: "left", fontWeight: 700 }}>Mix</th>
-                            <th style={{ ...tableCellStyle, textAlign: "right", fontWeight: 700 }}>Monthly</th>
-                            <th style={{ ...tableCellStyle, textAlign: "right", fontWeight: 700 }}>Annual</th>
+                            <th className={styles.th}>Unit</th>
+                            <th className={styles.th}>Mix</th>
+                            <th className={cx(styles.th, styles.thRight)}>Monthly</th>
+                            <th className={cx(styles.th, styles.thRight)}>Annual</th>
                           </tr>
                         </thead>
                         <tbody>
                           {calculation.rentRoll.length > 0 ? (
                             calculation.rentRoll.map((row, index) => (
                               <tr key={`${row.unit ?? row.tenantName ?? "row"}-${index}`}>
-                                <td style={tableCellStyle}>{row.unit ?? row.tenantName ?? "—"}</td>
-                                <td style={tableCellStyle}>
+                                <td className={styles.cell}>{row.unit ?? row.tenantName ?? "—"}</td>
+                                <td className={styles.cell}>
                                   {[
                                     row.beds != null ? `${formatNumber(row.beds)}Br` : null,
                                     row.baths != null ? `${row.baths}Ba` : null,
@@ -3235,10 +2546,10 @@ export function OmCalculationPanel({
                                     .filter(Boolean)
                                     .join(" · ") || "—"}
                                 </td>
-                                <td style={{ ...tableCellStyle, textAlign: "right" }}>
+                                <td className={cx(styles.cell, styles.cellNum)}>
                                   {formatCurrency(row.monthlyRent)}
                                 </td>
-                                <td style={{ ...tableCellStyle, textAlign: "right" }}>
+                                <td className={cx(styles.cell, styles.cellNum)}>
                                   {formatCurrency(
                                     row.annualRent ?? (row.monthlyRent != null ? row.monthlyRent * 12 : null)
                                   )}
@@ -3247,7 +2558,7 @@ export function OmCalculationPanel({
                             ))
                           ) : (
                             <tr>
-                              <td colSpan={4} style={{ ...tableCellStyle, color: "#64748b" }}>
+                              <td colSpan={4} className={cx(styles.cell, styles.cellMuted)}>
                                 No rent roll rows were extracted from the OM source.
                               </td>
                             </tr>
@@ -3257,34 +2568,34 @@ export function OmCalculationPanel({
                     </div>
                   </div>
 
-                  <div style={sectionCardStyle}>
-                    <div style={{ padding: "0.9rem 1rem", borderBottom: "1px solid #e2e8f0" }}>
-                      <strong style={{ color: "#0f172a" }}>Current expense table</strong>
-                      <div style={{ marginTop: "0.2rem", fontSize: "0.78rem", color: "#64748b" }}>
+                  <div className={styles.sectionCard}>
+                    <div className={styles.sectionHead}>
+                      <strong className={styles.sectionTitle}>Current expense table</strong>
+                      <div className={styles.sectionDesc}>
                         Raw OM expense lines before any model treatments, exclusions, or replacement logic.
                       </div>
                     </div>
-                    <div style={{ overflowX: "auto" }}>
-                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.84rem" }}>
-                        <thead style={{ background: "#f8fafc" }}>
+                    <div className={styles.tableScroll}>
+                      <table className={styles.table}>
+                        <thead className={styles.theadRaised}>
                           <tr>
-                            <th style={{ ...tableCellStyle, textAlign: "left", fontWeight: 700 }}>Line item</th>
-                            <th style={{ ...tableCellStyle, textAlign: "right", fontWeight: 700 }}>Amount</th>
+                            <th className={styles.th}>Line item</th>
+                            <th className={cx(styles.th, styles.thRight)}>Amount</th>
                           </tr>
                         </thead>
                         <tbody>
                           {calculation.expenseRows.length > 0 ? (
                             calculation.expenseRows.map((row) => (
                               <tr key={`${row.lineItem}-${row.amount}`}>
-                                <td style={tableCellStyle}>{row.lineItem}</td>
-                                <td style={{ ...tableCellStyle, textAlign: "right" }}>
+                                <td className={styles.cell}>{row.lineItem}</td>
+                                <td className={cx(styles.cell, styles.cellNum)}>
                                   {formatCurrency(row.amount)}
                                 </td>
                               </tr>
                             ))
                           ) : (
                             <tr>
-                              <td colSpan={2} style={{ ...tableCellStyle, color: "#64748b" }}>
+                              <td colSpan={2} className={cx(styles.cell, styles.cellMuted)}>
                                 No detailed expense rows were extracted from the OM source.
                               </td>
                             </tr>
@@ -3299,10 +2610,8 @@ export function OmCalculationPanel({
           </div>
         </div>
       ) : (
-        <div style={{ color: "#64748b", fontSize: "0.92rem" }}>
-          Analyze the OM to populate the underwriting outputs, sensitivities, and cash flow records.
-        </div>
+        <EmptyState title="Analyze the OM to populate the underwriting outputs, sensitivities, and cash flow records." />
       )}
-    </div>
+    </Panel>
   );
 }
