@@ -4,7 +4,7 @@ import Link from "next/link";
 import { Building2 } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
-import { Button, EmptyState, PageHeader, StatCard } from "@/components/ui";
+import { Button, EmptyState, PageHeader, SortableTh, StatCard, useTableSort } from "@/components/ui";
 import { API_BASE } from "@/lib/api";
 import { formatPercent, labelFromKey, scoreTone } from "@/lib/format";
 import styles from "./saved.module.css";
@@ -253,6 +253,7 @@ function SavedPageContent() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>("grid");
   const [includeRejected, setIncludeRejected] = useState(false);
   const [unsavingIds, setUnsavingIds] = useState<Set<string>>(new Set());
@@ -282,13 +283,18 @@ function SavedPageContent() {
     void loadSavedDeals();
   }, [loadSavedDeals]);
 
-  const handleUnsave = useCallback(async (propertyId: string) => {
+  const handleUnsave = useCallback(async (propertyId: string, address: string) => {
+    if (!window.confirm(`Remove ${address} from saved deals? The property itself stays in the pipeline.`)) return;
+    setNotice(null);
+    setError(null);
     setUnsavingIds((prev) => new Set([...prev, propertyId]));
     try {
-      await fetch(`${API_BASE}/api/profile/saved-deals/${encodeURIComponent(propertyId)}`, { method: "DELETE" });
+      const response = await fetch(`${API_BASE}/api/profile/saved-deals/${encodeURIComponent(propertyId)}`, { method: "DELETE" });
+      if (!response.ok) throw new Error(`Failed to remove ${address} from saved deals`);
       setRows((prev) => prev.filter((row) => row.propertyId !== propertyId));
-    } catch {
-      // ignore
+      setNotice(`Removed ${address} from saved deals.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to remove the saved deal");
     } finally {
       setUnsavingIds((prev) => {
         const next = new Set(prev);
@@ -308,6 +314,18 @@ function SavedPageContent() {
   }, [query, rows, includeRejected]);
 
   const rejectedCount = useMemo(() => rows.filter(isRejected).length, [rows]);
+
+  const sortAccessors = useMemo(
+    () => ({
+      property: (row: SavedDealRow) => row.displayAddress || row.canonicalAddress || row.propertyId,
+      status: (row: SavedDealRow) => (isRejected(row) ? "rejected" : row.status || row.savedDeal?.dealStatus || "saved"),
+      score: (row: SavedDealRow) => row.dealScore,
+      price: (row: SavedDealRow) => row.price,
+      updated: (row: SavedDealRow) => row.updatedAt,
+    }),
+    []
+  );
+  const { sorted: sortedRows, sortKey, sortDir, toggle: toggleSort } = useTableSort(filteredRows, sortAccessors);
 
   const metrics = useMemo(() => {
     const scored = rows.map((row) => row.dealScore).filter((score): score is number => typeof score === "number");
@@ -405,6 +423,7 @@ function SavedPageContent() {
         </div>
 
         {error ? <div className={styles.error}>{error}</div> : null}
+        {notice ? <div className={styles.notice}>{notice}</div> : null}
 
         {loading ? (
           <EmptyState title="Loading saved deals…" />
@@ -527,7 +546,7 @@ function SavedPageContent() {
                       <Button
                         variant="destructive"
                         size="sm"
-                        onClick={() => void handleUnsave(propertyId)}
+                        onClick={() => void handleUnsave(propertyId, address)}
                         disabled={isUnsaving}
                       >
                         {isUnsaving ? "Removing…" : "Unsave"}
@@ -543,16 +562,16 @@ function SavedPageContent() {
             <table className={styles.table}>
               <thead>
                 <tr>
-                  <th>Property</th>
-                  <th>Status</th>
-                  <th>Score</th>
-                  <th>Economics</th>
-                  <th>Activity</th>
+                  <SortableTh label="Property" sortKey="property" activeKey={sortKey} direction={sortDir} onToggle={toggleSort} firstDir="asc" />
+                  <SortableTh label="Status" sortKey="status" activeKey={sortKey} direction={sortDir} onToggle={toggleSort} firstDir="asc" />
+                  <SortableTh label="Score" sortKey="score" activeKey={sortKey} direction={sortDir} onToggle={toggleSort} />
+                  <SortableTh label="Economics" sortKey="price" activeKey={sortKey} direction={sortDir} onToggle={toggleSort} title="Sorts by price" />
+                  <SortableTh label="Activity" sortKey="updated" activeKey={sortKey} direction={sortDir} onToggle={toggleSort} title="Sorts by last update" />
                   <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {filteredRows.map((row) => {
+                {sortedRows.map((row) => {
                   const rejected = isRejected(row);
                   const displayStatus = rejected ? "rejected" : row.status || row.savedDeal?.dealStatus || "saved";
                   const rejectionLabel = row.rejection?.reasonLabel || labelFromKey(row.rejection?.reasonCode);

@@ -129,6 +129,8 @@ function DossierAssumptionsContent() {
   const [generating, setGenerating] = useState(false);
   const processBanner = useProcessBanner();
   const [error, setError] = useState<string | null>(null);
+  /** Success confirmation for the save-defaults / standard-leverage actions. */
+  const [notice, setNotice] = useState<string | null>(null);
   const [draft, setDraft] = useState<DossierAssumptionsDraft>({});
   const [mixSummary, setMixSummary] = useState<PropertyMixSummary | null>(null);
   const [generationStartedAt, setGenerationStartedAt] = useState<number | null>(null);
@@ -203,6 +205,7 @@ function DossierAssumptionsContent() {
   const handleSaveAssumptions = async () => {
     setSaving(true);
     setError(null);
+    setNotice(null);
     try {
       const res = await fetch(`${API_BASE}/api/profile`, {
         method: "PUT",
@@ -233,6 +236,7 @@ function DossierAssumptionsContent() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || data?.details || "Failed to save");
       setProfile(data);
+      setNotice("Assumptions saved as profile defaults — future dossiers start from these values.");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to save");
     } finally {
@@ -319,6 +323,7 @@ function DossierAssumptionsContent() {
   const handleGenerateStandardLeverage = async () => {
     setSaving(true);
     setError(null);
+    setNotice(null);
     try {
       const res = await fetch(`${API_BASE}/api/profile/generate-standard-leverage`, { method: "POST" });
       const data = await res.json();
@@ -330,6 +335,7 @@ function DossierAssumptionsContent() {
         interestRatePct: 6.5,
         amortizationYears: 30,
       }));
+      setNotice("Standard leverage applied to the financing inputs below: LTV 65%, interest 6.5%, amortization 30 years.");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to set standard leverage");
     } finally {
@@ -410,6 +416,9 @@ function DossierAssumptionsContent() {
       )}
       {error && (
         <p className={styles.error}>{error}</p>
+      )}
+      {notice && (
+        <p className={styles.notice}>{notice}</p>
       )}
 
       <section style={sectionStyle}>

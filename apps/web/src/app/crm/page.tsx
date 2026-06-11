@@ -195,16 +195,16 @@ function displayBrokerBlockName(broker: UiV2BrokerBlock | null | undefined): str
 }
 
 function formatDate(value: string | null | undefined): string {
-  if (!value) return "-";
+  if (!value) return "—";
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "-";
+  if (Number.isNaN(date.getTime())) return "—";
   return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
 function formatDateTime(value: string | null | undefined): string {
-  if (!value) return "-";
+  if (!value) return "—";
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "-";
+  if (Number.isNaN(date.getTime())) return "—";
   return date.toLocaleString("en-US", {
     month: "short",
     day: "numeric",
@@ -738,6 +738,8 @@ function CrmPageContent() {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  /** Page-level success confirmation for inline table actions (saves/records/rejects). */
+  const [pageNotice, setPageNotice] = useState<string | null>(null);
   const [panel, setPanel] = useState<PanelState | null>(null);
   const [viewMode, setViewMode] = useState<CrmViewMode>("properties");
   const [sortField, setSortField] = useState<CrmSortField>("flags");
@@ -1167,6 +1169,7 @@ function CrmPageContent() {
     async (row: UiV2CrmPropertyRowPayload) => {
       const draft = inlineBrokerDrafts[row.propertyId] ?? brokerToForm(row.broker);
       setSavingInlineBrokerId(row.propertyId);
+      setPageNotice(null);
       try {
         await apiFetch<PropertyBrokerResponse>(
           `/api/ui-v2/properties/${encodeURIComponent(row.propertyId)}/broker`,
@@ -1187,6 +1190,9 @@ function CrmPageContent() {
           delete next[row.propertyId];
           return next;
         });
+        setPageNotice(
+          `Broker saved for ${shortPropertyAddress(row.displayAddress ?? row.canonicalAddress) ?? compactPropertyId(row.propertyId)}.`
+        );
         await loadCrm();
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to save broker for property.");
@@ -1204,6 +1210,7 @@ function CrmPageContent() {
         note: row.response?.note ?? "",
       };
       setSavingResponseId(row.propertyId);
+      setPageNotice(null);
       try {
         await apiFetch<{ response: UiV2CrmBrokerResponsePayload }>(
           `/api/ui-v2/properties/${encodeURIComponent(row.propertyId)}/broker-response`,
@@ -1221,6 +1228,9 @@ function CrmPageContent() {
           delete next[row.propertyId];
           return next;
         });
+        setPageNotice(
+          `${responseStatusLabel(draft.status)} response recorded for ${shortPropertyAddress(row.displayAddress ?? row.canonicalAddress) ?? compactPropertyId(row.propertyId)}.`
+        );
         await loadCrm();
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to save broker response.");
@@ -1245,6 +1255,7 @@ function CrmPageContent() {
             ? "data_quality_issue"
             : "other";
       setRejectingPropertyId(row.propertyId);
+      setPageNotice(null);
       try {
         await apiFetch<PropertyDetailResponse>(`/api/ui-v2/properties/${encodeURIComponent(row.propertyId)}/reject`, {
           method: "POST",
@@ -1256,6 +1267,9 @@ function CrmPageContent() {
             },
           }),
         });
+        setPageNotice(
+          `Rejected ${shortPropertyAddress(row.displayAddress ?? row.canonicalAddress) ?? compactPropertyId(row.propertyId)} (${labelFromKey(reasonCode)}). The row stays visible with a Rejected flag.`
+        );
         await loadCrm();
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to reject property.");
@@ -1606,6 +1620,7 @@ function CrmPageContent() {
       </section>
 
       {error ? <div className={classNames(styles.notice, styles.noticeError)}>{error}</div> : null}
+      {pageNotice ? <div className={classNames(styles.notice, styles.notice_success)}>{pageNotice}</div> : null}
 
       <section className={styles.tableShell}>
         <div className={styles.tableHeader}>
@@ -1652,7 +1667,7 @@ function CrmPageContent() {
                   <th><SortHeader label="Email" field="email" activeField={sortField} direction={sortDirection} onSort={requestSort} /></th>
                   <th><SortHeader label="Response" field="response" activeField={sortField} direction={sortDirection} onSort={requestSort} /></th>
                   <th><SortHeader label="Last activity" field="lastActivity" activeField={sortField} direction={sortDirection} onSort={requestSort} /></th>
-                  <th><SortHeader label="Open" field="open" activeField={sortField} direction={sortDirection} onSort={requestSort} /></th>
+                  <th className={styles.numericCell}><SortHeader label="Open" field="open" activeField={sortField} direction={sortDirection} onSort={requestSort} /></th>
                   <th><SortHeader label="Flags" field="flags" activeField={sortField} direction={sortDirection} onSort={requestSort} /></th>
                   <th>Actions</th>
                 </tr>
@@ -1761,7 +1776,7 @@ function CrmPageContent() {
                             {row.lastActivityAt ? <span>{formatDateTime(row.lastActivityAt)}</span> : null}
                           </div>
                         </td>
-                        <td>
+                        <td className={styles.numericCell}>
                           <span className={row.openActionItemCount ? styles.actionCountHot : styles.actionCount}>
                             {row.openActionItemCount ?? 0}
                           </span>
@@ -1807,7 +1822,7 @@ function CrmPageContent() {
                   <th><SortHeader label="Contact" field="email" activeField={sortField} direction={sortDirection} onSort={requestSort} /></th>
                   <th><SortHeader label="Related properties" field="address" activeField={sortField} direction={sortDirection} onSort={requestSort} /></th>
                   <th><SortHeader label="Last activity" field="lastActivity" activeField={sortField} direction={sortDirection} onSort={requestSort} /></th>
-                  <th><SortHeader label="Open" field="open" activeField={sortField} direction={sortDirection} onSort={requestSort} /></th>
+                  <th className={styles.numericCell}><SortHeader label="Open" field="open" activeField={sortField} direction={sortDirection} onSort={requestSort} /></th>
                   <th><SortHeader label="Flags" field="flags" activeField={sortField} direction={sortDirection} onSort={requestSort} /></th>
                   <th>Actions</th>
                 </tr>
@@ -1881,7 +1896,7 @@ function CrmPageContent() {
                             {contactActivityAt(payload) ? <span>{formatDateTime(contactActivityAt(payload))}</span> : null}
                           </div>
                         </td>
-                        <td>
+                        <td className={styles.numericCell}>
                           <span className={payload.openActionItemCount ? styles.actionCountHot : styles.actionCount}>
                             {payload.openActionItemCount ?? 0}
                           </span>

@@ -73,7 +73,7 @@
 .primaryButton {
   border: 1px solid var(--brand, #0f766e);
   background: var(--brand, #0f766e);
-  color: #ffffff;
+  color: var(--brand-on);
 }
 
 .primaryButton:hover {
@@ -472,7 +472,7 @@
 
 .savedDealRow:hover {
   border-color: var(--brand-border, #99f6e4);
-  background: #ffffff;
+  background: var(--app-surface);
   box-shadow: var(--app-shadow-soft, 0 8px 22px rgb(0 0 0 / 0.06));
   transform: translateY(-1px);
 }

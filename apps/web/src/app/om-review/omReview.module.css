@@ -15,9 +15,15 @@
   padding: 0.65rem 0.9rem;
   border-radius: var(--radius-md);
   background: var(--app-green-soft);
-  color: #15803d;
+  color: #15803d; /* green-700 text for contrast on --app-green-soft; no darker green token exists */
   font-size: 0.86rem;
   margin-top: 0;
+}
+
+.noticeLink {
+  color: inherit;
+  font-weight: 650;
+  text-decoration: underline;
 }
 
 .error {
@@ -69,6 +75,8 @@
 .groupList {
   display: grid;
   gap: 1rem;
+  max-height: 60vh;
+  overflow-y: auto;
 }
 
 .group {
@@ -143,7 +151,7 @@
 .itemSummary {
   margin: 0;
   color: var(--app-ink-secondary);
-  font-size: 0.88rem;
+  font-size: var(--text-sm);
   line-height: var(--leading-normal);
 }
 
@@ -199,6 +207,8 @@
 .runList {
   display: grid;
   gap: 0.65rem;
+  max-height: 60vh;
+  overflow-y: auto;
 }
 
 .runCard {

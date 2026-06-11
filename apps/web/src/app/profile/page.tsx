@@ -369,6 +369,8 @@ function ProfilePageContent() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** Success confirmation for the account / automation / assumptions save buttons. */
+  const [notice, setNotice] = useState<string | null>(null);
   const [draft, setDraft] = useState<Partial<UserProfile>>({});
   const [savedSearches, setSavedSearches] = useState<SavedSearch[]>([]);
   const [savedSearchesLoading, setSavedSearchesLoading] = useState(true);
@@ -378,7 +380,7 @@ function ProfilePageContent() {
   const [runningSavedSearchId, setRunningSavedSearchId] = useState<string | null>(null);
   const [deletingSavedSearchId, setDeletingSavedSearchId] = useState<string | null>(null);
   const [savedSearchError, setSavedSearchError] = useState<string | null>(null);
-  const [savedSearchNotice, setSavedSearchNotice] = useState<string | null>(null);
+  const [savedSearchNotice, setSavedSearchNotice] = useState<React.ReactNode | null>(null);
 
   const fetchProfile = useCallback(async () => {
     setLoading(true);
@@ -443,6 +445,7 @@ function ProfilePageContent() {
     if (!profile) return;
     setSaving(true);
     setError(null);
+    setNotice(null);
     try {
       const res = await fetch(`${API_BASE}/api/profile`, {
         method: "PUT",
@@ -456,6 +459,7 @@ function ProfilePageContent() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || data?.details || "Failed to save");
       setProfile(data);
+      setNotice("Account details saved.");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to save");
     } finally {
@@ -467,6 +471,7 @@ function ProfilePageContent() {
     if (!profile) return;
     setSaving(true);
     setError(null);
+    setNotice(null);
     try {
       const res = await fetch(`${API_BASE}/api/profile`, {
         method: "PUT",
@@ -495,6 +500,11 @@ function ProfilePageContent() {
         automationReplyEmailEnabled: data.automationReplyEmailEnabled === true,
         automationAmbiguousActionHandlingEnabled: data.automationAmbiguousActionHandlingEnabled === true,
       }));
+      setNotice(
+        data.automationPaused === true
+          ? "Automation settings saved. All scheduled automation is paused."
+          : "Automation settings saved."
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to save automation settings");
     } finally {
@@ -506,6 +516,7 @@ function ProfilePageContent() {
     if (!profile) return;
     setSaving(true);
     setError(null);
+    setNotice(null);
     try {
       const res = await fetch(`${API_BASE}/api/profile`, {
         method: "PUT",
@@ -543,6 +554,7 @@ function ProfilePageContent() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || data?.details || "Failed to save");
       setProfile(data);
+      setNotice("Underwriting assumptions saved. New analyses and dossiers pick them up automatically.");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to save");
     } finally {
@@ -573,6 +585,7 @@ function ProfilePageContent() {
   const handleGenerateStandardLeverage = async () => {
     setSaving(true);
     setError(null);
+    setNotice(null);
     try {
       const res = await fetch(`${API_BASE}/api/profile/generate-standard-leverage`, { method: "POST" });
       const data = await res.json();
@@ -584,6 +597,7 @@ function ProfilePageContent() {
         defaultInterestRate: 6.5,
         defaultAmortization: 30,
       }));
+      setNotice("Standard leverage applied: LTV 65%, interest 6.5%, amortization 30 years.");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to set standard leverage");
     } finally {
@@ -596,6 +610,8 @@ function ProfilePageContent() {
     setSavedSearchDraft(buildSavedSearchDraft(search));
     setSavedSearchNotice(null);
     setSavedSearchError(null);
+    // The edit form sits above the list; bring it on screen so the populated draft is visible.
+    document.getElementById("saved-search-form")?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   };
 
   const handleResetSavedSearchDraft = (options?: { preserveMessages?: boolean }) => {
@@ -643,12 +659,22 @@ function ProfilePageContent() {
       const res = await fetch(`${API_BASE}/api/saved-searches/${encodeURIComponent(savedSearchId)}/run-now`, { method: "POST" });
       const data = await res.json();
       if (res.status === 409 || data?.code === "already_running") {
-        setSavedSearchNotice("Saved search is already running. Open Pipeline for live workflow tracking while the current run finishes.");
+        setSavedSearchNotice(
+          <>
+            Saved search is already running. <Link href="/pipeline" className={styles.noticeLink}>Open Pipeline</Link> for live
+            workflow tracking while the current run finishes, or check <Link href="/runs" className={styles.noticeLink}>run history</Link>.
+          </>
+        );
         await fetchSavedSearches();
         return;
       }
       if (!res.ok) throw new Error(data?.error || data?.details || "Failed to start saved search");
-      setSavedSearchNotice("Saved search started. Open Pipeline for live workflow tracking.");
+      setSavedSearchNotice(
+        <>
+          Saved search started. <Link href="/pipeline" className={styles.noticeLink}>Open Pipeline</Link> for live workflow
+          tracking; results land in <Link href="/runs" className={styles.noticeLink}>run history</Link> when it finishes.
+        </>
+      );
       await fetchSavedSearches();
     } catch (e) {
       setSavedSearchError(e instanceof Error ? e.message : "Failed to start saved search");
@@ -657,7 +683,8 @@ function ProfilePageContent() {
     }
   };
 
-  const handleDeleteSavedSearch = async (savedSearchId: string) => {
+  const handleDeleteSavedSearch = async (savedSearchId: string, name: string) => {
+    if (!window.confirm(`Delete saved search "${name}"? Its scheduled runs stop immediately.`)) return;
     setDeletingSavedSearchId(savedSearchId);
     setSavedSearchError(null);
     setSavedSearchNotice(null);
@@ -666,7 +693,7 @@ function ProfilePageContent() {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.error || data?.details || "Failed to delete saved search");
       if (editingSavedSearchId === savedSearchId) handleResetSavedSearchDraft();
-      setSavedSearchNotice("Saved search deleted.");
+      setSavedSearchNotice(`Deleted saved search "${name}".`);
       await fetchSavedSearches();
     } catch (e) {
       setSavedSearchError(e instanceof Error ? e.message : "Failed to delete saved search");
@@ -748,6 +775,7 @@ function ProfilePageContent() {
       )}
 
       {error && <p className={styles.errorBanner}>{error}</p>}
+      {notice && <p className={styles.successBanner}>{notice}</p>}
 
       {/* ── Account section ── */}
       <section className={styles.section}>
@@ -1006,7 +1034,7 @@ function ProfilePageContent() {
         </div>
         {savedSearchError && <p className={styles.errorBanner}>{savedSearchError}</p>}
         {savedSearchNotice && <p className={styles.successBanner}>{savedSearchNotice}</p>}
-        <div className={styles.formPanel}>
+        <div className={styles.formPanel} id="saved-search-form">
           <div className={styles.formPanelHeading}>
             <div>
               <h3>{editingSavedSearchId ? "Edit saved search" : "Add saved search"}</h3>
@@ -1268,7 +1296,7 @@ function ProfilePageContent() {
                   <Button
                     variant="destructive"
                     size="sm"
-                    onClick={() => void handleDeleteSavedSearch(search.id)}
+                    onClick={() => void handleDeleteSavedSearch(search.id, search.name)}
                     disabled={deletingSavedSearchId === search.id}
                   >
                     {deletingSavedSearchId === search.id ? "Deleting…" : "Delete"}

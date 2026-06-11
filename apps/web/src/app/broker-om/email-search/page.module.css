@@ -16,7 +16,7 @@
 .kicker {
   margin: 0 0 0.35rem;
   color: var(--app-muted);
-  font-size: 0.76rem;
+  font-size: var(--text-xs);
   font-weight: 680;
   text-transform: uppercase;
   letter-spacing: var(--tracking-label);
@@ -53,14 +53,14 @@
 }
 
 .button {
-  color: #ffffff;
+  color: var(--brand-on);
   background: var(--app-accent);
   border-color: var(--app-accent);
 }
 
 .secondaryButton {
   color: var(--app-ink);
-  background: #ffffff;
+  background: var(--app-surface);
   border-color: var(--app-line-strong);
 }
 
@@ -143,7 +143,7 @@
 
 .segmentActive {
   color: var(--app-accent-strong);
-  background: #ecfdf5;
+  background: var(--brand-soft); /* was off-palette #ecfdf5 (emerald-50); brand-soft is the matching token */
   font-weight: 700;
 }
 
@@ -180,8 +180,9 @@
   min-height: 1.65rem;
   border-radius: 999px;
   padding: 0.24rem 0.55rem;
-  font-size: 0.78rem;
+  font-size: var(--text-xs);
   font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
 
 .pill {
@@ -203,6 +204,7 @@
 }
 
 .mutedPill {
+  /* slate-50/200 — intentionally cooler than the zinc surface tokens; no token equivalent */
   color: var(--app-muted);
   background: #f8fafc;
   border: 1px solid #e2e8f0;
@@ -216,9 +218,15 @@
 }
 
 .notice {
-  color: #14532d;
+  color: #14532d; /* green-900 text for contrast on --app-green-soft; no dark green token exists */
   background: var(--app-green-soft);
   border: 1px solid var(--app-green-border);
+}
+
+.noticeLink {
+  color: inherit;
+  font-weight: 700;
+  text-decoration: underline;
 }
 
 .error {
@@ -256,6 +264,9 @@
 
 .rowList {
   display: grid;
+  /* Gmail pulls can return hundreds of rows; keep the list bounded next to the sticky preview. */
+  max-height: 70vh;
+  overflow-y: auto;
 }
 
 .documentRow {
@@ -281,12 +292,12 @@
   border: 1px solid var(--app-line-strong);
   border-radius: 6px;
   color: var(--app-muted);
-  background: #ffffff;
+  background: var(--app-surface);
   cursor: pointer;
 }
 
 .checkButtonActive {
-  color: #ffffff;
+  color: var(--brand-on);
   background: var(--app-accent);
   border-color: var(--app-accent);
 }
@@ -343,7 +354,7 @@
   min-height: 560px;
   border: 1px solid var(--app-line);
   border-radius: 8px;
-  background: #ffffff;
+  background: var(--app-surface);
 }
 
 .previewFallback {
@@ -362,12 +373,14 @@
   display: grid;
   gap: 0.75rem;
   padding: 1rem;
+  max-height: 60vh;
+  overflow-y: auto;
 }
 
 .candidate {
   border: 1px solid var(--app-line);
   border-radius: 8px;
-  background: #ffffff;
+  background: var(--app-surface);
 }
 
 .candidateHeader {

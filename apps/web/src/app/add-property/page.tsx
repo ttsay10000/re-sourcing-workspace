@@ -847,7 +847,7 @@ export default function AddPropertyPage() {
       setNotice({
         type: successes.length > 0 ? "info" : "error",
         title: successes.length > 0 ? "StreetEasy imports completed with issues" : "StreetEasy imports failed",
-        message: `${successes.length} of ${urls.length} listing${urls.length === 1 ? "" : "s"} imported. ${failures.length} failed${failures[0]?.message ? `: ${failures[0].message}` : "."}`,
+        message: `${successes.length} of ${urls.length} listing${urls.length === 1 ? "" : "s"} imported. ${failures.length} failed${failures[0]?.message ? `: ${failures[0].message}` : "."} Per-listing status and property links are in the Import activity panel.`,
         job: successes.length === 1 ? successes[0]?.job : undefined,
       });
       return;
@@ -859,7 +859,7 @@ export default function AddPropertyPage() {
       message:
         urls.length === 1
           ? getJobMessage(successes[0]!.job)
-          : `${successes.length} StreetEasy listings imported. Enrichment and rental flow were triggered for each property.`,
+          : `${successes.length} StreetEasy listings imported. Enrichment and rental flow were triggered for each property — open each one from the Import activity panel.`,
       job: successes.length === 1 ? successes[0]?.job : undefined,
     });
   };

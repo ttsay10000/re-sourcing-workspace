@@ -17,7 +17,7 @@
 .eyebrow {
   margin: 0 0 0.25rem;
   color: var(--app-ink-secondary);
-  font-size: 0.73rem;
+  font-size: var(--text-xs);
   font-weight: 560;
   text-transform: uppercase;
 }
@@ -39,7 +39,7 @@
 
 .searchLabel {
   color: var(--app-ink-secondary);
-  font-size: 0.78rem;
+  font-size: var(--text-xs);
   font-weight: 700;
 }
 
@@ -72,7 +72,7 @@
 .stackForm input:focus,
 .stackForm textarea:focus {
   border-color: var(--app-accent-teal);
-  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.13);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 13%, transparent);
 }
 
 .metrics {
@@ -106,14 +106,14 @@
 
 .metricValue {
   color: var(--app-ink);
-  font-size: 1.3rem;
+  font-size: var(--text-xl);
   font-weight: 760;
   font-variant-numeric: tabular-nums;
 }
 
 .metricLabel {
   color: var(--app-ink-secondary);
-  font-size: 0.7rem;
+  font-size: var(--text-2xs);
   font-weight: 700;
   text-transform: uppercase;
 }
@@ -163,7 +163,7 @@
   color: var(--app-ink-secondary);
   cursor: pointer;
   font: inherit;
-  font-size: 0.78rem;
+  font-size: var(--text-xs);
   font-weight: 760;
   min-height: 1.85rem;
   padding: 0.35rem 0.7rem;
@@ -181,16 +181,24 @@
 
 .tableHeader strong {
   color: var(--app-ink);
-  font-size: 0.9rem;
+  font-size: var(--text-sm);
 }
 
 .tableHeader span {
   color: var(--app-muted);
-  font-size: 0.78rem;
+  font-size: var(--text-xs);
 }
 
 .tableScroll {
   overflow: auto;
+  /* Bound the CRM list so the sticky header row actually engages and the page keeps its frame. */
+  max-height: 70vh;
+}
+
+/* Right-aligned numeric columns (e.g. open action counts). */
+.numericCell {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
 .table {
@@ -212,7 +220,7 @@
   border-bottom: 1px solid var(--app-line);
   background: var(--app-surface-strong);
   color: var(--app-ink-secondary);
-  font-size: 0.68rem;
+  font-size: var(--text-2xs);
   font-weight: 780;
   padding: 0.55rem 0.78rem;
   text-align: left;
@@ -253,7 +261,7 @@
 }
 
 .table tr:hover td:first-child {
-  box-shadow: inset 3px 0 0 rgba(15, 118, 110, 0.24);
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--brand) 24%, transparent);
 }
 
 .table th:nth-child(1),
@@ -344,7 +352,7 @@
 
 .subtleLine {
   color: var(--app-muted);
-  font-size: 0.74rem;
+  font-size: var(--text-xs);
   line-height: 1.35;
   margin-top: 0.18rem;
 }
@@ -389,7 +397,7 @@
 
 .activityLine span:last-child {
   color: var(--app-muted);
-  font-size: 0.78rem;
+  font-size: var(--text-xs);
 }
 
 .missingText {
@@ -465,7 +473,7 @@
   background: var(--app-surface-raised);
   color: var(--app-accent-teal);
   cursor: pointer;
-  font-size: 0.72rem;
+  font-size: var(--text-2xs);
   font-weight: 720;
   padding: 0.24rem 0.55rem;
   text-overflow: ellipsis;
@@ -484,7 +492,7 @@
 .moreChip {
   background: var(--app-surface-strong);
   color: var(--app-ink-secondary);
-  font-size: 0.72rem;
+  font-size: var(--text-2xs);
   font-weight: 760;
   padding: 0.31rem 0.45rem;
 }
@@ -496,7 +504,7 @@
   min-height: 1.42rem;
   overflow: hidden;
   border: 1px solid transparent;
-  font-size: 0.68rem;
+  font-size: var(--text-2xs);
   font-weight: 780;
   padding: 0.15rem 0.38rem;
   text-overflow: ellipsis;
@@ -534,7 +542,7 @@
   min-width: 1.75rem;
   height: 1.45rem;
   border-radius: 999px;
-  font-size: 0.72rem;
+  font-size: var(--text-2xs);
   font-weight: 780;
 }
 
@@ -554,7 +562,7 @@
 .primaryButton {
   border: 1px solid var(--app-line-strong);
   cursor: pointer;
-  font-size: 0.78rem;
+  font-size: var(--text-xs);
   font-weight: 760;
   line-height: 1.15;
   min-height: 1.75rem;
@@ -646,7 +654,7 @@
 .notice,
 .loadingBlock {
   border-radius: 8px;
-  font-size: 0.88rem;
+  font-size: var(--text-sm);
   line-height: 1.45;
   margin-bottom: 0.75rem;
   padding: 0.76rem 0.95rem;
@@ -712,7 +720,7 @@
   background: var(--app-surface);
   color: var(--app-ink-secondary);
   cursor: pointer;
-  font-size: 1rem;
+  font-size: var(--text-md);
   font-weight: 760;
 }
 
@@ -720,7 +728,7 @@
   margin: 0;
   color: var(--app-ink);
   font-family: var(--font-display);
-  font-size: 1.55rem;
+  font-size: var(--text-2xl);
   line-height: 1.2;
 }
 
@@ -739,7 +747,7 @@
 .panelSection h3 {
   margin: 0 0 0.7rem;
   color: var(--app-ink);
-  font-size: 0.92rem;
+  font-size: var(--text-sm);
 }
 
 .panelActions {
@@ -759,7 +767,7 @@
 
 .detailGrid dt {
   color: var(--app-muted);
-  font-size: 0.73rem;
+  font-size: var(--text-xs);
   font-weight: 760;
   margin-bottom: 0.18rem;
   text-transform: uppercase;
@@ -828,7 +836,7 @@
 .mergeItem em,
 .countText {
   color: var(--app-accent-teal);
-  font-size: 0.72rem;
+  font-size: var(--text-2xs);
   font-style: normal;
   font-weight: 780;
 }
@@ -861,7 +869,7 @@
 
 .emptyNote {
   margin: 0;
-  font-size: 0.88rem;
+  font-size: var(--text-sm);
 }
 
 .notes {
@@ -927,7 +935,7 @@
 .formGrid label span,
 .stackForm label span {
   color: var(--app-ink-secondary);
-  font-size: 0.76rem;
+  font-size: var(--text-xs);
   font-weight: 760;
 }
 

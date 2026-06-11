@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Badge, Button, Dialog, EmptyState, PageHeader, SkeletonRows } from "@/components/ui";
 import { API_BASE, apiFetch } from "@/lib/api";
 import { EMPTY_VALUE, formatCurrencyExact, formatDateShort, formatNumber } from "@/lib/format";
@@ -120,8 +120,14 @@ export default function OmReviewPage() {
   const [groups, setGroups] = useState<ReviewQueueGroup[]>([]);
   const [loading, setLoading] = useState(true);
   const [runningActionId, setRunningActionId] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState<ReactNode | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const noticeRef = useRef<HTMLParagraphElement | null>(null);
+
+  /* Promote/reject/retry buttons live mid-page; make sure their confirmation is on screen. */
+  useEffect(() => {
+    if (notice) noticeRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [notice]);
   const [runs, setRuns] = useState<ExtractionRun[]>([]);
   const [runsLoading, setRunsLoading] = useState(true);
   const [busyRunId, setBusyRunId] = useState<string | null>(null);
@@ -188,9 +194,14 @@ export default function OmReviewPage() {
       );
       setPromoteState(null);
       setNotice(
-        Object.keys(corrections).length > 0
-          ? `Promoted ${run.address} with ${Object.keys(corrections).length} correction${Object.keys(corrections).length === 1 ? "" : "s"}.`
-          : `Promoted ${run.address}.`
+        <>
+          {Object.keys(corrections).length > 0
+            ? `Promoted ${run.address} with ${Object.keys(corrections).length} correction${Object.keys(corrections).length === 1 ? "" : "s"}.`
+            : `Promoted ${run.address}.`}{" "}
+          <Link className={styles.noticeLink} href={`/pipeline?propertyId=${encodeURIComponent(run.propertyId)}`}>
+            Open property
+          </Link>
+        </>
       );
       await loadRuns();
     } catch (err) {
@@ -265,8 +276,9 @@ export default function OmReviewPage() {
       );
       const data = await res.json();
       if (!res.ok || data?.ok === false) throw new Error(data?.error || data?.details || "Failed to create review run");
-      setNotice(`Review run created for ${item.canonicalAddress}.`);
+      setNotice(`Review run created for ${item.canonicalAddress} — it appears under OM extraction runs above once processed.`);
       await loadQueue();
+      await loadRuns();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create review run");
     } finally {
@@ -303,7 +315,7 @@ export default function OmReviewPage() {
       />
 
       {error && <p className={styles.error}>{error}</p>}
-      {notice && <p className={styles.notice}>{notice}</p>}
+      {notice && <p ref={noticeRef} className={styles.notice}>{notice}</p>}
 
       <section className={styles.section}>
         <div className={styles.sectionHeading}>

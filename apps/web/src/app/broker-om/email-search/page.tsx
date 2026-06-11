@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   AlertTriangle,
   CheckSquare,
@@ -220,7 +220,7 @@ export default function BrokerOmEmailSearchPage() {
   const [importing, setImporting] = useState(false);
   const processBanner = useProcessBanner();
   const [creatingPropertyId, setCreatingPropertyId] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState<ReactNode | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -451,7 +451,24 @@ export default function BrokerOmEmailSearchPage() {
       const skippedCount = data.skipped?.length ?? 0;
       const errorCount = data.errors?.length ?? 0;
       const summary = `Imported ${importedCount} document${importedCount === 1 ? "" : "s"}${skippedCount ? `, skipped ${skippedCount}` : ""}${errorCount ? `, ${errorCount} failed` : ""}.`;
-      setNotice(summary);
+      setNotice(
+        <>
+          {summary}{" "}
+          {propertyId ? (
+            <Link className={styles.noticeLink} href={`/property-data?expand=${encodeURIComponent(propertyId)}`}>
+              View property documents
+            </Link>
+          ) : null}
+          {importedCount > 0 ? (
+            <>
+              {propertyId ? " · " : ""}
+              <Link className={styles.noticeLink} href="/om-review">
+                Track extraction in the review queue
+              </Link>
+            </>
+          ) : null}
+        </>
+      );
       if (errorCount > 0) banner.fail(summary);
       else banner.succeed(summary);
       clearSelection();
@@ -484,7 +501,12 @@ export default function BrokerOmEmailSearchPage() {
       const data = (await response.json()) as CreatePropertyResponse;
       if (!response.ok || data.error) throw new Error(data.error || data.details || "Failed to create property");
       setNotice(
-        `${data.createdProperty ? "Created" : "Matched"} property: ${data.canonicalAddress}.`
+        <>
+          {`${data.createdProperty ? "Created" : "Matched"} property: ${data.canonicalAddress}.`}{" "}
+          <Link className={styles.noticeLink} href={`/property-data?expand=${encodeURIComponent(data.propertyId)}`}>
+            Open property card
+          </Link>
+        </>
       );
       await loadProperties();
       setSelection((current) => ({
