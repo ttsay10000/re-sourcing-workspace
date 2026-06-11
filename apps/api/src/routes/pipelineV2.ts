@@ -430,13 +430,19 @@ function deriveDealPathStatus(input: {
   if (input.postTourDecision === "reject") return "rejected_after_tour";
   if (input.postTourDecision === "move_forward") return "offer_candidate";
   if (input.postTourDecision === "need_more_info") return "need_more_info";
-  if (input.tourCompletedAt) return "tour_completed_awaiting_inputs";
+  // An explicit tour-stage status persists even without its date ("moved
+  // anyway" — the board flags the missing info instead of bouncing the deal).
+  // Precedence mirrors savedProgressV2.deriveDealPathPipelineStatus.
+  if (input.tourCompletedAt || input.rawStatus === "tour_completed_awaiting_inputs") {
+    return "tour_completed_awaiting_inputs";
+  }
   if (input.tourScheduledAt) {
     const scheduledMs = Date.parse(input.tourScheduledAt);
     return Number.isFinite(scheduledMs) && scheduledMs <= Date.now()
       ? "tour_completed_awaiting_inputs"
       : "tour_scheduled";
   }
+  if (input.rawStatus === "tour_scheduled") return "tour_scheduled";
   return "not_scheduled";
 }
 
@@ -3154,6 +3160,30 @@ async function handleStatusUpdate(req: Request, res: Response): Promise<void> {
         });
       }
     }
+    // An explicit stage move always wins. If the stored deal path would steer
+    // the board to a different stage (tour dates, explicit tour status, or an
+    // offer decision), mark the path "canceled" so the deal stays where the
+    // user put it instead of silently bouncing back. Tour history (dates,
+    // notes) is preserved; a deal-path update with a new date or decision
+    // re-enters the flow.
+    const currentDealPath = existing.dealPath;
+    if (currentDealPath != null && status !== "rejected") {
+      const dealPathPipelineStatus = dealPathStatusForPipeline(
+        deriveDealPathStatus({
+          rawStatus: parseDealPathStatus(currentDealPath.status),
+          tourScheduledAt: currentDealPath.tourScheduledAt ?? null,
+          tourCompletedAt: currentDealPath.tourCompletedAt ?? null,
+          postTourDecision: currentDealPath.postTourDecision ?? null,
+        })
+      );
+      if (
+        dealPathPipelineStatus != null &&
+        dealPathPipelineStatus !== status &&
+        !DEAL_PATH_OVERRIDE_BLOCKING_STATUSES.has(status)
+      ) {
+        patch.dealPath = normalizeDealPathState({ ...currentDealPath, status: "canceled", updatedAt: now });
+      }
+    }
     await updatePipelineState(pool, propertyId, patch);
     void recordDealStageChange(pool, propertyId, status, { actor: actorName, source: "ui-v2-status" });
     const userId = await getDefaultUserId(pool);
@@ -3530,8 +3560,28 @@ async function handleDealPathUpdate(req: Request, res: Response): Promise<void> 
     const existing = readPipelineState(property.details);
     const now = new Date().toISOString();
     const actorName = stringOrNull(body.actorName) ?? "ui-v2";
+    // A deal explicitly moved out of the tour/offer flow carries a "canceled"
+    // deal-path status so its dates stop steering the board. A patch that
+    // brings a NEW tour/decision signal (not just a re-send of stored values)
+    // re-enters the flow; otherwise the cancellation sticks.
+    const mergeBase: Record<string, unknown> = { ...(existing.dealPath ?? {}) };
+    if (stringOrNull(mergeBase.status) === "canceled" && !("status" in input)) {
+      const dateRevives = (key: "tourScheduledAt" | "tourCompletedAt"): boolean => {
+        if (!(key in input)) return false;
+        const incoming = nullableIsoDateTime(input[key]);
+        return incoming != null && incoming !== nullableIsoDateTime(mergeBase[key]);
+      };
+      const incomingDecision = parseDealPathDecision(input.postTourDecision);
+      const decisionRevives =
+        incomingDecision != null &&
+        incomingDecision !== "pending" &&
+        incomingDecision !== parseDealPathDecision(mergeBase.postTourDecision);
+      if (dateRevives("tourScheduledAt") || dateRevives("tourCompletedAt") || decisionRevives) {
+        delete mergeBase.status;
+      }
+    }
     const nextDealPath = normalizeDealPathState({
-      ...(existing.dealPath ?? {}),
+      ...mergeBase,
       ...input,
       updatedAt: now,
     }) ?? {

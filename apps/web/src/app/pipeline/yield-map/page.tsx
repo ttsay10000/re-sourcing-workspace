@@ -813,7 +813,8 @@ export default function YieldMapPage() {
           id: summary.neighborhoodId,
           name: summary.name,
           polygon: summary.polygon,
-          // Cap-median scale; muted slate when only a $/SF median exists; null → hatch.
+          // Cap-median scale; muted slate when only a $/SF median exists;
+          // null → faint neutral wash (submarket estimate).
           fillColor: hasCapMedian ? yieldColor((summary.medianCapRate as number) * 100) : hasPsfOnly ? "#cbd5e1" : null,
           fallbackOnly,
         };
@@ -1496,8 +1497,8 @@ export default function YieldMapPage() {
                   {marketLayerOn ? (
                     <>
                       <span className={styles.legendItem}>
-                        <span className={styles.legendHatch} />
-                        submarket fallback
+                        <span className={styles.legendDot} style={{ background: "#94a3b8", opacity: 0.5 }} />
+                        submarket estimate
                       </span>
                       <span className={styles.legendItem}>
                         <span className={styles.legendHollow} />

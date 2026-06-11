@@ -312,10 +312,10 @@ export function DealWizardDrawer({
             {promptMode !== "general" ? (
               <p className={styles.drawerPromptHint}>
                 {isTourScheduledPrompt
-                  ? "Add the confirmed tour date to finish moving this deal to Tour Scheduled."
+                  ? "Add the confirmed tour date. The deal stays in Tour Scheduled either way — a missing date is flagged in Needs Action until it lands."
                   : isTourCompletedPrompt
-                    ? "Add the completed date, notes, and a decision to finish the move to Tour Completed."
-                    : "Add offer terms or upload the LOI to finish the move to LOI Offered."}
+                    ? "Add the completed date, notes, and a decision. The deal stays in Tour Completed either way — missing outcomes are flagged in Needs Action."
+                    : "Add offer terms or upload the LOI. The deal stays in LOI Offered either way — missing terms are flagged in Needs Action."}
               </p>
             ) : null}
             {autoMovedTourPassed ? (
@@ -330,9 +330,13 @@ export function DealWizardDrawer({
                   <input
                     type="date"
                     value={form.tourScheduledAt}
-                    required={isTourScheduledPrompt}
                     onChange={(event) => onUpdate(row.propertyId, "tourScheduledAt", event.target.value)}
                   />
+                  {isTourScheduledPrompt && !form.tourScheduledAt ? (
+                    <span className={styles.drawerDateWarning}>
+                      No date yet — the deal stays flagged “Tour date missing” until one is added.
+                    </span>
+                  ) : null}
                   {form.tourScheduledAt && form.tourScheduledAt <= todayDateInput() && !form.tourCompletedAt ? (
                     <span className={styles.drawerDateWarning}>
                       This date is today or in the past — the property will move to Tour Completed – Awaiting Inputs.
@@ -356,9 +360,13 @@ export function DealWizardDrawer({
                   <input
                     type="date"
                     value={form.tourCompletedAt}
-                    required={isTourCompletedPrompt}
                     onChange={(event) => onUpdate(row.propertyId, "tourCompletedAt", event.target.value)}
                   />
+                  {isTourCompletedPrompt && !form.tourCompletedAt ? (
+                    <span className={styles.drawerDateWarning}>
+                      No completed date yet — the deal stays flagged until the outcome is logged.
+                    </span>
+                  ) : null}
                 </label>
               ) : null}
               {isTourCompletedPrompt || showGeneralTourFields ? (

@@ -343,12 +343,38 @@
 
 /* ─── MapLibre canvas ─────────────────────────────────────────── */
 
+.mapCanvasWrap {
+  position: relative;
+}
+
 .mapCanvas {
   width: 100%;
   height: 540px;
   border: 1px solid var(--app-line);
   border-radius: var(--radius-lg, 10px);
   overflow: hidden;
+}
+
+/* The camera never auto-moves after the first fit — this refits on demand. */
+.mapRecenter {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  z-index: 5;
+  border: 1px solid var(--app-line-strong, #cbd5e1);
+  border-radius: 8px;
+  padding: 0.3rem 0.6rem;
+  background: rgba(255, 255, 255, 0.94);
+  color: var(--app-ink-secondary, #3f3f46);
+  font-size: 0.72rem;
+  font-weight: 750;
+  cursor: pointer;
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.14);
+}
+
+.mapRecenter:hover {
+  border-color: var(--app-accent-teal, #0f766e);
+  color: var(--app-accent-teal, #0f766e);
 }
 
 .pin {

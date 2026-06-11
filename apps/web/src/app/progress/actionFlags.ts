@@ -55,6 +55,7 @@ export type ActionFlagType =
   | "missing_document"
   | "underwriting_review"
   | "tour_scheduling"
+  | "tour_date_missing"
   | "tour_prep"
   | "post_tour_notes"
   | "loi_follow_up"
@@ -394,6 +395,14 @@ function tourRequestedFlags(row: FlagInputRow, now: number): ActionFlag[] {
 
 function tourScheduledFlags(row: FlagInputRow, now: number): ActionFlag[] {
   const flags: ActionFlag[] = [];
+  // The deal was moved here without a confirmed date (move-anyway): keep it on
+  // the board where the user put it, but chase the date until it lands.
+  if (!row.dealPath?.tourScheduledAt) {
+    flags.push(
+      flag(row, "tour_date_missing", "high", "Tour date missing", "Moved to Tour Scheduled without a confirmed date — add one so prep and follow-ups can be tracked.", "Add tour date", "schedule_tour", { dueInDays: 0 })
+    );
+    return flags;
+  }
   const untilTour = daysUntil(row.dealPath?.tourScheduledAt ?? null, now);
   if (untilTour != null && untilTour <= 1 && untilTour >= 0) {
     flags.push(
@@ -407,14 +416,15 @@ function tourCompletedFlags(row: FlagInputRow, now: number): ActionFlag[] {
   const flags: ActionFlag[] = [];
   const decision = row.dealPath?.postTourDecision ?? null;
   const hasNotes = Boolean(row.dealPath?.tourNotes?.trim());
-  if (!decision || decision === "pending" || !hasNotes) {
+  const hasCompletedDate = Boolean(row.dealPath?.tourCompletedAt);
+  if (!decision || decision === "pending" || !hasNotes || !hasCompletedDate) {
     const tourDays = daysSince(row.dealPath?.tourCompletedAt ?? row.dealPath?.tourScheduledAt ?? row.stageEnteredAt, now) ?? 0;
     flags.push(
       flag(
         row,
         "post_tour_notes",
         "high",
-        !hasNotes ? "Tour notes missing" : "Post-tour decision missing",
+        !hasCompletedDate ? "Tour outcome missing" : !hasNotes ? "Tour notes missing" : "Post-tour decision missing",
         `Tour completed${tourDays > 0 ? ` ${tourDays}d ago` : ""} — capture notes, condition, and a go/no-go decision before knowledge is lost.`,
         "Add tour outcomes",
         "complete_tour",
@@ -753,6 +763,7 @@ export function buildActionSummary(
   push("emails_due", (n) => `${n} email${n === 1 ? "" : "s"} due`, "high", "email_queue", (item) => isEmailFlag(item) && item.type !== "missing_contact");
   push("missing_broker", (n) => `${n} missing broker email`, "high", "broker_stepper", (item) => item.type === "missing_contact");
   push("post_tour", (n) => `${n} tour outcome${n === 1 ? "" : "s"} missing`, "high", "focus", (item) => item.type === "post_tour_notes");
+  push("tour_date_missing", (n) => `${n} tour date${n === 1 ? "" : "s"} missing`, "high", "focus", (item) => item.type === "tour_date_missing");
   push("uw_stale", (n) => `${n} UW review${n === 1 ? "" : "s"} stale`, "medium", "focus", (item) => item.type === "underwriting_review" && (item.dueInDays ?? 0) < 0);
   push("likely_reject", (n) => `${n} likely reject${n === 1 ? "" : "s"}`, "medium", "focus", (item) => item.type === "likely_reject" && item.severity === "high");
   push("tours", (n) => `${n} tour${n === 1 ? "" : "s"} to confirm`, "medium", "focus", (item) => item.type === "tour_scheduling" && item.severity !== "low");

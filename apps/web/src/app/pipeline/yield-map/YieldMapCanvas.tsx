@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import styles from "./yieldMap.module.css";
@@ -55,9 +55,9 @@ export type MarketHood = {
   id: string;
   name: string;
   polygon: [number, number][];
-  /** Solid fill from the median-cap scale; null → hatched submarket-fallback fill. */
+  /** Soft tint from the median-cap scale; null → faint neutral fill. */
   fillColor: string | null;
-  /** True when the hood renders on a submarket estimate only. */
+  /** True when the hood renders on a submarket estimate only (fainter fill). */
   fallbackOnly: boolean;
 };
 
@@ -85,10 +85,7 @@ const AREA_LINE_LAYER = "neighborhood-line";
 const TRANSPARENT = "rgba(0, 0, 0, 0)";
 
 const HOOD_FILL_LAYER = "market-hood-fill";
-const HOOD_HATCH_LAYER = "market-hood-hatch";
-const HOOD_LINE_LAYER = "market-hood-line";
 const HOOD_SOURCE = "market-hoods";
-const HATCH_IMAGE = "market-hatch-pattern";
 
 function popupNode(pin: MapPin): HTMLElement {
   const root = document.createElement("div");
@@ -140,25 +137,6 @@ function hollowPopupNode(pin: HollowPin): HTMLElement {
   return root;
 }
 
-/** Diagonal-stripe pattern for hoods running on submarket fallback only. */
-function hatchImageData(): ImageData {
-  const size = 12;
-  const canvas = document.createElement("canvas");
-  canvas.width = size;
-  canvas.height = size;
-  const ctx = canvas.getContext("2d")!;
-  ctx.clearRect(0, 0, size, size);
-  ctx.strokeStyle = "rgba(100, 116, 139, 0.55)";
-  ctx.lineWidth = 2;
-  for (let offset = -size; offset <= size * 2; offset += 6) {
-    ctx.beginPath();
-    ctx.moveTo(offset, -2);
-    ctx.lineTo(offset - size, size + 2);
-    ctx.stroke();
-  }
-  return ctx.getImageData(0, 0, size, size);
-}
-
 function hoodFeatureCollection(hoods: MarketHood[]): GeoJSON.FeatureCollection {
   return {
     type: "FeatureCollection",
@@ -172,7 +150,7 @@ function hoodFeatureCollection(hoods: MarketHood[]): GeoJSON.FeatureCollection {
           hoodId: hood.id,
           name: hood.name,
           fillColor: hood.fillColor ?? "#94a3b8",
-          hatch: hood.fallbackOnly,
+          fallback: hood.fallbackOnly,
         },
         geometry: { type: "Polygon", coordinates: [ring] },
       };
@@ -264,7 +242,13 @@ export function YieldMapCanvas({
   // popups + neighborhood cards stacking into an unreadable pile.
   const openPinPopupRef = useRef<maplibregl.Popup | null>(null);
   const styleReadyRef = useRef(false);
-  const lastFitKeyRef = useRef<string>("");
+  // The camera auto-fits exactly once (first non-empty pin set). Filtering,
+  // searching, toggles, and the 60s auto-refresh must never move a map the
+  // user is looking at — the Recenter button refits on demand.
+  const hasAutoFitRef = useRef(false);
+  const lastPinsKeyRef = useRef<string>("");
+  const pinsRef = useRef<MapPin[]>([]);
+  pinsRef.current = pins;
   const onPinHoverRef = useRef(onPinHover);
   onPinHoverRef.current = onPinHover;
   const renderHoodPopupRef = useRef<typeof renderHoodPopup>(renderHoodPopup);
@@ -313,9 +297,6 @@ export function YieldMapCanvas({
     if (!map) return;
 
     const apply = () => {
-      if (!map.hasImage(HATCH_IMAGE)) {
-        map.addImage(HATCH_IMAGE, hatchImageData());
-      }
       const data = hoodFeatureCollection(marketHoodsRef.current);
       const source = map.getSource(HOOD_SOURCE) as maplibregl.GeoJSONSource | undefined;
       if (source) {
@@ -323,25 +304,18 @@ export function YieldMapCanvas({
         return;
       }
       map.addSource(HOOD_SOURCE, { type: "geojson", data });
+      // One soft tint per hood — no outlines or hatching, so the market layer
+      // shades the basemap the way the original neighborhood fills did and
+      // pins/badges keep the visual hierarchy. Submarket-fallback hoods get a
+      // fainter wash; the popup explains their provenance.
       map.addLayer({
         id: HOOD_FILL_LAYER,
         type: "fill",
         source: HOOD_SOURCE,
-        filter: ["!", ["get", "hatch"]],
-        paint: { "fill-color": ["get", "fillColor"], "fill-opacity": 0.38 },
-      });
-      map.addLayer({
-        id: HOOD_HATCH_LAYER,
-        type: "fill",
-        source: HOOD_SOURCE,
-        filter: ["get", "hatch"],
-        paint: { "fill-pattern": HATCH_IMAGE, "fill-opacity": 0.85 },
-      });
-      map.addLayer({
-        id: HOOD_LINE_LAYER,
-        type: "line",
-        source: HOOD_SOURCE,
-        paint: { "line-color": "#475569", "line-width": 1, "line-opacity": 0.45 },
+        paint: {
+          "fill-color": ["get", "fillColor"],
+          "fill-opacity": ["case", ["get", "fallback"], 0.08, 0.16],
+        },
       });
 
       const showPopup = (hoodId: string, lngLat: maplibregl.LngLatLike) => {
@@ -386,14 +360,12 @@ export function YieldMapCanvas({
         hoodPopupPinnedRef.current = true;
         showPopup(hoodId, event.lngLat);
       };
-      for (const layer of [HOOD_FILL_LAYER, HOOD_HATCH_LAYER]) {
-        map.on("mousemove", layer, handleMove);
-        map.on("mouseleave", layer, handleLeave);
-        map.on("click", layer, handleClick);
-      }
+      map.on("mousemove", HOOD_FILL_LAYER, handleMove);
+      map.on("mouseleave", HOOD_FILL_LAYER, handleLeave);
+      map.on("click", HOOD_FILL_LAYER, handleClick);
       map.on("click", (event) => {
         // Clicking outside the polygons unpins the popup.
-        const hits = map.queryRenderedFeatures(event.point, { layers: [HOOD_FILL_LAYER, HOOD_HATCH_LAYER] });
+        const hits = map.queryRenderedFeatures(event.point, { layers: [HOOD_FILL_LAYER] });
         if (hits.length === 0) {
           hoodPopupPinnedRef.current = false;
           hoodPopupRef.current?.remove();
@@ -477,9 +449,30 @@ export function YieldMapCanvas({
       : [];
   }, [areas, showAreas]);
 
+  const fitToPins = useCallback((duration = 350) => {
+    const map = mapRef.current;
+    const currentPins = pinsRef.current;
+    if (!map || currentPins.length === 0) return;
+    const bounds = new maplibregl.LngLatBounds();
+    currentPins.forEach((pin) => bounds.extend([pin.lng, pin.lat]));
+    map.fitBounds(bounds, { padding: 56, maxZoom: 14.5, duration });
+  }, []);
+
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
+
+    // Identical content (the 60s auto-refresh usually returns the same set)
+    // leaves the existing markers alone instead of tearing down popups and
+    // hover state mid-interaction.
+    const pinsKey = pins
+      .map((pin) =>
+        [pin.id, pin.lat, pin.lng, pin.color, pin.kind, pin.pending ? 1 : 0, pin.address, pin.neighborhood ?? "", pin.lines.join("~")].join("|")
+      )
+      .join("\n");
+    if (pinsKey === lastPinsKeyRef.current) return;
+    lastPinsKeyRef.current = pinsKey;
+
     markersRef.current.forEach((entry) => {
       entry.popup.remove();
       entry.marker.remove();
@@ -539,18 +532,13 @@ export function YieldMapCanvas({
       markersRef.current.set(pin.id, { marker, element, popup });
     }
 
-    // Refit only when the visible set changes — recoloring shouldn't move the camera.
-    const fitKey = pins
-      .map((pin) => pin.id)
-      .sort()
-      .join("|");
-    if (pins.length > 0 && fitKey !== lastFitKeyRef.current) {
-      lastFitKeyRef.current = fitKey;
-      const bounds = new maplibregl.LngLatBounds();
-      pins.forEach((pin) => bounds.extend([pin.lng, pin.lat]));
-      map.fitBounds(bounds, { padding: 56, maxZoom: 14.5, duration: 0 });
+    // Auto-fit exactly once, when pins first arrive; afterwards the camera
+    // belongs to the user (Recenter refits on demand).
+    if (pins.length > 0 && !hasAutoFitRef.current) {
+      hasAutoFitRef.current = true;
+      fitToPins(0);
     }
-  }, [pins]);
+  }, [pins, fitToPins]);
 
   // Table-row hover → enlarge + ring the matching pin.
   useEffect(() => {
@@ -561,5 +549,17 @@ export function YieldMapCanvas({
     });
   }, [highlightedId, pins]);
 
-  return <div ref={containerRef} className={styles.mapCanvas} />;
+  return (
+    <div className={styles.mapCanvasWrap}>
+      <div ref={containerRef} className={styles.mapCanvas} />
+      <button
+        type="button"
+        className={styles.mapRecenter}
+        onClick={() => fitToPins()}
+        title="Fit the map to the visible pins"
+      >
+        ⌖ Recenter
+      </button>
+    </div>
+  );
 }

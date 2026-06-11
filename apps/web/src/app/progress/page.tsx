@@ -409,6 +409,10 @@ function dealPathPayload(form: DealPathFormState, mode: DealPathPromptMode = "ge
   const offerNotes = form.offerNotes.trim();
   const postTourDecision: UiV2DealPathDecision = mode === "loi_offered" ? "move_forward" : form.postTourDecision;
   return {
+    // Tour prompts pin the deal-path stage even when the date is missing: the
+    // move still happens and the flag engine chases the gap (move-anyway).
+    ...(mode === "tour_scheduled" ? { status: "tour_scheduled" } : {}),
+    ...(mode === "tour_completed" && postTourDecision !== "reject" ? { status: "tour_completed_awaiting_inputs" } : {}),
     tourScheduledAt: dateInputToPayload(form.tourScheduledAt),
     tourCompletedAt: mode === "tour_scheduled" ? null : dateInputToPayload(form.tourCompletedAt),
     tourNotes: [tourBrokerName ? `Broker: ${tourBrokerName}` : null, tourNotes || null].filter(Boolean).join("\n") || null,
@@ -427,7 +431,10 @@ function dealPathPayload(form: DealPathFormState, mode: DealPathPromptMode = "ge
 }
 
 function hasScheduledTour(row: ProgressRow): boolean {
-  return Boolean(row.dealPath?.tourScheduledAt);
+  // A deal belongs in Tour Scheduled with a confirmed date OR when it was
+  // explicitly moved there without one (deal-path status marker) — the
+  // missing date is flagged for review instead of blocking the move.
+  return Boolean(row.dealPath?.tourScheduledAt) || row.dealPath?.status === "tour_scheduled";
 }
 
 /**
@@ -916,6 +923,9 @@ function ProgressPageContent() {
                   rejectionReasonCode: "",
                   rejectionNotes: "",
                 }),
+                // Clear any explicit tour-stage pin: Tour Requested means the
+                // date is being re-requested, not merely missing.
+                status: "not_scheduled",
                 tourScheduledAt: null,
                 tourCompletedAt: null,
                 postTourDecision: "pending",
@@ -953,6 +963,105 @@ function ProgressPageContent() {
     [loadProgress]
   );
 
+  /**
+   * Move-anyway for the deal-path stages (Tour Scheduled / Tour Completed /
+   * LOI Offered): the card always lands where it was dropped, and any missing
+   * required info (tour date, outcome, LOI terms) is raised as a flag in
+   * Needs Action and the action bar instead of blocking the move. For a
+   * single property the guided drawer opens right after so the details can
+   * land immediately — closing it keeps the move.
+   */
+  const moveDealsToDealPathStage = useCallback(
+    async (
+      rows: DealFlowRow[],
+      sectionId: "tour_scheduled" | "tour_completed_awaiting_inputs" | "offer_review",
+      options?: { clearSelection?: boolean }
+    ) => {
+      const uniqueRows = [...new Map(rows.map((row) => [row.propertyId, row])).values()];
+      if (uniqueRows.length === 0) return;
+      const plan = {
+        tour_scheduled: {
+          dealPath: { status: "tour_scheduled", tourCompletedAt: null, postTourDecision: "pending" },
+          status: "tour_scheduled" as UiV2PipelineStatus,
+          label: "Tour Scheduled",
+          drawerMode: "tour_scheduled" as DealPathPromptMode,
+          missing: (row: DealFlowRow) => !row.dealPath?.tourScheduledAt,
+          missingLabel: "tour dates",
+        },
+        tour_completed_awaiting_inputs: {
+          dealPath: { status: "tour_completed_awaiting_inputs", postTourDecision: "pending" },
+          status: "tour_completed_awaiting_inputs" as UiV2PipelineStatus,
+          label: "Tour Completed · Awaiting Inputs",
+          drawerMode: "tour_completed" as DealPathPromptMode,
+          missing: (row: DealFlowRow) => !row.dealPath?.tourCompletedAt || !row.dealPath?.tourNotes?.trim(),
+          missingLabel: "tour outcomes",
+        },
+        offer_review: {
+          dealPath: { postTourDecision: "move_forward" },
+          status: "offer_review" as UiV2PipelineStatus,
+          label: "LOI Offered",
+          drawerMode: "loi_offered" as DealPathPromptMode,
+          missing: (row: DealFlowRow) => row.dealPath?.offerAmount == null && !row.dealPath?.offerNotes?.trim(),
+          missingLabel: "LOI terms",
+        },
+      }[sectionId];
+      setStageMoveBusy(uniqueRows.length === 1 ? uniqueRows[0].propertyId : BULK_STAGE_MOVE_ID);
+      setError(null);
+      try {
+        const results = await Promise.all(
+          uniqueRows.map(async (row) => {
+            try {
+              await patchDealPath(row.propertyId, plan.dealPath);
+              await patchSavedDealStatus(row.propertyId, plan.status);
+              return { row, ok: true as const };
+            } catch (err) {
+              return {
+                row,
+                ok: false as const,
+                message: err instanceof Error ? err.message : "Failed to move deal stage.",
+              };
+            }
+          })
+        );
+        const moved = results.filter((result) => result.ok).map((result) => result.row);
+        if (moved.length > 0) {
+          if (options?.clearSelection) {
+            setSelectedDealIds((current) => {
+              const next = new Set(current);
+              moved.forEach((row) => next.delete(row.propertyId));
+              return next;
+            });
+          }
+          const flaggedCount = moved.filter(plan.missing).length;
+          const movedLabel =
+            moved.length === 1
+              ? streetAddressOnly(moved[0].displayAddress || moved[0].canonicalAddress || moved[0].propertyId)
+              : `${moved.length} deals`;
+          setNotice(
+            flaggedCount > 0
+              ? `Moved ${movedLabel} to ${plan.label} — missing ${plan.missingLabel} flagged for review in Needs Action.`
+              : `Moved ${movedLabel} to ${plan.label}.`
+          );
+          await loadProgress("refresh");
+        }
+        const failures = results.filter((result) => !result.ok);
+        if (failures.length > 0) {
+          setError(
+            `${failures.length} of ${uniqueRows.length} deal${uniqueRows.length === 1 ? "" : "s"} could not move to ${plan.label}.`
+          );
+        }
+        // Single-property move: open the guided prompt so the details can land
+        // right away. Closing it keeps the move; the flag keeps chasing.
+        if (moved.length === 1 && uniqueRows.length === 1) {
+          startDealPathEdit(moved[0], { mode: plan.drawerMode });
+        }
+      } finally {
+        setStageMoveBusy(null);
+      }
+    },
+    [loadProgress, startDealPathEdit]
+  );
+
   const dropSavedDeal = useCallback(
     (section: SavedDealSection) => {
       const row = draggedDeal;
@@ -966,37 +1075,22 @@ function ProgressPageContent() {
         void moveDealsToTourRequested(rowsToMove, { clearSelection: movingSelection });
         return;
       }
-      if (section.id === "tour_scheduled") {
-        if (rowsToMove.length > 1) {
-          setError("Schedule tours one property at a time so each one gets its own date.");
-          return;
-        }
-        startDealPathEdit(row, { mode: "tour_scheduled" });
-        return;
-      }
-      if (section.id === "tour_completed_awaiting_inputs") {
-        if (rowsToMove.length > 1) {
-          setError("Complete tours one property at a time so each one gets its own notes and decision.");
-          return;
-        }
-        startDealPathEdit(row, { mode: "tour_completed" });
-        return;
-      }
-      if (section.id === "offer_review") {
-        if (rowsToMove.length > 1) {
-          setError("Move one property at a time to LOI Offered so each one gets offer notes or an LOI upload.");
-          return;
-        }
-        startDealPathEdit(row, { mode: "loi_offered" });
+      if (
+        section.id === "tour_scheduled" ||
+        section.id === "tour_completed_awaiting_inputs" ||
+        section.id === "offer_review"
+      ) {
+        void moveDealsToDealPathStage(rowsToMove, section.id, { clearSelection: movingSelection });
         return;
       }
       void moveSavedDeals(rowsToMove, section.targetStatus, { clearSelection: movingSelection });
     },
-    [draggedDeal, moveDealsToTourRequested, moveSavedDeals, sections, selectedDealIds, startDealPathEdit]
+    [draggedDeal, moveDealsToDealPathStage, moveDealsToTourRequested, moveSavedDeals, sections, selectedDealIds]
   );
 
   // Same stage-specific behavior as drag-and-drop, but reachable from the
-  // card's quick-action menu (tour/LOI stages open their guided prompts).
+  // card's quick-action menu (tour/LOI stages move first, then open their
+  // guided prompt for the details).
   const moveRowToSectionId = useCallback(
     (row: DealFlowRow, sectionId: string) => {
       const group = MOVE_STAGE_OPTIONS.find((option) => option.id === sectionId);
@@ -1005,21 +1099,13 @@ function ProgressPageContent() {
         void moveDealsToTourRequested([row]);
         return;
       }
-      if (sectionId === "tour_scheduled") {
-        startDealPathEdit(row, { mode: "tour_scheduled" });
-        return;
-      }
-      if (sectionId === "tour_completed_awaiting_inputs") {
-        startDealPathEdit(row, { mode: "tour_completed" });
-        return;
-      }
-      if (sectionId === "offer_review") {
-        startDealPathEdit(row, { mode: "loi_offered" });
+      if (sectionId === "tour_scheduled" || sectionId === "tour_completed_awaiting_inputs" || sectionId === "offer_review") {
+        void moveDealsToDealPathStage([row], sectionId);
         return;
       }
       void moveSavedDeals([row], group.targetStatus);
     },
-    [moveDealsToTourRequested, moveSavedDeals, startDealPathEdit]
+    [moveDealsToDealPathStage, moveDealsToTourRequested, moveSavedDeals]
   );
 
   const submitMoveStage = useCallback(() => {
@@ -1391,32 +1477,16 @@ function ProgressPageContent() {
       void moveDealsToTourRequested(selectedSavedDeals, { clearSelection: true });
       return;
     }
-    if (bulkTargetGroup.id === "tour_scheduled") {
-      if (selectedSavedDeals.length !== 1) {
-        setError("Select one property at a time when scheduling a tour so you can add the date.");
-        return;
-      }
-      startDealPathEdit(selectedSavedDeals[0]!, { mode: "tour_scheduled" });
-      return;
-    }
-    if (bulkTargetGroup.id === "tour_completed_awaiting_inputs") {
-      if (selectedSavedDeals.length !== 1) {
-        setError("Select one property at a time when completing a tour so you can add notes and a decision.");
-        return;
-      }
-      startDealPathEdit(selectedSavedDeals[0]!, { mode: "tour_completed" });
-      return;
-    }
-    if (bulkTargetGroup.id === "offer_review") {
-      if (selectedSavedDeals.length !== 1) {
-        setError("Select one property at a time when moving to LOI Offered so you can add offer context.");
-        return;
-      }
-      startDealPathEdit(selectedSavedDeals[0]!, { mode: "loi_offered" });
+    if (
+      bulkTargetGroup.id === "tour_scheduled" ||
+      bulkTargetGroup.id === "tour_completed_awaiting_inputs" ||
+      bulkTargetGroup.id === "offer_review"
+    ) {
+      void moveDealsToDealPathStage(selectedSavedDeals, bulkTargetGroup.id, { clearSelection: true });
       return;
     }
     void moveSavedDeals(selectedSavedDeals, bulkTargetGroup.targetStatus, { clearSelection: true });
-  }, [bulkTargetGroup, moveDealsToTourRequested, moveSavedDeals, selectedSavedDeals, startDealPathEdit]);
+  }, [bulkTargetGroup, moveDealsToDealPathStage, moveDealsToTourRequested, moveSavedDeals, selectedSavedDeals]);
 
   const updateDealPathField = useCallback(
     <K extends keyof DealPathFormState>(propertyId: string, field: K, value: DealPathFormState[K]) => {
@@ -1437,28 +1507,22 @@ function ProgressPageContent() {
       const form = dealPathForms[row.propertyId] ?? dealPathFormFromState(row.dealPath);
       const mode = dealPathPromptMode;
       const loiFile = loiUploadFiles[row.propertyId] ?? null;
-      if (mode === "tour_scheduled" && !form.tourScheduledAt.trim()) {
-        setError("Add a tour date before moving this property to Tour Scheduled.");
-        return;
-      }
-      if (mode === "tour_completed" && !form.tourCompletedAt.trim()) {
-        setError("Add the completed tour date before moving this property to Tour Completed.");
-        return;
-      }
-      if (mode === "tour_completed" && !form.tourNotes.trim()) {
-        setError("Add tour notes before moving this property to Tour Completed.");
-        return;
-      }
-      if (
-        mode === "loi_offered" &&
-        !form.offerAmount.trim() &&
-        !form.offerNotes.trim() &&
-        !form.loiRecipientEmail.trim() &&
-        loiFile == null
-      ) {
-        setError("Add offer notes, an offer amount, recipient context, or upload the LOI PDF before moving to LOI Offered.");
-        return;
-      }
+      // Missing stage info no longer blocks the save: the move still lands and
+      // the gap stays flagged in Needs Action / the action bar until filled.
+      const missingInfoLabel =
+        mode === "tour_scheduled" && !form.tourScheduledAt.trim()
+          ? "tour date"
+          : mode === "tour_completed" && !form.tourCompletedAt.trim()
+            ? "completed tour date"
+            : mode === "tour_completed" && !form.tourNotes.trim()
+              ? "tour notes"
+              : mode === "loi_offered" &&
+                  !form.offerAmount.trim() &&
+                  !form.offerNotes.trim() &&
+                  !form.loiRecipientEmail.trim() &&
+                  loiFile == null
+                ? "LOI terms"
+                : null;
       if (form.postTourDecision === "reject" && !form.rejectionReasonCode) {
         setError("Choose a rejection reason before rejecting after a tour.");
         return;
@@ -1492,8 +1556,12 @@ function ProgressPageContent() {
           form.postTourDecision === "reject"
             ? "Property rejected after tour."
             : destinationLabel
-              ? `Saved — moved to ${destinationLabel}.`
-              : "Deal path updated."
+              ? missingInfoLabel
+                ? `Saved — moved to ${destinationLabel}. Missing ${missingInfoLabel} flagged for review in Needs Action.`
+                : `Saved — moved to ${destinationLabel}.`
+              : missingInfoLabel
+                ? `Deal path updated — missing ${missingInfoLabel} flagged for review in Needs Action.`
+                : "Deal path updated."
         );
         setEditingDealPathId(null);
         setDealPathPromptMode("general");
@@ -1686,13 +1754,15 @@ function ProgressPageContent() {
     });
   }, []);
 
-  const toggleQueueSelectAll = useCallback(() => {
+  // The panel passes the currently visible (filtered) selectable items so
+  // "Select all" always matches what the user is looking at.
+  const toggleQueueSelectAll = useCallback((visibleSelectable: EmailQueueItem[]) => {
     setQueueSelectedIds((current) => {
-      const selectable = emailQueueItems.filter((item) => !item.snoozed).map((item) => item.propertyId);
+      const selectable = visibleSelectable.map((item) => item.propertyId);
       const allSelected = selectable.length > 0 && selectable.every((propertyId) => current.has(propertyId));
       return allSelected ? new Set<string>() : new Set(selectable);
     });
-  }, [emailQueueItems]);
+  }, []);
 
   const handleQueueDraft = useCallback(
     (item: EmailQueueItem) => {
@@ -1973,7 +2043,7 @@ function ProgressPageContent() {
             </div>
             <div
               ref={boardScrollerRef}
-              className={styles.boardScroller}
+              className={`${styles.boardScroller} ${draggedDeal ? styles.boardScrollerDragging : ""}`}
               onDragOver={handleBoardDragOver}
             >
               {savedStatusSections.map((section) => (

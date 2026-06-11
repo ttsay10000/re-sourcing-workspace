@@ -342,6 +342,9 @@ function deriveDealPathPipelineStatus(pipeline: JsonRecord, currentStatus: UiV2P
   if (currentStatus != null && DEAL_PATH_BLOCKING_STATUSES.has(currentStatus)) return null;
   const dealPath = isJsonRecord(pipeline.dealPath) ? pipeline.dealPath : null;
   if (dealPath == null) return null;
+  // "canceled" = the deal was explicitly moved out of the tour/offer flow;
+  // its dates and decision stop steering the board until a new signal lands.
+  if (stringOrNull(dealPath.status) === "canceled") return null;
   const postTourDecision = stringOrNull(dealPath.postTourDecision);
   if (postTourDecision === "reject") return null;
   if (postTourDecision === "move_forward") return "offer_review";
@@ -1202,9 +1205,14 @@ function buildProgressSections(rows: ProgressPropertyRow[]): ProgressSection[] {
               row.hasOm &&
               row.underwritingReviewCompleted
           : id === "tour_requested"
-            ? row.status === "tour_scheduled" && !row.dealPath?.tourScheduledAt
+            ? row.status === "tour_scheduled" &&
+              !row.dealPath?.tourScheduledAt &&
+              row.dealPath?.status !== "tour_scheduled"
           : id === "tour_scheduled"
-            ? row.status === "tour_scheduled" && Boolean(row.dealPath?.tourScheduledAt)
+            // A confirmed date OR an explicit move-anyway pin (deal-path
+            // status) lands here; the missing date is flagged client-side.
+            ? row.status === "tour_scheduled" &&
+              (Boolean(row.dealPath?.tourScheduledAt) || row.dealPath?.status === "tour_scheduled")
             : row.status === id;
       if (matched) claimed.add(row.propertyId);
       return matched;

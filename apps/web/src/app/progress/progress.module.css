@@ -506,6 +506,11 @@
   border-radius: 0 0 8px 8px;
 }
 
+/* Snap fights the edge auto-scroll while a card is mid-drag — disable it. */
+.boardScrollerDragging {
+  scroll-snap-type: none;
+}
+
 .statusColumn {
   flex: 0 0 300px;
   min-width: 300px;
@@ -529,6 +534,7 @@
 .statusColumnDropTarget {
   border-color: var(--app-accent-teal);
   box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--app-accent-teal) 32%, transparent);
+  background: color-mix(in srgb, var(--app-accent-teal) 6%, var(--app-surface-raised, #f8fafc));
 }
 
 /* Empty stages keep the full column track so the board reads as one grid. */
@@ -617,6 +623,9 @@
   width: 100%;
   max-width: 100%;
   min-width: 0;
+  /* Never let the column's flex layout compress cards to fit its fixed
+     height — cards stay full size and .columnBody scrolls instead. */
+  flex: 0 0 auto;
   overflow: hidden;
   display: grid;
   gap: 0.42rem;
@@ -1045,6 +1054,74 @@
   color: var(--app-ink-secondary);
   font-size: 0.74rem;
   font-weight: 800;
+}
+
+/* Sort + filter strip shared by the Needs Action and Email Queue panels. */
+.queueFilterBar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--app-line);
+  border-radius: 9px;
+  background: var(--app-surface);
+}
+
+.queueFilterLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: var(--app-muted);
+  font-size: 0.66rem;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.queueFilterSelect {
+  min-height: 1.75rem;
+  max-width: 13rem;
+  border: 1px solid var(--app-line);
+  border-radius: 7px;
+  padding: 0.18rem 0.4rem;
+  background: var(--app-surface);
+  color: var(--app-ink-secondary);
+  font-size: 0.72rem;
+  font-weight: 650;
+}
+
+.queueFilterInput {
+  flex: 1 1 11rem;
+  min-width: 8rem;
+  max-width: 16rem;
+  min-height: 1.75rem;
+  border: 1px solid var(--app-line);
+  border-radius: 7px;
+  padding: 0.18rem 0.5rem;
+  background: var(--app-surface);
+  color: var(--app-ink);
+  font-size: 0.72rem;
+}
+
+.queueFilterMeta {
+  margin-left: auto;
+  color: var(--app-muted);
+  font-size: 0.68rem;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.queueFilterClear {
+  border: 0;
+  padding: 0.18rem 0.3rem;
+  background: transparent;
+  color: var(--app-accent);
+  font-size: 0.68rem;
+  font-weight: 750;
+  cursor: pointer;
+  text-decoration: underline;
 }
 
 .queueToolbarActions {
