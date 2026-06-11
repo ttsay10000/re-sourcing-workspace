@@ -93,7 +93,76 @@ describe("broker enrichment", () => {
 
     expect(merged?.[0]?.email).toBe("jane@example-realty.com");
     expect(merged?.[0]?.verificationTier).toBe("verified");
+    // Tier and needsReview must agree — surfaces read one or the other.
+    expect(merged?.[0]?.needsReview).toBe(false);
     expect(merged?.[0]?.rejectedCandidate).toBeNull();
+  });
+
+  it("passes relaxed-pass quarantined candidates through the merge without populating send fields", () => {
+    const merged = mergeBrokerEnrichment(
+      ["Jane Broker"],
+      [{ name: "Jane Broker", firm: "Example Realty", email: null, phone: null, source: "source" }],
+      [
+        {
+          // Relaxed-pass output: contact lives ONLY in rejectedCandidate.
+          name: "Jane Broker",
+          firm: null,
+          email: null,
+          phone: null,
+          source: "llm",
+          confidence: null,
+          evidence: null,
+          sourceUrl: null,
+          needsReview: true,
+          verificationTier: "needs_review",
+          rejectedCandidate: {
+            email: "jane@current-firm.com",
+            phone: null,
+            firm: "Current Firm",
+            confidence: 65,
+            evidence: "Found at her current firm; listing-time agency could not be verified.",
+            sourceUrl: "https://example.com/jane-now",
+            reason: "firm_mismatch",
+          },
+        },
+      ],
+      { brokerageName: "Example Realty" }
+    );
+
+    const entry = merged?.[0];
+    expect(entry?.email).toBeNull();
+    expect(entry?.phone).toBeNull();
+    expect(entry?.verificationTier).toBe("needs_review");
+    expect(entry?.rejectedCandidate?.email).toBe("jane@current-firm.com");
+  });
+
+  it("reports candidate-only merges as not-meaningful so callers never overwrite a good contact with them", async () => {
+    const { hasMeaningfulBrokerEnrichment, hasRetainedBrokerCandidates } = await import("./brokerEnrichment.js");
+    const merged = mergeBrokerEnrichment(
+      ["Jane Broker"],
+      null,
+      [
+        {
+          name: "Jane Broker",
+          firm: "Example Realty",
+          email: "maybe@example-realty.com",
+          phone: null,
+          source: "llm",
+          confidence: 50,
+          evidence: "Uncertain match.",
+          sourceUrl: null,
+          needsReview: true,
+        },
+      ],
+      { brokerageName: "Example Realty" }
+    );
+
+    expect(merged).not.toBeNull();
+    // Firm is present so the entry is meaningful, but strip it to simulate a
+    // candidate-only entry and confirm the gates disagree in the right way.
+    const candidateOnly = merged!.map((entry) => ({ ...entry, firm: null }));
+    expect(hasMeaningfulBrokerEnrichment(candidateOnly)).toBe(false);
+    expect(hasRetainedBrokerCandidates(candidateOnly)).toBe(true);
   });
 
   it("retains a mid-confidence contact as a needs-review candidate instead of discarding it", () => {

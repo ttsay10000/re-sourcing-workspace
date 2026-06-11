@@ -11,6 +11,7 @@ import {
   brokerLookupContextFromListing,
   enrichBrokers,
   hasMeaningfulBrokerEnrichment,
+  hasRetainedBrokerCandidates,
   mergeBrokerEnrichment,
   type EnrichBrokersOptions,
 } from "./brokerEnrichment.js";
@@ -45,7 +46,8 @@ export interface RefreshBrokerEnrichmentResult {
 
 type ListingRow = NonNullable<Awaited<ReturnType<ListingRepo["byId"]>>>;
 
-function toListingNormalized(listing: ListingRow): ListingNormalized {
+/** Map a persisted listing row back to the normalized shape ListingRepo.upsert expects. Shared with the broker rerun CLI script. */
+export function toListingNormalized(listing: ListingRow): ListingNormalized {
   return {
     source: listing.source,
     externalId: listing.externalId,
@@ -120,7 +122,12 @@ export async function refreshBrokerEnrichmentForProperty(
   }
 
   const normalized = toListingNormalized(listing);
-  const context = brokerLookupContextFromListing(normalized);
+  // Build lookup context from TRUE source facts only. Passing previously
+  // persisted enrichment as "source" would launder old LLM-found contacts
+  // into verified source-payload entries (confidence 100, no review) on
+  // every refresh — the context must not see stored enrichment at all.
+  const context = brokerLookupContextFromListing({ ...normalized, agentEnrichment: null });
+  const sourceFacts = context.agentFacts ?? null;
 
   // Directory pre-pass: brokers verified on other listings resolve for free.
   const directoryHits = new Map<string, AgentEnrichmentEntry>();
@@ -145,38 +152,62 @@ export async function refreshBrokerEnrichmentForProperty(
   ];
   const merged = mergeBrokerEnrichment(
     agentNames,
-    existingEnrichment,
+    sourceFacts,
     combinedLookup.length > 0 ? combinedLookup : null,
     context
   );
 
-  if (!hasMeaningfulBrokerEnrichment(merged)) {
+  // Never let a weaker re-lookup erase a contact we already had: per broker,
+  // keep the existing entry when the fresh merge produced nothing sendable,
+  // carrying over any newly retained candidate for review.
+  const existingByName = new Map<string, AgentEnrichmentEntry>();
+  for (const entry of existingEnrichment ?? []) {
+    const key = entry.name?.trim().toLowerCase();
+    if (key) existingByName.set(key, entry);
+  }
+  const finalEntries: AgentEnrichmentEntry[] | null = merged
+    ? merged.map((entry) => {
+        const existing = existingByName.get(entry.name.trim().toLowerCase());
+        if (!entry.email && !entry.phone && (existing?.email || existing?.phone)) {
+          return {
+            ...existing!,
+            rejectedCandidate: entry.rejectedCandidate ?? existing!.rejectedCandidate ?? null,
+          };
+        }
+        return entry;
+      })
+    : null;
+
+  if (
+    !finalEntries ||
+    (!hasMeaningfulBrokerEnrichment(finalEntries) && !hasRetainedBrokerCandidates(finalEntries))
+  ) {
     return { status: "no_contact_found", propertyId, listingId: listing.id };
   }
 
-  const nextSerialized = JSON.stringify(merged);
+  const nextSerialized = JSON.stringify(finalEntries);
   const previousSerialized = JSON.stringify(existingEnrichment ?? null);
   if (nextSerialized === previousSerialized) {
     return {
       status: "unchanged",
       propertyId,
       listingId: listing.id,
-      entries: merged,
-      resolution: summarizeResolution(merged ?? [], new Set(directoryHits.keys())),
+      entries: finalEntries,
+      resolution: summarizeResolution(finalEntries, new Set(directoryHits.keys())),
     };
   }
 
-  normalized.agentEnrichment = merged;
+  normalized.agentEnrichment = finalEntries;
   const listingRepo = new ListingRepo({ pool });
   await listingRepo.upsert(normalized, { uploadedRunId: listing.uploadedRunId ?? null });
-  await recordVerifiedContactsInDirectory(pool, merged);
+  await recordVerifiedContactsInDirectory(pool, finalEntries);
   await syncPropertySourcingWorkflow(propertyId, { pool });
 
   return {
     status: "updated",
     propertyId,
     listingId: listing.id,
-    entries: merged,
-    resolution: summarizeResolution(merged ?? [], new Set(directoryHits.keys())),
+    entries: finalEntries,
+    resolution: summarizeResolution(finalEntries, new Set(directoryHits.keys())),
   };
 }

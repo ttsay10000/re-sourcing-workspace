@@ -8,6 +8,7 @@
  */
 import type { OmValidationFlag } from "@re-sourcing/contracts";
 import type { UnderwritingProjection } from "./underwritingModel.js";
+import { formatPct } from "../om/omValidationFlags.js";
 
 const FLAG_SOURCE = "underwriting_model";
 
@@ -28,9 +29,6 @@ function formatRatio(value: number): string {
   return `${(Math.round(value * 100) / 100).toFixed(2)}x`;
 }
 
-function formatPct(value: number): string {
-  return `${(Math.round(value * 10) / 10).toFixed(1)}%`;
-}
 
 export interface UnderwritingValidationFlagParams {
   projection: UnderwritingProjection;

@@ -18,6 +18,12 @@ interface DirectoryRow {
 /**
  * Find a previously verified contact for this broker name (and compatible
  * firm) in the directory. Returns a ready-to-merge enrichment entry or null.
+ *
+ * broker_contacts also holds rows that recipient-resolution sync stored as
+ * review-only (unvetted LLM candidates, manual_review_only = true) — those are
+ * excluded here, and a hit is only auto-promotable ("verified", confidence
+ * above the bar) when BOTH firms are known and compatible; name-only matches
+ * come back below the promotion bar so the merge routes them to review.
  */
 export async function findDirectoryContact(
   pool: import("pg").Pool,
@@ -31,23 +37,28 @@ export async function findDirectoryContact(
      FROM broker_contacts
      WHERE LOWER(display_name) = LOWER($1)
        AND normalized_email IS NOT NULL
+       AND manual_review_only = false
+       AND (do_not_contact_until IS NULL OR do_not_contact_until <= now())
      ORDER BY updated_at DESC
      LIMIT 10`,
     [normalizedName]
   );
   const compatible = result.rows.find((row) => firmsCompatible(firm, row.firm));
   if (!compatible?.normalized_email) return null;
+  const firmEvidenceKnown = Boolean(firm?.trim()) && Boolean(compatible.firm?.trim());
   return {
     name: compatible.display_name ?? normalizedName,
     firm: compatible.firm,
     email: compatible.normalized_email,
     phone: compatible.phone,
     source: "directory",
-    confidence: 90,
-    evidence: "Reused from the broker directory (previously verified contact for this broker).",
+    confidence: firmEvidenceKnown ? 90 : 60,
+    evidence: firmEvidenceKnown
+      ? "Reused from the broker directory (previously verified contact for this broker at a compatible firm)."
+      : "Broker directory match by name only (firm could not be cross-checked) — confirm before sending.",
     sourceUrl: null,
-    needsReview: false,
-    verificationTier: "verified",
+    needsReview: !firmEvidenceKnown,
+    verificationTier: firmEvidenceKnown ? "verified" : "needs_review",
   };
 }
 
@@ -67,6 +78,8 @@ export async function recordVerifiedContactsInDirectory(
     const email = entry.email?.trim().toLowerCase();
     if (!email) continue;
     if (entry.verificationTier != null && entry.verificationTier !== "verified") continue;
+    // Legacy entries without a tier: never record review-flagged contacts.
+    if (entry.needsReview === true) continue;
     try {
       await repo.upsert({
         normalizedEmail: email,

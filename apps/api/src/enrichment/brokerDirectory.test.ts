@@ -37,6 +37,34 @@ describe("brokerDirectory", () => {
     expect(hit!.needsReview).toBe(false);
   });
 
+  it("returns name-only matches below the promotion bar when firms cannot be cross-checked", async () => {
+    const pool = fakePool(() => ({
+      rows: [
+        {
+          normalized_email: "jane@somewhere.com",
+          display_name: "Jane Broker",
+          firm: null,
+          phone: null,
+          updated_at: "2026-06-01T00:00:00.000Z",
+        },
+      ],
+    }));
+
+    const hit = await findDirectoryContact(pool, "Jane Broker", "Example Realty");
+    expect(hit).not.toBeNull();
+    expect(hit!.verificationTier).toBe("needs_review");
+    expect(hit!.needsReview).toBe(true);
+    expect(hit!.confidence).toBeLessThan(70);
+  });
+
+  it("excludes review-only and do-not-contact rows in SQL", async () => {
+    const pool = fakePool(() => ({ rows: [] }));
+    await findDirectoryContact(pool, "Jane Broker", "Example Realty");
+    const sql = (pool as unknown as { calls: Array<{ text: string }> }).calls[0]!.text;
+    expect(sql).toContain("manual_review_only = false");
+    expect(sql).toContain("do_not_contact_until");
+  });
+
   it("skips directory rows whose firm is incompatible with the listing brokerage", async () => {
     const pool = fakePool(() => ({
       rows: [
@@ -103,6 +131,16 @@ describe("brokerDirectory", () => {
         source: "llm",
         confidence: 55,
         verificationTier: "needs_review",
+      },
+      // Legacy entries without a tier but flagged for review must also stay out.
+      {
+        name: "Legacy Flagged",
+        firm: "Example Realty",
+        email: "legacy@example-realty.com",
+        phone: null,
+        source: "llm",
+        confidence: 75,
+        needsReview: true,
       },
       // No email — nothing to key on.
       { name: "No Email", firm: "Example Realty", email: null, phone: null },

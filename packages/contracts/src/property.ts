@@ -570,6 +570,21 @@ export interface PropertyDealDossier {
   summary?: PropertyDealDossierSummary | null;
 }
 
+/**
+ * One grouped broker-outreach draft from POST /api/properties/
+ * preview-bulk-inquiry-emails: a single email to one broker covering all of
+ * their selected properties. Shared by the API grouping logic and the web
+ * preview modal so the shapes cannot drift apart.
+ */
+export interface BulkInquiryPreviewBatch {
+  toAddress: string;
+  contactName: string | null;
+  propertyIds: string[];
+  addresses: string[];
+  subject: string;
+  body: string;
+}
+
 export type PropertySourcingUpdateStatus = "new" | "updated" | "unchanged";
 
 export type PropertySourcingUpdateChangeType = "added" | "updated" | "removed";

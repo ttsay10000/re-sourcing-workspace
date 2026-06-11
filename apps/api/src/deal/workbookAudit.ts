@@ -8,6 +8,7 @@ import ExcelJS from "exceljs";
 import type { UnderwritingContext } from "./underwritingContext.js";
 import { computeMortgage } from "./mortgageAmortization.js";
 import { MAX_UNDERWRITING_HOLD_PERIOD_YEARS } from "./underwritingModel.js";
+import { CASH_FLOW_YEAR0_COLUMN, assumptionRows, columnLetter } from "./dealAnalysisWorkbook.js";
 
 export type WorkbookAuditCheckStatus = "pass" | "warning" | "failed";
 
@@ -30,9 +31,6 @@ export interface WorkbookAuditResult {
 
 /** Relative tolerance for engine tie-outs (plus a $1 absolute floor). */
 const TIE_OUT_RELATIVE_TOLERANCE = 0.005;
-
-/** Year columns in CashFlowModel: column C is year 0, D is year 1, ... */
-const CASH_FLOW_YEAR0_COLUMN = 3;
 
 function findRowByLabel(worksheet: ExcelJS.Worksheet, label: string): number | null {
   for (let row = 1; row <= worksheet.rowCount; row += 1) {
@@ -67,17 +65,6 @@ function readCachedCell(cell: ExcelJS.Cell): CachedCellRead {
 function withinTolerance(expected: number, actual: number): boolean {
   const tolerance = Math.max(1, Math.abs(expected) * TIE_OUT_RELATIVE_TOLERANCE);
   return Math.abs(expected - actual) <= tolerance;
-}
-
-function columnLetter(column: number): string {
-  let result = "";
-  let value = column;
-  while (value > 0) {
-    const remainder = (value - 1) % 26;
-    result = String.fromCharCode(65 + remainder) + result;
-    value = Math.floor((value - 1) / 26);
-  }
-  return result;
 }
 
 function tieOutSeries(params: {
@@ -252,9 +239,11 @@ export async function auditDealAnalysisWorkbook(params: {
     }
   }
 
-  // 1c. Assumptions inputs tie to the engine context.
+  // 1c. Assumptions inputs tie to the engine context. Cell coordinates come
+  //     from the builder's own exported geometry.
   if (assumptionsSheet) {
-    const purchaseCell = readCachedCell(assumptionsSheet.getCell("C13"));
+    const purchaseCellRef = `C${assumptionRows.purchasePrice}`;
+    const purchaseCell = readCachedCell(assumptionsSheet.getCell(purchaseCellRef));
     if (ctx.assumptions.acquisition.purchasePrice != null && purchaseCell.kind === "number") {
       checks.push({
         key: "assumption_purchase_price",
@@ -263,20 +252,31 @@ export async function auditDealAnalysisWorkbook(params: {
         expected: ctx.assumptions.acquisition.purchasePrice,
         actual: purchaseCell.value,
         sheet: "Assumptions",
-        cell: "C13",
+        cell: purchaseCellRef,
       });
     }
-    const noiBasis = ctx.assetCapRateNoiBasis ?? ctx.currentNoi;
-    const noiCell = readCachedCell(assumptionsSheet.getCell("C26"));
-    if (noiBasis != null && Number.isFinite(noiBasis) && noiCell.kind === "number") {
+    // The workbook caches its own reconstructed NOI basis, which legitimately
+    // diverges from the engine basis under currentNoi overrides or partial
+    // inputs — so a mismatch against every known engine basis is a warning to
+    // investigate, never a hard failure.
+    const noiBases = [ctx.assetCapRateNoiBasis, ctx.currentStateNoi, ctx.currentNoi].filter(
+      (value): value is number => value != null && Number.isFinite(value)
+    );
+    const noiCellRef = `C${assumptionRows.currentNoi}`;
+    const noiCell = readCachedCell(assumptionsSheet.getCell(noiCellRef));
+    if (noiBases.length > 0 && noiCell.kind === "number") {
+      const matches = noiBases.some((basis) => withinTolerance(basis, noiCell.value));
       checks.push({
         key: "assumption_current_noi",
         label: "Current NOI basis ties to engine",
-        status: withinTolerance(noiBasis, noiCell.value) ? "pass" : "failed",
-        expected: Math.round(noiBasis),
+        status: matches ? "pass" : "warning",
+        detail: matches
+          ? null
+          : "Workbook current-NOI cell matches none of the engine NOI bases — expected when a manual currentNoi override or partial OM inputs are in play; verify intentional.",
+        expected: Math.round(noiBases[0]!),
         actual: Math.round(noiCell.value),
         sheet: "Assumptions",
-        cell: "C26",
+        cell: noiCellRef,
       });
     }
   }

@@ -45,6 +45,7 @@ import {
   type UiV2OmAnalysisPayload,
   type UiV2RentalFlowPayload,
   type UiV2StatusChipTone,
+  type BulkInquiryPreviewBatch,
 } from "@re-sourcing/contracts";
 import {
   plannedBrokerCompReviewEndpoint,
@@ -144,14 +145,7 @@ type FlexiblePropertyDetail = UiV2PropertyDetailPayload & {
   overview: UiV2PropertyDetailPayload["overview"] & { gallery?: UiV2ImageAsset[] };
 };
 
-type OutreachPreviewBatch = {
-  toAddress: string;
-  contactName: string | null;
-  propertyIds: string[];
-  addresses: string[];
-  subject: string;
-  body: string;
-};
+type OutreachPreviewBatch = BulkInquiryPreviewBatch;
 
 type OutreachPreviewSkipped = {
   propertyId: string;
@@ -1377,7 +1371,6 @@ export default function PipelineClient() {
   const [galleryExpanded, setGalleryExpanded] = useState(false);
   const [sheetFullscreen, setSheetFullscreen] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [emailQueue, setEmailQueue] = useState<string[]>([]);
   const [outreachPreview, setOutreachPreview] = useState<{
     loading: boolean;
     sending: boolean;
@@ -2408,12 +2401,37 @@ export default function PipelineClient() {
       if (!response.ok) {
         throw new Error(payload.error || payload.details || "Failed to send broker emails.");
       }
-      const summary = `Broker emails: ${payload.sent ?? 0} sent${payload.failed ? `, ${payload.failed} failed` : ""}${
+      const failedCount = Number(payload.failed ?? 0);
+      const summary = `Broker emails: ${payload.sent ?? 0} sent${failedCount ? `, ${failedCount} failed` : ""}${
         payload.skippedProperties ? `, ${payload.skippedProperties} propert${payload.skippedProperties === 1 ? "y" : "ies"} skipped by guards` : ""
       }.`;
-      banner.succeed(summary);
-      setNotice(summary);
-      setOutreachPreview(null);
+      type GroupedSendResult = { toAddress?: string; status?: string; error?: string | null };
+      const results: GroupedSendResult[] = Array.isArray(payload.results) ? payload.results : [];
+      if (failedCount > 0) {
+        // Keep the modal open with ONLY the failed drafts (edits preserved) so
+        // the user can retry without rewriting them.
+        const failedAddresses = new Set(
+          results.filter((result) => result.status === "failed").map((result) => result.toAddress)
+        );
+        const firstError = results.find((result) => result.status === "failed")?.error;
+        banner.fail(summary);
+        setError(
+          `${summary}${firstError ? ` First failure: ${firstError}` : ""} The failed draft${failedCount === 1 ? " is" : "s are"} still open below — fix and resend.`
+        );
+        setOutreachPreview((current) =>
+          current
+            ? {
+                ...current,
+                sending: false,
+                batches: current.batches.filter((batch) => failedAddresses.has(batch.toAddress)),
+              }
+            : current
+        );
+      } else {
+        banner.succeed(summary);
+        setNotice(summary);
+        setOutreachPreview(null);
+      }
       const refreshed = await apiFetch<PipelineResponse>(
         `${API_BASE}/api/ui-v2/pipeline?${buildPipelineQueryString(queryString)}`
       );
@@ -3310,15 +3328,8 @@ export default function PipelineClient() {
         await send(true);
       }
       setComposer(null);
-      const [nextPropertyId, ...remainingQueue] = emailQueue;
-      setEmailQueue(remainingQueue);
-      setNotice(
-        nextPropertyId
-          ? `Broker email sent. Opening next queued property (${remainingQueue.length + 1} remaining).`
-          : "Broker email sent and logged."
-      );
+      setNotice("Broker email sent and logged.");
       if (selectedId === activeComposer.propertyId) await refreshSelected();
-      if (nextPropertyId) await emailBroker(nextPropertyId, "pipeline_table");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to send broker email.");
       setComposer((current) => (current ? { ...current, sendingNow: false } : current));
@@ -3345,15 +3356,8 @@ export default function PipelineClient() {
         }),
       });
       setComposer(null);
-      const [nextPropertyId, ...remainingQueue] = emailQueue;
-      setEmailQueue(remainingQueue);
-      setNotice(
-        nextPropertyId
-          ? `Outreach draft queued. Opening next queued property (${remainingQueue.length + 1} remaining).`
-          : "Outreach draft queued for review."
-      );
+      setNotice("Outreach draft queued for review.");
       if (selectedId === composer.propertyId) await refreshSelected();
-      if (nextPropertyId) await emailBroker(nextPropertyId, "pipeline_table");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to queue outreach draft.");
       setComposer((current) => (current ? { ...current, submitting: false } : current));
@@ -3996,7 +4000,6 @@ export default function PipelineClient() {
         <div>
           <strong>{selectedIds.length}</strong>
           <span>selected</span>
-          {emailQueue.length > 0 ? <small>{emailQueue.length} outreach drafts still queued</small> : null}
         </div>
         <div className={styles.bulkActions}>
           <button className={styles.ghostButton} type="button" onClick={toggleAllVisible}>
@@ -5319,7 +5322,17 @@ export default function PipelineClient() {
               <button
                 className={styles.primaryButton}
                 type="button"
-                disabled={outreachPreview.loading || outreachPreview.sending || outreachPreview.batches.length === 0}
+                title={
+                  outreachPreview.batches.some((batch) => !batch.subject.trim() || !batch.body.trim())
+                    ? "Every draft needs a subject and a body before sending."
+                    : undefined
+                }
+                disabled={
+                  outreachPreview.loading ||
+                  outreachPreview.sending ||
+                  outreachPreview.batches.length === 0 ||
+                  outreachPreview.batches.some((batch) => !batch.subject.trim() || !batch.body.trim())
+                }
                 onClick={() => void sendGroupedEmails()}
               >
                 {outreachPreview.sending
@@ -5407,10 +5420,7 @@ export default function PipelineClient() {
               <button
                 className={styles.closeButton}
                 type="button"
-                onClick={() => {
-                  setComposer(null);
-                  setEmailQueue([]);
-                }}
+                onClick={() => setComposer(null)}
                 aria-label="Close outreach composer"
               >
                 <X size={16} strokeWidth={2} aria-hidden="true" />
@@ -5418,9 +5428,6 @@ export default function PipelineClient() {
             </div>
             {composer.warnings.length > 0 ? (
               <div className={styles.warningBox}>{composer.warnings.join(" ")}</div>
-            ) : null}
-            {emailQueue.length > 0 ? (
-              <div className={styles.notice}>{emailQueue.length} more selected propert{emailQueue.length === 1 ? "y" : "ies"} will open after this draft is queued.</div>
             ) : null}
             <div className={styles.templateToolbar}>
               <label>
@@ -5496,10 +5503,7 @@ export default function PipelineClient() {
               <button
                 className={styles.ghostButton}
                 type="button"
-                onClick={() => {
-                  setComposer(null);
-                  setEmailQueue([]);
-                }}
+                onClick={() => setComposer(null)}
               >
                 Cancel
               </button>

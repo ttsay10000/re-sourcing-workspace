@@ -19,13 +19,14 @@ config({ path: resolve(__dirname, "../../.env") });
 config({ path: resolve(process.cwd(), ".env") });
 
 import { closePool, getPool, ListingRepo, MatchRepo } from "@re-sourcing/db";
-import type { ListingNormalized } from "@re-sourcing/contracts";
 import {
   brokerLookupContextFromListing,
   enrichBrokers,
   hasMeaningfulBrokerEnrichment,
+  hasRetainedBrokerCandidates,
   mergeBrokerEnrichment,
 } from "../enrichment/brokerEnrichment.js";
+import { toListingNormalized } from "../enrichment/refreshBrokerEnrichment.js";
 import { syncPropertySourcingWorkflow } from "../sourcing/workflow.js";
 
 interface ScriptOptions {
@@ -51,34 +52,6 @@ function parseArgs(argv: string[]): ScriptOptions {
     limit: Number.isFinite(limitParsed) && limitParsed > 0 ? Math.floor(limitParsed) : 100,
     listingId: getValue("--listing-id"),
     externalId: getValue("--external-id"),
-  };
-}
-
-function toListingNormalized(listing: Awaited<ReturnType<ListingRepo["byId"]>>): ListingNormalized {
-  if (!listing) throw new Error("Listing required");
-  return {
-    source: listing.source,
-    externalId: listing.externalId,
-    address: listing.address,
-    city: listing.city,
-    state: listing.state,
-    zip: listing.zip,
-    price: listing.price,
-    beds: listing.beds,
-    baths: listing.baths,
-    sqft: listing.sqft ?? null,
-    url: listing.url,
-    title: listing.title ?? null,
-    description: listing.description ?? null,
-    lat: listing.lat ?? null,
-    lon: listing.lon ?? null,
-    imageUrls: listing.imageUrls ?? null,
-    listedAt: listing.listedAt ?? null,
-    agentNames: listing.agentNames ?? null,
-    agentEnrichment: listing.agentEnrichment ?? null,
-    priceHistory: listing.priceHistory ?? null,
-    rentalPriceHistory: listing.rentalPriceHistory ?? null,
-    extra: listing.extra ?? null,
   };
 }
 
@@ -130,11 +103,31 @@ async function main(): Promise<number> {
       }
 
       const normalized = toListingNormalized(listing);
-      const context = brokerLookupContextFromListing(normalized);
+      // Source facts must come from the original listing payload only —
+      // feeding stored (already-merged) enrichment back in as "source" would
+      // re-stamp old LLM contacts as verified on every rerun.
+      const context = brokerLookupContextFromListing({ ...normalized, agentEnrichment: null });
       const lookedUp = await enrichBrokers(listing.agentNames, context);
-      const agentEnrichment = mergeBrokerEnrichment(listing.agentNames, listing.agentEnrichment, lookedUp, context);
+      const merged = mergeBrokerEnrichment(listing.agentNames, context.agentFacts ?? null, lookedUp, context);
 
-      if (!hasMeaningfulBrokerEnrichment(agentEnrichment)) {
+      // Keep the previously stored contact when the fresh lookup found nothing
+      // sendable for that broker.
+      const existingByName = new Map(
+        (listing.agentEnrichment ?? []).flatMap((entry) =>
+          entry.name ? [[entry.name.trim().toLowerCase(), entry] as const] : []
+        )
+      );
+      const agentEnrichment = merged
+        ? merged.map((entry) => {
+            const existing = existingByName.get(entry.name.trim().toLowerCase());
+            if (!entry.email && !entry.phone && (existing?.email || existing?.phone)) {
+              return { ...existing!, rejectedCandidate: entry.rejectedCandidate ?? existing!.rejectedCandidate ?? null };
+            }
+            return entry;
+          })
+        : null;
+
+      if (!hasMeaningfulBrokerEnrichment(agentEnrichment) && !hasRetainedBrokerCandidates(agentEnrichment)) {
         skipped++;
         console.warn(`[rerunBrokerEnrichment] No broker contact found for listing ${listing.externalId}`);
         continue;

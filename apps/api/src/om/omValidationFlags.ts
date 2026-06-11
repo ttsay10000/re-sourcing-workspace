@@ -16,7 +16,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return value != null && typeof value === "object" && !Array.isArray(value);
 }
 
-function toFiniteNumber(value: unknown): number | null {
+export function toFiniteNumber(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "string") {
     const parsed = Number(value.replace(/[$,%\s,]/g, ""));
@@ -25,7 +25,7 @@ function toFiniteNumber(value: unknown): number | null {
   return null;
 }
 
-function formatPct(value: number): string {
+export function formatPct(value: number): string {
   return `${(Math.round(value * 10) / 10).toFixed(1)}%`;
 }
 

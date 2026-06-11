@@ -172,7 +172,40 @@ export function firmsCompatible(sourceFirm: string | null | undefined, candidate
 
 function isMeaningfulBrokerEntry(entry: AgentEnrichmentEntry | null | undefined): boolean {
   if (!entry) return false;
-  return Boolean(entry.firm || entry.email || entry.phone || entry.rejectedCandidate);
+  return Boolean(entry.firm || entry.email || entry.phone);
+}
+
+/** True when any entry carries a retained (unpromoted) lookup candidate. */
+export function hasRetainedBrokerCandidates(
+  entries: AgentEnrichmentEntry[] | null | undefined
+): boolean {
+  return Array.isArray(entries) && entries.some((entry) => Boolean(entry?.rejectedCandidate));
+}
+
+/**
+ * Single source of truth for how trustworthy an entry's populated contact
+ * fields are. Mirrored nowhere else — UI counts and persistence both read it.
+ */
+export function deriveVerificationTier(params: {
+  sourceHasContact: boolean;
+  usedLookupContact: boolean;
+  lookupNeedsReview: boolean | null | undefined;
+  retainedCandidate: AgentEnrichmentCandidate | null;
+}): AgentEnrichmentEntry["verificationTier"] {
+  if (params.sourceHasContact) return "verified";
+  if (params.usedLookupContact) return params.lookupNeedsReview ? "needs_review" : "verified";
+  if (params.retainedCandidate) {
+    const confidence = params.retainedCandidate.confidence;
+    if (
+      params.retainedCandidate.reason === "low_confidence" &&
+      confidence != null &&
+      confidence < BROKER_LOOKUP_REVIEW_CONFIDENCE
+    ) {
+      return "rejected";
+    }
+    return "needs_review";
+  }
+  return null;
 }
 
 export function hasMeaningfulBrokerEnrichment(
@@ -293,6 +326,7 @@ export function mergeBrokerEnrichment(
 
     // Contacts that miss the promotion bar used to be discarded silently; keep
     // them visible for manual confirmation instead of populating send fields.
+    // Relaxed-pass results arrive already quarantined in lookup.rejectedCandidate.
     const retainedCandidate: AgentEnrichmentCandidate | null =
       !sourceHasContact && lookupHasContact && !lookupPromotable
         ? {
@@ -304,19 +338,15 @@ export function mergeBrokerEnrichment(
             sourceUrl: lookup?.sourceUrl ?? null,
             reason: lookupAllowed ? "low_confidence" : "firm_mismatch",
           }
-        : null;
-    const verificationTier: AgentEnrichmentEntry["verificationTier"] = sourceHasContact
-      ? "verified"
-      : usedLookupContact
-        ? lookup?.needsReview
-          ? "needs_review"
-          : "verified"
-        : retainedCandidate
-          ? retainedCandidate.reason === "low_confidence" &&
-            (lookupConfidence ?? 0) < BROKER_LOOKUP_REVIEW_CONFIDENCE
-            ? "rejected"
-            : "needs_review"
+        : !sourceHasContact && !usedLookupContact
+          ? lookup?.rejectedCandidate ?? null
           : null;
+    const verificationTier = deriveVerificationTier({
+      sourceHasContact,
+      usedLookupContact,
+      lookupNeedsReview: lookup?.needsReview,
+      retainedCandidate,
+    });
 
     return {
       name: source?.name ?? lookup?.name ?? agentName,
@@ -327,13 +357,23 @@ export function mergeBrokerEnrichment(
       confidence: sourceHasContact ? 100 : lookupPromotable ? lookupConfidence : null,
       evidence: sourceHasContact ? source?.evidence ?? "Broker contact provided by source listing payload." : lookup?.evidence ?? null,
       sourceUrl: sourceHasContact ? source?.sourceUrl ?? normalizedContext?.listingUrl ?? null : lookup?.sourceUrl ?? null,
-      needsReview: sourceHasContact ? false : Boolean(usedLookupContact || lookup?.needsReview || retainedCandidate),
+      // Aligned with verificationTier so surfaces never contradict each other;
+      // recipient resolution still review-gates LLM-sourced contacts separately.
+      needsReview: sourceHasContact
+        ? false
+        : usedLookupContact
+          ? Boolean(lookup?.needsReview)
+          : Boolean(lookup?.needsReview || retainedCandidate),
       verificationTier,
       rejectedCandidate: retainedCandidate,
     };
   });
 
-  return hasMeaningfulBrokerEnrichment(merged) ? merged : null;
+  // Meaningful contacts OR retained candidates are both worth returning, but
+  // callers that protect previously persisted enrichment should gate on
+  // hasMeaningfulBrokerEnrichment so a candidate-only merge never clobbers a
+  // listing that already has a sendable contact.
+  return hasMeaningfulBrokerEnrichment(merged) || hasRetainedBrokerCandidates(merged) ? merged : null;
 }
 
 function buildLookupInput(agentNames: string[], contextInput?: string | BrokerLookupContext | null): string {
@@ -560,21 +600,51 @@ export async function enrichBrokers(
     }
 
     if (relaxedSecondPass) {
+      // Only for names where the strict pass found NOTHING — never displace a
+      // verified phone-only result with an unverified current-firm contact.
       const stillUnresolved = initial
-        .map((entry, index) => (!entry.email && !entry.rejectedCandidate ? index : -1))
+        .map((entry, index) =>
+          !entry.email && !entry.phone && !entry.rejectedCandidate ? index : -1
+        )
         .filter((index) => index >= 0);
       for (const index of stillUnresolved) {
         const relaxed = await requestBrokerLookupWithRetry(openai, model, [names[index]!], propertyContext, {
           relaxed: true,
           searchContextSize,
         });
-        if (relaxed?.[0]?.email || relaxed?.[0]?.phone) {
-          initial[index] = relaxed[0];
+        const found = relaxed?.[0];
+        if (found?.email || found?.phone) {
+          // Quarantine at the source: relaxed results ride rejectedCandidate so
+          // even callers that persist raw lookups (no merge step) can never put
+          // an unverified address in a sendable field.
+          const base = initial[index]!;
+          initial[index] = {
+            ...base,
+            firm: base.firm ?? null,
+            email: null,
+            phone: null,
+            rejectedCandidate: {
+              email: found.email ?? null,
+              phone: found.phone ?? null,
+              firm: found.firm ?? null,
+              confidence: Math.min(
+                found.confidence ?? BROKER_LOOKUP_RELAXED_CONFIDENCE_CAP,
+                BROKER_LOOKUP_RELAXED_CONFIDENCE_CAP
+              ),
+              evidence: found.evidence ?? null,
+              sourceUrl: found.sourceUrl ?? null,
+              reason: "firm_mismatch",
+            },
+            needsReview: true,
+            verificationTier: "needs_review",
+          };
         }
       }
     }
 
-    return hasMeaningfulBrokerEnrichment(initial) ? initial : null;
+    return hasMeaningfulBrokerEnrichment(initial) || hasRetainedBrokerCandidates(initial)
+      ? initial
+      : null;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error("[brokerEnrichment] OpenAI request failed:", msg);

@@ -126,7 +126,10 @@ const NOTE_FONT: Partial<Font> = {
   color: { argb: COLOR.muted },
 };
 
-const assumptionRows = {
+// Exported so the post-generation audit (workbookAudit.ts) reads the exact
+// same sheet geometry the builder writes — a row moved here can then never
+// silently desynchronize the audit.
+export const assumptionRows = {
   address: 5,
   area: 6,
   units: 7,
@@ -267,7 +270,7 @@ function num(value: number | null | undefined): number {
   return value != null && Number.isFinite(value) ? value : 0;
 }
 
-function columnLetter(index: number): string {
+export function columnLetter(index: number): string {
   let result = "";
   let current = index;
   while (current > 0) {
@@ -277,6 +280,9 @@ function columnLetter(index: number): string {
   }
   return result;
 }
+
+/** CashFlowModel lays years across columns starting here (column C = year 0). */
+export const CASH_FLOW_YEAR0_COLUMN = 3;
 
 function assumptionCell(row: number): string {
   return `$C$${row}`;
@@ -1374,7 +1380,7 @@ function buildCashFlowModelSheet(
   const rows = artifacts.cashFlowRows;
   const holdPeriodRef = assumptionRef("holdPeriodYears");
   const leadTimeMonthsRef = assumptionRef("leadTimeMonths");
-  const lastModelColumn = columnLetter(3 + MAX_MODEL_YEARS);
+  const lastModelColumn = columnLetter(CASH_FLOW_YEAR0_COLUMN + MAX_MODEL_YEARS);
 
   worksheet.mergeCells("A1:F1");
   setSheetCell(worksheet, "A1", "Cash Flow Model", {
@@ -1402,7 +1408,7 @@ function buildCashFlowModelSheet(
     alignment: { horizontal: "center" },
   });
   for (let yearIndex = 0; yearIndex <= MAX_MODEL_YEARS; yearIndex += 1) {
-    const column = columnLetter(3 + yearIndex);
+    const column = columnLetter(CASH_FLOW_YEAR0_COLUMN + yearIndex);
     setSheetCell(worksheet, `${column}5`, yearIndex, {
       numFmt: INTEGER_FMT,
       fill: COLUMN_FILL,
@@ -1532,7 +1538,7 @@ function buildCashFlowModelSheet(
 
   for (let yearIndex = 0; yearIndex <= MAX_MODEL_YEARS; yearIndex += 1) {
     const year = yearIndex;
-    const column = columnLetter(3 + yearIndex);
+    const column = columnLetter(CASH_FLOW_YEAR0_COLUMN + yearIndex);
     const activeOperatingCondition = `OR(${column}$5=0,${column}$5>${holdPeriodRef})`;
     const activeYearCondition = `${column}$5<=${holdPeriodRef}`;
 

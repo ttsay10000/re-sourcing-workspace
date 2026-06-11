@@ -4,6 +4,16 @@
  */
 import { buildOutreachBody, buildSubject as buildOutreachSubject } from "../sourcing/outreachAutomation.js";
 
+/**
+ * One normalization for every place a recipient email is keyed: guard checks,
+ * grouping, outreach_batches.to_address, and inquiry-send rows must agree.
+ */
+export function normalizeRecipientEmail(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase();
+  return normalized || null;
+}
+
 export function buildInquiryDraft(input: {
   canonicalAddress: string;
   recipientName?: string | null;
@@ -31,14 +41,8 @@ tyler@stayhaus.co`,
   };
 }
 
-export interface BulkInquiryPreviewBatch {
-  toAddress: string;
-  contactName: string | null;
-  propertyIds: string[];
-  addresses: string[];
-  subject: string;
-  body: string;
-}
+export type { BulkInquiryPreviewBatch } from "@re-sourcing/contracts";
+import type { BulkInquiryPreviewBatch } from "@re-sourcing/contracts";
 
 /**
  * Group sendable recipients by normalized broker email and build one draft per
@@ -54,7 +58,7 @@ export function groupInquiryRecipients(
     { contactName: string | null; items: Array<{ propertyId: string; canonicalAddress: string }> }
   >();
   for (const row of rows) {
-    const key = row.email.trim().toLowerCase();
+    const key = normalizeRecipientEmail(row.email);
     if (!key) continue;
     const existing = grouped.get(key);
     if (existing) {

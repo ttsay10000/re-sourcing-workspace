@@ -6,7 +6,7 @@
  */
 import type { OmAuthoritativeSnapshot, OmValidationFlag } from "@re-sourcing/contracts";
 import type { ExpenseBenchmarkRow } from "@re-sourcing/db";
-import { EXPECTED_EXPENSE_CATEGORIES } from "./omValidationFlags.js";
+import { EXPECTED_EXPENSE_CATEGORIES, toFiniteNumber } from "./omValidationFlags.js";
 
 const FLAG_SOURCE = "expense_benchmarks";
 
@@ -36,15 +36,6 @@ const CATEGORY_TO_METRIC: Record<string, string> = {
   payroll: "payroll",
   reserves: "reserves",
 };
-
-function toFiniteNumber(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string") {
-    const parsed = Number(value.replace(/[$,%\s,]/g, ""));
-    if (Number.isFinite(parsed)) return parsed;
-  }
-  return null;
-}
 
 function formatMoney(value: number): string {
   return `$${Math.round(value).toLocaleString("en-US")}`;

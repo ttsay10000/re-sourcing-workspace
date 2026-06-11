@@ -1423,12 +1423,13 @@ export function computeUnderwritingProjection(
     yearlyNetSaleToEquity[assumptions.holdPeriodYears] ??
     yearlyNetSaleToEquity[yearlyNetSaleToEquity.length - 1] ??
     0;
-  // First operating year fully clear of lease-up drag. Lead time is modeled as
-  // a year-1 income haircut, so any lead time pushes stabilization to year 2;
-  // lead times beyond 12 months exceed what the year-1 haircut can represent.
+  // First operating year fully clear of lease-up drag. The model applies lead
+  // time as a year-1-only income haircut, so year 2 is always the stabilized
+  // year whenever any lead time exists — this must stay in lockstep with
+  // rentBreakdown.ts and the workbook's stabilized-NOI formula. Lead times
+  // beyond 12 months exceed what the year-1 haircut can represent (warned below).
   const leadTimeMonthsForStabilization = Math.max(0, assumptions.operating.leadTimeMonths);
-  const stabilizedYearIndex =
-    leadTimeMonthsForStabilization > 0 ? Math.floor(leadTimeMonthsForStabilization / 12) + 2 : 1;
+  const stabilizedYearIndex = leadTimeMonthsForStabilization > 0 ? 2 : 1;
   const stabilizedIndex = Math.min(assumptions.holdPeriodYears, stabilizedYearIndex);
   if (stabilizedIndex < stabilizedYearIndex) {
     warnings.push({

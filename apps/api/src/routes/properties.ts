@@ -43,7 +43,7 @@ import { randomUUID } from "crypto";
 import { resolveInquiryFilePath } from "../inquiry/storage.js";
 import { saveUploadedDocument, resolveUploadedDocFilePath, deleteUploadedDocumentFile, uploadedDocFileExists } from "../upload/uploadedDocStorage.js";
 import { sendMessage as gmailSendMessage } from "../inquiry/gmailClient.js";
-import { buildInquiryDraft, groupInquiryRecipients } from "../inquiry/bulkInquiryGrouping.js";
+import { buildInquiryDraft, groupInquiryRecipients, normalizeRecipientEmail } from "../inquiry/bulkInquiryGrouping.js";
 import { findBrokerPropertyConversationHistory } from "../inquiry/gmailConversationHistory.js";
 import { buildBrokerTeamRecords, findBrokerTeamOverlapMatches } from "../inquiry/brokerTeamOverlap.js";
 import type { PropertyDetails, RentalFinancials, RentalFinancialsFromLlm } from "@re-sourcing/contracts";
@@ -4454,12 +4454,6 @@ interface InquiryGuardState {
   }>;
 }
 
-function normalizeRecipientEmail(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  const normalized = value.trim().toLowerCase();
-  return normalized || null;
-}
-
 interface InquiryGuardBrokerTeamHistoryRow {
   property_id: string;
   canonical_address: string;
@@ -5086,27 +5080,38 @@ router.post("/properties/preview-bulk-inquiry-emails", async (req: Request, res:
         });
         continue;
       }
-      const check = await checkInquirySendGuards({
-        pool,
-        propertyId,
-        canonicalAddress: property.canonicalAddress,
-        toAddress: recipient.email,
-      });
-      if (!check.normalizedTo || check.blocked) {
+      // One Gmail/API hiccup must not 503 the whole preview — report the
+      // property as skipped and keep going.
+      try {
+        const check = await checkInquirySendGuards({
+          pool,
+          propertyId,
+          canonicalAddress: property.canonicalAddress,
+          toAddress: recipient.email,
+        });
+        if (!check.normalizedTo || check.blocked) {
+          skipped.push({
+            propertyId,
+            canonicalAddress: property.canonicalAddress,
+            reasonCode: check.blocked?.code ?? "invalid_recipient",
+            reason: check.blocked?.message ?? "Invalid recipient address.",
+          });
+          continue;
+        }
+        sendable.push({
+          propertyId,
+          canonicalAddress: property.canonicalAddress,
+          email: check.normalizedTo,
+          name: recipient.name,
+        });
+      } catch (err) {
         skipped.push({
           propertyId,
           canonicalAddress: property.canonicalAddress,
-          reasonCode: check.blocked?.code ?? "invalid_recipient",
-          reason: check.blocked?.message ?? "Invalid recipient address.",
+          reasonCode: "guard_check_failed",
+          reason: `Send-guard check failed (${extractInquiryErrorMessage(err)}) — re-check before sending.`,
         });
-        continue;
       }
-      sendable.push({
-        propertyId,
-        canonicalAddress: property.canonicalAddress,
-        email: check.normalizedTo,
-        name: recipient.name,
-      });
     }
 
     res.json({ ok: true, batches: groupInquiryRecipients(sendable), skipped });
@@ -5124,11 +5129,18 @@ interface GroupedSendBatchInput {
   body: string;
 }
 
-function parseGroupedSendBatches(raw: unknown): GroupedSendBatchInput[] | null {
-  if (!Array.isArray(raw) || raw.length === 0) return null;
+function parseGroupedSendBatches(
+  raw: unknown
+): { batches: GroupedSendBatchInput[] } | { error: string } {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    return { error: "Provide batches: [{ toAddress, propertyIds, subject, body }] — usually from preview-bulk-inquiry-emails." };
+  }
   const batches: GroupedSendBatchInput[] = [];
-  for (const entry of raw) {
-    if (!entry || typeof entry !== "object") return null;
+  for (let index = 0; index < raw.length; index++) {
+    const entry = raw[index];
+    if (!entry || typeof entry !== "object") {
+      return { error: `Batch ${index + 1} is not an object.` };
+    }
     const candidate = entry as Record<string, unknown>;
     const toAddress = typeof candidate.toAddress === "string" ? candidate.toAddress.trim() : "";
     const subject = typeof candidate.subject === "string" ? candidate.subject.trim() : "";
@@ -5142,10 +5154,14 @@ function parseGroupedSendBatches(raw: unknown): GroupedSendBatchInput[] | null {
           ),
         ]
       : [];
-    if (!toAddress || !subject || !body.trim() || propertyIds.length === 0) return null;
+    const batchLabel = toAddress || `batch ${index + 1}`;
+    if (!toAddress) return { error: `Batch ${index + 1} is missing a recipient address.` };
+    if (!subject) return { error: `The email to ${batchLabel} is missing a subject.` };
+    if (!body.trim()) return { error: `The email to ${batchLabel} has an empty body.` };
+    if (propertyIds.length === 0) return { error: `The email to ${batchLabel} lists no properties.` };
     batches.push({ toAddress, propertyIds, subject, body });
   }
-  return batches;
+  return { batches };
 }
 
 /**
@@ -5161,13 +5177,12 @@ async function handleGroupedBulkInquirySend(req: Request, res: Response): Promis
   const workflowStartedAt = new Date().toISOString();
   const dryRun = req.body?.dryRun === true;
   try {
-    const batches = parseGroupedSendBatches(req.body?.batches);
-    if (!batches) {
-      res.status(400).json({
-        error: "Provide batches: [{ toAddress, propertyIds, subject, body }] — usually from preview-bulk-inquiry-emails.",
-      });
+    const parsed = parseGroupedSendBatches(req.body?.batches);
+    if ("error" in parsed) {
+      res.status(400).json({ error: parsed.error });
       return;
     }
+    const batches = parsed.batches;
     const totalProperties = batches.reduce((sum, batch) => sum + batch.propertyIds.length, 0);
     const pool = getPool();
     const propertyRepo = new PropertyRepo({ pool });
@@ -5262,7 +5277,7 @@ async function handleGroupedBulkInquirySend(req: Request, res: Response): Promis
       try {
         const outreachBatch = await batchRepo.create({
           contactId: null,
-          toAddress: batch.toAddress.trim().toLowerCase(),
+          toAddress: normalizeRecipientEmail(batch.toAddress) ?? batch.toAddress.trim().toLowerCase(),
           status: "queued",
           createdBy: "manual_bulk",
           reviewReason: null,
@@ -5281,7 +5296,7 @@ async function handleGroupedBulkInquirySend(req: Request, res: Response): Promis
         });
         for (const item of sendable) {
           await inquirySendRepo.create(item.propertyId, sendResult.id, {
-            toAddress: batch.toAddress.trim().toLowerCase(),
+            toAddress: normalizeRecipientEmail(batch.toAddress) ?? batch.toAddress.trim().toLowerCase(),
             source: "manual_bulk",
             gmailThreadId: sendResult.threadId,
             batchId: outreachBatch.id,
