@@ -186,6 +186,11 @@ const cardStyle: React.CSSProperties = {
 };
 
 const inputStyle: React.CSSProperties = {
+  // Full-width + min-width 0 so selects with long option text (property
+  // addresses) shrink to their grid cell instead of overlapping neighbors.
+  width: "100%",
+  minWidth: 0,
+  maxWidth: "100%",
   minHeight: "2.45rem",
   border: "1px solid var(--app-line-strong)",
   borderRadius: "8px",
@@ -1599,7 +1604,7 @@ function DealAnalysisPageContent() {
             alignItems: "end",
           }}
         >
-          <label style={{ display: "grid", gap: "0.32rem", color: "var(--app-ink-secondary)", fontSize: "0.78rem", fontWeight: 800 }}>
+          <label style={{ display: "grid", gap: "0.32rem", minWidth: 0, color: "var(--app-ink-secondary)", fontSize: "0.78rem", fontWeight: 800 }}>
             Open workspace
             <select
               value={propertyId ?? ""}
@@ -1634,7 +1639,7 @@ function DealAnalysisPageContent() {
             </select>
           </label>
 
-          <label style={{ display: "grid", gap: "0.32rem", color: "var(--app-ink-secondary)", fontSize: "0.78rem", fontWeight: 800 }}>
+          <label style={{ display: "grid", gap: "0.32rem", minWidth: 0, color: "var(--app-ink-secondary)", fontSize: "0.78rem", fontWeight: 800 }}>
             Search
             <input
               type="search"
@@ -1645,7 +1650,7 @@ function DealAnalysisPageContent() {
             />
           </label>
 
-          <label style={{ display: "grid", gap: "0.32rem", color: "var(--app-ink-secondary)", fontSize: "0.78rem", fontWeight: 800 }}>
+          <label style={{ display: "grid", gap: "0.32rem", minWidth: 0, color: "var(--app-ink-secondary)", fontSize: "0.78rem", fontWeight: 800 }}>
             Sort
             <select
               value={workspaceSort}
