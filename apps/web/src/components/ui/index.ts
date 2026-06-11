@@ -14,5 +14,7 @@ export { ProgressStepper, type ProgressStep, type StepStatus } from "./ProgressS
 export { PropertyThumb } from "./PropertyThumb";
 export { ScoreGauge } from "./ScoreGauge";
 export { Skeleton, SkeletonRows } from "./Skeleton";
+export { SortableTh } from "./SortableTh";
 export { StageChip } from "./StageChip";
 export { StatCard, type StatCardTone } from "./StatCard";
+export { useTableSort, type SortDirection } from "./useTableSort";

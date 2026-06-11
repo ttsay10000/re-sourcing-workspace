@@ -1019,3 +1019,36 @@ button.statCard:hover {
   background: var(--app-red-soft);
   color: var(--app-red);
 }
+
+/* ── SortableTh: column-header sort button (inherits the host th's look) ── */
+
+.sortableTh {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.22rem;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.sortableTh:hover {
+  color: var(--brand-strong, #115e59);
+}
+
+.sortableThActive {
+  color: var(--brand-strong, #115e59);
+}
+
+.sortableThIdle {
+  opacity: 0.45;
+}
+
+.sortableTh:hover .sortableThIdle {
+  opacity: 0.9;
+}

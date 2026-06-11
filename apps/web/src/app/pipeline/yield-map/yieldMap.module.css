@@ -156,6 +156,37 @@
   margin-bottom: 0.6rem;
 }
 
+/* Title + free-text filter on the all-deals table. */
+.tableTitleRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.6rem;
+}
+
+.tableTitleRow .tableTitle {
+  margin-bottom: 0;
+}
+
+.tableFilterInput {
+  flex: 0 1 17rem;
+  min-width: 11rem;
+  min-height: 1.9rem;
+  border: 1px solid var(--app-line-strong, #d4d4d8);
+  border-radius: var(--radius-md, 8px);
+  padding: 0.28rem 0.55rem;
+  background: var(--app-surface);
+  color: var(--app-ink);
+  font-size: 0.78rem;
+}
+
+.tableFilterInput:focus-visible {
+  outline: 2px solid var(--brand, #0f766e);
+  outline-offset: 1px;
+}
+
 .table {
   width: 100%;
   border-collapse: collapse;
@@ -771,9 +802,14 @@
   white-space: nowrap;
 }
 
-/* Hover-linked highlight for both deal and comp rows (map pin ↔ table row). */
+/* Hover-linked highlight for both deal and comp rows (map pin ↔ table row).
+   Strong tint + inset accent bar — must survive the zebra stripe. */
 .rowActive td {
-  background: var(--brand-soft, #f0fdfa) !important;
+  background: color-mix(in srgb, var(--app-accent-teal, #0d9488) 14%, #ffffff) !important;
+}
+
+.rowActive td:first-child {
+  box-shadow: inset 3px 0 0 var(--brand, #0f766e);
 }
 
 .popupCompTag {
@@ -811,16 +847,23 @@
   cursor: help;
 }
 
-/* Market-movement headlines between the KPI strip and the map. */
+/* Market-movement headlines between the KPI strip and the map: one insight
+   per row (the wrap-flex soup read as a run-on paragraph). */
 .headlineStrip {
-  display: flex;
-  align-items: baseline;
-  gap: 0.9rem;
+  display: grid;
+  gap: 0.5rem;
   border: 1px solid var(--app-line);
   border-radius: var(--radius-lg, 12px);
   background: var(--app-surface);
   padding: 0.65rem 0.9rem;
   margin-bottom: 0.9rem;
+}
+
+.headlineStripHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.9rem;
 }
 
 .headlineKicker {
@@ -832,31 +875,64 @@
   color: var(--app-muted);
 }
 
+.headlineAsOf {
+  margin-left: 0.4rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  color: var(--app-muted);
+}
+
 .headlineList {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.35rem 1.4rem;
+  display: grid;
+  gap: 0.45rem;
   list-style: none;
   margin: 0;
   padding: 0;
-  flex: 1;
 }
 
 .headlineItem {
-  display: inline-flex;
+  display: flex;
   align-items: baseline;
-  gap: 0.4rem;
-  font-size: 0.78rem;
+  gap: 0.45rem;
+  min-width: 0;
+  font-size: 0.8rem;
+  padding-left: 0.1rem;
+  border-left: 2px solid transparent;
+  transition: border-color 120ms ease;
+}
+
+.headlineItem:hover {
+  border-left-color: var(--app-line-strong, #d4d4d8);
 }
 
 .headlineText {
   color: var(--app-ink);
   font-weight: 600;
+  min-width: 0;
 }
 
 .headlineMeta {
+  margin-left: auto;
+  flex-shrink: 0;
   color: var(--app-muted);
   font-size: 0.7rem;
+  white-space: nowrap;
+}
+
+.headlineMoreButton {
+  justify-self: start;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--brand-strong, #115e59);
+  font-size: 0.72rem;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.headlineMoreButton:hover {
+  text-decoration: underline;
 }
 
 .headlineDotUp,

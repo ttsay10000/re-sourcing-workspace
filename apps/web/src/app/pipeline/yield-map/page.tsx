@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { Badge, Dialog, PageHeader, StatCard } from "@/components/ui";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Badge, Dialog, PageHeader, SortableTh, StatCard, useTableSort } from "@/components/ui";
 import { dealFlowStageForStatus } from "@re-sourcing/contracts";
 import { API_BASE } from "@/lib/api";
 import { formatPercent, formatCurrencyCompact, formatCurrencyExact, labelFromKey, EMPTY_VALUE } from "@/lib/format";
@@ -467,17 +467,32 @@ export default function YieldMapPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [boroughFilter, setBoroughFilter] = useState("");
+  const [stageFilter, setStageFilter] = useState("");
+  const [hoodFilter, setHoodFilter] = useState("");
+  const [dealSearch, setDealSearch] = useState("");
   const [colorBy, setColorBy] = useState<"yield" | "psf" | "stage" | "vsMarket">("yield");
   const [showAreas, setShowAreas] = useState(true);
   const [includePending, setIncludePending] = useState(false);
   const [quickViewId, setQuickViewId] = useState<string | null>(null);
   const [headlines, setHeadlines] = useState<MarketHeadline[]>([]);
+  const [headlinesAsOf, setHeadlinesAsOf] = useState<string | null>(null);
+  const [showAllHeadlines, setShowAllHeadlines] = useState(false);
   const [boundaries, setBoundaries] = useState<NeighborhoodCollection | null>(null);
   const [showComps, setShowComps] = useState(false);
   const [marketComps, setMarketComps] = useState<MarketCompsResponse | null>(null);
   const [compsLoading, setCompsLoading] = useState(false);
   const [compsError, setCompsError] = useState<string | null>(null);
   const [activePinId, setActivePinId] = useState<string | null>(null);
+  // Distinguish map-origin hover (scroll the table to the row) from
+  // table-origin hover (never scroll — the user is already there).
+  const hoverSourceRef = useRef<"map" | "table" | null>(null);
+
+  // Two-way highlight: hovering a pin spotlights AND scrolls to its table row,
+  // so far-down rows are actually findable from the map.
+  useEffect(() => {
+    if (!activePinId || hoverSourceRef.current !== "map") return;
+    document.getElementById(`yield-row-${activePinId}`)?.scrollIntoView({ block: "nearest" });
+  }, [activePinId]);
   const [market, setMarket] = useState<MarketSummariesResponse | null>(null);
   const [marketError, setMarketError] = useState<string | null>(null);
   const [marketSource, setMarketSource] = useState<MarketSourceFilter>("all");
@@ -613,34 +628,15 @@ export default function YieldMapPage() {
     const controller = new AbortController();
     fetch(`${API_BASE}/api/market-headlines`, { credentials: "include", signal: controller.signal })
       .then((res) => (res.ok ? res.json() : null))
-      .then((payload: { headlines?: MarketHeadline[] } | null) => {
-        if (Array.isArray(payload?.headlines)) setHeadlines(payload.headlines.slice(0, 6));
+      .then((payload: { headlines?: MarketHeadline[]; generatedAt?: string | null } | null) => {
+        if (Array.isArray(payload?.headlines)) {
+          setHeadlines(payload.headlines.slice(0, 6));
+          setHeadlinesAsOf(payload.headlines.find((headline) => headline.asOf)?.asOf ?? payload.generatedAt ?? null);
+        }
       })
       .catch(() => {});
     return () => controller.abort();
   }, []);
-
-  const rows = useMemo(() => {
-    let all = data?.comps ?? [];
-    if (!includePending) all = all.filter((row) => !row.pendingReview);
-    if (!boroughFilter) return all;
-    return all.filter((row) => (row.borough ?? "Unknown") === boroughFilter);
-  }, [data, boroughFilter, includePending]);
-
-  const pendingAvailable = useMemo(
-    () => (data?.comps ?? []).filter((row) => row.pendingReview).length,
-    [data]
-  );
-
-  const compRows = useMemo(() => {
-    if (!showComps) return [];
-    const all = marketComps?.comps ?? [];
-    if (!boroughFilter) return all;
-    return all.filter((comp) => (comp.borough ?? "Unknown") === boroughFilter);
-  }, [showComps, marketComps, boroughFilter]);
-
-  const geoRows = useMemo(() => rows.filter((row) => row.lat != null && row.lng != null), [rows]);
-  const geoComps = useMemo(() => compRows.filter((comp) => comp.lat != null && comp.lng != null), [compRows]);
 
   const featureBBoxes = useMemo(() => {
     const out = new Map<string, FeatureBBox>();
@@ -682,6 +678,32 @@ export default function YieldMapPage() {
     if (row.dealStage) return labelFromKey(row.dealStage);
     return row.dealState ? labelFromKey(row.dealState) : EMPTY_VALUE;
   }, []);
+
+  // All filters apply here so the headline stats, every table, and the map
+  // pins narrow together.
+  const rows = useMemo(() => {
+    let all = data?.comps ?? [];
+    if (!includePending) all = all.filter((row) => !row.pendingReview);
+    if (boroughFilter) all = all.filter((row) => (row.borough ?? "Unknown") === boroughFilter);
+    if (stageFilter) all = all.filter((row) => boardStageLabel(row) === stageFilter);
+    if (hoodFilter) all = all.filter((row) => (displayHood(row) ?? "Unknown") === hoodFilter);
+    return all;
+  }, [data, boroughFilter, includePending, stageFilter, hoodFilter, boardStageLabel, displayHood]);
+
+  const pendingAvailable = useMemo(
+    () => (data?.comps ?? []).filter((row) => row.pendingReview).length,
+    [data]
+  );
+
+  const compRows = useMemo(() => {
+    if (!showComps) return [];
+    const all = marketComps?.comps ?? [];
+    if (!boroughFilter) return all;
+    return all.filter((comp) => (comp.borough ?? "Unknown") === boroughFilter);
+  }, [showComps, marketComps, boroughFilter]);
+
+  const geoRows = useMemo(() => rows.filter((row) => row.lat != null && row.lng != null), [rows]);
+  const geoComps = useMemo(() => compRows.filter((comp) => comp.lat != null && comp.lng != null), [compRows]);
 
   const flaggedRows = useMemo(() => rows.filter((row) => row.yieldFlag != null), [rows]);
   const yieldRows = useMemo(() => rows.filter((row) => row.ltrYieldPct != null), [rows]);
@@ -935,14 +957,34 @@ export default function YieldMapPage() {
     };
   }, [rows]);
 
+  // Default order: cap-rate mode ranks neighborhoods by median cap rate
+  // (highest first — the buyer's read); $/SF mode cheap-to-expensive.
   const neighborhoodStats = useMemo(
-    () => groupStats(rows, displayHood, dealMetricValue),
-    [rows, displayHood, dealMetricValue]
+    () =>
+      groupStats(rows, displayHood, dealMetricValue).sort((a, b) =>
+        a.name === "Unknown" ? 1 : b.name === "Unknown" ? -1 : metric === "psf" ? a.medianValue - b.medianValue : b.medianValue - a.medianValue
+      ),
+    [rows, displayHood, dealMetricValue, metric]
   );
   const boroughStats = useMemo(
     () => groupStats(rows, (row) => row.borough, dealMetricValue),
     [rows, dealMetricValue]
   );
+
+  // Click-to-sort on every table (default order preserved until a header is clicked).
+  const areaSortAccessors = useMemo(
+    () => ({
+      name: (stat: AreaTableStat) => stat.name,
+      count: (stat: AreaTableStat) => stat.count,
+      median: (stat: AreaTableStat) => stat.medianValue,
+      trend: (stat: AreaTableStat) => stat.medianDeltaPct,
+      range: (stat: AreaTableStat) => stat.maxValue - stat.minValue,
+      since: (stat: AreaTableStat) => stat.firstSourcedAt,
+    }),
+    []
+  );
+  const hoodSort = useTableSort(neighborhoodStats, areaSortAccessors);
+  const boroughSort = useTableSort(boroughStats, areaSortAccessors);
 
   // Geometric roll-up for the map: assign mapped deals to the NTA polygon they
   // fall inside, then badge each area with its median for the active metric.
@@ -1053,10 +1095,19 @@ export default function YieldMapPage() {
   // Comps slot into the deal list ordered by the active metric: cap rates rank
   // high-to-low, $/SF cheap-to-expensive (the buyer's read in both cases).
   const tableEntries = useMemo<TableEntry[]>(() => {
+    const search = dealSearch.trim().toLowerCase();
+    const matchesSearch = (entry: TableEntry): boolean => {
+      if (!search) return true;
+      const haystack =
+        entry.kind === "deal"
+          ? [entry.deal.canonicalAddress, displayHood(entry.deal), entry.deal.borough, boardStageLabel(entry.deal)]
+          : [compDisplayName(entry.comp), entry.comp.neighborhood, entry.comp.borough, packageTypeLabel(entry.comp.packageType)];
+      return haystack.filter(Boolean).join(" ").toLowerCase().includes(search);
+    };
     const entries: TableEntry[] = [
       ...rows.map((deal): TableEntry => ({ kind: "deal", rowId: deal.propertyId, deal })),
       ...compRows.map((comp): TableEntry => ({ kind: "comp", rowId: `comp:${comp.itemId}`, comp })),
-    ];
+    ].filter(matchesSearch);
     const valueOf = (entry: TableEntry): number | null =>
       entry.kind === "deal"
         ? dealMetricValue(entry.deal)
@@ -1071,11 +1122,37 @@ export default function YieldMapPage() {
       if (bValue == null) return -1;
       return metric === "psf" ? aValue - bValue : bValue - aValue;
     });
-  }, [rows, compRows, metric, dealMetricValue]);
+  }, [rows, compRows, metric, dealMetricValue, dealSearch, displayHood, boardStageLabel]);
+
+  const dealSortAccessors = useMemo(
+    () => ({
+      address: (entry: TableEntry) =>
+        entry.kind === "deal" ? entry.deal.canonicalAddress : compDisplayName(entry.comp),
+      capRate: (entry: TableEntry) => (entry.kind === "deal" ? entry.deal.ltrYieldPct : entry.comp.capRatePct),
+      trend: (entry: TableEntry) => (entry.kind === "deal" ? entry.deal.yieldDeltaPct : null),
+      mtr: (entry: TableEntry) => (entry.kind === "deal" ? entry.deal.mtrYieldPct : null),
+      noi: (entry: TableEntry) => (entry.kind === "deal" ? entry.deal.currentNoi : entry.comp.noi),
+      units: (entry: TableEntry) => (entry.kind === "deal" ? entry.deal.units : entry.comp.units),
+      pricePerUnit: (entry: TableEntry) => (entry.kind === "deal" ? entry.deal.pricePerUnit : entry.comp.pricePerUnit),
+      psf: (entry: TableEntry) => (entry.kind === "deal" ? entry.deal.pricePsf : entry.comp.pricePsf),
+      stage: (entry: TableEntry) =>
+        entry.kind === "deal" ? boardStageLabel(entry.deal) : packageTypeLabel(entry.comp.packageType),
+    }),
+    [boardStageLabel]
+  );
+  const dealSort = useTableSort(tableEntries, dealSortAccessors);
 
   const boroughOptions = useMemo(
     () => [...new Set((data?.comps ?? []).map((row) => row.borough ?? "Unknown"))].sort(),
     [data]
+  );
+  const stageOptions = useMemo(
+    () => [...new Set((data?.comps ?? []).map((row) => boardStageLabel(row)))].filter((label) => label !== EMPTY_VALUE).sort(),
+    [data, boardStageLabel]
+  );
+  const hoodOptions = useMemo(
+    () => [...new Set((data?.comps ?? []).map((row) => displayHood(row) ?? "Unknown"))].sort(),
+    [data, displayHood]
   );
 
   const trendTone = stats.upCount > stats.downCount ? "success" : "neutral";
@@ -1128,6 +1205,32 @@ export default function YieldMapPage() {
               >
                 <option value="">All boroughs</option>
                 {boroughOptions.map((name) => (
+                  <option key={name} value={name}>{name}</option>
+                ))}
+              </select>
+            </label>
+            <label className={styles.filterLabel}>
+              Neighborhood
+              <select
+                className={styles.filterSelect}
+                value={hoodFilter}
+                onChange={(event) => setHoodFilter(event.target.value)}
+              >
+                <option value="">All neighborhoods</option>
+                {hoodOptions.map((name) => (
+                  <option key={name} value={name}>{name}</option>
+                ))}
+              </select>
+            </label>
+            <label className={styles.filterLabel}>
+              Stage
+              <select
+                className={styles.filterSelect}
+                value={stageFilter}
+                onChange={(event) => setStageFilter(event.target.value)}
+              >
+                <option value="">All stages</option>
+                {stageOptions.map((name) => (
                   <option key={name} value={name}>{name}</option>
                 ))}
               </select>
@@ -1227,9 +1330,19 @@ export default function YieldMapPage() {
 
           {headlines.length > 0 ? (
             <div className={styles.headlineStrip} aria-label="Market movement headlines">
-              <span className={styles.headlineKicker}>Market headlines</span>
+              <div className={styles.headlineStripHead}>
+                <span className={styles.headlineKicker}>
+                  Market headlines
+                  {headlinesAsOf ? (
+                    <span className={styles.headlineAsOf}>· data through {fmtMonthYear(headlinesAsOf)}</span>
+                  ) : null}
+                </span>
+                <a href="/market-docs" className={styles.headlineLink}>
+                  Knowledge base →
+                </a>
+              </div>
               <ul className={styles.headlineList}>
-                {headlines.map((headline) => (
+                {(showAllHeadlines ? headlines : headlines.slice(0, 4)).map((headline) => (
                   <li key={headline.id} className={styles.headlineItem}>
                     <span
                       className={
@@ -1253,9 +1366,15 @@ export default function YieldMapPage() {
                   </li>
                 ))}
               </ul>
-              <a href="/market-docs" className={styles.headlineLink}>
-                Knowledge base →
-              </a>
+              {headlines.length > 4 ? (
+                <button
+                  type="button"
+                  className={styles.headlineMoreButton}
+                  onClick={() => setShowAllHeadlines((current) => !current)}
+                >
+                  {showAllHeadlines ? "Show fewer" : `+${headlines.length - 4} more`}
+                </button>
+              ) : null}
             </div>
           ) : null}
 
@@ -1398,7 +1517,10 @@ export default function YieldMapPage() {
                   areas={areas}
                   showAreas={showAreas}
                   highlightedId={activePinId}
-                  onPinHover={setActivePinId}
+                  onPinHover={(id) => {
+                    hoverSourceRef.current = "map";
+                    setActivePinId(id);
+                  }}
                   marketHoods={marketHoods}
                   hollowPins={hollowPins}
                   renderHoodPopup={renderHoodPopup}
@@ -1431,15 +1553,19 @@ export default function YieldMapPage() {
                 <table className={styles.table}>
                   <thead>
                     <tr>
-                      <th>Neighborhood</th>
-                      <th>Deals</th>
-                      <th>Median</th>
-                      {metric === "capRate" ? <th>Trend</th> : <th>Range</th>}
-                      <th>Since</th>
+                      <SortableTh label="Neighborhood" sortKey="name" firstDir="asc" activeKey={hoodSort.sortKey} direction={hoodSort.sortDir} onToggle={hoodSort.toggle} />
+                      <SortableTh label="Deals" sortKey="count" activeKey={hoodSort.sortKey} direction={hoodSort.sortDir} onToggle={hoodSort.toggle} />
+                      <SortableTh label="Median" sortKey="median" activeKey={hoodSort.sortKey} direction={hoodSort.sortDir} onToggle={hoodSort.toggle} />
+                      {metric === "capRate" ? (
+                        <SortableTh label="Trend" sortKey="trend" activeKey={hoodSort.sortKey} direction={hoodSort.sortDir} onToggle={hoodSort.toggle} />
+                      ) : (
+                        <SortableTh label="Range" sortKey="range" activeKey={hoodSort.sortKey} direction={hoodSort.sortDir} onToggle={hoodSort.toggle} />
+                      )}
+                      <SortableTh label="Since" sortKey="since" firstDir="asc" activeKey={hoodSort.sortKey} direction={hoodSort.sortDir} onToggle={hoodSort.toggle} />
                     </tr>
                   </thead>
                   <tbody>
-                    {neighborhoodStats.map((stat) => (
+                    {hoodSort.sorted.map((stat) => (
                       <tr key={stat.name}>
                         <td className={styles.dealAddressCell}>
                           <span className={styles.boroughName}>{stat.name}</span>
@@ -1481,15 +1607,17 @@ export default function YieldMapPage() {
                 <table className={styles.table}>
                   <thead>
                     <tr>
-                      <th>Borough</th>
-                      <th>Deals</th>
-                      <th>Median</th>
-                      <th>Range</th>
-                      {metric === "capRate" ? <th>Trend</th> : null}
+                      <SortableTh label="Borough" sortKey="name" firstDir="asc" activeKey={boroughSort.sortKey} direction={boroughSort.sortDir} onToggle={boroughSort.toggle} />
+                      <SortableTh label="Deals" sortKey="count" activeKey={boroughSort.sortKey} direction={boroughSort.sortDir} onToggle={boroughSort.toggle} />
+                      <SortableTh label="Median" sortKey="median" activeKey={boroughSort.sortKey} direction={boroughSort.sortDir} onToggle={boroughSort.toggle} />
+                      <SortableTh label="Range" sortKey="range" activeKey={boroughSort.sortKey} direction={boroughSort.sortDir} onToggle={boroughSort.toggle} />
+                      {metric === "capRate" ? (
+                        <SortableTh label="Trend" sortKey="trend" activeKey={boroughSort.sortKey} direction={boroughSort.sortDir} onToggle={boroughSort.toggle} />
+                      ) : null}
                     </tr>
                   </thead>
                   <tbody>
-                    {boroughStats.map((stat) => (
+                    {boroughSort.sorted.map((stat) => (
                       <tr key={stat.name}>
                         <td className={styles.boroughName}>{stat.name}</td>
                         <td>{stat.count}</td>
@@ -1510,32 +1638,51 @@ export default function YieldMapPage() {
             </div>
 
             <div className={`${styles.panel} ${styles.tablePanel}`}>
-              <span className={styles.tableTitle}>
-                All yield-bearing deals{showComps && compRows.length > 0 ? ` + ${compRows.length} comps` : ""}
-              </span>
+              <div className={styles.tableTitleRow}>
+                <span className={styles.tableTitle}>
+                  All yield-bearing deals{showComps && compRows.length > 0 ? ` + ${compRows.length} comps` : ""}
+                </span>
+                <input
+                  type="search"
+                  className={styles.tableFilterInput}
+                  value={dealSearch}
+                  onChange={(event) => setDealSearch(event.target.value)}
+                  placeholder="Filter by address, neighborhood, stage…"
+                  aria-label="Filter deals table"
+                />
+              </div>
               <table className={styles.table}>
                 <thead>
                   <tr>
-                    <th>Address</th>
-                    <th>Cap rate</th>
-                    <th title="Move since the yield was first produced; refreshes that change the cap rate add a new observation.">
-                      Trend
-                    </th>
-                    <th>MTR</th>
-                    <th>NOI</th>
-                    <th>Units</th>
-                    <th>$/Unit</th>
-                    <th>$/SF</th>
-                    <th>Stage</th>
+                    <SortableTh label="Address" sortKey="address" firstDir="asc" activeKey={dealSort.sortKey} direction={dealSort.sortDir} onToggle={dealSort.toggle} />
+                    <SortableTh label="Cap rate" sortKey="capRate" activeKey={dealSort.sortKey} direction={dealSort.sortDir} onToggle={dealSort.toggle} />
+                    <SortableTh
+                      label="Trend"
+                      sortKey="trend"
+                      activeKey={dealSort.sortKey}
+                      direction={dealSort.sortDir}
+                      onToggle={dealSort.toggle}
+                      title="Move since the yield was first produced; refreshes that change the cap rate add a new observation."
+                    />
+                    <SortableTh label="MTR" sortKey="mtr" activeKey={dealSort.sortKey} direction={dealSort.sortDir} onToggle={dealSort.toggle} />
+                    <SortableTh label="NOI" sortKey="noi" activeKey={dealSort.sortKey} direction={dealSort.sortDir} onToggle={dealSort.toggle} />
+                    <SortableTh label="Units" sortKey="units" activeKey={dealSort.sortKey} direction={dealSort.sortDir} onToggle={dealSort.toggle} />
+                    <SortableTh label="$/Unit" sortKey="pricePerUnit" activeKey={dealSort.sortKey} direction={dealSort.sortDir} onToggle={dealSort.toggle} />
+                    <SortableTh label="$/SF" sortKey="psf" activeKey={dealSort.sortKey} direction={dealSort.sortDir} onToggle={dealSort.toggle} />
+                    <SortableTh label="Stage" sortKey="stage" firstDir="asc" activeKey={dealSort.sortKey} direction={dealSort.sortDir} onToggle={dealSort.toggle} />
                   </tr>
                 </thead>
                 <tbody>
-                  {tableEntries.map((entry) =>
+                  {dealSort.sorted.map((entry) =>
                     entry.kind === "deal" ? (
                       <tr
                         key={entry.rowId}
+                        id={`yield-row-${entry.rowId}`}
                         className={activePinId === entry.rowId ? styles.rowActive : undefined}
-                        onMouseEnter={() => setActivePinId(entry.rowId)}
+                        onMouseEnter={() => {
+                          hoverSourceRef.current = "table";
+                          setActivePinId(entry.rowId);
+                        }}
                         onMouseLeave={() => setActivePinId(null)}
                       >
                         <td className={styles.dealAddressCell}>
@@ -1590,8 +1737,12 @@ export default function YieldMapPage() {
                     ) : (
                       <tr
                         key={entry.rowId}
+                        id={`yield-row-${entry.rowId}`}
                         className={`${styles.compRow} ${activePinId === entry.rowId ? styles.rowActive : ""}`}
-                        onMouseEnter={() => setActivePinId(entry.rowId)}
+                        onMouseEnter={() => {
+                          hoverSourceRef.current = "table";
+                          setActivePinId(entry.rowId);
+                        }}
                         onMouseLeave={() => setActivePinId(null)}
                       >
                         <td className={styles.dealAddressCell}>
@@ -1633,7 +1784,7 @@ export default function YieldMapPage() {
                       </tr>
                     )
                   )}
-                  {tableEntries.length === 0 ? (
+                  {dealSort.sorted.length === 0 ? (
                     <tr className={styles.emptyRow}>
                       <td colSpan={9}>
                         No deals with calculated yields yet — run OM analysis or compute scores to populate the living database.
