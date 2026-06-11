@@ -26,6 +26,17 @@ interface IngestReport {
   flags: string[];
   brief?: MarketDocumentBrief | null;
   knowledgeVersion?: number | null;
+  status?: "succeeded" | "failed";
+  error?: string | null;
+}
+
+type UploadItemState = "queued" | "processing" | "done" | "failed";
+
+interface UploadItem {
+  name: string;
+  state: UploadItemState;
+  error?: string | null;
+  documentId?: string | null;
 }
 
 interface MarketDocRow {
@@ -73,6 +84,8 @@ export default function MarketDocsPage() {
   const [files, setFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [uploadItems, setUploadItems] = useState<UploadItem[]>([]);
+  const [retryingId, setRetryingId] = useState<string | null>(null);
   const [lastReports, setLastReports] = useState<IngestReport[]>([]);
   const [documents, setDocuments] = useState<MarketDocRow[]>([]);
   const [listError, setListError] = useState<string | null>(null);
@@ -100,13 +113,24 @@ export default function MarketDocsPage() {
     refresh();
   }, [refresh]);
 
+  function patchUploadItem(index: number, patch: Partial<UploadItem>) {
+    setUploadItems((current) => current.map((item, i) => (i === index ? { ...item, ...patch } : item)));
+  }
+
+  // Each file uploads independently: one bad PDF marks its own row failed
+  // (with the stage-tagged reason) and the batch keeps going.
   async function uploadAll() {
     if (files.length === 0 || uploading) return;
     setUploading(true);
     setUploadError(null);
+    const batch = [...files];
+    setUploadItems(batch.map((file) => ({ name: file.name, state: "queued" as const })));
     const reports: IngestReport[] = [];
-    try {
-      for (const file of files) {
+    const failedFiles: File[] = [];
+    for (let index = 0; index < batch.length; index += 1) {
+      const file = batch[index];
+      patchUploadItem(index, { state: "processing" });
+      try {
         const body = new FormData();
         body.append("file", file);
         const res = await fetch(`${API_BASE}/api/market-docs`, {
@@ -114,18 +138,59 @@ export default function MarketDocsPage() {
           credentials: "include",
           body,
         });
-        const payload = (await res.json().catch(() => ({}))) as { report?: IngestReport; error?: string };
+        const payload = (await res.json().catch(() => ({}))) as { report?: IngestReport; error?: string; details?: string };
         if (!res.ok || !payload.report) {
-          throw new Error(payload.error || `HTTP ${res.status} for ${file.name}`);
+          throw new Error(payload.error || payload.details || `HTTP ${res.status}`);
         }
-        reports.push(payload.report);
+        if (payload.report.status === "failed") {
+          patchUploadItem(index, {
+            state: "failed",
+            error: payload.report.error ?? "Ingest failed — see the ingest log.",
+            documentId: payload.report.documentId,
+          });
+          failedFiles.push(file);
+        } else {
+          reports.push(payload.report);
+          patchUploadItem(index, { state: "done", documentId: payload.report.documentId });
+        }
+      } catch (err) {
+        patchUploadItem(index, { state: "failed", error: err instanceof Error ? err.message : "Upload failed." });
+        failedFiles.push(file);
       }
-      setLastReports(reports);
-      setFiles([]);
+    }
+    if (reports.length > 0) setLastReports(reports);
+    // Failed files stay staged so a fixed network/server is one click away.
+    setFiles(failedFiles);
+    if (reports.length === 0 && batch.length > 0) {
+      setUploadError("No documents ingested — every file failed. See the per-file errors above.");
+    }
+    setUploading(false);
+    refresh();
+  }
+
+  async function retryDocument(documentId: string) {
+    if (retryingId) return;
+    setRetryingId(documentId);
+    try {
+      const res = await fetch(`${API_BASE}/api/market-docs/${encodeURIComponent(documentId)}/retry`, {
+        method: "POST",
+        credentials: "include",
+      });
+      const payload = (await res.json().catch(() => ({}))) as { report?: IngestReport; error?: string };
+      if (!res.ok || !payload.report) throw new Error(payload.error || `HTTP ${res.status}`);
+      if (payload.report.status === "failed") {
+        setUploadError(`Retry failed: ${payload.report.error ?? "see the ingest log."}`);
+      } else {
+        setUploadError(null);
+        setLastReports((current) => [...current, payload.report as IngestReport]);
+        setUploadItems((current) =>
+          current.map((item) => (item.documentId === documentId ? { ...item, state: "done", error: null } : item))
+        );
+      }
     } catch (err) {
-      setUploadError(err instanceof Error ? err.message : "Upload failed.");
+      setUploadError(err instanceof Error ? err.message : "Retry failed.");
     } finally {
-      setUploading(false);
+      setRetryingId(null);
       refresh();
     }
   }
@@ -164,6 +229,44 @@ export default function MarketDocsPage() {
           </Button>
           {uploadError ? <span className={styles.uploadError}>{uploadError}</span> : null}
         </div>
+        {uploadItems.length > 0 ? (
+          <div className={styles.uploadStatusList}>
+            {uploadItems.map((item, index) => (
+              <div key={`${item.name}-${index}`} className={styles.uploadStatusRow}>
+                <Badge
+                  tone={
+                    item.state === "done"
+                      ? "success"
+                      : item.state === "failed"
+                        ? "danger"
+                        : item.state === "processing"
+                          ? "info"
+                          : "neutral"
+                  }
+                >
+                  {item.state}
+                </Badge>
+                <span className={styles.uploadStatusName}>{item.name}</span>
+                {item.error ? <span className={styles.uploadStatusError}>{item.error}</span> : null}
+                {item.state === "failed" && item.documentId ? (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => void retryDocument(item.documentId as string)}
+                    disabled={retryingId != null}
+                  >
+                    {retryingId === item.documentId ? "Retrying…" : "Retry"}
+                  </Button>
+                ) : null}
+              </div>
+            ))}
+            <span className={styles.uploadSummary}>
+              {uploadItems.filter((item) => item.state === "done").length} ingested ·{" "}
+              {uploadItems.filter((item) => item.state === "failed").length} failed
+              {uploading ? " · working…" : ""}
+            </span>
+          </div>
+        ) : null}
       </Panel>
 
       {latestBrief ? (
@@ -380,7 +483,18 @@ export default function MarketDocsPage() {
                 <td>{doc.ingestReport?.nStats ?? "—"}</td>
                 <td>
                   {doc.status === "failed" ? (
-                    <Badge tone="danger" title={doc.error ?? undefined}>failed</Badge>
+                    <span className={styles.statusCell}>
+                      <Badge tone="danger" title={doc.error ?? undefined}>failed</Badge>
+                      {doc.error ? <span className={styles.statusError}>{doc.error}</span> : null}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => void retryDocument(doc.id)}
+                        disabled={retryingId != null}
+                      >
+                        {retryingId === doc.id ? "Retrying…" : "Retry"}
+                      </Button>
+                    </span>
                   ) : (
                     <Badge tone={doc.status === "synthesized" ? "success" : "neutral"}>{doc.status}</Badge>
                   )}

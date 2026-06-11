@@ -28,6 +28,65 @@
   font-weight: 600;
 }
 
+/* Per-file upload outcomes: one row per document, batch survives failures. */
+.uploadStatusList {
+  display: grid;
+  gap: 0.4rem;
+  margin-top: 0.8rem;
+  padding-top: 0.7rem;
+  border-top: 1px solid var(--app-line, #e4e4e7);
+}
+
+.uploadStatusRow {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;
+  font-size: 0.8rem;
+}
+
+.uploadStatusName {
+  font-weight: 650;
+  color: var(--app-ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.uploadStatusError {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: #991b1b;
+  font-size: 0.74rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.uploadSummary {
+  margin-top: 0.15rem;
+  color: var(--app-muted);
+  font-size: 0.74rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.statusCell {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.statusError {
+  max-width: 16rem;
+  color: #991b1b;
+  font-size: 0.72rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .sectionTitle {
   display: block;
   font-size: 0.82rem;
