@@ -3,6 +3,8 @@
 import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
+import { CopyCheck, History, ListChecks, Mail, PlusCircle, Zap } from "lucide-react";
+import { Button, EmptyState, PageHeader, SkeletonRows, StatCard, type StatCardTone } from "@/components/ui";
 import { labelFromKey } from "@/lib/format";
 import {
   deriveListingActivitySummary,
@@ -13,7 +15,8 @@ import {
 import { PropertyDetailCollapsible } from "./PropertyDetailCollapsible";
 import { CanonicalPropertyDetail, type CanonicalProperty } from "./CanonicalPropertyDetail";
 import { AREA_OPTIONS, cityToArea, cityFromCanonicalAddress } from "./areas";
-import { getSourcingUpdateMeta } from "./sourcingUpdate";
+import { getSourcingUpdate, getSourcingUpdateMeta } from "./sourcingUpdate";
+import styles from "./propertyData.module.css";
 import {
   estimateGenerationProgress,
   generationStageLabel,
@@ -25,6 +28,10 @@ function formatElapsed(seconds: number): string {
   const m = Math.floor(seconds / 60);
   const s = seconds % 60;
   return m > 0 ? `${m}:${String(s).padStart(2, "0")}` : `0:${String(s).padStart(2, "0")}`;
+}
+
+function cx(...classes: Array<string | false | null | undefined>): string {
+  return classes.filter(Boolean).join(" ");
 }
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
@@ -304,19 +311,37 @@ function formatPriceReductionSummary(activity: ListingActivitySummary | null | u
   return `${countLabel} · Down ${amountLabel}${pctLabel} since listed`;
 }
 
-function workflowStatusStyle(status: WorkflowBoardRun["status"] | WorkflowBoardStep["status"]) {
+type StatusTone = "neutral" | "info" | "success" | "warning" | "danger";
+
+const STATUS_TONE_CLASS: Record<StatusTone, string> = {
+  neutral: styles.statusChipNeutral,
+  info: styles.statusChipInfo,
+  success: styles.statusChipSuccess,
+  warning: styles.statusChipWarning,
+  danger: styles.statusChipDanger,
+};
+
+function workflowStatusTone(status: WorkflowBoardRun["status"] | WorkflowBoardStep["status"]): StatusTone {
   switch (status) {
     case "running":
-      return { color: "#1d4ed8", backgroundColor: "#dbeafe", borderColor: "#93c5fd" };
+      return "info";
     case "completed":
-      return { color: "#166534", backgroundColor: "#dcfce7", borderColor: "#86efac" };
+      return "success";
     case "failed":
-      return { color: "#b91c1c", backgroundColor: "#fee2e2", borderColor: "#fca5a5" };
+      return "danger";
     case "partial":
-      return { color: "#9a3412", backgroundColor: "#ffedd5", borderColor: "#fdba74" };
+      return "warning";
     default:
-      return { color: "#475569", backgroundColor: "#f8fafc", borderColor: "#cbd5e1" };
+      return "neutral";
   }
+}
+
+function sourcingUpdateTone(details: Record<string, unknown> | null | undefined): StatusTone {
+  const update = getSourcingUpdate(details);
+  if (!update?.status) return "neutral";
+  if (update.status === "new") return "info";
+  if (update.status === "updated") return "warning";
+  return "neutral";
 }
 
 function workflowStatusLabel(status: WorkflowBoardRun["status"] | WorkflowBoardStep["status"]) {
@@ -401,20 +426,20 @@ function formatBulkInquiryRecipientSource(source: BulkInquiryRecipientSource): s
 function StatusChip({
   label,
   detail,
-  style,
+  tone,
   className = "",
 }: {
   label: string;
   detail?: string | null;
-  style: React.CSSProperties;
+  tone: StatusTone;
   className?: string;
 }) {
-  const classes = ["property-status-chip", className].filter(Boolean).join(" ");
+  const classes = [styles.statusChip, STATUS_TONE_CLASS[tone], className].filter(Boolean).join(" ");
 
   return (
-    <div className={classes} style={style}>
-      <span className="property-status-chip-label">{label}</span>
-      {detail ? <span className="property-status-chip-detail">{detail}</span> : null}
+    <div className={classes}>
+      <span className={styles.statusChipLabel}>{label}</span>
+      {detail ? <span className={styles.statusChipDetail}>{detail}</span> : null}
     </div>
   );
 }
@@ -929,13 +954,10 @@ function PropertyDataContent() {
   const fullAddress = (row: ListingRow) =>
     [row.address, row.city, row.state, row.zip].filter(Boolean).join(", ") || "—";
 
-  const dupConfStyle = (score: number | null | undefined) => {
-    if (score == null) return {};
+  const dupConfClass = (score: number | null | undefined) => {
+    if (score == null) return undefined;
     const intensity = score / 100;
-    return {
-      color: intensity >= 0.8 ? "#b91c1c" : intensity <= 0.2 ? "#15803d" : "#854d0e",
-      fontWeight: score >= 80 ? 600 : 400,
-    };
+    return intensity >= 0.8 ? styles.dupHigh : intensity <= 0.2 ? styles.dupLow : styles.dupMid;
   };
 
   const dossierCellMeta = (prop: CanonicalProperty) => {
@@ -946,48 +968,48 @@ function PropertyDataContent() {
       return {
         label: `Generating ${localJob.progressPct}%`,
         detail: localJob.stageLabel,
-        style: { color: "#1d4ed8", backgroundColor: "#dbeafe", borderColor: "#93c5fd" },
+        tone: "info" as StatusTone,
       };
     }
     if (localJob?.status === "failed") {
       return {
         label: "Failed",
         detail: localJob.notice ?? persisted?.lastError ?? "Generation failed",
-        style: { color: "#b91c1c", backgroundColor: "#fee2e2", borderColor: "#fca5a5" },
+        tone: "danger" as StatusTone,
       };
     }
     if (localJob?.status === "completed") {
       return {
         label: "Complete",
         detail: "PDF + Excel saved",
-        style: { color: "#166534", backgroundColor: "#dcfce7", borderColor: "#86efac" },
+        tone: "success" as StatusTone,
       };
     }
     if (persisted?.status === "running") {
       return {
         label: "Generating",
         detail: persisted.stageLabel ?? "In progress",
-        style: { color: "#1d4ed8", backgroundColor: "#dbeafe", borderColor: "#93c5fd" },
+        tone: "info" as StatusTone,
       };
     }
     if (persisted?.status === "failed") {
       return {
         label: "Failed",
         detail: persisted.lastError ?? "Last run failed",
-        style: { color: "#b91c1c", backgroundColor: "#fee2e2", borderColor: "#fca5a5" },
+        tone: "danger" as StatusTone,
       };
     }
     if (persisted?.status === "completed" || prop.dealScore != null) {
       return {
         label: "Complete",
         detail: persisted?.completedAt ? formatListedDate(persisted.completedAt) : "Ready",
-        style: { color: "#166534", backgroundColor: "#dcfce7", borderColor: "#86efac" },
+        tone: "success" as StatusTone,
       };
     }
     return {
       label: "Not started",
       detail: "Uses profile + property defaults",
-      style: { color: "#475569", backgroundColor: "#f8fafc", borderColor: "#cbd5e1" },
+      tone: "neutral" as StatusTone,
     };
   };
 
@@ -1088,14 +1110,14 @@ function PropertyDataContent() {
       if (dossierReady) dossierReadyCount++;
     }
     return [
-      { label: "New", count: newCount, tone: "#475569", bg: "#f8fafc", border: "#cbd5e1" },
-      { label: "Inquiry out", count: inquiryOut, tone: "#9a3412", bg: "#ffedd5", border: "#fdba74" },
-      { label: "OM received", count: omReceived, tone: "#854d0e", bg: "#fef3c7", border: "#fcd34d" },
-      { label: "Underwriting ready", count: underwritingReady, tone: "#166534", bg: "#dcfce7", border: "#86efac" },
-      { label: "Dossier running", count: dossierRunningCount, tone: "#1d4ed8", bg: "#dbeafe", border: "#93c5fd" },
-      { label: "Dossier ready", count: dossierReadyCount, tone: "#166534", bg: "#dcfce7", border: "#86efac" },
-      { label: "Refreshing", count: refreshingPropertyIds.size, tone: "#1d4ed8", bg: "#dbeafe", border: "#93c5fd" },
-      { label: "Workflow issues", count: failedWorkflowPropertyIds.size, tone: "#b91c1c", bg: "#fee2e2", border: "#fca5a5" },
+      { label: "New", count: newCount, tone: "neutral" as StatCardTone },
+      { label: "Inquiry out", count: inquiryOut, tone: "warning" as StatCardTone },
+      { label: "OM received", count: omReceived, tone: "warning" as StatCardTone },
+      { label: "Underwriting ready", count: underwritingReady, tone: "success" as StatCardTone },
+      { label: "Dossier running", count: dossierRunningCount, tone: "info" as StatCardTone },
+      { label: "Dossier ready", count: dossierReadyCount, tone: "success" as StatCardTone },
+      { label: "Refreshing", count: refreshingPropertyIds.size, tone: "info" as StatCardTone },
+      { label: "Workflow issues", count: failedWorkflowPropertyIds.size, tone: "danger" as StatCardTone },
     ];
   }, [canonicalProperties, failedWorkflowPropertyIds, localDossierJobs, refreshingPropertyIds]);
 
@@ -1111,34 +1133,34 @@ function PropertyDataContent() {
       return {
         label: "Refreshing",
         detail: "Updating inputs",
-        style: workflowStatusStyle("running"),
+        tone: workflowStatusTone("running"),
       };
     }
     if (hasAuthoritativeOm || prop.dealScore != null) {
       return {
         label: "Ready",
         detail: prop.dealScore != null ? `Score ${prop.dealScore}` : "OM parsed",
-        style: workflowStatusStyle("completed"),
+        tone: workflowStatusTone("completed"),
       };
     }
     if (prop.omStatus === "OM received") {
       return {
         label: "OM received",
         detail: "Awaiting authoritative OM",
-        style: workflowStatusStyle("partial"),
+        tone: workflowStatusTone("partial"),
       };
     }
     if (prop.omStatus === "OM pending") {
       return {
         label: "Waiting on OM",
         detail: "Inquiry sent",
-        style: workflowStatusStyle("pending"),
+        tone: workflowStatusTone("pending"),
       };
     }
     return {
       label: "Not started",
       detail: "Needs OM",
-      style: workflowStatusStyle("pending"),
+      tone: workflowStatusTone("pending"),
     };
   };
 
@@ -1147,20 +1169,20 @@ function PropertyDataContent() {
       return {
         label: "OM received",
         detail: "Document on file",
-        style: workflowStatusStyle("completed"),
+        tone: workflowStatusTone("completed"),
       };
     }
     if (prop.omStatus === "OM pending") {
       return {
         label: "Pending",
         detail: "Waiting on broker",
-        style: workflowStatusStyle("partial"),
+        tone: workflowStatusTone("partial"),
       };
     }
     return {
       label: "Not received",
       detail: "No OM yet",
-      style: workflowStatusStyle("pending"),
+      tone: workflowStatusTone("pending"),
     };
   };
 
@@ -1170,14 +1192,14 @@ function PropertyDataContent() {
       return {
         label: "Idle",
         detail: "No active job",
-        style: workflowStatusStyle("pending"),
+        tone: workflowStatusTone("pending"),
       };
     }
     const activeStep = run.steps.find((step) => step.status === "running" || step.status === "partial" || step.status === "failed");
     return {
       label: run.displayName,
       detail: activeStep?.label ?? workflowStatusLabel(run.status),
-      style: workflowStatusStyle(run.status),
+      tone: workflowStatusTone(run.status),
     };
   };
 
@@ -1676,74 +1698,75 @@ function PropertyDataContent() {
   }, [someCanonicalSelected, allCanonicalSelected]);
 
   return (
-    <div className="property-data-layout">
-      <section className="property-data-hero">
-        <div>
-          <p className="property-data-kicker">Property pipeline</p>
-          <h1 className="property-data-title">Property Data</h1>
-          <p className="property-data-intro">
+    <div className={styles.page}>
+      <PageHeader
+        eyebrow="Property pipeline"
+        title="Property Data"
+        subtitle={
+          <>
             {canonicalProperties.length} canonical propert{canonicalProperties.length === 1 ? "y" : "ies"} · {total} raw listing{total === 1 ? "" : "s"}
-          </p>
-        </div>
-        <div className="property-data-hero-actions">
-          <button
-            type="button"
-            className="btn-primary"
-            onClick={() => {
-              setManualAddError(null);
-              setManualAddModalOpen(true);
-            }}
-          >
-            Add missed property
-          </button>
-          <Link href="/runs" className="btn-secondary">
-            Saved searches
-          </Link>
-        </div>
-      </section>
+          </>
+        }
+        actions={
+          <>
+            <Button
+              variant="primary"
+              onClick={() => {
+                setManualAddError(null);
+                setManualAddModalOpen(true);
+              }}
+            >
+              Add missed property
+            </Button>
+            <Link href="/runs" className={styles.linkButton}>
+              Saved searches
+            </Link>
+          </>
+        }
+      />
       {sentMessage && (
-        <div className="card" style={{ marginBottom: "1rem", padding: "0.75rem 1rem", background: "#f0fdf4", borderColor: "#86efac" }}>
+        <div className={cx(styles.notice, styles.noticeSuccess)}>
           {decodeURIComponent(sentMessage)}
         </div>
       )}
       {manualAddNotice && (
         <div
-          className="card"
-          style={{
-            marginBottom: "1rem",
-            padding: "0.85rem 1rem",
-            background: manualAddNotice.type === "success" ? "#f0fdf4" : "#fff7ed",
-            borderColor: manualAddNotice.type === "success" ? "#86efac" : "#fdba74",
-            color: manualAddNotice.type === "success" ? "#166534" : "#9a3412",
-          }}
+          className={cx(
+            styles.notice,
+            manualAddNotice.type === "success" ? styles.noticeSuccess : styles.noticeWarning
+          )}
         >
           {manualAddNotice.message}
         </div>
       )}
       {bulkInquiryResult && (
         <div
-          className="card"
-          style={{
-            marginBottom: "1rem",
-            padding: "1rem",
-            borderColor: bulkInquiryResult.failed > 0 ? "#fca5a5" : bulkInquiryResult.skipped > 0 ? "#fdba74" : "#86efac",
-            background: bulkInquiryResult.failed > 0 ? "#fef2f2" : bulkInquiryResult.skipped > 0 ? "#fff7ed" : "#f0fdf4",
-          }}
+          className={cx(
+            styles.resultCard,
+            bulkInquiryResult.failed > 0
+              ? styles.resultCardDanger
+              : bulkInquiryResult.skipped > 0
+                ? styles.resultCardWarning
+                : styles.resultCardSuccess
+          )}
         >
-          <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", flexWrap: "wrap", alignItems: "center" }}>
+          <div className={styles.resultHead}>
             <div>
-              <div style={{ fontSize: "1rem", fontWeight: 700, color: "#111827" }}>Bulk broker email run</div>
-              <div style={{ marginTop: "0.2rem", fontSize: "0.9rem", color: "#475569" }}>
+              <div className={styles.resultTitle}>
+                <Mail size={16} strokeWidth={2} aria-hidden="true" className={styles.sectionIcon} />
+                Bulk broker email run
+              </div>
+              <div className={styles.resultMeta}>
                 {bulkInquiryResult.sent} sent, {bulkInquiryResult.skipped} skipped, {bulkInquiryResult.failed} failed
               </div>
             </div>
-            <button type="button" className="btn-secondary" onClick={() => setBulkInquiryResult(null)}>
+            <Button variant="secondary" onClick={() => setBulkInquiryResult(null)}>
               Dismiss
-            </button>
+            </Button>
           </div>
           {bulkInquiryResult.results.length > 0 && (
-            <div style={{ marginTop: "0.85rem", overflowX: "auto" }}>
-              <table className="property-data-table" style={{ fontSize: "0.85rem" }}>
+            <div className={styles.resultTableScroll}>
+              <table className={styles.dataTable}>
                 <thead>
                   <tr>
                     <th>Property</th>
@@ -1759,19 +1782,19 @@ function PropertyDataContent() {
                       <td>
                         <StatusChip
                           label={row.status === "sent" ? "Sent" : row.status === "skipped" ? "Skipped" : "Failed"}
-                          style={workflowStatusStyle(
+                          tone={workflowStatusTone(
                             row.status === "sent" ? "completed" : row.status === "skipped" ? "partial" : "failed"
                           )}
-                          className="property-status-chip--compact"
+                          className={styles.statusChipCompact}
                         />
                       </td>
                       <td>
                         <div>{row.toAddress || "—"}</div>
-                        <div style={{ fontSize: "0.74rem", color: "#6b7280" }}>
+                        <div className={styles.cellSub}>
                           {formatBulkInquiryRecipientSource(row.recipientSource)}
                         </div>
                       </td>
-                      <td style={{ color: row.status === "failed" ? "#b91c1c" : "#475569" }}>
+                      <td className={row.status === "failed" ? styles.noteDanger : styles.noteMuted}>
                         {row.status === "sent"
                           ? `Sent ${row.sentAt ? formatDateTime(row.sentAt) : "just now"}`
                           : row.reason || "—"}
@@ -1785,47 +1808,46 @@ function PropertyDataContent() {
         </div>
       )}
 
-      <div className="property-data-search-row">
+      <div className={styles.searchRow}>
         <input
           type="search"
           placeholder="Search by address, property ID, listing ID, or area"
-          className="input-text property-data-search"
+          className={styles.searchInput}
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           aria-label="Search properties"
-          style={{ flex: "1 1 24rem" }}
         />
       </div>
 
-      <div className="property-data-tabs-row">
-        <div className="property-data-tabs" aria-label="Property data sections">
+      <div className={styles.tabsRow}>
+        <div className={styles.tabs} aria-label="Property data sections">
           <button
             type="button"
-            className={`property-data-tab ${activeTab === "canonical" ? "property-data-tab--active" : ""}`}
+            className={cx(styles.tab, activeTab === "canonical" && styles.tabActive)}
             onClick={() => setActiveTab("canonical")}
           >
             Canonical properties
           </button>
           <button
             type="button"
-            className={`property-data-tab ${activeTab === "raw" ? "property-data-tab--active" : ""}`}
+            className={cx(styles.tab, activeTab === "raw" && styles.tabActive)}
             onClick={() => setActiveTab("raw")}
           >
             Raw listings
           </button>
           <Link
             href="/om-review"
-            className="property-data-tab property-data-tab--link"
+            className={cx(styles.tab, styles.tabLink)}
             title="Review ambiguous OM, rent roll, T12, or broker-email documents before promotion"
           >
             Document review queue
           </Link>
         </div>
-        <div className="property-data-filters" style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", alignItems: "center" }}>
-          <label className="property-data-filter-label" style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}>
-            <span style={{ whiteSpace: "nowrap", fontSize: "0.875rem" }}>Sort by</span>
+        <div className={styles.filters}>
+          <label className={styles.filterLabel}>
+            <span className={styles.filterName}>Sort by</span>
             <select
-              className="input-text property-data-filter-select"
+              className={styles.filterSelect}
               value={sortBy}
               onChange={(e) => setSortBy(e.target.value as "price" | "listedAt" | "lastActivity" | "area")}
               aria-label="Sort by"
@@ -1836,10 +1858,10 @@ function PropertyDataContent() {
               <option value="area">Area</option>
             </select>
           </label>
-          <label className="property-data-filter-label" style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}>
-            <span style={{ whiteSpace: "nowrap", fontSize: "0.875rem" }}>Direction</span>
+          <label className={styles.filterLabel}>
+            <span className={styles.filterName}>Direction</span>
             <select
-              className="input-text property-data-filter-select"
+              className={styles.filterSelect}
               value={sortDir}
               onChange={(e) => setSortDir(e.target.value as "asc" | "desc")}
               aria-label="Sort direction"
@@ -1848,10 +1870,10 @@ function PropertyDataContent() {
               <option value="desc">Descending</option>
             </select>
           </label>
-          <label className="property-data-filter-label" style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}>
-            <span style={{ whiteSpace: "nowrap", fontSize: "0.875rem" }}>Area</span>
+          <label className={styles.filterLabel}>
+            <span className={styles.filterName}>Area</span>
             <select
-              className="input-text property-data-filter-select"
+              className={styles.filterSelect}
               value={areaFilter}
               onChange={(e) => setAreaFilter(e.target.value)}
               aria-label="Filter by area"
@@ -1863,10 +1885,10 @@ function PropertyDataContent() {
           </label>
           {activeTab === "canonical" && (
             <>
-              <label className="property-data-filter-label" style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}>
-                <span style={{ whiteSpace: "nowrap", fontSize: "0.875rem" }}>Stage</span>
+              <label className={styles.filterLabel}>
+                <span className={styles.filterName}>Stage</span>
                 <select
-                  className="input-text property-data-filter-select"
+                  className={styles.filterSelect}
                   value={statusFilter}
                   onChange={(e) => setStatusFilter(e.target.value)}
                   aria-label="Filter by property stage"
@@ -1877,10 +1899,10 @@ function PropertyDataContent() {
                   ))}
                 </select>
               </label>
-              <label className="property-data-filter-label" style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}>
-                <span style={{ whiteSpace: "nowrap", fontSize: "0.875rem" }}>Tag</span>
+              <label className={styles.filterLabel}>
+                <span className={styles.filterName}>Tag</span>
                 <select
-                  className="input-text property-data-filter-select"
+                  className={styles.filterSelect}
                   value={tagFilter}
                   onChange={(e) => setTagFilter(e.target.value)}
                   aria-label="Filter by property tag"
@@ -1891,7 +1913,7 @@ function PropertyDataContent() {
                   ))}
                 </select>
               </label>
-              <label className="property-data-filter-label property-data-filter-checkbox">
+              <label className={cx(styles.filterLabel, styles.filterCheckbox)}>
                 <input
                   type="checkbox"
                   checked={includeRejected}
@@ -1901,45 +1923,43 @@ function PropertyDataContent() {
               </label>
             </>
           )}
-          <label className="property-data-filter-label" style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}>
-            <span style={{ whiteSpace: "nowrap", fontSize: "0.875rem" }}>Min price</span>
+          <label className={styles.filterLabel}>
+            <span className={styles.filterName}>Min price</span>
             <input
               type="text"
-              className="input-text"
+              className={styles.priceInput}
               placeholder="Min"
               value={minPrice}
               onChange={(e) => setMinPrice(e.target.value)}
               aria-label="Minimum price"
-              style={{ width: "5rem" }}
             />
           </label>
-          <label className="property-data-filter-label" style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}>
-            <span style={{ whiteSpace: "nowrap", fontSize: "0.875rem" }}>Max price</span>
+          <label className={styles.filterLabel}>
+            <span className={styles.filterName}>Max price</span>
             <input
               type="text"
-              className="input-text"
+              className={styles.priceInput}
               placeholder="Max"
               value={maxPrice}
               onChange={(e) => setMaxPrice(e.target.value)}
               aria-label="Maximum price"
-              style={{ width: "5rem" }}
             />
           </label>
-          <label className="property-data-filter-label" style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}>
-            <span style={{ whiteSpace: "nowrap", fontSize: "0.875rem" }}>Listed after</span>
+          <label className={styles.filterLabel}>
+            <span className={styles.filterName}>Listed after</span>
             <input
               type="date"
-              className="input-text"
+              className={styles.dateInput}
               value={listedAfter}
               onChange={(e) => setListedAfter(e.target.value)}
               aria-label="Listed after date"
             />
           </label>
-          <label className="property-data-filter-label" style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}>
-            <span style={{ whiteSpace: "nowrap", fontSize: "0.875rem" }}>Listed before</span>
+          <label className={styles.filterLabel}>
+            <span className={styles.filterName}>Listed before</span>
             <input
               type="date"
-              className="input-text"
+              className={styles.dateInput}
               value={listedBefore}
               onChange={(e) => setListedBefore(e.target.value)}
               aria-label="Listed before date"
@@ -1948,69 +1968,55 @@ function PropertyDataContent() {
         </div>
       </div>
 
-      <div className="property-data-content property-data-content--no-sidebar">
+      <div className={styles.content}>
         {activeTab === "raw" && loading && (
           <div
-            className="card"
+            className={styles.loadingBanner}
             role="status"
             aria-live="polite"
-            style={{
-              marginBottom: "1rem",
-              padding: "0.75rem 1rem",
-              background: "#fef9c3",
-              borderColor: "#facc15",
-              display: "flex",
-              alignItems: "center",
-              gap: "0.5rem",
-              flexWrap: "wrap",
-            }}
           >
-            <span style={{ fontWeight: 600 }}>
+            <span className={styles.bannerText}>
               Loading raw listings — broker &amp; price history may still be populating.
             </span>
-            <span style={{ fontVariantNumeric: "tabular-nums", fontWeight: 600 }}>
+            <span className={styles.bannerTimer}>
               {formatElapsed(enrichmentTimerSeconds)}
             </span>
           </div>
         )}
-        <div className="property-data-table-wrap">
+        <div className={styles.tableWrap}>
           {error && (
-            <div className="card error" style={{ margin: "1rem" }}>
+            <div className={styles.errorBanner}>
               {error}
             </div>
           )}
           {dossierNotice && (
             <div
-              style={{
-                margin: "1rem",
-                padding: "0.85rem 1rem",
-                borderRadius: "10px",
-                border: dossierNotice.type === "success" ? "1px solid #86efac" : "1px solid #fca5a5",
-                background: dossierNotice.type === "success" ? "#f0fdf4" : "#fef2f2",
-                color: dossierNotice.type === "success" ? "#166534" : "#b91c1c",
-                fontSize: "0.9rem",
-              }}
+              className={cx(
+                styles.notice,
+                styles.noticeInset,
+                dossierNotice.type === "success" ? styles.noticeSuccess : styles.noticeDanger
+              )}
             >
               {dossierNotice.message}
             </div>
           )}
           {loading && activeTab === "raw" && (
-            <div style={{ padding: "2rem", textAlign: "center", color: "#525252" }}>
-              Loading raw listings…
+            <div className={styles.loadingPad}>
+              <SkeletonRows count={6} />
             </div>
           )}
           {activeTab === "canonical" && (
             <>
               {loadingCanonical ? (
-                <div style={{ padding: "2rem", textAlign: "center", color: "#525252" }}>
-                  Loading canonical properties…
+                <div className={styles.loadingPad}>
+                  <SkeletonRows count={6} />
                 </div>
               ) : (
-                <table className="property-data-table property-data-table--canonical">
+                <table className={cx(styles.dataTable, styles.tableRows)}>
                   <thead>
                     <tr>
-                      <th className="property-data-table-expand-col" aria-label="Expand row" />
-                      <th className="property-data-table-checkbox-col" aria-label="Select property">
+                      <th className={styles.expandCol} aria-label="Expand row" />
+                      <th className={styles.checkboxCol} aria-label="Select property">
                         {filteredSortedCanonical.length > 0 && (
                           <input
                             type="checkbox"
@@ -2022,7 +2028,7 @@ function PropertyDataContent() {
                           />
                         )}
                       </th>
-                      <th style={{ width: "2rem" }} aria-label="Save deal" title="Save / Unsave deal" />
+                      <th className={styles.saveCol} aria-label="Save deal" title="Save / Unsave deal" />
                       <th>Property</th>
                       <th>Activity</th>
                       <th>Latest status</th>
@@ -2033,10 +2039,12 @@ function PropertyDataContent() {
                   <tbody>
                     {filteredSortedCanonical.length === 0 ? (
                       <tr>
-                        <td colSpan={8} style={{ padding: "2rem", color: "#737373", textAlign: "center" }}>
-                          {canonicalProperties.length === 0
-                            ? "No canonical properties yet. Send raw listings to canonical properties from the raw listings tab."
-                            : "No properties match the current filters."}
+                        <td colSpan={8} className={styles.emptyCell}>
+                          <EmptyState
+                            title={canonicalProperties.length === 0
+                              ? "No canonical properties yet. Send raw listings to canonical properties from the raw listings tab."
+                              : "No properties match the current filters."}
+                          />
                         </td>
                       </tr>
                     ) : (
@@ -2069,23 +2077,23 @@ function PropertyDataContent() {
                         return (
                           <React.Fragment key={prop.id}>
                             <tr
-                              className="property-data-row--clickable"
+                              className={styles.rowClickable}
                               onClick={() => setExpandedCanonicalId((id) => (id === prop.id ? null : prop.id))}
                             >
-                              <td className="property-data-table-expand-col">
+                              <td className={styles.expandCol}>
                                 <button
                                   type="button"
-                                  className="property-data-row-expand-btn"
+                                  className={styles.expandBtn}
                                   onClick={(e) => {
                                     e.stopPropagation();
                                     setExpandedCanonicalId((id) => (id === prop.id ? null : prop.id));
                                   }}
                                   aria-expanded={expandedCanonicalId === prop.id}
                                 >
-                                  <span className={`property-data-row-expand-chevron ${expandedCanonicalId === prop.id ? "property-data-row-expand-chevron--open" : ""}`}>▼</span>
+                                  <span className={cx(styles.chevron, expandedCanonicalId === prop.id && styles.chevronOpen)}>▼</span>
                                 </button>
                               </td>
-                              <td className="property-data-table-checkbox-col" onClick={(e) => e.stopPropagation()}>
+                              <td className={styles.checkboxCol} onClick={(e) => e.stopPropagation()}>
                                 <input
                                   type="checkbox"
                                   checked={selectedCanonicalIds.has(prop.id)}
@@ -2093,7 +2101,7 @@ function PropertyDataContent() {
                                   aria-label={`Select ${prop.canonicalAddress}`}
                                 />
                               </td>
-                              <td style={{ textAlign: "center", verticalAlign: "middle" }}>
+                              <td className={styles.saveCell}>
                                 <button
                                   type="button"
                                   onClick={(e) => {
@@ -2120,24 +2128,21 @@ function PropertyDataContent() {
                                       .finally(() => setSavedDealsLoading((prev) => { const n = new Set(prev); n.delete(prop.id); return n; }));
                                   }}
                                   title={savedPropertyIds.has(prop.id) ? "Unsave deal" : "Save deal"}
-                                  style={{ background: "none", border: "none", cursor: "pointer", fontSize: "1.25rem", lineHeight: 1 }}
+                                  className={styles.starButton}
                                   aria-label={savedPropertyIds.has(prop.id) ? "Unsave deal" : "Save deal"}
                                 >
                                   {savedPropertyIds.has(prop.id) ? "★" : "☆"}
                                 </button>
                               </td>
-                              <td className="property-data-cell-primary">
-                                <div className="property-data-cell-title">{prop.canonicalAddress}</div>
-                                <div className="property-data-cell-meta">{propertyMeta || "No listing summary yet"}</div>
+                              <td className={styles.cellPrimary}>
+                                <div className={styles.cellTitle}>{prop.canonicalAddress}</div>
+                                <div className={styles.cellMeta}>{propertyMeta || "No listing summary yet"}</div>
                                 {priceReductionSummary ? (
-                                  <div
-                                    className="property-data-cell-meta"
-                                    style={{ color: "#9a3412", fontWeight: 600, marginTop: "0.15rem" }}
-                                  >
+                                  <div className={cx(styles.cellMeta, styles.priceCut)}>
                                     {priceReductionSummary}
                                   </div>
                                 ) : null}
-                                <div className="property-data-chip-row" aria-label="Pipeline status, tags, and missing information">
+                                <div className={styles.chipRow} aria-label="Pipeline status, tags, and missing information">
                                   <span className={`property-mini-chip property-mini-chip--stage ${pipelineStatus === "rejected_removed" ? "property-mini-chip--danger" : ""}`}>
                                     {labelFromKey(pipelineStatus)}
                                   </span>
@@ -2154,29 +2159,18 @@ function PropertyDataContent() {
                                     <span className="property-mini-chip property-mini-chip--missing">+{missingFields.length - 3} missing</span>
                                   ) : null}
                                 </div>
-                                <div style={{ marginTop: "0.45rem", display: "flex", gap: "0.45rem", flexWrap: "wrap" }}>
+                                <div className={styles.pillRow}>
                                   <Link
                                     href={`/deal-analysis?property_id=${encodeURIComponent(prop.id)}`}
                                     onClick={(e) => e.stopPropagation()}
-                                    style={{
-                                      display: "inline-flex",
-                                      alignItems: "center",
-                                      padding: "0.35rem 0.6rem",
-                                      borderRadius: "999px",
-                                      border: "1px solid #bfdbfe",
-                                      background: "#eff6ff",
-                                      color: "#1d4ed8",
-                                      fontSize: "0.75rem",
-                                      fontWeight: 700,
-                                      textDecoration: "none",
-                                    }}
+                                    className={styles.pillLink}
                                   >
                                     OM workspace
                                   </Link>
                                   {!hasTouredTag ? (
                                     <button
                                       type="button"
-                                      className="property-row-pill-button"
+                                      className={styles.pillBrand}
                                       onClick={(e) => {
                                         e.stopPropagation();
                                         void handleAddPropertyTag(prop.id, "property_toured");
@@ -2194,16 +2188,7 @@ function PropertyDataContent() {
                                         setExpandedCanonicalId(prop.id);
                                         setInquiryComposerRequest({ propertyId: prop.id, nonce: Date.now() });
                                       }}
-                                      style={{
-                                        padding: "0.35rem 0.6rem",
-                                        borderRadius: "999px",
-                                        border: "1px solid #cbd5e1",
-                                        background: "#fff",
-                                        color: "#0f172a",
-                                        fontSize: "0.75rem",
-                                        fontWeight: 600,
-                                        cursor: "pointer",
-                                      }}
+                                      className={styles.pillNeutral}
                                       title={`Open inquiry draft for ${quickInquiryEmail}`}
                                     >
                                       Request info / OM
@@ -2213,7 +2198,7 @@ function PropertyDataContent() {
                               </td>
                               <td>
                                 <div
-                                  className="property-data-cell-title"
+                                  className={styles.cellTitle}
                                   title={describeListingActivity(prop.primaryListing?.lastActivity ?? null) ?? undefined}
                                 >
                                   {activityLabel}
@@ -2223,23 +2208,23 @@ function PropertyDataContent() {
                                 <StatusChip
                                   label={sourcingUpdateMeta.label}
                                   detail={sourcingUpdateMeta.detail}
-                                  style={sourcingUpdateMeta.style}
+                                  tone={sourcingUpdateTone(prop.details ?? null)}
                                 />
                               </td>
                               <td>
-                                <StatusChip label={omMeta.label} detail={omMeta.detail} style={omMeta.style} />
+                                <StatusChip label={omMeta.label} detail={omMeta.detail} tone={omMeta.tone} />
                               </td>
                               <td>
                                 <StatusChip
                                   label={activeRunMeta.label}
                                   detail={activeRunMeta.detail}
-                                  style={activeRunMeta.style}
+                                  tone={activeRunMeta.tone}
                                 />
                               </td>
                             </tr>
                             {expandedCanonicalId === prop.id && (
-                              <tr className="property-data-detail-row">
-                                <td colSpan={8} className="property-data-detail-cell">
+                              <tr className={styles.detailRow}>
+                                <td colSpan={8} className={styles.detailCell}>
                                   <CanonicalPropertyDetail
                                     property={prop}
                                     isSaved={savedPropertyIds.has(prop.id)}
@@ -2271,11 +2256,11 @@ function PropertyDataContent() {
             </>
           )}
           {activeTab === "raw" && !loading && (
-            <table className="property-data-table">
+            <table className={styles.dataTable}>
               <thead>
                 <tr>
-                  <th className="property-data-table-expand-col" aria-label="Expand row" />
-                  <th className="property-data-table-checkbox-col" aria-label="Select for canonical">
+                  <th className={styles.expandCol} aria-label="Expand row" />
+                  <th className={styles.checkboxCol} aria-label="Select for canonical">
                     {filteredSortedListings.length > 0 && (
                       <input
                         type="checkbox"
@@ -2290,34 +2275,36 @@ function PropertyDataContent() {
                   <th>Listing ID</th>
                   <th>Source</th>
                   <th>Raw Address</th>
-                  <th>Price</th>
+                  <th className={styles.cellNum}>Price</th>
                   <th>Last activity</th>
                   <th>Listed date</th>
-                  <th>Days on market</th>
-                  <th>Dup. Conf.</th>
+                  <th className={styles.cellNum}>Days on market</th>
+                  <th className={styles.cellNum}>Dup. Conf.</th>
                   <th>Link</th>
                 </tr>
               </thead>
               <tbody>
                 {filteredSortedListings.length === 0 ? (
                   <tr>
-                    <td colSpan={11} style={{ padding: "2rem", color: "#737373", textAlign: "center" }}>
-                      {listings.length === 0
-                        ? "No raw listings yet. Run a flow from Sourcing Agent, then use \"Send to property data\" for a completed run."
-                        : "No listings match the current filters."}
+                    <td colSpan={11} className={styles.emptyCell}>
+                      <EmptyState
+                        title={listings.length === 0
+                          ? "No raw listings yet. Run a flow from Sourcing Agent, then use \"Send to property data\" for a completed run."
+                          : "No listings match the current filters."}
+                      />
                     </td>
                   </tr>
                 ) : (
                   filteredSortedListings.map((row) => (
                     <React.Fragment key={row.id}>
                       <tr
-                        className={`property-data-row--clickable ${selectedId === row.id ? "property-data-row--selected" : ""}`}
+                        className={cx(styles.rowClickable, selectedId === row.id && styles.rowSelected)}
                         onClick={() => setSelectedId(row.id)}
                       >
-                        <td className="property-data-table-expand-col">
+                        <td className={styles.expandCol}>
                           <button
                             type="button"
-                            className="property-data-row-expand-btn"
+                            className={styles.expandBtn}
                             onClick={(e) => {
                               e.stopPropagation();
                               setExpandedRowId((id) => (id === row.id ? null : row.id));
@@ -2325,12 +2312,12 @@ function PropertyDataContent() {
                             aria-expanded={expandedRowId === row.id}
                             aria-label={expandedRowId === row.id ? "Collapse row" : "Expand row"}
                           >
-                            <span className={`property-data-row-expand-chevron ${expandedRowId === row.id ? "property-data-row-expand-chevron--open" : ""}`}>
+                            <span className={cx(styles.chevron, expandedRowId === row.id && styles.chevronOpen)}>
                               ▼
                             </span>
                           </button>
                         </td>
-                        <td className="property-data-table-checkbox-col" onClick={(e) => e.stopPropagation()}>
+                        <td className={styles.checkboxCol} onClick={(e) => e.stopPropagation()}>
                           <input
                             type="checkbox"
                             checked={selectedListingIds.has(row.id)}
@@ -2341,7 +2328,7 @@ function PropertyDataContent() {
                         <td>{row.externalId}</td>
                         <td>{row.source === "streeteasy" ? "Streeteasy" : row.source}</td>
                         <td>{fullAddress(row)}</td>
-                        <td>{formatPrice(row.price)}</td>
+                        <td className={styles.cellNum}>{formatPrice(row.price)}</td>
                         <td title={describeListingActivity(row.lastActivity ?? deriveListingActivitySummary({
                           listedAt: row.listedAt ?? null,
                           currentPrice: row.price ?? null,
@@ -2354,8 +2341,8 @@ function PropertyDataContent() {
                           }), row.listedAt ?? null)}
                         </td>
                         <td>{formatListedDate(row.listedAt)}</td>
-                        <td>{daysOnMarket(row.listedAt) != null ? `${daysOnMarket(row.listedAt)} days` : "—"}</td>
-                        <td style={dupConfStyle(row.duplicateScore)} title="Duplicate likelihood (100 = likely duplicate)">
+                        <td className={styles.cellNum}>{daysOnMarket(row.listedAt) != null ? `${daysOnMarket(row.listedAt)} days` : "—"}</td>
+                        <td className={cx(styles.cellNum, dupConfClass(row.duplicateScore))} title="Duplicate likelihood (100 = likely duplicate)">
                           {row.duplicateScore != null ? row.duplicateScore : "—"}
                         </td>
                         <td>
@@ -2369,8 +2356,8 @@ function PropertyDataContent() {
                         </td>
                       </tr>
                       {expandedRowId === row.id && (
-                        <tr key={`${row.id}-detail`} className="property-data-detail-row">
-                          <td colSpan={11} className="property-data-detail-cell" style={{ paddingLeft: "2.5rem", backgroundColor: "#fafafa" }}>
+                        <tr key={`${row.id}-detail`} className={styles.detailRow}>
+                          <td colSpan={11} className={styles.detailCell}>
                             <PropertyDetailCollapsible listing={row} />
                           </td>
                         </tr>
@@ -2385,8 +2372,8 @@ function PropertyDataContent() {
       </div>
 
       {((activeTab === "canonical" && expandedCanonicalId) || (activeTab === "raw" && selectedId)) ? null : (
-      <div className="property-data-bottom-bar">
-        <span className="property-data-bottom-label">
+      <div className={styles.bottomBar}>
+        <span className={styles.bottomLabel}>
           {activeTab === "raw"
             ? total > 0
               ? someSelected
@@ -2403,141 +2390,137 @@ function PropertyDataContent() {
                   : `${canonicalProperties.length} canonical propert${canonicalProperties.length === 1 ? "y" : "ies"}`
               : "No canonical properties"}
         </span>
-        <div className="property-data-bottom-actions">
+        <div className={styles.bottomActions}>
           {activeTab === "raw" && total > 0 && (
             <>
               {someSelected ? (
-                <button type="button" className="btn-secondary" onClick={clearListingSelection} title="Clear selection">
+                <Button variant="secondary" onClick={clearListingSelection} title="Clear selection">
                   Clear selection
-                </button>
+                </Button>
               ) : (
-                <button type="button" className="btn-secondary" onClick={selectAllListings} title="Select all listings">
+                <Button variant="secondary" onClick={selectAllListings} title="Select all listings">
                   Select all
-                </button>
+                </Button>
               )}
             </>
           )}
           {activeTab === "canonical" && canonicalProperties.length > 0 && (
             <>
               {someCanonicalSelected ? (
-                <button type="button" className="btn-secondary" onClick={clearCanonicalSelection} title="Clear property selection">
+                <Button variant="secondary" onClick={clearCanonicalSelection} title="Clear property selection">
                   Clear selection
-                </button>
+                </Button>
               ) : (
-                <button type="button" className="btn-secondary" onClick={selectAllCanonical} title="Select all visible canonical properties">
+                <Button variant="secondary" onClick={selectAllCanonical} title="Select all visible canonical properties">
                   Select all
-                </button>
+                </Button>
               )}
             </>
           )}
           {activeTab === "raw" ? (
-            <button
-              type="button"
-              className="btn-primary"
+            <Button
+              variant="primary"
               onClick={handleSendToCanonical}
               disabled={Boolean(total === 0 || sendingToCanonical)}
               title={someSelected ? "Send selected to canonical and run enrichment" : "Create canonical properties from all raw listings and link them"}
             >
               {sendingToCanonical ? "Sending…" : someSelected ? `Add ${selectedListingIds.size} to canonical` : "Add to canonical properties"}
-            </button>
+            </Button>
           ) : null}
           {activeTab === "canonical" && canonicalProperties.length > 0 && (
             <>
-              <button
-                type="button"
-                className="btn-secondary"
+              <Button
+                variant="secondary"
                 onClick={handleSendBulkInquiryEmails}
                 disabled={Boolean(bulkInquirySending || selectedCanonicalIds.size === 0)}
                 title="Send inquiry emails for selected canonical properties using manual override first, then broker emails in listing order."
               >
                 {bulkInquirySending ? "Sending inquiries…" : someCanonicalSelected ? `Email brokers (${selectedCanonicalIds.size})` : "Email brokers"}
-              </button>
-              <button
-                type="button"
-                className="btn-secondary"
+              </Button>
+              <Button
+                variant="secondary"
                 onClick={handleRerunEnrichment}
                 disabled={Boolean(rerunningEnrichment || selectedCanonicalIds.size === 0)}
                 title="Re-run enrichment for selected canonical properties (BBL assumed already set). Refreshes data from NYC Open Data."
               >
                 {rerunningEnrichment ? "Re-running…" : someCanonicalSelected ? `Re-run enrichment (${selectedCanonicalIds.size})` : "Re-run enrichment"}
-              </button>
-              <button
-                type="button"
-                className="btn-secondary"
+              </Button>
+              <Button
+                variant="secondary"
                 onClick={handleRunRentalFlow}
                 disabled={Boolean(runningRentalFlow || selectedCanonicalIds.size === 0)}
                 title="Re-run rental flow only for selected canonical properties (RapidAPI + LLM on listing). Runs automatically when adding to canonical properties."
               >
                 {runningRentalFlow ? "Running…" : someCanonicalSelected ? `Re-run rental flow (${selectedCanonicalIds.size})` : "Re-run rental flow"}
-              </button>
+              </Button>
               {someCanonicalSelected ? (
-                <button
-                  type="button"
-                  className="btn-danger-outline"
+                <Button
+                  variant="destructive"
                   onClick={handleRejectSelectedCanonicalProperties}
                   disabled={Boolean(deletingCanonical)}
                   title="Soft remove selected properties from the active pipeline while preserving their history."
                 >
                   {deletingCanonical ? "Updating…" : `Reject/remove (${selectedCanonicalIds.size})`}
-                </button>
+                </Button>
               ) : null}
               {someCanonicalSelected ? (
-                <button
-                  type="button"
-                  className="btn-danger"
+                <Button
+                  variant="destructive"
+                  className={styles.dangerSolid}
                   onClick={handleDeleteSelectedCanonicalProperties}
                   disabled={Boolean(deletingCanonical)}
                   title="Delete selected canonical property records. Raw listings remain."
                 >
                   {deletingCanonical ? "Deleting…" : `Delete selected (${selectedCanonicalIds.size})`}
-                </button>
+                </Button>
               ) : null}
             </>
           )}
           {activeTab === "raw" ? (
-            <button
-              type="button"
-              className="btn-secondary"
+            <Button
+              variant="secondary"
               onClick={openReviewDup}
               disabled={Boolean(total === 0)}
               title="Review potential duplicate listings (score ≥ 80)"
             >
               Review duplicates
-            </button>
+            </Button>
           ) : null}
           {activeTab === "canonical" && !someCanonicalSelected ? (
-            <button
-              type="button"
-              className="btn-danger-outline"
+            <Button
+              variant="destructive"
               onClick={handleClearCanonicalProperties}
               disabled={Boolean(clearingCanonical || canonicalProperties.length === 0)}
               title="Remove all canonical properties and their matches/enrichment data. Cannot be undone."
             >
               {clearingCanonical ? "Clearing…" : "Clear all canonical"}
-            </button>
+            </Button>
           ) : null}
         </div>
       </div>
       )}
 
       {reviewDupOpen && (
-        <div role="dialog" aria-modal="true" aria-labelledby="review-dup-title" style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}>
-          <div className="card" style={{ maxWidth: "560px", width: "90%", maxHeight: "80vh", overflow: "hidden", display: "flex", flexDirection: "column" }}>
-            <h2 id="review-dup-title" style={{ margin: 0, marginBottom: "0.75rem", fontSize: "1.1rem" }}>Review potential duplicates</h2>
-            <p style={{ fontSize: "0.875rem", color: "#525252", marginBottom: "1rem" }}>
+        <div role="dialog" aria-modal="true" aria-labelledby="review-dup-title" className={styles.modalOverlay}>
+          <div className={cx(styles.modalCard, styles.modalCardScroll)}>
+            <h2 id="review-dup-title" className={styles.modalTitle}>
+              <CopyCheck size={16} strokeWidth={2} aria-hidden="true" className={styles.sectionIcon} />
+              Review potential duplicates
+            </h2>
+            <p className={styles.modalIntro}>
               Listings with duplicate score ≥ 80. Delete duplicates to keep one record per property.
             </p>
             {loadingDup ? (
-              <p style={{ color: "#737373" }}>Loading…</p>
+              <SkeletonRows count={3} />
             ) : duplicateCandidates.length === 0 ? (
-              <p style={{ color: "#737373" }}>No potential duplicates found.</p>
+              <EmptyState title="No potential duplicates found." />
             ) : (
-              <div style={{ overflowY: "auto", flex: 1 }}>
-                <table className="property-data-table" style={{ fontSize: "0.875rem" }}>
+              <div className={styles.modalScrollBody}>
+                <table className={styles.dataTable}>
                   <thead>
                     <tr>
                       <th>Address</th>
-                      <th>Score</th>
+                      <th className={styles.cellNum}>Score</th>
                       <th aria-label="Actions" />
                     </tr>
                   </thead>
@@ -2545,16 +2528,15 @@ function PropertyDataContent() {
                     {duplicateCandidates.map((row) => (
                       <tr key={row.id}>
                         <td>{fullAddress(row)}</td>
-                        <td style={dupConfStyle(row.duplicateScore)}>{row.duplicateScore ?? "—"}</td>
+                        <td className={cx(styles.cellNum, dupConfClass(row.duplicateScore))}>{row.duplicateScore ?? "—"}</td>
                         <td>
-                          <button
-                            type="button"
-                            className="btn-secondary"
+                          <Button
+                            variant="secondary"
                             disabled={Boolean(deletingId === row.id)}
                             onClick={() => handleDeleteListing(row.id)}
                           >
                             {deletingId === row.id ? "Deleting…" : "Delete"}
-                          </button>
+                          </Button>
                         </td>
                       </tr>
                     ))}
@@ -2562,8 +2544,8 @@ function PropertyDataContent() {
                 </table>
               </div>
             )}
-            <div style={{ marginTop: "1rem", paddingTop: "0.75rem", borderTop: "1px solid #e5e5e5" }}>
-              <button type="button" className="btn-primary" onClick={() => setReviewDupOpen(false)}>Close</button>
+            <div className={styles.modalFooter}>
+              <Button variant="primary" onClick={() => setReviewDupOpen(false)}>Close</Button>
             </div>
           </div>
         </div>
@@ -2574,13 +2556,14 @@ function PropertyDataContent() {
           role="dialog"
           aria-modal="true"
           aria-labelledby="manual-add-title"
-          style={{ position: "fixed", inset: 0, background: "rgba(15, 23, 42, 0.45)", zIndex: 1100, display: "flex", alignItems: "center", justifyContent: "center", padding: "1rem" }}
+          className={cx(styles.modalOverlay, styles.modalOverlayHigh)}
         >
-          <div className="card" style={{ width: "100%", maxWidth: "620px" }}>
-            <h2 id="manual-add-title" style={{ margin: 0, marginBottom: "0.75rem", fontSize: "1.15rem" }}>
+          <div className={cx(styles.modalCard, styles.modalCardForm)}>
+            <h2 id="manual-add-title" className={styles.modalTitle}>
+              <PlusCircle size={16} strokeWidth={2} aria-hidden="true" className={styles.sectionIcon} />
               Add missed StreetEasy listings
             </h2>
-            <p style={{ marginTop: 0, marginBottom: "1rem", color: "#475569", fontSize: "0.92rem", lineHeight: 1.5 }}>
+            <p className={styles.modalIntro}>
               Paste StreetEasy sale URLs or numeric sale IDs that were missed by saved search. Numeric IDs and /sale/ URLs use RapidAPI sale-details-by-ID; other StreetEasy URLs fall back to the URL lookup.
             </p>
             <form
@@ -2589,46 +2572,43 @@ function PropertyDataContent() {
                 void handleManualAddProperty();
               }}
             >
-              <label style={{ display: "block", marginBottom: "0.85rem" }}>
-                <span style={{ display: "block", marginBottom: "0.35rem", fontSize: "0.82rem", fontWeight: 600, color: "#0f172a" }}>
+              <label className={styles.fieldLabel}>
+                <span className={styles.fieldName}>
                   StreetEasy URLs or sale IDs
                 </span>
                 <textarea
                   required
                   autoFocus
-                  className="input-text"
+                  className={styles.textarea}
                   placeholder={"https://streeteasy.com/sale/1733085\n1733085"}
                   value={manualAddDraft.streetEasyInput}
                   onChange={(e) => setManualAddDraft((prev) => ({ ...prev, streetEasyInput: e.target.value }))}
                   rows={5}
-                  style={{ width: "100%", resize: "vertical" }}
                 />
               </label>
-              <label style={{ display: "block", marginBottom: "0.35rem" }}>
-                <span style={{ display: "block", marginBottom: "0.35rem", fontSize: "0.82rem", fontWeight: 600, color: "#0f172a" }}>
+              <label className={cx(styles.fieldLabel, styles.fieldLabelTight)}>
+                <span className={styles.fieldName}>
                   OM URL
                 </span>
                 <input
                   type="url"
-                  className="input-text"
+                  className={styles.input}
                   placeholder="https://.../offering-memo.pdf"
                   value={manualAddDraft.omUrl}
                   onChange={(e) => setManualAddDraft((prev) => ({ ...prev, omUrl: e.target.value }))}
-                  style={{ width: "100%" }}
                 />
               </label>
-              <p style={{ margin: "0 0 1rem", fontSize: "0.8rem", color: "#64748b", lineHeight: 1.5 }}>
+              <p className={styles.formHint}>
                 The OM link works best when it points directly to a PDF or downloadable file, and can only be included with one StreetEasy listing at a time.
               </p>
               {manualAddError && (
-                <p style={{ margin: "0 0 1rem", color: "#b91c1c", fontSize: "0.85rem" }}>
+                <p className={styles.formError}>
                   {manualAddError}
                 </p>
               )}
-              <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.6rem", flexWrap: "wrap" }}>
-                <button
-                  type="button"
-                  className="btn-secondary"
+              <div className={styles.modalActions}>
+                <Button
+                  variant="secondary"
                   onClick={() => {
                     if (manualAddSubmitting) return;
                     setManualAddModalOpen(false);
@@ -2637,39 +2617,38 @@ function PropertyDataContent() {
                   disabled={manualAddSubmitting}
                 >
                   Cancel
-                </button>
-                <button
+                </Button>
+                <Button
                   type="submit"
-                  className="btn-primary"
+                  variant="primary"
                   disabled={Boolean(manualAddSubmitting || !manualAddDraft.streetEasyInput.trim())}
                 >
                   {manualAddSubmitting ? "Adding…" : "Run ingestion"}
-                </button>
+                </Button>
               </div>
             </form>
           </div>
         </div>
       )}
 
-      <div className="property-data-run-log-section">
+      <div className={styles.runLogSection}>
         {(sendingToCanonical || rerunningEnrichment || runningRentalFlow || lastEnrichmentResult) && (
           <div
-            className="card"
+            className={cx(
+              styles.enrichmentCard,
+              sendingToCanonical || rerunningEnrichment || runningRentalFlow
+                ? styles.enrichmentCardActive
+                : styles.enrichmentCardDone
+            )}
             role="status"
             aria-live="polite"
-            style={{
-              marginBottom: "1rem",
-              padding: "1rem",
-              maxWidth: "720px",
-              background: sendingToCanonical || rerunningEnrichment || runningRentalFlow ? "#fef9c3" : "#f0fdf4",
-              borderColor: sendingToCanonical || rerunningEnrichment || runningRentalFlow ? "#facc15" : "#86efac",
-            }}
           >
-            <h3 style={{ margin: "0 0 0.5rem 0", fontSize: "1rem", fontWeight: 600 }}>
+            <h3 className={styles.enrichmentTitle}>
+              <Zap size={16} strokeWidth={2} aria-hidden="true" className={styles.sectionIcon} />
               Enrichment run
             </h3>
             {sendingToCanonical || rerunningEnrichment || runningRentalFlow ? (
-              <p style={{ margin: 0, color: "#854d0e" }}>
+              <p className={styles.enrichmentCopy}>
                 {sendingToCanonical
                   ? "Enrichment in progress… Creating canonical properties, running all modules (Phase 1, Permits, Zoning, CO, HPD, etc.), and rental flow (RapidAPI + LLM) per property. This may take a few minutes."
                   : runningRentalFlow
@@ -2678,7 +2657,7 @@ function PropertyDataContent() {
               </p>
             ) : lastEnrichmentResult ? (
               <>
-                <p style={{ margin: "0 0 0.75rem 0" }}>
+                <p className={styles.enrichmentSummary}>
                   Last enrichment: <strong>{lastEnrichmentResult.success} succeeded</strong>
                   {lastEnrichmentResult.failed > 0 && (
                     <>, <strong>{lastEnrichmentResult.failed} failed</strong></>
@@ -2698,11 +2677,11 @@ function PropertyDataContent() {
                     </>
                   )}
                 </p>
-                <table className="property-data-table" style={{ fontSize: "0.875rem" }}>
+                <table className={styles.dataTable}>
                   <thead>
                     <tr>
                       <th>Module</th>
-                      <th style={{ textAlign: "right" }}>Completed</th>
+                      <th className={styles.cellNum}>Completed</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -2711,7 +2690,7 @@ function PropertyDataContent() {
                       .map(([key, count]) => (
                         <tr key={key}>
                           <td>{ENRICHMENT_MODULE_LABELS[key] ?? key}</td>
-                          <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{count}</td>
+                          <td className={styles.cellNum}>{count}</td>
                         </tr>
                       ))}
                   </tbody>
@@ -2722,63 +2701,48 @@ function PropertyDataContent() {
         )}
 
         {canonicalProperties.length > 0 && (
-          <div
-            className="workflow-stage-summary"
-            style={{
-              maxWidth: "1200px",
-              marginBottom: "1rem",
-            }}
-          >
+          <div className={styles.stageSummary}>
             {stageSummary.map((item) => (
-              <div
-                key={item.label}
-                className="card workflow-stage-card"
-                style={{
-                  borderColor: item.border,
-                  background: item.bg,
-                  color: item.tone,
-                }}
-              >
-                <div className="workflow-stage-card-label">{item.label}</div>
-                <div className="workflow-stage-card-value">{item.count}</div>
-              </div>
+              <StatCard key={item.label} label={item.label} value={item.count} tone={item.tone} />
             ))}
           </div>
         )}
 
         <button
           type="button"
-          className="property-detail-section-header"
+          className={cx("property-detail-section-header", styles.sectionToggle)}
           onClick={() => setPipelineStatsOpen((o) => !o)}
           aria-expanded={pipelineStatsOpen}
-          style={{ width: "100%", maxWidth: "520px", minHeight: "44px" }}
         >
-          <span className="property-detail-section-title">Coverage by module</span>
+          <span className={cx("property-detail-section-title", styles.toggleTitle)}>
+            <ListChecks size={15} strokeWidth={2} aria-hidden="true" className={styles.sectionIcon} />
+            Coverage by module
+          </span>
           <span className={`property-detail-section-chevron ${pipelineStatsOpen ? "property-detail-section-chevron--open" : ""}`} aria-hidden>▼</span>
         </button>
         {pipelineStatsOpen && (
-          <div className="property-data-run-log-table-wrap">
+          <div className={styles.runLogTableWrap}>
             {pipelineStats == null ? (
-              <p style={{ color: "#737373", fontSize: "0.875rem" }}>Loading pipeline stats…</p>
+              <SkeletonRows count={3} />
             ) : (
-              <table className="property-data-table" style={{ maxWidth: "720px", fontSize: "0.875rem" }}>
+              <table className={cx(styles.dataTable, styles.tableStats)}>
                 <thead>
                   <tr>
                     <th>Stage</th>
-                    <th style={{ textAlign: "right" }}>Count</th>
-                    <th style={{ textAlign: "right" }}>Remaining</th>
+                    <th className={styles.cellNum}>Count</th>
+                    <th className={styles.cellNum}>Remaining</th>
                   </tr>
                 </thead>
                 <tbody>
                   <tr>
                     <td>Raw listings</td>
-                    <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{pipelineStats.rawListings}</td>
-                    <td style={{ textAlign: "right", color: "#737373" }}>—</td>
+                    <td className={styles.cellNum}>{pipelineStats.rawListings}</td>
+                    <td className={cx(styles.cellNum, styles.mutedCell)}>—</td>
                   </tr>
                   <tr>
                     <td>Canonical properties</td>
-                    <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{pipelineStats.canonicalProperties}</td>
-                    <td style={{ textAlign: "right", color: "#737373" }}>—</td>
+                    <td className={styles.cellNum}>{pipelineStats.canonicalProperties}</td>
+                    <td className={cx(styles.cellNum, styles.mutedCell)}>—</td>
                   </tr>
                   {pipelineStats.enrichment.map((row) => {
                     const remaining = Math.max(0, pipelineStats.canonicalProperties - row.completed);
@@ -2788,14 +2752,14 @@ function PropertyDataContent() {
                       <React.Fragment key={row.key}>
                         <tr>
                           <td>{row.label}</td>
-                          <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{row.completed}</td>
-                          <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", color: remaining > 0 ? "#854d0e" : "#737373" }}>
+                          <td className={styles.cellNum}>{row.completed}</td>
+                          <td className={cx(styles.cellNum, remaining > 0 ? styles.warnCell : styles.mutedCell)}>
                             {remaining > 0 ? `${remaining} left` : "—"}
                           </td>
                         </tr>
                         {remaining > 0 && remainingIds.length > 0 && (
                           <tr>
-                            <td colSpan={3} style={{ paddingTop: 0, paddingLeft: "1.5rem", fontSize: "0.8125rem", color: "#737373", verticalAlign: "top" }}>
+                            <td colSpan={3} className={styles.statsRemainderCell}>
                               Not yet completed:{" "}
                               {remainingIds
                                 .map((id) => canonicalProperties.find((p) => p.id === id)?.canonicalAddress ?? id)
@@ -2814,23 +2778,26 @@ function PropertyDataContent() {
 
         <button
           type="button"
-          className="property-detail-section-header"
+          className={cx("property-detail-section-header", styles.workflowToggle)}
           onClick={() => setWorkflowBoardOpen((o) => !o)}
           aria-expanded={workflowBoardOpen}
-          style={{ width: "100%", maxWidth: "1200px", marginTop: "1rem" }}
         >
-          <span className="property-detail-section-title">Workflow runs</span>
+          <span className={cx("property-detail-section-title", styles.toggleTitle)}>
+            <History size={15} strokeWidth={2} aria-hidden="true" className={styles.sectionIcon} />
+            Workflow runs
+          </span>
           <span className={`property-detail-section-chevron ${workflowBoardOpen ? "property-detail-section-chevron--open" : ""}`} aria-hidden>▼</span>
         </button>
         {workflowBoardOpen && (
-          <div className="property-data-run-log-table-wrap">
+          <div className={styles.runLogTableWrap}>
             {workflowBoard.runs.length === 0 ? (
-              <p style={{ color: "#737373", fontSize: "0.875rem" }}>No workflow runs recorded yet.</p>
+              <EmptyState title="No workflow runs recorded yet." />
             ) : (
-              <div style={{ overflowX: "auto", maxWidth: "100%" }}>
+              <div className={styles.workflowScroll}>
                 <table
-                  className="property-data-table property-data-table--workflow"
-                  style={{ minWidth: `${320 + workflowDisplayColumns.length * 130}px`, fontSize: "0.84rem" }}
+                  className={cx(styles.dataTable, styles.tableRows)}
+                  /* Width scales with the number of visible workflow columns — genuinely dynamic. */
+                  style={{ minWidth: `${320 + workflowDisplayColumns.length * 130}px` }}
                 >
                   <thead>
                     <tr>
@@ -2843,26 +2810,26 @@ function PropertyDataContent() {
                   <tbody>
                     {workflowBoard.runs.map((run) => (
                       <tr key={run.id}>
-                        <td className="property-data-workflow-run-cell">
-                          <div className="property-data-workflow-run-title">{run.displayName}</div>
-                          <div className="property-data-workflow-run-meta">
+                        <td className={styles.workflowRunCell}>
+                          <div className={styles.workflowRunTitle}>{run.displayName}</div>
+                          <div className={styles.workflowRunMeta}>
                             {formatDateTime(run.startedAt)}
                             {run.finishedAt ? ` · Updated ${formatDateTime(run.finishedAt)}` : " · Live"}
                           </div>
-                          <div className="property-data-workflow-run-scope">
+                          <div className={styles.workflowRunScope}>
                             {run.scopeLabel ?? (run.totalItems > 0 ? `${run.totalItems} item${run.totalItems === 1 ? "" : "s"}` : "No scoped items")}
                           </div>
                           <StatusChip
                             label={`${workflowStatusLabel(run.status)} #${run.runNumber}`}
-                            style={workflowStatusStyle(run.status)}
-                            className="property-status-chip--compact property-status-chip--run"
+                            tone={workflowStatusTone(run.status)}
+                            className={cx(styles.statusChipCompact, styles.statusChipRun)}
                           />
                         </td>
                         {workflowDisplayColumns.map((column) => {
                           const step = summarizeWorkflowSteps(run, column);
                           if (!step) {
                             return (
-                              <td key={`${run.id}-${column.key}`} style={{ color: "#94a3b8", textAlign: "center" }}>
+                              <td key={`${run.id}-${column.key}`} className={styles.cellEmptyDash}>
                                 —
                               </td>
                             );
@@ -2876,21 +2843,20 @@ function PropertyDataContent() {
                                 ? `${processed}`
                                 : "0";
                           return (
-                            <td key={`${run.id}-${column.key}`} className="property-data-workflow-stage-cell">
+                            <td key={`${run.id}-${column.key}`} className={styles.workflowStageCell}>
                               <StatusChip
                                 label={workflowStatusLabel(step.status)}
-                                style={workflowStatusStyle(step.status)}
-                                className="property-status-chip--compact"
+                                tone={workflowStatusTone(step.status)}
+                                className={styles.statusChipCompact}
                               />
-                              <div className="property-data-workflow-stage-count">
+                              <div className={styles.workflowStageCount}>
                                 {progressText}
                                 {step.failedItems > 0 ? ` · ${step.failedItems} failed` : ""}
                               </div>
                               {note ? (
                                 <div
                                   title={note}
-                                  className="property-data-workflow-stage-note"
-                                  style={{ color: step.lastError ? "#b91c1c" : undefined }}
+                                  className={cx(styles.workflowStageNote, step.lastError ? styles.workflowStageNoteError : undefined)}
                                 >
                                   {note}
                                 </div>
@@ -2913,7 +2879,14 @@ function PropertyDataContent() {
 
 export default function PropertyDataPage() {
   return (
-    <Suspense fallback={<div className="property-data-layout"><h1 className="page-title">Property Data</h1><p style={{ padding: "2rem", color: "#737373" }}>Loading…</p></div>}>
+    <Suspense
+      fallback={
+        <div className={styles.page}>
+          <PageHeader title="Property Data" />
+          <SkeletonRows count={4} />
+        </div>
+      }
+    >
       <PropertyDataContent />
     </Suspense>
   );

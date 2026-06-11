@@ -1,7 +1,9 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { Images, Info } from "lucide-react";
 import { deriveListingActivitySummary, describeListingActivity, type ListingActivitySummary } from "@re-sourcing/contracts";
+import styles from "./propertyData.module.css";
 
 /** Sale details shape from GET sale details (stored in listing.extra). */
 interface SaleDetails {
@@ -157,6 +159,7 @@ function CollapsibleSection({
   onToggle,
   children,
   count,
+  icon,
 }: {
   id: string;
   title: string;
@@ -164,6 +167,7 @@ function CollapsibleSection({
   onToggle: () => void;
   children: React.ReactNode;
   count?: number;
+  icon?: React.ReactNode;
 }) {
   const label = count != null ? `${title} (${count})` : title;
   return (
@@ -176,7 +180,10 @@ function CollapsibleSection({
         aria-controls={`property-detail-${id}`}
         id={`property-detail-${id}-header`}
       >
-        <span className="property-detail-section-title">{label}</span>
+        <span className={`property-detail-section-title ${styles.toggleTitle}`}>
+          {icon}
+          {label}
+        </span>
         <span className={`property-detail-section-chevron ${open ? "property-detail-section-chevron--open" : ""}`} aria-hidden>
           ▼
         </span>
@@ -274,9 +281,10 @@ export function PropertyDetailCollapsible({ listing }: { listing: PropertyDetail
         count={(photoUrls.length > 0 ? photoUrls.length : 0) + (floorplanUrls.length > 0 ? floorplanUrls.length : 0)}
         open={!!openSections.photosFloorplans}
         onToggle={() => toggle("photosFloorplans")}
+        icon={<Images size={15} strokeWidth={2} aria-hidden="true" className={styles.sectionIcon} />}
       >
-        <div className="property-detail-media-columns" style={{ display: "flex", gap: "1rem", flexWrap: "wrap" }}>
-          <div style={{ flex: "1 1 300px", minWidth: 0 }}>
+        <div className={`property-detail-media-columns ${styles.mediaColumns}`}>
+          <div className={styles.mediaColumn}>
             {photoUrls.length > 0 ? (
               <div className="property-card-gallery-wrap">
                 <div className="property-card-gallery">
@@ -308,10 +316,10 @@ export function PropertyDetailCollapsible({ listing }: { listing: PropertyDetail
                 </div>
               </div>
             ) : (
-              <p className="property-detail-text" style={{ color: "#737373" }}>No photos</p>
+              <p className={`property-detail-text ${styles.mutedText}`}>No photos</p>
             )}
           </div>
-          <div style={{ flex: "1 1 300px", minWidth: 0 }}>
+          <div className={styles.mediaColumn}>
             {floorplanUrls.length > 0 ? (
               <div className="property-card-photos">
                 {floorplanUrls.map((src, i) => (
@@ -327,7 +335,7 @@ export function PropertyDetailCollapsible({ listing }: { listing: PropertyDetail
                 ))}
               </div>
             ) : (
-              <p className="property-detail-text" style={{ color: "#737373" }}>No floor plans</p>
+              <p className={`property-detail-text ${styles.mutedText}`}>No floor plans</p>
             )}
           </div>
         </div>
@@ -339,6 +347,7 @@ export function PropertyDetailCollapsible({ listing }: { listing: PropertyDetail
         title="Initial property info"
         open={!!openSections.detailsBrokerAmenitiesPriceHistory}
         onToggle={() => toggle("detailsBrokerAmenitiesPriceHistory")}
+        icon={<Info size={15} strokeWidth={2} aria-hidden="true" className={styles.sectionIcon} />}
       >
         <div className="initial-info-grid">
           <div className="initial-info-card initial-info-card--details">
@@ -412,7 +421,7 @@ export function PropertyDetailCollapsible({ listing }: { listing: PropertyDetail
                     ))}
                   </ul>
                 ) : (
-                  <p style={{ margin: 0, color: "#0f172a", fontSize: "0.875rem" }}>{brokerDisplay}</p>
+                  <p className={styles.brokerLine}>{brokerDisplay}</p>
                 )
               ) : (
                 <p className="initial-info-empty">—</p>
@@ -453,8 +462,7 @@ export function PropertyDetailCollapsible({ listing }: { listing: PropertyDetail
               <h4 className="initial-info-subtitle">Description</h4>
               <div className="initial-info-description-wrap property-card-description-wrap">
                 <p
-                  className={`property-card-description ${descriptionExpanded ? "property-card-description--expanded" : ""}`}
-                  style={{ whiteSpace: "pre-wrap" }}
+                  className={`property-card-description ${styles.preWrap} ${descriptionExpanded ? "property-card-description--expanded" : ""}`}
                 >
                   {description}
                 </p>
@@ -475,7 +483,7 @@ export function PropertyDetailCollapsible({ listing }: { listing: PropertyDetail
       </CollapsibleSection>
 
       {(listing.uploadedAt || listing.uploadedRunId) && (
-        <div className="property-card-footer" style={{ marginTop: "1rem", paddingTop: "0.75rem", borderTop: "1px solid #e5e5e5", fontSize: "0.8rem", color: "#737373" }}>
+        <div className={styles.cardFooter}>
           {formatUploaded(listing.uploadedAt, listing.uploadedRunId)}
         </div>
       )}
