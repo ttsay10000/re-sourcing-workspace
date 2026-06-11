@@ -1,6 +1,7 @@
-/* ─── Deal-analysis intake section only ─────────────────────────────────────
-   Covers the "1. Add OM / financial files or link" card and its sub-cards.
-   All other page styles remain inline as-is.
+/* ─── Deal-analysis page styles ─────────────────────────────────────────────
+   Originally covered only the "1. Add OM / financial files or link" intake
+   card; now hosts the whole page (tokens from globals.css only — see the
+   "Page-wide design-system classes" block appended below the intake rules).
    ─────────────────────────────────────────────────────────────────────────── */
 
 .intakeSectionHeading {
@@ -23,9 +24,9 @@
 .intakeCard {
   margin-top: 0.65rem;
   border: 1px solid var(--app-line, #e4e4e7);
-  border-radius: 10px;
+  border-radius: var(--radius-lg, 10px);
   padding: 1rem;
-  background: #ffffff;
+  background: var(--app-surface, #ffffff);
   display: grid;
   gap: 0.65rem;
 }
@@ -113,7 +114,712 @@
 /* ─── Replace-workspace notice ──────────────────────────────────────────── */
 
 .replaceNotice {
-  color: #92400e;
+  color: var(--app-amber, #92400e);
   font-size: 0.82rem;
   line-height: 1.45;
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   Page-wide design-system classes (full-page conversion).
+   Tokens from globals.css only — no raw hex/rgba below this line.
+   ════════════════════════════════════════════════════════════════════════ */
+
+/* ─── Page shell ────────────────────────────────────────────────────────── */
+
+.page {
+  width: min(100%, 1640px);
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  color: var(--app-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ─── Notices ───────────────────────────────────────────────────────────── */
+
+.notice {
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--app-green-border);
+  border-radius: var(--radius-md);
+  background: var(--app-green-soft);
+  color: var(--app-green);
+  font-weight: 600;
+}
+
+.error {
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--app-red-border);
+  border-radius: var(--radius-md);
+  background: var(--app-red-soft);
+  color: var(--app-red);
+}
+
+/* ─── Section / panel headers ───────────────────────────────────────────── */
+
+.panelTitle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--app-ink);
+  font-size: var(--text-md);
+  font-weight: 650;
+}
+
+.panelTitleIcon {
+  flex: 0 0 auto;
+  color: var(--brand-strong);
+}
+
+/* Lets the intake <h2> heading carry a leading lucide icon. */
+.withIcon {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.panelDesc {
+  margin: var(--space-1) 0 0;
+  color: var(--app-muted);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+}
+
+.mutedText {
+  color: var(--app-muted);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+}
+
+/* ─── Workspace navigator ───────────────────────────────────────────────── */
+
+.navHead {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.navStatus {
+  color: var(--brand-strong);
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+
+.navGrid {
+  margin-top: var(--space-4);
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--space-3);
+  align-items: end;
+}
+
+/* Navigator field labels: min-width 0 keeps long select options from
+   stretching the label's grid track and overlapping its neighbors. */
+.navLabel {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+  color: var(--app-ink-secondary);
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+
+/* Full-width + min-width 0 + max-width 100% so selects with long option text
+   (property addresses) shrink to their grid cell instead of overlapping
+   neighbors. Visual chrome comes from the global input/select base styles. */
+.input {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 2.45rem;
+  padding-block: 0.4rem;
+  font-size: var(--text-sm);
+}
+
+.filterBar {
+  margin-top: var(--space-3);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.filterChips {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.filterChip {
+  padding: 0.35rem 0.62rem;
+  border: 1px solid var(--app-line);
+  border-radius: var(--radius-pill);
+  background: var(--app-surface);
+  color: var(--app-ink-secondary);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 140ms ease, border-color 140ms ease, color 140ms ease;
+}
+
+.filterChip:hover {
+  border-color: var(--brand-border);
+  color: var(--brand-strong);
+}
+
+.filterChipActive,
+.filterChipActive:hover {
+  border-color: var(--brand-border);
+  background: var(--brand-soft);
+  color: var(--brand-strong);
+}
+
+.activeBanner {
+  margin-top: var(--space-3);
+  padding: 0.75rem 0.85rem;
+  border: 1px solid var(--brand-border);
+  border-radius: var(--radius-md);
+  background: var(--brand-soft);
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.activeBannerAddress {
+  color: var(--brand-strong);
+  font-weight: 700;
+}
+
+.activeBannerMeta {
+  margin-top: var(--space-1);
+  color: var(--app-muted);
+  font-size: var(--text-xs);
+}
+
+.activeBannerState {
+  color: var(--brand-strong);
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+
+.workspaceList {
+  margin-top: var(--space-4);
+  display: grid;
+  gap: var(--space-2);
+}
+
+.workspaceRow {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 0.72rem 0.85rem;
+  border: 1px solid var(--app-line);
+  border-radius: var(--radius-md);
+  background: var(--app-surface);
+  text-align: left;
+  cursor: pointer;
+}
+
+.workspaceRow:disabled {
+  cursor: not-allowed;
+}
+
+.workspaceRowActive {
+  border-color: var(--brand-border);
+  background: var(--brand-soft);
+}
+
+.workspaceRowInfo {
+  min-width: 260px;
+  flex: 1 1 320px;
+}
+
+.workspaceRowAddress {
+  color: var(--app-ink);
+}
+
+.workspaceRowMeta {
+  color: var(--app-muted);
+  font-size: var(--text-xs);
+  line-height: var(--leading-normal);
+}
+
+.workspaceRowBadges {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.workspaceRowState {
+  align-self: center;
+  color: var(--app-ink-secondary);
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+
+.workspaceRowStateActive {
+  color: var(--brand-strong);
+}
+
+.listFootnote {
+  color: var(--app-muted);
+  font-size: var(--text-xs);
+}
+
+/* ─── Two-column layouts ────────────────────────────────────────────────── */
+
+.intakeGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.9fr);
+  gap: var(--space-4);
+}
+
+.outputsGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(320px, 0.9fr);
+  gap: var(--space-4);
+}
+
+/* ─── Intake upload review list ─────────────────────────────────────────── */
+
+.reviewSection {
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--app-line);
+  display: grid;
+  gap: var(--space-2);
+}
+
+.reviewSectionHead {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  color: var(--app-ink-secondary);
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+
+.reviewSectionFlag {
+  color: var(--app-amber);
+}
+
+.reviewWarnNote {
+  color: var(--app-amber);
+  font-size: var(--text-xs);
+  line-height: var(--leading-normal);
+}
+
+.reviewList {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.reviewRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-3);
+  align-items: center;
+  padding: 0.62rem 0.72rem;
+  border: 1px solid var(--app-line);
+  border-radius: var(--radius-md);
+  background: var(--app-surface);
+  font-size: var(--text-sm);
+}
+
+.reviewRowBlocked {
+  border-color: var(--app-red-border);
+}
+
+.reviewRowInfo {
+  min-width: 0;
+}
+
+.reviewRowName {
+  color: var(--app-ink);
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.reviewRowMeta {
+  margin-top: var(--space-1);
+  color: var(--app-muted);
+  font-size: var(--text-xs);
+}
+
+.checkbox {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--brand);
+}
+
+.intakeFootnote {
+  color: var(--app-muted);
+  font-size: var(--text-xs);
+  line-height: var(--leading-normal);
+}
+
+/* ─── Batch results ─────────────────────────────────────────────────────── */
+
+.batchCard {
+  margin-top: var(--space-4);
+  border: 1px solid var(--app-line);
+  border-radius: var(--radius-lg);
+  padding: 0.9rem 1rem;
+  background: var(--app-surface);
+  display: grid;
+  gap: var(--space-2);
+}
+
+.batchTitle {
+  color: var(--app-ink);
+  font-size: var(--text-sm);
+}
+
+.batchRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  padding: 0.5rem 0.6rem;
+  border-radius: var(--radius-md);
+}
+
+.batchRowOk {
+  border: 1px solid var(--app-green-border);
+  background: var(--app-green-soft);
+}
+
+.batchRowFail {
+  border: 1px solid var(--app-red-border);
+  background: var(--app-red-soft);
+}
+
+.batchRowText {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.batchRowName {
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+
+.batchRowNameOk {
+  color: var(--app-green);
+}
+
+.batchRowNameFail {
+  color: var(--app-red);
+}
+
+.batchRowDetail {
+  font-size: var(--text-xs);
+  color: var(--app-muted);
+}
+
+.batchRowActions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* Inline text-style button (in-place navigation, see page comment). */
+.linkButton {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--brand);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+/* ─── Analysis workspace summary column ─────────────────────────────────── */
+
+.analysisHead {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.analysisTitleWrap {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+/* Compact Badge override for the uppercase analysis-state pill. */
+.statusBadge {
+  font-size: var(--text-2xs);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+
+.inlineLink {
+  color: var(--brand);
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+
+.inlineLink:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.docChipRow {
+  margin-top: var(--space-3);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.docChip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  max-width: 260px;
+  padding: 0.22rem 0.6rem;
+  border: 1px solid var(--app-blue-border);
+  border-radius: var(--radius-pill);
+  background: var(--app-blue-soft);
+  color: var(--app-blue);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.docChipPlain {
+  color: var(--app-muted);
+  font-size: var(--text-xs);
+}
+
+.warnBanner {
+  margin-top: var(--space-3);
+  padding: 0.72rem 0.82rem;
+  border: 1px solid var(--app-amber-border);
+  border-radius: var(--radius-md);
+  background: var(--app-amber-soft);
+  color: var(--app-amber);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  line-height: var(--leading-normal);
+}
+
+.miniStack {
+  margin-top: var(--space-4);
+  display: grid;
+  gap: var(--space-3);
+}
+
+.miniPanel {
+  padding: 0.8rem 0.9rem;
+  border: 1px solid var(--app-line);
+  border-radius: var(--radius-md);
+  background: var(--brand-soft);
+}
+
+.miniPanelNeutral {
+  background: var(--app-surface-raised);
+}
+
+.miniValue {
+  margin-top: var(--space-1);
+  color: var(--app-ink);
+  font-weight: 700;
+}
+
+.miniBody {
+  margin-top: var(--space-1);
+  color: var(--app-ink);
+  line-height: var(--leading-normal);
+}
+
+.miniBodyMeta {
+  color: var(--app-muted);
+  font-size: var(--text-xs);
+}
+
+.kvList {
+  margin-top: var(--space-2);
+  display: grid;
+  gap: var(--space-1);
+}
+
+.kvRow {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  font-size: var(--text-sm);
+}
+
+.kvLabel {
+  color: var(--app-muted);
+}
+
+/* Value cell: right-aligned with tabular figures (mostly currency/percent). */
+.kvValue {
+  color: var(--app-ink);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.calloutAmber {
+  margin-top: var(--space-2);
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--app-amber-border);
+  border-radius: var(--radius-sm);
+  background: var(--app-amber-soft);
+  color: var(--app-amber);
+  font-size: var(--text-xs);
+  line-height: var(--leading-normal);
+}
+
+.calloutTitle {
+  display: block;
+  margin-bottom: var(--space-1);
+}
+
+/* ─── Property-backed workspace banner ──────────────────────────────────── */
+
+.savedBanner {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  align-items: center;
+  /* Soft brand wash fading into the panel surface (token-built gradient). */
+  background: linear-gradient(180deg, var(--brand-soft) 0%, var(--app-surface) 100%);
+}
+
+.savedBannerTitle {
+  color: var(--app-ink);
+  font-size: var(--text-md);
+}
+
+.savedBannerMeta {
+  margin-top: var(--space-1);
+  color: var(--app-muted);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+}
+
+.savedBannerLinkRow {
+  margin-top: var(--space-1);
+}
+
+.recordLink {
+  color: var(--brand-strong);
+  font-size: var(--text-sm);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.recordLink:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* ─── Generate outputs ──────────────────────────────────────────────────── */
+
+.outputsMeta {
+  margin-top: var(--space-3);
+  display: grid;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+}
+
+.outputsLine {
+  color: var(--app-ink);
+}
+
+.outputsWarn {
+  color: var(--app-amber);
+  font-weight: 700;
+}
+
+.outputsNote {
+  color: var(--app-muted);
+}
+
+.docLinkGroup {
+  margin-left: var(--space-2);
+}
+
+.docLink {
+  color: var(--app-blue);
+  font-weight: 700;
+}
+
+.docLink + .docLink {
+  margin-left: var(--space-2);
+}
+
+.outputsActions {
+  display: grid;
+  gap: var(--space-3);
+  align-content: start;
+}
+
+/* Excel button keeps its legacy soft brand tint on the secondary variant. */
+.buttonTinted {
+  background: var(--brand-soft);
+}
+
+/* While the workspace save is in flight the (disabled) button shows a
+   brand-soft wash, matching the legacy in-progress styling. */
+.buttonBusy:disabled {
+  background: var(--brand-soft);
+}
+
+.createCard {
+  padding: 0.85rem 0.95rem;
+  border: 1px solid var(--app-line);
+  border-radius: var(--radius-md);
+  background: var(--brand-soft);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+}
+
+.createCardTitle {
+  color: var(--app-ink);
+  font-weight: 700;
+}
+
+.createCardMeta {
+  margin-top: var(--space-1);
+  color: var(--app-muted);
+}
+
+.createCardLinkRow {
+  margin-top: var(--space-2);
+}
+
+/* ─── Placeholder / fallback ────────────────────────────────────────────── */
+
+.placeholderPanel {
+  color: var(--app-muted);
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+}
+
+.suspenseFallback {
+  padding: var(--space-8);
+  color: var(--app-muted);
+  font-size: var(--text-sm);
 }

@@ -3,7 +3,7 @@
 import type { PropertyDetails } from "@re-sourcing/contracts";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import React, { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import {
   OM_CALC_NUMERIC_FIELDS,
   OmCalculationPanel,
@@ -14,9 +14,10 @@ import {
   type OmCalculationTextField,
   type OmCalculationUnitModelRow,
 } from "../property-data/OmCalculationPanel";
-import { Button, FileDropzone } from "@/components/ui";
+import { Calculator, FileDown, FolderOpen, Upload } from "lucide-react";
+import { Badge, type BadgeTone, Button, FileDropzone, PageHeader, Panel, SkeletonRows } from "@/components/ui";
 import { useProcessBanner } from "@/components/ProcessBanner";
-import intakeStyles from "./dealAnalysis.module.css";
+import styles from "./dealAnalysis.module.css";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
 const OM_IMPORT_MAX_BYTES = 10 * 1024 * 1024;
@@ -167,62 +168,10 @@ interface SavedWorkspacesResponse {
 type WorkspaceFilter = "all" | "uploaded_docs" | "manual_edits" | "dossier_ready" | "needs_dossier";
 type WorkspaceSort = "recent" | "address" | "dossier";
 
-const pageShellStyle: React.CSSProperties = {
-  width: "min(100%, 1640px)",
-  margin: "0 auto",
-  padding: "0",
-  display: "flex",
-  flexDirection: "column",
-  gap: "1rem",
-  color: "var(--app-ink)",
-  fontVariantNumeric: "tabular-nums",
-};
-
-const cardStyle: React.CSSProperties = {
-  border: "1px solid var(--app-line)",
-  borderRadius: "8px",
-  background: "var(--app-surface)",
-  boxShadow: "var(--app-shadow-xs)",
-};
-
-const inputStyle: React.CSSProperties = {
-  // Full-width + min-width 0 so selects with long option text (property
-  // addresses) shrink to their grid cell instead of overlapping neighbors.
-  width: "100%",
-  minWidth: 0,
-  maxWidth: "100%",
-  minHeight: "2.45rem",
-  border: "1px solid var(--app-line-strong)",
-  borderRadius: "8px",
-  padding: "0.52rem 0.68rem",
-  color: "var(--app-ink)",
-  background: "var(--app-surface)",
-  fontSize: "0.88rem",
-};
-
-const primaryButtonStyle: React.CSSProperties = {
-  minHeight: "2.35rem",
-  padding: "0.58rem 0.85rem",
-  borderRadius: "8px",
-  border: "1px solid var(--brand)",
-  background: "var(--brand)",
-  color: "var(--brand-on)",
-  fontSize: "0.86rem",
-  fontWeight: 750,
-  cursor: "pointer",
-};
-
-const secondaryButtonStyle: React.CSSProperties = {
-  minHeight: "2.35rem",
-  padding: "0.58rem 0.85rem",
-  borderRadius: "8px",
-  border: "1px solid var(--app-line-strong)",
-  background: "var(--app-surface)",
-  color: "var(--brand-strong)",
-  fontSize: "0.86rem",
-  fontWeight: 750,
-  cursor: "pointer",
-};
+// Shared style constants (pageShellStyle/cardStyle/inputStyle/buttonStyles)
+// moved to dealAnalysis.module.css classes and the Button/Panel primitives.
+// The old inputStyle width hotfix lives on as styles.input — selects with
+// long address options must not overflow their grid cells.
 
 function emptyDraft(): OmCalculationDraft {
   return {
@@ -293,28 +242,10 @@ function formatBytes(value: number | null | undefined): string {
   return `${value} B`;
 }
 
-function reviewBadgeStyle(tone: IntakeReviewTone): React.CSSProperties {
-  const toneStyles: Record<IntakeReviewTone, React.CSSProperties> = {
-    needsReview: {
-      background: "#fff7ed",
-      border: "1px solid #fed7aa",
-      color: "#9a3412",
-    },
-    blocked: {
-      background: "#fff1f2",
-      border: "1px solid #fecaca",
-      color: "#b91c1c",
-    },
-  };
-  return {
-    borderRadius: "999px",
-    padding: "0.18rem 0.5rem",
-    fontSize: "0.73rem",
-    fontWeight: 850,
-    whiteSpace: "nowrap",
-    ...toneStyles[tone],
-  };
-}
+const REVIEW_BADGE_TONE: Record<IntakeReviewTone, BadgeTone> = {
+  needsReview: "warning",
+  blocked: "danger",
+};
 
 function OmIntakeReviewList({
   rows,
@@ -324,45 +255,23 @@ function OmIntakeReviewList({
   emptyText: string;
 }) {
   if (rows.length === 0) {
-    return (
-      <div style={{ color: "#68736d", fontSize: "0.86rem" }}>
-        {emptyText}
-      </div>
-    );
+    return <div className={styles.mutedText}>{emptyText}</div>;
   }
 
   return (
-    <div style={{ display: "grid", gap: "0.55rem" }}>
+    <div className={styles.reviewList}>
       {rows.map((row) => (
         <div
           key={row.key}
-          style={{
-            display: "grid",
-            gridTemplateColumns: "minmax(0, 1fr) auto",
-            gap: "0.65rem",
-            alignItems: "center",
-            padding: "0.62rem 0.72rem",
-            borderRadius: "6px",
-            background: "#fff",
-            border: row.tone === "blocked" ? "1px solid #fca5a5" : "1px solid rgba(38, 47, 44, 0.12)",
-            fontSize: "0.86rem",
-          }}
+          className={row.tone === "blocked" ? `${styles.reviewRow} ${styles.reviewRowBlocked}` : styles.reviewRow}
         >
-          <div style={{ minWidth: 0 }}>
-            <div
-              style={{
-                color: "#18231e",
-                fontWeight: 800,
-                overflowWrap: "anywhere",
-              }}
-            >
-              {row.fileName}
-            </div>
-            <div style={{ marginTop: "0.18rem", color: "#68736d", fontSize: "0.78rem" }}>
+          <div className={styles.reviewRowInfo}>
+            <div className={styles.reviewRowName}>{row.fileName}</div>
+            <div className={styles.reviewRowMeta}>
               {row.sizeLabel} · {row.statusDetail}
             </div>
           </div>
-          <span style={reviewBadgeStyle(row.tone)}>{row.statusLabel}</span>
+          <Badge tone={REVIEW_BADGE_TONE[row.tone]}>{row.statusLabel}</Badge>
         </div>
       ))}
     </div>
@@ -1527,84 +1436,39 @@ function DealAnalysisPageContent() {
   }
 
   return (
-    <div style={pageShellStyle}>
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          gap: "1rem",
-          flexWrap: "wrap",
-          alignItems: "flex-end",
-          padding: "0.35rem 0 0.15rem",
-        }}
-      >
-        <div style={{ maxWidth: "760px" }}>
-          <div
-            style={{
-              color: "var(--brand-strong)",
-              fontSize: "0.72rem",
-              fontWeight: 800,
-              letterSpacing: "var(--tracking-label)",
-              textTransform: "uppercase",
-            }}
-          >
-            Deal Progress
-          </div>
-          <h1
-            style={{
-              margin: "0.18rem 0 0",
-              fontFamily: "var(--font-display)",
-              fontSize: "var(--text-3xl)",
-              fontWeight: 700,
-              lineHeight: 1.06,
-              color: "var(--app-ink)",
-            }}
-          >
-            OM Workspace Analysis
-          </h1>
-          <p style={{ margin: "0.45rem 0 0", color: "var(--app-ink-secondary)", lineHeight: 1.45, fontSize: "0.95rem" }}>
-            Open saved property-backed OM workspaces, parse OM PDFs and broker financial files, and keep underwriting edits in sync
-            with dossier outputs.
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={resetWorkspace}
-          style={{
-            ...secondaryButtonStyle,
-            alignSelf: "center",
-          }}
-        >
-          New OM workspace
-        </button>
-      </div>
+    <div className={styles.page}>
+      <PageHeader
+        eyebrow="Deal Progress"
+        title="OM Workspace Analysis"
+        subtitle="Open saved property-backed OM workspaces, parse OM PDFs and broker financial files, and keep underwriting edits in sync with dossier outputs."
+        actions={
+          <Button type="button" onClick={resetWorkspace}>
+            New OM workspace
+          </Button>
+        }
+      />
 
-      <div style={{ ...cardStyle, padding: "1.15rem" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap" }}>
+      <Panel padding="lg">
+        <div className={styles.navHead}>
           <div>
-            <strong style={{ color: "var(--app-ink)", fontSize: "1rem" }}>OM workspace navigator</strong>
-            <div style={{ marginTop: "0.3rem", color: "var(--app-muted)", fontSize: "0.9rem", lineHeight: 1.5 }}>
+            <strong className={styles.panelTitle}>
+              <FolderOpen size={16} strokeWidth={2} aria-hidden="true" className={styles.panelTitleIcon} />
+              OM workspace navigator
+            </strong>
+            <div className={styles.panelDesc}>
               One reusable workspace per property with OM-side uploads, authoritative OM data, or saved
               underwriting edits.
             </div>
           </div>
           {propertyId ? (
-            <div style={{ color: "var(--brand-strong)", fontSize: "0.84rem", fontWeight: 800 }}>
+            <div className={styles.navStatus}>
               {savedWorkspaceLoading ? "Loading saved workspace..." : "Saved workspace loaded"}
             </div>
           ) : null}
         </div>
 
-        <div
-          style={{
-            marginTop: "0.95rem",
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-            gap: "0.75rem",
-            alignItems: "end",
-          }}
-        >
-          <label style={{ display: "grid", gap: "0.32rem", minWidth: 0, color: "var(--app-ink-secondary)", fontSize: "0.78rem", fontWeight: 800 }}>
+        <div className={styles.navGrid}>
+          <label className={styles.navLabel}>
             Open workspace
             <select
               value={propertyId ?? ""}
@@ -1622,7 +1486,7 @@ function DealAnalysisPageContent() {
                 if (!savedWorkspacesLoading) void loadSavedWorkspaces({ background: true });
               }}
               disabled={savedWorkspacesLoading || filteredSavedWorkspaces.length === 0}
-              style={inputStyle}
+              className={styles.input}
             >
               <option value="">
                 {savedWorkspacesLoading
@@ -1639,23 +1503,23 @@ function DealAnalysisPageContent() {
             </select>
           </label>
 
-          <label style={{ display: "grid", gap: "0.32rem", minWidth: 0, color: "var(--app-ink-secondary)", fontSize: "0.78rem", fontWeight: 800 }}>
+          <label className={styles.navLabel}>
             Search
             <input
               type="search"
               value={workspaceSearch}
               onChange={(event) => setWorkspaceSearch(event.target.value)}
               placeholder="Address or file name"
-              style={inputStyle}
+              className={styles.input}
             />
           </label>
 
-          <label style={{ display: "grid", gap: "0.32rem", minWidth: 0, color: "var(--app-ink-secondary)", fontSize: "0.78rem", fontWeight: 800 }}>
+          <label className={styles.navLabel}>
             Sort
             <select
               value={workspaceSort}
               onChange={(event) => setWorkspaceSort(event.target.value as WorkspaceSort)}
-              style={inputStyle}
+              className={styles.input}
             >
               <option value="recent">Recently updated</option>
               <option value="address">Address A-Z</option>
@@ -1664,17 +1528,8 @@ function DealAnalysisPageContent() {
           </label>
         </div>
 
-        <div
-          style={{
-            marginTop: "0.75rem",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            gap: "0.75rem",
-            flexWrap: "wrap",
-          }}
-        >
-          <div style={{ display: "flex", gap: "0.45rem", flexWrap: "wrap" }}>
+        <div className={styles.filterBar}>
+          <div className={styles.filterChips}>
             {[
               ["all", "All"],
               ["uploaded_docs", "Uploaded docs"],
@@ -1688,64 +1543,34 @@ function DealAnalysisPageContent() {
                   key={value}
                   type="button"
                   onClick={() => setWorkspaceFilter(value as WorkspaceFilter)}
-                  style={{
-                    padding: "0.35rem 0.62rem",
-                    borderRadius: "999px",
-                    border: isActive ? "1px solid var(--brand-border)" : "1px solid var(--app-line)",
-                    background: isActive ? "var(--brand-soft)" : "var(--app-surface)",
-                    color: isActive ? "var(--brand-strong)" : "var(--app-ink-secondary)",
-                    fontSize: "0.8rem",
-                    fontWeight: 800,
-                    cursor: "pointer",
-                  }}
+                  className={isActive ? `${styles.filterChip} ${styles.filterChipActive}` : styles.filterChip}
                 >
                   {label}
                 </button>
               );
             })}
           </div>
-          <button
-            type="button"
-            onClick={() => setWorkspaceResultsOpen((open) => !open)}
-            style={{
-              ...secondaryButtonStyle,
-              minHeight: "2rem",
-              padding: "0.38rem 0.7rem",
-              fontSize: "0.82rem",
-            }}
-          >
+          <Button type="button" size="sm" onClick={() => setWorkspaceResultsOpen((open) => !open)}>
             {workspaceResultsOpen ? "Hide matches" : `Show matches (${filteredSavedWorkspaces.length})`}
-          </button>
+          </Button>
         </div>
 
         {activeSavedWorkspace ? (
-          <div
-            style={{
-              marginTop: "0.85rem",
-              padding: "0.75rem 0.85rem",
-              borderRadius: "8px",
-              border: "1px solid var(--brand-border)",
-              background: "var(--brand-soft)",
-              display: "flex",
-              justifyContent: "space-between",
-              gap: "0.75rem",
-              flexWrap: "wrap",
-            }}
-          >
+          <div className={styles.activeBanner}>
             <div>
-              <div style={{ color: "var(--brand-strong)", fontWeight: 850 }}>{activeSavedWorkspace.canonicalAddress}</div>
-              <div style={{ marginTop: "0.25rem", color: "var(--app-muted)", fontSize: "0.84rem" }}>
+              <div className={styles.activeBannerAddress}>{activeSavedWorkspace.canonicalAddress}</div>
+              <div className={styles.activeBannerMeta}>
                 Last workspace update {formatDateLabel(getSavedWorkspaceUpdatedAt(activeSavedWorkspace))}
                 {activeSavedWorkspace.omFileName ? ` • ${activeSavedWorkspace.omFileName}` : ""}
               </div>
             </div>
-            <div style={{ color: "var(--brand-strong)", fontSize: "0.82rem", fontWeight: 850 }}>Currently open</div>
+            <div className={styles.activeBannerState}>Currently open</div>
           </div>
         ) : null}
 
-        <div style={{ marginTop: "0.95rem", display: "grid", gap: "0.55rem" }}>
+        <div className={styles.workspaceList}>
           {savedWorkspacesLoading ? (
-            <div style={{ color: "#68736d", fontSize: "0.9rem" }}>Loading recent OM workspaces...</div>
+            <SkeletonRows count={3} />
           ) : savedWorkspaces.length > 0 && workspaceResultsOpen ? (
             filteredSavedWorkspaces.slice(0, 12).map((workspace) => {
               const isActive = workspace.propertyId === propertyId;
@@ -1758,119 +1583,32 @@ function DealAnalysisPageContent() {
                     router.replace(`/deal-analysis?property_id=${encodeURIComponent(workspace.propertyId)}`, { scroll: false })
                   }
                   disabled={savedWorkspaceLoading && isActive}
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    gap: "0.75rem",
-                    alignItems: "center",
-                    flexWrap: "wrap",
-                    padding: "0.72rem 0.85rem",
-                    borderRadius: "8px",
-                    border: isActive ? "1px solid rgba(47, 111, 82, 0.48)" : "1px solid rgba(38, 47, 44, 0.12)",
-                    background: isActive ? "#edf8f1" : "#fff",
-                    textAlign: "left",
-                    cursor: savedWorkspaceLoading && isActive ? "not-allowed" : "pointer",
-                  }}
+                  className={isActive ? `${styles.workspaceRow} ${styles.workspaceRowActive}` : styles.workspaceRow}
                 >
-                  <div style={{ minWidth: "260px", flex: "1 1 320px" }}>
-                    <strong style={{ color: "#18231e" }}>{workspace.canonicalAddress}</strong>
-                    <div style={{ color: "#68736d", fontSize: "0.84rem", lineHeight: 1.5 }}>
+                  <div className={styles.workspaceRowInfo}>
+                    <strong className={styles.workspaceRowAddress}>{workspace.canonicalAddress}</strong>
+                    <div className={styles.workspaceRowMeta}>
                       Last update {formatDateLabel(lastUpdatedAt)}
                       {workspace.omFileName ? ` • ${workspace.omFileName}` : ""}
                     </div>
                   </div>
-                  <div style={{ display: "flex", gap: "0.45rem", flexWrap: "wrap" }}>
-                    {workspace.uploadedOmAt ? (
-                      <span
-                        style={{
-                          padding: "0.2rem 0.5rem",
-                          borderRadius: "999px",
-                          background: "#edf8f1",
-                          color: "#1c5d3f",
-                          fontSize: "0.76rem",
-                          fontWeight: 700,
-                        }}
-                      >
-                        Uploaded docs
-                      </span>
-                    ) : null}
-                    {workspace.hasAuthoritativeOm ? (
-                      <span
-                        style={{
-                          padding: "0.2rem 0.5rem",
-                          borderRadius: "999px",
-                          background: "#ecfdf5",
-                          color: "#166534",
-                          fontSize: "0.76rem",
-                          fontWeight: 700,
-                        }}
-                      >
-                        Authoritative OM
-                      </span>
-                    ) : null}
+                  <div className={styles.workspaceRowBadges}>
+                    {workspace.uploadedOmAt ? <Badge tone="success">Uploaded docs</Badge> : null}
+                    {workspace.hasAuthoritativeOm ? <Badge tone="success">Authoritative OM</Badge> : null}
                     {workspace.unitModelRowCount > 0 ? (
-                      <span
-                        style={{
-                          padding: "0.2rem 0.5rem",
-                          borderRadius: "999px",
-                          background: "#f2f6f4",
-                          color: "#40524a",
-                          fontSize: "0.76rem",
-                          fontWeight: 700,
-                        }}
-                      >
-                        {workspace.unitModelRowCount} unit rows
-                      </span>
+                      <Badge tone="neutral">{workspace.unitModelRowCount} unit rows</Badge>
                     ) : null}
                     {workspace.expenseModelRowCount > 0 ? (
-                      <span
-                        style={{
-                          padding: "0.2rem 0.5rem",
-                          borderRadius: "999px",
-                          background: "#f2f6f4",
-                          color: "#40524a",
-                          fontSize: "0.76rem",
-                          fontWeight: 700,
-                        }}
-                      >
-                        {workspace.expenseModelRowCount} expense rows
-                      </span>
+                      <Badge tone="neutral">{workspace.expenseModelRowCount} expense rows</Badge>
                     ) : null}
-                    {workspace.hasBrokerEmailNotes ? (
-                      <span
-                        style={{
-                          padding: "0.2rem 0.5rem",
-                          borderRadius: "999px",
-                          background: "#fff7ed",
-                          color: "#9a3412",
-                          fontSize: "0.76rem",
-                          fontWeight: 700,
-                        }}
-                      >
-                        Broker notes saved
-                      </span>
-                    ) : null}
-                    {workspace.dossierStatus === "completed" ? (
-                      <span
-                        style={{
-                          padding: "0.2rem 0.5rem",
-                          borderRadius: "999px",
-                          background: "#edf8f1",
-                          color: "#1c5d3f",
-                          fontSize: "0.76rem",
-                          fontWeight: 700,
-                        }}
-                      >
-                        Dossier ready
-                      </span>
-                    ) : null}
+                    {workspace.hasBrokerEmailNotes ? <Badge tone="warning">Broker notes saved</Badge> : null}
+                    {workspace.dossierStatus === "completed" ? <Badge tone="success">Dossier ready</Badge> : null}
                     <span
-                      style={{
-                        color: isActive ? "#2f6f52" : "#47534d",
-                        fontSize: "0.8rem",
-                        fontWeight: 800,
-                        alignSelf: "center",
-                      }}
+                      className={
+                        isActive
+                          ? `${styles.workspaceRowState} ${styles.workspaceRowStateActive}`
+                          : styles.workspaceRowState
+                      }
                     >
                       {isActive ? "Loaded" : "Open"}
                     </span>
@@ -1879,42 +1617,39 @@ function DealAnalysisPageContent() {
               );
             })
           ) : savedWorkspaces.length > 0 && filteredSavedWorkspaces.length === 0 ? (
-            <div style={{ color: "#68736d", fontSize: "0.9rem", lineHeight: 1.55 }}>
+            <div className={styles.mutedText}>
               No OM workspaces match the current search and filters.
             </div>
           ) : (
-            <div style={{ color: "#68736d", fontSize: "0.9rem", lineHeight: 1.55 }}>
+            <div className={styles.mutedText}>
               {savedWorkspaces.length === 0
                 ? "No saved OM workspaces yet. Analyze uploaded OM / financial packages or upload documents to a property card to make that workspace reusable from this page."
                 : "Use the dropdown, search, or filters above to open a saved OM workspace."}
             </div>
           )}
           {workspaceResultsOpen && filteredSavedWorkspaces.length > 12 ? (
-            <div style={{ color: "#68736d", fontSize: "0.84rem" }}>
+            <div className={styles.listFootnote}>
               Showing 12 of {filteredSavedWorkspaces.length} matching workspaces. Narrow the search to jump
               directly to a property.
             </div>
           ) : null}
         </div>
-      </div>
+      </Panel>
 
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "minmax(0, 1.35fr) minmax(320px, 0.9fr)",
-          gap: "1rem",
-        }}
-      >
-        <div style={{ ...cardStyle, padding: "1.2rem" }}>
-          <h2 className={intakeStyles.intakeSectionHeading}>1. Add OM / financial files or link</h2>
-          <p className={intakeStyles.intakeSectionDesc}>
+      <div className={styles.intakeGrid}>
+        <Panel padding="lg">
+          <h2 className={`${styles.intakeSectionHeading} ${styles.withIcon}`}>
+            <Upload size={16} strokeWidth={2} aria-hidden="true" className={styles.panelTitleIcon} />
+            1. Add OM / financial files or link
+          </h2>
+          <p className={styles.intakeSectionDesc}>
             Start from file uploads, rent roll/T-12 workbooks, or a directly downloadable OM link, then pull prior builds back from
             the saved workspace list above.
           </p>
 
           {/* ── Files card ── */}
-          <div className={intakeStyles.intakeCard}>
-            <span className={intakeStyles.microLabel}>OM / financial files</span>
+          <div className={styles.intakeCard}>
+            <span className={styles.microLabel}>OM / financial files</span>
             <FileDropzone
               files={pendingFiles}
               onChange={(files) => {
@@ -1935,47 +1670,30 @@ function DealAnalysisPageContent() {
               hint={`PDF, Excel, CSV, TXT, images · up to ${OM_IMPORT_MAX_FILES} files, ${formatBytes(OM_IMPORT_MAX_BYTES)} each`}
             />
             {pendingSelectionReplacesWorkspace ? (
-              <p className={intakeStyles.replaceNotice}>
+              <p className={styles.replaceNotice}>
                 These pending files are not in the active workspace yet. Run analysis again to replace the
                 current OM workspace.
               </p>
             ) : null}
             {freshUploadReviewRows.length > 0 ? (
-              <div
-                style={{
-                  paddingTop: "0.95rem",
-                  borderTop: "1px solid rgba(38, 47, 44, 0.12)",
-                  display: "grid",
-                  gap: "0.55rem",
-                }}
-              >
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    gap: "0.75rem",
-                    flexWrap: "wrap",
-                    color: "#303832",
-                    fontSize: "0.8rem",
-                    fontWeight: 850,
-                  }}
-                >
+              <div className={styles.reviewSection}>
+                <div className={styles.reviewSectionHead}>
                   <span>Fresh upload review</span>
-                  <span style={{ color: "#9a3412" }}>Analysis not verified by user</span>
+                  <span className={styles.reviewSectionFlag}>Analysis not verified by user</span>
                 </div>
                 <OmIntakeReviewList rows={freshUploadReviewRows} emptyText="" />
-                <div style={{ color: "#92400e", fontSize: "0.82rem", lineHeight: 1.45 }}>
+                <div className={styles.reviewWarnNote}>
                   Needs review before relying on the extracted assumptions or treating the OM analysis as verified.
                 </div>
               </div>
             ) : null}
-            <div className={intakeStyles.intakeActionRow}>
-              <label className={intakeStyles.separateCheckLabel}>
+            <div className={styles.intakeActionRow}>
+              <label className={styles.separateCheckLabel}>
                 <input
                   type="checkbox"
                   checked={separateProperties}
                   onChange={(event) => setSeparateProperties(event.target.checked)}
-                  style={{ width: "15px", height: "15px", accentColor: "#0f766e" }}
+                  className={styles.checkbox}
                 />
                 Each file is a separate property (one analysis per OM)
               </label>
@@ -1996,7 +1714,7 @@ function DealAnalysisPageContent() {
               </Button>
             </div>
             {separateProperties ? (
-              <div style={{ color: "#68736d", fontSize: "0.8rem", lineHeight: 1.5 }}>
+              <div className={styles.intakeFootnote}>
                 Each file gets its own Gemini extraction, property match-or-create, and review-required
                 workspace. Files run one at a time - keep this tab open for large batches.
               </div>
@@ -2004,58 +1722,26 @@ function DealAnalysisPageContent() {
           </div>
 
           {batchResults ? (
-            <div
-              style={{
-                marginTop: "1rem",
-                border: "1px solid rgba(38, 47, 44, 0.14)",
-                borderRadius: "10px",
-                padding: "0.9rem 1rem",
-                background: "#ffffff",
-                display: "grid",
-                gap: "0.55rem",
-              }}
-            >
-              <strong style={{ color: "#18231e", fontSize: "0.86rem" }}>Batch results</strong>
+            <div className={styles.batchCard}>
+              <strong className={styles.batchTitle}>Batch results</strong>
               {batchResults.map((row) => (
                 <div
                   key={`${row.filename}-${row.propertyId ?? "failed"}`}
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    gap: "0.75rem",
-                    flexWrap: "wrap",
-                    padding: "0.5rem 0.6rem",
-                    borderRadius: "8px",
-                    background: row.ok ? "#f7fbf8" : "#fef2f2",
-                    border: row.ok ? "1px solid rgba(47, 111, 82, 0.18)" : "1px solid #fecaca",
-                  }}
+                  className={`${styles.batchRow} ${row.ok ? styles.batchRowOk : styles.batchRowFail}`}
                 >
-                  <div style={{ display: "grid", gap: "0.1rem", minWidth: 0 }}>
-                    <span style={{ fontSize: "0.82rem", fontWeight: 800, color: row.ok ? "#1c5d3f" : "#991b1b" }}>
+                  <div className={styles.batchRowText}>
+                    <span className={`${styles.batchRowName} ${row.ok ? styles.batchRowNameOk : styles.batchRowNameFail}`}>
                       {row.ok ? row.canonicalAddress ?? row.filename : row.filename}
                     </span>
-                    <span style={{ fontSize: "0.76rem", color: "#68736d" }}>
+                    <span className={styles.batchRowDetail}>
                       {row.ok
                         ? `${row.createdProperty ? "New property created" : "Matched existing property"} from ${row.filename}`
                         : row.error ?? "Analysis failed."}
                     </span>
                   </div>
                   {row.ok && row.propertyId ? (
-                    <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                      <span
-                        style={{
-                          padding: "0.16rem 0.5rem",
-                          borderRadius: "999px",
-                          background: "#fff7ed",
-                          border: "1px solid #fed7aa",
-                          color: "#9a3412",
-                          fontSize: "0.72rem",
-                          fontWeight: 800,
-                        }}
-                      >
-                        Needs review
-                      </span>
+                    <div className={styles.batchRowActions}>
+                      <Badge tone="warning">Needs review</Badge>
                       <button
                         type="button"
                         // In-place navigation (right param + no scroll reset):
@@ -2067,16 +1753,7 @@ function DealAnalysisPageContent() {
                             scroll: false,
                           })
                         }
-                        style={{
-                          fontSize: "0.8rem",
-                          fontWeight: 800,
-                          color: "#0f766e",
-                          background: "none",
-                          border: "none",
-                          padding: 0,
-                          cursor: "pointer",
-                          textDecoration: "underline",
-                        }}
+                        className={styles.linkButton}
                       >
                         Open workspace
                       </button>
@@ -2088,9 +1765,9 @@ function DealAnalysisPageContent() {
           ) : null}
 
           {/* ── OM PDF link card ── */}
-          <div className={intakeStyles.intakeCard}>
-            <span className={intakeStyles.microLabel}>OM PDF link</span>
-            <label className={intakeStyles.intakeFieldLabel}>
+          <div className={styles.intakeCard}>
+            <span className={styles.microLabel}>OM PDF link</span>
+            <label className={styles.intakeFieldLabel}>
               <input
                 value={omUrl}
                 onChange={(event) => {
@@ -2098,11 +1775,11 @@ function DealAnalysisPageContent() {
                   setError(null);
                 }}
                 placeholder="https://.../offering-memorandum.pdf"
-                className={intakeStyles.intakeInput}
+                className={styles.intakeInput}
               />
             </label>
-            <div className={intakeStyles.intakeCardRow}>
-              <span className={intakeStyles.intakeCardHint}>
+            <div className={styles.intakeCardRow}>
+              <span className={styles.intakeCardHint}>
                 Link imports use the same OM analysis prompt and save back to the matched property workspace.
               </span>
               <Button
@@ -2118,9 +1795,9 @@ function DealAnalysisPageContent() {
           </div>
 
           {/* ── Broker notes card ── */}
-          <div className={intakeStyles.intakeCard}>
-            <span className={intakeStyles.microLabel}>Broker notes</span>
-            <label className={intakeStyles.intakeFieldLabel}>
+          <div className={styles.intakeCard}>
+            <span className={styles.microLabel}>Broker notes</span>
+            <label className={styles.intakeFieldLabel}>
               <textarea
                 value={brokerNotes}
                 onChange={(event) => {
@@ -2129,20 +1806,20 @@ function DealAnalysisPageContent() {
                 }}
                 placeholder={"Paste what the broker shared, e.g.\n6 units at 412 E 9th St. Unit 1: $3,400/mo, Unit 2: $2,950 stabilized...\nTaxes $48k, insurance $12k, water/sewer $9k."}
                 rows={5}
-                className={intakeStyles.intakeTextarea}
+                className={styles.intakeTextarea}
               />
             </label>
-            <label className={intakeStyles.intakeFieldLabel}>
-              <span className={intakeStyles.microLabel}>Address hint (optional)</span>
+            <label className={styles.intakeFieldLabel}>
+              <span className={styles.microLabel}>Address hint (optional)</span>
               <input
                 value={notesAddressHint}
                 onChange={(event) => setNotesAddressHint(event.target.value)}
                 placeholder="412 East 9th Street, Manhattan"
-                className={intakeStyles.intakeInput}
+                className={styles.intakeInput}
               />
             </label>
-            <div className={intakeStyles.intakeCardRow}>
-              <span className={intakeStyles.intakeCardHint}>
+            <div className={styles.intakeCardRow}>
+              <span className={styles.intakeCardHint}>
                 Notes run through the same extraction as OMs: rents, unit details, and expenses become
                 broker-reported current figures on the matched or newly created property, flagged for review.
               </span>
@@ -2157,51 +1834,30 @@ function DealAnalysisPageContent() {
               </Button>
             </div>
           </div>
-        </div>
+        </Panel>
 
-        <div style={{ ...cardStyle, padding: "1.2rem" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: "0.75rem", flexWrap: "wrap" }}>
-            <span style={{ display: "inline-flex", alignItems: "center", gap: "0.55rem", flexWrap: "wrap" }}>
-              <strong style={{ color: "#18231e", fontSize: "1rem" }}>2. Analysis workspace</strong>
+        <Panel padding="lg">
+          <div className={styles.analysisHead}>
+            <span className={styles.analysisTitleWrap}>
+              <strong className={styles.panelTitle}>
+                <Calculator size={16} strokeWidth={2} aria-hidden="true" className={styles.panelTitleIcon} />
+                2. Analysis workspace
+              </strong>
               {calculation ? (
-                <span
-                  style={{
-                    border: "1px solid #99f6e4",
-                    borderRadius: "999px",
-                    background: "#f0fdfa",
-                    color: "#115e59",
-                    fontSize: "0.62rem",
-                    fontWeight: 700,
-                    letterSpacing: "0.05em",
-                    textTransform: "uppercase",
-                    padding: "0.18rem 0.55rem",
-                  }}
-                >
+                <Badge tone="brand" className={styles.statusBadge}>
                   Initial analysis complete
-                </span>
+                </Badge>
               ) : (
-                <span
-                  style={{
-                    border: "1px solid #e4e4e7",
-                    borderRadius: "999px",
-                    background: "#fafaf9",
-                    color: "#71717a",
-                    fontSize: "0.62rem",
-                    fontWeight: 700,
-                    letterSpacing: "0.05em",
-                    textTransform: "uppercase",
-                    padding: "0.18rem 0.55rem",
-                  }}
-                >
+                <Badge tone="neutral" className={styles.statusBadge}>
                   Not analyzed yet
-                </span>
+                </Badge>
               )}
             </span>
-            <a href="/pipeline/yield-map" style={{ fontSize: "0.8rem", fontWeight: 800, color: "#0f766e" }}>
+            <a href="/pipeline/yield-map" className={styles.inlineLink}>
               Compare in Yield Map →
             </a>
           </div>
-          <div style={{ marginTop: "0.3rem", color: "#68736d", fontSize: "0.9rem", lineHeight: 1.55 }}>
+          <div className={styles.panelDesc}>
             Once the OM is parsed, this page will populate current state, unit-level rows, sensitivities,
             assumptions, and the deal dossier PDF. Extracted yields feed the living comps database on the
             Yield Map automatically.
@@ -2209,8 +1865,8 @@ function DealAnalysisPageContent() {
           {propertyId && uploadedDocuments.length > 0 ? (
             // Cross-check lane: open the original OM/rent roll next to the
             // extracted numbers, spot what didn't pull in, type it in below.
-            <div style={{ marginTop: "0.7rem", display: "flex", flexWrap: "wrap", alignItems: "center", gap: "0.45rem" }}>
-              <span style={{ fontSize: "0.72rem", color: "#65736b", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 850 }}>
+            <div className={styles.docChipRow}>
+              <span className={styles.microLabel}>
                 Source documents
               </span>
               {uploadedDocuments.map((doc) =>
@@ -2221,29 +1877,13 @@ function DealAnalysisPageContent() {
                     target="_blank"
                     rel="noreferrer"
                     title={`Open ${doc.fileName} in a new tab to cross-check fields that did not pull in.`}
-                    style={{
-                      display: "inline-flex",
-                      alignItems: "center",
-                      gap: "0.3rem",
-                      padding: "0.22rem 0.6rem",
-                      borderRadius: "999px",
-                      border: "1px solid #bfdbfe",
-                      background: "#eff6ff",
-                      color: "#1d4ed8",
-                      fontSize: "0.76rem",
-                      fontWeight: 700,
-                      textDecoration: "none",
-                      maxWidth: "260px",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                    }}
+                    className={styles.docChip}
                   >
                     {doc.fileName}
                     {doc.category ? ` · ${doc.category}` : ""} ↗
                   </a>
                 ) : (
-                  <span key={doc.fileName} style={{ fontSize: "0.76rem", color: "#68736d" }}>
+                  <span key={doc.fileName} className={styles.docChipPlain}>
                     {doc.fileName}
                   </span>
                 )
@@ -2251,58 +1891,32 @@ function DealAnalysisPageContent() {
             </div>
           ) : null}
           {hasFreshUploadNeedsReview ? (
-            <div
-              style={{
-                marginTop: "0.85rem",
-                padding: "0.72rem 0.82rem",
-                borderRadius: "8px",
-                border: "1px solid #fed7aa",
-                background: "#fff7ed",
-                color: "#9a3412",
-                fontSize: "0.84rem",
-                fontWeight: 800,
-                lineHeight: 1.45,
-              }}
-            >
+            <div className={styles.warnBanner}>
               OM analysis status: needs review. Analysis not verified by user for{" "}
               {activeFreshUploadReview?.documents.length ?? 0} fresh upload
               {(activeFreshUploadReview?.documents.length ?? 0) === 1 ? "" : "s"}.
             </div>
           ) : null}
 
-          <div style={{ marginTop: "0.9rem", display: "grid", gap: "0.7rem" }}>
-            <div
-              style={{
-                padding: "0.8rem 0.9rem",
-                borderRadius: "8px",
-                background: "#f7fbf8",
-                border: "1px solid rgba(38, 47, 44, 0.12)",
-              }}
-            >
-              <div style={{ fontSize: "0.72rem", color: "#65736b", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 850 }}>
+          <div className={styles.miniStack}>
+            <div className={styles.miniPanel}>
+              <div className={styles.microLabel}>
                 Extracted address
               </div>
-              <div style={{ marginTop: "0.2rem", fontWeight: 800, color: "#18231e" }}>
+              <div className={styles.miniValue}>
                 {resolvedAddress?.canonicalAddress ?? workspaceProperty?.canonicalAddress ?? "Waiting on OM analysis"}
               </div>
             </div>
 
-            <div
-              style={{
-                padding: "0.8rem 0.9rem",
-                borderRadius: "8px",
-                background: "#f7fbf8",
-                border: "1px solid rgba(38, 47, 44, 0.12)",
-              }}
-            >
-              <div style={{ fontSize: "0.72rem", color: "#65736b", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 850 }}>
+            <div className={styles.miniPanel}>
+              <div className={styles.microLabel}>
                 Canonical property match
               </div>
-              <div style={{ marginTop: "0.2rem", color: "#18231e", lineHeight: 1.5 }}>
+              <div className={styles.miniBody}>
                 {matchedProperty ? (
                   <>
                     <strong>{matchedProperty.canonicalAddress}</strong>
-                    <div style={{ fontSize: "0.84rem", color: "#68736d" }}>
+                    <div className={styles.miniBodyMeta}>
                       Match strategy: {matchedProperty.matchStrategy === "exact_canonical" ? "Exact canonical" : "Address line"}
                     </div>
                   </>
@@ -2312,74 +1926,37 @@ function DealAnalysisPageContent() {
               </div>
             </div>
 
-            <div
-              style={{
-                padding: "0.8rem 0.9rem",
-                borderRadius: "8px",
-                background: "#f7fbf8",
-                border: "1px solid rgba(38, 47, 44, 0.12)",
-              }}
-            >
-              <div style={{ fontSize: "0.72rem", color: "#65736b", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 850 }}>
+            <div className={styles.miniPanel}>
+              <div className={styles.microLabel}>
                 Current outputs
               </div>
-              <div style={{ marginTop: "0.45rem", display: "grid", gap: "0.35rem" }}>
+              <div className={styles.kvList}>
                 {summaryCards.length > 0 ? (
                   summaryCards.map((row) => (
-                    <div
-                      key={row.label}
-                      style={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                        gap: "0.8rem",
-                        fontSize: "0.86rem",
-                      }}
-                    >
-                      <span style={{ color: "#68736d" }}>{row.label}</span>
-                      <strong style={{ color: "#18231e" }}>{row.value}</strong>
+                    <div key={row.label} className={styles.kvRow}>
+                      <span className={styles.kvLabel}>{row.label}</span>
+                      <strong className={styles.kvValue}>{row.value}</strong>
                     </div>
                   ))
+                ) : savedWorkspaceLoading ? (
+                  <SkeletonRows count={3} />
                 ) : (
-                  <div style={{ color: "#68736d", fontSize: "0.86rem" }}>
-                    {savedWorkspaceLoading
-                      ? "Loading the saved OM workspace metrics..."
-                      : "Analyze uploaded OM / financial files or reopen a saved workspace to populate returns and current-state metrics."}
+                  <div className={styles.mutedText}>
+                    Analyze uploaded OM / financial files or reopen a saved workspace to populate returns and current-state metrics.
                   </div>
                 )}
               </div>
               {calculation?.yieldSignals?.calloutLabel ? (
-                <div
-                  style={{
-                    marginTop: "0.55rem",
-                    padding: "0.5rem 0.6rem",
-                    borderRadius: "6px",
-                    border: "1px solid #fde68a",
-                    background: "#fffbeb",
-                    color: "#92400e",
-                    fontSize: "0.78rem",
-                    lineHeight: 1.45,
-                  }}
-                >
-                  <strong style={{ display: "block", marginBottom: "0.15rem" }}>
+                <div className={styles.calloutAmber}>
+                  <strong className={styles.calloutTitle}>
                     LTR → MTR bump flagged
                   </strong>
                   {calculation.yieldSignals.calloutLabel}
                 </div>
               ) : null}
               {calculation?.brokerYieldComparison?.calloutLabel ? (
-                <div
-                  style={{
-                    marginTop: "0.55rem",
-                    padding: "0.5rem 0.6rem",
-                    borderRadius: "6px",
-                    border: "1px solid #fde68a",
-                    background: "#fffbeb",
-                    color: "#92400e",
-                    fontSize: "0.78rem",
-                    lineHeight: 1.45,
-                  }}
-                >
-                  <strong style={{ display: "block", marginBottom: "0.15rem" }}>
+                <div className={styles.calloutAmber}>
+                  <strong className={styles.calloutTitle}>
                     Broker cap rate differs from actuals
                   </strong>
                   {calculation.brokerYieldComparison.calloutLabel}
@@ -2387,18 +1964,11 @@ function DealAnalysisPageContent() {
               ) : null}
             </div>
             {calculation ? (
-              <div
-                style={{
-                  padding: "0.8rem 0.9rem",
-                  borderRadius: "8px",
-                  background: "#fafaf9",
-                  border: "1px solid #e4e4e7",
-                }}
-              >
-                <div style={{ fontSize: "0.72rem", color: "#65736b", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 850 }}>
+              <div className={`${styles.miniPanel} ${styles.miniPanelNeutral}`}>
+                <div className={styles.microLabel}>
                   Property summary
                 </div>
-                <div style={{ marginTop: "0.45rem", display: "grid", gap: "0.35rem" }}>
+                <div className={styles.kvList}>
                   {[
                     { label: "Asset class", value: calculation.propertyInfo.assetClass ?? "—" },
                     {
@@ -2423,95 +1993,52 @@ function DealAnalysisPageContent() {
                   ]
                     .filter((row) => row.value !== "—")
                     .map((row) => (
-                      <div
-                        key={row.label}
-                        style={{ display: "flex", justifyContent: "space-between", gap: "0.8rem", fontSize: "0.84rem" }}
-                      >
-                        <span style={{ color: "#68736d" }}>{row.label}</span>
-                        <strong style={{ color: "#18231e", textAlign: "right" }}>{row.value}</strong>
+                      <div key={row.label} className={styles.kvRow}>
+                        <span className={styles.kvLabel}>{row.label}</span>
+                        <strong className={styles.kvValue}>{row.value}</strong>
                       </div>
                     ))}
                 </div>
               </div>
             ) : null}
           </div>
-        </div>
+        </Panel>
       </div>
 
-      {notice ? (
-        <div
-          style={{
-            padding: "0.9rem 1rem",
-            borderRadius: "8px",
-            border: "1px solid rgba(47, 111, 82, 0.22)",
-            background: "#edf8f1",
-            color: "#1c5d3f",
-            fontWeight: 700,
-          }}
-        >
-          {notice}
-        </div>
-      ) : null}
+      {notice ? <div className={styles.notice}>{notice}</div> : null}
 
-      {error ? (
-        <div
-          style={{
-            padding: "0.9rem 1rem",
-            borderRadius: "14px",
-            border: "1px solid #fecaca",
-            background: "#fff1f2",
-            color: "#b91c1c",
-          }}
-        >
-          {error}
-        </div>
-      ) : null}
+      {error ? <div className={styles.error}>{error}</div> : null}
 
       {workspaceDetails ? (
         <>
           {propertyId ? (
-            <div
-              style={{
-                ...cardStyle,
-                padding: "1rem 1.1rem",
-                display: "flex",
-                justifyContent: "space-between",
-                gap: "1rem",
-                flexWrap: "wrap",
-                alignItems: "center",
-                background: "linear-gradient(180deg, #f7fbf8 0%, #ffffff 100%)",
-              }}
-            >
+            <Panel padding="lg" className={styles.savedBanner}>
               <div>
-                <strong style={{ color: "#18231e", fontSize: "0.98rem" }}>
+                <strong className={styles.savedBannerTitle}>
                   Property-backed OM workspace
                 </strong>
-                <div style={{ marginTop: "0.28rem", color: "#68736d", fontSize: "0.88rem", lineHeight: 1.55 }}>
+                <div className={styles.savedBannerMeta}>
                   Reopened from the saved property record
                   {savedWorkspaceUpdatedAt ? ` • last saved ${formatDateLabel(savedWorkspaceUpdatedAt)}` : ""}.
                 </div>
-                <div style={{ marginTop: "0.3rem" }}>
+                <div className={styles.savedBannerLinkRow}>
                   <Link
                     href={`/property-data?property_id=${encodeURIComponent(propertyId)}`}
-                    style={{ color: "#173f36", fontWeight: 800, textDecoration: "none", fontSize: "0.86rem" }}
+                    className={styles.recordLink}
                   >
                     Open property record
                   </Link>
                 </div>
               </div>
-              <button
+              <Button
                 type="button"
                 onClick={saveWorkspaceToProperty}
                 disabled={workspaceSaving || !isDirty}
-                style={{
-                  ...secondaryButtonStyle,
-                  background: workspaceSaving ? "#edf8f1" : "#fff",
-                  cursor: workspaceSaving || !isDirty ? "not-allowed" : "pointer",
-                }}
+                className={workspaceSaving ? styles.buttonBusy : undefined}
               >
                 {workspaceSaving ? "Saving workspace..." : "Save workspace to property"}
-              </button>
-            </div>
+              </Button>
+            </Panel>
           ) : null}
 
           <OmCalculationPanel
@@ -2544,37 +2071,32 @@ function DealAnalysisPageContent() {
             onClearSaved={() => {}}
           />
 
-          <div
-            style={{
-              ...cardStyle,
-              padding: "1.15rem",
-              display: "grid",
-              gridTemplateColumns: "minmax(0, 1.1fr) minmax(320px, 0.9fr)",
-              gap: "1rem",
-            }}
-          >
+          <Panel padding="lg" className={styles.outputsGrid}>
             <div>
-              <strong style={{ color: "#18231e", fontSize: "1rem" }}>3. Generate outputs</strong>
-              <div style={{ marginTop: "0.35rem", color: "#68736d", lineHeight: 1.55, fontSize: "0.9rem" }}>
+              <strong className={styles.panelTitle}>
+                <FileDown size={16} strokeWidth={2} aria-hidden="true" className={styles.panelTitleIcon} />
+                3. Generate outputs
+              </strong>
+              <div className={styles.panelDesc}>
                 Generate the deal dossier PDF or Excel workbook from this OM workspace.
                 {propertyId
                   ? " Because this workspace is tied to a canonical property, generation will save the dossier, refresh deal scoring, and make the deal visible from the property record."
                   : " You can also create or match a canonical property record from the extracted address and send it through BBL resolution and enrichment."}
               </div>
-              <div style={{ marginTop: "0.75rem", display: "grid", gap: "0.45rem", fontSize: "0.86rem" }}>
-                <div style={{ color: "#18231e" }}>
+              <div className={styles.outputsMeta}>
+                <div className={styles.outputsLine}>
                   Uploaded OM docs: <strong>{uploadedDocuments.length || workspaceFiles.length}</strong>
                   {propertyId && uploadedDocuments.some((doc) => doc.id) ? (
-                    <span style={{ marginLeft: "0.4rem" }}>
+                    <span className={styles.docLinkGroup}>
                       {uploadedDocuments
                         .filter((doc) => doc.id)
-                        .map((doc, index) => (
+                        .map((doc) => (
                           <a
                             key={doc.id}
                             href={`${API_BASE}/api/properties/${encodeURIComponent(propertyId)}/documents/${encodeURIComponent(doc.id!)}/file`}
                             target="_blank"
                             rel="noreferrer"
-                            style={{ color: "#1d4ed8", fontWeight: 700, marginLeft: index === 0 ? 0 : "0.5rem" }}
+                            className={styles.docLink}
                           >
                             {doc.fileName}
                           </a>
@@ -2583,14 +2105,14 @@ function DealAnalysisPageContent() {
                   ) : null}
                 </div>
                 {hasFreshUploadNeedsReview ? (
-                  <div style={{ color: "#92400e", fontWeight: 800 }}>
+                  <div className={styles.outputsWarn}>
                     Fresh upload review: needs review · analysis not verified by user.
                   </div>
                 ) : null}
-                <div style={{ color: "#18231e" }}>
+                <div className={styles.outputsLine}>
                   Workspace address: <strong>{resolvedAddress?.canonicalAddress ?? workspaceProperty?.canonicalAddress ?? "—"}</strong>
                 </div>
-                <div style={{ color: "#68736d" }}>
+                <div className={styles.outputsNote}>
                   {isDirty
                     ? "The PDF and property-create step will use your current edits. Refresh analysis if you also want the on-screen metrics updated first."
                     : "The on-screen metrics are in sync with the latest underwriting inputs."}
@@ -2598,15 +2120,12 @@ function DealAnalysisPageContent() {
               </div>
             </div>
 
-            <div style={{ display: "grid", gap: "0.75rem", alignContent: "start" }}>
-              <button
+            <div className={styles.outputsActions}>
+              <Button
                 type="button"
+                variant="primary"
                 onClick={downloadDossier}
                 disabled={!canGenerateDossier || dossierDownloading}
-                style={{
-                  ...primaryButtonStyle,
-                  cursor: !canGenerateDossier || dossierDownloading ? "not-allowed" : "pointer",
-                }}
               >
                 {dossierDownloading
                   ? propertyId
@@ -2615,17 +2134,13 @@ function DealAnalysisPageContent() {
                   : propertyId
                     ? "Generate saved deal dossier PDF"
                     : "Download deal dossier PDF"}
-              </button>
+              </Button>
 
-              <button
+              <Button
                 type="button"
                 onClick={downloadDossierExcel}
                 disabled={!canGenerateDossier || excelDownloading}
-                style={{
-                  ...secondaryButtonStyle,
-                  background: "#edf8f1",
-                  cursor: !canGenerateDossier || excelDownloading ? "not-allowed" : "pointer",
-                }}
+                className={styles.buttonTinted}
               >
                 {excelDownloading
                   ? propertyId
@@ -2634,55 +2149,36 @@ function DealAnalysisPageContent() {
                   : propertyId
                     ? "Generate saved deal dossier Excel"
                     : "Download deal dossier Excel"}
-              </button>
+              </Button>
 
-              <button
+              <Button
                 type="button"
                 onClick={createPropertyRecord}
                 disabled={!canGenerateDossier || propertyCreating || workspaceFiles.length === 0 || propertyId != null}
-                style={{
-                  ...secondaryButtonStyle,
-                  cursor:
-                    !canGenerateDossier ||
-                    propertyCreating ||
-                    workspaceFiles.length === 0 ||
-                    propertyId != null
-                      ? "not-allowed"
-                      : "pointer",
-                }}
               >
                 {propertyId
                   ? "Property record already attached"
                   : propertyCreating
                     ? "Creating / matching property..."
                     : "Create property record from OM"}
-              </button>
+              </Button>
 
               {createResult ? (
-                <div
-                  style={{
-                    padding: "0.85rem 0.95rem",
-                    borderRadius: "8px",
-                    border: "1px solid rgba(38, 47, 44, 0.12)",
-                    background: "#f7fbf8",
-                    fontSize: "0.86rem",
-                    lineHeight: 1.55,
-                  }}
-                >
-                  <div style={{ color: "#18231e", fontWeight: 800 }}>{createResult.canonicalAddress}</div>
-                  <div style={{ marginTop: "0.22rem", color: "#68736d" }}>
+                <div className={styles.createCard}>
+                  <div className={styles.createCardTitle}>{createResult.canonicalAddress}</div>
+                  <div className={styles.createCardMeta}>
                     {createResult.createdProperty ? "New property created" : "Existing property matched"} via{" "}
                     {createResult.matchStrategy}.
                   </div>
                   {createResult.enrichment?.bbl ? (
-                    <div style={{ marginTop: "0.22rem", color: "#68736d" }}>
+                    <div className={styles.createCardMeta}>
                       BBL: {createResult.enrichment.bbl}
                     </div>
                   ) : null}
-                  <div style={{ marginTop: "0.45rem" }}>
+                  <div className={styles.createCardLinkRow}>
                     <Link
                       href={`/property-data?property_id=${encodeURIComponent(createResult.propertyId)}`}
-                      style={{ color: "#173f36", fontWeight: 800, textDecoration: "none" }}
+                      className={styles.recordLink}
                     >
                       Open property record
                     </Link>
@@ -2690,24 +2186,18 @@ function DealAnalysisPageContent() {
                 </div>
               ) : null}
             </div>
-          </div>
+          </Panel>
         </>
       ) : null}
 
       {!workspaceDetails ? (
-        <div
-          style={{
-            ...cardStyle,
-            padding: "1.1rem",
-            color: "#68736d",
-            lineHeight: 1.6,
-            fontSize: "0.92rem",
-          }}
-        >
-          {savedWorkspaceLoading
-            ? "Loading the saved OM workspace..."
-            : "Analyze uploaded OM / financial files or reopen a saved OM workspace to populate current state, unit-by-unit rent uplift and occupancy assumptions, recurring opex, upfront furnishing and onboarding costs, sensitivities, and the deal dossier output."}
-        </div>
+        <Panel padding="lg" className={styles.placeholderPanel}>
+          {savedWorkspaceLoading ? (
+            <SkeletonRows count={3} />
+          ) : (
+            "Analyze uploaded OM / financial files or reopen a saved OM workspace to populate current state, unit-by-unit rent uplift and occupancy assumptions, recurring opex, upfront furnishing and onboarding costs, sensitivities, and the deal dossier output."
+          )}
+        </Panel>
       ) : null}
     </div>
   );
@@ -2715,7 +2205,7 @@ function DealAnalysisPageContent() {
 
 export default function DealAnalysisPage() {
   return (
-    <Suspense fallback={<div style={{ padding: "2rem" }}>Loading deal analysis...</div>}>
+    <Suspense fallback={<div className={styles.suspenseFallback}>Loading deal analysis...</div>}>
       <DealAnalysisPageContent />
     </Suspense>
   );
