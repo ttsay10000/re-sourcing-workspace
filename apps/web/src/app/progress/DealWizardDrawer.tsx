@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import {
   AlertTriangle,
   ArrowRightLeft,
@@ -38,6 +38,7 @@ import {
   formatUnitLabel,
   formatWholeCurrency,
   labelFromKey,
+  todayDateInput,
 } from "./format";
 import styles from "./progress.module.css";
 
@@ -96,6 +97,7 @@ export function DealWizardDrawer({
   flags,
   loiFile,
   saving,
+  autoMovedTourPassed,
   onUpdate,
   onLoiFileChange,
   onCancel,
@@ -113,6 +115,7 @@ export function DealWizardDrawer({
   flags: ActionFlag[];
   loiFile?: File | null;
   saving: boolean;
+  autoMovedTourPassed?: boolean;
   onUpdate: <K extends keyof DealPathFormState>(propertyId: string, field: K, value: DealPathFormState[K]) => void;
   onLoiFileChange: (file: File | null) => void;
   onCancel: () => void;
@@ -129,13 +132,26 @@ export function DealWizardDrawer({
   const top = flags[0] ?? null;
   const restFlags = flags.slice(1);
 
+  // Closing must never silently discard typed inputs ("entered a tour date,
+  // clicked outside, nothing happened"). Track dirtiness against the form the
+  // drawer opened with and confirm before any non-save close path.
+  const initialFormRef = useRef(form);
+  const initialLoiRef = useRef(loiFile ?? null);
+  const dirtyRef = useRef(false);
+  dirtyRef.current =
+    JSON.stringify(form) !== JSON.stringify(initialFormRef.current) || (loiFile ?? null) !== initialLoiRef.current;
+  const requestClose = useCallback(() => {
+    if (dirtyRef.current && !window.confirm("Discard unsaved deal inputs? Use the save button to keep them.")) return;
+    onCancel();
+  }, [onCancel]);
+
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (event.key !== "Escape") return;
       // A dialog stacked on top of the drawer (composer, reject, move…) owns
       // this Escape; the drawer only closes when it is the topmost layer.
       if (document.querySelectorAll('[role="dialog"][aria-modal="true"]').length > 1) return;
-      onCancel();
+      requestClose();
     }
     document.addEventListener("keydown", onKeyDown);
     const { overflow } = document.body.style;
@@ -144,7 +160,7 @@ export function DealWizardDrawer({
       document.removeEventListener("keydown", onKeyDown);
       document.body.style.overflow = overflow;
     };
-  }, [onCancel]);
+  }, [requestClose]);
 
   const isTourScheduledPrompt = promptMode === "tour_scheduled";
   const isTourCompletedPrompt = promptMode === "tour_completed";
@@ -171,7 +187,7 @@ export function DealWizardDrawer({
     .join(" · ");
 
   return (
-    <div className={styles.drawerOverlay} role="presentation" onMouseDown={onCancel}>
+    <div className={styles.drawerOverlay} role="presentation" onMouseDown={requestClose}>
       <aside
         className={styles.drawer}
         role="dialog"
@@ -189,7 +205,7 @@ export function DealWizardDrawer({
             <h2 title={address}>{address}</h2>
             {locationLine ? <p>{locationLine}</p> : null}
           </div>
-          <button type="button" className={styles.drawerClose} onClick={onCancel} aria-label="Close deal workspace">
+          <button type="button" className={styles.drawerClose} onClick={requestClose} aria-label="Close deal workspace">
             <X size={16} strokeWidth={2} aria-hidden="true" />
           </button>
         </header>
@@ -302,6 +318,11 @@ export function DealWizardDrawer({
                     : "Add offer terms or upload the LOI to finish the move to LOI Offered."}
               </p>
             ) : null}
+            {autoMovedTourPassed ? (
+              <p className={styles.drawerDateWarning}>
+                This deal moved here automatically — its scheduled tour date passed. Log the outcome below.
+              </p>
+            ) : null}
             <form id="deal-wizard-form" className={styles.drawerFormGrid} onSubmit={onSave}>
               {isTourScheduledPrompt || showGeneralTourFields ? (
                 <label>
@@ -312,6 +333,11 @@ export function DealWizardDrawer({
                     required={isTourScheduledPrompt}
                     onChange={(event) => onUpdate(row.propertyId, "tourScheduledAt", event.target.value)}
                   />
+                  {form.tourScheduledAt && form.tourScheduledAt <= todayDateInput() && !form.tourCompletedAt ? (
+                    <span className={styles.drawerDateWarning}>
+                      This date is today or in the past — the property will move to Tour Completed – Awaiting Inputs.
+                    </span>
+                  ) : null}
                 </label>
               ) : null}
               {showGeneralTourFields ? (
@@ -497,7 +523,7 @@ export function DealWizardDrawer({
             </button>
           </div>
           <div className={styles.drawerFooterRight}>
-            <Button variant="ghost" size="sm" onClick={onCancel} disabled={saving}>
+            <Button variant="ghost" size="sm" onClick={requestClose} disabled={saving}>
               Cancel
             </Button>
             <Button variant="primary" size="sm" type="submit" form="deal-wizard-form" disabled={saving}>

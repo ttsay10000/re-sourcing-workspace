@@ -71,6 +71,7 @@ import {
   formatWholeCurrency,
   labelFromKey,
   streetAddressOnly,
+  todayDateInput,
 } from "./format";
 import styles from "./progress.module.css";
 
@@ -287,16 +288,33 @@ function dateInputFromIso(value: string | null | undefined): string {
   return date.toISOString().slice(0, 10);
 }
 
-function todayDateInput(): string {
-  const date = new Date();
-  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
-  return local.toISOString().slice(0, 10);
-}
-
 function dateInputToPayload(value: string | null | undefined): string | null {
   const trimmed = value?.trim();
   if (!trimmed) return null;
   return /^\d{4}-\d{2}-\d{2}$/.test(trimmed) ? `${trimmed}T12:00:00` : trimmed;
+}
+
+/**
+ * Price fields accept human input ("$4.5M", "950K", "4,500,000"). The API's
+ * parser nulls anything it can't read, so unparseable input must be caught
+ * client-side instead of silently dropping the value.
+ */
+function parsePriceInput(value: string): number | null | "invalid" {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const match = /^\$?([0-9][0-9.,]*)([kKmM])?$/.exec(trimmed.replace(/\s+/g, ""));
+  if (!match) return "invalid";
+  const base = Number(match[1].replace(/,/g, ""));
+  if (!Number.isFinite(base)) return "invalid";
+  const multiplier = match[2] ? (match[2].toLowerCase() === "k" ? 1_000 : 1_000_000) : 1;
+  return base * multiplier;
+}
+
+function priceInputToPayload(value: string): number | string | null {
+  const parsed = parsePriceInput(value);
+  // "invalid" falls through as the raw string so non-drawer callers keep
+  // their current behavior (the API nulls what it cannot parse).
+  return parsed === "invalid" ? value.trim() || null : parsed;
 }
 
 function formValue(value: string | number | null | undefined): string {
@@ -395,8 +413,8 @@ function dealPathPayload(form: DealPathFormState, mode: DealPathPromptMode = "ge
     tourCompletedAt: mode === "tour_scheduled" ? null : dateInputToPayload(form.tourCompletedAt),
     tourNotes: [tourBrokerName ? `Broker: ${tourBrokerName}` : null, tourNotes || null].filter(Boolean).join("\n") || null,
     postTourDecision,
-    targetPrice: form.targetPrice.trim() || null,
-    offerAmount: form.offerAmount.trim() || null,
+    targetPrice: priceInputToPayload(form.targetPrice),
+    offerAmount: priceInputToPayload(form.offerAmount),
     offerNotes: [loiRecipientEmail ? `LOI recipient: ${loiRecipientEmail}` : null, offerNotes || null].filter(Boolean).join("\n") || null,
     loiContingencies: form.loiContingenciesText
       .split(/\n|,/)
@@ -410,6 +428,23 @@ function dealPathPayload(form: DealPathFormState, mode: DealPathPromptMode = "ge
 
 function hasScheduledTour(row: ProgressRow): boolean {
   return Boolean(row.dealPath?.tourScheduledAt);
+}
+
+/**
+ * True when the board auto-moved this deal to Tour Completed – Awaiting Inputs
+ * because its scheduled tour date passed (no outcome recorded yet). Surfaced
+ * on the card and in the drawer so the move is never silent.
+ */
+function isAutoMovedTourPassed(
+  row: { dealPath?: UiV2DealPathState | null },
+  sectionId: string | undefined
+): boolean {
+  const dealPath = row.dealPath;
+  if (sectionId !== "tour_completed_awaiting_inputs" || !dealPath?.tourScheduledAt) return false;
+  if (dealPath.tourCompletedAt != null) return false;
+  if (dealPath.postTourDecision != null && dealPath.postTourDecision !== "pending") return false;
+  const scheduledMs = Date.parse(dealPath.tourScheduledAt);
+  return Number.isFinite(scheduledMs) && scheduledMs <= Date.now();
 }
 
 function sectionCount(summary: Summary | null, sectionId: string, fallback: number): number {
@@ -520,7 +555,7 @@ async function patchSavedDealStatus(propertyId: string, nextStatus: UiV2Pipeline
   if (!response.ok) throw new Error(data.error || data.details || "Failed to move deal stage.");
 }
 
-async function patchDealPath(propertyId: string, dealPath: Record<string, unknown>): Promise<void> {
+async function patchDealPath(propertyId: string, dealPath: Record<string, unknown>): Promise<UiV2DealPathState | null> {
   const response = await fetch(`${API_BASE}/api/ui-v2/properties/${propertyId}/deal-path`, {
     method: "PATCH",
     credentials: "include",
@@ -531,8 +566,13 @@ async function patchDealPath(propertyId: string, dealPath: Record<string, unknow
       source: "progress_table",
     }),
   });
-  const data = (await response.json().catch(() => ({}))) as { error?: string; details?: string };
+  const data = (await response.json().catch(() => ({}))) as {
+    property?: { dealPath?: UiV2DealPathState | null } | null;
+    error?: string;
+    details?: string;
+  };
   if (!response.ok) throw new Error(data.error || data.details || "Failed to update deal path.");
+  return data.property?.dealPath ?? null;
 }
 
 async function uploadLoiDocument(propertyId: string, file: File): Promise<void> {
@@ -1423,13 +1463,38 @@ function ProgressPageContent() {
         setError("Choose a rejection reason before rejecting after a tour.");
         return;
       }
+      if (parsePriceInput(form.targetPrice) === "invalid" || parsePriceInput(form.offerAmount) === "invalid") {
+        setError("Enter prices as plain numbers — e.g. 4500000, $4.5M, or 950K.");
+        return;
+      }
       setDealPathSavingId(row.propertyId);
       setError(null);
       setNotice(null);
       try {
         if (mode === "loi_offered" && loiFile) await uploadLoiDocument(row.propertyId, loiFile);
-        await patchDealPath(row.propertyId, dealPathPayload(form, mode));
-        setNotice(form.postTourDecision === "reject" ? "Property rejected after tour." : "Deal path updated.");
+        const savedDealPath = await patchDealPath(row.propertyId, dealPathPayload(form, mode));
+        // The server derives the landing stage (e.g. a past tour date goes
+        // straight to Tour Completed) — name it so the move is never silent.
+        const destinationSectionId =
+          form.postTourDecision === "reject"
+            ? null
+            : savedDealPath?.status === "tour_scheduled"
+              ? "tour_scheduled"
+              : savedDealPath?.status === "tour_completed_awaiting_inputs" || savedDealPath?.status === "need_more_info"
+                ? "tour_completed_awaiting_inputs"
+                : savedDealPath?.status === "offer_candidate"
+                  ? "offer_review"
+                  : null;
+        const destinationLabel = destinationSectionId
+          ? DEAL_FLOW_STAGES.find((stage) => stage.id === destinationSectionId)?.label ?? null
+          : null;
+        setNotice(
+          form.postTourDecision === "reject"
+            ? "Property rejected after tour."
+            : destinationLabel
+              ? `Saved — moved to ${destinationLabel}.`
+              : "Deal path updated."
+        );
         setEditingDealPathId(null);
         setDealPathPromptMode("general");
         setLoiUploadFiles((current) => {
@@ -1439,13 +1504,14 @@ function ProgressPageContent() {
           return next;
         });
         await loadProgress("refresh");
+        if (destinationSectionId) scrollToColumn(destinationSectionId);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to update deal path.");
       } finally {
         setDealPathSavingId(null);
       }
     },
-    [dealPathForms, dealPathPromptMode, loadProgress, loiUploadFiles]
+    [dealPathForms, dealPathPromptMode, loadProgress, loiUploadFiles, scrollToColumn]
   );
 
   const startReject = useCallback((row: DealFlowRow) => {
@@ -2002,6 +2068,10 @@ function ProgressPageContent() {
           flags={effectiveFlagsByProperty.get(editingDealPathRow.propertyId) ?? []}
           loiFile={loiUploadFiles[editingDealPathRow.propertyId] ?? null}
           saving={dealPathSavingId === editingDealPathRow.propertyId}
+          autoMovedTourPassed={isAutoMovedTourPassed(
+            editingDealPathRow,
+            sectionIdByProperty.get(editingDealPathRow.propertyId)
+          )}
           onUpdate={updateDealPathField}
           onLoiFileChange={(file) =>
             setLoiUploadFiles((current) => ({
@@ -2573,6 +2643,14 @@ function PropertyMiniCard({
         </span>
         <small className={scoreClass(row.dealScore)}>{row.dealScore == null ? "—" : Math.round(row.dealScore)}</small>
         <AgingChip since={row.stageEnteredAt} className={styles.agingChip} />
+        {isAutoMovedTourPassed(row, sectionId) ? (
+          <span
+            className={styles.tourPassedChip}
+            title="Scheduled tour date has passed; the board moved this deal here automatically. Log the outcome."
+          >
+            Tour date passed — log outcome
+          </span>
+        ) : null}
         {topFlag ? (
           <span
             className={`${styles.flagChip} ${styles[`chipSeverity_${topFlag.severity}`]}`}

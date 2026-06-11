@@ -43,6 +43,13 @@ export function formatDate(value: string | null | undefined): string {
   return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
+/** Today's date as a YYYY-MM-DD `<input type="date">` value, in local time. */
+export function todayDateInput(): string {
+  const date = new Date();
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 10);
+}
+
 export function formatShortDate(value: string | null | undefined): string {
   if (!value) return "—";
   const date = new Date(value);

@@ -531,10 +531,8 @@
   box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--app-accent-teal) 32%, transparent);
 }
 
-/* Empty stages collapse into slim rails so the board stays scannable. */
+/* Empty stages keep the full column track so the board reads as one grid. */
 .statusColumnEmpty {
-  flex-basis: 11rem;
-  min-width: 11rem;
   opacity: 0.75;
 }
 
@@ -567,7 +565,7 @@
 
 .columnTitleRow h3 {
   margin: 0;
-  font-size: 0.72rem;
+  font-size: 0.74rem;
   font-weight: 750;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -595,7 +593,7 @@
 .columnStats {
   margin: 0.25rem 0 0;
   color: var(--app-muted);
-  font-size: 0.64rem;
+  font-size: 0.68rem;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -686,14 +684,15 @@
 }
 
 .cardTitle {
-  display: block;
-  font-size: 0.76rem;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  font-size: 0.8rem;
   font-weight: 700;
   line-height: 1.25;
   color: var(--app-ink, #18181b);
-  white-space: nowrap;
   overflow: hidden;
-  text-overflow: ellipsis;
+  overflow-wrap: anywhere;
 }
 
 .cardTitleBlock:hover .cardTitle {
@@ -709,7 +708,7 @@
 .cardMeta {
   display: block;
   margin-top: 0.12rem;
-  font-size: 0.64rem;
+  font-size: 0.7rem;
   color: var(--app-muted, #6b7280);
   white-space: nowrap;
   overflow: hidden;
@@ -777,7 +776,7 @@
 .cardMetrics small {
   overflow: hidden;
   color: var(--app-muted);
-  font-size: 0.54rem;
+  font-size: 0.6rem;
   font-weight: 700;
   letter-spacing: 0.06em;
   line-height: 1;
@@ -789,7 +788,7 @@
 .cardMetrics strong {
   overflow: hidden;
   color: var(--app-ink);
-  font-size: 0.76rem;
+  font-size: 0.8rem;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   line-height: 1.1;
@@ -876,6 +875,35 @@
   border-color: var(--app-amber-border);
   background: var(--app-amber-soft);
   color: var(--app-amber);
+}
+
+/* Auto-move explainer: scheduled date passed, board moved the deal itself. */
+.tourPassedChip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  min-height: 1.05rem;
+  border: 1px solid var(--app-amber-border, #fde68a);
+  border-radius: 999px;
+  padding: 0.08rem 0.42rem;
+  background: var(--app-amber-soft, #fffbeb);
+  color: var(--app-amber, #d97706);
+  font-size: 0.56rem;
+  font-weight: 800;
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: help;
+}
+
+.drawerDateWarning {
+  display: block;
+  margin: 0.3rem 0 0;
+  color: var(--app-amber, #d97706);
+  font-size: 0.74rem;
+  font-weight: 600;
+  line-height: 1.35;
 }
 
 .cardTouchLine {
