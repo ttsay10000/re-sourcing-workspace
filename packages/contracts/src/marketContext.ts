@@ -184,6 +184,10 @@ export interface MarketDocIngestReport {
   brief?: MarketDocumentBrief | null;
   /** Knowledge-base version this document was folded into. */
   knowledgeVersion?: number | null;
+  /** "failed" when the pipeline aborted; the document row keeps the error. */
+  status?: "succeeded" | "failed";
+  /** Stage-tagged failure message when status is "failed". */
+  error?: string | null;
 }
 
 // ---------------------------------------------------------------------------

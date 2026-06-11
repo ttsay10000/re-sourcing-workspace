@@ -44,6 +44,9 @@ export interface MarketContextStore {
   listCompsByNeighborhoods(neighborhoodIds: string[]): Promise<MarketComp[]>;
   insertStat(params: InsertMarketStatParams): Promise<MarketStat>;
   listStatsBySubmarkets(submarketIds: string[]): Promise<MarketStat[]>;
+  /** Retry path: clear rows a failed ingest wrote before re-running it. */
+  deleteCompsByDocument(documentId: string): Promise<void>;
+  deleteStatsByDocument(documentId: string): Promise<void>;
   /** All stored stats (knowledge step compares this doc against prior periods/publishers). */
   listAllStats(): Promise<MarketStat[]>;
   upsertSummary(params: UpsertNeighborhoodSummaryParams): Promise<void>;
@@ -124,6 +127,14 @@ export class PgMarketContextStore implements MarketContextStore {
 
   listStatsBySubmarkets(submarketIds: string[]) {
     return this.stats.listBySubmarkets(submarketIds);
+  }
+
+  deleteCompsByDocument(documentId: string) {
+    return this.comps.deleteByDocument(documentId);
+  }
+
+  deleteStatsByDocument(documentId: string) {
+    return this.stats.deleteByDocument(documentId);
   }
 
   listAllStats() {
@@ -316,6 +327,14 @@ export class InMemoryMarketContextStore implements MarketContextStore {
 
   async listStatsBySubmarkets(submarketIds: string[]) {
     return this.stats.filter((stat) => stat.submarketId != null && submarketIds.includes(stat.submarketId));
+  }
+
+  async deleteCompsByDocument(documentId: string) {
+    this.comps = this.comps.filter((comp) => comp.documentId !== documentId);
+  }
+
+  async deleteStatsByDocument(documentId: string) {
+    this.stats = this.stats.filter((stat) => stat.documentId !== documentId);
   }
 
   async listAllStats() {

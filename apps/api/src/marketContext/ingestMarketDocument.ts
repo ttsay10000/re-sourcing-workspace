@@ -8,7 +8,7 @@
  * Unresolved neighborhood names go to the review queue (comps kept with
  * neighborhood_id = null) — never silently dropped.
  */
-import type { MarketDocIngestReport, MarketStat } from "@re-sourcing/contracts";
+import type { MarketDocIngestReport, MarketDocument, MarketStat } from "@re-sourcing/contracts";
 import type { UpsertMarketCompParams } from "@re-sourcing/db";
 import { extractTextMetadataFromBuffer } from "../upload/extractTextFromUploadedFile.js";
 import { classifyMarketDocument } from "./classify.js";
@@ -35,6 +35,8 @@ export interface IngestMarketDocumentParams {
   llm?: MarketLlmRunner;
   /** Rollup reference date (tests pin this; defaults to now). */
   asOf?: Date;
+  /** Re-run ingestion for an already-stored document (retry path) instead of inserting a new row. */
+  existingDocument?: MarketDocument;
 }
 
 function compToUpsertParams(comp: MergedComp, documentId: string | null): UpsertMarketCompParams {
@@ -127,12 +129,53 @@ export async function resynthesizeNeighborhoods(params: {
 export async function ingestMarketDocument(params: IngestMarketDocumentParams): Promise<MarketDocIngestReport> {
   const { store } = params;
   const llm = params.llm ?? runMarketLlm;
-  const document = await store.insertDocument({
-    filename: params.filename,
-    contentType: params.contentType,
-    fileContent: params.buffer,
-  });
+  const document =
+    params.existingDocument ??
+    (await store.insertDocument({
+      filename: params.filename,
+      contentType: params.contentType,
+      fileContent: params.buffer,
+    }));
 
+  // Any stage throw marks THIS document failed (stage named in the stored
+  // error) and returns a failure report instead of bubbling a 500 — one bad
+  // file must never sink a batch or leave a statusless row.
+  const stageRef = { current: "text extraction" };
+  try {
+    return await executeIngestPipeline(params, document, llm, stageRef);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const error = `${stageRef.current} failed: ${message}`;
+    console.error(`[marketContext ingest] ${error}`, err);
+    await store.setDocumentStatus(document.id, "failed", error).catch(() => undefined);
+    const report: MarketDocIngestReport = {
+      documentId: document.id,
+      sourceType: "broker_provided",
+      documentClass: "unknown",
+      publisher: null,
+      classifierConfidence: "low",
+      flagForReview: true,
+      nComps: 0,
+      nCompsMerged: 0,
+      nStats: 0,
+      unresolvedNeighborhoods: [],
+      affectedNeighborhoods: [],
+      flags: [error],
+      status: "failed",
+      error,
+    };
+    await store.saveIngestReport(document.id, report).catch(() => undefined);
+    return report;
+  }
+}
+
+async function executeIngestPipeline(
+  params: IngestMarketDocumentParams,
+  document: MarketDocument,
+  llm: MarketLlmRunner,
+  stageRef: { current: string }
+): Promise<MarketDocIngestReport> {
+  const { store } = params;
   const textMetadata = await extractTextMetadataFromBuffer(params.buffer, params.filename);
   const pages = textMetadata.pages ?? [];
   const fullText =
@@ -141,6 +184,7 @@ export async function ingestMarketDocument(params: IngestMarketDocumentParams): 
       : textMetadata.text;
 
   // Stage 1a: classify.
+  stageRef.current = "classification";
   const pdf = { buffer: params.buffer, filename: params.filename };
   const classifyResult = await classifyMarketDocument({ pdf, pages, llm });
   await store.saveLlmOutput({
@@ -156,6 +200,7 @@ export async function ingestMarketDocument(params: IngestMarketDocumentParams): 
   await store.saveClassification(document.id, classification, classifyResult.flagForReview);
 
   // Stage 1b: extract (classifier provenance injected; extractor cannot override source_type).
+  stageRef.current = "extraction";
   const extraction = await extractMarketDocument({
     pdf,
     documentText: fullText || null,
@@ -193,12 +238,15 @@ export async function ingestMarketDocument(params: IngestMarketDocumentParams): 
       unresolvedNeighborhoods: [],
       affectedNeighborhoods: [],
       flags,
+      status: "failed",
+      error,
     };
     await store.saveIngestReport(document.id, report);
     return report;
   }
 
   // Resolve neighborhoods + coordinates.
+  stageRef.current = "neighborhood resolution";
   const neighborhoods = await store.listNeighborhoods();
   const index = buildNeighborhoodIndex(neighborhoods);
   const unresolved = new Set<string>();
@@ -221,6 +269,7 @@ export async function ingestMarketDocument(params: IngestMarketDocumentParams): 
   });
 
   // Dedupe against existing rows (and within this batch via sequential upserts).
+  stageRef.current = "comp/stat persistence";
   const candidates = await store.findCompsByNormalizedAddresses(normalizedAddresses);
   const candidatePool = [...candidates];
   let merged = 0;
@@ -263,6 +312,7 @@ export async function ingestMarketDocument(params: IngestMarketDocumentParams): 
   await store.setDocumentStatus(document.id, "extracted");
 
   // Stage 2: rollup + synthesis for neighborhoods touched by this document only.
+  stageRef.current = "neighborhood synthesis";
   await resynthesizeNeighborhoods({
     neighborhoodIds: [...affected],
     store,
@@ -285,6 +335,7 @@ export async function ingestMarketDocument(params: IngestMarketDocumentParams): 
     unresolvedNeighborhoods: [...unresolved],
     affectedNeighborhoods: [...affected],
     flags,
+    status: "succeeded",
   };
 
   // Stage 3: analyst brief for this upload + fold it into the living knowledge

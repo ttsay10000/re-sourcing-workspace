@@ -266,3 +266,89 @@ describe("acceptance 7 — popup payload (n split + per-comp source badges)", ()
     expect(summary.sources.join(" ")).toContain("Manhattan Monthly");
   });
 });
+
+describe("acceptance 8 — per-document failure isolation + retry", () => {
+  it("marks the document failed (stage-tagged error) and returns a failure report instead of throwing", async () => {
+    const isolated = new InMemoryMarketContextStore(loadSeedNeighborhoods());
+    const throwingLlm = async () => {
+      throw new Error("provider unavailable");
+    };
+    const report = await ingestMarketDocument({
+      filename: "broken.pdf",
+      contentType: "application/pdf",
+      buffer: Buffer.from("not really a pdf", "utf-8"),
+      store: isolated,
+      llm: throwingLlm,
+      asOf: FIXTURE_AS_OF,
+    });
+    expect(report.status).toBe("failed");
+    expect(report.error).toContain("classification failed");
+    const doc = isolated.documents[0];
+    expect(doc.status).toBe("failed");
+    expect(doc.error).toContain("provider unavailable");
+    expect(doc.ingestReport?.status).toBe("failed");
+  });
+
+  it("a failure does not poison the next ingest on the same store (batch isolation)", async () => {
+    const isolated = new InMemoryMarketContextStore(loadSeedNeighborhoods());
+    const throwingLlm = async () => {
+      throw new Error("boom");
+    };
+    await ingestMarketDocument({
+      filename: "broken.pdf",
+      contentType: "text/plain",
+      buffer: Buffer.from("bad", "utf-8"),
+      store: isolated,
+      llm: throwingLlm,
+      asOf: FIXTURE_AS_OF,
+    });
+    const good = fixture("ay_monthly_jan_feb_2026");
+    const report = await ingestMarketDocument({
+      filename: good.filename,
+      contentType: "text/plain",
+      buffer: Buffer.from(good.text, "utf-8"),
+      store: isolated,
+      llm: fixtureLlmRunner(),
+      asOf: FIXTURE_AS_OF,
+    });
+    expect(report.status).toBe("succeeded");
+    expect(isolated.documents).toHaveLength(2);
+    expect(isolated.documents[0].status).toBe("failed");
+    expect(isolated.documents[1].status).toBe("synthesized");
+  });
+
+  it("retries a failed document in place via existingDocument and clears the stored error", async () => {
+    const isolated = new InMemoryMarketContextStore(loadSeedNeighborhoods());
+    const throwingLlm = async () => {
+      throw new Error("transient outage");
+    };
+    const good = fixture("ay_monthly_jan_feb_2026");
+    await ingestMarketDocument({
+      filename: good.filename,
+      contentType: "text/plain",
+      buffer: Buffer.from(good.text, "utf-8"),
+      store: isolated,
+      llm: throwingLlm,
+      asOf: FIXTURE_AS_OF,
+    });
+    const failedDoc = isolated.documents[0];
+    expect(failedDoc.status).toBe("failed");
+
+    await isolated.deleteCompsByDocument(failedDoc.id);
+    await isolated.deleteStatsByDocument(failedDoc.id);
+    const retry = await ingestMarketDocument({
+      filename: good.filename,
+      contentType: "text/plain",
+      buffer: Buffer.from(good.text, "utf-8"),
+      store: isolated,
+      llm: fixtureLlmRunner(),
+      asOf: FIXTURE_AS_OF,
+      existingDocument: failedDoc,
+    });
+    expect(retry.status).toBe("succeeded");
+    expect(isolated.documents).toHaveLength(1);
+    expect(isolated.documents[0].status).toBe("synthesized");
+    expect(isolated.documents[0].error).toBeNull();
+    expect(retry.nComps).toBeGreaterThan(0);
+  });
+});

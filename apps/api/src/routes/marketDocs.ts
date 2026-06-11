@@ -65,7 +65,11 @@ router.post(
         buffer: file.buffer,
         store,
       });
-      res.status(201).json({ report });
+      // Pipeline failures still return the report (200): the document row
+      // exists with status "failed" + stored error, so the client can show
+      // per-file state and offer a retry. 503 is reserved for pre-insert
+      // failures (multer, DB down) in the catch below.
+      res.status(report.status === "failed" ? 200 : 201).json({ report });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error("[market-docs upload]", err);
@@ -73,6 +77,45 @@ router.post(
     }
   }
 );
+
+// Re-run ingestion for a failed document using its stored file bytes.
+router.post("/market-docs/:id/retry", async (req: Request, res: Response) => {
+  try {
+    const pool = getPool();
+    const repo = new MarketDocumentRepo({ pool });
+    const document = await repo.byId(req.params.id);
+    if (!document) {
+      res.status(404).json({ error: "Market document not found.", documentId: req.params.id });
+      return;
+    }
+    if (document.status !== "failed") {
+      res.status(409).json({ error: `Only failed documents can be retried (status: ${document.status}).` });
+      return;
+    }
+    const buffer = await repo.getFileContent(document.id);
+    if (!buffer) {
+      res.status(409).json({ error: "Original file bytes not stored — re-upload the document." });
+      return;
+    }
+    const store = new PgMarketContextStore(pool);
+    // Clear partial writes from the failed attempt; merged comps keep their
+    // original document_id and survive.
+    await store.deleteCompsByDocument(document.id);
+    await store.deleteStatsByDocument(document.id);
+    const report = await ingestMarketDocument({
+      filename: document.filename,
+      contentType: document.contentType,
+      buffer,
+      store,
+      existingDocument: document,
+    });
+    res.status(report.status === "failed" ? 200 : 201).json({ report });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[market-docs retry]", err);
+    res.status(503).json({ error: "Failed to retry market document.", details: message });
+  }
+});
 
 // Ingest log (flag_for_review surfaces here and in the UI).
 router.get("/market-docs", async (_req: Request, res: Response) => {

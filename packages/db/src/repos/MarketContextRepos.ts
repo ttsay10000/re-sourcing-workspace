@@ -411,6 +411,11 @@ export class MarketCompRepo {
     return mapMarketComp(r.rows[0]);
   }
 
+  /** Retry path: clear comps this document created (merged rows keep their original document_id and survive). */
+  async deleteByDocument(documentId: string): Promise<void> {
+    await this.client.query(`DELETE FROM market_comps WHERE document_id = $1`, [documentId]);
+  }
+
   /** Dedupe candidates: existing comps sharing a normalized address. */
   async listByNormalizedAddresses(addresses: string[]): Promise<MarketComp[]> {
     if (addresses.length === 0) return [];
@@ -502,6 +507,11 @@ export class MarketStatRepo {
       ]
     );
     return mapMarketStat(r.rows[0]);
+  }
+
+  /** Retry path: clear this document's partial writes before re-ingesting. */
+  async deleteByDocument(documentId: string): Promise<void> {
+    await this.client.query(`DELETE FROM market_stats WHERE document_id = $1`, [documentId]);
   }
 
   async listBySubmarkets(submarketIds: string[]): Promise<MarketStat[]> {
