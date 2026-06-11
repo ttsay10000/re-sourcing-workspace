@@ -620,6 +620,44 @@ async function rerunPropertyDossier(propertyId: string): Promise<DossierGenerate
   return data;
 }
 
+/**
+ * Move-anyway plans for the deal-path stages: which deal-path fields pin the
+ * stage, which pipeline status lands the move, which guided drawer collects
+ * the details, and what counts as "missing" (flagged instead of blocking).
+ */
+const DEAL_PATH_STAGE_MOVES = {
+  tour_scheduled: {
+    dealPath: { status: "tour_scheduled", tourCompletedAt: null, postTourDecision: "pending" },
+    status: "tour_scheduled" as UiV2PipelineStatus,
+    label: "Tour Scheduled",
+    drawerMode: "tour_scheduled" as DealPathPromptMode,
+    missing: (row: DealFlowRow) => !row.dealPath?.tourScheduledAt,
+    missingLabel: "tour dates",
+  },
+  tour_completed_awaiting_inputs: {
+    dealPath: { status: "tour_completed_awaiting_inputs", postTourDecision: "pending" },
+    status: "tour_completed_awaiting_inputs" as UiV2PipelineStatus,
+    label: "Tour Completed · Awaiting Inputs",
+    drawerMode: "tour_completed" as DealPathPromptMode,
+    missing: (row: DealFlowRow) => !row.dealPath?.tourCompletedAt || !row.dealPath?.tourNotes?.trim(),
+    missingLabel: "tour outcomes",
+  },
+  offer_review: {
+    dealPath: { postTourDecision: "move_forward" },
+    status: "offer_review" as UiV2PipelineStatus,
+    label: "LOI Offered",
+    drawerMode: "loi_offered" as DealPathPromptMode,
+    missing: (row: DealFlowRow) => row.dealPath?.offerAmount == null && !row.dealPath?.offerNotes?.trim(),
+    missingLabel: "LOI terms",
+  },
+} as const;
+
+type DealPathStageMoveId = keyof typeof DEAL_PATH_STAGE_MOVES;
+
+function isDealPathStageMoveId(sectionId: string): sectionId is DealPathStageMoveId {
+  return sectionId in DEAL_PATH_STAGE_MOVES;
+}
+
 function ProgressPageContent() {
   const searchParams = useSearchParams();
   const query = (searchParams.get("q") ?? "").trim().toLowerCase();
@@ -972,39 +1010,10 @@ function ProgressPageContent() {
    * land immediately — closing it keeps the move.
    */
   const moveDealsToDealPathStage = useCallback(
-    async (
-      rows: DealFlowRow[],
-      sectionId: "tour_scheduled" | "tour_completed_awaiting_inputs" | "offer_review",
-      options?: { clearSelection?: boolean }
-    ) => {
+    async (rows: DealFlowRow[], sectionId: DealPathStageMoveId, options?: { clearSelection?: boolean }) => {
       const uniqueRows = [...new Map(rows.map((row) => [row.propertyId, row])).values()];
       if (uniqueRows.length === 0) return;
-      const plan = {
-        tour_scheduled: {
-          dealPath: { status: "tour_scheduled", tourCompletedAt: null, postTourDecision: "pending" },
-          status: "tour_scheduled" as UiV2PipelineStatus,
-          label: "Tour Scheduled",
-          drawerMode: "tour_scheduled" as DealPathPromptMode,
-          missing: (row: DealFlowRow) => !row.dealPath?.tourScheduledAt,
-          missingLabel: "tour dates",
-        },
-        tour_completed_awaiting_inputs: {
-          dealPath: { status: "tour_completed_awaiting_inputs", postTourDecision: "pending" },
-          status: "tour_completed_awaiting_inputs" as UiV2PipelineStatus,
-          label: "Tour Completed · Awaiting Inputs",
-          drawerMode: "tour_completed" as DealPathPromptMode,
-          missing: (row: DealFlowRow) => !row.dealPath?.tourCompletedAt || !row.dealPath?.tourNotes?.trim(),
-          missingLabel: "tour outcomes",
-        },
-        offer_review: {
-          dealPath: { postTourDecision: "move_forward" },
-          status: "offer_review" as UiV2PipelineStatus,
-          label: "LOI Offered",
-          drawerMode: "loi_offered" as DealPathPromptMode,
-          missing: (row: DealFlowRow) => row.dealPath?.offerAmount == null && !row.dealPath?.offerNotes?.trim(),
-          missingLabel: "LOI terms",
-        },
-      }[sectionId];
+      const plan = DEAL_PATH_STAGE_MOVES[sectionId];
       setStageMoveBusy(uniqueRows.length === 1 ? uniqueRows[0].propertyId : BULK_STAGE_MOVE_ID);
       setError(null);
       try {
@@ -1075,11 +1084,7 @@ function ProgressPageContent() {
         void moveDealsToTourRequested(rowsToMove, { clearSelection: movingSelection });
         return;
       }
-      if (
-        section.id === "tour_scheduled" ||
-        section.id === "tour_completed_awaiting_inputs" ||
-        section.id === "offer_review"
-      ) {
+      if (isDealPathStageMoveId(section.id)) {
         void moveDealsToDealPathStage(rowsToMove, section.id, { clearSelection: movingSelection });
         return;
       }
@@ -1099,7 +1104,7 @@ function ProgressPageContent() {
         void moveDealsToTourRequested([row]);
         return;
       }
-      if (sectionId === "tour_scheduled" || sectionId === "tour_completed_awaiting_inputs" || sectionId === "offer_review") {
+      if (isDealPathStageMoveId(sectionId)) {
         void moveDealsToDealPathStage([row], sectionId);
         return;
       }
@@ -1477,11 +1482,7 @@ function ProgressPageContent() {
       void moveDealsToTourRequested(selectedSavedDeals, { clearSelection: true });
       return;
     }
-    if (
-      bulkTargetGroup.id === "tour_scheduled" ||
-      bulkTargetGroup.id === "tour_completed_awaiting_inputs" ||
-      bulkTargetGroup.id === "offer_review"
-    ) {
+    if (isDealPathStageMoveId(bulkTargetGroup.id)) {
       void moveDealsToDealPathStage(selectedSavedDeals, bulkTargetGroup.id, { clearSelection: true });
       return;
     }

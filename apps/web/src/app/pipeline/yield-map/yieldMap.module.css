@@ -525,20 +525,6 @@
   transform: scale(1.25);
 }
 
-.legendHatch {
-  width: 14px;
-  height: 10px;
-  border: 1px solid var(--app-line);
-  border-radius: 2px;
-  background: repeating-linear-gradient(
-    -45deg,
-    rgba(100, 116, 139, 0.55),
-    rgba(100, 116, 139, 0.55) 2px,
-    transparent 2px,
-    transparent 5px
-  );
-}
-
 .legendHollow {
   width: 10px;
   height: 10px;
