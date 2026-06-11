@@ -1,6 +1,9 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
+import { Calculator, ClipboardList, FileText, Images, Info, Mail } from "lucide-react";
+import { Button } from "@/components/ui";
+import styles from "./canonicalDetail.module.css";
 import {
   deriveListingActivitySummary,
   describeListingActivity,
@@ -620,6 +623,18 @@ function V3Bullets({ items }: { items: string[] }) {
   );
 }
 
+const RECORDS_TH_ALIGN_CLASS: Record<"left" | "right" | "center", string> = {
+  left: "",
+  right: styles.recordsThRight,
+  center: styles.recordsThCenter,
+};
+
+const RECORDS_TD_ALIGN_CLASS: Record<"left" | "right" | "center", string> = {
+  left: "",
+  right: styles.recordsTdRight,
+  center: styles.recordsTdCenter,
+};
+
 function V3RecordsTable({
   columns,
   rows,
@@ -630,51 +645,19 @@ function V3RecordsTable({
   emptyText: string;
 }) {
   if (rows.length === 0) {
-    return (
-      <div
-        style={{
-          border: "1px dashed rgba(38, 47, 44, 0.18)",
-          borderRadius: "8px",
-          padding: "0.8rem",
-          color: "#7a847d",
-          fontSize: "0.86rem",
-          background: "#fbfaf6",
-        }}
-      >
-        {emptyText}
-      </div>
-    );
+    return <div className={styles.recordsEmpty}>{emptyText}</div>;
   }
   return (
-    <div
-      style={{
-        maxHeight: "380px",
-        overflow: "auto",
-        border: "1px solid rgba(38, 47, 44, 0.12)",
-        borderRadius: "8px",
-        background: "#fff",
-      }}
-    >
-      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.84rem", minWidth: "720px" }}>
+    <div className={styles.recordsScroll}>
+      <table className={styles.recordsTable}>
         <thead>
-          <tr style={{ background: "#f5f2eb", borderBottom: "1px solid rgba(38, 47, 44, 0.12)" }}>
+          <tr className={styles.recordsHeadRow}>
             {columns.map((column) => (
               <th
                 key={column.key}
-                style={{
-                  position: "sticky",
-                  top: 0,
-                  zIndex: 1,
-                  width: column.width,
-                  padding: "0.55rem 0.65rem",
-                  textAlign: column.align ?? "left",
-                  color: "#59645f",
-                  fontSize: "0.72rem",
-                  fontWeight: 800,
-                  textTransform: "uppercase",
-                  letterSpacing: 0,
-                  background: "#f5f2eb",
-                }}
+                className={[styles.recordsTh, RECORDS_TH_ALIGN_CLASS[column.align ?? "left"]].filter(Boolean).join(" ")}
+                /* Column width is runtime data from each table definition. */
+                style={column.width ? { width: column.width } : undefined}
               >
                 {column.label}
               </th>
@@ -683,17 +666,11 @@ function V3RecordsTable({
         </thead>
         <tbody>
           {rows.map((row, rowIndex) => (
-            <tr key={rowIndex} style={{ borderBottom: "1px solid rgba(38, 47, 44, 0.08)" }}>
+            <tr key={rowIndex} className={styles.recordsRow}>
               {columns.map((column) => (
                 <td
                   key={column.key}
-                  style={{
-                    padding: "0.58rem 0.65rem",
-                    textAlign: column.align ?? "left",
-                    color: "#1f2933",
-                    verticalAlign: "middle",
-                    overflowWrap: "anywhere",
-                  }}
+                  className={[styles.recordsTd, RECORDS_TD_ALIGN_CLASS[column.align ?? "left"]].filter(Boolean).join(" ")}
                 >
                   {row[column.key] ?? "—"}
                 </td>
@@ -853,18 +830,18 @@ function BrokerCompsDetailPanel({
   const renderPpsfSpread = (subjectValue: number | null, compValue: number | null): React.ReactNode => {
     const delta = comparisonDelta(subjectValue, compValue);
     if (delta.diff == null || delta.pct == null) return "—";
-    const tone = delta.diff <= 0 ? "#166534" : "#991b1b";
+    const tone = delta.diff <= 0 ? styles.spreadGood : styles.spreadBad;
     return (
-      <span style={{ color: tone, fontWeight: 700 }}>
-        {formatSignedMoney(delta.diff)} <span style={{ color: "#64748b", fontWeight: 600 }}>({formatSignedPercent(delta.pct)})</span>
+      <span className={tone}>
+        {formatSignedMoney(delta.diff)} <span className={styles.spreadPct}>({formatSignedPercent(delta.pct)})</span>
       </span>
     );
   };
   const renderRentSpread = (subjectRentPsf: number | null, compRentPsf: number | null): React.ReactNode => {
     const delta = comparisonDelta(subjectRentPsf, compRentPsf);
     if (delta.diff == null || delta.pct == null) return "—";
-    const tone = delta.diff <= 0 ? "#166534" : "#991b1b";
-    return <span style={{ color: tone, fontWeight: 700 }}>{formatSignedMoney(delta.diff)} ({formatSignedPercent(delta.pct)})</span>;
+    const tone = delta.diff <= 0 ? styles.spreadGood : styles.spreadBad;
+    return <span className={tone}>{formatSignedMoney(delta.diff)} ({formatSignedPercent(delta.pct)})</span>;
   };
   const averageSpreadPct = (pairs: Array<{ subjectValue: number | null; compValue: number | null }>): number | null => {
     const spreads = pairs
@@ -955,9 +932,9 @@ function BrokerCompsDetailPanel({
   ];
   const buildingRows = pricingCompRows.map((row) => ({
     property: (
-      <div style={{ display: "grid", gap: "0.12rem" }}>
+      <div className={styles.cellStack}>
         <strong>{row.propertyName ?? row.address ?? "Unlabeled comp"}</strong>
-        {row.address ? <span style={{ color: "#64748b", fontSize: "0.78rem" }}>{row.address}</span> : null}
+        {row.address ? <span className={styles.cellSub}>{row.address}</span> : null}
       </div>
     ),
     neighborhood: row.neighborhood ?? "—",
@@ -984,9 +961,9 @@ function BrokerCompsDetailPanel({
       const subjectRentPsf = row.bedrooms != null ? subject.rentPsfByBedroom[String(row.bedrooms)] ?? null : null;
       return {
         address: (
-          <div style={{ display: "grid", gap: "0.12rem" }}>
+          <div className={styles.cellStack}>
             <strong>{row.propertyName ?? row.address ?? "Unlabeled comp"}</strong>
-            {row.address ? <span style={{ color: "#64748b", fontSize: "0.78rem" }}>{row.address}</span> : null}
+            {row.address ? <span className={styles.cellSub}>{row.address}</span> : null}
           </div>
         ),
         bedBath: joinedSummary([row.bedroomType ?? (row.bedrooms != null ? `${row.bedrooms} Bed` : null), row.bathrooms != null ? `${row.bathrooms} Bath` : null]),
@@ -1055,44 +1032,45 @@ function BrokerCompsDetailPanel({
   ].filter((entry): entry is string => Boolean(entry && entry.trim()));
 
   return (
-    <div style={{ display: "grid", gap: "1rem" }}>
+    <div className={styles.stackLg}>
       <V3ReportPanel
         title="Market / comps"
         subtitle="Broker market analysis, project comps, bedroom mix, and pricing signals."
         actions={(
-          <form onSubmit={uploadSelectedPackage} style={{ display: "flex", flexWrap: "wrap", gap: "0.45rem", justifyContent: "flex-end", alignItems: "center" }}>
+          <form onSubmit={uploadSelectedPackage} className={styles.uploadForm}>
             <input
               aria-label="Broker comp package"
               type="file"
               accept=".pdf,.xlsx,.xls,.csv,.txt"
               onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)}
-              style={{ maxWidth: "15rem", fontSize: "0.78rem" }}
+              className={styles.fileInput}
             />
-            <button
+            <Button
+              size="sm"
               type="button"
               disabled={loading}
               onClick={() => void loadBrokerComps()}
               title={`GET ${reviewEndpoint}`}
-              style={{ minHeight: "2rem", border: "1px solid #cbd5e1", borderRadius: "8px", padding: "0.35rem 0.7rem", background: "#f8fafc", color: "#334155", fontSize: "0.78rem", fontWeight: 700 }}
             >
               {loading ? "Refreshing…" : "Refresh extract"}
-            </button>
-            <button
+            </Button>
+            <Button
+              size="sm"
               type="submit"
+              variant="primary"
               disabled={!selectedFile || uploading}
               title={`POST ${uploadEndpoint}`}
-              style={{ minHeight: "2rem", border: "1px solid #1f6b4d", borderRadius: "8px", padding: "0.35rem 0.7rem", background: selectedFile && !uploading ? "#1f6b4d" : "#f8fafc", color: selectedFile && !uploading ? "#fff" : "#64748b", fontSize: "0.78rem", fontWeight: 700 }}
             >
               {uploading ? "Replacing…" : "Replace extract"}
-            </button>
+            </Button>
           </form>
         )}
       >
         <V3ReportSection title="Pricing Check">
           <V3FactList items={pricingFacts} />
-          {error ? <p style={{ margin: 0, color: "#991b1b", fontSize: "0.86rem" }}>{error}</p> : null}
+          {error ? <p className={styles.errorText}>{error}</p> : null}
           {!activeSurface.hasData ? (
-            <p style={{ margin: 0, color: "#64748b", fontSize: "0.86rem" }}>
+            <p className={styles.noteMuted}>
               No broker comp package has been uploaded or extracted yet.
             </p>
           ) : null}
@@ -1280,6 +1258,7 @@ function CollapsibleSection({
   onToggle,
   children,
   count,
+  icon,
 }: {
   id: string;
   title: string;
@@ -1287,6 +1266,7 @@ function CollapsibleSection({
   onToggle: () => void;
   children: React.ReactNode;
   count?: number;
+  icon?: React.ReactNode;
 }) {
   return (
     <div id={`canonical-section-${id}`} className="property-detail-section" data-open={open ? "true" : "false"}>
@@ -1298,7 +1278,10 @@ function CollapsibleSection({
         aria-controls={`canonical-detail-${id}`}
       >
         <span className="property-detail-section-title-wrap">
-          <span className="property-detail-section-title">{title}</span>
+          <span className={`property-detail-section-title ${styles.sectionTitle}`}>
+            {icon}
+            {title}
+          </span>
           {count != null && <span className="property-detail-section-count">{count}</span>}
         </span>
         <span className="property-detail-section-status">{open ? "Open" : "Closed"}</span>
@@ -2813,16 +2796,16 @@ export function CanonicalPropertyDetail({
     return {
       image: unitImages[0] ? (
         <a href={unitImages[0]} target="_blank" rel="noopener noreferrer">
-          <img src={unitImages[0]} alt="" style={{ width: "64px", height: "46px", objectFit: "cover", borderRadius: "6px", display: "block" }} />
+          <img src={unitImages[0]} alt="" className={styles.unitThumb} />
         </a>
       ) : (
-        <span style={{ color: "#94a3b8" }}>No photo</span>
+        <span className={styles.noPhoto}>No photo</span>
       ),
       unit: (
         <span>
           <strong>{unitLabel}</strong>
           {mediaRow?.streeteasyUrl ? (
-            <a href={mediaRow.streeteasyUrl} target="_blank" rel="noopener noreferrer" style={{ display: "block", color: "#1f4f46", fontSize: "0.76rem", marginTop: "0.1rem" }}>
+            <a href={mediaRow.streeteasyUrl} target="_blank" rel="noopener noreferrer" className={styles.unitSourceLink}>
               Source listing
             </a>
           ) : null}
@@ -2874,6 +2857,13 @@ export function CanonicalPropertyDetail({
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
   const sourcingUpdate = getSourcingUpdate(d);
   const sourcingUpdateMeta = getSourcingUpdateMeta(d);
+  // Tone class replaces sourcingUpdateMeta.style (raw hex) — same status branches as getSourcingUpdateMeta.
+  const sourcingBannerToneClass =
+    sourcingUpdate?.status === "new"
+      ? styles.sourcingBannerInfo
+      : sourcingUpdate?.status === "updated"
+        ? styles.sourcingBannerWarn
+        : styles.sourcingBannerNeutral;
   const pipelineProperty = { ...property, details: d };
   const pipelineTags = propertyPipelineTags(pipelineProperty);
   const pipelineMissingFields = propertyPipelineMissingFields(pipelineProperty);
@@ -3191,15 +3181,7 @@ export function CanonicalPropertyDetail({
       >
       {(enrichmentActionNotice || enrichmentActionError) && (
         <div
-          style={{
-            margin: "0 0 0.85rem",
-            padding: "0.6rem 0.75rem",
-            borderRadius: "8px",
-            border: enrichmentActionError ? "1px solid #fecaca" : "1px solid #bfdbfe",
-            background: enrichmentActionError ? "#fef2f2" : "#eff6ff",
-            color: enrichmentActionError ? "#991b1b" : "#1e3a8a",
-            fontSize: "0.86rem",
-          }}
+          className={`${styles.actionNotice} ${enrichmentActionError ? styles.actionNoticeError : styles.actionNoticeInfo}`}
         >
           {enrichmentActionError ?? enrichmentActionNotice}
         </div>
@@ -3245,15 +3227,13 @@ export function CanonicalPropertyDetail({
             <div className="property-metric">
               <div className="property-metric-label">Dup. conf.</div>
               <div
-                className="property-metric-value"
-                style={{
-                  color:
-                    (listingForDisplay.duplicateScore ?? 0) >= 80
-                      ? "#b91c1c"
-                      : (listingForDisplay.duplicateScore ?? 0) <= 20
-                        ? "#15803d"
-                        : "#854d0e",
-                }}
+                className={`property-metric-value ${
+                  (listingForDisplay.duplicateScore ?? 0) >= 80
+                    ? styles.dupHigh
+                    : (listingForDisplay.duplicateScore ?? 0) <= 20
+                      ? styles.dupLow
+                      : styles.dupMid
+                }`}
               >
                 {listingForDisplay.duplicateScore != null ? listingForDisplay.duplicateScore : "—"}
               </div>
@@ -3275,8 +3255,8 @@ export function CanonicalPropertyDetail({
         )}
 
         {manualSourceLinks && (
-          <div className="linked-listing-bar" style={{ marginTop: "0.5rem", marginBottom: "0.5rem" }}>
-          <div className="linked-listing-bar-inner" style={{ flexWrap: "wrap", gap: "0.75rem" }}>
+          <div className={`linked-listing-bar ${styles.barSpaced}`}>
+          <div className={`linked-listing-bar-inner ${styles.barInnerWrap}`}>
             <div className="property-metric">
               <div className="property-metric-label">Manual add</div>
               <div className="property-metric-value">
@@ -3323,8 +3303,8 @@ export function CanonicalPropertyDetail({
       {activeTab === "dossierScore" && (
       <>
       {/* Deal score — generated after dossier flow persists deal_signals */}
-      <div className="linked-listing-bar" style={{ marginTop: "0.5rem", marginBottom: "0.5rem" }}>
-        <div className="linked-listing-bar-inner" style={{ flexWrap: "wrap", gap: "0.5rem" }}>
+      <div className={`linked-listing-bar ${styles.barSpaced}`}>
+        <div className={`linked-listing-bar-inner ${styles.barInnerWrapTight}`}>
           <div className="property-metric">
             <div className="property-metric-label">Deal score</div>
             <div className="property-metric-value">
@@ -3364,17 +3344,7 @@ export function CanonicalPropertyDetail({
             </div>
           )}
         </div>
-        <div
-          style={{
-            display: "flex",
-            flexWrap: "wrap",
-            gap: "0.5rem",
-            alignItems: "center",
-            padding: "0.75rem 1rem 0",
-            borderTop: "1px solid rgba(0,0,0,0.08)",
-            marginTop: "0.75rem",
-          }}
-        >
+        <div className={styles.scoreOverrideRow}>
           <input
             type="number"
             min={0}
@@ -3383,30 +3353,30 @@ export function CanonicalPropertyDetail({
             value={scoreOverrideDraft.score}
             onChange={(e) => setScoreOverrideDraft((prev) => ({ ...prev, score: e.target.value }))}
             placeholder={dealScore != null ? String(dealScore) : "Score"}
-            style={{ width: "6rem" }}
+            className={styles.scoreInput}
           />
           <input
             type="text"
             value={scoreOverrideDraft.reason}
             onChange={(e) => setScoreOverrideDraft((prev) => ({ ...prev, reason: e.target.value }))}
             placeholder="Override reason"
-            style={{ minWidth: "16rem", flex: "1 1 18rem" }}
+            className={styles.reasonInput}
           />
-          <button type="button" onClick={saveScoreOverride} disabled={scoreOverrideSaving}>
+          <Button size="sm" type="button" onClick={saveScoreOverride} disabled={scoreOverrideSaving}>
             {scoreOverrideSaving ? "Saving…" : scoreOverride ? "Replace override" : "Set override"}
-          </button>
+          </Button>
           {scoreOverride && (
-            <button type="button" onClick={clearScoreOverride} disabled={scoreOverrideSaving}>
+            <Button size="sm" type="button" onClick={clearScoreOverride} disabled={scoreOverrideSaving}>
               Clear override
-            </button>
+            </Button>
           )}
           {scoreOverride && (
-            <span style={{ fontSize: "0.85rem", color: "#555" }} title={scoreOverride.reason}>
+            <span className={styles.overrideNote} title={scoreOverride.reason}>
               Active override: {scoreOverride.reason}
             </span>
           )}
           {scoreOverrideError && (
-            <span style={{ fontSize: "0.85rem", color: "#b91c1c" }}>{scoreOverrideError}</span>
+            <span className={styles.errorNote}>{scoreOverrideError}</span>
           )}
         </div>
       </div>
@@ -3415,48 +3385,50 @@ export function CanonicalPropertyDetail({
 
       {activeTab === "dossierScore" && (
         <div className="rental-om-panel">
-          <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", flexWrap: "wrap", alignItems: "center" }}>
+          <div className={styles.spreadRow}>
             <div>
-              <strong style={{ display: "block", color: "#0f172a" }}>Dossier workflow</strong>
-              <span style={{ display: "block", marginTop: "0.2rem", color: "#64748b", fontSize: "0.8rem" }}>
+              <strong className={styles.blockTitle}>Dossier workflow</strong>
+              <span className={styles.blockSubtext}>
                 {analysisStatusLabel}
                 {showDossierProgress ? ` · ${activeDossierStageLabel}` : ""}
               </span>
             </div>
-            <div style={{ display: "flex", gap: "0.45rem", flexWrap: "wrap" }}>
-              <button
+            <div className={styles.btnRow}>
+              <Button
+                size="sm"
                 type="button"
                 onClick={handleRefreshAuthoritativeOm}
                 disabled={Boolean(authoritativeOmRefreshing || !hasOmDocument)}
-                style={{ padding: "0.4rem 0.65rem", borderRadius: "6px", border: "1px solid #cbd5e1", background: "#fff", color: "#0f172a", cursor: authoritativeOmRefreshing || !hasOmDocument ? "not-allowed" : "pointer", fontSize: "0.78rem", fontWeight: 650 }}
               >
                 {authoritativeOmRefreshing ? "Refreshing…" : "Refresh OM inputs"}
-              </button>
-              <button
+              </Button>
+              <Button
+                size="sm"
                 type="button"
+                variant="primary"
                 onClick={handleGenerateDossier}
                 disabled={Boolean(isDossierBusy || !canGenerateDossier)}
-                style={{ padding: "0.4rem 0.65rem", borderRadius: "6px", border: "1px solid #0f172a", background: isDossierBusy || !canGenerateDossier ? "#e2e8f0" : "#0f172a", color: isDossierBusy || !canGenerateDossier ? "#64748b" : "#fff", cursor: isDossierBusy || !canGenerateDossier ? "not-allowed" : "pointer", fontSize: "0.78rem", fontWeight: 650 }}
               >
                 {isDossierBusy ? "Working…" : "Generate dossier"}
-              </button>
-              <button
+              </Button>
+              <Button
+                size="sm"
                 type="button"
                 onClick={handleRefreshDealScore}
                 disabled={Boolean(scoreRefreshing || !dealSignals)}
-                style={{ padding: "0.4rem 0.65rem", borderRadius: "6px", border: "1px solid #cbd5e1", background: "#fff", color: scoreRefreshing || !dealSignals ? "#64748b" : "#0f172a", cursor: scoreRefreshing || !dealSignals ? "not-allowed" : "pointer", fontSize: "0.78rem", fontWeight: 650 }}
               >
                 {scoreRefreshing ? "Refreshing…" : "Refresh score"}
-              </button>
+              </Button>
             </div>
           </div>
           {showDossierProgress && (
-            <div className="dossier-progress-track" style={{ marginTop: "0.7rem" }}>
+            <div className={`dossier-progress-track ${styles.progressSpaced}`}>
+              {/* Progress width is runtime job state. */}
               <div className="dossier-progress-fill" style={{ width: `${Math.min(activeDossierProgressPct, 100)}%` }} />
             </div>
           )}
           {dossierError && (
-            <p style={{ margin: "0.6rem 0 0", color: "#b91c1c", fontSize: "0.8rem" }}>{dossierError}</p>
+            <p className={styles.errorTextXs}>{dossierError}</p>
           )}
         </div>
       )}
@@ -3547,72 +3519,38 @@ export function CanonicalPropertyDetail({
       )}
 
       {(activeTab === "underwriting" || activeTab === "dossierScore") && (
-      <div
-        style={{
-          marginBottom: "1rem",
-          padding: "1rem 1.1rem",
-          borderRadius: "1rem",
-          border: "1px solid #dbeafe",
-          background: "linear-gradient(135deg, #f8fbff 0%, #ffffff 100%)",
-          display: "flex",
-          justifyContent: "space-between",
-          gap: "1rem",
-          flexWrap: "wrap",
-          alignItems: "center",
-        }}
-      >
-        <div style={{ maxWidth: "760px" }}>
-          <div style={{ fontSize: "0.76rem", fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1d4ed8" }}>
+      <div className={styles.analysisBanner}>
+        <div className={styles.analysisBannerBody}>
+          <div className={styles.analysisEyebrow}>
             Deal Analysis
           </div>
-          <div style={{ marginTop: "0.25rem", fontSize: "1rem", fontWeight: 700, color: "#0f172a" }}>
+          <div className={styles.analysisTitle}>
             OM calculation and dossier generation now live on a standalone page.
           </div>
-          <p style={{ margin: "0.45rem 0 0", fontSize: "0.9rem", color: "#475569", lineHeight: 1.55 }}>
+          <p className={styles.analysisCopy}>
             Use the dedicated analysis workspace to save property-specific underwriting, run the simplified OM metrics view, and generate the dossier without adding more collapsible sections here.
           </p>
-          <div style={{ marginTop: "0.55rem", fontSize: "0.82rem", color: "#475569" }}>
-            Status: <strong style={{ color: "#0f172a" }}>{analysisStatusLabel}</strong>
+          <div className={styles.analysisStatus}>
+            Status: <strong className={styles.analysisStatusStrong}>{analysisStatusLabel}</strong>
             {persistedDossierGeneration?.completedAt ? ` · Last completed ${formatDateOnly(persistedDossierGeneration.completedAt)}` : ""}
             {persistedDossierGeneration?.status === "running" ? ` · ${activeDossierStageLabel}` : ""}
           </div>
           {persistedDossierGeneration?.status === "failed" && persistedDossierGeneration.lastError && (
-            <div style={{ marginTop: "0.35rem", fontSize: "0.82rem", color: "#b91c1c" }}>
+            <div className={styles.analysisError}>
               Last run failed: {persistedDossierGeneration.lastError}
             </div>
           )}
         </div>
-        <div style={{ display: "flex", gap: "0.65rem", flexWrap: "wrap" }}>
+        <div className={styles.analysisActions}>
           <a
             href={`/deal-analysis?property_id=${encodeURIComponent(property.id)}`}
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              padding: "0.7rem 1rem",
-              borderRadius: "999px",
-              background: "#0f172a",
-              color: "#fff",
-              textDecoration: "none",
-              fontWeight: 700,
-            }}
+            className={styles.pillLinkPrimary}
           >
             Open deal analysis
           </a>
           <a
             href={`/dossier-assumptions?property_id=${encodeURIComponent(property.id)}`}
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              padding: "0.7rem 1rem",
-              borderRadius: "999px",
-              border: "1px solid #cbd5e1",
-              background: "#fff",
-              color: "#334155",
-              textDecoration: "none",
-              fontWeight: 600,
-            }}
+            className={styles.pillLinkSecondary}
           >
             Advanced assumptions
           </a>
@@ -3648,32 +3586,23 @@ export function CanonicalPropertyDetail({
       )}
 
       {(activeTab === "overview" || activeTab === "sources" || activeTab === "activity") && sourcingUpdate && (
-        <div
-          style={{
-            marginBottom: "1rem",
-            padding: "0.85rem 1rem",
-            borderRadius: "0.9rem",
-            border: `1px solid ${sourcingUpdateMeta.style.borderColor}`,
-            background: sourcingUpdateMeta.style.backgroundColor,
-            color: sourcingUpdateMeta.style.color,
-          }}
-        >
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.75rem", flexWrap: "wrap" }}>
+        <div className={`${styles.sourcingBanner} ${sourcingBannerToneClass}`}>
+          <div className={styles.sourcingHeader}>
             <div>
-              <div style={{ fontSize: "0.78rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+              <div className={styles.sourcingEyebrow}>
                 Saved-search sync
               </div>
-              <div style={{ fontSize: "1rem", fontWeight: 600 }}>{sourcingUpdateMeta.label}</div>
+              <div className={styles.sourcingLabel}>{sourcingUpdateMeta.label}</div>
             </div>
-            <div style={{ fontSize: "0.82rem", opacity: 0.9 }}>
+            <div className={styles.sourcingDetail}>
               {sourcingUpdate.lastEvaluatedAt ? `Last checked ${formatDateOnly(sourcingUpdate.lastEvaluatedAt)}` : sourcingUpdateMeta.detail}
             </div>
           </div>
           {typeof sourcingUpdate.summary === "string" && sourcingUpdate.summary.trim().length > 0 && (
-            <p style={{ margin: "0.6rem 0 0", fontSize: "0.9rem", lineHeight: 1.5 }}>{sourcingUpdate.summary}</p>
+            <p className={styles.sourcingSummary}>{sourcingUpdate.summary}</p>
           )}
           {Array.isArray(sourcingUpdate.changes) && sourcingUpdate.changes.length > 0 && (
-            <ul style={{ margin: "0.65rem 0 0", paddingLeft: "1.1rem", fontSize: "0.88rem", lineHeight: 1.5 }}>
+            <ul className={styles.sourcingChanges}>
               {sourcingUpdate.changes.slice(0, 6).map((change, index) => (
                 <li key={`${change.field}-${index}`}>{formatSourcingUpdateChange(change)}</li>
               ))}
@@ -3691,12 +3620,13 @@ export function CanonicalPropertyDetail({
         count={photoUrls.length + floorplanUrls.length}
         open={!!openSections.photosFloorplans}
         onToggle={() => toggle("photosFloorplans")}
+        icon={<Images size={15} strokeWidth={2} aria-hidden="true" className={styles.sectionIcon} />}
       >
         {primaryListing === "loading" ? (
-          <p style={{ color: "#737373" }}>Loading listing…</p>
+          <p className={styles.muted}>Loading listing…</p>
         ) : photoUrls.length > 0 || floorplanUrls.length > 0 ? (
-          <div className="property-detail-media-columns" style={{ display: "flex", gap: "1rem", flexWrap: "wrap" }}>
-            <div style={{ flex: "1 1 300px", minWidth: 0 }}>
+          <div className={`property-detail-media-columns ${styles.mediaColumns}`}>
+            <div className={styles.mediaColumn}>
               {photoUrls.length > 0 ? (
                 <div className="property-card-gallery-wrap">
                   <div className="property-card-gallery">
@@ -3713,10 +3643,10 @@ export function CanonicalPropertyDetail({
                   </div>
                 </div>
               ) : (
-                <p className="property-detail-text" style={{ color: "#737373" }}>No photos</p>
+                <p className={`property-detail-text ${styles.muted}`}>No photos</p>
               )}
             </div>
-            <div style={{ flex: "1 1 300px", minWidth: 0 }}>
+            <div className={styles.mediaColumn}>
               {floorplanUrls.length > 0 ? (
                 <div className="property-card-photos">
                   {floorplanUrls.map((src, i) => (
@@ -3726,12 +3656,12 @@ export function CanonicalPropertyDetail({
                   ))}
                 </div>
               ) : (
-                <p className="property-detail-text" style={{ color: "#737373" }}>No floor plans</p>
+                <p className={`property-detail-text ${styles.muted}`}>No floor plans</p>
               )}
             </div>
           </div>
         ) : (
-          <p style={{ color: "#737373" }}>No linked listing or no media. Add raw listings and link to this property.</p>
+          <p className={styles.muted}>No linked listing or no media. Add raw listings and link to this property.</p>
         )}
       </CollapsibleSection>
 
@@ -3741,6 +3671,7 @@ export function CanonicalPropertyDetail({
         title="Initial property info"
         open={!!openSections.detailsBrokerAmenitiesPriceHistory}
         onToggle={() => toggle("detailsBrokerAmenitiesPriceHistory")}
+        icon={<Info size={15} strokeWidth={2} aria-hidden="true" className={styles.sectionIcon} />}
       >
         <V3ReportPanel
           title="Property details"
@@ -3818,8 +3749,7 @@ export function CanonicalPropertyDetail({
             <V3ReportSection title="Description">
               <div className="initial-info-description-wrap property-card-description-wrap">
                 <p
-                  className={`property-card-description ${descriptionExpanded ? "property-card-description--expanded" : ""}`}
-                  style={{ whiteSpace: "pre-wrap", color: "#34413b", lineHeight: 1.55, margin: 0 }}
+                  className={`property-card-description ${styles.descriptionText} ${descriptionExpanded ? "property-card-description--expanded" : ""}`}
                 >
                   {listingForDisplay.description}
                 </p>
@@ -3929,44 +3859,45 @@ export function CanonicalPropertyDetail({
         title={activeTab === "documents" ? "Documents" : activeTab === "outreach" ? "Outreach" : "OM Workspace"}
         open={!!openSections.rentalOm}
         onToggle={() => toggle("rentalOm")}
+        icon={
+          activeTab === "documents" ? (
+            <FileText size={15} strokeWidth={2} aria-hidden="true" className={styles.sectionIcon} />
+          ) : activeTab === "outreach" ? (
+            <Mail size={15} strokeWidth={2} aria-hidden="true" className={styles.sectionIcon} />
+          ) : (
+            <Calculator size={15} strokeWidth={2} aria-hidden="true" className={styles.sectionIcon} />
+          )
+        }
       >
-        <div className="rental-om-shell" data-active-tab={activeTab} style={{ fontSize: "0.875rem" }}>
+        <div className={`rental-om-shell ${styles.omShell}`} data-active-tab={activeTab}>
           {/* Request info by email — always first */}
-          <div className="rental-om-panel rental-om-panel--inquiry" style={{ marginBottom: "0.75rem" }}>
-            <strong style={{ display: "block", marginBottom: "0.35rem", fontSize: "0.9rem", color: "#1a1a1a" }}>Request info by email</strong>
+          <div className={`rental-om-panel rental-om-panel--inquiry ${styles.panelSpaced}`}>
+            <strong className={styles.inquiryTitle}>Request info by email</strong>
             {lastInquirySentAt && (
-              <p style={{ margin: "0 0 0.5rem", fontSize: "0.8rem", color: "#166534", fontWeight: 500 }}>
+              <p className={styles.sentNote}>
                 Last inquiry sent: {formatDateOnly(lastInquirySentAt) ?? lastInquirySentAt}
               </p>
             )}
             {inquirySendSuccess && (
-              <p style={{ margin: "0 0 0.5rem", padding: "0.4rem 0.6rem", backgroundColor: "#dcfce7", border: "1px solid #22c55e", borderRadius: "6px", fontSize: "0.875rem", color: "#166534" }}>
+              <p className={styles.successNote}>
                 {inquirySendSuccess}
               </p>
             )}
             {hasOmDocument && (
-              <p style={{ margin: "0 0 0.5rem", padding: "0.4rem 0.6rem", backgroundColor: "#f0f9ff", border: "1px solid #0ea5e9", borderRadius: "6px", fontSize: "0.8rem", color: "#0369a1" }}>
+              <p className={styles.omReceivedNote}>
                 OM already received or uploaded. See <strong>Documents (from inquiry replies)</strong> and <strong>Uploaded documents</strong> below.
               </p>
             )}
-            <div
-              style={{
-                margin: "0 0 0.75rem",
-                padding: "0.7rem 0.8rem",
-                borderRadius: "8px",
-                border: "1px solid #e5e7eb",
-                backgroundColor: "#fafafa",
-              }}
-            >
-              <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", flexWrap: "wrap", alignItems: "flex-start" }}>
+            <div className={styles.recipientBox}>
+              <div className={styles.recipientHeader}>
                 <div>
-                  <div style={{ fontSize: "0.72rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: "#4b5563" }}>
+                  <div className={styles.recipientEyebrow}>
                     Preferred broker email
                   </div>
-                  <div style={{ marginTop: "0.2rem", fontSize: "0.92rem", fontWeight: 600, color: "#111827" }}>
+                  <div className={styles.recipientEmail}>
                     {preferredInquiryRecipient.email || "No broker email selected yet"}
                   </div>
-                  <div style={{ marginTop: "0.2rem", fontSize: "0.75rem", color: "#6b7280", lineHeight: 1.5 }}>
+                  <div className={styles.recipientHint}>
                     {usingManualRecipientOverride
                       ? "Manual override is active. Inquiry actions use this email first."
                       : recipientResolution?.status === "resolved"
@@ -3977,79 +3908,54 @@ export function CanonicalPropertyDetail({
                   </div>
                 </div>
                 {recipientResolutionLoading ? (
-                  <span style={{ fontSize: "0.75rem", color: "#64748b" }}>Refreshing…</span>
+                  <span className={styles.refreshingNote}>Refreshing…</span>
                 ) : null}
               </div>
               {recipientOverrideNotice && (
-                <p style={{ margin: "0.6rem 0 0", fontSize: "0.78rem", color: "#166534" }}>{recipientOverrideNotice}</p>
+                <p className={styles.recipientNotice}>{recipientOverrideNotice}</p>
               )}
               {recipientOverrideError && (
-                <p style={{ margin: "0.6rem 0 0", fontSize: "0.78rem", color: "#b91c1c" }}>{recipientOverrideError}</p>
+                <p className={styles.recipientError}>{recipientOverrideError}</p>
               )}
-              <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginTop: "0.65rem" }}>
+              <div className={styles.inlineForm}>
                 <input
                   type="text"
                   value={recipientOverrideDraft}
                   onChange={(e) => setRecipientOverrideDraft(e.target.value)}
                   placeholder={preferredInquiryRecipient.email || "broker@firm.com"}
-                  style={{ flex: "1 1 18rem", minWidth: "14rem", padding: "0.45rem", fontSize: "0.85rem", border: "1px solid #cbd5e1", borderRadius: "6px" }}
+                  className={styles.recipientInput}
                 />
                 <button
                   type="button"
                   onClick={saveRecipientOverride}
                   disabled={Boolean(recipientOverrideSaving || !recipientOverrideDraft.trim())}
-                  style={{
-                    padding: "0.4rem 0.7rem",
-                    borderRadius: "6px",
-                    border: "1px solid #0f766e",
-                    backgroundColor: recipientOverrideSaving ? "#99f6e4" : "#ccfbf1",
-                    color: "#115e59",
-                    cursor: recipientOverrideSaving ? "wait" : "pointer",
-                    fontSize: "0.8rem",
-                    fontWeight: 600,
-                  }}
+                  className={`${styles.btnBrandSoft} ${recipientOverrideSaving ? styles.btnBrandSoftBusy : ""}`}
                 >
                   {recipientOverrideSaving ? "Saving…" : usingManualRecipientOverride ? "Update preferred email" : "Save preferred email"}
                 </button>
                 {usingManualRecipientOverride && (
-                  <button
+                  <Button
+                    size="sm"
                     type="button"
                     onClick={clearRecipientOverride}
                     disabled={recipientOverrideSaving}
-                    style={{
-                      padding: "0.4rem 0.7rem",
-                      borderRadius: "6px",
-                      border: "1px solid #cbd5e1",
-                      backgroundColor: "#fff",
-                      color: "#334155",
-                      cursor: recipientOverrideSaving ? "wait" : "pointer",
-                      fontSize: "0.8rem",
-                    }}
                   >
                     Use sourced email
-                  </button>
+                  </Button>
                 )}
               </div>
               {brokerEmailOptions.length > 0 && (
-                <div style={{ marginTop: "0.65rem" }}>
-                  <div style={{ marginBottom: "0.35rem", fontSize: "0.72rem", fontWeight: 600, color: "#6b7280" }}>
+                <div className={styles.candidateBlock}>
+                  <div className={styles.candidateLabel}>
                     LLM / listing candidate emails
                   </div>
-                  <div style={{ display: "flex", gap: "0.35rem", flexWrap: "wrap" }}>
+                  <div className={styles.chipRow}>
                     {brokerEmailOptions.map((option) => (
                       <button
                         key={option.email.toLowerCase()}
                         type="button"
                         onClick={() => setRecipientOverrideDraft(option.email)}
-                        style={{
-                          padding: "0.25rem 0.55rem",
-                          borderRadius: "999px",
-                          border: "1px solid #d1d5db",
-                          backgroundColor: "#fff",
-                          color: "#374151",
-                          cursor: "pointer",
-                          fontSize: "0.74rem",
-                        }}
+                        className={styles.emailChip}
                         title={option.name ? `${option.name} - ${option.email}` : option.email}
                       >
                         {option.email}
@@ -4059,7 +3965,7 @@ export function CanonicalPropertyDetail({
                 </div>
               )}
             </div>
-            <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+            <div className={styles.actionRow}>
               <button
                 type="button"
                 disabled={hasOmDocument}
@@ -4076,15 +3982,7 @@ export function CanonicalPropertyDetail({
                   setSendAnotherConfirm(false);
                   setInquiryEmailModalOpen(true);
                 }}
-                style={{
-                  padding: "0.35rem 0.6rem",
-                  backgroundColor: hasOmDocument ? "#e5e7eb" : "#f0f0f0",
-                  border: "1px solid #ccc",
-                  borderRadius: "4px",
-                  fontSize: "0.8rem",
-                  color: hasOmDocument ? "#9ca3af" : "#333",
-                  cursor: hasOmDocument ? "not-allowed" : "pointer",
-                }}
+                className={styles.btnAction}
               >
                 {lastInquirySentAt ? "Send another inquiry" : "Request info / OM by email & track reply"}
               </button>
@@ -4100,42 +3998,34 @@ export function CanonicalPropertyDetail({
                   setInquiryGuard(null);
                   setManualInquiryModalOpen(true);
                 }}
-                style={{
-                  padding: "0.35rem 0.6rem",
-                  backgroundColor: hasOmDocument ? "#e5e7eb" : "#fff",
-                  border: "1px solid #ccc",
-                  borderRadius: "4px",
-                  fontSize: "0.8rem",
-                  color: hasOmDocument ? "#9ca3af" : "#333",
-                  cursor: hasOmDocument ? "not-allowed" : "pointer",
-                }}
+                className={`${styles.btnAction} ${styles.btnActionPlain}`}
               >
                 Mark prior inquiry as sent
               </button>
             </div>
-            <p style={{ margin: "0.25rem 0 0", color: "#737373", fontSize: "0.75rem" }}>
+            <p className={styles.helpText}>
               Review the draft and click Send to email the broker. Use the subject line so replies are matched to this property. If you already reached out outside the app, use <strong>Mark prior inquiry as sent</strong> so the guardrail persists across refreshes. Replies and attachments appear in <strong>Documents (from inquiry replies)</strong> below after the daily process-inbox cron runs.
             </p>
           </div>
           {inquiryEmailModalOpen && (
-            <div className="rental-om-modal" style={{ position: "fixed", inset: 0, zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", backgroundColor: "rgba(0,0,0,0.4)" }} onClick={() => setInquiryEmailModalOpen(false)}>
-              <div style={{ backgroundColor: "#fff", borderRadius: "8px", padding: "1.25rem", maxWidth: "520px", width: "100%", maxHeight: "90vh", overflow: "auto", boxShadow: "0 4px 20px rgba(0,0,0,0.15)" }} onClick={(e) => e.stopPropagation()}>
-                <p style={{ margin: "0 0 0.75rem", fontWeight: 600 }}>Request OM / rent roll from broker</p>
+            <div className={`rental-om-modal ${styles.modalOverlay}`} onClick={() => setInquiryEmailModalOpen(false)}>
+              <div className={`${styles.modalCard} ${styles.modalCardLg}`} onClick={(e) => e.stopPropagation()}>
+                <p className={styles.modalTitle}>Request OM / rent roll from broker</p>
                 {lastInquirySentAt && (
-                  <p style={{ margin: "0 0 0.75rem", padding: "0.5rem 0.6rem", backgroundColor: "#fef3c7", border: "1px solid #f59e0b", borderRadius: "6px", fontSize: "0.8rem", color: "#92400e" }}>
+                  <p className={styles.warnNote}>
                     An inquiry was already sent on {formatDateOnly(lastInquirySentAt) ?? lastInquirySentAt}. Sending again may result in duplicate emails to the broker.
                   </p>
                 )}
-                <p style={{ margin: "0 0 1rem", fontSize: "0.875rem", color: "#555" }}>
+                <p className={styles.modalCopy}>
                   Review the draft below and edit if needed (e.g. add your phone and email in the signature). Click <strong>Send email</strong> to send from your connected Gmail. Keep the subject line so replies can be matched to this property.
                 </p>
-                {inquirySendError && <p style={{ margin: "0 0 0.75rem", fontSize: "0.875rem", color: "#b91c1c" }}>{inquirySendError}</p>}
+                {inquirySendError && <p className={styles.modalError}>{inquirySendError}</p>}
                 {inquiryGuardLoading && (
-                  <p style={{ margin: "0 0 0.75rem", fontSize: "0.8rem", color: "#64748b" }}>Checking inquiry guardrails…</p>
+                  <p className={styles.guardChecking}>Checking inquiry guardrails…</p>
                 )}
                 {inquiryGuard?.sameRecipientOtherProperties.length ? (
-                  <div style={{ margin: "0 0 0.75rem", padding: "0.5rem 0.6rem", backgroundColor: "#fff7ed", border: "1px solid #fb923c", borderRadius: "6px", fontSize: "0.8rem", color: "#9a3412" }}>
-                    <strong style={{ display: "block", marginBottom: "0.25rem" }}>This broker email was already contacted for another property.</strong>
+                  <div className={styles.warnNote}>
+                    <strong className={styles.warnNoteTitle}>This broker email was already contacted for another property.</strong>
                     {inquiryGuard.sameRecipientOtherProperties.map((row) => (
                       <div key={`${row.propertyId}-${row.sentAt}`}>
                         {row.canonicalAddress} — {formatDateOnly(row.sentAt)}
@@ -4144,8 +4034,8 @@ export function CanonicalPropertyDetail({
                   </div>
                 ) : null}
                 {inquiryGuard?.sameBrokerTeamOtherProperties.length ? (
-                  <div style={{ margin: "0 0 0.75rem", padding: "0.5rem 0.6rem", backgroundColor: "#fff7ed", border: "1px solid #fb923c", borderRadius: "6px", fontSize: "0.8rem", color: "#9a3412" }}>
-                    <strong style={{ display: "block", marginBottom: "0.25rem" }}>A broker on this listing team was already involved on another contacted property.</strong>
+                  <div className={styles.warnNote}>
+                    <strong className={styles.warnNoteTitle}>A broker on this listing team was already involved on another contacted property.</strong>
                     {inquiryGuard.sameBrokerTeamOtherProperties.map((row) => (
                       <div key={`${row.propertyId}-${row.sentAt}`}>
                         {row.canonicalAddress} — {formatDateOnly(row.sentAt)}
@@ -4154,43 +4044,35 @@ export function CanonicalPropertyDetail({
                     ))}
                   </div>
                 ) : null}
-                <div style={{ marginBottom: "0.75rem" }}>
-                  <label style={{ display: "block", fontSize: "0.75rem", marginBottom: "0.25rem", color: "#555" }}>To (broker)</label>
+                <div className={styles.field}>
+                  <label className={styles.fieldLabel}>To (broker)</label>
                   <input
                     type="text"
                     value={inquiryDraft.to}
                     onChange={(e) => setInquiryDraft((p) => ({ ...p, to: e.target.value }))}
                     placeholder="Preferred broker email"
-                    style={{ width: "100%", padding: "0.4rem", fontSize: "0.875rem", border: "1px solid #ccc", borderRadius: "4px" }}
+                    className={styles.textInput}
                   />
                   {!inquiryDraft.to && (
-                    <p style={{ margin: "0.25rem 0 0", fontSize: "0.75rem", color: "#888" }}>No broker email on file yet. Save a preferred email above or enter one here manually.</p>
+                    <p className={styles.fieldHint}>No broker email on file yet. Save a preferred email above or enter one here manually.</p>
                   )}
                   {brokerEmailOptions.length > 1 && (
-                    <p style={{ margin: "0.25rem 0 0", fontSize: "0.75rem", color: "#666" }}>
+                    <p className={styles.fieldHintMuted}>
                       Other sourced emails: {brokerEmailOptions.slice(1).map((entry) => entry.email).join(", ") || "—"}
                     </p>
                   )}
                 </div>
-                <div style={{ marginBottom: "0.75rem" }}>
-                  <label style={{ display: "block", fontSize: "0.75rem", marginBottom: "0.25rem", color: "#555" }}>Subject</label>
+                <div className={styles.field}>
+                  <label className={styles.fieldLabel}>Subject</label>
                   <input
                     type="text"
                     value={inquiryDraft.subject}
                     onChange={(e) => setInquiryDraft((p) => ({ ...p, subject: e.target.value }))}
-                    style={{ width: "100%", padding: "0.4rem", fontSize: "0.875rem", border: "1px solid #ccc", borderRadius: "4px" }}
+                    className={styles.textInput}
                   />
                 </div>
-                <div
-                  style={{
-                    marginBottom: "0.75rem",
-                    padding: "0.65rem 0.7rem",
-                    border: "1px solid #dbeafe",
-                    borderRadius: "6px",
-                    background: "#eff6ff",
-                  }}
-                >
-                  <label style={{ display: "flex", alignItems: "center", gap: "0.45rem", fontSize: "0.82rem", fontWeight: 600, color: "#1e3a8a", cursor: "pointer" }}>
+                <div className={styles.tourBox}>
+                  <label className={styles.tourToggleLabel}>
                     <input
                       type="checkbox"
                       checked={includeTourRequest}
@@ -4199,15 +4081,15 @@ export function CanonicalPropertyDetail({
                     Also ask for a tour if available
                   </label>
                   {includeTourRequest && (
-                    <div style={{ marginTop: "0.55rem" }}>
-                      <label style={{ display: "block", fontSize: "0.72rem", marginBottom: "0.25rem", color: "#1e40af" }}>Preferred tour date and time</label>
+                    <div className={styles.tourBody}>
+                      <label className={styles.tourLabel}>Preferred tour date and time</label>
                       <input
                         type="datetime-local"
                         value={tourDateTime}
                         onChange={(e) => setTourDateTime(e.target.value)}
-                        style={{ width: "100%", maxWidth: "18rem", padding: "0.4rem", fontSize: "0.875rem", border: "1px solid #93c5fd", borderRadius: "4px" }}
+                        className={styles.tourInput}
                       />
-                      <p style={{ margin: "0.35rem 0 0", color: tourRequestNeedsDateTime ? "#b91c1c" : "#1e40af", fontSize: "0.74rem", lineHeight: 1.4 }}>
+                      <p className={`${styles.tourHint} ${tourRequestNeedsDateTime ? styles.tourHintError : ""}`}>
                         {tourRequestNeedsDateTime
                           ? "Choose a date and time to add the tour request to the draft."
                           : tourDateTimeLabel
@@ -4217,18 +4099,18 @@ export function CanonicalPropertyDetail({
                     </div>
                   )}
                 </div>
-                <div style={{ marginBottom: "1rem" }}>
-                  <label style={{ display: "block", fontSize: "0.75rem", marginBottom: "0.25rem", color: "#555" }}>Body (editable)</label>
+                <div className={styles.fieldLg}>
+                  <label className={styles.fieldLabel}>Body (editable)</label>
                   <textarea
                     value={inquiryDraft.body}
                     onChange={(e) => setInquiryDraft((p) => ({ ...p, body: e.target.value }))}
                     rows={6}
-                    style={{ width: "100%", padding: "0.4rem", fontSize: "0.875rem", border: "1px solid #ccc", borderRadius: "4px", resize: "vertical" }}
+                    className={styles.textareaInput}
                   />
                 </div>
                 {inquiryNeedsOverride && (
-                  <div style={{ marginBottom: "1rem" }}>
-                    <label style={{ display: "flex", alignItems: "center", gap: "0.35rem", fontSize: "0.875rem", cursor: "pointer" }}>
+                  <div className={styles.fieldLg}>
+                    <label className={styles.checkboxLabel}>
                       <input
                         type="checkbox"
                         checked={sendAnotherConfirm}
@@ -4238,10 +4120,11 @@ export function CanonicalPropertyDetail({
                     </label>
                   </div>
                 )}
-                <div style={{ display: "flex", gap: "0.5rem", justifyContent: "flex-end" }}>
-                  <button type="button" onClick={() => { setInquiryEmailModalOpen(false); setInquirySendError(null); }} style={{ padding: "0.4rem 0.75rem", border: "1px solid #ccc", borderRadius: "4px", background: "#fff", cursor: "pointer" }}>Cancel</button>
-                  <button
+                <div className={styles.modalActions}>
+                  <Button type="button" onClick={() => { setInquiryEmailModalOpen(false); setInquirySendError(null); }}>Cancel</Button>
+                  <Button
                     type="button"
+                    variant="primary"
                     disabled={Boolean(inquirySending || !inquiryDraft.to?.trim() || tourRequestNeedsDateTime || (inquiryNeedsOverride && !sendAnotherConfirm))}
                     onClick={async () => {
                       setInquirySendError(null);
@@ -4279,25 +4162,24 @@ export function CanonicalPropertyDetail({
                         setInquirySending(false);
                       }
                     }}
-                    style={{ padding: "0.4rem 0.75rem", border: "1px solid #0066cc", borderRadius: "4px", background: inquirySending ? "#94a3b8" : "#0066cc", color: "#fff", cursor: inquirySending ? "wait" : "pointer" }}
                   >
                     {inquirySending ? "Sending…" : "Send email"}
-                  </button>
+                  </Button>
                 </div>
               </div>
             </div>
           )}
           {manualInquiryModalOpen && (
-            <div className="rental-om-modal" style={{ position: "fixed", inset: 0, zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", backgroundColor: "rgba(0,0,0,0.4)" }} onClick={() => setManualInquiryModalOpen(false)}>
-              <div style={{ backgroundColor: "#fff", borderRadius: "8px", padding: "1.25rem", maxWidth: "460px", width: "100%", maxHeight: "90vh", overflow: "auto", boxShadow: "0 4px 20px rgba(0,0,0,0.15)" }} onClick={(e) => e.stopPropagation()}>
-                <p style={{ margin: "0 0 0.75rem", fontWeight: 600 }}>Mark prior inquiry as sent</p>
-                <p style={{ margin: "0 0 1rem", fontSize: "0.875rem", color: "#555" }}>
+            <div className={`rental-om-modal ${styles.modalOverlay}`} onClick={() => setManualInquiryModalOpen(false)}>
+              <div className={`${styles.modalCard} ${styles.modalCardSm}`} onClick={(e) => e.stopPropagation()}>
+                <p className={styles.modalTitle}>Mark prior inquiry as sent</p>
+                <p className={styles.modalCopy}>
                   This does <strong>not</strong> send an email. It records prior outreach on the server so duplicate-send guardrails continue to work after refresh.
                 </p>
-                {manualInquiryError && <p style={{ margin: "0 0 0.75rem", fontSize: "0.875rem", color: "#b91c1c" }}>{manualInquiryError}</p>}
+                {manualInquiryError && <p className={styles.modalError}>{manualInquiryError}</p>}
                 {inquiryGuard?.sameRecipientOtherProperties.length ? (
-                  <div style={{ margin: "0 0 0.75rem", padding: "0.5rem 0.6rem", backgroundColor: "#fff7ed", border: "1px solid #fb923c", borderRadius: "6px", fontSize: "0.8rem", color: "#9a3412" }}>
-                    <strong style={{ display: "block", marginBottom: "0.25rem" }}>This broker email already has inquiry history on other properties.</strong>
+                  <div className={styles.warnNote}>
+                    <strong className={styles.warnNoteTitle}>This broker email already has inquiry history on other properties.</strong>
                     {inquiryGuard.sameRecipientOtherProperties.map((row) => (
                       <div key={`${row.propertyId}-${row.sentAt}`}>
                         {row.canonicalAddress} — {formatDateOnly(row.sentAt)}
@@ -4306,8 +4188,8 @@ export function CanonicalPropertyDetail({
                   </div>
                 ) : null}
                 {inquiryGuard?.sameBrokerTeamOtherProperties.length ? (
-                  <div style={{ margin: "0 0 0.75rem", padding: "0.5rem 0.6rem", backgroundColor: "#fff7ed", border: "1px solid #fb923c", borderRadius: "6px", fontSize: "0.8rem", color: "#9a3412" }}>
-                    <strong style={{ display: "block", marginBottom: "0.25rem" }}>This listing team overlaps with other properties that already have inquiry history.</strong>
+                  <div className={styles.warnNote}>
+                    <strong className={styles.warnNoteTitle}>This listing team overlaps with other properties that already have inquiry history.</strong>
                     {inquiryGuard.sameBrokerTeamOtherProperties.map((row) => (
                       <div key={`${row.propertyId}-${row.sentAt}`}>
                         {row.canonicalAddress} — {formatDateOnly(row.sentAt)}
@@ -4316,29 +4198,30 @@ export function CanonicalPropertyDetail({
                     ))}
                   </div>
                 ) : null}
-                <div style={{ marginBottom: "0.75rem" }}>
-                  <label style={{ display: "block", fontSize: "0.75rem", marginBottom: "0.25rem", color: "#555" }}>Broker email</label>
+                <div className={styles.field}>
+                  <label className={styles.fieldLabel}>Broker email</label>
                   <input
                     type="text"
                     value={manualInquiryDraft.to}
                     onChange={(e) => setManualInquiryDraft((prev) => ({ ...prev, to: e.target.value }))}
                     placeholder="Preferred broker email (optional but recommended)"
-                    style={{ width: "100%", padding: "0.4rem", fontSize: "0.875rem", border: "1px solid #ccc", borderRadius: "4px" }}
+                    className={styles.textInput}
                   />
                 </div>
-                <div style={{ marginBottom: "1rem" }}>
-                  <label style={{ display: "block", fontSize: "0.75rem", marginBottom: "0.25rem", color: "#555" }}>Sent date</label>
+                <div className={styles.fieldLg}>
+                  <label className={styles.fieldLabel}>Sent date</label>
                   <input
                     type="date"
                     value={manualInquiryDraft.sentAt}
                     onChange={(e) => setManualInquiryDraft((prev) => ({ ...prev, sentAt: e.target.value }))}
-                    style={{ width: "100%", padding: "0.4rem", fontSize: "0.875rem", border: "1px solid #ccc", borderRadius: "4px" }}
+                    className={styles.textInput}
                   />
                 </div>
-                <div style={{ display: "flex", gap: "0.5rem", justifyContent: "flex-end" }}>
-                  <button type="button" onClick={() => { setManualInquiryModalOpen(false); setManualInquiryError(null); }} style={{ padding: "0.4rem 0.75rem", border: "1px solid #ccc", borderRadius: "4px", background: "#fff", cursor: "pointer" }}>Cancel</button>
-                  <button
+                <div className={styles.modalActions}>
+                  <Button type="button" onClick={() => { setManualInquiryModalOpen(false); setManualInquiryError(null); }}>Cancel</Button>
+                  <Button
                     type="button"
+                    variant="primary"
                     disabled={Boolean(manualInquirySaving)}
                     onClick={async () => {
                       setManualInquiryError(null);
@@ -4370,10 +4253,9 @@ export function CanonicalPropertyDetail({
                         setManualInquirySaving(false);
                       }
                     }}
-                    style={{ padding: "0.4rem 0.75rem", border: "1px solid #0066cc", borderRadius: "4px", background: manualInquirySaving ? "#94a3b8" : "#0066cc", color: "#fff", cursor: manualInquirySaving ? "wait" : "pointer" }}
                   >
                     {manualInquirySaving ? "Saving…" : "Save inquiry history"}
-                  </button>
+                  </Button>
                 </div>
               </div>
             </div>
@@ -4417,7 +4299,7 @@ export function CanonicalPropertyDetail({
             </V3ReportPanel>
           )}
           {rentRollComparison && !rentRollComparison.comparable && rentalUnits.length > 0 && omRentRoll.length > 0 && (
-            <p style={{ margin: "0.5rem 0", padding: "0.35rem 0.5rem", backgroundColor: "#fef3c7", borderRadius: "4px", fontSize: "0.8rem", color: "#92400e" }}>
+            <p className={styles.compareWarn}>
               <strong>RapidAPI rent roll likely incomplete — comparison disabled.</strong> Only compare when total units and total bedrooms match (RapidAPI: {rentRollComparison.totalUnitsRapid} units, {rentRollComparison.totalBedsRapid} beds; OM: {rentRollComparison.totalUnitsOm} units, {rentRollComparison.totalBedsOm} beds).
             </p>
           )}
@@ -4481,22 +4363,22 @@ export function CanonicalPropertyDetail({
             </V3ReportPanel>
           ) : (
             <V3ReportPanel title={financialsHeading} subtitle={financialsCopy}>
-              <p style={{ margin: 0, color: "#64748b", fontSize: "0.86rem" }}>
+              <p className={styles.noteMuted}>
                 Upload or promote an OM snapshot to populate investor takeaways, key metrics, rent roll rows, and expense tables.
               </p>
             </V3ReportPanel>
           )}
           <div className="rental-om-doc-grid">
             <div className="rental-om-panel rental-om-panel--documents">
-              <strong style={{ display: "block", marginBottom: "0.2rem" }}>Documents</strong>
-              <p style={{ margin: "0 0 0.35rem", fontSize: "0.75rem", color: "#666" }}>Inquiry attachments, uploaded docs, and generated dossier/Excel.</p>
+              <strong className={styles.docBlockTitle}>Documents</strong>
+              <p className={styles.docBlockSub}>Inquiry attachments, uploaded docs, and generated dossier/Excel.</p>
               {unifiedDocuments === null ? (
-                <p style={{ margin: 0, fontSize: "0.8rem", color: "#737373" }}>Loading…</p>
+                <p className={styles.docMutedText}>Loading…</p>
               ) : unifiedDocuments.length > 0 ? (
                 <div className="rental-om-doc-list">
                   {unifiedDocuments.map((doc) => (
                     <div key={doc.id} className={`rental-om-doc-card ${selectedDocument?.id === doc.id ? "rental-om-doc-card--selected" : ""}`}>
-                      <div style={{ minWidth: 0 }}>
+                      <div className={styles.docMin}>
                         <button
                           type="button"
                           className="rental-om-doc-title-button"
@@ -4504,14 +4386,14 @@ export function CanonicalPropertyDetail({
                         >
                           {doc.fileName}
                         </button>
-                        <div style={{ fontSize: "0.75rem", color: "#555", marginTop: "0.15rem" }}>
+                        <div className={styles.docMeta}>
                           {doc.source} · {formatDateOnly(doc.createdAt)}
                         </div>
                         <a
                           href={`${API_BASE}/api/properties/${property.id}/documents/${doc.id}/file`}
                           target="_blank"
                           rel="noopener noreferrer"
-                          style={{ display: "inline-block", marginTop: "0.3rem", fontSize: "0.74rem", color: "#475569", fontWeight: 650 }}
+                          className={styles.docOpenLink}
                         >
                           Open file
                         </a>
@@ -4539,7 +4421,7 @@ export function CanonicalPropertyDetail({
                             setDeletingDocId(null);
                           }
                         }}
-                        style={{ flexShrink: 0, padding: "0.28rem 0.55rem", fontSize: "0.75rem", border: "1px solid #dc2626", borderRadius: "999px", background: "#fff", color: "#dc2626", cursor: deletingDocId === doc.id ? "wait" : "pointer" }}
+                        className={styles.btnDangerPill}
                       >
                         {deletingDocId === doc.id ? "Removing…" : "Remove"}
                       </button>
@@ -4547,12 +4429,12 @@ export function CanonicalPropertyDetail({
                   ))}
                 </div>
               ) : (
-                <p style={{ margin: 0, fontSize: "0.8rem", color: "#737373" }}>No documents yet. Send an inquiry, upload a file, or use the Deal dossier section above to generate the PDF and Excel.</p>
+                <p className={styles.docMutedText}>No documents yet. Send an inquiry, upload a file, or use the Deal dossier section above to generate the PDF and Excel.</p>
               )}
             </div>
             <div className="rental-om-panel rental-om-document-preview">
-              <strong style={{ display: "block", marginBottom: "0.2rem" }}>Preview</strong>
-              <p style={{ margin: "0 0 0.55rem", fontSize: "0.75rem", color: "#666" }}>
+              <strong className={styles.docBlockTitle}>Preview</strong>
+              <p className={styles.previewSub}>
                 Select a document to preview it here.
               </p>
               {selectedDocument && selectedDocumentUrl ? (
@@ -4571,16 +4453,15 @@ export function CanonicalPropertyDetail({
                 ) : (
                   <div className="rental-om-document-preview-empty">
                     <div>
-                      <strong style={{ display: "block", color: "#0f172a", marginBottom: "0.25rem" }}>
+                      <strong className={styles.previewEmptyTitle}>
                         Preview not available
                       </strong>
-                      <div style={{ marginBottom: "0.65rem" }}>{selectedDocument.fileName}</div>
+                      <div className={styles.previewEmptyName}>{selectedDocument.fileName}</div>
                       <a
                         href={selectedDocumentUrl}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="property-detail-rail-button"
-                        style={{ width: "auto", minHeight: "2.1rem", display: "inline-flex" }}
+                        className={`property-detail-rail-button ${styles.railButtonInline}`}
                       >
                         Open file
                       </a>
@@ -4592,7 +4473,7 @@ export function CanonicalPropertyDetail({
               )}
             </div>
             <div className="rental-om-panel rental-om-panel--upload">
-              <strong style={{ display: "block", marginBottom: "0.2rem" }}>Upload document</strong>
+              <strong className={styles.docBlockTitle}>Upload document</strong>
               <form
               onSubmit={async (e) => {
                 e.preventDefault();
@@ -4629,11 +4510,11 @@ export function CanonicalPropertyDetail({
                   setUploading(false);
                 }
               }}
-              style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", alignItems: "center", marginBottom: "0.5rem" }}
+              className={styles.uploadDocForm}
             >
-              <input type="file" name="file" style={{ fontSize: "0.8rem" }} accept=".pdf,.doc,.docx,.xls,.xlsx,.txt,.csv,image/*" />
-              <input type="text" name="docSource" placeholder="Source (e.g. Broker, Listing agent)" style={{ padding: "0.35rem 0.5rem", fontSize: "0.8rem", border: "1px solid #ccc", borderRadius: "4px", minWidth: "140px" }} />
-              <select name="docCategory" style={{ padding: "0.35rem 0.5rem", fontSize: "0.8rem", border: "1px solid #ccc", borderRadius: "4px" }}>
+              <input type="file" name="file" className={styles.fileInputSm} accept=".pdf,.doc,.docx,.xls,.xlsx,.txt,.csv,image/*" />
+              <input type="text" name="docSource" placeholder="Source (e.g. Broker, Listing agent)" className={styles.docSourceInput} />
+              <select name="docCategory" className={styles.docSelect}>
                 <option value="OM">OM</option>
                 <option value="Brochure">Brochure</option>
                 <option value="Rent Roll">Rent Roll</option>
@@ -4641,11 +4522,11 @@ export function CanonicalPropertyDetail({
                 <option value="T12 / Operating Summary">T12 / Operating Summary</option>
                 <option value="Other">Other</option>
               </select>
-              <button type="submit" disabled={Boolean(uploading)} style={{ padding: "0.35rem 0.6rem", fontSize: "0.8rem", border: "1px solid #0066cc", borderRadius: "4px", background: uploading ? "#94a3b8" : "#0066cc", color: "#fff", cursor: uploading ? "wait" : "pointer" }}>
+              <Button size="sm" type="submit" variant="primary" disabled={Boolean(uploading)}>
                 {uploading ? "Uploading…" : "Upload"}
-              </button>
+              </Button>
               </form>
-              {uploadError && <p style={{ margin: "0.25rem 0 0", fontSize: "0.8rem", color: "#b91c1c" }}>{uploadError}</p>}
+              {uploadError && <p className={styles.uploadError}>{uploadError}</p>}
             </div>
           </div>
           {listingForDisplay?.rentalPriceHistory?.length && rentalUnits.length === 0 && !hasAuthoritativeOm ? (
@@ -4661,7 +4542,7 @@ export function CanonicalPropertyDetail({
               ))}
             </div>
           ) : rentalUnits.length === 0 && !hasAuthoritativeOm ? (
-            <p style={{ color: "#737373", margin: 0 }}>—</p>
+            <p className={styles.mutedFlat}>—</p>
           ) : null}
         </div>
       </CollapsibleSection>
@@ -4677,32 +4558,33 @@ export function CanonicalPropertyDetail({
         count={unifiedRows.length}
         open={!!openSections.violationsComplaintsPermits}
         onToggle={() => { toggle("violationsComplaintsPermits"); if (!unifiedFetched) fetchUnifiedTable(); }}
+        icon={<ClipboardList size={15} strokeWidth={2} aria-hidden="true" className={styles.sectionIcon} />}
       >
         {unifiedLoading ? (
-          <p style={{ color: "#737373" }}>Loading…</p>
+          <p className={styles.muted}>Loading…</p>
         ) : unifiedRows.length === 0 ? (
-          <p style={{ color: "#737373" }}>No permits, violations, complaints, or litigations on file. Open this section to load data.</p>
+          <p className={styles.muted}>No permits, violations, complaints, or litigations on file. Open this section to load data.</p>
         ) : (
-          <div style={{ overflowX: "auto", maxHeight: "400px", overflowY: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem", tableLayout: "fixed" }}>
+          <div className={styles.unifiedScroll}>
+            <table className={styles.unifiedTable}>
               <colgroup>
-                <col style={{ width: "7rem", minWidth: "7rem" }} />
-                <col style={{ width: "8rem", minWidth: "8rem" }} />
-                <col style={{ width: "auto" }} />
+                <col className={styles.unifiedColDate} />
+                <col className={styles.unifiedColCategory} />
+                <col className={styles.unifiedColInfo} />
               </colgroup>
               <thead>
-                <tr style={{ borderBottom: "1px solid #e5e5e5" }}>
-                  <th style={{ textAlign: "left", padding: "0.5rem 0.75rem 0.5rem 0" }}>Date</th>
-                  <th style={{ textAlign: "left", padding: "0.5rem 0.75rem" }}>Category</th>
-                  <th style={{ textAlign: "left", padding: "0.5rem 0 0.5rem 0.75rem" }}>Info</th>
+                <tr className={styles.unifiedHeadRow}>
+                  <th className={styles.unifiedThFirst}>Date</th>
+                  <th className={styles.unifiedTh}>Category</th>
+                  <th className={styles.unifiedThLast}>Info</th>
                 </tr>
               </thead>
               <tbody>
                 {unifiedRows.map((row, i) => (
-                  <tr key={i} style={{ borderBottom: "1px solid #f0f0f0" }}>
-                    <td style={{ padding: "0.5rem 0.75rem 0.5rem 0", whiteSpace: "nowrap", verticalAlign: "top" }}>{row.date}</td>
-                    <td style={{ padding: "0.5rem 0.75rem", verticalAlign: "top" }}>{row.category}</td>
-                    <td style={{ padding: "0.5rem 0 0.5rem 0.75rem", wordBreak: "break-word", verticalAlign: "top" }}>{row.info}</td>
+                  <tr key={i} className={styles.unifiedRow}>
+                    <td className={styles.unifiedTdFirst}>{row.date}</td>
+                    <td className={styles.unifiedTd}>{row.category}</td>
+                    <td className={styles.unifiedTdLast}>{row.info}</td>
                   </tr>
                 ))}
               </tbody>
@@ -4714,7 +4596,7 @@ export function CanonicalPropertyDetail({
       )}
 
       {activeTab === "dossierScore" && (
-      <div style={{ marginTop: "1.5rem", fontSize: "0.8rem", color: "#64748b" }}>
+      <div className={styles.footnote}>
         Deal dossier generation now runs from the dedicated section above using these property-level costs plus your saved profile defaults.
       </div>
       )}

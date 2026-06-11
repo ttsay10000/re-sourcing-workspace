@@ -1,0 +1,1042 @@
+/* Canonical property detail — design-system module.
+   Used only by CanonicalPropertyDetail.tsx (expanded-row detail inside the
+   property-data page). Tokens from globals.css only. Shared sibling classes
+   (rental-om-*, linked-listing-bar, property-metric, property-mini-chip,
+   property-detail-section-*, initial-info-*, v3-report-*, …) stay global in
+   globals.css and are not redefined here. */
+
+/* ─── Collapsible section headers ─────────────────────────────── */
+
+.sectionTitle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.sectionIcon {
+  color: var(--app-muted);
+  flex-shrink: 0;
+}
+
+/* ─── Generic layout / text helpers ───────────────────────────── */
+
+.stackLg {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.muted {
+  color: var(--app-muted);
+}
+
+.mutedFlat {
+  margin: 0;
+  color: var(--app-muted);
+}
+
+/* margin:0 + sm copy (was 0.86rem / #64748b) */
+.noteMuted {
+  margin: 0;
+  color: var(--app-muted);
+  font-size: var(--text-sm);
+}
+
+.errorText {
+  margin: 0;
+  color: var(--app-red);
+  font-size: var(--text-sm);
+}
+
+.errorTextXs {
+  margin: 0.6rem 0 0;
+  color: var(--app-red);
+  font-size: var(--text-xs);
+}
+
+.footnote {
+  margin-top: var(--space-6);
+  font-size: var(--text-xs);
+  color: var(--app-muted);
+}
+
+/* ─── V3RecordsTable ──────────────────────────────────────────── */
+
+.recordsEmpty {
+  border: 1px dashed var(--app-line-strong);
+  border-radius: var(--radius-md);
+  padding: 0.8rem;
+  color: var(--app-muted);
+  font-size: var(--text-sm);
+  background: var(--app-surface-raised);
+}
+
+.recordsScroll {
+  max-height: 380px;
+  overflow: auto;
+  border: 1px solid var(--app-line);
+  border-radius: var(--radius-md);
+  background: var(--app-surface);
+}
+
+.recordsTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-xs);
+  min-width: 720px;
+}
+
+.recordsHeadRow {
+  background: var(--app-surface-strong);
+  border-bottom: 1px solid var(--app-line);
+}
+
+.recordsTh {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 0.55rem 0.65rem;
+  text-align: left;
+  color: var(--app-muted);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+  background: var(--app-surface-strong);
+}
+
+.recordsThRight {
+  text-align: right;
+}
+
+.recordsThCenter {
+  text-align: center;
+}
+
+.recordsRow {
+  border-bottom: 1px solid var(--app-line-subtle);
+}
+
+.recordsTd {
+  padding: 0.58rem 0.65rem;
+  text-align: left;
+  color: var(--app-ink);
+  vertical-align: middle;
+  overflow-wrap: anywhere;
+}
+
+.recordsTdRight {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.recordsTdCenter {
+  text-align: center;
+}
+
+/* ─── Broker comps panel ──────────────────────────────────────── */
+
+.cellStack {
+  display: grid;
+  gap: 0.12rem;
+}
+
+.cellSub {
+  color: var(--app-muted);
+  font-size: var(--text-xs);
+}
+
+.spreadGood {
+  color: var(--app-green);
+  font-weight: 700;
+}
+
+.spreadBad {
+  color: var(--app-red);
+  font-weight: 700;
+}
+
+.spreadPct {
+  color: var(--app-muted);
+  font-weight: 600;
+}
+
+.uploadForm {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  justify-content: flex-end;
+  align-items: center;
+}
+
+.fileInput {
+  max-width: 15rem;
+  min-width: 0;
+  font-size: var(--text-xs);
+}
+
+/* ─── Enrichment / pipeline action notice ─────────────────────── */
+
+.actionNotice {
+  margin: 0 0 0.85rem;
+  padding: 0.6rem var(--space-3);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--app-line);
+  font-size: var(--text-sm);
+}
+
+.actionNoticeInfo {
+  border-color: var(--app-blue-border);
+  background: var(--app-blue-soft);
+  color: var(--app-blue);
+}
+
+.actionNoticeError {
+  border-color: var(--app-red-border);
+  background: var(--app-red-soft);
+  color: var(--app-red);
+}
+
+/* ─── Linked-listing bars / metrics ───────────────────────────── */
+
+.barSpaced {
+  margin-top: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.barInnerWrap {
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.barInnerWrapTight {
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.dupHigh {
+  color: var(--app-red);
+}
+
+.dupLow {
+  color: var(--app-green);
+}
+
+.dupMid {
+  color: var(--app-amber);
+}
+
+/* ─── Deal score override row ─────────────────────────────────── */
+
+.scoreOverrideRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+  padding: var(--space-3) var(--space-4) 0;
+  border-top: 1px solid var(--app-line);
+  margin-top: var(--space-3);
+}
+
+.scoreInput {
+  width: 6rem;
+  min-width: 0;
+}
+
+.reasonInput {
+  min-width: 16rem;
+  flex: 1 1 18rem;
+}
+
+.overrideNote {
+  font-size: var(--text-sm);
+  color: var(--app-ink-secondary);
+}
+
+.errorNote {
+  font-size: var(--text-sm);
+  color: var(--app-red);
+}
+
+/* ─── Dossier workflow panel ──────────────────────────────────── */
+
+.spreadRow {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.blockTitle {
+  display: block;
+  color: var(--app-ink);
+}
+
+.blockSubtext {
+  display: block;
+  margin-top: 0.2rem;
+  color: var(--app-muted);
+  font-size: var(--text-xs);
+}
+
+.btnRow {
+  display: flex;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.progressSpaced {
+  margin-top: 0.7rem;
+}
+
+/* ─── Deal-analysis banner ────────────────────────────────────── */
+
+.analysisBanner {
+  margin-bottom: var(--space-4);
+  padding: var(--space-4) 1.1rem;
+  border-radius: var(--radius-xl);
+  border: 1px solid var(--app-blue-border);
+  background: linear-gradient(135deg, var(--app-blue-soft) 0%, var(--app-surface) 100%);
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.analysisBannerBody {
+  max-width: 760px;
+}
+
+.analysisEyebrow {
+  font-size: var(--text-xs);
+  font-weight: 700;
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--app-blue);
+}
+
+.analysisTitle {
+  margin-top: var(--space-1);
+  font-size: var(--text-md);
+  font-weight: 700;
+  color: var(--app-ink);
+}
+
+.analysisCopy {
+  margin: 0.45rem 0 0;
+  font-size: var(--text-sm);
+  color: var(--app-ink-secondary);
+  line-height: var(--leading-normal);
+}
+
+.analysisStatus {
+  margin-top: 0.55rem;
+  font-size: var(--text-sm);
+  color: var(--app-ink-secondary);
+}
+
+.analysisStatusStrong {
+  color: var(--app-ink);
+}
+
+.analysisError {
+  margin-top: 0.35rem;
+  font-size: var(--text-sm);
+  color: var(--app-red);
+}
+
+.analysisActions {
+  display: flex;
+  gap: 0.65rem;
+  flex-wrap: wrap;
+}
+
+.pillLinkPrimary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.7rem var(--space-4);
+  border-radius: var(--radius-pill);
+  background: var(--app-ink);
+  color: var(--brand-on);
+  text-decoration: none;
+  font-weight: 700;
+}
+
+.pillLinkSecondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.7rem var(--space-4);
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--app-line-strong);
+  background: var(--app-surface);
+  color: var(--app-ink-secondary);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+/* ─── Saved-search sourcing banner (tone ← sourcingUpdate.status) ─ */
+
+.sourcingBanner {
+  margin-bottom: var(--space-4);
+  padding: 0.85rem var(--space-4);
+  border-radius: var(--radius-xl);
+  border: 1px solid var(--app-line-strong);
+}
+
+.sourcingBannerInfo {
+  border-color: var(--app-blue-border);
+  background: var(--app-blue-soft);
+  color: var(--app-blue);
+}
+
+.sourcingBannerWarn {
+  border-color: var(--app-amber-border);
+  background: var(--app-amber-soft);
+  color: var(--app-amber);
+}
+
+.sourcingBannerNeutral {
+  border-color: var(--app-line-strong);
+  background: var(--app-surface-raised);
+  color: var(--app-ink-secondary);
+}
+
+.sourcingHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.sourcingEyebrow {
+  font-size: var(--text-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+}
+
+.sourcingLabel {
+  font-size: var(--text-md);
+  font-weight: 600;
+}
+
+.sourcingDetail {
+  font-size: var(--text-sm);
+  opacity: 0.9;
+}
+
+.sourcingSummary {
+  margin: 0.6rem 0 0;
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+}
+
+.sourcingChanges {
+  margin: 0.65rem 0 0;
+  padding-left: 1.1rem;
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+}
+
+/* ─── Photos / media ──────────────────────────────────────────── */
+
+.mediaColumns {
+  display: flex;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.mediaColumn {
+  flex: 1 1 300px;
+  min-width: 0;
+}
+
+.descriptionText {
+  white-space: pre-wrap;
+  color: var(--app-ink-secondary);
+  line-height: var(--leading-normal);
+  margin: 0;
+}
+
+/* ─── Rental / OM shell + inquiry panel ───────────────────────── */
+
+.omShell {
+  font-size: var(--text-sm);
+}
+
+.panelSpaced {
+  margin-bottom: var(--space-3);
+}
+
+.inquiryTitle {
+  display: block;
+  margin-bottom: 0.35rem;
+  font-size: var(--text-sm);
+  color: var(--app-ink);
+}
+
+.sentNote {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--app-green);
+  font-weight: 500;
+}
+
+.successNote {
+  margin: 0 0 var(--space-2);
+  padding: 0.4rem 0.6rem;
+  background-color: var(--app-green-soft);
+  border: 1px solid var(--app-green-border);
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
+  color: var(--app-green);
+}
+
+.omReceivedNote {
+  margin: 0 0 var(--space-2);
+  padding: 0.4rem 0.6rem;
+  background-color: var(--app-blue-soft);
+  border: 1px solid var(--app-blue-border);
+  border-radius: var(--radius-md);
+  font-size: var(--text-xs);
+  color: var(--app-blue);
+}
+
+.recipientBox {
+  margin: 0 0 var(--space-3);
+  padding: 0.7rem 0.8rem;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--app-line);
+  background-color: var(--app-surface-raised);
+}
+
+.recipientHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+
+.recipientEyebrow {
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+  color: var(--app-ink-secondary);
+}
+
+.recipientEmail {
+  margin-top: 0.2rem;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--app-ink);
+}
+
+.recipientHint {
+  margin-top: 0.2rem;
+  font-size: var(--text-xs);
+  color: var(--app-muted);
+  line-height: var(--leading-normal);
+}
+
+.refreshingNote {
+  font-size: var(--text-xs);
+  color: var(--app-muted);
+}
+
+.recipientNotice {
+  margin: 0.6rem 0 0;
+  font-size: var(--text-xs);
+  color: var(--app-green);
+}
+
+.recipientError {
+  margin: 0.6rem 0 0;
+  font-size: var(--text-xs);
+  color: var(--app-red);
+}
+
+.inlineForm {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  margin-top: 0.65rem;
+}
+
+.recipientInput {
+  flex: 1 1 18rem;
+  min-width: 14rem;
+  padding: 0.45rem;
+  font-size: var(--text-sm);
+  border: 1px solid var(--app-line-strong);
+  border-radius: var(--radius-md);
+}
+
+.btnBrandSoft {
+  padding: 0.4rem 0.7rem;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--brand);
+  background-color: var(--brand-soft);
+  color: var(--brand-strong);
+  cursor: pointer;
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+.btnBrandSoftBusy {
+  background-color: var(--brand-border);
+  cursor: wait;
+}
+
+.candidateBlock {
+  margin-top: 0.65rem;
+}
+
+.candidateLabel {
+  margin-bottom: 0.35rem;
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  color: var(--app-muted);
+}
+
+.chipRow {
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.emailChip {
+  padding: 0.25rem 0.55rem;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--app-line-strong);
+  background-color: var(--app-surface);
+  color: var(--app-ink-secondary);
+  cursor: pointer;
+  font-size: var(--text-xs);
+}
+
+.actionRow {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.btnAction {
+  padding: 0.35rem 0.6rem;
+  background-color: var(--app-surface-strong);
+  border: 1px solid var(--app-line-strong);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  color: var(--app-ink-secondary);
+  cursor: pointer;
+}
+
+.btnActionPlain {
+  background-color: var(--app-surface);
+}
+
+.btnAction:disabled {
+  background-color: var(--app-line);
+  color: var(--app-subtle);
+  cursor: not-allowed;
+}
+
+.helpText {
+  margin: var(--space-1) 0 0;
+  color: var(--app-muted);
+  font-size: var(--text-xs);
+}
+
+/* ─── Modals ──────────────────────────────────────────────────── */
+
+.modalOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* Overlay scrim: no design token exists for translucent ink. */
+  background-color: rgba(24, 24, 27, 0.45);
+}
+
+.modalCard {
+  background-color: var(--app-surface);
+  border-radius: var(--radius-md);
+  padding: 1.25rem;
+  width: 100%;
+  max-height: 90vh;
+  overflow: auto;
+  box-shadow: var(--app-shadow);
+}
+
+.modalCardLg {
+  max-width: 520px;
+}
+
+.modalCardSm {
+  max-width: 460px;
+}
+
+.modalTitle {
+  margin: 0 0 var(--space-3);
+  font-weight: 600;
+}
+
+.modalCopy {
+  margin: 0 0 var(--space-4);
+  font-size: var(--text-sm);
+  color: var(--app-ink-secondary);
+}
+
+.modalError {
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--app-red);
+}
+
+.guardChecking {
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-xs);
+  color: var(--app-muted);
+}
+
+.warnNote {
+  margin: 0 0 var(--space-3);
+  padding: var(--space-2) 0.6rem;
+  background-color: var(--app-amber-soft);
+  border: 1px solid var(--app-amber-border);
+  border-radius: var(--radius-md);
+  font-size: var(--text-xs);
+  color: var(--app-amber);
+}
+
+.warnNoteTitle {
+  display: block;
+  margin-bottom: var(--space-1);
+}
+
+.field {
+  margin-bottom: var(--space-3);
+}
+
+.fieldLg {
+  margin-bottom: var(--space-4);
+}
+
+.fieldLabel {
+  display: block;
+  font-size: var(--text-xs);
+  margin-bottom: var(--space-1);
+  color: var(--app-ink-secondary);
+}
+
+.textInput {
+  width: 100%;
+  min-width: 0;
+  padding: 0.4rem;
+  font-size: var(--text-sm);
+  border: 1px solid var(--app-line-strong);
+  border-radius: var(--radius-sm);
+}
+
+.textareaInput {
+  width: 100%;
+  min-width: 0;
+  padding: 0.4rem;
+  font-size: var(--text-sm);
+  border: 1px solid var(--app-line-strong);
+  border-radius: var(--radius-sm);
+  resize: vertical;
+}
+
+.fieldHint {
+  margin: var(--space-1) 0 0;
+  font-size: var(--text-xs);
+  color: var(--app-subtle);
+}
+
+.fieldHintMuted {
+  margin: var(--space-1) 0 0;
+  font-size: var(--text-xs);
+  color: var(--app-muted);
+}
+
+.tourBox {
+  margin-bottom: var(--space-3);
+  padding: 0.65rem 0.7rem;
+  border: 1px solid var(--app-blue-border);
+  border-radius: var(--radius-md);
+  background: var(--app-blue-soft);
+}
+
+.tourToggleLabel {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--app-blue);
+  cursor: pointer;
+}
+
+.tourBody {
+  margin-top: 0.55rem;
+}
+
+.tourLabel {
+  display: block;
+  font-size: var(--text-2xs);
+  margin-bottom: var(--space-1);
+  color: var(--app-blue);
+}
+
+.tourInput {
+  width: 100%;
+  max-width: 18rem;
+  min-width: 0;
+  padding: 0.4rem;
+  font-size: var(--text-sm);
+  border: 1px solid var(--app-blue-border);
+  border-radius: var(--radius-sm);
+}
+
+.tourHint {
+  margin: 0.35rem 0 0;
+  color: var(--app-blue);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+
+.tourHintError {
+  color: var(--app-red);
+}
+
+.checkboxLabel {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.modalActions {
+  display: flex;
+  gap: var(--space-2);
+  justify-content: flex-end;
+}
+
+/* ─── Comparison warning ──────────────────────────────────────── */
+
+.compareWarn {
+  margin: var(--space-2) 0;
+  padding: 0.35rem var(--space-2);
+  background-color: var(--app-amber-soft);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  color: var(--app-amber);
+}
+
+/* ─── Rental review unit cells ────────────────────────────────── */
+
+.unitThumb {
+  width: 64px;
+  height: 46px;
+  object-fit: cover;
+  border-radius: var(--radius-md);
+  display: block;
+}
+
+.noPhoto {
+  color: var(--app-subtle);
+}
+
+.unitSourceLink {
+  display: block;
+  color: var(--brand-strong);
+  font-size: var(--text-xs);
+  margin-top: 0.1rem;
+}
+
+/* ─── Documents / preview / upload ────────────────────────────── */
+
+.docBlockTitle {
+  display: block;
+  margin-bottom: 0.2rem;
+}
+
+.docBlockSub {
+  margin: 0 0 0.35rem;
+  font-size: var(--text-xs);
+  color: var(--app-muted);
+}
+
+.docMutedText {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--app-muted);
+}
+
+.docMin {
+  min-width: 0;
+}
+
+.docMeta {
+  font-size: var(--text-xs);
+  color: var(--app-ink-secondary);
+  margin-top: 0.15rem;
+}
+
+.docOpenLink {
+  display: inline-block;
+  margin-top: 0.3rem;
+  font-size: var(--text-xs);
+  color: var(--app-ink-secondary);
+  font-weight: 650;
+}
+
+.btnDangerPill {
+  flex-shrink: 0;
+  padding: 0.28rem 0.55rem;
+  font-size: var(--text-xs);
+  border: 1px solid var(--app-red);
+  border-radius: var(--radius-pill);
+  background: var(--app-surface);
+  color: var(--app-red);
+  cursor: pointer;
+}
+
+.btnDangerPill:disabled {
+  cursor: wait;
+}
+
+.previewSub {
+  margin: 0 0 0.55rem;
+  font-size: var(--text-xs);
+  color: var(--app-muted);
+}
+
+.previewEmptyTitle {
+  display: block;
+  color: var(--app-ink);
+  margin-bottom: var(--space-1);
+}
+
+.previewEmptyName {
+  margin-bottom: 0.65rem;
+}
+
+.railButtonInline {
+  width: auto;
+  min-height: 2.1rem;
+  display: inline-flex;
+}
+
+.uploadDocForm {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+  margin-bottom: var(--space-2);
+}
+
+.fileInputSm {
+  font-size: var(--text-xs);
+  min-width: 0;
+}
+
+.docSourceInput {
+  padding: 0.35rem var(--space-2);
+  font-size: var(--text-xs);
+  border: 1px solid var(--app-line-strong);
+  border-radius: var(--radius-sm);
+  min-width: 140px;
+}
+
+.docSelect {
+  padding: 0.35rem var(--space-2);
+  font-size: var(--text-xs);
+  border: 1px solid var(--app-line-strong);
+  border-radius: var(--radius-sm);
+  min-width: 0;
+}
+
+.uploadError {
+  margin: var(--space-1) 0 0;
+  font-size: var(--text-xs);
+  color: var(--app-red);
+}
+
+/* ─── Unified city-records table (activity tab) ───────────────── */
+
+.unifiedScroll {
+  overflow-x: auto;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.unifiedTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+  table-layout: fixed;
+}
+
+.unifiedColDate {
+  width: 7rem;
+  min-width: 7rem;
+}
+
+.unifiedColCategory {
+  width: 8rem;
+  min-width: 8rem;
+}
+
+.unifiedColInfo {
+  width: auto;
+}
+
+.unifiedHeadRow {
+  border-bottom: 1px solid var(--app-line);
+}
+
+.unifiedThFirst {
+  text-align: left;
+  padding: var(--space-2) var(--space-3) var(--space-2) 0;
+}
+
+.unifiedTh {
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+}
+
+.unifiedThLast {
+  text-align: left;
+  padding: var(--space-2) 0 var(--space-2) var(--space-3);
+}
+
+.unifiedRow {
+  border-bottom: 1px solid var(--app-line-subtle);
+}
+
+.unifiedTdFirst {
+  padding: var(--space-2) var(--space-3) var(--space-2) 0;
+  white-space: nowrap;
+  vertical-align: top;
+}
+
+.unifiedTd {
+  padding: var(--space-2) var(--space-3);
+  vertical-align: top;
+}
+
+.unifiedTdLast {
+  padding: var(--space-2) 0 var(--space-2) var(--space-3);
+  word-break: break-word;
+  vertical-align: top;
+}
