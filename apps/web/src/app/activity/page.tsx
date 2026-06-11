@@ -9,7 +9,9 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { FileText, History, RefreshCcw, Building2, FileCheck2, Upload } from "lucide-react";
+import { Badge, type BadgeTone, Button, EmptyState, PageHeader, SkeletonRows } from "@/components/ui";
 import { API_BASE } from "@/lib/api";
+import styles from "./activity.module.css";
 
 type ActivityItem = {
   kind: "event" | "run";
@@ -86,18 +88,18 @@ function typeLabel(item: ActivityItem): string {
   }
 }
 
-function statusTone(status: string | null): { background: string; color: string; border: string } {
+function statusBadgeTone(status: string | null): BadgeTone {
   switch (status) {
     case "completed":
-      return { background: "#ecfdf5", color: "#047857", border: "#a7f3d0" };
+      return "success";
     case "failed":
-      return { background: "#fef2f2", color: "#b91c1c", border: "#fecaca" };
+      return "danger";
     case "partial":
-      return { background: "#fffbeb", color: "#b45309", border: "#fde68a" };
+      return "warning";
     case "running":
-      return { background: "#eff6ff", color: "#1d4ed8", border: "#bfdbfe" };
+      return "info";
     default:
-      return { background: "#f4f4f3", color: "#52525b", border: "#e4e4e7" };
+      return "neutral";
   }
 }
 
@@ -183,19 +185,14 @@ export default function ActivityPage() {
   }, [items]);
 
   return (
-    <main style={{ padding: "1.4rem 1.6rem", maxWidth: "980px", margin: "0 auto", display: "grid", gap: "1rem" }}>
-      <header style={{ display: "grid", gap: "0.3rem" }}>
-        <span style={{ fontSize: "0.72rem", fontWeight: 800, letterSpacing: "0.08em", color: "var(--brand-strong, #2f6f52)", textTransform: "uppercase" }}>
-          Deal Progress · Record Keeper
-        </span>
-        <h1 style={{ margin: 0, fontSize: "1.45rem", color: "var(--app-ink, #18231e)" }}>Activity Log</h1>
-        <p style={{ margin: 0, color: "var(--app-ink-secondary, #68736d)", fontSize: "0.88rem", maxWidth: "62ch" }}>
-          Everything that changed the workspace — OM uploads, new properties, dossier generations, imports, and
-          refresh runs — newest first. Filter by type or search by address and file name.
-        </p>
-      </header>
+    <main className={styles.page}>
+      <PageHeader
+        eyebrow="Deal Progress · Record Keeper"
+        title="Activity Log"
+        subtitle="Everything that changed the workspace — OM uploads, new properties, dossier generations, imports, and refresh runs — newest first. Filter by type or search by address and file name."
+      />
 
-      <div style={{ display: "flex", flexWrap: "wrap", gap: "0.45rem", alignItems: "center" }}>
+      <div className={styles.filterRow}>
         {FILTERS.map((entry) => {
           const ChipIcon = entry.icon;
           const active = entry.key === filterKey;
@@ -204,19 +201,7 @@ export default function ActivityPage() {
               key={entry.key}
               type="button"
               onClick={() => setFilterKey(entry.key)}
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: "0.35rem",
-                padding: "0.38rem 0.7rem",
-                borderRadius: "999px",
-                border: active ? "1px solid var(--brand-strong, #2f6f52)" : "1px solid rgba(38, 47, 44, 0.16)",
-                background: active ? "var(--brand-strong, #2f6f52)" : "#ffffff",
-                color: active ? "#ffffff" : "var(--app-ink, #18231e)",
-                fontSize: "0.78rem",
-                fontWeight: 700,
-                cursor: "pointer",
-              }}
+              className={active ? `${styles.filterChip} ${styles.filterChipActive}` : styles.filterChip}
             >
               <ChipIcon size={13} strokeWidth={2} aria-hidden="true" />
               {entry.label}
@@ -228,7 +213,7 @@ export default function ActivityPage() {
             event.preventDefault();
             setAppliedSearch(search);
           }}
-          style={{ marginLeft: "auto", display: "flex", gap: "0.4rem" }}
+          className={styles.searchForm}
         >
           <input
             type="search"
@@ -239,151 +224,70 @@ export default function ActivityPage() {
             }}
             placeholder="Search address, file, action"
             aria-label="Search activity"
-            style={{
-              padding: "0.4rem 0.65rem",
-              borderRadius: "8px",
-              border: "1px solid rgba(38, 47, 44, 0.18)",
-              fontSize: "0.82rem",
-              minWidth: "220px",
-            }}
+            className={styles.searchInput}
           />
-          <button
-            type="submit"
-            style={{
-              padding: "0.4rem 0.75rem",
-              borderRadius: "8px",
-              border: "1px solid rgba(38, 47, 44, 0.18)",
-              background: "#ffffff",
-              fontSize: "0.8rem",
-              fontWeight: 700,
-              cursor: "pointer",
-            }}
-          >
+          <Button type="submit" size="sm">
             Search
-          </button>
+          </Button>
         </form>
       </div>
 
-      {error ? (
-        <div style={{ padding: "0.7rem 0.9rem", borderRadius: "8px", border: "1px solid #fecaca", background: "#fef2f2", color: "#991b1b", fontSize: "0.84rem" }}>
-          {error}
-        </div>
-      ) : null}
+      {error ? <div className={styles.error}>{error}</div> : null}
 
       {loading ? (
-        <div style={{ color: "var(--app-ink-secondary, #68736d)", fontSize: "0.88rem" }}>Loading activity…</div>
+        <SkeletonRows count={6} />
       ) : items.length === 0 ? (
-        <div
-          style={{
-            padding: "1.6rem",
-            borderRadius: "10px",
-            border: "1px dashed rgba(38, 47, 44, 0.2)",
-            color: "var(--app-ink-secondary, #68736d)",
-            fontSize: "0.88rem",
-            textAlign: "center",
-          }}
-        >
-          No activity recorded for this filter yet. New OM uploads, property creates, dossier generations, and
-          refresh runs will appear here as they happen.
-        </div>
+        <EmptyState
+          icon={<History size={16} strokeWidth={2} aria-hidden="true" />}
+          title="No activity recorded for this filter yet."
+          description="New OM uploads, property creates, dossier generations, and refresh runs will appear here as they happen."
+        />
       ) : (
-        <div style={{ display: "grid", gap: "1.1rem" }}>
+        <div className={styles.eventGroups}>
           {grouped.map((group) => (
-            <section key={group.day} style={{ display: "grid", gap: "0.45rem" }}>
-              <h2 style={{ margin: 0, fontSize: "0.78rem", fontWeight: 800, color: "var(--app-ink-secondary, #68736d)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
-                {group.day}
-              </h2>
-              <div style={{ display: "grid", gap: "0.45rem" }}>
-                {group.items.map((item) => {
-                  const tone = statusTone(item.status);
-                  return (
-                    <article
-                      key={`${item.kind}-${item.id}`}
-                      style={{
-                        display: "flex",
-                        gap: "0.8rem",
-                        alignItems: "baseline",
-                        padding: "0.6rem 0.8rem",
-                        borderRadius: "10px",
-                        border: "1px solid rgba(38, 47, 44, 0.12)",
-                        background: "#ffffff",
-                      }}
-                    >
-                      <span style={{ fontSize: "0.74rem", color: "var(--app-ink-secondary, #68736d)", minWidth: "4.2rem" }}>
-                        {formatTime(item.createdAt)}
-                      </span>
-                      <div style={{ display: "grid", gap: "0.18rem", minWidth: 0, flex: 1 }}>
-                        <div style={{ display: "flex", gap: "0.5rem", alignItems: "baseline", flexWrap: "wrap" }}>
-                          <strong style={{ fontSize: "0.86rem", color: "var(--app-ink, #18231e)" }}>{item.title}</strong>
-                          <span
-                            style={{
-                              fontSize: "0.68rem",
-                              fontWeight: 800,
-                              padding: "0.08rem 0.45rem",
-                              borderRadius: "999px",
-                              background: "#f4f4f3",
-                              border: "1px solid #e4e4e7",
-                              color: "#52525b",
-                              textTransform: "capitalize",
-                            }}
-                          >
-                            {typeLabel(item)}
-                          </span>
-                          {item.kind === "run" && item.status ? (
-                            <span
-                              style={{
-                                fontSize: "0.68rem",
-                                fontWeight: 800,
-                                padding: "0.08rem 0.45rem",
-                                borderRadius: "999px",
-                                background: tone.background,
-                                border: `1px solid ${tone.border}`,
-                                color: tone.color,
-                                textTransform: "capitalize",
-                              }}
-                            >
-                              {item.status}
-                            </span>
-                          ) : null}
-                        </div>
-                        {item.body ? (
-                          <span style={{ fontSize: "0.78rem", color: "var(--app-ink-secondary, #68736d)", overflowWrap: "anywhere" }}>
-                            {item.body}
-                          </span>
-                        ) : null}
-                        {item.propertyId ? (
-                          <Link
-                            href={`/pipeline?propertyId=${encodeURIComponent(item.propertyId)}`}
-                            style={{ fontSize: "0.76rem", fontWeight: 700, color: "#1d4ed8", textDecoration: "none", justifySelf: "start" }}
-                          >
-                            {item.address || "Open property"}
-                          </Link>
+            <section key={group.day} className={styles.dayGroup}>
+              <h2 className={styles.dayHeading}>{group.day}</h2>
+              <div className={styles.eventList}>
+                {group.items.map((item) => (
+                  <article key={`${item.kind}-${item.id}`} className={styles.eventRow}>
+                    <span className={styles.eventTime}>{formatTime(item.createdAt)}</span>
+                    <div className={styles.eventBody}>
+                      <div className={styles.eventTitleLine}>
+                        <strong className={styles.eventTitle}>{item.title}</strong>
+                        <Badge tone="neutral" className={styles.eventBadge}>
+                          {typeLabel(item)}
+                        </Badge>
+                        {item.kind === "run" && item.status ? (
+                          <Badge tone={statusBadgeTone(item.status)} className={styles.eventBadge}>
+                            {item.status}
+                          </Badge>
                         ) : null}
                       </div>
-                    </article>
-                  );
-                })}
+                      {item.body ? <span className={styles.eventBodyText}>{item.body}</span> : null}
+                      {item.propertyId ? (
+                        <Link
+                          href={`/pipeline?propertyId=${encodeURIComponent(item.propertyId)}`}
+                          className={styles.eventLink}
+                        >
+                          {item.address || "Open property"}
+                        </Link>
+                      ) : null}
+                    </div>
+                  </article>
+                ))}
               </div>
             </section>
           ))}
           {nextBefore ? (
-            <button
+            <Button
               type="button"
+              size="sm"
               onClick={() => void loadMore()}
               disabled={loadingMore}
-              style={{
-                justifySelf: "center",
-                padding: "0.5rem 1.1rem",
-                borderRadius: "999px",
-                border: "1px solid rgba(38, 47, 44, 0.18)",
-                background: "#ffffff",
-                fontSize: "0.82rem",
-                fontWeight: 700,
-                cursor: loadingMore ? "wait" : "pointer",
-              }}
+              className={styles.loadMoreButton}
             >
               {loadingMore ? "Loading…" : "Load older activity"}
-            </button>
+            </Button>
           ) : null}
         </div>
       )}

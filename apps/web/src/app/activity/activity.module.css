@@ -1,0 +1,165 @@
+.page {
+  display: grid;
+  gap: var(--space-4);
+  width: min(100%, 980px);
+  margin: 0 auto;
+  color: var(--app-ink);
+}
+
+/* ─── Filter chips + search ───────────────────────────────────── */
+
+.filterRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.filterChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-height: 2rem;
+  padding: 0.38rem 0.7rem;
+  border: 1px solid var(--app-line);
+  border-radius: var(--radius-pill);
+  background: var(--app-surface);
+  color: var(--app-ink-secondary);
+  font-size: var(--text-xs);
+  font-weight: 650;
+  cursor: pointer;
+  transition: background 140ms ease, border-color 140ms ease, color 140ms ease;
+}
+
+.filterChip:hover {
+  border-color: var(--brand-border);
+  background: var(--brand-soft);
+  color: var(--brand-strong);
+}
+
+.filterChipActive,
+.filterChipActive:hover {
+  border-color: var(--brand);
+  background: var(--brand);
+  color: var(--brand-on);
+}
+
+.searchForm {
+  display: flex;
+  gap: var(--space-2);
+  margin-left: auto;
+}
+
+.searchInput {
+  width: 14rem;
+  min-width: 0;
+  padding-block: 0.4rem;
+  font-size: var(--text-xs);
+}
+
+/* ─── Notices ─────────────────────────────────────────────────── */
+
+.error {
+  border: 1px solid var(--app-red-border);
+  border-radius: var(--radius-md);
+  padding: 0.65rem 0.9rem;
+  background: var(--app-red-soft);
+  color: var(--app-red);
+  font-size: var(--text-sm);
+}
+
+/* ─── Day-grouped event feed ──────────────────────────────────── */
+
+.eventGroups {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.dayGroup {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.dayHeading {
+  margin: 0;
+  color: var(--app-muted);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+
+.eventList {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.eventRow {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  padding: 0.6rem 0.8rem;
+  border: 1px solid var(--app-line);
+  border-radius: var(--radius-md);
+  background: var(--app-surface);
+  box-shadow: var(--app-shadow-xs);
+}
+
+.eventTime {
+  flex: 0 0 auto;
+  min-width: 4.2rem;
+  color: var(--app-muted);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.eventBody {
+  display: grid;
+  flex: 1;
+  gap: 0.18rem;
+  min-width: 0;
+}
+
+.eventTitleLine {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.eventTitle {
+  color: var(--app-ink);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+/* Run types/statuses arrive lowercase ("streeteasy refresh") — keep the
+   original capitalised pill text on top of the shared Badge. */
+.eventBadge {
+  text-transform: capitalize;
+}
+
+.eventBodyText {
+  color: var(--app-ink-secondary);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+.eventLink {
+  justify-self: start;
+  color: var(--app-blue);
+  font-size: var(--text-xs);
+  font-weight: 650;
+  text-decoration: none;
+}
+
+.eventLink:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.loadMoreButton {
+  justify-self: center;
+  border-radius: var(--radius-pill);
+  padding-inline: 1.1rem;
+}
