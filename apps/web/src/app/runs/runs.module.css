@@ -1,0 +1,751 @@
+/* Sourcing Agent (runs list + run detail) — design-system module.
+   Shared by runs/page.tsx and runs/[id]/page.tsx. Tokens from globals.css only. */
+
+.page {
+  display: grid;
+  gap: var(--space-6);
+  width: min(100%, 1520px);
+  margin: 0 auto;
+  color: var(--app-ink);
+}
+
+/* ─── Notices / banners ───────────────────────────────────────── */
+
+.sendingBanner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  padding: 0.65rem 0.9rem;
+  border: 1px solid var(--app-amber-border);
+  border-radius: var(--radius-md);
+  background: var(--app-amber-soft);
+  color: var(--app-amber);
+  font-size: var(--text-sm);
+}
+
+.sendingBannerText {
+  font-weight: 600;
+}
+
+.sendingBannerTimer {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.notice {
+  border: 1px solid var(--app-green-border);
+  border-radius: var(--radius-md);
+  padding: 0.65rem 0.9rem;
+  background: var(--app-green-soft);
+  color: var(--app-green);
+  font-size: var(--text-sm);
+}
+
+.error {
+  border: 1px solid var(--app-red-border);
+  border-radius: var(--radius-md);
+  padding: 0.65rem 0.9rem;
+  background: var(--app-red-soft);
+  color: var(--app-red);
+  font-size: var(--text-sm);
+}
+
+/* ─── Section headers (inside Panels / form card) ─────────────── */
+
+.sectionHead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-4);
+}
+
+.sectionTitle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-3);
+  color: var(--app-ink);
+  font-size: var(--text-md);
+  font-weight: 650;
+}
+
+.sectionHead .sectionTitle {
+  margin-bottom: var(--space-1);
+}
+
+.sectionIcon {
+  flex: 0 0 auto;
+  color: var(--brand-strong);
+}
+
+.sectionSub {
+  margin: 0;
+  max-width: 46rem;
+  color: var(--app-muted);
+  font-size: var(--text-xs);
+  line-height: var(--leading-normal);
+}
+
+/* ─── "How it works" copy ─────────────────────────────────────── */
+
+.howCopy {
+  margin: 0 0 var(--space-3);
+  color: var(--app-ink-secondary);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+}
+
+.howList {
+  margin: 0 0 var(--space-3);
+  padding-left: var(--space-6);
+  color: var(--app-ink-secondary);
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+}
+
+.footnote {
+  margin: var(--space-3) 0 0;
+  color: var(--app-muted);
+  font-size: var(--text-xs);
+  line-height: var(--leading-normal);
+}
+
+.footnote code {
+  padding: 0.05rem 0.25rem;
+  border: 1px solid var(--app-line);
+  border-radius: var(--radius-sm);
+  background: var(--app-surface-strong);
+  color: var(--app-ink);
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+}
+
+/* ─── Search builder form card (mirrors the Panel primitive so the
+       <form> element matches its sibling Panels without restructuring) ── */
+
+.builderCard {
+  border: 1px solid var(--app-line);
+  border-radius: var(--radius-lg);
+  background: var(--app-surface);
+  box-shadow: var(--app-shadow-xs);
+  padding: var(--space-5);
+}
+
+/* ─── Form grids ──────────────────────────────────────────────── */
+
+.formGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-4);
+}
+
+.scheduleGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-4);
+}
+
+.filtersGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-4);
+}
+
+.spanFull {
+  grid-column: 1 / -1;
+}
+
+.fieldBlock {
+  margin-bottom: var(--space-4);
+}
+
+.fieldLabel {
+  display: block;
+  margin-bottom: var(--space-1);
+  color: var(--app-ink);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+.groupLabel {
+  display: block;
+  margin-bottom: var(--space-2);
+  color: var(--app-ink);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+.checkboxField {
+  display: flex;
+  align-items: flex-end;
+}
+
+.checkboxLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--app-ink);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+/* Inputs/selects inside grids: full width, allowed to shrink. Visual chrome
+   comes from the global :where(input/select/textarea) design-system base. */
+.input {
+  width: 100%;
+  min-width: 0;
+  min-height: 2.35rem;
+  padding-block: 0.4rem;
+}
+
+.inputNarrow {
+  max-width: 24rem;
+}
+
+.textarea {
+  width: 100%;
+  min-width: 0;
+  padding-block: 0.4rem;
+  resize: vertical;
+}
+
+.monoField {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.buttonRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  align-items: center;
+}
+
+/* ─── Sub-panels inside the builder (sources, outreach, LoopNet) ── */
+
+.subPanel {
+  margin-bottom: var(--space-4);
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--app-line);
+  border-radius: var(--radius-md);
+  background: var(--app-surface-strong);
+}
+
+.subPanelHead {
+  margin-bottom: var(--space-3);
+}
+
+.subPanelTitle {
+  margin: 0 0 var(--space-2);
+  color: var(--app-ink);
+  font-size: var(--text-sm);
+  font-weight: 650;
+}
+
+.subPanelHint {
+  margin: 0;
+  color: var(--app-muted);
+  font-size: var(--text-xs);
+  line-height: var(--leading-normal);
+}
+
+.outreachGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--space-3) var(--space-4);
+}
+
+.sourceToggleRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.sourceToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--app-ink);
+  font-size: var(--text-xs);
+}
+
+.sourceToggleDisabled {
+  color: var(--app-muted);
+}
+
+/* LoopNet manual-capture area */
+
+.loopnetGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-4);
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--app-line);
+  border-radius: var(--radius-md);
+  background: var(--app-surface-strong);
+}
+
+.captureStack {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: var(--space-3);
+}
+
+.captureCard {
+  display: grid;
+  gap: 0.6rem;
+  padding: var(--space-3);
+  border: 1px solid var(--app-line);
+  border-radius: var(--radius-md);
+  background: var(--app-surface);
+}
+
+.copyHint {
+  color: var(--app-muted);
+  font-size: var(--text-xs);
+}
+
+.copyHintDone {
+  color: var(--app-green);
+}
+
+.captureHtmlAction {
+  margin-top: var(--space-2);
+}
+
+/* ─── Areas picker ────────────────────────────────────────────── */
+
+.areaTabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin-bottom: var(--space-2);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--app-line);
+}
+
+.areaTab {
+  padding: 0.35rem 0.6rem;
+  border: 1px solid var(--app-line);
+  border-radius: var(--radius-pill);
+  background: var(--app-surface);
+  color: var(--app-muted);
+  font-size: var(--text-xs);
+  font-weight: 650;
+  cursor: pointer;
+  transition: background 140ms ease, border-color 140ms ease, color 140ms ease;
+}
+
+.areaTab:hover {
+  border-color: var(--brand-border);
+  color: var(--brand-strong);
+}
+
+.areaTabActive,
+.areaTabActive:hover {
+  border-color: var(--brand-border);
+  background: var(--brand-soft);
+  color: var(--brand-strong);
+  font-weight: 700;
+}
+
+.areaList {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  max-height: 14rem;
+  overflow-y: auto;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--app-line);
+  border-radius: var(--radius-md);
+  background: var(--app-surface-strong);
+}
+
+.areaOption {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: var(--space-2);
+  color: var(--app-ink);
+  font-size: var(--text-xs);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.areaOptionInherited {
+  cursor: default;
+  opacity: 0.6;
+  color: var(--app-ink-secondary);
+}
+
+.areaOptionNameBold {
+  font-weight: 700;
+}
+
+/* ─── Property type checkboxes ────────────────────────────────── */
+
+.typeOptionsBox {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  padding: var(--space-2);
+  border: 1px solid var(--app-line);
+  border-radius: var(--radius-md);
+  background: var(--app-surface-strong);
+}
+
+.typeOption {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+/* ─── Saved searches list ─────────────────────────────────────── */
+
+.savedSearchList {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.savedSearchCard {
+  padding: var(--space-4);
+  border: 1px solid var(--app-line);
+  border-radius: var(--radius-md);
+  background: var(--app-surface);
+  box-shadow: var(--app-shadow-xs);
+}
+
+.savedSearchCardExpanded {
+  background: var(--app-surface-raised);
+}
+
+.savedSearchTop {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.savedSearchInfo {
+  flex: 1 1 28rem;
+}
+
+.savedSearchTitleRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-2);
+}
+
+.savedSearchName {
+  margin: 0;
+  color: var(--app-ink);
+  font-size: var(--text-md);
+  font-weight: 650;
+}
+
+.savedSearchFilters {
+  margin: 0 0 var(--space-2);
+  color: var(--app-ink-secondary);
+  font-size: var(--text-xs);
+  line-height: var(--leading-normal);
+}
+
+.savedSearchMeta {
+  margin: 0;
+  color: var(--app-muted);
+  font-size: var(--text-xs);
+  line-height: var(--leading-normal);
+}
+
+.savedSearchActions {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+/* ─── Saved-search run history ────────────────────────────────── */
+
+.runHistory {
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--app-line);
+}
+
+.runHistoryTitle {
+  margin: 0 0 var(--space-2);
+  color: var(--app-ink);
+  font-size: var(--text-sm);
+  font-weight: 650;
+}
+
+.emptyNote {
+  margin: 0;
+  color: var(--app-muted);
+  font-size: var(--text-xs);
+}
+
+/* ─── Tables ──────────────────────────────────────────────────── */
+
+.tableScroll {
+  overflow-x: auto;
+}
+
+/* Unbounded run/property logs: cap height so the page stays scannable;
+   the sticky header below keeps column labels visible. */
+.logScroll {
+  max-height: 34rem;
+  overflow: auto;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-xs);
+}
+
+.table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 0.45rem;
+  border-bottom: 1px solid var(--app-line);
+  background: var(--app-surface);
+  color: var(--app-muted);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  letter-spacing: var(--tracking-label);
+  text-align: left;
+  text-transform: uppercase;
+}
+
+.table td {
+  padding: 0.45rem;
+  border-bottom: 1px solid var(--app-line-subtle);
+  color: var(--app-ink);
+  vertical-align: top;
+}
+
+.table tbody tr:hover td {
+  background: var(--brand-soft);
+}
+
+/* Numeric columns: right-aligned, tabular figures. */
+.cellNum {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.cellCenter {
+  text-align: center;
+}
+
+/* Run row followed by its workflow-detail row: the pair reads as one record. */
+.rowJoined td {
+  border-bottom: none;
+}
+
+.workflowCell {
+  padding: 0 0.45rem 0.65rem;
+  border-bottom: 1px solid var(--app-line-subtle);
+}
+
+.cellSub {
+  font-size: var(--text-2xs);
+  color: var(--app-muted);
+}
+
+.workflowTag {
+  margin-top: var(--space-1);
+  font-size: var(--text-2xs);
+  color: var(--app-muted);
+}
+
+.stageCell {
+  min-width: 10rem;
+}
+
+.stageName {
+  color: var(--app-ink);
+  font-weight: 650;
+}
+
+.stageProgress {
+  margin-top: 0.2rem;
+  font-size: var(--text-2xs);
+  color: var(--app-muted);
+}
+
+.elapsedMain {
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.errorCell {
+  max-width: 14rem;
+}
+
+.errorText {
+  color: var(--app-red);
+}
+
+.mutedText {
+  color: var(--app-muted);
+}
+
+.errorInline {
+  margin-left: var(--space-1);
+  color: var(--app-red);
+}
+
+.warnNote {
+  font-size: var(--text-2xs);
+  color: var(--app-amber);
+}
+
+.tableAction {
+  margin-right: var(--space-3);
+}
+
+.link {
+  color: var(--brand-strong);
+  font-weight: 650;
+  text-decoration: none;
+}
+
+.link:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* ─── Workflow source metadata + step cards ───────────────────── */
+
+.sourceMetaBox {
+  margin-bottom: 0.45rem;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid var(--app-blue-border);
+  border-radius: var(--radius-sm);
+  background: var(--app-blue-soft);
+  color: var(--app-blue);
+  font-size: var(--text-2xs);
+  line-height: var(--leading-snug);
+}
+
+.stepGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
+  gap: 0.45rem;
+  padding: 0.55rem;
+  border: 1px solid var(--app-line);
+  border-radius: var(--radius-md);
+  background: var(--app-surface-raised);
+}
+
+.stepEmpty {
+  color: var(--app-muted);
+  font-size: var(--text-xs);
+}
+
+.stepCard {
+  min-height: 5.2rem;
+  padding: var(--space-2);
+  border: 1px solid var(--app-line);
+  border-radius: var(--radius-sm);
+  background: var(--app-surface);
+}
+
+.stepCardHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+}
+
+.stepName {
+  color: var(--app-ink-secondary);
+  font-size: var(--text-2xs);
+  line-height: var(--leading-snug);
+}
+
+/* Compact Badge override for the per-step status pill. */
+.stepBadge {
+  flex: 0 0 auto;
+  min-height: 1.2rem;
+  padding: 0 0.35rem;
+  font-size: var(--text-2xs);
+}
+
+.stepProgress {
+  margin-top: var(--space-1);
+  color: var(--app-ink);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.stepNote {
+  margin-top: 0.3rem;
+  color: var(--app-muted);
+  font-size: var(--text-2xs);
+  line-height: var(--leading-snug);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.stepNoteError {
+  color: var(--app-red);
+}
+
+/* ─── Run detail page ─────────────────────────────────────────── */
+
+.backLine {
+  margin: 0;
+}
+
+.runSummary {
+  margin: 0;
+  color: var(--app-ink-secondary);
+  font-size: var(--text-sm);
+}
+
+.errorList {
+  margin: var(--space-1) 0 0 var(--space-4);
+  padding: 0;
+}
+
+.photoWrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.thumbLink {
+  display: block;
+  flex-shrink: 0;
+}
+
+.thumb {
+  display: block;
+  width: 36px;
+  height: 27px;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+}
+
+.photoCount {
+  font-size: var(--text-2xs);
+  color: var(--app-muted);
+}

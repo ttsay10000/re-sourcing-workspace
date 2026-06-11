@@ -2,8 +2,11 @@
 
 import { Fragment, useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import Link from "next/link";
+import { CalendarClock, History, Info, SlidersHorizontal } from "lucide-react";
+import { Badge, type BadgeTone, Button, EmptyState, PageHeader, Panel, SkeletonRows } from "@/components/ui";
 import { BOROUGH_TABS, isIncludedByParent, type AreaNode } from "./areas";
 import { useProcessBanner } from "@/components/ProcessBanner";
+import styles from "./runs.module.css";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
 const DEFAULT_AREAS = ["all-downtown", "all-midtown"] as const;
@@ -263,7 +266,7 @@ function timestampMs(value: string | null | undefined): number | null {
 }
 
 function formatDurationMs(ms: number | null): string {
-  if (ms == null || !Number.isFinite(ms)) return "-";
+  if (ms == null || !Number.isFinite(ms)) return "—";
   const totalSeconds = Math.max(0, Math.floor(ms / 1000));
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
@@ -297,19 +300,19 @@ function workflowStatusLabel(status: WorkflowStatus | SavedSearchRun["status"]):
   }
 }
 
-function workflowStatusColors(status: WorkflowStatus | SavedSearchRun["status"]) {
+function workflowStatusTone(status: WorkflowStatus | SavedSearchRun["status"]): BadgeTone {
   switch (status) {
     case "running":
-      return { color: "#1d4ed8", backgroundColor: "#dbeafe", borderColor: "#93c5fd" };
+      return "info";
     case "completed":
-      return { color: "#166534", backgroundColor: "#dcfce7", borderColor: "#86efac" };
+      return "success";
     case "failed":
     case "cancelled":
-      return { color: "#b91c1c", backgroundColor: "#fee2e2", borderColor: "#fca5a5" };
+      return "danger";
     case "partial":
-      return { color: "#9a3412", backgroundColor: "#ffedd5", borderColor: "#fdba74" };
+      return "warning";
     default:
-      return { color: "#475569", backgroundColor: "#f8fafc", borderColor: "#cbd5e1" };
+      return "neutral";
   }
 }
 
@@ -328,7 +331,7 @@ function workflowProgressLabel(step: SavedSearchWorkflowStep): string {
   const processed = step.completedItems + step.failedItems + step.skippedItems;
   if (step.totalItems > 0) return `${step.completedItems}/${step.totalItems}`;
   if (processed > 0) return `${processed}`;
-  return "-";
+  return "—";
 }
 
 function sourceMetadataForWorkflow(workflowRun: SavedSearchWorkflowRun | null | undefined): Record<string, unknown> | null {
@@ -746,17 +749,9 @@ export default function RunsPage() {
         return (
           <div key={node.value}>
             <label
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "flex-start",
-                gap: "0.5rem",
-                fontSize: "0.85rem",
-                cursor: includedByParent ? "default" : "pointer",
-                paddingLeft: `${depth * 1.25}rem`,
-                opacity: includedByParent ? 0.6 : 1,
-                color: includedByParent ? "#525252" : undefined,
-              }}
+              className={includedByParent ? `${styles.areaOption} ${styles.areaOptionInherited}` : styles.areaOption}
+              /* Indentation depends on recursion depth in the area tree — genuinely dynamic. */
+              style={{ paddingLeft: `${depth * 1.25}rem` }}
             >
               <input
                 type="checkbox"
@@ -766,7 +761,7 @@ export default function RunsPage() {
                   if (!includedByParent) toggleArea(node.value);
                 }}
               />
-              <span style={{ fontWeight: isBold ? 700 : 400 }}>{node.label}</span>
+              <span className={isBold ? styles.areaOptionNameBold : undefined}>{node.label}</span>
             </label>
             {node.children?.length ? renderAreaNodes(node.children, depth + 1) : null}
           </div>
@@ -1077,54 +1072,33 @@ export default function RunsPage() {
   };
 
   return (
-    <div className="runs-page">
-      <h1 className="page-title">Sourcing Agent</h1>
+    <div className={styles.page}>
+      <PageHeader title="Sourcing Agent" />
 
       {sendingRunId ? (
-        <div
-          className="card"
-          role="status"
-          aria-live="polite"
-          style={{
-            marginBottom: "1.5rem",
-            padding: "0.75rem 1rem",
-            background: "#fef9c3",
-            borderColor: "#facc15",
-            display: "flex",
-            alignItems: "center",
-            gap: "0.5rem",
-            flexWrap: "wrap",
-          }}
-        >
-          <span style={{ fontWeight: 600 }}>
+        <div className={styles.sendingBanner} role="status" aria-live="polite">
+          <span className={styles.sendingBannerText}>
             Sending to property data - enriching brokers and price history...
           </span>
-          <span style={{ fontVariantNumeric: "tabular-nums", fontWeight: 600 }}>
+          <span className={styles.sendingBannerTimer}>
             {formatElapsed(sendTimerSeconds)}
           </span>
         </div>
       ) : null}
 
-      {notice ? (
-        <div className="card" style={{ marginBottom: "1rem", background: "#ecfdf5", borderColor: "#34d399" }}>
-          {notice}
-        </div>
-      ) : null}
+      {notice ? <div className={styles.notice}>{notice}</div> : null}
 
-      {error ? (
-        <div className="card error" style={{ marginBottom: "1rem" }}>
-          {error}
-        </div>
-      ) : null}
+      {error ? <div className={styles.error}>{error}</div> : null}
 
-      <div className="card" style={{ marginBottom: "1.5rem" }}>
-        <h2 style={{ fontSize: "1.1rem", marginBottom: "0.75rem", fontWeight: 600 }}>
+      <Panel padding="lg">
+        <h2 className={styles.sectionTitle}>
+          <Info size={16} strokeWidth={2} aria-hidden="true" className={styles.sectionIcon} />
           How it works
         </h2>
-        <p style={{ marginBottom: "0.75rem", lineHeight: 1.5 }}>
+        <p className={styles.howCopy}>
           Sourcing Agent now does two jobs from one surface: one-off manual pulls and persistent automated saved searches.
         </p>
-        <ol style={{ marginBottom: "0.75rem", paddingLeft: "1.5rem", lineHeight: 1.6 }}>
+        <ol className={styles.howList}>
           <li>
             <strong>Run once:</strong> uses the selected source flow, keeps the run in memory, and still requires{" "}
             <strong>Send to property data</strong> after review.
@@ -1134,78 +1108,50 @@ export default function RunsPage() {
             manual saved-search runs automatically ingest listings, create canonical properties, and sync sourcing workflow state.
           </li>
         </ol>
-        <p style={{ marginBottom: "0.5rem", lineHeight: 1.5 }}>
+        <p className={styles.howCopy}>
           Use the builder below for both paths. The manual run log remains separate from saved-search automation history because the
           saved-search pipeline persists real ingestion runs in Postgres.
         </p>
-        <p style={{ fontSize: "0.875rem", color: "#525252", marginTop: "0.75rem" }}>
+        <p className={styles.footnote}>
           Ensure <code>RAPIDAPI_KEY</code> is set in the API server environment. Scheduled searches also depend on the saved-search cron endpoint.
         </p>
-      </div>
+      </Panel>
 
-      <form onSubmit={handleManualRunSubmit} className="card" style={{ marginBottom: "1.5rem" }}>
-        <div
-          style={{
-            display: "flex",
-            alignItems: "flex-start",
-            justifyContent: "space-between",
-            gap: "1rem",
-            flexWrap: "wrap",
-            marginBottom: "1rem",
-          }}
-        >
+      <form onSubmit={handleManualRunSubmit} className={styles.builderCard}>
+        <div className={styles.sectionHead}>
           <div>
-            <h2 style={{ fontSize: "1rem", marginBottom: "0.35rem" }}>Search builder</h2>
-            <p style={{ color: "#525252", fontSize: "0.85rem", lineHeight: 1.5, maxWidth: "46rem" }}>
+            <h2 className={styles.sectionTitle}>
+              <SlidersHorizontal size={16} strokeWidth={2} aria-hidden="true" className={styles.sectionIcon} />
+              Search builder
+            </h2>
+            <p className={styles.sectionSub}>
               Build the StreetEasy query once, then either run it immediately or save it as automation.
             </p>
           </div>
-          {editingSavedSearchId ? (
-            <div
-              style={{
-                padding: "0.35rem 0.6rem",
-                borderRadius: 999,
-                background: "#e0f2fe",
-                color: "#075985",
-                fontSize: "0.8rem",
-                fontWeight: 600,
-              }}
-            >
-              Editing saved search
-            </div>
-          ) : null}
+          {editingSavedSearchId ? <Badge tone="info">Editing saved search</Badge> : null}
         </div>
 
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-            gap: "0.75rem 1rem",
-            marginBottom: "1rem",
-          }}
-        >
+        <div className={styles.formGrid}>
           <div>
-            <label style={{ display: "block", marginBottom: "0.25rem", fontSize: "0.85rem", fontWeight: 600 }}>
+            <label className={styles.fieldLabel}>
               Saved search name
             </label>
             <input
               type="text"
               value={form.searchName}
               onChange={(event) => updateForm("searchName", event.target.value)}
-              className="input-text"
+              className={styles.input}
               placeholder="West Village multifamily"
-              style={{ width: "100%" }}
             />
           </div>
           <div>
-            <label style={{ display: "block", marginBottom: "0.25rem", fontSize: "0.85rem", fontWeight: 600 }}>
+            <label className={styles.fieldLabel}>
               Schedule cadence
             </label>
             <select
               value={form.scheduleCadence}
               onChange={(event) => updateForm("scheduleCadence", event.target.value as SearchCadence)}
-              className="input-text"
-              style={{ width: "100%" }}
+              className={styles.input}
             >
               <option value="manual">Manual only</option>
               <option value="daily">Daily</option>
@@ -1214,14 +1160,13 @@ export default function RunsPage() {
             </select>
           </div>
           <div>
-            <label style={{ display: "block", marginBottom: "0.25rem", fontSize: "0.85rem", fontWeight: 600 }}>
+            <label className={styles.fieldLabel}>
               Run source
             </label>
             <select
               value={form.manualRunSource}
               onChange={(event) => updateForm("manualRunSource", event.target.value as SourceAdapterId)}
-              className="input-text"
-              style={{ width: "100%" }}
+              className={styles.input}
             >
               {SOURCE_OPTIONS.map((option) => (
                 <option key={option.value} value={option.value}>
@@ -1231,20 +1176,19 @@ export default function RunsPage() {
             </select>
           </div>
           <div>
-            <label style={{ display: "block", marginBottom: "0.25rem", fontSize: "0.85rem", fontWeight: 600 }}>
+            <label className={styles.fieldLabel}>
               Timezone
             </label>
             <input
               type="text"
               value={form.timezone}
               onChange={(event) => updateForm("timezone", event.target.value)}
-              className="input-text"
+              className={styles.input}
               placeholder="America/New_York"
-              style={{ width: "100%" }}
             />
           </div>
-          <div style={{ display: "flex", alignItems: "flex-end" }}>
-            <label style={{ display: "inline-flex", alignItems: "center", gap: "0.5rem", fontSize: "0.85rem", fontWeight: 600 }}>
+          <div className={styles.checkboxField}>
+            <label className={styles.checkboxLabel}>
               <input
                 type="checkbox"
                 checked={form.savedSearchEnabled}
@@ -1256,36 +1200,27 @@ export default function RunsPage() {
         </div>
 
         {form.scheduleCadence !== "manual" ? (
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-              gap: "0.75rem 1rem",
-              marginBottom: "1rem",
-            }}
-          >
+          <div className={styles.scheduleGrid}>
             <div>
-              <label style={{ display: "block", marginBottom: "0.25rem", fontSize: "0.85rem", fontWeight: 600 }}>
+              <label className={styles.fieldLabel}>
                 Run time
               </label>
               <input
                 type="time"
                 value={form.runTimeLocal}
                 onChange={(event) => updateForm("runTimeLocal", event.target.value)}
-                className="input-text"
-                style={{ width: "100%" }}
+                className={styles.input}
               />
             </div>
             {form.scheduleCadence === "weekly" ? (
               <div>
-                <label style={{ display: "block", marginBottom: "0.25rem", fontSize: "0.85rem", fontWeight: 600 }}>
+                <label className={styles.fieldLabel}>
                   Weekly run day
                 </label>
                 <select
                   value={form.weeklyRunDay}
                   onChange={(event) => updateForm("weeklyRunDay", event.target.value)}
-                  className="input-text"
-                  style={{ width: "100%" }}
+                  className={styles.input}
                 >
                   {WEEKDAY_OPTIONS.map((option) => (
                     <option key={option.value} value={option.value}>
@@ -1297,7 +1232,7 @@ export default function RunsPage() {
             ) : null}
             {form.scheduleCadence === "monthly" ? (
               <div>
-                <label style={{ display: "block", marginBottom: "0.25rem", fontSize: "0.85rem", fontWeight: 600 }}>
+                <label className={styles.fieldLabel}>
                   Monthly run day
                 </label>
                 <input
@@ -1306,8 +1241,7 @@ export default function RunsPage() {
                   max={28}
                   value={form.monthlyRunDay}
                   onChange={(event) => updateForm("monthlyRunDay", event.target.value)}
-                  className="input-text"
-                  style={{ width: "100%" }}
+                  className={styles.input}
                 />
               </div>
             ) : null}
@@ -1315,166 +1249,127 @@ export default function RunsPage() {
         ) : null}
 
         {form.manualRunSource !== "streeteasy" ? (
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-              gap: "0.75rem 1rem",
-              marginBottom: "1rem",
-              padding: "0.85rem 1rem",
-              border: "1px solid var(--app-line)",
-              borderRadius: 8,
-              background: "var(--app-surface-strong)",
-            }}
-          >
+          <div className={styles.loopnetGrid}>
             {form.manualRunSource === "loopnet" ? (
               <div>
-                <label style={{ display: "block", marginBottom: "0.25rem", fontSize: "0.85rem", fontWeight: 600 }}>
+                <label className={styles.fieldLabel}>
                   LoopNet location
                 </label>
                 <input
                   type="text"
                   value={form.sourceLocation}
                   onChange={(event) => updateForm("sourceLocation", event.target.value)}
-                  className="input-text"
+                  className={styles.input}
                   placeholder="New York, NY"
-                  style={{ width: "100%" }}
                 />
               </div>
             ) : null}
-            <div style={{ gridColumn: "1 / -1" }}>
-              <label style={{ display: "block", marginBottom: "0.25rem", fontSize: "0.85rem", fontWeight: 600 }}>
+            <div className={styles.spanFull}>
+              <label className={styles.fieldLabel}>
                 Manual listing URLs
               </label>
               <textarea
                 value={form.manualUrls}
                 onChange={(event) => updateForm("manualUrls", event.target.value)}
-                className="input-text"
+                className={styles.textarea}
                 rows={3}
                 placeholder="Paste one URL per line or comma-separated"
-                style={{ width: "100%", resize: "vertical" }}
               />
             </div>
             {form.manualRunSource === "loopnet" ? (
-              <div style={{ gridColumn: "1 / -1", display: "grid", gap: "0.75rem" }}>
-                <div
-                  style={{
-                    border: "1px solid var(--app-line)",
-                    borderRadius: 8,
-                    padding: "0.75rem",
-                    background: "var(--app-surface)",
-                    display: "grid",
-                    gap: "0.6rem",
-                  }}
-                >
+              <div className={styles.captureStack}>
+                <div className={styles.captureCard}>
                   <div>
-                    <h3 style={{ fontSize: "0.95rem", marginBottom: "0.25rem" }}>LoopNet browser capture</h3>
-                    <p style={{ color: "#525252", fontSize: "0.8rem", lineHeight: 1.45 }}>
+                    <h3 className={styles.subPanelTitle}>LoopNet browser capture</h3>
+                    <p className={styles.subPanelHint}>
                       Preferred: Chrome extension or bookmarklet from your normal browser session. Fallbacks: pasted HTML, then local Playwright browser capture.
                     </p>
                   </div>
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", alignItems: "center" }}>
-                    <button
+                  <div className={styles.buttonRow}>
+                    <Button
                       type="button"
-                      className="btn-primary"
+                      variant="primary"
                       disabled={!loopNetBookmarklet}
                       onClick={handleCopyLoopNetBookmarklet}
                     >
                       Copy bookmarklet
-                    </button>
-                    <span style={{ color: bookmarkletCopied ? "#166534" : "#737373", fontSize: "0.8rem" }}>
+                    </Button>
+                    <span className={bookmarkletCopied ? `${styles.copyHint} ${styles.copyHintDone}` : styles.copyHint}>
                       {bookmarkletCopied ? "Copied" : "Drag or paste into a browser bookmark, then click it on a LoopNet listing."}
                     </span>
                   </div>
                   <div>
-                    <label style={{ display: "block", marginBottom: "0.25rem", fontSize: "0.8rem", fontWeight: 600 }}>
+                    <label className={styles.fieldLabel}>
                       Extension capture token
                     </label>
                     <input
                       value={loopNetCaptureConfig?.token ?? ""}
                       readOnly
-                      className="input-text"
+                      className={`${styles.input} ${styles.monoField}`}
                       placeholder="Token loads after capture config is available"
-                      style={{ width: "100%", fontFamily: "monospace", fontSize: "0.75rem" }}
                       onFocus={(event) => event.currentTarget.select()}
                     />
                   </div>
                   <textarea
                     value={loopNetBookmarklet}
                     readOnly
-                    className="input-text"
+                    className={`${styles.textarea} ${styles.monoField}`}
                     rows={2}
                     placeholder="Bookmarklet loads after capture config is available"
-                    style={{ width: "100%", resize: "vertical", fontFamily: "monospace", fontSize: "0.75rem" }}
                     onFocus={(event) => event.currentTarget.select()}
                   />
                 </div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
-                  <button
+                <div className={styles.buttonRow}>
+                  <Button
                     type="button"
-                    className="btn-secondary"
+                    variant="secondary"
                     disabled={loopNetOperatorBusy}
                     onClick={handleStartLoopNetOperator}
                   >
                     Open browser capture
-                  </button>
-                  <button
+                  </Button>
+                  <Button
                     type="button"
-                    className="btn-primary"
+                    variant="primary"
                     disabled={loopNetOperatorBusy || !loopNetOperatorSessionId}
                     onClick={handleCaptureLoopNetOperator}
                   >
                     Capture loaded page
-                  </button>
+                  </Button>
                 </div>
                 <div>
-                  <label style={{ display: "block", marginBottom: "0.25rem", fontSize: "0.85rem", fontWeight: 600 }}>
+                  <label className={styles.fieldLabel}>
                     Saved page HTML
                   </label>
                   <textarea
                     value={loopNetCapturedHtml}
                     onChange={(event) => setLoopNetCapturedHtml(event.target.value)}
-                    className="input-text"
+                    className={styles.textarea}
                     rows={3}
                     placeholder="Optional: paste saved LoopNet HTML for the first URL above"
-                    style={{ width: "100%", resize: "vertical" }}
                   />
-                  <button
+                  <Button
                     type="button"
-                    className="btn-secondary"
+                    variant="secondary"
                     disabled={loopNetOperatorBusy || !loopNetCapturedHtml.trim()}
                     onClick={handleCaptureLoopNetHtml}
-                    style={{ marginTop: "0.5rem" }}
+                    className={styles.captureHtmlAction}
                   >
                     Capture pasted HTML
-                  </button>
+                  </Button>
                 </div>
               </div>
             ) : null}
           </div>
         ) : null}
 
-        <div
-          style={{
-            marginBottom: "1rem",
-            padding: "0.85rem 1rem",
-            border: "1px solid var(--app-line)",
-            borderRadius: 8,
-            background: "var(--app-surface-strong)",
-          }}
-        >
-          <h3 style={{ fontSize: "0.95rem", marginBottom: "0.5rem" }}>Saved-search sources</h3>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: "0.75rem" }}>
+        <div className={styles.subPanel}>
+          <h3 className={styles.subPanelTitle}>Saved-search sources</h3>
+          <div className={styles.sourceToggleRow}>
             {SOURCE_OPTIONS.map((option) => (
               <label
                 key={option.value}
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: "0.4rem",
-                  fontSize: "0.85rem",
-                  color: option.savedSearch ? "#171717" : "#525252",
-                }}
+                className={option.savedSearch ? styles.sourceToggle : `${styles.sourceToggle} ${styles.sourceToggleDisabled}`}
               >
                 <input
                   type="checkbox"
@@ -1489,30 +1384,16 @@ export default function RunsPage() {
           </div>
         </div>
 
-        <div
-          style={{
-            marginBottom: "1rem",
-            padding: "0.85rem 1rem",
-            border: "1px solid var(--app-line)",
-            borderRadius: 8,
-            background: "var(--app-surface-strong)",
-          }}
-        >
-          <div style={{ marginBottom: "0.75rem" }}>
-            <h3 style={{ fontSize: "0.95rem", marginBottom: "0.25rem" }}>Outreach automation rules</h3>
-            <p style={{ color: "#525252", fontSize: "0.8rem", lineHeight: 1.5 }}>
+        <div className={styles.subPanel}>
+          <div className={styles.subPanelHead}>
+            <h3 className={styles.subPanelTitle}>Outreach automation rules</h3>
+            <p className={styles.subPanelHint}>
               These rules are applied after saved-search ingestion when the sourcing workflow decides whether the property is ready for automated outreach.
             </p>
           </div>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-              gap: "0.75rem 1rem",
-            }}
-          >
+          <div className={styles.outreachGrid}>
             <div>
-              <label style={{ display: "block", marginBottom: "0.25rem", fontSize: "0.85rem" }}>
+              <label className={styles.fieldLabel}>
                 Minimum units
               </label>
               <input
@@ -1520,13 +1401,12 @@ export default function RunsPage() {
                 min={1}
                 value={form.outreachMinUnits}
                 onChange={(event) => updateForm("outreachMinUnits", event.target.value)}
-                className="input-text"
+                className={styles.input}
                 placeholder="-"
-                style={{ width: "100%" }}
               />
             </div>
             <div>
-              <label style={{ display: "block", marginBottom: "0.25rem", fontSize: "0.85rem" }}>
+              <label className={styles.fieldLabel}>
                 Minimum recipient confidence (%)
               </label>
               <input
@@ -1535,13 +1415,12 @@ export default function RunsPage() {
                 max={100}
                 value={form.minimumRecipientConfidence}
                 onChange={(event) => updateForm("minimumRecipientConfidence", event.target.value)}
-                className="input-text"
+                className={styles.input}
                 placeholder="-"
-                style={{ width: "100%" }}
               />
             </div>
-            <div style={{ display: "flex", alignItems: "flex-end" }}>
-              <label style={{ display: "inline-flex", alignItems: "center", gap: "0.5rem", fontSize: "0.85rem", fontWeight: 600 }}>
+            <div className={styles.checkboxField}>
+              <label className={styles.checkboxLabel}>
                 <input
                   type="checkbox"
                   checked={form.requireResolvedRecipient}
@@ -1551,106 +1430,68 @@ export default function RunsPage() {
               </label>
             </div>
           </div>
-          <p style={{ marginTop: "0.65rem", color: "#525252", fontSize: "0.75rem" }}>
+          <p className={styles.footnote}>
             Search max price and property types are also copied into the saved-search outreach rules.
           </p>
         </div>
 
-        <div style={{ marginBottom: "1rem" }}>
-          <label style={{ display: "block", marginBottom: "0.35rem", fontWeight: 600 }}>
+        <div className={styles.fieldBlock}>
+          <label className={styles.groupLabel}>
             Areas (required) - select one or more boroughs for the same search
           </label>
-          <div
-            style={{
-              display: "flex",
-              gap: "0.25rem",
-              marginBottom: "0.5rem",
-              flexWrap: "wrap",
-              borderBottom: "1px solid var(--app-line)",
-              paddingBottom: "0.5rem",
-            }}
-          >
+          <div className={styles.areaTabs}>
             {BOROUGH_TABS.map((tab) => (
               <button
                 key={tab.id}
                 type="button"
                 onClick={() => setAreaBoroughTab(tab.id)}
-                style={{
-                  padding: "0.35rem 0.6rem",
-                  fontSize: "0.8rem",
-                  fontWeight: areaBoroughTab === tab.id ? 700 : 650,
-                  border: `1px solid ${areaBoroughTab === tab.id ? "var(--brand-border)" : "var(--app-line)"}`,
-                  borderRadius: 999,
-                  background: areaBoroughTab === tab.id ? "var(--brand-soft)" : "var(--app-surface)",
-                  color: areaBoroughTab === tab.id ? "var(--brand-strong)" : "var(--app-muted)",
-                  cursor: "pointer",
-                }}
+                className={areaBoroughTab === tab.id ? `${styles.areaTab} ${styles.areaTabActive}` : styles.areaTab}
               >
                 {tab.label}
               </button>
             ))}
           </div>
-          <div
-            className="runs-areas-list"
-            style={{
-              maxHeight: "14rem",
-              overflowY: "auto",
-              padding: "0.75rem 1rem",
-              border: "1px solid var(--app-line)",
-              borderRadius: 6,
-              background: "var(--app-surface-strong)",
-            }}
-          >
+          <div className={styles.areaList}>
             {BOROUGH_TABS.find((tab) => tab.id === areaBoroughTab)?.tree.map((node) => renderAreaNodes([node], 0))}
           </div>
-          <p style={{ fontSize: "0.75rem", color: "#525252", marginTop: "0.35rem" }}>
+          <p className={styles.footnote}>
             Selected: {form.selectedAreas.length > 0 ? form.selectedAreas.join(", ") : `${DEFAULT_AREAS[0]}, ${DEFAULT_AREAS[1]} (default)`}
           </p>
         </div>
 
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))",
-            gap: "0.75rem 1rem",
-            marginBottom: "1rem",
-          }}
-        >
+        <div className={styles.filtersGrid}>
           <div>
-            <label style={{ display: "block", marginBottom: "0.25rem", fontSize: "0.85rem" }}>
+            <label className={styles.fieldLabel}>
               Min price
             </label>
             <input
               type="number"
               value={form.minPrice}
               onChange={(event) => updateForm("minPrice", event.target.value)}
-              className="input-text"
+              className={styles.input}
               placeholder="-"
-              style={{ width: "100%" }}
             />
           </div>
           <div>
-            <label style={{ display: "block", marginBottom: "0.25rem", fontSize: "0.85rem" }}>
+            <label className={styles.fieldLabel}>
               Max price
             </label>
             <input
               type="number"
               value={form.maxPrice}
               onChange={(event) => updateForm("maxPrice", event.target.value)}
-              className="input-text"
+              className={styles.input}
               placeholder="-"
-              style={{ width: "100%" }}
             />
           </div>
           <div>
-            <label style={{ display: "block", marginBottom: "0.25rem", fontSize: "0.85rem" }}>
+            <label className={styles.fieldLabel}>
               Min beds
             </label>
             <select
               value={form.minBeds}
               onChange={(event) => updateForm("minBeds", event.target.value)}
-              className="input-text"
-              style={{ width: "100%" }}
+              className={styles.input}
             >
               <option value="">-</option>
               {BEDS_BATHS_OPTIONS.map((value) => (
@@ -1661,14 +1502,13 @@ export default function RunsPage() {
             </select>
           </div>
           <div>
-            <label style={{ display: "block", marginBottom: "0.25rem", fontSize: "0.85rem" }}>
+            <label className={styles.fieldLabel}>
               Max beds
             </label>
             <select
               value={form.maxBeds}
               onChange={(event) => updateForm("maxBeds", event.target.value)}
-              className="input-text"
-              style={{ width: "100%" }}
+              className={styles.input}
             >
               <option value="">-</option>
               {BEDS_BATHS_OPTIONS.map((value) => (
@@ -1679,14 +1519,13 @@ export default function RunsPage() {
             </select>
           </div>
           <div>
-            <label style={{ display: "block", marginBottom: "0.25rem", fontSize: "0.85rem" }}>
+            <label className={styles.fieldLabel}>
               Min baths
             </label>
             <select
               value={form.minBaths}
               onChange={(event) => updateForm("minBaths", event.target.value)}
-              className="input-text"
-              style={{ width: "100%" }}
+              className={styles.input}
             >
               <option value="">-</option>
               {BEDS_BATHS_OPTIONS.map((value) => (
@@ -1697,7 +1536,7 @@ export default function RunsPage() {
             </select>
           </div>
           <div>
-            <label style={{ display: "block", marginBottom: "0.25rem", fontSize: "0.85rem" }}>
+            <label className={styles.fieldLabel}>
               Max HOA/mo
             </label>
             <input
@@ -1705,13 +1544,12 @@ export default function RunsPage() {
               min={0}
               value={form.maxHoa}
               onChange={(event) => updateForm("maxHoa", event.target.value)}
-              className="input-text"
+              className={styles.input}
               placeholder="-"
-              style={{ width: "100%" }}
             />
           </div>
           <div>
-            <label style={{ display: "block", marginBottom: "0.25rem", fontSize: "0.85rem" }}>
+            <label className={styles.fieldLabel}>
               Max tax/mo
             </label>
             <input
@@ -1719,13 +1557,12 @@ export default function RunsPage() {
               min={0}
               value={form.maxTax}
               onChange={(event) => updateForm("maxTax", event.target.value)}
-              className="input-text"
+              className={styles.input}
               placeholder="-"
-              style={{ width: "100%" }}
             />
           </div>
           <div>
-            <label style={{ display: "block", marginBottom: "0.25rem", fontSize: "0.85rem" }}>
+            <label className={styles.fieldLabel}>
               Limit (properties)
             </label>
             <input
@@ -1734,52 +1571,31 @@ export default function RunsPage() {
               max={500}
               value={form.limit}
               onChange={(event) => updateForm("limit", event.target.value)}
-              className="input-text"
-              style={{ width: "100%" }}
+              className={styles.input}
             />
           </div>
         </div>
 
-        <div style={{ marginBottom: "1rem" }}>
-          <label style={{ display: "block", marginBottom: "0.25rem", fontSize: "0.85rem" }}>
+        <div className={styles.fieldBlock}>
+          <label className={styles.fieldLabel}>
             Amenities (e.g. washer_dryer,doorman)
           </label>
           <input
             type="text"
             value={form.amenities}
             onChange={(event) => updateForm("amenities", event.target.value)}
-            className="input-text"
+            className={`${styles.input} ${styles.inputNarrow}`}
             placeholder="-"
-            style={{ width: "100%", maxWidth: "24rem" }}
           />
         </div>
 
-        <div style={{ marginBottom: "1rem" }}>
-          <label style={{ display: "block", marginBottom: "0.35rem", fontSize: "0.85rem", fontWeight: 600 }}>
+        <div className={styles.fieldBlock}>
+          <label className={styles.groupLabel}>
             Property types
           </label>
-          <div
-            style={{
-              display: "flex",
-              flexWrap: "wrap",
-              gap: "0.35rem",
-              padding: "0.5rem",
-              border: "1px solid var(--app-line)",
-              borderRadius: 6,
-              background: "var(--app-surface-strong)",
-            }}
-          >
+          <div className={styles.typeOptionsBox}>
             {TYPE_OPTIONS.map((option) => (
-              <label
-                key={option.value}
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: "0.35rem",
-                  fontSize: "0.85rem",
-                  cursor: "pointer",
-                }}
-              >
+              <label key={option.value} className={styles.typeOption}>
                 <input
                   type="checkbox"
                   checked={form.selectedTypes.includes(option.value)}
@@ -1789,345 +1605,250 @@ export default function RunsPage() {
               </label>
             ))}
           </div>
-          <p style={{ fontSize: "0.75rem", color: "#525252", marginTop: "0.35rem" }}>
+          <p className={styles.footnote}>
             Condo, Co-op, House, Multi-family. Leave all unchecked for all types.
           </p>
         </div>
 
-        <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
-          <button type="submit" disabled={startingManualRun} className="btn-primary">
+        <div className={styles.buttonRow}>
+          <Button type="submit" disabled={startingManualRun} variant="primary">
             {startingManualRun ? "Starting run..." : "Run once"}
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
             disabled={savingSearch}
-            className="btn-secondary"
+            variant="secondary"
             onClick={() => {
               void handleSaveSearch();
             }}
           >
             {savingSearch ? "Saving..." : editingSavedSearchId ? "Update saved search" : "Create saved search"}
-          </button>
-          <button type="button" className="btn-secondary" onClick={resetBuilder}>
+          </Button>
+          <Button type="button" variant="secondary" onClick={resetBuilder}>
             {editingSavedSearchId ? "Stop editing" : "Reset builder"}
-          </button>
+          </Button>
         </div>
       </form>
 
-      <div className="card" style={{ marginBottom: "1.5rem" }}>
-        <div
-          style={{
-            display: "flex",
-            alignItems: "flex-start",
-            justifyContent: "space-between",
-            gap: "1rem",
-            flexWrap: "wrap",
-            marginBottom: "0.85rem",
-          }}
-        >
+      <Panel padding="lg">
+        <div className={styles.sectionHead}>
           <div>
-            <h2 style={{ fontSize: "1rem", marginBottom: "0.25rem" }}>Automated saved searches</h2>
-            <p style={{ color: "#525252", fontSize: "0.85rem", lineHeight: 1.5 }}>
+            <h2 className={styles.sectionTitle}>
+              <CalendarClock size={16} strokeWidth={2} aria-hidden="true" className={styles.sectionIcon} />
+              Automated saved searches
+            </h2>
+            <p className={styles.sectionSub}>
               Saved-search runs automatically ingest into Property Data and sourcing workflow. Use manual runs below when you want a review gate first.
             </p>
           </div>
         </div>
 
         {savedSearchesLoading ? (
-          <p>Loading saved searches...</p>
+          <SkeletonRows count={3} />
         ) : savedSearches.length === 0 ? (
-          <p style={{ color: "#525252" }}>No saved searches yet. Use the builder above and click Create saved search.</p>
+          <EmptyState
+            icon={<CalendarClock size={16} strokeWidth={2} aria-hidden="true" />}
+            title="No saved searches yet."
+            description="Use the builder above and click Create saved search."
+          />
         ) : (
-          <div style={{ display: "grid", gap: "0.85rem" }}>
+          <div className={styles.savedSearchList}>
             {savedSearches.map((savedSearch) => {
               const isExpanded = expandedSavedSearchId === savedSearch.id;
               return (
                 <article
                   key={savedSearch.id}
-                  style={{
-                    border: "1px solid #e5e7eb",
-                    borderRadius: 8,
-                    padding: "1rem",
-                    background: isExpanded ? "#fcfcfc" : "#fff",
-                  }}
+                  className={isExpanded ? `${styles.savedSearchCard} ${styles.savedSearchCardExpanded}` : styles.savedSearchCard}
                 >
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "flex-start",
-                      justifyContent: "space-between",
-                      gap: "1rem",
-                      flexWrap: "wrap",
-                    }}
-                  >
-                    <div style={{ flex: "1 1 28rem" }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.35rem" }}>
-                        <h3 style={{ fontSize: "1rem", margin: 0 }}>{savedSearch.name}</h3>
-                        <span
-                          style={{
-                            padding: "0.2rem 0.55rem",
-                            borderRadius: 999,
-                            background: savedSearch.enabled ? "#dcfce7" : "#e5e7eb",
-                            color: savedSearch.enabled ? "#166534" : "#4b5563",
-                            fontSize: "0.75rem",
-                            fontWeight: 600,
-                          }}
-                        >
+                  <div className={styles.savedSearchTop}>
+                    <div className={styles.savedSearchInfo}>
+                      <div className={styles.savedSearchTitleRow}>
+                        <h3 className={styles.savedSearchName}>{savedSearch.name}</h3>
+                        <Badge tone={savedSearch.enabled ? "success" : "neutral"}>
                           {savedSearch.enabled ? "Enabled" : "Disabled"}
-                        </span>
-                        <span
-                          style={{
-                            padding: "0.2rem 0.55rem",
-                            borderRadius: 999,
-                            background: "#eff6ff",
-                            color: "#1d4ed8",
-                            fontSize: "0.75rem",
-                            fontWeight: 600,
-                          }}
-                        >
-                          {formatSchedule(savedSearch)}
-                        </span>
+                        </Badge>
+                        <Badge tone="info">{formatSchedule(savedSearch)}</Badge>
                       </div>
-                      <p style={{ margin: "0 0 0.35rem 0", color: "#262626", fontSize: "0.85rem", lineHeight: 1.5 }}>
+                      <p className={styles.savedSearchFilters}>
                         {formatSearchFilters(savedSearch)}
                       </p>
-                      <p style={{ margin: 0, color: "#525252", fontSize: "0.8rem", lineHeight: 1.5 }}>
+                      <p className={styles.savedSearchMeta}>
                         Next run: {formatDateTime(savedSearch.nextRunAt)} | Last run: {formatDateTime(savedSearch.lastRunAt)} | Last success:{" "}
                         {formatDateTime(savedSearch.lastSuccessAt)}
                       </p>
                     </div>
-                    <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", justifyContent: "flex-end" }}>
-                      <button
+                    <div className={styles.savedSearchActions}>
+                      <Button
                         type="button"
-                        className="btn-secondary"
+                        variant="secondary"
                         onClick={() => {
                           loadSavedSearchIntoForm(savedSearch);
                           setNotice(`Loaded "${savedSearch.name}" into the builder.`);
                         }}
                       >
                         Edit
-                      </button>
-                      <button
+                      </Button>
+                      <Button
                         type="button"
-                        className="btn-secondary"
+                        variant="secondary"
                         disabled={runningSavedSearchId === savedSearch.id}
                         onClick={() => {
                           void handleRunSavedSearchNow(savedSearch.id);
                         }}
                       >
                         {runningSavedSearchId === savedSearch.id ? "Starting..." : "Run now"}
-                      </button>
-                      <button
+                      </Button>
+                      <Button
                         type="button"
-                        className="btn-secondary"
+                        variant="secondary"
                         onClick={() => {
                           void handleToggleSavedSearchRuns(savedSearch.id);
                         }}
                       >
                         {isExpanded ? "Hide runs" : "View runs"}
-                      </button>
-                      <button
+                      </Button>
+                      <Button
                         type="button"
-                        className="btn-secondary"
+                        variant="destructive"
                         disabled={deletingSavedSearchId === savedSearch.id}
                         onClick={() => {
                           void handleDeleteSavedSearch(savedSearch.id);
                         }}
                       >
                         {deletingSavedSearchId === savedSearch.id ? "Deleting..." : "Delete"}
-                      </button>
+                      </Button>
                     </div>
                   </div>
 
                   {isExpanded ? (
-                    <div style={{ marginTop: "0.85rem", paddingTop: "0.85rem", borderTop: "1px solid #e5e7eb" }}>
-                      <h4 style={{ fontSize: "0.9rem", marginBottom: "0.5rem" }}>Saved-search run history</h4>
+                    <div className={styles.runHistory}>
+                      <h4 className={styles.runHistoryTitle}>Saved-search run history</h4>
                       {savedSearchRunsLoading ? (
-                        <p>Loading runs...</p>
+                        <SkeletonRows count={3} />
                       ) : expandedSavedSearchRuns.length === 0 ? (
-                        <p style={{ color: "#525252" }}>No runs yet.</p>
+                        <p className={styles.emptyNote}>No runs yet.</p>
                       ) : (
-                        <div style={{ overflowX: "auto" }}>
-                          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.82rem" }}>
+                        <div className={styles.tableScroll}>
+                          <table className={styles.table}>
                             <thead>
-	                              <tr>
-	                                <th style={{ textAlign: "left", padding: "0.45rem", borderBottom: "1px solid #e5e7eb" }}>Started</th>
-	                                <th style={{ textAlign: "left", padding: "0.45rem", borderBottom: "1px solid #e5e7eb" }}>Status</th>
-	                                <th style={{ textAlign: "left", padding: "0.45rem", borderBottom: "1px solid #e5e7eb" }}>Current stage</th>
-	                                <th style={{ textAlign: "left", padding: "0.45rem", borderBottom: "1px solid #e5e7eb" }}>Elapsed</th>
-	                                <th style={{ textAlign: "left", padding: "0.45rem", borderBottom: "1px solid #e5e7eb" }}>Trigger</th>
-	                                <th style={{ textAlign: "right", padding: "0.45rem", borderBottom: "1px solid #e5e7eb" }}>Seen</th>
-	                                <th style={{ textAlign: "right", padding: "0.45rem", borderBottom: "1px solid #e5e7eb" }}>New</th>
-	                                <th style={{ textAlign: "right", padding: "0.45rem", borderBottom: "1px solid #e5e7eb" }}>Updated</th>
-                                <th style={{ textAlign: "left", padding: "0.45rem", borderBottom: "1px solid #e5e7eb" }}>Errors</th>
-	                              </tr>
-	                            </thead>
-	                            <tbody>
-	                              {expandedSavedSearchRuns.slice(0, 10).map((run) => {
-	                                const workflowRun = run.workflowRun ?? null;
-	                                const activeStep = currentWorkflowStep(workflowRun);
-	                                const stageLabel = activeStep?.label ?? (workflowRun ? workflowStatusLabel(workflowRun.status) : "Run summary only");
-	                                const runDuration = formatDurationMs(durationBetween(workflowRun?.startedAt ?? run.startedAt, workflowRun?.finishedAt ?? run.finishedAt));
-	                                const stageDuration = activeStep ? formatDurationMs(durationBetween(activeStep.startedAt, activeStep.finishedAt)) : "-";
-	                                const runStatusStyle = workflowStatusColors(workflowRun?.status ?? run.status);
-	                                const errorText = run.summary?.errors?.length ? run.summary.errors[0] : null;
-	                                const sourceRequest = summarizeSourceRequest(workflowRun);
-	                                const sourcePages = summarizeSourcePages(workflowRun);
-	                                return (
-	                                  <Fragment key={run.id}>
-	                                    <tr>
-	                                      <td style={{ padding: "0.45rem", borderBottom: workflowRun ? "none" : "1px solid #f3f4f6", verticalAlign: "top" }}>
-	                                        <div>{formatDateTime(run.startedAt)}</div>
-	                                        <div style={{ fontSize: "0.75rem", color: "#525252" }}>
-	                                          {run.finishedAt ? `Finished ${formatDateTime(run.finishedAt)}` : "Still running"}
-	                                        </div>
-	                                      </td>
-	                                      <td style={{ padding: "0.45rem", borderBottom: workflowRun ? "none" : "1px solid #f3f4f6", verticalAlign: "top" }}>
-	                                        <span
-	                                          style={{
-	                                            display: "inline-flex",
-	                                            alignItems: "center",
-	                                            border: "1px solid",
-	                                            borderRadius: 999,
-	                                            padding: "0.14rem 0.45rem",
-	                                            fontSize: "0.72rem",
-	                                            fontWeight: 700,
-	                                            ...runStatusStyle,
-	                                          }}
-	                                        >
-	                                          {workflowStatusLabel(workflowRun?.status ?? run.status)}
-	                                        </span>
-	                                        {workflowRun ? (
-	                                          <div style={{ marginTop: "0.25rem", fontSize: "0.72rem", color: "#64748b" }}>Workflow #{workflowRun.runNumber}</div>
-	                                        ) : null}
-	                                      </td>
-	                                      <td style={{ padding: "0.45rem", borderBottom: workflowRun ? "none" : "1px solid #f3f4f6", verticalAlign: "top", minWidth: "10rem" }}>
-	                                        <div style={{ fontWeight: 650, color: "#1f2937" }}>{stageLabel}</div>
-	                                        {activeStep ? (
-	                                          <div style={{ marginTop: "0.2rem", fontSize: "0.72rem", color: "#64748b" }}>
-	                                            {workflowProgressLabel(activeStep)}
-	                                            {activeStep.failedItems > 0 ? ` · ${activeStep.failedItems} failed` : ""}
-	                                          </div>
-	                                        ) : null}
-	                                      </td>
-	                                      <td style={{ padding: "0.45rem", borderBottom: workflowRun ? "none" : "1px solid #f3f4f6", verticalAlign: "top" }}>
-	                                        <div style={{ fontVariantNumeric: "tabular-nums", fontWeight: 650 }}>{runDuration}</div>
-	                                        {activeStep ? <div style={{ fontSize: "0.72rem", color: "#64748b" }}>Stage {stageDuration}</div> : null}
-	                                      </td>
-	                                      <td style={{ padding: "0.45rem", borderBottom: workflowRun ? "none" : "1px solid #f3f4f6", verticalAlign: "top" }}>
-	                                        {run.triggerSource ?? "-"}
-	                                      </td>
-	                                      <td style={{ textAlign: "right", padding: "0.45rem", borderBottom: workflowRun ? "none" : "1px solid #f3f4f6", verticalAlign: "top" }}>
-	                                        {run.summary?.listingsSeen ?? 0}
-	                                      </td>
-	                                      <td style={{ textAlign: "right", padding: "0.45rem", borderBottom: workflowRun ? "none" : "1px solid #f3f4f6", verticalAlign: "top" }}>
-	                                        {run.summary?.listingsNew ?? 0}
-	                                      </td>
-	                                      <td style={{ textAlign: "right", padding: "0.45rem", borderBottom: workflowRun ? "none" : "1px solid #f3f4f6", verticalAlign: "top" }}>
-	                                        {run.summary?.listingsUpdated ?? 0}
-	                                      </td>
-	                                      <td style={{ padding: "0.45rem", borderBottom: workflowRun ? "none" : "1px solid #f3f4f6", verticalAlign: "top", maxWidth: "14rem" }}>
-	                                        <span title={errorText ?? undefined} style={{ color: errorText ? "#b91c1c" : "#64748b" }}>
-	                                          {errorText ?? "-"}
-	                                        </span>
-	                                      </td>
-	                                    </tr>
-	                                    {workflowRun ? (
-	                                      <tr>
-	                                        <td colSpan={9} style={{ padding: "0 0.45rem 0.65rem", borderBottom: "1px solid #f3f4f6" }}>
-	                                          {sourceRequest || sourcePages ? (
-	                                            <div
-	                                              style={{
-	                                                marginBottom: "0.45rem",
-	                                                padding: "0.45rem 0.55rem",
-	                                                border: "1px solid #dbeafe",
-	                                                borderRadius: 6,
-	                                                background: "#eff6ff",
-	                                                color: "#1e3a8a",
-	                                                fontSize: "0.72rem",
-	                                                lineHeight: 1.45,
-	                                              }}
-	                                            >
-	                                              {sourceRequest ? <div><strong>RapidAPI request:</strong> {sourceRequest}</div> : null}
-	                                              {sourcePages ? <div><strong>Pages:</strong> {sourcePages}</div> : null}
-	                                            </div>
-	                                          ) : null}
-	                                          <div
-	                                            style={{
-	                                              display: "grid",
-	                                              gridTemplateColumns: "repeat(auto-fit, minmax(9.5rem, 1fr))",
-	                                              gap: "0.45rem",
-	                                              padding: "0.55rem",
-	                                              border: "1px solid #e2e8f0",
-	                                              borderRadius: 8,
-	                                              background: "#f8fafc",
-	                                            }}
-	                                          >
-	                                            {workflowRun.steps.length === 0 ? (
-	                                              <div style={{ color: "#64748b", fontSize: "0.78rem" }}>No stage records yet.</div>
-	                                            ) : (
-	                                              workflowRun.steps.map((step) => {
-	                                                const note = step.lastError ?? step.lastMessage ?? null;
-	                                                return (
-	                                                  <div
-	                                                    key={`${workflowRun.id}-${step.key}`}
-	                                                    style={{
-	                                                      minHeight: "5.2rem",
-	                                                      padding: "0.5rem",
-	                                                      border: "1px solid #e2e8f0",
-	                                                      borderRadius: 6,
-	                                                      background: "#ffffff",
-	                                                    }}
-	                                                  >
-	                                                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.4rem" }}>
-	                                                      <strong style={{ color: "#334155", fontSize: "0.76rem", lineHeight: 1.25 }}>{step.label}</strong>
-	                                                      <span
-	                                                        style={{
-	                                                          flex: "0 0 auto",
-	                                                          border: "1px solid",
-	                                                          borderRadius: 999,
-	                                                          padding: "0.1rem 0.35rem",
-	                                                          fontSize: "0.66rem",
-	                                                          fontWeight: 700,
-	                                                          ...workflowStatusColors(step.status),
-	                                                        }}
-	                                                      >
-	                                                        {workflowStatusLabel(step.status)}
-	                                                      </span>
-	                                                    </div>
-	                                                    <div style={{ marginTop: "0.35rem", fontVariantNumeric: "tabular-nums", fontWeight: 700, color: "#0f172a" }}>
-	                                                      {workflowProgressLabel(step)} · {formatDurationMs(durationBetween(step.startedAt, step.finishedAt))}
-	                                                    </div>
-	                                                    {note ? (
-	                                                      <div
-	                                                        title={note}
-	                                                        style={{
-	                                                          marginTop: "0.3rem",
-	                                                          color: step.lastError ? "#b91c1c" : "#64748b",
-	                                                          fontSize: "0.7rem",
-	                                                          lineHeight: 1.35,
-	                                                          overflow: "hidden",
-	                                                          display: "-webkit-box",
-	                                                          WebkitBoxOrient: "vertical",
-	                                                          WebkitLineClamp: 2,
-	                                                        }}
-	                                                      >
-	                                                        {note}
-	                                                      </div>
-	                                                    ) : null}
-	                                                  </div>
-	                                                );
-	                                              })
-	                                            )}
-	                                          </div>
-	                                        </td>
-	                                      </tr>
-	                                    ) : null}
-	                                  </Fragment>
-	                                );
-	                              })}
-	                            </tbody>
-	                          </table>
+                              <tr>
+                                <th>Started</th>
+                                <th>Status</th>
+                                <th>Current stage</th>
+                                <th>Elapsed</th>
+                                <th>Trigger</th>
+                                <th className={styles.cellNum}>Seen</th>
+                                <th className={styles.cellNum}>New</th>
+                                <th className={styles.cellNum}>Updated</th>
+                                <th>Errors</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {expandedSavedSearchRuns.slice(0, 10).map((run) => {
+                                const workflowRun = run.workflowRun ?? null;
+                                const activeStep = currentWorkflowStep(workflowRun);
+                                const stageLabel = activeStep?.label ?? (workflowRun ? workflowStatusLabel(workflowRun.status) : "Run summary only");
+                                const runDuration = formatDurationMs(durationBetween(workflowRun?.startedAt ?? run.startedAt, workflowRun?.finishedAt ?? run.finishedAt));
+                                const stageDuration = activeStep ? formatDurationMs(durationBetween(activeStep.startedAt, activeStep.finishedAt)) : "—";
+                                const runStatusTone = workflowStatusTone(workflowRun?.status ?? run.status);
+                                const errorText = run.summary?.errors?.length ? run.summary.errors[0] : null;
+                                const sourceRequest = summarizeSourceRequest(workflowRun);
+                                const sourcePages = summarizeSourcePages(workflowRun);
+                                return (
+                                  <Fragment key={run.id}>
+                                    <tr className={workflowRun ? styles.rowJoined : undefined}>
+                                      <td>
+                                        <div>{formatDateTime(run.startedAt)}</div>
+                                        <div className={styles.cellSub}>
+                                          {run.finishedAt ? `Finished ${formatDateTime(run.finishedAt)}` : "Still running"}
+                                        </div>
+                                      </td>
+                                      <td>
+                                        <Badge tone={runStatusTone}>
+                                          {workflowStatusLabel(workflowRun?.status ?? run.status)}
+                                        </Badge>
+                                        {workflowRun ? (
+                                          <div className={styles.workflowTag}>Workflow #{workflowRun.runNumber}</div>
+                                        ) : null}
+                                      </td>
+                                      <td className={styles.stageCell}>
+                                        <div className={styles.stageName}>{stageLabel}</div>
+                                        {activeStep ? (
+                                          <div className={styles.stageProgress}>
+                                            {workflowProgressLabel(activeStep)}
+                                            {activeStep.failedItems > 0 ? ` · ${activeStep.failedItems} failed` : ""}
+                                          </div>
+                                        ) : null}
+                                      </td>
+                                      <td>
+                                        <div className={styles.elapsedMain}>{runDuration}</div>
+                                        {activeStep ? <div className={styles.cellSub}>Stage {stageDuration}</div> : null}
+                                      </td>
+                                      <td>
+                                        {run.triggerSource ?? "—"}
+                                      </td>
+                                      <td className={styles.cellNum}>
+                                        {run.summary?.listingsSeen ?? 0}
+                                      </td>
+                                      <td className={styles.cellNum}>
+                                        {run.summary?.listingsNew ?? 0}
+                                      </td>
+                                      <td className={styles.cellNum}>
+                                        {run.summary?.listingsUpdated ?? 0}
+                                      </td>
+                                      <td className={styles.errorCell}>
+                                        <span title={errorText ?? undefined} className={errorText ? styles.errorText : styles.mutedText}>
+                                          {errorText ?? "—"}
+                                        </span>
+                                      </td>
+                                    </tr>
+                                    {workflowRun ? (
+                                      <tr>
+                                        <td colSpan={9} className={styles.workflowCell}>
+                                          {sourceRequest || sourcePages ? (
+                                            <div className={styles.sourceMetaBox}>
+                                              {sourceRequest ? <div><strong>RapidAPI request:</strong> {sourceRequest}</div> : null}
+                                              {sourcePages ? <div><strong>Pages:</strong> {sourcePages}</div> : null}
+                                            </div>
+                                          ) : null}
+                                          <div className={styles.stepGrid}>
+                                            {workflowRun.steps.length === 0 ? (
+                                              <div className={styles.stepEmpty}>No stage records yet.</div>
+                                            ) : (
+                                              workflowRun.steps.map((step) => {
+                                                const note = step.lastError ?? step.lastMessage ?? null;
+                                                return (
+                                                  <div key={`${workflowRun.id}-${step.key}`} className={styles.stepCard}>
+                                                    <div className={styles.stepCardHead}>
+                                                      <strong className={styles.stepName}>{step.label}</strong>
+                                                      <Badge tone={workflowStatusTone(step.status)} className={styles.stepBadge}>
+                                                        {workflowStatusLabel(step.status)}
+                                                      </Badge>
+                                                    </div>
+                                                    <div className={styles.stepProgress}>
+                                                      {workflowProgressLabel(step)} · {formatDurationMs(durationBetween(step.startedAt, step.finishedAt))}
+                                                    </div>
+                                                    {note ? (
+                                                      <div
+                                                        title={note}
+                                                        className={step.lastError ? `${styles.stepNote} ${styles.stepNoteError}` : styles.stepNote}
+                                                      >
+                                                        {note}
+                                                      </div>
+                                                    ) : null}
+                                                  </div>
+                                                );
+                                              })
+                                            )}
+                                          </div>
+                                        </td>
+                                      </tr>
+                                    ) : null}
+                                  </Fragment>
+                                );
+                              })}
+                            </tbody>
+                          </table>
                         </div>
                       )}
                     </div>
@@ -2137,35 +1858,42 @@ export default function RunsPage() {
             })}
           </div>
         )}
-      </div>
+      </Panel>
 
-      <div className="card" style={{ maxWidth: "none" }}>
-        <h2 style={{ fontSize: "1rem", marginBottom: "0.75rem" }}>Manual sourcing run log</h2>
+      <Panel padding="lg">
+        <h2 className={styles.sectionTitle}>
+          <History size={16} strokeWidth={2} aria-hidden="true" className={styles.sectionIcon} />
+          Manual sourcing run log
+        </h2>
         {runsLoading ? (
-          <div>Loading runs...</div>
+          <SkeletonRows count={4} />
         ) : runs.length === 0 ? (
-          <p style={{ color: "#525252" }}>No manual runs yet. Use the builder above and click Run once.</p>
+          <EmptyState
+            icon={<History size={16} strokeWidth={2} aria-hidden="true" />}
+            title="No manual runs yet."
+            description="Use the builder above and click Run once."
+          />
         ) : (
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" }}>
+          <div className={`${styles.tableScroll} ${styles.logScroll}`}>
+            <table className={styles.table}>
               <thead>
                 <tr>
-                  <th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
+                  <th>
                     Started (timer)
                   </th>
-                  <th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
+                  <th>
                     Source
                   </th>
-                  <th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
+                  <th>
                     Step 1
                   </th>
-                  <th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
+                  <th>
                     Step 2
                   </th>
-                  <th style={{ textAlign: "right", padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
+                  <th className={styles.cellNum}>
                     Properties
                   </th>
-                  <th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
+                  <th>
                     Action
                   </th>
                 </tr>
@@ -2173,51 +1901,56 @@ export default function RunsPage() {
               <tbody>
                 {runs.map((run) => (
                   <tr key={run.id}>
-                    <td style={{ padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
+                    <td>
                       <div>{formatDateTime(run.startedAt)}</div>
-                      <div style={{ fontSize: "0.75rem", color: "#525252" }}>
+                      <div className={styles.cellSub}>
                         Elapsed: {formatRelativeElapsed(run.startedAt)}
                       </div>
                     </td>
-                    <td style={{ padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
+                    <td>
                       {run.sourceLabel ?? sourceLabel(run.source)}
                       {run.warningsCount ? (
-                        <div style={{ fontSize: "0.75rem", color: "#a16207" }}>
+                        <div className={styles.warnNote}>
                           {run.warningsCount} note{run.warningsCount === 1 ? "" : "s"}
                         </div>
                       ) : null}
                     </td>
-                    <td style={{ padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>{step1Label(run)}</td>
-                    <td style={{ padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>{step2Label(run)}</td>
-                    <td style={{ textAlign: "right", padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
+                    <td>{step1Label(run)}</td>
+                    <td>{step2Label(run)}</td>
+                    <td className={styles.cellNum}>
                       {run.propertiesCount}
                       {run.errorsCount > 0 ? (
-                        <span className="error" style={{ marginLeft: "0.35rem" }}>
+                        <span className={styles.errorInline}>
                           ({run.errorsCount} errors)
                         </span>
                       ) : null}
                     </td>
-                    <td style={{ padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
+                    <td>
                       {typeof run.sourceMetadata?.searchUrl === "string" ? (
-                        <a href={run.sourceMetadata.searchUrl} target="_blank" rel="noreferrer" style={{ marginRight: "0.75rem" }}>
+                        <a
+                          href={run.sourceMetadata.searchUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className={`${styles.link} ${styles.tableAction}`}
+                        >
                           Open search
                         </a>
                       ) : null}
-                      <Link href={`/runs/${run.id}`} style={{ marginRight: "0.75rem" }}>
+                      <Link href={`/runs/${run.id}`} className={`${styles.link} ${styles.tableAction}`}>
                         View properties
                       </Link>
                       {run.step2Status === "completed" && run.propertiesCount > 0 ? (
-                        <button
+                        <Button
                           type="button"
-                          className="btn-primary"
-                          style={{ padding: "0.25rem 0.5rem", fontSize: "0.8rem" }}
+                          variant="primary"
+                          size="sm"
                           disabled={sendingRunId === run.id}
                           onClick={() => {
                             void handleSendToPropertyData(run.id);
                           }}
                         >
                           {sendingRunId === run.id ? "Sending..." : "Send to property data"}
-                        </button>
+                        </Button>
                       ) : null}
                     </td>
                   </tr>
@@ -2226,7 +1959,7 @@ export default function RunsPage() {
             </table>
           </div>
         )}
-      </div>
+      </Panel>
     </div>
   );
 }

@@ -3,6 +3,9 @@
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
+import { Building2 } from "lucide-react";
+import { PageHeader, Panel, SkeletonRows } from "@/components/ui";
+import styles from "../runs.module.css";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
 
@@ -42,11 +45,20 @@ export default function RunDetailPage() {
 
   const formatTime = (iso: string) => new Date(iso).toLocaleString();
 
-  if (loading) return <div className="card">Loading…</div>;
+  if (loading) {
+    return (
+      <div className={styles.page}>
+        <SkeletonRows count={6} />
+      </div>
+    );
+  }
   if (error || !run) {
     return (
-      <div className="card error">
-        {error || "Run not found."} <Link href="/runs">Back to Sourcing Agent</Link>
+      <div className={styles.error}>
+        {error || "Run not found."}{" "}
+        <Link href="/runs" className={styles.link}>
+          Back to Sourcing Agent
+        </Link>
       </div>
     );
   }
@@ -59,25 +71,27 @@ export default function RunDetailPage() {
   };
 
   return (
-    <div className="run-detail-page">
-      <h1 className="page-title">Sourcing Agent Run at {formatTime(run.startedAt)}</h1>
-      <p className="card" style={{ marginBottom: "1rem" }}>
-        <Link href="/runs">← Back to Sourcing Agent</Link>
+    <div className={styles.page}>
+      <PageHeader title={<>Sourcing Agent Run at {formatTime(run.startedAt)}</>} />
+      <p className={styles.backLine}>
+        <Link href="/runs" className={styles.link}>
+          ← Back to Sourcing Agent
+        </Link>
       </p>
-      <p style={{ marginBottom: "1rem" }}>
+      <p className={styles.runSummary}>
         Step 1: {run.step1Status} ({run.step1Count} URLs) — Step 2: {run.step2Status} (
         {run.step2Count}/{run.step2Total} properties)
         {run.errors.length > 0 && ` — Errors: ${run.errors.length}`}
       </p>
 
       {run.errors.length > 0 && (
-        <div className="card error" style={{ marginBottom: "1rem" }}>
+        <div className={styles.error}>
           <strong>Errors:</strong>
-          <ul style={{ margin: "0.25rem 0 0 1rem" }}>
+          <ul className={styles.errorList}>
             {run.errors.map((e, i) => (
               <li key={i}>
                 {e.url ? (
-                  <a href={e.url} target="_blank" rel="noopener noreferrer">
+                  <a href={e.url} target="_blank" rel="noopener noreferrer" className={styles.link}>
                     {e.url}
                   </a>
                 ) : (
@@ -91,34 +105,37 @@ export default function RunDetailPage() {
       )}
 
       {run.properties.length > 0 && (
-        <div className="card" style={{ maxWidth: "none" }}>
-          <h2 style={{ fontSize: "1rem", marginBottom: "0.75rem" }}>Property data (raw)</h2>
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.875rem" }}>
+        <Panel padding="lg">
+          <h2 className={styles.sectionTitle}>
+            <Building2 size={16} strokeWidth={2} aria-hidden="true" className={styles.sectionIcon} />
+            Property data (raw)
+          </h2>
+          <div className={`${styles.tableScroll} ${styles.logScroll}`}>
+            <table className={styles.table}>
               <thead>
                 <tr>
-                  <th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
+                  <th>
                     Address
                   </th>
-                  <th style={{ textAlign: "right", padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
+                  <th className={styles.cellNum}>
                     Price
                   </th>
-                  <th style={{ textAlign: "center", padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
+                  <th className={styles.cellNum}>
                     Beds
                   </th>
-                  <th style={{ textAlign: "center", padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
+                  <th className={styles.cellNum}>
                     Baths
                   </th>
-                  <th style={{ textAlign: "right", padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
+                  <th className={styles.cellNum}>
                     Sqft
                   </th>
-                  <th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
+                  <th>
                     Link
                   </th>
-                  <th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
+                  <th>
                     Broker / Agent
                   </th>
-                  <th style={{ textAlign: "center", padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
+                  <th className={styles.cellCenter}>
                     Photos
                   </th>
                 </tr>
@@ -136,29 +153,30 @@ export default function RunDetailPage() {
                   const firstImg = imgs[0];
                   return (
                   <tr key={i}>
-                    <td style={{ padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
+                    <td>
                       {pick(p, "address", "formatted_address", "street_address", "title")}
                     </td>
-                    <td style={{ textAlign: "right", padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
+                    <td className={styles.cellNum}>
                       {p.price != null || p.list_price != null
                         ? `$${Number(p.price ?? p.list_price ?? 0).toLocaleString()}`
                         : "—"}
                     </td>
-                    <td style={{ textAlign: "center", padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
+                    <td className={styles.cellNum}>
                       {pick(p, "bedrooms", "beds")}
                     </td>
-                    <td style={{ textAlign: "center", padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
+                    <td className={styles.cellNum}>
                       {pick(p, "bathrooms", "baths")}
                     </td>
-                    <td style={{ textAlign: "right", padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
+                    <td className={styles.cellNum}>
                       {pick(p, "square_feet", "sqft", "sqft_feet")}
                     </td>
-                    <td style={{ padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
+                    <td>
                       {(p._fetchUrl != null && String(p._fetchUrl).trim()) || (p.url || p.link || p.listing_url) ? (
                         <a
                           href={String((p._fetchUrl != null && String(p._fetchUrl).trim()) ? p._fetchUrl : (p.url ?? p.link ?? p.listing_url))}
                           target="_blank"
                           rel="noopener noreferrer"
+                          className={styles.link}
                         >
                           view source
                         </a>
@@ -166,18 +184,18 @@ export default function RunDetailPage() {
                         "—"
                       )}
                     </td>
-                    <td style={{ padding: "0.5rem", borderBottom: "1px solid #e5e5e5" }}>
+                    <td>
                       {brokerDisplay}
                     </td>
-                    <td style={{ padding: "0.5rem", borderBottom: "1px solid #e5e5e5", textAlign: "center" }}>
+                    <td className={styles.cellCenter}>
                       {imgs.length > 0 ? (
-                        <span style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem" }}>
+                        <span className={styles.photoWrap}>
                           {firstImg && (
-                            <a href={firstImg} target="_blank" rel="noopener noreferrer" style={{ display: "block", flexShrink: 0 }}>
-                              <img src={firstImg} alt="" loading="lazy" style={{ width: 36, height: 27, objectFit: "cover", borderRadius: 4 }} />
+                            <a href={firstImg} target="_blank" rel="noopener noreferrer" className={styles.thumbLink}>
+                              <img src={firstImg} alt="" loading="lazy" className={styles.thumb} />
                             </a>
                           )}
-                          <span style={{ fontSize: "0.8em", color: "#525252" }}>{imgs.length} photo{imgs.length !== 1 ? "s" : ""}</span>
+                          <span className={styles.photoCount}>{imgs.length} photo{imgs.length !== 1 ? "s" : ""}</span>
                         </span>
                       ) : (
                         "—"
@@ -189,7 +207,7 @@ export default function RunDetailPage() {
               </tbody>
             </table>
           </div>
-        </div>
+        </Panel>
       )}
     </div>
   );
