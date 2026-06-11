@@ -100,7 +100,7 @@ describe("document brief — produced and persisted on every successful ingest",
       expect(report.brief, fixture.id).toBeTruthy();
       const doc = store.documents.find((d) => d.id === report.documentId)!;
       expect(doc.documentBrief).toEqual(report.brief);
-      expect(report.brief!.promptVersion).toBe("knowledge_v1");
+      expect(report.brief!.promptVersion).toBe(MARKET_PROMPT_VERSIONS.knowledge);
       expect(report.brief!.incorporatedAt).toBe(FIXTURE_AS_OF.toISOString());
     }
   });
@@ -458,5 +458,96 @@ describe("market headlines — knowledge base first, rule-based fallback, never 
   it("returns the empty contract shape when there is no data at all", () => {
     const payload = computeMarketHeadlines({ knowledge: null, summaries: [], stats: [], neighborhoods: [] });
     expect(payload).toEqual({ headlines: [], generatedAt: null, knowledgeVersion: null });
+  });
+});
+
+describe("executive summary — knowledge_v2 cross-report trends", () => {
+  it("parses executive_summary insights (numbered, direction-coerced) from model output", () => {
+    const result = validateKnowledgeOutput({
+      knowledge: {
+        as_of: "Q1 2026",
+        executive_summary: [
+          { text: "no numbers so dropped" },
+          {
+            text: "Manhattan MF caps 5.6%→5.9%, Q4'25→Q1'26 (Avison Young)",
+            metric: "cap_rate",
+            value: 0.059,
+            unit: "%",
+            source: "Avison Young",
+            period: "Q1 2026",
+            direction: "up",
+          },
+          {
+            text: "Below-96th $/SF $986 trailing 6-mo (Ariel)",
+            direction: "sideways",
+          },
+        ],
+        submarket_trends: [],
+        asset_type_attention: [],
+        cap_rate_psf_movements: [],
+        discrepancies: [],
+        sources: ["Avison Young — Q1 2026"],
+      },
+    });
+    const exec = result.narrative!.executiveSummary ?? [];
+    expect(exec).toHaveLength(2);
+    expect(exec[0].direction).toBe("up");
+    expect(exec[0].source).toBe("Avison Young");
+    expect(exec[1].direction).toBeNull();
+  });
+
+  it("deterministic merge derives a non-empty executive summary from cross-period stat deltas", () => {
+    const latest = store.knowledgeEntries.at(-1)!;
+    const exec = latest.narrative.executiveSummary ?? [];
+    expect(exec.length).toBeGreaterThan(0);
+    for (const insight of exec) expect(insight.text).toMatch(/\d/);
+  });
+
+  it("headlines lead with executive-summary insights and dedupe case/whitespace variants", () => {
+    const latest = store.knowledgeEntries.at(-1)!;
+    const withExec = {
+      ...latest,
+      narrative: {
+        ...latest.narrative,
+        executiveSummary: [
+          {
+            text: "Manhattan MF caps 5.6%→5.9%, Q4'25→Q1'26 (AY)",
+            metric: null,
+            value: null,
+            unit: null,
+            source: "Avison Young",
+            period: "Q1 2026",
+            direction: "up" as const,
+          },
+        ],
+        submarketTrends: [
+          {
+            scope: "Manhattan",
+            direction: "up" as const,
+            claims: [
+              {
+                text: "MANHATTAN MF CAPS  5.6%→5.9%, Q4'25→Q1'26 (AY)",
+                metric: null,
+                value: null,
+                unit: null,
+                source: "Avison Young",
+                period: "Q1 2026",
+              },
+            ],
+          },
+        ],
+      },
+    };
+    const payload = computeMarketHeadlines({
+      knowledge: withExec,
+      summaries: [],
+      stats: [],
+      neighborhoods: [],
+    });
+    expect(payload.headlines[0].text).toBe("Manhattan MF caps 5.6%→5.9%, Q4'25→Q1'26 (AY)");
+    expect(payload.headlines[0].tone).toBe("up");
+    // The near-duplicate trend claim (case/whitespace variant) must not repeat.
+    const texts = payload.headlines.map((headline) => headline.text.toLowerCase().replace(/\s+/g, " "));
+    expect(new Set(texts).size).toBe(texts.length);
   });
 });

@@ -9,7 +9,7 @@ export const MARKET_PROMPT_VERSIONS = {
   classify: "classify_v1",
   extract: "extract_v1",
   synthesize: "synthesize_v1",
-  knowledge: "knowledge_v1",
+  knowledge: "knowledge_v2",
 } as const;
 
 export const CLASSIFIER_PROMPT = `You are classifying a real-estate PDF for a comp database. Output ONLY valid JSON:
@@ -178,6 +178,13 @@ RULES:
 7. asset_type_attention.attention is relative to what the knowledge base recorded before
    ("more" | "less" | "steady").
 8. knowledge.sources lists "Publisher — period" for every report folded in so far.
+9. executive_summary: 3-5 claims written for a principal deciding where to hunt
+   deals this quarter — the HIGHEST-level read synthesized ACROSS every report
+   folded in so far, not just this upload. Each claim marks the trend OVER TIME
+   with prior→current values and periods inside ONE publisher's series
+   ("Manhattan MF caps 5.6%→5.9%, Q4'25→Q1'26, Avison Young"); cross-publisher
+   gaps belong in discrepancies, never in a trend claim. Order by decision
+   relevance. ≤140 chars each. direction reflects the metric's trajectory.
 
 OUTPUT SCHEMA (exact keys, no extras):
 {
@@ -189,6 +196,11 @@ OUTPUT SCHEMA (exact keys, no extras):
   },
   "knowledge": {
     "as_of": string | null,                // latest period covered, e.g. "Q1 2026"
+    "executive_summary": [{                // 3-5 cross-report, trends-over-time takeaways (rule 9)
+      "text": string, "metric": string | null, "value": number | null,
+      "unit": string | null, "source": string | null, "period": string | null,
+      "direction": "up" | "down" | "flat" | "mixed" | null
+    }],
     "submarket_trends": [{
       "scope": string,                     // verbatim geography, e.g. "Manhattan below 96th St"
       "direction": "up" | "down" | "flat" | "mixed",

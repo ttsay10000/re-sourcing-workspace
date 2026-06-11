@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { AlertTriangle, Building2, TrendingUp } from "lucide-react";
 import type {
   MarketDocumentBrief,
   MarketKnowledgeResponse,
@@ -365,10 +366,36 @@ export default function MarketDocsPage() {
         </div>
         {knowledge ? (
           <div className={styles.knowledgeBody}>
+            {(knowledge.narrative.executiveSummary ?? []).length > 0 ? (
+              <div className={styles.execSummary}>
+                <span className={styles.execSummaryTitle}>
+                  <TrendingUp size={15} strokeWidth={2} aria-hidden="true" />
+                  Executive summary — trends across all reports
+                </span>
+                <ul className={styles.execSummaryList}>
+                  {(knowledge.narrative.executiveSummary ?? []).map((insight) => (
+                    <li key={insight.text} className={styles.execSummaryRow}>
+                      {insight.direction ? (
+                        <Badge tone={DIRECTION_META[insight.direction].tone}>
+                          {DIRECTION_META[insight.direction].label}
+                        </Badge>
+                      ) : null}
+                      <span className={styles.execSummaryText}>{insight.text}</span>
+                      {insight.source || insight.period ? (
+                        <span className={styles.execSummaryMeta}>
+                          {[insight.source, insight.period].filter(Boolean).join(" · ")}
+                        </span>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+
             {knowledge.narrative.submarketTrends.length > 0 ? (
               <div className={styles.trendGrid}>
                 {knowledge.narrative.submarketTrends.map((trend) => (
-                  <div key={trend.scope} className={styles.trendCard}>
+                  <div key={trend.scope} className={`${styles.trendCard} ${styles[`trendCard_${trend.direction}`] ?? ""}`}>
                     <div className={styles.trendHeadline}>
                       <span className={styles.trendScope}>{trend.scope}</span>
                       <Badge tone={DIRECTION_META[trend.direction].tone}>{DIRECTION_META[trend.direction].label}</Badge>
@@ -385,7 +412,10 @@ export default function MarketDocsPage() {
 
             {knowledge.narrative.assetTypeAttention.length > 0 ? (
               <div className={styles.knowledgeGroup}>
-                <span className={styles.briefGroupTitle}>Asset-type attention</span>
+                <span className={styles.briefGroupTitle}>
+                  <Building2 size={14} strokeWidth={2} aria-hidden="true" />
+                  Asset-type attention
+                </span>
                 <ul className={styles.attentionList}>
                   {knowledge.narrative.assetTypeAttention.map((note) => (
                     <li key={note.segment} className={styles.attentionRow}>
@@ -403,7 +433,10 @@ export default function MarketDocsPage() {
 
             {knowledge.narrative.capRatePsfMovements.length > 0 ? (
               <div className={styles.knowledgeGroup}>
-                <span className={styles.briefGroupTitle}>Cap rate / $PSF movements</span>
+                <span className={styles.briefGroupTitle}>
+                  <TrendingUp size={14} strokeWidth={2} aria-hidden="true" />
+                  Cap rate / $PSF movements
+                </span>
                 <ul className={styles.briefList}>
                   {knowledge.narrative.capRatePsfMovements.map((claim) => (
                     <li key={claim.text}>{claim.text}</li>
@@ -414,7 +447,10 @@ export default function MarketDocsPage() {
 
             {knowledge.narrative.discrepancies.filter((item) => item.status === "open").length > 0 ? (
               <div className={styles.discrepancyBox}>
-                <span className={styles.discrepancyTitle}>Open discrepancies</span>
+                <span className={styles.discrepancyTitle}>
+                  <AlertTriangle size={14} strokeWidth={2} aria-hidden="true" />
+                  Open discrepancies
+                </span>
                 <ul className={styles.discrepancyList}>
                   {knowledge.narrative.discrepancies
                     .filter((item) => item.status === "open")

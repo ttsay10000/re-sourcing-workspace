@@ -234,10 +234,17 @@ export interface MarketKnowledgeDiscrepancy {
   status: "open" | "resolved";
 }
 
+/** Executive insight: a cross-document, trends-over-time takeaway (prior→current values with periods). */
+export interface MarketKnowledgeExecInsight extends MarketKnowledgeClaim {
+  direction?: MarketTrendDirection | null;
+}
+
 /** Cumulative structured market narrative; grows with every ingested document. */
 export interface MarketKnowledgeNarrative {
   /** Latest period covered, e.g. "Q1 2026". */
   asOf: string | null;
+  /** 3-5 highest-level takeaways synthesized ACROSS all folded-in reports, marking trends over time. Optional: entries stored before knowledge_v2 lack it. */
+  executiveSummary?: MarketKnowledgeExecInsight[];
   submarketTrends: MarketKnowledgeSubmarketTrend[];
   assetTypeAttention: MarketKnowledgeAttentionNote[];
   capRatePsfMovements: MarketKnowledgeClaim[];

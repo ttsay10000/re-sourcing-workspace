@@ -23,6 +23,7 @@ import type {
   MarketKnowledgeClaim,
   MarketKnowledgeDiscrepancy,
   MarketKnowledgeEntry,
+  MarketKnowledgeExecInsight,
   MarketKnowledgeNarrative,
   MarketKnowledgeSubmarketTrend,
   MarketPriceType,
@@ -39,6 +40,7 @@ const MAX_TEXT_CHARS = 160;
 const MAX_BRIEF_BULLETS = 6;
 const MIN_BRIEF_BULLETS = 3;
 const MAX_CLAIMS_PER_SCOPE = 5;
+const MAX_EXEC_INSIGHTS = 5;
 const MAX_TRENDS = 12;
 const MAX_MOVEMENTS = 10;
 const MAX_ATTENTION_NOTES = 8;
@@ -51,6 +53,7 @@ const DISCREPANCY_LEVEL_PCT = 0.2;
 
 export const EMPTY_KNOWLEDGE_NARRATIVE: MarketKnowledgeNarrative = {
   asOf: null,
+  executiveSummary: [],
   submarketTrends: [],
   assetTypeAttention: [],
   capRatePsfMovements: [],
@@ -259,6 +262,31 @@ function cleanClaims(value: unknown, max: number): MarketKnowledgeClaim[] {
 const DIRECTIONS: MarketTrendDirection[] = ["up", "down", "flat", "mixed"];
 const ATTENTIONS = ["more", "less", "steady"] as const;
 
+/** Exec insights are claims + optional trajectory direction. */
+function cleanExecInsights(value: unknown, max: number): MarketKnowledgeExecInsight[] {
+  if (!Array.isArray(value)) return [];
+  const insights: MarketKnowledgeExecInsight[] = [];
+  for (const raw of value) {
+    if (raw == null || typeof raw !== "object" || Array.isArray(raw)) continue;
+    const row = raw as Record<string, unknown>;
+    const text = asString(row.text);
+    if (!text || text.length > MAX_TEXT_CHARS || !/\d/.test(text)) continue;
+    insights.push({
+      text,
+      metric: asString(row.metric),
+      value: asNumberOrNull(row.value),
+      unit: asString(row.unit),
+      source: asString(row.source),
+      period: asString(row.period),
+      direction: DIRECTIONS.includes(row.direction as MarketTrendDirection)
+        ? (row.direction as MarketTrendDirection)
+        : null,
+    });
+    if (insights.length >= max) break;
+  }
+  return insights;
+}
+
 export interface KnowledgeBriefDraft {
   title: string | null;
   whatItSays: string[];
@@ -351,9 +379,11 @@ export function validateKnowledgeOutput(parsed: Record<string, unknown> | null):
       ? row.sources.filter((src): src is string => typeof src === "string").slice(0, MAX_SOURCES)
       : [];
     const movements = cleanClaims(row.cap_rate_psf_movements, MAX_MOVEMENTS);
-    if (trends.length > 0 || movements.length > 0 || sources.length > 0) {
+    const executiveSummary = cleanExecInsights(row.executive_summary, MAX_EXEC_INSIGHTS);
+    if (trends.length > 0 || movements.length > 0 || sources.length > 0 || executiveSummary.length > 0) {
       narrative = {
         asOf: asString(row.as_of),
+        executiveSummary,
         submarketTrends: trends,
         assetTypeAttention: attention,
         capRatePsfMovements: movements,
@@ -707,8 +737,28 @@ export function deterministicNarrativeMerge(inputs: DeterministicInputs): Market
 
   const sources = [...new Set([...prior.sources, sourceLabel(classification, inputs.filename)])];
 
+  // Deterministic exec summary: cross-period deltas (same metric + scope)
+  // lead, then the top movement — so the panel never renders empty without a
+  // model. Direction stays null (no inference from formatted text).
+  const freshExec: MarketKnowledgeExecInsight[] = [
+    ...briefDraft.comparedToPrior.slice(0, 3).map((text) => ({
+      text: clamp(text),
+      metric: null,
+      value: null,
+      unit: null,
+      source: null,
+      period: null,
+      direction: null,
+    })),
+    ...movements.slice(0, 1).map((claim) => ({ ...claim, direction: null })),
+  ]
+    .filter((insight, index, all) => all.findIndex((other) => other.text === insight.text) === index)
+    .slice(0, MAX_EXEC_INSIGHTS - 1);
+  const executiveSummary = freshExec.length > 0 ? freshExec : prior.executiveSummary ?? [];
+
   return {
     asOf: classification.period_covered ?? prior.asOf,
+    executiveSummary,
     submarketTrends: trends.slice(0, MAX_TRENDS),
     assetTypeAttention: attention.slice(0, MAX_ATTENTION_NOTES),
     capRatePsfMovements: movements,
@@ -904,10 +954,13 @@ function toneFromValue(value: number | null): MarketHeadline["tone"] {
 export function headlinesFromKnowledge(entry: MarketKnowledgeEntry): MarketHeadline[] {
   const headlines: MarketHeadline[] = [];
   const seen = new Set<string>();
+  // Normalized dedupe key — near-duplicate lines differing only in case or
+  // whitespace previously rendered twice on the Yield Map strip.
+  const dedupeKey = (text: string) => text.toLowerCase().replace(/\s+/g, " ").trim();
   const push = (text: string, tone: MarketHeadline["tone"], scope: string | null, source: string | null, asOf: string | null) => {
     const trimmed = clamp(text, 140);
-    if (!trimmed || seen.has(trimmed) || headlines.length >= MAX_HEADLINES) return;
-    seen.add(trimmed);
+    if (!trimmed || seen.has(dedupeKey(trimmed)) || headlines.length >= MAX_HEADLINES) return;
+    seen.add(dedupeKey(trimmed));
     headlines.push({
       id: `kb-v${entry.version}-${headlines.length + 1}`,
       text: trimmed,
@@ -918,6 +971,16 @@ export function headlinesFromKnowledge(entry: MarketKnowledgeEntry): MarketHeadl
     });
   };
   const narrative = entry.narrative;
+  // The exec read leads the strip — cross-report, trends-over-time takeaways.
+  for (const insight of narrative.executiveSummary ?? []) {
+    push(
+      insight.text,
+      insight.direction ? toneFromDirection(insight.direction) : "neutral",
+      null,
+      insight.source,
+      insight.period ?? narrative.asOf
+    );
+  }
   for (const trend of narrative.submarketTrends) {
     const claim = trend.claims[0];
     if (!claim) continue;

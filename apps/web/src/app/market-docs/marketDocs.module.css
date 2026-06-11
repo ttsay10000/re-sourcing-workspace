@@ -214,6 +214,9 @@
 }
 
 .briefGroupTitle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
   font-size: 0.68rem;
   font-weight: 800;
   text-transform: uppercase;
@@ -241,6 +244,9 @@
 }
 
 .discrepancyTitle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
   font-size: 0.68rem;
   font-weight: 800;
   text-transform: uppercase;
@@ -299,8 +305,78 @@
   gap: 0.4rem;
   align-content: start;
   border: 1px solid var(--app-line);
+  border-left: 3px solid var(--app-line-strong, #d4d4d8);
   border-radius: var(--radius-md, 8px);
   padding: 0.6rem 0.7rem;
+}
+
+.trendCard_up {
+  border-left-color: var(--app-green, #16a34a);
+}
+
+.trendCard_down {
+  border-left-color: var(--app-red, #dc2626);
+}
+
+.trendCard_mixed {
+  border-left-color: var(--app-amber, #d97706);
+}
+
+.trendCard_flat {
+  border-left-color: var(--app-line-strong, #d4d4d8);
+}
+
+/* Executive summary: the cross-report, trends-over-time read leads the panel. */
+.execSummary {
+  display: grid;
+  gap: 0.55rem;
+  border-left: 3px solid var(--brand, #0f766e);
+  background: var(--brand-soft, #f0fdfa);
+  border-radius: var(--radius-md, 8px);
+  padding: 0.75rem 0.85rem;
+}
+
+.execSummaryTitle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--brand-strong, #115e59);
+}
+
+.execSummaryList {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.execSummaryRow {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.execSummaryText {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 0.92rem;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--app-ink);
+}
+
+.execSummaryMeta {
+  flex: 0 0 auto;
+  color: var(--app-muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 .trendHeadline {
