@@ -497,8 +497,11 @@ export const FIXTURE_AS_OF = new Date("2026-03-15T12:00:00Z");
  */
 export function fixtureLlmRunner(fixtures: MarketDocFixture[] = MARKET_DOC_FIXTURES): MarketLlmRunner {
   return async (request) => {
-    if (request.stage === "synthesize") {
-      return { provider: "mock", model: "fixture", rawOutput: null, parsed: null, error: "fixture runner: deterministic bullets" };
+    // Synthesis, notes, and review carry no fixture payloads ON PURPOSE: the
+    // pipeline exercises its deterministic fallbacks for those stages instead
+    // of accidentally parsing an extract response under another schema.
+    if (request.stage === "synthesize" || request.stage === "notes" || request.stage === "review") {
+      return { provider: "mock", model: "fixture", rawOutput: null, parsed: null, error: "fixture runner: deterministic path" };
     }
     const haystack = request.documentText ?? request.pdf?.buffer.toString("utf-8") ?? "";
     const fixture = fixtures.find((candidate) => haystack.includes(candidate.marker));

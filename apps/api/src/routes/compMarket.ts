@@ -408,6 +408,8 @@ router.get("/comps/market", async (req: Request, res: Response) => {
     }
 
     comps.sort((a, b) => (b.packageCreatedAt ?? "").localeCompare(a.packageCreatedAt ?? ""));
+    // Each origin queried up to `limit` rows; honor the contract on the union too.
+    if (comps.length > limit) comps.length = limit;
     const capRates = comps.map((comp) => comp.capRatePct).filter((value): value is number => value != null);
     const psfs = comps.map((comp) => comp.pricePsf).filter((value): value is number => value != null);
     res.json({

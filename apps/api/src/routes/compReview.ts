@@ -58,7 +58,22 @@ router.get("/comps/review-queue", async (_req: Request, res: Response) => {
   try {
     const pool = getPool();
 
-    const marketRows = await new MarketCompRepo({ pool }).listPendingWithDocuments(QUEUE_LIMIT);
+    const [marketRows, brokerResult] = await Promise.all([
+      new MarketCompRepo({ pool }).listPendingWithDocuments(QUEUE_LIMIT),
+      pool.query(
+        `SELECT i.id, i.item_type, i.normalized_payload, i.reviewed_payload, i.confidence, i.created_at,
+                pkg.id AS package_id, pkg.package_type, pkg.created_at AS package_created_at,
+                p.canonical_address AS subject_address
+         FROM broker_comp_extracted_items i
+         INNER JOIN broker_comp_packages pkg ON pkg.id = i.package_id
+         INNER JOIN properties p ON p.id = i.property_id
+         WHERE i.item_type IN ('sale_comp', 'pricing_comp')
+           AND i.review_status = 'pending'
+         ORDER BY i.created_at DESC
+         LIMIT $1`,
+        [QUEUE_LIMIT]
+      ),
+    ]);
     const marketItems: CompReviewQueueItem[] = marketRows.map(({ comp, document }) => ({
       id: comp.id,
       source: "market_doc",
@@ -97,19 +112,6 @@ router.get("/comps/review-queue", async (_req: Request, res: Response) => {
       createdAt: comp.createdAt,
     }));
 
-    const brokerResult = await pool.query(
-      `SELECT i.id, i.item_type, i.normalized_payload, i.reviewed_payload, i.confidence, i.created_at,
-              pkg.id AS package_id, pkg.package_type, pkg.created_at AS package_created_at,
-              p.canonical_address AS subject_address
-       FROM broker_comp_extracted_items i
-       INNER JOIN broker_comp_packages pkg ON pkg.id = i.package_id
-       INNER JOIN properties p ON p.id = i.property_id
-       WHERE i.item_type IN ('sale_comp', 'pricing_comp')
-         AND i.review_status = 'pending'
-       ORDER BY i.created_at DESC
-       LIMIT $1`,
-      [QUEUE_LIMIT]
-    );
     const brokerItems: CompReviewQueueItem[] = brokerResult.rows.map((row) => {
       const payload = {
         ...((row.normalized_payload as Record<string, unknown> | null) ?? {}),

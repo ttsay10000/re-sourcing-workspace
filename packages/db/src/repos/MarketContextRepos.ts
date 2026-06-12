@@ -169,7 +169,17 @@ function mapNeighborhoodSummary(row: Row): NeighborhoodSummary & { topComps: Mar
     fallbackContext: str(row.fallback_context),
     dataFreshness: dateOnly(row.data_freshness),
     sources: jsonArray<string>(row.sources),
-    topComps: jsonArray<MarketComp>(row.top_comps),
+    // Snapshots persisted before migration 064/065 predate the review-gate and
+    // deal-intel fields; default them so consumers never see undefined.
+    topComps: jsonArray<MarketComp>(row.top_comps).map((comp) => ({
+      ...comp,
+      grm: comp.grm ?? null,
+      buyer: comp.buyer ?? null,
+      seller: comp.seller ?? null,
+      saleConditions: comp.saleConditions ?? [],
+      reviewStatus: comp.reviewStatus ?? "approved",
+      reviewedAt: comp.reviewedAt ?? null,
+    })),
     updatedAt: iso(row.updated_at),
   };
 }
@@ -395,6 +405,20 @@ export interface PendingMarketCompRow {
   } | null;
 }
 
+/** Shared mapper for the doc_* columns selected by the comp+document joins. */
+function mapJoinedDocument(row: Row): PendingMarketCompRow["document"] {
+  if (!row.doc_id) return null;
+  return {
+    id: String(row.doc_id),
+    filename: String(row.doc_filename),
+    reportTitle: str(row.doc_report_title),
+    publisher: str(row.doc_publisher),
+    periodCovered: str(row.doc_period_covered),
+    sourceType: str(row.doc_source_type),
+    documentClass: str(row.doc_document_class),
+  };
+}
+
 export class MarketCompRepo {
   constructor(private options: MarketContextRepoOptions) {}
 
@@ -557,20 +581,7 @@ export class MarketCompRepo {
        LIMIT $1`,
       [Math.max(1, Math.min(limit, 1000))]
     );
-    return r.rows.map((row: Row) => ({
-      comp: mapMarketComp(row),
-      document: row.doc_id
-        ? {
-            id: String(row.doc_id),
-            filename: String(row.doc_filename),
-            reportTitle: str(row.doc_report_title),
-            publisher: str(row.doc_publisher),
-            periodCovered: str(row.doc_period_covered),
-            sourceType: str(row.doc_source_type),
-            documentClass: str(row.doc_document_class),
-          }
-        : null,
-    }));
+    return r.rows.map((row: Row) => ({ comp: mapMarketComp(row), document: mapJoinedDocument(row) }));
   }
 
   /** Comp Analysis / Yield Map comp layer: approved comps with their source document's period for attribution. */
@@ -587,20 +598,7 @@ export class MarketCompRepo {
        LIMIT $1`,
       [Math.max(1, Math.min(limit, 2000))]
     );
-    return r.rows.map((row: Row) => ({
-      comp: mapMarketComp(row),
-      document: row.doc_id
-        ? {
-            id: String(row.doc_id),
-            filename: String(row.doc_filename),
-            reportTitle: str(row.doc_report_title),
-            publisher: str(row.doc_publisher),
-            periodCovered: str(row.doc_period_covered),
-            sourceType: str(row.doc_source_type),
-            documentClass: str(row.doc_document_class),
-          }
-        : null,
-    }));
+    return r.rows.map((row: Row) => ({ comp: mapMarketComp(row), document: mapJoinedDocument(row) }));
   }
 
   /** Apply a user review decision. Returns affected rows so callers can resynthesize their neighborhoods. */
