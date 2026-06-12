@@ -1,6 +1,6 @@
 import { randomUUID } from "crypto";
 import { Router, type Request, type Response } from "express";
-import type { PoolClient } from "pg";
+import type { Pool, PoolClient } from "pg";
 import type {
   AgentEnrichmentEntry,
   BrokerContact,
@@ -12,6 +12,7 @@ import type {
   UiV2CrmBrokerResponsePayload,
   UiV2CrmBrokerResponseStatus,
   UiV2CrmPropertyRowPayload,
+  UiV2OutreachDraftListItem,
   UiV2OutreachDraftPayload,
   UiV2OutreachFollowUpActionPayload,
   UiV2OutreachSendNowPayload,
@@ -36,6 +37,12 @@ import {
   syncRecipientResolution,
 } from "../sourcing/workflow.js";
 import { sendMessage as gmailSendMessage } from "../inquiry/gmailClient.js";
+import {
+  readUiDraftMetadata,
+  sendExistingDraftBatch,
+  SENDABLE_DRAFT_STATUSES,
+  UI_V2_DRAFT_KIND,
+} from "../sourcing/outreachDraftQueue.js";
 
 const router = Router();
 
@@ -236,6 +243,43 @@ async function markOmRequestedFromOutreach(
   void recordDealStageChange(pool, propertyId, "outreach", { actor, source });
 }
 
+/**
+ * Guard shared by send-now and the drafts queue: refuse to email a broker
+ * when an OM already exists or an inquiry was already logged. Error copy must
+ * keep "Use force" — the web composers branch on that substring to offer the
+ * force retry.
+ */
+async function assertNoPriorOutreach(pool: Pool, propertyId: string): Promise<void> {
+  const [lastSentAt, omResult] = await Promise.all([
+    new InquirySendRepo({ pool }).getLastSentAt(propertyId),
+    pool.query<{ has_om_document: boolean }>(
+      `SELECT EXISTS (
+         SELECT 1
+         FROM property_inquiry_documents d
+         WHERE d.property_id = $1
+           AND LOWER(COALESCE(d.filename, '')) ~ '(offering|memorandum|(^|[^a-z])om([^a-z]|$)|brochure|rent[ _-]?roll)'
+       ) OR EXISTS (
+         SELECT 1
+         FROM property_uploaded_documents u
+         WHERE u.property_id = $1
+           AND u.category IN ('OM', 'Brochure', 'Rent Roll')
+       ) OR EXISTS (
+         SELECT 1
+         FROM properties p
+         WHERE p.id = $1
+           AND COALESCE(p.details->'omData'->'authoritative', 'null'::jsonb) <> 'null'::jsonb
+       ) AS has_om_document`,
+      [propertyId]
+    ),
+  ]);
+  if (omResult.rows[0]?.has_om_document) {
+    throw new RouteError(409, "OM already received for this property. Use force to send anyway.");
+  }
+  if (lastSentAt) {
+    throw new RouteError(409, "An inquiry has already been logged for this property. Use force to resend.");
+  }
+}
+
 function parseLimit(value: unknown, fallback = 50): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
@@ -275,6 +319,29 @@ function mapOutreachTemplate(row: Record<string, unknown>): UiV2OutreachTemplate
 
 function isJsonRecord(value: unknown): value is JsonRecord {
   return value != null && typeof value === "object" && !Array.isArray(value);
+}
+
+function mapOutreachDraftListRow(row: Record<string, unknown>): UiV2OutreachDraftListItem {
+  const metadata = isJsonRecord(row.metadata) ? row.metadata : {};
+  return {
+    id: String(row.id),
+    // Empty when the property was deleted (FK cascade removed the batch item).
+    propertyId: row.property_id ? String(row.property_id) : "",
+    contactId: cleanString(row.contact_id),
+    toAddress: String(row.to_address ?? ""),
+    subject: cleanString(metadata.subject) ?? "",
+    body: cleanString(metadata.body) ?? "",
+    status: row.status === "failed" ? "failed" : "draft",
+    followUpAt: cleanString(metadata.followUpAt),
+    templateId: cleanString(metadata.templateId),
+    templateName: cleanString(metadata.templateName),
+    createdAt: toIso(row.created_at) ?? "",
+    updatedAt: toIso(row.updated_at) ?? "",
+    canonicalAddress: cleanString(row.canonical_address),
+    displayAddress: cleanString(row.display_address),
+    contactName: cleanString(row.contact_name),
+    reviewReason: cleanString(row.review_reason),
+  };
 }
 
 function readManualOverride(property: Property | null): JsonRecord | null {
@@ -1289,6 +1356,155 @@ router.get("/ui-v2/properties/:id/outreach-composer", async (req: Request, res: 
   }
 });
 
+router.get("/ui-v2/outreach-drafts", async (req: Request, res: Response) => {
+  try {
+    const pool = getPool();
+    const limit = parseLimit(req.query.limit);
+    const offset = parseOffset(req.query.offset);
+    const result = await pool.query(
+      `SELECT
+         b.id, b.contact_id, b.to_address, b.status, b.review_reason, b.metadata,
+         b.created_at, b.updated_at,
+         i.property_id,
+         p.canonical_address,
+         NULLIF(split_part(p.canonical_address, ',', 1), '') AS display_address,
+         bc.display_name AS contact_name,
+         COUNT(*) OVER() AS total_count
+       FROM outreach_batches b
+       LEFT JOIN LATERAL (
+         SELECT property_id FROM outreach_batch_items
+         WHERE batch_id = b.id ORDER BY created_at LIMIT 1
+       ) i ON true
+       LEFT JOIN properties p ON p.id = i.property_id
+       LEFT JOIN broker_contacts bc ON bc.id = b.contact_id
+       WHERE b.status IN ('review_required', 'failed')
+         AND b.metadata->>'kind' = $3
+       ORDER BY b.created_at DESC
+       LIMIT $1 OFFSET $2`,
+      [limit, offset, UI_V2_DRAFT_KIND]
+    );
+    const drafts = result.rows.map(mapOutreachDraftListRow);
+    res.json({ drafts, total: Number(result.rows[0]?.total_count ?? 0), limit, offset });
+  } catch (err) {
+    sendRouteError(res, "outreach-draft-list", err);
+  }
+});
+
+router.post("/ui-v2/outreach-drafts/:id/send", async (req: Request, res: Response) => {
+  const pool = getPool();
+  const outreachRepo = new OutreachBatchRepo({ pool });
+  // Set once validation passes; failures past that point mark the batch failed.
+  let sendPhaseBatchId: string | null = null;
+  try {
+    const id = requiredString(req.params.id, "draft id");
+    const force = (req.body as JsonRecord | null)?.force === true;
+    const batch = await outreachRepo.byId(id);
+    const meta = batch ? readUiDraftMetadata(batch) : null;
+    if (!batch || !meta) throw new RouteError(404, "Draft not found.");
+    if (!SENDABLE_DRAFT_STATUSES.has(batch.status)) {
+      throw new RouteError(409, `Draft is ${batch.status}; only queued drafts can be sent.`);
+    }
+    if (batch.gmailMessageId) {
+      throw new RouteError(409, "This draft already has a sent Gmail message.");
+    }
+    const propertyId = batch.items?.[0]?.propertyId;
+    if (!propertyId) throw new RouteError(422, "Draft has no linked property.");
+    if (!meta.subject || !meta.body) throw new RouteError(422, "Draft is missing a subject or body.");
+    if (!force) await assertNoPriorOutreach(pool, propertyId);
+
+    sendPhaseBatchId = batch.id;
+    const sent = await sendExistingDraftBatch(
+      {
+        sendMessage: gmailSendMessage,
+        outreachRepo,
+        inquirySendRepo: new InquirySendRepo({ pool }),
+        actionItemRepo: new PropertyActionItemRepo({ pool }),
+      },
+      batch,
+      meta,
+      propertyId
+    );
+
+    await syncPropertySourcingWorkflow(propertyId, { pool }).catch((err) => {
+      console.warn("[crm-v2 outreach-draft-send workflow sync]", err);
+    });
+    await markOmRequestedFromOutreach(pool, propertyId, "ui-v2", "ui-v2-draft-send").catch((err) => {
+      console.warn("[crm-v2 outreach-draft-send status]", err);
+    });
+
+    const draft: UiV2OutreachDraftPayload = {
+      id: batch.id,
+      propertyId,
+      contactId: batch.contactId ?? null,
+      toAddress: batch.toAddress,
+      subject: meta.subject,
+      body: meta.body,
+      status: "sent",
+      followUpAt: meta.followUpAt,
+      templateId: meta.templateId,
+      templateName: meta.templateName,
+      createdAt: batch.createdAt,
+      updatedAt: sent.sentAt,
+    };
+    const payload: UiV2OutreachSendNowPayload = {
+      draft,
+      batchId: batch.id,
+      messageId: sent.messageId,
+      threadId: sent.threadId,
+      sentAt: sent.sentAt,
+    };
+    res.json(payload);
+  } catch (err) {
+    if (sendPhaseBatchId && !(err instanceof RouteError)) {
+      // Keep the draft visible and retryable: failed batches stay in the list.
+      await outreachRepo.updateStatus(sendPhaseBatchId, {
+        status: "failed",
+        reviewReason: err instanceof Error ? err.message : String(err),
+        metadata: { draftStatus: "failed", lastSendError: err instanceof Error ? err.message : String(err) },
+      }).catch(() => undefined);
+    }
+    sendRouteError(res, "outreach-draft-send", err);
+  }
+});
+
+router.post("/ui-v2/outreach-drafts/:id/dismiss", async (req: Request, res: Response) => {
+  try {
+    const id = requiredString(req.params.id, "draft id");
+    const pool = getPool();
+    const outreachRepo = new OutreachBatchRepo({ pool });
+    const batch = await outreachRepo.byId(id);
+    const meta = batch ? readUiDraftMetadata(batch) : null;
+    if (!batch || !meta) throw new RouteError(404, "Draft not found.");
+    if (!SENDABLE_DRAFT_STATUSES.has(batch.status)) {
+      throw new RouteError(409, `Draft is ${batch.status} and can no longer be dismissed.`);
+    }
+    // 'skipped' is terminal and invisible to the queue list, the automation
+    // review queue, and automation's historical scan; the row stays for history.
+    const updated = await outreachRepo.updateStatus(id, {
+      status: "skipped",
+      reviewReason: "dismissed_by_user",
+      metadata: { draftStatus: "dismissed", dismissedAt: new Date().toISOString() },
+    });
+    const draft: UiV2OutreachDraftPayload = {
+      id: batch.id,
+      propertyId: batch.items?.[0]?.propertyId ?? "",
+      contactId: batch.contactId ?? null,
+      toAddress: batch.toAddress,
+      subject: meta.subject,
+      body: meta.body,
+      status: "draft",
+      followUpAt: meta.followUpAt,
+      templateId: meta.templateId,
+      templateName: meta.templateName,
+      createdAt: batch.createdAt,
+      updatedAt: updated?.updatedAt ?? batch.updatedAt,
+    };
+    res.json({ ok: true, draft });
+  } catch (err) {
+    sendRouteError(res, "outreach-draft-dismiss", err);
+  }
+});
+
 router.post("/ui-v2/outreach-drafts", async (req: Request, res: Response) => {
   try {
     const body = (req.body ?? {}) as JsonRecord;
@@ -1358,37 +1574,7 @@ router.post("/ui-v2/outreach-send-now", async (req: Request, res: Response) => {
     const property = await new PropertyRepo({ pool }).byId(propertyId);
     if (!property) throw new RouteError(404, "Property not found.");
     const force = body.force === true;
-    const inquiryRepo = new InquirySendRepo({ pool });
-    if (!force) {
-      const [lastSentAt, omResult] = await Promise.all([
-        inquiryRepo.getLastSentAt(propertyId),
-        pool.query<{ has_om_document: boolean }>(
-          `SELECT EXISTS (
-             SELECT 1
-             FROM property_inquiry_documents d
-             WHERE d.property_id = $1
-               AND LOWER(COALESCE(d.filename, '')) ~ '(offering|memorandum|(^|[^a-z])om([^a-z]|$)|brochure|rent[ _-]?roll)'
-           ) OR EXISTS (
-             SELECT 1
-             FROM property_uploaded_documents u
-             WHERE u.property_id = $1
-               AND u.category IN ('OM', 'Brochure', 'Rent Roll')
-           ) OR EXISTS (
-             SELECT 1
-             FROM properties p
-             WHERE p.id = $1
-               AND COALESCE(p.details->'omData'->'authoritative', 'null'::jsonb) <> 'null'::jsonb
-           ) AS has_om_document`,
-          [propertyId]
-        ),
-      ]);
-      if (omResult.rows[0]?.has_om_document) {
-        throw new RouteError(409, "OM already received for this property. Use force to send anyway.");
-      }
-      if (lastSentAt) {
-        throw new RouteError(409, "An inquiry has already been logged for this property. Use force to resend.");
-      }
-    }
+    if (!force) await assertNoPriorOutreach(pool, propertyId);
 
     const contactId = cleanString(body.contactId);
     const followUpAt = cleanString(body.followUpAt);
@@ -1413,34 +1599,18 @@ router.post("/ui-v2/outreach-send-now", async (req: Request, res: Response) => {
     });
     batchId = batch.id;
 
-    const result = await gmailSendMessage(toAddress, subject, draftBody);
-    const { sentAt } = await inquiryRepo.create(propertyId, result.id, {
-      toAddress,
-      source: "gmail_api",
-      gmailThreadId: result.threadId,
-      batchId: batch.id,
-      sendMode: "ui_v2_send_now",
-    });
-    await outreachRepo.updateStatus(batch.id, {
-      status: "sent",
-      gmailMessageId: result.id,
-      gmailThreadId: result.threadId,
-      sentAt,
-      metadata: { draftStatus: "sent" },
-    });
-    if (followUpAt) {
-      await new PropertyActionItemRepo({ pool }).upsertOpen(propertyId, "confirm_follow_up", {
-        priority: "medium",
-        summary: "Follow up with broker",
-        details: {
-          contactId,
-          draftId: batch.id,
-          source: "ui-v2",
-          sendMode: "send_now",
-        },
-        dueAt: followUpAt,
-      });
-    }
+    const sent = await sendExistingDraftBatch(
+      {
+        sendMessage: gmailSendMessage,
+        outreachRepo,
+        inquirySendRepo: new InquirySendRepo({ pool }),
+        actionItemRepo: new PropertyActionItemRepo({ pool }),
+      },
+      batch,
+      { subject, body: draftBody, followUpAt, templateId, templateName, draftStatus: "sending" },
+      propertyId,
+      { inquirySendMode: "ui_v2_send_now", followUpSendMode: "send_now" }
+    );
     await syncPropertySourcingWorkflow(propertyId, { pool }).catch((err) => {
       console.warn("[crm-v2 outreach-send-now workflow sync]", err);
     });
@@ -1460,14 +1630,14 @@ router.post("/ui-v2/outreach-send-now", async (req: Request, res: Response) => {
       templateId,
       templateName,
       createdAt: batch.createdAt,
-      updatedAt: sentAt,
+      updatedAt: sent.sentAt,
     };
     const payload: UiV2OutreachSendNowPayload = {
       draft,
       batchId: batch.id,
-      messageId: result.id,
-      threadId: result.threadId,
-      sentAt,
+      messageId: sent.messageId,
+      threadId: sent.threadId,
+      sentAt: sent.sentAt,
     };
     res.status(201).json(payload);
   } catch (err) {

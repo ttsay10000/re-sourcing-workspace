@@ -1065,6 +1065,26 @@ export interface UiV2OutreachSendNowPayload {
   sentAt: string;
 }
 
+/** A saved outreach draft (outreach_batches row with metadata.kind='ui_v2_outreach_draft') enriched for the CRM Drafts tab. */
+export interface UiV2OutreachDraftListItem extends UiV2OutreachDraftPayload {
+  canonicalAddress: string | null;
+  displayAddress: string | null;
+  contactName: string | null;
+  reviewReason?: string | null;
+}
+
+export interface UiV2OutreachDraftListPayload {
+  drafts: UiV2OutreachDraftListItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface UiV2OutreachDraftDismissPayload {
+  ok: boolean;
+  draft: UiV2OutreachDraftPayload;
+}
+
 export interface UiV2OutreachFollowUpActionInput {
   draftId?: string | null;
   propertyId: string;
