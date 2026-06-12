@@ -242,7 +242,7 @@ router.post("/market-docs/:id/restore", async (req: Request, res: Response) => {
     }
     const document = existing.excludedAt ? await repo.restore(existing.id) : existing;
     const affected = existing.excludedAt
-      ? await new MarketCompRepo({ pool }).reopenForRestoredDocument(existing.id)
+      ? await new MarketCompRepo({ pool }).reopenForRestoredDocument(existing.id, existing.excludedAt)
       : [];
     const neighborhoodIds = [...new Set(affected.map((row) => row.neighborhoodId).filter((id): id is string => id != null))];
     await resynthesizeNeighborhoods({

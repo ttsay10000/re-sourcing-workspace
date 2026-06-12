@@ -615,13 +615,22 @@ export class MarketCompRepo {
     return r.rows.map((row: Row) => ({ id: String(row.id), neighborhoodId: str(row.neighborhood_id) }));
   }
 
-  /** Document restore: its rejected comps go back through the review queue. */
-  async reopenForRestoredDocument(documentId: string): Promise<Array<{ id: string; neighborhoodId: string | null }>> {
+  /**
+   * Document restore: comps the EXCLUSION rejected go back through the review
+   * queue. Comps the user had rejected before the removal stay rejected —
+   * exclusion-rejections always carry reviewed_at >= the document's
+   * excluded_at, user rejections predate it.
+   */
+  async reopenForRestoredDocument(
+    documentId: string,
+    excludedAt: string | null
+  ): Promise<Array<{ id: string; neighborhoodId: string | null }>> {
     const r = await this.client.query(
       `UPDATE market_comps SET review_status = 'pending', reviewed_at = NULL
        WHERE document_id = $1 AND review_status = 'rejected'
+         AND ($2::timestamptz IS NULL OR reviewed_at >= $2::timestamptz)
        RETURNING id, neighborhood_id`,
-      [documentId]
+      [documentId, excludedAt]
     );
     return r.rows.map((row: Row) => ({ id: String(row.id), neighborhoodId: str(row.neighborhood_id) }));
   }

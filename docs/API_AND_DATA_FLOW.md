@@ -237,6 +237,32 @@ Tables (migration `060_market_knowledge.sql`):
 - `market_documents.document_brief` — JSONB analyst brief per upload ({ title, whatItSays, comparedToPrior, discrepancies, incorporatedAt })
 - `market_llm_outputs` — raw model output for the merge step persisted under the new `knowledge` stage (prompt version `knowledge_v1`)
 
+## Market docs usability push: per-doc notes, live AI review, comp review gate (2026-06-12)
+
+Per-document analyst notes (ingest stage 3, before the knowledge merge):
+
+- Gemini reads the PDF natively (`notes_read_v1`), the OpenAI model refines against the structured extraction (`notes_refine_v1`); either pass may be skipped, and with no model a deterministic numbers-only fallback runs — ingest never blocks. Stored on `market_documents.llm_notes` (MarketDocumentNotes: overview, neighborhoods, asset types w/ direction, buyer activity, notable transactions, cap/$PSF, financing, small-building focus, regulatory, risks, investment relevance) and opened from the ingest log's Notes dialog. Raw outputs persist in `market_llm_outputs` under stage `notes`.
+- `GET /api/market-docs/:id/notes` — full notes + brief for one document.
+
+Live AI market review (market-docs page panel):
+
+- `POST /api/market-review/refresh` — regenerates the cross-document review from every INCLUDED document's notes (OpenAI-preferred synthesis, Gemini retry, deterministic digest fallback that bubbles per-doc notes up). Appends a versioned `market_reviews` row carrying `included_document_ids`. The web page auto-triggers it after each upload batch.
+- `GET /api/market-review` — `{ review, stale, currentDocumentCount }`; `stale` = the stored review's document set no longer matches the current non-excluded corpus.
+- Review shape (`MarketReview`): headline, market pulse, small-multifamily focus, cap-rate trends, buyer/seller activity, loan environment, opportunities ("where to hunt"), same-publisher QoQ comparisons, cross-brokerage discrepancies (each side cited), sources.
+
+Document removal / duplicates (ingest log management):
+
+- `DELETE /api/market-docs/:id?reason=duplicate|removed` — soft exclusion (`excluded_at`/`excluded_reason`): uncorroborated comps from the doc are rejected (corroborated ones survive via `provenance_list`), its stats leave fallback/knowledge/QoQ inputs (repo-level joins), affected neighborhood summaries re-roll deterministically, and the live review goes stale. `POST /api/market-docs/:id/restore` reverses it — only comps the EXCLUSION rejected (reviewed_at >= excluded_at) reopen as pending; earlier user rejections stick.
+- `GET /api/market-docs` rows now carry `llmNotes`, `excludedAt/excludedReason`, computed `duplicateOfId` (same publisher+period+class, or identical filename → earliest included upload), and `pendingComps`.
+
+Comp review gate (migration `064_market_docs_review.sql`):
+
+- `market_comps.review_status` pending|approved|rejected (+ `reviewed_at`); new extractions land pending, pre-migration rows grandfathered approved. Pending comps still count in neighborhood rollups (map fills stay live); ONLY approved comps reach the Comp Analysis table / `GET /api/comps/market` / yield-map comp pins; rejected comps also leave rollups + neighborhood-psf blending. Dedupe merges keep the existing decision, except a rejected comp re-corroborated by a new source reopens as pending.
+- Broker packages: `sale_comp`/`pricing_comp` extractions are now created `review_status='pending'` (other item types stay auto-accepted) so they flow through the same gate; the promote flow already requires accepted.
+- `GET /api/comps/review-queue` — unified pending queue (market-doc comps with publisher/title/period + broker comps with package/subject), normalized field-level payloads for verification.
+- `POST /api/comps/review` — `{ decisions: [{ id, source: market_doc|broker, action: approve|reject }] }`; market-doc decisions re-roll affected neighborhood summaries.
+- `GET /api/comps/market` now returns BOTH origins with a `source` attribution object (kind, label, title, publisher, period, documentId/packageId) + `origin` filter param + `summary.originCounts`; subject fields are null for market-doc rows (the yield map renders source attribution instead of the subject link).
+
 ## v6 push: refresh semantics, activity log, neighborhood $/SF context (2026-06-10)
 
 Refresh semantics:
