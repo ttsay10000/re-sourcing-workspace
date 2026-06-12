@@ -198,15 +198,21 @@ interface MarkerEntry {
   marker: maplibregl.Marker;
   element: HTMLElement;
   popup: maplibregl.Popup;
+  /** Cancels a pending hover-intent popup so teardown can't resurrect it. */
+  cancelHover: () => void;
 }
 
 /**
  * MapLibre canvas: neighborhood delineations + metric badges under one marker
  * per geocoded deal (dots) and comp (diamonds), fit to the visible set.
- * Popups open on hover (sticky on click); `highlightedId` enlarges a pin so
- * table-row hover can point at the map. The optional market-context overlay
- * adds median-cap polygon fills with provenance popups plus hollow asking pins.
+ * Hover shows a popup after a short intent delay (so sweeping across the
+ * comps layer doesn't flicker); clicking a pin SELECTS it (`onPinSelect`
+ * opens the property wizard). `highlightedId` enlarges a pin so table-row
+ * hover can point at the map. The optional market-context overlay adds
+ * median-cap polygon fills with provenance popups plus hollow asking pins.
  */
+const PIN_HOVER_INTENT_MS = 150;
+
 export function YieldMapCanvas({
   pins,
   boundaries,
@@ -214,6 +220,7 @@ export function YieldMapCanvas({
   showAreas,
   highlightedId,
   onPinHover,
+  onPinSelect,
   marketHoods,
   hollowPins,
   renderHoodPopup,
@@ -224,6 +231,8 @@ export function YieldMapCanvas({
   showAreas: boolean;
   highlightedId?: string | null;
   onPinHover?: (id: string | null) => void;
+  /** Click = select: open the property wizard for this pin's deal. */
+  onPinSelect?: (propertyId: string) => void;
   /** Market-context overlay; omit to render the deal-pin map only. */
   marketHoods?: MarketHood[];
   hollowPins?: HollowPin[];
@@ -251,6 +260,8 @@ export function YieldMapCanvas({
   pinsRef.current = pins;
   const onPinHoverRef = useRef(onPinHover);
   onPinHoverRef.current = onPinHover;
+  const onPinSelectRef = useRef(onPinSelect);
+  onPinSelectRef.current = onPinSelect;
   const renderHoodPopupRef = useRef<typeof renderHoodPopup>(renderHoodPopup);
   renderHoodPopupRef.current = renderHoodPopup;
   // Latest hoods read inside deferred "load" callbacks so a stale empty
@@ -275,6 +286,7 @@ export function YieldMapCanvas({
     (window as Window & { __yieldMap?: maplibregl.Map }).__yieldMap = map;
     return () => {
       markersRef.current.forEach((entry) => {
+        entry.cancelHover();
         entry.popup.remove();
         entry.marker.remove();
       });
@@ -474,6 +486,7 @@ export function YieldMapCanvas({
     lastPinsKeyRef.current = pinsKey;
 
     markersRef.current.forEach((entry) => {
+      entry.cancelHover();
       entry.popup.remove();
       entry.marker.remove();
     });
@@ -507,29 +520,44 @@ export function YieldMapCanvas({
         openPinPopupRef.current = popup;
       };
 
-      // Hover shows the popup; click pins it open until the next map click.
+      // Hover highlights and (after a short intent delay) shows the popup —
+      // never more. Click is the select action: it opens the property wizard
+      // via onPinSelect and keeps the popup pinned until the next map click.
       let sticky = false;
+      let hoverTimer: number | null = null;
+      const clearHoverTimer = () => {
+        if (hoverTimer != null) {
+          window.clearTimeout(hoverTimer);
+          hoverTimer = null;
+        }
+      };
       popup.on("close", () => {
         sticky = false;
         if (openPinPopupRef.current === popup) openPinPopupRef.current = null;
       });
       element.addEventListener("mouseenter", () => {
         onPinHoverRef.current?.(pin.id);
-        openExclusive();
+        clearHoverTimer();
+        hoverTimer = window.setTimeout(() => {
+          hoverTimer = null;
+          openExclusive();
+        }, PIN_HOVER_INTENT_MS);
       });
       element.addEventListener("mouseleave", () => {
         onPinHoverRef.current?.(null);
+        clearHoverTimer();
         if (!sticky) popup.remove();
       });
       element.addEventListener("click", (event) => {
         event.stopPropagation();
-        sticky = !sticky;
-        if (sticky) openExclusive();
-        if (!sticky) popup.remove();
+        clearHoverTimer();
+        sticky = true;
+        openExclusive();
+        onPinSelectRef.current?.(pin.propertyId);
       });
 
       const marker = new maplibregl.Marker({ element }).setLngLat([pin.lng, pin.lat]).addTo(map);
-      markersRef.current.set(pin.id, { marker, element, popup });
+      markersRef.current.set(pin.id, { marker, element, popup, cancelHover: clearHoverTimer });
     }
 
     // Auto-fit exactly once, when pins first arrive; afterwards the camera

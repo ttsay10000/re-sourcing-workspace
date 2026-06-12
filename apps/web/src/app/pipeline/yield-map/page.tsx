@@ -486,16 +486,14 @@ export default function YieldMapPage() {
   const [compsLoading, setCompsLoading] = useState(false);
   const [compsError, setCompsError] = useState<string | null>(null);
   const [activePinId, setActivePinId] = useState<string | null>(null);
-  // Distinguish map-origin hover (scroll the table to the row) from
-  // table-origin hover (never scroll — the user is already there).
-  const hoverSourceRef = useRef<"map" | "table" | null>(null);
 
-  // Two-way highlight: hovering a pin spotlights AND scrolls to its table row,
-  // so far-down rows are actually findable from the map.
-  useEffect(() => {
-    if (!activePinId || hoverSourceRef.current !== "map") return;
-    document.getElementById(`yield-row-${activePinId}`)?.scrollIntoView({ block: "nearest" });
-  }, [activePinId]);
+  // Hover is highlight-only in both directions (pin ⇄ table row) — it never
+  // scrolls. Clicking a pin is the select action: it opens the property
+  // wizard and scrolls the table to the matching row.
+  const selectPin = useCallback((id: string) => {
+    setQuickViewId(id);
+    document.getElementById(`yield-row-${id}`)?.scrollIntoView({ block: "nearest" });
+  }, []);
   const [market, setMarket] = useState<MarketSummariesResponse | null>(null);
   const [marketError, setMarketError] = useState<string | null>(null);
   const [marketSource, setMarketSource] = useState<MarketSourceFilter>("all");
@@ -1540,10 +1538,8 @@ export default function YieldMapPage() {
                   areas={areas}
                   showAreas={showAreas}
                   highlightedId={activePinId}
-                  onPinHover={(id) => {
-                    hoverSourceRef.current = "map";
-                    setActivePinId(id);
-                  }}
+                  onPinHover={setActivePinId}
+                  onPinSelect={selectPin}
                   marketHoods={marketHoods}
                   hollowPins={hollowPins}
                   renderHoodPopup={renderHoodPopup}
@@ -1554,7 +1550,7 @@ export default function YieldMapPage() {
                         metric === "capRate" ? "; ▲/▼ marks the median cap-rate move since each deal was first sourced" : ""
                       }. `
                     : ""}
-                  Hover a table row to spotlight its pin; hover a pin for cap rate and $/PSF
+                  Hover a pin or table row to spotlight its match; click a pin to open the property wizard
                   {showComps ? "; diamonds are broker-package comps" : ""}.
                   {marketLayerOn
                     ? " Sources: Research = published market reports ingested on Market docs; Broker = comps from broker-provided documents."
@@ -1702,10 +1698,7 @@ export default function YieldMapPage() {
                         key={entry.rowId}
                         id={`yield-row-${entry.rowId}`}
                         className={activePinId === entry.rowId ? styles.rowActive : undefined}
-                        onMouseEnter={() => {
-                          hoverSourceRef.current = "table";
-                          setActivePinId(entry.rowId);
-                        }}
+                        onMouseEnter={() => setActivePinId(entry.rowId)}
                         onMouseLeave={() => setActivePinId(null)}
                       >
                         <td className={styles.dealAddressCell}>
@@ -1762,10 +1755,7 @@ export default function YieldMapPage() {
                         key={entry.rowId}
                         id={`yield-row-${entry.rowId}`}
                         className={`${styles.compRow} ${activePinId === entry.rowId ? styles.rowActive : ""}`}
-                        onMouseEnter={() => {
-                          hoverSourceRef.current = "table";
-                          setActivePinId(entry.rowId);
-                        }}
+                        onMouseEnter={() => setActivePinId(entry.rowId)}
                         onMouseLeave={() => setActivePinId(null)}
                       >
                         <td className={styles.dealAddressCell}>
