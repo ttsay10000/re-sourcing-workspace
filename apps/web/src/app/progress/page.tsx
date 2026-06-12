@@ -16,6 +16,8 @@ import {
 import {
   ArrowRightLeft,
   CalendarCheck,
+  ChevronLeft,
+  ChevronRight,
   Flag,
   KanbanSquare,
   ListTodo,
@@ -40,6 +42,7 @@ import {
 import { AgingChip, AnchoredPopover, BrokerContactDialog, Button, Dialog, PageHeader, PromptMenu, PropertyThumb, StatCard } from "@/components/ui";
 import { RecommendationStepper, type StepperKind, type StepperRow } from "./RecommendationStepper";
 import { API_BASE, apiFetch } from "@/lib/api";
+import { usePersistedIdSet } from "@/lib/useColumnPrefs";
 import { runBulkPropertyAction } from "@/lib/bulkPropertyActions";
 import { scoreTone } from "@/lib/format";
 import { useProcessBanner } from "@/components/ProcessBanner";
@@ -80,6 +83,7 @@ const BULK_STAGE_MOVE_ID = "__bulk_stage_move__";
 const OM_ANALYSIS_BULK_ID = "__bulk_om_analysis__";
 const DOSSIER_BULK_ID = "__bulk_dossier__";
 const SNOOZE_STORAGE_KEY = "progress.emailSnoozes";
+const COLLAPSED_STAGES_STORAGE_KEY = "sourcing-os.progress.collapsed-stages.v1";
 
 type Summary = {
   savedCount?: number;
@@ -694,6 +698,8 @@ function ProgressPageContent() {
   const [boardFocus, setBoardFocus] = useState<BoardFocus | null>(null);
   const [stepper, setStepper] = useState<{ kind: StepperKind; rows: StepperRow[] } | null>(null);
   const [focusedCardId, setFocusedCardId] = useState<string | null>(null);
+  /** Stage columns the user has collapsed to slim rails (persisted). */
+  const collapsedStages = usePersistedIdSet(COLLAPSED_STAGES_STORAGE_KEY);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [flashColumnId, setFlashColumnId] = useState<string | null>(null);
   const [boardMode, setBoardMode] = useState<BoardMode>("board");
@@ -1136,12 +1142,15 @@ function ProgressPageContent() {
   }, [boardFocus, query, sections]);
 
   const flowRows = useMemo(() => sections.flatMap((section) => section.rows ?? []), [sections]);
+  // Collapsed stages render no cards, so keyboard navigation skips them too.
   const navigableRows = useMemo(
     () =>
       filteredSections.flatMap((section, sectionIndex) =>
-        (section.rows ?? []).map((row, rowIndex) => ({ row: row as DealFlowRow, sectionIndex, rowIndex, sectionId: section.id }))
+        collapsedStages.ids.has(section.id)
+          ? []
+          : (section.rows ?? []).map((row, rowIndex) => ({ row: row as DealFlowRow, sectionIndex, rowIndex, sectionId: section.id }))
       ),
-    [filteredSections]
+    [collapsedStages.ids, filteredSections]
   );
 
   /* ── Workflow intelligence (deterministic; see actionFlags.ts) ── */
@@ -2060,6 +2069,29 @@ function ProgressPageContent() {
                 >
                   Clear
                 </button>
+                <button
+                  type="button"
+                  className={styles.bulkClearButton}
+                  title="Collapse every stage that currently has no deals"
+                  disabled={loading}
+                  onClick={() =>
+                    collapsedStages.setMany([
+                      ...new Set([
+                        ...collapsedStages.ids,
+                        ...savedStatusSections
+                          .filter((section) => (section.rows ?? []).length === 0)
+                          .map((section) => section.id),
+                      ]),
+                    ])
+                  }
+                >
+                  Collapse empty
+                </button>
+                {collapsedStages.ids.size > 0 ? (
+                  <button type="button" className={styles.bulkClearButton} onClick={collapsedStages.clear}>
+                    Expand all ({collapsedStages.ids.size})
+                  </button>
+                ) : null}
               </div>
             </div>
             <div
@@ -2073,6 +2105,8 @@ function ProgressPageContent() {
                   flash={flashColumnId === section.id}
                   section={section}
                   loading={loading}
+                  collapsed={collapsedStages.ids.has(section.id)}
+                  onToggleCollapsed={() => collapsedStages.toggle(section.id)}
                   movingPropertyId={stageMoveBusy}
                   selectedDealIds={selectedDealIds}
                   bulkMoving={bulkControlsBusy}
@@ -2493,6 +2527,8 @@ function StatusColumn({
   onMoveStage,
   focusedCardId = null,
   flash = false,
+  collapsed = false,
+  onToggleCollapsed,
 }: {
   section: SavedDealSection;
   loading: boolean;
@@ -2501,6 +2537,8 @@ function StatusColumn({
   bulkMoving?: boolean;
   dragOver?: boolean;
   flagsByProperty: ReadonlyMap<string, ActionFlag[]>;
+  collapsed?: boolean;
+  onToggleCollapsed?: () => void;
   onToggleSelected?: (propertyId: string, selected: boolean) => void;
   onDragStartDeal?: (row: DealFlowRow) => void;
   onDragEndDeal?: () => void;
@@ -2524,6 +2562,40 @@ function StatusColumn({
   ]
     .filter(Boolean)
     .join(" · ");
+
+  if (collapsed) {
+    return (
+      <section
+        id={`board-column-${section.id}`}
+        className={`${styles.statusColumn} ${styles.statusColumnCollapsed} ${
+          dragOver ? styles.statusColumnDropTarget : ""
+        } ${flash ? styles.statusColumnFlash : ""}`}
+        onDragOver={onDragOverSection}
+        onDrop={(event) => {
+          event.preventDefault();
+          onDropOnSection?.();
+        }}
+      >
+        <button
+          type="button"
+          className={styles.collapsedRailButton}
+          title={`Expand ${section.label} (${section.rows.length} deal${section.rows.length === 1 ? "" : "s"})`}
+          aria-expanded={false}
+          onClick={onToggleCollapsed}
+        >
+          <ChevronRight size={13} strokeWidth={2.2} aria-hidden="true" />
+          <span
+            className={`${styles.collapsedCount} ${section.rows.length > 0 ? styles.collapsedCountActive : ""}`}
+            aria-hidden="true"
+          >
+            {section.rows.length}
+          </span>
+          <span className={styles.collapsedLabel}>{section.label}</span>
+        </button>
+      </section>
+    );
+  }
+
   return (
     <section
       id={`board-column-${section.id}`}
@@ -2539,7 +2611,20 @@ function StatusColumn({
       <div className={styles.columnHeader} title={section.description}>
         <div className={styles.columnTitleRow}>
           <h3>{section.label}</h3>
-          <span className={styles.columnCount}>{section.rows.length}</span>
+          <span className={styles.columnHeaderRight}>
+            <span className={styles.columnCount}>{section.rows.length}</span>
+            {onToggleCollapsed ? (
+              <button
+                type="button"
+                className={styles.columnCollapseButton}
+                title={`Collapse ${section.label}`}
+                aria-expanded
+                onClick={onToggleCollapsed}
+              >
+                <ChevronLeft size={13} strokeWidth={2.2} aria-hidden="true" />
+              </button>
+            ) : null}
+          </span>
         </div>
         {statsLine ? <p className={styles.columnStats}>{statsLine}</p> : null}
       </div>

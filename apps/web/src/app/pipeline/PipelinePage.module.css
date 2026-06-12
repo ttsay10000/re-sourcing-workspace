@@ -816,48 +816,46 @@
   cursor: pointer;
 }
 
+/* Row state model: one --row-bg custom property feeds the row AND its
+   sticky last cell, so hover/selected/unavailable always agree and the
+   permutation matrix of selectors collapses to a handful of rules.
+   The sticky cell paints --row-bg over white so transparent rows stay
+   opaque while scrolling under it. */
+.pipelineTable tbody tr {
+  --row-bg: transparent;
+  background: var(--row-bg);
+  transition: background 120ms ease;
+}
+
+.pipelineTable tbody tr td:last-child {
+  background: linear-gradient(var(--row-bg, transparent), var(--row-bg, transparent)) #fff;
+}
+
 .pipelineTable tbody tr:hover {
-  background: var(--brand-soft, #f0fdfa);
+  --row-bg: var(--brand-soft, #f0fdfa);
   box-shadow: inset 3px 0 0 rgba(15, 118, 110, 0.35);
 }
 
-.pipelineTable tbody tr:hover td:last-child {
-  background: var(--brand-soft, #f0fdfa);
-}
-
-.selectedRow,
-.pipelineTable tbody tr.selectedRow:hover {
-  background: #e6f5f3;
+.pipelineTable tbody tr.selectedRow {
+  --row-bg: #e6f5f3;
   box-shadow: inset 3px 0 0 var(--brand, #0f766e);
 }
 
-.selectedRow td:last-child,
-.pipelineTable tbody tr.selectedRow:hover td:last-child {
-  background: #e6f5f3;
+.pipelineTable tbody tr.selectedRow:hover {
+  --row-bg: #ddf0ed;
 }
 
 /* Red highlight for listings flagged unavailable (in contract, delisted, sold) by the listing refresh. */
-.unavailableRow,
 .pipelineTable tbody tr.unavailableRow,
 .pipelineTable tbody tr.unavailableRow:hover {
-  background: #fef2f2;
+  --row-bg: #fef2f2;
   box-shadow: inset 3px 0 0 #dc2626;
-}
-
-.unavailableRow td:last-child,
-.pipelineTable tbody tr.unavailableRow:hover td:last-child {
-  background: #fef2f2;
 }
 
 .pipelineTable tbody tr.unavailableRow.selectedRow,
 .pipelineTable tbody tr.unavailableRow.selectedRow:hover {
-  background: #fee2e2;
+  --row-bg: #fee2e2;
   box-shadow: inset 3px 0 0 #b91c1c;
-}
-
-.pipelineTable tbody tr.unavailableRow.selectedRow td:last-child,
-.pipelineTable tbody tr.unavailableRow.selectedRow:hover td:last-child {
-  background: #fee2e2;
 }
 
 .selectColumn input {
@@ -921,10 +919,6 @@
   padding: 0.25rem;
   margin: -0.25rem;
   transition: background 150ms ease;
-}
-
-.pipelineTable tbody tr:hover .addressWrap {
-  background: rgba(15, 118, 110, 0.08);
 }
 
 .addressWrap strong,
@@ -3289,7 +3283,7 @@
 }
 
 .keyboardRow td {
-  box-shadow: inset 0 0 0 1.5px var(--brand, #0f766e);
+  box-shadow: inset 0 0 0 2px var(--app-focus, rgba(15, 118, 110, 0.42));
 }
 
 .keyboardRow td:first-child {

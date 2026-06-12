@@ -310,6 +310,8 @@
   box-shadow: var(--app-shadow-md);
 }
 
+/* Stays in normal page flow on purpose — a sticky bar here trailed the
+   scroll and overlapped the board. */
 .savedFlowHeader {
   display: flex;
   align-items: center;
@@ -320,9 +322,6 @@
   border-bottom: 1px solid var(--app-line);
   background: var(--app-surface-raised);
   border-radius: 8px 8px 0 0;
-  position: sticky;
-  top: 0;
-  z-index: 5;
 }
 
 .savedFlowHeaderRight {
@@ -524,7 +523,76 @@
   background: var(--app-surface-raised, #f8fafc);
   overflow: hidden;
   scroll-snap-align: start;
-  transition: border-color 150ms ease, box-shadow 150ms ease;
+  transition: border-color 150ms ease, box-shadow 150ms ease, flex-basis 200ms ease,
+    min-width 200ms ease, max-width 200ms ease;
+}
+
+/* Collapsed stage: a slim vertical rail — the whole rail is the expand
+   toggle and still accepts card drops. */
+.statusColumnCollapsed {
+  flex: 0 0 44px;
+  min-width: 44px;
+  max-width: 44px;
+}
+
+.collapsedRailButton {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  height: 100%;
+  padding: 0.55rem 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  color: var(--app-ink-secondary, #52525b);
+  transition: background 140ms ease, color 140ms ease;
+}
+
+.collapsedRailButton:hover {
+  background: var(--brand-soft, #f0fdfa);
+  color: var(--brand-strong, #115e59);
+}
+
+.collapsedLabel {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  font-size: var(--text-2xs);
+  font-weight: 750;
+  letter-spacing: var(--tracking-label, 0.08em);
+  text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-height: 14rem;
+}
+
+.collapsedCount {
+  display: inline-grid;
+  min-width: 1.35rem;
+  height: 1.35rem;
+  padding: 0 0.25rem;
+  place-items: center;
+  border: 1px solid var(--app-line, #e4e4e7);
+  border-radius: 999px;
+  background: var(--app-surface, #fff);
+  color: var(--app-muted, #71717a);
+  font-size: 0.66rem;
+  font-weight: 850;
+  font-variant-numeric: tabular-nums;
+}
+
+.collapsedCountActive {
+  border-color: var(--app-green-border);
+  background: var(--app-green-soft);
+  color: var(--app-green);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .statusColumn {
+    transition: border-color 150ms ease, box-shadow 150ms ease;
+  }
 }
 
 .statusColumn:hover {
@@ -567,6 +635,31 @@
   align-items: center;
   justify-content: space-between;
   gap: 0.4rem;
+}
+
+.columnHeaderRight {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.columnCollapseButton {
+  display: inline-grid;
+  width: 1.4rem;
+  height: 1.4rem;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--app-subtle, #a1a1aa);
+  cursor: pointer;
+  transition: background 130ms ease, color 130ms ease, border-color 130ms ease;
+}
+
+.columnCollapseButton:hover {
+  border-color: var(--app-line, #e4e4e7);
+  background: var(--app-surface-raised, #fafaf9);
+  color: var(--app-ink, #18181b);
 }
 
 .columnTitleRow h3 {
@@ -635,27 +728,46 @@
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
   padding: 0.55rem 0.6rem;
   cursor: pointer;
-  transition: border-color 0.15s ease, box-shadow 0.18s ease;
+  transition: border-color 140ms ease, box-shadow 140ms ease, transform 140ms ease,
+    background 140ms ease;
 }
 
 .propertyCard:nth-child(even) {
   background: #f9fafb;
 }
 
+/* State model: hover lifts, selected tints, focus rings — and they compose
+   (selected+hover deepens, focus ring stacks on either). Declared base →
+   hover → selected → focused so later states win without !important. */
 .propertyCard:hover {
   border-color: var(--app-line-strong, #9ca3af);
   box-shadow: 0 4px 12px rgba(15, 23, 42, 0.08);
+  transform: translateY(-1px);
 }
 
-.propertyCardSelected {
+.propertyCard.propertyCardSelected {
   border-color: var(--brand, #0f766e);
-  box-shadow: 0 0 0 2px rgba(15, 118, 110, 0.15);
-  background: color-mix(in srgb, var(--app-accent-teal) 7%, var(--app-surface)) !important;
+  background: color-mix(in srgb, var(--app-accent-teal) 7%, var(--app-surface));
 }
 
-.propertyCardFocused {
-  border-color: var(--brand, #0f766e) !important;
-  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.16) !important;
+.propertyCard.propertyCardSelected:hover {
+  background: color-mix(in srgb, var(--app-accent-teal) 12%, var(--app-surface));
+}
+
+.propertyCard.propertyCardFocused {
+  border-color: var(--brand, #0f766e);
+  box-shadow: 0 0 0 2px var(--app-focus, rgba(15, 118, 110, 0.42));
+}
+
+.propertyCard.propertyCardFocused:hover {
+  box-shadow: 0 0 0 2px var(--app-focus, rgba(15, 118, 110, 0.42)), 0 4px 12px rgba(15, 23, 42, 0.08);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .propertyCard,
+  .propertyCard:hover {
+    transform: none;
+  }
 }
 
 .propertyCardBusy {
