@@ -211,3 +211,91 @@
   color: var(--app-ink-secondary);
   font-size: 0.8rem;
 }
+
+/* --- Review queue: extracted comps awaiting user approval --- */
+
+.queuePanel {
+  border: 1px solid #f59e0b;
+  border-radius: var(--radius-lg, 12px);
+  background: #fffbeb;
+  padding: 0.9rem 1rem;
+  display: grid;
+  gap: 0.55rem;
+}
+
+.queueHeader {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  flex-wrap: wrap;
+}
+
+.queueTitle {
+  font-size: 0.88rem;
+  font-weight: 800;
+  color: #92400e;
+}
+
+.queueCounts {
+  font-size: 0.74rem;
+  font-weight: 650;
+  color: #b45309;
+}
+
+.queueBulk {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.queueHint {
+  margin: 0;
+  font-size: 0.74rem;
+  color: #92400e;
+}
+
+.queueTableWrap {
+  background: #fff;
+  border: 1px solid var(--app-line);
+  border-radius: var(--radius-md, 8px);
+  padding: 0.3rem 0.7rem 0.5rem;
+  overflow-x: auto;
+}
+
+.checkCell {
+  width: 1.6rem;
+}
+
+.decisionCell {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  white-space: nowrap;
+}
+
+/* --- Source attribution + extraction flags on the main table --- */
+
+.sourceKind {
+  font-weight: 700;
+  color: var(--app-ink-secondary);
+}
+
+.flagRow {
+  display: flex;
+  gap: 0.3rem;
+  margin-top: 0.15rem;
+  flex-wrap: wrap;
+}
+
+.flagChip {
+  display: inline-block;
+  font-size: 0.64rem;
+  font-weight: 750;
+  color: #92400e;
+  background: #fef3c7;
+  border: 1px solid #fde68a;
+  border-radius: var(--radius-pill, 999px);
+  padding: 0.05rem 0.4rem;
+  white-space: nowrap;
+}

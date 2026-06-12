@@ -1,14 +1,28 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { AlertTriangle, Building2, TrendingUp } from "lucide-react";
+import Link from "next/link";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  AlertTriangle,
+  Banknote,
+  Building2,
+  Crosshair,
+  FileText,
+  RefreshCw,
+  Sparkles,
+  TrendingUp,
+  Users,
+} from "lucide-react";
 import type {
   MarketDocumentBrief,
+  MarketDocumentNotes,
   MarketKnowledgeResponse,
   MarketKnowledgeState,
+  MarketReviewRecord,
+  MarketReviewResponse,
   MarketTrendDirection,
 } from "@re-sourcing/contracts";
-import { Badge, Button, FileDropzone, PageHeader, Panel } from "@/components/ui";
+import { Badge, Button, ConfirmDialog, Dialog, FileDropzone, PageHeader, Panel } from "@/components/ui";
 import { API_BASE } from "@/lib/api";
 import styles from "./marketDocs.module.css";
 
@@ -22,9 +36,11 @@ interface IngestReport {
   nComps: number;
   nCompsMerged: number;
   nStats: number;
+  nCompsPendingReview?: number;
   unresolvedNeighborhoods: string[];
   affectedNeighborhoods: string[];
   flags: string[];
+  notesGenerated?: boolean;
   brief?: MarketDocumentBrief | null;
   knowledgeVersion?: number | null;
   status?: "succeeded" | "failed";
@@ -55,6 +71,11 @@ interface MarketDocRow {
   error: string | null;
   ingestReport: IngestReport | null;
   documentBrief?: MarketDocumentBrief | null;
+  llmNotes?: MarketDocumentNotes | null;
+  excludedAt?: string | null;
+  excludedReason?: "removed" | "duplicate" | null;
+  duplicateOfId: string | null;
+  pendingComps: number;
   createdAt: string;
 }
 
@@ -81,6 +102,46 @@ function formatWhen(iso: string | null | undefined): string {
   return Number.isNaN(date.getTime()) ? "—" : date.toLocaleString();
 }
 
+/** Notes dialog section: skip silently when the report had nothing on the topic. */
+function NotesSection({ title, items }: { title: string; items: string[] }) {
+  if (items.length === 0) return null;
+  return (
+    <div className={styles.briefGroup}>
+      <span className={styles.briefGroupTitle}>{title}</span>
+      <ul className={styles.briefList}>
+        {items.map((item) => (
+          <li key={item}>{item}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function ReviewGroup({
+  icon,
+  title,
+  items,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  items: string[];
+}) {
+  if (items.length === 0) return null;
+  return (
+    <div className={styles.briefGroup}>
+      <span className={styles.briefGroupTitle}>
+        {icon}
+        {title}
+      </span>
+      <ul className={styles.briefList}>
+        {items.map((item) => (
+          <li key={item}>{item}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 export default function MarketDocsPage() {
   const [files, setFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -91,6 +152,19 @@ export default function MarketDocsPage() {
   const [documents, setDocuments] = useState<MarketDocRow[]>([]);
   const [listError, setListError] = useState<string | null>(null);
   const [knowledge, setKnowledge] = useState<MarketKnowledgeState | null>(null);
+
+  // Live AI review state.
+  const [review, setReview] = useState<MarketReviewRecord | null>(null);
+  const [reviewStale, setReviewStale] = useState(false);
+  const [reviewDocCount, setReviewDocCount] = useState(0);
+  const [reviewBusy, setReviewBusy] = useState(false);
+  const [reviewError, setReviewError] = useState<string | null>(null);
+
+  // Ingest-log management state.
+  const [showRemoved, setShowRemoved] = useState(false);
+  const [notesDoc, setNotesDoc] = useState<MarketDocRow | null>(null);
+  const [removeTarget, setRemoveTarget] = useState<MarketDocRow | null>(null);
+  const [rowBusyId, setRowBusyId] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
     fetch(`${API_BASE}/api/market-docs`, { credentials: "include" })
@@ -108,18 +182,45 @@ export default function MarketDocsPage() {
         setKnowledge(payload.knowledge ?? null);
       })
       .catch(() => setKnowledge(null));
+    fetch(`${API_BASE}/api/market-review`, { credentials: "include" })
+      .then(async (res) => {
+        const payload = (await res.json().catch(() => ({}))) as MarketReviewResponse & { error?: string };
+        if (!res.ok || payload.error) throw new Error(payload.error || `HTTP ${res.status}`);
+        setReview(payload.review ?? null);
+        setReviewStale(payload.stale);
+        setReviewDocCount(payload.currentDocumentCount);
+      })
+      .catch(() => undefined);
   }, []);
 
   useEffect(() => {
     refresh();
   }, [refresh]);
 
+  const refreshReview = useCallback(async () => {
+    setReviewBusy(true);
+    setReviewError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/market-review/refresh`, { method: "POST", credentials: "include" });
+      const payload = (await res.json().catch(() => ({}))) as MarketReviewResponse & { error?: string };
+      if (!res.ok || payload.error) throw new Error(payload.error || `HTTP ${res.status}`);
+      setReview(payload.review ?? null);
+      setReviewStale(payload.stale);
+      setReviewDocCount(payload.currentDocumentCount);
+    } catch (err) {
+      setReviewError(err instanceof Error ? err.message : "Failed to refresh the live review.");
+    } finally {
+      setReviewBusy(false);
+    }
+  }, []);
+
   function patchUploadItem(index: number, patch: Partial<UploadItem>) {
     setUploadItems((current) => current.map((item, i) => (i === index ? { ...item, ...patch } : item)));
   }
 
   // Each file uploads independently: one bad PDF marks its own row failed
-  // (with the stage-tagged reason) and the batch keeps going.
+  // (with the stage-tagged reason) and the batch keeps going. After the batch,
+  // the live AI review regenerates so the cross-document read stays current.
   async function uploadAll() {
     if (files.length === 0 || uploading) return;
     setUploading(true);
@@ -167,6 +268,7 @@ export default function MarketDocsPage() {
     }
     setUploading(false);
     refresh();
+    if (reports.length > 0) void refreshReview();
   }
 
   async function retryDocument(documentId: string) {
@@ -196,16 +298,68 @@ export default function MarketDocsPage() {
     }
   }
 
+  async function removeDocument(doc: MarketDocRow, reason: "removed" | "duplicate") {
+    setRowBusyId(doc.id);
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/market-docs/${encodeURIComponent(doc.id)}?reason=${reason}`,
+        { method: "DELETE", credentials: "include" }
+      );
+      const payload = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok || payload.error) throw new Error(payload.error || `HTTP ${res.status}`);
+      setRemoveTarget(null);
+      refresh();
+    } catch (err) {
+      setListError(err instanceof Error ? err.message : "Failed to remove document.");
+    } finally {
+      setRowBusyId(null);
+    }
+  }
+
+  async function restoreDocument(doc: MarketDocRow) {
+    setRowBusyId(doc.id);
+    try {
+      const res = await fetch(`${API_BASE}/api/market-docs/${encodeURIComponent(doc.id)}/restore`, {
+        method: "POST",
+        credentials: "include",
+      });
+      const payload = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok || payload.error) throw new Error(payload.error || `HTTP ${res.status}`);
+      refresh();
+    } catch (err) {
+      setListError(err instanceof Error ? err.message : "Failed to restore document.");
+    } finally {
+      setRowBusyId(null);
+    }
+  }
+
   // Latest analyzed upload: prefer the just-ingested report's brief, else the knowledge base copy.
   const latestBrief: MarketDocumentBrief | null =
     [...lastReports].reverse().find((report) => report.brief)?.brief ?? knowledge?.latestBrief ?? null;
+
+  const removedCount = useMemo(() => documents.filter((doc) => doc.excludedAt).length, [documents]);
+  const visibleDocuments = useMemo(
+    () => (showRemoved ? documents : documents.filter((doc) => !doc.excludedAt)),
+    [documents, showRemoved]
+  );
+  const pendingCompsTotal = useMemo(
+    () => documents.filter((doc) => !doc.excludedAt).reduce((sum, doc) => sum + (doc.pendingComps ?? 0), 0),
+    [documents]
+  );
+  const docTitleById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const doc of documents) map.set(doc.id, doc.report_title ?? doc.filename);
+    return map;
+  }, [documents]);
+
+  const liveReview = review?.review ?? null;
 
   return (
     <div className={styles.page}>
       <PageHeader
         eyebrow="Market context"
         title="Market documents"
-        subtitle="Drop the general market reports here — Avison Young, Ariel Property Advisors, Alpha, M&M quarterly and monthly PDFs — plus broker materials (OMs, setups, comp lists). Each upload is classified, extracted with provenance, compared against the knowledge base, and folded into the living market narrative behind the Yield Map."
+        subtitle="Drop the general market reports here — Avison Young, Ariel Property Advisors, Alpha, M&M quarterly and monthly PDFs — plus broker materials (OMs, setups, comp lists). Each upload gets a Gemini read refined by the OpenAI model into analyst notes, extracted deals go to the comp review queue, and the live AI review keeps the cross-report acquisitions read current."
         actions={
           <a href="/pipeline/yield-map" className={styles.headerLink}>
             ← Yield Map
@@ -270,6 +424,156 @@ export default function MarketDocsPage() {
         ) : null}
       </Panel>
 
+      {/* ---- Live AI market review: the cross-document acquisitions read ---- */}
+      <Panel>
+        <div className={styles.knowledgeHeader}>
+          <span className={styles.sectionTitle}>
+            <Sparkles size={14} strokeWidth={2} aria-hidden="true" style={{ verticalAlign: "-2px", marginRight: "0.3rem" }} />
+            Live AI market review
+          </span>
+          {review ? <Badge tone="brand">v{review.version}</Badge> : null}
+          {reviewStale ? (
+            <Badge tone="warning" title="Documents were added or removed since this review was generated.">
+              stale — refresh
+            </Badge>
+          ) : null}
+          <span className={styles.knowledgeMeta}>
+            {review
+              ? `generated ${formatWhen(review.createdAt)} from ${review.includedDocumentIds.length} document${review.includedDocumentIds.length === 1 ? "" : "s"}`
+              : `${reviewDocCount} document${reviewDocCount === 1 ? "" : "s"} ready`}
+            {review?.provider ? ` · ${review.provider}${review.model ? `/${review.model}` : ""}` : ""}
+          </span>
+          <span className={styles.reviewActions}>
+            <Button variant="secondary" size="sm" onClick={() => void refreshReview()} disabled={reviewBusy || uploading}>
+              <RefreshCw size={13} strokeWidth={2.2} aria-hidden="true" className={reviewBusy ? styles.spinning : undefined} />
+              {reviewBusy ? "Reviewing…" : review ? "Refresh review" : "Generate review"}
+            </Button>
+          </span>
+        </div>
+        {reviewError ? <div className={styles.uploadError}>{reviewError}</div> : null}
+        {reviewBusy && !liveReview ? (
+          <span className={styles.emptyNote}>Reading every included document&apos;s notes and writing the cross-report review…</span>
+        ) : null}
+        {liveReview ? (
+          <div className={styles.knowledgeBody}>
+            <div className={styles.execSummary}>
+              <span className={styles.execSummaryTitle}>
+                <TrendingUp size={15} strokeWidth={2} aria-hidden="true" />
+                {liveReview.headline}
+              </span>
+              {liveReview.marketPulse.length > 0 ? (
+                <ul className={styles.execSummaryList}>
+                  {liveReview.marketPulse.map((line) => (
+                    <li key={line} className={styles.execSummaryRow}>
+                      <span className={styles.execSummaryText}>{line}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </div>
+
+            <div className={styles.briefColumns}>
+              <ReviewGroup
+                icon={<Building2 size={14} strokeWidth={2} aria-hidden="true" />}
+                title="Small multifamily focus"
+                items={liveReview.smallMultifamilyFocus}
+              />
+              <ReviewGroup
+                icon={<TrendingUp size={14} strokeWidth={2} aria-hidden="true" />}
+                title="Cap rate trends"
+                items={liveReview.capRateTrends}
+              />
+              <ReviewGroup
+                icon={<Users size={14} strokeWidth={2} aria-hidden="true" />}
+                title="Buying & selling activity"
+                items={liveReview.buyerSellerActivity}
+              />
+              <ReviewGroup
+                icon={<Banknote size={14} strokeWidth={2} aria-hidden="true" />}
+                title="Loan environment"
+                items={liveReview.loanEnvironment}
+              />
+            </div>
+
+            {liveReview.opportunities.length > 0 ? (
+              <div className={styles.opportunityBox}>
+                <span className={styles.briefGroupTitle}>
+                  <Crosshair size={14} strokeWidth={2} aria-hidden="true" />
+                  Where to hunt
+                </span>
+                <ul className={styles.briefList}>
+                  {liveReview.opportunities.map((line) => (
+                    <li key={line}>{line}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+
+            {liveReview.qoqComparisons.length > 0 ? (
+              <div className={styles.knowledgeGroup}>
+                <span className={styles.briefGroupTitle}>Quarter-over-quarter, same publisher</span>
+                <div className={styles.trendGrid}>
+                  {liveReview.qoqComparisons.map((comparison) => (
+                    <div key={`${comparison.publisher}-${comparison.toPeriod}`} className={styles.trendCard}>
+                      <div className={styles.trendHeadline}>
+                        <span className={styles.trendScope}>{comparison.publisher}</span>
+                        <Badge tone="neutral">{comparison.fromPeriod} → {comparison.toPeriod}</Badge>
+                      </div>
+                      <ul className={styles.briefList}>
+                        {comparison.changes.map((change) => (
+                          <li key={change}>{change}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
+            {liveReview.discrepancies.length > 0 ? (
+              <div className={styles.discrepancyBox}>
+                <span className={styles.discrepancyTitle}>
+                  <AlertTriangle size={14} strokeWidth={2} aria-hidden="true" />
+                  Brokerages disagree
+                </span>
+                <ul className={styles.discrepancyList}>
+                  {liveReview.discrepancies.map((item) => (
+                    <li key={item.topic}>
+                      <strong>{item.topic}:</strong>{" "}
+                      {item.positions.map((position) => `${position.claim} (${position.source}${position.period ? `, ${position.period}` : ""})`).join(" vs ")}
+                      {item.note ? ` — ${item.note}` : ""}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+
+            {liveReview.sources.length > 0 ? (
+              <span className={styles.sourcesLine}>Reviewed: {liveReview.sources.join(" · ")}</span>
+            ) : null}
+          </div>
+        ) : !reviewBusy ? (
+          <span className={styles.emptyNote}>
+            {reviewDocCount > 0
+              ? "No live review yet — hit Generate review to synthesize the acquisitions read across every ingested report."
+              : "Ingest market documents above and the live AI review will synthesize the small-multifamily acquisitions read across all of them."}
+          </span>
+        ) : null}
+      </Panel>
+
+      {pendingCompsTotal > 0 ? (
+        <div className={styles.queueCallout}>
+          <strong>
+            {pendingCompsTotal} extracted deal{pendingCompsTotal === 1 ? "" : "s"} awaiting comp review.
+          </strong>{" "}
+          Approve or reject them on{" "}
+          <Link href="/pipeline/comp-analysis" className={styles.queueLink}>
+            Comp Analysis → Review queue
+          </Link>{" "}
+          to control what reaches the comp table and the yield map layer.
+        </div>
+      ) : null}
+
       {latestBrief ? (
         <Panel>
           <span className={styles.sectionTitle}>New upload analysis</span>
@@ -331,10 +635,12 @@ export default function MarketDocsPage() {
                   {sourceBadge({ source_type: report.sourceType, publisher: report.publisher })}
                   <Badge tone="neutral">{report.documentClass}</Badge>
                   {report.flagForReview ? <Badge tone="warning">review</Badge> : null}
+                  {report.notesGenerated ? <Badge tone="success">notes ✓</Badge> : null}
                   {report.knowledgeVersion != null ? <Badge tone="brand">knowledge v{report.knowledgeVersion}</Badge> : null}
                 </div>
                 <span>
-                  {report.nComps} comps ({report.nCompsMerged} merged) · {report.nStats} stats ·{" "}
+                  {report.nComps} comps ({report.nCompsMerged} merged
+                  {report.nCompsPendingReview ? `, ${report.nCompsPendingReview} to review` : ""}) · {report.nStats} stats ·{" "}
                   {report.affectedNeighborhoods.length} neighborhoods updated
                 </span>
                 {report.unresolvedNeighborhoods.length > 0 ? (
@@ -477,7 +783,19 @@ export default function MarketDocsPage() {
       </Panel>
 
       <Panel>
-        <span className={styles.sectionTitle}>Ingest log</span>
+        <div className={styles.knowledgeHeader}>
+          <span className={styles.sectionTitle}>Ingest log</span>
+          {removedCount > 0 ? (
+            <label className={styles.showRemovedToggle}>
+              <input
+                type="checkbox"
+                checked={showRemoved}
+                onChange={(event) => setShowRemoved(event.target.checked)}
+              />
+              Show removed ({removedCount})
+            </label>
+          ) : null}
+        </div>
         {listError ? <div className={styles.uploadError}>{listError}</div> : null}
         <table className={styles.table}>
           <thead>
@@ -489,19 +807,38 @@ export default function MarketDocsPage() {
               <th>Comps</th>
               <th>Stats</th>
               <th>Status</th>
+              <th>Actions</th>
             </tr>
           </thead>
           <tbody>
-            {documents.map((doc) => (
-              <tr key={doc.id}>
+            {visibleDocuments.map((doc) => (
+              <tr key={doc.id} className={doc.excludedAt ? styles.removedRow : undefined}>
                 <td className={styles.docCell}>
                   <span className={styles.docName}>{doc.report_title ?? doc.filename}</span>
                   {doc.period_covered ? <span className={styles.docMeta}>{doc.period_covered}</span> : null}
+                  {doc.excludedAt ? (
+                    <span className={styles.docMeta}>
+                      {doc.excludedReason === "duplicate" ? "excluded as duplicate" : "removed"} · {formatWhen(doc.excludedAt)}
+                    </span>
+                  ) : null}
+                  {!doc.excludedAt && doc.duplicateOfId ? (
+                    <span
+                      className={styles.docDiscrepancy}
+                      title={`Same publisher, period, and class as "${docTitleById.get(doc.duplicateOfId) ?? "an earlier upload"}".`}
+                    >
+                      possible duplicate of “{docTitleById.get(doc.duplicateOfId) ?? "earlier upload"}”
+                    </span>
+                  ) : null}
                   {doc.documentBrief && doc.documentBrief.discrepancies.length > 0 ? (
                     <span className={styles.docDiscrepancy}>
                       {doc.documentBrief.discrepancies.length} discrepanc
                       {doc.documentBrief.discrepancies.length === 1 ? "y" : "ies"} flagged
                     </span>
+                  ) : null}
+                  {!doc.excludedAt && doc.pendingComps > 0 ? (
+                    <Link href="/pipeline/comp-analysis" className={styles.queueLink}>
+                      {doc.pendingComps} comp{doc.pendingComps === 1 ? "" : "s"} to review →
+                    </Link>
                   ) : null}
                 </td>
                 <td>{sourceBadge(doc)}</td>
@@ -535,11 +872,40 @@ export default function MarketDocsPage() {
                     <Badge tone={doc.status === "synthesized" ? "success" : "neutral"}>{doc.status}</Badge>
                   )}
                 </td>
+                <td>
+                  <span className={styles.actionsCell}>
+                    {doc.llmNotes ? (
+                      <Button variant="ghost" size="sm" onClick={() => setNotesDoc(doc)}>
+                        <FileText size={13} strokeWidth={2} aria-hidden="true" />
+                        Notes
+                      </Button>
+                    ) : null}
+                    {doc.excludedAt ? (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => void restoreDocument(doc)}
+                        disabled={rowBusyId != null}
+                      >
+                        {rowBusyId === doc.id ? "Restoring…" : "Restore"}
+                      </Button>
+                    ) : (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setRemoveTarget(doc)}
+                        disabled={rowBusyId != null}
+                      >
+                        Remove
+                      </Button>
+                    )}
+                  </span>
+                </td>
               </tr>
             ))}
-            {documents.length === 0 && !listError ? (
+            {visibleDocuments.length === 0 && !listError ? (
               <tr>
-                <td colSpan={7} className={styles.emptyRow}>
+                <td colSpan={8} className={styles.emptyRow}>
                   No market documents ingested yet — drop the first research report or broker package above.
                 </td>
               </tr>
@@ -547,6 +913,91 @@ export default function MarketDocsPage() {
           </tbody>
         </table>
       </Panel>
+
+      {/* ---- Per-document analyst notes dialog ---- */}
+      <Dialog
+        open={notesDoc != null}
+        onClose={() => setNotesDoc(null)}
+        title={notesDoc?.llmNotes?.title ?? "Analyst notes"}
+        description={
+          notesDoc?.llmNotes
+            ? `${notesDoc.llmNotes.sourceLabel} · generated ${formatWhen(notesDoc.llmNotes.generatedAt)} · ${notesDoc.llmNotes.providers.join(" → ")}`
+            : undefined
+        }
+        size="lg"
+      >
+        {notesDoc?.llmNotes ? (
+          <div className={styles.notesBody}>
+            <NotesSection title="Overview" items={notesDoc.llmNotes.overview} />
+            {notesDoc.llmNotes.neighborhoods.length > 0 ? (
+              <div className={styles.briefGroup}>
+                <span className={styles.briefGroupTitle}>Neighborhoods</span>
+                <ul className={styles.briefList}>
+                  {notesDoc.llmNotes.neighborhoods.map((hood) => (
+                    <li key={hood.name}>
+                      <strong>{hood.name}</strong> — {hood.takeaway}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            {notesDoc.llmNotes.assetTypes.length > 0 ? (
+              <div className={styles.briefGroup}>
+                <span className={styles.briefGroupTitle}>Asset types</span>
+                <ul className={styles.attentionList}>
+                  {notesDoc.llmNotes.assetTypes.map((take) => (
+                    <li key={take.segment} className={styles.attentionRow}>
+                      <Badge tone={DIRECTION_META[take.direction].tone}>{DIRECTION_META[take.direction].label}</Badge>
+                      <span>
+                        <strong>{take.segment}</strong> — {take.note}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            <NotesSection title="Buying & selling activity" items={notesDoc.llmNotes.buyerActivity} />
+            <NotesSection title="Notable transactions" items={notesDoc.llmNotes.notableTransactions} />
+            <NotesSection title="Cap rates & $/SF" items={notesDoc.llmNotes.capRatePsf} />
+            <NotesSection title="Financing & loan environment" items={notesDoc.llmNotes.financing} />
+            <NotesSection title="Small-building focus" items={notesDoc.llmNotes.smallBuildingFocus} />
+            <NotesSection title="Regulatory" items={notesDoc.llmNotes.regulatory} />
+            <NotesSection title="Risks & watch items" items={notesDoc.llmNotes.risksWatchItems} />
+            {notesDoc.llmNotes.investmentRelevance.length > 0 ? (
+              <div className={styles.opportunityBox}>
+                <span className={styles.briefGroupTitle}>
+                  <Crosshair size={14} strokeWidth={2} aria-hidden="true" />
+                  Why it matters for small-MF acquisitions
+                </span>
+                <ul className={styles.briefList}>
+                  {notesDoc.llmNotes.investmentRelevance.map((line) => (
+                    <li key={line}>{line}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+          </div>
+        ) : (
+          <span className={styles.emptyNote}>No notes stored for this document.</span>
+        )}
+      </Dialog>
+
+      {/* ---- Remove confirmation ---- */}
+      <ConfirmDialog
+        open={removeTarget != null}
+        onClose={() => setRemoveTarget(null)}
+        onConfirm={() => {
+          if (removeTarget) void removeDocument(removeTarget, removeTarget.duplicateOfId ? "duplicate" : "removed");
+        }}
+        busy={rowBusyId != null}
+        title={`Remove “${removeTarget?.report_title ?? removeTarget?.filename ?? "document"}”?`}
+        description={
+          removeTarget?.duplicateOfId
+            ? "This looks like a duplicate upload — it will be excluded as a duplicate. Its comps leave the rollups and comp surfaces, its stats stop backing the map, and the live AI review will drop it on the next refresh. You can restore it later."
+            : "The document is excluded (not deleted): its comps leave the rollups and comp surfaces, its stats stop backing the map, and the live AI review will drop it on the next refresh. You can restore it later."
+        }
+        confirmLabel={removeTarget?.duplicateOfId ? "Exclude duplicate" : "Remove document"}
+      />
     </div>
   );
 }

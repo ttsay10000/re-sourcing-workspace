@@ -124,15 +124,21 @@ interface MarketSummariesResponse {
   askingPins: MarketContextComp[];
 }
 
-/** Broker-package comparable from GET /api/comps/market. */
+/** Comparable from GET /api/comps/market: broker-package items + approved market-doc deals. */
 interface MarketComp {
   itemId: string;
   packageId: string;
   packageType: string;
   packageCreatedAt: string | null;
-  subjectPropertyId: string;
-  subjectAddress: string;
+  subjectPropertyId: string | null;
+  subjectAddress: string | null;
   itemType: string;
+  origin?: "broker_package" | "market_doc";
+  source?: {
+    kind: "broker_package" | "market_doc";
+    label: string;
+    period: string | null;
+  };
   propertyName: string | null;
   address: string | null;
   neighborhood: string | null;
@@ -1086,7 +1092,9 @@ export default function YieldMapPage() {
           ? [`${comp.units ?? EMPTY_VALUE} units · NOI ${formatCurrencyExact(comp.noi)}`]
           : []),
         ...(comp.psfOnly ? ["$/PSF only — no cap rate in package"] : []),
-        `Subject: ${comp.subjectAddress.split(",")[0]} · ${packageTypeLabel(comp.packageType)}`,
+        comp.subjectAddress
+          ? `Subject: ${comp.subjectAddress.split(",")[0]} · ${packageTypeLabel(comp.packageType)}`
+          : `Source: ${comp.source?.label ?? packageTypeLabel(comp.packageType)}${comp.source?.period ? ` · ${comp.source.period}` : ""}`,
       ],
     }));
 
@@ -1748,13 +1756,22 @@ export default function YieldMapPage() {
                       >
                         <td className={styles.dealAddressCell}>
                           <span className={styles.compRowHead}>
-                            <a
-                              href={`/pipeline?propertyId=${encodeURIComponent(entry.comp.subjectPropertyId)}`}
-                              className={styles.compLink}
-                              title={`From a ${packageTypeLabel(entry.comp.packageType)} package on ${entry.comp.subjectAddress}`}
-                            >
-                              {compDisplayName(entry.comp)}
-                            </a>
+                            {entry.comp.subjectPropertyId ? (
+                              <a
+                                href={`/pipeline?propertyId=${encodeURIComponent(entry.comp.subjectPropertyId)}`}
+                                className={styles.compLink}
+                                title={`From a ${packageTypeLabel(entry.comp.packageType)} package on ${entry.comp.subjectAddress ?? "a subject deal"}`}
+                              >
+                                {compDisplayName(entry.comp)}
+                              </a>
+                            ) : (
+                              <span
+                                className={styles.compLink}
+                                title={`From ${entry.comp.source?.label ?? "a market document"}${entry.comp.source?.period ? ` · ${entry.comp.source.period}` : ""}`}
+                              >
+                                {compDisplayName(entry.comp)}
+                              </span>
+                            )}
                             <span className={styles.compChip}>Comp</span>
                           </span>
                           <div className={styles.dealNeighborhood}>

@@ -423,3 +423,89 @@
   color: var(--app-muted);
   font-style: italic;
 }
+
+/* --- Live AI review panel --- */
+
+.reviewActions {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.spinning {
+  animation: marketDocsSpin 1s linear infinite;
+}
+
+@keyframes marketDocsSpin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Green-tinted highlight: where to hunt deals right now. */
+.opportunityBox {
+  display: grid;
+  gap: 0.3rem;
+  border: 1px solid var(--app-green, #16a34a);
+  border-radius: var(--radius-md, 8px);
+  background: #f0fdf4;
+  padding: 0.55rem 0.7rem;
+}
+
+/* --- Comp review queue callout --- */
+
+.queueCallout {
+  border: 1px solid #f59e0b;
+  border-radius: var(--radius-md, 8px);
+  background: #fffbeb;
+  padding: 0.6rem 0.8rem;
+  font-size: 0.8rem;
+  color: #92400e;
+}
+
+.queueLink {
+  color: var(--brand-strong, #115e59);
+  font-size: 0.74rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.queueLink:hover {
+  text-decoration: underline;
+}
+
+/* --- Ingest log management --- */
+
+.showRemovedToggle {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.74rem;
+  font-weight: 650;
+  color: var(--app-muted);
+  cursor: pointer;
+  user-select: none;
+}
+
+.removedRow td {
+  opacity: 0.55;
+}
+
+.actionsCell {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  white-space: nowrap;
+}
+
+/* --- Per-document analyst notes dialog --- */
+
+.notesBody {
+  display: grid;
+  gap: 0.9rem;
+}

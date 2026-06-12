@@ -9,8 +9,8 @@ import type { NeighborhoodCollection } from "./geo";
 export type MapPin = {
   /** Unique across deals AND comps (deals use propertyId, comps use comp:<itemId>). */
   id: string;
-  /** Subject property to open for this pin (the comp's subject for comps). */
-  propertyId: string;
+  /** Subject property to open for this pin (the comp's subject for comps; null for market-doc comps). */
+  propertyId: string | null;
   kind: "deal" | "comp";
   address: string;
   /** Neighborhood (· borough) tag rendered directly under the address. */
@@ -115,10 +115,12 @@ function popupNode(pin: MapPin): HTMLElement {
     root.appendChild(row);
   }
 
-  const link = document.createElement("a");
-  link.href = `/pipeline?propertyId=${encodeURIComponent(pin.propertyId)}`;
-  link.textContent = pin.kind === "comp" ? "Open subject deal →" : "Open in pipeline →";
-  root.appendChild(link);
+  if (pin.propertyId) {
+    const link = document.createElement("a");
+    link.href = `/pipeline?propertyId=${encodeURIComponent(pin.propertyId)}`;
+    link.textContent = pin.kind === "comp" ? "Open subject deal →" : "Open in pipeline →";
+    root.appendChild(link);
+  }
 
   return root;
 }
