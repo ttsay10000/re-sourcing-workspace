@@ -71,7 +71,7 @@
 }
 
 .dangerButton {
-  color: #991b1b;
+  color: var(--app-red-text);
   background: var(--app-red-soft);
   border-color: var(--app-red-border);
 }
@@ -192,13 +192,13 @@
 }
 
 .warnPill {
-  color: #92400e;
+  color: var(--app-amber-text);
   background: var(--app-amber-soft);
   border: 1px solid var(--app-amber-border);
 }
 
 .okPill {
-  color: #166534;
+  color: var(--app-green-text);
   background: var(--app-green-soft);
   border: 1px solid var(--app-green-border);
 }
@@ -218,7 +218,7 @@
 }
 
 .notice {
-  color: #14532d; /* green-900 text for contrast on --app-green-soft; no dark green token exists */
+  color: var(--app-green-text);
   background: var(--app-green-soft);
   border: 1px solid var(--app-green-border);
 }
@@ -230,7 +230,7 @@
 }
 
 .error {
-  color: #991b1b;
+  color: var(--app-red-text);
   background: var(--app-red-soft);
   border: 1px solid var(--app-red-border);
 }
@@ -319,7 +319,7 @@
 .emailMeta {
   margin: 0.45rem 0 0;
   color: var(--app-muted);
-  font-size: 0.86rem;
+  font-size: var(--text-xs-plus);
   overflow-wrap: anywhere;
 }
 

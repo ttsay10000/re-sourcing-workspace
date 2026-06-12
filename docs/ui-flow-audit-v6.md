@@ -138,3 +138,18 @@ Conventions applied everywhere:
 4. **Pipeline `.tableShell` bounding + sticky header** behind an interactive test of row menus/keyboard nav.
 
 Build: `npm run build -w @re-sourcing/web` ✓ (all 21 routes compile).
+
+---
+
+## Follow-up pass (2026-06-12)
+
+All four cross-cutting items above are resolved on this branch:
+
+1. **Outreach drafts queue surfaced** as a third **Drafts tab on /crm** (chosen over a standalone page or pipeline filter). API: `GET /api/ui-v2/outreach-drafts` (filters `metadata->>'kind' = 'ui_v2_outreach_draft'` so automation review batches stay out), `POST :id/send` (same prior-outreach force guard as send-now; send-phase failures stay listed as retryable "Send failed" rows), `POST :id/dismiss` (terminal `skipped` + `review_reason='dismissed_by_user'`, no migration needed — the status column has no CHECK constraint). Send-now and the queue now share one send path (`apps/api/src/sourcing/outreachDraftQueue.ts`, unit-tested) that marks the batch sent before bookkeeping, mirroring the automation sender. UI: send/dismiss behind ConfirmDialogs, "Review in composer" prefills the saved draft via a `draftPrefill` panel option, sixth metric card shows the queue depth. Drafts saved from the Progress page land in the same queue.
+2. **Dark-text tokens** added (`--app-green-text: #15803d`, `--app-amber-text: #92400e`, `--app-red-text: #991b1b`) and swept across every text `color:` use of the six dark hexes; the commented exceptions are gone. Non-text uses (backgrounds, borders, box-shadows, `accent-color`) intentionally stay literal. Consolidation note: former `#166534`/`#14532d` greens lighten to the 700 shade; `#b45309` ambers darken to the 800 shade.
+3. **Type scale**: the 0.82–0.86rem cluster got a token — `--text-xs-plus: 0.84rem` — and all 94 `font-size` declarations in the family now use it (≤0.32px shifts, no design sign-off needed). Padding/margin uses of the same values were left alone.
+4. **Pipeline `.tableShell`** bounded to `70vh` with `overflow-y: auto`, matching the CRM convention; the existing sticky header/columns engage. Row menus are `position: fixed` with a capture-phase scroll listener that closes them, so two-axis scrolling is safe.
+
+Also landed from the per-page deferred lists: email-search rows show an **Imported** pill after import (matched through `imported[].sourceMetadata` gmail ids — the uploaded-document id differs from the candidate row id); saved grid-card View property/View docs are real `Link`s in the table view's `actionStack` styling; pipeline merge confirm moved off `window.confirm` onto ConfirmDialog; bulk-reject notices name the first three addresses.
+
+Still deferred: dossier-assumptions wholesale port, CRM contact/merge panel staleness after merges, pipeline broker/deal-path sheet refresh, `.enrichmentKeyRows` consolidation, display-size literals (1.35/1.45/1.65rem), auto-dismissing a queue draft after re-saving it from the composer (re-save currently creates a new row).

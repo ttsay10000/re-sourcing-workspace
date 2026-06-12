@@ -5,6 +5,7 @@
   --font-mono: var(--font-geist-mono), ui-monospace, "SFMono-Regular", "Cascadia Code", "Fira Code", monospace;
   --text-2xs: 0.6875rem;
   --text-xs: 0.75rem;
+  --text-xs-plus: 0.84rem;
   --text-sm: 0.9375rem;
   --text-md: 1rem;
   --text-lg: 1.125rem;
@@ -61,12 +62,15 @@
   --app-green: #16a34a;
   --app-green-soft: #f0fdf4;
   --app-green-border: #bbf7d0;
+  --app-green-text: #15803d;
   --app-amber: #d97706;
   --app-amber-soft: #fffbeb;
   --app-amber-border: #fde68a;
+  --app-amber-text: #92400e;
   --app-red: #dc2626;
   --app-red-soft: #fef2f2;
   --app-red-border: #fecaca;
+  --app-red-text: #991b1b;
   --app-blue: #2563eb;
   --app-blue-soft: #eff6ff;
   --app-blue-border: #bfdbfe;
@@ -302,7 +306,7 @@ h2,
   color: rgba(255, 255, 255, 0.55);
   text-decoration: none;
   border-radius: 6px;
-  font-size: 0.84rem;
+  font-size: var(--text-xs-plus);
   font-weight: 500;
   letter-spacing: 0;
   transition:
@@ -517,7 +521,7 @@ h2,
   border-radius: var(--radius-md);
   color: var(--app-muted);
   background: transparent;
-  font-size: 0.84rem;
+  font-size: var(--text-xs-plus);
   font-weight: 500;
   text-decoration: none;
   white-space: nowrap;
@@ -540,7 +544,7 @@ h2,
   border-radius: var(--radius-md);
   color: var(--brand-on);
   background: var(--brand);
-  font-size: 0.84rem;
+  font-size: var(--text-xs-plus);
   font-weight: 600;
   text-decoration: none;
   white-space: nowrap;
@@ -818,7 +822,7 @@ h2,
 }
 
 .profile-field span {
-  font-size: 0.82rem;
+  font-size: var(--text-xs-plus);
   font-weight: 600;
   color: #5f6f67;
 }
@@ -905,7 +909,7 @@ h2,
 
 .profile-assumption-group-header p {
   margin: 0;
-  font-size: 0.86rem;
+  font-size: var(--text-xs-plus);
   line-height: 1.55;
   color: #66746c;
 }
@@ -919,7 +923,7 @@ h2,
 }
 
 .profile-assumptions-toolbar span {
-  font-size: 0.85rem;
+  font-size: var(--text-xs-plus);
   color: #66746c;
 }
 
@@ -1624,7 +1628,7 @@ h2,
 
 .dossier-generate-note {
   margin: 0 0 1rem;
-  font-size: 0.85rem;
+  font-size: var(--text-xs-plus);
   color: var(--app-muted);
 }
 
@@ -1647,7 +1651,7 @@ h2,
 }
 
 .dossier-progress-subtitle {
-  font-size: 0.85rem;
+  font-size: var(--text-xs-plus);
   color: var(--app-muted);
 }
 
@@ -2013,7 +2017,7 @@ h2,
 }
 
 .home-toolbar-meta {
-  font-size: 0.85rem;
+  font-size: var(--text-xs-plus);
   color: #5f6b60;
   white-space: nowrap;
 }
@@ -2253,7 +2257,7 @@ h2,
 }
 
 .home-offer-strip-title {
-  font-size: 0.82rem;
+  font-size: var(--text-xs-plus);
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -2332,7 +2336,7 @@ h2,
 }
 
 .home-deal-card-meta-footer {
-  font-size: 0.82rem;
+  font-size: var(--text-xs-plus);
   line-height: 1.5;
   color: #68706a;
 }
@@ -2384,7 +2388,7 @@ h2,
 }
 
 .home-sidebar-selection-label {
-  font-size: 0.82rem;
+  font-size: var(--text-xs-plus);
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: #5f675f;
@@ -2402,7 +2406,7 @@ h2,
   background: rgba(255, 255, 255, 0.78);
   border: 1px solid #e5e1d7;
   color: #535f55;
-  font-size: 0.84rem;
+  font-size: var(--text-xs-plus);
   line-height: 1.45;
 }
 
@@ -2825,7 +2829,7 @@ h2,
   padding: 0.9rem 1rem;
   border: none;
   background: linear-gradient(180deg, #fdfdf9 0%, #f4f8f2 100%);
-  font-size: 0.82rem;
+  font-size: var(--text-xs-plus);
   font-weight: 600;
   color: #2f3b31;
   cursor: pointer;
@@ -3095,7 +3099,7 @@ h2,
   display: block;
   margin-top: 0.12rem;
   color: #0f172a;
-  font-size: 0.82rem;
+  font-size: var(--text-xs-plus);
   line-height: 1.25;
   overflow-wrap: anywhere;
 }
@@ -3200,7 +3204,7 @@ h2,
   border-radius: 8px;
   background: #f8fafc;
   color: #64748b;
-  font-size: 0.84rem;
+  font-size: var(--text-xs-plus);
 }
 
 .rental-om-shell[data-active-tab="outreach"] > .rental-om-panel:not(.rental-om-panel--inquiry),
@@ -3552,7 +3556,7 @@ h2,
 }
 
 .initial-info-price-change--up {
-  color: #15803d;
+  color: var(--app-green-text);
   font-weight: 500;
 }
 
@@ -4159,7 +4163,7 @@ h2,
   flex-wrap: wrap;
   justify-content: flex-start;
   color: #6f614e;
-  font-size: 0.85rem;
+  font-size: var(--text-xs-plus);
 }
 
 .sales-metrics-dataset-meta span {
@@ -4416,7 +4420,7 @@ h2,
   padding: 0.3rem 0.6rem;
   border-radius: 999px;
   background: rgba(142, 118, 83, 0.1);
-  font-size: 0.82rem;
+  font-size: var(--text-xs-plus);
   color: #5f5547;
   white-space: nowrap;
 }
@@ -4853,7 +4857,7 @@ body * {
   border: 1px solid transparent;
   border-radius: 6px;
   color: var(--app-ink-secondary);
-  font-size: 0.84rem;
+  font-size: var(--text-xs-plus);
   font-weight: 700;
 }
 
@@ -4911,7 +4915,7 @@ body * {
 }
 
 .property-data-table {
-  font-size: 0.82rem;
+  font-size: var(--text-xs-plus);
 }
 
 .property-data-table th {
@@ -5057,7 +5061,7 @@ body * {
 
 .property-data-filter-checkbox span {
   white-space: nowrap;
-  font-size: 0.82rem;
+  font-size: var(--text-xs-plus);
 }
 
 .property-pipeline-panel {
@@ -5109,7 +5113,7 @@ body * {
 .property-pipeline-panel-message--error {
   border-color: #fecaca;
   background: #fef2f2;
-  color: #991b1b;
+  color: var(--app-red-text);
 }
 
 @media (max-width: 900px) {
@@ -5273,7 +5277,7 @@ body * {
   border-radius: 8px;
   background: var(--app-surface);
   color: var(--app-ink);
-  font-size: 0.82rem;
+  font-size: var(--text-xs-plus);
 }
 
 .property-detail-rail-button:hover {
@@ -5493,7 +5497,7 @@ body * {
 .v3-report-section-subtitle {
   margin: 0.2rem 0 0;
   color: var(--app-muted);
-  font-size: 0.84rem;
+  font-size: var(--text-xs-plus);
   line-height: 1.45;
 }
 

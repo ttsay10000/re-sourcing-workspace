@@ -23,7 +23,7 @@
 }
 
 .uploadError {
-  color: #991b1b;
+  color: var(--app-red-text);
   font-size: 0.78rem;
   font-weight: 600;
 }
@@ -56,7 +56,7 @@
 .uploadStatusError {
   flex: 1 1 auto;
   min-width: 0;
-  color: #991b1b;
+  color: var(--app-red-text);
   font-size: 0.74rem;
   white-space: nowrap;
   overflow: hidden;
@@ -80,7 +80,7 @@
 
 .statusError {
   max-width: 16rem;
-  color: #991b1b;
+  color: var(--app-red-text);
   font-size: 0.72rem;
   white-space: nowrap;
   overflow: hidden;
@@ -89,7 +89,7 @@
 
 .sectionTitle {
   display: block;
-  font-size: 0.82rem;
+  font-size: var(--text-xs-plus);
   font-weight: 800;
   color: var(--app-ink-secondary);
   margin-bottom: 0.6rem;
@@ -118,7 +118,7 @@
 }
 
 .reportWarning {
-  color: #92400e;
+  color: var(--app-amber-text);
   font-weight: 650;
 }
 
@@ -251,7 +251,7 @@
   font-weight: 800;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: #92400e;
+  color: var(--app-amber-text);
 }
 
 .discrepancyList {
@@ -261,13 +261,13 @@
   gap: 0.25rem;
   font-size: 0.78rem;
   font-weight: 600;
-  color: #92400e;
+  color: var(--app-amber-text);
 }
 
 .docDiscrepancy {
   font-size: 0.7rem;
   font-weight: 700;
-  color: #92400e;
+  color: var(--app-amber-text);
 }
 
 /* --- Market knowledge base panel --- */

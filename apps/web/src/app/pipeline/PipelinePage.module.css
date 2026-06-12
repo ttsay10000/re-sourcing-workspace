@@ -85,7 +85,7 @@
   padding: 0.52rem 0.82rem;
   background: var(--app-surface, #fff);
   color: var(--app-ink, #18181b);
-  font-size: 0.86rem;
+  font-size: var(--text-xs-plus);
   letter-spacing: 0;
 }
 
@@ -244,7 +244,7 @@
   border-radius: 8px;
   min-height: 2.1rem;
   padding: 0.48rem 1rem;
-  font-size: 0.84rem;
+  font-size: var(--text-xs-plus);
   font-weight: 500;
   letter-spacing: 0;
   cursor: pointer;
@@ -345,7 +345,7 @@
   border: 1px solid #cfe0d5;
   background: #f0faf2;
   color: #245b37;
-  font-size: 0.86rem;
+  font-size: var(--text-xs-plus);
 }
 
 .error {
@@ -828,7 +828,7 @@
 }
 
 .addressWrap strong {
-  font-size: 0.84rem;
+  font-size: var(--text-xs-plus);
 }
 
 .addressWrap span {
@@ -878,7 +878,7 @@
 }
 
 .askActivityRaise {
-  color: #b45309;
+  color: var(--app-amber-text);
 }
 
 .yocFlag {
@@ -895,7 +895,7 @@
 }
 
 .yocFlagWarn {
-  color: #b45309;
+  color: var(--app-amber-text);
 }
 
 .dateCell {
@@ -1339,7 +1339,7 @@
 .sheetHeader p {
   margin: 0.3rem 0 0;
   color: var(--app-muted, #71717a);
-  font-size: 0.84rem;
+  font-size: var(--text-xs-plus);
 }
 
 .sheetWindowActions {
@@ -1412,7 +1412,7 @@
 
 .sheetScreeningBar .screeningAccentWarn dd,
 .sheetScreeningBar .screeningAccentWarn small {
-  color: #b45309;
+  color: var(--app-amber-text);
 }
 
 .sheetScreeningBar .screeningAccentDanger dd,
@@ -1693,7 +1693,7 @@
   padding: 0.65rem 0.85rem;
   background: transparent;
   color: var(--app-muted, #71717a);
-  font-size: 0.84rem;
+  font-size: var(--text-xs-plus);
   font-weight: 500;
   cursor: pointer;
   transition: color 140ms ease, border-color 140ms ease;
@@ -1929,7 +1929,7 @@
   padding: 0.62rem 0.75rem;
   background: #fff8e7;
   color: #6f4a15;
-  font-size: 0.82rem;
+  font-size: var(--text-xs-plus);
   line-height: 1.42;
 }
 
@@ -1969,7 +1969,7 @@
 .description {
   margin: 0.75rem 0 0;
   color: #4b5862;
-  font-size: 0.86rem;
+  font-size: var(--text-xs-plus);
   line-height: 1.45;
 }
 
@@ -2013,7 +2013,7 @@
 .dealPathForm input,
 .dealPathForm select {
   min-height: 2rem;
-  font-size: 0.82rem;
+  font-size: var(--text-xs-plus);
 }
 
 .dealPathForm textarea {
@@ -2223,7 +2223,7 @@
 
 .enrichmentSectionHeader strong {
   color: var(--app-ink, #18181b);
-  font-size: 0.85rem;
+  font-size: var(--text-xs-plus);
   font-weight: 650;
 }
 
@@ -2253,7 +2253,7 @@
 .enrichmentBullets strong {
   min-width: 0;
   color: var(--app-ink, #18181b);
-  font-size: 0.82rem;
+  font-size: var(--text-xs-plus);
   font-weight: 600;
   line-height: 1.35;
   font-variant-numeric: tabular-nums;
@@ -2290,7 +2290,7 @@
 
 .moduleHeader strong {
   color: #1d2b34;
-  font-size: 0.85rem;
+  font-size: var(--text-xs-plus);
 }
 
 .moduleHeader p,
@@ -2325,7 +2325,7 @@
 .moduleItems dd {
   margin: 0.13rem 0 0;
   color: #18242d;
-  font-size: 0.86rem;
+  font-size: var(--text-xs-plus);
   font-weight: 700;
   line-height: 1.28;
   overflow-wrap: anywhere;
@@ -2436,7 +2436,7 @@
 
 .dataModuleHeader strong {
   color: var(--app-ink, #18181b);
-  font-size: 0.86rem;
+  font-size: var(--text-xs-plus);
   font-weight: 760;
   line-height: 1.25;
 }
@@ -2750,7 +2750,7 @@
 
 .timeline strong {
   display: block;
-  font-size: 0.84rem;
+  font-size: var(--text-xs-plus);
 }
 
 .timeline p {
@@ -2810,7 +2810,7 @@
 .outreachPreviewHint {
   margin: 0.85rem 1.25rem;
   color: var(--app-muted, #71717a);
-  font-size: 0.85rem;
+  font-size: var(--text-xs-plus);
 }
 
 .outreachPreviewBody {
@@ -2863,7 +2863,7 @@
 .outreachPreviewCard input,
 .outreachPreviewCard textarea {
   width: 100%;
-  font-size: 0.85rem;
+  font-size: var(--text-xs-plus);
   padding: 0.45rem 0.6rem;
   border: 1px solid var(--app-line-strong, #d4d4d8);
   border-radius: 6px;
@@ -2884,7 +2884,7 @@
 }
 
 .outreachPreviewSkipped header strong {
-  font-size: 0.85rem;
+  font-size: var(--text-xs-plus);
 }
 
 .outreachPreviewSkipped ul {
@@ -2909,7 +2909,7 @@
 }
 
 .outreachPreviewSkipped li strong {
-  font-size: 0.84rem;
+  font-size: var(--text-xs-plus);
 }
 
 .outreachPreviewSkipped li small {
@@ -3086,7 +3086,7 @@
   font-size: var(--text-2xs);
   letter-spacing: 0.07em;
   text-transform: uppercase;
-  color: #92400e;
+  color: var(--app-amber-text);
 }
 
 .sheetScoreFlags ul {

@@ -28,20 +28,20 @@
 .bannerSuccess {
   background: #f0fdf4;
   border-bottom-color: #bbf7d0;
-  color: #15803d;
+  color: var(--app-green-text);
 }
 
 .bannerError {
   background: var(--app-red-soft, #fef2f2);
   border-bottom-color: var(--app-red-border, #fecaca);
-  color: #991b1b;
+  color: var(--app-red-text);
 }
 
 /* Page reloaded mid-run: outcome unknown until the user verifies. */
 .bannerInterrupted {
   background: #fffbeb;
   border-bottom-color: #fde68a;
-  color: #92400e;
+  color: var(--app-amber-text);
 }
 
 .stamp {

@@ -13,7 +13,7 @@
   border-radius: var(--radius-md);
   padding: 0.75rem 1rem;
   background: var(--app-red-soft);
-  color: #991b1b;
+  color: var(--app-red-text);
   font-size: 0.9rem;
 }
 
@@ -38,7 +38,7 @@
 
 .filterSelect {
   /* inherits global input styles — radius/border/bg */
-  font-size: 0.85rem;
+  font-size: var(--text-xs-plus);
   padding: 0.45rem 0.6rem;
 }
 
@@ -190,7 +190,7 @@
 .table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.84rem;
+  font-size: var(--text-xs-plus);
   font-variant-numeric: tabular-nums;
 }
 
@@ -436,7 +436,7 @@
 
 .popup strong {
   color: var(--app-ink, #18181b);
-  font-size: 0.82rem;
+  font-size: var(--text-xs-plus);
   font-weight: 650;
 }
 
@@ -549,7 +549,7 @@
 
 .hoodPopupHeader strong {
   color: var(--app-ink, #18181b);
-  font-size: 0.85rem;
+  font-size: var(--text-xs-plus);
   font-weight: 700;
 }
 
@@ -806,7 +806,7 @@
   display: inline-block;
   font-size: 0.66rem;
   font-weight: 750;
-  color: #92400e;
+  color: var(--app-amber-text);
   background: #fef3c7;
   border: 1px solid #fde68a;
   border-radius: var(--radius-pill, 999px);
@@ -983,7 +983,7 @@
 
 .quickViewNotice {
   font-size: 0.78rem;
-  color: #92400e;
+  color: var(--app-amber-text);
   background: #fffbeb;
   border: 1px solid #fde68a;
   border-radius: var(--radius-md, 8px);

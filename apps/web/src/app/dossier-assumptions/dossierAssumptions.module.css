@@ -103,7 +103,7 @@
   border: 1px solid var(--app-green-border);
   border-radius: var(--radius-md);
   background: var(--app-green-soft);
-  color: #15803d; /* green-700 text for contrast on --app-green-soft; no darker green token exists */
+  color: var(--app-green-text);
   font-size: var(--text-sm);
 }
 

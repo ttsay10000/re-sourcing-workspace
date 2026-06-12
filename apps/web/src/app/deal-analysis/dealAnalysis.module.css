@@ -57,7 +57,7 @@
   align-items: center;
   gap: 0.45rem;
   color: var(--app-ink, #303832);
-  font-size: 0.84rem;
+  font-size: var(--text-xs-plus);
   font-weight: 600;
   cursor: pointer;
 }
@@ -74,7 +74,7 @@
 
 .intakeCardHint {
   color: var(--app-muted, #68736d);
-  font-size: 0.84rem;
+  font-size: var(--text-xs-plus);
   line-height: 1.5;
 }
 
@@ -115,7 +115,7 @@
 
 .replaceNotice {
   color: var(--app-amber, #92400e);
-  font-size: 0.82rem;
+  font-size: var(--text-xs-plus);
   line-height: 1.45;
 }
 

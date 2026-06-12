@@ -105,7 +105,7 @@
   min-height: 2rem;
   padding: 0.46rem 0.92rem;
   border-radius: 999px;
-  font-size: 0.82rem;
+  font-size: var(--text-xs-plus);
   font-weight: 750;
   text-decoration: none;
   cursor: pointer;
@@ -308,7 +308,7 @@
 .notice {
   border: 1px solid var(--app-green-border);
   background: var(--app-green-soft);
-  color: #15803d; /* green-700 text for contrast on --app-green-soft; no darker green token exists */
+  color: var(--app-green-text);
 }
 
 .emptyState {
@@ -327,7 +327,7 @@
   width: 100%;
   min-width: 68rem;
   border-collapse: collapse;
-  font-size: 0.86rem;
+  font-size: var(--text-xs-plus);
 }
 
 .table th,
@@ -556,7 +556,7 @@
 
 .rejectionBlock strong {
   color: var(--app-red);
-  font-size: 0.86rem;
+  font-size: var(--text-xs-plus);
 }
 
 .stack span {
@@ -578,24 +578,22 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* Score pill text uses the darker 800-shade of each semantic hue for AA contrast
-   on the soft backgrounds; globals.css has no dark-text tokens for these. */
 .scoreStrong {
   border: 1px solid var(--app-green-border);
   background: var(--app-green-soft);
-  color: #166534;
+  color: var(--app-green-text);
 }
 
 .scoreWatch {
   border: 1px solid var(--app-amber-border);
   background: var(--app-amber-soft);
-  color: #92400e;
+  color: var(--app-amber-text);
 }
 
 .scoreWeak {
   border: 1px solid var(--app-red-border);
   background: var(--app-red-soft);
-  color: #991b1b;
+  color: var(--app-red-text);
 }
 
 .scoreEmpty {

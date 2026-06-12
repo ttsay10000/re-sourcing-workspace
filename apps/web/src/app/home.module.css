@@ -64,7 +64,7 @@
   min-height: 2.1rem;
   border-radius: 8px;
   padding: 0.45rem 0.9rem;
-  font-size: 0.84rem;
+  font-size: var(--text-xs-plus);
   font-weight: 500;
   text-decoration: none;
   transition: background 140ms ease, border-color 140ms ease, color 140ms ease;
@@ -103,8 +103,8 @@
   padding: 0.65rem 0.9rem;
   border-radius: 8px;
   background: var(--app-green-soft, #f0fdf4);
-  color: #15803d;
-  font-size: 0.86rem;
+  color: var(--app-green-text);
+  font-size: var(--text-xs-plus);
 }
 
 .error {
@@ -204,7 +204,7 @@
 
 .terminalCounter span {
   color: var(--app-muted, #71717a);
-  font-size: 0.82rem;
+  font-size: var(--text-xs-plus);
 }
 
 .segmentedControl {
@@ -265,7 +265,7 @@
 .panelHeader span,
 .panelHeader a {
   color: var(--app-muted, #71717a);
-  font-size: 0.82rem;
+  font-size: var(--text-xs-plus);
   font-weight: 400;
   text-decoration: none;
 }
@@ -375,11 +375,11 @@
 .stageSubMetricDanger {
   border-color: var(--app-red-border, #fecaca);
   background: var(--app-red-soft, #fef2f2);
-  color: #991b1b;
+  color: var(--app-red-text);
 }
 
 .stageSubMetricDanger b {
-  color: #991b1b;
+  color: var(--app-red-text);
 }
 
 /* ─── Dashboard two-col grid ──────────────────────────────────── */
@@ -494,7 +494,7 @@
   place-items: center;
   background: var(--app-surface-strong, #f4f4f3);
   color: var(--app-muted, #71717a);
-  font-size: 0.86rem;
+  font-size: var(--text-xs-plus);
   font-weight: 750;
 }
 
@@ -573,7 +573,7 @@
 .badgeReady {
   border-color: var(--app-green-border, #bbf7d0);
   background: var(--app-green-soft, #f0fdf4);
-  color: #166534;
+  color: var(--app-green-text);
 }
 
 .badgeMissing {
@@ -584,13 +584,13 @@
 .emptyStage {
   padding: 0.45rem 0;
   color: var(--app-muted, #71717a);
-  font-size: 0.82rem;
+  font-size: var(--text-xs-plus);
 }
 
 .dealsTable {
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.86rem;
+  font-size: var(--text-xs-plus);
 }
 
 .dealsTable th,
@@ -648,7 +648,7 @@
   gap: 0.08rem;
   min-width: 4.2rem;
   font-variant-numeric: tabular-nums;
-  font-size: 0.82rem;
+  font-size: var(--text-xs-plus);
   text-align: right;
 }
 
@@ -748,13 +748,13 @@
 .attentionGroup strong {
   color: var(--app-ink, #18181b);
   flex: 1;
-  font-size: 0.86rem;
+  font-size: var(--text-xs-plus);
   font-weight: 600;
 }
 
 .attentionToggle > span:nth-of-type(2) {
   color: var(--app-ink-secondary, #52525b);
-  font-size: 0.82rem;
+  font-size: var(--text-xs-plus);
   font-weight: 500;
 }
 
@@ -790,13 +790,13 @@
 .attentionToneWarning {
   border: 1px solid var(--app-amber-border, #fde68a);
   background: var(--app-amber-soft, #fffbeb);
-  color: #92400e;
+  color: var(--app-amber-text);
 }
 
 .attentionToneDanger {
   border: 1px solid var(--app-red-border, #fecaca);
   background: var(--app-red-soft, #fef2f2);
-  color: #991b1b;
+  color: var(--app-red-text);
 }
 
 .attentionToneNeutral {
@@ -817,7 +817,7 @@
   border-radius: 6px;
   padding: 0.36rem 0.55rem;
   color: var(--app-ink-secondary, #52525b);
-  font-size: 0.84rem;
+  font-size: var(--text-xs-plus);
   text-decoration: none;
   transition: background 140ms ease, color 140ms ease;
 }
