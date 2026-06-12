@@ -529,20 +529,20 @@ function SavedPageContent() {
 
                     {/* Actions */}
                     <div className={styles.dealCardActions}>
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        onClick={() => { window.location.href = `/pipeline?propertyId=${encodeURIComponent(propertyId)}`; }}
-                      >
-                        View property
-                      </Button>
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        onClick={() => { window.location.href = `/pipeline?propertyId=${encodeURIComponent(propertyId)}&tab=underwriting`; }}
-                      >
-                        View docs
-                      </Button>
+                      <span className={styles.actionStack}>
+                        <Link
+                          href={`/pipeline?propertyId=${encodeURIComponent(propertyId)}`}
+                          className={styles.actionPrimary}
+                        >
+                          View property
+                        </Link>
+                        <Link
+                          href={`/pipeline?propertyId=${encodeURIComponent(propertyId)}&tab=underwriting`}
+                          className={styles.actionSecondary}
+                        >
+                          View docs
+                        </Link>
+                      </span>
                       <Button
                         variant="destructive"
                         size="sm"

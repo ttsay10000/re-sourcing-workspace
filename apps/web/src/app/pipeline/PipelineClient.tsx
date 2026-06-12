@@ -13,7 +13,7 @@ import {
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { MailPlus, Star, X } from "lucide-react";
-import { BrokerContactDialog, FileDropzone, StageChip, type BrokerSearchCandidate } from "@/components/ui";
+import { BrokerContactDialog, ConfirmDialog, FileDropzone, StageChip, type BrokerSearchCandidate } from "@/components/ui";
 import { useProcessBanner } from "@/components/ProcessBanner";
 import { runBulkPropertyAction } from "@/lib/bulkPropertyActions";
 import {
@@ -361,6 +361,13 @@ interface RejectState {
   surface: UiV2ActionSurface;
   reasonCode: UiV2RejectionReasonCode | "";
   note: string;
+}
+
+interface MergePromptState {
+  row: PipelineRow;
+  targetId: string;
+  sourceLabel: string;
+  targetLabel: string;
 }
 
 interface ComposerState {
@@ -1348,6 +1355,8 @@ export default function PipelineClient() {
   const [dealPathForm, setDealPathForm] = useState<DealPathFormState>(dealPathFormFromState(null));
   const [newTag, setNewTag] = useState("");
   const [rejectState, setRejectState] = useState<RejectState | null>(null);
+  /** Merge pending confirmation — drives the ConfirmDialog popup. */
+  const [mergePrompt, setMergePrompt] = useState<MergePromptState | null>(null);
   const rejectOpen = rejectState != null;
   // The reject popup behaves like a real modal: background scroll locks and
   // Escape dismisses, so the user lands in the dialog instead of the page.
@@ -2895,7 +2904,7 @@ export default function PipelineClient() {
     }
   }
 
-  async function mergePropertyIntoSelectedTarget(row: PipelineRow) {
+  function requestMergeIntoSelectedTarget(row: PipelineRow) {
     const targetIds = selectedIds.filter((id) => id !== row.propertyId);
     if (targetIds.length !== 1) {
       setError("Select exactly one source row as the merge target, then use More on the duplicate row.");
@@ -2903,13 +2912,15 @@ export default function PipelineClient() {
     }
     const targetId = targetIds[0]!;
     const targetRow = rows.find((candidate) => candidate.propertyId === targetId);
-    const sourceLabel = row.displayAddress ?? row.canonicalAddress;
-    const targetLabel = targetRow?.displayAddress ?? targetRow?.canonicalAddress ?? "the selected source row";
-    const confirmed = window.confirm(
-      `Merge ${sourceLabel} into ${targetLabel}? Uploaded OM documents, generated files, OM runs, and deal signals will move to the target row; the duplicate row will be archived.`
-    );
-    if (!confirmed) return;
+    setMergePrompt({
+      row,
+      targetId,
+      sourceLabel: row.displayAddress ?? row.canonicalAddress,
+      targetLabel: targetRow?.displayAddress ?? targetRow?.canonicalAddress ?? "the selected source row",
+    });
+  }
 
+  async function performMerge({ row, targetId, sourceLabel, targetLabel }: MergePromptState) {
     setBusyAction(`${row.propertyId}:merge`);
     setNotice(null);
     setError(null);
@@ -2943,6 +2954,11 @@ export default function PipelineClient() {
     const { propertyId, surface, reasonCode, note } = rejectState;
     const propertyIds = rejectState.propertyIds?.length ? rejectState.propertyIds : [propertyId];
     const isBulkReject = propertyIds.length > 1;
+    // Resolve labels before the bulk path replaces `rows` with the reloaded list.
+    const rejectedLabels = propertyIds.map((id) => {
+      const row = rows.find((candidate) => candidate.propertyId === id);
+      return row?.displayAddress ?? row?.canonicalAddress ?? id;
+    });
     setBusyAction(isBulkReject ? "bulk:reject" : `${propertyId}:reject`);
     setNotice(null);
     setError(null);
@@ -2980,11 +2996,19 @@ export default function PipelineClient() {
         }
       }
 
-      const completed = propertyIds.length - failures.length;
       setRejectState(null);
+      const failedSet = new Set(failures.map((failure) => failure.propertyId));
+      const completedLabels = propertyIds
+        .map((id, index) => ({ id, label: rejectedLabels[index]! }))
+        .filter(({ id }) => !failedSet.has(id))
+        .map(({ label }) => label);
       setNotice(
         isBulkReject
-          ? `${completed} propert${completed === 1 ? "y" : "ies"} rejected.`
+          ? completedLabels.length === 0
+            ? "No properties were rejected."
+            : `Rejected ${completedLabels.slice(0, 3).join(", ")}${
+                completedLabels.length > 3 ? ` and ${completedLabels.length - 3} more` : ""
+              }.`
           : "Property rejected."
       );
       if (failures.length > 0) {
@@ -3468,7 +3492,7 @@ export default function PipelineClient() {
             }
             onClick={() => {
               closeRowActionMenu();
-              void mergePropertyIntoSelectedTarget(row);
+              requestMergeIntoSelectedTarget(row);
             }}
           >
             {busyAction === `${row.propertyId}:merge` ? "Merging..." : "Merge into selected row"}
@@ -5408,6 +5432,25 @@ export default function PipelineClient() {
           </form>
         </div>
       ) : null}
+
+      <ConfirmDialog
+        open={mergePrompt != null}
+        onClose={() => setMergePrompt(null)}
+        onConfirm={() => {
+          const prompt = mergePrompt;
+          setMergePrompt(null);
+          if (prompt) void performMerge(prompt);
+        }}
+        title="Merge properties"
+        description={
+          mergePrompt
+            ? `Merge ${mergePrompt.sourceLabel} into ${mergePrompt.targetLabel}? Uploaded OM documents, generated files, OM runs, and deal signals will move to the target row; the duplicate row will be archived.`
+            : undefined
+        }
+        confirmLabel="Merge"
+        destructive
+        busy={mergePrompt != null && busyAction === `${mergePrompt.row.propertyId}:merge`}
+      />
 
       {composer ? (
         <div className={styles.modalOverlay}>

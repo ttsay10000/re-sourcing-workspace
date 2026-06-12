@@ -120,8 +120,13 @@ interface SelectionState {
 
 interface ImportResponse {
   ok: boolean;
-  imported?: Array<{ id: string; filename: string; category: DocumentCategory }>;
-  skipped?: Array<{ reason: string; documentId?: string | null }>;
+  imported?: Array<{
+    id: string;
+    filename: string;
+    category: DocumentCategory;
+    sourceMetadata?: { gmailMessageId?: string | null; gmailAttachmentId?: string | null } | null;
+  }>;
+  skipped?: Array<{ reason: string; documentId?: string | null; messageId?: string; attachmentId?: string }>;
   errors?: Array<{ error: string }>;
   omReview?: { runId?: string | null; error?: string } | null;
   omReviews?: Array<{ propertyId: string; canonicalAddress: string }>;
@@ -212,6 +217,8 @@ export default function BrokerOmEmailSearchPage() {
   const [includeNewPropertyCandidates, setIncludeNewPropertyCandidates] = useState(true);
   const [maxMessages, setMaxMessages] = useState(50);
   const [searchResult, setSearchResult] = useState<SearchResponse | null>(null);
+  /** Candidate row ids (`messageId:attachmentId`) imported during this search session. */
+  const [importedCandidateIds, setImportedCandidateIds] = useState<Set<string>>(new Set());
   const [selection, setSelection] = useState<Record<string, SelectionState>>({});
   const [preview, setPreview] = useState<GmailDocumentCandidate | null>(null);
   const [loadingProperties, setLoadingProperties] = useState(true);
@@ -321,6 +328,7 @@ export default function BrokerOmEmailSearchPage() {
       if (!response.ok) throw new Error(data?.error || data?.details || "Failed to search Gmail");
       const result = data as SearchResponse;
       setSearchResult(result);
+      setImportedCandidateIds(new Set());
       setSelection(defaultSelection(result.documents, propertyId));
       setPullState({
         propertyId: result.property?.id ?? null,
@@ -450,6 +458,22 @@ export default function BrokerOmEmailSearchPage() {
       const importedCount = data.imported?.length ?? 0;
       const skippedCount = data.skipped?.length ?? 0;
       const errorCount = data.errors?.length ?? 0;
+      // Candidate row ids are `messageId:attachmentId`; imported rows carry the
+      // Gmail ids in sourceMetadata, already-imported skips carry them directly.
+      const justImported = new Set<string>();
+      for (const document of data.imported ?? []) {
+        const messageId = document.sourceMetadata?.gmailMessageId;
+        const attachmentId = document.sourceMetadata?.gmailAttachmentId;
+        if (messageId && attachmentId) justImported.add(`${messageId}:${attachmentId}`);
+      }
+      for (const skip of data.skipped ?? []) {
+        if (skip.reason === "already_imported" && skip.messageId && skip.attachmentId) {
+          justImported.add(`${skip.messageId}:${skip.attachmentId}`);
+        }
+      }
+      if (justImported.size > 0) {
+        setImportedCandidateIds((current) => new Set([...current, ...justImported]));
+      }
       const summary = `Imported ${importedCount} document${importedCount === 1 ? "" : "s"}${skippedCount ? `, skipped ${skippedCount}` : ""}${errorCount ? `, ${errorCount} failed` : ""}.`;
       setNotice(
         <>
@@ -559,6 +583,7 @@ export default function BrokerOmEmailSearchPage() {
               onChange={(event) => {
                 setPropertyId(event.target.value);
                 setSearchResult(null);
+                setImportedCandidateIds(new Set());
                 setSelection({});
                 setPreview(null);
               }}
@@ -754,6 +779,7 @@ export default function BrokerOmEmailSearchPage() {
                     <div>
                       <p className={styles.fileName}>{document.filename}</p>
                       <div className={styles.fileMeta}>
+                        {importedCandidateIds.has(document.id) ? <span className={styles.okPill}>Imported</span> : null}
                         <span className={document.large ? styles.warnPill : styles.mutedPill}>{formatBytes(document.sizeBytes)}</span>
                         <span className={styles.mutedPill}>{document.mimeType}</span>
                         <span className={styles.mutedPill}>{document.classificationConfidence}</span>
