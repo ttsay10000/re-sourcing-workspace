@@ -11,7 +11,9 @@
  */
 
 import { Router, type Request, type Response } from "express";
+import type { Pool } from "pg";
 import { getPool, NeighborhoodRepo } from "@re-sourcing/db";
+import { deriveBoardPipelineStatus } from "../deal/boardPipelineStatus.js";
 import { resolveOperatingYield, sanitizeRatePct, type OperatingYieldFlag } from "../deal/operatingYield.js";
 import {
   buildNeighborhoodIndex,
@@ -28,8 +30,15 @@ interface OperatingCompRow {
   neighborhood: string | null;
   dealState: string | null;
   dealStage: string | null;
-  /** Saved-deal status (deal-progress board input); lets the UI show the exact board stage. */
-  savedStatus: string | null;
+  /**
+   * The deal-progress board's current pipeline status for this property
+   * (same derivation the board uses: rejection > deal path > uiV2Status >
+   * saved-deal status > legacy status), so stage chips here always match the
+   * board — including moves the board writes only to details.pipeline.
+   */
+  boardStatus: string | null;
+  /** Manually scrubbed from yield-map calculations (medians/averages/area stats). */
+  yieldMapExcluded: boolean;
   lat: number | null;
   lng: number | null;
   units: number | null;
@@ -115,6 +124,51 @@ function toIsoString(value: unknown): string | null {
 
 function median(sortedAscending: number[]): number | null {
   return sortedAscending.length > 0 ? sortedAscending[Math.floor((sortedAscending.length - 1) / 2)] : null;
+}
+
+async function hasTable(pool: Pool, tableName: string): Promise<boolean> {
+  const result = await pool.query<{ exists: boolean }>("SELECT to_regclass($1) IS NOT NULL AS exists", [tableName]);
+  return result.rows[0]?.exists === true;
+}
+
+async function hasColumn(pool: Pool, tableName: string, columnName: string): Promise<boolean> {
+  const result = await pool.query<{ exists: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1 FROM information_schema.columns WHERE table_name = $1 AND column_name = $2
+     ) AS exists`,
+    [tableName, columnName]
+  );
+  return result.rows[0]?.exists === true;
+}
+
+/** Fields the board-status derivation needs, degrading before migrations 053/064. */
+function boardStatusSelect(hasExclusionColumn: boolean, hasRejections: boolean): string {
+  return `
+         p.details->'pipeline' AS pipeline,
+         ${hasExclusionColumn ? "p.yield_map_excluded" : "FALSE AS yield_map_excluded"},
+         ${hasRejections ? "rej.rejected_at AS active_rejection_at" : "NULL::timestamptz AS active_rejection_at"},`;
+}
+
+/** Latest unrestored rejection — the same signal the deal-progress board treats as "rejected". */
+function rejectionJoin(hasRejections: boolean): string {
+  if (!hasRejections) return "";
+  return `
+       LEFT JOIN LATERAL (
+         SELECT r.rejected_at
+         FROM property_rejections r
+         WHERE r.property_id = p.id AND r.restored_at IS NULL
+         ORDER BY r.rejected_at DESC
+         LIMIT 1
+       ) rej ON TRUE`;
+}
+
+/** Board pipeline status for a comps row (mirrors the deal-progress board). */
+function boardStatusOf(row: Record<string, unknown>): string {
+  return deriveBoardPipelineStatus({
+    details: row.pipeline == null ? null : { pipeline: row.pipeline },
+    hasActiveRejection: row.active_rejection_at != null,
+    savedDealStatus: (row.saved_status as string | null) ?? null,
+  });
 }
 
 
@@ -285,13 +339,19 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
 
   try {
     const pool = getPool();
+    // Schema feature detection keeps the map serving while a deploy's
+    // migrations (053 rejections, 064 exclusion flag) are still pending.
+    const [hasRejections, hasExclusionColumn] = await Promise.all([
+      hasTable(pool, "property_rejections"),
+      hasColumn(pool, "properties", "yield_map_excluded"),
+    ]);
     const result = await pool.query(
       `SELECT
          p.id AS property_id,
          p.canonical_address,
          p.deal_state,
          p.deal_stage,
-         sd.deal_status AS saved_status,
+         sd.deal_status AS saved_status,${boardStatusSelect(hasExclusionColumn, hasRejections)}
          COALESCE(p.lat, CASE WHEN p.details->>'lat' ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN (p.details->>'lat')::double precision END) AS lat,
          COALESCE(p.lng, CASE WHEN p.details->>'lon' ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN (p.details->>'lon')::double precision END) AS lng,
          p.details#>>'{neighborhood,primary,borough}' AS borough,
@@ -374,7 +434,7 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
            -- keeping them out of the timeline stops fake "up" trends from a bad first extraction.
            WHERE h.property_id = p.id AND h.asset_cap_rate IS NOT NULL AND h.asset_cap_rate > 0
          ) t
-       ) hist ON TRUE
+       ) hist ON TRUE${rejectionJoin(hasRejections)}
        WHERE ds.asset_cap_rate IS NOT NULL
           OR p.details#>>'{omData,authoritative,currentFinancials,noi}' IS NOT NULL
           OR p.details#>>'{rentalFinancials,omAnalysis,currentFinancials,noi}' IS NOT NULL
@@ -436,7 +496,8 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
           neighborhood: (row.neighborhood as string | null) ?? null,
           dealState: (row.deal_state as string | null) ?? null,
           dealStage: (row.deal_stage as string | null) ?? null,
-          savedStatus: (row.saved_status as string | null) ?? null,
+          boardStatus: boardStatusOf(row),
+          yieldMapExcluded: row.yield_map_excluded === true,
           lat: toNumber(row.lat),
           lng: toNumber(row.lng),
           units: toNumber(row.units),
@@ -473,7 +534,7 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
            p.canonical_address,
            p.deal_state,
            p.deal_stage,
-           sd.deal_status AS saved_status,
+           sd.deal_status AS saved_status,${boardStatusSelect(hasExclusionColumn, hasRejections)}
            COALESCE(p.lat, CASE WHEN p.details->>'lat' ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN (p.details->>'lat')::double precision END) AS lat,
            COALESCE(p.lng, CASE WHEN p.details->>'lon' ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN (p.details->>'lon')::double precision END) AS lng,
            p.details#>>'{neighborhood,primary,borough}' AS borough,
@@ -519,7 +580,7 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
            WHERE m.property_id = p.id AND m.status <> 'rejected'
            ORDER BY (m.status = 'accepted') DESC, m.confidence DESC NULLS LAST, m.created_at DESC
            LIMIT 1
-         ) lst ON TRUE
+         ) lst ON TRUE${rejectionJoin(hasRejections)}
          ORDER BY run.started_at DESC
          LIMIT $1`,
         [limit]
@@ -555,7 +616,8 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
           neighborhood: (row.neighborhood as string | null) ?? null,
           dealState: (row.deal_state as string | null) ?? null,
           dealStage: (row.deal_stage as string | null) ?? null,
-          savedStatus: (row.saved_status as string | null) ?? null,
+          boardStatus: boardStatusOf(row),
+          yieldMapExcluded: row.yield_map_excluded === true,
           lat: toNumber(row.lat),
           lng: toNumber(row.lng),
           units,
@@ -611,8 +673,9 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
     if (maxYield != null) rows = rows.filter((row) => row.ltrYieldPct != null && row.ltrYieldPct <= maxYield);
 
     // Summary stats stay on reviewed data only — pending extractions are
-    // returned for display but never move the medians until promoted.
-    const statsRows = rows.filter((row) => !row.pendingReview);
+    // returned for display but never move the medians until promoted, and
+    // manually excluded properties never count regardless of visibility.
+    const statsRows = rows.filter((row) => !row.pendingReview && !row.yieldMapExcluded);
     const yields = statsRows
       .map((row) => row.ltrYieldPct)
       .filter((value): value is number => value != null)
@@ -680,6 +743,8 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
         // Flagged rows carry null yields, so every aggregate below already excludes them.
         flaggedCount: rows.filter((row) => row.yieldFlag != null).length,
         pendingCount: rows.filter((row) => row.pendingReview).length,
+        rejectedCount: rows.filter((row) => row.boardStatus === "rejected").length,
+        excludedCount: rows.filter((row) => row.yieldMapExcluded).length,
         averageLtrYieldPct: average,
         medianLtrYieldPct: medianYield,
         boroughStats,

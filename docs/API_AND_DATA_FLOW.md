@@ -264,3 +264,19 @@ Neighborhood $/SF context:
 
 - `GET /api/comps/neighborhood-psf` — `{ neighborhoods: [{ key, name, borough, aliases, medianPsf, count, dealCount, compCount }], defaultHighPsf: 2000 }`; blends our deals' latest `deal_signals.price_psf` (ask/GSF fallback) with `market_comps.price_psf`, resolved through the market layer's neighborhood alias map so StreetEasy/listing area labels and publisher names converge.
 - Pipeline $/SF highlight precedence: neighborhood median ±25% (≥3 observations) → $2,000/SF default high-end threshold when the area is unknown/thin → 3σ outlier rule against visible rows.
+
+## Yield map: rejected toggle, per-property calc exclusion, live board stage (2026-06-12)
+
+Stage source of truth:
+
+- `GET /api/comps/operating` rows now carry `boardStatus` instead of `savedStatus`. It is derived by `apps/api/src/deal/boardPipelineStatus.ts` — the exact precedence the deal-progress board uses (active `property_rejections` row / `pipeline.rejectedAt` → deal-path tour/offer signals → `details.pipeline.uiV2Status` written by board moves → saved-deal status specials → legacy status map). `savedProgressV2.deriveStatus` delegates to the same helper, so the yield map's STAGE column can no longer drift from the board. Previously the column read `saved_deals.deal_status`, whose enum only holds the legacy values (`new, interesting, saved, dossier_generated, rejected`) — board moves to Tour/LOI/etc. never reached it, which is why stages looked stuck.
+
+Rejected visibility:
+
+- Yield map "Rejected" toggle (default off): rejected deals (`boardStatus = rejected`) stay out of the map, tables, medians, and area badges so the cap-rate read stays on free-market availability. Toggling them in counts them again while shown; stage pins color them red.
+
+Per-property calc exclusion (migration `064_yield_map_exclusion.sql`):
+
+- `properties.yield_map_excluded` (+ `yield_map_excluded_at`) — persisted scrub designation, e.g. rent-stabilized buildings whose cap rates would distort free-market medians.
+- `POST /api/properties/:id/yield-map-exclusion` `{ excluded: boolean }` — flips the flag (logged as a `yield_map_exclusion_changed` pipeline event). Row controls: ✂ exclude / ↺ include on each deal row and in the quick-view dialog.
+- Excluded rows never count toward any yield-map aggregate (client medians/averages/area badges and the API `summary` stats). The "Excluded" toggle shows them muted for review/re-inclusion; `summary` gains `rejectedCount` / `excludedCount`.

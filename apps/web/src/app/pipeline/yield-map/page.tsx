@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Badge, Dialog, PageHeader, SortableTh, StatCard, useTableSort } from "@/components/ui";
-import { dealFlowStageForStatus } from "@re-sourcing/contracts";
+import { dealFlowStageForStatus, STATUS_TO_CANONICAL } from "@re-sourcing/contracts";
 import { API_BASE } from "@/lib/api";
 import { formatPercent, formatCurrencyCompact, formatCurrencyExact, labelFromKey, EMPTY_VALUE } from "@/lib/format";
 import styles from "./yieldMap.module.css";
@@ -24,7 +24,10 @@ interface CompRow {
   neighborhood: string | null;
   dealState: string | null;
   dealStage: string | null;
-  savedStatus: string | null;
+  /** The deal-progress board's current pipeline status (rejection > deal path > board moves > legacy). */
+  boardStatus: string | null;
+  /** Manually scrubbed from yield-map calculations; persists with the property. */
+  yieldMapExcluded: boolean;
   lat: number | null;
   lng: number | null;
   units: number | null;
@@ -56,6 +59,8 @@ interface CompsResponse {
     withCoordinates: number;
     flaggedCount?: number;
     pendingCount?: number;
+    rejectedCount?: number;
+    excludedCount?: number;
     averageLtrYieldPct: number | null;
     medianLtrYieldPct: number | null;
   };
@@ -392,8 +397,23 @@ const STAGE_LEGEND = [
   { label: "Closed", color: "#15803d" },
 ];
 
+const REJECTED_PIN_COLOR = "#dc2626";
+/** Excluded-from-calcs rows render visibly muted in every color mode. */
+const EXCLUDED_PIN_COLOR = "#cbd5e1";
+
 function stagePinColor(stage: string | null): string {
   return (stage && STAGE_PIN_COLORS[stage]) || "#cbd5e1";
+}
+
+/** Rejected on the deal-progress board (dead deal). */
+function isRejectedRow(row: CompRow): boolean {
+  return row.boardStatus === "rejected";
+}
+
+/** Canonical pipeline stage for pin coloring — board status first, stored stage as fallback. */
+function canonicalStageOf(row: CompRow): string | null {
+  const fromStatus = row.boardStatus ? STATUS_TO_CANONICAL[row.boardStatus]?.stage : undefined;
+  return fromStatus ?? row.dealStage;
 }
 
 function packageTypeLabel(value: string): string {
@@ -473,6 +493,11 @@ export default function YieldMapPage() {
   const [colorBy, setColorBy] = useState<"yield" | "psf" | "stage" | "vsMarket">("yield");
   const [showAreas, setShowAreas] = useState(true);
   const [includePending, setIncludePending] = useState(false);
+  // Rejected deals stay off the free-market read unless toggled back in.
+  const [showRejected, setShowRejected] = useState(false);
+  // Manually scrubbed properties stay hidden unless toggled in for review.
+  const [showExcluded, setShowExcluded] = useState(false);
+  const [exclusionBusyId, setExclusionBusyId] = useState<string | null>(null);
   const [quickViewId, setQuickViewId] = useState<string | null>(null);
   const [headlines, setHeadlines] = useState<MarketHeadline[]>([]);
   const [headlinesAsOf, setHeadlinesAsOf] = useState<string | null>(null);
@@ -671,29 +696,81 @@ export default function YieldMapPage() {
     [hoodNameByPropertyId]
   );
 
-  /** Board stage chip text — the same stage the deal-progress board shows for this status. */
+  /** Board stage chip text — the same stage the deal-progress board shows right now. */
   const boardStageLabel = useCallback((row: CompRow): string => {
-    const stage = dealFlowStageForStatus(row.savedStatus);
+    if (isRejectedRow(row)) return "Rejected";
+    const stage = dealFlowStageForStatus(row.boardStatus);
     if (stage) return stage.shortLabel;
     if (row.dealStage) return labelFromKey(row.dealStage);
     return row.dealState ? labelFromKey(row.dealState) : EMPTY_VALUE;
   }, []);
 
+  // The working universe: rejected deals and manually scrubbed properties
+  // only enter when their toggles bring them back. Filter options and counts
+  // downstream all follow this set.
+  const visibleComps = useMemo(
+    () =>
+      (data?.comps ?? []).filter(
+        (row) => (showRejected || !isRejectedRow(row)) && (showExcluded || !row.yieldMapExcluded)
+      ),
+    [data, showRejected, showExcluded]
+  );
+
   // All filters apply here so the headline stats, every table, and the map
   // pins narrow together.
   const rows = useMemo(() => {
-    let all = data?.comps ?? [];
+    let all = visibleComps;
     if (!includePending) all = all.filter((row) => !row.pendingReview);
     if (boroughFilter) all = all.filter((row) => (row.borough ?? "Unknown") === boroughFilter);
     if (stageFilter) all = all.filter((row) => boardStageLabel(row) === stageFilter);
     if (hoodFilter) all = all.filter((row) => (displayHood(row) ?? "Unknown") === hoodFilter);
     return all;
-  }, [data, boroughFilter, includePending, stageFilter, hoodFilter, boardStageLabel, displayHood]);
+  }, [visibleComps, boroughFilter, includePending, stageFilter, hoodFilter, boardStageLabel, displayHood]);
+
+  // Calculation set: excluded properties can be *visible* (toggle) but never
+  // count toward medians, averages, trends, or area badges.
+  const calcRows = useMemo(() => rows.filter((row) => !row.yieldMapExcluded), [rows]);
 
   const pendingAvailable = useMemo(
     () => (data?.comps ?? []).filter((row) => row.pendingReview).length,
     [data]
   );
+  const rejectedAvailable = useMemo(() => (data?.comps ?? []).filter(isRejectedRow).length, [data]);
+  const excludedAvailable = useMemo(
+    () => (data?.comps ?? []).filter((row) => row.yieldMapExcluded).length,
+    [data]
+  );
+
+  /** Persist the scrub designation, then update the loaded rows in place. */
+  const toggleExclusion = useCallback(async (row: CompRow) => {
+    const next = !row.yieldMapExcluded;
+    setExclusionBusyId(row.propertyId);
+    try {
+      const res = await fetch(`${API_BASE}/api/properties/${encodeURIComponent(row.propertyId)}/yield-map-exclusion`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ excluded: next }),
+      });
+      const payload = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok || payload.error) throw new Error(payload.error || `HTTP ${res.status}`);
+      setData((current) =>
+        current
+          ? {
+              ...current,
+              comps: current.comps.map((comp) =>
+                comp.propertyId === row.propertyId ? { ...comp, yieldMapExcluded: next } : comp
+              ),
+            }
+          : current
+      );
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update yield-map exclusion.");
+    } finally {
+      setExclusionBusyId(null);
+    }
+  }, []);
 
   const compRows = useMemo(() => {
     if (!showComps) return [];
@@ -703,16 +780,21 @@ export default function YieldMapPage() {
   }, [showComps, marketComps, boroughFilter]);
 
   const geoRows = useMemo(() => rows.filter((row) => row.lat != null && row.lng != null), [rows]);
+  const calcGeoRows = useMemo(() => geoRows.filter((row) => !row.yieldMapExcluded), [geoRows]);
   const geoComps = useMemo(() => compRows.filter((comp) => comp.lat != null && comp.lng != null), [compRows]);
 
-  const flaggedRows = useMemo(() => rows.filter((row) => row.yieldFlag != null), [rows]);
-  const yieldRows = useMemo(() => rows.filter((row) => row.ltrYieldPct != null), [rows]);
+  const flaggedRows = useMemo(() => calcRows.filter((row) => row.yieldFlag != null), [calcRows]);
+  const yieldRows = useMemo(() => calcRows.filter((row) => row.ltrYieldPct != null), [calcRows]);
 
   const summaries = useMemo(() => (marketLayerOn ? market?.summaries ?? [] : []), [market, marketLayerOn]);
   const summaryById = useMemo(
     () => new Map(summaries.map((summary) => [summary.neighborhoodId, summary])),
     [summaries]
   );
+
+  // Hygiene set for "our deals vs market" medians: visibility toggles apply,
+  // but excluded properties never feed the numbers even while shown.
+  const statsComps = useMemo(() => visibleComps.filter((row) => !row.yieldMapExcluded), [visibleComps]);
 
   /** Our own deals' median LTR yield per neighborhood (alias-matched) for the spread line. */
   const ourYieldByHood = useMemo(() => {
@@ -723,7 +805,7 @@ export default function YieldMapPage() {
       for (const alias of summary.aliases) aliasToHood.set(normalizeHoodName(alias), summary.neighborhoodId);
     }
     const grouped = new Map<string, number[]>();
-    for (const row of data?.comps ?? []) {
+    for (const row of statsComps) {
       if (row.ltrYieldPct == null) continue;
       const hoodName = hoodNameByPropertyId.get(row.propertyId) ?? row.neighborhood;
       if (!hoodName) continue;
@@ -739,7 +821,7 @@ export default function YieldMapPage() {
       if (value != null) result.set(hoodId, { median: value, count: values.length });
     }
     return result;
-  }, [data, summaries, hoodNameByPropertyId]);
+  }, [statsComps, summaries, hoodNameByPropertyId]);
 
   /**
    * Per-deal read against area comps for the "Vs market" pin mode and popup
@@ -943,33 +1025,34 @@ export default function YieldMapPage() {
   const metricColor = metric === "psf" ? psfColor : yieldColor;
   const fmtMetric = (value: number | null) => (metric === "psf" ? fmtPsf(value) : fmtPct(value, 2));
 
-  // Headline stats follow the borough filter (the API summary covers all boroughs).
+  // Headline stats follow the borough filter (the API summary covers all
+  // boroughs) and read from the calculation set — excluded rows never count.
   const stats = useMemo(() => {
-    const yields = rows.map((row) => row.ltrYieldPct).filter((v): v is number => v != null);
-    const psfs = rows.map((row) => row.pricePsf).filter((v): v is number => v != null);
+    const yields = calcRows.map((row) => row.ltrYieldPct).filter((v): v is number => v != null);
+    const psfs = calcRows.map((row) => row.pricePsf).filter((v): v is number => v != null);
     return {
       medianYieldPct: median(yields),
       averageYieldPct: yields.length > 0 ? yields.reduce((sum, v) => sum + v, 0) / yields.length : null,
       medianPsf: median(psfs),
       psfCount: psfs.length,
-      upCount: rows.filter((row) => row.yieldTrend === "up").length,
-      downCount: rows.filter((row) => row.yieldTrend === "down").length,
-      flatCount: rows.filter((row) => row.yieldTrend === "flat").length,
+      upCount: calcRows.filter((row) => row.yieldTrend === "up").length,
+      downCount: calcRows.filter((row) => row.yieldTrend === "down").length,
+      flatCount: calcRows.filter((row) => row.yieldTrend === "flat").length,
     };
-  }, [rows]);
+  }, [calcRows]);
 
   // Default order: cap-rate mode ranks neighborhoods by median cap rate
   // (highest first — the buyer's read); $/SF mode cheap-to-expensive.
   const neighborhoodStats = useMemo(
     () =>
-      groupStats(rows, displayHood, dealMetricValue).sort((a, b) =>
+      groupStats(calcRows, displayHood, dealMetricValue).sort((a, b) =>
         a.name === "Unknown" ? 1 : b.name === "Unknown" ? -1 : metric === "psf" ? a.medianValue - b.medianValue : b.medianValue - a.medianValue
       ),
-    [rows, displayHood, dealMetricValue, metric]
+    [calcRows, displayHood, dealMetricValue, metric]
   );
   const boroughStats = useMemo(
-    () => groupStats(rows, (row) => row.borough, dealMetricValue),
-    [rows, dealMetricValue]
+    () => groupStats(calcRows, (row) => row.borough, dealMetricValue),
+    [calcRows, dealMetricValue]
   );
 
   // Click-to-sort on every table (default order preserved until a header is clicked).
@@ -995,7 +1078,7 @@ export default function YieldMapPage() {
     for (const feature of boundaries.features) {
       if (feature.properties.park) continue;
       const bbox = featureBBoxes.get(feature.properties.code);
-      const members = geoRows.filter((row) => pointInFeature(row.lng!, row.lat!, feature, bbox));
+      const members = calcGeoRows.filter((row) => pointInFeature(row.lng!, row.lat!, feature, bbox));
       const values = members.map(dealMetricValue).filter((v): v is number => v != null);
       const medianValue = median(values);
       if (medianValue == null) continue;
@@ -1022,14 +1105,17 @@ export default function YieldMapPage() {
       });
     }
     return result;
-  }, [boundaries, featureBBoxes, geoRows, dealMetricValue, metric, metricColor]);
+  }, [boundaries, featureBBoxes, calcGeoRows, dealMetricValue, metric, metricColor]);
 
   const pins = useMemo<MapPin[]>(() => {
     const dealPins: MapPin[] = geoRows.map((row) => {
       const vsMarket = vsMarketByPropertyId.get(row.propertyId) ?? null;
-      const color =
-        colorBy === "stage"
-          ? stagePinColor(row.dealStage)
+      const color = row.yieldMapExcluded
+        ? EXCLUDED_PIN_COLOR
+        : colorBy === "stage"
+          ? isRejectedRow(row)
+            ? REJECTED_PIN_COLOR
+            : stagePinColor(canonicalStageOf(row))
           : colorBy === "vsMarket"
             ? metric === "psf"
               ? vsMarketPsfColor(vsMarket?.psfDeltaPct ?? null)
@@ -1059,6 +1145,7 @@ export default function YieldMapPage() {
             ? `Yield ${fmtDeltaPp(row.yieldDeltaPct)} since first sourced ${fmtDateMDY(row.firstYieldAt)}`
             : `First sourced ${fmtDateMDY(row.firstYieldAt ?? row.sourcedAt)}`,
           `Stage: ${boardStageLabel(row)}`,
+          ...(row.yieldMapExcluded ? ["✂ Excluded from yield calcs — not counted in medians or area stats"] : []),
           ...(row.pendingReview ? ["⏳ OM extraction awaiting review — promote it to confirm these numbers"] : []),
           ...(row.yieldFlagDetail ? [`⚠ ${row.yieldFlagDetail}`] : []),
         ],
@@ -1144,32 +1231,42 @@ export default function YieldMapPage() {
   const dealSort = useTableSort(tableEntries, dealSortAccessors);
 
   const boroughOptions = useMemo(
-    () => [...new Set((data?.comps ?? []).map((row) => row.borough ?? "Unknown"))].sort(),
-    [data]
+    () => [...new Set(visibleComps.map((row) => row.borough ?? "Unknown"))].sort(),
+    [visibleComps]
   );
   const stageOptions = useMemo(
-    () => [...new Set((data?.comps ?? []).map((row) => boardStageLabel(row)))].filter((label) => label !== EMPTY_VALUE).sort(),
-    [data, boardStageLabel]
+    () => [...new Set(visibleComps.map((row) => boardStageLabel(row)))].filter((label) => label !== EMPTY_VALUE).sort(),
+    [visibleComps, boardStageLabel]
   );
   const hoodOptions = useMemo(
-    () => [...new Set((data?.comps ?? []).map((row) => displayHood(row) ?? "Unknown"))].sort(),
-    [data, displayHood]
+    () => [...new Set(visibleComps.map((row) => displayHood(row) ?? "Unknown"))].sort(),
+    [visibleComps, displayHood]
   );
+
+  // Toggling rejected/excluded visibility can remove the selected stage (e.g.
+  // "Rejected") from the option list — reset instead of pinning an empty table.
+  useEffect(() => {
+    if (stageFilter && !stageOptions.includes(stageFilter)) setStageFilter("");
+  }, [stageFilter, stageOptions]);
 
   const trendTone = stats.upCount > stats.downCount ? "success" : "neutral";
   const metricNoun = metric === "psf" ? "Sale $/SF" : "Cap rates";
   const legendBands =
     colorBy === "stage"
-      ? STAGE_LEGEND
+      ? showRejected
+        ? [...STAGE_LEGEND, { label: "Rejected", color: REJECTED_PIN_COLOR }]
+        : STAGE_LEGEND
       : colorBy === "vsMarket"
         ? VS_MARKET_BANDS
         : colorBy === "psf"
           ? PSF_BANDS
           : YIELD_BANDS;
 
+  // Resolved against the full payload (not the filtered rows) so the dialog
+  // survives the row being scrubbed/toggled out from under it.
   const quickViewRow = useMemo(
-    () => (quickViewId ? rows.find((row) => row.propertyId === quickViewId) ?? null : null),
-    [quickViewId, rows]
+    () => (quickViewId ? (data?.comps ?? []).find((row) => row.propertyId === quickViewId) ?? null : null),
+    [quickViewId, data]
   );
 
   return (
@@ -1258,12 +1355,12 @@ export default function YieldMapPage() {
               label="Deals with yield"
               value={yieldRows.length}
               sub={
-                geoRows.length < yieldRows.length
-                  ? `${geoRows.length} mapped · ${yieldRows.length - geoRows.length} missing geocode`
-                  : `${geoRows.length} mapped`
+                calcGeoRows.length < yieldRows.length
+                  ? `${calcGeoRows.length} mapped · ${yieldRows.length - calcGeoRows.length} missing geocode`
+                  : `${calcGeoRows.length} mapped`
               }
               title={
-                geoRows.length < yieldRows.length
+                calcGeoRows.length < yieldRows.length
                   ? "Mapped deals have coordinates. Deals missing a geocode still count in the stats — run enrichment on them to place them on the map."
                   : "Every deal with a usable yield is geocoded and on the map."
               }
@@ -1325,6 +1422,15 @@ export default function YieldMapPage() {
                 label="Yield data flags"
                 value={flaggedRows.length}
                 sub="0% / $0 NOI — excluded from stats"
+              />
+            ) : null}
+            {excludedAvailable > 0 ? (
+              <StatCard
+                tone="neutral"
+                label="Scrubbed from calcs"
+                value={excludedAvailable}
+                sub={showExcluded ? "shown muted on the map" : "hidden — toggle ‘Excluded’"}
+                title="Properties manually excluded from yield-map calculations (e.g. rent-stabilized buildings). They never count toward medians, averages, or area stats."
               />
             ) : null}
           </div>
@@ -1480,6 +1586,30 @@ export default function YieldMapPage() {
                   />
                   Awaiting review
                   {pendingAvailable > 0 ? <span className={styles.compToggleNote}>{pendingAvailable}</span> : null}
+                </label>
+                <label
+                  className={styles.compToggle}
+                  title="Deals rejected on the deal-progress board stay out of the map, tables, and medians by default, keeping the cap-rate read on free-market availability. Toggle them back in — while shown they count in the stats."
+                >
+                  <input
+                    type="checkbox"
+                    checked={showRejected}
+                    onChange={(event) => setShowRejected(event.target.checked)}
+                  />
+                  Rejected
+                  {rejectedAvailable > 0 ? <span className={styles.compToggleNote}>{rejectedAvailable}</span> : null}
+                </label>
+                <label
+                  className={styles.compToggle}
+                  title="Properties manually scrubbed from yield calculations (✂ on a deal row — e.g. rent-stabilized buildings that would distort free-market cap rates). They never count toward medians, averages, or area stats; toggle to show them muted for review or re-inclusion."
+                >
+                  <input
+                    type="checkbox"
+                    checked={showExcluded}
+                    onChange={(event) => setShowExcluded(event.target.checked)}
+                  />
+                  Excluded
+                  {excludedAvailable > 0 ? <span className={styles.compToggleNote}>{excludedAvailable}</span> : null}
                 </label>
                 <div className={styles.legendList}>
                   {legendBands.map((band) => (
@@ -1671,6 +1801,11 @@ export default function YieldMapPage() {
                     <SortableTh label="$/Unit" sortKey="pricePerUnit" activeKey={dealSort.sortKey} direction={dealSort.sortDir} onToggle={dealSort.toggle} />
                     <SortableTh label="$/SF" sortKey="psf" activeKey={dealSort.sortKey} direction={dealSort.sortDir} onToggle={dealSort.toggle} />
                     <SortableTh label="Stage" sortKey="stage" firstDir="asc" activeKey={dealSort.sortKey} direction={dealSort.sortDir} onToggle={dealSort.toggle} />
+                    <th
+                      className={styles.actionTh}
+                      aria-label="Yield calculation inclusion"
+                      title="Scrub a property out of yield-map calculations (medians, averages, area stats). The designation persists with the property."
+                    />
                   </tr>
                 </thead>
                 <tbody>
@@ -1679,7 +1814,14 @@ export default function YieldMapPage() {
                       <tr
                         key={entry.rowId}
                         id={`yield-row-${entry.rowId}`}
-                        className={activePinId === entry.rowId ? styles.rowActive : undefined}
+                        className={
+                          [
+                            entry.deal.yieldMapExcluded ? styles.rowExcluded : null,
+                            activePinId === entry.rowId ? styles.rowActive : null,
+                          ]
+                            .filter(Boolean)
+                            .join(" ") || undefined
+                        }
                         onMouseEnter={() => {
                           hoverSourceRef.current = "table";
                           setActivePinId(entry.rowId);
@@ -1730,9 +1872,28 @@ export default function YieldMapPage() {
                             <Badge tone="warning" title="OM extraction awaiting review">
                               awaiting review
                             </Badge>
+                          ) : isRejectedRow(entry.deal) ? (
+                            <Badge tone="danger" title="Rejected on the deal-progress board — shown because the Rejected toggle is on.">
+                              rejected
+                            </Badge>
                           ) : (
                             boardStageLabel(entry.deal)
                           )}
+                        </td>
+                        <td className={styles.actionCell}>
+                          <button
+                            type="button"
+                            className={styles.excludeButton}
+                            disabled={exclusionBusyId === entry.deal.propertyId}
+                            onClick={() => void toggleExclusion(entry.deal)}
+                            title={
+                              entry.deal.yieldMapExcluded
+                                ? "Excluded from yield-map calculations. Click to count this property again — the designation persists with the property."
+                                : "Scrub this property out of yield-map calculations (medians, averages, area stats) — e.g. rent-stabilized buildings. Persists with the property until re-included."
+                            }
+                          >
+                            {entry.deal.yieldMapExcluded ? "↺ include" : "✂ exclude"}
+                          </button>
                         </td>
                       </tr>
                     ) : (
@@ -1782,12 +1943,13 @@ export default function YieldMapPage() {
                           {formatCurrencyExact(entry.comp.pricePsf)}
                         </td>
                         <td className={styles.stageCell}>{packageTypeLabel(entry.comp.packageType)}</td>
+                        <td className={styles.actionCell} />
                       </tr>
                     )
                   )}
                   {dealSort.sorted.length === 0 ? (
                     <tr className={styles.emptyRow}>
-                      <td colSpan={9}>
+                      <td colSpan={10}>
                         No deals with calculated yields yet — run OM analysis or compute scores to populate the living database.
                       </td>
                     </tr>
@@ -1812,6 +1974,19 @@ export default function YieldMapPage() {
         footer={
           quickViewRow ? (
             <>
+              <button
+                type="button"
+                className={styles.quickViewActionSecondary}
+                disabled={exclusionBusyId === quickViewRow.propertyId}
+                onClick={() => void toggleExclusion(quickViewRow)}
+                title={
+                  quickViewRow.yieldMapExcluded
+                    ? "Count this property in yield-map calculations again."
+                    : "Scrub this property out of yield-map calculations (medians, averages, area stats). Persists with the property."
+                }
+              >
+                {quickViewRow.yieldMapExcluded ? "↺ Include in yield calcs" : "✂ Exclude from yield calcs"}
+              </button>
               <a className={styles.quickViewAction} href={`/pipeline?propertyId=${encodeURIComponent(quickViewRow.propertyId)}`}>
                 Open property wizard →
               </a>
@@ -1835,6 +2010,12 @@ export default function YieldMapPage() {
             ) : null}
             {quickViewRow.yieldFlagDetail ? (
               <div className={styles.quickViewNotice}>⚠ {quickViewRow.yieldFlagDetail}</div>
+            ) : null}
+            {quickViewRow.yieldMapExcluded ? (
+              <div className={styles.quickViewNotice}>
+                ✂ Excluded from yield-map calculations — this property never counts toward medians, averages, or
+                area stats until re-included.
+              </div>
             ) : null}
             <dl className={styles.quickViewGrid}>
               <div>

@@ -19,6 +19,7 @@ import type {
   UiV2SavedDealsListResponse,
 } from "@re-sourcing/contracts";
 import { getPool, UserProfileRepo } from "@re-sourcing/db";
+import { deriveBoardPipelineStatus } from "../deal/boardPipelineStatus.js";
 import { resolveEffectiveDealScore } from "../deal/effectiveDealScore.js";
 import { returnRateToPctPoints } from "../deal/irrCalculation.js";
 import {
@@ -41,37 +42,6 @@ const MAX_LIMIT = 250;
 const PROGRESS_SECTION_LIMIT = 250;
 
 const DEAL_STATUSES = new Set<DealStatus>(["new", "interesting", "saved", "dossier_generated", "rejected"]);
-const UI_V2_STATUSES = new Set<UiV2PipelineStatus>([
-  "new",
-  "screening",
-  "interesting",
-  "saved",
-  "underwriting",
-  "tour_scheduled",
-  "tour_completed_awaiting_inputs",
-  "outreach",
-  "awaiting_broker",
-  "om_received",
-  "dossier_generated",
-  "offer_review",
-  "negotiation",
-  "contract_signed",
-  "deal_closed",
-  "rejected",
-  "archived",
-]);
-const DEAL_PATH_PIPELINE_STATUSES = new Set<UiV2PipelineStatus>([
-  "tour_scheduled",
-  "tour_completed_awaiting_inputs",
-]);
-const DEAL_PATH_BLOCKING_STATUSES = new Set<UiV2PipelineStatus>([
-  "offer_review",
-  "negotiation",
-  "contract_signed",
-  "deal_closed",
-  "rejected",
-  "archived",
-]);
 
 type JsonRecord = Record<string, unknown>;
 
@@ -338,32 +308,6 @@ function readPipeline(details: JsonRecord | null): JsonRecord {
   return isJsonRecord(details?.pipeline) ? details.pipeline : {};
 }
 
-function deriveDealPathPipelineStatus(pipeline: JsonRecord, currentStatus: UiV2PipelineStatus | null): UiV2PipelineStatus | null {
-  if (currentStatus != null && DEAL_PATH_BLOCKING_STATUSES.has(currentStatus)) return null;
-  const dealPath = isJsonRecord(pipeline.dealPath) ? pipeline.dealPath : null;
-  if (dealPath == null) return null;
-  // "canceled" = the deal was explicitly moved out of the tour/offer flow;
-  // its dates and decision stop steering the board until a new signal lands.
-  if (stringOrNull(dealPath.status) === "canceled") return null;
-  const postTourDecision = stringOrNull(dealPath.postTourDecision);
-  if (postTourDecision === "reject") return null;
-  if (postTourDecision === "move_forward") return "offer_review";
-  if (postTourDecision === "need_more_info") return "tour_completed_awaiting_inputs";
-  const rawStatus = stringOrNull(dealPath.status);
-  const tourCompletedAt = stringOrNull(dealPath.tourCompletedAt);
-  const tourScheduledAt = stringOrNull(dealPath.tourScheduledAt);
-  if (tourCompletedAt || rawStatus === "tour_completed_awaiting_inputs") return "tour_completed_awaiting_inputs";
-  if (tourScheduledAt) {
-    const scheduledMs = Date.parse(tourScheduledAt);
-    return Number.isFinite(scheduledMs) && scheduledMs <= Date.now()
-      ? "tour_completed_awaiting_inputs"
-      : "tour_scheduled";
-  }
-  return rawStatus != null && DEAL_PATH_PIPELINE_STATUSES.has(rawStatus as UiV2PipelineStatus)
-    ? (rawStatus as UiV2PipelineStatus)
-    : null;
-}
-
 function readTags(details: JsonRecord | null): string[] {
   const pipeline = readPipeline(details);
   const source = Array.isArray(pipeline.tags) ? pipeline.tags : Array.isArray(details?.tags) ? details.tags : [];
@@ -511,57 +455,12 @@ function readFirstImageUrl(row: SavedProgressBaseRow): string | null {
   return typeof image === "string" ? image.trim() : null;
 }
 
-function mapLegacyStatus(status: string | null): UiV2PipelineStatus {
-  const direct = status != null && UI_V2_STATUSES.has(status as UiV2PipelineStatus) ? (status as UiV2PipelineStatus) : null;
-  if (direct != null) return direct;
-  switch (status) {
-    case "enrichment_running":
-    case "enrichment_complete":
-      return "screening";
-    case "needs_om":
-    case "om_requested":
-      return "outreach";
-    case "follow_up_needed":
-      return "awaiting_broker";
-    case "om_received":
-      return "om_received";
-    case "underwriting":
-      return "underwriting";
-    case "saved_watchlist":
-      return "saved";
-    case "loi_sent":
-      return "offer_review";
-    case "negotiation":
-      return "negotiation";
-    case "contract_signed":
-    case "diligence_escrow":
-      return "contract_signed";
-    case "closed":
-      return "deal_closed";
-    case "rejected_removed":
-      return "rejected";
-    default:
-      return "new";
-  }
-}
-
 function deriveStatus(row: SavedProgressBaseRow): UiV2PipelineStatus {
-  const details = row.details;
-  const pipeline = readPipeline(details);
-  if (row.rejected_at != null || stringOrNull(pipeline.rejectedAt) != null || pipeline.status === "rejected_removed") {
-    return "rejected";
-  }
-  const uiStatus = stringOrNull(pipeline.uiV2Status);
-  const currentStatus = uiStatus != null && UI_V2_STATUSES.has(uiStatus as UiV2PipelineStatus)
-    ? (uiStatus as UiV2PipelineStatus)
-    : null;
-  const dealPathStatus = deriveDealPathPipelineStatus(pipeline, currentStatus);
-  if (dealPathStatus != null) return dealPathStatus;
-  if (currentStatus != null) return currentStatus;
-  if (row.saved_deal_status === "dossier_generated") return "dossier_generated";
-  if (row.saved_deal_status === "rejected") return "rejected";
-  if (row.saved_deal_status === "saved") return "saved";
-  return mapLegacyStatus(stringOrNull(pipeline.status));
+  return deriveBoardPipelineStatus({
+    details: row.details,
+    hasActiveRejection: row.rejected_at != null,
+    savedDealStatus: typeof row.saved_deal_status === "string" ? row.saved_deal_status : null,
+  });
 }
 
 function deriveOmStatus(row: SavedProgressBaseRow): string {
