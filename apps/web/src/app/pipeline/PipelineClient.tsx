@@ -14,6 +14,14 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { MailPlus, Star, X } from "lucide-react";
 import { AnchoredPopover, BrokerContactDialog, ConfirmDialog, Dialog, FileDropzone, StageChip, type BrokerSearchCandidate } from "@/components/ui";
+import {
+  PIPELINE_COLUMNS,
+  PIPELINE_COLUMNS_STORAGE_KEY,
+  isLockedPipelineColumn,
+  pipelineTableMinWidth,
+  type PipelineColumnId,
+} from "./pipelineColumns";
+import { usePersistedIdSet } from "@/lib/useColumnPrefs";
 import { useProcessBanner } from "@/components/ProcessBanner";
 import { runBulkPropertyAction } from "@/lib/bulkPropertyActions";
 import {
@@ -1375,6 +1383,18 @@ export default function PipelineClient() {
   const [linkListingDraft, setLinkListingDraft] = useState<{ url: string; saving: boolean } | null>(null);
   const [headerMenu, setHeaderMenu] = useState<PipelineHeaderMenuId | null>(null);
   const [rowMenu, setRowMenu] = useState<RowActionMenuState | null>(null);
+  // Column visibility: persisted set of hidden column ids. Until the
+  // localStorage value hydrates, every column renders so SSR and the first
+  // client paint agree.
+  const hiddenColumnPrefs = usePersistedIdSet(PIPELINE_COLUMNS_STORAGE_KEY);
+  const [columnsMenuAnchor, setColumnsMenuAnchor] = useState<HTMLElement | null>(null);
+  const showColumn = useCallback(
+    (id: PipelineColumnId) =>
+      !hiddenColumnPrefs.hydrated || isLockedPipelineColumn(id) || !hiddenColumnPrefs.ids.has(id),
+    [hiddenColumnPrefs.hydrated, hiddenColumnPrefs.ids]
+  );
+  const visibleColumns = useMemo(() => PIPELINE_COLUMNS.filter((column) => showColumn(column.id)), [showColumn]);
+  const hiddenColumnDefs = useMemo(() => PIPELINE_COLUMNS.filter((column) => !showColumn(column.id)), [showColumn]);
   const [brokerPrompt, setBrokerPrompt] = useState<{
     propertyId: string;
     address: string;
@@ -3992,6 +4012,19 @@ export default function PipelineClient() {
           <button className={styles.ghostButton} type="button" onClick={clearFilters}>
             Reset
           </button>
+          <button
+            className={styles.ghostButton}
+            type="button"
+            aria-haspopup="dialog"
+            aria-expanded={columnsMenuAnchor != null}
+            title="Choose which table columns are visible"
+            onClick={(event) => {
+              const anchorEl = event.currentTarget;
+              setColumnsMenuAnchor((current) => (current ? null : anchorEl));
+            }}
+          >
+            Columns{hiddenColumnDefs.length > 0 ? ` · ${hiddenColumnDefs.length} hidden` : ""}
+          </button>
         </div>
       </form>
 
@@ -4091,32 +4124,66 @@ export default function PipelineClient() {
         </div>
       </div>
 
+      {hiddenColumnDefs.length > 0 ? (
+        <div className={styles.hiddenColumnsRail} aria-label="Hidden columns">
+          <span className={styles.hiddenColumnsLabel}>Hidden columns</span>
+          {hiddenColumnDefs.map((column) => (
+            <button
+              key={column.id}
+              type="button"
+              className={`${styles.hiddenColumnChip} anim-card-enter`}
+              title={`Show the ${column.label} column`}
+              onClick={() => hiddenColumnPrefs.remove(column.id)}
+            >
+              + {column.label}
+            </button>
+          ))}
+          <button type="button" className={styles.hiddenColumnsShowAll} onClick={hiddenColumnPrefs.clear}>
+            Show all
+          </button>
+        </div>
+      ) : null}
+
+      <AnchoredPopover
+        open={columnsMenuAnchor != null}
+        anchorEl={columnsMenuAnchor}
+        onClose={() => setColumnsMenuAnchor(null)}
+        placement="bottom-end"
+        role="dialog"
+        ariaLabel="Choose visible columns"
+        className={styles.columnsPopover}
+      >
+        <div className={styles.columnsPopoverHead}>
+          <span className={styles.kicker}>Columns</span>
+          <button
+            type="button"
+            className={styles.linkButton}
+            disabled={hiddenColumnDefs.length === 0}
+            onClick={hiddenColumnPrefs.clear}
+          >
+            Show all
+          </button>
+        </div>
+        <div className={styles.columnsPopoverList}>
+          {PIPELINE_COLUMNS.filter((column) => !column.locked).map((column) => (
+            <label key={column.id} className={styles.columnsPopoverItem}>
+              <input
+                type="checkbox"
+                checked={showColumn(column.id)}
+                onChange={() => hiddenColumnPrefs.toggle(column.id)}
+              />
+              <span>{column.label}</span>
+            </label>
+          ))}
+        </div>
+      </AnchoredPopover>
+
       <section className={styles.tableShell} aria-busy={loading}>
-        <table className={styles.pipelineTable}>
+        <table className={styles.pipelineTable} style={{ minWidth: pipelineTableMinWidth(visibleColumns) }}>
           <colgroup>
-            <col className={styles.colSelect} />
-            <col className={styles.colStar} />
-            <col className={styles.colAddress} />
-            <col className={styles.colStage} />
-            <col className={styles.colSource} />
-            <col className={styles.colPropertyType} />
-            <col className={styles.colType} />
-            <col className={styles.colDate} />
-            <col className={styles.colDate} />
-            <col className={styles.colDate} />
-            <col className={styles.colAsk} />
-            <col className={styles.colPsf} />
-            <col className={styles.colYoc} />
-            <col className={styles.colYoc} />
-            <col className={styles.colUnit} />
-            <col className={styles.colSqft} />
-            <col className={styles.colScore} />
-            <col className={styles.colStatus} />
-            <col className={styles.colOm} />
-            <col className={styles.colEnrich} />
-            <col className={styles.colFlow} />
-            <col className={styles.colTags} />
-            <col className={styles.colAction} />
+            {visibleColumns.map((column) => (
+              <col key={column.id} className={styles[column.colClass]} />
+            ))}
           </colgroup>
           <thead>
             <tr>
@@ -4130,25 +4197,25 @@ export default function PipelineClient() {
               </th>
               <th className={styles.starColumn} aria-label="Saved deal" />
               <th>{renderHeader("address", "Address")}</th>
-              <th>{renderHeader("stage", "Stage")}</th>
-              <th>{renderHeader("source", "Source")}</th>
-              <th>{renderHeader("propertyType", "Property Type")}</th>
-              <th>{renderHeader("marketType", "Market")}</th>
-              <th>{renderHeader("listedAt", "Date Listed")}</th>
-              <th>{renderHeader("createdAt", "Date Added")}</th>
-              <th>{renderHeader("updatedAt", "Updated")}</th>
-              <th>{renderHeader("askingPrice", "Ask")}</th>
-              <th>{renderHeader("pricePerSqft", "$/SF")}</th>
-              <th>{renderHeader("ltrYocPct", "YoC LTR")}</th>
-              <th>{renderHeader("mtrYocPct", "YoC MTR")}</th>
-              <th>{renderHeader("units", "Units")}</th>
-              <th>{renderHeader("buildingSqft", "SF")}</th>
-              <th>{renderHeader("dealScore", "Score")}</th>
-              <th>{renderHeader("status", "Status")}</th>
-              <th>{renderHeader("om", "Tracker")}</th>
-              <th>{renderHeader("enrichment", "Enrich")}</th>
-              <th>{renderHeader("flow", "Flow")}</th>
-              <th>{renderHeader("tags", "Tags")}</th>
+              {showColumn("stage") ? <th>{renderHeader("stage", "Stage")}</th> : null}
+              {showColumn("source") ? <th>{renderHeader("source", "Source")}</th> : null}
+              {showColumn("propertyType") ? <th>{renderHeader("propertyType", "Property Type")}</th> : null}
+              {showColumn("marketType") ? <th>{renderHeader("marketType", "Market")}</th> : null}
+              {showColumn("listedAt") ? <th>{renderHeader("listedAt", "Date Listed")}</th> : null}
+              {showColumn("createdAt") ? <th>{renderHeader("createdAt", "Date Added")}</th> : null}
+              {showColumn("updatedAt") ? <th>{renderHeader("updatedAt", "Updated")}</th> : null}
+              {showColumn("ask") ? <th>{renderHeader("askingPrice", "Ask")}</th> : null}
+              {showColumn("psf") ? <th>{renderHeader("pricePerSqft", "$/SF")}</th> : null}
+              {showColumn("yocLtr") ? <th>{renderHeader("ltrYocPct", "YoC LTR")}</th> : null}
+              {showColumn("yocMtr") ? <th>{renderHeader("mtrYocPct", "YoC MTR")}</th> : null}
+              {showColumn("units") ? <th>{renderHeader("units", "Units")}</th> : null}
+              {showColumn("sqft") ? <th>{renderHeader("buildingSqft", "SF")}</th> : null}
+              {showColumn("score") ? <th>{renderHeader("dealScore", "Score")}</th> : null}
+              {showColumn("status") ? <th>{renderHeader("status", "Status")}</th> : null}
+              {showColumn("tracker") ? <th>{renderHeader("om", "Tracker")}</th> : null}
+              {showColumn("enrich") ? <th>{renderHeader("enrichment", "Enrich")}</th> : null}
+              {showColumn("flow") ? <th>{renderHeader("flow", "Flow")}</th> : null}
+              {showColumn("tags") ? <th>{renderHeader("tags", "Tags")}</th> : null}
               <th>{renderHeader("actions", "Action")}</th>
             </tr>
           </thead>
@@ -4231,111 +4298,149 @@ export default function PipelineClient() {
                       </div>
                     </div>
                   </td>
-                  <td className={styles.stageCell}>
-                    <StageChip status={status} />
-                  </td>
-                  <td>{sourceLabel(String(row.source ?? ""))}</td>
-                  <td className={styles.propertyTypeCell}>{titleize(row.propertyType)}</td>
-                  <td onClick={stopRowClick}>
-                    <select
-                      className={styles.typeSelect}
-                      value={row.marketType ?? "unknown"}
-                      disabled={busyAction === `${row.propertyId}:market-type`}
-                      onChange={(event) => updateMarketType(row, event.target.value as UiV2MarketType)}
-                    >
-                      {MARKET_TYPE_OPTIONS.map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </select>
-                  </td>
-                  <td className={styles.dateCell}>{formatDate(row.listedAt)}</td>
-                  <td className={styles.dateCell}>
-                    <strong>{formatDate(row.createdAt)}</strong>
-                    {rowIsNew ? <span className={styles.newBadge} title={newBadgeTitle(row)}>New</span> : null}
-                  </td>
-                  <td className={styles.dateCell}>{formatDate(row.updatedAt)}</td>
-                  <td className={cx(styles.numericCell, styles.askCell)}>
-                    <strong>{formatCurrency(row.askingPrice)}</strong>
-                    {askActivity ? (
-                      <span
-                        className={`${styles.askActivity} ${askActivity.tone === "cut" ? styles.askActivityCut : askActivity.tone === "raise" ? styles.askActivityRaise : ""}`}
-                        title={askActivity.title}
+                  {showColumn("stage") ? (
+                    <td className={styles.stageCell}>
+                      <StageChip status={status} />
+                    </td>
+                  ) : null}
+                  {showColumn("source") ? (
+                    <td>{sourceLabel(String(row.source ?? ""))}</td>
+                  ) : null}
+                  {showColumn("propertyType") ? (
+                    <td className={styles.propertyTypeCell}>{titleize(row.propertyType)}</td>
+                  ) : null}
+                  {showColumn("marketType") ? (
+                    <td onClick={stopRowClick}>
+                      <select
+                        className={styles.typeSelect}
+                        value={row.marketType ?? "unknown"}
+                        disabled={busyAction === `${row.propertyId}:market-type`}
+                        onChange={(event) => updateMarketType(row, event.target.value as UiV2MarketType)}
                       >
-                        {askActivity.label}
-                      </span>
-                    ) : null}
-                  </td>
-                  <td className={cx(styles.numericCell, flagCellClass(psfFlag))} title={psfFlag?.title}>
-                    {formatCurrency(row.pricePerSqft, false)}
-                  </td>
-                  <td className={cx(styles.numericCell, styles.yocCell, flagCellClass(ltrFlag))} title={ltrFlag?.title}>
-                    <strong>{formatPercent(rowLtrYoc)}</strong>
-                    {ltrFlag ? (
-                      <span className={cx(styles.yocFlag, ltrFlag.severity === "danger" ? styles.yocFlagDanger : styles.yocFlagWarn)}>
-                        {ltrFlag.label}
-                      </span>
-                    ) : null}
-                  </td>
-                  <td className={cx(styles.numericCell, styles.yocCell, flagCellClass(mtrFlag))} title={mtrFlag?.title}>
-                    <strong>{formatPercent(rowMtrYoc)}</strong>
-                    {mtrFlag ? (
-                      <span className={cx(styles.yocFlag, mtrFlag.severity === "danger" ? styles.yocFlagDanger : styles.yocFlagWarn)}>
-                        {mtrFlag.label}
-                      </span>
-                    ) : null}
-                  </td>
-                  <td className={styles.numericCell}>{formatNumber(row.units)}</td>
-                  <td className={styles.numericCell}>{formatNumber(row.buildingSqft)}</td>
-                  <td className={styles.scoreCell}>
-                    <span className={`${styles.scoreBadge} ${scoreTone(score)}`} title={scoreExplanation(row)}>
-                      {scoreLabel(score)}
-                    </span>
-                  </td>
-                  <td onClick={stopRowClick}>
-                    <select
-                      className={`${styles.statusSelect} ${statusToneClass(row.statusChip.tone)}`}
-                      value={status}
-                      disabled={!row.statusChip.editable || busyAction === `${row.propertyId}:status`}
-                      onChange={(event) =>
-                        updateStatus(row.propertyId, event.target.value as UiV2PipelineStatus, "pipeline_table", event.currentTarget)
-                      }
-                    >
-                      {UI_V2_PIPELINE_STATUS_OPTIONS.map((option) => (
-                        <option key={option.status} value={option.status}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </select>
-                  </td>
-                  <td className={styles.trackerCell}>
-                    <div className={styles.trackerGroup} aria-label={`Tracker for ${row.displayAddress ?? row.canonicalAddress}`}>
-                      {trackerItems.map((item) => (
+                        {MARKET_TYPE_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                  ) : null}
+                  {showColumn("listedAt") ? (
+                    <td className={styles.dateCell}>{formatDate(row.listedAt)}</td>
+                  ) : null}
+                  {showColumn("createdAt") ? (
+                    <td className={styles.dateCell}>
+                      <strong>{formatDate(row.createdAt)}</strong>
+                      {rowIsNew ? <span className={styles.newBadge} title={newBadgeTitle(row)}>New</span> : null}
+                    </td>
+                  ) : null}
+                  {showColumn("updatedAt") ? (
+                    <td className={styles.dateCell}>{formatDate(row.updatedAt)}</td>
+                  ) : null}
+                  {showColumn("ask") ? (
+                    <td className={cx(styles.numericCell, styles.askCell)}>
+                      <strong>{formatCurrency(row.askingPrice)}</strong>
+                      {askActivity ? (
                         <span
-                          key={item.key}
-                          className={cx(styles.trackerChip, trackerToneClass(item.tone))}
-                          title={item.title}
+                          className={`${styles.askActivity} ${askActivity.tone === "cut" ? styles.askActivityCut : askActivity.tone === "raise" ? styles.askActivityRaise : ""}`}
+                          title={askActivity.title}
                         >
-                          {item.label}
+                          {askActivity.label}
+                        </span>
+                      ) : null}
+                    </td>
+                  ) : null}
+                  {showColumn("psf") ? (
+                    <td className={cx(styles.numericCell, flagCellClass(psfFlag))} title={psfFlag?.title}>
+                      {formatCurrency(row.pricePerSqft, false)}
+                    </td>
+                  ) : null}
+                  {showColumn("yocLtr") ? (
+                    <td className={cx(styles.numericCell, styles.yocCell, flagCellClass(ltrFlag))} title={ltrFlag?.title}>
+                      <strong>{formatPercent(rowLtrYoc)}</strong>
+                      {ltrFlag ? (
+                        <span className={cx(styles.yocFlag, ltrFlag.severity === "danger" ? styles.yocFlagDanger : styles.yocFlagWarn)}>
+                          {ltrFlag.label}
+                        </span>
+                      ) : null}
+                    </td>
+                  ) : null}
+                  {showColumn("yocMtr") ? (
+                    <td className={cx(styles.numericCell, styles.yocCell, flagCellClass(mtrFlag))} title={mtrFlag?.title}>
+                      <strong>{formatPercent(rowMtrYoc)}</strong>
+                      {mtrFlag ? (
+                        <span className={cx(styles.yocFlag, mtrFlag.severity === "danger" ? styles.yocFlagDanger : styles.yocFlagWarn)}>
+                          {mtrFlag.label}
+                        </span>
+                      ) : null}
+                    </td>
+                  ) : null}
+                  {showColumn("units") ? (
+                    <td className={styles.numericCell}>{formatNumber(row.units)}</td>
+                  ) : null}
+                  {showColumn("sqft") ? (
+                    <td className={styles.numericCell}>{formatNumber(row.buildingSqft)}</td>
+                  ) : null}
+                  {showColumn("score") ? (
+                    <td className={styles.scoreCell}>
+                      <span className={`${styles.scoreBadge} ${scoreTone(score)}`} title={scoreExplanation(row)}>
+                        {scoreLabel(score)}
+                      </span>
+                    </td>
+                  ) : null}
+                  {showColumn("status") ? (
+                    <td onClick={stopRowClick}>
+                      <select
+                        className={`${styles.statusSelect} ${statusToneClass(row.statusChip.tone)}`}
+                        value={status}
+                        disabled={!row.statusChip.editable || busyAction === `${row.propertyId}:status`}
+                        onChange={(event) =>
+                          updateStatus(row.propertyId, event.target.value as UiV2PipelineStatus, "pipeline_table", event.currentTarget)
+                        }
+                      >
+                        {UI_V2_PIPELINE_STATUS_OPTIONS.map((option) => (
+                          <option key={option.status} value={option.status}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                  ) : null}
+                  {showColumn("tracker") ? (
+                    <td className={styles.trackerCell}>
+                      <div className={styles.trackerGroup} aria-label={`Tracker for ${row.displayAddress ?? row.canonicalAddress}`}>
+                        {trackerItems.map((item) => (
+                          <span
+                            key={item.key}
+                            className={cx(styles.trackerChip, trackerToneClass(item.tone))}
+                            title={item.title}
+                          >
+                            {item.label}
+                          </span>
+                        ))}
+                      </div>
+                    </td>
+                  ) : null}
+                  {showColumn("enrich") ? (
+                    <td>
+                      <span className={`${styles.tinyChip} ${statusToneClass(row.enrichmentState?.status === "complete" ? "success" : row.enrichmentState?.status === "failed" ? "danger" : "neutral")}`}>
+                        {titleize(row.enrichmentState?.status)}
+                      </span>
+                    </td>
+                  ) : null}
+                  {showColumn("flow") ? (
+                    <td>{flowLabel(row)}</td>
+                  ) : null}
+                  {showColumn("tags") ? (
+                    <td className={styles.tagsCell}>
+                      {displayTags.slice(0, 3).map((tag) => (
+                        <span className={cx(styles.tagChip, tagToneClass(tag))} key={tag}>
+                          {tagLabel(tag)}
                         </span>
                       ))}
-                    </div>
-                  </td>
-                  <td>
-                    <span className={`${styles.tinyChip} ${statusToneClass(row.enrichmentState?.status === "complete" ? "success" : row.enrichmentState?.status === "failed" ? "danger" : "neutral")}`}>
-                      {titleize(row.enrichmentState?.status)}
-                    </span>
-                  </td>
-                  <td>{flowLabel(row)}</td>
-                  <td className={styles.tagsCell}>
-                    {displayTags.slice(0, 3).map((tag) => (
-                      <span className={cx(styles.tagChip, tagToneClass(tag))} key={tag}>
-                        {tagLabel(tag)}
-                      </span>
-                    ))}
-                    {displayTags.length > 3 ? <span className={styles.tagMore}>+{displayTags.length - 3}</span> : null}
-                  </td>
+                      {displayTags.length > 3 ? <span className={styles.tagMore}>+{displayTags.length - 3}</span> : null}
+                    </td>
+                  ) : null}
                   <td onClick={stopRowClick}>
                     <div className={styles.actionGroup}>
                       <button

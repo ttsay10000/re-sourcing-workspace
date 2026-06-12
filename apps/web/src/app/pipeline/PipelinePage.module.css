@@ -185,6 +185,101 @@
   padding: 0.45rem;
 }
 
+/* ── Column visibility: manager popover + hidden-column toggles ─── */
+
+.columnsPopover {
+  width: 15.5rem;
+  padding: 0.7rem 0.8rem;
+}
+
+.columnsPopoverHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  margin-bottom: 0.55rem;
+}
+
+.columnsPopoverList {
+  display: grid;
+  gap: 0.1rem;
+}
+
+.columnsPopoverItem {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3rem 0.4rem;
+  border-radius: var(--radius-md, 8px);
+  font-size: var(--text-xs);
+  font-weight: 550;
+  color: var(--app-ink, #18181b);
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.columnsPopoverItem:hover {
+  background: var(--brand-soft, #f0fdfa);
+}
+
+.columnsPopoverItem input {
+  accent-color: var(--brand, #0f766e);
+}
+
+/* Slim rail of "little toggles" for hidden columns, above the table. */
+.hiddenColumnsRail {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.6rem;
+}
+
+.hiddenColumnsLabel {
+  color: var(--app-muted, #71717a);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  letter-spacing: var(--tracking-label, 0.08em);
+  text-transform: uppercase;
+}
+
+.hiddenColumnChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  border: 1px dashed var(--app-line-strong, #d4d4d8);
+  border-radius: 999px;
+  padding: 0.22rem 0.6rem;
+  background: var(--app-surface, #fff);
+  color: var(--app-ink-secondary, #52525b);
+  font-size: var(--text-2xs);
+  font-weight: 650;
+  cursor: pointer;
+  transition: border-color 130ms ease, background 130ms ease, color 130ms ease;
+}
+
+.hiddenColumnChip:hover {
+  border-color: var(--brand-border, #99f6e4);
+  background: var(--brand-soft, #f0fdfa);
+  color: var(--brand-strong, #115e59);
+}
+
+.hiddenColumnsShowAll {
+  border: 0;
+  background: transparent;
+  color: var(--app-muted, #71717a);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  cursor: pointer;
+  padding: 0.22rem 0.4rem;
+  border-radius: 6px;
+}
+
+.hiddenColumnsShowAll:hover {
+  background: rgba(0, 0, 0, 0.05);
+  color: var(--app-ink, #18181b);
+}
+
 /* Compact anchored reject form — opens beside the trigger. */
 .rejectPopover {
   width: min(22rem, calc(100vw - 16px));
@@ -406,9 +501,9 @@
   box-shadow: var(--app-shadow-xs);
 }
 
+/* min-width is set inline from the visible-column registry. */
 .pipelineTable {
   width: 100%;
-  min-width: 2356px;
   border-collapse: collapse;
   table-layout: fixed;
   font-size: var(--text-xs);
