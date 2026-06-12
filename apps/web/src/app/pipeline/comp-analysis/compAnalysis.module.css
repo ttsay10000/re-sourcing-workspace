@@ -233,13 +233,13 @@
 .queueTitle {
   font-size: 0.88rem;
   font-weight: 800;
-  color: #92400e;
+  color: var(--app-amber-text);
 }
 
 .queueCounts {
   font-size: 0.74rem;
   font-weight: 650;
-  color: #b45309;
+  color: var(--app-amber-text);
 }
 
 .queueBulk {
@@ -252,7 +252,7 @@
 .queueHint {
   margin: 0;
   font-size: 0.74rem;
-  color: #92400e;
+  color: var(--app-amber-text);
 }
 
 .queueTableWrap {
@@ -292,7 +292,7 @@
   display: inline-block;
   font-size: 0.64rem;
   font-weight: 750;
-  color: #92400e;
+  color: var(--app-amber-text);
   background: #fef3c7;
   border: 1px solid #fde68a;
   border-radius: var(--radius-pill, 999px);

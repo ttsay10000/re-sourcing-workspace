@@ -464,7 +464,7 @@
   background: #fffbeb;
   padding: 0.6rem 0.8rem;
   font-size: 0.8rem;
-  color: #92400e;
+  color: var(--app-amber-text);
 }
 
 .queueLink {
