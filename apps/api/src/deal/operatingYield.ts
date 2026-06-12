@@ -10,6 +10,15 @@
 
 export type OperatingYieldFlag = "zero_noi" | "zero_cap_signal" | "negative_yield";
 
+/**
+ * Pricing bases an LTR yield can be quoted on:
+ * - "listed": the marketed ask (OM asking price, else the matched listing's price).
+ * - "whisper": the latest broker whisper price / pricing opinion on file.
+ * - "user": manually entered / negotiated pricing (the underwriting basis —
+ *   stored deal signals are computed on this price).
+ */
+export type LtrAskSource = "listed" | "whisper" | "user";
+
 export interface OperatingYieldInput {
   /** Latest deal_signals.asset_cap_rate (already in percent, e.g. 5.8). */
   signalLtrPct: number | null;
@@ -66,6 +75,23 @@ export function resolveOperatingYield(input: OperatingYieldInput): OperatingYiel
     flag,
     flagDetail: flag ? FLAG_DETAILS[flag] : null,
   };
+}
+
+/**
+ * Yield on one explicit pricing basis, with no stored-signal shortcut and no
+ * cross-basis price fallback. A missing price (or missing NOI) is not a data
+ * error — the basis simply has no yield (null, unflagged) — while a $0 or
+ * negative computation carries the same data-quality flags as
+ * resolveOperatingYield.
+ */
+export function deriveBasisYield(noi: number | null, ask: number | null): OperatingYieldResult {
+  if (noi == null || ask == null || ask <= 0) {
+    return { ltrYieldPct: null, yieldSource: null, flag: null, flagDetail: null };
+  }
+  const pct = (noi / ask) * 100;
+  if (pct > 0) return { ltrYieldPct: pct, yieldSource: "derived", flag: null, flagDetail: null };
+  const flag: OperatingYieldFlag = pct < 0 ? "negative_yield" : "zero_noi";
+  return { ltrYieldPct: null, yieldSource: null, flag, flagDetail: FLAG_DETAILS[flag] };
 }
 
 /** Secondary rates (MTR/adjusted cap) get the same zero-is-not-a-rate guard. */
