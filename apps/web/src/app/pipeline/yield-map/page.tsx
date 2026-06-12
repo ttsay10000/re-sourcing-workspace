@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Badge, Dialog, PageHeader, SortableTh, StatCard, useTableSort } from "@/components/ui";
 import { dealFlowStageForStatus } from "@re-sourcing/contracts";
 import { API_BASE } from "@/lib/api";
+import { useProcessBanner, useProcessEntries } from "@/components/ProcessBanner";
 import { formatPercent, formatCurrencyCompact, formatCurrencyExact, labelFromKey, EMPTY_VALUE } from "@/lib/format";
 import styles from "./yieldMap.module.css";
 import { YieldMapCanvas, type MapPin, type AreaStat, type HollowPin, type MarketHood } from "./YieldMapCanvas";
@@ -463,6 +464,8 @@ type TableEntry =
   | { kind: "comp"; rowId: string; comp: MarketComp };
 
 export default function YieldMapPage() {
+  const processBanner = useProcessBanner();
+  const { dismiss: dismissBanner } = useProcessEntries();
   const [data, setData] = useState<CompsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -502,7 +505,9 @@ export default function YieldMapPage() {
 
   const metric: Metric = colorBy === "psf" ? "psf" : "capRate";
 
-  const loadDeals = useCallback(async (options?: { signal?: AbortSignal; initial?: boolean }) => {
+  // Resolves true on success, false on failure, null when aborted — the
+  // initial-load banner needs to report the real outcome.
+  const loadDeals = useCallback(async (options?: { signal?: AbortSignal; initial?: boolean }): Promise<boolean | null> => {
     if (options?.initial) setLoading(true);
     try {
       // Pending (awaiting-review) rows always come back; the toggle filters client-side.
@@ -514,9 +519,11 @@ export default function YieldMapPage() {
       if (!res.ok || payload.error) throw new Error(payload.error || `HTTP ${res.status}`);
       setData(payload);
       setError(null);
+      return true;
     } catch (err) {
-      if (err instanceof DOMException && err.name === "AbortError") return;
+      if (err instanceof DOMException && err.name === "AbortError") return null;
       setError(err instanceof Error ? err.message : "Failed to load yield map.");
+      return false;
     } finally {
       if (options?.initial) setLoading(false);
     }
@@ -573,9 +580,24 @@ export default function YieldMapPage() {
 
   useEffect(() => {
     const controller = new AbortController();
-    void loadDeals({ signal: controller.signal, initial: true }).then(() => setLastRefreshedAt(new Date()));
-    return () => controller.abort();
-  }, [loadDeals]);
+    let settled = false;
+    const banner = processBanner.start("Yield map data", {
+      message: "Loading flagged comps and market overlays…",
+    });
+    void loadDeals({ signal: controller.signal, initial: true }).then((ok) => {
+      if (controller.signal.aborted || ok == null) return;
+      settled = true;
+      setLastRefreshedAt(new Date());
+      if (ok) banner.succeed("Yield map ready.");
+      else banner.fail("Yield map failed to load — see the page for details.");
+    });
+    return () => {
+      controller.abort();
+      // A page-scoped GET stops when the page goes away — drop a banner
+      // that never finished instead of leaving an orphaned spinner.
+      if (!settled) dismissBanner(banner.id);
+    };
+  }, [dismissBanner, loadDeals, processBanner]);
 
   useEffect(() => {
     const controller = new AbortController();

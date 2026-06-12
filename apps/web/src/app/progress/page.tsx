@@ -1632,6 +1632,7 @@ function ProgressPageContent() {
       setRejectSavingId(rejectState.propertyId);
       setError(null);
       setNotice(null);
+      const banner = processBanner.start("Rejecting property", { message: rejectState.address });
       try {
         const response = await fetch(`${API_BASE}/api/ui-v2/properties/${encodeURIComponent(rejectState.propertyId)}/reject`, {
           method: "POST",
@@ -1656,14 +1657,16 @@ function ProgressPageContent() {
         });
         setRejectState(null);
         setNotice("Property rejected.");
+        banner.succeed(`Rejected ${rejectState.address}.`);
         await loadProgress("refresh");
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to reject property.");
+        banner.fail(err instanceof Error ? err.message : "Failed to reject property.");
       } finally {
         setRejectSavingId(null);
       }
     },
-    [loadProgress, rejectState]
+    [loadProgress, processBanner, rejectState]
   );
 
   const refreshSelectedOmAnalysis = useCallback(async () => {

@@ -23,6 +23,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { API_BASE } from "@/lib/api";
+import { ActivityIndicator } from "./ActivityIndicator";
 import { ProcessBannerProvider, ProcessBannerViewport } from "./ProcessBanner";
 
 type NavChildLink = {
@@ -382,6 +383,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           </div>
 
           <div className="app-topbar-actions">
+            <ActivityIndicator />
             <Link href="/add-property" className="app-import-link">
               <Upload size={15} strokeWidth={1.85} aria-hidden="true" />
               <span>Import</span>

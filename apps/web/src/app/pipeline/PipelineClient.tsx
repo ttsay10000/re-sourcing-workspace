@@ -2960,8 +2960,13 @@ export default function PipelineClient() {
     setBusyAction(isBulkReject ? "bulk:reject" : `${propertyId}:reject`);
     setNotice(null);
     setError(null);
+    const banner = processBanner.start(
+      isBulkReject ? `Rejecting ${propertyIds.length} properties` : "Rejecting property",
+      { message: isBulkReject ? `0/${propertyIds.length} rejected` : rejectedLabels[0] }
+    );
     try {
       const failures: Array<{ propertyId: string; message: string }> = [];
+      let processed = 0;
       for (const id of propertyIds) {
         try {
           const response = await apiFetch<PropertyResponse>(`${API_BASE}/api/ui-v2/properties/${encodeURIComponent(id)}/reject`, {
@@ -2975,6 +2980,13 @@ export default function PipelineClient() {
           if (!isBulkReject) applyProperty(response.property);
         } catch (err) {
           failures.push({ propertyId: id, message: err instanceof Error ? err.message : "Failed to reject property." });
+        }
+        processed += 1;
+        if (isBulkReject) {
+          banner.update(
+            `${processed}/${propertyIds.length} rejected${failures.length ? ` · ${failures.length} failed` : ""}`,
+            Math.round((processed / propertyIds.length) * 100)
+          );
         }
       }
 
@@ -3013,9 +3025,19 @@ export default function PipelineClient() {
         setError(
           `${failures.length} rejection${failures.length === 1 ? "" : "s"} failed. First issue: ${failures[0]!.message}`
         );
+        banner.fail(
+          `${failures.length}/${propertyIds.length} rejection${failures.length === 1 ? "" : "s"} failed — ${failures[0]!.message}`
+        );
+      } else {
+        banner.succeed(
+          isBulkReject
+            ? `Rejected ${completedLabels.length} propert${completedLabels.length === 1 ? "y" : "ies"}.`
+            : `Rejected ${rejectedLabels[0]}.`
+        );
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to reject property.");
+      banner.fail(err instanceof Error ? err.message : "Failed to reject property.");
     } finally {
       setBusyAction(null);
     }
