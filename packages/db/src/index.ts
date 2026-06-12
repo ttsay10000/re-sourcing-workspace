@@ -168,9 +168,11 @@ export type {
   InsertMarketStatParams,
   ListMarketCompsFilters,
   MarketContextRepoOptions,
+  PendingMarketCompRow,
   UpsertMarketCompParams,
   UpsertNeighborhoodSummaryParams,
 } from "./repos/MarketContextRepos.js";
 export { MarketKnowledgeRepo, type AppendMarketKnowledgeEntryParams } from "./repos/MarketKnowledgeRepo.js";
+export { MarketReviewRepo, type AppendMarketReviewParams } from "./repos/MarketReviewRepo.js";
 
 export { runMigrations, type RunMigrationsResult } from "./runMigrations.js";

@@ -181,9 +181,12 @@ router.get("/comps/neighborhood-psf", async (_req: Request, res: Response) => {
     );
 
     const compRows = await pool.query(
-      `SELECT neighborhood_id, neighborhood_raw, price_psf
-       FROM market_comps
-       WHERE price_psf IS NOT NULL AND price_psf > 0`
+      `SELECT c.neighborhood_id, c.neighborhood_raw, c.price_psf
+       FROM market_comps c
+       LEFT JOIN market_documents d ON d.id = c.document_id
+       WHERE c.price_psf IS NOT NULL AND c.price_psf > 0
+         AND c.review_status != 'rejected'
+         AND (c.document_id IS NULL OR d.excluded_at IS NULL)`
     );
 
     interface Bucket {

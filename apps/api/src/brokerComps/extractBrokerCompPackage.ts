@@ -481,7 +481,9 @@ export async function extractBrokerCompPackageDraft(
         normalizedPayload: compProfile.normalized,
         pageRefs: [{ pageNumber, label: page.pageRef ?? null }],
         confidence: 0.72,
-        reviewStatus: "accepted",
+        // Comp-bearing items wait for user review (the Comp Analysis queue)
+        // before they reach comp surfaces or can be promoted.
+        reviewStatus: "pending",
       });
 
       const bedroomBreakdown = Array.isArray(compProfile.normalized.bedroomBreakdown)

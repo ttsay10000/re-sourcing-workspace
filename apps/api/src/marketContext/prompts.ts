@@ -10,6 +10,9 @@ export const MARKET_PROMPT_VERSIONS = {
   extract: "extract_v1",
   synthesize: "synthesize_v1",
   knowledge: "knowledge_v2",
+  notesRead: "notes_read_v1",
+  notesRefine: "notes_refine_v1",
+  review: "review_v1",
 } as const;
 
 export const CLASSIFIER_PROMPT = `You are classifying a real-estate PDF for a comp database. Output ONLY valid JSON:
@@ -140,6 +143,137 @@ export function buildExtractionPrompt(params: { documentClass: string; sourceTyp
     params.sourceType
   );
 }
+
+/** Shared JSON schema for both notes stages (read + refine). */
+const NOTES_SCHEMA = `OUTPUT SCHEMA (exact keys, no extras; every list may be empty but must be present):
+{
+  "title": string,                          // report title, else the filename
+  "period_covered": string | null,          // e.g. "Q1 2026"
+  "overview": [string],                     // 2-5 bullets: the report in numbers
+  "neighborhoods": [{ "name": string, "takeaway": string }],
+  "asset_types": [{ "segment": string, "direction": "up" | "down" | "flat" | "mixed", "note": string }],
+  "buyer_activity": [string],
+  "notable_transactions": [string],         // "address — $price, cap X%, $Y/SF, N units, buyer: Z (page P)"
+  "cap_rate_psf": [string],
+  "financing": [string],
+  "small_building_focus": [string],
+  "regulatory": [string],
+  "risks_watch_items": [string],
+  "investment_relevance": [string]
+}`;
+
+/**
+ * Notes stage 1 (Gemini, native PDF read): exhaustive analyst notes — what a
+ * NYC multifamily acquisitions professional would highlight in this document.
+ */
+export const NOTES_READ_PROMPT = `You are a senior NYC multifamily acquisitions analyst reading a market document
+(research report, OM, BOV, or comp list) cover to cover. Write the firm's notes on it:
+everything an investor hunting small multifamily deals would mark up. Output ONLY valid JSON.
+
+CAPTURE — be thorough, with numbers and verbatim geographies on every line:
+1. NEIGHBORHOODS: every submarket/neighborhood the document covers, each with its
+   key figures ($/SF, cap rate, volume, txn count) and printed change (QoQ/YoY).
+2. ASSET TYPES rising or falling: multifamily vs mixed-use vs office/retail; walk-ups
+   vs elevator; small buildings vs institutional product; direction must come from
+   printed figures, not your judgment.
+3. BUYING / SELLING ACTIVITY: who is buying (institutional, private, family office,
+   1031, foreign capital), named active buyers or sellers, contract/closing volume
+   shifts, distress or motivated-seller signals.
+4. NOTABLE TRANSACTIONS: individual deals with address, price, cap rate, $/SF,
+   units, buyer/seller when printed, and the source page.
+5. CAP RATES & $/SF: every level and movement printed, scoped exactly as stated.
+6. FINANCING / LOAN ENVIRONMENT: rates, spreads, lender appetite, maturities,
+   refinancing pressure, agency vs bank activity.
+7. SMALL-BUILDING FOCUS: anything about sub-10-unit / sub-9-unit buildings, $1-15M
+   deals, free-market vs rent-stabilized pricing gaps, RS share effects on value.
+8. REGULATORY: rent stabilization, 421a/485x, good-cause, tax policy mentions.
+9. RISKS / WATCH ITEMS the document itself calls out.
+10. INVESTMENT RELEVANCE: 3-6 bullets on why this matters for acquiring small NYC
+    multifamily now — written from the document's facts only.
+
+HARD RULES:
+- Extract, never infer. No number that is not printed in the document.
+- Keep the publisher's exact geographic scopes ("Manhattan below 96th St" ≠ "Manhattan").
+- Each bullet ≤200 characters, self-contained, and carries at least one number when
+  the document provides one; name the metric's period (Q1 2026, trailing 6-mo).
+- Empty array when the document is silent on a topic — never pad.
+
+${NOTES_SCHEMA}`;
+
+/**
+ * Notes stage 2 (OpenAI refine): tighten + complete the stage-1 notes using the
+ * structured extraction (comps/stats) as cross-check, same output schema.
+ */
+export const NOTES_REFINE_PROMPT = `You are the reviewing analyst. A first-pass reader produced DRAFT NOTES JSON for a
+market document; you also receive the document's CLASSIFICATION and the STRUCTURED
+EXTRACTION (comps + aggregate stats) pulled from the same file. Produce the final,
+improved notes. Output ONLY valid JSON in the same schema.
+
+IMPROVE BY:
+1. Deduplicating and merging overlapping bullets; keep the most specific number.
+2. Cross-checking against the structured extraction — add material comps/stats the
+   draft missed (cap rates, $/SF, notable sales with addresses), and correct any
+   draft figure that conflicts with the extraction.
+3. Making every bullet decision-useful for a small-multifamily acquirer: lead with
+   the number, scope, and period. Strip filler adjectives.
+4. Sharpening investment_relevance into the "so what": where pricing is soft or
+   compressing, which segments are over/under-bid, what to underwrite differently.
+5. Keeping the draft's facts otherwise — do NOT invent numbers not present in the
+   draft or the extraction. Empty arrays stay empty when there is nothing real.
+
+${NOTES_SCHEMA}`;
+
+/**
+ * Live AI market review: cross-document synthesis for the market docs page.
+ * Regenerated on demand from every currently included document's notes.
+ */
+export const MARKET_REVIEW_PROMPT = `You are the acquisitions team's market analyst. You receive analyst notes (and key
+stats) for EVERY market document currently in the workspace — multiple brokerages,
+multiple periods. Write the live market review for a principal buying small NYC
+multifamily (roughly 4-30 units, $1-20M, free-market and mixed RS). Output ONLY valid JSON.
+
+PRIORITIES:
+(a) headline + market_pulse: the highest-level cross-report read. Every claim carries
+    a number, publisher, and period. Mark trends over time within ONE publisher's
+    series ("Manhattan MF $/SF $576→$649, Q1'25→Q1'26, PropertyShark").
+(b) small_multifamily_focus: smaller buildings and unit counts specifically — sub-10-unit
+    pricing, walk-up vs elevator, FM vs rent-stabilized value gaps, where small deals
+    are clearing vs sitting.
+(c) cap_rate_trends: compression/expansion in bps with scopes and periods.
+(d) buyer_seller_activity: institutional buying up or down, named active buyers,
+    private/1031/foreign capital shifts, seller motivation/distress signals.
+(e) loan_environment: rates, lender appetite, maturities, refi pressure — anything the
+    notes carry about debt.
+(f) opportunities: where to hunt now — low or falling $/SF pockets, segments with
+    softening pricing but stable fundamentals, neighborhoods with rising activity.
+    Every entry needs the supporting number.
+(g) qoq_comparisons: for each publisher with documents covering DIFFERENT periods,
+    what changed between consecutive periods (both values + delta). Same-publisher
+    series only.
+(h) discrepancies: where different brokerages disagree about the same market/trend —
+    cite each side's number with publisher + period, and note the likely universe/
+    methodology difference when the notes state one.
+
+HARD RULES:
+1. Use ONLY the supplied notes and stats. Never infer, average, or blend numbers
+   across publishers (their universes differ).
+2. Bullets ≤200 characters; numbers + sources, zero filler.
+3. Empty arrays where the corpus is silent — never pad.
+4. sources: one "Publisher — period (title)" entry per supplied document.
+
+OUTPUT SCHEMA (exact keys, no extras):
+{
+  "headline": string,
+  "market_pulse": [string],
+  "small_multifamily_focus": [string],
+  "cap_rate_trends": [string],
+  "buyer_seller_activity": [string],
+  "loan_environment": [string],
+  "opportunities": [string],
+  "qoq_comparisons": [{ "publisher": string, "from_period": string, "to_period": string, "changes": [string] }],
+  "discrepancies": [{ "topic": string, "positions": [{ "source": string, "period": string | null, "claim": string }], "note": string | null }],
+  "sources": [string]
+}`;
 
 export const KNOWLEDGE_PROMPT = `You are a NYC multifamily acquisitions analyst maintaining the firm's living market
 knowledge base. You receive: (1) the CURRENT KNOWLEDGE BASE, (2) THIS UPLOAD's

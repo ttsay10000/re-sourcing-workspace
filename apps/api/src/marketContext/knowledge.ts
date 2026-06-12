@@ -22,6 +22,7 @@ import type {
   MarketKnowledgeAttentionNote,
   MarketKnowledgeClaim,
   MarketKnowledgeDiscrepancy,
+  MarketDocumentNotes,
   MarketKnowledgeEntry,
   MarketKnowledgeExecInsight,
   MarketKnowledgeNarrative,
@@ -439,7 +440,7 @@ function latestPriorStat(stat: MarketStat, priorStats: MarketStat[]): MarketStat
   return matches[0] ?? null;
 }
 
-function compareStatLine(current: MarketStat, prior: MarketStat): string {
+export function compareStatLine(current: MarketStat, prior: MarketStat): string {
   const publisherPair =
     current.provenance.publisher === prior.provenance.publisher
       ? current.provenance.publisher ?? "unbranded"
@@ -852,6 +853,8 @@ export interface UpdateMarketKnowledgeParams {
   comps: KnowledgeCompInput[];
   /** This document's saved stats. */
   stats: MarketStat[];
+  /** This document's analyst notes (extra context for the merge prompt). */
+  notes?: MarketDocumentNotes | null;
   store: MarketContextStore;
   llm: MarketLlmRunner | null;
   asOf?: Date;
@@ -890,9 +893,24 @@ export async function updateMarketKnowledge(params: UpdateMarketKnowledgeParams)
   let model: string | null = null;
 
   if (params.llm) {
+    // The per-document analyst notes ride along as extra context (financing,
+    // buyer activity, small-building reads that the comp/stat rows miss).
+    const notesContext = params.notes
+      ? `\n\nTHIS UPLOAD'S ANALYST NOTES:\n${JSON.stringify(
+          {
+            overview: params.notes.overview,
+            buyer_activity: params.notes.buyerActivity,
+            cap_rate_psf: params.notes.capRatePsf,
+            financing: params.notes.financing,
+            small_building_focus: params.notes.smallBuildingFocus,
+          },
+          null,
+          2
+        )}`
+      : "";
     const llm = await params.llm({
       stage: "knowledge",
-      prompt: `${KNOWLEDGE_PROMPT}\n\nSUPPLIED RECORDS:\n${buildKnowledgeInput(inputs)}`,
+      prompt: `${KNOWLEDGE_PROMPT}\n\nSUPPLIED RECORDS:\n${buildKnowledgeInput(inputs)}${notesContext}`,
     });
     await store.saveLlmOutput({
       documentId: params.document.id,

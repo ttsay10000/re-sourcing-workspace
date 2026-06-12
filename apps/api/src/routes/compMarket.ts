@@ -1,11 +1,17 @@
 /**
- * Market comps read API: every comparable extracted from broker comp packages,
- * across all subject properties, with lazy Geoclient geocoding so comps can be
- * plotted next to deals on the yield map.
+ * Market comps read API: every user-approved comparable — broker comp package
+ * items AND deals extracted from market documents (research reports, OMs,
+ * comp lists) — across all subject properties, with lazy Geoclient geocoding
+ * so comps can be plotted next to deals on the yield map.
  *
- * GET /api/comps/market?geocode=1&limit=500
- *   - comps[]: one row per accepted sale_comp / pricing_comp item
+ * GET /api/comps/market?geocode=1&limit=500&origin=all|broker|market_doc
+ *   - comps[]: one row per accepted broker sale_comp / pricing_comp item plus
+ *     one row per approved market-doc comp, each carrying a `source`
+ *     attribution (report title + publisher + period, or package + subject)
  *   - summary: counts + medians + cap-rate coverage (psfOnly flagging)
+ *
+ * Review gate: broker items must be accepted/edited (pending ones sit in the
+ * Comp Analysis review queue) and market-doc comps must be approved.
  *
  * Geocoding: comp addresses come from PDFs, so coordinates are resolved via
  * the NYC Geoclient address endpoint and cached in comp_address_geocodes.
@@ -14,7 +20,7 @@
  */
 
 import { Router, type Request, type Response } from "express";
-import { getPool } from "@re-sourcing/db";
+import { getPool, MarketCompRepo } from "@re-sourcing/db";
 import { resolveBBLFromAddress } from "../enrichment/geoclient.js";
 import { stripUnitFromAddressLine } from "../enrichment/resolvePropertyBBL.js";
 
@@ -23,13 +29,29 @@ const router = Router();
 const GEOCODE_BATCH_PER_REQUEST = 12;
 const GEOCODE_FAILED_RETRY_DAYS = 7;
 
+export type MarketCompOrigin = "broker_package" | "market_doc";
+
+/** Where a comp came from, rendered on Comp Analysis and yield-map popups. */
+export interface MarketCompSource {
+  kind: MarketCompOrigin;
+  /** One-line attribution, e.g. "Tri-State Investment Sales — Manhattan property sales report" or "Sale Comps package". */
+  label: string;
+  title: string | null;
+  publisher: string | null;
+  /** e.g. "Q1 2026" for market documents. */
+  period: string | null;
+  documentId: string | null;
+  packageId: string | null;
+}
+
 export interface MarketCompRow {
   itemId: string;
   packageId: string;
   packageType: string;
   packageCreatedAt: string | null;
-  subjectPropertyId: string;
-  subjectAddress: string;
+  /** Null for market-doc comps (no subject deal behind a research report). */
+  subjectPropertyId: string | null;
+  subjectAddress: string | null;
   itemType: string;
   propertyName: string | null;
   address: string | null;
@@ -49,6 +71,12 @@ export interface MarketCompRow {
   confidence: number | null;
   reviewStatus: string;
   selectionDecision: string | null;
+  origin: MarketCompOrigin;
+  source: MarketCompSource;
+  assetType: string | null;
+  priceType: string | null;
+  /** Comp tables inside OMs/BOVs — usable but flagged. */
+  cherryPickRisk: boolean;
   lat: number | null;
   lng: number | null;
 }
@@ -72,6 +100,10 @@ function median(values: number[]): number | null {
   if (values.length === 0) return null;
   const sorted = [...values].sort((a, b) => a - b);
   return sorted[Math.floor((sorted.length - 1) / 2)];
+}
+
+function packageTypeLabel(value: string): string {
+  return value.replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 const BOROUGH_NAMES = ["manhattan", "bronx", "brooklyn", "queens", "staten island"];
@@ -139,87 +171,165 @@ interface GeocodeCacheRow {
 router.get("/comps/market", async (req: Request, res: Response) => {
   const limit = Math.max(1, Math.min(toNumber(req.query.limit) ?? 500, 1000));
   const shouldGeocode = req.query.geocode === "1" || req.query.geocode === "true";
+  const origin =
+    req.query.origin === "broker" ? "broker_package" : req.query.origin === "market_doc" ? "market_doc" : "all";
 
   try {
     const pool = getPool();
-    const result = await pool.query(
-      `SELECT
-         i.id,
-         i.package_id,
-         i.item_type,
-         i.normalized_payload,
-         i.reviewed_payload,
-         i.confidence,
-         i.review_status,
-         i.selection_decision,
-         pkg.package_type,
-         pkg.created_at AS package_created_at,
-         p.id AS subject_property_id,
-         p.canonical_address AS subject_address,
-         p.details#>>'{neighborhood,primary,borough}' AS subject_borough
-       FROM broker_comp_extracted_items i
-       INNER JOIN broker_comp_packages pkg ON pkg.id = i.package_id
-       INNER JOIN properties p ON p.id = i.property_id
-       WHERE i.item_type IN ('sale_comp', 'pricing_comp')
-         AND i.review_status IN ('accepted', 'edited')
-         AND (i.selection_decision IS NULL OR i.selection_decision IN ('include', 'watch'))
-         AND pkg.status IN ('approved', 'needs_review', 'extracted', 'classified')
-       ORDER BY pkg.created_at DESC, i.created_at DESC
-       LIMIT $1`,
-      [limit]
-    );
-
     const comps: MarketCompRow[] = [];
     const parsedByKey = new Map<string, ParsedCompAddress>();
     const keyByItemId = new Map<string, string>();
+    const registerForGeocode = (itemId: string, address: string, fallbackBorough: string | null) => {
+      const parsed = parseCompAddress(address, fallbackBorough);
+      if (!parsed) return;
+      const key = geocodeKey(parsed.addressLine, parsed.borough);
+      parsedByKey.set(key, parsed);
+      keyByItemId.set(itemId, key);
+    };
 
-    for (const row of result.rows) {
-      const payload = {
-        ...((row.normalized_payload as Record<string, unknown> | null) ?? {}),
-        ...((row.reviewed_payload as Record<string, unknown> | null) ?? {}),
-      };
-      const capRatePct = toNumber(payload.capRatePct ?? payload.capRate);
-      const pricePsf = toNumber(payload.pricePerSqft ?? payload.salePsf ?? payload.soldPpsf ?? payload.askingPpsf);
-      const address = toText(payload.address ?? payload.propertyAddress);
-      const subjectBorough = toText(row.subject_borough);
-      const comp: MarketCompRow = {
-        itemId: String(row.id),
-        packageId: String(row.package_id),
-        packageType: String(row.package_type),
-        packageCreatedAt: toIso(row.package_created_at),
-        subjectPropertyId: String(row.subject_property_id),
-        subjectAddress: String(row.subject_address),
-        itemType: String(row.item_type),
-        propertyName: toText(payload.propertyName),
-        address,
-        neighborhood: toText(payload.neighborhood),
-        borough: normalizeBoroughName(toText(payload.borough)) ?? normalizeBoroughName(subjectBorough),
-        units: toNumber(payload.units),
-        yearCompleted: toNumber(payload.yearCompleted),
-        capRatePct,
-        noi: toNumber(payload.noi),
-        salePrice: toNumber(payload.salePrice),
-        saleDate: toText(payload.saleDate),
-        pricePsf,
-        pricePerUnit: toNumber(payload.pricePerUnit),
-        percentSoldPct: toNumber(payload.percentSoldPct),
-        psfOnly: capRatePct == null && pricePsf != null,
-        confidence: toNumber(row.confidence),
-        reviewStatus: String(row.review_status),
-        selectionDecision: (row.selection_decision as string | null) ?? null,
-        lat: null,
-        lng: null,
-      };
+    if (origin !== "market_doc") {
+      const result = await pool.query(
+        `SELECT
+           i.id,
+           i.package_id,
+           i.item_type,
+           i.normalized_payload,
+           i.reviewed_payload,
+           i.confidence,
+           i.review_status,
+           i.selection_decision,
+           pkg.package_type,
+           pkg.created_at AS package_created_at,
+           p.id AS subject_property_id,
+           p.canonical_address AS subject_address,
+           p.details#>>'{neighborhood,primary,borough}' AS subject_borough
+         FROM broker_comp_extracted_items i
+         INNER JOIN broker_comp_packages pkg ON pkg.id = i.package_id
+         INNER JOIN properties p ON p.id = i.property_id
+         WHERE i.item_type IN ('sale_comp', 'pricing_comp')
+           AND i.review_status IN ('accepted', 'edited')
+           AND (i.selection_decision IS NULL OR i.selection_decision IN ('include', 'watch'))
+           AND pkg.status IN ('approved', 'needs_review', 'extracted', 'classified')
+         ORDER BY pkg.created_at DESC, i.created_at DESC
+         LIMIT $1`,
+        [limit]
+      );
 
-      if (address) {
-        const parsed = parseCompAddress(address, subjectBorough);
-        if (parsed) {
-          const key = geocodeKey(parsed.addressLine, parsed.borough);
-          parsedByKey.set(key, parsed);
-          keyByItemId.set(comp.itemId, key);
-        }
+      for (const row of result.rows) {
+        const payload = {
+          ...((row.normalized_payload as Record<string, unknown> | null) ?? {}),
+          ...((row.reviewed_payload as Record<string, unknown> | null) ?? {}),
+        };
+        const capRatePct = toNumber(payload.capRatePct ?? payload.capRate);
+        const pricePsf = toNumber(payload.pricePerSqft ?? payload.salePsf ?? payload.soldPpsf ?? payload.askingPpsf);
+        const address = toText(payload.address ?? payload.propertyAddress);
+        const subjectBorough = toText(row.subject_borough);
+        const packageType = String(row.package_type);
+        const subjectAddress = String(row.subject_address);
+        const comp: MarketCompRow = {
+          itemId: String(row.id),
+          packageId: String(row.package_id),
+          packageType,
+          packageCreatedAt: toIso(row.package_created_at),
+          subjectPropertyId: String(row.subject_property_id),
+          subjectAddress,
+          itemType: String(row.item_type),
+          propertyName: toText(payload.propertyName),
+          address,
+          neighborhood: toText(payload.neighborhood),
+          borough: normalizeBoroughName(toText(payload.borough)) ?? normalizeBoroughName(subjectBorough),
+          units: toNumber(payload.units),
+          yearCompleted: toNumber(payload.yearCompleted),
+          capRatePct,
+          noi: toNumber(payload.noi),
+          salePrice: toNumber(payload.salePrice),
+          saleDate: toText(payload.saleDate),
+          pricePsf,
+          pricePerUnit: toNumber(payload.pricePerUnit),
+          percentSoldPct: toNumber(payload.percentSoldPct),
+          psfOnly: capRatePct == null && pricePsf != null,
+          confidence: toNumber(row.confidence),
+          reviewStatus: String(row.review_status),
+          selectionDecision: (row.selection_decision as string | null) ?? null,
+          origin: "broker_package",
+          source: {
+            kind: "broker_package",
+            label: `${packageTypeLabel(packageType)} package · ${subjectAddress.split(",")[0]}`,
+            title: null,
+            publisher: null,
+            period: null,
+            documentId: null,
+            packageId: String(row.package_id),
+          },
+          assetType: toText(payload.assetType),
+          priceType: null,
+          cherryPickRisk: false,
+          lat: null,
+          lng: null,
+        };
+
+        if (address) registerForGeocode(comp.itemId, address, subjectBorough);
+        comps.push(comp);
       }
-      comps.push(comp);
+    }
+
+    if (origin !== "broker_package") {
+      // Deals extracted from market documents (research reports, OMs, comp
+      // lists) that the user approved in the review queue. Subject properties
+      // never count as comps; asking-price rows keep their priceType label.
+      const docRows = await new MarketCompRepo({ pool }).listApprovedWithDocuments(limit);
+      for (const { comp: docComp, document } of docRows) {
+        const capRatePct = docComp.capRate != null ? docComp.capRate * 100 : null;
+        const publisher = document?.publisher ?? docComp.provenance.publisher;
+        const title = document?.reportTitle ?? docComp.provenance.report_title;
+        const comp: MarketCompRow = {
+          itemId: docComp.id,
+          packageId: document?.id ?? docComp.documentId ?? docComp.id,
+          packageType: document?.documentClass ?? docComp.provenance.document_class,
+          packageCreatedAt: docComp.createdAt,
+          subjectPropertyId: null,
+          subjectAddress: null,
+          itemType: "market_doc_comp",
+          propertyName: null,
+          address: docComp.address,
+          neighborhood: docComp.neighborhoodRaw,
+          borough: normalizeBoroughName(docComp.borough),
+          units: docComp.unitsTotal,
+          yearCompleted: null,
+          capRatePct,
+          noi: null,
+          salePrice: docComp.salePrice,
+          saleDate: docComp.saleDate,
+          pricePsf: docComp.pricePsf,
+          pricePerUnit:
+            docComp.salePrice != null && docComp.unitsTotal != null && docComp.unitsTotal > 0
+              ? docComp.salePrice / docComp.unitsTotal
+              : null,
+          percentSoldPct: null,
+          psfOnly: capRatePct == null && docComp.pricePsf != null,
+          confidence: null,
+          reviewStatus: docComp.reviewStatus,
+          selectionDecision: null,
+          origin: "market_doc",
+          source: {
+            kind: "market_doc",
+            label: [publisher, title].filter(Boolean).join(" — ") || document?.filename || "Market document",
+            title,
+            publisher,
+            period: document?.periodCovered ?? null,
+            documentId: document?.id ?? docComp.documentId,
+            packageId: null,
+          },
+          assetType: docComp.assetType,
+          priceType: docComp.priceType,
+          cherryPickRisk: docComp.cherryPickRisk,
+          lat: docComp.lat,
+          lng: docComp.lng,
+        };
+
+        if (comp.lat == null && docComp.address) registerForGeocode(comp.itemId, docComp.address, docComp.borough);
+        comps.push(comp);
+      }
     }
 
     // Attach cached coordinates; optionally geocode a bounded batch of misses.
@@ -279,6 +389,7 @@ router.get("/comps/market", async (req: Request, res: Response) => {
       }
 
       for (const comp of comps) {
+        if (comp.lat != null && comp.lng != null) continue;
         const key = keyByItemId.get(comp.itemId);
         const hit = key ? cacheByKey.get(key) : undefined;
         if (hit && hit.geocode_status === "ok") {
@@ -288,6 +399,7 @@ router.get("/comps/market", async (req: Request, res: Response) => {
       }
     }
 
+    comps.sort((a, b) => (b.packageCreatedAt ?? "").localeCompare(a.packageCreatedAt ?? ""));
     const capRates = comps.map((comp) => comp.capRatePct).filter((value): value is number => value != null);
     const psfs = comps.map((comp) => comp.pricePsf).filter((value): value is number => value != null);
     res.json({
@@ -299,6 +411,10 @@ router.get("/comps/market", async (req: Request, res: Response) => {
         withCoordinates: comps.filter((comp) => comp.lat != null && comp.lng != null).length,
         medianCapRatePct: median(capRates),
         medianPricePsf: median(psfs),
+        originCounts: {
+          broker: comps.filter((comp) => comp.origin === "broker_package").length,
+          marketDoc: comps.filter((comp) => comp.origin === "market_doc").length,
+        },
       },
     });
   } catch (err) {

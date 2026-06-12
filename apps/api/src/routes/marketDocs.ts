@@ -1,8 +1,9 @@
 /**
  * Market context API: upload + ingest market PDFs (broker docs and research
- * reports), read neighborhood summaries for the Yield Map overlay, query
- * extracted market comps by provenance, and serve the living knowledge base
- * (GET /api/market-knowledge) + Yield Map headlines (GET /api/market-headlines).
+ * reports), per-document analyst notes, document removal/restore (live-review
+ * inclusion control), the live AI market review, neighborhood summaries for
+ * the Yield Map overlay, market comps by provenance, and the living knowledge
+ * base (GET /api/market-knowledge) + Yield Map headlines (GET /api/market-headlines).
  */
 import { Router, type Request, type Response } from "express";
 import multer from "multer";
@@ -11,19 +12,26 @@ import {
   MarketCompRepo,
   MarketDocumentRepo,
   MarketKnowledgeRepo,
+  MarketLlmOutputRepo,
+  MarketReviewRepo,
   NeighborhoodRepo,
   NeighborhoodSummaryRepo,
   MarketStatRepo,
 } from "@re-sourcing/db";
 import type {
   MarketComp,
+  MarketDocument,
+  MarketDocumentListItem,
   MarketHeadlinesResponse,
   MarketKnowledgeResponse,
+  MarketReviewResponse,
   NeighborhoodSummaryWithGeo,
 } from "@re-sourcing/contracts";
-import { ingestMarketDocument } from "../marketContext/ingestMarketDocument.js";
+import { ingestMarketDocument, resynthesizeNeighborhoods } from "../marketContext/ingestMarketDocument.js";
 import { PgMarketContextStore } from "../marketContext/store.js";
 import { computeMarketHeadlines } from "../marketContext/knowledge.js";
+import { runMarketLlm } from "../marketContext/llmAdapter.js";
+import { isReviewStale, refreshMarketReview } from "../marketContext/review.js";
 import { computeNeighborhoodRollup, effectiveSourceType, withReadTimeFallback } from "../marketContext/rollup.js";
 import { fallbackSubmarketsFor } from "../marketContext/neighborhoodResolve.js";
 
@@ -117,16 +125,193 @@ router.post("/market-docs/:id/retry", async (req: Request, res: Response) => {
   }
 });
 
-// Ingest log (flag_for_review surfaces here and in the UI).
+/**
+ * Possible-duplicate detection for the ingest log: documents sharing
+ * publisher + period + class (or an identical filename) point at the earliest
+ * included upload via duplicateOfId so the UI can flag and exclude repeats.
+ */
+function computeDuplicateOf(documents: MarketDocument[]): Map<string, string> {
+  const groups = new Map<string, MarketDocument[]>();
+  for (const doc of documents) {
+    const keys: string[] = [];
+    if (doc.publisher && doc.period_covered) {
+      keys.push(`meta|${doc.publisher.toLowerCase()}|${doc.period_covered.toLowerCase()}|${doc.document_class}`);
+    }
+    keys.push(`file|${doc.filename.trim().toLowerCase()}`);
+    for (const key of keys) {
+      const list = groups.get(key) ?? [];
+      list.push(doc);
+      groups.set(key, list);
+    }
+  }
+  const duplicateOf = new Map<string, string>();
+  for (const list of groups.values()) {
+    const unique = [...new Map(list.map((doc) => [doc.id, doc])).values()];
+    if (unique.length < 2) continue;
+    const sorted = unique.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    const original = sorted.find((doc) => !doc.excludedAt) ?? sorted[0];
+    for (const doc of sorted) {
+      if (doc.id !== original.id && !duplicateOf.has(doc.id)) duplicateOf.set(doc.id, original.id);
+    }
+  }
+  return duplicateOf;
+}
+
+// Ingest log: classification + notes + duplicate flags + pending-comp counts.
 router.get("/market-docs", async (_req: Request, res: Response) => {
   try {
     const repo = new MarketDocumentRepo({ pool: getPool() });
-    const documents = await repo.list(100);
+    const [rows, pendingCounts] = await Promise.all([repo.list(200), repo.pendingCompCounts()]);
+    const duplicateOf = computeDuplicateOf(rows);
+    const documents: MarketDocumentListItem[] = rows.map((doc) => ({
+      ...doc,
+      duplicateOfId: duplicateOf.get(doc.id) ?? null,
+      pendingComps: pendingCounts.get(doc.id) ?? 0,
+    }));
     res.json({ documents });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[market-docs list]", err);
     res.status(503).json({ error: "Failed to list market documents.", details: message });
+  }
+});
+
+// Full analyst notes for one document (the ingest log's Notes panel).
+router.get("/market-docs/:id/notes", async (req: Request, res: Response) => {
+  try {
+    const repo = new MarketDocumentRepo({ pool: getPool() });
+    const document = await repo.byId(req.params.id);
+    if (!document) {
+      res.status(404).json({ error: "Market document not found.", documentId: req.params.id });
+      return;
+    }
+    res.json({ documentId: document.id, notes: document.llmNotes ?? null, brief: document.documentBrief ?? null });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[market-docs notes]", err);
+    res.status(503).json({ error: "Failed to load document notes.", details: message });
+  }
+});
+
+/**
+ * Soft-remove a document (?reason=duplicate marks duplicate exclusions): its
+ * uncorroborated comps are rejected out of rollups + comp surfaces, its stats
+ * leave fallbacks, and the live AI review goes stale until refreshed.
+ */
+router.delete("/market-docs/:id", async (req: Request, res: Response) => {
+  try {
+    const pool = getPool();
+    const repo = new MarketDocumentRepo({ pool });
+    const existing = await repo.byId(req.params.id);
+    if (!existing) {
+      res.status(404).json({ error: "Market document not found.", documentId: req.params.id });
+      return;
+    }
+    if (existing.excludedAt) {
+      res.json({ document: existing, rejectedComps: 0, resynthesizedNeighborhoods: [] });
+      return;
+    }
+    const reason = req.query.reason === "duplicate" ? "duplicate" : "removed";
+    const document = await repo.setExcluded(existing.id, reason);
+    const affected = await new MarketCompRepo({ pool }).rejectForExcludedDocument(existing.id);
+    const neighborhoodIds = [...new Set(affected.map((row) => row.neighborhoodId).filter((id): id is string => id != null))];
+    // Deterministic re-rollup (no model) so map fills drop the removed data immediately.
+    await resynthesizeNeighborhoods({
+      neighborhoodIds,
+      store: new PgMarketContextStore(pool),
+      llm: null,
+      documentId: existing.id,
+    });
+    res.json({ document, rejectedComps: affected.length, resynthesizedNeighborhoods: neighborhoodIds });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[market-docs remove]", err);
+    res.status(503).json({ error: "Failed to remove market document.", details: message });
+  }
+});
+
+// Restore an excluded document; its rejected comps go back through review.
+router.post("/market-docs/:id/restore", async (req: Request, res: Response) => {
+  try {
+    const pool = getPool();
+    const repo = new MarketDocumentRepo({ pool });
+    const existing = await repo.byId(req.params.id);
+    if (!existing) {
+      res.status(404).json({ error: "Market document not found.", documentId: req.params.id });
+      return;
+    }
+    const document = existing.excludedAt ? await repo.restore(existing.id) : existing;
+    const affected = existing.excludedAt
+      ? await new MarketCompRepo({ pool }).reopenForRestoredDocument(existing.id)
+      : [];
+    const neighborhoodIds = [...new Set(affected.map((row) => row.neighborhoodId).filter((id): id is string => id != null))];
+    await resynthesizeNeighborhoods({
+      neighborhoodIds,
+      store: new PgMarketContextStore(pool),
+      llm: null,
+      documentId: existing.id,
+    });
+    res.json({ document, reopenedComps: affected.length, resynthesizedNeighborhoods: neighborhoodIds });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[market-docs restore]", err);
+    res.status(503).json({ error: "Failed to restore market document.", details: message });
+  }
+});
+
+// Current live AI review + staleness vs the included-document set.
+router.get("/market-review", async (_req: Request, res: Response) => {
+  try {
+    const pool = getPool();
+    const [latest, included] = await Promise.all([
+      new MarketReviewRepo({ pool }).latest(),
+      new MarketDocumentRepo({ pool }).listIncluded(),
+    ]);
+    const payload: MarketReviewResponse = {
+      review: latest,
+      stale: isReviewStale(latest, included.map((doc) => doc.id)),
+      currentDocumentCount: included.length,
+    };
+    res.json(payload);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[market-review]", err);
+    res.status(503).json({ error: "Failed to load the live market review.", details: message });
+  }
+});
+
+/**
+ * Regenerate the live AI review from every included document's notes (the
+ * OpenAI model synthesizes; Gemini is the retry; deterministic digest when no
+ * model is configured). Appends a new market_reviews version.
+ */
+router.post("/market-review/refresh", async (_req: Request, res: Response) => {
+  try {
+    const pool = getPool();
+    const [included, stats, knowledge] = await Promise.all([
+      new MarketDocumentRepo({ pool }).listIncluded(),
+      new MarketStatRepo({ pool }).list(1000),
+      new MarketKnowledgeRepo({ pool }).latest().catch(() => null),
+    ]);
+    if (included.length === 0) {
+      const payload: MarketReviewResponse = { review: null, stale: false, currentDocumentCount: 0 };
+      res.json(payload);
+      return;
+    }
+    const record = await refreshMarketReview({
+      documents: included,
+      stats,
+      knowledge,
+      llm: runMarketLlm,
+      saveLlmOutput: (params) => new MarketLlmOutputRepo({ pool }).insert(params),
+      appendReview: (params) => new MarketReviewRepo({ pool }).append(params),
+    });
+    const payload: MarketReviewResponse = { review: record, stale: false, currentDocumentCount: included.length };
+    res.status(201).json(payload);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[market-review refresh]", err);
+    res.status(503).json({ error: "Failed to refresh the live market review.", details: message });
   }
 });
 
@@ -281,11 +466,16 @@ router.get("/market-headlines", async (_req: Request, res: Response) => {
 router.get("/comps", async (req: Request, res: Response) => {
   try {
     const repo = new MarketCompRepo({ pool: getPool() });
+    const reviewStatus =
+      req.query.review_status === "pending" || req.query.review_status === "approved" || req.query.review_status === "rejected"
+        ? req.query.review_status
+        : null;
     const comps = await repo.list({
       neighborhoodId: typeof req.query.neighborhood === "string" ? req.query.neighborhood.trim() || null : null,
       sourceType: typeof req.query.source_type === "string" ? req.query.source_type.trim() || null : null,
       priceType: typeof req.query.price_type === "string" ? req.query.price_type.trim() || null : null,
       unresolvedOnly: req.query.unresolved === "1",
+      reviewStatus,
     });
     res.json({ comps, count: comps.length });
   } catch (err) {

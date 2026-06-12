@@ -24,6 +24,7 @@ import { isSameDeal, mergeComps, normalizeCompAddress, type MergedComp } from ".
 import { computeNeighborhoodRollup } from "./rollup.js";
 import { synthesizeNeighborhood } from "./synthesize.js";
 import { updateMarketKnowledge } from "./knowledge.js";
+import { generateDocumentNotes } from "./notes.js";
 import { MARKET_PROMPT_VERSIONS } from "./prompts.js";
 import type { MarketContextStore } from "./store.js";
 
@@ -269,16 +270,22 @@ async function executeIngestPipeline(
   });
 
   // Dedupe against existing rows (and within this batch via sequential upserts).
+  // New rows enter the user review queue (review_status defaults to pending);
+  // merges keep the existing row's review decision, except a rejected comp
+  // re-corroborated by a new source goes back through review.
   stageRef.current = "comp/stat persistence";
   const candidates = await store.findCompsByNormalizedAddresses(normalizedAddresses);
   const candidatePool = [...candidates];
   let merged = 0;
   const affected = new Set<string>();
+  const reopenedIds: string[] = [];
   for (const comp of incoming) {
     const match = candidatePool.find((existing) => isSameDeal(existing, comp));
     if (match) {
+      const wasRejected = match.reviewStatus === "rejected";
       const mergedComp = mergeComps(match, comp);
       const saved = await store.replaceComp(match.id, compToUpsertParams(mergedComp, match.documentId ?? document.id));
+      if (wasRejected) reopenedIds.push(saved.id);
       candidatePool[candidatePool.indexOf(match)] = saved;
       merged += 1;
       if (saved.neighborhoodId) affected.add(saved.neighborhoodId);
@@ -288,6 +295,7 @@ async function executeIngestPipeline(
       if (saved.neighborhoodId) affected.add(saved.neighborhoodId);
     }
   }
+  if (reopenedIds.length > 0) await store.setCompReviewStatus(reopenedIds, "pending");
 
   // Stats: store with resolved submarket scope; values stay publisher-scoped.
   const savedStats: MarketStat[] = [];
@@ -332,13 +340,39 @@ async function executeIngestPipeline(
     nComps: incoming.length,
     nCompsMerged: merged,
     nStats: savedStats.length,
+    nCompsPendingReview: incoming.length - merged,
     unresolvedNeighborhoods: [...unresolved],
     affectedNeighborhoods: [...affected],
     flags,
     status: "succeeded",
   };
 
-  // Stage 3: analyst brief for this upload + fold it into the living knowledge
+  // Stage 3: per-document analyst notes — the Gemini read → OpenAI refine
+  // chain behind the ingest log's Notes panel and the live review corpus.
+  // Failures never sink an otherwise successful ingest.
+  let notes = null;
+  try {
+    notes = await generateDocumentNotes({
+      documentId: document.id,
+      filename: params.filename,
+      classification,
+      pdf,
+      documentText: fullText || null,
+      comps: incoming,
+      stats: savedStats,
+      store,
+      llm,
+      asOf: params.asOf,
+    });
+    report.notesGenerated = true;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[marketContext notes]", err);
+    report.notesGenerated = false;
+    report.flags.push(`document notes failed: ${message}`);
+  }
+
+  // Stage 4: analyst brief for this upload + fold it into the living knowledge
   // base (versioned). Failures never sink an otherwise successful ingest.
   try {
     const knowledge = await updateMarketKnowledge({
@@ -347,6 +381,7 @@ async function executeIngestPipeline(
       report,
       comps: incoming,
       stats: savedStats,
+      notes,
       store,
       llm,
       asOf: params.asOf,

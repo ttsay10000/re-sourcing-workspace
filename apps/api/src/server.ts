@@ -28,6 +28,7 @@ import brokerOmRouter from "./routes/brokerOm.js";
 import compsRouter from "./routes/comps.js";
 import marketDocsRouter from "./routes/marketDocs.js";
 import compMarketRouter from "./routes/compMarket.js";
+import compReviewRouter from "./routes/compReview.js";
 import workflowRunsRouter from "./routes/workflowRuns.js";
 import activityRouter from "./routes/activity.js";
 
@@ -85,6 +86,7 @@ app.use("/api", dossierRouter);
 app.use("/api", compsRouter);
 app.use("/api", marketDocsRouter);
 app.use("/api", compMarketRouter);
+app.use("/api", compReviewRouter);
 app.use("/api", workflowRunsRouter);
 app.use("/api", activityRouter);
 app.use("/api", dealsRouter);

@@ -17,12 +17,17 @@ import { parseCompletionJsonContent } from "../om/omAnalysisShared.js";
 import { DEFAULT_GEMINI_OM_MODEL } from "../om/extractOmAnalysisFromGeminiPdfOnly.js";
 
 export interface MarketLlmRequest {
-  stage: "classify" | "extract" | "synthesize" | "knowledge";
+  stage: "classify" | "extract" | "synthesize" | "knowledge" | "notes" | "review";
   prompt: string;
   /** Native document input for providers with PDF vision (Gemini inline data). */
   pdf?: { buffer: Buffer; filename: string } | null;
   /** Text fallback used when the provider cannot ingest the PDF natively. */
   documentText?: string | null;
+  /**
+   * Stage's preferred provider (e.g. notes read = gemini, notes refine =
+   * openai). MARKET_LLM_PROVIDER still wins when explicitly configured.
+   */
+  provider?: "gemini" | "openai";
 }
 
 export interface MarketLlmResult {
@@ -58,6 +63,9 @@ function resolveProvider(request: MarketLlmRequest): "gemini" | "openai" {
   const configured = (process.env.MARKET_LLM_PROVIDER ?? "auto").trim().toLowerCase();
   if (configured === "gemini") return "gemini";
   if (configured === "openai") return "openai";
+  // Stage preference (when that provider has a key), then auto.
+  if (request.provider === "gemini" && getGeminiKey()) return "gemini";
+  if (request.provider === "openai" && getOpenAiKey()) return "openai";
   // auto: prefer native PDF vision when possible.
   if (request.pdf && getGeminiKey() && request.pdf.buffer.length <= MAX_INLINE_PDF_BYTES) return "gemini";
   return "openai";

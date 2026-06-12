@@ -474,7 +474,9 @@ export function brokerCompItemsFromParsedJson(
       normalizedPayload: normalized,
       pageRefs,
       confidence: 0.82,
-      reviewStatus: "accepted",
+      // Comp-bearing items wait for user review (the Comp Analysis queue)
+      // before they reach comp surfaces or can be promoted.
+      reviewStatus: "pending",
     });
 
     const bedroomBreakdown = recordArray(normalized.bedroomBreakdown);

@@ -21,10 +21,12 @@ import {
 } from "@re-sourcing/db";
 import type {
   MarketComp,
+  MarketCompReviewStatus,
   MarketDocClassification,
   MarketDocIngestReport,
   MarketDocument,
   MarketDocumentBrief,
+  MarketDocumentNotes,
   MarketKnowledgeEntry,
   MarketStat,
   NeighborhoodRecord,
@@ -54,6 +56,10 @@ export interface MarketContextStore {
   listAllSummaries(): Promise<Array<Omit<NeighborhoodSummary, "updatedAt">>>;
   /** Per-upload analyst brief persisted on the document row. */
   saveDocumentBrief(id: string, brief: MarketDocumentBrief): Promise<void>;
+  /** Per-upload analyst notes (Gemini read → OpenAI refine) persisted on the document row. */
+  saveDocumentNotes(id: string, notes: MarketDocumentNotes): Promise<void>;
+  /** Review-gate transitions (merge-into-rejected resets, queue decisions). */
+  setCompReviewStatus(ids: string[], status: MarketCompReviewStatus): Promise<void>;
   /** Current knowledge-base state (highest version), or null when empty. */
   getLatestKnowledgeEntry(): Promise<MarketKnowledgeEntry | null>;
   /** Append the next knowledge-base version (append-only audit trail). */
@@ -151,6 +157,14 @@ export class PgMarketContextStore implements MarketContextStore {
 
   saveDocumentBrief(id: string, brief: MarketDocumentBrief) {
     return this.documents.saveBrief(id, brief);
+  }
+
+  saveDocumentNotes(id: string, notes: MarketDocumentNotes) {
+    return this.documents.saveNotes(id, notes);
+  }
+
+  async setCompReviewStatus(ids: string[], status: MarketCompReviewStatus) {
+    await this.comps.setReviewStatus(ids, status);
   }
 
   getLatestKnowledgeEntry() {
@@ -282,6 +296,8 @@ export class InMemoryMarketContextStore implements MarketContextStore {
       provenanceList: params.provenanceList,
       lat: params.lat,
       lng: params.lng,
+      reviewStatus: "pending",
+      reviewedAt: null,
       createdAt,
     };
   }
@@ -296,13 +312,23 @@ export class InMemoryMarketContextStore implements MarketContextStore {
     const index = this.comps.findIndex((comp) => comp.id === id);
     const existing = this.comps[index];
     const replaced = this.compFromParams(id, params, existing?.createdAt ?? new Date().toISOString());
+    // Mirrors the SQL UPDATE: a dedupe merge never touches the review gate.
+    if (existing) {
+      replaced.reviewStatus = existing.reviewStatus;
+      replaced.reviewedAt = existing.reviewedAt;
+    }
     if (index >= 0) this.comps[index] = replaced;
     else this.comps.push(replaced);
     return replaced;
   }
 
   async listCompsByNeighborhoods(neighborhoodIds: string[]) {
-    return this.comps.filter((comp) => comp.neighborhoodId != null && neighborhoodIds.includes(comp.neighborhoodId));
+    return this.comps.filter(
+      (comp) =>
+        comp.neighborhoodId != null &&
+        neighborhoodIds.includes(comp.neighborhoodId) &&
+        comp.reviewStatus !== "rejected"
+    );
   }
 
   async insertStat(params: InsertMarketStatParams) {
@@ -352,6 +378,21 @@ export class InMemoryMarketContextStore implements MarketContextStore {
   async saveDocumentBrief(id: string, brief: MarketDocumentBrief) {
     const doc = this.documents.find((d) => d.id === id);
     if (doc) doc.documentBrief = brief;
+  }
+
+  async saveDocumentNotes(id: string, notes: MarketDocumentNotes) {
+    const doc = this.documents.find((d) => d.id === id);
+    if (doc) doc.llmNotes = notes;
+  }
+
+  async setCompReviewStatus(ids: string[], status: MarketCompReviewStatus) {
+    const now = new Date().toISOString();
+    for (const comp of this.comps) {
+      if (ids.includes(comp.id)) {
+        comp.reviewStatus = status;
+        comp.reviewedAt = now;
+      }
+    }
   }
 
   async getLatestKnowledgeEntry() {

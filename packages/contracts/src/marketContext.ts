@@ -71,8 +71,28 @@ export interface MarketDocument extends MarketDocClassification {
   ingestReport: MarketDocIngestReport | null;
   /** Analyst brief for this upload (knowledge-base step; null before it runs). */
   documentBrief?: MarketDocumentBrief | null;
+  /** Robust per-upload analyst notes (Gemini PDF read refined by OpenAI; null before the notes stage runs). */
+  llmNotes?: MarketDocumentNotes | null;
+  /** Soft removal: excluded documents leave rollups, comp surfaces, and the live AI review. */
+  excludedAt?: string | null;
+  excludedReason?: "removed" | "duplicate" | null;
   createdAt: string;
 }
+
+/** GET /api/market-docs row: document plus computed review-surface context. */
+export interface MarketDocumentListItem extends MarketDocument {
+  /** Earliest non-excluded document sharing publisher + period + class (possible duplicate). */
+  duplicateOfId: string | null;
+  /** Extracted comps from this document still awaiting user review. */
+  pendingComps: number;
+}
+
+/**
+ * User review gate for extracted comps. New extractions land "pending" and
+ * only "approved" comps reach the Comp Analysis table / Yield Map comp layer;
+ * "rejected" comps also leave neighborhood rollups.
+ */
+export type MarketCompReviewStatus = "pending" | "approved" | "rejected";
 
 /** Extracted comp row. Mirrors the market_comps table. */
 export interface MarketComp {
@@ -108,6 +128,8 @@ export interface MarketComp {
   provenanceList: MarketProvenance[];
   lat: number | null;
   lng: number | null;
+  reviewStatus: MarketCompReviewStatus;
+  reviewedAt: string | null;
   createdAt: string;
 }
 
@@ -177,9 +199,13 @@ export interface MarketDocIngestReport {
   nComps: number;
   nCompsMerged: number;
   nStats: number;
+  /** Newly inserted comps now waiting in the user review queue. */
+  nCompsPendingReview?: number;
   unresolvedNeighborhoods: string[];
   affectedNeighborhoods: string[];
   flags: string[];
+  /** True when the per-document analyst notes stage produced stored notes. */
+  notesGenerated?: boolean;
   /** Analyst brief for this upload (set after the knowledge-base step). */
   brief?: MarketDocumentBrief | null;
   /** Knowledge-base version this document was folded into. */
@@ -323,4 +349,188 @@ export interface NeighborhoodSummaryWithGeo extends NeighborhoodSummary {
   aliases: string[];
   polygon: [number, number][];
   topComps: MarketComp[];
+}
+
+// ---------------------------------------------------------------------------
+// Per-document analyst notes (market_documents.llm_notes): the robust
+// "what would an acquisitions analyst pull out of this report" summary.
+// Stage 1 (Gemini, native PDF) reads the document; stage 2 (OpenAI) refines.
+// ---------------------------------------------------------------------------
+
+export interface MarketNotesNeighborhoodTake {
+  /** Verbatim geography from the report. */
+  name: string;
+  /** ≤200 chars, numbers required ("$954/SF median, +12.6% YoY — PropertyShark Q1'26"). */
+  takeaway: string;
+}
+
+export interface MarketNotesAssetTypeTake {
+  /** e.g. "multifamily 6-9 units", "mixed-use w/ ground retail", "rent-stabilized >50%". */
+  segment: string;
+  direction: MarketTrendDirection;
+  note: string;
+}
+
+/** Robust per-upload analyst notes persisted on market_documents.llm_notes. */
+export interface MarketDocumentNotes {
+  /** Report title, else filename. */
+  title: string;
+  /** "Publisher — period" attribution line. */
+  sourceLabel: string;
+  periodCovered: string | null;
+  /** The report in numbers: 2-5 highest-level bullets. */
+  overview: string[];
+  /** Per-neighborhood / submarket observations. */
+  neighborhoods: MarketNotesNeighborhoodTake[];
+  /** Asset types / segments rising or falling. */
+  assetTypes: MarketNotesAssetTypeTake[];
+  /** Buying & selling activity: institutional vs private, new entrants, 1031/foreign capital, contract volume. */
+  buyerActivity: string[];
+  /** Notable individual transactions with price / cap / $PSF / buyer when printed. */
+  notableTransactions: string[];
+  /** Cap-rate and $/SF observations (levels and printed changes). */
+  capRatePsf: string[];
+  /** Loan environment: rates, lender appetite, refi pressure, distress. */
+  financing: string[];
+  /** Small-building specifics: sub-10-unit dynamics, free-market vs stabilized pricing. */
+  smallBuildingFocus: string[];
+  /** Regulatory / policy notes (RS share effects, 421a/485x, good-cause). */
+  regulatory: string[];
+  /** Risks and watch items the report calls out. */
+  risksWatchItems: string[];
+  /** Why this matters for a small-multifamily acquirer hunting deals. */
+  investmentRelevance: string[];
+  generatedAt: string;
+  promptVersion: string;
+  /** Provider/model chain, e.g. ["gemini/gemini-3-flash-preview", "openai/gpt-5.5"]. */
+  providers: string[];
+}
+
+// ---------------------------------------------------------------------------
+// Live AI market review (market_reviews): cross-document synthesis focused on
+// small-multifamily acquisitions, regenerated from currently included docs.
+// ---------------------------------------------------------------------------
+
+export interface MarketReviewQoqComparison {
+  /** Same-publisher series only — cross-publisher gaps belong in discrepancies. */
+  publisher: string;
+  fromPeriod: string;
+  toPeriod: string;
+  /** What changed, with both values ("Manhattan MF caps 5.6%→5.9%, +30bps"). */
+  changes: string[];
+}
+
+export interface MarketReviewDiscrepancyPosition {
+  source: string;
+  period: string | null;
+  claim: string;
+}
+
+export interface MarketReviewDiscrepancy {
+  topic: string;
+  /** Each conflicting source's number, cited. */
+  positions: MarketReviewDiscrepancyPosition[];
+  /** Why they may differ (universe/methodology) or null when unexplained. */
+  note: string | null;
+}
+
+/** The live cross-document AI review payload (market_reviews.review). */
+export interface MarketReview {
+  /** One-line read of the market for a small-MF acquirer. */
+  headline: string;
+  /** Top cross-report takeaways with numbers. */
+  marketPulse: string[];
+  /** Smaller buildings / smaller unit counts: pricing, demand, FM vs RS. */
+  smallMultifamilyFocus: string[];
+  /** Compression/expansion trends with bps and periods. */
+  capRateTrends: string[];
+  /** Institutional buying trends, notable buyers/sellers, activity up or down. */
+  buyerSellerActivity: string[];
+  /** Loan environment for acquisitions. */
+  loanEnvironment: string[];
+  /** Where to hunt: low / falling $PSF pockets, motivated-seller signals. */
+  opportunities: string[];
+  /** Same-brokerage quarter-over-quarter changes. */
+  qoqComparisons: MarketReviewQoqComparison[];
+  /** Cross-brokerage conflicts about trends/activity, both numbers cited. */
+  discrepancies: MarketReviewDiscrepancy[];
+  /** "Publisher — period (title)" for every document included. */
+  sources: string[];
+}
+
+/** Append-only versioned live review row (market_reviews). */
+export interface MarketReviewRecord {
+  id: string;
+  version: number;
+  review: MarketReview;
+  includedDocumentIds: string[];
+  promptVersion: string | null;
+  provider: string | null;
+  model: string | null;
+  createdAt: string;
+}
+
+/** GET /api/market-review response. */
+export interface MarketReviewResponse {
+  review: MarketReviewRecord | null;
+  /** True when included docs no longer match the current non-excluded set. */
+  stale: boolean;
+  /** Documents that would feed a refresh right now. */
+  currentDocumentCount: number;
+}
+
+// ---------------------------------------------------------------------------
+// Unified comp review queue (market-doc extractions + broker package comps).
+// ---------------------------------------------------------------------------
+
+export type CompReviewSource = "market_doc" | "broker";
+
+/** One comp awaiting user review, normalized across both extraction pipelines. */
+export interface CompReviewQueueItem {
+  id: string;
+  source: CompReviewSource;
+  address: string | null;
+  propertyName: string | null;
+  neighborhood: string | null;
+  borough: string | null;
+  units: number | null;
+  gsf: number | null;
+  salePrice: number | null;
+  saleDate: string | null;
+  /** Percent points (5.82 = 5.82%). */
+  capRatePct: number | null;
+  pricePsf: number | null;
+  pricePerUnit: number | null;
+  noi: number | null;
+  assetType: string | null;
+  priceType: MarketPriceType | null;
+  /** "high" | "medium" | "low" for doc comps; numeric 0-1 rendered as a label for broker items. */
+  confidence: string | null;
+  cherryPickRisk: boolean;
+  notes: string | null;
+  /** e.g. "Tri-State Investment Sales · Manhattan property sales report" or "Broker package · Sale comps". */
+  sourceLabel: string;
+  /** e.g. "Q1 2026" or the subject property address for broker packages. */
+  sourceDetail: string | null;
+  documentId: string | null;
+  packageId: string | null;
+  createdAt: string;
+}
+
+export interface CompReviewQueueResponse {
+  items: CompReviewQueueItem[];
+  counts: { marketDoc: number; broker: number };
+}
+
+export interface CompReviewDecision {
+  id: string;
+  source: CompReviewSource;
+  action: "approve" | "reject";
+}
+
+/** POST /api/comps/review response. */
+export interface CompReviewResult {
+  updated: number;
+  /** Neighborhood rollups recomputed because a market-doc comp changed status. */
+  resynthesizedNeighborhoods: string[];
 }

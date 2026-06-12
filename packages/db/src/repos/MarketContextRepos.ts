@@ -6,10 +6,12 @@ import type { PoolClient } from "pg";
 import type {
   ClassifierConfidence,
   MarketComp,
+  MarketCompReviewStatus,
   MarketDocClassification,
   MarketDocIngestReport,
   MarketDocument,
   MarketDocumentBrief,
+  MarketDocumentNotes,
   MarketProvenance,
   MarketStat,
   NeighborhoodRecord,
@@ -83,6 +85,9 @@ function mapMarketDocument(row: Row): MarketDocument {
     flagForReview: Boolean(row.flag_for_review),
     ingestReport: (row.ingest_report as MarketDocIngestReport | null) ?? null,
     documentBrief: (row.document_brief as MarketDocumentBrief | null) ?? null,
+    llmNotes: (row.llm_notes as MarketDocumentNotes | null) ?? null,
+    excludedAt: row.excluded_at != null ? iso(row.excluded_at) : null,
+    excludedReason: (str(row.excluded_reason) as MarketDocument["excludedReason"]) ?? null,
     error: str(row.error),
     createdAt: iso(row.created_at),
   };
@@ -117,6 +122,8 @@ function mapMarketComp(row: Row): MarketComp {
     provenanceList: provenanceList.length > 0 ? provenanceList : [provenance],
     lat: num(row.lat),
     lng: num(row.lng),
+    reviewStatus: (str(row.review_status) ?? "pending") as MarketCompReviewStatus,
+    reviewedAt: row.reviewed_at != null ? iso(row.reviewed_at) : null,
     createdAt: iso(row.created_at),
   };
 }
@@ -189,13 +196,16 @@ export class MarketDocumentRepo {
     return this.options.client ?? this.options.pool;
   }
 
+  private static readonly COLUMNS = `id, filename, content_type, status, source_type, publisher, branded,
+    document_class, report_title, period_covered, geo_scope, subject_property, classifier_confidence,
+    classifier_evidence, flag_for_review, ingest_report, document_brief, llm_notes, excluded_at,
+    excluded_reason, error, created_at`;
+
   async insert(params: InsertMarketDocumentParams): Promise<MarketDocument> {
     const r = await this.client.query(
       `INSERT INTO market_documents (filename, content_type, file_content)
        VALUES ($1, $2, $3)
-       RETURNING id, filename, content_type, status, source_type, publisher, branded, document_class,
-                 report_title, period_covered, geo_scope, subject_property, classifier_confidence,
-                 classifier_evidence, flag_for_review, ingest_report, document_brief, error, created_at`,
+       RETURNING ${MarketDocumentRepo.COLUMNS}`,
       [params.filename, params.contentType ?? null, params.fileContent ?? null]
     );
     return mapMarketDocument(r.rows[0]);
@@ -251,12 +261,35 @@ export class MarketDocumentRepo {
     ]);
   }
 
+  async saveNotes(id: string, notes: MarketDocumentNotes): Promise<void> {
+    await this.client.query("UPDATE market_documents SET llm_notes = $2::jsonb WHERE id = $1", [
+      id,
+      JSON.stringify(notes),
+    ]);
+  }
+
+  /** Soft removal: the document leaves rollups, comp surfaces, and the live review. */
+  async setExcluded(id: string, reason: "removed" | "duplicate"): Promise<MarketDocument | null> {
+    const r = await this.client.query(
+      `UPDATE market_documents SET excluded_at = now(), excluded_reason = $2
+       WHERE id = $1 RETURNING ${MarketDocumentRepo.COLUMNS}`,
+      [id, reason]
+    );
+    return r.rows[0] ? mapMarketDocument(r.rows[0]) : null;
+  }
+
+  async restore(id: string): Promise<MarketDocument | null> {
+    const r = await this.client.query(
+      `UPDATE market_documents SET excluded_at = NULL, excluded_reason = NULL
+       WHERE id = $1 RETURNING ${MarketDocumentRepo.COLUMNS}`,
+      [id]
+    );
+    return r.rows[0] ? mapMarketDocument(r.rows[0]) : null;
+  }
+
   async byId(id: string): Promise<MarketDocument | null> {
     const r = await this.client.query(
-      `SELECT id, filename, content_type, status, source_type, publisher, branded, document_class,
-              report_title, period_covered, geo_scope, subject_property, classifier_confidence,
-              classifier_evidence, flag_for_review, ingest_report, document_brief, error, created_at
-       FROM market_documents WHERE id = $1`,
+      `SELECT ${MarketDocumentRepo.COLUMNS} FROM market_documents WHERE id = $1`,
       [id]
     );
     return r.rows[0] ? mapMarketDocument(r.rows[0]) : null;
@@ -264,13 +297,31 @@ export class MarketDocumentRepo {
 
   async list(limit = 100): Promise<MarketDocument[]> {
     const r = await this.client.query(
-      `SELECT id, filename, content_type, status, source_type, publisher, branded, document_class,
-              report_title, period_covered, geo_scope, subject_property, classifier_confidence,
-              classifier_evidence, flag_for_review, ingest_report, document_brief, error, created_at
-       FROM market_documents ORDER BY created_at DESC LIMIT $1`,
+      `SELECT ${MarketDocumentRepo.COLUMNS} FROM market_documents ORDER BY created_at DESC LIMIT $1`,
       [limit]
     );
     return r.rows.map((row: Row) => mapMarketDocument(row));
+  }
+
+  /** Documents feeding the live AI review: ingested (not failed) and not excluded. */
+  async listIncluded(limit = 200): Promise<MarketDocument[]> {
+    const r = await this.client.query(
+      `SELECT ${MarketDocumentRepo.COLUMNS} FROM market_documents
+       WHERE excluded_at IS NULL AND status NOT IN ('failed', 'uploaded')
+       ORDER BY created_at DESC LIMIT $1`,
+      [limit]
+    );
+    return r.rows.map((row: Row) => mapMarketDocument(row));
+  }
+
+  /** Pending-review comp counts per document (ingest-log chips). */
+  async pendingCompCounts(): Promise<Map<string, number>> {
+    const r = await this.client.query(
+      `SELECT document_id, COUNT(*)::int AS n FROM market_comps
+       WHERE review_status = 'pending' AND document_id IS NOT NULL
+       GROUP BY document_id`
+    );
+    return new Map(r.rows.map((row: Row) => [String(row.document_id), Number(row.n)]));
   }
 
   async getFileContent(id: string): Promise<Buffer | null> {
@@ -314,7 +365,22 @@ export interface ListMarketCompsFilters {
   sourceType?: string | null;
   priceType?: string | null;
   unresolvedOnly?: boolean;
+  reviewStatus?: MarketCompReviewStatus | null;
   limit?: number;
+}
+
+/** A pending comp joined to its source document (review-queue payload). */
+export interface PendingMarketCompRow {
+  comp: MarketComp;
+  document: {
+    id: string;
+    filename: string;
+    reportTitle: string | null;
+    publisher: string | null;
+    periodCovered: string | null;
+    sourceType: string | null;
+    documentClass: string | null;
+  } | null;
 }
 
 export class MarketCompRepo {
@@ -324,10 +390,19 @@ export class MarketCompRepo {
     return this.options.client ?? this.options.pool;
   }
 
-  private static readonly COLUMNS = `id, document_id, address, address_normalized, neighborhood_raw,
-    neighborhood_id, borough, sale_price, price_type, sale_date, gsf, price_psf, units_total,
-    units_resi, pct_rent_stabilized, cap_rate, asset_type, notes_short, cherry_pick_risk,
-    is_subject_property, confidence, raw_text, provenance, provenance_list, lat, lng, created_at`;
+  private static readonly COLUMN_NAMES = [
+    "id", "document_id", "address", "address_normalized", "neighborhood_raw",
+    "neighborhood_id", "borough", "sale_price", "price_type", "sale_date", "gsf", "price_psf",
+    "units_total", "units_resi", "pct_rent_stabilized", "cap_rate", "asset_type", "notes_short",
+    "cherry_pick_risk", "is_subject_property", "confidence", "raw_text", "provenance",
+    "provenance_list", "lat", "lng", "review_status", "reviewed_at", "created_at",
+  ] as const;
+
+  private static readonly COLUMNS = MarketCompRepo.COLUMN_NAMES.join(", ");
+
+  private static prefixedColumns(prefix: string): string {
+    return MarketCompRepo.COLUMN_NAMES.map((column) => `${prefix}.${column}`).join(", ");
+  }
 
   async insert(params: UpsertMarketCompParams): Promise<MarketComp> {
     const r = await this.client.query(
@@ -426,14 +501,129 @@ export class MarketCompRepo {
     return r.rows.map((row: Row) => mapMarketComp(row));
   }
 
+  /**
+   * Rollup feed: rejected comps are out (user said the extraction is wrong, or
+   * the source document was removed — exclusion rejects its uncorroborated
+   * comps). Pending comps still count so map fills stay live at ingest time;
+   * the review gate applies to the Comp Analysis / comp-pin surfaces instead.
+   */
   async listByNeighborhoods(neighborhoodIds: string[]): Promise<MarketComp[]> {
     if (neighborhoodIds.length === 0) return [];
     const r = await this.client.query(
-      `SELECT ${MarketCompRepo.COLUMNS} FROM market_comps WHERE neighborhood_id = ANY($1)
+      `SELECT ${MarketCompRepo.COLUMNS} FROM market_comps
+       WHERE neighborhood_id = ANY($1) AND review_status != 'rejected'
        ORDER BY sale_date DESC NULLS LAST`,
       [neighborhoodIds]
     );
     return r.rows.map((row: Row) => mapMarketComp(row));
+  }
+
+  /** Review queue: pending extractions joined to their source document. Subject properties are not comps. */
+  async listPendingWithDocuments(limit = 200): Promise<PendingMarketCompRow[]> {
+    const r = await this.client.query(
+      `SELECT ${MarketCompRepo.prefixedColumns("c")},
+              d.id AS doc_id, d.filename AS doc_filename, d.report_title AS doc_report_title,
+              d.publisher AS doc_publisher, d.period_covered AS doc_period_covered,
+              d.source_type AS doc_source_type, d.document_class AS doc_document_class
+       FROM market_comps c
+       LEFT JOIN market_documents d ON d.id = c.document_id
+       WHERE c.review_status = 'pending'
+         AND c.is_subject_property = false
+         AND (c.document_id IS NULL OR d.excluded_at IS NULL)
+       ORDER BY c.created_at DESC
+       LIMIT $1`,
+      [Math.max(1, Math.min(limit, 1000))]
+    );
+    return r.rows.map((row: Row) => ({
+      comp: mapMarketComp(row),
+      document: row.doc_id
+        ? {
+            id: String(row.doc_id),
+            filename: String(row.doc_filename),
+            reportTitle: str(row.doc_report_title),
+            publisher: str(row.doc_publisher),
+            periodCovered: str(row.doc_period_covered),
+            sourceType: str(row.doc_source_type),
+            documentClass: str(row.doc_document_class),
+          }
+        : null,
+    }));
+  }
+
+  /** Comp Analysis / Yield Map comp layer: approved comps with their source document's period for attribution. */
+  async listApprovedWithDocuments(limit = 500): Promise<PendingMarketCompRow[]> {
+    const r = await this.client.query(
+      `SELECT ${MarketCompRepo.prefixedColumns("c")},
+              d.id AS doc_id, d.filename AS doc_filename, d.report_title AS doc_report_title,
+              d.publisher AS doc_publisher, d.period_covered AS doc_period_covered,
+              d.source_type AS doc_source_type, d.document_class AS doc_document_class
+       FROM market_comps c
+       LEFT JOIN market_documents d ON d.id::text = c.provenance->>'document_id'
+       WHERE c.review_status = 'approved' AND c.is_subject_property = false
+       ORDER BY c.sale_date DESC NULLS LAST, c.created_at DESC
+       LIMIT $1`,
+      [Math.max(1, Math.min(limit, 2000))]
+    );
+    return r.rows.map((row: Row) => ({
+      comp: mapMarketComp(row),
+      document: row.doc_id
+        ? {
+            id: String(row.doc_id),
+            filename: String(row.doc_filename),
+            reportTitle: str(row.doc_report_title),
+            publisher: str(row.doc_publisher),
+            periodCovered: str(row.doc_period_covered),
+            sourceType: str(row.doc_source_type),
+            documentClass: str(row.doc_document_class),
+          }
+        : null,
+    }));
+  }
+
+  /** Apply a user review decision. Returns affected rows so callers can resynthesize their neighborhoods. */
+  async setReviewStatus(
+    ids: string[],
+    status: MarketCompReviewStatus
+  ): Promise<Array<{ id: string; neighborhoodId: string | null }>> {
+    if (ids.length === 0) return [];
+    const r = await this.client.query(
+      `UPDATE market_comps SET review_status = $2, reviewed_at = now()
+       WHERE id = ANY($1::uuid[])
+       RETURNING id, neighborhood_id`,
+      [ids, status]
+    );
+    return r.rows.map((row: Row) => ({ id: String(row.id), neighborhoodId: str(row.neighborhood_id) }));
+  }
+
+  /**
+   * Document removal: reject the document's comps unless another non-excluded
+   * document corroborates them (provenance_list keeps corroborated deals alive).
+   */
+  async rejectForExcludedDocument(documentId: string): Promise<Array<{ id: string; neighborhoodId: string | null }>> {
+    const r = await this.client.query(
+      `UPDATE market_comps c SET review_status = 'rejected', reviewed_at = now()
+       WHERE c.document_id = $1
+         AND c.review_status != 'rejected'
+         AND NOT EXISTS (
+           SELECT 1 FROM jsonb_array_elements(c.provenance_list) p
+           JOIN market_documents d2 ON d2.id::text = p->>'document_id'
+           WHERE d2.id::text != $1::text AND d2.excluded_at IS NULL
+         )
+       RETURNING c.id, c.neighborhood_id`,
+      [documentId]
+    );
+    return r.rows.map((row: Row) => ({ id: String(row.id), neighborhoodId: str(row.neighborhood_id) }));
+  }
+
+  /** Document restore: its rejected comps go back through the review queue. */
+  async reopenForRestoredDocument(documentId: string): Promise<Array<{ id: string; neighborhoodId: string | null }>> {
+    const r = await this.client.query(
+      `UPDATE market_comps SET review_status = 'pending', reviewed_at = NULL
+       WHERE document_id = $1 AND review_status = 'rejected'
+       RETURNING id, neighborhood_id`,
+      [documentId]
+    );
+    return r.rows.map((row: Row) => ({ id: String(row.id), neighborhoodId: str(row.neighborhood_id) }));
   }
 
   async list(filters: ListMarketCompsFilters = {}): Promise<MarketComp[]> {
@@ -453,6 +643,10 @@ export class MarketCompRepo {
     }
     if (filters.unresolvedOnly) {
       where.push("neighborhood_id IS NULL");
+    }
+    if (filters.reviewStatus) {
+      values.push(filters.reviewStatus);
+      where.push(`review_status = $${values.length}`);
     }
     values.push(Math.max(1, Math.min(filters.limit ?? 500, 2000)));
     const sql = `SELECT ${MarketCompRepo.COLUMNS} FROM market_comps
@@ -514,13 +708,19 @@ export class MarketStatRepo {
     await this.client.query(`DELETE FROM market_stats WHERE document_id = $1`, [documentId]);
   }
 
+  // Stats carry no review status (they are publisher aggregates, not deals);
+  // removal works at the document level, so both readers skip stats whose
+  // source document is excluded.
+
   async listBySubmarkets(submarketIds: string[]): Promise<MarketStat[]> {
     if (submarketIds.length === 0) return [];
     const r = await this.client.query(
-      `SELECT id, document_id, metric, metric_type, value, comparison_period, geo_level,
-              geo_name, submarket_id, segment, period, provenance, created_at
-       FROM market_stats WHERE submarket_id = ANY($1)
-       ORDER BY created_at DESC`,
+      `SELECT s.id, s.document_id, s.metric, s.metric_type, s.value, s.comparison_period, s.geo_level,
+              s.geo_name, s.submarket_id, s.segment, s.period, s.provenance, s.created_at
+       FROM market_stats s
+       LEFT JOIN market_documents d ON d.id = s.document_id
+       WHERE s.submarket_id = ANY($1) AND (s.document_id IS NULL OR d.excluded_at IS NULL)
+       ORDER BY s.created_at DESC`,
       [submarketIds]
     );
     return r.rows.map((row: Row) => mapMarketStat(row));
@@ -528,9 +728,12 @@ export class MarketStatRepo {
 
   async list(limit = 500): Promise<MarketStat[]> {
     const r = await this.client.query(
-      `SELECT id, document_id, metric, metric_type, value, comparison_period, geo_level,
-              geo_name, submarket_id, segment, period, provenance, created_at
-       FROM market_stats ORDER BY created_at DESC LIMIT $1`,
+      `SELECT s.id, s.document_id, s.metric, s.metric_type, s.value, s.comparison_period, s.geo_level,
+              s.geo_name, s.submarket_id, s.segment, s.period, s.provenance, s.created_at
+       FROM market_stats s
+       LEFT JOIN market_documents d ON d.id = s.document_id
+       WHERE s.document_id IS NULL OR d.excluded_at IS NULL
+       ORDER BY s.created_at DESC LIMIT $1`,
       [limit]
     );
     return r.rows.map((row: Row) => mapMarketStat(row));
@@ -617,7 +820,7 @@ export class NeighborhoodSummaryRepo {
 export interface InsertMarketLlmOutputParams {
   documentId: string | null;
   neighborhoodId?: string | null;
-  stage: "classify" | "extract" | "synthesize" | "knowledge";
+  stage: "classify" | "extract" | "synthesize" | "knowledge" | "notes" | "review";
   promptVersion: string;
   provider: string | null;
   model: string | null;
