@@ -4,10 +4,13 @@ import {
   useCallback,
   useEffect,
   useId,
+  useLayoutEffect,
   useRef,
   useState,
+  type CSSProperties,
   type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 import type { LucideIcon } from "lucide-react";
 import styles from "./primitives.module.css";
 import { cx } from "./utils";
@@ -22,20 +25,67 @@ type PopoverProps = {
   panelClassName?: string;
 };
 
+const VIEWPORT_MARGIN = 8;
+const TRIGGER_GAP = 6;
+
 /**
  * Lightweight anchored popover: closes on outside click and Escape.
- * Use for quick in-place actions instead of navigating away.
+ * The panel renders in a body portal with fixed positioning so it never
+ * gets clipped by overflow-hidden ancestors (e.g. board cards/columns);
+ * it opens below the trigger and flips above when there's no room.
  */
 export function Popover({ trigger, children, align = "start", className, panelClassName }: PopoverProps) {
   const [open, setOpen] = useState(false);
+  const [panelStyle, setPanelStyle] = useState<CSSProperties>({ top: 0, left: 0, visibility: "hidden" });
   const rootRef = useRef<HTMLSpanElement | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
   const panelId = useId();
   const close = useCallback(() => setOpen(false), []);
 
-  useEffect(() => {
+  const reposition = useCallback(() => {
+    const anchor = rootRef.current;
+    const panel = panelRef.current;
+    if (!anchor || !panel) return;
+    const anchorRect = anchor.getBoundingClientRect();
+    const panelRect = panel.getBoundingClientRect();
+
+    let left = align === "end" ? anchorRect.right - panelRect.width : anchorRect.left;
+    left = Math.max(VIEWPORT_MARGIN, Math.min(left, window.innerWidth - panelRect.width - VIEWPORT_MARGIN));
+
+    const belowTop = anchorRect.bottom + TRIGGER_GAP;
+    const aboveTop = anchorRect.top - TRIGGER_GAP - panelRect.height;
+    const fitsBelow = belowTop + panelRect.height <= window.innerHeight - VIEWPORT_MARGIN;
+    const fitsAbove = aboveTop >= VIEWPORT_MARGIN;
+    const top = fitsBelow || !fitsAbove ? belowTop : aboveTop;
+
+    setPanelStyle({
+      top: Math.round(Math.max(VIEWPORT_MARGIN, Math.min(top, window.innerHeight - panelRect.height - VIEWPORT_MARGIN))),
+      left: Math.round(left),
+    });
+  }, [align]);
+
+  // Position on open (before paint, so the panel never flashes at 0,0) and
+  // keep the panel glued to its trigger through scrolling and resizes.
+  useLayoutEffect(() => {
     if (!open) return;
+    reposition();
+    window.addEventListener("resize", reposition);
+    document.addEventListener("scroll", reposition, true);
+    return () => {
+      window.removeEventListener("resize", reposition);
+      document.removeEventListener("scroll", reposition, true);
+    };
+  }, [open, reposition]);
+
+  useEffect(() => {
+    if (!open) {
+      setPanelStyle({ top: 0, left: 0, visibility: "hidden" });
+      return;
+    }
     const onPointerDown = (event: PointerEvent) => {
-      if (rootRef.current && !rootRef.current.contains(event.target as Node)) setOpen(false);
+      const target = event.target as Node;
+      if (rootRef.current?.contains(target) || panelRef.current?.contains(target)) return;
+      setOpen(false);
     };
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") setOpen(false);
@@ -56,11 +106,23 @@ export function Popover({ trigger, children, align = "start", className, panelCl
         "aria-haspopup": true,
         "aria-controls": panelId,
       })}
-      {open ? (
-        <div id={panelId} className={cx(styles.popoverPanel, align === "end" && styles.popoverPanelEnd, panelClassName)}>
-          {typeof children === "function" ? children(close) : children}
-        </div>
-      ) : null}
+      {open
+        ? createPortal(
+            <div
+              id={panelId}
+              ref={panelRef}
+              className={cx(styles.popoverPanel, panelClassName)}
+              style={panelStyle}
+              // The panel lives in a body portal, but React still bubbles its
+              // events through the trigger's tree — don't let panel clicks
+              // reach card-level handlers (open drawer, drag, …).
+              onClick={(event) => event.stopPropagation()}
+            >
+              {typeof children === "function" ? children(close) : children}
+            </div>,
+            document.body
+          )
+        : null}
     </span>
   );
 }

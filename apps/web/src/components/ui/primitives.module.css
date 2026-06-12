@@ -680,21 +680,18 @@ button.statCard:hover {
 }
 
 .popoverPanel {
-  position: absolute;
-  top: calc(100% + 0.35rem);
-  left: 0;
+  position: fixed;
+  /* top/left are set inline from the trigger's rect (portal-positioned). */
   z-index: 120;
   min-width: 13rem;
+  max-width: min(22rem, calc(100vw - 16px));
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
   border: 1px solid var(--app-line);
   border-radius: var(--radius-lg);
   background: var(--app-surface);
   box-shadow: var(--app-shadow-md);
   animation: dialog-rise 140ms ease;
-}
-
-.popoverPanelEnd {
-  left: auto;
-  right: 0;
 }
 
 @media (prefers-reduced-motion: reduce) {
