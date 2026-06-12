@@ -263,6 +263,17 @@ Comp review gate (migration `064_market_docs_review.sql`):
 - `POST /api/comps/review` — `{ decisions: [{ id, source: market_doc|broker, action: approve|reject }] }`; market-doc decisions re-roll affected neighborhood summaries.
 - `GET /api/comps/market` now returns BOTH origins with a `source` attribution object (kind, label, title, publisher, period, documentId/packageId) + `origin` filter param + `summary.originCounts`; subject fields are null for market-doc rows (the yield map renders source attribution instead of the subject link).
 
+## Analyst-lens prompt push: deal intel + coverage universes (2026-06-12, v2 prompts)
+
+Extraction (`extract_v2`) now captures the fields a VP-level acquisitions read needs:
+
+- `market_comps.buyer` / `seller` — verbatim entity names (institutional-trend tracking; never inferred), `grm` (how sub-10-unit deals are quoted; sanity window 1-60, never derived/converted), and `sale_conditions` JSONB (whitelisted printed flags: portfolio_sale, partial_interest, note_sale, ground_lease, distressed, estate_sale, delivered_vacant, 1031_exchange, related_party). Migration `065_comp_deal_intel.sql`.
+- Rollup medians exclude non-arm's-length/non-fee-simple prints (portfolio, partial interest, note sale, ground lease) while estate/vacant/1031 prints stay in as real clearing prices; flagged comps remain visible in `excludedComps` and carry condition chips on Comp Analysis + the review queue.
+- The extraction prompt now enforces a metric-name vocabulary (avg_price_psf, dollar_volume, transaction_count, avg_grm, months_of_supply, …) and a segment-naming convention (free_market, units_5_9, under_5m, walk_up, … combined as printed) so same-publisher series match across quarters (the QoQ pairing keys on metric+segment), and instructs the model to emit one stat PER size/price/regulatory slice — segmented tables over all-market averages.
+- `market_documents.coverage_universe` (classify_v2) — the publisher's stated methodology/universe ("sales $1M+ in 5+ unit buildings, all Manhattan"), fed into the knowledge + live-review prompts so cross-publisher gaps get EXPLAINED via universe differences rather than just flagged.
+- Notes prompts (`notes_read_v2`/`notes_refine_v2`) rewritten to the VP lens: free-market sub-10-unit focus (pricing vs broader market, walk-up discounts, vacancy premiums, FM-vs-RS spreads), neighborhood relative value (spreads/rankings), buyer composition + motivated-seller signals, GRM, small-balance lending, and printed forward-looking views ("Outlook:" prefix in risks_watch_items). Refine-input comp truncation now keeps sub-10-unit comps first.
+- Live review (`review_v2`): universe-aware discrepancy explanations, institutional-share trend within one publisher's series, relative-value opportunities.
+
 ## v6 push: refresh semantics, activity log, neighborhood $/SF context (2026-06-10)
 
 Refresh semantics:

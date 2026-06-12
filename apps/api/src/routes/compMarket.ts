@@ -75,6 +75,10 @@ export interface MarketCompRow {
   source: MarketCompSource;
   assetType: string | null;
   priceType: string | null;
+  /** Purchaser as printed (institutional-trend tracking). */
+  buyer: string | null;
+  /** Printed sale-condition flags (portfolio, partial interest, estate, ...). */
+  saleConditions: string[];
   /** Comp tables inside OMs/BOVs — usable but flagged. */
   cherryPickRisk: boolean;
   lat: number | null;
@@ -263,6 +267,8 @@ router.get("/comps/market", async (req: Request, res: Response) => {
           },
           assetType: toText(payload.assetType),
           priceType: null,
+          buyer: toText(payload.buyer ?? payload.purchaser),
+          saleConditions: [],
           cherryPickRisk: false,
           lat: null,
           lng: null,
@@ -322,6 +328,8 @@ router.get("/comps/market", async (req: Request, res: Response) => {
           },
           assetType: docComp.assetType,
           priceType: docComp.priceType,
+          buyer: docComp.buyer,
+          saleConditions: docComp.saleConditions,
           cherryPickRisk: docComp.cherryPickRisk,
           lat: docComp.lat,
           lng: docComp.lng,

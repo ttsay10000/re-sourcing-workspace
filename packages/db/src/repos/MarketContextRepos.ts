@@ -13,6 +13,7 @@ import type {
   MarketDocumentBrief,
   MarketDocumentNotes,
   MarketProvenance,
+  MarketSaleCondition,
   MarketStat,
   NeighborhoodRecord,
   NeighborhoodSummary,
@@ -79,6 +80,7 @@ function mapMarketDocument(row: Row): MarketDocument {
     report_title: str(row.report_title),
     period_covered: str(row.period_covered),
     geo_scope: str(row.geo_scope),
+    coverage_universe: str(row.coverage_universe),
     subject_property: str(row.subject_property),
     classifier_confidence: (str(row.classifier_confidence) ?? "low") as ClassifierConfidence,
     evidence: jsonArray<string>(row.classifier_evidence),
@@ -112,7 +114,11 @@ function mapMarketComp(row: Row): MarketComp {
     unitsResi: int(row.units_resi),
     pctRentStabilized: num(row.pct_rent_stabilized),
     capRate: num(row.cap_rate),
+    grm: num(row.grm),
     assetType: str(row.asset_type) as MarketComp["assetType"],
+    buyer: str(row.buyer),
+    seller: str(row.seller),
+    saleConditions: jsonArray<MarketSaleCondition>(row.sale_conditions),
     notesShort: str(row.notes_short),
     cherryPickRisk: Boolean(row.cherry_pick_risk),
     isSubjectProperty: Boolean(row.is_subject_property),
@@ -197,9 +203,9 @@ export class MarketDocumentRepo {
   }
 
   private static readonly COLUMNS = `id, filename, content_type, status, source_type, publisher, branded,
-    document_class, report_title, period_covered, geo_scope, subject_property, classifier_confidence,
-    classifier_evidence, flag_for_review, ingest_report, document_brief, llm_notes, excluded_at,
-    excluded_reason, error, created_at`;
+    document_class, report_title, period_covered, geo_scope, coverage_universe, subject_property,
+    classifier_confidence, classifier_evidence, flag_for_review, ingest_report, document_brief, llm_notes,
+    excluded_at, excluded_reason, error, created_at`;
 
   async insert(params: InsertMarketDocumentParams): Promise<MarketDocument> {
     const r = await this.client.query(
@@ -219,8 +225,9 @@ export class MarketDocumentRepo {
     await this.client.query(
       `UPDATE market_documents SET
          status = 'classified', source_type = $2, publisher = $3, branded = $4, document_class = $5,
-         report_title = $6, period_covered = $7, geo_scope = $8, subject_property = $9,
-         classifier_confidence = $10, classifier_evidence = $11::jsonb, flag_for_review = $12
+         report_title = $6, period_covered = $7, geo_scope = $8, coverage_universe = $9,
+         subject_property = $10, classifier_confidence = $11, classifier_evidence = $12::jsonb,
+         flag_for_review = $13
        WHERE id = $1`,
       [
         id,
@@ -231,6 +238,7 @@ export class MarketDocumentRepo {
         classification.report_title,
         classification.period_covered,
         classification.geo_scope,
+        classification.coverage_universe,
         classification.subject_property,
         classification.classifier_confidence,
         JSON.stringify(classification.evidence),
@@ -348,7 +356,11 @@ export interface UpsertMarketCompParams {
   unitsResi: number | null;
   pctRentStabilized: number | null;
   capRate: number | null;
+  grm: number | null;
   assetType: MarketComp["assetType"];
+  buyer: string | null;
+  seller: string | null;
+  saleConditions: MarketSaleCondition[];
   notesShort: string | null;
   cherryPickRisk: boolean;
   isSubjectProperty: boolean;
@@ -393,7 +405,8 @@ export class MarketCompRepo {
   private static readonly COLUMN_NAMES = [
     "id", "document_id", "address", "address_normalized", "neighborhood_raw",
     "neighborhood_id", "borough", "sale_price", "price_type", "sale_date", "gsf", "price_psf",
-    "units_total", "units_resi", "pct_rent_stabilized", "cap_rate", "asset_type", "notes_short",
+    "units_total", "units_resi", "pct_rent_stabilized", "cap_rate", "grm", "asset_type",
+    "buyer", "seller", "sale_conditions", "notes_short",
     "cherry_pick_risk", "is_subject_property", "confidence", "raw_text", "provenance",
     "provenance_list", "lat", "lng", "review_status", "reviewed_at", "created_at",
   ] as const;
@@ -408,9 +421,11 @@ export class MarketCompRepo {
     const r = await this.client.query(
       `INSERT INTO market_comps (document_id, address, address_normalized, neighborhood_raw,
          neighborhood_id, borough, sale_price, price_type, sale_date, gsf, price_psf, units_total,
-         units_resi, pct_rent_stabilized, cap_rate, asset_type, notes_short, cherry_pick_risk,
-         is_subject_property, confidence, raw_text, provenance, provenance_list, lat, lng)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22::jsonb,$23::jsonb,$24,$25)
+         units_resi, pct_rent_stabilized, cap_rate, grm, asset_type, buyer, seller, sale_conditions,
+         notes_short, cherry_pick_risk, is_subject_property, confidence, raw_text, provenance,
+         provenance_list, lat, lng)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20::jsonb,
+               $21,$22,$23,$24,$25,$26::jsonb,$27::jsonb,$28,$29)
        RETURNING ${MarketCompRepo.COLUMNS}`,
       [
         params.documentId,
@@ -428,7 +443,11 @@ export class MarketCompRepo {
         params.unitsResi,
         params.pctRentStabilized,
         params.capRate,
+        params.grm,
         params.assetType,
+        params.buyer,
+        params.seller,
+        JSON.stringify(params.saleConditions),
         params.notesShort,
         params.cherryPickRisk,
         params.isSubjectProperty,
@@ -449,9 +468,9 @@ export class MarketCompRepo {
       `UPDATE market_comps SET document_id=$2, address=$3, address_normalized=$4, neighborhood_raw=$5,
          neighborhood_id=$6, borough=$7, sale_price=$8, price_type=$9, sale_date=$10, gsf=$11,
          price_psf=$12, units_total=$13, units_resi=$14, pct_rent_stabilized=$15, cap_rate=$16,
-         asset_type=$17, notes_short=$18, cherry_pick_risk=$19, is_subject_property=$20,
-         confidence=$21, raw_text=$22, provenance=$23::jsonb, provenance_list=$24::jsonb,
-         lat=$25, lng=$26, updated_at=now()
+         grm=$17, asset_type=$18, buyer=$19, seller=$20, sale_conditions=$21::jsonb, notes_short=$22,
+         cherry_pick_risk=$23, is_subject_property=$24, confidence=$25, raw_text=$26,
+         provenance=$27::jsonb, provenance_list=$28::jsonb, lat=$29, lng=$30, updated_at=now()
        WHERE id = $1
        RETURNING ${MarketCompRepo.COLUMNS}`,
       [
@@ -471,7 +490,11 @@ export class MarketCompRepo {
         params.unitsResi,
         params.pctRentStabilized,
         params.capRate,
+        params.grm,
         params.assetType,
+        params.buyer,
+        params.seller,
+        JSON.stringify(params.saleConditions),
         params.notesShort,
         params.cherryPickRisk,
         params.isSubjectProperty,

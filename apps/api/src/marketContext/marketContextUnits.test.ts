@@ -27,6 +27,7 @@ const RESEARCH_CLASSIFICATION: MarketDocClassification = {
   report_title: "Monthly",
   period_covered: "Jan–Feb 2026",
   geo_scope: "Manhattan south of 96th St",
+  coverage_universe: null,
   subject_property: null,
   classifier_confidence: "high",
   evidence: [],
@@ -71,7 +72,11 @@ function marketComp(partial: Partial<MarketComp>): MarketComp {
     unitsResi: null,
     pctRentStabilized: null,
     capRate: null,
+    grm: null,
     assetType: null,
+    buyer: null,
+    seller: null,
+    saleConditions: [],
     notesShort: null,
     cherryPickRisk: false,
     isSubjectProperty: false,
@@ -328,5 +333,140 @@ describe("synthesis validation", () => {
       expect(bullet).toMatch(/\d/);
       expect(bullet.length).toBeLessThanOrEqual(120);
     }
+  });
+});
+
+describe("deal-intel extraction (extract_v2)", () => {
+  it("coerces buyer/seller/GRM and whitelists sale_conditions", () => {
+    const result = coerceExtraction(
+      {
+        comps: [
+          {
+            address: "100 Main Street",
+            sale_price: 4_000_000,
+            price_type: "closed",
+            grm: "14.2",
+            buyer: "Acme Property Group LLC",
+            seller: "Estate of J. Smith",
+            sale_conditions: ["estate_sale", "PORTFOLIO_SALE", "made_up_flag", "estate_sale"],
+            page: 3,
+          },
+        ],
+        market_stats: [],
+      },
+      RESEARCH_CLASSIFICATION,
+      "doc_a"
+    );
+    expect(result.comps).toHaveLength(1);
+    const comp = result.comps[0];
+    expect(comp.grm).toBe(14.2);
+    expect(comp.buyer).toBe("Acme Property Group LLC");
+    expect(comp.seller).toBe("Estate of J. Smith");
+    // Whitelisted, case-normalized, deduped; invented flags dropped.
+    expect(comp.saleConditions).toEqual(["estate_sale", "portfolio_sale"]);
+  });
+
+  it("rejects GRM outside the sanity window instead of storing a misread cell", () => {
+    const result = coerceExtraction(
+      {
+        comps: [
+          { address: "1 Low St", sale_price: 1, grm: 0.4 },
+          { address: "2 High St", sale_price: 1, grm: 950 },
+        ],
+        market_stats: [],
+      },
+      RESEARCH_CLASSIFICATION,
+      "doc_a"
+    );
+    expect(result.comps.map((comp) => comp.grm)).toEqual([null, null]);
+  });
+
+  it("captures the publisher coverage universe in classification", () => {
+    const classification = coerceClassification({
+      source_type: "market_research",
+      publisher: "Ariel Property Advisors",
+      branded: true,
+      document_class: "published_report",
+      classifier_confidence: "high",
+      coverage_universe: "Sales $1M+ in 10+ unit buildings, all Manhattan",
+      evidence: [],
+    });
+    expect(classification.coverage_universe).toBe("Sales $1M+ in 10+ unit buildings, all Manhattan");
+  });
+
+  it("keeps portfolio/partial-interest/note/ground-lease prints out of rollup medians", () => {
+    const nolita = loadSeedNeighborhoods().find((hood) => hood.id === "nolita")!;
+    const asOf = new Date("2026-03-15T12:00:00Z");
+    const comps = [
+      marketComp({ id: "1", neighborhoodId: "nolita", capRate: 0.05, pricePsf: 1500, saleDate: "2026-01-10" }),
+      marketComp({ id: "2", neighborhoodId: "nolita", capRate: 0.06, pricePsf: 1400, saleDate: "2026-02-10" }),
+      marketComp({ id: "3", neighborhoodId: "nolita", capRate: 0.055, pricePsf: 1450, saleDate: "2026-02-12" }),
+      // A partial-interest print at a distorted $/SF must not move the median…
+      marketComp({
+        id: "4",
+        neighborhoodId: "nolita",
+        capRate: 0.09,
+        pricePsf: 700,
+        saleDate: "2026-02-13",
+        saleConditions: ["partial_interest"],
+      }),
+      // …while an estate sale is a real clearing price and stays in.
+      marketComp({
+        id: "5",
+        neighborhoodId: "nolita",
+        capRate: 0.07,
+        pricePsf: 1300,
+        saleDate: "2026-02-14",
+        saleConditions: ["estate_sale"],
+      }),
+    ];
+    const draft = computeNeighborhoodRollup({ neighborhood: nolita, comps, submarketStats: [], asOf });
+    expect(draft.compCount12mo).toBe(4);
+    expect(draft.medianCapRate).toBe(median([0.05, 0.06, 0.055, 0.07]));
+    expect(draft.excludedComps.some((comp) => comp.id === "4")).toBe(true);
+  });
+
+  it("merges deal-intel fields across documents (union of condition flags, gap-fill buyer/GRM)", () => {
+    const existing = marketComp({
+      salePrice: 4_000_000,
+      saleDate: "2026-02-01",
+      buyer: null,
+      grm: null,
+      saleConditions: ["estate_sale"],
+    });
+    const incoming: MergedComp = {
+      address: existing.address,
+      addressNormalized: normalizeCompAddress(existing.address),
+      neighborhoodRaw: null,
+      neighborhoodId: null,
+      borough: "Manhattan",
+      salePrice: 4_000_000,
+      priceType: "closed",
+      saleDate: "2026-02-01",
+      gsf: null,
+      pricePsf: null,
+      unitsTotal: null,
+      unitsResi: null,
+      pctRentStabilized: null,
+      capRate: null,
+      grm: 13.5,
+      assetType: null,
+      buyer: "Acme Property Group LLC",
+      seller: null,
+      saleConditions: ["delivered_vacant"],
+      notesShort: null,
+      cherryPickRisk: false,
+      isSubjectProperty: false,
+      confidence: "high",
+      rawText: null,
+      provenance: provenance("market_research", "doc_b"),
+      provenanceList: [provenance("market_research", "doc_b")],
+      lat: null,
+      lng: null,
+    };
+    const merged = mergeComps(existing, incoming);
+    expect(merged.buyer).toBe("Acme Property Group LLC");
+    expect(merged.grm).toBe(13.5);
+    expect([...merged.saleConditions].sort()).toEqual(["delivered_vacant", "estate_sale"]);
   });
 });

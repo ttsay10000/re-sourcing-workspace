@@ -278,6 +278,7 @@ export function buildReviewInput(params: { documents: MarketDocument[]; stats: M
         source_type: doc.source_type,
         document_class: doc.document_class,
         geo_scope: doc.geo_scope,
+        coverage_universe: doc.coverage_universe,
         filename: doc.filename,
         ingested_at: doc.createdAt,
         analyst_notes: doc.llmNotes

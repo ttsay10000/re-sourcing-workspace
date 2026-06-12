@@ -55,6 +55,7 @@ export function coerceClassification(parsed: Record<string, unknown> | null): Ma
     report_title: asString(parsed?.report_title),
     period_covered: asString(parsed?.period_covered),
     geo_scope: asString(parsed?.geo_scope),
+    coverage_universe: asString(parsed?.coverage_universe),
     subject_property: asString(parsed?.subject_property),
     classifier_confidence: confidence,
     evidence,

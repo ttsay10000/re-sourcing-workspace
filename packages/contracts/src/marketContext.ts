@@ -31,6 +31,23 @@ export type MarketAssetType =
 
 export type MarketGeoLevel = "address" | "neighborhood" | "submarket" | "borough" | "citywide";
 
+/**
+ * Printed/footnoted sale conditions on a comp. Non-arm's-length or
+ * non-fee-simple prints (portfolio_sale, partial_interest, note_sale,
+ * ground_lease) are excluded from neighborhood median math; the rest are real
+ * comps whose flags explain the print (estate pricing, vacancy premium).
+ */
+export type MarketSaleCondition =
+  | "portfolio_sale"
+  | "partial_interest"
+  | "note_sale"
+  | "ground_lease"
+  | "distressed"
+  | "estate_sale"
+  | "delivered_vacant"
+  | "1031_exchange"
+  | "related_party";
+
 export type MarketMetricType = "level" | "pct_change";
 
 /** Provenance object stored on every extracted record. Injected by code, never by the extractor. */
@@ -56,6 +73,8 @@ export interface MarketDocClassification {
   report_title: string | null;
   period_covered: string | null;
   geo_scope: string | null;
+  /** Publisher's stated methodology/universe ("sales $1M+ in 5+ unit buildings, all Manhattan"); reconciles cross-publisher gaps. */
+  coverage_universe: string | null;
   subject_property: string | null;
   classifier_confidence: ClassifierConfidence;
   evidence: string[];
@@ -114,7 +133,14 @@ export interface MarketComp {
   pctRentStabilized: number | null;
   /** Decimal (0.0582 = 5.82%); null when printed "N/A" — never inferred. */
   capRate: number | null;
+  /** Gross rent multiplier as printed (how sub-10-unit deals are quoted); never derived. */
+  grm: number | null;
   assetType: MarketAssetType | null;
+  /** Purchaser / seller exactly as printed; never inferred. */
+  buyer: string | null;
+  seller: string | null;
+  /** Printed sale-condition flags (see MarketSaleCondition). */
+  saleConditions: MarketSaleCondition[];
   notesShort: string | null;
   /** true for comp tables inside OMs/BOVs. */
   cherryPickRisk: boolean;
@@ -499,11 +525,17 @@ export interface CompReviewQueueItem {
   saleDate: string | null;
   /** Percent points (5.82 = 5.82%). */
   capRatePct: number | null;
+  /** Gross rent multiplier as printed. */
+  grm: number | null;
   pricePsf: number | null;
   pricePerUnit: number | null;
   noi: number | null;
   assetType: string | null;
   priceType: MarketPriceType | null;
+  /** Purchaser as printed (institutional-trend verification). */
+  buyer: string | null;
+  /** Printed sale-condition flags to verify before approval. */
+  saleConditions: string[];
   /** "high" | "medium" | "low" for doc comps; numeric 0-1 rendered as a label for broker items. */
   confidence: string | null;
   cherryPickRisk: boolean;

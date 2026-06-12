@@ -43,9 +43,15 @@ interface MarketComp {
   };
   assetType: string | null;
   priceType: string | null;
+  buyer: string | null;
+  saleConditions: string[];
   cherryPickRisk: boolean;
   lat: number | null;
   lng: number | null;
+}
+
+function conditionLabel(value: string): string {
+  return value.replace(/_/g, " ");
 }
 
 interface MarketCompsResponse {
@@ -302,9 +308,29 @@ export default function CompAnalysisPage() {
                           .join(" · ")}
                         {item.cherryPickRisk ? " · ⚠ broker-picked set" : ""}
                       </div>
+                      {item.buyer ? <div className={styles.compSub}>buyer: {item.buyer}</div> : null}
+                      {item.saleConditions.length > 0 ? (
+                        <div className={styles.flagRow}>
+                          {item.saleConditions.map((condition) => (
+                            <span key={condition} className={styles.flagChip} title="Printed sale condition — verify before approving.">
+                              {conditionLabel(condition)}
+                            </span>
+                          ))}
+                        </div>
+                      ) : null}
                       {item.notes ? <div className={styles.compSub}>{item.notes}</div> : null}
                     </td>
-                    <td style={{ color: capRateColor(item.capRatePct) }}>{fmtPct(item.capRatePct)}</td>
+                    <td style={{ color: capRateColor(item.capRatePct) }}>
+                      {item.capRatePct != null ? (
+                        fmtPct(item.capRatePct)
+                      ) : item.grm != null ? (
+                        <span className={styles.compSub} title="No cap rate printed — gross rent multiplier as printed.">
+                          {item.grm}x GRM
+                        </span>
+                      ) : (
+                        EMPTY_VALUE
+                      )}
+                    </td>
                     <td>{fmtPsf(item.pricePsf)}</td>
                     <td>{formatCurrencyExact(item.salePrice)}</td>
                     <td>{item.units ?? EMPTY_VALUE}</td>
@@ -484,13 +510,19 @@ export default function CompAnalysisPage() {
                             .filter(Boolean)
                             .join(" · ")}
                         </div>
-                        {comp.cherryPickRisk || (comp.priceType && comp.priceType !== "closed") ? (
+                        {comp.buyer ? <div className={styles.compSub}>buyer: {comp.buyer}</div> : null}
+                        {comp.cherryPickRisk || comp.saleConditions.length > 0 || (comp.priceType && comp.priceType !== "closed") ? (
                           <div className={styles.flagRow}>
                             {comp.cherryPickRisk ? (
                               <span className={styles.flagChip} title="Comp table inside an OM/BOV — broker-selected set.">
                                 ⚠ broker-picked
                               </span>
                             ) : null}
+                            {comp.saleConditions.map((condition) => (
+                              <span key={condition} className={styles.flagChip} title="Printed sale condition.">
+                                {conditionLabel(condition)}
+                              </span>
+                            ))}
                             {comp.priceType && comp.priceType !== "closed" ? (
                               <span className={styles.flagChip} title="Not a closed sale.">
                                 {comp.priceType.replace(/_/g, " ")}

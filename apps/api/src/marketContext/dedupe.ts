@@ -99,7 +99,10 @@ function populatedFieldCount(comp: ExtractedComp | MarketComp): number {
     comp.unitsResi,
     comp.pctRentStabilized,
     comp.capRate,
+    comp.grm,
     comp.assetType,
+    comp.buyer,
+    comp.seller,
     comp.notesShort,
     comp.borough,
     comp.neighborhoodRaw,
@@ -159,7 +162,11 @@ export function mergeComps(existing: MarketComp, incoming: MergedComp): MergedCo
         unitsResi: existing.unitsResi,
         pctRentStabilized: existing.pctRentStabilized,
         capRate: existing.capRate,
+        grm: existing.grm,
         assetType: existing.assetType,
+        buyer: existing.buyer,
+        seller: existing.seller,
+        saleConditions: existing.saleConditions,
         notesShort: existing.notesShort,
         cherryPickRisk: existing.cherryPickRisk,
         isSubjectProperty: existing.isSubjectProperty,
@@ -184,10 +191,16 @@ export function mergeComps(existing: MarketComp, incoming: MergedComp): MergedCo
   base.unitsResi = base.unitsResi ?? other.unitsResi;
   base.pctRentStabilized = base.pctRentStabilized ?? other.pctRentStabilized;
   base.capRate = base.capRate ?? other.capRate;
+  base.grm = base.grm ?? other.grm;
   base.assetType = base.assetType ?? other.assetType;
+  base.buyer = base.buyer ?? other.buyer;
+  base.seller = base.seller ?? other.seller;
   base.notesShort = base.notesShort ?? other.notesShort;
   base.lat = base.lat ?? (incomingWins ? existing.lat : incoming.lat);
   base.lng = base.lng ?? (incomingWins ? existing.lng : incoming.lng);
+  // Condition flags accumulate — a footnote either side printed stays true.
+  // (?? [] guards rows persisted before migration 065 added the column.)
+  base.saleConditions = [...new Set([...(existing.saleConditions ?? []), ...(incoming.saleConditions ?? [])])];
 
   // Research-sourced closed figures win over broker-provided ones.
   const researchSide = existingResearch ? existing : incomingResearch ? incoming : null;

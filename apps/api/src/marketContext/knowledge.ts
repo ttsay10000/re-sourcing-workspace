@@ -73,7 +73,10 @@ export interface KnowledgeCompInput {
   unitsTotal: number | null;
   pctRentStabilized: number | null;
   capRate: number | null;
+  grm?: number | null;
   assetType: MarketAssetType | null;
+  buyer?: string | null;
+  saleConditions?: string[];
   cherryPickRisk: boolean;
   isSubjectProperty: boolean;
 }
@@ -795,6 +798,7 @@ export function buildKnowledgeInput(inputs: DeterministicInputs): string {
           report_title: inputs.classification.report_title,
           period_covered: inputs.classification.period_covered,
           geo_scope: inputs.classification.geo_scope,
+          coverage_universe: inputs.classification.coverage_universe,
           filename: inputs.filename,
         },
         comps: inputs.comps.slice(0, MAX_PROMPT_COMPS).map((comp) => ({
@@ -807,7 +811,10 @@ export function buildKnowledgeInput(inputs: DeterministicInputs): string {
           units_total: comp.unitsTotal,
           pct_rent_stabilized: comp.pctRentStabilized,
           cap_rate: comp.capRate,
+          grm: comp.grm ?? null,
           asset_type: comp.assetType,
+          buyer: comp.buyer ?? null,
+          sale_conditions: comp.saleConditions ?? [],
           cherry_pick_risk: comp.cherryPickRisk,
           is_subject_property: comp.isSubjectProperty,
         })),

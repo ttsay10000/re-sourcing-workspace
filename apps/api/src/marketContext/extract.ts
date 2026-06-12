@@ -11,6 +11,7 @@ import type {
   MarketMetricType,
   MarketPriceType,
   MarketProvenance,
+  MarketSaleCondition,
 } from "@re-sourcing/contracts";
 import { MARKET_PROMPT_VERSIONS, buildExtractionPrompt } from "./prompts.js";
 import type { MarketLlmRequest, MarketLlmResult, MarketLlmRunner } from "./llmAdapter.js";
@@ -29,7 +30,11 @@ export interface ExtractedComp {
   unitsResi: number | null;
   pctRentStabilized: number | null;
   capRate: number | null;
+  grm: number | null;
   assetType: MarketAssetType | null;
+  buyer: string | null;
+  seller: string | null;
+  saleConditions: MarketSaleCondition[];
   notesShort: string | null;
   cherryPickRisk: boolean;
   isSubjectProperty: boolean;
@@ -61,6 +66,34 @@ const PRICE_TYPES: MarketPriceType[] = ["closed", "asking", "in_contract", "unkn
 const ASSET_TYPES: MarketAssetType[] = ["multifamily", "mixed-use", "office", "retail", "development", "conversion"];
 const GEO_LEVELS: MarketGeoLevel[] = ["address", "neighborhood", "submarket", "borough", "citywide"];
 const CONFIDENCES: ClassifierConfidence[] = ["high", "medium", "low"];
+const SALE_CONDITIONS: MarketSaleCondition[] = [
+  "portfolio_sale",
+  "partial_interest",
+  "note_sale",
+  "ground_lease",
+  "distressed",
+  "estate_sale",
+  "delivered_vacant",
+  "1031_exchange",
+  "related_party",
+];
+
+/** Whitelist + dedupe the model's sale-condition tags; unknown tags are dropped. */
+function asSaleConditions(value: unknown): MarketSaleCondition[] {
+  if (!Array.isArray(value)) return [];
+  const conditions = value
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => item.trim().toLowerCase())
+    .filter((item): item is MarketSaleCondition => SALE_CONDITIONS.includes(item as MarketSaleCondition));
+  return [...new Set(conditions)];
+}
+
+/** GRM sanity window: NYC multifamily prints roughly 5-40x gross; outside that is a misread cell. */
+function asGrm(value: unknown): number | null {
+  const parsed = asNumber(value);
+  if (parsed == null || parsed < 1 || parsed > 60) return null;
+  return parsed;
+}
 
 function asString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
@@ -187,7 +220,11 @@ export function coerceExtraction(
       unitsResi: asNumber(row.units_resi),
       pctRentStabilized: asRate(row.pct_rent_stabilized),
       capRate: asRate(row.cap_rate),
+      grm: asGrm(row.grm),
       assetType: ASSET_TYPES.includes(rawAssetType as MarketAssetType) ? (rawAssetType as MarketAssetType) : null,
+      buyer: asString(row.buyer),
+      seller: asString(row.seller),
+      saleConditions: asSaleConditions(row.sale_conditions),
       notesShort: asString(row.notes_short),
       cherryPickRisk,
       isSubjectProperty,

@@ -71,6 +71,7 @@ router.get("/comps/review-queue", async (_req: Request, res: Response) => {
       salePrice: comp.salePrice,
       saleDate: comp.saleDate,
       capRatePct: comp.capRate != null ? comp.capRate * 100 : null,
+      grm: comp.grm,
       pricePsf: comp.pricePsf,
       pricePerUnit:
         comp.salePrice != null && comp.unitsTotal != null && comp.unitsTotal > 0
@@ -81,6 +82,8 @@ router.get("/comps/review-queue", async (_req: Request, res: Response) => {
       priceType: comp.priceType,
       confidence: comp.confidence,
       cherryPickRisk: comp.cherryPickRisk,
+      buyer: comp.buyer,
+      saleConditions: comp.saleConditions,
       notes: comp.notesShort,
       sourceLabel: [
         document?.publisher ?? document?.filename ?? "Market document",
@@ -126,6 +129,7 @@ router.get("/comps/review-queue", async (_req: Request, res: Response) => {
         salePrice,
         saleDate: toText(payload.saleDate),
         capRatePct: toNumber(payload.capRatePct ?? payload.capRate),
+        grm: toNumber(payload.grm ?? payload.grossRentMultiplier),
         pricePsf: toNumber(payload.pricePerSqft ?? payload.salePsf ?? payload.soldPpsf ?? payload.askingPpsf),
         pricePerUnit:
           toNumber(payload.pricePerUnit) ??
@@ -135,6 +139,8 @@ router.get("/comps/review-queue", async (_req: Request, res: Response) => {
         priceType: null as MarketPriceType | null,
         confidence: confidenceLabel(toNumber(row.confidence)),
         cherryPickRisk: false,
+        buyer: toText(payload.buyer ?? payload.purchaser),
+        saleConditions: [],
         notes: toText(payload.notes ?? payload.note),
         sourceLabel: `Broker package · ${packageTypeLabel(String(row.package_type))}`,
         sourceDetail: String(row.subject_address).split(",")[0] ?? null,

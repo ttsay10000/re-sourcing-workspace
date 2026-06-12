@@ -46,6 +46,27 @@ const MAX_PROMPT_STATS = 40;
 export interface NotesCompInput extends KnowledgeCompInput {
   neighborhoodRaw?: string | null;
   notesShort?: string | null;
+  grm?: number | null;
+  buyer?: string | null;
+  seller?: string | null;
+  saleConditions?: string[];
+}
+
+/**
+ * When a report carries more comps than the refine prompt budget, keep the
+ * firm's segment first: sub-10-unit buildings lead, then larger deals by
+ * price. The notable-transaction lens follows the acquisition strategy.
+ */
+export function prioritizeCompsForNotes<T extends NotesCompInput>(comps: T[], max: number): T[] {
+  if (comps.length <= max) return comps;
+  return [...comps]
+    .sort((a, b) => {
+      const aSmall = a.unitsTotal != null && a.unitsTotal < 10 ? 0 : 1;
+      const bSmall = b.unitsTotal != null && b.unitsTotal < 10 ? 0 : 1;
+      if (aSmall !== bSmall) return aSmall - bSmall;
+      return (b.salePrice ?? 0) - (a.salePrice ?? 0);
+    })
+    .slice(0, max);
 }
 
 function clamp(text: string): string {
@@ -142,9 +163,12 @@ function compLine(comp: NotesCompInput): string {
   const pieces = [
     comp.salePrice != null ? moneyShort(comp.salePrice) : null,
     comp.capRate != null ? `${(comp.capRate * 100).toFixed(2)}% cap` : null,
+    comp.grm != null ? `${comp.grm}x GRM` : null,
     comp.pricePsf != null ? `$${Math.round(comp.pricePsf)}/SF` : null,
     comp.unitsTotal != null ? `${comp.unitsTotal} units` : null,
     comp.assetType,
+    comp.buyer ? `buyer: ${comp.buyer}` : null,
+    ...(comp.saleConditions ?? []).map((condition) => condition.replace(/_/g, " ")),
     comp.priceType !== "closed" ? comp.priceType : null,
   ].filter(Boolean);
   return clamp(`${comp.address} — ${pieces.join(", ")}`);
@@ -220,6 +244,24 @@ export function deterministicNotes(params: {
     .slice(0, 5)
     .map(compLine);
 
+  // Printed buyers are facts — surface who bought without inferring entity type.
+  const buyerActivity: string[] = [];
+  const namedBuyers = closed.map((comp) => comp.buyer).filter((b): b is string => b != null);
+  if (namedBuyers.length > 0) {
+    const unique = [...new Set(namedBuyers)];
+    buyerActivity.push(
+      clamp(
+        `Buyers printed on ${namedBuyers.length} of ${closed.length} closed deals — incl. ${unique.slice(0, 4).join(", ")}`
+      )
+    );
+  }
+  const motivated = closed.filter((comp) =>
+    (comp.saleConditions ?? []).some((condition) => ["estate_sale", "distressed", "note_sale"].includes(condition))
+  );
+  if (motivated.length > 0) {
+    buyerActivity.push(clamp(`${motivated.length} closed deal${motivated.length === 1 ? "" : "s"} flagged estate/distressed/note-sale`));
+  }
+
   const small = closed.filter((comp) => comp.unitsTotal != null && comp.unitsTotal < 10);
   const smallFm = small.filter((comp) => (comp.pctRentStabilized ?? 0) <= 0.1);
   const smallBuildingFocus: string[] = [];
@@ -254,7 +296,7 @@ export function deterministicNotes(params: {
     overview: overview.slice(0, LIST_CAPS.overview),
     neighborhoods,
     assetTypes,
-    buyerActivity: [],
+    buyerActivity: buyerActivity.slice(0, LIST_CAPS.buyerActivity),
     notableTransactions: notable,
     capRatePsf,
     financing: [],
@@ -281,11 +323,12 @@ function refineInput(params: {
         report_title: params.classification.report_title,
         period_covered: params.classification.period_covered,
         geo_scope: params.classification.geo_scope,
+        coverage_universe: params.classification.coverage_universe,
         filename: params.filename,
       },
       draft_notes: params.draft,
       structured_extraction: {
-        comps: params.comps.slice(0, MAX_PROMPT_COMPS).map((comp) => ({
+        comps: prioritizeCompsForNotes(params.comps, MAX_PROMPT_COMPS).map((comp) => ({
           address: comp.address,
           neighborhood: comp.neighborhoodRaw ?? null,
           sale_price: comp.salePrice,
@@ -295,7 +338,11 @@ function refineInput(params: {
           units_total: comp.unitsTotal,
           pct_rent_stabilized: comp.pctRentStabilized,
           cap_rate: comp.capRate,
+          grm: comp.grm ?? null,
           asset_type: comp.assetType,
+          buyer: comp.buyer ?? null,
+          seller: comp.seller ?? null,
+          sale_conditions: comp.saleConditions ?? [],
           notes: comp.notesShort ?? null,
           is_subject_property: comp.isSubjectProperty,
         })),

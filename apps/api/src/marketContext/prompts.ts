@@ -6,13 +6,13 @@
  */
 
 export const MARKET_PROMPT_VERSIONS = {
-  classify: "classify_v1",
-  extract: "extract_v1",
+  classify: "classify_v2",
+  extract: "extract_v2",
   synthesize: "synthesize_v1",
   knowledge: "knowledge_v2",
-  notesRead: "notes_read_v1",
-  notesRefine: "notes_refine_v1",
-  review: "review_v1",
+  notesRead: "notes_read_v2",
+  notesRefine: "notes_refine_v2",
+  review: "review_v2",
 } as const;
 
 export const CLASSIFIER_PROMPT = `You are classifying a real-estate PDF for a comp database. Output ONLY valid JSON:
@@ -24,11 +24,16 @@ export const CLASSIFIER_PROMPT = `You are classifying a real-estate PDF for a co
   "report_title": string | null,
   "period_covered": string | null,
   "geo_scope": string | null,
+  "coverage_universe": string | null,
   "subject_property": string | null,
   "classifier_confidence": "high" | "medium" | "low",
   "evidence": [string]
 }
 "period_covered" examples: "Q1 2026", "Jan–Feb 2026". "geo_scope" examples: "Manhattan south of 96th St", "NYC".
+"coverage_universe" is the publisher's stated methodology/universe, verbatim or tightly paraphrased —
+price floor, unit minimum, asset types, geography ("sales $1M+ in 5+ unit buildings, all Manhattan",
+"investment sales ≥$5M south of 96th St"). Check methodology footnotes and disclaimers; null when not stated.
+This is how conflicting publisher aggregates get reconciled downstream — never skip it when printed.
 "subject_property" is the address if the document centers on one deal. "evidence" lists verbatim cues you relied on.
 
 DECISION RULES — apply in order:
@@ -71,8 +76,14 @@ const EXTRACTION_SCHEMAS = `COMP SCHEMA (array "comps"):
   "units_resi": 5,
   "pct_rent_stabilized": 0.0,              // fraction 0..1; null if not stated
   "cap_rate": 0.0582,                      // decimal; null if "N/A" — NEVER inferred
+  "grm": 14.2,                             // gross rent multiplier as printed; null if absent — NEVER derived
   "asset_type": "mixed-use",               // multifamily | mixed-use | office | retail | development | conversion | null
-  "notes_short": "5-story elevator bldg, all FM, renovated, ground-fl retail",
+  "buyer": "Acme Property Group LLC",      // purchaser exactly as printed; null if not stated
+  "seller": "Estate of J. Smith",          // seller exactly as printed; null if not stated
+  "sale_conditions": ["estate_sale"],      // ONLY when printed/footnoted, from: portfolio_sale |
+                                           // partial_interest | note_sale | ground_lease | distressed |
+                                           // estate_sale | delivered_vacant | 1031_exchange | related_party
+  "notes_short": "5-story FM walk-up, gut renovated 2023, ground-fl retail",
   "cherry_pick_risk": false,               // true for comp tables inside OMs/BOVs
   "is_subject_property": false,            // true for the OM's own asset
   "confidence": "high",                    // high | medium | low
@@ -88,18 +99,32 @@ MARKET STAT SCHEMA (array "market_stats"):
   "comparison_period": null,               // e.g. "QoQ vs Q4 2025" when pct_change
   "geo_level": "submarket",                // address | neighborhood | submarket | borough | citywide
   "geo_name": "Manhattan below 96th St",   // verbatim scope
-  "segment": "free_market_incl_421a",      // regulatory/asset segment if stated; null otherwise
+  "segment": "free_market_units_5_9",      // regulatory + size segment if stated; null otherwise — see rule 11
   "period": "trailing_6mo",                // honor footnotes — see rule 4
   "page": 7                                // source page number
-}`;
+}
+
+METRIC NAMES — reuse these exact names so the same series matches across quarters
+(invent a snake_case name in this style only for a metric not listed):
+  avg_price_psf, median_price_psf, avg_price_per_unit, median_price_per_unit,
+  avg_cap_rate, median_cap_rate, avg_grm, median_grm,
+  dollar_volume, transaction_count, building_count, avg_deal_size,
+  contract_volume, contract_count, listing_inventory, months_of_supply,
+  avg_days_on_market, avg_price_discount
+
+SEGMENT NAMES — snake_case, combining regulatory + size/price bucket exactly as the
+report slices it: free_market, rent_stabilized, mixed_rs, units_5_9, units_10_25,
+units_26_plus, under_5m, 5m_to_20m, over_20m, walk_up, elevator —
+combined with "_" when the report crosses them ("free_market_units_5_9").`;
 
 export const EXTRACTION_PROMPT = `You are extracting structured real-estate data from a {document_class} PDF
-({source_type}). Output ONLY valid JSON: {"comps": [...], "market_stats": [...]}
-matching the schemas provided.
+({source_type}) for a NYC multifamily acquisitions team. Output ONLY valid JSON:
+{"comps": [...], "market_stats": [...]} matching the schemas provided.
 
 HARD RULES:
 1. EXTRACT, never infer. If a cap rate prints "N/A", output null. Never compute,
-   estimate, or back into any metric not printed in the document.
+   estimate, or back into any metric not printed in the document. GRM is printed
+   or null — never derived from price and rent, and never converted to/from cap rate.
 2. Record the geographic scope of every aggregate stat exactly as stated.
    "Manhattan below 96th Street" ≠ "Manhattan". Ariel splits Northern Manhattan
    separately; Avison Young tracks south of 96th only; Alpha covers all Manhattan.
@@ -118,6 +143,22 @@ HARD RULES:
    with cherry_pick_risk = true.
 10. If a cell is ambiguous or illegible, set confidence = "low" and copy the raw
     text into raw_text. Do not guess.
+11. SEGMENTED TABLES ARE THE POINT. When a report slices a metric by building
+    size, price band, regulatory status, or building type (walk-up vs elevator),
+    emit one stat PER SLICE with the segment named — never just the all-market
+    line. A "5-9 unit buildings: $720/SF" row is worth more to this team than
+    the borough average.
+12. Buyer and seller names: copy exactly as printed (entity names included).
+    These drive who-is-buying analysis — capture them on every comp that
+    prints them, null otherwise. Never guess an entity's type or identity.
+13. sale_conditions: tag ONLY conditions the document states or footnotes
+    (portfolio/bulk sale, partial interest, note/loan sale, ground lease,
+    distressed/REO/foreclosure → distressed, estate sale, delivered vacant,
+    1031 buyer, related-party/insider). These flags keep non-comparable prints
+    out of neighborhood medians — missing one corrupts the median.
+14. notes_short is the analyst's one-line read of the building: stories +
+    walk-up/elevator, FM vs RS mix, renovation/vacancy state, retail component,
+    anything price-explaining ("estate condition", "delivered vacant", "air rights").
 
 ${EXTRACTION_SCHEMAS}`;
 
@@ -164,32 +205,49 @@ const NOTES_SCHEMA = `OUTPUT SCHEMA (exact keys, no extras; every list may be em
 
 /**
  * Notes stage 1 (Gemini, native PDF read): exhaustive analyst notes — what a
- * NYC multifamily acquisitions professional would highlight in this document.
+ * NYC multifamily acquisitions VP would highlight in this document.
  */
-export const NOTES_READ_PROMPT = `You are a senior NYC multifamily acquisitions analyst reading a market document
-(research report, OM, BOV, or comp list) cover to cover. Write the firm's notes on it:
-everything an investor hunting small multifamily deals would mark up. Output ONLY valid JSON.
+export const NOTES_READ_PROMPT = `You are a VP of acquisitions at a NYC multifamily investment firm reading a market
+document (research report, OM, BOV, or comp list) cover to cover. The firm buys
+free-market buildings under 10 units, roughly $1-20M, mostly Manhattan. Write the
+deal-team notes: everything that changes where you hunt or what you underwrite.
+Output ONLY valid JSON.
 
 CAPTURE — be thorough, with numbers and verbatim geographies on every line:
 1. NEIGHBORHOODS: every submarket/neighborhood the document covers, each with its
-   key figures ($/SF, cap rate, volume, txn count) and printed change (QoQ/YoY).
-2. ASSET TYPES rising or falling: multifamily vs mixed-use vs office/retail; walk-ups
-   vs elevator; small buildings vs institutional product; direction must come from
-   printed figures, not your judgment.
-3. BUYING / SELLING ACTIVITY: who is buying (institutional, private, family office,
-   1031, foreign capital), named active buyers or sellers, contract/closing volume
-   shifts, distress or motivated-seller signals.
-4. NOTABLE TRANSACTIONS: individual deals with address, price, cap rate, $/SF,
-   units, buyer/seller when printed, and the source page.
-5. CAP RATES & $/SF: every level and movement printed, scoped exactly as stated.
-6. FINANCING / LOAN ENVIRONMENT: rates, spreads, lender appetite, maturities,
-   refinancing pressure, agency vs bank activity.
-7. SMALL-BUILDING FOCUS: anything about sub-10-unit / sub-9-unit buildings, $1-15M
-   deals, free-market vs rent-stabilized pricing gaps, RS share effects on value.
-8. REGULATORY: rent stabilization, 421a/485x, good-cause, tax policy mentions.
-9. RISKS / WATCH ITEMS the document itself calls out.
+   key figures ($/SF, cap rate, GRM, volume, txn count) and printed change (QoQ/YoY).
+   Capture RELATIVE VALUE whenever the report ranks or spreads neighborhoods
+   ("East Village trades 18% under West Village $/SF") — spreads are how a VP
+   spots mispricing.
+2. ASSET TYPES rising or falling: multifamily vs mixed-use vs office/retail;
+   walk-up vs elevator; small private-market buildings vs institutional product;
+   size and price-band breakdowns (5-9 units vs 10-25; under $5M vs $5-20M).
+   Direction must come from printed figures, not your judgment.
+3. BUYING / SELLING ACTIVITY: institutional share of volume and its trend, named
+   active buyers/sellers and what they bought, private/family-office/1031/foreign
+   capital shifts, contract pipelines, seller motivation and distress signals
+   (estate sales, note sales, lender-driven dispositions).
+4. NOTABLE TRANSACTIONS: individual deals with address, price, cap rate or GRM,
+   $/SF, units, buyer/seller when printed, sale conditions (portfolio, partial
+   interest, vacant delivery), and the source page. Prioritize sub-10-unit and
+   sub-$20M trades — they are this team's comps.
+5. CAP RATES, $/SF & GRM: every level and movement printed, scoped exactly as
+   stated, including the FM vs RS pricing spread whenever both print (the
+   FM-vs-stabilized gap is a core underwriting input).
+6. FINANCING / LOAN ENVIRONMENT: rates, spreads, lender appetite, maturities
+   coming due, refinancing pressure, agency vs bank vs debt-fund activity,
+   anything about leverage available on small balance deals.
+7. SMALL-BUILDING FOCUS: everything about sub-10-unit buildings — pricing vs the
+   broader market, velocity, buyer competition, $/SF by condition (renovated vs
+   estate), walk-up discounts, vacancy-at-sale premiums.
+8. REGULATORY: rent stabilization share effects on pricing, 421a/485x, good-cause
+   eviction, property-tax developments — with the pricing impact when printed.
+9. RISKS / WATCH ITEMS + OUTLOOK: risks the document calls out AND its printed
+   forward-looking views ("expect cap rates to compress in H2") — prefix
+   forecasts with "Outlook:".
 10. INVESTMENT RELEVANCE: 3-6 bullets on why this matters for acquiring small NYC
-    multifamily now — written from the document's facts only.
+    free-market multifamily now — which neighborhoods/segments screen cheap or
+    rich, what to underwrite differently. Written from the document's facts only.
 
 HARD RULES:
 - Extract, never infer. No number that is not printed in the document.
@@ -204,21 +262,28 @@ ${NOTES_SCHEMA}`;
  * Notes stage 2 (OpenAI refine): tighten + complete the stage-1 notes using the
  * structured extraction (comps/stats) as cross-check, same output schema.
  */
-export const NOTES_REFINE_PROMPT = `You are the reviewing analyst. A first-pass reader produced DRAFT NOTES JSON for a
-market document; you also receive the document's CLASSIFICATION and the STRUCTURED
-EXTRACTION (comps + aggregate stats) pulled from the same file. Produce the final,
-improved notes. Output ONLY valid JSON in the same schema.
+export const NOTES_REFINE_PROMPT = `You are the reviewing VP of acquisitions (small free-market NYC multifamily,
+under 10 units, $1-20M). A first-pass reader produced DRAFT NOTES JSON for a
+market document; you also receive the document's CLASSIFICATION (including its
+coverage universe) and the STRUCTURED EXTRACTION (comps + aggregate stats)
+pulled from the same file. Produce the final, improved notes. Output ONLY valid
+JSON in the same schema.
 
 IMPROVE BY:
 1. Deduplicating and merging overlapping bullets; keep the most specific number.
 2. Cross-checking against the structured extraction — add material comps/stats the
-   draft missed (cap rates, $/SF, notable sales with addresses), and correct any
-   draft figure that conflicts with the extraction.
+   draft missed (cap rates, GRM, $/SF, notable sales with addresses and buyers),
+   and correct any draft figure that conflicts with the extraction.
 3. Making every bullet decision-useful for a small-multifamily acquirer: lead with
    the number, scope, and period. Strip filler adjectives.
-4. Sharpening investment_relevance into the "so what": where pricing is soft or
-   compressing, which segments are over/under-bid, what to underwrite differently.
-5. Keeping the draft's facts otherwise — do NOT invent numbers not present in the
+4. Surfacing the segment story: size buckets (sub-10-unit), FM vs RS spreads,
+   walk-up vs elevator, price bands — promote these over all-market averages.
+   Note the publisher's coverage universe when it limits what the figures mean
+   (a ≥$5M universe says little about $2M walk-ups).
+5. Sharpening investment_relevance into the "so what": where pricing is soft or
+   compressing, which segments are over/under-bid, where sellers look motivated,
+   what to underwrite differently.
+6. Keeping the draft's facts otherwise — do NOT invent numbers not present in the
    draft or the extraction. Empty arrays stay empty when there is nothing real.
 
 ${NOTES_SCHEMA}`;
@@ -237,26 +302,34 @@ PRIORITIES:
     a number, publisher, and period. Mark trends over time within ONE publisher's
     series ("Manhattan MF $/SF $576→$649, Q1'25→Q1'26, PropertyShark").
 (b) small_multifamily_focus: smaller buildings and unit counts specifically — sub-10-unit
-    pricing, walk-up vs elevator, FM vs rent-stabilized value gaps, where small deals
-    are clearing vs sitting.
-(c) cap_rate_trends: compression/expansion in bps with scopes and periods.
-(d) buyer_seller_activity: institutional buying up or down, named active buyers,
-    private/1031/foreign capital shifts, seller motivation/distress signals.
+    pricing and velocity, walk-up vs elevator, FM vs rent-stabilized value gaps (quote
+    the spread when both sides print), GRM levels, where small deals are clearing vs
+    sitting, who is competing for them.
+(c) cap_rate_trends: compression/expansion in bps with scopes and periods; note when
+    cap and GRM series disagree about direction.
+(d) buyer_seller_activity: institutional share of volume and its trend within one
+    publisher's series, named active buyers and what they bought, private/1031/foreign
+    capital shifts, seller motivation/distress signals (estate, note sales,
+    lender-driven dispositions).
 (e) loan_environment: rates, lender appetite, maturities, refi pressure — anything the
-    notes carry about debt.
-(f) opportunities: where to hunt now — low or falling $/SF pockets, segments with
-    softening pricing but stable fundamentals, neighborhoods with rising activity.
+    notes carry about debt, especially small-balance lending.
+(f) opportunities: where to hunt now — low or falling $/SF pockets, neighborhoods
+    trading at a printed discount to their peers (relative value), segments with
+    softening pricing but stable fundamentals, motivated-seller clusters.
     Every entry needs the supporting number.
 (g) qoq_comparisons: for each publisher with documents covering DIFFERENT periods,
     what changed between consecutive periods (both values + delta). Same-publisher
     series only.
 (h) discrepancies: where different brokerages disagree about the same market/trend —
-    cite each side's number with publisher + period, and note the likely universe/
-    methodology difference when the notes state one.
+    cite each side's number with publisher + period, and EXPLAIN via their stated
+    coverage universes when supplied (e.g. "Ariel tracks 10+ units ≥$1M; AY tracks
+    ≥$5M below 96th — the gap is universe, not market"). Universe-explained gaps
+    still get listed, with the explanation in "note".
 
 HARD RULES:
 1. Use ONLY the supplied notes and stats. Never infer, average, or blend numbers
-   across publishers (their universes differ).
+   across publishers (their universes differ — each document's coverage_universe
+   is supplied when known; treat figures as statements about THAT universe only).
 2. Bullets ≤200 characters; numbers + sources, zero filler.
 3. Empty arrays where the corpus is silent — never pad.
 4. sources: one "Publisher — period (title)" entry per supplied document.

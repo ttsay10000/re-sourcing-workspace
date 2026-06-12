@@ -155,6 +155,7 @@ describe("per-document analyst notes", () => {
         report_title: "Manhattan Multifamily Market Trends",
         period_covered: "Q1 2026",
         geo_scope: "Manhattan",
+        coverage_universe: null,
         subject_property: null,
         classifier_confidence: "high",
         evidence: [],
@@ -169,7 +170,7 @@ describe("per-document analyst notes", () => {
     });
 
     expect(notes.title).toBe("Refined");
-    expect(notes.promptVersion).toBe("notes_refine_v1");
+    expect(notes.promptVersion).toBe("notes_refine_v2");
     expect(notes.providers).toEqual(["gemini/gemini-3-flash-preview", "openai/gpt-5.5"]);
     expect(notes.sourceLabel).toContain("PropertyShark");
     // Both raw outputs persisted under the notes stage.
@@ -239,6 +240,7 @@ function documentRow(params: {
     report_title: `${params.publisher} report`,
     period_covered: params.period,
     geo_scope: "Manhattan",
+    coverage_universe: null,
     subject_property: null,
     classifier_confidence: "high",
     evidence: [],
@@ -262,7 +264,7 @@ function documentRow(params: {
       risksWatchItems: [],
       investmentRelevance: [],
       generatedAt: new Date().toISOString(),
-      promptVersion: "notes_refine_v1",
+      promptVersion: "notes_refine_v2",
       providers: ["mock"],
     },
     excludedAt: null,
@@ -359,7 +361,7 @@ describe("live AI review", () => {
     // Sources always come from the corpus, not the model.
     expect(record.review.sources).toHaveLength(2);
     expect(record.includedDocumentIds.sort()).toEqual(["doc-a", "doc-b"]);
-    expect(record.promptVersion).toBe("review_v1");
+    expect(record.promptVersion).toBe("review_v2");
     expect(saved).toHaveLength(1);
   });
 

@@ -18,6 +18,19 @@ import { fallbackSubmarketsFor } from "./neighborhoodResolve.js";
 export const ROLLUP_MIN_N = 3;
 const TRAILING_MONTHS = 12;
 
+/**
+ * Sale-condition prints that are not arm's-length fee-simple building trades:
+ * portfolio allocations, partial interests, note sales, and ground leases
+ * never enter median math (they would corrupt $/SF and cap medians). Estate /
+ * vacant / 1031 / distressed prints stay in — they are real clearing prices
+ * whose flags explain them.
+ */
+const NON_COMPARABLE_CONDITIONS = new Set(["portfolio_sale", "partial_interest", "note_sale", "ground_lease"]);
+
+export function isNonComparableSale(comp: Pick<MarketComp, "saleConditions">): boolean {
+  return (comp.saleConditions ?? []).some((condition) => NON_COMPARABLE_CONDITIONS.has(condition));
+}
+
 export function median(values: number[]): number | null {
   if (values.length === 0) return null;
   const sorted = [...values].sort((a, b) => a - b);
@@ -160,10 +173,13 @@ export function computeNeighborhoodRollup(params: {
   const inHood = params.comps.filter((comp) => comp.neighborhoodId === params.neighborhood.id);
   const recent = inHood.filter((comp) => withinTrailingMonths(comp.saleDate, asOf, TRAILING_MONTHS));
 
-  const included = recent.filter((comp) => comp.priceType === "closed" && !comp.cherryPickRisk);
+  const included = recent.filter(
+    (comp) => comp.priceType === "closed" && !comp.cherryPickRisk && !isNonComparableSale(comp)
+  );
   const cherryPicked = recent.filter((comp) => comp.cherryPickRisk);
   const asking = inHood.filter((comp) => comp.priceType === "asking");
-  const excluded = [...new Set([...cherryPicked, ...asking])];
+  const nonComparable = recent.filter((comp) => isNonComparableSale(comp));
+  const excluded = [...new Set([...cherryPicked, ...asking, ...nonComparable])];
 
   const caps = included.map((comp) => comp.capRate).filter((value): value is number => value != null);
   const psfs = included.map((comp) => comp.pricePsf).filter((value): value is number => value != null);
