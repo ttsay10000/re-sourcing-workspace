@@ -205,7 +205,7 @@
 /* Assumption row: label + bordered input group. */
 .fieldRow {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(124px, 144px);
+  grid-template-columns: minmax(0, 1fr) minmax(108px, 132px);
   gap: 0.55rem;
   align-items: center;
 }
@@ -239,10 +239,10 @@
   flex: 1;
   width: 100%;
   min-width: 0;
-  padding: 0.4rem 0.55rem;
+  padding: 0.34rem 0.5rem;
   border: none;
   outline: none;
-  font-size: var(--text-sm);
+  font-size: var(--text-xs-plus);
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
@@ -367,9 +367,10 @@
 
 .statValue {
   margin-top: 0.2rem;
-  font-size: var(--text-md);
-  font-weight: 700;
+  font-size: 0.9375rem;
+  font-weight: 650;
   color: var(--app-ink);
+  font-variant-numeric: tabular-nums;
 }
 
 /* ─── Assumption group cards ──────────────────────────────────── */
@@ -793,8 +794,9 @@
 }
 
 .heroAddress {
-  font-size: clamp(1.35rem, 2vw, 2.05rem);
-  font-weight: 700;
+  font-size: clamp(1.15rem, 1.6vw, 1.5rem);
+  font-weight: 620;
+  letter-spacing: var(--tracking-tight);
   color: var(--app-ink);
 }
 
