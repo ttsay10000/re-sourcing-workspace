@@ -13,6 +13,8 @@ import type {
   UiV2CrmPropertyRowPayload,
   UiV2CrmRelatedProperty,
   UiV2OutreachComposerPayload,
+  UiV2OutreachDraftListItem,
+  UiV2OutreachDraftListPayload,
   UiV2OutreachDraftPayload,
   UiV2OutreachFollowUpActionPayload,
   UiV2OutreachSendNowPayload,
@@ -36,7 +38,7 @@ const BROKER_RESPONSE_OPTIONS: Array<{ value: UiV2CrmBrokerResponseStatus; label
 ];
 
 type NoticeType = "success" | "error" | "info";
-type CrmViewMode = "properties" | "contacts";
+type CrmViewMode = "properties" | "contacts" | "drafts";
 type CrmSortField = "address" | "broker" | "email" | "flags" | "lastActivity" | "open" | "response";
 type SortDirection = "asc" | "desc";
 
@@ -106,6 +108,8 @@ type PanelState =
       notice?: Notice;
       openComposer?: boolean;
       openFollowUp?: boolean;
+      /** When set, the composer opens with this saved draft instead of the template text. */
+      draftPrefill?: DraftFormState;
     };
 
 interface BrokerFormState {
@@ -639,6 +643,43 @@ function normalizeCrmListPayload(payload: unknown): UiV2CrmListPayload {
   };
 }
 
+function normalizeOutreachDraftListItem(value: unknown): UiV2OutreachDraftListItem | null {
+  const record = readRecord(value);
+  const id = String(record.id ?? "");
+  if (!id) return null;
+  return {
+    id,
+    propertyId: typeof record.propertyId === "string" ? record.propertyId : "",
+    contactId: typeof record.contactId === "string" ? record.contactId : null,
+    toAddress: typeof record.toAddress === "string" ? record.toAddress : "",
+    subject: typeof record.subject === "string" ? record.subject : "",
+    body: typeof record.body === "string" ? record.body : "",
+    status: record.status === "failed" ? "failed" : "draft",
+    followUpAt: typeof record.followUpAt === "string" ? record.followUpAt : null,
+    templateId: typeof record.templateId === "string" ? record.templateId : null,
+    templateName: typeof record.templateName === "string" ? record.templateName : null,
+    createdAt: typeof record.createdAt === "string" ? record.createdAt : "",
+    updatedAt: typeof record.updatedAt === "string" ? record.updatedAt : "",
+    canonicalAddress: typeof record.canonicalAddress === "string" ? record.canonicalAddress : null,
+    displayAddress: typeof record.displayAddress === "string" ? record.displayAddress : null,
+    contactName: typeof record.contactName === "string" ? record.contactName : null,
+    reviewReason: typeof record.reviewReason === "string" ? record.reviewReason : null,
+  };
+}
+
+function normalizeDraftListPayload(payload: unknown): UiV2OutreachDraftListPayload {
+  const root = readRecord(payload);
+  const drafts = Array.isArray(root.drafts)
+    ? (root.drafts.map(normalizeOutreachDraftListItem).filter(Boolean) as UiV2OutreachDraftListItem[])
+    : [];
+  return {
+    drafts,
+    total: Number(root.total ?? drafts.length),
+    limit: Number(root.limit ?? CRM_LIMIT),
+    offset: Number(root.offset ?? 0),
+  };
+}
+
 function normalizePropertyBrokerPayload(
   payload: unknown,
   detail: UiV2PropertyDetailPayload | null
@@ -758,6 +799,14 @@ function CrmPageContent() {
   const [rejectingPropertyId, setRejectingPropertyId] = useState<string | null>(null);
   /** Row pending reject confirmation — drives the ConfirmDialog popup. */
   const [rejectPrompt, setRejectPrompt] = useState<UiV2CrmPropertyRowPayload | null>(null);
+  const [drafts, setDrafts] = useState<UiV2OutreachDraftListItem[]>([]);
+  const [draftsTotal, setDraftsTotal] = useState(0);
+  const [draftsLoading, setDraftsLoading] = useState(true);
+  const [draftActionId, setDraftActionId] = useState<string | null>(null);
+  /** Draft pending send confirmation — drives the ConfirmDialog popup. */
+  const [sendDraftPrompt, setSendDraftPrompt] = useState<UiV2OutreachDraftListItem | null>(null);
+  /** Draft pending dismiss confirmation — drives the ConfirmDialog popup. */
+  const [dismissDraftPrompt, setDismissDraftPrompt] = useState<UiV2OutreachDraftListItem | null>(null);
   const [composer, setComposer] = useState<UiV2OutreachComposerPayload | null>(null);
   const [draftForm, setDraftForm] = useState<DraftFormState>(emptyDraftForm());
   const [loadingComposer, setLoadingComposer] = useState(false);
@@ -810,6 +859,33 @@ function CrmPageContent() {
     void loadCrm(controller.signal);
     return () => controller.abort();
   }, [loadCrm]);
+
+  const loadDrafts = useCallback(async (signal?: AbortSignal) => {
+    setDraftsLoading(true);
+    try {
+      const data = await apiFetch<UiV2OutreachDraftListPayload>(
+        `/api/ui-v2/outreach-drafts?limit=${CRM_LIMIT}&offset=0`,
+        { signal }
+      );
+      const payload = normalizeDraftListPayload(data);
+      setDrafts(payload.drafts);
+      setDraftsTotal(payload.total);
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      setError(err instanceof Error ? err.message : "Failed to load outreach drafts.");
+      setDrafts([]);
+      setDraftsTotal(0);
+    } finally {
+      if (!signal?.aborted) setDraftsLoading(false);
+    }
+  }, []);
+
+  // Fetched on mount (not just on tab switch) so the queue metric is populated immediately.
+  useEffect(() => {
+    const controller = new AbortController();
+    void loadDrafts(controller.signal);
+    return () => controller.abort();
+  }, [loadDrafts]);
 
   useEffect(() => {
     const labelsFromPayload: Record<string, string> = {};
@@ -977,7 +1053,12 @@ function CrmPageContent() {
   }, []);
 
   const openPropertyPanel = useCallback(
-    (propertyId: string, contactPayload?: UiV2CrmContactPayload, notice?: Notice, options?: { composer?: boolean; followUp?: boolean }) => {
+    (
+      propertyId: string,
+      contactPayload?: UiV2CrmContactPayload,
+      notice?: Notice,
+      options?: { composer?: boolean; followUp?: boolean; draftPrefill?: DraftFormState }
+    ) => {
       setComposer(null);
       setDraftForm(emptyDraftForm());
       setPropertyDetail(null);
@@ -990,6 +1071,7 @@ function CrmPageContent() {
         notice,
         openComposer: options?.composer,
         openFollowUp: options?.followUp,
+        draftPrefill: options?.draftPrefill,
       });
     },
     []
@@ -1063,7 +1145,7 @@ function CrmPageContent() {
   }, [activePropertyId]);
 
   const loadComposer = useCallback(
-    async (propertyId: string) => {
+    async (propertyId: string, prefill?: DraftFormState) => {
       setLoadingComposer(true);
       setComposer(null);
       try {
@@ -1071,7 +1153,7 @@ function CrmPageContent() {
           `/api/ui-v2/properties/${encodeURIComponent(propertyId)}/outreach-composer`
         );
         const composerPayload = normalizeComposerPayload(data, propertyBroker?.broker);
-        const toAddress = cleanDisplayText(composerPayload.broker?.email) ?? "";
+        const toAddress = prefill?.toAddress || (cleanDisplayText(composerPayload.broker?.email) ?? "");
         if (!toAddress) {
           setPanelNotice({
             type: "info",
@@ -1080,14 +1162,16 @@ function CrmPageContent() {
           return;
         }
         setComposer(composerPayload);
-        setDraftForm({
-          toAddress,
-          subject: composerPayload.subject,
-          body: composerPayload.body,
-          followUpAt: composerPayload.followUpAt ? toDateTimeLocal(new Date(composerPayload.followUpAt)) : "",
-          templateId: "",
-          templateName: "",
-        });
+        setDraftForm(
+          prefill ?? {
+            toAddress,
+            subject: composerPayload.subject,
+            body: composerPayload.body,
+            followUpAt: composerPayload.followUpAt ? toDateTimeLocal(new Date(composerPayload.followUpAt)) : "",
+            templateId: "",
+            templateName: "",
+          }
+        );
       } catch (err) {
         setPanelNotice({
           type: "error",
@@ -1102,20 +1186,24 @@ function CrmPageContent() {
 
   useEffect(() => {
     if (panel?.type === "property" && panel.openComposer && propertyBroker) {
-      if (!cleanDisplayText(propertyBroker.broker?.email)) {
+      const prefill = panel.draftPrefill;
+      if (!prefill?.toAddress && !cleanDisplayText(propertyBroker.broker?.email)) {
         setPanel((current) =>
           current?.type === "property"
             ? {
                 ...current,
                 openComposer: false,
+                draftPrefill: undefined,
                 notice: { type: "info", message: "Add a broker email before drafting outreach for this property." },
               }
             : current
         );
         return;
       }
-      setPanel((current) => (current?.type === "property" ? { ...current, openComposer: false } : current));
-      void loadComposer(panel.propertyId);
+      setPanel((current) =>
+        current?.type === "property" ? { ...current, openComposer: false, draftPrefill: undefined } : current
+      );
+      void loadComposer(panel.propertyId, prefill);
     }
   }, [loadComposer, panel, propertyBroker, setPanelNotice]);
 
@@ -1494,6 +1582,80 @@ function CrmPageContent() {
     }
   }, [activePropertyId, draftForm, loadCrm, propertyBroker, setPanelNotice]);
 
+  const handleSendQueuedDraft = useCallback(
+    async (draft: UiV2OutreachDraftListItem) => {
+      const address =
+        shortPropertyAddress(draft.displayAddress) ?? shortPropertyAddress(draft.canonicalAddress) ?? draft.toAddress;
+      const send = (force = false) =>
+        apiFetch<UiV2OutreachSendNowPayload>(`/api/ui-v2/outreach-drafts/${encodeURIComponent(draft.id)}/send`, {
+          method: "POST",
+          body: JSON.stringify({ force }),
+        });
+      setDraftActionId(draft.id);
+      setPageNotice(null);
+      try {
+        let data: UiV2OutreachSendNowPayload;
+        try {
+          data = await send(false);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : "Failed to send outreach draft.";
+          if (!message.includes("Use force") || !window.confirm(`${message} Send anyway?`)) throw err;
+          data = await send(true);
+        }
+        setPageNotice(`Email sent to ${draft.toAddress} for ${address} at ${formatDateTime(data.sentAt)}.`);
+        await Promise.all([loadDrafts(), loadCrm()]);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to send outreach draft.");
+        // A send-phase failure flips the row to "Send failed"; reload so it shows.
+        await loadDrafts();
+      } finally {
+        setDraftActionId(null);
+      }
+    },
+    [loadCrm, loadDrafts]
+  );
+
+  const handleDismissQueuedDraft = useCallback(
+    async (draft: UiV2OutreachDraftListItem) => {
+      const address =
+        shortPropertyAddress(draft.displayAddress) ?? shortPropertyAddress(draft.canonicalAddress) ?? draft.toAddress;
+      setDraftActionId(draft.id);
+      setPageNotice(null);
+      try {
+        await apiFetch<{ ok: boolean }>(`/api/ui-v2/outreach-drafts/${encodeURIComponent(draft.id)}/dismiss`, {
+          method: "POST",
+          body: JSON.stringify({}),
+        });
+        setPageNotice(`Draft for ${address} dismissed. No email was sent.`);
+        await loadDrafts();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to dismiss outreach draft.");
+      } finally {
+        setDraftActionId(null);
+      }
+    },
+    [loadDrafts]
+  );
+
+  const reviewDraftInComposer = useCallback(
+    (draft: UiV2OutreachDraftListItem) => {
+      if (!draft.propertyId) return;
+      // Re-saving from the composer creates a new queue row; dismiss this one after.
+      openPropertyPanel(draft.propertyId, undefined, undefined, {
+        composer: true,
+        draftPrefill: {
+          toAddress: draft.toAddress,
+          subject: draft.subject,
+          body: draft.body,
+          followUpAt: draft.followUpAt ? toDateTimeLocal(new Date(draft.followUpAt)) : "",
+          templateId: draft.templateId ?? "",
+          templateName: draft.templateName ?? "",
+        },
+      });
+    },
+    [openPropertyPanel]
+  );
+
   const handleScheduleFollowUp = useCallback(
     async (event: FormEvent<HTMLFormElement>) => {
       event.preventDefault();
@@ -1617,6 +1779,10 @@ function CrmPageContent() {
           <span className={styles.metricValue}>{stats.manualReview}</span>
           <span className={styles.metricLabel}>Manual review</span>
         </div>
+        <div className={styles.metric}>
+          <span className={styles.metricValue}>{draftsTotal}</span>
+          <span className={styles.metricLabel}>Drafts queued</span>
+        </div>
       </section>
 
       {error ? <div className={classNames(styles.notice, styles.noticeError)}>{error}</div> : null}
@@ -1626,13 +1792,23 @@ function CrmPageContent() {
         <div className={styles.tableHeader}>
           <div>
             <strong>
-              {loading
-                ? "Loading CRM"
-                : viewMode === "properties"
-                  ? `${sortedPropertyRows.length} properties shown`
-                  : `${sortedContacts.length} contacts shown`}
+              {viewMode === "drafts"
+                ? draftsLoading
+                  ? "Loading drafts"
+                  : `${drafts.length} drafts shown`
+                : loading
+                  ? "Loading CRM"
+                  : viewMode === "properties"
+                    ? `${sortedPropertyRows.length} properties shown`
+                    : `${sortedContacts.length} contacts shown`}
             </strong>
-            <span>{query.trim() ? `Filtered by "${query.trim()}"` : `Sorted by ${sortField}`}</span>
+            <span>
+              {viewMode === "drafts"
+                ? "Sorted by newest"
+                : query.trim()
+                  ? `Filtered by "${query.trim()}"`
+                  : `Sorted by ${sortField}`}
+            </span>
           </div>
           <div className={styles.tableTools}>
             <div className={styles.segmentedControl} aria-label="CRM view">
@@ -1650,8 +1826,26 @@ function CrmPageContent() {
               >
                 Contacts
               </button>
+              <button
+                className={viewMode === "drafts" ? styles.segmentActive : undefined}
+                type="button"
+                onClick={() => {
+                  setViewMode("drafts");
+                  void loadDrafts();
+                }}
+              >
+                Drafts{draftsTotal > 0 ? ` (${draftsTotal})` : ""}
+              </button>
             </div>
-            <button className={styles.secondaryButton} type="button" onClick={() => void loadCrm()} disabled={loading}>
+            <button
+              className={styles.secondaryButton}
+              type="button"
+              onClick={() => {
+                void loadCrm();
+                void loadDrafts();
+              }}
+              disabled={loading}
+            >
               Refresh
             </button>
           </div>
@@ -1814,7 +2008,7 @@ function CrmPageContent() {
                 )}
               </tbody>
             </table>
-          ) : (
+          ) : viewMode === "contacts" ? (
             <table className={styles.table}>
               <thead>
                 <tr>
@@ -1929,6 +2123,113 @@ function CrmPageContent() {
                 )}
               </tbody>
             </table>
+          ) : (
+            <table className={styles.table}>
+              <thead>
+                <tr>
+                  <th>Property</th>
+                  <th>To</th>
+                  <th>Subject</th>
+                  <th>Created</th>
+                  <th>Status</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {draftsLoading ? (
+                  <tr>
+                    <td colSpan={6} className={styles.emptyCell}>
+                      Loading outreach drafts...
+                    </td>
+                  </tr>
+                ) : drafts.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className={styles.emptyCell}>
+                      No outreach drafts waiting for review. Save a draft from a property&apos;s Email composer here or
+                      in the Pipeline, and it will queue here before anything is sent.
+                    </td>
+                  </tr>
+                ) : (
+                  drafts.map((draft) => {
+                    const addressLabel =
+                      shortPropertyAddress(draft.displayAddress) ??
+                      shortPropertyAddress(draft.canonicalAddress) ??
+                      (draft.propertyId ? compactPropertyId(draft.propertyId) : "Property removed");
+                    const busy = draftActionId === draft.id;
+                    return (
+                      <tr key={draft.id}>
+                        <td className={styles.brokerCell}>
+                          {draft.propertyId ? (
+                            <button
+                              className={styles.linkButton}
+                              type="button"
+                              title={draft.canonicalAddress ?? undefined}
+                              onClick={() => openPropertyPanel(draft.propertyId)}
+                            >
+                              {addressLabel}
+                            </button>
+                          ) : (
+                            <span>{addressLabel}</span>
+                          )}
+                          {draft.canonicalAddress ? (
+                            <div className={styles.subtleLine}>{draft.canonicalAddress}</div>
+                          ) : null}
+                        </td>
+                        <td>
+                          <div>{draft.toAddress}</div>
+                          {draft.contactName ? <div className={styles.subtleLine}>{draft.contactName}</div> : null}
+                        </td>
+                        <td>
+                          <div title={draft.body}>{draft.subject}</div>
+                          {draft.templateName ? <div className={styles.subtleLine}>{draft.templateName}</div> : null}
+                        </td>
+                        <td>{formatDateTime(draft.createdAt)}</td>
+                        <td>
+                          {draft.status === "failed" ? (
+                            <span
+                              className={classNames(styles.flag, styles.flag_danger)}
+                              title={draft.reviewReason ?? undefined}
+                            >
+                              Send failed
+                            </span>
+                          ) : (
+                            <span className={classNames(styles.flag, styles.flag_warning)}>Needs review</span>
+                          )}
+                        </td>
+                        <td>
+                          <div className={styles.rowActions}>
+                            <button
+                              className={styles.tableButton}
+                              type="button"
+                              disabled={busy || !draft.propertyId}
+                              onClick={() => setSendDraftPrompt(draft)}
+                            >
+                              {busy ? "Working" : "Send"}
+                            </button>
+                            <button
+                              className={styles.tableButton}
+                              type="button"
+                              disabled={busy || !draft.propertyId}
+                              onClick={() => reviewDraftInComposer(draft)}
+                            >
+                              Review in composer
+                            </button>
+                            <button
+                              className={styles.tableButtonDanger}
+                              type="button"
+                              disabled={busy}
+                              onClick={() => setDismissDraftPrompt(draft)}
+                            >
+                              Dismiss
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
           )}
         </div>
       </section>
@@ -2019,6 +2320,51 @@ function CrmPageContent() {
         confirmLabel="Reject"
         destructive
         busy={rejectPrompt != null && rejectingPropertyId === rejectPrompt.propertyId}
+      />
+
+      <ConfirmDialog
+        open={sendDraftPrompt != null}
+        onClose={() => setSendDraftPrompt(null)}
+        onConfirm={() => {
+          const draft = sendDraftPrompt;
+          setSendDraftPrompt(null);
+          if (draft) void handleSendQueuedDraft(draft);
+        }}
+        title="Send outreach email"
+        description={
+          sendDraftPrompt
+            ? `Sends the saved draft to ${sendDraftPrompt.toAddress} via Gmail for ${
+                shortPropertyAddress(sendDraftPrompt.displayAddress) ??
+                shortPropertyAddress(sendDraftPrompt.canonicalAddress) ??
+                "this property"
+              }. This emails the broker immediately and cannot be undone.`
+            : undefined
+        }
+        confirmLabel="Send email"
+        busy={sendDraftPrompt != null && draftActionId === sendDraftPrompt.id}
+      />
+
+      <ConfirmDialog
+        open={dismissDraftPrompt != null}
+        onClose={() => setDismissDraftPrompt(null)}
+        onConfirm={() => {
+          const draft = dismissDraftPrompt;
+          setDismissDraftPrompt(null);
+          if (draft) void handleDismissQueuedDraft(draft);
+        }}
+        title="Dismiss draft"
+        description={
+          dismissDraftPrompt
+            ? `Removes the draft for ${
+                shortPropertyAddress(dismissDraftPrompt.displayAddress) ??
+                shortPropertyAddress(dismissDraftPrompt.canonicalAddress) ??
+                dismissDraftPrompt.toAddress
+              } from the queue without sending. The record is kept for history.`
+            : undefined
+        }
+        confirmLabel="Dismiss"
+        destructive
+        busy={dismissDraftPrompt != null && draftActionId === dismissDraftPrompt.id}
       />
     </div>
   );
