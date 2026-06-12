@@ -51,6 +51,7 @@ export type DealPathFormState = {
   postTourDecision: UiV2DealPathDecision;
   targetPrice: string;
   offerAmount: string;
+  finalPrice: string;
   loiRecipientEmail: string;
   offerNotes: string;
   loiContingenciesText: string;
@@ -402,6 +403,17 @@ export function DealWizardDrawer({
                     value={form.offerAmount}
                     onChange={(event) => onUpdate(row.propertyId, "offerAmount", event.target.value)}
                     placeholder="LOI offer"
+                  />
+                </label>
+              ) : null}
+              {showGeneralTourFields ? (
+                <label>
+                  <span>Final price</span>
+                  <input
+                    inputMode="numeric"
+                    value={form.finalPrice}
+                    onChange={(event) => onUpdate(row.propertyId, "finalPrice", event.target.value)}
+                    placeholder="Agreed / closing price"
                   />
                 </label>
               ) : null}
