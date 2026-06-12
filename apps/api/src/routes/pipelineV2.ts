@@ -8,7 +8,7 @@
 import { randomUUID } from "node:crypto";
 import { Router, type Request, type Response } from "express";
 import type { Pool, PoolClient } from "pg";
-import { deriveListingActivitySummary, describeListingActivity } from "@re-sourcing/contracts";
+import { deriveListingActivitySummary, describeListingActivity, pipelineStatusRank } from "@re-sourcing/contracts";
 import {
   DocumentRepo,
   BrokerCompPackageRepo,
@@ -3858,18 +3858,34 @@ router.post("/ui-v2/properties/:id/save", async (req: Request, res: Response) =>
       return;
     }
     const userId = await getDefaultUserId(pool);
-    await new SavedDealsRepo({ pool }).save(userId, propertyId, "saved");
-    void recordDealStageChange(pool, propertyId, "saved", { source: "ui-v2-save" });
     const existing = readPipelineState(property.details);
-    await updatePipelineState(pool, propertyId, {
-      status: "saved_watchlist",
-      uiV2Status: "saved",
-      tags: uniqueStrings([...existing.tags, "saved"]),
-      rejectedAt: null,
-      rejectionReason: null,
-      rejection: undefined,
-      lastActivityAt: new Date().toISOString(),
-    });
+    const currentUiStatus = existing.uiV2Status ?? mapLegacyStatus(existing.status);
+    const isRejected =
+      currentUiStatus === "rejected" || existing.rejectedAt != null || existing.status === "rejected_removed";
+    // Saving a deal that already advanced past "saved" (underwriting, tour,
+    // offer, …) must keep its stage: ensure the saved_deals row exists without
+    // downgrading and leave the pipeline status untouched. Rejected deals and
+    // deals at/before "saved" keep the original restore-to-saved behavior.
+    const keepCurrentStage = !isRejected && pipelineStatusRank(currentUiStatus) > pipelineStatusRank("saved");
+    if (keepCurrentStage) {
+      await new SavedDealsRepo({ pool }).ensureSaved(userId, propertyId, "saved");
+      await updatePipelineState(pool, propertyId, {
+        tags: uniqueStrings([...existing.tags, "saved"]),
+        lastActivityAt: new Date().toISOString(),
+      });
+    } else {
+      await new SavedDealsRepo({ pool }).save(userId, propertyId, "saved");
+      void recordDealStageChange(pool, propertyId, "saved", { source: "ui-v2-save" });
+      await updatePipelineState(pool, propertyId, {
+        status: "saved_watchlist",
+        uiV2Status: "saved",
+        tags: uniqueStrings([...existing.tags, "saved"]),
+        rejectedAt: null,
+        rejectionReason: null,
+        rejection: undefined,
+        lastActivityAt: new Date().toISOString(),
+      });
+    }
     await new PropertyRejectionRepo({ pool }).restoreActive(propertyId, {
       actor: stringOrNull(isPlainRecord(req.body) ? req.body.actorName : null) ?? "ui-v2",
       restoredReason: "saved_deal",

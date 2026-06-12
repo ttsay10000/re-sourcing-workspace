@@ -954,7 +954,7 @@ export async function promoteReviewedOmDetailsForProperty(params: {
 }
 
 /** Funnel positions an arriving OM should advance past (everything before the board's "UW · Awaiting Review"). */
-const PRE_OM_PIPELINE_STATUSES = new Set(["new", "screening", "interesting", "saved", "outreach", "awaiting_broker"]);
+const PRE_OM_PIPELINE_STATUSES = ["new", "screening", "interesting", "saved", "outreach", "awaiting_broker"];
 
 /**
  * First OM upload for a deal moves it onto the deal-progress board's
@@ -962,23 +962,34 @@ const PRE_OM_PIPELINE_STATUSES = new Set(["new", "screening", "interesting", "sa
  * and home-page review flag light up the moment the document lands. Deals
  * already further along — or rejected — are left where they are, and any
  * failure here must never block the ingestion itself.
+ *
+ * The guard and the write are one conditional statement: the pre-OM check is
+ * re-evaluated inside the UPDATE, and only uiV2Status is merged into the
+ * pipeline object as stored at write time. A stale in-memory pipeline copy
+ * can therefore never clobber a concurrent board move (e.g. to tour/offer)
+ * or drop sibling keys like dealPath — reworking the OM workspace on a deal
+ * that is already moving forward leaves its stage untouched.
  */
 async function advancePipelineOnOmArrival(propertyId: string, pool: Pool): Promise<void> {
   try {
-    const propertyRepo = new PropertyRepo({ pool });
-    const property = await propertyRepo.byId(propertyId);
-    if (!property) return;
-    const details = isPlainObject(property.details) ? (property.details as Record<string, unknown>) : {};
-    const pipeline = isPlainObject(details.pipeline) ? (details.pipeline as Record<string, unknown>) : {};
-    if (pipeline.rejectedAt != null) return;
-    const uiStatus = typeof pipeline.uiV2Status === "string" ? pipeline.uiV2Status : null;
-    const legacyStatus = typeof pipeline.status === "string" ? pipeline.status : null;
-    const current = uiStatus ?? legacyStatus;
-    if (current != null && !PRE_OM_PIPELINE_STATUSES.has(current)) return;
-    await propertyRepo.mergeDetails(propertyId, {
-      pipeline: { ...pipeline, uiV2Status: "om_received" },
-    });
-    await recordDealStageChange(pool, propertyId, "om_received", { source: "om_upload" });
+    const result = await pool.query(
+      `UPDATE properties
+       SET details = COALESCE(details, '{}'::jsonb) || jsonb_build_object(
+             'pipeline',
+             COALESCE(details->'pipeline', '{}'::jsonb) || '{"uiV2Status":"om_received"}'::jsonb
+           ),
+           updated_at = now()
+       WHERE id = $1
+         AND (details->'pipeline'->>'rejectedAt') IS NULL
+         AND (
+           COALESCE(details->'pipeline'->>'uiV2Status', details->'pipeline'->>'status') IS NULL
+           OR COALESCE(details->'pipeline'->>'uiV2Status', details->'pipeline'->>'status') = ANY($2::text[])
+         )`,
+      [propertyId, PRE_OM_PIPELINE_STATUSES]
+    );
+    if ((result.rowCount ?? 0) > 0) {
+      await recordDealStageChange(pool, propertyId, "om_received", { source: "om_upload" });
+    }
   } catch (err) {
     console.warn("[advancePipelineOnOmArrival]", err instanceof Error ? err.message : err);
   }

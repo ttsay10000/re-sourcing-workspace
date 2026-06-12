@@ -237,6 +237,11 @@ Tables (migration `060_market_knowledge.sql`):
 - `market_documents.document_brief` — JSONB analyst brief per upload ({ title, whatItSays, comparedToPrior, discrepancies, incorporatedAt })
 - `market_llm_outputs` — raw model output for the merge step persisted under the new `knowledge` stage (prompt version `knowledge_v1`)
 
+## Saved-data authority + stage no-regress (2026-06-12)
+
+- Saved OM workspace rows are now authoritative for all generation paths (dossier, Excel, deal signals, om-calculation): once `dealDossier.assumptions.unitModelRows`/`expenseModelRows` exist, `resolveDetailedCashFlowModel` builds the model from the saved set and never re-adds snapshot rows the user removed or lets a re-extracted snapshot's values displace saved edits. Details in `apps/api/src/rental/FINANCIAL_FLOWS.md` ("Saved OM Workspace Rows Are Authoritative").
+- Automatic flows can no longer move a deal backward on the board: OM arrival/refresh, outreach sends, document-upload auto-save, listing imports, and "Save deal" all respect `UI_V2_STATUS_FUNNEL_RANK` (`@re-sourcing/contracts`). A deal at tour/offer keeps its stage through any OM workspace rework or underwriting adjustment; only explicit user moves regress. Details in FINANCIAL_FLOWS.md ("Deal Stage Never Auto-Regresses").
+
 ## v6 push: refresh semantics, activity log, neighborhood $/SF context (2026-06-10)
 
 Refresh semantics:

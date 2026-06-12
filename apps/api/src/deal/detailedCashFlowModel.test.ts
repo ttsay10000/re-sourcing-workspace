@@ -185,4 +185,150 @@ describe("detailedCashFlowModel", () => {
       }),
     ]);
   });
+
+  it("keeps removed expense rows removed: saved rows are authoritative over the OM snapshot", () => {
+    const details = {
+      omData: {
+        authoritative: {
+          rentRoll: [{ unit: "1A", unitCategory: "Residential", annualRent: 36_000 }],
+          expenses: {
+            expensesTable: [
+              { lineItem: "Insurance", amount: 5_000 },
+              { lineItem: "Water and Sewer", amount: 8_000 },
+            ],
+          },
+        },
+      },
+    } as never;
+    // User removed "Water and Sewer" in the OM workspace and saved: the saved
+    // set only carries Insurance. The source row must NOT come back.
+    const model = resolveDetailedCashFlowModel({
+      details,
+      defaultRentUpliftPct: 70,
+      defaultVacancyPct: 15,
+      defaultAnnualExpenseGrowthPct: 2,
+      defaultAnnualPropertyTaxGrowthPct: 3,
+      unitModelRows: null,
+      expenseModelRows: [
+        { rowId: "expense-insurance-1", lineItem: "Insurance", amount: 4_500, annualGrowthPct: 2 },
+      ],
+    });
+
+    expect(model.expenseModelRows).toEqual([
+      expect.objectContaining({ rowId: "expense-insurance-1", lineItem: "Insurance", amount: 4_500 }),
+    ]);
+    expect(model.expenseModelRows.some((row) => /water/i.test(row.lineItem))).toBe(false);
+  });
+
+  it("keeps saved values when an OM re-extraction shifts row identity instead of resurrecting extracted numbers", () => {
+    // After a re-run of OM analysis the snapshot rows come back in a new
+    // order/wording, so none of the saved rowIds match the source anymore.
+    const reExtractedDetails = {
+      omData: {
+        authoritative: {
+          rentRoll: [
+            { unit: "Unit 2A", unitCategory: "Residential", annualRent: 41_000 },
+            { unit: "Unit 1A", unitCategory: "Residential", annualRent: 39_000 },
+          ],
+          expenses: {
+            expensesTable: [{ lineItem: "Insurance Premium", amount: 12_000 }],
+          },
+        },
+      },
+    } as never;
+    const model = resolveDetailedCashFlowModel({
+      details: reExtractedDetails,
+      defaultRentUpliftPct: 70,
+      defaultVacancyPct: 15,
+      defaultAnnualExpenseGrowthPct: 2,
+      defaultAnnualPropertyTaxGrowthPct: 3,
+      unitModelRows: [
+        {
+          rowId: "rent-1a-residential-1",
+          unitLabel: "1A",
+          currentAnnualRent: 36_000,
+          underwrittenAnnualRent: 48_000,
+          rentUpliftPct: 0,
+          occupancyPct: 100,
+          includeInUnderwriting: true,
+          isProtected: false,
+        },
+      ],
+      expenseModelRows: [
+        { rowId: "expense-insurance-1", lineItem: "Insurance", amount: 4_500, annualGrowthPct: 2 },
+      ],
+    });
+
+    expect(model.unitModelRows).toEqual([
+      expect.objectContaining({
+        rowId: "rent-1a-residential-1",
+        unitLabel: "1A",
+        currentAnnualRent: 36_000,
+        underwrittenAnnualRent: 48_000,
+      }),
+    ]);
+    expect(model.expenseModelRows).toEqual([
+      expect.objectContaining({ rowId: "expense-insurance-1", lineItem: "Insurance", amount: 4_500 }),
+    ]);
+  });
+
+  it("keeps removed unit rows removed while matched saved rows still inherit source defaults", () => {
+    const details = {
+      omData: {
+        authoritative: {
+          rentRoll: [
+            { unit: "1A", unitCategory: "Residential", annualRent: 36_000, beds: 2, baths: 1, sqft: 850 },
+            { unit: "2A", unitCategory: "Residential", annualRent: 42_000 },
+          ],
+        },
+      },
+    } as never;
+    // User dropped unit 2A and only edited 1A's underwritten rent. Beds/baths
+    // and the rest of 1A keep flowing in from the matching source row.
+    const model = resolveDetailedCashFlowModel({
+      details,
+      defaultRentUpliftPct: 70,
+      defaultVacancyPct: 15,
+      defaultAnnualExpenseGrowthPct: 2,
+      defaultAnnualPropertyTaxGrowthPct: 3,
+      unitModelRows: [
+        { rowId: "rent-1a-residential-1", unitLabel: "1A", underwrittenAnnualRent: 50_000 },
+      ],
+      expenseModelRows: null,
+    });
+
+    expect(model.unitModelRows).toHaveLength(1);
+    expect(model.unitModelRows[0]).toEqual(
+      expect.objectContaining({
+        rowId: "rent-1a-residential-1",
+        currentAnnualRent: 36_000,
+        underwrittenAnnualRent: 50_000,
+        beds: 2,
+        baths: 1,
+        sqft: 850,
+      })
+    );
+  });
+
+  it("still builds the model from the OM snapshot when nothing has been saved", () => {
+    const model = resolveDetailedCashFlowModel({
+      details: {
+        omData: {
+          authoritative: {
+            rentRoll: [{ unit: "1A", unitCategory: "Residential", annualRent: 36_000 }],
+            expenses: { expensesTable: [{ lineItem: "Insurance", amount: 5_000 }] },
+          },
+        },
+      } as never,
+      defaultRentUpliftPct: 70,
+      defaultVacancyPct: 15,
+      defaultAnnualExpenseGrowthPct: 2,
+      defaultAnnualPropertyTaxGrowthPct: 3,
+      unitModelRows: null,
+      expenseModelRows: null,
+    });
+
+    expect(model.unitModelRows).toHaveLength(1);
+    expect(model.expenseModelRows.some((row) => row.lineItem === "Insurance")).toBe(true);
+  });
 });

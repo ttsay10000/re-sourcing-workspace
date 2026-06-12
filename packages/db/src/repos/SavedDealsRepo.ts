@@ -25,6 +25,28 @@ export class SavedDealsRepo {
     return mapSavedDeal(r.rows[0]);
   }
 
+  /**
+   * Ensure a saved_deals row exists without ever downgrading an existing
+   * deal_status. Used by automatic flows (e.g. OM/underwriting document
+   * uploads) where re-saving must not push a deal that is already further
+   * down the funnel (tour, offer, …) back to "saved".
+   */
+  async ensureSaved(userId: string, propertyId: string, dealStatus: DealStatus = "saved"): Promise<SavedDeal> {
+    const inserted = await this.client.query(
+      `INSERT INTO saved_deals (user_id, property_id, deal_status)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (user_id, property_id) DO NOTHING
+       RETURNING *`,
+      [userId, propertyId, dealStatus]
+    );
+    if (inserted.rows[0]) return mapSavedDeal(inserted.rows[0]);
+    const existing = await this.client.query(
+      "SELECT * FROM saved_deals WHERE user_id = $1 AND property_id = $2",
+      [userId, propertyId]
+    );
+    return mapSavedDeal(existing.rows[0]);
+  }
+
   async unsave(userId: string, propertyId: string): Promise<boolean> {
     const r = await this.client.query(
       "DELETE FROM saved_deals WHERE user_id = $1 AND property_id = $2",
