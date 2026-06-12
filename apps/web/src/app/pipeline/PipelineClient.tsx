@@ -4761,22 +4761,6 @@ export default function PipelineClient() {
 	                        </dd>
 	                      </div>
 	                    </dl>
-                    {(() => {
-                      const sheetScoreFlags = [
-                        ...((selectedProperty ?? selectedRow)?.underwriting?.capReasons ?? []),
-                        ...((selectedProperty ?? selectedRow)?.underwriting?.riskFlags ?? []),
-                      ];
-                      return sheetScoreFlags.length > 0 ? (
-                        <div className={styles.sheetScoreFlags}>
-                          <strong>Why this score</strong>
-                          <ul>
-                            {sheetScoreFlags.slice(0, 8).map((flag) => (
-                              <li key={flag}>{flag}</li>
-                            ))}
-                          </ul>
-                        </div>
-                      ) : null;
-                    })()}
 	                    {sourceFactsEditOpen ? (
 	                      <form className={styles.sourceFactsForm} onSubmit={saveSourceFacts}>
 	                        <label>
@@ -4879,6 +4863,7 @@ export default function PipelineClient() {
 	                        </div>
 	                      </form>
 	                    ) : null}
+	                    <OmAnalysisPanel analysis={selectedProperty?.enrichmentDetails?.omAnalysis} />
 	                    {selectedProperty?.overview.description ? <p className={styles.description}>{selectedProperty.overview.description}</p> : null}
 	                  </section>
 
@@ -6453,7 +6438,7 @@ function PropertyDataPanel({ details, modules }: { details?: UiV2EnrichmentDetai
   });
   const listingFacts = details?.listingFacts ?? null;
   const factItems = factsFromListing(listingFacts);
-  if (modules.length === 0 && factItems.length === 0 && !details?.rentalFlow && !details?.omAnalysis) {
+  if (modules.length === 0 && factItems.length === 0 && !details?.rentalFlow) {
     return <div className={styles.emptyState}>No enrichment details are available yet.</div>;
   }
   return (
@@ -6493,7 +6478,6 @@ function PropertyDataPanel({ details, modules }: { details?: UiV2EnrichmentDetai
       ) : null}
 
       <RentalFlowPanel flow={details?.rentalFlow} />
-      <OmAnalysisPanel analysis={details?.omAnalysis} />
     </div>
   );
 }

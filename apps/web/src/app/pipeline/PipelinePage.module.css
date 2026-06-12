@@ -3069,34 +3069,6 @@
   }
 }
 
-.sheetScoreFlags {
-  margin-top: 0.6rem;
-  padding: 0.65rem 0.8rem;
-  border: 1px solid rgba(180, 83, 9, 0.25);
-  border-left: 4px solid #b45309;
-  border-radius: 10px;
-  background: #fffbeb;
-  font-size: var(--text-xs);
-  color: #7c2d12;
-}
-
-.sheetScoreFlags strong {
-  display: block;
-  margin-bottom: 0.3rem;
-  font-size: var(--text-2xs);
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-  color: var(--app-amber-text);
-}
-
-.sheetScoreFlags ul {
-  margin: 0;
-  padding-left: 1rem;
-  display: grid;
-  gap: 0.2rem;
-}
-
-
 /* ─── Overhaul pass: stage column, broker chip, sticky address ──── */
 
 .colStage {
