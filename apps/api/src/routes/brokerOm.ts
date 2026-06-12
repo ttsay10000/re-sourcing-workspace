@@ -1,11 +1,13 @@
-import { randomUUID } from "crypto";
+import { createHash, randomUUID } from "crypto";
 import { extname } from "path";
 import { Router, type Request, type Response } from "express";
 import {
+  BrokerOmEmailPullRunRepo,
   getPool,
   InboxSyncStateRepo,
   PropertyRepo,
   PropertyUploadedDocumentRepo,
+  type BrokerOmEmailPullRunRecord,
 } from "@re-sourcing/db";
 import type { Property, PropertyDocumentCategory } from "@re-sourcing/contracts";
 import {
@@ -20,7 +22,19 @@ import {
 } from "../inquiry/gmailClient.js";
 import { classifyInquiryAttachment } from "../inquiry/attachmentClassification.js";
 import { saveUploadedDocument } from "../upload/uploadedDocStorage.js";
-import { ingestAuthoritativeOm, type OmAutomationDocument } from "../om/ingestAuthoritativeOm.js";
+import {
+  assessMetadataDuplicates,
+  buildEmailPropertyMatchers,
+  emailAddressFirstLine,
+  filenameLooksAddressLike,
+  matchPropertiesForEmailAttachment,
+  normalizeEmailSearchText,
+  resolveEmailDuplicateFlag,
+  type EmailDuplicateFlag,
+  type EmailPropertyMatcher,
+  type EmailPropertyMatchVia,
+  type ExistingPropertyDocumentRef,
+} from "../om/brokerOmEmailMatching.js";
 import { syncPropertySourcingWorkflow } from "../sourcing/workflow.js";
 import { analyzeAndPersistDealAnalysisOmDocuments, DealAnalysisOmImportError } from "../deal/dealAnalysisOmImport.js";
 
@@ -105,6 +119,12 @@ interface GmailDocumentCandidate {
   matchedReason: string;
   matchedProperty?: MatchedPropertyRef | null;
   matchedProperties?: MatchedPropertyRef[];
+  /** How the property match was made: attachment filename (preferred) or email subject/body fallback. */
+  matchedVia?: EmailPropertyMatchVia | null;
+  /** Set when the attachment looks like a duplicate of a document already uploaded to the matched property. */
+  duplicate?: EmailDuplicateFlag | null;
+  /** True when an earlier pull in this scope already surfaced this attachment. */
+  previouslyPulled?: boolean;
 }
 
 interface NewPropertyEmailCandidate {
@@ -140,14 +160,6 @@ function isOmIngestionCategory(category: PropertyDocumentCategory): boolean {
     category === "T12 / Operating Summary" ||
     category === "Financial Model"
   );
-}
-
-function normalizeSearchText(value: string | null | undefined): string {
-  return (value ?? "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
 }
 
 function addressFirstLine(property: Property): string {
@@ -365,40 +377,233 @@ function resolveBaseline(body: Record<string, unknown> | undefined, lastSyncedAt
   };
 }
 
-interface PropertyMatcher extends MatchedPropertyRef {
-  normalizedFirstLine: string;
+/** Max attachments downloaded per pull purely to hash-compare against existing documents. */
+const MAX_DUPLICATE_CONTENT_COMPARISONS =
+  Number(process.env.BROKER_OM_EMAIL_DUP_COMPARE_LIMIT) || 6;
+
+function sha256Hex(buffer: Buffer): string {
+  return createHash("sha256").update(buffer).digest("hex");
 }
 
-function buildPropertyMatchers(properties: Property[]): PropertyMatcher[] {
-  return properties
-    .map((property) => ({
-      id: property.id,
-      canonicalAddress: property.canonicalAddress,
-      normalizedFirstLine: normalizeSearchText(addressFirstLine(property)),
-    }))
-    .filter((matcher) => matcher.normalizedFirstLine.length >= 5);
-}
-
-function matchCandidateProperties(candidate: GmailDocumentCandidate, matchers: PropertyMatcher[]): MatchedPropertyRef[] {
-  const haystack = normalizeSearchText(
-    [candidate.subject, candidate.bodyPreview, candidate.filename].filter(Boolean).join(" ")
+/**
+ * Existing uploaded documents for the given properties with everything needed
+ * for duplicate checks. The content hash is computed in Postgres so document
+ * bytes never leave the database; rows imported after this change also carry
+ * the hash in source_metadata, which is used first.
+ */
+async function loadExistingDocumentRefs(
+  pool: ReturnType<typeof getPool>,
+  propertyIds: string[]
+): Promise<ExistingPropertyDocumentRef[]> {
+  if (propertyIds.length === 0) return [];
+  const r = await pool.query(
+    `SELECT id, property_id, filename, category, created_at,
+            source_metadata->>'gmailMessageId' AS gmail_message_id,
+            source_metadata->>'gmailAttachmentId' AS gmail_attachment_id,
+            NULLIF(source_metadata->>'sizeBytes', '')::bigint AS meta_size_bytes,
+            octet_length(file_content) AS content_size_bytes,
+            COALESCE(source_metadata->>'sha256', encode(sha256(file_content), 'hex')) AS sha256
+     FROM property_uploaded_documents
+     WHERE property_id = ANY($1)`,
+    [propertyIds]
   );
-  if (!haystack) return [];
-  return matchers
-    .filter((matcher) => haystack.includes(matcher.normalizedFirstLine))
-    .sort((a, b) => b.normalizedFirstLine.length - a.normalizedFirstLine.length)
-    .map((matcher) => ({ id: matcher.id, canonicalAddress: matcher.canonicalAddress }));
+  return r.rows.map((row: Record<string, unknown>) => {
+    const metaSize = row.meta_size_bytes != null ? Number(row.meta_size_bytes) : null;
+    const contentSize = row.content_size_bytes != null ? Number(row.content_size_bytes) : null;
+    return {
+      id: String(row.id),
+      propertyId: String(row.property_id),
+      filename: String(row.filename ?? ""),
+      category: row.category != null ? String(row.category) : null,
+      createdAt: row.created_at != null ? new Date(String(row.created_at)).toISOString() : null,
+      gmailMessageId: row.gmail_message_id != null ? String(row.gmail_message_id) : null,
+      gmailAttachmentId: row.gmail_attachment_id != null ? String(row.gmail_attachment_id) : null,
+      sizeBytes: Number.isFinite(metaSize) && metaSize! > 0 ? metaSize : Number.isFinite(contentSize) && contentSize! > 0 ? contentSize : null,
+      sha256: row.sha256 != null ? String(row.sha256) : null,
+    } satisfies ExistingPropertyDocumentRef;
+  });
 }
 
-function messageMentionsProperty(candidate: GmailDocumentCandidate, property: Property): boolean {
-  const firstLine = normalizeSearchText(addressFirstLine(property));
-  if (!firstLine) return false;
-  const haystack = normalizeSearchText([
-    candidate.subject,
-    candidate.bodyPreview,
-    candidate.filename,
-  ].filter(Boolean).join(" "));
-  return haystack.includes(firstLine);
+/**
+ * Attach property matches (filename first, email fallback) and duplicate
+ * flags to pulled candidates. Duplicate flags are confirmed byte-for-byte
+ * (bounded by MAX_DUPLICATE_CONTENT_COMPARISONS and the request deadline)
+ * whenever filename/size metadata suggests the property already has the
+ * document.
+ */
+async function annotateCandidates(params: {
+  pool: ReturnType<typeof getPool>;
+  documents: GmailDocumentCandidate[];
+  matchers: EmailPropertyMatcher[];
+  /** Property the pull is scoped to; unmatched attachments default to it unless their filename names another building. */
+  contextProperty?: Property | null;
+  deadlineAtMs: number;
+}): Promise<GmailDocumentCandidate[]> {
+  const { pool, documents, matchers, contextProperty, deadlineAtMs } = params;
+  const matchResults = documents.map((candidate) =>
+    matchPropertiesForEmailAttachment(
+      { filename: candidate.filename, subject: candidate.subject, bodyPreview: candidate.bodyPreview },
+      matchers
+    )
+  );
+
+  const relevantPropertyIds = new Set<string>();
+  if (contextProperty) relevantPropertyIds.add(contextProperty.id);
+  for (const result of matchResults) {
+    for (const match of result.matches) relevantPropertyIds.add(match.id);
+  }
+  const existingDocs = await loadExistingDocumentRefs(pool, [...relevantPropertyIds]);
+  const docsByProperty = new Map<string, ExistingPropertyDocumentRef[]>();
+  for (const doc of existingDocs) {
+    const list = docsByProperty.get(doc.propertyId);
+    if (list) list.push(doc);
+    else docsByProperty.set(doc.propertyId, [doc]);
+  }
+
+  let comparisonsUsed = 0;
+  const annotated: GmailDocumentCandidate[] = [];
+  for (let index = 0; index < documents.length; index++) {
+    const candidate = documents[index]!;
+    const result = matchResults[index]!;
+    let matches = result.matches;
+    let matchedVia: EmailPropertyMatchVia | null = result.matchedVia;
+    let matchedReason = candidate.matchedReason;
+    if (matches.length > 0) {
+      const first = matches[0]!;
+      matchedReason = `${matchedVia === "filename" ? "Filename" : "Email"} matches ${first.canonicalAddress.split(",")[0]?.trim() || first.canonicalAddress}`;
+    } else if (contextProperty) {
+      if (filenameLooksAddressLike(candidate.filename)) {
+        matchedReason = "Filename looks like a different building — review before importing here";
+      } else {
+        matches = [{ id: contextProperty.id, canonicalAddress: contextProperty.canonicalAddress }];
+        matchedVia = "email";
+      }
+    }
+
+    // Duplicate check against every property this attachment could land on
+    // (the scoped property included — that is where an import defaults to).
+    const duplicateScopeIds = new Set<string>(matches.map((match) => match.id));
+    if (contextProperty) duplicateScopeIds.add(contextProperty.id);
+    const scopedDocs = [...duplicateScopeIds].flatMap((id) => docsByProperty.get(id) ?? []);
+    const assessment = assessMetadataDuplicates(
+      {
+        messageId: candidate.messageId,
+        attachmentId: candidate.attachmentId,
+        filename: candidate.filename,
+        sizeBytes: candidate.sizeBytes,
+      },
+      scopedDocs
+    );
+    let candidateSha256: string | null = null;
+    if (
+      !assessment.alreadyImported &&
+      assessment.comparisonTargets.length > 0 &&
+      !candidate.tooLarge &&
+      comparisonsUsed < MAX_DUPLICATE_CONTENT_COMPARISONS &&
+      Date.now() < deadlineAtMs
+    ) {
+      comparisonsUsed++;
+      try {
+        candidateSha256 = sha256Hex(await getAttachment(candidate.messageId, candidate.attachmentId));
+      } catch (err) {
+        console.warn("[broker-om dup compare] attachment download failed", err instanceof Error ? err.message : err);
+      }
+    }
+    const duplicate = resolveEmailDuplicateFlag({ assessment, candidateSha256 });
+
+    annotated.push({
+      ...candidate,
+      matchedReason,
+      matchedProperty: matches[0] ?? null,
+      matchedProperties: matches,
+      matchedVia: matches.length > 0 ? matchedVia : null,
+      duplicate,
+    });
+  }
+  return annotated;
+}
+
+interface PullLedgerResult {
+  fresh: GmailDocumentCandidate[];
+  skippedPreviouslyPulled: number;
+}
+
+/**
+ * Drop (or mark, when includePreviouslyPulled) attachments earlier pulls in
+ * this scope already surfaced. Matches on (message, attachmentId) and on
+ * (message, filename) since Gmail attachment ids are not guaranteed stable.
+ */
+async function applyPullLedger(params: {
+  pullRepo: BrokerOmEmailPullRunRepo;
+  scopeKey: string;
+  documents: GmailDocumentCandidate[];
+  includePreviouslyPulled: boolean;
+}): Promise<PullLedgerResult> {
+  const { pullRepo, scopeKey, documents, includePreviouslyPulled } = params;
+  if (documents.length === 0) return { fresh: [], skippedPreviouslyPulled: 0 };
+  const messageIds = [...new Set(documents.map((document) => document.messageId))];
+  const seen = await pullRepo.seenAttachmentsForMessages(scopeKey, messageIds);
+  const seenKeys = new Set<string>();
+  for (const entry of seen) {
+    seenKeys.add(`${entry.messageId}:att:${entry.attachmentId}`);
+    if (entry.filename) seenKeys.add(`${entry.messageId}:name:${entry.filename}`);
+  }
+  const fresh: GmailDocumentCandidate[] = [];
+  let skippedPreviouslyPulled = 0;
+  for (const document of documents) {
+    const wasPulled =
+      seenKeys.has(`${document.messageId}:att:${document.attachmentId}`) ||
+      seenKeys.has(`${document.messageId}:name:${document.filename}`);
+    if (wasPulled && !includePreviouslyPulled) {
+      skippedPreviouslyPulled++;
+      continue;
+    }
+    fresh.push(wasPulled ? { ...document, previouslyPulled: true } : document);
+  }
+  return { fresh, skippedPreviouslyPulled };
+}
+
+async function persistPullRun(params: {
+  pullRepo: BrokerOmEmailPullRunRepo;
+  scopeKey: string;
+  propertyId: string | null;
+  mode: BrokerOmSearchMode;
+  query: string;
+  baselineAt: string;
+  runAt: string;
+  truncated: boolean;
+  totalFound: number;
+  skippedPreviouslyPulled: number;
+  documents: GmailDocumentCandidate[];
+}): Promise<BrokerOmEmailPullRunRecord | null> {
+  try {
+    await params.pullRepo.recordPulledAttachments(
+      params.scopeKey,
+      params.documents.map((document) => ({
+        messageId: document.messageId,
+        attachmentId: document.attachmentId,
+        filename: document.filename,
+        sizeBytes: document.sizeBytes,
+      }))
+    );
+    return await params.pullRepo.insertRun({
+      scopeKey: params.scopeKey,
+      propertyId: params.propertyId,
+      mode: params.mode,
+      query: params.query,
+      baselineAt: params.baselineAt,
+      runAt: params.runAt,
+      truncated: params.truncated,
+      documentCount: params.totalFound,
+      newDocumentCount: params.documents.filter((document) => !document.previouslyPulled).length,
+      skippedPreviouslyPulled: params.skippedPreviouslyPulled,
+      documents: params.documents,
+    });
+  } catch (err) {
+    // Persisting the run is bookkeeping; the pull response must not fail on it.
+    console.warn("[broker-om persist pull run]", err instanceof Error ? err.message : err);
+    return null;
+  }
 }
 
 function dealKeywordReason(candidate: GmailDocumentCandidate): string | null {
@@ -408,7 +613,7 @@ function dealKeywordReason(candidate: GmailDocumentCandidate): string | null {
 }
 
 async function buildNewPropertyCandidates(params: {
-  property: Property;
+  matchers: EmailPropertyMatcher[];
   maxMessages: number;
   deadlineAtMs?: number;
 }): Promise<NewPropertyEmailCandidate[]> {
@@ -422,7 +627,13 @@ async function buildNewPropertyCandidates(params: {
   });
   const grouped = new Map<string, NewPropertyEmailCandidate>();
   for (const document of documents) {
-    if (messageMentionsProperty(document, params.property)) continue;
+    // Anything matching a property we already track (by filename first, then
+    // email subject/body) is not a new-property candidate.
+    const match = matchPropertiesForEmailAttachment(
+      { filename: document.filename, subject: document.subject, bodyPreview: document.bodyPreview },
+      params.matchers
+    );
+    if (match.matches.length > 0) continue;
     const reason = dealKeywordReason(document);
     if (!reason) continue;
     const entry = grouped.get(document.messageId) ?? {
@@ -485,7 +696,10 @@ router.get("/broker-om/properties/:id/email-pull-state", async (req: Request, re
       res.status(404).json({ error: "Property not found", propertyId });
       return;
     }
-    const syncState = await new InboxSyncStateRepo({ pool }).get(propertyCursorKey(propertyId));
+    const [syncState, latestRun] = await Promise.all([
+      new InboxSyncStateRepo({ pool }).get(propertyCursorKey(propertyId)),
+      new BrokerOmEmailPullRunRepo({ pool }).latestForScope(propertyCursorKey(propertyId)),
+    ]);
     res.json({
       propertyId,
       canonicalAddress: property.canonicalAddress,
@@ -493,6 +707,7 @@ router.get("/broker-om/properties/:id/email-pull-state", async (req: Request, re
       lastPulledAt: syncState?.lastSyncedAt ?? null,
       largeAttachmentBytes: LARGE_ATTACHMENT_BYTES,
       maxAttachmentBytes: MAX_ATTACHMENT_BYTES,
+      latestRun,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -520,6 +735,7 @@ router.post("/broker-om/properties/:id/email-search", async (req: Request, res: 
     }
     const maxMessages = numericBody(req.body?.maxMessages, DEFAULT_PROPERTY_SEARCH_LIMIT, MAX_SEARCH_LIMIT);
     const includeNewPropertyCandidates = req.body?.includeNewPropertyCandidates !== false;
+    const includePreviouslyPulled = req.body?.includePreviouslyPulled === true;
     const maxNewPropertyMessages = numericBody(
       req.body?.maxNewPropertyMessages,
       DEFAULT_NEW_PROPERTY_SEARCH_LIMIT,
@@ -530,6 +746,8 @@ router.post("/broker-om/properties/:id/email-search", async (req: Request, res: 
     const searchRunAt = new Date().toISOString();
     const deadlineAtMs = Date.now() + EMAIL_SEARCH_BUDGET_MS;
 
+    const properties = await propertyRepo.list();
+    const matchers = buildEmailPropertyMatchers(properties);
     const [searchResult, newPropertyCandidates] = await Promise.all([
       buildCandidatesForQuery({
         query,
@@ -539,11 +757,40 @@ router.post("/broker-om/properties/:id/email-search", async (req: Request, res: 
         deadlineAtMs,
       }),
       includeNewPropertyCandidates
-        ? buildNewPropertyCandidates({ property, maxMessages: maxNewPropertyMessages, deadlineAtMs })
+        ? buildNewPropertyCandidates({ matchers, maxMessages: maxNewPropertyMessages, deadlineAtMs })
         : Promise.resolve([]),
     ]);
 
-    await syncRepo.upsert(propertyCursorKey(propertyId), searchRunAt);
+    const pullRepo = new BrokerOmEmailPullRunRepo({ pool });
+    const scopeKey = propertyCursorKey(propertyId);
+    const { fresh, skippedPreviouslyPulled } = await applyPullLedger({
+      pullRepo,
+      scopeKey,
+      documents: searchResult.documents,
+      includePreviouslyPulled,
+    });
+    const documents = await annotateCandidates({
+      pool,
+      documents: fresh,
+      matchers,
+      contextProperty: property,
+      deadlineAtMs,
+    });
+    const storedRun = await persistPullRun({
+      pullRepo,
+      scopeKey,
+      propertyId,
+      mode,
+      query,
+      baselineAt: baseline.toISOString(),
+      runAt: searchRunAt,
+      truncated: searchResult.truncated,
+      totalFound: searchResult.documents.length,
+      skippedPreviouslyPulled,
+      documents,
+    });
+
+    await syncRepo.upsert(scopeKey, searchRunAt);
     res.json({
       ok: true,
       property: {
@@ -559,8 +806,11 @@ router.post("/broker-om/properties/:id/email-search", async (req: Request, res: 
       systemStartAt: SYSTEM_START_AT.toISOString(),
       largeAttachmentBytes: LARGE_ATTACHMENT_BYTES,
       maxAttachmentBytes: MAX_ATTACHMENT_BYTES,
-      documents: searchResult.documents,
+      documents,
+      totalFound: searchResult.documents.length,
+      skippedPreviouslyPulled,
       truncated: searchResult.truncated,
+      runId: storedRun?.id ?? null,
       newPropertyCandidates,
     });
   } catch (err) {
@@ -573,7 +823,10 @@ router.post("/broker-om/properties/:id/email-search", async (req: Request, res: 
 router.get("/broker-om/email-pull-state", async (_req: Request, res: Response) => {
   try {
     const pool = getPool();
-    const syncState = await new InboxSyncStateRepo({ pool }).get(GLOBAL_PULL_CURSOR_KEY);
+    const [syncState, latestRun] = await Promise.all([
+      new InboxSyncStateRepo({ pool }).get(GLOBAL_PULL_CURSOR_KEY),
+      new BrokerOmEmailPullRunRepo({ pool }).latestForScope(GLOBAL_PULL_CURSOR_KEY),
+    ]);
     res.json({
       propertyId: null,
       canonicalAddress: null,
@@ -581,6 +834,7 @@ router.get("/broker-om/email-pull-state", async (_req: Request, res: Response) =
       lastPulledAt: syncState?.lastSyncedAt ?? null,
       largeAttachmentBytes: LARGE_ATTACHMENT_BYTES,
       maxAttachmentBytes: MAX_ATTACHMENT_BYTES,
+      latestRun,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -600,9 +854,11 @@ router.post("/broker-om/email-search", async (req: Request, res: Response) => {
       return;
     }
     const maxMessages = numericBody(req.body?.maxMessages, DEFAULT_GLOBAL_SEARCH_LIMIT, MAX_SEARCH_LIMIT);
+    const includePreviouslyPulled = req.body?.includePreviouslyPulled === true;
     const extraQuery = typeof req.body?.query === "string" ? req.body.query.trim() || null : null;
     const query = buildDealKeywordSearchQuery(baseline, extraQuery);
     const searchRunAt = new Date().toISOString();
+    const deadlineAtMs = Date.now() + EMAIL_SEARCH_BUDGET_MS;
 
     const [searchResult, properties] = await Promise.all([
       buildCandidatesForQuery({
@@ -610,23 +866,42 @@ router.post("/broker-om/email-search", async (req: Request, res: Response) => {
         baseline,
         maxMessages,
         matchedReason: "Deal document keywords",
+        deadlineAtMs,
       }),
       new PropertyRepo({ pool }).list(),
     ]);
 
-    const matchers = buildPropertyMatchers(properties);
-    const documents = searchResult.documents.map((candidate) => {
-      const matches = matchCandidateProperties(candidate, matchers);
+    const matchers = buildEmailPropertyMatchers(properties);
+    const pullRepo = new BrokerOmEmailPullRunRepo({ pool });
+    const { fresh, skippedPreviouslyPulled } = await applyPullLedger({
+      pullRepo,
+      scopeKey: GLOBAL_PULL_CURSOR_KEY,
+      documents: searchResult.documents,
+      includePreviouslyPulled,
+    });
+    const annotated = await annotateCandidates({
+      pool,
+      documents: fresh,
+      matchers,
+      deadlineAtMs,
+    });
+    const documents = annotated.map((candidate) => {
+      if (candidate.matchedProperty) return candidate;
       const keywordReason = dealKeywordReason(candidate);
-      const matchedReason = matches[0]
-        ? `Matches ${matches[0].canonicalAddress.split(",")[0]?.trim() || matches[0].canonicalAddress}`
-        : keywordReason ?? candidate.matchedReason;
-      return {
-        ...candidate,
-        matchedReason,
-        matchedProperty: matches[0] ?? null,
-        matchedProperties: matches,
-      } satisfies GmailDocumentCandidate;
+      return keywordReason ? { ...candidate, matchedReason: keywordReason } : candidate;
+    });
+    const storedRun = await persistPullRun({
+      pullRepo,
+      scopeKey: GLOBAL_PULL_CURSOR_KEY,
+      propertyId: null,
+      mode,
+      query,
+      baselineAt: baseline.toISOString(),
+      runAt: searchRunAt,
+      truncated: searchResult.truncated,
+      totalFound: searchResult.documents.length,
+      skippedPreviouslyPulled,
+      documents,
     });
 
     await syncRepo.upsert(GLOBAL_PULL_CURSOR_KEY, searchRunAt);
@@ -643,7 +918,10 @@ router.post("/broker-om/email-search", async (req: Request, res: Response) => {
       largeAttachmentBytes: LARGE_ATTACHMENT_BYTES,
       maxAttachmentBytes: MAX_ATTACHMENT_BYTES,
       documents,
+      totalFound: searchResult.documents.length,
+      skippedPreviouslyPulled,
       truncated: searchResult.truncated,
+      runId: storedRun?.id ?? null,
       newPropertyCandidates: [],
     });
   } catch (err) {
@@ -696,15 +974,138 @@ interface EmailImportRequestDoc {
   propertyId?: unknown;
 }
 
-async function importEmailDocumentsForProperty(params: {
+/** Imported row plus everything the deal-analysis run needs (bytes + email context). */
+interface ImportedEmailDocument {
+  inserted: Awaited<ReturnType<PropertyUploadedDocumentRepo["insert"]>>;
+  buffer: Buffer;
+  mimeType: string;
+  messageId: string;
+  subject: string | null;
+  fromAddress: string | null;
+}
+
+async function findExistingContentDuplicate(params: {
   pool: ReturnType<typeof getPool>;
   propertyId: string;
+  sha256: string;
+}): Promise<{ id: string; filename: string } | null> {
+  const r = await params.pool.query<{ id: string; filename: string }>(
+    `SELECT id, filename
+     FROM property_uploaded_documents
+     WHERE property_id = $1
+       AND (source_metadata->>'sha256' = $2 OR encode(sha256(file_content), 'hex') = $2)
+     LIMIT 1`,
+    [params.propertyId, params.sha256]
+  );
+  return r.rows[0] ?? null;
+}
+
+/**
+ * The deal-analysis LLM run for OM-category documents imported from Gmail —
+ * the same single-package process the deal-analysis upload page uses (the
+ * all-properties import calls this once per property group, mirroring the
+ * batch/separate-properties process). It extracts, promotes the snapshot,
+ * refreshes deal signals, and runs enrichment so the property carries all
+ * derived characteristics without a manual review step.
+ */
+async function runEmailImportDealAnalysis(params: {
+  pool: ReturnType<typeof getPool>;
+  property: Property;
+  documents: ImportedEmailDocument[];
+}) {
+  const { pool, property, documents } = params;
+  const subjects = [...new Set(documents.map((document) => document.subject).filter(Boolean))] as string[];
+  const fromAddresses = [...new Set(documents.map((document) => document.fromAddress).filter(Boolean))] as string[];
+  try {
+    const result = await analyzeAndPersistDealAnalysisOmDocuments({
+      documents: documents.map((document) => ({
+        filename: document.inserted.filename,
+        mimeType: document.mimeType,
+        buffer: document.buffer,
+        sizeBytes: document.buffer.length,
+      })),
+      sourceType: "pipeline_document_upload",
+      sourceLabel: sourceLabel(fromAddresses[0] ?? null),
+      targetPropertyId: property.id,
+      propertyContext: [
+        `Broker OM email import for tracked property: ${property.canonicalAddress}.`,
+        "Determine the property address from the attached documents themselves (cover page, title, headers). Broker threads often carry OMs for other buildings, so the email subject below is fallback context only — use it solely when the documents state no address.",
+        subjects.length > 0 ? `Email subject(s) (fallback context only): ${subjects.join(" | ")}` : null,
+      ]
+        .filter(Boolean)
+        .join("\n"),
+      sourceMetadata: {
+        uploadedVia: "broker_om_manual_gmail_pull",
+        gmailMessageIds: [...new Set(documents.map((document) => document.messageId))],
+      },
+      runDossier: false,
+      prePersistedDocuments: documents.map((document) => ({
+        id: document.inserted.id,
+        fileName: document.inserted.filename,
+        contentType: document.inserted.contentType ?? null,
+        category: document.inserted.category ?? null,
+        createdAt: document.inserted.createdAt,
+      })),
+      pool,
+    });
+
+    // Safety check for threads carrying someone else's OM: compare the
+    // address the documents themselves state with the target property.
+    const extractedFirstLine = result.resolvedAddress
+      ? normalizeEmailSearchText(result.resolvedAddress.addressLine)
+      : null;
+    const propertyFirstLine = normalizeEmailSearchText(emailAddressFirstLine(property.canonicalAddress));
+    const addressMismatch =
+      extractedFirstLine && propertyFirstLine && extractedFirstLine !== propertyFirstLine
+        ? {
+            extractedAddress: result.resolvedAddress?.canonicalAddress ?? null,
+            propertyAddress: property.canonicalAddress,
+            warning: `The document states ${result.resolvedAddress?.canonicalAddress ?? "a different address"} but was imported to ${property.canonicalAddress}.`,
+          }
+        : null;
+
+    return {
+      ok: true,
+      dealAnalysis: true,
+      status: "promoted" as const,
+      runId: result.omReview?.runId ?? null,
+      snapshotId: result.omReview?.snapshotId ?? null,
+      dossierGenerated: result.omReview?.dossierGenerated ?? false,
+      underwritingRefreshed: result.omReview?.underwritingRefreshed ?? false,
+      documentsProcessed: documents.length,
+      extractedAddress: result.resolvedAddress?.canonicalAddress ?? null,
+      addressMismatch,
+      enrichment: result.enrichment ?? null,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      dealAnalysis: true,
+      status: "failed" as const,
+      runId: null,
+      snapshotId: null,
+      dossierGenerated: false,
+      underwritingRefreshed: false,
+      documentsProcessed: documents.length,
+      extractedAddress: null,
+      addressMismatch: null,
+      enrichment: null,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+async function importEmailDocumentsForProperty(params: {
+  pool: ReturnType<typeof getPool>;
+  property: Property;
   documents: EmailImportRequestDoc[];
   runOmReview: boolean;
 }) {
-  const { pool, propertyId } = params;
+  const { pool, property } = params;
+  const propertyId = property.id;
   const docRepo = new PropertyUploadedDocumentRepo({ pool });
   const imported: Array<Awaited<ReturnType<PropertyUploadedDocumentRepo["insert"]>>> = [];
+  const importedWithBuffers: ImportedEmailDocument[] = [];
   const skipped: Array<{ messageId: string; attachmentId: string; reason: string; documentId?: string | null }> = [];
   const errors: Array<{ messageId: string; attachmentId: string; error: string }> = [];
   const uploadedAt = new Date().toISOString();
@@ -750,6 +1151,19 @@ async function importEmailDocumentsForProperty(params: {
         });
         continue;
       }
+      // Byte-identical to a document this property already has (regardless of
+      // which email it arrived on) — skip instead of storing a duplicate.
+      const contentSha256 = sha256Hex(buffer);
+      const contentDuplicate = await findExistingContentDuplicate({ pool, propertyId, sha256: contentSha256 });
+      if (contentDuplicate) {
+        skipped.push({
+          messageId,
+          attachmentId,
+          reason: `duplicate_content:${contentDuplicate.filename}`,
+          documentId: contentDuplicate.id,
+        });
+        continue;
+      }
       const docId = randomUUID();
       const filePath = await saveUploadedDocument(propertyId, docId, filename, buffer);
       const inserted = await docRepo.insert({
@@ -772,11 +1186,20 @@ async function importEmailDocumentsForProperty(params: {
           gmailDate: parseDateHeader(msg),
           originalFileName: filename,
           sizeBytes: buffer.length,
+          sha256: contentSha256,
           classificationMethod: requestDoc?.category ? "user_selected" : "filename_auto",
         },
         fileContent: buffer,
       });
       imported.push(inserted);
+      importedWithBuffers.push({
+        inserted,
+        buffer,
+        mimeType,
+        messageId,
+        subject: getHeader(msg, "Subject"),
+        fromAddress: getHeader(msg, "From"),
+      });
     } catch (error) {
       errors.push({
         messageId,
@@ -786,36 +1209,11 @@ async function importEmailDocumentsForProperty(params: {
     }
   }
 
-  const omDocuments: OmAutomationDocument[] = imported
-    .filter((document) => isOmIngestionCategory(document.category))
-    .map((document) => ({
-      id: document.id,
-      origin: "uploaded_document",
-      filename: document.filename,
-      mimeType: document.contentType ?? null,
-      filePath: document.filePath,
-      category: document.category,
-      source: document.source ?? null,
-      createdAt: document.createdAt,
-    }));
-  const runOmReview = params.runOmReview && omDocuments.length > 0;
-  const omReview = runOmReview
-    ? await ingestAuthoritativeOm({
-        propertyId,
-        sourceType: "uploaded_document",
-        documents: omDocuments,
-        autoPromote: false,
-        triggerDossier: false,
-        pool,
-      }).catch((error) => ({
-        documentsProcessed: 0,
-        documentsSkippedNoFile: 0,
-        runId: null,
-        snapshotId: null,
-        dossierGenerated: false,
-        error: error instanceof Error ? error.message : String(error),
-      }))
-    : null;
+  const omDocuments = importedWithBuffers.filter((document) => isOmIngestionCategory(document.inserted.category));
+  const omReview =
+    params.runOmReview && omDocuments.length > 0
+      ? await runEmailImportDealAnalysis({ pool, property, documents: omDocuments })
+      : null;
 
   await syncPropertySourcingWorkflow(propertyId, { pool }).catch(() => {});
   return { imported, skipped, errors, omReview };
@@ -839,7 +1237,7 @@ router.post("/broker-om/properties/:id/import-email-documents", async (req: Requ
 
     const { imported, skipped, errors, omReview } = await importEmailDocumentsForProperty({
       pool,
-      propertyId,
+      property,
       documents: requestedDocuments,
       runOmReview: req.body?.runOmReview !== false,
     });
@@ -906,7 +1304,7 @@ router.post("/broker-om/import-email-documents", async (req: Request, res: Respo
       }
       const result = await importEmailDocumentsForProperty({
         pool,
-        propertyId: docPropertyId,
+        property,
         documents,
         runOmReview,
       });
@@ -984,8 +1382,9 @@ router.post("/broker-om/create-property-from-email-document", async (req: Reques
       sourceLabel: sourceLabel(getHeader(msg, "From")),
       propertyContext: [
         "Manual broker OM Gmail pull.",
-        getHeader(msg, "Subject") ? `Subject: ${getHeader(msg, "Subject")}` : null,
-        getBodyText(msg) ? `Email body preview: ${compactPreview(getBodyText(msg), 1200)}` : null,
+        "Determine the property address from the attached document itself (cover page, title, headers). Broker threads often reference a different building in the subject line — only fall back to the email subject/body below when the document states no address.",
+        getHeader(msg, "Subject") ? `Email subject (fallback context only): ${getHeader(msg, "Subject")}` : null,
+        getBodyText(msg) ? `Email body preview (fallback context only): ${compactPreview(getBodyText(msg), 1200)}` : null,
       ].filter(Boolean).join("\n"),
       sourceMetadata: {
         uploadedVia: "broker_om_manual_new_property_gmail_pull",
