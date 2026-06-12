@@ -1,16 +1,10 @@
 "use client";
 
-import {
-  useCallback,
-  useEffect,
-  useId,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
+import { useCallback, useId, useRef, useState, type ReactNode } from "react";
 import type { LucideIcon } from "lucide-react";
 import styles from "./primitives.module.css";
 import { cx } from "./utils";
+import { AnchoredPopover } from "./AnchoredPopover";
 
 type PopoverProps = {
   /** Trigger element; receives toggle handler + expanded state. */
@@ -25,28 +19,14 @@ type PopoverProps = {
 /**
  * Lightweight anchored popover: closes on outside click and Escape.
  * Use for quick in-place actions instead of navigating away.
+ * Renders through AnchoredPopover (portal), so it is never clipped by
+ * overflow containers and follows the trigger through nested scrolling.
  */
 export function Popover({ trigger, children, align = "start", className, panelClassName }: PopoverProps) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLSpanElement | null>(null);
   const panelId = useId();
   const close = useCallback(() => setOpen(false), []);
-
-  useEffect(() => {
-    if (!open) return;
-    const onPointerDown = (event: PointerEvent) => {
-      if (rootRef.current && !rootRef.current.contains(event.target as Node)) setOpen(false);
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("pointerdown", onPointerDown);
-    document.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.removeEventListener("pointerdown", onPointerDown);
-      document.removeEventListener("keydown", onKeyDown);
-    };
-  }, [open]);
 
   return (
     <span ref={rootRef} className={cx(styles.popoverRoot, className)}>
@@ -56,11 +36,17 @@ export function Popover({ trigger, children, align = "start", className, panelCl
         "aria-haspopup": true,
         "aria-controls": panelId,
       })}
-      {open ? (
-        <div id={panelId} className={cx(styles.popoverPanel, align === "end" && styles.popoverPanelEnd, panelClassName)}>
-          {typeof children === "function" ? children(close) : children}
-        </div>
-      ) : null}
+      <AnchoredPopover
+        open={open}
+        anchorEl={rootRef.current}
+        onClose={close}
+        placement={align === "end" ? "bottom-end" : "bottom-start"}
+        role="menu"
+        id={panelId}
+        className={cx(styles.anchoredMenuBody, panelClassName)}
+      >
+        {typeof children === "function" ? children(close) : children}
+      </AnchoredPopover>
     </span>
   );
 }
@@ -89,7 +75,7 @@ export function PromptMenu({ trigger, items, heading, align = "end", className }
   return (
     <Popover trigger={trigger} align={align} className={className} panelClassName={styles.promptMenuPanel}>
       {(close) => (
-        <div role="menu" className={styles.promptMenu}>
+        <div className={styles.promptMenu}>
           {heading ? <div className={styles.promptMenuHeading}>{heading}</div> : null}
           {items.map((item, index) => {
             const ItemIcon = item.icon;

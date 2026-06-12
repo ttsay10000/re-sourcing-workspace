@@ -679,26 +679,38 @@ button.statCard:hover {
   display: inline-flex;
 }
 
-.popoverPanel {
-  position: absolute;
-  top: calc(100% + 0.35rem);
-  left: 0;
-  z-index: 120;
-  min-width: 13rem;
+/* Portal-based anchored panel: chrome + entrance for AnchoredPopover.
+   Positioned inline (top/left/transform-origin) by the component. */
+.anchoredPanel {
+  position: fixed;
+  z-index: 210;
   border: 1px solid var(--app-line);
   border-radius: var(--radius-lg);
   background: var(--app-surface);
-  box-shadow: var(--app-shadow-md);
-  animation: dialog-rise 140ms ease;
+  box-shadow: var(--app-shadow-lg);
+  outline: none;
+  overflow: auto;
+  animation: anchored-pop 150ms cubic-bezier(0.2, 0.9, 0.3, 1);
 }
 
-.popoverPanelEnd {
-  left: auto;
-  right: 0;
+@keyframes anchored-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .popoverPanel { animation: none; }
+  .anchoredPanel { animation: none; }
+}
+
+/* Default body width for menu-style anchored panels. */
+.anchoredMenuBody {
+  min-width: 13rem;
 }
 
 .promptMenuPanel {

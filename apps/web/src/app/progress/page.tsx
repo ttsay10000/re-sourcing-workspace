@@ -25,6 +25,7 @@ import {
   MoreHorizontal,
   PenLine,
   Sparkles,
+  X,
   XCircle,
 } from "lucide-react";
 import {
@@ -36,7 +37,7 @@ import {
   type UiV2PipelineStatus,
   type UiV2RejectionReasonCode,
 } from "@re-sourcing/contracts";
-import { AgingChip, BrokerContactDialog, Button, Dialog, PageHeader, PromptMenu, PropertyThumb, StatCard } from "@/components/ui";
+import { AgingChip, AnchoredPopover, BrokerContactDialog, Button, Dialog, PageHeader, PromptMenu, PropertyThumb, StatCard } from "@/components/ui";
 import { RecommendationStepper, type StepperKind, type StepperRow } from "./RecommendationStepper";
 import { API_BASE, apiFetch } from "@/lib/api";
 import { runBulkPropertyAction } from "@/lib/bulkPropertyActions";
@@ -197,6 +198,8 @@ type RejectFormState = {
   address: string;
   reasonCode: UiV2RejectionReasonCode | "";
   note: string;
+  /** Trigger (or card) that opened the form — the popover anchors to it. */
+  anchorEl: HTMLElement | null;
 };
 
 type ComposerDialogState = {
@@ -223,6 +226,8 @@ type MoveStageDialogState = {
   propertyId: string;
   address: string;
   targetSectionId: string;
+  /** Trigger (or card) that opened the picker — the popover anchors to it. */
+  anchorEl: HTMLElement | null;
 };
 
 type RecommendationsState = {
@@ -1220,8 +1225,15 @@ function ProgressPageContent() {
   }, [flowRows]);
 
   /** Central router for flag CTAs: every flag click lands in the right workflow. */
+  // Anchors action popovers to the deal card when the caller has no event
+  // target handy (menu items, keyboard shortcuts).
+  const cardAnchor = useCallback((propertyId: string): HTMLElement | null => {
+    if (typeof document === "undefined") return null;
+    return document.getElementById(`deal-card-${propertyId}`);
+  }, []);
+
   const runBoardAction = useCallback(
-    (row: DealFlowRow, actionKind: FlagActionKind) => {
+    (row: DealFlowRow, actionKind: FlagActionKind, anchorEl?: HTMLElement | null) => {
       switch (actionKind) {
         case "compose_email":
           if (row.brokerEmail) void openEmailComposer(row, "email");
@@ -1249,6 +1261,7 @@ function ProgressPageContent() {
             address: row.displayAddress || row.canonicalAddress || row.propertyId,
             reasonCode: "",
             note: "",
+            anchorEl: anchorEl ?? cardAnchor(row.propertyId),
           });
           return;
         case "move_stage":
@@ -1259,6 +1272,7 @@ function ProgressPageContent() {
               const sectionId = sectionIdByProperty.get(row.propertyId);
               return !sectionId || sectionId === "sourced" ? "om_requested" : sectionId;
             })(),
+            anchorEl: anchorEl ?? cardAnchor(row.propertyId),
           });
           return;
         case "review_underwriting":
@@ -1267,7 +1281,7 @@ function ProgressPageContent() {
           startDealPathEdit(row);
       }
     },
-    [openBrokerEmailDialog, openEmailComposer, sectionIdByProperty, startDealPathEdit]
+    [cardAnchor, openBrokerEmailDialog, openEmailComposer, sectionIdByProperty, startDealPathEdit]
   );
 
   const openStepperFor = useCallback(
@@ -1400,6 +1414,7 @@ function ProgressPageContent() {
           propertyId: focused.row.propertyId,
           address: focused.row.displayAddress || focused.row.canonicalAddress || focused.row.propertyId,
           targetSectionId: focused.sectionId === "sourced" ? "om_requested" : focused.sectionId,
+          anchorEl: cardAnchor(focused.row.propertyId),
         });
         return;
       }
@@ -1411,6 +1426,7 @@ function ProgressPageContent() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [
     brokerEmailState,
+    cardAnchor,
     composerState,
     editingDealPathId,
     focusedCardId,
@@ -1583,14 +1599,18 @@ function ProgressPageContent() {
     [dealPathForms, dealPathPromptMode, loadProgress, loiUploadFiles, scrollToColumn]
   );
 
-  const startReject = useCallback((row: DealFlowRow) => {
-    setRejectState({
-      propertyId: row.propertyId,
-      address: row.displayAddress || row.canonicalAddress || row.propertyId,
-      reasonCode: "",
-      note: "",
-    });
-  }, []);
+  const startReject = useCallback(
+    (row: DealFlowRow, anchorEl?: HTMLElement | null) => {
+      setRejectState({
+        propertyId: row.propertyId,
+        address: row.displayAddress || row.canonicalAddress || row.propertyId,
+        reasonCode: "",
+        note: "",
+        anchorEl: anchorEl ?? cardAnchor(row.propertyId),
+      });
+    },
+    [cardAnchor]
+  );
 
   const submitReject = useCallback(
     async (event: FormEvent<HTMLFormElement>) => {
@@ -2075,11 +2095,12 @@ function ProgressPageContent() {
                   onEmailBroker={(row, intent) => void openEmailComposer(row, intent)}
                   onAddBrokerEmail={openBrokerEmailDialog}
                   onStartReject={startReject}
-                  onMoveStage={(row) =>
+                  onMoveStage={(row, anchorEl) =>
                     setMoveStageState({
                       propertyId: row.propertyId,
                       address: row.displayAddress || row.canonicalAddress || row.propertyId,
                       targetSectionId: section.id === "sourced" ? "om_requested" : section.id,
+                      anchorEl: anchorEl ?? cardAnchor(row.propertyId),
                     })
                   }
                   focusedCardId={focusedCardId}
@@ -2091,9 +2112,9 @@ function ProgressPageContent() {
           <NeedsActionPanel
             rows={needsActionRows}
             onOpen={(row) => handleQueueOpen(row.propertyId)}
-            onAction={(row) => {
+            onAction={(row, anchorEl) => {
               const dealRow = rowById.get(row.propertyId);
-              if (dealRow) runBoardAction(dealRow, row.flag.actionKind);
+              if (dealRow) runBoardAction(dealRow, row.flag.actionKind, anchorEl ?? null);
             }}
           />
         ) : (
@@ -2164,6 +2185,7 @@ function ProgressPageContent() {
                 const sectionId = sectionIdByProperty.get(editingDealPathRow.propertyId);
                 return !sectionId || sectionId === "sourced" ? "om_requested" : sectionId;
               })(),
+              anchorEl: null,
             })
           }
         />
@@ -2290,26 +2312,33 @@ function ProgressPageContent() {
         </dl>
       </Dialog>
 
-      <Dialog
-        open={moveStageState != null}
-        onClose={() => setMoveStageState(null)}
-        title="Move deal to stage"
-        description={moveStageState?.address}
-        size="sm"
-        footer={
-          <>
-            <Button variant="ghost" size="sm" onClick={() => setMoveStageState(null)}>
-              Cancel
-            </Button>
-            <Button variant="primary" size="sm" onClick={submitMoveStage} disabled={moveStageState == null}>
-              Move deal
-            </Button>
-          </>
-        }
-      >
-        {moveStageState ? (
-          <div className={styles.dialogForm}>
-            <label className={styles.dialogField}>
+      {moveStageState ? (
+        <AnchoredPopover
+          open
+          anchorEl={moveStageState.anchorEl}
+          onClose={() => setMoveStageState(null)}
+          placement="bottom-end"
+          role="dialog"
+          ariaLabel={`Move ${moveStageState.address} to stage`}
+          className={styles.rejectPopover}
+        >
+          <div className={styles.rejectForm}>
+            <div className={styles.rejectFormHead}>
+              <div>
+                <span className={styles.modalKicker}>Move deal to stage</span>
+                <strong className={styles.rejectFormAddress}>{moveStageState.address}</strong>
+              </div>
+              <button
+                type="button"
+                className={styles.closeButton}
+                data-popover-close
+                onClick={() => setMoveStageState(null)}
+                aria-label="Close stage picker"
+              >
+                <X size={14} strokeWidth={2.2} aria-hidden="true" />
+              </button>
+            </div>
+            <label>
               <span>Stage</span>
               <select
                 value={moveStageState.targetSectionId}
@@ -2327,9 +2356,17 @@ function ProgressPageContent() {
             <p className={styles.dialogHint}>
               Tour and LOI stages open their guided prompt so dates, notes, and offers land with the move.
             </p>
+            <div className={styles.rejectFormActions}>
+              <Button variant="ghost" size="sm" onClick={() => setMoveStageState(null)}>
+                Cancel
+              </Button>
+              <Button variant="primary" size="sm" onClick={submitMoveStage}>
+                Move deal
+              </Button>
+            </div>
           </div>
-        ) : null}
-      </Dialog>
+        </AnchoredPopover>
+      ) : null}
     </div>
   );
 }
@@ -2348,22 +2385,29 @@ function RejectDealModal({
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }) {
   return (
-    <div className={styles.modalOverlay} role="presentation" onMouseDown={onCancel}>
-      <form
-        className={styles.rejectModal}
-        role="dialog"
-        aria-modal="true"
-        aria-label={`Reject ${state.address}`}
-        onSubmit={onSubmit}
-        onMouseDown={(event) => event.stopPropagation()}
-      >
-        <div className={styles.modalHeader}>
+    <AnchoredPopover
+      open
+      anchorEl={state.anchorEl}
+      onClose={onCancel}
+      placement="bottom-end"
+      role="dialog"
+      ariaLabel={`Reject ${state.address}`}
+      className={styles.rejectPopover}
+    >
+      <form className={styles.rejectForm} onSubmit={onSubmit}>
+        <div className={styles.rejectFormHead}>
           <div>
             <span className={styles.modalKicker}>Reject property</span>
-            <h2>{state.address}</h2>
+            <strong className={styles.rejectFormAddress}>{state.address}</strong>
           </div>
-          <button type="button" className={styles.closeButton} onClick={onCancel} aria-label="Close rejection modal">
-            x
+          <button
+            type="button"
+            className={styles.closeButton}
+            data-popover-close
+            onClick={onCancel}
+            aria-label="Close rejection form"
+          >
+            <X size={14} strokeWidth={2.2} aria-hidden="true" />
           </button>
         </div>
         <label>
@@ -2386,11 +2430,11 @@ function RejectDealModal({
           <textarea
             value={state.note}
             onChange={(event) => onChange({ ...state, note: event.target.value })}
-            rows={4}
+            rows={3}
             placeholder="Optional context"
           />
         </label>
-        <div className={styles.modalActions}>
+        <div className={styles.rejectFormActions}>
           <button className={styles.bulkClearButton} type="button" onClick={onCancel} disabled={saving}>
             Cancel
           </button>
@@ -2399,7 +2443,7 @@ function RejectDealModal({
           </button>
         </div>
       </form>
-    </div>
+    </AnchoredPopover>
   );
 }
 
@@ -2463,11 +2507,11 @@ function StatusColumn({
   onDragOverSection?: (event: DragEvent<HTMLElement>) => void;
   onDropOnSection?: () => void;
   onOpenDrawer?: (row: DealFlowRow, options?: { mode?: DealPathPromptMode }) => void;
-  onRunAction?: (row: DealFlowRow, actionKind: FlagActionKind) => void;
+  onRunAction?: (row: DealFlowRow, actionKind: FlagActionKind, anchorEl?: HTMLElement | null) => void;
   onEmailBroker?: (row: DealFlowRow, intent: "email" | "request_om") => void;
   onAddBrokerEmail?: (row: DealFlowRow) => void;
-  onStartReject?: (row: DealFlowRow) => void;
-  onMoveStage?: (row: DealFlowRow) => void;
+  onStartReject?: (row: DealFlowRow, anchorEl?: HTMLElement | null) => void;
+  onMoveStage?: (row: DealFlowRow, anchorEl?: HTMLElement | null) => void;
   focusedCardId?: string | null;
   flash?: boolean;
 }) {
@@ -2558,11 +2602,11 @@ function PropertyMiniCard({
   onDragStartDeal?: (row: DealFlowRow) => void;
   onDragEndDeal?: () => void;
   onOpenDrawer?: (row: DealFlowRow, options?: { mode?: DealPathPromptMode }) => void;
-  onRunAction?: (row: DealFlowRow, actionKind: FlagActionKind) => void;
+  onRunAction?: (row: DealFlowRow, actionKind: FlagActionKind, anchorEl?: HTMLElement | null) => void;
   onEmailBroker?: (row: DealFlowRow, intent: "email" | "request_om") => void;
   onAddBrokerEmail?: (row: DealFlowRow) => void;
-  onStartReject?: (row: DealFlowRow) => void;
-  onMoveStage?: (row: DealFlowRow) => void;
+  onStartReject?: (row: DealFlowRow, anchorEl?: HTMLElement | null) => void;
+  onMoveStage?: (row: DealFlowRow, anchorEl?: HTMLElement | null) => void;
 }) {
   const address = row.displayAddress || row.canonicalAddress || row.propertyId;
   const metrics = cardMetricsForRow(row).slice(0, 4);
@@ -2585,6 +2629,7 @@ function PropertyMiniCard({
 
   return (
     <article
+      id={`deal-card-${row.propertyId}`}
       className={`${styles.propertyCard} ${selected ? styles.propertyCardSelected : ""} ${busy ? styles.propertyCardBusy : ""} ${
         keyboardFocused ? styles.propertyCardFocused : ""
       }`}
@@ -2627,7 +2672,7 @@ function PropertyMiniCard({
             aria-label={`${topFlag.label}: ${topFlag.recommendedAction}`}
             onClick={(event) => {
               event.stopPropagation();
-              onRunAction?.(row, topFlag.actionKind);
+              onRunAction?.(row, topFlag.actionKind, event.currentTarget);
             }}
           >
             <FlagIcon size={13} strokeWidth={2.2} aria-hidden="true" />
@@ -2747,7 +2792,7 @@ function PropertyMiniCard({
           className={styles.cardActionButton}
           disabled={busy}
           title={topFlag ? topFlag.reason : cta.label}
-          onClick={() => onRunAction?.(row, cta.actionKind)}
+          onClick={(event) => onRunAction?.(row, cta.actionKind, event.currentTarget)}
         >
           {cta.label}
         </button>
@@ -2756,7 +2801,7 @@ function PropertyMiniCard({
           className={styles.cardMoveButton}
           disabled={busy}
           title="Move to stage…"
-          onClick={() => onMoveStage?.(row)}
+          onClick={(event) => onMoveStage?.(row, event.currentTarget)}
         >
           <ArrowRightLeft size={11} strokeWidth={2} aria-hidden="true" />
           Move

@@ -415,7 +415,7 @@ export function NeedsActionPanel({
 }: {
   rows: NeedsActionRow[];
   onOpen: (row: NeedsActionRow) => void;
-  onAction: (row: NeedsActionRow) => void;
+  onAction: (row: NeedsActionRow, anchorEl?: HTMLElement | null) => void;
 }) {
   const [search, setSearch] = useState("");
   const [stageFilter, setStageFilter] = useState("");
@@ -522,7 +522,11 @@ export function NeedsActionPanel({
                     <div className={styles.queueSubject}>{row.flag.reason}</div>
                   </div>
                   <div className={styles.queueActions}>
-                    <button type="button" className={styles.queuePrimaryButton} onClick={() => onAction(row)}>
+                    <button
+                      type="button"
+                      className={styles.queuePrimaryButton}
+                      onClick={(event) => onAction(row, event.currentTarget)}
+                    >
                       {row.flag.recommendedAction}
                     </button>
                     <button type="button" className={styles.queueIconButton} title="Open deal workspace" onClick={() => onOpen(row)}>

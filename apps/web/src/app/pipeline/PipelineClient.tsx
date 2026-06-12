@@ -13,7 +13,7 @@ import {
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { MailPlus, Star, X } from "lucide-react";
-import { BrokerContactDialog, ConfirmDialog, FileDropzone, StageChip, type BrokerSearchCandidate } from "@/components/ui";
+import { AnchoredPopover, BrokerContactDialog, ConfirmDialog, Dialog, FileDropzone, StageChip, type BrokerSearchCandidate } from "@/components/ui";
 import { useProcessBanner } from "@/components/ProcessBanner";
 import { runBulkPropertyAction } from "@/lib/bulkPropertyActions";
 import {
@@ -156,8 +156,8 @@ type OutreachPreviewSkipped = {
 
 type RowActionMenuState = {
   propertyId: string;
-  top: number;
-  right: number;
+  /** The "More" button that opened the menu — the popover stays pinned to it. */
+  anchorEl: HTMLElement;
 };
 
 type RowDownloadAction = {
@@ -361,6 +361,8 @@ interface RejectState {
   surface: UiV2ActionSurface;
   reasonCode: UiV2RejectionReasonCode | "";
   note: string;
+  /** Trigger that opened the form — the popover anchors to it. */
+  anchorEl: HTMLElement | null;
 }
 
 interface MergePromptState {
@@ -1357,22 +1359,6 @@ export default function PipelineClient() {
   const [rejectState, setRejectState] = useState<RejectState | null>(null);
   /** Merge pending confirmation — drives the ConfirmDialog popup. */
   const [mergePrompt, setMergePrompt] = useState<MergePromptState | null>(null);
-  const rejectOpen = rejectState != null;
-  // The reject popup behaves like a real modal: background scroll locks and
-  // Escape dismisses, so the user lands in the dialog instead of the page.
-  useEffect(() => {
-    if (!rejectOpen) return;
-    const { overflow } = document.body.style;
-    document.body.style.overflow = "hidden";
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setRejectState(null);
-    };
-    document.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.body.style.overflow = overflow;
-      document.removeEventListener("keydown", onKeyDown);
-    };
-  }, [rejectOpen]);
   const [composer, setComposer] = useState<ComposerState | null>(null);
   const [templates, setTemplates] = useState<UiV2OutreachTemplatePayload[]>([]);
   const [loadingTemplates, setLoadingTemplates] = useState(false);
@@ -1492,22 +1478,6 @@ export default function PipelineClient() {
     const visibleIds = new Set(rows.map((row) => row.propertyId));
     setSelectedIds((current) => current.filter((propertyId) => visibleIds.has(propertyId)));
   }, [rows]);
-
-  useEffect(() => {
-    if (!rowMenu) return;
-    const close = () => setRowMenu(null);
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") close();
-    };
-    window.addEventListener("resize", close);
-    window.addEventListener("scroll", close, true);
-    document.addEventListener("keydown", closeOnEscape);
-    return () => {
-      window.removeEventListener("resize", close);
-      window.removeEventListener("scroll", close, true);
-      document.removeEventListener("keydown", closeOnEscape);
-    };
-  }, [rowMenu]);
 
   useEffect(() => {
     let ignore = false;
@@ -2822,7 +2792,8 @@ export default function PipelineClient() {
     }
   }
 
-  function openBulkRejectModal() {
+  function openBulkRejectModal(event: MouseEvent<HTMLButtonElement>) {
+    const anchorEl = event.currentTarget;
     if (selectedRejectableRows.length === 0) {
       setError("Select at least one active property to reject.");
       return;
@@ -2838,10 +2809,16 @@ export default function PipelineClient() {
       surface: "pipeline_table",
       reasonCode: "",
       note: "",
+      anchorEl,
     });
   }
 
-  async function updateStatus(propertyId: string, status: UiV2PipelineStatus, surface: UiV2ActionSurface) {
+  async function updateStatus(
+    propertyId: string,
+    status: UiV2PipelineStatus,
+    surface: UiV2ActionSurface,
+    anchorEl: HTMLElement | null = null
+  ) {
     const row = rows.find((item) => item.propertyId === propertyId);
     if (status === "rejected") {
       setRejectState({
@@ -2850,6 +2827,7 @@ export default function PipelineClient() {
         surface,
         reasonCode: "",
         note: "",
+        anchorEl,
       });
       return;
     }
@@ -3409,16 +3387,10 @@ export default function PipelineClient() {
 
   function toggleRowActionMenu(row: PipelineRow, event: MouseEvent<HTMLButtonElement>) {
     event.stopPropagation();
-    const rect = event.currentTarget.getBoundingClientRect();
+    const anchorEl = event.currentTarget;
     setHeaderMenu(null);
     setRowMenu((current) =>
-      current?.propertyId === row.propertyId
-        ? null
-        : {
-            propertyId: row.propertyId,
-            top: Math.round(rect.bottom + 6),
-            right: Math.max(8, Math.round(window.innerWidth - rect.right)),
-          }
+      current?.propertyId === row.propertyId ? null : { propertyId: row.propertyId, anchorEl }
     );
   }
 
@@ -3460,10 +3432,14 @@ export default function PipelineClient() {
     const mergeTargetIds = selectedIds.filter((id) => id !== row.propertyId);
     const canMergeIntoSelectedTarget = mergeTargetIds.length === 1;
     return (
-      <div
+      <AnchoredPopover
+        open
+        anchorEl={rowMenu?.anchorEl ?? null}
+        onClose={closeRowActionMenu}
+        placement="bottom-end"
+        role="menu"
+        ariaLabel={`Actions for ${row.displayAddress ?? row.canonicalAddress}`}
         className={styles.rowActionPopover}
-        style={{ top: rowMenu?.top ?? 0, right: rowMenu?.right ?? 8 }}
-        onClick={stopRowClick}
       >
         <div className={styles.rowActionMenuSection}>
           <span className={styles.rowActionMenuLabel}>Downloads</span>
@@ -3527,6 +3503,7 @@ export default function PipelineClient() {
                 type="button"
                 disabled={busyAction === `${row.propertyId}:reject`}
                 onClick={() => {
+                  const anchorEl = rowMenu?.anchorEl ?? null;
                   closeRowActionMenu();
                   setRejectState({
                     propertyId: row.propertyId,
@@ -3534,6 +3511,7 @@ export default function PipelineClient() {
                     surface: "pipeline_table",
                     reasonCode: "",
                     note: "",
+                    anchorEl,
                   });
                 }}
               >
@@ -3542,7 +3520,7 @@ export default function PipelineClient() {
             </>
           )}
         </div>
-      </div>
+      </AnchoredPopover>
     );
   }
 
@@ -4320,7 +4298,9 @@ export default function PipelineClient() {
                       className={`${styles.statusSelect} ${statusToneClass(row.statusChip.tone)}`}
                       value={status}
                       disabled={!row.statusChip.editable || busyAction === `${row.propertyId}:status`}
-                      onChange={(event) => updateStatus(row.propertyId, event.target.value as UiV2PipelineStatus, "pipeline_table")}
+                      onChange={(event) =>
+                        updateStatus(row.propertyId, event.target.value as UiV2PipelineStatus, "pipeline_table", event.currentTarget)
+                      }
                     >
                       {UI_V2_PIPELINE_STATUS_OPTIONS.map((option) => (
                         <option key={option.status} value={option.status}>
@@ -4620,7 +4600,9 @@ export default function PipelineClient() {
                     className={`${styles.statusSelect} ${statusToneClass(sheetStatus.tone)}`}
                     value={String(sheetStatus.status)}
                     disabled={!sheetStatus.editable}
-                    onChange={(event) => updateStatus(selectedId, event.target.value as UiV2PipelineStatus, "property_sheet")}
+                    onChange={(event) =>
+                      updateStatus(selectedId, event.target.value as UiV2PipelineStatus, "property_sheet", event.currentTarget)
+                    }
                   >
                     {UI_V2_PIPELINE_STATUS_OPTIONS.map((option) => (
                       <option key={option.status} value={option.status}>
@@ -4682,13 +4664,14 @@ export default function PipelineClient() {
                     <button
                       className={styles.dangerButton}
                       type="button"
-                      onClick={() =>
+                      onClick={(event) =>
                         setRejectState({
                           propertyId: selectedId,
                           address: selectedProperty?.overview.displayAddress ?? selectedProperty?.overview.canonicalAddress ?? "Property",
                           surface: "property_sheet",
                           reasonCode: "",
                           note: "",
+                          anchorEl: event.currentTarget,
                         })
                       }
                     >
@@ -5212,27 +5195,60 @@ export default function PipelineClient() {
       />
 
       {outreachPreview ? (
-        <div className={styles.modalOverlay}>
-          <div className={`${styles.modal} ${styles.outreachPreviewModal}`}>
-            <div className={styles.modalHeader}>
-              <div>
-                <span className={styles.kicker}>Email brokers</span>
-                <h2>
-                  {outreachPreview.loading
-                    ? "Preparing drafts…"
-                    : `${outreachPreview.batches.length} email${outreachPreview.batches.length === 1 ? "" : "s"} ready`}
-                </h2>
-              </div>
+        <Dialog
+          open
+          onClose={() => {
+            if (!outreachPreview.sending) setOutreachPreview(null);
+          }}
+          title={
+            outreachPreview.loading
+              ? "Preparing drafts…"
+              : `${outreachPreview.batches.length} email${outreachPreview.batches.length === 1 ? "" : "s"} ready`
+          }
+          description="Email brokers"
+          size="lg"
+          footer={
+            <>
               <button
-                className={styles.closeButton}
+                className={styles.ghostButton}
                 type="button"
                 onClick={() => setOutreachPreview(null)}
                 disabled={outreachPreview.sending}
-                aria-label="Close email preview"
               >
-                <X size={16} strokeWidth={2} aria-hidden="true" />
+                Cancel
               </button>
-            </div>
+              <button
+                className={styles.secondaryButton}
+                type="button"
+                disabled={outreachPreview.loading || outreachPreview.sending}
+                onClick={() => void openGroupedEmailPreview()}
+                title="Re-resolve recipients and guards (use after adding a missing broker email)."
+              >
+                Re-check
+              </button>
+              <button
+                className={styles.primaryButton}
+                type="button"
+                title={
+                  outreachPreview.batches.some((batch) => !batch.subject.trim() || !batch.body.trim())
+                    ? "Every draft needs a subject and a body before sending."
+                    : undefined
+                }
+                disabled={
+                  outreachPreview.loading ||
+                  outreachPreview.sending ||
+                  outreachPreview.batches.length === 0 ||
+                  outreachPreview.batches.some((batch) => !batch.subject.trim() || !batch.body.trim())
+                }
+                onClick={() => void sendGroupedEmails()}
+              >
+                {outreachPreview.sending
+                  ? "Sending…"
+                  : `Send ${outreachPreview.batches.length} email${outreachPreview.batches.length === 1 ? "" : "s"}`}
+              </button>
+            </>
+          }
+        >
             {outreachPreview.loading ? (
               <p className={styles.outreachPreviewHint}>Resolving recipients and running send guards…</p>
             ) : (
@@ -5325,60 +5341,34 @@ export default function PipelineClient() {
                 ) : null}
               </div>
             )}
-            <div className={styles.modalActions}>
-              <button
-                className={styles.ghostButton}
-                type="button"
-                onClick={() => setOutreachPreview(null)}
-                disabled={outreachPreview.sending}
-              >
-                Cancel
-              </button>
-              <button
-                className={styles.secondaryButton}
-                type="button"
-                disabled={outreachPreview.loading || outreachPreview.sending}
-                onClick={() => void openGroupedEmailPreview()}
-                title="Re-resolve recipients and guards (use after adding a missing broker email)."
-              >
-                Re-check
-              </button>
-              <button
-                className={styles.primaryButton}
-                type="button"
-                title={
-                  outreachPreview.batches.some((batch) => !batch.subject.trim() || !batch.body.trim())
-                    ? "Every draft needs a subject and a body before sending."
-                    : undefined
-                }
-                disabled={
-                  outreachPreview.loading ||
-                  outreachPreview.sending ||
-                  outreachPreview.batches.length === 0 ||
-                  outreachPreview.batches.some((batch) => !batch.subject.trim() || !batch.body.trim())
-                }
-                onClick={() => void sendGroupedEmails()}
-              >
-                {outreachPreview.sending
-                  ? "Sending…"
-                  : `Send ${outreachPreview.batches.length} email${outreachPreview.batches.length === 1 ? "" : "s"}`}
-              </button>
-            </div>
-          </div>
-        </div>
+        </Dialog>
       ) : null}
 
       {rejectState ? (
-        <div className={styles.modalOverlay}>
-          <form className={styles.modal} onSubmit={submitReject}>
-            <div className={styles.modalHeader}>
+        <AnchoredPopover
+          open
+          anchorEl={rejectState.anchorEl}
+          onClose={() => setRejectState(null)}
+          placement="bottom-end"
+          role="dialog"
+          ariaLabel={`Reject ${rejectState.address}`}
+          className={styles.rejectPopover}
+        >
+          <form className={styles.rejectForm} onSubmit={submitReject}>
+            <div className={styles.rejectFormHead}>
               <div>
                 <span className={styles.kicker}>
                   {rejectState.propertyIds && rejectState.propertyIds.length > 1 ? "Reject selected" : "Reject property"}
                 </span>
-                <h2>{rejectState.address}</h2>
+                <strong className={styles.rejectFormAddress}>{rejectState.address}</strong>
               </div>
-              <button className={styles.closeButton} type="button" onClick={() => setRejectState(null)} aria-label="Close rejection modal">
+              <button
+                className={styles.closeButton}
+                type="button"
+                data-popover-close
+                onClick={() => setRejectState(null)}
+                aria-label="Close rejection form"
+              >
                 <X size={16} strokeWidth={2} aria-hidden="true" />
               </button>
             </div>
@@ -5405,11 +5395,11 @@ export default function PipelineClient() {
               <textarea
                 value={rejectState.note}
                 onChange={(event) => setRejectState({ ...rejectState, note: event.target.value })}
-                rows={4}
+                rows={3}
                 placeholder="Optional context"
               />
             </label>
-            <div className={styles.modalActions}>
+            <div className={styles.rejectFormActions}>
               <button className={styles.ghostButton} type="button" onClick={() => setRejectState(null)}>
                 Cancel
               </button>
@@ -5430,7 +5420,7 @@ export default function PipelineClient() {
               </button>
             </div>
           </form>
-        </div>
+        </AnchoredPopover>
       ) : null}
 
       <ConfirmDialog
@@ -5453,22 +5443,41 @@ export default function PipelineClient() {
       />
 
       {composer ? (
-        <div className={styles.modalOverlay}>
-          <form className={styles.composerModal} onSubmit={submitComposer}>
-            <div className={styles.modalHeader}>
-              <div>
-                <span className={styles.kicker}>Outreach composer</span>
-                <h2>{selectedProperty?.overview.displayAddress ?? selectedRow?.displayAddress ?? "Broker outreach"}</h2>
-              </div>
-              <button
-                className={styles.closeButton}
-                type="button"
-                onClick={() => setComposer(null)}
-                aria-label="Close outreach composer"
-              >
-                <X size={16} strokeWidth={2} aria-hidden="true" />
+        <Dialog
+          open
+          onClose={() => setComposer(null)}
+          title={selectedProperty?.overview.displayAddress ?? selectedRow?.displayAddress ?? "Broker outreach"}
+          description="Outreach composer"
+          size="lg"
+          footer={
+            <>
+              <button className={styles.ghostButton} type="button" onClick={() => setComposer(null)}>
+                Cancel
               </button>
-            </div>
+              <button
+                className={styles.secondaryButton}
+                type="submit"
+                form="pipeline-composer-form"
+                disabled={composer.submitting}
+              >
+                {composer.submitting ? "Saving..." : "Save draft for review"}
+              </button>
+              <button
+                className={styles.primaryButton}
+                type="button"
+                onClick={() => void sendComposerNow()}
+                disabled={composer.sendingNow}
+              >
+                {composer.sendingNow ? "Sending..." : "Send now"}
+              </button>
+            </>
+          }
+        >
+          <form
+            id="pipeline-composer-form"
+            className={cx(styles.composerModal, styles.composerForm)}
+            onSubmit={submitComposer}
+          >
             {composer.warnings.length > 0 ? (
               <div className={styles.warningBox}>{composer.warnings.join(" ")}</div>
             ) : null}
@@ -5542,23 +5551,8 @@ export default function PipelineClient() {
                 onChange={(event) => setComposer({ ...composer, followUpAt: event.target.value })}
               />
             </label>
-            <div className={styles.modalActions}>
-              <button
-                className={styles.ghostButton}
-                type="button"
-                onClick={() => setComposer(null)}
-              >
-                Cancel
-              </button>
-              <button className={styles.secondaryButton} type="submit" disabled={composer.submitting}>
-                {composer.submitting ? "Saving..." : "Save draft for review"}
-              </button>
-              <button className={styles.primaryButton} type="button" onClick={() => void sendComposerNow()} disabled={composer.sendingNow}>
-                {composer.sendingNow ? "Sending..." : "Send now"}
-              </button>
-            </div>
           </form>
-        </div>
+        </Dialog>
       ) : null}
     </main>
   );

@@ -2054,47 +2054,34 @@
   color: var(--app-red);
 }
 
-/* ── Reject modal (kept as an explicit decision dialog) ─────────────────── */
+/* ── Reject / move-stage popovers (anchored to their trigger) ───────────── */
 
-.modalOverlay {
-  position: fixed;
-  inset: 0;
-  z-index: 150;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 1rem;
-  background: rgba(15, 23, 42, 0.42);
+.rejectPopover {
+  width: min(22rem, calc(100vw - 16px));
 }
 
-.rejectModal {
+.rejectForm {
   display: grid;
-  gap: 0.75rem;
-  width: min(100%, 34rem);
-  max-height: min(90vh, 52rem);
-  overflow: auto;
-  border: 1px solid var(--app-line-strong);
-  border-radius: 8px;
-  background: var(--app-surface);
-  box-shadow: var(--app-shadow-md);
+  gap: 0.7rem;
+  padding: 0.85rem 0.9rem;
   color: var(--app-ink);
 }
 
-.modalHeader {
+.rejectFormHead {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 1rem;
-  padding: 0.9rem 1rem 0;
+  gap: 0.6rem;
 }
 
-.modalHeader h2 {
-  margin: 0.12rem 0 0;
+.rejectFormAddress {
+  display: block;
+  margin-top: 0.15rem;
   color: var(--app-ink);
-  font-family: var(--font-ui);
-  font-size: 1rem;
-  font-weight: 760;
-  line-height: 1.2;
+  font-size: var(--text-sm);
+  font-weight: 620;
+  letter-spacing: var(--tracking-tight, -0.01em);
+  line-height: 1.25;
 }
 
 .modalKicker {
@@ -2119,19 +2106,18 @@
   line-height: 1;
 }
 
-.rejectModal label {
+.rejectForm label {
   display: grid;
   gap: 0.24rem;
   min-width: 0;
-  padding: 0 1rem;
   color: var(--app-ink-secondary);
   font-size: 0.62rem;
   font-weight: 820;
   text-transform: uppercase;
 }
 
-.rejectModal select,
-.rejectModal textarea {
+.rejectForm select,
+.rejectForm textarea {
   width: 100%;
   min-width: 0;
   border: 1px solid var(--app-line-strong);
@@ -2144,23 +2130,22 @@
   text-transform: none;
 }
 
-.rejectModal select {
+.rejectForm select {
   min-height: 2rem;
   padding: 0.34rem 0.5rem;
 }
 
-.rejectModal textarea {
-  min-height: 4.5rem;
+.rejectForm textarea {
+  min-height: 4rem;
   resize: vertical;
   padding: 0.45rem 0.5rem;
   line-height: 1.35;
 }
 
-.modalActions {
+.rejectFormActions {
   display: flex;
   justify-content: flex-end;
   gap: 0.42rem;
-  padding: 0 1rem 1rem;
 }
 
 .rejectConfirmButton {

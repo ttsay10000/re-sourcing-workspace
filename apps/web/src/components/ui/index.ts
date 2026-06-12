@@ -1,4 +1,5 @@
 export { AgingChip } from "./AgingChip";
+export { AnchoredPopover, type AnchoredPlacement } from "./AnchoredPopover";
 export { Badge, type BadgeTone } from "./Badge";
 export { BrokerContactDialog, type BrokerContactDraft, type BrokerSearchCandidate } from "./BrokerContactDialog";
 export { Button, type ButtonSize, type ButtonVariant } from "./Button";
