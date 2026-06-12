@@ -425,13 +425,19 @@ const NOOP_HANDLE: ProcessHandle = {
   fail: () => {},
 };
 
+const NOOP_BANNER: Pick<ProcessBannerContextValue, "start"> = { start: () => NOOP_HANDLE };
+const NOOP_ENTRIES: Pick<ProcessBannerContextValue, "entries" | "dismiss"> = {
+  entries: [],
+  dismiss: () => {},
+};
+
 export function useProcessBanner(): Pick<ProcessBannerContextValue, "start"> {
   const context = useContext(ProcessBannerContext);
-  return context ?? { start: () => NOOP_HANDLE };
+  return context ?? NOOP_BANNER;
 }
 
 /** Read access to the live entries (e.g. the topbar activity indicator). */
 export function useProcessEntries(): Pick<ProcessBannerContextValue, "entries" | "dismiss"> {
   const context = useContext(ProcessBannerContext);
-  return context ?? { entries: [], dismiss: () => {} };
+  return context ?? NOOP_ENTRIES;
 }

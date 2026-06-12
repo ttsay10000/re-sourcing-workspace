@@ -6276,12 +6276,14 @@ button:active:not(:disabled) {
   }
 }
 
+/* "backwards" (not "both") so the final keyframe releases and hover/focus
+   transforms keep working after the entrance finishes. */
 .anim-page-enter {
-  animation: page-enter 240ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: page-enter 240ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
 }
 
 .anim-card-enter {
-  animation: card-enter 200ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: card-enter 200ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
   animation-delay: calc(var(--stagger, 0) * 18ms);
 }
 

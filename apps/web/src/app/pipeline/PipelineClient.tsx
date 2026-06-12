@@ -3917,7 +3917,7 @@ export default function PipelineClient() {
 
   return (
     <main
-      className={styles.page}
+      className={cx(styles.page, "anim-page-enter")}
       onClick={() => {
         setHeaderMenu(null);
         closeRowActionMenu();

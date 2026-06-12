@@ -472,7 +472,7 @@ function HomePageContent() {
   }, [pipelineRows, yieldFlagRows, actionAlertRows]);
 
   return (
-    <main className={styles.page}>
+    <main className={`${styles.page} anim-page-enter`}>
       <header className={styles.header}>
         <div className={styles.headerCopy}>
           <h1>Acquisitions dashboard</h1>

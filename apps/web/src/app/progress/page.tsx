@@ -9,6 +9,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type DragEvent,
   type FormEvent,
   type MouseEvent as ReactMouseEvent,
@@ -1829,7 +1830,7 @@ function ProgressPageContent() {
   );
 
   return (
-    <div className={styles.page}>
+    <div className={`${styles.page} anim-page-enter`}>
       <PageHeader
         eyebrow="Deal movement"
         title="Deal Progress"
@@ -2637,10 +2638,11 @@ function StatusColumn({
         ) : section.rows.length === 0 ? (
           <div className={styles.emptyState}>Empty</div>
         ) : (
-          section.rows.map((row) => (
+          section.rows.map((row, rowIndex) => (
             <PropertyMiniCard
               key={`${section.id}-${row.propertyId}`}
               row={row}
+              enterIndex={Math.min(rowIndex, 8)}
               sectionId={section.id}
               flags={flagsByProperty.get(row.propertyId) ?? []}
               selected={selectedDealIds?.has(row.propertyId) ?? false}
@@ -2670,6 +2672,7 @@ function PropertyMiniCard({
   selected,
   busy,
   keyboardFocused,
+  enterIndex = 0,
   onToggleSelected,
   onDragStartDeal,
   onDragEndDeal,
@@ -2686,6 +2689,8 @@ function PropertyMiniCard({
   selected: boolean;
   busy: boolean;
   keyboardFocused: boolean;
+  /** Mount-order index (capped) driving the staggered entrance delay. */
+  enterIndex?: number;
   onToggleSelected?: (propertyId: string, selected: boolean) => void;
   onDragStartDeal?: (row: DealFlowRow) => void;
   onDragEndDeal?: () => void;
@@ -2718,9 +2723,10 @@ function PropertyMiniCard({
   return (
     <article
       id={`deal-card-${row.propertyId}`}
-      className={`${styles.propertyCard} ${selected ? styles.propertyCardSelected : ""} ${busy ? styles.propertyCardBusy : ""} ${
+      className={`${styles.propertyCard} anim-card-enter ${selected ? styles.propertyCardSelected : ""} ${busy ? styles.propertyCardBusy : ""} ${
         keyboardFocused ? styles.propertyCardFocused : ""
       }`}
+      style={{ "--stagger": enterIndex } as CSSProperties}
       ref={keyboardFocused ? (node) => node?.scrollIntoView({ block: "nearest", inline: "nearest" }) : undefined}
       draggable={!busy}
       aria-selected={selected}

@@ -464,7 +464,9 @@ type TableEntry =
   | { kind: "comp"; rowId: string; comp: MarketComp };
 
 export default function YieldMapPage() {
-  const processBanner = useProcessBanner();
+  // Destructured because the hook values change identity with every banner
+  // update — the underlying callbacks are stable, the wrapper object is not.
+  const { start: startProcessBanner } = useProcessBanner();
   const { dismiss: dismissBanner } = useProcessEntries();
   const [data, setData] = useState<CompsResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -579,7 +581,7 @@ export default function YieldMapPage() {
   useEffect(() => {
     const controller = new AbortController();
     let settled = false;
-    const banner = processBanner.start("Yield map data", {
+    const banner = startProcessBanner("Yield map data", {
       message: "Loading flagged comps and market overlays…",
     });
     void loadDeals({ signal: controller.signal, initial: true }).then((ok) => {
@@ -595,7 +597,7 @@ export default function YieldMapPage() {
       // that never finished instead of leaving an orphaned spinner.
       if (!settled) dismissBanner(banner.id);
     };
-  }, [dismissBanner, loadDeals, processBanner]);
+  }, [dismissBanner, loadDeals, startProcessBanner]);
 
   useEffect(() => {
     const controller = new AbortController();

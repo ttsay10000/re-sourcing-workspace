@@ -1436,7 +1436,7 @@ function DealAnalysisPageContent() {
   }
 
   return (
-    <div className={styles.page}>
+    <div className={`${styles.page} anim-page-enter`}>
       <PageHeader
         eyebrow="Deal Progress"
         title="OM Workspace Analysis"
