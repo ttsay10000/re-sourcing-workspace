@@ -52,6 +52,15 @@ export interface DealAnalysisOmInputDocument {
   sizeBytes: number;
 }
 
+/** An already-stored property_uploaded_documents row standing in for a fresh upload. */
+export interface DealAnalysisPrePersistedDocument {
+  id: string;
+  fileName: string;
+  contentType: string | null;
+  category: PropertyDocumentCategory | null;
+  createdAt: string;
+}
+
 export class DealAnalysisOmImportError extends Error {
   statusCode: number;
 
@@ -233,6 +242,13 @@ export async function analyzeAndPersistDealAnalysisOmDocuments(params: {
    * numbers-only signals refresh inside promotion and never fail the upload.
    */
   runDossier?: boolean;
+  /**
+   * When the documents were already saved to property_uploaded_documents
+   * (e.g. the broker OM email import), pass the stored rows here — aligned
+   * 1:1 with `documents` — so the analysis run reuses them instead of
+   * inserting duplicates.
+   */
+  prePersistedDocuments?: DealAnalysisPrePersistedDocument[] | null;
   pool?: Pool;
 }) {
   if (params.documents.length === 0) {
@@ -286,7 +302,10 @@ export async function analyzeAndPersistDealAnalysisOmDocuments(params: {
   const resolvedAddress = resolveOmPropertyAddress(
     (extracted.omAnalysis.propertyInfo as Record<string, unknown> | null | undefined) ?? null
   );
-  if (!resolvedAddress) {
+  // Without a target property the address is what we match/create on, so it
+  // is required; with one (e.g. email imports to a known property) a missing
+  // OM address must not fail the run.
+  if (!resolvedAddress && !trimmedString(params.targetPropertyId)) {
     throw new DealAnalysisOmImportError(
       "The OM analysis did not return a usable building address, so a property workspace could not be created."
     );
@@ -295,7 +314,7 @@ export async function analyzeAndPersistDealAnalysisOmDocuments(params: {
   const pool = params.pool ?? getPool();
   const client = await pool.connect();
   let propertyId = "";
-  let canonicalAddress = resolvedAddress.canonicalAddress;
+  let canonicalAddress = resolvedAddress?.canonicalAddress ?? "";
   let createdProperty = false;
   let matchStrategy: DealAnalysisDraftPropertyMatchStrategy = "new";
   try {
@@ -314,8 +333,8 @@ export async function analyzeAndPersistDealAnalysisOmDocuments(params: {
         }
       : await findOrCreateDealAnalysisDraftProperty({
           propertyRepo,
-          canonicalAddress: resolvedAddress.canonicalAddress,
-          addressLine: resolvedAddress.addressLine,
+          canonicalAddress: resolvedAddress!.canonicalAddress,
+          addressLine: resolvedAddress!.addressLine,
         });
     propertyId = draftProperty.property.id;
     canonicalAddress = draftProperty.property.canonicalAddress;
@@ -354,14 +373,18 @@ export async function analyzeAndPersistDealAnalysisOmDocuments(params: {
         documentClassifications: reviewMetadata.documentClassifications,
         sourceMetadata,
       },
-      omDerivedAddress: {
-        rawAddress: resolvedAddress.rawAddress,
-        addressLine: resolvedAddress.addressLine,
-        locality: resolvedAddress.locality,
-        zip: resolvedAddress.zip,
-        canonicalAddress: resolvedAddress.canonicalAddress,
-        addressSource: resolvedAddress.addressSource,
-      },
+      ...(resolvedAddress
+        ? {
+            omDerivedAddress: {
+              rawAddress: resolvedAddress.rawAddress,
+              addressLine: resolvedAddress.addressLine,
+              locality: resolvedAddress.locality,
+              zip: resolvedAddress.zip,
+              canonicalAddress: resolvedAddress.canonicalAddress,
+              addressSource: resolvedAddress.addressSource,
+            },
+          }
+        : {}),
       ...(details?.taxCode ? { taxCode: details.taxCode } : {}),
     });
 
@@ -387,36 +410,40 @@ export async function analyzeAndPersistDealAnalysisOmDocuments(params: {
   }
 
   const uploadedDocRepo = new PropertyUploadedDocumentRepo({ pool });
-  const persistedDocuments = [];
-  for (const document of params.documents) {
-    const docId = randomUUID();
-    const filePath = await saveUploadedDocument(propertyId, docId, document.filename, document.buffer);
-    const category = classifyDealAnalysisDocumentCategory(document);
-    const inserted = await uploadedDocRepo.insert({
-      id: docId,
-      propertyId,
-      filename: document.filename,
-      contentType: document.mimeType,
-      filePath,
-      category,
-      source: params.sourceLabel,
-      sourceMetadata: {
-        sourceType: params.sourceType,
-        workspaceStatus: "draft",
-        reviewRequired: true,
-        userVerified: false,
-        underwritingReviewStatus: "user_review_required",
-        ...(sourceMetadata ?? {}),
-      },
-      fileContent: document.buffer,
-    });
-    persistedDocuments.push({
-      id: inserted.id,
-      fileName: inserted.filename,
-      contentType: inserted.contentType,
-      category,
-      createdAt: inserted.createdAt,
-    });
+  const persistedDocuments: DealAnalysisPrePersistedDocument[] = [];
+  if (params.prePersistedDocuments && params.prePersistedDocuments.length > 0) {
+    persistedDocuments.push(...params.prePersistedDocuments);
+  } else {
+    for (const document of params.documents) {
+      const docId = randomUUID();
+      const filePath = await saveUploadedDocument(propertyId, docId, document.filename, document.buffer);
+      const category = classifyDealAnalysisDocumentCategory(document);
+      const inserted = await uploadedDocRepo.insert({
+        id: docId,
+        propertyId,
+        filename: document.filename,
+        contentType: document.mimeType,
+        filePath,
+        category,
+        source: params.sourceLabel,
+        sourceMetadata: {
+          sourceType: params.sourceType,
+          workspaceStatus: "draft",
+          reviewRequired: true,
+          userVerified: false,
+          underwritingReviewStatus: "user_review_required",
+          ...(sourceMetadata ?? {}),
+        },
+        fileContent: document.buffer,
+      });
+      persistedDocuments.push({
+        id: inserted.id,
+        fileName: inserted.filename,
+        contentType: inserted.contentType ?? null,
+        category,
+        createdAt: inserted.createdAt,
+      });
+    }
   }
 
   if (persistedDocuments.length > 0) {

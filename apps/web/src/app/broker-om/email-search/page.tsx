@@ -48,6 +48,17 @@ interface PropertyOption {
   canonicalAddress: string;
 }
 
+interface DuplicateFlag {
+  status: "already_imported" | "exact_duplicate" | "likely_duplicate" | "possible_duplicate";
+  propertyId: string;
+  documentId: string;
+  filename: string;
+  category: string | null;
+  uploadedAt: string | null;
+  reason: string;
+  contentCompared: boolean;
+}
+
 interface GmailDocumentCandidate {
   id: string;
   messageId: string;
@@ -70,6 +81,27 @@ interface GmailDocumentCandidate {
   matchedReason: string;
   matchedProperty?: PropertyOption | null;
   matchedProperties?: PropertyOption[];
+  /** How the property match was made — attachment filename (preferred) or email subject/body fallback. */
+  matchedVia?: "filename" | "email" | null;
+  duplicate?: DuplicateFlag | null;
+  previouslyPulled?: boolean;
+}
+
+/** A persisted pull run returned by the email-pull-state endpoints. */
+interface StoredPullRun {
+  id: string;
+  scopeKey: string;
+  propertyId: string | null;
+  mode: string;
+  query: string | null;
+  baselineAt: string | null;
+  runAt: string;
+  truncated: boolean;
+  documentCount: number;
+  newDocumentCount: number;
+  skippedPreviouslyPulled: number;
+  documents: GmailDocumentCandidate[];
+  createdAt: string;
 }
 
 interface NewPropertyEmailCandidate {
@@ -92,6 +124,7 @@ interface PullState {
   lastPulledAt: string | null;
   largeAttachmentBytes: number;
   maxAttachmentBytes: number;
+  latestRun?: StoredPullRun | null;
 }
 
 interface SearchResponse {
@@ -107,15 +140,29 @@ interface SearchResponse {
   largeAttachmentBytes: number;
   maxAttachmentBytes: number;
   documents: GmailDocumentCandidate[];
+  /** Attachments found before skipping previously pulled ones. */
+  totalFound?: number;
+  skippedPreviouslyPulled?: number;
   /** True when the scan stopped at its server-side time budget — pull again to continue. */
   truncated?: boolean;
   newPropertyCandidates: NewPropertyEmailCandidate[];
+  /** Client-only: set when the result was rebuilt from the stored latest run. */
+  restored?: boolean;
 }
 
 interface SelectionState {
   selected: boolean;
   category: DocumentCategory;
   propertyId: string;
+}
+
+interface ImportOmReview {
+  ok?: boolean;
+  status?: "promoted" | "failed";
+  runId?: string | null;
+  extractedAddress?: string | null;
+  addressMismatch?: { warning?: string } | null;
+  error?: string;
 }
 
 interface ImportResponse {
@@ -128,8 +175,8 @@ interface ImportResponse {
   }>;
   skipped?: Array<{ reason: string; documentId?: string | null; messageId?: string; attachmentId?: string }>;
   errors?: Array<{ error: string }>;
-  omReview?: { runId?: string | null; error?: string } | null;
-  omReviews?: Array<{ propertyId: string; canonicalAddress: string }>;
+  omReview?: ImportOmReview | null;
+  omReviews?: Array<{ propertyId: string; canonicalAddress: string; omReview?: ImportOmReview | null }>;
   error?: string;
   details?: string;
 }
@@ -206,6 +253,37 @@ function shortAddress(value: string): string {
   return value.split(",")[0]?.trim() || value;
 }
 
+function fileKind(filename: string, mimeType: string): string {
+  const ext = filename.split(".").pop();
+  if (ext && ext.length <= 5 && filename.includes(".")) return ext.toUpperCase();
+  if (mimeType.includes("pdf")) return "PDF";
+  if (mimeType.includes("spreadsheet") || mimeType.includes("excel")) return "XLSX";
+  return "FILE";
+}
+
+function DuplicatePill({ duplicate, styles: s }: { duplicate: DuplicateFlag; styles: Record<string, string> }) {
+  const label =
+    duplicate.status === "already_imported"
+      ? "Already imported"
+      : duplicate.status === "exact_duplicate"
+        ? "Duplicate (same content)"
+        : duplicate.status === "likely_duplicate"
+          ? "Likely duplicate"
+          : "Possible duplicate";
+  const className =
+    duplicate.status === "already_imported"
+      ? s.mutedPill
+      : duplicate.status === "exact_duplicate"
+        ? s.dangerPill
+        : s.warnPill;
+  return (
+    <span className={className} title={duplicate.reason}>
+      <AlertTriangle size={13} aria-hidden="true" />
+      {label}
+    </span>
+  );
+}
+
 export default function BrokerOmEmailSearchPage() {
   const [properties, setProperties] = useState<PropertyOption[]>([]);
   const [propertyId, setPropertyId] = useState("");
@@ -215,10 +293,10 @@ export default function BrokerOmEmailSearchPage() {
   const [lookbackUnit, setLookbackUnit] = useState<LookbackUnit>("days");
   const [query, setQuery] = useState("");
   const [includeNewPropertyCandidates, setIncludeNewPropertyCandidates] = useState(true);
+  const [includePreviouslyPulled, setIncludePreviouslyPulled] = useState(false);
   const [maxMessages, setMaxMessages] = useState(50);
   const [searchResult, setSearchResult] = useState<SearchResponse | null>(null);
   /** Candidate row ids (`messageId:attachmentId`) imported during this search session. */
-  const [importedCandidateIds, setImportedCandidateIds] = useState<Set<string>>(new Set());
   const [selection, setSelection] = useState<Record<string, SelectionState>>({});
   const [preview, setPreview] = useState<GmailDocumentCandidate | null>(null);
   const [loadingProperties, setLoadingProperties] = useState(true);
@@ -288,6 +366,38 @@ export default function BrokerOmEmailSearchPage() {
     void loadPullState(propertyId);
   }, [loadPullState, propertyId]);
 
+  // Rebuild the deal-documents list from the stored latest run, so a page
+  // refresh does not lose the last pull's rows.
+  useEffect(() => {
+    if (searchResult != null) return;
+    const run = pullState?.latestRun;
+    if (!run || !Array.isArray(run.documents) || run.documents.length === 0) return;
+    if ((run.propertyId ?? "") !== propertyId) return;
+    setSearchResult({
+      ok: true,
+      property:
+        run.propertyId && pullState?.canonicalAddress
+          ? { id: run.propertyId, canonicalAddress: pullState.canonicalAddress }
+          : null,
+      mode: (run.mode as PullMode) ?? "since_last",
+      query: run.query ?? "",
+      baselineAt: run.baselineAt ?? run.runAt,
+      previousLastPulledAt: null,
+      searchRunAt: run.runAt,
+      lastPulledAt: pullState?.lastPulledAt ?? run.runAt,
+      systemStartAt: pullState?.systemStartAt ?? run.runAt,
+      largeAttachmentBytes: pullState?.largeAttachmentBytes ?? 10 * 1024 * 1024,
+      maxAttachmentBytes: pullState?.maxAttachmentBytes ?? 25 * 1024 * 1024,
+      documents: run.documents,
+      totalFound: run.documentCount,
+      skippedPreviouslyPulled: run.skippedPreviouslyPulled,
+      truncated: run.truncated,
+      newPropertyCandidates: [],
+      restored: true,
+    });
+    setSelection(defaultSelection(run.documents, run.propertyId ?? ""));
+  }, [pullState, searchResult, propertyId]);
+
   const allPropertiesMode = propertyId === "";
   const documents = searchResult?.documents ?? [];
   const selectedDocuments = documents.filter((document) => selection[document.id]?.selected);
@@ -321,6 +431,7 @@ export default function BrokerOmEmailSearchPage() {
           sinceDate: mode === "custom" ? computeSinceDate(lookbackAmount, lookbackUnit).toISOString() : null,
           query: query.trim() || null,
           maxMessages,
+          includePreviouslyPulled,
           includeNewPropertyCandidates: propertyId ? includeNewPropertyCandidates : false,
         }),
       });
@@ -328,7 +439,6 @@ export default function BrokerOmEmailSearchPage() {
       if (!response.ok) throw new Error(data?.error || data?.details || "Failed to search Gmail");
       const result = data as SearchResponse;
       setSearchResult(result);
-      setImportedCandidateIds(new Set());
       setSelection(defaultSelection(result.documents, propertyId));
       setPullState({
         propertyId: result.property?.id ?? null,
@@ -339,12 +449,18 @@ export default function BrokerOmEmailSearchPage() {
         maxAttachmentBytes: result.maxAttachmentBytes,
       });
       const matchedCount = result.documents.filter((document) => document.matchedProperty).length;
+      const duplicateCount = result.documents.filter((document) => document.duplicate).length;
+      const skippedCount = result.skippedPreviouslyPulled ?? 0;
+      const parts = [
+        `${result.documents.length} document${result.documents.length === 1 ? "" : "s"}`,
+        skippedCount ? `${skippedCount} previously pulled skipped` : null,
+        propertyId ? null : `${matchedCount} matched to existing properties`,
+        duplicateCount ? `${duplicateCount} flagged as possible duplicate${duplicateCount === 1 ? "" : "s"}` : null,
+      ].filter(Boolean);
       const truncatedNote = result.truncated
         ? " Partial pull — the scan hit its time budget; pull again to continue."
         : "";
-      const summary = propertyId
-        ? `Pull complete: ${result.documents.length} property document${result.documents.length === 1 ? "" : "s"} found.${truncatedNote}`
-        : `Pull complete: ${result.documents.length} deal document${result.documents.length === 1 ? "" : "s"} found, ${matchedCount} matched to existing properties.${truncatedNote}`;
+      const summary = `Pull complete: ${parts.join(", ")}.${truncatedNote}`;
       setNotice(summary);
       banner.succeed(summary);
     } catch (err) {
@@ -373,12 +489,15 @@ export default function BrokerOmEmailSearchPage() {
     }));
   };
 
+  const isHardDuplicate = (document: GmailDocumentCandidate) =>
+    document.duplicate?.status === "already_imported" || document.duplicate?.status === "exact_duplicate";
+
   const selectAllEligible = () => {
     setSelection((current) => {
       const next = { ...current };
       for (const document of documents) {
         next[document.id] = {
-          selected: !document.tooLarge,
+          selected: !document.tooLarge && !isHardDuplicate(document),
           category: current[document.id]?.category ?? document.suggestedCategory,
           propertyId: current[document.id]?.propertyId ?? fallbackDocumentPropertyId(document),
         };
@@ -418,14 +537,15 @@ export default function BrokerOmEmailSearchPage() {
     const categorySummary = selectedDocuments
       .map((document) => {
         const category = selection[document.id]?.category ?? document.suggestedCategory;
-        if (propertyId) return `${document.filename} -> ${category}`;
-        return `${document.filename} -> ${category} -> ${propertyLabel(selection[document.id]?.propertyId ?? "")}`;
+        const duplicateNote = document.duplicate ? " (flagged duplicate)" : "";
+        if (propertyId) return `${document.filename} -> ${category}${duplicateNote}`;
+        return `${document.filename} -> ${category} -> ${propertyLabel(selection[document.id]?.propertyId ?? "")}${duplicateNote}`;
       })
       .join("\n");
     const confirmed = window.confirm(
       propertyId
-        ? `Upload ${selectedDocuments.length} Gmail document${selectedDocuments.length === 1 ? "" : "s"} to ${selectedProperty?.canonicalAddress ?? "this property"}?\n\n${categorySummary}`
-        : `Upload ${selectedDocuments.length} Gmail document${selectedDocuments.length === 1 ? "" : "s"} to their assigned properties?\n\n${categorySummary}`
+        ? `Upload ${selectedDocuments.length} Gmail document${selectedDocuments.length === 1 ? "" : "s"} to ${selectedProperty?.canonicalAddress ?? "this property"}?\n\nOM-type documents run deal analysis and update the property's numbers.\n\n${categorySummary}`
+        : `Upload ${selectedDocuments.length} Gmail document${selectedDocuments.length === 1 ? "" : "s"} to their assigned properties?\n\nOM-type documents run deal analysis per property and update each property's numbers.\n\n${categorySummary}`
     );
     if (!confirmed) return;
     setImporting(true);
@@ -457,24 +577,28 @@ export default function BrokerOmEmailSearchPage() {
       if (!response.ok || data.error) throw new Error(data.error || data.details || "Failed to import documents");
       const importedCount = data.imported?.length ?? 0;
       const skippedCount = data.skipped?.length ?? 0;
+      const duplicateSkips = (data.skipped ?? []).filter(
+        (entry) => entry.reason === "already_imported" || entry.reason.startsWith("duplicate_content")
+      ).length;
       const errorCount = data.errors?.length ?? 0;
-      // Candidate row ids are `messageId:attachmentId`; imported rows carry the
-      // Gmail ids in sourceMetadata, already-imported skips carry them directly.
-      const justImported = new Set<string>();
-      for (const document of data.imported ?? []) {
-        const messageId = document.sourceMetadata?.gmailMessageId;
-        const attachmentId = document.sourceMetadata?.gmailAttachmentId;
-        if (messageId && attachmentId) justImported.add(`${messageId}:${attachmentId}`);
-      }
-      for (const skip of data.skipped ?? []) {
-        if (skip.reason === "already_imported" && skip.messageId && skip.attachmentId) {
-          justImported.add(`${skip.messageId}:${skip.attachmentId}`);
-        }
-      }
-      if (justImported.size > 0) {
-        setImportedCandidateIds((current) => new Set([...current, ...justImported]));
-      }
-      const summary = `Imported ${importedCount} document${importedCount === 1 ? "" : "s"}${skippedCount ? `, skipped ${skippedCount}` : ""}${errorCount ? `, ${errorCount} failed` : ""}.`;
+      const reviews: Array<{ propertyId: string; canonicalAddress: string | null; omReview?: ImportOmReview | null }> =
+        data.omReviews && data.omReviews.length > 0
+          ? data.omReviews
+          : data.omReview
+            ? [{ propertyId, canonicalAddress: selectedProperty?.canonicalAddress ?? null, omReview: data.omReview }]
+            : [];
+      const analyzed = reviews.filter((entry) => entry.omReview && entry.omReview.status !== "failed");
+      const analysisFailures = reviews.filter((entry) => entry.omReview?.status === "failed");
+      const addressWarnings = reviews
+        .map((entry) => entry.omReview?.addressMismatch?.warning)
+        .filter((warning): warning is string => Boolean(warning));
+      const summary = `Imported ${importedCount} document${importedCount === 1 ? "" : "s"}${
+        skippedCount ? `, skipped ${skippedCount}${duplicateSkips ? ` (${duplicateSkips} duplicate${duplicateSkips === 1 ? "" : "s"})` : ""}` : ""
+      }${errorCount ? `, ${errorCount} failed` : ""}${
+        analyzed.length > 0
+          ? `. Deal analysis ran for ${analyzed.length} propert${analyzed.length === 1 ? "y" : "ies"} — characteristics updated.`
+          : "."
+      }`;
       setNotice(
         <>
           {summary}{" "}
@@ -483,17 +607,21 @@ export default function BrokerOmEmailSearchPage() {
               View property documents
             </Link>
           ) : null}
-          {importedCount > 0 ? (
-            <>
-              {propertyId ? " · " : ""}
-              <Link className={styles.noticeLink} href="/om-review">
-                Track extraction in the review queue
+          {analyzed.map((entry, index) => (
+            <span key={entry.propertyId}>
+              {propertyId || index > 0 ? " · " : ""}
+              <Link className={styles.noticeLink} href={`/deal-analysis?property_id=${encodeURIComponent(entry.propertyId)}`}>
+                {entry.canonicalAddress ? `Open ${shortAddress(entry.canonicalAddress)} analysis` : "Open deal analysis"}
               </Link>
-            </>
+            </span>
+          ))}
+          {analysisFailures.length > 0 ? (
+            <span> Deal analysis failed for {analysisFailures.length}: {analysisFailures.map((entry) => entry.omReview?.error).filter(Boolean).join("; ")}</span>
           ) : null}
+          {addressWarnings.length > 0 ? <span> ⚠ {addressWarnings.join(" ")}</span> : null}
         </>
       );
-      if (errorCount > 0) banner.fail(summary);
+      if (errorCount > 0 || analysisFailures.length > 0) banner.fail(summary);
       else banner.succeed(summary);
       clearSelection();
     } catch (err) {
@@ -583,7 +711,6 @@ export default function BrokerOmEmailSearchPage() {
               onChange={(event) => {
                 setPropertyId(event.target.value);
                 setSearchResult(null);
-                setImportedCandidateIds(new Set());
                 setSelection({});
                 setPreview(null);
               }}
@@ -681,6 +808,14 @@ export default function BrokerOmEmailSearchPage() {
               Searches your whole inbox for OM, offering memorandum, rent roll, rent/expense, T12, and pro forma attachments.
             </span>
           )}
+          <label className={styles.checkboxLine} title="By default, attachments surfaced by an earlier pull are skipped.">
+            <input
+              type="checkbox"
+              checked={includePreviouslyPulled}
+              onChange={(event) => setIncludePreviouslyPulled(event.target.checked)}
+            />
+            <span>Include previously pulled</span>
+          </label>
           <label className={styles.checkboxLine}>
             <span>Messages</span>
             <input
@@ -710,7 +845,21 @@ export default function BrokerOmEmailSearchPage() {
           <div className={styles.sectionHeader}>
             <div>
               <h2>{allPropertiesMode ? "Deal documents (all properties)" : "Property documents"}</h2>
-              <p>{searchResult ? `${documents.length} attachment${documents.length === 1 ? "" : "s"} found` : "No pull run yet"}</p>
+              {searchResult ? (
+                <p>
+                  {searchResult.restored ? "Last pull " : "Pulled "}
+                  {formatDate(searchResult.searchRunAt)} · {documents.length} attachment{documents.length === 1 ? "" : "s"}
+                  {searchResult.skippedPreviouslyPulled
+                    ? ` · ${searchResult.skippedPreviouslyPulled} previously pulled skipped`
+                    : ""}
+                  {documents.filter((document) => document.duplicate).length > 0
+                    ? ` · ${documents.filter((document) => document.duplicate).length} possible duplicate${documents.filter((document) => document.duplicate).length === 1 ? "" : "s"}`
+                    : ""}
+                  {searchResult.truncated ? " · partial (time budget hit)" : ""}
+                </p>
+              ) : (
+                <p>No pull run yet</p>
+              )}
             </div>
             <div className={styles.headerActions}>
               <button type="button" className={styles.ghostButton} onClick={selectAllEligible} disabled={documents.length === 0}>
@@ -779,17 +928,27 @@ export default function BrokerOmEmailSearchPage() {
                     <div>
                       <p className={styles.fileName}>{document.filename}</p>
                       <div className={styles.fileMeta}>
-                        {importedCandidateIds.has(document.id) ? <span className={styles.okPill}>Imported</span> : null}
-                        <span className={document.large ? styles.warnPill : styles.mutedPill}>{formatBytes(document.sizeBytes)}</span>
-                        <span className={styles.mutedPill}>{document.mimeType}</span>
-                        <span className={styles.mutedPill}>{document.classificationConfidence}</span>
+                        <span className={document.large ? styles.warnPill : styles.mutedPill}>
+                          {fileKind(document.filename, document.mimeType)} · {formatBytes(document.sizeBytes)}
+                        </span>
                         {allPropertiesMode ? (
                           document.matchedProperty ? (
-                            <span className={styles.okPill}>{shortAddress(document.matchedProperty.canonicalAddress)}</span>
+                            <span className={styles.okPill} title={document.matchedReason}>
+                              {shortAddress(document.matchedProperty.canonicalAddress)}
+                              {document.matchedVia ? ` · via ${document.matchedVia === "filename" ? "doc title" : "subject"}` : ""}
+                            </span>
                           ) : (
-                            <span className={styles.warnPill}>No property match</span>
+                            <span className={styles.warnPill} title={document.matchedReason}>No property match</span>
                           )
+                        ) : document.matchedProperty && document.matchedProperty.id !== propertyId ? (
+                          <span className={styles.warnPill} title={document.matchedReason}>
+                            Doc title matches {shortAddress(document.matchedProperty.canonicalAddress)}
+                          </span>
+                        ) : !document.matchedProperty && document.matchedReason.includes("different building") ? (
+                          <span className={styles.warnPill} title={document.matchedReason}>Unknown building in doc title</span>
                         ) : null}
+                        {document.duplicate ? <DuplicatePill duplicate={document.duplicate} styles={styles} /> : null}
+                        {document.previouslyPulled ? <span className={styles.mutedPill}>Pulled before</span> : null}
                         {document.tooLarge ? <span className={styles.warnPill}>Over import max</span> : null}
                       </div>
                       <p className={styles.emailMeta}>

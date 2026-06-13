@@ -1,9 +1,11 @@
 .page {
   display: grid;
-  gap: 1rem;
-  max-width: 1320px;
+  gap: 0.9rem;
+  max-width: 1480px;
   margin: 0 auto;
-  padding: 1.25rem;
+  /* The app shell already pads the main column; padding here doubled it and
+     left the page floating in dead space. */
+  padding: 0;
 }
 
 .header {
@@ -94,9 +96,9 @@
 .controls {
   display: grid;
   grid-template-columns: minmax(260px, 1.25fr) minmax(210px, 0.85fr) minmax(210px, 0.85fr) auto;
-  gap: 0.75rem;
+  gap: 0.8rem;
   align-items: end;
-  padding: 1rem;
+  padding: 0.9rem 1rem 0.6rem;
 }
 
 .field {
@@ -150,8 +152,9 @@
 .toggles {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.7rem;
-  padding: 0 1rem 1rem;
+  align-items: center;
+  gap: 0.45rem 1.1rem;
+  padding: 0 1rem 0.8rem;
 }
 
 .checkboxLine {
@@ -159,13 +162,14 @@
   align-items: center;
   gap: 0.4rem;
   color: var(--app-ink-secondary);
+  font-size: var(--text-sm);
 }
 
 .metaBar {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.55rem;
-  padding: 0.8rem 1rem;
+  gap: 0.5rem;
+  padding: 0.6rem 1rem;
   border-top: 1px solid var(--app-line-subtle);
   color: var(--app-muted);
 }
@@ -173,7 +177,8 @@
 .pill,
 .warnPill,
 .okPill,
-.mutedPill {
+.mutedPill,
+.dangerPill {
   display: inline-flex;
   align-items: center;
   gap: 0.3rem;
@@ -201,6 +206,12 @@
   color: var(--app-green-text);
   background: var(--app-green-soft);
   border: 1px solid var(--app-green-border);
+}
+
+.dangerPill {
+  color: #991b1b;
+  background: var(--app-red-soft);
+  border: 1px solid var(--app-red-border);
 }
 
 .mutedPill {
@@ -237,8 +248,9 @@
 
 .contentGrid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(340px, 0.48fr);
-  gap: 1rem;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 0.42fr);
+  gap: 0.9rem;
+  align-items: start;
 }
 
 .sectionHeader {
@@ -246,7 +258,7 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: 0.75rem;
-  padding: 1rem;
+  padding: 0.8rem 1rem;
   border-bottom: 1px solid var(--app-line-subtle);
 }
 
@@ -271,11 +283,10 @@
 
 .documentRow {
   display: grid;
-  grid-template-columns: 2rem minmax(0, 1fr) 11rem auto;
-  gap: 0.75rem;
+  grid-template-columns: 1.9rem minmax(0, 1fr) 10.5rem auto;
+  gap: 0.7rem;
   align-items: center;
-  min-height: 5.5rem;
-  padding: 0.85rem 1rem;
+  padding: 0.7rem 1rem;
   border-bottom: 1px solid var(--app-line-subtle);
 }
 
@@ -312,12 +323,12 @@
 .fileMeta {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.35rem;
-  margin-top: 0.45rem;
+  gap: 0.3rem;
+  margin-top: 0.35rem;
 }
 
 .emailMeta {
-  margin: 0.45rem 0 0;
+  margin: 0.35rem 0 0;
   color: var(--app-muted);
   font-size: var(--text-xs-plus);
   overflow-wrap: anywhere;
@@ -351,17 +362,17 @@
 
 .previewFrame {
   width: 100%;
-  min-height: 560px;
+  min-height: 540px;
   border: 1px solid var(--app-line);
   border-radius: 8px;
   background: var(--app-surface);
 }
 
 .previewFallback {
-  min-height: 280px;
+  min-height: 180px;
   display: grid;
   place-items: center;
-  padding: 1rem;
+  padding: 0.75rem;
   color: var(--app-muted);
   text-align: center;
   background: var(--app-surface-raised);

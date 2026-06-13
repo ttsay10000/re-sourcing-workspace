@@ -129,6 +129,14 @@ export { OutreachBatchRepo } from "./repos/OutreachBatchRepo.js";
 export type { OutreachBatchRepoOptions, CreateOutreachBatchParams } from "./repos/OutreachBatchRepo.js";
 export { InboxSyncStateRepo } from "./repos/InboxSyncStateRepo.js";
 export type { InboxSyncStateRepoOptions } from "./repos/InboxSyncStateRepo.js";
+export { BrokerOmEmailPullRunRepo } from "./repos/BrokerOmEmailPullRunRepo.js";
+export type {
+  BrokerOmEmailPullRunRecord,
+  BrokerOmEmailPullRunRepoOptions,
+  BrokerOmPulledAttachmentKey,
+  InsertBrokerOmEmailPullRunParams,
+  RecordBrokerOmPulledAttachmentParams,
+} from "./repos/BrokerOmEmailPullRunRepo.js";
 export { DealScoreOverridesRepo } from "./repos/DealScoreOverridesRepo.js";
 export type {
   DealScoreOverridesRepoOptions,
