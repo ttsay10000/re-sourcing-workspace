@@ -7,11 +7,10 @@
 
 import { Router, type Request, type Response } from "express";
 import type { Pool } from "pg";
-import { DEAL_FLOW_STAGES } from "@re-sourcing/contracts";
+import { DEAL_FLOW_STAGES, type DealFlowStageId } from "@re-sourcing/contracts";
 import type {
   DealFlowRecommendationsResponse,
   DealStatus,
-  PropertyDetails,
   SavedDeal,
   UiV2DealProgressSummaryResponse,
   UiV2DealPathState,
@@ -19,9 +18,7 @@ import type {
   UiV2SavedDealsListResponse,
 } from "@re-sourcing/contracts";
 import { getPool, UserProfileRepo } from "@re-sourcing/db";
-import { deriveBoardPipelineStatus } from "../deal/boardPipelineStatus.js";
 import { resolveEffectiveDealScore } from "../deal/effectiveDealScore.js";
-import { returnRateToPctPoints } from "../deal/irrCalculation.js";
 import {
   buildProgressRecommendations,
   type RecommendationInputRow,
@@ -33,7 +30,6 @@ import {
   hasCompletedDealDossier,
 } from "../deal/propertyDossierState.js";
 import { resolvePreferredOmUnitCount } from "../om/authoritativeOm.js";
-import { resolveReconstructedNoiBasisFromDetails } from "../deal/reconstructedNoiBasis.js";
 
 const router = Router();
 
@@ -42,6 +38,38 @@ const MAX_LIMIT = 250;
 const PROGRESS_SECTION_LIMIT = 250;
 
 const DEAL_STATUSES = new Set<DealStatus>(["new", "interesting", "saved", "dossier_generated", "rejected"]);
+const UI_V2_STATUSES = new Set<UiV2PipelineStatus>([
+  "new",
+  "screening",
+  "interesting",
+  "saved",
+  "underwriting",
+  "tour_scheduled",
+  "tour_completed_awaiting_inputs",
+  "outreach",
+  "awaiting_broker",
+  "om_received",
+  "dossier_generated",
+  "offer_review",
+  "negotiation",
+  "contract_signed",
+  "deal_closed",
+  "rejected",
+  "archived",
+]);
+const DEAL_PATH_PIPELINE_STATUSES = new Set<UiV2PipelineStatus>([
+  "tour_scheduled",
+  "tour_completed_awaiting_inputs",
+]);
+const DEAL_PATH_BLOCKING_STATUSES = new Set<UiV2PipelineStatus>([
+  "offer_review",
+  "negotiation",
+  "contract_signed",
+  "deal_closed",
+  "rejected",
+  "archived",
+]);
+const DEAL_FLOW_STAGE_IDS = new Set<DealFlowStageId>(DEAL_FLOW_STAGES.map((stage) => stage.id));
 
 type JsonRecord = Record<string, unknown>;
 
@@ -84,13 +112,14 @@ interface SavedProgressBaseRow {
   inquiry_filenames: string[] | null;
   generated_doc_count: number | string | null;
   broker_comp_package_count: number | string | null;
-  whisper_price: number | string | null;
   open_action_item_count: number | string | null;
   latest_inquiry_sent_at: Date | string | null;
   manual_broker_name: string | null;
   manual_broker_email: string | null;
   recipient_contact_email: string | null;
   broker_display_name: string | null;
+  deal_state?: string | null;
+  deal_stage?: string | null;
   stage_entered_at: Date | string | null;
   rejection_reason_code?: string | null;
   rejection_reason_label?: string | null;
@@ -146,14 +175,14 @@ interface ProgressPropertyRow {
   displayAddress: string;
   source: string | null;
   price: number | null;
-  /** Latest broker whisper / pricing-opinion signal, when one is recorded. */
-  whisperPrice: number | null;
   units: number | null;
   sqft: number | null;
   pricePerSqft: number | null;
   dealScore: number | null;
   ltrYocPct: number | null;
   mtrYocPct: number | null;
+  stage: DealFlowStageId;
+  dealState: string | null;
   status: UiV2PipelineStatus;
   savedDealStatus: string | null;
   tags: string[];
@@ -177,18 +206,7 @@ interface ProgressPropertyRow {
 }
 
 interface ProgressSection {
-  id:
-    | "sourced"
-    | "om_requested"
-    | "underwriting_awaiting_review"
-    | "underwriting_review_completed"
-    | "tour_requested"
-    | "tour_scheduled"
-    | "tour_completed_awaiting_inputs"
-    | "offer_review"
-    | "negotiation"
-    | "contract_signed"
-    | "deal_closed";
+  id: DealFlowStageId;
   label: string;
   count: number;
   rows: ProgressPropertyRow[];
@@ -244,6 +262,10 @@ function stringOrNull(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+function isDealFlowStageId(value: unknown): value is DealFlowStageId {
+  return typeof value === "string" && DEAL_FLOW_STAGE_IDS.has(value as DealFlowStageId);
 }
 
 function readNumericPath(root: unknown, path: string[]): number | null {
@@ -309,6 +331,29 @@ function parseStatusFilter(value: unknown): DealStatus[] {
 
 function readPipeline(details: JsonRecord | null): JsonRecord {
   return isJsonRecord(details?.pipeline) ? details.pipeline : {};
+}
+
+function deriveDealPathPipelineStatus(pipeline: JsonRecord, currentStatus: UiV2PipelineStatus | null): UiV2PipelineStatus | null {
+  if (currentStatus != null && DEAL_PATH_BLOCKING_STATUSES.has(currentStatus)) return null;
+  const dealPath = isJsonRecord(pipeline.dealPath) ? pipeline.dealPath : null;
+  if (dealPath == null) return null;
+  const postTourDecision = stringOrNull(dealPath.postTourDecision);
+  if (postTourDecision === "reject") return null;
+  if (postTourDecision === "move_forward") return "offer_review";
+  if (postTourDecision === "need_more_info") return "tour_completed_awaiting_inputs";
+  const rawStatus = stringOrNull(dealPath.status);
+  const tourCompletedAt = stringOrNull(dealPath.tourCompletedAt);
+  const tourScheduledAt = stringOrNull(dealPath.tourScheduledAt);
+  if (tourCompletedAt || rawStatus === "tour_completed_awaiting_inputs") return "tour_completed_awaiting_inputs";
+  if (tourScheduledAt) {
+    const scheduledMs = Date.parse(tourScheduledAt);
+    return Number.isFinite(scheduledMs) && scheduledMs <= Date.now()
+      ? "tour_completed_awaiting_inputs"
+      : "tour_scheduled";
+  }
+  return rawStatus != null && DEAL_PATH_PIPELINE_STATUSES.has(rawStatus as UiV2PipelineStatus)
+    ? (rawStatus as UiV2PipelineStatus)
+    : null;
 }
 
 function readTags(details: JsonRecord | null): string[] {
@@ -458,12 +503,90 @@ function readFirstImageUrl(row: SavedProgressBaseRow): string | null {
   return typeof image === "string" ? image.trim() : null;
 }
 
+function mapLegacyStatus(status: string | null): UiV2PipelineStatus {
+  const direct = status != null && UI_V2_STATUSES.has(status as UiV2PipelineStatus) ? (status as UiV2PipelineStatus) : null;
+  if (direct != null) return direct;
+  switch (status) {
+    case "enrichment_running":
+    case "enrichment_complete":
+      return "screening";
+    case "needs_om":
+    case "om_requested":
+      return "outreach";
+    case "follow_up_needed":
+      return "awaiting_broker";
+    case "om_received":
+      return "om_received";
+    case "underwriting":
+      return "underwriting";
+    case "saved_watchlist":
+      return "saved";
+    case "loi_sent":
+      return "offer_review";
+    case "negotiation":
+      return "negotiation";
+    case "contract_signed":
+    case "diligence_escrow":
+      return "contract_signed";
+    case "closed":
+      return "deal_closed";
+    case "rejected_removed":
+      return "rejected";
+    default:
+      return "new";
+  }
+}
+
 function deriveStatus(row: SavedProgressBaseRow): UiV2PipelineStatus {
-  return deriveBoardPipelineStatus({
-    details: row.details,
-    hasActiveRejection: row.rejected_at != null,
-    savedDealStatus: typeof row.saved_deal_status === "string" ? row.saved_deal_status : null,
-  });
+  const details = row.details;
+  const pipeline = readPipeline(details);
+  if (row.deal_state === "dead") return "rejected";
+  if (row.deal_state === "closed" || row.deal_stage === "deal_closed") return "deal_closed";
+  if (row.rejected_at != null || stringOrNull(pipeline.rejectedAt) != null || pipeline.status === "rejected_removed") {
+    return "rejected";
+  }
+  const uiStatus = stringOrNull(pipeline.uiV2Status);
+  const currentStatus = uiStatus != null && UI_V2_STATUSES.has(uiStatus as UiV2PipelineStatus)
+    ? (uiStatus as UiV2PipelineStatus)
+    : null;
+  const dealPathStatus = deriveDealPathPipelineStatus(pipeline, currentStatus);
+  if (dealPathStatus != null) return dealPathStatus;
+  if (currentStatus != null) return currentStatus;
+  if (row.saved_deal_status === "dossier_generated") return "dossier_generated";
+  if (row.saved_deal_status === "rejected") return "rejected";
+  if (row.saved_deal_status === "saved") return "saved";
+  return mapLegacyStatus(stringOrNull(pipeline.status));
+}
+
+function stageFromStatus(input: {
+  status: UiV2PipelineStatus;
+  savedDealStatus: string | null;
+  hasOm: boolean;
+  underwritingReviewRequired: boolean;
+  underwritingReviewCompleted: boolean;
+  dealPath: UiV2DealPathState | null;
+}): DealFlowStageId {
+  const { status, hasOm, underwritingReviewRequired, underwritingReviewCompleted, dealPath } = input;
+  if (status === "deal_closed") return "deal_closed";
+  if (status === "outreach" || status === "awaiting_broker") return "om_requested";
+  if (status === "tour_completed_awaiting_inputs") return "tour_completed_awaiting_inputs";
+  if (status === "tour_scheduled") return dealPath?.tourScheduledAt ? "tour_scheduled" : "tour_requested";
+  if (status === "offer_review") return "drafting_loi";
+  if (status === "negotiation") return "negotiation";
+  if (status === "contract_signed") return "contract_signed_diligence";
+  if (
+    hasOm &&
+    (underwritingReviewRequired ||
+      (!underwritingReviewCompleted &&
+        (status === "om_received" ||
+          status === "underwriting" ||
+          status === "dossier_generated" ||
+          input.savedDealStatus != null)))
+  ) {
+    return "underwriting_awaiting_review";
+  }
+  if (hasOm && underwritingReviewCompleted) return "underwriting_review_completed";
+  return "sourced";
 }
 
 function deriveOmStatus(row: SavedProgressBaseRow): string {
@@ -647,9 +770,6 @@ function getSavedCurrentNoi(row: SavedProgressBaseRow): number | null {
   const summary = getCurrentDossierSummary(row);
   const allowSignalFallback = hasCurrentUnderwritingSource(row);
   return (
-    // Same numerator as the pipeline and OM workspace: reconstructed actuals
-    // basis first, broker-stated NOI only as a fallback.
-    resolveReconstructedNoiBasisFromDetails(details as PropertyDetails | null) ??
     summary?.currentNoi ??
     readNumericPath(details, ["omData", "authoritative", "currentFinancials", "noi"]) ??
     readNumericPath(details, ["omData", "authoritative", "currentFinancials", "netOperatingIncome"]) ??
@@ -754,8 +874,8 @@ function mapSavedRow(row: SavedProgressBaseRow): SavedDealV2Row {
     pricePerSqft: price != null && sqft != null && sqft > 0 ? Math.round(price / sqft) : null,
     capRate: allowSignalFallback ? toNumber(row.latest_signal_adjusted_cap_rate) ?? toNumber(row.latest_signal_asset_cap_rate) : null,
     rentUpside: allowSignalFallback ? toNumber(row.latest_signal_rent_upside) : null,
-    irrPct: allowSignalFallback ? returnRateToPctPoints(toNumber(row.latest_signal_irr_pct)) : null,
-    cocPct: allowSignalFallback ? returnRateToPctPoints(toNumber(row.latest_signal_coc_pct)) : null,
+    irrPct: allowSignalFallback ? toNumber(row.latest_signal_irr_pct) : null,
+    cocPct: allowSignalFallback ? toNumber(row.latest_signal_coc_pct) : null,
     dealScore: resolveDealScore(row),
     ltrYocPct: getNoiYieldOnCost(row, currentNoi, allowSignalFallback ? row.latest_signal_asset_cap_rate : null),
     mtrYocPct: getNoiYieldOnCost(row, adjustedNoi, allowSignalFallback ? row.latest_signal_adjusted_cap_rate : null),
@@ -793,19 +913,30 @@ function mapSavedRow(row: SavedProgressBaseRow): SavedDealV2Row {
 function mapProgressRow(row: SavedProgressBaseRow): ProgressPropertyRow {
   const saved = mapSavedRow(row);
   const underwritingReview = deriveUnderwritingReviewState(row, saved.hasOm, saved.hasDossier);
+  const dealPath = readDealPath(row.details);
+  const fallbackStage = stageFromStatus({
+    status: saved.status,
+    savedDealStatus: row.saved_deal_status,
+    hasOm: saved.hasOm,
+    underwritingReviewRequired: underwritingReview.required,
+    underwritingReviewCompleted: underwritingReview.completed,
+    dealPath,
+  });
+  const stage = isDealFlowStageId(row.deal_stage) ? row.deal_stage : fallbackStage;
   return {
     propertyId: saved.propertyId,
     canonicalAddress: saved.canonicalAddress,
     displayAddress: saved.displayAddress,
     source: saved.source,
     price: saved.price,
-    whisperPrice: toPositiveNumber(row.whisper_price),
     units: saved.units,
     sqft: saved.sqft,
     pricePerSqft: saved.pricePerSqft,
     dealScore: saved.dealScore,
     ltrYocPct: saved.ltrYocPct,
     mtrYocPct: saved.mtrYocPct,
+    stage,
+    dealState: row.deal_state ?? null,
     status: saved.status,
     savedDealStatus: row.saved_deal_status,
     tags: saved.tags,
@@ -816,7 +947,7 @@ function mapProgressRow(row: SavedProgressBaseRow): ProgressPropertyRow {
     underwritingReviewStatus: underwritingReview.status,
     underwritingReviewRequired: underwritingReview.required,
     underwritingReviewCompleted: underwritingReview.completed,
-    dealPath: readDealPath(row.details),
+    dealPath,
     openActionItemCount: saved.openActionItemCount,
     neighborhood: saved.neighborhood,
     borough: saved.borough,
@@ -938,11 +1069,10 @@ function baseSelectSql(hasRejections: boolean, savedOnly: boolean, includeBroker
        COALESCE(idoc.inquiry_filenames, ARRAY[]::text[]) AS inquiry_filenames,
        COALESCE(gdoc.generated_doc_count, 0) AS generated_doc_count,
        COALESCE(bcp.broker_comp_package_count, 0) AS broker_comp_package_count,
-       wpx.whisper_price,
        COALESCE(ai.open_action_item_count, 0) AS open_action_item_count,
        pis.sent_at AS latest_inquiry_sent_at,
        ${brokerSelect(includeBroker)}
-       ${includeStage ? "p.stage_entered_at," : "NULL::timestamptz AS stage_entered_at,"}
+       ${includeStage ? "p.deal_state, p.deal_stage, p.stage_entered_at," : "NULL::text AS deal_state, NULL::text AS deal_stage, NULL::timestamptz AS stage_entered_at,"}
        ${rejectionSelect(hasRejections)}
      FROM ${savedOnly ? "saved_deals sd INNER JOIN properties p ON p.id = sd.property_id" : "properties p LEFT JOIN saved_deals sd ON sd.property_id = p.id AND sd.user_id = $1"}${brokerJoin(includeBroker)}
      LEFT JOIN LATERAL (
@@ -998,22 +1128,6 @@ function baseSelectSql(hasRejections: boolean, savedOnly: boolean, includeBroker
        FROM broker_comp_packages
        WHERE property_id = p.id
      ) bcp ON true
-     LEFT JOIN LATERAL (
-       SELECT COALESCE(
-           CASE WHEN jsonb_typeof(i.reviewed_payload->'amount') = 'number' THEN (i.reviewed_payload->>'amount')::numeric END,
-           CASE WHEN jsonb_typeof(i.normalized_payload->'amount') = 'number' THEN (i.normalized_payload->>'amount')::numeric END
-         ) AS whisper_price
-       FROM broker_comp_extracted_items i
-       WHERE i.property_id = p.id
-         AND i.item_type = 'pricing_opinion'
-         AND i.review_status <> 'rejected'
-         AND (
-           jsonb_typeof(i.reviewed_payload->'amount') = 'number'
-           OR jsonb_typeof(i.normalized_payload->'amount') = 'number'
-         )
-       ORDER BY i.created_at DESC
-       LIMIT 1
-     ) wpx ON true
      LEFT JOIN LATERAL (
        SELECT COUNT(*)::int AS open_action_item_count
        FROM property_action_items
@@ -1077,66 +1191,9 @@ function buildProgressSections(rows: ProgressPropertyRow[]): ProgressSection[] {
   const sectionLabels: Record<ProgressSection["id"], string> = Object.fromEntries(
     DEAL_FLOW_STAGES.map((stage) => [stage.id, stage.label])
   ) as Record<ProgressSection["id"], string>;
-  const ids: ProgressSection["id"][] = [
-    "sourced",
-    "om_requested",
-    "underwriting_awaiting_review",
-    "underwriting_review_completed",
-    "tour_requested",
-    "tour_scheduled",
-    "tour_completed_awaiting_inputs",
-    "offer_review",
-    "negotiation",
-    "contract_signed",
-    "deal_closed",
-  ];
-  const claimed = new Set<string>();
+  const ids = DEAL_FLOW_STAGES.map((stage) => stage.id);
   return ids.map((id) => {
-    const matches = rows.filter((row) => {
-      if (claimed.has(row.propertyId)) return false;
-      if (row.status === "rejected" || row.status === "archived") return false;
-      const isLaterDealStage = [
-        "tour_scheduled",
-        "tour_completed_awaiting_inputs",
-        "offer_review",
-        "negotiation",
-        "contract_signed",
-        "deal_closed",
-      ].includes(row.status);
-      const matched =
-        id === "sourced"
-          ? !isLaterDealStage &&
-            !row.hasOm &&
-            !["outreach", "awaiting_broker", "om_received", "underwriting", "dossier_generated"].includes(row.status)
-          : id === "om_requested"
-          ? !isLaterDealStage && (row.status === "outreach" || row.status === "awaiting_broker")
-          : id === "underwriting_awaiting_review"
-            ? !isLaterDealStage &&
-              row.hasOm &&
-              (row.underwritingReviewRequired ||
-                (!row.underwritingReviewCompleted &&
-                  (row.status === "om_received" ||
-                    row.status === "underwriting" ||
-                    row.status === "dossier_generated" ||
-                    row.status === "saved" ||
-                    row.savedDealStatus != null)))
-          : id === "underwriting_review_completed"
-            ? !isLaterDealStage &&
-              row.hasOm &&
-              row.underwritingReviewCompleted
-          : id === "tour_requested"
-            ? row.status === "tour_scheduled" &&
-              !row.dealPath?.tourScheduledAt &&
-              row.dealPath?.status !== "tour_scheduled"
-          : id === "tour_scheduled"
-            // A confirmed date OR an explicit move-anyway pin (deal-path
-            // status) lands here; the missing date is flagged client-side.
-            ? row.status === "tour_scheduled" &&
-              (Boolean(row.dealPath?.tourScheduledAt) || row.dealPath?.status === "tour_scheduled")
-            : row.status === id;
-      if (matched) claimed.add(row.propertyId);
-      return matched;
-    });
+    const matches = rows.filter((row) => row.dealState !== "dead" && row.status !== "rejected" && row.status !== "archived" && row.stage === id);
     return {
       id,
       label: sectionLabels[id],
@@ -1191,7 +1248,7 @@ router.get("/ui-v2/deal-progress", async (_req: Request, res: Response) => {
     const pool = getPool();
     const [hasRejections, hasStageColumns] = await Promise.all([
       hasTable(pool, "property_rejections"),
-      hasColumn(pool, "properties", "stage_entered_at"),
+      hasColumn(pool, "properties", "deal_stage"),
     ]);
     const [baseRows, rejectionReasons] = await Promise.all([
       fetchProgressRows(pool, userId, hasRejections, hasStageColumns),
@@ -1251,7 +1308,7 @@ router.get("/ui-v2/deal-progress/recommendations", async (req: Request, res: Res
     const pool = getPool();
     const [hasRejections, hasStageColumns] = await Promise.all([
       hasTable(pool, "property_rejections"),
-      hasColumn(pool, "properties", "stage_entered_at"),
+      hasColumn(pool, "properties", "deal_stage"),
     ]);
     const baseRows = await fetchProgressRows(pool, userId, hasRejections, hasStageColumns);
     const rows = baseRows.map(mapProgressRow);

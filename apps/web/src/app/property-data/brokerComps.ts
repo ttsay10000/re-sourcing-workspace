@@ -11,6 +11,8 @@ export interface BrokerCompComparableRow {
   propertyName: string | null;
   address: string | null;
   neighborhood: string | null;
+  timelineLabel: string | null;
+  assetClass: string | null;
   developer: string | null;
   architect: string | null;
   designer: string | null;
@@ -36,15 +38,19 @@ export interface BrokerCompComparableRow {
   source: string | null;
   reviewStatus: string | null;
   selectionDecision: string | null;
+  isDownstreamIncluded: boolean;
   notes: string | null;
 }
 
 export interface BrokerCompBedroomBreakdownRow {
   id: string;
+  itemId: string;
   packageId: string | null;
   propertyName: string | null;
   address: string | null;
   neighborhood: string | null;
+  timelineLabel: string | null;
+  assetClass: string | null;
   bedroomType: string | null;
   bedrooms: number | null;
   bathrooms: number | null;
@@ -62,6 +68,7 @@ export interface BrokerCompBedroomBreakdownRow {
   percentSoldPct: number | null;
   reviewStatus: string | null;
   selectionDecision: string | null;
+  isDownstreamIncluded: boolean;
 }
 
 export interface BrokerCompSubjectUnitPricingRow {
@@ -84,10 +91,17 @@ export interface BrokerCompPackageRow {
   status: string | null;
   packageType: string | null;
   sourceName: string | null;
+  documentReviewStatus: string | null;
+  documentReviewApprovedAt: string | null;
+  documentReviewReviewedAt: string | null;
+  hasGptDocumentReview: boolean;
   createdAt: string | null;
   updatedAt: string | null;
   itemCount: number;
   reviewedItemCount: number;
+  includedItemCount: number;
+  excludedItemCount: number;
+  watchItemCount: number;
 }
 
 export interface BrokerCompUiSurface {
@@ -101,6 +115,9 @@ export interface BrokerCompUiSurface {
   status: string | null;
   updatedAt: string | null;
   hasData: boolean;
+  includedComparableCount: number;
+  excludedItemCount: number;
+  watchItemCount: number;
 }
 
 const PACKAGE_CONTAINER_KEYS = [
@@ -125,6 +142,16 @@ export function plannedBrokerCompUploadEndpoint(propertyId: string): string {
 
 export function plannedBrokerCompReviewEndpoint(propertyId: string): string {
   return `/api/properties/${encodeURIComponent(propertyId)}/broker-comps/review`;
+}
+
+export function isBrokerCompDecisionDownstreamIncluded(
+  decision: string | null | undefined,
+  reviewStatus?: string | null,
+  includeInDossier?: boolean | null
+): boolean {
+  if (reviewStatus === "rejected") return false;
+  if (includeInDossier === false) return false;
+  return decision == null || decision === "" || decision === "include";
 }
 
 export function readBrokerCompSurface(...sources: unknown[]): BrokerCompUiSurface {
@@ -218,6 +245,8 @@ export function readBrokerCompSurface(...sources: unknown[]): BrokerCompUiSurfac
     ...allItems.flatMap((item) => missingFlagsFromItem(item)),
   ]);
   const reviewedItems = allItems.filter((item) => isReviewedStatus(item.reviewStatus)).length;
+  const excludedItemCount = allItems.filter((item) => item.selectionDecision === "exclude").length;
+  const watchItemCount = allItems.filter((item) => item.selectionDecision === "watch").length;
 
   return {
     packages: packageRows,
@@ -241,6 +270,9 @@ export function readBrokerCompSurface(...sources: unknown[]): BrokerCompUiSurfac
       allMissingFlags.length > 0 ||
       Boolean(summary) ||
       reviewedItems > 0,
+    includedComparableCount: comparables.filter((row) => row.isDownstreamIncluded && row.itemType !== "subject_projected_pricing").length,
+    excludedItemCount,
+    watchItemCount,
   };
 }
 
@@ -250,19 +282,10 @@ function packageTimestamp(payload: BrokerCompPackageReviewPayload): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function isPricingOpinionPackage(payload: BrokerCompPackageReviewPayload): boolean {
-  const packageType = payload.package.packageType;
-  return packageType === "broker_opinion" || payload.items.every((item) => item.itemType === "pricing_opinion");
-}
-
 function selectCurrentPackages(packages: BrokerCompPackageReviewPayload[]): BrokerCompPackageReviewPayload[] {
   if (packages.length <= 1) return packages;
   const sorted = [...packages].sort((left, right) => packageTimestamp(right) - packageTimestamp(left));
-  const extractedPackages = sorted.filter((payload) => !isPricingOpinionPackage(payload));
-  const latestExtracted = extractedPackages[0] ? [extractedPackages[0]] : [];
-  const opinionPackages = sorted.filter(isPricingOpinionPackage).slice(0, 5);
-  const selected = [...latestExtracted, ...opinionPackages];
-  return selected.length > 0 ? selected.sort((left, right) => packageTimestamp(right) - packageTimestamp(left)) : [sorted[0]];
+  return sorted;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -326,14 +349,17 @@ function normalizeItems(value: unknown): BrokerCompExtractedItem[] {
     if (!isRecord(entry)) return [];
     if (typeof entry.itemType === "string" && isRecord(entry.normalizedPayload)) {
       const item = entry as unknown as BrokerCompExtractedItem;
+      const selectionDecision = stringValue(entry.selectionDecision ?? entry.selection_decision);
       return [{
         ...item,
         propertyId: stringValue(entry.propertyId) ?? stringValue(entry.property_id) ?? item.propertyId ?? "",
         packageId: stringValue(entry.packageId) ?? stringValue(entry.package_id) ?? item.packageId ?? "loose",
         pageRefs: Array.isArray(item.pageRefs) ? item.pageRefs : [],
-        includeInDossier: Boolean(item.includeInDossier),
+        selectionDecision: selectionDecision as BrokerCompExtractedItem["selectionDecision"],
+        includeInDossier: Boolean(entry.includeInDossier ?? entry.include_in_dossier ?? item.includeInDossier),
       }];
     }
+    const selectionDecision = stringValue(entry.selectionDecision ?? entry.selection_decision);
     const item: BrokerCompExtractedItem = {
       id: stringValue(entry.id) ?? `loose-comp-${index}`,
       packageId: stringValue(entry.packageId) ?? "loose",
@@ -344,8 +370,8 @@ function normalizeItems(value: unknown): BrokerCompExtractedItem[] {
       pageRefs: [],
       confidence: numberValue(entry.confidence) ?? null,
       reviewStatus: (stringValue(entry.reviewStatus) ?? stringValue(entry.status) ?? "pending") as BrokerCompExtractedItem["reviewStatus"],
-      selectionDecision: stringValue(entry.selectionDecision) as BrokerCompExtractedItem["selectionDecision"],
-      includeInDossier: Boolean(entry.includeInDossier ?? entry.reviewed ?? false),
+      selectionDecision: selectionDecision as BrokerCompExtractedItem["selectionDecision"],
+      includeInDossier: Boolean(entry.includeInDossier ?? entry.include_in_dossier ?? entry.reviewed ?? false),
       analystNote: stringValue(entry.analystNote) ?? stringValue(entry.notes),
       createdAt: stringValue(entry.createdAt) ?? "",
       updatedAt: stringValue(entry.updatedAt) ?? "",
@@ -397,16 +423,27 @@ function normalizeFlags(value: unknown): BrokerCompDataFlag[] {
 
 function packageRow(payload: BrokerCompPackageReviewPayload): BrokerCompPackageRow {
   const accepted = payload.items.filter((item) => isReviewedStatus(item.reviewStatus)).length;
+  const included = payload.items.filter((item) => isBrokerCompDecisionDownstreamIncluded(item.selectionDecision, item.reviewStatus, item.includeInDossier)).length;
+  const excluded = payload.items.filter((item) => item.selectionDecision === "exclude").length;
+  const watch = payload.items.filter((item) => item.selectionDecision === "watch").length;
+  const packageMeta = isRecord(payload.package.packageMeta) ? payload.package.packageMeta : isRecord(payload.package.sourceMeta) ? payload.package.sourceMeta : {};
   return {
     id: payload.package.id,
     label: payload.package.sourceName || payload.package.packageType || payload.package.id,
     status: payload.package.status ?? null,
     packageType: payload.package.packageType ?? null,
     sourceName: payload.package.sourceName ?? null,
+    documentReviewStatus: stringValue(packageMeta.documentReviewStatus),
+    documentReviewApprovedAt: stringValue(packageMeta.documentReviewApprovedAt),
+    documentReviewReviewedAt: stringValue(packageMeta.documentReviewReviewedAt),
+    hasGptDocumentReview: isRecord(packageMeta.gptDocumentReview),
     createdAt: payload.package.createdAt ?? null,
     updatedAt: payload.package.updatedAt ?? null,
     itemCount: payload.items.length,
     reviewedItemCount: accepted,
+    includedItemCount: included,
+    excludedItemCount: excluded,
+    watchItemCount: watch,
   };
 }
 
@@ -420,17 +457,85 @@ function stringArray(value: unknown): string[] {
   return value.flatMap((entry) => (typeof entry === "string" && entry.trim() ? [entry.trim()] : []));
 }
 
+function itemPayload(item: BrokerCompExtractedItem): Record<string, unknown> {
+  const reviewedPayload = (item as { reviewedPayload?: unknown }).reviewedPayload;
+  if (isRecord(reviewedPayload)) return reviewedPayload;
+  return item.normalizedPayload ?? item.rawPayload ?? {};
+}
+
+function titleizeValue(value: string): string {
+  return value
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .split(" ")
+    .map((part) => (part.length <= 3 && part === part.toUpperCase() ? part : part.charAt(0).toUpperCase() + part.slice(1).toLowerCase()))
+    .join(" ");
+}
+
+function assetClassLabel(value: unknown): string | null {
+  const raw = stringValue(value);
+  if (!raw) return null;
+  const normalized = raw.toLowerCase().replace(/[_\s-]+/g, "_");
+  if (normalized === "mixed_use" || normalized === "mixeduse") return "Mixed-use";
+  if (normalized === "multi_family" || normalized === "multifamily" || normalized === "multi_fam") return "Multifamily";
+  if (normalized === "commercial_retail") return "Retail";
+  if (normalized === "not_specified" || normalized === "unknown") return "Unspecified";
+  return titleizeValue(raw);
+}
+
+function assetClassFromPayload(data: Record<string, unknown>): string | null {
+  return assetClassLabel(
+    data.assetClass ??
+      data.asset_class ??
+      data.propertyType ??
+      data.property_type ??
+      data.useType ??
+      data.use_type ??
+      data.buildingType ??
+      data.building_type
+  );
+}
+
+function timelineDateLabel(value: unknown): string | null {
+  const raw = stringValue(value);
+  if (!raw) return null;
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime()) || !/\d{4}/.test(raw)) return raw;
+  return parsed.toISOString().slice(0, 10);
+}
+
+function timelineLabelFromPayload(data: Record<string, unknown>): string | null {
+  const quarter = stringValue(data.quarter ?? data.reportQuarter ?? data.asOfQuarter ?? data.periodQuarter);
+  const month = stringValue(data.month ?? data.reportMonth ?? data.asOfMonth ?? data.saleMonth);
+  const year = stringValue(data.year ?? data.reportYear ?? data.asOfYear ?? data.saleYear);
+  const asOf = stringValue(data.asOfPeriod ?? data.as_of_period ?? data.asOf ?? data.as_of ?? data.asOfDate ?? data.as_of_date ?? data.reportingPeriod);
+  const saleDate = timelineDateLabel(data.saleDate ?? data.sale_date ?? data.closedAt ?? data.closed_at ?? data.closingDate ?? data.soldDate ?? data.transactionDate ?? data.date);
+  const contractDate = timelineDateLabel(data.contractDate ?? data.contract_date);
+  const period = [quarter, month, year].filter(Boolean).join(" ");
+  const parts = [
+    period || null,
+    asOf ? `As of ${asOf}` : null,
+    saleDate ? `Sale ${saleDate}` : null,
+    contractDate && contractDate !== saleDate ? `Contract ${contractDate}` : null,
+  ].filter((part): part is string => Boolean(part));
+  return parts.length > 0 ? parts.join(" · ") : null;
+}
+
 function comparableRow(item: BrokerCompExtractedItem): BrokerCompComparableRow | null {
   if (!["sale_comp", "operating_snapshot", "pricing_comp", "subject_projected_pricing"].includes(item.itemType)) {
     return null;
   }
-  const data = item.normalizedPayload ?? {};
+  const data = itemPayload(item);
+  const isDownstreamIncluded = isBrokerCompDecisionDownstreamIncluded(item.selectionDecision, item.reviewStatus, item.includeInDossier);
   return {
     id: item.id,
     packageId: item.packageId ?? null,
     propertyName: stringValue(data.propertyName) ?? stringValue(data.projectName),
     address: stringValue(data.address) ?? stringValue(data.propertyAddress) ?? stringValue(data.compAddress),
     neighborhood: stringValue(data.neighborhood) ?? stringValue(data.submarket),
+    timelineLabel: timelineLabelFromPayload(data),
+    assetClass: assetClassFromPayload(data),
     developer: stringValue(data.developer),
     architect: stringValue(data.architect),
     designer: stringValue(data.designer),
@@ -456,29 +561,38 @@ function comparableRow(item: BrokerCompExtractedItem): BrokerCompComparableRow |
     source: stringValue(data.source) ?? stringValue(data.sourceName),
     reviewStatus: item.reviewStatus ?? null,
     selectionDecision: item.selectionDecision ?? null,
+    isDownstreamIncluded,
     notes: item.analystNote ?? stringValue(data.notes) ?? stringValue(data.note),
   };
 }
 
 function bedroomBreakdownRowsFromItem(item: BrokerCompExtractedItem): BrokerCompBedroomBreakdownRow[] {
-  const data = item.normalizedPayload ?? {};
+  const data = itemPayload(item);
+  const isDownstreamIncluded = isBrokerCompDecisionDownstreamIncluded(item.selectionDecision, item.reviewStatus, item.includeInDossier);
   const parent = {
+    itemId: item.id,
     packageId: item.packageId ?? null,
     propertyName: stringValue(data.propertyName) ?? stringValue(data.projectName),
     address: stringValue(data.address) ?? stringValue(data.propertyAddress) ?? stringValue(data.compAddress),
     neighborhood: stringValue(data.neighborhood) ?? stringValue(data.submarket),
+    timelineLabel: timelineLabelFromPayload(data),
+    assetClass: assetClassFromPayload(data),
     units: numberValue(data.units ?? data.unitCount),
     percentSoldPct: numberValue(data.percentSoldPct ?? data.percentSold),
     reviewStatus: item.reviewStatus ?? null,
     selectionDecision: item.selectionDecision ?? null,
+    isDownstreamIncluded,
   };
 
   const buildRow = (row: Record<string, unknown>, suffix: string): BrokerCompBedroomBreakdownRow => ({
     id: `${item.id}:${suffix}`,
+    itemId: parent.itemId,
     packageId: parent.packageId,
     propertyName: stringValue(row.propertyName) ?? parent.propertyName,
     address: stringValue(row.address) ?? parent.address,
     neighborhood: stringValue(row.neighborhood) ?? parent.neighborhood,
+    timelineLabel: timelineLabelFromPayload(row) ?? parent.timelineLabel,
+    assetClass: assetClassFromPayload(row) ?? parent.assetClass,
     bedroomType: stringValue(row.bedroomType ?? row.unitType),
     bedrooms: numberValue(row.bedrooms),
     bathrooms: numberValue(row.bathrooms ?? row.baths),
@@ -496,6 +610,7 @@ function bedroomBreakdownRowsFromItem(item: BrokerCompExtractedItem): BrokerComp
     percentSoldPct: numberValue(row.percentSoldPct ?? row.percentSold) ?? parent.percentSoldPct,
     reviewStatus: parent.reviewStatus,
     selectionDecision: parent.selectionDecision,
+    isDownstreamIncluded: parent.isDownstreamIncluded,
   });
 
   if (item.itemType === "unit_breakdown_row") {
@@ -544,7 +659,7 @@ function missingFlagsFromItem(item: BrokerCompExtractedItem): BrokerCompDataFlag
 function dedupeComparables(rows: BrokerCompComparableRow[]): BrokerCompComparableRow[] {
   const seen = new Set<string>();
   return rows.filter((row) => {
-    const key = [row.address, row.price, row.saleDate, row.itemType].join("|");
+    const key = [row.id, row.address, row.price, row.saleDate, row.itemType, row.selectionDecision].join("|");
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -554,7 +669,7 @@ function dedupeComparables(rows: BrokerCompComparableRow[]): BrokerCompComparabl
 function dedupeBedroomBreakdowns(rows: BrokerCompBedroomBreakdownRow[]): BrokerCompBedroomBreakdownRow[] {
   const seen = new Set<string>();
   return rows.filter((row) => {
-    const key = [row.address, row.bedroomType, row.count, row.avgAskingPpsf, row.avgSoldPpsf, row.priceRange].join("|");
+    const key = [row.id, row.address, row.bedroomType, row.count, row.avgAskingPpsf, row.avgSoldPpsf, row.priceRange, row.selectionDecision].join("|");
     if (seen.has(key)) return false;
     seen.add(key);
     return true;

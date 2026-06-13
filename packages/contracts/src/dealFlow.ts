@@ -8,44 +8,59 @@
  */
 /**
  * Canonical persistence stages (migration 056, `properties.deal_stage`).
- * Coarser than the display flow: several display stages share one canonical
- * stage. Mirrored from @re-sourcing/db's DEAL_STAGES (db depends on
- * contracts, so the literal union is duplicated here and equality is
- * asserted by a test in apps/api).
+ *
+ * These are intentionally the same ids shown on the Deal Progress board. Older
+ * UI/status values are adapted into this stage taxonomy while `deal_state`
+ * carries lifecycle state (`active`, `dead`, `closed`).
  */
-export type CanonicalDealStage =
-  | "inbox"
-  | "screening"
-  | "pursuing"
-  | "outreach"
-  | "om_review"
-  | "underwriting"
-  | "tour"
-  | "offer_loi"
-  | "contract_dd"
-  | "closed";
+export type DealFlowStageId =
+  | "sourced"
+  | "om_requested"
+  | "underwriting_awaiting_review"
+  | "underwriting_review_completed"
+  | "tour_requested"
+  | "tour_scheduled"
+  | "tour_completed_awaiting_inputs"
+  | "drafting_loi"
+  | "loi_sent_awaiting_response"
+  | "negotiation"
+  | "contract_signed_diligence"
+  | "deal_closed";
 
+export type CanonicalDealStage = DealFlowStageId;
 export type CanonicalDealState = "active" | "dead" | "closed";
 
-/** Saved-deal status → canonical stage/state written to properties.deal_stage. */
+/** Saved-deal/status adapter to canonical stage/state written to properties.deal_stage. */
 export const STATUS_TO_CANONICAL: Record<string, { stage: CanonicalDealStage; state: CanonicalDealState }> = {
-  new: { stage: "inbox", state: "active" },
-  screening: { stage: "screening", state: "active" },
-  interesting: { stage: "screening", state: "active" },
-  saved: { stage: "pursuing", state: "active" },
-  outreach: { stage: "outreach", state: "active" },
-  awaiting_broker: { stage: "outreach", state: "active" },
-  om_received: { stage: "om_review", state: "active" },
-  underwriting: { stage: "underwriting", state: "active" },
-  dossier_generated: { stage: "underwriting", state: "active" },
-  tour_scheduled: { stage: "tour", state: "active" },
-  tour_completed_awaiting_inputs: { stage: "tour", state: "active" },
-  offer_review: { stage: "offer_loi", state: "active" },
-  negotiation: { stage: "offer_loi", state: "active" },
-  contract_signed: { stage: "contract_dd", state: "active" },
-  deal_closed: { stage: "closed", state: "closed" },
-  archived: { stage: "closed", state: "closed" },
-  rejected: { stage: "screening", state: "dead" },
+  new: { stage: "sourced", state: "active" },
+  screening: { stage: "sourced", state: "active" },
+  interesting: { stage: "sourced", state: "active" },
+  saved: { stage: "sourced", state: "active" },
+  outreach: { stage: "om_requested", state: "active" },
+  awaiting_broker: { stage: "om_requested", state: "active" },
+  om_requested: { stage: "om_requested", state: "active" },
+  om_received: { stage: "underwriting_awaiting_review", state: "active" },
+  underwriting: { stage: "underwriting_awaiting_review", state: "active" },
+  dossier_generated: { stage: "underwriting_awaiting_review", state: "active" },
+  underwriting_awaiting_review: { stage: "underwriting_awaiting_review", state: "active" },
+  underwriting_review_completed: { stage: "underwriting_review_completed", state: "active" },
+  tour_requested: { stage: "tour_requested", state: "active" },
+  tour_scheduled: { stage: "tour_scheduled", state: "active" },
+  tour_completed_awaiting_inputs: { stage: "tour_completed_awaiting_inputs", state: "active" },
+  offer_candidate: { stage: "drafting_loi", state: "active" },
+  offer_review: { stage: "drafting_loi", state: "active" },
+  drafting_loi: { stage: "drafting_loi", state: "active" },
+  loi_sent: { stage: "loi_sent_awaiting_response", state: "active" },
+  loi_sent_awaiting_response: { stage: "loi_sent_awaiting_response", state: "active" },
+  negotiation: { stage: "negotiation", state: "active" },
+  contract_signed: { stage: "contract_signed_diligence", state: "active" },
+  diligence_escrow: { stage: "contract_signed_diligence", state: "active" },
+  contract_signed_diligence: { stage: "contract_signed_diligence", state: "active" },
+  deal_closed: { stage: "deal_closed", state: "closed" },
+  closed: { stage: "deal_closed", state: "closed" },
+  archived: { stage: "sourced", state: "dead" },
+  rejected: { stage: "sourced", state: "dead" },
+  rejected_removed: { stage: "sourced", state: "dead" },
 };
 
 /** Aging thresholds (days in stage) shared by chips and recommendation rules. */
@@ -57,31 +72,40 @@ export const STAGE_AGING = {
 /**
  * Funnel position of each ui-v2 pipeline status. Automatic flows (OM uploads,
  * OM analysis refresh, outreach sends, document post-processing) must only
- * move a deal to a status with a HIGHER rank than its current one — deals that
- * are moving forward are never pushed back by reworking the OM workspace or
- * re-running underwriting. Manual board moves are exempt: the user can drag a
- * deal anywhere. Statuses sharing a rank are lateral moves within one stage.
- * Terminal/dead states rank highest so no automatic flow ever "advances" out
- * of them.
+ * move a deal to a status with a HIGHER rank than its current one. Manual
+ * board moves are exempt: the user can drag a deal anywhere.
  */
 export const UI_V2_STATUS_FUNNEL_RANK: Record<string, number> = {
   new: 0,
   screening: 1,
   interesting: 1,
   saved: 2,
+  sourced: 2,
   outreach: 3,
   awaiting_broker: 3,
+  om_requested: 3,
   om_received: 4,
   underwriting: 5,
   dossier_generated: 5,
-  tour_scheduled: 6,
-  tour_completed_awaiting_inputs: 7,
-  offer_review: 8,
-  negotiation: 9,
-  contract_signed: 10,
-  deal_closed: 11,
-  rejected: 12,
-  archived: 12,
+  underwriting_awaiting_review: 5,
+  underwriting_review_completed: 6,
+  tour_requested: 7,
+  tour_scheduled: 8,
+  tour_completed_awaiting_inputs: 9,
+  offer_candidate: 10,
+  offer_review: 10,
+  drafting_loi: 10,
+  loi_sent: 11,
+  loi_sent_awaiting_response: 11,
+  negotiation: 12,
+  contract_signed: 13,
+  diligence_escrow: 13,
+  contract_signed_diligence: 13,
+  deal_closed: 14,
+  closed: 14,
+  rejected: 15,
+  archived: 15,
+  rejected_removed: 15,
 };
 
 /** Funnel rank of a pipeline status; unknown/legacy statuses rank as 0 (new). */
@@ -105,19 +129,6 @@ export function isForwardPipelineStatusMove(
   return pipelineStatusRank(next) > pipelineStatusRank(normalized);
 }
 
-export type DealFlowStageId =
-  | "sourced"
-  | "om_requested"
-  | "underwriting_awaiting_review"
-  | "underwriting_review_completed"
-  | "tour_requested"
-  | "tour_scheduled"
-  | "tour_completed_awaiting_inputs"
-  | "offer_review"
-  | "negotiation"
-  | "contract_signed"
-  | "deal_closed";
-
 export type DealFlowStage = {
   id: DealFlowStageId;
   /** Full label, used on board column headers and tooltips. */
@@ -137,7 +148,7 @@ export const DEAL_FLOW_STAGES: readonly DealFlowStage[] = [
     id: "sourced",
     label: "Sourced",
     shortLabel: "Sourced",
-    statuses: ["new", "screening", "interesting"],
+    statuses: ["new", "screening", "interesting", "saved"],
     targetStatus: "saved",
   },
   {
@@ -149,14 +160,14 @@ export const DEAL_FLOW_STAGES: readonly DealFlowStage[] = [
   },
   {
     id: "underwriting_awaiting_review",
-    label: "Underwriting · Awaiting Review",
+    label: "Underwriting - Awaiting Review",
     shortLabel: "UW Review",
-    statuses: ["saved", "underwriting", "om_received", "dossier_generated"],
+    statuses: ["underwriting", "om_received", "dossier_generated"],
     targetStatus: "underwriting",
   },
   {
     id: "underwriting_review_completed",
-    label: "Underwriting · Review Completed",
+    label: "Underwriting - Review Completed",
     shortLabel: "UW Done",
     statuses: ["underwriting", "om_received", "dossier_generated"],
     targetStatus: "underwriting",
@@ -177,16 +188,23 @@ export const DEAL_FLOW_STAGES: readonly DealFlowStage[] = [
   },
   {
     id: "tour_completed_awaiting_inputs",
-    label: "Tour Completed · Awaiting Inputs",
+    label: "Tour Completed - Awaiting Inputs",
     shortLabel: "Awaiting Inputs",
     statuses: ["tour_completed_awaiting_inputs"],
     targetStatus: "tour_completed_awaiting_inputs",
   },
   {
-    id: "offer_review",
-    label: "LOI Offered",
-    shortLabel: "LOI",
-    statuses: ["offer_review"],
+    id: "drafting_loi",
+    label: "Drafting LOI",
+    shortLabel: "Draft LOI",
+    statuses: ["offer_review", "offer_candidate", "drafting_loi"],
+    targetStatus: "offer_review",
+  },
+  {
+    id: "loi_sent_awaiting_response",
+    label: "LOI Sent - Awaiting Response",
+    shortLabel: "LOI Sent",
+    statuses: ["loi_sent", "loi_sent_awaiting_response"],
     targetStatus: "offer_review",
   },
   {
@@ -197,10 +215,10 @@ export const DEAL_FLOW_STAGES: readonly DealFlowStage[] = [
     targetStatus: "negotiation",
   },
   {
-    id: "contract_signed",
+    id: "contract_signed_diligence",
     label: "Contract Signed / Diligence",
     shortLabel: "Contract",
-    statuses: ["contract_signed"],
+    statuses: ["contract_signed", "diligence_escrow", "contract_signed_diligence"],
     targetStatus: "contract_signed",
   },
   {

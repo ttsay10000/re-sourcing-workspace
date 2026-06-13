@@ -1,9 +1,11 @@
 import https from "node:https";
 import { URL } from "node:url";
+import type { BrokerCompItemType } from "@re-sourcing/contracts";
 import type { BrokerCompExtractedItemInput } from "../brokerComp/service.js";
 import { getSharedGeminiOmRequestQueue, runWithGeminiOmRequestQueue } from "../asyncTaskQueue.js";
 import { DEFAULT_GEMINI_OM_MODEL } from "../om/extractOmAnalysisFromGeminiPdfOnly.js";
 import { parseCompletionJsonContent } from "../om/omAnalysisShared.js";
+import { buildGeminiMarketExtractionPrompt, MARKET_PROMPT_V3_VERSION } from "./marketPromptV3.js";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -45,8 +47,6 @@ export interface GeminiBrokerCompExtractionParams {
   filename: string;
   textPreview?: string | null;
   pageCount?: number | null;
-  /** Skip the filename extension check when content sniffing already proved the buffer is a PDF. */
-  assumePdf?: boolean;
 }
 
 const geminiHttpsAgent = new https.Agent({ keepAlive: true });
@@ -267,79 +267,6 @@ function normalizeSubjectUnitRow(row: JsonRecord): JsonRecord {
   };
 }
 
-function pageRefsFromRecord(record: JsonRecord, fallbackPage: number): Array<{ pageNumber: number; label: string | null }> {
-  const pageNumber = numberValue(record.pageNumber ?? record.page ?? record.sourcePage) ?? fallbackPage;
-  return [{ pageNumber, label: `Page ${pageNumber}` }];
-}
-
-function normalizeCompPayload(comp: JsonRecord, sourceType: string): JsonRecord {
-  const priceRange = moneyRange(comp.priceRange ?? comp.range, comp.priceRangeLow ?? comp.lowPrice, comp.priceRangeHigh ?? comp.highPrice);
-  const askingPpsf = moneyValue(comp.askingPpsf ?? comp.averageAskingPpsf ?? comp.avgAskingPpsf);
-  const soldPpsf = moneyValue(comp.soldPpsf ?? comp.averageSoldPpsf ?? comp.avgSoldPpsf);
-  const averageUnitSqft = numberValue(comp.averageUnitSqft ?? comp.averageUnitSf ?? comp.avgUnitSqft ?? comp.avgUnitSf);
-  const bedroomBreakdown = recordArray(comp.bedroomBreakdown ?? comp.unitBreakdown ?? comp.bedroomMix)
-    .map(normalizeBedroomRow)
-    .filter((row) => stringValue(row.bedroomType) || row.count != null);
-
-  // Investment-sale financials — what comp analysis actually needs. Cap rate is
-  // the priority; when only PSF figures exist the item gets flagged psfOnly.
-  const units = numberValue(comp.units ?? comp.unitCount);
-  const capRatePct = percentValue(comp.capRatePct ?? comp.capRate ?? comp.cap_rate);
-  const noi = moneyValue(comp.noi ?? comp.netOperatingIncome ?? comp.net_operating_income);
-  const salePrice = moneyValue(comp.salePrice ?? comp.soldPrice ?? comp.closingPrice ?? comp.sale_price);
-  const saleDate = stringValue(comp.saleDate ?? comp.closingDate ?? comp.soldDate ?? comp.sale_date);
-  const buildingSqft = numberValue(comp.buildingSqft ?? comp.grossSqft ?? comp.gsf ?? comp.building_sf);
-  const salePsf =
-    moneyValue(comp.salePsf ?? comp.pricePsf ?? comp.price_psf) ??
-    (salePrice != null && buildingSqft != null && buildingSqft > 0 ? Math.round(salePrice / buildingSqft) : null);
-  const pricePerUnit =
-    moneyValue(comp.pricePerUnit ?? comp.price_per_unit) ??
-    (salePrice != null && units != null && units > 0 ? Math.round(salePrice / units) : null);
-  const pricePerSqft = salePsf ?? soldPpsf ?? askingPpsf;
-  const psfOnly = capRatePct == null && pricePerSqft != null;
-
-  return {
-    propertyName: stringValue(comp.propertyName ?? comp.projectName ?? comp.name),
-    address: stringValue(comp.address ?? comp.propertyAddress),
-    neighborhood: stringValue(comp.neighborhood ?? comp.submarket),
-    developer: stringValue(comp.developer),
-    architect: stringValue(comp.architect),
-    designer: stringValue(comp.designer),
-    yearCompleted: numberValue(comp.yearCompleted ?? comp.completedYear),
-    floors: numberValue(comp.floors ?? comp.floorCount),
-    units,
-    salesBegan: stringValue(comp.salesBegan ?? comp.salesStart),
-    percentSoldPct: percentValue(comp.percentSold ?? comp.percentSoldPct),
-    averageUnitSqft,
-    averageUnitSf: averageUnitSqft,
-    askingPpsf,
-    soldPpsf,
-    pricePerSqft,
-    capRatePct,
-    noi,
-    salePrice,
-    saleDate,
-    buildingSqft,
-    pricePerUnit,
-    propertyType: stringValue(comp.propertyType ?? comp.assetType ?? comp.asset_type),
-    metricFlags: {
-      hasCapRate: capRatePct != null,
-      psfOnly,
-    },
-    averageAskingUnitPrice:
-      averageUnitSqft != null && askingPpsf != null
-        ? Math.round(averageUnitSqft * askingPpsf)
-        : null,
-    priceRange: priceRange.label,
-    priceRangeLow: priceRange.low,
-    priceRangeHigh: priceRange.high,
-    bedroomTypes: bedroomBreakdown.map((row) => row.bedroomType).filter(Boolean),
-    bedroomBreakdown,
-    packageFlavor: capRatePct != null || salePrice != null || noi != null ? "investment_sale" : "pricing_sellout",
-    sourceType,
-  };
-}
-
 /**
  * Top-level JSON shape shared by every broker comp model extractor (Gemini PDF
  * vision and OpenAI spreadsheet text). Both prompts must reference this exact
@@ -401,35 +328,244 @@ export const BROKER_COMP_EXTRACTION_RULES = `- Preserve exact values from the so
 - Keep comps separated by bedroom type so a 1-bed row can be compared with other 1-bed rows, etc.
 - If cap rate, NOI, sale comp, or rent/expense data is not present, add a missingDataFlags entry rather than guessing.`;
 
-function buildPrompt(params: GeminiBrokerCompExtractionParams): string {
-  const textPreview = params.textPreview?.trim()
-    ? `\n\nSelectable text preview from the PDF parser:\n${params.textPreview.slice(0, 20_000)}`
-    : "";
-  const pageCount = params.pageCount != null ? `${params.pageCount}` : "unknown";
-  return `You are extracting broker market comps from a real estate PDF package.
-
-Attached PDF: ${params.filename}
-Page count: ${pageCount}
-
-Read the entire attached PDF directly, including image-only pages and visual tables. Return one JSON object only.
-
-Top-level JSON shape:
-${BROKER_COMP_EXTRACTION_JSON_SHAPE}
-
-Rules:
-${BROKER_COMP_EXTRACTION_RULES}
-- Extract subject projected pricing rows even if they are image-only.${textPreview}`;
+function pageRefsFromRecord(record: JsonRecord, fallbackPage: number): Array<{ pageNumber: number; label: string | null }> {
+  const refs = recordArray(record.pageRefs ?? record.page_refs);
+  if (refs.length > 0) {
+    return refs.flatMap((ref) => {
+      const pageNumber = numberValue(ref.pageNumber ?? ref.page ?? ref.sourcePage);
+      if (pageNumber == null) return [];
+      const label = stringValue(ref.label ?? ref.sourceTableOrSection ?? ref.source_table_or_section ?? ref.excerpt);
+      return [{ pageNumber, label: label ?? `Page ${pageNumber}` }];
+    });
+  }
+  const pageNumbers = Array.isArray(record.sourcePageNumbers)
+    ? record.sourcePageNumbers
+    : Array.isArray(record.pageNumbers)
+      ? record.pageNumbers
+      : null;
+  if (pageNumbers?.length) {
+    return pageNumbers.flatMap((entry) => {
+      const pageNumber = numberValue(entry);
+      return pageNumber == null ? [] : [{ pageNumber, label: `Page ${pageNumber}` }];
+    });
+  }
+  const pageNumber = numberValue(record.pageNumber ?? record.page ?? record.sourcePage) ?? fallbackPage;
+  return [{ pageNumber, label: stringValue(record.sourceTableOrSection ?? record.sourceExcerpt) ?? `Page ${pageNumber}` }];
 }
 
-/**
- * Map one parsed model response (the shared JSON shape above) to extracted
- * items. sourceType tags each payload with its provenance ("gemini_pdf",
- * "openai_spreadsheet", ...) without changing any other field name.
- */
+function normalizeCompPayload(comp: JsonRecord, sourceType: string): JsonRecord {
+  const priceRange = moneyRange(comp.priceRange ?? comp.range, comp.priceRangeLow ?? comp.lowPrice, comp.priceRangeHigh ?? comp.highPrice);
+  const askingPpsf = moneyValue(comp.askingPpsf ?? comp.averageAskingPpsf ?? comp.avgAskingPpsf);
+  const soldPpsf = moneyValue(comp.soldPpsf ?? comp.averageSoldPpsf ?? comp.avgSoldPpsf);
+  const averageUnitSqft = numberValue(comp.averageUnitSqft ?? comp.averageUnitSf ?? comp.avgUnitSqft ?? comp.avgUnitSf);
+  const bedroomBreakdown = recordArray(comp.bedroomBreakdown ?? comp.unitBreakdown ?? comp.bedroomMix)
+    .map(normalizeBedroomRow)
+    .filter((row) => stringValue(row.bedroomType) || row.count != null);
+  const units = numberValue(comp.units ?? comp.unitCount);
+  const capRatePct = percentValue(comp.capRatePct ?? comp.capRate ?? comp.cap_rate);
+  const noi = moneyValue(comp.noi ?? comp.netOperatingIncome ?? comp.net_operating_income);
+  const salePrice = moneyValue(comp.salePrice ?? comp.soldPrice ?? comp.closingPrice ?? comp.sale_price);
+  const saleDate = stringValue(comp.saleDate ?? comp.closingDate ?? comp.soldDate ?? comp.sale_date);
+  const buildingSqft = numberValue(comp.buildingSqft ?? comp.grossSqft ?? comp.gsf ?? comp.building_sf);
+  const salePsf =
+    moneyValue(comp.salePsf ?? comp.pricePsf ?? comp.price_psf) ??
+    (salePrice != null && buildingSqft != null && buildingSqft > 0 ? Math.round(salePrice / buildingSqft) : null);
+  const pricePerUnit =
+    moneyValue(comp.pricePerUnit ?? comp.price_per_unit) ??
+    (salePrice != null && units != null && units > 0 ? Math.round(salePrice / units) : null);
+  const pricePerSqft = salePsf ?? soldPpsf ?? askingPpsf;
+  const psfOnly = capRatePct == null && pricePerSqft != null;
+  return {
+    propertyName: stringValue(comp.propertyName ?? comp.projectName ?? comp.name),
+    address: stringValue(comp.address ?? comp.propertyAddress),
+    neighborhood: stringValue(comp.neighborhood ?? comp.submarket),
+    developer: stringValue(comp.developer),
+    architect: stringValue(comp.architect),
+    designer: stringValue(comp.designer),
+    yearCompleted: numberValue(comp.yearCompleted ?? comp.completedYear),
+    floors: numberValue(comp.floors ?? comp.floorCount),
+    units,
+    salesBegan: stringValue(comp.salesBegan ?? comp.salesStart),
+    percentSoldPct: percentValue(comp.percentSold ?? comp.percentSoldPct),
+    averageUnitSqft,
+    averageUnitSf: averageUnitSqft,
+    askingPpsf,
+    soldPpsf,
+    pricePerSqft,
+    salePsf,
+    capRatePct,
+    noi,
+    salePrice,
+    saleDate,
+    pricePerUnit,
+    buildingSqft,
+    propertyType: stringValue(comp.propertyType ?? comp.assetType),
+    psfOnly,
+    averageAskingUnitPrice:
+      averageUnitSqft != null && askingPpsf != null
+        ? Math.round(averageUnitSqft * askingPpsf)
+        : null,
+    priceRange: priceRange.label,
+    priceRangeLow: priceRange.low,
+    priceRangeHigh: priceRange.high,
+    bedroomTypes: bedroomBreakdown.map((row) => row.bedroomType).filter(Boolean),
+    bedroomBreakdown,
+    packageFlavor: capRatePct != null || salePrice != null || noi != null ? "investment_sale" : "pricing_sellout",
+    sourceType,
+  };
+}
+
+function normalizeMarketCompItemType(value: unknown): BrokerCompItemType {
+  const raw = stringValue(value)?.toLowerCase().replace(/[\s-]+/g, "_");
+  if (raw === "lease_comp") return "lease_comp";
+  if (raw === "rent_comp") return "rent_roll_row";
+  if (raw === "expense_comp") return "expense_row";
+  if (raw === "pricing_opinion") return "pricing_opinion";
+  if (raw === "subject_projected_pricing") return "subject_projected_pricing";
+  if (raw === "development_comp") return "development_comp";
+  if (raw === "conversion_comp") return "conversion_comp";
+  if (raw === "retail_sale") return "retail_sale";
+  if (raw === "portfolio_sale") return "portfolio_sale";
+  if (raw === "recapitalization") return "recapitalization";
+  if (raw === "secondary_analysis") return "secondary_analysis";
+  if (raw === "distressed_sale") return "distressed_sale";
+  if (raw === "sale_comp") return "sale_comp";
+  return "sale_comp";
+}
+
+function marketCompRowId(row: JsonRecord, index: number): string {
+  const explicit = stringValue(row.marketCompRowId ?? row.id ?? row.rowId);
+  if (explicit) return explicit;
+  const address = stringValue(row.normalizedAddress ?? row.address ?? row.propertyName)?.toLowerCase() ?? "unknown";
+  const date = stringValue(row.saleDate ?? row.leaseDate ?? row.compDate ?? row.asOfDate) ?? "no-date";
+  return `market-comp-${index + 1}-${address.replace(/[^a-z0-9]+/g, "-")}-${date.replace(/[^a-z0-9]+/gi, "-")}`;
+}
+
+function normalizeMarketCompRow(row: JsonRecord, index: number): JsonRecord {
+  const compType = stringValue(row.compType ?? row.itemType) ?? "sale_comp";
+  const sourcePageNumbers = Array.isArray(row.sourcePageNumbers)
+    ? row.sourcePageNumbers.flatMap((entry) => {
+        const parsed = numberValue(entry);
+        return parsed == null ? [] : [parsed];
+      })
+    : pageRefsFromRecord(row, 1).map((ref) => ref.pageNumber);
+  const missingFields = Array.isArray(row.missingFields)
+    ? row.missingFields
+    : recordArray(row.missingDataFlags).map((flag) => flag.field).filter(Boolean);
+  return {
+    ...row,
+    marketCompRowId: marketCompRowId(row, index),
+    routeTo: "market_comps_section",
+    rowStatus: stringValue(row.rowStatus) ?? "candidate",
+    reviewStatus: "pending",
+    selectionDecision: "watch",
+    humanOverride: null,
+    compType,
+    sourcePageNumbers,
+    missingFields,
+    sourceType: "gemini_market_doc_v3",
+    schemaVersion: "market_doc_extraction_v3",
+  };
+}
+
+function marketCompItemsFromParsedJson(parsed: JsonRecord): BrokerCompExtractedItemInput[] {
+  const rows = recordArray(parsed.marketCompsTableRows).map(normalizeMarketCompRow);
+  return rows.map((row) => {
+    const itemType = normalizeMarketCompItemType(row.compType);
+    const includeRationale = stringValue(row.includeRationale);
+    const notComparableReasons = Array.isArray(row.notComparableReasons)
+      ? row.notComparableReasons.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+      : [];
+    return {
+      itemType,
+      rawPayload: row,
+      normalizedPayload: row,
+      pageRefs: pageRefsFromRecord(row, 1),
+      confidence: numberValue(row.confidence) ?? 0.72,
+      reviewStatus: "pending",
+      selectionDecision: "watch",
+      includeInDossier: false,
+      analystNote: includeRationale ?? (notComparableReasons.length ? notComparableReasons.join("; ") : null),
+    };
+  });
+}
+
+function marketMetricItemsFromParsedJson(parsed: JsonRecord): BrokerCompExtractedItemInput[] {
+  return recordArray(parsed.marketMetrics).map((metric, index) => ({
+    itemType: "market_metric_snapshot",
+    rawPayload: metric,
+    normalizedPayload: {
+      ...metric,
+      sourceType: "gemini_market_doc_v3",
+      schemaVersion: "market_doc_extraction_v3",
+    },
+    pageRefs: pageRefsFromRecord(metric, 1),
+    confidence: numberValue(metric.confidence) ?? 0.7,
+    reviewStatus: "pending",
+    selectionDecision: "watch",
+    includeInDossier: false,
+    analystNote: stringValue(metric.metricName) ?? `Market metric ${index + 1}`,
+  }));
+}
+
+function marketSignalItemsFromParsedJson(parsed: JsonRecord): BrokerCompExtractedItemInput[] {
+  const signalRows = [
+    ...recordArray(parsed.marketSignals),
+    ...recordArray(parsed.regulatorySignals),
+    ...recordArray(parsed.supplyDemandSignals),
+    ...recordArray(parsed.capitalMarketsSignals),
+  ];
+  return signalRows.map((signal, index) => ({
+    itemType: "market_signal",
+    rawPayload: signal,
+    normalizedPayload: {
+      ...signal,
+      sourceType: "gemini_market_doc_v3",
+      schemaVersion: "market_doc_extraction_v3",
+    },
+    pageRefs: pageRefsFromRecord(signal, 1),
+    confidence: numberValue(signal.confidence) ?? 0.65,
+    reviewStatus: "pending",
+    selectionDecision: "watch",
+    includeInDossier: false,
+    analystNote: stringValue(signal.summary) ?? stringValue(signal.analystImplication) ?? `Market signal ${index + 1}`,
+  }));
+}
+
+function secondaryAnalysisItemsFromParsedJson(parsed: JsonRecord): BrokerCompExtractedItemInput[] {
+  return recordArray(parsed.propertyLevelComps)
+    .filter((row) => stringValue(row.itemType) === "secondary_analysis")
+    .map((row, index) => ({
+      itemType: "secondary_analysis",
+      rawPayload: row,
+      normalizedPayload: {
+        ...row,
+        sourceType: "gemini_market_doc_v3",
+        schemaVersion: "market_doc_extraction_v3",
+      },
+      pageRefs: pageRefsFromRecord(row, 1),
+      confidence: numberValue(row.confidence) ?? 0.65,
+      reviewStatus: "pending",
+      selectionDecision: "watch",
+      includeInDossier: false,
+      analystNote: stringValue(row.includeRationale) ?? stringValue(row.summary) ?? `Secondary analysis ${index + 1}`,
+    }));
+}
+
 export function brokerCompItemsFromParsedJson(
-  parsed: Record<string, unknown>,
+  parsed: JsonRecord,
   sourceType: string
 ): BrokerCompExtractedItemInput[] {
+  if (parsed.schemaVersion === "market_doc_extraction_v3" || Array.isArray(parsed.marketCompsTableRows)) {
+    const items = [
+      ...marketCompItemsFromParsedJson(parsed),
+      ...marketMetricItemsFromParsedJson(parsed),
+      ...marketSignalItemsFromParsedJson(parsed),
+      ...secondaryAnalysisItemsFromParsedJson(parsed),
+    ];
+    if (items.length > 0) return items;
+  }
+
   const items: BrokerCompExtractedItemInput[] = [];
   const subject = recordValue(parsed.subject);
   if (subject) {
@@ -450,13 +586,13 @@ export function brokerCompItemsFromParsedJson(
           projectedSellout,
           pricePerSqft: averagePpsf,
           unitPricingRows: unitRows,
-          sourceType: "package",
+          sourceType,
           packageFlavor: "projected_pricing",
-          note: "Subject projected pricing extracted from broker market analysis package.",
+          note: "Subject projected pricing extracted from broker market analysis PDF.",
         },
         pageRefs: [{ pageNumber, label: `Page ${pageNumber}` }],
         confidence: 0.82,
-        reviewStatus: "accepted",
+        reviewStatus: "pending",
         selectionDecision: "watch",
         includeInDossier: false,
       });
@@ -466,17 +602,16 @@ export function brokerCompItemsFromParsedJson(
   for (const comp of recordArray(parsed.comparables ?? parsed.comps ?? parsed.projects)) {
     const normalized = normalizeCompPayload(comp, sourceType);
     const pageRefs = pageRefsFromRecord(comp, 1);
-    const isSaleComp =
-      normalized.capRatePct != null || normalized.salePrice != null || normalized.noi != null;
+    const isSaleComp = normalized.capRatePct != null || normalized.salePrice != null || normalized.noi != null;
     items.push({
       itemType: isSaleComp ? "sale_comp" : "pricing_comp",
       rawPayload: comp,
       normalizedPayload: normalized,
       pageRefs,
       confidence: 0.82,
-      // Comp-bearing items wait for user review (the Comp Analysis queue)
-      // before they reach comp surfaces or can be promoted.
       reviewStatus: "pending",
+      selectionDecision: "watch",
+      includeInDossier: false,
     });
 
     const bedroomBreakdown = recordArray(normalized.bedroomBreakdown);
@@ -499,7 +634,9 @@ export function brokerCompItemsFromParsedJson(
         },
         pageRefs: [{ ...pageRefs[0], label: `${pageRefs[0]?.label ?? "Page"} / Bedroom row ${index + 1}` }],
         confidence: 0.84,
-        reviewStatus: "accepted",
+        reviewStatus: "pending",
+        selectionDecision: "watch",
+        includeInDossier: false,
       });
     }
   }
@@ -514,12 +651,12 @@ export function brokerCompItemsFromParsedJson(
       normalizedPayload: {
         amount,
         source: stringValue(opinion.source) ?? "Broker package",
-        sourceType: "package",
+        sourceType,
         note: stringValue(opinion.note ?? opinion.notes),
       },
       pageRefs,
       confidence: 0.75,
-      reviewStatus: "accepted",
+      reviewStatus: "pending",
       selectionDecision: "watch",
       includeInDossier: false,
     });
@@ -539,7 +676,7 @@ export function brokerCompItemsFromParsedJson(
       },
       pageRefs: [{ pageNumber: 1, label: "Package" }],
       confidence: 0.7,
-      reviewStatus: "accepted",
+      reviewStatus: "pending",
       selectionDecision: "watch",
       includeInDossier: false,
     });
@@ -548,27 +685,8 @@ export function brokerCompItemsFromParsedJson(
   return items;
 }
 
-/**
- * Preflight reasons Gemini broker comp extraction would be skipped before any
- * request is made. Lets the orchestrator surface a precise warning instead of
- * silently falling back to text heuristics.
- */
-export function describeGeminiBrokerCompSkipReason(params: {
-  filename: string;
-  byteLength: number;
-  assumePdf?: boolean;
-}): string | null {
-  if (!getGeminiApiKey()) {
-    return "GEMINI_API_KEY is missing or invalid; PDF vision comp extraction was skipped.";
-  }
-  if (!params.assumePdf && !isPdfFilename(params.filename)) {
-    return `"${params.filename}" is not a PDF, so Gemini PDF vision comp extraction was skipped.`;
-  }
-  const maxBytes = getGeminiBrokerCompInlineMaxBytes();
-  if (params.byteLength > maxBytes) {
-    return `PDF is ${Math.round(params.byteLength / 1024 / 1024)} MB, over the ${Math.round(maxBytes / 1024 / 1024)} MB inline Gemini limit; vision comp extraction was skipped.`;
-  }
-  return null;
+export function itemsFromParsedJson(parsed: JsonRecord): BrokerCompExtractedItemInput[] {
+  return brokerCompItemsFromParsedJson(parsed, "gemini_pdf");
 }
 
 export async function extractBrokerCompPackageFromGeminiPdf(
@@ -577,7 +695,7 @@ export async function extractBrokerCompPackageFromGeminiPdf(
   const apiKey = getGeminiApiKey();
   const model = resolveGeminiBrokerCompModel();
   if (!apiKey) return null;
-  if (!params.assumePdf && !isPdfFilename(params.filename)) return null;
+  if (!isPdfFilename(params.filename)) return null;
   const maxBytes = getGeminiBrokerCompInlineMaxBytes();
   if (params.buffer.length > maxBytes) {
     console.warn("[extractBrokerCompPackageFromGeminiPdf] PDF too large for inline Gemini broker comp extraction.", {
@@ -591,7 +709,7 @@ export async function extractBrokerCompPackageFromGeminiPdf(
   const queuedAt = Date.now();
   const pendingBeforeQueue = getSharedGeminiOmRequestQueue().getPendingCount();
   return runWithGeminiOmRequestQueue(async () => {
-    const prompt = buildPrompt(params);
+    const prompt = buildGeminiMarketExtractionPrompt(params);
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
     const timeoutMs = getGeminiBrokerCompTimeoutMs();
     const response = await postGeminiGenerateContent({
@@ -661,7 +779,7 @@ export async function extractBrokerCompPackageFromGeminiPdf(
       return null;
     }
 
-    const extractedItems = brokerCompItemsFromParsedJson(parsed, "gemini_pdf");
+    const extractedItems = itemsFromParsedJson(parsed);
     console.info("[extractBrokerCompPackageFromGeminiPdf] Gemini broker comp extraction completed.", {
       model,
       filename: params.filename,
@@ -681,10 +799,16 @@ export async function extractBrokerCompPackageFromGeminiPdf(
       packageMeta: {
         provider: "gemini",
         model,
+        promptVersion: MARKET_PROMPT_V3_VERSION,
+        schemaVersion: stringValue(parsed.schemaVersion) ?? "market_doc_extraction_v3",
         extractionMethod: "pdf_vision",
-        subjectAddress: stringValue(recordValue(parsed.subject)?.address),
+        marketDocExtraction: parsed,
+        sourceDoc: recordValue(parsed.sourceDoc),
         sourceCoverage: recordValue(parsed.sourceCoverage),
         missingDataFlags: recordArray(parsed.missingDataFlags),
+        marketCompsTableRows: recordArray(parsed.marketCompsTableRows),
+        marketMetrics: recordArray(parsed.marketMetrics),
+        marketSignals: recordArray(parsed.marketSignals),
       },
       summary: takeaways.length > 0 ? takeaways.join(" ") : null,
       rawOutput,

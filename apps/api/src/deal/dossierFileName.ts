@@ -23,5 +23,5 @@ export function buildProFormaFileName(
   date: Date = new Date()
 ): string {
   const dateStr = date.toISOString().slice(0, 10);
-  return `PRO-FORMA-${buildDossierExportSlug(address)}-${dateStr}.xlsx`;
+  return `DEAL-ANALYSIS-${buildDossierExportSlug(address)}-${dateStr}.xlsx`;
 }

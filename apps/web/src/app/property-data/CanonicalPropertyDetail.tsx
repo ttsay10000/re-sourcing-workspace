@@ -1,9 +1,6 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import { Calculator, ClipboardList, FileText, Images, Info, Mail } from "lucide-react";
-import { Button } from "@/components/ui";
-import styles from "./canonicalDetail.module.css";
 import {
   deriveListingActivitySummary,
   describeListingActivity,
@@ -22,7 +19,9 @@ import { buildInquiryDraft, updateInquiryDraftTourRequest } from "./inquiryDraft
 import {
   plannedBrokerCompReviewEndpoint,
   plannedBrokerCompUploadEndpoint,
+  isBrokerCompDecisionDownstreamIncluded,
   readBrokerCompSurface,
+  type BrokerCompComparableRow,
   type BrokerCompUiSurface,
 } from "./brokerComps";
 import { formatSourcingUpdateChange, getSourcingUpdate, getSourcingUpdateMeta } from "./sourcingUpdate";
@@ -623,18 +622,6 @@ function V3Bullets({ items }: { items: string[] }) {
   );
 }
 
-const RECORDS_TH_ALIGN_CLASS: Record<"left" | "right" | "center", string> = {
-  left: "",
-  right: styles.recordsThRight,
-  center: styles.recordsThCenter,
-};
-
-const RECORDS_TD_ALIGN_CLASS: Record<"left" | "right" | "center", string> = {
-  left: "",
-  right: styles.recordsTdRight,
-  center: styles.recordsTdCenter,
-};
-
 function V3RecordsTable({
   columns,
   rows,
@@ -645,19 +632,51 @@ function V3RecordsTable({
   emptyText: string;
 }) {
   if (rows.length === 0) {
-    return <div className={styles.recordsEmpty}>{emptyText}</div>;
+    return (
+      <div
+        style={{
+          border: "1px dashed rgba(38, 47, 44, 0.18)",
+          borderRadius: "8px",
+          padding: "0.8rem",
+          color: "#7a847d",
+          fontSize: "0.86rem",
+          background: "#fbfaf6",
+        }}
+      >
+        {emptyText}
+      </div>
+    );
   }
   return (
-    <div className={styles.recordsScroll}>
-      <table className={styles.recordsTable}>
+    <div
+      style={{
+        maxHeight: "380px",
+        overflow: "auto",
+        border: "1px solid rgba(38, 47, 44, 0.12)",
+        borderRadius: "8px",
+        background: "#fff",
+      }}
+    >
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.84rem", minWidth: "720px" }}>
         <thead>
-          <tr className={styles.recordsHeadRow}>
+          <tr style={{ background: "#f5f2eb", borderBottom: "1px solid rgba(38, 47, 44, 0.12)" }}>
             {columns.map((column) => (
               <th
                 key={column.key}
-                className={[styles.recordsTh, RECORDS_TH_ALIGN_CLASS[column.align ?? "left"]].filter(Boolean).join(" ")}
-                /* Column width is runtime data from each table definition. */
-                style={column.width ? { width: column.width } : undefined}
+                style={{
+                  position: "sticky",
+                  top: 0,
+                  zIndex: 1,
+                  width: column.width,
+                  padding: "0.55rem 0.65rem",
+                  textAlign: column.align ?? "left",
+                  color: "#59645f",
+                  fontSize: "0.72rem",
+                  fontWeight: 800,
+                  textTransform: "uppercase",
+                  letterSpacing: 0,
+                  background: "#f5f2eb",
+                }}
               >
                 {column.label}
               </th>
@@ -666,11 +685,17 @@ function V3RecordsTable({
         </thead>
         <tbody>
           {rows.map((row, rowIndex) => (
-            <tr key={rowIndex} className={styles.recordsRow}>
+            <tr key={rowIndex} style={{ borderBottom: "1px solid rgba(38, 47, 44, 0.08)" }}>
               {columns.map((column) => (
                 <td
                   key={column.key}
-                  className={[styles.recordsTd, RECORDS_TD_ALIGN_CLASS[column.align ?? "left"]].filter(Boolean).join(" ")}
+                  style={{
+                    padding: "0.58rem 0.65rem",
+                    textAlign: column.align ?? "left",
+                    color: "#1f2933",
+                    verticalAlign: "middle",
+                    overflowWrap: "anywhere",
+                  }}
                 >
                   {row[column.key] ?? "—"}
                 </td>
@@ -692,6 +717,8 @@ interface BrokerCompSubjectBaseline {
   rentPsfByBedroom: Record<string, number>;
 }
 
+type BrokerCompReviewDecision = "include" | "watch" | "exclude";
+
 function BrokerCompsDetailPanel({
   propertyId,
   surface,
@@ -707,6 +734,9 @@ function BrokerCompsDetailPanel({
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [reviewingItems, setReviewingItems] = useState<Record<string, boolean>>({});
+  const [reviewingPackages, setReviewingPackages] = useState<Record<string, boolean>>({});
+  const [refreshingLiveAnalysis, setRefreshingLiveAnalysis] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastLoadedAt, setLastLoadedAt] = useState<string | null>(null);
   const activeSurface = readBrokerCompSurface(livePayload, surface);
@@ -758,6 +788,110 @@ function BrokerCompsDetailPanel({
       setError(err instanceof Error ? err.message : "Failed to upload broker comp package.");
     } finally {
       setUploading(false);
+    }
+  }
+
+  async function updateBrokerCompReview(
+    packageId: string | null,
+    itemId: string,
+    decision: BrokerCompReviewDecision
+  ) {
+    if (!packageId) {
+      setError("This comp row is missing a package id, so it cannot be reviewed yet.");
+      return;
+    }
+    const reviewKey = `${packageId}:${itemId}`;
+    setReviewingItems((current) => ({ ...current, [reviewKey]: true }));
+    setError(null);
+    try {
+      const response = await fetch(
+        `${API_BASE}/api/properties/${encodeURIComponent(propertyId)}/broker-comp-packages/${encodeURIComponent(packageId)}/items/${encodeURIComponent(itemId)}/review`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            reviewStatus: "accepted",
+            selectionDecision: decision,
+            includeInDossier: decision === "include",
+          }),
+        }
+      );
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        const message = payload && typeof payload === "object" && "error" in payload
+          ? String((payload as { error?: unknown }).error)
+          : `Review update failed (${response.status})`;
+        throw new Error(message);
+      }
+      setLivePayload(payload);
+      await loadBrokerComps();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update broker comp review.");
+    } finally {
+      setReviewingItems((current) => {
+        const next = { ...current };
+        delete next[reviewKey];
+        return next;
+      });
+    }
+  }
+
+  async function approveBrokerCompDocumentReview(packageId: string) {
+    setReviewingPackages((current) => ({ ...current, [packageId]: true }));
+    setError(null);
+    try {
+      const response = await fetch(
+        `${API_BASE}/api/properties/${encodeURIComponent(propertyId)}/broker-comp-packages/${encodeURIComponent(packageId)}/document-review`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ documentReviewStatus: "approved" }),
+        }
+      );
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        const message = payload && typeof payload === "object" && "error" in payload
+          ? String((payload as { error?: unknown }).error)
+          : `Document review approval failed (${response.status})`;
+        throw new Error(message);
+      }
+      setLivePayload(payload);
+      await loadBrokerComps();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to approve document review.");
+    } finally {
+      setReviewingPackages((current) => {
+        const next = { ...current };
+        delete next[packageId];
+        return next;
+      });
+    }
+  }
+
+  async function refreshLiveMarketAnalysisSnapshot() {
+    setRefreshingLiveAnalysis(true);
+    setError(null);
+    try {
+      const response = await fetch(
+        `${API_BASE}/api/properties/${encodeURIComponent(propertyId)}/broker-comps/live-analysis/refresh`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({}),
+        }
+      );
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        const message = payload && typeof payload === "object" && "error" in payload
+          ? String((payload as { error?: unknown }).error)
+          : `Live analysis refresh failed (${response.status})`;
+        throw new Error(message);
+      }
+      await loadBrokerComps();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to refresh live market analysis.");
+    } finally {
+      setRefreshingLiveAnalysis(false);
     }
   }
 
@@ -830,18 +964,18 @@ function BrokerCompsDetailPanel({
   const renderPpsfSpread = (subjectValue: number | null, compValue: number | null): React.ReactNode => {
     const delta = comparisonDelta(subjectValue, compValue);
     if (delta.diff == null || delta.pct == null) return "—";
-    const tone = delta.diff <= 0 ? styles.spreadGood : styles.spreadBad;
+    const tone = delta.diff <= 0 ? "#166534" : "#991b1b";
     return (
-      <span className={tone}>
-        {formatSignedMoney(delta.diff)} <span className={styles.spreadPct}>({formatSignedPercent(delta.pct)})</span>
+      <span style={{ color: tone, fontWeight: 700 }}>
+        {formatSignedMoney(delta.diff)} <span style={{ color: "#64748b", fontWeight: 600 }}>({formatSignedPercent(delta.pct)})</span>
       </span>
     );
   };
   const renderRentSpread = (subjectRentPsf: number | null, compRentPsf: number | null): React.ReactNode => {
     const delta = comparisonDelta(subjectRentPsf, compRentPsf);
     if (delta.diff == null || delta.pct == null) return "—";
-    const tone = delta.diff <= 0 ? styles.spreadGood : styles.spreadBad;
-    return <span className={tone}>{formatSignedMoney(delta.diff)} ({formatSignedPercent(delta.pct)})</span>;
+    const tone = delta.diff <= 0 ? "#166534" : "#991b1b";
+    return <span style={{ color: tone, fontWeight: 700 }}>{formatSignedMoney(delta.diff)} ({formatSignedPercent(delta.pct)})</span>;
   };
   const averageSpreadPct = (pairs: Array<{ subjectValue: number | null; compValue: number | null }>): number | null => {
     const spreads = pairs
@@ -850,20 +984,22 @@ function BrokerCompsDetailPanel({
     if (spreads.length === 0) return null;
     return spreads.reduce((sum, value) => sum + value, 0) / spreads.length;
   };
+  const includedComparables = activeSurface.comparables.filter((row) => row.isDownstreamIncluded);
+  const includedBedroomBreakdowns = activeSurface.bedroomBreakdowns.filter((row) => row.isDownstreamIncluded);
   const projectSpreadPct = averageSpreadPct(
-    activeSurface.comparables
+    includedComparables
       .filter((row) => row.itemType === "pricing_comp")
       .map((row) => ({ subjectValue: subjectOverallPpsf, compValue: compPpsfForProject(row) }))
   );
   const bedroomSpreadPct = averageSpreadPct(
-    activeSurface.bedroomBreakdowns.map((row) => ({
+    includedBedroomBreakdowns.map((row) => ({
       subjectValue: row.bedrooms != null ? subjectBedroomPpsf.get(row.bedrooms) ?? subjectOverallPpsf : subjectOverallPpsf,
       compValue: compPpsfForBedroom(row),
     }))
   );
-  const hasBedroomRentComps = activeSurface.bedroomBreakdowns.some((row) => row.avgRentPerSqft != null || row.avgRentMonthly != null);
+  const hasBedroomRentComps = includedBedroomBreakdowns.some((row) => row.avgRentPerSqft != null || row.avgRentMonthly != null);
 
-  const pricingCompRows = activeSurface.comparables.filter((row) => row.itemType === "pricing_comp");
+  const pricingCompRows = includedComparables.filter((row) => row.itemType === "pricing_comp");
   const averageNumber = (values: Array<number | null | undefined>): number | null => {
     const clean = values.filter((value): value is number => value != null && Number.isFinite(value));
     if (clean.length === 0) return null;
@@ -890,6 +1026,114 @@ function BrokerCompsDetailPanel({
     if (high != null) return formatWholeMoney(high);
     return "—";
   };
+  const decisionLabel = (decision: string | null | undefined, included: boolean): string => {
+    if (included && (!decision || decision === "include")) return "Included";
+    if (decision === "watch") return "Watch";
+    if (decision === "exclude") return "Excluded";
+    if (decision === "duplicate") return "Duplicate";
+    if (decision === "not_comparable") return "Not comparable";
+    return included ? "Included" : "Not included";
+  };
+  const renderDecisionBadge = (decision: string | null | undefined, included: boolean): React.ReactNode => {
+    const label = decisionLabel(decision, included);
+    const tone = included ? "#166534" : decision === "exclude" ? "#991b1b" : "#854d0e";
+    const bg = included ? "#dcfce7" : decision === "exclude" ? "#fee2e2" : "#fef3c7";
+    return (
+      <span style={{ display: "inline-flex", alignItems: "center", borderRadius: "999px", padding: "0.12rem 0.45rem", background: bg, color: tone, fontSize: "0.72rem", fontWeight: 800 }}>
+        {label}
+      </span>
+    );
+  };
+  const renderReviewActions = (
+    packageId: string | null,
+    itemId: string,
+    decision: string | null,
+    included: boolean
+  ): React.ReactNode => {
+    const reviewKey = packageId ? `${packageId}:${itemId}` : itemId;
+    const saving = Boolean(reviewingItems[reviewKey]);
+    const buttonStyle: React.CSSProperties = {
+      minHeight: "1.65rem",
+      border: "1px solid #cbd5e1",
+      borderRadius: "6px",
+      padding: "0.18rem 0.45rem",
+      background: "#fff",
+      color: "#334155",
+      fontSize: "0.72rem",
+      fontWeight: 800,
+      cursor: saving ? "wait" : "pointer",
+    };
+    const restoreLabel = included ? "Include" : "Restore";
+    return (
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem", justifyContent: "flex-end" }}>
+        <button
+          type="button"
+          disabled={saving || (included && isBrokerCompDecisionDownstreamIncluded(decision))}
+          onClick={() => void updateBrokerCompReview(packageId, itemId, "include")}
+          style={{ ...buttonStyle, background: included ? "#ecfdf5" : "#fff" }}
+        >
+          {saving ? "Saving..." : restoreLabel}
+        </button>
+        <button
+          type="button"
+          disabled={saving || decision === "watch"}
+          onClick={() => void updateBrokerCompReview(packageId, itemId, "watch")}
+          style={buttonStyle}
+        >
+          Watch
+        </button>
+        <button
+          type="button"
+          disabled={saving || decision === "exclude"}
+          onClick={() => void updateBrokerCompReview(packageId, itemId, "exclude")}
+          style={{ ...buttonStyle, color: "#991b1b" }}
+        >
+          Exclude
+        </button>
+      </div>
+    );
+  };
+  const renderPackageReviewActions = (packageId: string, documentReviewStatus: string | null, hasGptDocumentReview: boolean): React.ReactNode => {
+    const saving = Boolean(reviewingPackages[packageId]);
+    const approved = documentReviewStatus === "approved";
+    const buttonStyle: React.CSSProperties = {
+      minHeight: "1.65rem",
+      border: "1px solid #cbd5e1",
+      borderRadius: "6px",
+      padding: "0.18rem 0.5rem",
+      background: approved ? "#ecfdf5" : "#fff",
+      color: approved ? "#166534" : "#334155",
+      fontSize: "0.72rem",
+      fontWeight: 800,
+      cursor: saving ? "wait" : "pointer",
+    };
+    return (
+      <button
+        type="button"
+        disabled={saving || approved || !hasGptDocumentReview}
+        onClick={() => void approveBrokerCompDocumentReview(packageId)}
+        style={buttonStyle}
+        title={hasGptDocumentReview ? "Approve GPT report-level review for live analysis" : "GPT report-level review is not available for this package yet"}
+      >
+        {saving ? "Saving..." : approved ? "Approved" : "Approve report"}
+      </button>
+    );
+  };
+  const renderCompIdentity = (
+    row: Pick<BrokerCompComparableRow, "propertyName" | "address" | "assetClass" | "timelineLabel" | "selectionDecision" | "isDownstreamIncluded">,
+    fallback = "Unlabeled comp"
+  ): React.ReactNode => (
+    <div style={{ display: "grid", gap: "0.12rem" }}>
+      <strong>{row.propertyName ?? row.address ?? fallback}</strong>
+      {row.address ? <span style={{ color: "#64748b", fontSize: "0.78rem" }}>{row.address}</span> : null}
+      {row.assetClass || row.timelineLabel ? (
+        <span style={{ color: "#64748b", fontSize: "0.74rem" }}>
+          {[row.assetClass, row.timelineLabel].filter(Boolean).join(" · ")}
+        </span>
+      ) : null}
+      {!row.isDownstreamIncluded ? <span>{renderDecisionBadge(row.selectionDecision, row.isDownstreamIncluded)}</span> : null}
+    </div>
+  );
   const sourcePackage = activeSurface.packages.find((pkg) => pkg.packageType !== "broker_opinion") ?? activeSurface.packages[0] ?? null;
   const packageProjectedSelloutFromRows = activeSurface.subjectUnitPricingRows.reduce((sum, row) => sum + (row.price ?? 0), 0);
   const packageProjectedSellout =
@@ -928,16 +1172,14 @@ function BrokerCompsDetailPanel({
     { label: "Avg comp $/SF", value: formatPpsf(averageProjectPpsf) },
     { label: "Avg project spread", value: formatSignedPercent(projectSpreadPct), tone: projectSpreadPct == null ? "neutral" : projectSpreadPct <= 0 ? "good" : "warn" },
     { label: "Avg bedroom spread", value: formatSignedPercent(bedroomSpreadPct), tone: bedroomSpreadPct == null ? "neutral" : bedroomSpreadPct <= 0 ? "good" : "warn" },
+    { label: "Included comps", value: String(activeSurface.includedComparableCount), detail: activeSurface.excludedItemCount || activeSurface.watchItemCount ? `${activeSurface.excludedItemCount} excluded · ${activeSurface.watchItemCount} watch` : null },
     { label: "Loaded", value: formatDateOnly(lastLoadedAt ?? activeSurface.updatedAt), detail: sourcePackage ? sourcePackage.label : null },
   ];
   const buildingRows = pricingCompRows.map((row) => ({
-    property: (
-      <div className={styles.cellStack}>
-        <strong>{row.propertyName ?? row.address ?? "Unlabeled comp"}</strong>
-        {row.address ? <span className={styles.cellSub}>{row.address}</span> : null}
-      </div>
-    ),
+    property: renderCompIdentity(row),
     neighborhood: row.neighborhood ?? "—",
+    assetClass: row.assetClass ?? "—",
+    timeline: row.timelineLabel ?? "—",
     year: formatNumberValue(row.yearCompleted),
     floors: formatNumberValue(row.floors),
     units: formatNumberValue(row.units),
@@ -947,8 +1189,9 @@ function BrokerCompsDetailPanel({
     askPpsf: formatPpsf(row.askingPpsf ?? row.pricePerSqft),
     soldPpsf: formatPpsf(row.soldPpsf),
     range: priceRangeLabel(row.priceRangeLow, row.priceRangeHigh, row.priceRange),
+    review: renderReviewActions(row.packageId, row.id, row.selectionDecision, row.isDownstreamIncluded),
   }));
-  const bedroomRows = [...activeSurface.bedroomBreakdowns]
+  const bedroomRows = [...includedBedroomBreakdowns]
     .sort((left, right) => {
       const bedDelta = (left.bedrooms ?? 99) - (right.bedrooms ?? 99);
       if (bedDelta !== 0) return bedDelta;
@@ -961,10 +1204,7 @@ function BrokerCompsDetailPanel({
       const subjectRentPsf = row.bedrooms != null ? subject.rentPsfByBedroom[String(row.bedrooms)] ?? null : null;
       return {
         address: (
-          <div className={styles.cellStack}>
-            <strong>{row.propertyName ?? row.address ?? "Unlabeled comp"}</strong>
-            {row.address ? <span className={styles.cellSub}>{row.address}</span> : null}
-          </div>
+          renderCompIdentity(row)
         ),
         bedBath: joinedSummary([row.bedroomType ?? (row.bedrooms != null ? `${row.bedrooms} Bed` : null), row.bathrooms != null ? `${row.bathrooms} Bath` : null]),
         offered: formatNumberValue(row.count),
@@ -977,10 +1217,11 @@ function BrokerCompsDetailPanel({
         rentPsf: compRentPsf != null ? formatMoneyValue(compRentPsf) : "—",
         rentSpread: renderRentSpread(subjectRentPsf, compRentPsf),
         range: priceRangeLabel(row.priceRangeLow, row.priceRangeHigh, row.priceRange),
+        review: renderReviewActions(row.packageId, row.itemId, row.selectionDecision, row.isDownstreamIncluded),
       };
     });
   const bedroomSummaryGroups = new Map<string, { bedrooms: number | null; label: string; rows: typeof activeSurface.bedroomBreakdowns }>();
-  for (const row of activeSurface.bedroomBreakdowns) {
+  for (const row of includedBedroomBreakdowns) {
     const key = row.bedrooms != null ? String(row.bedrooms) : row.bedroomType ?? "unknown";
     const label = row.bedroomType ?? (row.bedrooms != null ? `${row.bedrooms} Bed` : "Unknown");
     const existing = bedroomSummaryGroups.get(key);
@@ -1024,6 +1265,45 @@ function BrokerCompsDetailPanel({
     ppsf: formatPpsf(row.ppsf),
     notes: row.notes ?? "—",
   }));
+  const packageReviewRows = activeSurface.packages.map((pkg) => ({
+    source: (
+      <div style={{ display: "grid", gap: "0.12rem" }}>
+        <strong>{pkg.label}</strong>
+        <span style={{ color: "#64748b", fontSize: "0.74rem" }}>{[pkg.packageType, pkg.sourceName].filter(Boolean).join(" · ") || "—"}</span>
+      </div>
+    ),
+    status: pkg.status ?? "—",
+    reportReview: pkg.hasGptDocumentReview
+      ? (pkg.documentReviewStatus === "approved" ? "Approved" : pkg.documentReviewStatus ?? "Pending")
+      : "No GPT review",
+    rows: `${pkg.includedItemCount} included / ${pkg.watchItemCount} watch / ${pkg.excludedItemCount} excluded`,
+    reviewed: `${pkg.reviewedItemCount} of ${pkg.itemCount}`,
+    updated: formatDateOnly(pkg.documentReviewApprovedAt ?? pkg.documentReviewReviewedAt ?? pkg.updatedAt ?? pkg.createdAt),
+    action: renderPackageReviewActions(pkg.id, pkg.documentReviewStatus, pkg.hasGptDocumentReview),
+  }));
+  const reviewDecisionRows = activeSurface.comparables
+    .filter((row) => row.itemType !== "subject_projected_pricing")
+    .sort((left, right) => Number(left.isDownstreamIncluded) - Number(right.isDownstreamIncluded))
+    .map((row) => ({
+      comp: renderCompIdentity(row),
+      type: joinedSummary([
+        row.assetClass,
+        row.itemType
+          .split("_")
+          .filter(Boolean)
+          .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+          .join(" "),
+      ]),
+      decision: renderDecisionBadge(row.selectionDecision, row.isDownstreamIncluded),
+      metrics: joinedSummary([
+        row.price != null ? formatWholeMoney(row.price) : null,
+        compPpsfForProject(row) != null ? `${formatPpsf(compPpsfForProject(row))}/SF` : null,
+        row.capRatePct != null ? formatPercentValue(row.capRatePct) : null,
+        row.units != null ? `${formatNumberValue(row.units)} units` : null,
+      ]),
+      source: row.source ?? "—",
+      review: renderReviewActions(row.packageId, row.id, row.selectionDecision, row.isDownstreamIncluded),
+    }));
   const extractionNotes = [
     activeSurface.summary,
     activeSurface.missingDataFlags.length > 0
@@ -1032,45 +1312,69 @@ function BrokerCompsDetailPanel({
   ].filter((entry): entry is string => Boolean(entry && entry.trim()));
 
   return (
-    <div className={styles.stackLg}>
+    <div style={{ display: "grid", gap: "1rem" }}>
       <V3ReportPanel
         title="Market / comps"
         subtitle="Broker market analysis, project comps, bedroom mix, and pricing signals."
         actions={(
-          <form onSubmit={uploadSelectedPackage} className={styles.uploadForm}>
+          <form onSubmit={uploadSelectedPackage} style={{ display: "flex", flexWrap: "wrap", gap: "0.45rem", justifyContent: "flex-end", alignItems: "center" }}>
             <input
               aria-label="Broker comp package"
               type="file"
               accept=".pdf,.xlsx,.xls,.csv,.txt"
               onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)}
-              className={styles.fileInput}
+              style={{ maxWidth: "15rem", fontSize: "0.78rem" }}
             />
-            <Button
-              size="sm"
+            <button
               type="button"
               disabled={loading}
               onClick={() => void loadBrokerComps()}
               title={`GET ${reviewEndpoint}`}
+              style={{ minHeight: "2rem", border: "1px solid #cbd5e1", borderRadius: "8px", padding: "0.35rem 0.7rem", background: "#f8fafc", color: "#334155", fontSize: "0.78rem", fontWeight: 700 }}
             >
               {loading ? "Refreshing…" : "Refresh extract"}
-            </Button>
-            <Button
-              size="sm"
+            </button>
+            <button
+              type="button"
+              disabled={refreshingLiveAnalysis}
+              onClick={() => void refreshLiveMarketAnalysisSnapshot()}
+              title="POST /api/properties/:id/broker-comps/live-analysis/refresh"
+              style={{ minHeight: "2rem", border: "1px solid #0f766e", borderRadius: "8px", padding: "0.35rem 0.7rem", background: refreshingLiveAnalysis ? "#f8fafc" : "#ecfeff", color: "#0f766e", fontSize: "0.78rem", fontWeight: 700 }}
+            >
+              {refreshingLiveAnalysis ? "Running…" : "Run live analysis"}
+            </button>
+            <button
               type="submit"
-              variant="primary"
               disabled={!selectedFile || uploading}
               title={`POST ${uploadEndpoint}`}
+              style={{ minHeight: "2rem", border: "1px solid #1f6b4d", borderRadius: "8px", padding: "0.35rem 0.7rem", background: selectedFile && !uploading ? "#1f6b4d" : "#f8fafc", color: selectedFile && !uploading ? "#fff" : "#64748b", fontSize: "0.78rem", fontWeight: 700 }}
             >
-              {uploading ? "Replacing…" : "Replace extract"}
-            </Button>
+              {uploading ? "Uploading…" : "Upload extract"}
+            </button>
           </form>
         )}
       >
+        <V3ReportSection title="Report Review">
+          <V3RecordsTable
+            columns={[
+              { key: "source", label: "Report" },
+              { key: "status", label: "Package", width: "8rem" },
+              { key: "reportReview", label: "GPT Review", width: "9rem" },
+              { key: "rows", label: "Rows", width: "14rem" },
+              { key: "reviewed", label: "Reviewed", width: "7rem", align: "right" },
+              { key: "updated", label: "Updated", width: "7rem" },
+              { key: "action", label: "Action", width: "10rem", align: "right" },
+            ]}
+            rows={packageReviewRows}
+            emptyText="No market reports are available yet."
+          />
+        </V3ReportSection>
+
         <V3ReportSection title="Pricing Check">
           <V3FactList items={pricingFacts} />
-          {error ? <p className={styles.errorText}>{error}</p> : null}
+          {error ? <p style={{ margin: 0, color: "#991b1b", fontSize: "0.86rem" }}>{error}</p> : null}
           {!activeSurface.hasData ? (
-            <p className={styles.noteMuted}>
+            <p style={{ margin: 0, color: "#64748b", fontSize: "0.86rem" }}>
               No broker comp package has been uploaded or extracted yet.
             </p>
           ) : null}
@@ -1091,6 +1395,7 @@ function BrokerCompsDetailPanel({
               { key: "askPpsf", label: "Ask $/SF", width: "8rem", align: "right" },
               { key: "soldPpsf", label: "Sold $/SF", width: "8rem", align: "right" },
               { key: "range", label: "Price Range", width: "11rem", align: "right" },
+              { key: "review", label: "Review", width: "13rem", align: "right" },
             ]}
             rows={buildingRows}
             emptyText="No building-level comp rows are available yet."
@@ -1151,9 +1456,25 @@ function BrokerCompsDetailPanel({
                   ]
                 : []),
               { key: "range", label: "Range", width: "11rem", align: "right" },
+              { key: "review", label: "Review", width: "13rem", align: "right" },
             ]}
             rows={bedroomRows}
             emptyText="No bedroom-level comp rows are available yet."
+          />
+        </V3ReportSection>
+
+        <V3ReportSection title="Review Decisions">
+          <V3RecordsTable
+            columns={[
+              { key: "comp", label: "Comp" },
+              { key: "type", label: "Type", width: "10rem" },
+              { key: "decision", label: "Decision", width: "8rem" },
+              { key: "metrics", label: "Metrics", width: "14rem" },
+              { key: "source", label: "Source", width: "9rem" },
+              { key: "review", label: "Review", width: "13rem", align: "right" },
+            ]}
+            rows={reviewDecisionRows}
+            emptyText="No comparable rows are available for review yet."
           />
         </V3ReportSection>
       </V3ReportPanel>
@@ -1258,7 +1579,6 @@ function CollapsibleSection({
   onToggle,
   children,
   count,
-  icon,
 }: {
   id: string;
   title: string;
@@ -1266,7 +1586,6 @@ function CollapsibleSection({
   onToggle: () => void;
   children: React.ReactNode;
   count?: number;
-  icon?: React.ReactNode;
 }) {
   return (
     <div id={`canonical-section-${id}`} className="property-detail-section" data-open={open ? "true" : "false"}>
@@ -1278,10 +1597,7 @@ function CollapsibleSection({
         aria-controls={`canonical-detail-${id}`}
       >
         <span className="property-detail-section-title-wrap">
-          <span className={`property-detail-section-title ${styles.sectionTitle}`}>
-            {icon}
-            {title}
-          </span>
+          <span className="property-detail-section-title">{title}</span>
           {count != null && <span className="property-detail-section-count">{count}</span>}
         </span>
         <span className="property-detail-section-status">{open ? "Open" : "Closed"}</span>
@@ -2796,16 +3112,16 @@ export function CanonicalPropertyDetail({
     return {
       image: unitImages[0] ? (
         <a href={unitImages[0]} target="_blank" rel="noopener noreferrer">
-          <img src={unitImages[0]} alt="" className={styles.unitThumb} />
+          <img src={unitImages[0]} alt="" style={{ width: "64px", height: "46px", objectFit: "cover", borderRadius: "6px", display: "block" }} />
         </a>
       ) : (
-        <span className={styles.noPhoto}>No photo</span>
+        <span style={{ color: "#94a3b8" }}>No photo</span>
       ),
       unit: (
         <span>
           <strong>{unitLabel}</strong>
           {mediaRow?.streeteasyUrl ? (
-            <a href={mediaRow.streeteasyUrl} target="_blank" rel="noopener noreferrer" className={styles.unitSourceLink}>
+            <a href={mediaRow.streeteasyUrl} target="_blank" rel="noopener noreferrer" style={{ display: "block", color: "#1f4f46", fontSize: "0.76rem", marginTop: "0.1rem" }}>
               Source listing
             </a>
           ) : null}
@@ -2857,13 +3173,6 @@ export function CanonicalPropertyDetail({
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
   const sourcingUpdate = getSourcingUpdate(d);
   const sourcingUpdateMeta = getSourcingUpdateMeta(d);
-  // Tone class replaces sourcingUpdateMeta.style (raw hex) — same status branches as getSourcingUpdateMeta.
-  const sourcingBannerToneClass =
-    sourcingUpdate?.status === "new"
-      ? styles.sourcingBannerInfo
-      : sourcingUpdate?.status === "updated"
-        ? styles.sourcingBannerWarn
-        : styles.sourcingBannerNeutral;
   const pipelineProperty = { ...property, details: d };
   const pipelineTags = propertyPipelineTags(pipelineProperty);
   const pipelineMissingFields = propertyPipelineMissingFields(pipelineProperty);
@@ -2883,7 +3192,7 @@ export function CanonicalPropertyDetail({
     { id: "overview", label: "Overview" },
     { id: "documents", label: "Documents", badge: unifiedDocuments == null ? null : unifiedDocuments.length },
     { id: "omWorkspace", label: "OM" },
-    { id: "marketComps", label: "Market / Comps", badge: brokerCompSurface.hasData ? brokerCompSurface.comparables.length : null },
+    { id: "marketComps", label: "Market / Comps", badge: brokerCompSurface.hasData ? brokerCompSurface.includedComparableCount : null },
     { id: "dossierScore", label: "Dossier/Score" },
     { id: "underwriting", label: "Model" },
     { id: "enrichment", label: "Enrichment" },
@@ -2912,8 +3221,12 @@ export function CanonicalPropertyDetail({
     },
     {
       label: "Comps",
-      value: brokerCompSurface.hasData ? `${brokerCompSurface.comparables.length} extracted` : "Not started",
-      detail: brokerCompSurface.pricingOpinions.length > 0 ? `${brokerCompSurface.pricingOpinions.length} pricing opinion${brokerCompSurface.pricingOpinions.length === 1 ? "" : "s"}` : null,
+      value: brokerCompSurface.hasData ? `${brokerCompSurface.includedComparableCount} included` : "Not started",
+      detail: [
+        brokerCompSurface.pricingOpinions.length > 0 ? `${brokerCompSurface.pricingOpinions.length} pricing opinion${brokerCompSurface.pricingOpinions.length === 1 ? "" : "s"}` : null,
+        brokerCompSurface.excludedItemCount > 0 ? `${brokerCompSurface.excludedItemCount} excluded` : null,
+        brokerCompSurface.watchItemCount > 0 ? `${brokerCompSurface.watchItemCount} watch` : null,
+      ].filter(Boolean).join(" · ") || null,
       tone: brokerCompSurface.hasData ? "good" : "neutral",
     },
     {
@@ -3181,7 +3494,15 @@ export function CanonicalPropertyDetail({
       >
       {(enrichmentActionNotice || enrichmentActionError) && (
         <div
-          className={`${styles.actionNotice} ${enrichmentActionError ? styles.actionNoticeError : styles.actionNoticeInfo}`}
+          style={{
+            margin: "0 0 0.85rem",
+            padding: "0.6rem 0.75rem",
+            borderRadius: "8px",
+            border: enrichmentActionError ? "1px solid #fecaca" : "1px solid #bfdbfe",
+            background: enrichmentActionError ? "#fef2f2" : "#eff6ff",
+            color: enrichmentActionError ? "#991b1b" : "#1e3a8a",
+            fontSize: "0.86rem",
+          }}
         >
           {enrichmentActionError ?? enrichmentActionNotice}
         </div>
@@ -3227,13 +3548,15 @@ export function CanonicalPropertyDetail({
             <div className="property-metric">
               <div className="property-metric-label">Dup. conf.</div>
               <div
-                className={`property-metric-value ${
-                  (listingForDisplay.duplicateScore ?? 0) >= 80
-                    ? styles.dupHigh
-                    : (listingForDisplay.duplicateScore ?? 0) <= 20
-                      ? styles.dupLow
-                      : styles.dupMid
-                }`}
+                className="property-metric-value"
+                style={{
+                  color:
+                    (listingForDisplay.duplicateScore ?? 0) >= 80
+                      ? "#b91c1c"
+                      : (listingForDisplay.duplicateScore ?? 0) <= 20
+                        ? "#15803d"
+                        : "#854d0e",
+                }}
               >
                 {listingForDisplay.duplicateScore != null ? listingForDisplay.duplicateScore : "—"}
               </div>
@@ -3255,8 +3578,8 @@ export function CanonicalPropertyDetail({
         )}
 
         {manualSourceLinks && (
-          <div className={`linked-listing-bar ${styles.barSpaced}`}>
-          <div className={`linked-listing-bar-inner ${styles.barInnerWrap}`}>
+          <div className="linked-listing-bar" style={{ marginTop: "0.5rem", marginBottom: "0.5rem" }}>
+          <div className="linked-listing-bar-inner" style={{ flexWrap: "wrap", gap: "0.75rem" }}>
             <div className="property-metric">
               <div className="property-metric-label">Manual add</div>
               <div className="property-metric-value">
@@ -3303,8 +3626,8 @@ export function CanonicalPropertyDetail({
       {activeTab === "dossierScore" && (
       <>
       {/* Deal score — generated after dossier flow persists deal_signals */}
-      <div className={`linked-listing-bar ${styles.barSpaced}`}>
-        <div className={`linked-listing-bar-inner ${styles.barInnerWrapTight}`}>
+      <div className="linked-listing-bar" style={{ marginTop: "0.5rem", marginBottom: "0.5rem" }}>
+        <div className="linked-listing-bar-inner" style={{ flexWrap: "wrap", gap: "0.5rem" }}>
           <div className="property-metric">
             <div className="property-metric-label">Deal score</div>
             <div className="property-metric-value">
@@ -3344,7 +3667,17 @@ export function CanonicalPropertyDetail({
             </div>
           )}
         </div>
-        <div className={styles.scoreOverrideRow}>
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: "0.5rem",
+            alignItems: "center",
+            padding: "0.75rem 1rem 0",
+            borderTop: "1px solid rgba(0,0,0,0.08)",
+            marginTop: "0.75rem",
+          }}
+        >
           <input
             type="number"
             min={0}
@@ -3353,30 +3686,30 @@ export function CanonicalPropertyDetail({
             value={scoreOverrideDraft.score}
             onChange={(e) => setScoreOverrideDraft((prev) => ({ ...prev, score: e.target.value }))}
             placeholder={dealScore != null ? String(dealScore) : "Score"}
-            className={styles.scoreInput}
+            style={{ width: "6rem" }}
           />
           <input
             type="text"
             value={scoreOverrideDraft.reason}
             onChange={(e) => setScoreOverrideDraft((prev) => ({ ...prev, reason: e.target.value }))}
             placeholder="Override reason"
-            className={styles.reasonInput}
+            style={{ minWidth: "16rem", flex: "1 1 18rem" }}
           />
-          <Button size="sm" type="button" onClick={saveScoreOverride} disabled={scoreOverrideSaving}>
+          <button type="button" onClick={saveScoreOverride} disabled={scoreOverrideSaving}>
             {scoreOverrideSaving ? "Saving…" : scoreOverride ? "Replace override" : "Set override"}
-          </Button>
+          </button>
           {scoreOverride && (
-            <Button size="sm" type="button" onClick={clearScoreOverride} disabled={scoreOverrideSaving}>
+            <button type="button" onClick={clearScoreOverride} disabled={scoreOverrideSaving}>
               Clear override
-            </Button>
+            </button>
           )}
           {scoreOverride && (
-            <span className={styles.overrideNote} title={scoreOverride.reason}>
+            <span style={{ fontSize: "0.85rem", color: "#555" }} title={scoreOverride.reason}>
               Active override: {scoreOverride.reason}
             </span>
           )}
           {scoreOverrideError && (
-            <span className={styles.errorNote}>{scoreOverrideError}</span>
+            <span style={{ fontSize: "0.85rem", color: "#b91c1c" }}>{scoreOverrideError}</span>
           )}
         </div>
       </div>
@@ -3385,50 +3718,48 @@ export function CanonicalPropertyDetail({
 
       {activeTab === "dossierScore" && (
         <div className="rental-om-panel">
-          <div className={styles.spreadRow}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", flexWrap: "wrap", alignItems: "center" }}>
             <div>
-              <strong className={styles.blockTitle}>Dossier workflow</strong>
-              <span className={styles.blockSubtext}>
+              <strong style={{ display: "block", color: "#0f172a" }}>Dossier workflow</strong>
+              <span style={{ display: "block", marginTop: "0.2rem", color: "#64748b", fontSize: "0.8rem" }}>
                 {analysisStatusLabel}
                 {showDossierProgress ? ` · ${activeDossierStageLabel}` : ""}
               </span>
             </div>
-            <div className={styles.btnRow}>
-              <Button
-                size="sm"
+            <div style={{ display: "flex", gap: "0.45rem", flexWrap: "wrap" }}>
+              <button
                 type="button"
                 onClick={handleRefreshAuthoritativeOm}
                 disabled={Boolean(authoritativeOmRefreshing || !hasOmDocument)}
+                style={{ padding: "0.4rem 0.65rem", borderRadius: "6px", border: "1px solid #cbd5e1", background: "#fff", color: "#0f172a", cursor: authoritativeOmRefreshing || !hasOmDocument ? "not-allowed" : "pointer", fontSize: "0.78rem", fontWeight: 650 }}
               >
                 {authoritativeOmRefreshing ? "Refreshing…" : "Refresh OM inputs"}
-              </Button>
-              <Button
-                size="sm"
+              </button>
+              <button
                 type="button"
-                variant="primary"
                 onClick={handleGenerateDossier}
                 disabled={Boolean(isDossierBusy || !canGenerateDossier)}
+                style={{ padding: "0.4rem 0.65rem", borderRadius: "6px", border: "1px solid #0f172a", background: isDossierBusy || !canGenerateDossier ? "#e2e8f0" : "#0f172a", color: isDossierBusy || !canGenerateDossier ? "#64748b" : "#fff", cursor: isDossierBusy || !canGenerateDossier ? "not-allowed" : "pointer", fontSize: "0.78rem", fontWeight: 650 }}
               >
                 {isDossierBusy ? "Working…" : "Generate dossier"}
-              </Button>
-              <Button
-                size="sm"
+              </button>
+              <button
                 type="button"
                 onClick={handleRefreshDealScore}
                 disabled={Boolean(scoreRefreshing || !dealSignals)}
+                style={{ padding: "0.4rem 0.65rem", borderRadius: "6px", border: "1px solid #cbd5e1", background: "#fff", color: scoreRefreshing || !dealSignals ? "#64748b" : "#0f172a", cursor: scoreRefreshing || !dealSignals ? "not-allowed" : "pointer", fontSize: "0.78rem", fontWeight: 650 }}
               >
                 {scoreRefreshing ? "Refreshing…" : "Refresh score"}
-              </Button>
+              </button>
             </div>
           </div>
           {showDossierProgress && (
-            <div className={`dossier-progress-track ${styles.progressSpaced}`}>
-              {/* Progress width is runtime job state. */}
+            <div className="dossier-progress-track" style={{ marginTop: "0.7rem" }}>
               <div className="dossier-progress-fill" style={{ width: `${Math.min(activeDossierProgressPct, 100)}%` }} />
             </div>
           )}
           {dossierError && (
-            <p className={styles.errorTextXs}>{dossierError}</p>
+            <p style={{ margin: "0.6rem 0 0", color: "#b91c1c", fontSize: "0.8rem" }}>{dossierError}</p>
           )}
         </div>
       )}
@@ -3519,38 +3850,72 @@ export function CanonicalPropertyDetail({
       )}
 
       {(activeTab === "underwriting" || activeTab === "dossierScore") && (
-      <div className={styles.analysisBanner}>
-        <div className={styles.analysisBannerBody}>
-          <div className={styles.analysisEyebrow}>
+      <div
+        style={{
+          marginBottom: "1rem",
+          padding: "1rem 1.1rem",
+          borderRadius: "1rem",
+          border: "1px solid #dbeafe",
+          background: "linear-gradient(135deg, #f8fbff 0%, #ffffff 100%)",
+          display: "flex",
+          justifyContent: "space-between",
+          gap: "1rem",
+          flexWrap: "wrap",
+          alignItems: "center",
+        }}
+      >
+        <div style={{ maxWidth: "760px" }}>
+          <div style={{ fontSize: "0.76rem", fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1d4ed8" }}>
             Deal Analysis
           </div>
-          <div className={styles.analysisTitle}>
+          <div style={{ marginTop: "0.25rem", fontSize: "1rem", fontWeight: 700, color: "#0f172a" }}>
             OM calculation and dossier generation now live on a standalone page.
           </div>
-          <p className={styles.analysisCopy}>
+          <p style={{ margin: "0.45rem 0 0", fontSize: "0.9rem", color: "#475569", lineHeight: 1.55 }}>
             Use the dedicated analysis workspace to save property-specific underwriting, run the simplified OM metrics view, and generate the dossier without adding more collapsible sections here.
           </p>
-          <div className={styles.analysisStatus}>
-            Status: <strong className={styles.analysisStatusStrong}>{analysisStatusLabel}</strong>
+          <div style={{ marginTop: "0.55rem", fontSize: "0.82rem", color: "#475569" }}>
+            Status: <strong style={{ color: "#0f172a" }}>{analysisStatusLabel}</strong>
             {persistedDossierGeneration?.completedAt ? ` · Last completed ${formatDateOnly(persistedDossierGeneration.completedAt)}` : ""}
             {persistedDossierGeneration?.status === "running" ? ` · ${activeDossierStageLabel}` : ""}
           </div>
           {persistedDossierGeneration?.status === "failed" && persistedDossierGeneration.lastError && (
-            <div className={styles.analysisError}>
+            <div style={{ marginTop: "0.35rem", fontSize: "0.82rem", color: "#b91c1c" }}>
               Last run failed: {persistedDossierGeneration.lastError}
             </div>
           )}
         </div>
-        <div className={styles.analysisActions}>
+        <div style={{ display: "flex", gap: "0.65rem", flexWrap: "wrap" }}>
           <a
             href={`/deal-analysis?property_id=${encodeURIComponent(property.id)}`}
-            className={styles.pillLinkPrimary}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              padding: "0.7rem 1rem",
+              borderRadius: "999px",
+              background: "#0f172a",
+              color: "#fff",
+              textDecoration: "none",
+              fontWeight: 700,
+            }}
           >
             Open deal analysis
           </a>
           <a
             href={`/dossier-assumptions?property_id=${encodeURIComponent(property.id)}`}
-            className={styles.pillLinkSecondary}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              padding: "0.7rem 1rem",
+              borderRadius: "999px",
+              border: "1px solid #cbd5e1",
+              background: "#fff",
+              color: "#334155",
+              textDecoration: "none",
+              fontWeight: 600,
+            }}
           >
             Advanced assumptions
           </a>
@@ -3586,23 +3951,32 @@ export function CanonicalPropertyDetail({
       )}
 
       {(activeTab === "overview" || activeTab === "sources" || activeTab === "activity") && sourcingUpdate && (
-        <div className={`${styles.sourcingBanner} ${sourcingBannerToneClass}`}>
-          <div className={styles.sourcingHeader}>
+        <div
+          style={{
+            marginBottom: "1rem",
+            padding: "0.85rem 1rem",
+            borderRadius: "0.9rem",
+            border: `1px solid ${sourcingUpdateMeta.style.borderColor}`,
+            background: sourcingUpdateMeta.style.backgroundColor,
+            color: sourcingUpdateMeta.style.color,
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.75rem", flexWrap: "wrap" }}>
             <div>
-              <div className={styles.sourcingEyebrow}>
+              <div style={{ fontSize: "0.78rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em" }}>
                 Saved-search sync
               </div>
-              <div className={styles.sourcingLabel}>{sourcingUpdateMeta.label}</div>
+              <div style={{ fontSize: "1rem", fontWeight: 600 }}>{sourcingUpdateMeta.label}</div>
             </div>
-            <div className={styles.sourcingDetail}>
+            <div style={{ fontSize: "0.82rem", opacity: 0.9 }}>
               {sourcingUpdate.lastEvaluatedAt ? `Last checked ${formatDateOnly(sourcingUpdate.lastEvaluatedAt)}` : sourcingUpdateMeta.detail}
             </div>
           </div>
           {typeof sourcingUpdate.summary === "string" && sourcingUpdate.summary.trim().length > 0 && (
-            <p className={styles.sourcingSummary}>{sourcingUpdate.summary}</p>
+            <p style={{ margin: "0.6rem 0 0", fontSize: "0.9rem", lineHeight: 1.5 }}>{sourcingUpdate.summary}</p>
           )}
           {Array.isArray(sourcingUpdate.changes) && sourcingUpdate.changes.length > 0 && (
-            <ul className={styles.sourcingChanges}>
+            <ul style={{ margin: "0.65rem 0 0", paddingLeft: "1.1rem", fontSize: "0.88rem", lineHeight: 1.5 }}>
               {sourcingUpdate.changes.slice(0, 6).map((change, index) => (
                 <li key={`${change.field}-${index}`}>{formatSourcingUpdateChange(change)}</li>
               ))}
@@ -3620,13 +3994,12 @@ export function CanonicalPropertyDetail({
         count={photoUrls.length + floorplanUrls.length}
         open={!!openSections.photosFloorplans}
         onToggle={() => toggle("photosFloorplans")}
-        icon={<Images size={15} strokeWidth={2} aria-hidden="true" className={styles.sectionIcon} />}
       >
         {primaryListing === "loading" ? (
-          <p className={styles.muted}>Loading listing…</p>
+          <p style={{ color: "#737373" }}>Loading listing…</p>
         ) : photoUrls.length > 0 || floorplanUrls.length > 0 ? (
-          <div className={`property-detail-media-columns ${styles.mediaColumns}`}>
-            <div className={styles.mediaColumn}>
+          <div className="property-detail-media-columns" style={{ display: "flex", gap: "1rem", flexWrap: "wrap" }}>
+            <div style={{ flex: "1 1 300px", minWidth: 0 }}>
               {photoUrls.length > 0 ? (
                 <div className="property-card-gallery-wrap">
                   <div className="property-card-gallery">
@@ -3643,10 +4016,10 @@ export function CanonicalPropertyDetail({
                   </div>
                 </div>
               ) : (
-                <p className={`property-detail-text ${styles.muted}`}>No photos</p>
+                <p className="property-detail-text" style={{ color: "#737373" }}>No photos</p>
               )}
             </div>
-            <div className={styles.mediaColumn}>
+            <div style={{ flex: "1 1 300px", minWidth: 0 }}>
               {floorplanUrls.length > 0 ? (
                 <div className="property-card-photos">
                   {floorplanUrls.map((src, i) => (
@@ -3656,12 +4029,12 @@ export function CanonicalPropertyDetail({
                   ))}
                 </div>
               ) : (
-                <p className={`property-detail-text ${styles.muted}`}>No floor plans</p>
+                <p className="property-detail-text" style={{ color: "#737373" }}>No floor plans</p>
               )}
             </div>
           </div>
         ) : (
-          <p className={styles.muted}>No linked listing or no media. Add raw listings and link to this property.</p>
+          <p style={{ color: "#737373" }}>No linked listing or no media. Add raw listings and link to this property.</p>
         )}
       </CollapsibleSection>
 
@@ -3671,7 +4044,6 @@ export function CanonicalPropertyDetail({
         title="Initial property info"
         open={!!openSections.detailsBrokerAmenitiesPriceHistory}
         onToggle={() => toggle("detailsBrokerAmenitiesPriceHistory")}
-        icon={<Info size={15} strokeWidth={2} aria-hidden="true" className={styles.sectionIcon} />}
       >
         <V3ReportPanel
           title="Property details"
@@ -3749,7 +4121,8 @@ export function CanonicalPropertyDetail({
             <V3ReportSection title="Description">
               <div className="initial-info-description-wrap property-card-description-wrap">
                 <p
-                  className={`property-card-description ${styles.descriptionText} ${descriptionExpanded ? "property-card-description--expanded" : ""}`}
+                  className={`property-card-description ${descriptionExpanded ? "property-card-description--expanded" : ""}`}
+                  style={{ whiteSpace: "pre-wrap", color: "#34413b", lineHeight: 1.55, margin: 0 }}
                 >
                   {listingForDisplay.description}
                 </p>
@@ -3859,45 +4232,44 @@ export function CanonicalPropertyDetail({
         title={activeTab === "documents" ? "Documents" : activeTab === "outreach" ? "Outreach" : "OM Workspace"}
         open={!!openSections.rentalOm}
         onToggle={() => toggle("rentalOm")}
-        icon={
-          activeTab === "documents" ? (
-            <FileText size={15} strokeWidth={2} aria-hidden="true" className={styles.sectionIcon} />
-          ) : activeTab === "outreach" ? (
-            <Mail size={15} strokeWidth={2} aria-hidden="true" className={styles.sectionIcon} />
-          ) : (
-            <Calculator size={15} strokeWidth={2} aria-hidden="true" className={styles.sectionIcon} />
-          )
-        }
       >
-        <div className={`rental-om-shell ${styles.omShell}`} data-active-tab={activeTab}>
+        <div className="rental-om-shell" data-active-tab={activeTab} style={{ fontSize: "0.875rem" }}>
           {/* Request info by email — always first */}
-          <div className={`rental-om-panel rental-om-panel--inquiry ${styles.panelSpaced}`}>
-            <strong className={styles.inquiryTitle}>Request info by email</strong>
+          <div className="rental-om-panel rental-om-panel--inquiry" style={{ marginBottom: "0.75rem" }}>
+            <strong style={{ display: "block", marginBottom: "0.35rem", fontSize: "0.9rem", color: "#1a1a1a" }}>Request info by email</strong>
             {lastInquirySentAt && (
-              <p className={styles.sentNote}>
+              <p style={{ margin: "0 0 0.5rem", fontSize: "0.8rem", color: "#166534", fontWeight: 500 }}>
                 Last inquiry sent: {formatDateOnly(lastInquirySentAt) ?? lastInquirySentAt}
               </p>
             )}
             {inquirySendSuccess && (
-              <p className={styles.successNote}>
+              <p style={{ margin: "0 0 0.5rem", padding: "0.4rem 0.6rem", backgroundColor: "#dcfce7", border: "1px solid #22c55e", borderRadius: "6px", fontSize: "0.875rem", color: "#166534" }}>
                 {inquirySendSuccess}
               </p>
             )}
             {hasOmDocument && (
-              <p className={styles.omReceivedNote}>
+              <p style={{ margin: "0 0 0.5rem", padding: "0.4rem 0.6rem", backgroundColor: "#f0f9ff", border: "1px solid #0ea5e9", borderRadius: "6px", fontSize: "0.8rem", color: "#0369a1" }}>
                 OM already received or uploaded. See <strong>Documents (from inquiry replies)</strong> and <strong>Uploaded documents</strong> below.
               </p>
             )}
-            <div className={styles.recipientBox}>
-              <div className={styles.recipientHeader}>
+            <div
+              style={{
+                margin: "0 0 0.75rem",
+                padding: "0.7rem 0.8rem",
+                borderRadius: "8px",
+                border: "1px solid #e5e7eb",
+                backgroundColor: "#fafafa",
+              }}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", flexWrap: "wrap", alignItems: "flex-start" }}>
                 <div>
-                  <div className={styles.recipientEyebrow}>
+                  <div style={{ fontSize: "0.72rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: "#4b5563" }}>
                     Preferred broker email
                   </div>
-                  <div className={styles.recipientEmail}>
+                  <div style={{ marginTop: "0.2rem", fontSize: "0.92rem", fontWeight: 600, color: "#111827" }}>
                     {preferredInquiryRecipient.email || "No broker email selected yet"}
                   </div>
-                  <div className={styles.recipientHint}>
+                  <div style={{ marginTop: "0.2rem", fontSize: "0.75rem", color: "#6b7280", lineHeight: 1.5 }}>
                     {usingManualRecipientOverride
                       ? "Manual override is active. Inquiry actions use this email first."
                       : recipientResolution?.status === "resolved"
@@ -3908,54 +4280,79 @@ export function CanonicalPropertyDetail({
                   </div>
                 </div>
                 {recipientResolutionLoading ? (
-                  <span className={styles.refreshingNote}>Refreshing…</span>
+                  <span style={{ fontSize: "0.75rem", color: "#64748b" }}>Refreshing…</span>
                 ) : null}
               </div>
               {recipientOverrideNotice && (
-                <p className={styles.recipientNotice}>{recipientOverrideNotice}</p>
+                <p style={{ margin: "0.6rem 0 0", fontSize: "0.78rem", color: "#166534" }}>{recipientOverrideNotice}</p>
               )}
               {recipientOverrideError && (
-                <p className={styles.recipientError}>{recipientOverrideError}</p>
+                <p style={{ margin: "0.6rem 0 0", fontSize: "0.78rem", color: "#b91c1c" }}>{recipientOverrideError}</p>
               )}
-              <div className={styles.inlineForm}>
+              <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginTop: "0.65rem" }}>
                 <input
                   type="text"
                   value={recipientOverrideDraft}
                   onChange={(e) => setRecipientOverrideDraft(e.target.value)}
                   placeholder={preferredInquiryRecipient.email || "broker@firm.com"}
-                  className={styles.recipientInput}
+                  style={{ flex: "1 1 18rem", minWidth: "14rem", padding: "0.45rem", fontSize: "0.85rem", border: "1px solid #cbd5e1", borderRadius: "6px" }}
                 />
                 <button
                   type="button"
                   onClick={saveRecipientOverride}
                   disabled={Boolean(recipientOverrideSaving || !recipientOverrideDraft.trim())}
-                  className={`${styles.btnBrandSoft} ${recipientOverrideSaving ? styles.btnBrandSoftBusy : ""}`}
+                  style={{
+                    padding: "0.4rem 0.7rem",
+                    borderRadius: "6px",
+                    border: "1px solid #0f766e",
+                    backgroundColor: recipientOverrideSaving ? "#99f6e4" : "#ccfbf1",
+                    color: "#115e59",
+                    cursor: recipientOverrideSaving ? "wait" : "pointer",
+                    fontSize: "0.8rem",
+                    fontWeight: 600,
+                  }}
                 >
                   {recipientOverrideSaving ? "Saving…" : usingManualRecipientOverride ? "Update preferred email" : "Save preferred email"}
                 </button>
                 {usingManualRecipientOverride && (
-                  <Button
-                    size="sm"
+                  <button
                     type="button"
                     onClick={clearRecipientOverride}
                     disabled={recipientOverrideSaving}
+                    style={{
+                      padding: "0.4rem 0.7rem",
+                      borderRadius: "6px",
+                      border: "1px solid #cbd5e1",
+                      backgroundColor: "#fff",
+                      color: "#334155",
+                      cursor: recipientOverrideSaving ? "wait" : "pointer",
+                      fontSize: "0.8rem",
+                    }}
                   >
                     Use sourced email
-                  </Button>
+                  </button>
                 )}
               </div>
               {brokerEmailOptions.length > 0 && (
-                <div className={styles.candidateBlock}>
-                  <div className={styles.candidateLabel}>
+                <div style={{ marginTop: "0.65rem" }}>
+                  <div style={{ marginBottom: "0.35rem", fontSize: "0.72rem", fontWeight: 600, color: "#6b7280" }}>
                     LLM / listing candidate emails
                   </div>
-                  <div className={styles.chipRow}>
+                  <div style={{ display: "flex", gap: "0.35rem", flexWrap: "wrap" }}>
                     {brokerEmailOptions.map((option) => (
                       <button
                         key={option.email.toLowerCase()}
                         type="button"
                         onClick={() => setRecipientOverrideDraft(option.email)}
-                        className={styles.emailChip}
+                        style={{
+                          padding: "0.25rem 0.55rem",
+                          borderRadius: "999px",
+                          border: "1px solid #d1d5db",
+                          backgroundColor: "#fff",
+                          color: "#374151",
+                          cursor: "pointer",
+                          fontSize: "0.74rem",
+                        }}
                         title={option.name ? `${option.name} - ${option.email}` : option.email}
                       >
                         {option.email}
@@ -3965,7 +4362,7 @@ export function CanonicalPropertyDetail({
                 </div>
               )}
             </div>
-            <div className={styles.actionRow}>
+            <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
               <button
                 type="button"
                 disabled={hasOmDocument}
@@ -3982,7 +4379,15 @@ export function CanonicalPropertyDetail({
                   setSendAnotherConfirm(false);
                   setInquiryEmailModalOpen(true);
                 }}
-                className={styles.btnAction}
+                style={{
+                  padding: "0.35rem 0.6rem",
+                  backgroundColor: hasOmDocument ? "#e5e7eb" : "#f0f0f0",
+                  border: "1px solid #ccc",
+                  borderRadius: "4px",
+                  fontSize: "0.8rem",
+                  color: hasOmDocument ? "#9ca3af" : "#333",
+                  cursor: hasOmDocument ? "not-allowed" : "pointer",
+                }}
               >
                 {lastInquirySentAt ? "Send another inquiry" : "Request info / OM by email & track reply"}
               </button>
@@ -3998,34 +4403,42 @@ export function CanonicalPropertyDetail({
                   setInquiryGuard(null);
                   setManualInquiryModalOpen(true);
                 }}
-                className={`${styles.btnAction} ${styles.btnActionPlain}`}
+                style={{
+                  padding: "0.35rem 0.6rem",
+                  backgroundColor: hasOmDocument ? "#e5e7eb" : "#fff",
+                  border: "1px solid #ccc",
+                  borderRadius: "4px",
+                  fontSize: "0.8rem",
+                  color: hasOmDocument ? "#9ca3af" : "#333",
+                  cursor: hasOmDocument ? "not-allowed" : "pointer",
+                }}
               >
                 Mark prior inquiry as sent
               </button>
             </div>
-            <p className={styles.helpText}>
+            <p style={{ margin: "0.25rem 0 0", color: "#737373", fontSize: "0.75rem" }}>
               Review the draft and click Send to email the broker. Use the subject line so replies are matched to this property. If you already reached out outside the app, use <strong>Mark prior inquiry as sent</strong> so the guardrail persists across refreshes. Replies and attachments appear in <strong>Documents (from inquiry replies)</strong> below after the daily process-inbox cron runs.
             </p>
           </div>
           {inquiryEmailModalOpen && (
-            <div className={`rental-om-modal ${styles.modalOverlay}`} onClick={() => setInquiryEmailModalOpen(false)}>
-              <div className={`${styles.modalCard} ${styles.modalCardLg}`} onClick={(e) => e.stopPropagation()}>
-                <p className={styles.modalTitle}>Request OM / rent roll from broker</p>
+            <div className="rental-om-modal" style={{ position: "fixed", inset: 0, zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", backgroundColor: "rgba(0,0,0,0.4)" }} onClick={() => setInquiryEmailModalOpen(false)}>
+              <div style={{ backgroundColor: "#fff", borderRadius: "8px", padding: "1.25rem", maxWidth: "520px", width: "100%", maxHeight: "90vh", overflow: "auto", boxShadow: "0 4px 20px rgba(0,0,0,0.15)" }} onClick={(e) => e.stopPropagation()}>
+                <p style={{ margin: "0 0 0.75rem", fontWeight: 600 }}>Request OM / rent roll from broker</p>
                 {lastInquirySentAt && (
-                  <p className={styles.warnNote}>
+                  <p style={{ margin: "0 0 0.75rem", padding: "0.5rem 0.6rem", backgroundColor: "#fef3c7", border: "1px solid #f59e0b", borderRadius: "6px", fontSize: "0.8rem", color: "#92400e" }}>
                     An inquiry was already sent on {formatDateOnly(lastInquirySentAt) ?? lastInquirySentAt}. Sending again may result in duplicate emails to the broker.
                   </p>
                 )}
-                <p className={styles.modalCopy}>
+                <p style={{ margin: "0 0 1rem", fontSize: "0.875rem", color: "#555" }}>
                   Review the draft below and edit if needed (e.g. add your phone and email in the signature). Click <strong>Send email</strong> to send from your connected Gmail. Keep the subject line so replies can be matched to this property.
                 </p>
-                {inquirySendError && <p className={styles.modalError}>{inquirySendError}</p>}
+                {inquirySendError && <p style={{ margin: "0 0 0.75rem", fontSize: "0.875rem", color: "#b91c1c" }}>{inquirySendError}</p>}
                 {inquiryGuardLoading && (
-                  <p className={styles.guardChecking}>Checking inquiry guardrails…</p>
+                  <p style={{ margin: "0 0 0.75rem", fontSize: "0.8rem", color: "#64748b" }}>Checking inquiry guardrails…</p>
                 )}
                 {inquiryGuard?.sameRecipientOtherProperties.length ? (
-                  <div className={styles.warnNote}>
-                    <strong className={styles.warnNoteTitle}>This broker email was already contacted for another property.</strong>
+                  <div style={{ margin: "0 0 0.75rem", padding: "0.5rem 0.6rem", backgroundColor: "#fff7ed", border: "1px solid #fb923c", borderRadius: "6px", fontSize: "0.8rem", color: "#9a3412" }}>
+                    <strong style={{ display: "block", marginBottom: "0.25rem" }}>This broker email was already contacted for another property.</strong>
                     {inquiryGuard.sameRecipientOtherProperties.map((row) => (
                       <div key={`${row.propertyId}-${row.sentAt}`}>
                         {row.canonicalAddress} — {formatDateOnly(row.sentAt)}
@@ -4034,8 +4447,8 @@ export function CanonicalPropertyDetail({
                   </div>
                 ) : null}
                 {inquiryGuard?.sameBrokerTeamOtherProperties.length ? (
-                  <div className={styles.warnNote}>
-                    <strong className={styles.warnNoteTitle}>A broker on this listing team was already involved on another contacted property.</strong>
+                  <div style={{ margin: "0 0 0.75rem", padding: "0.5rem 0.6rem", backgroundColor: "#fff7ed", border: "1px solid #fb923c", borderRadius: "6px", fontSize: "0.8rem", color: "#9a3412" }}>
+                    <strong style={{ display: "block", marginBottom: "0.25rem" }}>A broker on this listing team was already involved on another contacted property.</strong>
                     {inquiryGuard.sameBrokerTeamOtherProperties.map((row) => (
                       <div key={`${row.propertyId}-${row.sentAt}`}>
                         {row.canonicalAddress} — {formatDateOnly(row.sentAt)}
@@ -4044,35 +4457,43 @@ export function CanonicalPropertyDetail({
                     ))}
                   </div>
                 ) : null}
-                <div className={styles.field}>
-                  <label className={styles.fieldLabel}>To (broker)</label>
+                <div style={{ marginBottom: "0.75rem" }}>
+                  <label style={{ display: "block", fontSize: "0.75rem", marginBottom: "0.25rem", color: "#555" }}>To (broker)</label>
                   <input
                     type="text"
                     value={inquiryDraft.to}
                     onChange={(e) => setInquiryDraft((p) => ({ ...p, to: e.target.value }))}
                     placeholder="Preferred broker email"
-                    className={styles.textInput}
+                    style={{ width: "100%", padding: "0.4rem", fontSize: "0.875rem", border: "1px solid #ccc", borderRadius: "4px" }}
                   />
                   {!inquiryDraft.to && (
-                    <p className={styles.fieldHint}>No broker email on file yet. Save a preferred email above or enter one here manually.</p>
+                    <p style={{ margin: "0.25rem 0 0", fontSize: "0.75rem", color: "#888" }}>No broker email on file yet. Save a preferred email above or enter one here manually.</p>
                   )}
                   {brokerEmailOptions.length > 1 && (
-                    <p className={styles.fieldHintMuted}>
+                    <p style={{ margin: "0.25rem 0 0", fontSize: "0.75rem", color: "#666" }}>
                       Other sourced emails: {brokerEmailOptions.slice(1).map((entry) => entry.email).join(", ") || "—"}
                     </p>
                   )}
                 </div>
-                <div className={styles.field}>
-                  <label className={styles.fieldLabel}>Subject</label>
+                <div style={{ marginBottom: "0.75rem" }}>
+                  <label style={{ display: "block", fontSize: "0.75rem", marginBottom: "0.25rem", color: "#555" }}>Subject</label>
                   <input
                     type="text"
                     value={inquiryDraft.subject}
                     onChange={(e) => setInquiryDraft((p) => ({ ...p, subject: e.target.value }))}
-                    className={styles.textInput}
+                    style={{ width: "100%", padding: "0.4rem", fontSize: "0.875rem", border: "1px solid #ccc", borderRadius: "4px" }}
                   />
                 </div>
-                <div className={styles.tourBox}>
-                  <label className={styles.tourToggleLabel}>
+                <div
+                  style={{
+                    marginBottom: "0.75rem",
+                    padding: "0.65rem 0.7rem",
+                    border: "1px solid #dbeafe",
+                    borderRadius: "6px",
+                    background: "#eff6ff",
+                  }}
+                >
+                  <label style={{ display: "flex", alignItems: "center", gap: "0.45rem", fontSize: "0.82rem", fontWeight: 600, color: "#1e3a8a", cursor: "pointer" }}>
                     <input
                       type="checkbox"
                       checked={includeTourRequest}
@@ -4081,15 +4502,15 @@ export function CanonicalPropertyDetail({
                     Also ask for a tour if available
                   </label>
                   {includeTourRequest && (
-                    <div className={styles.tourBody}>
-                      <label className={styles.tourLabel}>Preferred tour date and time</label>
+                    <div style={{ marginTop: "0.55rem" }}>
+                      <label style={{ display: "block", fontSize: "0.72rem", marginBottom: "0.25rem", color: "#1e40af" }}>Preferred tour date and time</label>
                       <input
                         type="datetime-local"
                         value={tourDateTime}
                         onChange={(e) => setTourDateTime(e.target.value)}
-                        className={styles.tourInput}
+                        style={{ width: "100%", maxWidth: "18rem", padding: "0.4rem", fontSize: "0.875rem", border: "1px solid #93c5fd", borderRadius: "4px" }}
                       />
-                      <p className={`${styles.tourHint} ${tourRequestNeedsDateTime ? styles.tourHintError : ""}`}>
+                      <p style={{ margin: "0.35rem 0 0", color: tourRequestNeedsDateTime ? "#b91c1c" : "#1e40af", fontSize: "0.74rem", lineHeight: 1.4 }}>
                         {tourRequestNeedsDateTime
                           ? "Choose a date and time to add the tour request to the draft."
                           : tourDateTimeLabel
@@ -4099,18 +4520,18 @@ export function CanonicalPropertyDetail({
                     </div>
                   )}
                 </div>
-                <div className={styles.fieldLg}>
-                  <label className={styles.fieldLabel}>Body (editable)</label>
+                <div style={{ marginBottom: "1rem" }}>
+                  <label style={{ display: "block", fontSize: "0.75rem", marginBottom: "0.25rem", color: "#555" }}>Body (editable)</label>
                   <textarea
                     value={inquiryDraft.body}
                     onChange={(e) => setInquiryDraft((p) => ({ ...p, body: e.target.value }))}
                     rows={6}
-                    className={styles.textareaInput}
+                    style={{ width: "100%", padding: "0.4rem", fontSize: "0.875rem", border: "1px solid #ccc", borderRadius: "4px", resize: "vertical" }}
                   />
                 </div>
                 {inquiryNeedsOverride && (
-                  <div className={styles.fieldLg}>
-                    <label className={styles.checkboxLabel}>
+                  <div style={{ marginBottom: "1rem" }}>
+                    <label style={{ display: "flex", alignItems: "center", gap: "0.35rem", fontSize: "0.875rem", cursor: "pointer" }}>
                       <input
                         type="checkbox"
                         checked={sendAnotherConfirm}
@@ -4120,11 +4541,10 @@ export function CanonicalPropertyDetail({
                     </label>
                   </div>
                 )}
-                <div className={styles.modalActions}>
-                  <Button type="button" onClick={() => { setInquiryEmailModalOpen(false); setInquirySendError(null); }}>Cancel</Button>
-                  <Button
+                <div style={{ display: "flex", gap: "0.5rem", justifyContent: "flex-end" }}>
+                  <button type="button" onClick={() => { setInquiryEmailModalOpen(false); setInquirySendError(null); }} style={{ padding: "0.4rem 0.75rem", border: "1px solid #ccc", borderRadius: "4px", background: "#fff", cursor: "pointer" }}>Cancel</button>
+                  <button
                     type="button"
-                    variant="primary"
                     disabled={Boolean(inquirySending || !inquiryDraft.to?.trim() || tourRequestNeedsDateTime || (inquiryNeedsOverride && !sendAnotherConfirm))}
                     onClick={async () => {
                       setInquirySendError(null);
@@ -4162,24 +4582,25 @@ export function CanonicalPropertyDetail({
                         setInquirySending(false);
                       }
                     }}
+                    style={{ padding: "0.4rem 0.75rem", border: "1px solid #0066cc", borderRadius: "4px", background: inquirySending ? "#94a3b8" : "#0066cc", color: "#fff", cursor: inquirySending ? "wait" : "pointer" }}
                   >
                     {inquirySending ? "Sending…" : "Send email"}
-                  </Button>
+                  </button>
                 </div>
               </div>
             </div>
           )}
           {manualInquiryModalOpen && (
-            <div className={`rental-om-modal ${styles.modalOverlay}`} onClick={() => setManualInquiryModalOpen(false)}>
-              <div className={`${styles.modalCard} ${styles.modalCardSm}`} onClick={(e) => e.stopPropagation()}>
-                <p className={styles.modalTitle}>Mark prior inquiry as sent</p>
-                <p className={styles.modalCopy}>
+            <div className="rental-om-modal" style={{ position: "fixed", inset: 0, zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", backgroundColor: "rgba(0,0,0,0.4)" }} onClick={() => setManualInquiryModalOpen(false)}>
+              <div style={{ backgroundColor: "#fff", borderRadius: "8px", padding: "1.25rem", maxWidth: "460px", width: "100%", maxHeight: "90vh", overflow: "auto", boxShadow: "0 4px 20px rgba(0,0,0,0.15)" }} onClick={(e) => e.stopPropagation()}>
+                <p style={{ margin: "0 0 0.75rem", fontWeight: 600 }}>Mark prior inquiry as sent</p>
+                <p style={{ margin: "0 0 1rem", fontSize: "0.875rem", color: "#555" }}>
                   This does <strong>not</strong> send an email. It records prior outreach on the server so duplicate-send guardrails continue to work after refresh.
                 </p>
-                {manualInquiryError && <p className={styles.modalError}>{manualInquiryError}</p>}
+                {manualInquiryError && <p style={{ margin: "0 0 0.75rem", fontSize: "0.875rem", color: "#b91c1c" }}>{manualInquiryError}</p>}
                 {inquiryGuard?.sameRecipientOtherProperties.length ? (
-                  <div className={styles.warnNote}>
-                    <strong className={styles.warnNoteTitle}>This broker email already has inquiry history on other properties.</strong>
+                  <div style={{ margin: "0 0 0.75rem", padding: "0.5rem 0.6rem", backgroundColor: "#fff7ed", border: "1px solid #fb923c", borderRadius: "6px", fontSize: "0.8rem", color: "#9a3412" }}>
+                    <strong style={{ display: "block", marginBottom: "0.25rem" }}>This broker email already has inquiry history on other properties.</strong>
                     {inquiryGuard.sameRecipientOtherProperties.map((row) => (
                       <div key={`${row.propertyId}-${row.sentAt}`}>
                         {row.canonicalAddress} — {formatDateOnly(row.sentAt)}
@@ -4188,8 +4609,8 @@ export function CanonicalPropertyDetail({
                   </div>
                 ) : null}
                 {inquiryGuard?.sameBrokerTeamOtherProperties.length ? (
-                  <div className={styles.warnNote}>
-                    <strong className={styles.warnNoteTitle}>This listing team overlaps with other properties that already have inquiry history.</strong>
+                  <div style={{ margin: "0 0 0.75rem", padding: "0.5rem 0.6rem", backgroundColor: "#fff7ed", border: "1px solid #fb923c", borderRadius: "6px", fontSize: "0.8rem", color: "#9a3412" }}>
+                    <strong style={{ display: "block", marginBottom: "0.25rem" }}>This listing team overlaps with other properties that already have inquiry history.</strong>
                     {inquiryGuard.sameBrokerTeamOtherProperties.map((row) => (
                       <div key={`${row.propertyId}-${row.sentAt}`}>
                         {row.canonicalAddress} — {formatDateOnly(row.sentAt)}
@@ -4198,30 +4619,29 @@ export function CanonicalPropertyDetail({
                     ))}
                   </div>
                 ) : null}
-                <div className={styles.field}>
-                  <label className={styles.fieldLabel}>Broker email</label>
+                <div style={{ marginBottom: "0.75rem" }}>
+                  <label style={{ display: "block", fontSize: "0.75rem", marginBottom: "0.25rem", color: "#555" }}>Broker email</label>
                   <input
                     type="text"
                     value={manualInquiryDraft.to}
                     onChange={(e) => setManualInquiryDraft((prev) => ({ ...prev, to: e.target.value }))}
                     placeholder="Preferred broker email (optional but recommended)"
-                    className={styles.textInput}
+                    style={{ width: "100%", padding: "0.4rem", fontSize: "0.875rem", border: "1px solid #ccc", borderRadius: "4px" }}
                   />
                 </div>
-                <div className={styles.fieldLg}>
-                  <label className={styles.fieldLabel}>Sent date</label>
+                <div style={{ marginBottom: "1rem" }}>
+                  <label style={{ display: "block", fontSize: "0.75rem", marginBottom: "0.25rem", color: "#555" }}>Sent date</label>
                   <input
                     type="date"
                     value={manualInquiryDraft.sentAt}
                     onChange={(e) => setManualInquiryDraft((prev) => ({ ...prev, sentAt: e.target.value }))}
-                    className={styles.textInput}
+                    style={{ width: "100%", padding: "0.4rem", fontSize: "0.875rem", border: "1px solid #ccc", borderRadius: "4px" }}
                   />
                 </div>
-                <div className={styles.modalActions}>
-                  <Button type="button" onClick={() => { setManualInquiryModalOpen(false); setManualInquiryError(null); }}>Cancel</Button>
-                  <Button
+                <div style={{ display: "flex", gap: "0.5rem", justifyContent: "flex-end" }}>
+                  <button type="button" onClick={() => { setManualInquiryModalOpen(false); setManualInquiryError(null); }} style={{ padding: "0.4rem 0.75rem", border: "1px solid #ccc", borderRadius: "4px", background: "#fff", cursor: "pointer" }}>Cancel</button>
+                  <button
                     type="button"
-                    variant="primary"
                     disabled={Boolean(manualInquirySaving)}
                     onClick={async () => {
                       setManualInquiryError(null);
@@ -4253,9 +4673,10 @@ export function CanonicalPropertyDetail({
                         setManualInquirySaving(false);
                       }
                     }}
+                    style={{ padding: "0.4rem 0.75rem", border: "1px solid #0066cc", borderRadius: "4px", background: manualInquirySaving ? "#94a3b8" : "#0066cc", color: "#fff", cursor: manualInquirySaving ? "wait" : "pointer" }}
                   >
                     {manualInquirySaving ? "Saving…" : "Save inquiry history"}
-                  </Button>
+                  </button>
                 </div>
               </div>
             </div>
@@ -4299,7 +4720,7 @@ export function CanonicalPropertyDetail({
             </V3ReportPanel>
           )}
           {rentRollComparison && !rentRollComparison.comparable && rentalUnits.length > 0 && omRentRoll.length > 0 && (
-            <p className={styles.compareWarn}>
+            <p style={{ margin: "0.5rem 0", padding: "0.35rem 0.5rem", backgroundColor: "#fef3c7", borderRadius: "4px", fontSize: "0.8rem", color: "#92400e" }}>
               <strong>RapidAPI rent roll likely incomplete — comparison disabled.</strong> Only compare when total units and total bedrooms match (RapidAPI: {rentRollComparison.totalUnitsRapid} units, {rentRollComparison.totalBedsRapid} beds; OM: {rentRollComparison.totalUnitsOm} units, {rentRollComparison.totalBedsOm} beds).
             </p>
           )}
@@ -4363,22 +4784,22 @@ export function CanonicalPropertyDetail({
             </V3ReportPanel>
           ) : (
             <V3ReportPanel title={financialsHeading} subtitle={financialsCopy}>
-              <p className={styles.noteMuted}>
+              <p style={{ margin: 0, color: "#64748b", fontSize: "0.86rem" }}>
                 Upload or promote an OM snapshot to populate investor takeaways, key metrics, rent roll rows, and expense tables.
               </p>
             </V3ReportPanel>
           )}
           <div className="rental-om-doc-grid">
             <div className="rental-om-panel rental-om-panel--documents">
-              <strong className={styles.docBlockTitle}>Documents</strong>
-              <p className={styles.docBlockSub}>Inquiry attachments, uploaded docs, and generated dossier/Excel.</p>
+              <strong style={{ display: "block", marginBottom: "0.2rem" }}>Documents</strong>
+              <p style={{ margin: "0 0 0.35rem", fontSize: "0.75rem", color: "#666" }}>Inquiry attachments, uploaded docs, and generated dossier/Excel.</p>
               {unifiedDocuments === null ? (
-                <p className={styles.docMutedText}>Loading…</p>
+                <p style={{ margin: 0, fontSize: "0.8rem", color: "#737373" }}>Loading…</p>
               ) : unifiedDocuments.length > 0 ? (
                 <div className="rental-om-doc-list">
                   {unifiedDocuments.map((doc) => (
                     <div key={doc.id} className={`rental-om-doc-card ${selectedDocument?.id === doc.id ? "rental-om-doc-card--selected" : ""}`}>
-                      <div className={styles.docMin}>
+                      <div style={{ minWidth: 0 }}>
                         <button
                           type="button"
                           className="rental-om-doc-title-button"
@@ -4386,14 +4807,14 @@ export function CanonicalPropertyDetail({
                         >
                           {doc.fileName}
                         </button>
-                        <div className={styles.docMeta}>
+                        <div style={{ fontSize: "0.75rem", color: "#555", marginTop: "0.15rem" }}>
                           {doc.source} · {formatDateOnly(doc.createdAt)}
                         </div>
                         <a
                           href={`${API_BASE}/api/properties/${property.id}/documents/${doc.id}/file`}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className={styles.docOpenLink}
+                          style={{ display: "inline-block", marginTop: "0.3rem", fontSize: "0.74rem", color: "#475569", fontWeight: 650 }}
                         >
                           Open file
                         </a>
@@ -4421,7 +4842,7 @@ export function CanonicalPropertyDetail({
                             setDeletingDocId(null);
                           }
                         }}
-                        className={styles.btnDangerPill}
+                        style={{ flexShrink: 0, padding: "0.28rem 0.55rem", fontSize: "0.75rem", border: "1px solid #dc2626", borderRadius: "999px", background: "#fff", color: "#dc2626", cursor: deletingDocId === doc.id ? "wait" : "pointer" }}
                       >
                         {deletingDocId === doc.id ? "Removing…" : "Remove"}
                       </button>
@@ -4429,12 +4850,12 @@ export function CanonicalPropertyDetail({
                   ))}
                 </div>
               ) : (
-                <p className={styles.docMutedText}>No documents yet. Send an inquiry, upload a file, or use the Deal dossier section above to generate the PDF and Excel.</p>
+                <p style={{ margin: 0, fontSize: "0.8rem", color: "#737373" }}>No documents yet. Send an inquiry, upload a file, or use the Deal dossier section above to generate the PDF and Excel.</p>
               )}
             </div>
             <div className="rental-om-panel rental-om-document-preview">
-              <strong className={styles.docBlockTitle}>Preview</strong>
-              <p className={styles.previewSub}>
+              <strong style={{ display: "block", marginBottom: "0.2rem" }}>Preview</strong>
+              <p style={{ margin: "0 0 0.55rem", fontSize: "0.75rem", color: "#666" }}>
                 Select a document to preview it here.
               </p>
               {selectedDocument && selectedDocumentUrl ? (
@@ -4453,15 +4874,16 @@ export function CanonicalPropertyDetail({
                 ) : (
                   <div className="rental-om-document-preview-empty">
                     <div>
-                      <strong className={styles.previewEmptyTitle}>
+                      <strong style={{ display: "block", color: "#0f172a", marginBottom: "0.25rem" }}>
                         Preview not available
                       </strong>
-                      <div className={styles.previewEmptyName}>{selectedDocument.fileName}</div>
+                      <div style={{ marginBottom: "0.65rem" }}>{selectedDocument.fileName}</div>
                       <a
                         href={selectedDocumentUrl}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className={`property-detail-rail-button ${styles.railButtonInline}`}
+                        className="property-detail-rail-button"
+                        style={{ width: "auto", minHeight: "2.1rem", display: "inline-flex" }}
                       >
                         Open file
                       </a>
@@ -4473,7 +4895,7 @@ export function CanonicalPropertyDetail({
               )}
             </div>
             <div className="rental-om-panel rental-om-panel--upload">
-              <strong className={styles.docBlockTitle}>Upload document</strong>
+              <strong style={{ display: "block", marginBottom: "0.2rem" }}>Upload document</strong>
               <form
               onSubmit={async (e) => {
                 e.preventDefault();
@@ -4510,11 +4932,11 @@ export function CanonicalPropertyDetail({
                   setUploading(false);
                 }
               }}
-              className={styles.uploadDocForm}
+              style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", alignItems: "center", marginBottom: "0.5rem" }}
             >
-              <input type="file" name="file" className={styles.fileInputSm} accept=".pdf,.doc,.docx,.xls,.xlsx,.txt,.csv,image/*" />
-              <input type="text" name="docSource" placeholder="Source (e.g. Broker, Listing agent)" className={styles.docSourceInput} />
-              <select name="docCategory" className={styles.docSelect}>
+              <input type="file" name="file" style={{ fontSize: "0.8rem" }} accept=".pdf,.doc,.docx,.xls,.xlsx,.txt,.csv,image/*" />
+              <input type="text" name="docSource" placeholder="Source (e.g. Broker, Listing agent)" style={{ padding: "0.35rem 0.5rem", fontSize: "0.8rem", border: "1px solid #ccc", borderRadius: "4px", minWidth: "140px" }} />
+              <select name="docCategory" style={{ padding: "0.35rem 0.5rem", fontSize: "0.8rem", border: "1px solid #ccc", borderRadius: "4px" }}>
                 <option value="OM">OM</option>
                 <option value="Brochure">Brochure</option>
                 <option value="Rent Roll">Rent Roll</option>
@@ -4522,11 +4944,11 @@ export function CanonicalPropertyDetail({
                 <option value="T12 / Operating Summary">T12 / Operating Summary</option>
                 <option value="Other">Other</option>
               </select>
-              <Button size="sm" type="submit" variant="primary" disabled={Boolean(uploading)}>
+              <button type="submit" disabled={Boolean(uploading)} style={{ padding: "0.35rem 0.6rem", fontSize: "0.8rem", border: "1px solid #0066cc", borderRadius: "4px", background: uploading ? "#94a3b8" : "#0066cc", color: "#fff", cursor: uploading ? "wait" : "pointer" }}>
                 {uploading ? "Uploading…" : "Upload"}
-              </Button>
+              </button>
               </form>
-              {uploadError && <p className={styles.uploadError}>{uploadError}</p>}
+              {uploadError && <p style={{ margin: "0.25rem 0 0", fontSize: "0.8rem", color: "#b91c1c" }}>{uploadError}</p>}
             </div>
           </div>
           {listingForDisplay?.rentalPriceHistory?.length && rentalUnits.length === 0 && !hasAuthoritativeOm ? (
@@ -4542,7 +4964,7 @@ export function CanonicalPropertyDetail({
               ))}
             </div>
           ) : rentalUnits.length === 0 && !hasAuthoritativeOm ? (
-            <p className={styles.mutedFlat}>—</p>
+            <p style={{ color: "#737373", margin: 0 }}>—</p>
           ) : null}
         </div>
       </CollapsibleSection>
@@ -4558,33 +4980,32 @@ export function CanonicalPropertyDetail({
         count={unifiedRows.length}
         open={!!openSections.violationsComplaintsPermits}
         onToggle={() => { toggle("violationsComplaintsPermits"); if (!unifiedFetched) fetchUnifiedTable(); }}
-        icon={<ClipboardList size={15} strokeWidth={2} aria-hidden="true" className={styles.sectionIcon} />}
       >
         {unifiedLoading ? (
-          <p className={styles.muted}>Loading…</p>
+          <p style={{ color: "#737373" }}>Loading…</p>
         ) : unifiedRows.length === 0 ? (
-          <p className={styles.muted}>No permits, violations, complaints, or litigations on file. Open this section to load data.</p>
+          <p style={{ color: "#737373" }}>No permits, violations, complaints, or litigations on file. Open this section to load data.</p>
         ) : (
-          <div className={styles.unifiedScroll}>
-            <table className={styles.unifiedTable}>
+          <div style={{ overflowX: "auto", maxHeight: "400px", overflowY: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem", tableLayout: "fixed" }}>
               <colgroup>
-                <col className={styles.unifiedColDate} />
-                <col className={styles.unifiedColCategory} />
-                <col className={styles.unifiedColInfo} />
+                <col style={{ width: "7rem", minWidth: "7rem" }} />
+                <col style={{ width: "8rem", minWidth: "8rem" }} />
+                <col style={{ width: "auto" }} />
               </colgroup>
               <thead>
-                <tr className={styles.unifiedHeadRow}>
-                  <th className={styles.unifiedThFirst}>Date</th>
-                  <th className={styles.unifiedTh}>Category</th>
-                  <th className={styles.unifiedThLast}>Info</th>
+                <tr style={{ borderBottom: "1px solid #e5e5e5" }}>
+                  <th style={{ textAlign: "left", padding: "0.5rem 0.75rem 0.5rem 0" }}>Date</th>
+                  <th style={{ textAlign: "left", padding: "0.5rem 0.75rem" }}>Category</th>
+                  <th style={{ textAlign: "left", padding: "0.5rem 0 0.5rem 0.75rem" }}>Info</th>
                 </tr>
               </thead>
               <tbody>
                 {unifiedRows.map((row, i) => (
-                  <tr key={i} className={styles.unifiedRow}>
-                    <td className={styles.unifiedTdFirst}>{row.date}</td>
-                    <td className={styles.unifiedTd}>{row.category}</td>
-                    <td className={styles.unifiedTdLast}>{row.info}</td>
+                  <tr key={i} style={{ borderBottom: "1px solid #f0f0f0" }}>
+                    <td style={{ padding: "0.5rem 0.75rem 0.5rem 0", whiteSpace: "nowrap", verticalAlign: "top" }}>{row.date}</td>
+                    <td style={{ padding: "0.5rem 0.75rem", verticalAlign: "top" }}>{row.category}</td>
+                    <td style={{ padding: "0.5rem 0 0.5rem 0.75rem", wordBreak: "break-word", verticalAlign: "top" }}>{row.info}</td>
                   </tr>
                 ))}
               </tbody>
@@ -4596,7 +5017,7 @@ export function CanonicalPropertyDetail({
       )}
 
       {activeTab === "dossierScore" && (
-      <div className={styles.footnote}>
+      <div style={{ marginTop: "1.5rem", fontSize: "0.8rem", color: "#64748b" }}>
         Deal dossier generation now runs from the dedicated section above using these property-level costs plus your saved profile defaults.
       </div>
       )}

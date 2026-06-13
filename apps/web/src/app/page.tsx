@@ -133,9 +133,10 @@ const WORKLIST_STAGE_KEYS = new Set<string>([
   "tour_requested",
   "tour_scheduled",
   "tour_completed_awaiting_inputs",
-  "offer_review",
+  "drafting_loi",
+  "loi_sent_awaiting_response",
   "negotiation",
-  "contract_signed",
+  "contract_signed_diligence",
 ]);
 const CLOSED_STATUSES = new Set(["deal_closed", "archived", "closed"]);
 const REJECTED_STATUSES = new Set(["rejected"]);

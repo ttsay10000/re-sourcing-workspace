@@ -167,6 +167,15 @@ function sampleContext(): UnderwritingContext {
       textSignals: ["value-add / dated-condition language"],
       summaryBullets: ["Photos show dated interiors and the OM explicitly frames the asset as value-add."],
     },
+    analystContext: {
+      listingSummary: "Listing describes a mixed-use value-add deal with ground-floor retail.",
+      listingSignals: ["Listing condition cue: value-add opportunity with renovated units."],
+      brokerClaims: ["Broker/listing claim: below-market rent upside."],
+      marketNeighborhoodSignals: ["Internal neighborhood metric: median sale pricing $900 PSF as of 2026-05-01."],
+      mixedUseRetailSignals: ["Commercial rent share: 10.0% of annual rent."],
+      diligenceFlags: ["Listing diligence flag: verify certificate of occupancy."],
+      sourceNotes: ["Retail/commercial footprint context uses internal listing, OM, valuation, and rent-roll fields only."],
+    },
   };
 }
 
@@ -182,6 +191,9 @@ describe("buildDossierStructuredText", () => {
     expect(text).toContain("Photo review: 5 image(s) analyzed; image quality Medium; confidence moderate");
     expect(text).toContain("Photos cover: exterior, kitchen, bathroom");
     expect(text).toContain("Not visible in photos: mechanicals, roof");
+    expect(text).toContain("Internal analyst context:");
+    expect(text).toContain("Listing condition cue: value-add opportunity with renovated units.");
+    expect(text).toContain("Commercial rent share: 10.0% of annual rent.");
     expect(text).not.toContain("IRR at asking");
     expect(text).toContain("**Gross rental income**");
     expect(text).toContain("Vacancy loss");

@@ -1,5 +1,6 @@
 import type { IngestionJobStatus, IngestionRunStatus, ListingSource } from "./enums.js";
 import type { ListingActivitySummary } from "./listing.js";
+import type { DealFlowStageId } from "./dealFlow.js";
 import type {
   BrokerCompMarketSummary,
   OmIngestionRun,
@@ -123,6 +124,13 @@ export interface UiV2DealPathState {
   offerNotes?: string | null;
   loiContingencies?: string[];
   loiContingencyNotes?: string | null;
+  contractSignedAt?: string | null;
+  escrowPeriodDays?: number | null;
+  escrowStartDate?: string | null;
+  escrowEndDate?: string | null;
+  diligenceDeadline?: string | null;
+  contractDocumentId?: string | null;
+  contractNotes?: string | null;
   rejectionReasonCode?: UiV2RejectionReasonCode | null;
   rejectionNotes?: string | null;
   updatedAt?: string | null;
@@ -729,6 +737,8 @@ export interface UiV2PipelineRow {
   canonicalAddress: string;
   displayAddress?: string | null;
   source?: ListingSource | string | null;
+  stage?: DealFlowStageId | string | null;
+  dealState?: "active" | "dead" | "closed" | string | null;
   statusChip: UiV2StatusChip;
   tags: string[];
   askingPrice?: number | null;

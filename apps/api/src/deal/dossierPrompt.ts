@@ -91,6 +91,7 @@ REQUIRED DOCUMENT STRUCTURE (output in this order)
    - These bullets must be analytical, not generic marketing copy.
    - Each bullet must include at least one hard number from the OM/underwriting data and, when possible, a derived implication or delta.
    - For mixed-use assets, explicitly mention residential/commercial composition, commercial rent share, lease rollover/escalation details if available, and any OM data discrepancies that should be verified before underwriting is finalized.
+   - If internal analyst context is provided, use it to call out listing-description condition language, broker claims, upside cues, amenities, market/neighborhood trend anchors, mixed-use/retail footprint clues, and diligence flags. Do not add external market facts that are not in the data block.
    - Prefer bullets like: current vs stabilized NOI delta, cap-rate delta, commercial share of rent, RS/FM unit split, debt-service cushion, missing lease data, or a discrepancy between OM sections.
 
 -----------------------------------------------------

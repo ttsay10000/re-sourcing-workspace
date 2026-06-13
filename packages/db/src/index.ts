@@ -58,6 +58,7 @@ export type {
   CreateBrokerCompPackageParams,
   PromoteBrokerCompItemParams,
   UpdateBrokerCompExtractedItemParams,
+  UpdateBrokerCompPackageMetaParams,
   UpsertBrokerCompPackagePageParams,
 } from "./repos/BrokerCompPackageRepo.js";
 export { mapDocument, mapUserProfile, mapSavedDeal, mapDealSignalRow, mapDealScoreOverride } from "./map.js";

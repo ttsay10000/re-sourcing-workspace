@@ -2505,6 +2505,88 @@ function buildFormulaAuditSheet(workbook: ExcelJS.Workbook, artifacts: WorkbookB
   });
 }
 
+function analystSectionRows(ctx: UnderwritingContext): Array<[string, string]> {
+  const analyst = ctx.analystContext;
+  if (!analyst) return [];
+  const rows: Array<[string, string]> = [];
+  if (analyst.listingSummary) rows.push(["Listing Summary", analyst.listingSummary]);
+  analyst.listingSignals?.forEach((signal) => rows.push(["Listing / OM Cues", signal]));
+  analyst.brokerClaims?.forEach((signal) => rows.push(["Broker Claims / Notes", signal]));
+  analyst.marketNeighborhoodSignals?.forEach((signal) => rows.push(["Market / Neighborhood", signal]));
+  analyst.mixedUseRetailSignals?.forEach((signal) => rows.push(["Mixed-Use / Retail", signal]));
+  analyst.diligenceFlags?.forEach((signal) => rows.push(["Diligence Flags", signal]));
+  analyst.sourceNotes?.forEach((signal) => rows.push(["Source Notes", signal]));
+  return rows;
+}
+
+function buildAnalystNotesSheet(workbook: ExcelJS.Workbook, ctx: UnderwritingContext): void {
+  const worksheet = workbook.addWorksheet("Analyst Notes", {
+    views: [{ state: "frozen", ySplit: 4, showGridLines: false }],
+  });
+  worksheet.columns = [
+    { width: 24 },
+    { width: 90 },
+    { width: 30 },
+  ];
+
+  worksheet.mergeCells("A1:C1");
+  setSheetCell(worksheet, "A1", "Internal Analyst Notes", {
+    fill: TITLE_FILL,
+    font: TITLE_FONT,
+    alignment: { horizontal: "left", vertical: "middle" },
+  });
+  worksheet.mergeCells("A2:C2");
+  setSheetCell(
+    worksheet,
+    "A2",
+    "Checkpoint-safe internal context from listing descriptions, OMs, saved broker/user notes, approved broker comps, neighborhood fields, and mixed-use retail signals already present in the deal record.",
+    {
+      fill: SOFT_FILL,
+      font: NOTE_FONT,
+      alignment: { wrapText: true, vertical: "top" },
+    }
+  );
+  worksheet.getRow(2).height = 42;
+
+  ["Section", "Analyst note", "Source boundary"].forEach((label, index) => {
+    setSheetCell(worksheet, `${columnLetter(index + 1)}4`, label, {
+      fill: COLUMN_FILL,
+      font: HEADER_FONT,
+      alignment: { horizontal: "center", wrapText: true },
+    });
+  });
+
+  const rows = analystSectionRows(ctx);
+  const visibleRows =
+    rows.length > 0
+      ? rows
+      : ([
+          [
+            "No analyst notes",
+            "No listing description, internal market, broker comp, saved note, or mixed-use retail context was available for this workbook run.",
+          ],
+        ] as Array<[string, string]>);
+
+  visibleRows.forEach(([section, note], index) => {
+    const row = index + 5;
+    setSheetCell(worksheet, `A${row}`, section, {
+      fill: SOFT_FILL,
+      font: LABEL_FONT,
+      alignment: { wrapText: true, vertical: "top" },
+    });
+    setSheetCell(worksheet, `B${row}`, note, {
+      fill: FORMULA_FILL,
+      alignment: { wrapText: true, vertical: "top" },
+    });
+    setSheetCell(worksheet, `C${row}`, "Internal-only", {
+      fill: SOFT_FILL,
+      font: NOTE_FONT,
+      alignment: { wrapText: true, vertical: "top", horizontal: "center" },
+    });
+    worksheet.getRow(row).height = Math.min(84, Math.max(34, Math.ceil(note.length / 78) * 18));
+  });
+}
+
 function buildModelGuideSheet(workbook: ExcelJS.Workbook): void {
   const worksheet = workbook.addWorksheet("Model Guide", {
     views: [{ state: "frozen", ySplit: 4, showGridLines: false }],
@@ -2552,6 +2634,11 @@ function buildModelGuideSheet(workbook: ExcelJS.Workbook): void {
       "Assumptions",
       "Editable inputs and source handoff",
       "Blue values are hard-coded from the current OM workspace / saved underwriting assumptions. Formula cells are white.",
+    ],
+    [
+      "Analyst Notes",
+      "Internal listing, market, and mixed-use context",
+      "Carries deterministic notes from existing internal sources only; it does not call new market-comp or live-analysis prompts.",
     ],
     [
       "FinancingModel",
@@ -2631,6 +2718,7 @@ export async function buildDealAnalysisWorkbook(
 
   const artifacts = buildArtifacts(ctx);
   buildAssumptionsSheet(workbook, ctx, blueprint, artifacts);
+  buildAnalystNotesSheet(workbook, ctx);
   buildFinancingModelSheet(workbook, ctx);
   buildMonthlyDebtSheet(workbook);
   buildCashFlowModelSheet(workbook, ctx, artifacts);

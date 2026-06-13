@@ -16,11 +16,11 @@ describe("dossierFileName", () => {
     expect(buildDossierPdfFileName("   ")).toBe("DEAL-DOSSIER-PROPERTY.pdf");
   });
 
-  it("builds the PDF and pro forma file names consistently", () => {
+  it("builds the PDF and deal-analysis workbook file names consistently", () => {
     const date = new Date("2026-03-26T12:00:00.000Z");
     expect(buildDossierPdfFileName("248 E 32nd St")).toBe("DEAL-DOSSIER-248-E-32ND-ST.pdf");
     expect(buildProFormaFileName("248 E 32nd St", date)).toBe(
-      "PRO-FORMA-248-E-32ND-ST-2026-03-26.xlsx"
+      "DEAL-ANALYSIS-248-E-32ND-ST-2026-03-26.xlsx"
     );
   });
 });

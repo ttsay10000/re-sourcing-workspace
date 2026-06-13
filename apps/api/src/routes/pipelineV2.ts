@@ -8,7 +8,13 @@
 import { randomUUID } from "node:crypto";
 import { Router, type Request, type Response } from "express";
 import type { Pool, PoolClient } from "pg";
-import { deriveListingActivitySummary, describeListingActivity, pipelineStatusRank } from "@re-sourcing/contracts";
+import {
+  DEAL_FLOW_STAGE_BY_ID,
+  dealFlowStageForStatus,
+  deriveListingActivitySummary,
+  describeListingActivity,
+  type DealFlowStageId,
+} from "@re-sourcing/contracts";
 import {
   DocumentRepo,
   BrokerCompPackageRepo,
@@ -80,16 +86,10 @@ import {
 import { resolveEffectiveDealScore } from "../deal/effectiveDealScore.js";
 import { recordDealStageChange } from "../deal/recordDealStageChange.js";
 import { resolveOmAskingPriceFromDetails } from "../deal/omAskingPrice.js";
-import { computeBrokerYieldComparison, computeYieldSignals } from "../deal/yieldSignals.js";
-import { returnRateToPctPoints } from "../deal/irrCalculation.js";
+import { computeYieldSignals } from "../deal/yieldSignals.js";
 import { buildLoiFileName, buildLoiPdf } from "../deal/loiGenerator.js";
 import { saveGeneratedDocument } from "../deal/generatedDocStorage.js";
-import { resolveReconstructedNoiBasisFromDetails } from "../deal/reconstructedNoiBasis.js";
-import {
-  getAuthoritativeOmSnapshot,
-  resolveBrokerStatedCapRatePct,
-  resolvePreferredOmUnitCount,
-} from "../om/authoritativeOm.js";
+import { resolvePreferredOmUnitCount } from "../om/authoritativeOm.js";
 
 const router = Router();
 
@@ -229,6 +229,9 @@ interface PipelineBaseRow {
   details: PropertyDetails | null;
   property_created_at: Date | string;
   property_updated_at: Date | string;
+  deal_state: string | null;
+  deal_stage: string | null;
+  stage_entered_at: Date | string | null;
   listing_id: string | null;
   listing_source: ListingSource | string | null;
   listing_price: number | string | null;
@@ -276,7 +279,6 @@ interface PipelineBaseRow {
   broker_notes: string | null;
   uploaded_doc_count: number | string | null;
   uploaded_categories: PropertyDocumentCategory[] | null;
-  latest_om_document_id: string | null;
   uploaded_last_updated_at: Date | string | null;
   inquiry_doc_count: number | string | null;
   inquiry_filenames: string[] | null;
@@ -430,19 +432,13 @@ function deriveDealPathStatus(input: {
   if (input.postTourDecision === "reject") return "rejected_after_tour";
   if (input.postTourDecision === "move_forward") return "offer_candidate";
   if (input.postTourDecision === "need_more_info") return "need_more_info";
-  // An explicit tour-stage status persists even without its date ("moved
-  // anyway" — the board flags the missing info instead of bouncing the deal).
-  // Precedence mirrors savedProgressV2.deriveDealPathPipelineStatus.
-  if (input.tourCompletedAt || input.rawStatus === "tour_completed_awaiting_inputs") {
-    return "tour_completed_awaiting_inputs";
-  }
+  if (input.tourCompletedAt) return "tour_completed_awaiting_inputs";
   if (input.tourScheduledAt) {
     const scheduledMs = Date.parse(input.tourScheduledAt);
     return Number.isFinite(scheduledMs) && scheduledMs <= Date.now()
       ? "tour_completed_awaiting_inputs"
       : "tour_scheduled";
   }
-  if (input.rawStatus === "tour_scheduled") return "tour_scheduled";
   return "not_scheduled";
 }
 
@@ -465,10 +461,16 @@ function normalizeDealPathState(input: unknown): UiV2DealPathState | null {
     postTourDecision,
     targetPrice: toFiniteNumber(input.targetPrice),
     offerAmount: toFiniteNumber(input.offerAmount),
-    finalPrice: toFiniteNumber(input.finalPrice),
     offerNotes: stringOrNull(input.offerNotes),
     loiContingencies,
     loiContingencyNotes: stringOrNull(input.loiContingencyNotes),
+    contractSignedAt: nullableIsoDateTime(input.contractSignedAt),
+    escrowPeriodDays: toFiniteNumber(input.escrowPeriodDays),
+    escrowStartDate: nullableIsoDateTime(input.escrowStartDate),
+    escrowEndDate: nullableIsoDateTime(input.escrowEndDate),
+    diligenceDeadline: nullableIsoDateTime(input.diligenceDeadline),
+    contractDocumentId: stringOrNull(input.contractDocumentId),
+    contractNotes: stringOrNull(input.contractNotes),
     rejectionReasonCode: parseRejectionReasonCode(input.rejectionReasonCode),
     rejectionNotes: stringOrNull(input.rejectionNotes),
     updatedAt: nullableIsoDateTime(input.updatedAt),
@@ -770,7 +772,7 @@ function legacyStatusFromUiV2Status(status: UiV2PipelineStatus): LegacyPipelineS
     contract_signed: "contract_signed",
     deal_closed: "closed",
     rejected: "rejected_removed",
-    archived: "closed",
+    archived: "rejected_removed",
   };
   return mapping[status];
 }
@@ -821,9 +823,74 @@ function statusTone(status: UiV2PipelineStatus): UiV2StatusChipTone {
   return tones[status];
 }
 
+function uiStatusForDealStage(stage: DealFlowStageId): UiV2PipelineStatus {
+  switch (stage) {
+    case "sourced":
+      return "saved";
+    case "om_requested":
+      return "awaiting_broker";
+    case "underwriting_awaiting_review":
+    case "underwriting_review_completed":
+      return "underwriting";
+    case "tour_requested":
+    case "tour_scheduled":
+      return "tour_scheduled";
+    case "tour_completed_awaiting_inputs":
+      return "tour_completed_awaiting_inputs";
+    case "drafting_loi":
+    case "loi_sent_awaiting_response":
+      return "offer_review";
+    case "negotiation":
+      return "negotiation";
+    case "contract_signed_diligence":
+      return "contract_signed";
+    case "deal_closed":
+      return "deal_closed";
+  }
+}
+
+function legacyStatusForDealStage(stage: DealFlowStageId): string {
+  switch (stage) {
+    case "sourced":
+      return "saved_watchlist";
+    case "om_requested":
+      return "om_requested";
+    case "underwriting_awaiting_review":
+    case "underwriting_review_completed":
+      return "underwriting";
+    case "tour_requested":
+    case "tour_scheduled":
+      return "tour_scheduled";
+    case "tour_completed_awaiting_inputs":
+      return "tour_completed_awaiting_inputs";
+    case "drafting_loi":
+      return "offer_review";
+    case "loi_sent_awaiting_response":
+      return "loi_sent";
+    case "negotiation":
+      return "negotiation";
+    case "contract_signed_diligence":
+      return "contract_signed";
+    case "deal_closed":
+      return "closed";
+  }
+}
+
+function dealStageLabel(stage: DealFlowStageId): string {
+  return DEAL_FLOW_STAGE_BY_ID.get(stage)?.label ?? stage;
+}
+
+function derivePipelineRowStage(row: PipelineBaseRow): DealFlowStageId | null {
+  if (isDealStage(row.deal_stage)) return row.deal_stage;
+  const status = deriveUiV2Status(row);
+  return dealFlowStageForStatus(status)?.id ?? null;
+}
+
 function deriveUiV2Status(row: PipelineBaseRow): UiV2PipelineStatus {
   const details = row.details;
   const pipeline = readPipelineState(details);
+  if (row.deal_state === "dead") return pipeline.uiV2Status === "archived" ? "archived" : "rejected";
+  if (row.deal_state === "closed" || row.deal_stage === "deal_closed") return "deal_closed";
   if (pipeline.status === "rejected_removed" || pipeline.rejectedAt != null) return "rejected";
   const explicitStatus = pipeline.uiV2Status;
   const dealPathStatus = pipeline.dealPath?.status;
@@ -1363,35 +1430,6 @@ function normalizeOmStatus(value: unknown, hasOmDocument: boolean, hasOmRequest:
   return hasOmDocument ? "available" : "missing";
 }
 
-const VALIDATION_SEVERITY_RANK: Record<string, number> = { error: 0, warning: 1, info: 2 };
-
-/**
- * Row-level digest of the active OM snapshot's validation flags so the
- * pipeline table can triage extractions without opening the sheet.
- */
-function summarizeOmValidationFlags(
-  details: PipelineBaseRow["details"]
-): Pick<UiV2DocumentStatus, "omValidationFlagCount" | "omValidationWorstSeverity" | "omValidationMessages"> {
-  const snapshot = getAuthoritativeOmSnapshot(details);
-  const flags = Array.isArray(snapshot?.validationFlags) ? snapshot.validationFlags : [];
-  if (flags.length === 0) {
-    return { omValidationFlagCount: 0, omValidationWorstSeverity: null, omValidationMessages: [] };
-  }
-  const sorted = [...flags].sort(
-    (a, b) =>
-      (VALIDATION_SEVERITY_RANK[a.severity ?? ""] ?? 3) - (VALIDATION_SEVERITY_RANK[b.severity ?? ""] ?? 3)
-  );
-  const worst = sorted[0]?.severity;
-  return {
-    omValidationFlagCount: flags.length,
-    omValidationWorstSeverity: worst === "error" || worst === "warning" || worst === "info" ? worst : null,
-    omValidationMessages: sorted
-      .slice(0, 3)
-      .map((flag) => flag.message)
-      .filter((message): message is string => typeof message === "string" && message.length > 0),
-  };
-}
-
 function buildDocumentStatus(row: PipelineBaseRow, collections?: DetailCollections): UiV2DocumentStatus {
   const uploadedDocs = collections?.uploadedDocs ?? [];
   const inquiryDocs = collections?.inquiryDocs ?? [];
@@ -1409,21 +1447,14 @@ function buildDocumentStatus(row: PipelineBaseRow, collections?: DetailCollectio
     : hasOm(row);
   const pipeline = readPipelineState(row.details);
   const latestRequestAt = optionalIso(row.latest_inquiry_sent_at);
-  const omDocumentId = collections
-    ? uploadedDocs.find((doc) => doc.category === "OM" || doc.category === "Brochure")?.id ??
-      inquiryDocs.find((doc) => looksLikeOmStyleFilename(doc.filename))?.id ??
-      null
-    : row.latest_om_document_id ?? null;
   return {
     hasOm: hasOmDocument,
-    omDocumentId,
     omStatus: normalizeOmStatus(row.latest_om_status ?? pipeline.omStatus, hasOmDocument, latestRequestAt != null),
     latestOmRunId: row.latest_om_run_id,
     latestRequestAt,
     documentCount,
     categories,
     lastUpdatedAt: latestDocUpdatedAt(row),
-    ...summarizeOmValidationFlags(row.details),
   };
 }
 
@@ -1701,8 +1732,7 @@ function buildEnrichmentDetails(row: PipelineBaseRow): UiV2EnrichmentDetailPaylo
     label: string,
     summaryItems: Array<UiV2DetailItem | null | undefined>,
     detailItems: Array<UiV2DetailItem | null | undefined> = [],
-    fallbackStatus?: string | null,
-    lastRefreshedAt?: string | null
+    fallbackStatus?: string | null
   ) => {
     const summary = compactItems(summaryItems);
     const detail = compactItems(detailItems);
@@ -1713,7 +1743,6 @@ function buildEnrichmentDetails(row: PipelineBaseRow): UiV2EnrichmentDetailPaylo
       status: moduleStatus([...summary, ...detail], fallbackStatus),
       summaryItems: summary,
       detailItems: detail,
-      lastRefreshedAt: lastRefreshedAt ?? null,
     });
   };
 
@@ -1731,7 +1760,7 @@ function buildEnrichmentDetails(row: PipelineBaseRow): UiV2EnrichmentDetailPaylo
     detailItem("Walk score", neighborhood?.metrics?.walkScore),
     detailItem("Transit score", neighborhood?.metrics?.transitScore),
     detailItem("Narrative", neighborhood?.narrative),
-  ], null, neighborhood?.lastRefreshedAt ?? null);
+  ]);
   addModule("tax_assessment", "Tax Assessment", [
     detailItem("Tax class", details?.taxClass ?? details?.taxCode),
     detailItem("BBL", details?.buildingLotBlock ?? details?.bbl),
@@ -1758,7 +1787,8 @@ function buildEnrichmentDetails(row: PipelineBaseRow): UiV2EnrichmentDetailPaylo
   ], [
     detailItem("Map number", readStringPath(enrichment, ["zoning", "zoningMapNumber"])),
     detailItem("Map code", readStringPath(enrichment, ["zoning", "zoningMapCode"])),
-  ], null, readStringPath(enrichment, ["zoning", "lastRefreshedAt"]));
+    detailItem("Refreshed", readStringPath(enrichment, ["zoning", "lastRefreshedAt"])),
+  ]);
   addModule("certificate_of_occupancy", "Certificate of Occupancy", [
     detailItem("Status", readStringPath(enrichment, ["certificateOfOccupancy", "status"])),
     detailItem("Job type", readStringPath(enrichment, ["certificateOfOccupancy", "jobType"])),
@@ -1766,15 +1796,15 @@ function buildEnrichmentDetails(row: PipelineBaseRow): UiV2EnrichmentDetailPaylo
   ], [
     detailItem("Filing type", readStringPath(enrichment, ["certificateOfOccupancy", "filingType"])),
     detailItem("Issued", readStringPath(enrichment, ["certificateOfOccupancy", "issuanceDate"])),
-  ], null, readStringPath(enrichment, ["certificateOfOccupancy", "lastRefreshedAt"]));
+  ]);
   addModule("permits", "Permits", [
     detailItem("Count", readNumericPath(enrichment, ["permits_summary", "count"])),
     detailItem("Last issued", readStringPath(enrichment, ["permits_summary", "last_issued_date"])),
-  ], [], null, readStringPath(enrichment, ["permits_summary", "lastRefreshedAt"]));
+  ]);
   addModule("hpd_registration", "HPD Registration", [
     detailItem("Registration ID", readStringPath(enrichment, ["hpdRegistration", "registrationId"])),
     detailItem("Last registration", readStringPath(enrichment, ["hpdRegistration", "lastRegistrationDate"])),
-  ], [], null, readStringPath(enrichment, ["hpdRegistration", "lastRefreshedAt"]));
+  ]);
   addModule("hpd_violations", "HPD Violations", [
     detailItem("Open", readNumericPath(enrichment, ["hpd_violations_summary", "openCount"])),
     detailItem("Closed", readNumericPath(enrichment, ["hpd_violations_summary", "closedCount"])),
@@ -1783,7 +1813,7 @@ function buildEnrichmentDetails(row: PipelineBaseRow): UiV2EnrichmentDetailPaylo
     detailItem("Total", readNumericPath(enrichment, ["hpd_violations_summary", "total"])),
     detailItem("Most recent", readStringPath(enrichment, ["hpd_violations_summary", "mostRecentApprovedDate"])),
     detailItem("By class", isPlainRecord(enrichment.hpd_violations_summary) ? enrichment.hpd_violations_summary.byClass : null),
-  ], null, readStringPath(enrichment, ["hpd_violations_summary", "lastRefreshedAt"]));
+  ]);
   addModule("dob_complaints", "DOB Complaints", [
     detailItem("30 days", readNumericPath(enrichment, ["dob_complaints_summary", "count30"])),
     detailItem("90 days", readNumericPath(enrichment, ["dob_complaints_summary", "count90"])),
@@ -1792,7 +1822,7 @@ function buildEnrichmentDetails(row: PipelineBaseRow): UiV2EnrichmentDetailPaylo
     detailItem("Open", readNumericPath(enrichment, ["dob_complaints_summary", "openCount"])),
     detailItem("Closed", readNumericPath(enrichment, ["dob_complaints_summary", "closedCount"])),
     detailItem("Top categories", isPlainRecord(enrichment.dob_complaints_summary) ? enrichment.dob_complaints_summary.topCategories : null),
-  ], null, readStringPath(enrichment, ["dob_complaints_summary", "lastRefreshedAt"]));
+  ]);
   addModule("housing_litigations", "Housing Litigations", [
     detailItem("Total", readNumericPath(enrichment, ["housing_litigations_summary", "total"])),
     detailItem("Open", readNumericPath(enrichment, ["housing_litigations_summary", "openCount"])),
@@ -1801,7 +1831,7 @@ function buildEnrichmentDetails(row: PipelineBaseRow): UiV2EnrichmentDetailPaylo
     detailItem("Last finding", readStringPath(enrichment, ["housing_litigations_summary", "lastFindingDate"])),
     detailItem("By case type", isPlainRecord(enrichment.housing_litigations_summary) ? enrichment.housing_litigations_summary.byCaseType : null),
     detailItem("By status", isPlainRecord(enrichment.housing_litigations_summary) ? enrichment.housing_litigations_summary.byStatus : null),
-  ], null, readStringPath(enrichment, ["housing_litigations_summary", "lastRefreshedAt"]));
+  ]);
   addModule("affordable_housing", "Affordable Housing", [
     detailItem("Project count", readNumericPath(enrichment, ["affordable_housing_summary", "projectCount"])),
     detailItem("Total units", readNumericPath(enrichment, ["affordable_housing_summary", "totalUnits"])),
@@ -1810,7 +1840,7 @@ function buildEnrichmentDetails(row: PipelineBaseRow): UiV2EnrichmentDetailPaylo
     detailItem("Start", readStringPath(enrichment, ["affordable_housing_summary", "latestProjectStartDate"])),
     detailItem("Completion", readStringPath(enrichment, ["affordable_housing_summary", "latestProjectCompletionDate"])),
     detailItem("By band", isPlainRecord(enrichment.affordable_housing_summary) ? enrichment.affordable_housing_summary.totalAffordableByBand : null),
-  ], null, readStringPath(enrichment, ["affordable_housing_summary", "lastRefreshedAt"]));
+  ]);
 
   const rentalUnits = Array.isArray(rentalFinancials?.rentalUnits) ? rentalFinancials.rentalUnits : [];
   const omRentRoll = Array.isArray(omAnalysis.rentRoll) ? omAnalysis.rentRoll : [];
@@ -1884,33 +1914,45 @@ function getCalculatedDealScore(row: PipelineBaseRow): number | null {
 }
 
 function getCapRate(row: PipelineBaseRow): number | null {
-  const explicit = resolveBrokerStatedCapRatePct(row.details);
+  const details = row.details;
+  const summary = getCurrentDossierSummary(row);
+  const allowSignalFallback = hasCurrentUnderwritingSource(row);
+  const explicit =
+    readFirstNumericPath(details, [
+      ["omData", "authoritative", "valuationMetrics", "capRate"],
+      ["omData", "authoritative", "valuationMetrics", "currentCapRate"],
+      ["omData", "authoritative", "uiFinancialSummary", "capRate"],
+      ["rentalFinancials", "omAnalysis", "valuationMetrics", "capRate"],
+      ["rentalFinancials", "omAnalysis", "valuationMetrics", "currentCapRate"],
+      ["rentalFinancials", "fromLlm", "capRate"],
+    ]);
   if (explicit != null) return explicit;
-  const noi = getCurrentNoi(row) ?? getAdjustedNoi(row);
+  const noi =
+    readNumericPath(details, ["omData", "authoritative", "currentFinancials", "noi"]) ??
+    readNumericPath(details, ["omData", "authoritative", "currentFinancials", "netOperatingIncome"]) ??
+    readNumericPath(details, ["rentalFinancials", "omAnalysis", "currentFinancials", "noi"]) ??
+    readNumericPath(details, ["rentalFinancials", "omAnalysis", "currentFinancials", "netOperatingIncome"]) ??
+    readNumericPath(details, ["rentalFinancials", "fromLlm", "noi"]) ??
+    summary?.currentNoi ??
+    (allowSignalFallback ? toFiniteNumber(row.latest_signal_current_noi) : null) ??
+    summary?.adjustedNoi ??
+    (allowSignalFallback ? toFiniteNumber(row.latest_signal_adjusted_noi) : null);
   const price = getAskingPrice(row);
   if (noi == null || price == null || price <= 0) return null;
   return (noi / price) * 100;
 }
 
-/** Broker-stated NOI exactly as extracted from the OM/docs — pro forma territory. */
-function getBrokerReportedNoi(row: PipelineBaseRow): number | null {
+function getCurrentNoi(row: PipelineBaseRow): number | null {
   const details = row.details;
+  const summary = getCurrentDossierSummary(row);
+  const allowSignalFallback = hasCurrentUnderwritingSource(row);
   return (
+    summary?.currentNoi ??
     readNumericPath(details, ["omData", "authoritative", "currentFinancials", "noi"]) ??
     readNumericPath(details, ["omData", "authoritative", "currentFinancials", "netOperatingIncome"]) ??
     readNumericPath(details, ["rentalFinancials", "omAnalysis", "currentFinancials", "noi"]) ??
     readNumericPath(details, ["rentalFinancials", "omAnalysis", "currentFinancials", "netOperatingIncome"]) ??
-    readNumericPath(details, ["rentalFinancials", "fromLlm", "noi"])
-  );
-}
-
-function getCurrentNoi(row: PipelineBaseRow): number | null {
-  const summary = getCurrentDossierSummary(row);
-  const allowSignalFallback = hasCurrentUnderwritingSource(row);
-  return (
-    resolveReconstructedNoiBasisFromDetails(row.details) ??
-    summary?.currentNoi ??
-    getBrokerReportedNoi(row) ??
+    readNumericPath(details, ["rentalFinancials", "fromLlm", "noi"]) ??
     (allowSignalFallback ? toFiniteNumber(row.latest_signal_current_noi) : null)
   );
 }
@@ -1937,12 +1979,6 @@ function buildUnderwriting(row: PipelineBaseRow): UiV2UnderwritingSummary | null
   const ltrYocPct = getNoiYieldOnCost(row, currentNoi, allowSignalFallback ? row.latest_signal_asset_cap_rate : null);
   const mtrYocPct = getNoiYieldOnCost(row, adjustedNoi, allowSignalFallback ? row.latest_signal_adjusted_cap_rate : null);
   const yieldSignals = computeYieldSignals({ ltrYieldPct: ltrYocPct, mtrYieldPct: mtrYocPct });
-  const brokerYieldComparison = computeBrokerYieldComparison({
-    brokerNoi: getBrokerReportedNoi(row),
-    brokerStatedCapRatePct: resolveBrokerStatedCapRatePct(details),
-    reconstructedNoi: resolveReconstructedNoiBasisFromDetails(details),
-    purchasePrice: getAskingPrice(row),
-  });
   const hasAnyUnderwriting =
     summary != null ||
     assumptions != null ||
@@ -1967,11 +2003,6 @@ function buildUnderwriting(row: PipelineBaseRow): UiV2UnderwritingSummary | null
     yocSpreadPct: yieldSignals.spreadPctPoints,
     mtrCalloutCode: yieldSignals.calloutCode,
     mtrCalloutLabel: yieldSignals.calloutLabel,
-    brokerCapRatePct: brokerYieldComparison.brokerCapRatePct,
-    brokerCapRateSource: brokerYieldComparison.brokerCapRateSource,
-    brokerVsReconstructedPctPoints: brokerYieldComparison.deltaPctPoints,
-    brokerCapCalloutCode: brokerYieldComparison.calloutCode,
-    brokerCapCalloutLabel: brokerYieldComparison.calloutLabel,
     riskFlags: allowSignalFallback && Array.isArray(row.latest_signal_risk_flags)
       ? (row.latest_signal_risk_flags as unknown[]).filter((flag): flag is string => typeof flag === "string")
       : [],
@@ -1979,8 +2010,8 @@ function buildUnderwriting(row: PipelineBaseRow): UiV2UnderwritingSummary | null
       ? (row.latest_signal_cap_reasons as unknown[]).filter((flag): flag is string => typeof flag === "string")
       : [],
     targetIrrPct: summary?.targetIrrPct ?? assumptions?.targetIrrPct ?? null,
-    irrPct: returnRateToPctPoints(summary?.irrPct ?? (allowSignalFallback ? toFiniteNumber(row.latest_signal_irr_pct) : null)),
-    cocPct: returnRateToPctPoints(summary?.cocPct ?? (allowSignalFallback ? toFiniteNumber(row.latest_signal_coc_pct) : null)),
+    irrPct: summary?.irrPct ?? (allowSignalFallback ? toFiniteNumber(row.latest_signal_irr_pct) : null),
+    cocPct: summary?.cocPct ?? (allowSignalFallback ? toFiniteNumber(row.latest_signal_coc_pct) : null),
     currentNoi,
     adjustedNoi,
     summary,
@@ -2148,6 +2179,8 @@ function buildPipelineRow(row: PipelineBaseRow, userId: string): UiV2PipelineRow
     canonicalAddress: row.canonical_address,
     displayAddress: overview.displayAddress,
     source: overview.source,
+    stage: derivePipelineRowStage(row),
+    dealState: row.deal_state ?? null,
     statusChip: buildStatusChip(row),
     tags,
     askingPrice: overview.askingPrice,
@@ -2461,6 +2494,9 @@ async function fetchPipelineRows(pool: Pool, userId: string): Promise<PipelineBa
        p.details,
        p.created_at AS property_created_at,
        p.updated_at AS property_updated_at,
+       p.deal_state,
+       p.deal_stage,
+       p.stage_entered_at,
        l.id AS listing_id,
        l.source AS listing_source,
        l.price AS listing_price,
@@ -2509,7 +2545,6 @@ async function fetchPipelineRows(pool: Pool, userId: string): Promise<PipelineBa
        COALESCE(ud.uploaded_doc_count, 0) AS uploaded_doc_count,
        ud.uploaded_categories,
        ud.uploaded_last_updated_at,
-       omdoc.latest_om_document_id,
        COALESCE(idoc.inquiry_doc_count, 0) AS inquiry_doc_count,
        idoc.inquiry_filenames,
        idoc.inquiry_last_updated_at,
@@ -2561,19 +2596,6 @@ async function fetchPipelineRows(pool: Pool, userId: string): Promise<PipelineBa
        FROM property_uploaded_documents
        WHERE property_id = p.id
      ) ud ON true
-     LEFT JOIN LATERAL (
-       -- Newest OM-style document id so list rows can offer a direct download
-       -- without opening the property (matches looksLikeOmStyleFilename).
-       SELECT COALESCE(
-         (SELECT d2.id::text FROM property_uploaded_documents d2
-           WHERE d2.property_id = p.id AND d2.category IN ('OM', 'Brochure')
-           ORDER BY d2.created_at DESC LIMIT 1),
-         (SELECT i2.id::text FROM property_inquiry_documents i2
-           WHERE i2.property_id = p.id
-             AND i2.filename ~* '(offering|memorandum|(^|[^a-z])om([^a-z]|$)|brochure|rent[ _-]?roll)'
-           ORDER BY i2.created_at DESC LIMIT 1)
-       ) AS latest_om_document_id
-     ) omdoc ON true
      LEFT JOIN LATERAL (
        SELECT
          COUNT(*)::int AS inquiry_doc_count,
@@ -3111,6 +3133,9 @@ async function handleStatusUpdate(req: Request, res: Response): Promise<void> {
       return;
     }
     const rejection = status === "rejected" ? extractRejectionReason(body) : null;
+    const archiveDisposition: UiV2RejectionReason | null =
+      status === "archived" ? { reasonCode: "other", note: "Archived from active pipeline." } : null;
+    const deadDisposition = rejection ?? archiveDisposition;
     if (status === "rejected" && rejection == null) {
       res.status(400).json({
         error: "Rejection reason required.",
@@ -3133,27 +3158,33 @@ async function handleStatusUpdate(req: Request, res: Response): Promise<void> {
       uiV2Status: status,
       lastActivityAt: now,
     };
-    if (status === "rejected" && rejection != null) {
+    if ((status === "rejected" || status === "archived") && deadDisposition != null) {
       patch.previousStatus = existing.status === "rejected_removed" ? existing.previousStatus : existing.status;
-      patch.previousUiV2Status = existing.uiV2Status === "rejected" ? existing.previousUiV2Status : existing.uiV2Status;
+      patch.previousUiV2Status =
+        existing.uiV2Status === "rejected" || existing.uiV2Status === "archived"
+          ? existing.previousUiV2Status
+          : existing.uiV2Status;
       patch.rejectedAt = now;
-      patch.rejectionReason = formatRejectionReason(rejection);
-      patch.rejection = { ...rejection, rejectedAt: now };
-      patch.tags = uniqueStrings([...existing.tags, "rejected"]);
+      patch.rejectionReason = formatRejectionReason(deadDisposition);
+      patch.rejection = { ...deadDisposition, rejectedAt: now };
+      patch.tags = uniqueStrings([...existing.tags, status === "archived" ? "archived" : "rejected"]);
       await new PropertyRejectionRepo({ pool }).reject({
         propertyId,
-        reasonCode: rejection.reasonCode,
-        reasonLabel: REJECTION_REASON_LABELS[rejection.reasonCode],
-        note: rejection.note ?? null,
+        reasonCode: deadDisposition.reasonCode,
+        reasonLabel: REJECTION_REASON_LABELS[deadDisposition.reasonCode],
+        note: deadDisposition.note ?? null,
         actor: actorName,
-        source: "ui-v2",
+        source: status === "archived" ? "ui-v2-archive" : "ui-v2",
         metadata: { previousStatus: existing.uiV2Status ?? mapLegacyStatus(existing.status) },
       });
     } else {
       patch.rejectedAt = null;
       patch.rejectionReason = null;
       patch.rejection = undefined;
-      patch.tags = existing.tags.filter((tag) => normalizeTag(tag) !== "rejected");
+      patch.tags = existing.tags.filter((tag) => {
+        const normalized = normalizeTag(tag);
+        return normalized !== "rejected" && normalized !== "archived";
+      });
       if (existing.uiV2Status === "rejected" || existing.status === "rejected_removed" || existing.rejectedAt) {
         await new PropertyRejectionRepo({ pool }).restoreActive(propertyId, {
           actor: actorName,
@@ -3161,51 +3192,27 @@ async function handleStatusUpdate(req: Request, res: Response): Promise<void> {
         });
       }
     }
-    // An explicit stage move always wins. If the stored deal path would steer
-    // the board to a different stage (tour dates, explicit tour status, or an
-    // offer decision), mark the path "canceled" so the deal stays where the
-    // user put it instead of silently bouncing back. Tour history (dates,
-    // notes) is preserved; a deal-path update with a new date or decision
-    // re-enters the flow.
-    const currentDealPath = existing.dealPath;
-    if (currentDealPath != null && status !== "rejected") {
-      const dealPathPipelineStatus = dealPathStatusForPipeline(
-        deriveDealPathStatus({
-          rawStatus: parseDealPathStatus(currentDealPath.status),
-          tourScheduledAt: currentDealPath.tourScheduledAt ?? null,
-          tourCompletedAt: currentDealPath.tourCompletedAt ?? null,
-          postTourDecision: currentDealPath.postTourDecision ?? null,
-        })
-      );
-      if (
-        dealPathPipelineStatus != null &&
-        dealPathPipelineStatus !== status &&
-        !DEAL_PATH_OVERRIDE_BLOCKING_STATUSES.has(status)
-      ) {
-        patch.dealPath = normalizeDealPathState({ ...currentDealPath, status: "canceled", updatedAt: now });
-      }
-    }
     await updatePipelineState(pool, propertyId, patch);
     void recordDealStageChange(pool, propertyId, status, { actor: actorName, source: "ui-v2-status" });
     const userId = await getDefaultUserId(pool);
     const savedDealsRepo = new SavedDealsRepo({ pool });
     const savedDeal = await savedDealsRepo.get(userId, propertyId);
-    if (status === "rejected" && savedDeal && savedDeal.dealStatus !== "rejected") {
+    if ((status === "rejected" || status === "archived") && savedDeal && savedDeal.dealStatus !== "rejected") {
       await savedDealsRepo.updateStatus(userId, propertyId, "rejected");
-    } else if (status !== "rejected" && savedDeal?.dealStatus === "rejected") {
+    } else if (status !== "rejected" && status !== "archived" && savedDeal?.dealStatus === "rejected") {
       await savedDealsRepo.updateStatus(userId, propertyId, "saved");
     }
     await new PropertyPipelineEventRepo({ pool }).create({
       propertyId,
-      eventType: status === "rejected" ? "rejected" : "status_changed",
+      eventType: status === "rejected" || status === "archived" ? "rejected" : "status_changed",
       actor: actorName,
       source: "ui-v2",
-      title: status === "rejected" ? "Property rejected" : eventTitleForStatus(status),
-      body: status === "rejected" && rejection != null ? formatRejectionReason(rejection) : null,
+      title: status === "archived" ? "Property archived" : status === "rejected" ? "Property rejected" : eventTitleForStatus(status),
+      body: deadDisposition != null ? formatRejectionReason(deadDisposition) : null,
       metadata: {
         status,
         previousStatus: existing.uiV2Status ?? mapLegacyStatus(existing.status),
-        ...(rejection ? { rejection } : {}),
+        ...(deadDisposition ? { rejection: deadDisposition } : {}),
       },
     });
     const detail = await loadDetailForProperty(pool, userId, propertyId);
@@ -3457,20 +3464,28 @@ router.post("/ui-v2/properties/:id/stage", async (req: Request, res: Response) =
     res.status(400).json({ error: "Property id is required." });
     return;
   }
-  const state = req.body?.state ?? "active";
   const stage = req.body?.stage;
-  if (!isDealState(state)) {
-    res.status(422).json({ error: "state must be one of: active, dead, closed." });
-    return;
-  }
   if (!isDealStage(stage)) {
     res.status(422).json({ error: "stage is not a recognized deal stage." });
+    return;
+  }
+  const requestedState = req.body?.state ?? (stage === "deal_closed" ? "closed" : "active");
+  const state = stage === "deal_closed" ? "closed" : requestedState;
+  if (!isDealState(state)) {
+    res.status(422).json({ error: "state must be one of: active, dead, closed." });
     return;
   }
   const reason = typeof req.body?.reason === "string" ? req.body.reason.trim() || null : null;
   const actor = typeof req.body?.actorName === "string" ? req.body.actorName.trim() || null : null;
   try {
     const pool = getPool();
+    const propertyRepo = new PropertyRepo({ pool });
+    const property = await propertyRepo.byId(propertyId);
+    if (!property) {
+      res.status(404).json({ error: "Property not found" });
+      return;
+    }
+    const existing = readPipelineState(property.details);
     const repo = new StageTransitionRepo({ pool });
     const transition = await repo.recordTransition({
       propertyId,
@@ -3481,6 +3496,35 @@ router.post("/ui-v2/properties/:id/stage", async (req: Request, res: Response) =
       reason,
       metadata: null,
     });
+    const now = new Date().toISOString();
+    const uiStatus = state === "dead" ? "archived" : uiStatusForDealStage(stage);
+    const patch: Partial<PipelineDetailsState> = {
+      status: state === "dead" ? "rejected_removed" : legacyStatusForDealStage(stage),
+      uiV2Status: uiStatus,
+      lastActivityAt: now,
+    };
+    if (state !== "dead" && (existing.uiV2Status === "rejected" || existing.uiV2Status === "archived" || existing.status === "rejected_removed" || existing.rejectedAt)) {
+      patch.rejectedAt = null;
+      patch.rejectionReason = null;
+      patch.rejection = undefined;
+      patch.tags = existing.tags.filter((tag) => {
+        const normalized = normalizeTag(tag);
+        return normalized !== "rejected" && normalized !== "archived";
+      });
+      await new PropertyRejectionRepo({ pool }).restoreActive(propertyId, {
+        actor,
+        restoredReason: "stage_changed",
+      });
+    }
+    await updatePipelineState(pool, propertyId, patch);
+    const userId = await getDefaultUserId(pool);
+    const savedDealsRepo = new SavedDealsRepo({ pool });
+    const savedDeal = await savedDealsRepo.get(userId, propertyId);
+    if (state === "dead" && savedDeal && savedDeal.dealStatus !== "rejected") {
+      await savedDealsRepo.updateStatus(userId, propertyId, "rejected");
+    } else if (state !== "dead" && savedDeal?.dealStatus === "rejected") {
+      await savedDealsRepo.updateStatus(userId, propertyId, "saved");
+    }
     if (transition) {
       await new PropertyPipelineEventRepo({ pool })
         .create({
@@ -3488,7 +3532,9 @@ router.post("/ui-v2/properties/:id/stage", async (req: Request, res: Response) =
           eventType: "stage_changed",
           actor,
           source: "user",
-          title: `Stage: ${transition.fromStage ?? "unset"} -> ${transition.toStage}`,
+          title: `Stage: ${
+            transition.fromStage && isDealStage(transition.fromStage) ? dealStageLabel(transition.fromStage) : transition.fromStage ?? "unset"
+          } -> ${dealStageLabel(transition.toStage)}`,
           body: reason,
           metadata: {
             fromState: transition.fromState,
@@ -3499,7 +3545,8 @@ router.post("/ui-v2/properties/:id/stage", async (req: Request, res: Response) =
         })
         .catch((err) => console.warn("[ui-v2 stage] event log failed", err));
     }
-    res.json({ ok: true, transition, changed: transition != null });
+    const detail = await loadDetailForProperty(pool, userId, propertyId);
+    res.json({ ok: true, transition, changed: transition != null, property: detail });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     if (message === "Property not found") {
@@ -3561,28 +3608,8 @@ async function handleDealPathUpdate(req: Request, res: Response): Promise<void> 
     const existing = readPipelineState(property.details);
     const now = new Date().toISOString();
     const actorName = stringOrNull(body.actorName) ?? "ui-v2";
-    // A deal explicitly moved out of the tour/offer flow carries a "canceled"
-    // deal-path status so its dates stop steering the board. A patch that
-    // brings a NEW tour/decision signal (not just a re-send of stored values)
-    // re-enters the flow; otherwise the cancellation sticks.
-    const mergeBase: Record<string, unknown> = { ...(existing.dealPath ?? {}) };
-    if (stringOrNull(mergeBase.status) === "canceled" && !("status" in input)) {
-      const dateRevives = (key: "tourScheduledAt" | "tourCompletedAt"): boolean => {
-        if (!(key in input)) return false;
-        const incoming = nullableIsoDateTime(input[key]);
-        return incoming != null && incoming !== nullableIsoDateTime(mergeBase[key]);
-      };
-      const incomingDecision = parseDealPathDecision(input.postTourDecision);
-      const decisionRevives =
-        incomingDecision != null &&
-        incomingDecision !== "pending" &&
-        incomingDecision !== parseDealPathDecision(mergeBase.postTourDecision);
-      if (dateRevives("tourScheduledAt") || dateRevives("tourCompletedAt") || decisionRevives) {
-        delete mergeBase.status;
-      }
-    }
     const nextDealPath = normalizeDealPathState({
-      ...mergeBase,
+      ...(existing.dealPath ?? {}),
       ...input,
       updatedAt: now,
     }) ?? {
@@ -3659,6 +3686,9 @@ async function handleDealPathUpdate(req: Request, res: Response): Promise<void> 
     }
 
     await updatePipelineState(pool, propertyId, patch);
+    if (patch.uiV2Status) {
+      void recordDealStageChange(pool, propertyId, patch.uiV2Status, { actor: actorName, source: "deal_path" });
+    }
     await new PropertyPipelineEventRepo({ pool }).create({
       propertyId,
       eventType: "deal_path_updated",
@@ -3859,34 +3889,18 @@ router.post("/ui-v2/properties/:id/save", async (req: Request, res: Response) =>
       return;
     }
     const userId = await getDefaultUserId(pool);
+    await new SavedDealsRepo({ pool }).save(userId, propertyId, "saved");
+    void recordDealStageChange(pool, propertyId, "saved", { source: "ui-v2-save" });
     const existing = readPipelineState(property.details);
-    const currentUiStatus = existing.uiV2Status ?? mapLegacyStatus(existing.status);
-    const isRejected =
-      currentUiStatus === "rejected" || existing.rejectedAt != null || existing.status === "rejected_removed";
-    // Saving a deal that already advanced past "saved" (underwriting, tour,
-    // offer, …) must keep its stage: ensure the saved_deals row exists without
-    // downgrading and leave the pipeline status untouched. Rejected deals and
-    // deals at/before "saved" keep the original restore-to-saved behavior.
-    const keepCurrentStage = !isRejected && pipelineStatusRank(currentUiStatus) > pipelineStatusRank("saved");
-    if (keepCurrentStage) {
-      await new SavedDealsRepo({ pool }).ensureSaved(userId, propertyId, "saved");
-      await updatePipelineState(pool, propertyId, {
-        tags: uniqueStrings([...existing.tags, "saved"]),
-        lastActivityAt: new Date().toISOString(),
-      });
-    } else {
-      await new SavedDealsRepo({ pool }).save(userId, propertyId, "saved");
-      void recordDealStageChange(pool, propertyId, "saved", { source: "ui-v2-save" });
-      await updatePipelineState(pool, propertyId, {
-        status: "saved_watchlist",
-        uiV2Status: "saved",
-        tags: uniqueStrings([...existing.tags, "saved"]),
-        rejectedAt: null,
-        rejectionReason: null,
-        rejection: undefined,
-        lastActivityAt: new Date().toISOString(),
-      });
-    }
+    await updatePipelineState(pool, propertyId, {
+      status: "saved_watchlist",
+      uiV2Status: "saved",
+      tags: uniqueStrings([...existing.tags, "saved"]),
+      rejectedAt: null,
+      rejectionReason: null,
+      rejection: undefined,
+      lastActivityAt: new Date().toISOString(),
+    });
     await new PropertyRejectionRepo({ pool }).restoreActive(propertyId, {
       actor: stringOrNull(isPlainRecord(req.body) ? req.body.actorName : null) ?? "ui-v2",
       restoredReason: "saved_deal",
@@ -3941,7 +3955,10 @@ router.post("/ui-v2/properties/:id/restore", async (req: Request, res: Response)
       rejectedAt: null,
       rejectionReason: null,
       rejection: undefined,
-      tags: existing.tags.filter((tag) => normalizeTag(tag) !== "rejected"),
+      tags: existing.tags.filter((tag) => {
+        const normalized = normalizeTag(tag);
+        return normalized !== "rejected" && normalized !== "archived";
+      }),
       lastActivityAt: new Date().toISOString(),
     });
     await new PropertyRejectionRepo({ pool }).restoreActive(propertyId, {

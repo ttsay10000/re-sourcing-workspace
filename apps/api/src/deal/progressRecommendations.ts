@@ -190,14 +190,14 @@ export function buildRuleBasedRecommendations(rows: RecommendationInputRow[]): D
     );
   }
 
-  const loiFollowup = rows.filter((row) => row.sectionId === "offer_review");
+  const loiFollowup = rows.filter((row) => row.sectionId === "loi_sent_awaiting_response");
   if (loiFollowup.length > 0) {
     items.push(
       recommendation(
         "loi_followup",
         loiFollowup,
         `Follow up on ${loiFollowup.length} open ${pluralize(loiFollowup.length, "LOI")}`,
-        "offer_review"
+        "loi_sent_awaiting_response"
       )
     );
   }

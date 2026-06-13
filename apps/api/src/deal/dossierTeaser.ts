@@ -373,6 +373,9 @@ function buildHighlights(ctx: UnderwritingContext, details: PropertyDetails | nu
   const sourceAsOf = firstString(neighborhoodMetrics?.sourceAsOf);
   const pricePsfMedian = toFiniteNumber(neighborhoodMetrics?.medianPricePsf);
   const rentUplift = ctx.assumptions.operating.blendedRentUpliftPct ?? ctx.assumptions.operating.rentUpliftPct;
+  const listingCue = ctx.analystContext?.listingSignals?.[0] ?? ctx.analystContext?.brokerClaims?.[0] ?? null;
+  const marketCue = ctx.analystContext?.marketNeighborhoodSignals?.[0] ?? null;
+  const retailCue = ctx.analystContext?.mixedUseRetailSignals?.[0] ?? null;
   const highlights = compact<DossierTeaserHighlight>([
     {
       title: "NOI Repositioning",
@@ -385,6 +388,18 @@ function buildHighlights(ctx: UnderwritingContext, details: PropertyDetails | nu
       ? {
           title: "Rent Strategy",
           body: `The base case carries ${pctLabel(rentUplift)} blended rent uplift with ${pctLabel(ctx.assumptions.operating.vacancyPct)} vacancy and ${pctLabel(ctx.assumptions.operating.annualExpenseGrowthPct)} annual expense growth.`
+        }
+      : null,
+    listingCue
+      ? {
+          title: "Listing / OM Cue",
+          body: listingCue,
+        }
+      : null,
+    retailCue
+      ? {
+          title: "Retail Footprint",
+          body: retailCue,
         }
       : null,
     offer?.recommendedOfferHigh != null
@@ -402,8 +417,14 @@ function buildHighlights(ctx: UnderwritingContext, details: PropertyDetails | nu
           body: `Neighborhood median sale pricing is ${moneyLabel(pricePsfMedian)} PSF${sourceAsOf ? ` as of ${sourceAsOf}` : ""}; use this as a comp anchor for pricing review.`
         }
       : null,
+    marketCue
+      ? {
+          title: "Internal Market Note",
+          body: marketCue,
+        }
+      : null,
   ]);
-  return highlights.slice(0, 4);
+  return highlights.slice(0, 6);
 }
 
 function enrichmentSummary(
@@ -801,6 +822,7 @@ function buildRisks(
       ctx.conditionReview?.coverageMissing?.length
         ? `Photos do not cover: ${ctx.conditionReview.coverageMissing.join(", ")}`
         : null,
+      ...(ctx.analystContext?.diligenceFlags ?? []),
     ],
     14
   );
@@ -849,6 +871,9 @@ function buildMitigants(
         : null,
       ctx.conditionReview?.coverageMissing?.length
         ? `Add missing inspection/photo coverage for ${ctx.conditionReview.coverageMissing.join(", ")}.`
+        : null,
+      ctx.analystContext?.diligenceFlags?.length
+        ? "Resolve listing, OM, and broker-comp diligence flags before relying on the upside or mixed-use thesis."
         : null,
     ],
     6
@@ -937,10 +962,11 @@ function buildProvenance(
       neighborhood?.metrics
         ? `Neighborhood metrics read from property details${firstString(neighborhood.metrics.sourceAsOf) ? `, source as of ${firstString(neighborhood.metrics.sourceAsOf)}` : ""}.`
         : null,
+      ...(ctx.analystContext?.sourceNotes ?? []),
       scoringResult ? `Deal score uses ${scoringResult.scoringProfileLabel} (${scoringResult.scoreVersion}).` : null,
       riskProfileLine(scoringResult?.riskProfile),
     ],
-    8
+    10
   );
 }
 
@@ -968,6 +994,12 @@ export function buildDossierTeaserData(params: {
   const price = ctx.assumptions.acquisition.purchasePrice ?? ctx.purchasePrice;
   const pricePsf = resolvePricePsf(ctx, details, listing);
   const neighborhoodMetrics = details?.neighborhood?.metrics;
+  const commercialRentShare =
+    ctx.rentBreakdown?.current.commercial != null &&
+    ctx.rentBreakdown.current.total != null &&
+    ctx.rentBreakdown.current.total > 0
+      ? ctx.rentBreakdown.current.commercial / ctx.rentBreakdown.current.total
+      : null;
 
   return {
     address: ctx.canonicalAddress,
@@ -1015,6 +1047,7 @@ export function buildDossierTeaserData(params: {
       { label: "Current gross rent", value: moneyLabel(ctx.currentGrossRent), sublabel: ctx.currentOtherIncome ? `${moneyLabel(ctx.currentOtherIncome)} other income` : null },
       { label: "Current expenses", value: moneyLabel(ctx.currentExpensesTotal ?? ctx.operating.currentExpenses), sublabel: ctx.expenseRows?.length ? `${ctx.expenseRows.length} expense rows` : null },
       { label: "Stabilized gross rent", value: moneyLabel(ctx.operating.adjustedGrossRent), sublabel: ctx.rentBreakdown?.freeMarketResidentialLift != null ? `${moneyLabel(ctx.rentBreakdown.freeMarketResidentialLift)} free-market lift` : null },
+      { label: "Commercial rent share", value: decimalPctLabel(commercialRentShare), sublabel: ctx.propertyMix?.commercialUnits ? `${numberLabel(ctx.propertyMix.commercialUnits)} commercial unit(s)` : null },
       { label: "Neighborhood median PSF", value: moneyLabel(toFiniteNumber(neighborhoodMetrics?.medianPricePsf)), sublabel: firstString(neighborhoodMetrics?.sourceAsOf) },
     ],
     risks: buildRisks(ctx, scoringResult, details, listing),

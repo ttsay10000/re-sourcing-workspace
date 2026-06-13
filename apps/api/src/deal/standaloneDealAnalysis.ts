@@ -29,6 +29,7 @@ import type { DossierAssumptionOverrides } from "./underwritingModel.js";
 import {
   buildDossierStructuredText,
 } from "./dossierGenerator.js";
+import { buildDossierAnalystContext } from "./dossierAnalystContext.js";
 import { buildDossierPdfCoverData } from "./dossierPdfCover.js";
 import { buildDossierPdfFileName } from "./dossierFileName.js";
 import { dossierTextToPdf } from "./dossierToPdf.js";
@@ -539,6 +540,12 @@ export async function buildStandaloneUnderwritingContext(params: {
     rentBreakdown: buildRentBreakdown(artifacts),
     recommendedOffer: artifacts.recommendedOffer,
   };
+  ctx.analystContext = buildDossierAnalystContext({
+    details,
+    listing: null,
+    brokerEmailNotes: params.brokerEmailNotes,
+    ctx,
+  });
 
   return { ctx, profile, artifacts };
 }

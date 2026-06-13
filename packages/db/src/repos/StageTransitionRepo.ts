@@ -1,21 +1,13 @@
 import type { Pool, PoolClient } from "pg";
+import { DEAL_FLOW_STAGES, type DealFlowStageId } from "@re-sourcing/contracts";
 
 export type DealState = "active" | "dead" | "closed";
 
 export const DEAL_STAGES = [
-  "inbox",
-  "screening",
-  "pursuing",
-  "outreach",
-  "om_review",
-  "underwriting",
-  "tour",
-  "offer_loi",
-  "contract_dd",
-  "closed",
-] as const;
+  ...DEAL_FLOW_STAGES.map((stage) => stage.id),
+] as readonly DealFlowStageId[];
 
-export type DealStage = (typeof DEAL_STAGES)[number];
+export type DealStage = DealFlowStageId;
 
 export interface StageTransition {
   id: string;

@@ -9,9 +9,10 @@ const STAGE_TONES: Record<DealFlowStageId, BadgeTone> = {
   tour_requested: "warning",
   tour_scheduled: "brand",
   tour_completed_awaiting_inputs: "warning",
-  offer_review: "brand",
+  drafting_loi: "brand",
+  loi_sent_awaiting_response: "brand",
   negotiation: "brand",
-  contract_signed: "success",
+  contract_signed_diligence: "success",
   deal_closed: "success",
 };
 

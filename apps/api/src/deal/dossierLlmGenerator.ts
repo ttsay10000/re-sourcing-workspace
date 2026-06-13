@@ -68,6 +68,25 @@ function serializeUnderwritingContext(ctx: UnderwritingContext): string {
       lines.push(`  Summary bullets: ${ctx.conditionReview.summaryBullets.join("; ")}`);
     }
   }
+  if (ctx.analystContext) {
+    lines.push("Internal analyst context:");
+    if (ctx.analystContext.listingSummary) lines.push(`  Listing summary: ${ctx.analystContext.listingSummary}`);
+    if (ctx.analystContext.listingSignals?.length) {
+      lines.push(`  Listing / OM cues: ${ctx.analystContext.listingSignals.join("; ")}`);
+    }
+    if (ctx.analystContext.brokerClaims?.length) {
+      lines.push(`  Broker claims / internal notes: ${ctx.analystContext.brokerClaims.join("; ")}`);
+    }
+    if (ctx.analystContext.marketNeighborhoodSignals?.length) {
+      lines.push(`  Market / neighborhood context: ${ctx.analystContext.marketNeighborhoodSignals.join("; ")}`);
+    }
+    if (ctx.analystContext.mixedUseRetailSignals?.length) {
+      lines.push(`  Mixed-use / retail footprint: ${ctx.analystContext.mixedUseRetailSignals.join("; ")}`);
+    }
+    if (ctx.analystContext.diligenceFlags?.length) {
+      lines.push(`  Diligence flags: ${ctx.analystContext.diligenceFlags.join("; ")}`);
+    }
+  }
   if (ctx.financialFlags && ctx.financialFlags.length > 0) {
     lines.push(`Financial flags (use as 1–2 bullets in Current State): ${ctx.financialFlags.join("; ")}`);
   }

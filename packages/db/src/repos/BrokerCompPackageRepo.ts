@@ -78,6 +78,14 @@ export interface UpdateBrokerCompExtractedItemParams {
   reviewedAt?: string | null;
 }
 
+export interface UpdateBrokerCompPackageMetaParams {
+  status?: BrokerCompPackageStatus | null;
+  packageMeta?: Record<string, unknown> | null;
+  sourceMeta?: Record<string, unknown> | null;
+  reviewedAt?: string | null;
+  lastError?: string | null;
+}
+
 export interface BrokerCompPackageRecord extends BrokerCompPackage {
   rawPayload?: Record<string, unknown> | null;
   normalizedPayload?: Record<string, unknown> | null;
@@ -379,6 +387,29 @@ export class BrokerCompPackageRepo {
     return result.rows[0] ? mapPackage(result.rows[0]) : null;
   }
 
+  async updatePackageMeta(id: string, patch: UpdateBrokerCompPackageMetaParams): Promise<BrokerCompPackageRecord | null> {
+    const result = await this.client.query(
+      `UPDATE broker_comp_packages
+       SET status = COALESCE($2, status),
+           package_meta = COALESCE(package_meta, '{}'::jsonb) || COALESCE($3::jsonb, '{}'::jsonb),
+           source_meta = COALESCE(source_meta, '{}'::jsonb) || COALESCE($4::jsonb, '{}'::jsonb),
+           reviewed_at = COALESCE($5::timestamptz, reviewed_at),
+           last_error = COALESCE($6, last_error),
+           updated_at = now()
+       WHERE id = $1
+       RETURNING *`,
+      [
+        id,
+        patch.status ?? null,
+        patch.packageMeta != null ? JSON.stringify(patch.packageMeta) : null,
+        patch.sourceMeta != null ? JSON.stringify(patch.sourceMeta) : null,
+        patch.reviewedAt ?? null,
+        patch.lastError ?? null,
+      ]
+    );
+    return result.rows[0] ? mapPackage(result.rows[0]) : null;
+  }
+
   async upsertPage(params: UpsertBrokerCompPackagePageParams): Promise<BrokerCompPackagePageRecord> {
     const result = await this.client.query(
       `INSERT INTO broker_comp_package_pages (
@@ -433,6 +464,10 @@ export class BrokerCompPackageRepo {
   }
 
   async createItem(params: CreateBrokerCompExtractedItemParams): Promise<BrokerCompExtractedItemRecord> {
+    const includeInDossier =
+      params.selectionDecision == null || params.selectionDecision === "include"
+        ? params.includeInDossier === true
+        : false;
     const result = await this.client.query(
       `INSERT INTO broker_comp_extracted_items (
         package_id,
@@ -461,7 +496,7 @@ export class BrokerCompPackageRepo {
         params.confidence ?? null,
         params.reviewStatus ?? "pending",
         params.selectionDecision ?? null,
-        params.includeInDossier === true,
+        includeInDossier,
         params.analystNote ?? null,
         params.reviewedAt ?? null,
       ]
@@ -517,7 +552,31 @@ export class BrokerCompPackageRepo {
         params.reviewedAt ?? null,
       ]
     );
-    return result.rows[0] ? mapItem(result.rows[0]) : null;
+    if (!result.rows[0]) return null;
+    const updated = mapItem(result.rows[0]);
+    await this.client.query(
+      `UPDATE broker_comp_promoted_items
+       SET selection_decision = $2,
+           include_in_dossier = CASE
+             WHEN COALESCE($2, 'include') = 'include'
+               AND $3 IN ('accepted', 'edited')
+             THEN true
+             ELSE false
+           END,
+           normalized_payload = COALESCE($4::jsonb, normalized_payload),
+           reviewed_payload = COALESCE($5::jsonb, reviewed_payload),
+           analyst_note = $6
+       WHERE extracted_item_id = $1`,
+      [
+        updated.id,
+        updated.selectionDecision ?? null,
+        updated.reviewStatus,
+        params.normalizedPayload != null ? JSON.stringify(params.normalizedPayload) : null,
+        params.reviewedPayload != null ? JSON.stringify(params.reviewedPayload) : null,
+        updated.analystNote ?? null,
+      ]
+    );
+    return updated;
   }
 
   async listItemsByIds(packageId: string, itemIds: string[]): Promise<BrokerCompExtractedItemRecord[]> {
@@ -534,7 +593,9 @@ export class BrokerCompPackageRepo {
   async listAcceptedItems(packageId: string): Promise<BrokerCompExtractedItemRecord[]> {
     const result = await this.client.query(
       `SELECT * FROM broker_comp_extracted_items
-       WHERE package_id = $1 AND review_status = 'accepted'
+       WHERE package_id = $1
+         AND review_status IN ('accepted', 'edited')
+         AND COALESCE(selection_decision, 'include') = 'include'
        ORDER BY created_at, id`,
       [packageId]
     );
@@ -625,6 +686,8 @@ export class BrokerCompPackageRepo {
     const result = await this.client.query(
       `SELECT * FROM broker_comp_promoted_items
        WHERE property_id = $1
+         AND include_in_dossier IS TRUE
+         AND COALESCE(selection_decision, 'include') = 'include'
        ORDER BY promoted_at DESC
        LIMIT $2`,
       [propertyId, limit]

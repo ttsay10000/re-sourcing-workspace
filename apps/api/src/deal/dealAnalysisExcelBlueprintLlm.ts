@@ -75,7 +75,7 @@ const ALLOWED_METRIC_KEYS = new Set<DealAnalysisSummaryMetricKey>([
 ]);
 
 export const FALLBACK_BLUEPRINT: DealAnalysisWorkbookBlueprint = {
-  workbookTitle: "Deal Dossier Workbook",
+  workbookTitle: "Deal Analysis Workbook",
   assumptionsSubtitle:
     "Blue text marks hard-coded inputs from the current deal analysis. Formula-linked cells roll through financing, cash flow, and summary tabs.",
   summarySubtitle:

@@ -24,6 +24,7 @@ describe("STATUS_TO_CANONICAL", () => {
       "underwriting",
       "tour_scheduled",
       "offer_review",
+      "loi_sent",
       "negotiation",
       "contract_signed",
       "deal_closed",
@@ -35,7 +36,7 @@ describe("STATUS_TO_CANONICAL", () => {
 
   it("terminal statuses leave the active state", () => {
     expect(STATUS_TO_CANONICAL.deal_closed!.state).toBe("closed");
-    expect(STATUS_TO_CANONICAL.archived!.state).toBe("closed");
+    expect(STATUS_TO_CANONICAL.archived!.state).toBe("dead");
     expect(STATUS_TO_CANONICAL.rejected!.state).toBe("dead");
   });
 });

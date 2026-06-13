@@ -65,9 +65,20 @@ interface OperatingCompRow {
   ltrYieldBySource: Record<LtrAskSource, number | null>;
   /** listed = OM ask → matched listing; whisper = latest broker pricing opinion; user = manual/negotiated (signal basis). */
   askBySource: Record<LtrAskSource, number | null>;
+  ltrListedYieldPct: number | null;
+  ltrWhisperYieldPct: number | null;
+  ltrNegotiatedYieldPct: number | null;
   mtrYieldPct: number | null;
+  mtrNegotiatedYieldPct: number | null;
   yieldSpreadPct: number | null;
   currentNoi: number | null;
+  adjustedNoi: number | null;
+  listedPrice: number | null;
+  whisperPrice: number | null;
+  inputPrice: number | null;
+  negotiatedPrice: number | null;
+  negotiatedPriceSource: "input" | "whisper" | "listed" | "om" | "signal" | null;
+  whisperSource: string | null;
   pricePerUnit: number | null;
   pricePsf: number | null;
   expenseRatioPct: number | null;
@@ -135,7 +146,30 @@ const TREND_FLAT_EPSILON_PP = 0.005;
 function toNumber(value: unknown): number | null {
   if (value == null) return null;
   const numeric = typeof value === "string" ? Number(value) : value;
-  return typeof numeric === "number" && Number.isFinite(numeric) ? numeric : null;
+  if (typeof numeric === "number" && Number.isFinite(numeric)) return numeric;
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const match = trimmed.match(/^\(?\s*-?\$?\s*([0-9][0-9,\s]*(?:\.[0-9]+)?)\s*(k|m|mm|b|bn)?\s*%?\s*\)?$/i);
+  if (!match) return null;
+  const sign = trimmed.includes("(") || trimmed.startsWith("-") ? -1 : 1;
+  const base = Number(match[1].replace(/[,\s]/g, ""));
+  if (!Number.isFinite(base)) return null;
+  const suffix = match[2]?.toLowerCase();
+  const multiplier = suffix === "k" ? 1_000 : suffix === "m" || suffix === "mm" ? 1_000_000 : suffix === "b" || suffix === "bn" ? 1_000_000_000 : 1;
+  return sign * base * multiplier;
+}
+
+function yieldPct(noi: number | null, price: number | null): number | null {
+  return noi != null && price != null && price > 0 ? (noi / price) * 100 : null;
+}
+
+function firstNumber(...values: unknown[]): number | null {
+  for (const value of values) {
+    const numeric = toNumber(value);
+    if (numeric != null) return numeric;
+  }
+  return null;
 }
 
 function toIsoString(value: unknown): string | null {
@@ -416,21 +450,36 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
          ds.price_psf,
          ds.expense_ratio,
          ds.deal_score,
+         ds.adjusted_noi,
          ds.generated_at AS signal_at,
          p.created_at AS sourced_at,
          hist.yield_obs_count,
          hist.yield_history,
          lst.listing_price,
-         wsp.whisper_price,
+         whisper.whisper_price,
+         whisper.whisper_source,
          p.details#>>'{omData,authoritative,currentFinancials,grossRentalIncome}' AS fallback_rent_om,
          p.details#>>'{omData,authoritative,currentFinancials,otherIncome}' AS fallback_other_income_om,
          p.details#>>'{omData,authoritative,expenses,totalExpenses}' AS fallback_expense_total_om,
          p.details#>>'{omData,authoritative,currentFinancials,operatingExpenses}' AS fallback_expenses_om,
+         p.details#>>'{manualSourceFacts,listedPrice}' AS fallback_listing_manual_listed,
+         p.details#>>'{manualSourceFacts,listingPrice}' AS fallback_listing_manual_listing,
+         p.details#>>'{omData,authoritative,propertyInfo,listedPrice}' AS fallback_listing_om_listed,
+         p.details#>>'{omData,authoritative,propertyInfo,listingPrice}' AS fallback_listing_om_listing,
          p.details#>>'{omData,authoritative,currentFinancials,noi}' AS fallback_noi_om,
+         p.details#>>'{omData,authoritative,currentFinancials,netOperatingIncome}' AS fallback_noi_om_net,
          p.details#>>'{rentalFinancials,omAnalysis,currentFinancials,noi}' AS fallback_noi_analysis,
+         p.details#>>'{rentalFinancials,omAnalysis,currentFinancials,netOperatingIncome}' AS fallback_noi_analysis_net,
          p.details#>>'{rentalFinancials,fromLlm,noi}' AS fallback_noi_llm,
+         p.details#>>'{manualSourceFacts,purchasePrice}' AS fallback_input_purchase,
          p.details#>>'{manualSourceFacts,askingPrice}' AS fallback_ask_manual,
-         p.details#>>'{omData,authoritative,propertyInfo,askingPrice}' AS fallback_ask_om
+         p.details#>>'{manualSourceFacts,askPrice}' AS fallback_input_ask,
+         p.details#>>'{dealDossier,assumptions,purchasePrice}' AS fallback_dossier_purchase,
+         p.details#>>'{purchasePrice}' AS fallback_top_purchase,
+         p.details#>>'{askingPrice}' AS fallback_top_ask,
+         p.details#>>'{omData,authoritative,propertyInfo,askingPrice}' AS fallback_ask_om,
+         whisper.whisper_price,
+         whisper.whisper_source
        FROM properties p
        LEFT JOIN LATERAL (
          SELECT *
@@ -454,20 +503,6 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
          ORDER BY (m.status = 'accepted') DESC, m.confidence DESC NULLS LAST, m.created_at DESC
          LIMIT 1
        ) lst ON TRUE
-       -- Latest whisper price / broker pricing opinion (manual entry or comp-package
-       -- extraction); analyst-reviewed amounts win over the extracted value.
-       LEFT JOIN LATERAL (
-         SELECT w.amount_text::numeric AS whisper_price
-         FROM (
-           SELECT COALESCE(NULLIF(i.reviewed_payload->>'amount', ''), i.normalized_payload->>'amount') AS amount_text,
-                  i.created_at
-           FROM broker_comp_extracted_items i
-           WHERE i.property_id = p.id AND i.item_type = 'pricing_opinion' AND i.review_status <> 'rejected'
-         ) w
-         WHERE w.amount_text ~ '^[0-9]+(\\.[0-9]+)?$' AND w.amount_text::numeric > 0
-         ORDER BY w.created_at DESC
-         LIMIT 1
-       ) wsp ON TRUE
        -- Cap-rate timeline: the first signal plus every refresh where the rate changed
        -- (consecutive regenerations with the same rate collapse onto the first date).
        LEFT JOIN LATERAL (
@@ -483,10 +518,35 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
            -- keeping them out of the timeline stops fake "up" trends from a bad first extraction.
            WHERE h.property_id = p.id AND h.asset_cap_rate IS NOT NULL AND h.asset_cap_rate > 0
          ) t
-       ) hist ON TRUE${rejectionJoin(hasRejections)}
+       ) hist ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT
+           COALESCE(payload.payload->>'amount', payload.payload->>'price', payload.payload->>'value') AS whisper_price,
+           COALESCE(payload.payload->>'source', bcp.source_name, bcp.source_document_type, 'Broker package') AS whisper_source
+         FROM broker_comp_promoted_items item
+         INNER JOIN broker_comp_packages bcp ON bcp.id = item.package_id
+         CROSS JOIN LATERAL (
+           SELECT COALESCE(item.reviewed_payload, item.normalized_payload, item.raw_payload, '{}'::jsonb) AS payload
+         ) payload
+         WHERE item.property_id = p.id
+           AND item.include_in_dossier IS NOT FALSE
+           AND (
+             item.item_type = 'pricing_opinion'
+             OR item.package_type = 'broker_opinion'
+             OR item.package_type = 'pricing_sellout'
+             OR COALESCE(payload.payload->>'source', '') ILIKE '%whisper%'
+             OR COALESCE(payload.payload->>'note', '') ILIKE '%whisper%'
+           )
+           AND COALESCE(payload.payload->>'amount', payload.payload->>'price', payload.payload->>'value') ~* '^\\$?\\s*[0-9][0-9,]*(\\.[0-9]+)?\\s*(k|m|mm|b|bn)?$'
+         ORDER BY item.promoted_at DESC, item.created_at DESC
+         LIMIT 1
+       ) whisper ON TRUE
+       ${rejectionJoin(hasRejections)}
        WHERE ds.asset_cap_rate IS NOT NULL
           OR p.details#>>'{omData,authoritative,currentFinancials,noi}' IS NOT NULL
+          OR p.details#>>'{omData,authoritative,currentFinancials,netOperatingIncome}' IS NOT NULL
           OR p.details#>>'{rentalFinancials,omAnalysis,currentFinancials,noi}' IS NOT NULL
+          OR p.details#>>'{rentalFinancials,omAnalysis,currentFinancials,netOperatingIncome}' IS NOT NULL
           OR p.details#>>'{rentalFinancials,fromLlm,noi}' IS NOT NULL
        ORDER BY ds.asset_cap_rate DESC NULLS LAST
        LIMIT $1`,
@@ -503,34 +563,70 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
           fallbackRent != null && fallbackExpenses != null
             ? fallbackRent + (toNumber(row.fallback_other_income_om) ?? 0) - fallbackExpenses
             : null;
-        const fallbackNoi =
-          reconstructedNoi ??
-          toNumber(row.fallback_noi_om) ?? toNumber(row.fallback_noi_analysis) ?? toNumber(row.fallback_noi_llm);
-        const listedAsk = toNumber(row.fallback_ask_om) ?? toNumber(row.listing_price);
-        const whisperAsk = toNumber(row.whisper_price);
-        const manualAsk = toNumber(row.fallback_ask_manual);
-        const fallbackAsk = manualAsk ?? listedAsk;
-        // Listed/whisper yields are always recomputed from NOI ÷ that basis's
-        // price; the stored signal can't stand in for them because it was
-        // produced on the underwriting (user) price. The signal's NOI does
-        // backstop rows whose extraction details no longer carry one.
+        const fallbackNoi = firstNumber(
+          reconstructedNoi,
+          row.current_noi,
+          row.fallback_noi_om,
+          row.fallback_noi_om_net,
+          row.fallback_noi_analysis,
+          row.fallback_noi_analysis_net,
+          row.fallback_noi_llm
+        );
+        const adjustedNoi = firstNumber(row.adjusted_noi);
+        const listedPrice = firstNumber(
+          row.listing_price,
+          row.fallback_listing_manual_listed,
+          row.fallback_listing_manual_listing,
+          row.fallback_listing_om_listed,
+          row.fallback_listing_om_listing,
+          row.fallback_ask_om
+        );
+        const whisperPrice = firstNumber(row.whisper_price);
+        const inputPrice = firstNumber(
+          row.fallback_input_purchase,
+          row.fallback_ask_manual,
+          row.fallback_input_ask,
+          row.fallback_dossier_purchase,
+          row.fallback_top_purchase,
+          row.fallback_top_ask
+        );
+        const omAskingPrice = firstNumber(row.fallback_ask_om);
+        const fallbackAsk = inputPrice ?? listedPrice ?? omAskingPrice;
+        const negotiatedPrice = inputPrice ?? whisperPrice ?? listedPrice ?? omAskingPrice;
+        const negotiatedPriceSource: OperatingCompRow["negotiatedPriceSource"] =
+          inputPrice != null
+            ? "input"
+            : whisperPrice != null
+              ? "whisper"
+              : listedPrice != null
+                ? "listed"
+                : omAskingPrice != null
+                  ? "om"
+                  : signalLtr != null
+                    ? "signal"
+                    : null;
+        // Listed/whisper yields are always recomputed from NOI and that basis's
+        // price; the stored signal can't stand in for them because it may have
+        // been produced on the underwriting/user price.
         const basisNoi = fallbackNoi ?? toNumber(row.current_noi);
         const resolvedBySource: Record<LtrAskSource, ReturnType<typeof resolveOperatingYield>> = {
-          listed: deriveBasisYield(basisNoi, listedAsk),
-          whisper: deriveBasisYield(basisNoi, whisperAsk),
+          listed: deriveBasisYield(basisNoi, listedPrice),
+          whisper: deriveBasisYield(basisNoi, whisperPrice),
           user: resolveOperatingYield({ signalLtrPct: signalLtr, fallbackNoi, fallbackAsk }),
         };
         const resolved = resolvedBySource[askSource];
-        // Rows where no basis produces a usable yield or a data-quality flag
-        // carry no information for this view; flagged rows stay visible for
-        // follow-up, and rows missing only the selected basis's price stay
-        // visible so the basis toggle never hides deals entirely.
         const isEmpty = (value: ReturnType<typeof resolveOperatingYield>) =>
           value.ltrYieldPct == null && value.flag == null;
         if (isEmpty(resolvedBySource.listed) && isEmpty(resolvedBySource.whisper) && isEmpty(resolvedBySource.user)) {
           return null;
         }
+        const ltrListedYieldPct = yieldPct(basisNoi, listedPrice);
+        const ltrWhisperYieldPct = yieldPct(basisNoi, whisperPrice);
+        const ltrNegotiatedYieldPct = yieldPct(basisNoi, negotiatedPrice);
         const mtrYieldPct = resolved.flag == null ? sanitizeRatePct(toNumber(row.adjusted_cap_rate)) : null;
+        const mtrNegotiatedYieldPct = yieldPct(adjustedNoi, negotiatedPrice) ?? mtrYieldPct;
+        const units = toNumber(row.units);
+        const pricePerUnit = toNumber(row.price_per_unit) ?? (negotiatedPrice != null && units != null && units > 0 ? negotiatedPrice / units : null);
 
         // Cap-rate timeline. Flagged rows get no trend: their stored rates are
         // data errors, and a 0% first extraction would read as a fake "up" move.
@@ -544,8 +640,6 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
         const observationCount = toNumber(row.yield_obs_count) ?? 0;
         const firstPoint = yieldHistory[0] ?? null;
         const lastPoint = yieldHistory[yieldHistory.length - 1] ?? null;
-        // A trend needs at least two observations; a refresh that left the rate
-        // unchanged still counts as a (flat) second observation.
         let yieldDeltaPct: number | null = null;
         let yieldTrend: OperatingCompRow["yieldTrend"] = null;
         if (firstPoint && lastPoint && observationCount >= 2) {
@@ -553,7 +647,6 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
           yieldTrend =
             yieldDeltaPct > TREND_FLAT_EPSILON_PP ? "up" : yieldDeltaPct < -TREND_FLAT_EPSILON_PP ? "down" : "flat";
         }
-
         const comp: OperatingCompRow = {
           propertyId: String(row.property_id),
           canonicalAddress: String(row.canonical_address),
@@ -567,19 +660,30 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
           yieldMapExcluded: row.yield_map_excluded === true,
           lat: toNumber(row.lat),
           lng: toNumber(row.lng),
-          units: toNumber(row.units),
-          askingPrice: askSource === "listed" ? listedAsk : askSource === "whisper" ? whisperAsk : fallbackAsk,
+          units,
+          askingPrice: askSource === "listed" ? listedPrice : askSource === "whisper" ? whisperPrice : fallbackAsk,
           ltrYieldPct: resolved.ltrYieldPct,
           ltrYieldBySource: {
             listed: resolvedBySource.listed.ltrYieldPct,
             whisper: resolvedBySource.whisper.ltrYieldPct,
             user: resolvedBySource.user.ltrYieldPct,
           },
-          askBySource: { listed: listedAsk, whisper: whisperAsk, user: fallbackAsk },
+          askBySource: { listed: listedPrice, whisper: whisperPrice, user: fallbackAsk },
+          ltrListedYieldPct,
+          ltrWhisperYieldPct,
+          ltrNegotiatedYieldPct,
           mtrYieldPct,
+          mtrNegotiatedYieldPct,
           yieldSpreadPct: mtrYieldPct != null ? toNumber(row.yield_spread) : null,
           currentNoi: toNumber(row.current_noi) ?? fallbackNoi,
-          pricePerUnit: toNumber(row.price_per_unit),
+          adjustedNoi,
+          listedPrice,
+          whisperPrice,
+          inputPrice,
+          negotiatedPrice,
+          negotiatedPriceSource,
+          whisperSource: (row.whisper_source as string | null) ?? null,
+          pricePerUnit,
           pricePsf: toNumber(row.price_psf),
           expenseRatioPct: toNumber(row.expense_ratio),
           dealScore: toNumber(row.deal_score),
@@ -691,6 +795,9 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
         // here — pending rows have no manual price or stored signal yet.
         const ask = toNumber(info?.askingPrice) ?? toNumber(row.listing_price);
         const whisperAsk = toNumber(row.whisper_price);
+        const negotiatedPrice = whisperAsk ?? ask;
+        const negotiatedPriceSource: OperatingCompRow["negotiatedPriceSource"] =
+          whisperAsk != null ? "whisper" : ask != null ? "om" : null;
         const resolvedBySource: Record<LtrAskSource, ReturnType<typeof resolveOperatingYield>> = {
           listed: deriveBasisYield(noi, ask),
           whisper: deriveBasisYield(noi, whisperAsk),
@@ -729,9 +836,20 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
             user: resolvedBySource.user.ltrYieldPct,
           },
           askBySource: { listed: ask, whisper: whisperAsk, user: ask },
+          ltrListedYieldPct: yieldPct(noi, ask),
+          ltrWhisperYieldPct: yieldPct(noi, whisperAsk),
+          ltrNegotiatedYieldPct: yieldPct(noi, negotiatedPrice),
           mtrYieldPct: null,
+          mtrNegotiatedYieldPct: null,
           yieldSpreadPct: null,
           currentNoi: noi,
+          adjustedNoi: null,
+          listedPrice: ask,
+          whisperPrice: whisperAsk,
+          inputPrice: null,
+          negotiatedPrice,
+          negotiatedPriceSource,
+          whisperSource: null,
           pricePerUnit: ask != null && units != null && units > 0 ? ask / units : null,
           pricePsf: ask != null && gsf != null && gsf > 0 ? ask / gsf : null,
           expenseRatioPct: null,

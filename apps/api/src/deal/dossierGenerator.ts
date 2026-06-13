@@ -92,6 +92,25 @@ function pushConditionReview(lines: string[], ctx: UnderwritingContext): void {
   bullets.forEach((bullet) => lines.push(`• ${bullet}`));
 }
 
+function pushBulletGroup(lines: string[], title: string, bullets: string[] | null | undefined, limit: number): void {
+  if (!Array.isArray(bullets) || bullets.length === 0) return;
+  lines.push(`${title}:`);
+  bullets.slice(0, limit).forEach((bullet) => lines.push(`• ${bullet}`));
+}
+
+function pushAnalystContext(lines: string[], ctx: UnderwritingContext): void {
+  const analyst = ctx.analystContext;
+  if (!analyst) return;
+  lines.push("Internal analyst context:");
+  if (analyst.listingSummary) lines.push(`• ${analyst.listingSummary}`);
+  pushBulletGroup(lines, "Listing / OM cues", analyst.listingSignals, 4);
+  pushBulletGroup(lines, "Broker claims and internal notes", analyst.brokerClaims, 4);
+  pushBulletGroup(lines, "Market / neighborhood context", analyst.marketNeighborhoodSignals, 5);
+  pushBulletGroup(lines, "Mixed-use / retail footprint", analyst.mixedUseRetailSignals, 5);
+  pushBulletGroup(lines, "Diligence flags", analyst.diligenceFlags, 5);
+  pushBulletGroup(lines, "Source notes", analyst.sourceNotes, 3);
+}
+
 function propertyTaxGrowthSourceLine(ctx: UnderwritingContext): string {
   const taxCode = ctx.propertyOverview?.taxCode?.trim() || null;
   const growthPct = ctx.assumptions.operating.annualPropertyTaxGrowthPct;
@@ -706,6 +725,7 @@ export function buildDossierStructuredText(ctx: UnderwritingContext): string {
   }
   lines.push(propertyTaxGrowthSourceLine(ctx));
   pushConditionReview(lines, ctx);
+  pushAnalystContext(lines, ctx);
   lines.push("");
 
   lines.push("2. RECOMMENDED OFFER");
@@ -944,6 +964,12 @@ export function buildDossierStructuredText(ctx: UnderwritingContext): string {
     );
   }
   if (ctx.returns.irrPct != null) lines.push(`• Projected IRR: ${(ctx.returns.irrPct * 100).toFixed(2)}%`);
+  ctx.analystContext?.marketNeighborhoodSignals?.slice(0, 2).forEach((signal) => {
+    lines.push(`• Market context: ${signal}`);
+  });
+  ctx.analystContext?.mixedUseRetailSignals?.slice(0, 2).forEach((signal) => {
+    lines.push(`• Footprint context: ${signal}`);
+  });
   if (ctx.recommendedOffer?.discountToAskingPct != null && ctx.recommendedOffer.discountToAskingPct > 0) {
     lines.push(
       `• High-end recommended offer is ${ctx.recommendedOffer.discountToAskingPct.toFixed(2)}% below ask to clear the target IRR.`

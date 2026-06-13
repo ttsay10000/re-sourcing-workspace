@@ -265,6 +265,15 @@ function sampleContext(): UnderwritingContext {
       textSignals: ["value-add language"],
       summaryBullets: ["Photos and OM copy support a value-add scope."],
     },
+    analystContext: {
+      listingSummary: "Listing describes a mixed-use value-add deal with ground-floor retail.",
+      listingSignals: ["Listing condition cue: value-add opportunity with renovated units."],
+      brokerClaims: ["Broker/listing claim: below-market rent upside."],
+      marketNeighborhoodSignals: ["Internal neighborhood metric: median sale pricing $1,050 PSF as of 2026-05-01."],
+      mixedUseRetailSignals: ["Commercial rent share: 12.0% of annual rent."],
+      diligenceFlags: ["Listing diligence flag: verify certificate of occupancy."],
+      sourceNotes: ["Retail/commercial footprint context uses internal listing, OM, valuation, and rent-roll fields only."],
+    },
   };
 }
 
@@ -381,6 +390,8 @@ describe("dossierTeaser", () => {
       "Stabilized Cap",
     ]);
     expect(teaser.investmentHighlights.some((item) => item.title === "Neighborhood Marker")).toBe(true);
+    expect(teaser.investmentHighlights.some((item) => item.title === "Listing / OM Cue")).toBe(true);
+    expect(teaser.investmentHighlights.some((item) => item.title === "Retail Footprint")).toBe(true);
     expect(teaser.capitalStack.find((row) => row.label === "Upfront CapEx")?.sublabel).toContain("furnishing");
     expect(teaser.returnScenarios.map((scenario) => scenario.label)).toEqual(["Downside", "Base", "Upside"]);
     expect(teaser.rentSummary.rows[0]?.unitDetail).toContain("900 SF");
@@ -397,6 +408,7 @@ describe("dossierTeaser", () => {
     expect(teaser.risks).toContain("Elevated furnished-rent uplift underwritten (72.0% above in-place rents)");
     expect(teaser.risks.some((risk) => risk.includes("O5"))).toBe(true);
     expect(teaser.risks.some((risk) => risk.includes("Floor 3 current rent is missing"))).toBe(true);
+    expect(teaser.risks.some((risk) => risk.includes("certificate of occupancy"))).toBe(true);
     expect(teaser.provenance.some((line) => line.includes("value-add-furnished-monthly-rental"))).toBe(true);
     expect(teaser.operatingSnapshot.find((row) => row.label === "Neighborhood median PSF")?.value).toBe("$1,050");
   });

@@ -118,6 +118,7 @@ import {
   DealAnalysisOmImportError,
 } from "../deal/dealAnalysisOmImport.js";
 import { runGenerateDossier } from "../deal/runGenerateDossier.js";
+import { ensurePropertyRefreshable, filterActivePropertyIds } from "../deal/activePropertyFilter.js";
 
 const router = Router();
 
@@ -2368,7 +2369,7 @@ router.post("/properties/refresh-listings", async (req: Request, res: Response) 
   const workflowStartedAt = new Date().toISOString();
   try {
     const raw = req.body?.propertyIds;
-    const propertyIds = Array.isArray(raw)
+    let propertyIds = Array.isArray(raw)
       ? Array.from(
           new Set(
             (raw as unknown[])
@@ -2381,6 +2382,18 @@ router.post("/properties/refresh-listings", async (req: Request, res: Response) 
       res.status(400).json({ error: "propertyIds required (non-empty array)." });
       return;
     }
+    const pool = getPool();
+    const activeFilter = await filterActivePropertyIds(pool, propertyIds);
+    propertyIds = activeFilter.activePropertyIds;
+    if (propertyIds.length === 0) {
+      res.json({
+        ok: true,
+        skippedDeadPropertyIds: activeFilter.skippedDeadPropertyIds,
+        results: [],
+        streetEasyRefresh: { attempted: 0, success: 0, failed: 0, skipped: 0, priceChanged: 0, unavailable: 0, errors: [] },
+      });
+      return;
+    }
 
     workflowRunId = await createWorkflowRun({
       runType: "refresh_listings",
@@ -2388,7 +2401,7 @@ router.post("/properties/refresh-listings", async (req: Request, res: Response) 
       scopeLabel: `${propertyIds.length} propert${propertyIds.length === 1 ? "y" : "ies"}`,
       triggerSource: "manual",
       totalItems: propertyIds.length,
-      metadata: { propertyIds },
+      metadata: { propertyIds, skippedDeadPropertyIds: activeFilter.skippedDeadPropertyIds },
       steps: [
         {
           stepKey: "streeteasy_refresh",
@@ -2400,7 +2413,6 @@ router.post("/properties/refresh-listings", async (req: Request, res: Response) 
       ],
     });
 
-    const pool = getPool();
     const streetEasyRefresh = {
       attempted: 0,
       success: 0,
@@ -2467,13 +2479,18 @@ router.post("/properties/refresh-listings", async (req: Request, res: Response) 
       }
     }
 
-    await mergeWorkflowRunMetadata(workflowRunId, { propertyIds, results, streetEasyRefresh });
+    await mergeWorkflowRunMetadata(workflowRunId, {
+      propertyIds,
+      skippedDeadPropertyIds: activeFilter.skippedDeadPropertyIds,
+      results,
+      streetEasyRefresh,
+    });
     await updateWorkflowRun(workflowRunId, {
       status: streetEasyRefresh.failed > 0 ? "partial" : "completed",
       finishedAt: new Date().toISOString(),
     });
 
-    res.json({ ok: true, results, streetEasyRefresh });
+    res.json({ ok: true, results, streetEasyRefresh, skippedDeadPropertyIds: activeFilter.skippedDeadPropertyIds });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[properties refresh-listings]", err);
@@ -2728,7 +2745,7 @@ router.post("/properties/run-enrichment", async (req: Request, res: Response) =>
   const workflowStartedAt = new Date().toISOString();
   try {
     const raw = req.body?.propertyIds;
-    const propertyIds = Array.isArray(raw)
+    let propertyIds = Array.isArray(raw)
       ? (raw as unknown[]).filter((id): id is string => typeof id === "string" && id.trim().length > 0).map((id) => id.trim())
       : [];
     if (propertyIds.length === 0) {
@@ -2738,6 +2755,19 @@ router.post("/properties/run-enrichment", async (req: Request, res: Response) =>
     // refreshStreetEasy=false skips the RapidAPI listing pull so callers can
     // run enrichment-only refreshes without spending listing-details credits.
     const shouldRefreshListings = req.body?.refreshStreetEasy !== false;
+    const sourcingPool = getPool();
+    const activeFilter = await filterActivePropertyIds(sourcingPool, propertyIds);
+    propertyIds = activeFilter.activePropertyIds;
+    if (propertyIds.length === 0) {
+      res.json({
+        ok: true,
+        skippedDeadPropertyIds: activeFilter.skippedDeadPropertyIds,
+        streetEasyRefresh: { attempted: 0, success: 0, failed: 0, skipped: 0, priceChanged: 0, unavailable: 0, errors: [] },
+        permitEnrichment: { ran: false, success: 0, failed: 0, byModule: {} },
+        omFinancialsRefresh: { documentsProcessed: 0, documentsSkippedNoFile: 0 },
+      });
+      return;
+    }
 
     const enrichmentStepKeys = ["permits", ...ENRICHMENT_MODULES.map((module) => module.key)];
     const enrichmentProgress = Object.fromEntries(
@@ -2779,7 +2809,6 @@ router.post("/properties/run-enrichment", async (req: Request, res: Response) =>
     });
 
     const appToken = process.env.SOCRATA_APP_TOKEN ?? null;
-    const sourcingPool = getPool();
     const streetEasyRefresh = { attempted: 0, success: 0, failed: 0, skipped: 0, priceChanged: 0, unavailable: 0, errors: [] as string[] };
     for (let i = 0; shouldRefreshListings && i < propertyIds.length; i++) {
       if (i > 0) await new Promise((r) => setTimeout(r, ENRICHMENT_RATE_LIMIT_DELAY_MS));
@@ -2925,12 +2954,13 @@ router.post("/properties/run-enrichment", async (req: Request, res: Response) =>
         status: "completed",
         startedAt: omStartedAt,
         finishedAt: omStartedAt,
-        lastMessage: "Skipped automatic OM financial refresh in v1",
+        lastMessage: "Skipped automatic OM financial refresh for this workflow",
       });
     }
 
     await mergeWorkflowRunMetadata(workflowRunId, {
       propertyIds,
+      skippedDeadPropertyIds: activeFilter.skippedDeadPropertyIds,
       streetEasyRefresh,
       permitEnrichment: {
         ran: true,
@@ -2961,6 +2991,7 @@ router.post("/properties/run-enrichment", async (req: Request, res: Response) =>
         documentsProcessed: omFinancialsProcessed,
         documentsSkippedNoFile: omFinancialsSkippedNoFile,
       },
+      skippedDeadPropertyIds: activeFilter.skippedDeadPropertyIds,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -3145,6 +3176,8 @@ router.post("/properties/:id/refresh-om-financials", async (req: Request, res: R
     const requestBody = isPlainRecord(req.body) ? req.body : {};
     const autoPromote = requestBody.autoPromote === true;
     const triggerDossier = requestBody.triggerDossier === true;
+    const pool = getPool();
+    await ensurePropertyRefreshable(pool, propertyId.trim(), "refreshing OM financials");
     workflowRunId = await createWorkflowRun({
       runType: "refresh_om_financials",
       displayName: "Refresh OM financials",
@@ -3162,7 +3195,6 @@ router.post("/properties/:id/refresh-om-financials", async (req: Request, res: R
         },
       ],
     });
-    const pool = getPool();
     const result = await refreshOmFinancialsForProperty(propertyId.trim(), pool, {
       autoPromote,
       triggerDossier,
@@ -3233,6 +3265,10 @@ router.post("/properties/:id/refresh-om-financials", async (req: Request, res: R
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    if ((err as Error & { code?: string })?.code === "property_dead" && workflowRunId == null) {
+      res.status(409).json({ error: message, code: "property_dead" });
+      return;
+    }
     console.error("[properties refresh-om-financials]", err);
     await upsertWorkflowStep(workflowRunId, {
       stepKey: "om_financials",
@@ -3551,6 +3587,7 @@ const VALID_UPLOAD_CATEGORIES: PropertyDocumentCategory[] = [
   "Expense Comp Package",
   "Market Analysis",
   "Broker Notes",
+  "Contract",
   "Other",
 ];
 
@@ -6431,9 +6468,11 @@ router.post("/properties/run-rental-flow", async (req: Request, res: Response) =
   try {
     const pool = getPool();
     const propertyRepo = new PropertyRepo({ pool });
-    const propertyIds = Array.isArray(req.body?.propertyIds) && req.body.propertyIds.length > 0
+    let propertyIds = Array.isArray(req.body?.propertyIds) && req.body.propertyIds.length > 0
       ? (req.body.propertyIds as string[]).filter((id: unknown) => typeof id === "string" && id.trim().length > 0)
       : (await propertyRepo.list({ limit: 200 })).map((p) => p.id);
+    const activeFilter = await filterActivePropertyIds(pool, propertyIds);
+    propertyIds = activeFilter.activePropertyIds;
     const shouldRefreshStreetEasy = req.body?.refreshStreetEasy !== false;
     // Callers that just ran /properties/run-enrichment pass runEnrichment: false to avoid re-running the full enrichment pipeline.
     const shouldRunEnrichment = req.body?.runEnrichment !== false;
@@ -6443,7 +6482,7 @@ router.post("/properties/run-rental-flow", async (req: Request, res: Response) =
       scopeLabel: `${propertyIds.length} propert${propertyIds.length === 1 ? "y" : "ies"}`,
       triggerSource: "manual",
       totalItems: propertyIds.length,
-      metadata: { propertyIds },
+      metadata: { propertyIds, skippedDeadPropertyIds: activeFilter.skippedDeadPropertyIds },
       steps: [
         ...(shouldRefreshStreetEasy
           ? [
@@ -6574,13 +6613,18 @@ router.post("/properties/run-rental-flow", async (req: Request, res: Response) =
       if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
     }
 
-    await mergeWorkflowRunMetadata(workflowRunId, { propertyIds, results, streetEasyRefresh });
+    await mergeWorkflowRunMetadata(workflowRunId, {
+      propertyIds,
+      skippedDeadPropertyIds: activeFilter.skippedDeadPropertyIds,
+      results,
+      streetEasyRefresh,
+    });
     await updateWorkflowRun(workflowRunId, {
       status: failed > 0 || streetEasyRefresh.failed > 0 ? "partial" : "completed",
       finishedAt: new Date().toISOString(),
     });
 
-    res.json({ ok: true, results, streetEasyRefresh });
+    res.json({ ok: true, results, streetEasyRefresh, skippedDeadPropertyIds: activeFilter.skippedDeadPropertyIds });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[properties run-rental-flow]", err);

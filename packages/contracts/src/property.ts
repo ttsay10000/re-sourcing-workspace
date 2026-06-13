@@ -560,7 +560,7 @@ export interface PropertyDealDossierSummary {
   dealSignalsGeneratedAt?: string | null;
   dossierDocumentId?: string | null;
   excelDocumentId?: string | null;
-  /** Structured deal-level validation flags computed with the projection (DSCR floor, exit-cap-vs-entry, tax load, model-shape warnings). */
+  /** Structured deal-level validation flags computed with the projection. */
   validationFlags?: OmValidationFlag[] | null;
 }
 
@@ -573,8 +573,7 @@ export interface PropertyDealDossier {
 /**
  * One grouped broker-outreach draft from POST /api/properties/
  * preview-bulk-inquiry-emails: a single email to one broker covering all of
- * their selected properties. Shared by the API grouping logic and the web
- * preview modal so the shapes cannot drift apart.
+ * their selected properties.
  */
 export interface BulkInquiryPreviewBatch {
   toAddress: string;
@@ -653,6 +652,7 @@ export type PropertyDocumentCategory =
   | "Expense Comp Package"
   | "Market Analysis"
   | "Broker Notes"
+  | "Contract"
   | "Other";
 
 /** User-uploaded document row (OM, brochure, rent roll, etc.). */
@@ -709,6 +709,17 @@ export type BrokerCompExtractionMethod = "text" | "ocr" | "vision" | "spreadshee
 
 export type BrokerCompItemType =
   | "sale_comp"
+  | "lease_comp"
+  | "retail_sale"
+  | "development_comp"
+  | "conversion_comp"
+  | "portfolio_sale"
+  | "recapitalization"
+  | "distressed_sale"
+  | "regulatory_status_snapshot"
+  | "market_metric_snapshot"
+  | "secondary_analysis"
+  | "market_signal"
   | "operating_snapshot"
   | "rent_roll_row"
   | "expense_row"
@@ -740,10 +751,15 @@ export interface BrokerCompPackage {
   sourceDocumentType?: "uploaded" | "inquiry" | "generated" | string | null;
   packageType: BrokerCompPackageType;
   status: BrokerCompPackageStatus;
+  rawPayload?: Record<string, unknown> | null;
+  normalizedPayload?: Record<string, unknown> | null;
   sourceName?: string | null;
   sourceMeta?: Record<string, unknown> | null;
   pageCount?: number | null;
   parserVersion?: string | null;
+  packageMeta?: Record<string, unknown> | null;
+  reviewedAt?: string | null;
+  promotedAt?: string | null;
   lastError?: string | null;
   createdAt: string;
   updatedAt: string;
@@ -802,6 +818,8 @@ export interface BrokerCompPackageReviewPayload {
   package: BrokerCompPackage;
   pages: BrokerCompPackagePage[];
   items: BrokerCompExtractedItem[];
+  extractedItems?: BrokerCompExtractedItem[] | null;
+  promotedItems?: unknown[] | null;
 }
 
 export interface BrokerCompMarketSummary {

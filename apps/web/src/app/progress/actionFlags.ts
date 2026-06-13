@@ -513,7 +513,8 @@ export function computeRowFlags(sectionId: string, row: FlagInputRow, options?: 
     case "tour_completed_awaiting_inputs":
       flags = tourCompletedFlags(row, now);
       break;
-    case "offer_review":
+    case "drafting_loi":
+    case "loi_sent_awaiting_response":
       flags = offerReviewFlags(row, now);
       break;
     case "negotiation":
@@ -549,9 +550,10 @@ const STAGE_DEFAULT_CTA: Record<string, PrimaryCta> = {
   tour_requested: { label: "Confirm tour", actionKind: "schedule_tour" },
   tour_scheduled: { label: "Mark toured", actionKind: "complete_tour" },
   tour_completed_awaiting_inputs: { label: "Add tour outcomes", actionKind: "complete_tour" },
-  offer_review: { label: "Update LOI", actionKind: "update_loi" },
+  drafting_loi: { label: "Update LOI", actionKind: "update_loi" },
+  loi_sent_awaiting_response: { label: "Follow up LOI", actionKind: "update_loi" },
   negotiation: { label: "Record counter", actionKind: "open_inputs" },
-  contract_signed: { label: "Update inputs", actionKind: "open_inputs" },
+  contract_signed_diligence: { label: "Update inputs", actionKind: "open_inputs" },
   deal_closed: { label: "Update inputs", actionKind: "open_inputs" },
 };
 
@@ -587,7 +589,7 @@ export function dataCompleteness(sectionId: string, row: FlagInputRow): Complete
   const stageIndex = STAGE_INDEX.get(sectionId) ?? 0;
   const tourIndex = STAGE_INDEX.get("tour_requested") ?? 4;
   const tourDoneIndex = STAGE_INDEX.get("tour_completed_awaiting_inputs") ?? 6;
-  const loiIndex = STAGE_INDEX.get("offer_review") ?? 7;
+  const loiIndex = STAGE_INDEX.get("drafting_loi") ?? 7;
   const items: CompletenessItem[] = [
     { key: "price", label: "Ask price", done: row.price != null },
     { key: "sqft", label: "Square feet", done: row.sqft != null },

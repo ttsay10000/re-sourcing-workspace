@@ -42,6 +42,7 @@ import {
 import { buildRentBreakdown } from "./buildOmCalculation.js";
 import { resolveOmAskingPriceFromDetails } from "./omAskingPrice.js";
 import { buildDossierPdfCoverData } from "./dossierPdfCover.js";
+import { buildDossierAnalystContext } from "./dossierAnalystContext.js";
 import { buildDossierPdfFileName, buildProFormaFileName } from "./dossierFileName.js";
 import { resolveEffectiveDealScore } from "./effectiveDealScore.js";
 import { buildDossierStructuredText } from "./dossierGenerator.js";
@@ -860,6 +861,13 @@ export async function runGenerateDossier(
       }),
       recommendedOffer,
     };
+    ctx.analystContext = buildDossierAnalystContext({
+      details,
+      listing,
+      brokerEmailNotes,
+      brokerNotesSummary: brokerNotesExtract?.notesSummary ?? null,
+      ctx,
+    });
 
     const dossierFileName = buildDossierPdfFileName(packageContext.dossierAddress);
     const excelFileName = buildProFormaFileName(packageContext.dossierAddress);

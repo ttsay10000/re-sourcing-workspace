@@ -1,5 +1,5 @@
 /**
- * Shared underwriting context for Excel pro forma and dossier generator.
+ * Shared underwriting context for the deal-analysis workbook and dossier generator.
  * Built by the generate-dossier flow from property, listing, profile, and deal modules.
  */
 
@@ -178,6 +178,16 @@ export interface DossierConditionReviewContext {
   summaryBullets?: string[] | null;
 }
 
+export interface DossierAnalystContext {
+  listingSummary?: string | null;
+  listingSignals?: string[];
+  brokerClaims?: string[];
+  marketNeighborhoodSignals?: string[];
+  mixedUseRetailSignals?: string[];
+  diligenceFlags?: string[];
+  sourceNotes?: string[];
+}
+
 export interface UnderwritingContext {
   propertyId: string;
   canonicalAddress: string;
@@ -333,6 +343,8 @@ export interface UnderwritingContext {
   recommendedOffer?: DossierRecommendedOfferContext | null;
   /** Optional: listing-photo + OM/listing-text condition review for dossier narrative. */
   conditionReview?: DossierConditionReviewContext | null;
+  /** Optional: deterministic analyst cues from internal listings, OMs, broker notes, comps, and saved market context. */
+  analystContext?: DossierAnalystContext | null;
 }
 
 /**

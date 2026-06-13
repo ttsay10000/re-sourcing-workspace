@@ -109,6 +109,18 @@ export function getOmAnalysisReasoningEffort(): "low" | "medium" | "high" {
   return getReasoningEffortFromEnv("OPENAI_OM_REASONING_EFFORT", "OPENAI_COMPLEX_REASONING_EFFORT");
 }
 
+/** Used by market document review and live market analysis. */
+export function getMarketAnalysisModel(): string {
+  const model = getModelFromEnv("OPENAI_MARKET_ANALYSIS_MODEL", "OPENAI_COMPLEX_ANALYSIS_MODEL");
+  if (model) return model;
+  return DEFAULT_COMPLEX_ANALYSIS_MODEL;
+}
+
+/** Highest available reasoning effort for market document review / live market analysis. */
+export function getMarketAnalysisReasoningEffort(): "low" | "medium" | "high" {
+  return getReasoningEffortFromEnv("OPENAI_MARKET_ANALYSIS_REASONING_EFFORT", "OPENAI_COMPLEX_REASONING_EFFORT");
+}
+
 /** Used by deal dossier analysis LLM; defaults to gpt-5.5 unless overridden. */
 export function getDossierModel(): string {
   const model = getModelFromEnv("OPENAI_DOSSIER_MODEL", "OPENAI_COMPLEX_ANALYSIS_MODEL");

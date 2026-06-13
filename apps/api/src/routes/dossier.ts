@@ -43,6 +43,7 @@ import {
   updateWorkflowRun,
   upsertWorkflowStep,
 } from "../workflow/workflowTracker.js";
+import { ensurePropertyRefreshable, filterActivePropertyIds } from "../deal/activePropertyFilter.js";
 
 const router = Router();
 const MISSING_DOSSIER_SOURCE_ERROR =
@@ -540,7 +541,8 @@ router.post("/dossier/refresh-scores", async (req: Request, res: Response) => {
       );
       propertyIds = rows.rows.map((row) => row.property_id);
     }
-    propertyIds = [...new Set(propertyIds)];
+    const activeFilter = await filterActivePropertyIds(pool, [...new Set(propertyIds)]);
+    propertyIds = activeFilter.activePropertyIds;
     const scoringProfile = buildDealScoringProfileFromPreferences(
       scoringProfileKey,
       profile.scoringPreferences ?? null
@@ -564,6 +566,7 @@ router.post("/dossier/refresh-scores", async (req: Request, res: Response) => {
       scoreVersion: scoringProfile.scoreVersion,
       refreshed: results.filter((row) => row.status === "refreshed").length,
       skipped: results.filter((row) => row.status === "skipped").length,
+      skippedDeadPropertyIds: activeFilter.skippedDeadPropertyIds,
       results,
     });
   } catch (err) {
@@ -596,6 +599,7 @@ router.post("/dossier/generate", async (req: Request, res: Response) => {
         res.status(404).json({ error: "Property not found" });
         return;
       }
+      await ensurePropertyRefreshable(pool, propertyId, "generating a dossier");
       console.info("[dossier generate] Started", {
         propertyId,
         queueWaitMs: requestStartedAtMs - queuedAt,
@@ -799,6 +803,10 @@ router.post("/dossier/generate", async (req: Request, res: Response) => {
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      if ((err as Error & { code?: string })?.code === "property_dead" && workflowRunId == null) {
+        res.status(409).json({ error: message, code: "property_dead" });
+        return;
+      }
       console.error("[dossier generate]", err);
       console.info("[dossier generate] Failed", {
         workflowRunId,
