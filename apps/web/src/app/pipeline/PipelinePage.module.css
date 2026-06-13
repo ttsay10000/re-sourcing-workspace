@@ -898,6 +898,10 @@
   color: var(--app-amber-text);
 }
 
+.yocFlagGood {
+  color: #15803d;
+}
+
 .dateCell {
   color: #3f4e58;
   white-space: nowrap;

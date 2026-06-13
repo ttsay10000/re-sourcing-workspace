@@ -394,7 +394,7 @@ function cx(...values: Array<string | false | null | undefined>): string {
   return values.filter(Boolean).join(" ");
 }
 
-type YieldFlag = { severity: "warn" | "danger"; label: string; title: string };
+type YieldFlag = { severity: "good" | "warn" | "danger"; label: string; title: string };
 
 /** Data-sanity flag for the MTR yield cell: server callouts first, then client guards. */
 function mtrYieldFlag(row: PipelineRow, ltr: number | null, mtr: number | null): YieldFlag | null {
@@ -431,18 +431,31 @@ function mtrYieldFlag(row: PipelineRow, ltr: number | null, mtr: number | null):
   return null;
 }
 
-function ltrYieldFlag(row: PipelineRow, ltr: number | null): YieldFlag | null {
-  if (ltr != null && ltr < 0) {
+/**
+ * Absolute cap-rate bands for the LTR yield cell. Broker pro forma caps run
+ * low against actuals by construction, so comparing to them tags nearly every
+ * row — an absolute band is the screening signal that matters.
+ */
+const LTR_CAP_GOOD_PCT = 6;
+const LTR_CAP_BAD_PCT = 4;
+
+function ltrYieldFlag(ltr: number | null): YieldFlag | null {
+  if (ltr == null) return null;
+  if (ltr < 0) {
     return { severity: "danger", label: "Negative", title: "Negative LTR yield — check NOI inputs." };
   }
-  const brokerCode = row.underwriting?.brokerCapCalloutCode;
-  if (brokerCode) {
+  if (ltr < LTR_CAP_BAD_PCT) {
     return {
-      severity: "warn",
-      label: brokerCode === "broker_cap_above_reconstructed" ? "Broker high" : "Broker low",
-      title:
-        row.underwriting?.brokerCapCalloutLabel ??
-        "Broker cap rate differs from the yield reconstructed from actuals.",
+      severity: "danger",
+      label: `Sub-${LTR_CAP_BAD_PCT}% cap`,
+      title: `LTR yield on cost is below ${LTR_CAP_BAD_PCT}% — thin cap rate at the asking price.`,
+    };
+  }
+  if (ltr >= LTR_CAP_GOOD_PCT) {
+    return {
+      severity: "good",
+      label: `${LTR_CAP_GOOD_PCT}%+ cap`,
+      title: `LTR yield on cost is at or above ${LTR_CAP_GOOD_PCT}% — strong cap rate at the asking price.`,
     };
   }
   return null;
@@ -450,7 +463,13 @@ function ltrYieldFlag(row: PipelineRow, ltr: number | null): YieldFlag | null {
 
 function flagCellClass(flag: YieldFlag | null): string | false {
   if (!flag) return false;
+  if (flag.severity === "good") return "cell-flag-good";
   return flag.severity === "danger" ? "cell-flag-danger" : "cell-flag-warn";
+}
+
+function yocFlagToneClass(flag: YieldFlag): string {
+  if (flag.severity === "good") return styles.yocFlagGood;
+  return flag.severity === "danger" ? styles.yocFlagDanger : styles.yocFlagWarn;
 }
 
 function pipelineRowHasOm(row: Pick<PipelineRow, "documentStatus"> | null | undefined): boolean {
@@ -4191,7 +4210,7 @@ export default function PipelineClient() {
               const isUnavailable = rowListingUnavailable(row);
               const displayTags = orderedRowTags(row);
               const psfFlag = psfFlagFor(row);
-              const ltrFlag = ltrYieldFlag(row, rowLtrYoc);
+              const ltrFlag = ltrYieldFlag(rowLtrYoc);
               const mtrFlag = mtrYieldFlag(row, rowLtrYoc, rowMtrYoc);
               return (
                 <tr
@@ -4295,7 +4314,7 @@ export default function PipelineClient() {
                   <td className={cx(styles.numericCell, styles.yocCell, flagCellClass(ltrFlag))} title={ltrFlag?.title}>
                     <strong>{formatPercent(rowLtrYoc)}</strong>
                     {ltrFlag ? (
-                      <span className={cx(styles.yocFlag, ltrFlag.severity === "danger" ? styles.yocFlagDanger : styles.yocFlagWarn)}>
+                      <span className={cx(styles.yocFlag, yocFlagToneClass(ltrFlag))}>
                         {ltrFlag.label}
                       </span>
                     ) : null}
@@ -4303,7 +4322,7 @@ export default function PipelineClient() {
                   <td className={cx(styles.numericCell, styles.yocCell, flagCellClass(mtrFlag))} title={mtrFlag?.title}>
                     <strong>{formatPercent(rowMtrYoc)}</strong>
                     {mtrFlag ? (
-                      <span className={cx(styles.yocFlag, mtrFlag.severity === "danger" ? styles.yocFlagDanger : styles.yocFlagWarn)}>
+                      <span className={cx(styles.yocFlag, yocFlagToneClass(mtrFlag))}>
                         {mtrFlag.label}
                       </span>
                     ) : null}
