@@ -85,6 +85,8 @@ interface ProcessBannerContextValue {
   entries: ProcessEntry[];
   dismiss: (id: string) => void;
   dismissAll: () => void;
+  /** Hovering a banner pauses its auto-dismiss countdown. */
+  markHovered: (id: string, hovered: boolean) => void;
 }
 
 const ProcessBannerContext = createContext<ProcessBannerContextValue | null>(null);
@@ -94,6 +96,8 @@ const MAX_ENTRIES = 10;
 const WORKFLOW_POLL_INTERVAL_MS = 4_000;
 /** A running fetch-owned entry that hasn't reported progress for this long is presumed orphaned. */
 const RUNNING_STALL_MS = 30 * 60 * 1000;
+/** Success banners fade out on their own; errors stay until dismissed. */
+const SUCCESS_AUTO_DISMISS_MS = 10_000;
 
 /** Finished durations per estimate kind, persisted so countdowns learn from real runs. */
 const DURATION_HISTORY_KEY = "sourcing-os.process-durations.v1";
@@ -232,6 +236,9 @@ function loadPersistedEntries(): ProcessEntry[] {
         if (!id || !label || !isProcessStatus(entry.status)) return null;
         const workflowRunId = typeof entry.workflowRunId === "string" ? entry.workflowRunId : null;
         const wasRunning = entry.status === "running";
+        // Successes auto-dismiss now and history lives in the activity
+        // indicator, so a pre-reload success doesn't come back as a banner.
+        if (entry.status === "success") return null;
         // Pollable runs resume; fetch-owned runs lost their promise in the reload.
         const status: ProcessStatus = wasRunning && !workflowRunId ? "interrupted" : entry.status;
         return {
@@ -382,9 +389,37 @@ export function ProcessBannerProvider({ children }: { children: ReactNode }) {
     [patchEntry, succeedEntry]
   );
 
+  // Success banners are the "it's done" alert: they linger ~10s, then fade
+  // away on their own (hover pauses the countdown). Errors and interruptions
+  // stay until the user dismisses them.
+  const hoveredIdsRef = useRef<Set<string>>(new Set());
+  const markHovered = useCallback((id: string, hovered: boolean) => {
+    if (hovered) hoveredIdsRef.current.add(id);
+    else hoveredIdsRef.current.delete(id);
+  }, []);
+
+  useEffect(() => {
+    if (!entries.some((entry) => entry.status === "success" && entry.finishedAt != null)) return;
+    const timer = setInterval(() => {
+      const now = Date.now();
+      setEntries((current) =>
+        current.filter(
+          (entry) =>
+            !(
+              entry.status === "success" &&
+              entry.finishedAt != null &&
+              now - entry.finishedAt > SUCCESS_AUTO_DISMISS_MS &&
+              !hoveredIdsRef.current.has(entry.id)
+            )
+        )
+      );
+    }, 1_000);
+    return () => clearInterval(timer);
+  }, [entries]);
+
   // Safety net: a fetch-owned entry that stopped reporting (e.g. its page
   // unmounted and the closure died) flips to "interrupted" instead of
-  // spinning forever. Nothing is ever auto-removed — only ✕ does that.
+  // spinning forever. Errors are never auto-removed — only ✕ does that.
   useEffect(() => {
     if (!entries.some((entry) => entry.status === "running" && !entry.workflowRunId)) return;
     const timer = setInterval(() => {
@@ -449,8 +484,8 @@ export function ProcessBannerProvider({ children }: { children: ReactNode }) {
   }, [entries, patchEntry, succeedEntry]);
 
   const contextValue = useMemo(
-    () => ({ start, entries, dismiss: removeEntry, dismissAll }),
-    [start, entries, removeEntry, dismissAll]
+    () => ({ start, entries, dismiss: removeEntry, dismissAll, markHovered }),
+    [start, entries, removeEntry, dismissAll, markHovered]
   );
 
   return <ProcessBannerContext.Provider value={contextValue}>{children}</ProcessBannerContext.Provider>;
@@ -528,12 +563,17 @@ export function ProcessBannerViewport() {
     return () => clearInterval(timer);
   }, [hasRunning]);
   if (!context || entries.length === 0) return null;
-  const { dismiss, dismissAll } = context;
+  const { dismiss, dismissAll, markHovered } = context;
   const terminalCount = entries.filter((entry) => entry.status !== "running").length;
   return (
     <div className={styles.viewport} role="status" aria-live="polite">
       {entries.map((entry) => (
-        <div key={entry.id} className={`${styles.banner} ${statusClass(entry.status)}`}>
+        <div
+          key={entry.id}
+          className={`${styles.banner} ${statusClass(entry.status)}`}
+          onMouseEnter={() => markHovered(entry.id, true)}
+          onMouseLeave={() => markHovered(entry.id, false)}
+        >
           <span className={styles.icon} aria-hidden="true">
             {statusIcon(entry.status)}
           </span>
@@ -546,13 +586,21 @@ export function ProcessBannerViewport() {
           ) : null}
           {entry.message ? <span className={styles.message}>{entry.message}</span> : null}
           {entry.status === "running" ? <CountdownChip entry={entry} now={now} /> : null}
-          {entry.status === "running" && entry.progressPct != null ? (
-            <span className={styles.progress}>
-              <span className={styles.progressTrack}>
-                <span className={styles.progressFill} style={{ width: `${entry.progressPct}%` }} />
+          {entry.status === "running" ? (
+            entry.progressPct != null ? (
+              <span className={styles.progress}>
+                <span className={styles.progressTrack}>
+                  <span className={styles.progressFill} style={{ width: `${entry.progressPct}%` }} />
+                </span>
+                <span className={styles.progressPct}>{entry.progressPct}%</span>
               </span>
-              <span className={styles.progressPct}>{entry.progressPct}%</span>
-            </span>
+            ) : (
+              <span className={styles.progress}>
+                <span className={`${styles.progressTrack} ${styles.progressIndeterminate}`}>
+                  <span className={styles.progressShimmer} />
+                </span>
+              </span>
+            )
           ) : null}
           <button
             type="button"
@@ -585,7 +633,19 @@ const NOOP_HANDLE: ProcessHandle = {
   fail: () => {},
 };
 
+const NOOP_BANNER: Pick<ProcessBannerContextValue, "start"> = { start: () => NOOP_HANDLE };
+const NOOP_ENTRIES: Pick<ProcessBannerContextValue, "entries" | "dismiss"> = {
+  entries: [],
+  dismiss: () => {},
+};
+
 export function useProcessBanner(): Pick<ProcessBannerContextValue, "start"> {
   const context = useContext(ProcessBannerContext);
-  return context ?? { start: () => NOOP_HANDLE };
+  return context ?? NOOP_BANNER;
+}
+
+/** Read access to the live entries (e.g. the topbar activity indicator). */
+export function useProcessEntries(): Pick<ProcessBannerContextValue, "entries" | "dismiss"> {
+  const context = useContext(ProcessBannerContext);
+  return context ?? NOOP_ENTRIES;
 }

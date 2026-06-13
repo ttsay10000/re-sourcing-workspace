@@ -24,6 +24,7 @@ import type {
 } from "@re-sourcing/contracts";
 import { Badge, Button, ConfirmDialog, Dialog, FileDropzone, PageHeader, Panel } from "@/components/ui";
 import { API_BASE } from "@/lib/api";
+import { useProcessBanner } from "@/components/ProcessBanner";
 import styles from "./marketDocs.module.css";
 
 interface IngestReport {
@@ -143,6 +144,7 @@ function ReviewGroup({
 }
 
 export default function MarketDocsPage() {
+  const processBanner = useProcessBanner();
   const [files, setFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -227,11 +229,18 @@ export default function MarketDocsPage() {
     setUploadError(null);
     const batch = [...files];
     setUploadItems(batch.map((file) => ({ name: file.name, state: "queued" as const })));
+    const banner = processBanner.start("Market doc ingestion", {
+      message: `0/${batch.length} docs ingested`,
+    });
     const reports: IngestReport[] = [];
     const failedFiles: File[] = [];
     for (let index = 0; index < batch.length; index += 1) {
       const file = batch[index];
       patchUploadItem(index, { state: "processing" });
+      banner.update(
+        `Reading ${file.name} (${index + 1}/${batch.length})${failedFiles.length ? ` · ${failedFiles.length} failed` : ""}`,
+        Math.round((index / batch.length) * 100)
+      );
       try {
         const body = new FormData();
         body.append("file", file);
@@ -265,6 +274,11 @@ export default function MarketDocsPage() {
     setFiles(failedFiles);
     if (reports.length === 0 && batch.length > 0) {
       setUploadError("No documents ingested — every file failed. See the per-file errors above.");
+      banner.fail(`All ${batch.length} doc${batch.length === 1 ? "" : "s"} failed to ingest.`);
+    } else {
+      banner.succeed(
+        `${reports.length}/${batch.length} docs ingested${failedFiles.length ? ` · ${failedFiles.length} failed` : ""}`
+      );
     }
     setUploading(false);
     refresh();
@@ -274,6 +288,7 @@ export default function MarketDocsPage() {
   async function retryDocument(documentId: string) {
     if (retryingId) return;
     setRetryingId(documentId);
+    const banner = processBanner.start("Market doc retry", { message: "Re-running ingestion…" });
     try {
       const res = await fetch(`${API_BASE}/api/market-docs/${encodeURIComponent(documentId)}/retry`, {
         method: "POST",
@@ -283,15 +298,18 @@ export default function MarketDocsPage() {
       if (!res.ok || !payload.report) throw new Error(payload.error || `HTTP ${res.status}`);
       if (payload.report.status === "failed") {
         setUploadError(`Retry failed: ${payload.report.error ?? "see the ingest log."}`);
+        banner.fail(`Retry failed: ${payload.report.error ?? "see the ingest log."}`);
       } else {
         setUploadError(null);
         setLastReports((current) => [...current, payload.report as IngestReport]);
         setUploadItems((current) =>
           current.map((item) => (item.documentId === documentId ? { ...item, state: "done", error: null } : item))
         );
+        banner.succeed("Document ingested on retry.");
       }
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : "Retry failed.");
+      banner.fail(err instanceof Error ? err.message : "Retry failed.");
     } finally {
       setRetryingId(null);
       refresh();

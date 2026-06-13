@@ -50,7 +50,6 @@
 }
 
 .filters label,
-.modal label,
 .composerModal label {
   display: flex;
   flex-direction: column;
@@ -72,20 +71,17 @@
 .dealPathForm select,
 .dealPathForm textarea,
 .addTagForm input,
-.modal input,
-.modal select,
-.modal textarea,
 .composerModal input,
 .composerModal select,
 .composerModal textarea {
   width: 100%;
-  min-height: 2.15rem;
+  min-height: var(--control-h, 2.05rem);
   border: 1px solid var(--app-line-strong, #d4d4d8);
   border-radius: 6px;
-  padding: 0.52rem 0.82rem;
+  padding: 0.3rem 0.7rem;
   background: var(--app-surface, #fff);
   color: var(--app-ink, #18181b);
-  font-size: var(--text-xs-plus);
+  font-size: var(--control-font, 0.8125rem);
   letter-spacing: 0;
 }
 
@@ -98,9 +94,6 @@
 .dealPathForm select:focus,
 .dealPathForm textarea:focus,
 .addTagForm input:focus,
-.modal input:focus,
-.modal select:focus,
-.modal textarea:focus,
 .composerModal input:focus,
 .composerModal select:focus,
 .composerModal textarea:focus {
@@ -116,7 +109,6 @@
 .filterButtons,
 .actionGroup,
 .sheetActions,
-.modalActions,
 .addTagForm,
 .panelHeader {
   display: flex;
@@ -184,18 +176,154 @@
   color: var(--brand-strong, #115e59);
 }
 
+/* Layout only — positioning and panel chrome come from AnchoredPopover. */
 .rowActionPopover {
-  position: fixed;
-  z-index: 95;
   display: grid;
   min-width: 12.4rem;
   max-width: min(16rem, calc(100vw - 1rem));
   gap: 0.45rem;
-  border: 1px solid var(--app-line, #e4e4e7);
-  border-radius: var(--radius-md, 8px);
   padding: 0.45rem;
-  background: var(--app-surface, #ffffff);
-  box-shadow: var(--app-shadow-lg);
+}
+
+/* ── Column visibility: manager popover + hidden-column toggles ─── */
+
+.columnsPopover {
+  width: 15.5rem;
+  padding: 0.7rem 0.8rem;
+}
+
+.columnsPopoverHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  margin-bottom: 0.55rem;
+}
+
+.columnsPopoverList {
+  display: grid;
+  gap: 0.1rem;
+}
+
+.columnsPopoverItem {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3rem 0.4rem;
+  border-radius: var(--radius-md, 8px);
+  font-size: var(--text-xs);
+  font-weight: 550;
+  color: var(--app-ink, #18181b);
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.columnsPopoverItem:hover {
+  background: var(--brand-soft, #f0fdfa);
+}
+
+.columnsPopoverItem input {
+  accent-color: var(--brand, #0f766e);
+}
+
+/* Slim rail of "little toggles" for hidden columns, above the table. */
+.hiddenColumnsRail {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.6rem;
+}
+
+.hiddenColumnsLabel {
+  color: var(--app-muted, #71717a);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  letter-spacing: var(--tracking-label, 0.08em);
+  text-transform: uppercase;
+}
+
+.hiddenColumnChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  border: 1px dashed var(--app-line-strong, #d4d4d8);
+  border-radius: 999px;
+  padding: 0.22rem 0.6rem;
+  background: var(--app-surface, #fff);
+  color: var(--app-ink-secondary, #52525b);
+  font-size: var(--text-2xs);
+  font-weight: 650;
+  cursor: pointer;
+  transition: border-color 130ms ease, background 130ms ease, color 130ms ease;
+}
+
+.hiddenColumnChip:hover {
+  border-color: var(--brand-border, #99f6e4);
+  background: var(--brand-soft, #f0fdfa);
+  color: var(--brand-strong, #115e59);
+}
+
+.hiddenColumnsShowAll {
+  border: 0;
+  background: transparent;
+  color: var(--app-muted, #71717a);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  cursor: pointer;
+  padding: 0.22rem 0.4rem;
+  border-radius: 6px;
+}
+
+.hiddenColumnsShowAll:hover {
+  background: rgba(0, 0, 0, 0.05);
+  color: var(--app-ink, #18181b);
+}
+
+/* Compact anchored reject form — opens beside the trigger. */
+.rejectPopover {
+  width: min(22rem, calc(100vw - 16px));
+}
+
+.rejectForm {
+  display: grid;
+  gap: 0.7rem;
+  padding: 0.85rem 0.9rem;
+}
+
+.rejectFormHead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.rejectFormAddress {
+  display: block;
+  margin-top: 0.15rem;
+  color: var(--app-ink, #18181b);
+  font-size: var(--text-sm);
+  font-weight: 620;
+  letter-spacing: var(--tracking-tight, -0.01em);
+  line-height: 1.25;
+}
+
+.rejectForm label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+  color: #65717d;
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.rejectFormActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
 }
 
 .rowActionMenuSection {
@@ -373,9 +501,9 @@
   box-shadow: var(--app-shadow-xs);
 }
 
+/* min-width is set inline from the visible-column registry. */
 .pipelineTable {
   width: 100%;
-  min-width: 2356px;
   border-collapse: collapse;
   table-layout: fixed;
   font-size: var(--text-xs);
@@ -688,48 +816,46 @@
   cursor: pointer;
 }
 
+/* Row state model: one --row-bg custom property feeds the row AND its
+   sticky last cell, so hover/selected/unavailable always agree and the
+   permutation matrix of selectors collapses to a handful of rules.
+   The sticky cell paints --row-bg over white so transparent rows stay
+   opaque while scrolling under it. */
+.pipelineTable tbody tr {
+  --row-bg: transparent;
+  background: var(--row-bg);
+  transition: background 120ms ease;
+}
+
+.pipelineTable tbody tr td:last-child {
+  background: linear-gradient(var(--row-bg, transparent), var(--row-bg, transparent)) #fff;
+}
+
 .pipelineTable tbody tr:hover {
-  background: var(--brand-soft, #f0fdfa);
+  --row-bg: var(--brand-soft, #f0fdfa);
   box-shadow: inset 3px 0 0 rgba(15, 118, 110, 0.35);
 }
 
-.pipelineTable tbody tr:hover td:last-child {
-  background: var(--brand-soft, #f0fdfa);
-}
-
-.selectedRow,
-.pipelineTable tbody tr.selectedRow:hover {
-  background: #e6f5f3;
+.pipelineTable tbody tr.selectedRow {
+  --row-bg: #e6f5f3;
   box-shadow: inset 3px 0 0 var(--brand, #0f766e);
 }
 
-.selectedRow td:last-child,
-.pipelineTable tbody tr.selectedRow:hover td:last-child {
-  background: #e6f5f3;
+.pipelineTable tbody tr.selectedRow:hover {
+  --row-bg: #ddf0ed;
 }
 
 /* Red highlight for listings flagged unavailable (in contract, delisted, sold) by the listing refresh. */
-.unavailableRow,
 .pipelineTable tbody tr.unavailableRow,
 .pipelineTable tbody tr.unavailableRow:hover {
-  background: #fef2f2;
+  --row-bg: #fef2f2;
   box-shadow: inset 3px 0 0 #dc2626;
-}
-
-.unavailableRow td:last-child,
-.pipelineTable tbody tr.unavailableRow:hover td:last-child {
-  background: #fef2f2;
 }
 
 .pipelineTable tbody tr.unavailableRow.selectedRow,
 .pipelineTable tbody tr.unavailableRow.selectedRow:hover {
-  background: #fee2e2;
+  --row-bg: #fee2e2;
   box-shadow: inset 3px 0 0 #b91c1c;
-}
-
-.pipelineTable tbody tr.unavailableRow.selectedRow td:last-child,
-.pipelineTable tbody tr.unavailableRow.selectedRow:hover td:last-child {
-  background: #fee2e2;
 }
 
 .selectColumn input {
@@ -793,10 +919,6 @@
   padding: 0.25rem;
   margin: -0.25rem;
   transition: background 150ms ease;
-}
-
-.pipelineTable tbody tr:hover .addressWrap {
-  background: rgba(15, 118, 110, 0.08);
 }
 
 .addressWrap strong,
@@ -1271,10 +1393,25 @@
   display: grid;
   place-items: center;
   background: rgba(255, 255, 255, 0.72);
+  animation: overlay-fade 200ms ease;
 }
 
-.sheetOverlay,
-.modalOverlay {
+@keyframes overlay-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tableOverlay {
+    animation: none;
+  }
+}
+
+.sheetOverlay {
   position: fixed;
   inset: 0;
   z-index: 120;
@@ -1320,24 +1457,14 @@
 }
 
 .sheetHeader,
-.modalHeader {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 1rem;
-  padding: 1.1rem 1.25rem;
-  border-bottom: 1px solid var(--app-line, #e4e4e7);
-}
-
-.sheetHeader h2,
-.modalHeader h2 {
+.sheetHeader h2 {
   margin: 0.3rem 0 0;
   color: var(--app-ink, #18181b);
   font-family: var(--font-display, Geist, ui-sans-serif, system-ui, sans-serif);
-  font-size: 1.45rem;
-  font-weight: 600;
-  line-height: 1.12;
-  letter-spacing: -0.01em;
+  font-size: 1.05rem;
+  font-weight: 620;
+  line-height: 1.2;
+  letter-spacing: var(--tracking-tight, -0.01em);
 }
 
 .sheetHeader p {
@@ -2770,49 +2897,19 @@
   margin-top: 0.8rem;
 }
 
-.modalOverlay {
-  z-index: 160;
-  align-items: center;
-  justify-content: center;
-  padding: 1rem;
+/* Composer form body — renders inside the shared Dialog, which owns the
+   overlay, panel chrome, header, and footer. */
+.composerForm {
+  display: grid;
+  gap: 0.75rem;
 }
 
-.modal,
-.composerModal {
-  width: min(34rem, 96vw);
-  max-height: 92vh;
-  overflow: auto;
-  border: 1px solid #dce3de;
-  border-radius: 8px;
-  background: #fff;
-  box-shadow: 0 24px 70px rgba(8, 16, 22, 0.32);
-}
-
-.modal > label,
-.composerModal > label,
-.warningBox {
-  margin: 0.85rem 1rem 0;
-}
-
-.modalActions {
-  justify-content: flex-end;
-  padding: 1rem;
-}
-
-.outreachPreviewModal {
-  width: min(46rem, 96vw);
-  display: flex;
-  flex-direction: column;
-}
-
-.outreachPreviewModal .modalActions {
-  display: flex;
-  gap: 0.5rem;
-  border-top: 1px solid var(--app-line, #e4e4e7);
+.composerForm .warningBox {
+  margin: 0;
 }
 
 .outreachPreviewHint {
-  margin: 0.85rem 1.25rem;
+  margin: 0;
   color: var(--app-muted, #71717a);
   font-size: var(--text-xs-plus);
 }
@@ -2820,8 +2917,6 @@
 .outreachPreviewBody {
   display: grid;
   gap: 0.85rem;
-  padding: 0.85rem 1.25rem;
-  overflow-y: auto;
 }
 
 .outreachPreviewCard {
@@ -2930,7 +3025,7 @@
   grid-template-columns: minmax(10rem, 1fr) minmax(10rem, 1fr) auto auto;
   align-items: end;
   gap: 0.55rem;
-  margin: 0.85rem 1rem 0;
+  margin: 0;
   border: 1px solid #e0e7e3;
   border-radius: 8px;
   background: #f7faf8;
@@ -3180,7 +3275,7 @@
 }
 
 .keyboardRow td {
-  box-shadow: inset 0 0 0 1.5px var(--brand, #0f766e);
+  box-shadow: inset 0 0 0 2px var(--app-focus, rgba(15, 118, 110, 0.42));
 }
 
 .keyboardRow td:first-child {

@@ -18,6 +18,11 @@
   --leading-normal: 1.5;
   --leading-relaxed: 1.65;
   --tracking-label: 0.08em;
+  --tracking-tight: -0.01em;
+
+  /* Control sizing — compact, consistent form fields everywhere */
+  --control-font: 0.8125rem;
+  --control-h: 2.05rem;
 
   /* Surfaces */
   --app-bg: #f5f5f4;
@@ -129,13 +134,24 @@ textarea {
   font: inherit;
 }
 
+:where(input:not([type="checkbox"]):not([type="radio"]), select) {
+  font-size: var(--control-font);
+  min-height: var(--control-h);
+  padding-block: 0.3rem;
+}
+
+:where(textarea) {
+  font-size: var(--control-font);
+  padding-block: 0.45rem;
+}
+
 :where(input:not([type="checkbox"]):not([type="radio"]), select, textarea) {
   border: 1px solid var(--app-line-strong);
   border-radius: var(--radius-md);
   background: linear-gradient(180deg, #ffffff 0%, var(--app-surface-raised) 100%);
   color: var(--app-ink);
   box-shadow: var(--app-control-shadow);
-  padding-inline: 0.82rem;
+  padding-inline: 0.7rem;
 }
 
 :where(input:not([type="checkbox"]):not([type="radio"]), select, textarea):focus {
@@ -182,6 +198,15 @@ h2,
   font-family: var(--font-display);
   line-height: var(--leading-tight);
   font-weight: 560;
+}
+
+/* Small uppercase section label — the house style for card/section kickers. */
+.kicker-label {
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--app-muted);
 }
 
 :where(a, button, input, select, textarea):focus-visible {
@@ -1423,9 +1448,10 @@ h2,
 }
 
 .property-card-address {
-  font-size: 1.05rem;
-  font-weight: 650;
-  color: #171511;
+  font-size: 0.95rem;
+  font-weight: 620;
+  color: var(--app-ink);
+  letter-spacing: var(--tracking-tight);
   line-height: 1.22;
   margin: 0;
 }
@@ -6228,4 +6254,47 @@ button:active:not(:disabled) {
 .value-flag-danger {
   color: var(--app-red);
   font-weight: 700;
+}
+
+/* ── Motion utilities ─────────────────────────────────────────────────────
+   Soft fade/rise entrances. Apply .anim-page-enter to a page root and
+   .anim-card-enter (+ --stagger index) to list/board items on first paint. */
+@keyframes page-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes card-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* "backwards" (not "both") so the final keyframe releases and hover/focus
+   transforms keep working after the entrance finishes. */
+.anim-page-enter {
+  animation: page-enter 240ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
+}
+
+.anim-card-enter {
+  animation: card-enter 200ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
+  animation-delay: calc(var(--stagger, 0) * 18ms);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .anim-page-enter,
+  .anim-card-enter {
+    animation: none;
+  }
 }

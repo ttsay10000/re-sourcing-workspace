@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Badge, Dialog, PageHeader, SortableTh, StatCard, useTableSort } from "@/components/ui";
 import { dealFlowStageForStatus, STATUS_TO_CANONICAL } from "@re-sourcing/contracts";
 import { API_BASE } from "@/lib/api";
+import { useProcessBanner, useProcessEntries } from "@/components/ProcessBanner";
 import { formatPercent, formatCurrencyCompact, formatCurrencyExact, labelFromKey, EMPTY_VALUE } from "@/lib/format";
 import styles from "./yieldMap.module.css";
 import { YieldMapCanvas, type MapPin, type AreaStat, type HollowPin, type MarketHood } from "./YieldMapCanvas";
@@ -528,6 +529,10 @@ type TableEntry =
   | { kind: "comp"; rowId: string; comp: MarketComp };
 
 export default function YieldMapPage() {
+  // Destructured because the hook values change identity with every banner
+  // update — the underlying callbacks are stable, the wrapper object is not.
+  const { start: startProcessBanner } = useProcessBanner();
+  const { dismiss: dismissBanner } = useProcessEntries();
   const [data, setData] = useState<CompsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -555,16 +560,14 @@ export default function YieldMapPage() {
   const [compsLoading, setCompsLoading] = useState(false);
   const [compsError, setCompsError] = useState<string | null>(null);
   const [activePinId, setActivePinId] = useState<string | null>(null);
-  // Distinguish map-origin hover (scroll the table to the row) from
-  // table-origin hover (never scroll — the user is already there).
-  const hoverSourceRef = useRef<"map" | "table" | null>(null);
 
-  // Two-way highlight: hovering a pin spotlights AND scrolls to its table row,
-  // so far-down rows are actually findable from the map.
-  useEffect(() => {
-    if (!activePinId || hoverSourceRef.current !== "map") return;
-    document.getElementById(`yield-row-${activePinId}`)?.scrollIntoView({ block: "nearest" });
-  }, [activePinId]);
+  // Hover is highlight-only in both directions (pin ⇄ table row) — it never
+  // scrolls. Clicking a pin is the select action: it opens the property
+  // wizard and scrolls the table to the matching row.
+  const selectPin = useCallback((id: string) => {
+    setQuickViewId(id);
+    document.getElementById(`yield-row-${id}`)?.scrollIntoView({ block: "nearest" });
+  }, []);
   const [market, setMarket] = useState<MarketSummariesResponse | null>(null);
   const [marketError, setMarketError] = useState<string | null>(null);
   const [marketSource, setMarketSource] = useState<MarketSourceFilter>("all");
@@ -574,7 +577,9 @@ export default function YieldMapPage() {
 
   const metric: Metric = colorBy === "psf" ? "psf" : "capRate";
 
-  const loadDeals = useCallback(async (options?: { signal?: AbortSignal; initial?: boolean }) => {
+  // Resolves true on success, false on failure, null when aborted — the
+  // initial-load banner needs to report the real outcome.
+  const loadDeals = useCallback(async (options?: { signal?: AbortSignal; initial?: boolean }): Promise<boolean | null> => {
     if (options?.initial) setLoading(true);
     try {
       // Pending (awaiting-review) rows always come back; the toggle filters client-side.
@@ -586,9 +591,11 @@ export default function YieldMapPage() {
       if (!res.ok || payload.error) throw new Error(payload.error || `HTTP ${res.status}`);
       setData(payload);
       setError(null);
+      return true;
     } catch (err) {
-      if (err instanceof DOMException && err.name === "AbortError") return;
+      if (err instanceof DOMException && err.name === "AbortError") return null;
       setError(err instanceof Error ? err.message : "Failed to load yield map.");
+      return false;
     } finally {
       if (options?.initial) setLoading(false);
     }
@@ -645,15 +652,26 @@ export default function YieldMapPage() {
 
   // Re-runs when the pricing basis changes (loadDeals identity). Only the very
   // first load gets the full-page banner; basis switches swap data in place.
-  const hasLoadedOnceRef = useRef(false);
   useEffect(() => {
     const controller = new AbortController();
-    void loadDeals({ signal: controller.signal, initial: !hasLoadedOnceRef.current }).then(() => {
-      hasLoadedOnceRef.current = true;
-      setLastRefreshedAt(new Date());
+    let settled = false;
+    const banner = startProcessBanner("Yield map data", {
+      message: "Loading flagged comps and market overlays…",
     });
-    return () => controller.abort();
-  }, [loadDeals]);
+    void loadDeals({ signal: controller.signal, initial: true }).then((ok) => {
+      if (controller.signal.aborted || ok == null) return;
+      settled = true;
+      setLastRefreshedAt(new Date());
+      if (ok) banner.succeed("Yield map ready.");
+      else banner.fail("Yield map failed to load — see the page for details.");
+    });
+    return () => {
+      controller.abort();
+      // A page-scoped GET stops when the page goes away — drop a banner
+      // that never finished instead of leaving an orphaned spinner.
+      if (!settled) dismissBanner(banner.id);
+    };
+  }, [dismissBanner, loadDeals, startProcessBanner]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -1757,10 +1775,8 @@ export default function YieldMapPage() {
                   areas={areas}
                   showAreas={showAreas}
                   highlightedId={activePinId}
-                  onPinHover={(id) => {
-                    hoverSourceRef.current = "map";
-                    setActivePinId(id);
-                  }}
+                  onPinHover={setActivePinId}
+                  onPinSelect={selectPin}
                   marketHoods={marketHoods}
                   hollowPins={hollowPins}
                   renderHoodPopup={renderHoodPopup}
@@ -1771,7 +1787,7 @@ export default function YieldMapPage() {
                         metric === "capRate" ? "; ▲/▼ marks the median cap-rate move since each deal was first sourced" : ""
                       }. `
                     : ""}
-                  Hover a table row to spotlight its pin; hover a pin for cap rate and $/PSF
+                  Hover a pin or table row to spotlight its match; click a pin to open the property wizard
                   {showComps ? "; diamonds are broker-package comps" : ""}.
                   {marketLayerOn
                     ? " Sources: Research = published market reports ingested on Market docs; Broker = comps from broker-provided documents."
@@ -1931,10 +1947,7 @@ export default function YieldMapPage() {
                             .filter(Boolean)
                             .join(" ") || undefined
                         }
-                        onMouseEnter={() => {
-                          hoverSourceRef.current = "table";
-                          setActivePinId(entry.rowId);
-                        }}
+                        onMouseEnter={() => setActivePinId(entry.rowId)}
                         onMouseLeave={() => setActivePinId(null)}
                       >
                         <td className={styles.dealAddressCell}>
@@ -2021,10 +2034,7 @@ export default function YieldMapPage() {
                         key={entry.rowId}
                         id={`yield-row-${entry.rowId}`}
                         className={`${styles.compRow} ${activePinId === entry.rowId ? styles.rowActive : ""}`}
-                        onMouseEnter={() => {
-                          hoverSourceRef.current = "table";
-                          setActivePinId(entry.rowId);
-                        }}
+                        onMouseEnter={() => setActivePinId(entry.rowId)}
                         onMouseLeave={() => setActivePinId(null)}
                       >
                         <td className={styles.dealAddressCell}>
