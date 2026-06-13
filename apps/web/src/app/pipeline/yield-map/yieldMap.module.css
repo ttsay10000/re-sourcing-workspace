@@ -1043,9 +1043,64 @@
 .quickViewActionSecondary {
   color: var(--brand-strong, #115e59);
   border: 1px solid var(--app-line);
+  /* Also used on <button> (yield-calc exclusion), so reset button chrome. */
+  background: none;
+  font-family: inherit;
+  cursor: pointer;
 }
 
 .quickViewAction:hover,
 .quickViewActionSecondary:hover {
   filter: brightness(1.05);
+}
+
+.quickViewActionSecondary:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* ── Yield-calc exclusion controls ── */
+
+.actionTh {
+  width: 1%;
+}
+
+.actionCell {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.excludeButton {
+  font-size: 0.68rem;
+  font-weight: 650;
+  font-family: inherit;
+  color: var(--app-ink-secondary);
+  background: var(--app-surface);
+  border: 1px solid var(--app-line);
+  border-radius: var(--radius-md, 8px);
+  padding: 0.2rem 0.5rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.excludeButton:hover {
+  color: #b91c1c;
+  border-color: #fca5a5;
+}
+
+.excludeButton:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Excluded-from-calcs rows stay readable but clearly out of the numbers; the
+   action cell keeps full contrast so re-inclusion stays obvious. */
+.rowExcluded td:not(.actionCell) {
+  opacity: 0.55;
+}
+
+.rowExcluded .excludeButton,
+.rowExcluded .excludeButton:hover {
+  color: var(--brand-strong, #115e59);
+  border-color: var(--app-line);
 }

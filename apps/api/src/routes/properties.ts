@@ -27,6 +27,7 @@ import {
   RecipientResolutionRepo,
   OmExtractedSnapshotRepo,
   OmIngestionRunRepo,
+  PropertyPipelineEventRepo,
   SavedDealsRepo,
   UserProfileRepo,
 } from "@re-sourcing/db";
@@ -1372,6 +1373,53 @@ router.post("/properties/:id/restore", async (req: Request, res: Response) => {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[properties restore]", err);
     res.status(503).json({ error: "Failed to restore property.", details: message });
+  }
+});
+
+/**
+ * POST /api/properties/:id/yield-map-exclusion - scrub a property out of (or
+ * back into) yield-map calculations. The designation persists on the property
+ * (e.g. rent-stabilized buildings whose cap rates would distort free-market
+ * medians); excluded rows stay viewable behind a toggle on the yield map.
+ */
+router.post("/properties/:id/yield-map-exclusion", async (req: Request, res: Response) => {
+  try {
+    const propertyId = req.params.id;
+    const excluded = req.body?.excluded;
+    if (typeof excluded !== "boolean") {
+      res.status(400).json({ error: "Body must include excluded: boolean." });
+      return;
+    }
+    const pool = getPool();
+    const updated = await new PropertyRepo({ pool }).setYieldMapExcluded(propertyId, excluded);
+    if (!updated) {
+      res.status(404).json({ error: "Canonical property not found." });
+      return;
+    }
+    try {
+      await new PropertyPipelineEventRepo({ pool }).create({
+        propertyId,
+        eventType: "yield_map_exclusion_changed",
+        actor: typeof req.body?.actorName === "string" ? req.body.actorName : "yield-map",
+        source: "yield-map",
+        title: excluded ? "Excluded from yield map calculations" : "Re-included in yield map calculations",
+        metadata: { excluded },
+      });
+    } catch (eventErr) {
+      console.warn(
+        "[properties yield-map-exclusion] event log skipped",
+        eventErr instanceof Error ? eventErr.message : eventErr
+      );
+    }
+    res.json({ ok: true, propertyId, excluded });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[properties yield-map-exclusion]", err);
+    const migrationHint =
+      (err as { code?: string } | null)?.code === "42703"
+        ? " The database schema is behind — run `npm run db:migrate` (migration 064 adds yield_map_excluded)."
+        : "";
+    res.status(503).json({ error: `Failed to update yield-map exclusion.${migrationHint}`, details: message });
   }
 });
 

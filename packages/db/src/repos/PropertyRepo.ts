@@ -126,6 +126,23 @@ export class PropertyRepo {
   }
 
   /**
+   * Turn the yield-map calculation exclusion on/off (migration 064). Excluded
+   * properties stay visible behind a toggle but never count toward yield-map
+   * medians/averages/area stats. Returns false when the property doesn't exist.
+   */
+  async setYieldMapExcluded(propertyId: string, excluded: boolean): Promise<boolean> {
+    const r = await this.client.query(
+      `UPDATE properties
+       SET yield_map_excluded = $2,
+           yield_map_excluded_at = CASE WHEN $2 THEN now() ELSE NULL END,
+           updated_at = now()
+       WHERE id = $1`,
+      [propertyId, excluded]
+    );
+    return (r.rowCount ?? 0) > 0;
+  }
+
+  /**
    * Shallow merge an object into properties.details (e.g. { enrichment: { permits_summary: {...} } }).
    * Preserves other top-level keys; overwrites only the keys present in merge.
    */
