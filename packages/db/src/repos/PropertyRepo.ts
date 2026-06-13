@@ -138,4 +138,25 @@ export class PropertyRepo {
       [propertyId, JSON.stringify(merge)]
     );
   }
+
+  /**
+   * Atomically merge a patch into one top-level details object (e.g. pipeline)
+   * AS STORED AT WRITE TIME. Unlike mergeDetails — which replaces the whole
+   * key with whatever object the caller assembled from an earlier read — this
+   * preserves sibling keys written concurrently (dealPath, tags, status moves),
+   * so long-running flows can never clobber a stage change that landed while
+   * they were working.
+   */
+  async mergeDetailsKey(propertyId: string, key: string, patch: Record<string, unknown>): Promise<void> {
+    await this.client.query(
+      `UPDATE properties
+       SET details = COALESCE(details, '{}'::jsonb) || jsonb_build_object(
+             $2::text,
+             COALESCE(details->$2, '{}'::jsonb) || $3::jsonb
+           ),
+           updated_at = now()
+       WHERE id = $1`,
+      [propertyId, key, JSON.stringify(patch)]
+    );
+  }
 }

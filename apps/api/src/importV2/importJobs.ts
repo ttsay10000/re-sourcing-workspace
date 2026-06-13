@@ -352,7 +352,7 @@ function buildDetailsMerge(params: {
   savedSearchId?: string | null;
   sourceMetadata?: JsonRecord | null;
   manualInput?: UiV2ManualEntryImportInput;
-}): JsonRecord {
+}): { merge: JsonRecord; pipelinePatch: JsonRecord } {
   const now = nowIso();
   const details = (params.property.details ?? null) as PropertyDetails | null;
   const detailRecord = isRecord(details) ? details : {};
@@ -369,18 +369,20 @@ function buildDetailsMerge(params: {
     ...(params.sourceUrl && params.normalized.source === "streeteasy" ? { streetEasyUrl: params.sourceUrl } : {}),
     addedAt: now,
   });
+  // Written via mergeDetailsKey so only these keys touch the stored pipeline:
+  // a listing pull running alongside a stage move (or any other pipeline
+  // write) can never replace the whole object with this snapshot's copy.
+  const pipelinePatch: JsonRecord = {
+    status: typeof pipeline.status === "string" ? pipeline.status : "new_sourced",
+    uiV2Status: typeof pipeline.uiV2Status === "string" ? pipeline.uiV2Status : "new",
+    source: params.sourceLabel,
+    ...(marketType ? { marketType } : {}),
+    sourceLinks,
+    tags: uniqueStrings([...existingTags, ...inputTags, marketType]),
+    lastActivityAt: now,
+  };
   const merge: JsonRecord = {
     manualSourceLinks,
-    pipeline: {
-      ...pipeline,
-      status: typeof pipeline.status === "string" ? pipeline.status : "new_sourced",
-      uiV2Status: typeof pipeline.uiV2Status === "string" ? pipeline.uiV2Status : "new",
-      source: params.sourceLabel,
-      ...(marketType ? { marketType } : {}),
-      sourceLinks,
-      tags: uniqueStrings([...existingTags, ...inputTags, marketType]),
-      lastActivityAt: now,
-    },
     importV2: {
       jobType: params.jobType,
       source: params.sourceLabel,
@@ -451,7 +453,7 @@ function buildDetailsMerge(params: {
     if (notes) merge.notes = notes;
   }
 
-  return merge;
+  return { merge, pipelinePatch };
 }
 
 async function recomputeDuplicateScores(pool: Pool): Promise<void> {
@@ -570,19 +572,18 @@ async function persistListingAsProperty(params: PersistListingParams): Promise<P
         normalizedListing: normalized as unknown as JsonRecord,
       },
     });
-    await propertyRepo.mergeDetails(
-      propertyId,
-      buildDetailsMerge({
-        property,
-        normalized,
-        listingId,
-        jobType: params.jobType,
-        sourceLabel: params.sourceLabel,
-        sourceUrl: params.sourceUrl,
-        savedSearchId: params.savedSearchId,
-        sourceMetadata: params.sourceMetadata,
-      })
-    );
+    const detailsMerge = buildDetailsMerge({
+      property,
+      normalized,
+      listingId,
+      jobType: params.jobType,
+      sourceLabel: params.sourceLabel,
+      sourceUrl: params.sourceUrl,
+      savedSearchId: params.savedSearchId,
+      sourceMetadata: params.sourceMetadata,
+    });
+    await propertyRepo.mergeDetails(propertyId, detailsMerge.merge);
+    await propertyRepo.mergeDetailsKey(propertyId, "pipeline", detailsMerge.pipelinePatch);
 
     await client.query("COMMIT");
   } catch (err) {
@@ -628,18 +629,18 @@ async function persistManualEntry(input: UiV2ManualEntryImportInput): Promise<Pe
     sourceLabel: "manual",
     sourceUrl: cleanString(input.listingUrl, 2_000),
   });
-  await new PropertyRepo({ pool }).mergeDetails(
-    result.property.id,
-    buildDetailsMerge({
-      property: result.property,
-      normalized: listing,
-      listingId: result.listingId,
-      jobType: "manual_entry",
-      sourceLabel: "manual",
-      sourceUrl: cleanString(input.listingUrl, 2_000),
-      manualInput: input,
-    })
-  );
+  const manualDetailsMerge = buildDetailsMerge({
+    property: result.property,
+    normalized: listing,
+    listingId: result.listingId,
+    jobType: "manual_entry",
+    sourceLabel: "manual",
+    sourceUrl: cleanString(input.listingUrl, 2_000),
+    manualInput: input,
+  });
+  const manualEntryPropertyRepo = new PropertyRepo({ pool });
+  await manualEntryPropertyRepo.mergeDetails(result.property.id, manualDetailsMerge.merge);
+  await manualEntryPropertyRepo.mergeDetailsKey(result.property.id, "pipeline", manualDetailsMerge.pipelinePatch);
   if (input.broker && (input.broker.name || input.broker.email || input.broker.phone || input.broker.firm)) {
     await overwriteManualBrokerResolution(result.property.id, {
       name: input.broker.name ?? null,

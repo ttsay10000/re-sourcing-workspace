@@ -3532,7 +3532,9 @@ function isOmIngestionCategory(category: PropertyDocumentCategory): boolean {
 
 async function autoSavePropertyWithUnderwritingDocument(propertyId: string, pool: import("pg").Pool): Promise<boolean> {
   const userId = await new UserProfileRepo({ pool }).ensureDefault();
-  await new SavedDealsRepo({ pool }).save(userId, propertyId, "saved");
+  // ensureSaved never downgrades: re-uploading an OM/underwriting document for
+  // a deal that already advanced (tour, offer, …) must not reset it to "saved".
+  await new SavedDealsRepo({ pool }).ensureSaved(userId, propertyId, "saved");
   return true;
 }
 

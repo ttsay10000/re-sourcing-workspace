@@ -237,6 +237,7 @@ Tables (migration `060_market_knowledge.sql`):
 - `market_documents.document_brief` — JSONB analyst brief per upload ({ title, whatItSays, comparedToPrior, discrepancies, incorporatedAt })
 - `market_llm_outputs` — raw model output for the merge step persisted under the new `knowledge` stage (prompt version `knowledge_v1`)
 
+<<<<<<< HEAD
 ## Market docs usability push: per-doc notes, live AI review, comp review gate (2026-06-12)
 
 Per-document analyst notes (ingest stage 3, before the knowledge merge):
@@ -273,6 +274,11 @@ Extraction (`extract_v2`) now captures the fields a VP-level acquisitions read n
 - `market_documents.coverage_universe` (classify_v2) — the publisher's stated methodology/universe ("sales $1M+ in 5+ unit buildings, all Manhattan"), fed into the knowledge + live-review prompts so cross-publisher gaps get EXPLAINED via universe differences rather than just flagged.
 - Notes prompts (`notes_read_v2`/`notes_refine_v2`) rewritten to the VP lens: free-market sub-10-unit focus (pricing vs broader market, walk-up discounts, vacancy premiums, FM-vs-RS spreads), neighborhood relative value (spreads/rankings), buyer composition + motivated-seller signals, GRM, small-balance lending, and printed forward-looking views ("Outlook:" prefix in risks_watch_items). Refine-input comp truncation now keeps sub-10-unit comps first.
 - Live review (`review_v2`): universe-aware discrepancy explanations, institutional-share trend within one publisher's series, relative-value opportunities.
+
+## Saved-data authority + stage no-regress (2026-06-12)
+
+- Saved OM workspace rows are now authoritative for all generation paths (dossier, Excel, deal signals, om-calculation): once `dealDossier.assumptions.unitModelRows`/`expenseModelRows` exist, `resolveDetailedCashFlowModel` builds the model from the saved set and never re-adds snapshot rows the user removed or lets a re-extracted snapshot's values displace saved edits. Details in `apps/api/src/rental/FINANCIAL_FLOWS.md` ("Saved OM Workspace Rows Are Authoritative").
+- Automatic flows can no longer move a deal backward on the board: OM arrival/refresh, outreach sends, document-upload auto-save, listing imports, and "Save deal" all respect `UI_V2_STATUS_FUNNEL_RANK` (`@re-sourcing/contracts`). A deal at tour/offer keeps its stage through any OM workspace rework or underwriting adjustment; only explicit user moves regress. Details in FINANCIAL_FLOWS.md ("Deal Stage Never Auto-Regresses").
 
 ## v6 push: refresh semantics, activity log, neighborhood $/SF context (2026-06-10)
 

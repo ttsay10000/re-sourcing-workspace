@@ -415,13 +415,17 @@ export function resolveDetailedCashFlowModel(params: {
     return row;
   });
 
-  const savedUnitRows = new Map(
-    (params.unitModelRows ?? []).map((row) => [row.rowId, row] as const)
-  );
-  const seenUnitRowIds = new Set<string>();
-  const unitModelRows: ResolvedUnitModelRow[] = sourceRentRoll.map((row, index) => {
-    const rowId = rentRowId(row, index);
-    seenUnitRowIds.add(rowId);
+  // Saved workspace rows are authoritative once the user has saved any: the
+  // resolved model is exactly the saved set (rows the user removed stay
+  // removed, and a re-extracted OM snapshot whose rows no longer line up by
+  // rowId cannot resurrect old extracted values into the dossier/Excel).
+  // Source rows only seed the model while nothing has been saved yet; saved
+  // rows that still match a source row keep inheriting its defaults for any
+  // field the user left untouched.
+  const savedUnitRowList = params.unitModelRows ?? [];
+  const savedUnitRowsAuthoritative = savedUnitRowList.length > 0;
+  const savedUnitRows = new Map(savedUnitRowList.map((row) => [row.rowId, row] as const));
+  const resolveSourceUnitRow = (row: OmRentRollRow, index: number, rowId: string): ResolvedUnitModelRow => {
     const override = savedUnitRows.get(rowId);
     const record = row as Record<string, unknown>;
     const labels = classificationText(record);
@@ -528,10 +532,9 @@ export function resolveDetailedCashFlowModel(params: {
       modeledAnnualRent,
       defaultProjectedAnnualRent,
     };
-  });
+  };
 
-  for (const savedRow of params.unitModelRows ?? []) {
-    if (seenUnitRowIds.has(savedRow.rowId)) continue;
+  const resolveSavedOnlyUnitRow = (savedRow: PropertyDealDossierUnitModelRow): ResolvedUnitModelRow => {
     const isProtected =
       savedRow.isProtected ?? (savedRow.isCommercial === true || savedRow.isRentStabilized === true);
     const isVacantLike = false;
@@ -568,7 +571,7 @@ export function resolveDetailedCashFlowModel(params: {
       savedRow.monthlyHospitalityExpense ??
       defaultMonthlyRecurringOpex(isProtected);
     const monthlyHospitalityExpense = monthlyRecurringOpex;
-    unitModelRows.push({
+    return {
       rowId: savedRow.rowId,
       unitLabel: savedRow.unitLabel ?? savedRow.rowId,
       building: savedRow.building ?? null,
@@ -601,13 +604,39 @@ export function resolveDetailedCashFlowModel(params: {
         includeInUnderwriting,
       }),
       defaultProjectedAnnualRent: underwrittenAnnualRent,
-    });
+    };
+  };
+
+  const sourceUnitEntries = sourceRentRoll.map((row, index) => ({
+    row,
+    index,
+    rowId: rentRowId(row, index),
+  }));
+  let unitModelRows: ResolvedUnitModelRow[];
+  if (savedUnitRowsAuthoritative) {
+    const sourceUnitByRowId = new Map(sourceUnitEntries.map((entry) => [entry.rowId, entry] as const));
+    const seenUnitRowIds = new Set<string>();
+    unitModelRows = [];
+    for (const savedRow of savedUnitRowList) {
+      if (seenUnitRowIds.has(savedRow.rowId)) continue;
+      seenUnitRowIds.add(savedRow.rowId);
+      const source = sourceUnitByRowId.get(savedRow.rowId);
+      unitModelRows.push(
+        source
+          ? resolveSourceUnitRow(source.row, source.index, source.rowId)
+          : resolveSavedOnlyUnitRow(savedRow)
+      );
+    }
+  } else {
+    unitModelRows = sourceUnitEntries.map((entry) =>
+      resolveSourceUnitRow(entry.row, entry.index, entry.rowId)
+    );
   }
 
+  const savedExpenseRowsAuthoritative = normalizedSavedExpenseRows.length > 0;
   const savedExpenseRows = new Map(
     normalizedSavedExpenseRows.map((row) => [row.rowId, row] as const)
   );
-  const seenExpenseRowIds = new Set<string>();
   const hospitalityEligibleUnitCount = countHospitalityEligibleUnits(unitModelRows);
   const derivedExpenseRowsSource =
     sourceExpenseRows.length > 0
@@ -635,8 +664,8 @@ export function resolveDetailedCashFlowModel(params: {
           ]
         : [];
 
-  const expenseModelRows: ResolvedExpenseModelRow[] = expenseRowsSource.map((row) => {
-    seenExpenseRowIds.add(row.rowId);
+  type ExpenseSourceRow = (typeof expenseRowsSource)[number];
+  const resolveSourceExpenseRow = (row: ExpenseSourceRow): ResolvedExpenseModelRow => {
     const override = savedExpenseRows.get(row.rowId);
     const lineItem = override?.lineItem?.trim() || row.lineItem;
     const treatment = resolvedExpenseTreatment(override, lineItem);
@@ -655,13 +684,14 @@ export function resolveDetailedCashFlowModel(params: {
       treatment,
       isManagementLine: isManagementFeeExpenseLine(lineItem),
     };
-  });
+  };
 
-  for (const savedRow of normalizedSavedExpenseRows) {
-    if (seenExpenseRowIds.has(savedRow.rowId)) continue;
+  const resolveSavedOnlyExpenseRow = (
+    savedRow: PropertyDealDossierExpenseModelRow
+  ): ResolvedExpenseModelRow | null => {
     const lineItem = savedRow.lineItem.trim();
-    if (!lineItem) continue;
-    expenseModelRows.push({
+    if (!lineItem) return null;
+    return {
       rowId: savedRow.rowId,
       lineItem,
       amount: savedRow.amount ?? null,
@@ -674,7 +704,23 @@ export function resolveDetailedCashFlowModel(params: {
         }),
       treatment: resolvedExpenseTreatment(savedRow, lineItem),
       isManagementLine: isManagementFeeExpenseLine(lineItem),
-    });
+    };
+  };
+
+  let expenseModelRows: ResolvedExpenseModelRow[];
+  if (savedExpenseRowsAuthoritative) {
+    const sourceExpenseByRowId = new Map(expenseRowsSource.map((row) => [row.rowId, row] as const));
+    const seenExpenseRowIds = new Set<string>();
+    expenseModelRows = [];
+    for (const savedRow of normalizedSavedExpenseRows) {
+      if (seenExpenseRowIds.has(savedRow.rowId)) continue;
+      seenExpenseRowIds.add(savedRow.rowId);
+      const source = sourceExpenseByRowId.get(savedRow.rowId);
+      const resolved = source ? resolveSourceExpenseRow(source) : resolveSavedOnlyExpenseRow(savedRow);
+      if (resolved) expenseModelRows.push(resolved);
+    }
+  } else {
+    expenseModelRows = expenseRowsSource.map(resolveSourceExpenseRow);
   }
 
   return {

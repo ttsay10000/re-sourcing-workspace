@@ -19,6 +19,7 @@ import type {
   UiV2OutreachTemplatePayload,
   UiV2PipelineStatus,
 } from "@re-sourcing/contracts";
+import { pipelineStatusRank } from "@re-sourcing/contracts";
 import {
   BrokerContactRepo,
   getPool,
@@ -204,29 +205,21 @@ async function markOmRequestedFromOutreach(
       ? (details.pipeline as JsonRecord)
       : {};
   const currentUiStatus = normalizeTag(existingPipeline.uiV2Status);
-  if (
-    [
-      "rejected",
-      "archived",
-      "om_received",
-      "dossier_generated",
-      "offer_review",
-      "negotiation",
-      "contract_signed",
-      "deal_closed",
-      "underwriting",
-    ].includes(currentUiStatus)
-  ) {
+  // Never move a deal backward: outreach only advances deals that sit at or
+  // before the outreach stage. Anything further along (om_received,
+  // underwriting, tour, offer, terminal states) keeps its status even when a
+  // broker email goes out again. Lateral re-sends within the outreach stage
+  // are allowed so follow-ups keep refreshing activity.
+  if (currentUiStatus && pipelineStatusRank(currentUiStatus) > pipelineStatusRank("outreach")) {
     return;
   }
   const now = new Date().toISOString();
-  await propertyRepo.mergeDetails(propertyId, {
-    pipeline: {
-      ...existingPipeline,
-      status: "om_requested",
-      uiV2Status: "outreach",
-      lastActivityAt: now,
-    },
+  // Sibling-preserving merge: only the keys outreach owns are written, so a
+  // stage move or deal-path change landing mid-send is never clobbered.
+  await propertyRepo.mergeDetailsKey(propertyId, "pipeline", {
+    status: "om_requested",
+    uiV2Status: "outreach",
+    lastActivityAt: now,
   });
   await new PropertyPipelineEventRepo({ pool }).create({
     propertyId,

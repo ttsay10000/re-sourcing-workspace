@@ -54,6 +54,57 @@ export const STAGE_AGING = {
   dangerDays: 14,
 } as const;
 
+/**
+ * Funnel position of each ui-v2 pipeline status. Automatic flows (OM uploads,
+ * OM analysis refresh, outreach sends, document post-processing) must only
+ * move a deal to a status with a HIGHER rank than its current one — deals that
+ * are moving forward are never pushed back by reworking the OM workspace or
+ * re-running underwriting. Manual board moves are exempt: the user can drag a
+ * deal anywhere. Statuses sharing a rank are lateral moves within one stage.
+ * Terminal/dead states rank highest so no automatic flow ever "advances" out
+ * of them.
+ */
+export const UI_V2_STATUS_FUNNEL_RANK: Record<string, number> = {
+  new: 0,
+  screening: 1,
+  interesting: 1,
+  saved: 2,
+  outreach: 3,
+  awaiting_broker: 3,
+  om_received: 4,
+  underwriting: 5,
+  dossier_generated: 5,
+  tour_scheduled: 6,
+  tour_completed_awaiting_inputs: 7,
+  offer_review: 8,
+  negotiation: 9,
+  contract_signed: 10,
+  deal_closed: 11,
+  rejected: 12,
+  archived: 12,
+};
+
+/** Funnel rank of a pipeline status; unknown/legacy statuses rank as 0 (new). */
+export function pipelineStatusRank(status: string | null | undefined): number {
+  const normalized = String(status ?? "").trim().toLowerCase();
+  return UI_V2_STATUS_FUNNEL_RANK[normalized] ?? 0;
+}
+
+/**
+ * Whether an automatic flow is allowed to move a deal from `current` to
+ * `next`. True only when `next` is strictly further down the funnel (or the
+ * current status is unknown). Lateral and backward moves return false.
+ */
+export function isForwardPipelineStatusMove(
+  current: string | null | undefined,
+  next: string
+): boolean {
+  const normalized = String(current ?? "").trim().toLowerCase();
+  if (!normalized) return true;
+  if (UI_V2_STATUS_FUNNEL_RANK[normalized] == null) return true;
+  return pipelineStatusRank(next) > pipelineStatusRank(normalized);
+}
+
 export type DealFlowStageId =
   | "sourced"
   | "om_requested"
