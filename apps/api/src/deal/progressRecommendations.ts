@@ -208,7 +208,7 @@ export function buildRuleBasedRecommendations(rows: RecommendationInputRow[]): D
 function ruleBasedHeadline(items: DealFlowRecommendation[]): string {
   if (items.length === 0) return "All caught up — no pending actions on the board.";
   const totalDeals = new Set(items.flatMap((item) => item.propertyIds)).size;
-  return `${items.length} ${pluralize(items.length, "action")} across ${totalDeals} ${pluralize(totalDeals, "deal")} need your attention.`;
+  return `${items.length} ${pluralize(items.length, "action")} across ${totalDeals} ${pluralize(totalDeals, "deal")} ${pluralize(items.length, "needs", "need")} your attention.`;
 }
 
 function getApiKey(): string | null {
