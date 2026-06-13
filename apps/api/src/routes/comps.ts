@@ -8,11 +8,26 @@
  * The derived fallback (no signal yet) mirrors the same basis: reconstruct NOI
  * from extracted gross rent + other income − expenses, and only fall back to
  * the broker-stated NOI when reconstruction is impossible.
+ *
+ * Yields are quoted on a pricing basis (`ask_source` query param):
+ * - "listed" (default): NOI ÷ listed ask (OM asking price → matched listing).
+ * - "whisper": NOI ÷ the latest broker whisper price / pricing opinion.
+ * - "user": the underwriting view — stored signal cap rate (computed on the
+ *   negotiated/entered purchase price), falling back to NOI ÷ manual ask.
+ * Every row also carries all three yields so the UI can compare bases without
+ * refetching. `flagged=1` defaults to the "user" basis: its flags audit the
+ * stored signals, not the marketed price.
  */
 
 import { Router, type Request, type Response } from "express";
 import { getPool, NeighborhoodRepo } from "@re-sourcing/db";
-import { resolveOperatingYield, sanitizeRatePct, type OperatingYieldFlag } from "../deal/operatingYield.js";
+import {
+  deriveBasisYield,
+  resolveOperatingYield,
+  sanitizeRatePct,
+  type LtrAskSource,
+  type OperatingYieldFlag,
+} from "../deal/operatingYield.js";
 import {
   buildNeighborhoodIndex,
   normalizeNeighborhoodName,
@@ -33,8 +48,14 @@ interface OperatingCompRow {
   lat: number | null;
   lng: number | null;
   units: number | null;
+  /** The price behind ltrYieldPct — the requested basis's price. */
   askingPrice: number | null;
+  /** LTR yield on the requested pricing basis (see ltrYieldBySource for all three). */
   ltrYieldPct: number | null;
+  /** LTR yield recomputed on every pricing basis; null where that basis has no price/NOI. */
+  ltrYieldBySource: Record<LtrAskSource, number | null>;
+  /** listed = OM ask → matched listing; whisper = latest broker pricing opinion; user = manual/negotiated (signal basis). */
+  askBySource: Record<LtrAskSource, number | null>;
   mtrYieldPct: number | null;
   yieldSpreadPct: number | null;
   currentNoi: number | null;
@@ -285,6 +306,16 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
   // unpromoted OM extraction run (status needs_review/completed). They carry
   // pendingReview=true so the UI can mark them and gate them behind a toggle.
   const includePending = req.query.include_pending === "1";
+  // Pricing basis for ltrYieldPct/yieldFlag/stats. Listed pricing is the
+  // default so negotiated/entered prices can't inflate the map; flagged=1
+  // stays on the user basis because its flags audit the stored signals.
+  const askSourceParam = typeof req.query.ask_source === "string" ? req.query.ask_source.trim().toLowerCase() : "";
+  const askSource: LtrAskSource =
+    askSourceParam === "listed" || askSourceParam === "whisper" || askSourceParam === "user"
+      ? askSourceParam
+      : flaggedOnly
+        ? "user"
+        : "listed";
 
   try {
     const pool = getPool();
@@ -330,6 +361,7 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
          hist.yield_obs_count,
          hist.yield_history,
          lst.listing_price,
+         wsp.whisper_price,
          p.details#>>'{omData,authoritative,currentFinancials,grossRentalIncome}' AS fallback_rent_om,
          p.details#>>'{omData,authoritative,currentFinancials,otherIncome}' AS fallback_other_income_om,
          p.details#>>'{omData,authoritative,expenses,totalExpenses}' AS fallback_expense_total_om,
@@ -362,6 +394,20 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
          ORDER BY (m.status = 'accepted') DESC, m.confidence DESC NULLS LAST, m.created_at DESC
          LIMIT 1
        ) lst ON TRUE
+       -- Latest whisper price / broker pricing opinion (manual entry or comp-package
+       -- extraction); analyst-reviewed amounts win over the extracted value.
+       LEFT JOIN LATERAL (
+         SELECT w.amount_text::numeric AS whisper_price
+         FROM (
+           SELECT COALESCE(NULLIF(i.reviewed_payload->>'amount', ''), i.normalized_payload->>'amount') AS amount_text,
+                  i.created_at
+           FROM broker_comp_extracted_items i
+           WHERE i.property_id = p.id AND i.item_type = 'pricing_opinion' AND i.review_status <> 'rejected'
+         ) w
+         WHERE w.amount_text ~ '^[0-9]+(\\.[0-9]+)?$' AND w.amount_text::numeric > 0
+         ORDER BY w.created_at DESC
+         LIMIT 1
+       ) wsp ON TRUE
        -- Cap-rate timeline: the first signal plus every refresh where the rate changed
        -- (consecutive regenerations with the same rate collapse onto the first date).
        LEFT JOIN LATERAL (
@@ -400,12 +446,30 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
         const fallbackNoi =
           reconstructedNoi ??
           toNumber(row.fallback_noi_om) ?? toNumber(row.fallback_noi_analysis) ?? toNumber(row.fallback_noi_llm);
-        const fallbackAsk =
-          toNumber(row.fallback_ask_manual) ?? toNumber(row.fallback_ask_om) ?? toNumber(row.listing_price);
-        const resolved = resolveOperatingYield({ signalLtrPct: signalLtr, fallbackNoi, fallbackAsk });
-        // Rows with neither a usable yield nor a data-quality flag carry no
-        // information for this view; flagged rows stay visible for follow-up.
-        if (resolved.ltrYieldPct == null && resolved.flag == null) return null;
+        const listedAsk = toNumber(row.fallback_ask_om) ?? toNumber(row.listing_price);
+        const whisperAsk = toNumber(row.whisper_price);
+        const manualAsk = toNumber(row.fallback_ask_manual);
+        const fallbackAsk = manualAsk ?? listedAsk;
+        // Listed/whisper yields are always recomputed from NOI ÷ that basis's
+        // price; the stored signal can't stand in for them because it was
+        // produced on the underwriting (user) price. The signal's NOI does
+        // backstop rows whose extraction details no longer carry one.
+        const basisNoi = fallbackNoi ?? toNumber(row.current_noi);
+        const resolvedBySource: Record<LtrAskSource, ReturnType<typeof resolveOperatingYield>> = {
+          listed: deriveBasisYield(basisNoi, listedAsk),
+          whisper: deriveBasisYield(basisNoi, whisperAsk),
+          user: resolveOperatingYield({ signalLtrPct: signalLtr, fallbackNoi, fallbackAsk }),
+        };
+        const resolved = resolvedBySource[askSource];
+        // Rows where no basis produces a usable yield or a data-quality flag
+        // carry no information for this view; flagged rows stay visible for
+        // follow-up, and rows missing only the selected basis's price stay
+        // visible so the basis toggle never hides deals entirely.
+        const isEmpty = (value: ReturnType<typeof resolveOperatingYield>) =>
+          value.ltrYieldPct == null && value.flag == null;
+        if (isEmpty(resolvedBySource.listed) && isEmpty(resolvedBySource.whisper) && isEmpty(resolvedBySource.user)) {
+          return null;
+        }
         const mtrYieldPct = resolved.flag == null ? sanitizeRatePct(toNumber(row.adjusted_cap_rate)) : null;
 
         // Cap-rate timeline. Flagged rows get no trend: their stored rates are
@@ -443,8 +507,14 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
           lat: toNumber(row.lat),
           lng: toNumber(row.lng),
           units: toNumber(row.units),
-          askingPrice: fallbackAsk,
+          askingPrice: askSource === "listed" ? listedAsk : askSource === "whisper" ? whisperAsk : fallbackAsk,
           ltrYieldPct: resolved.ltrYieldPct,
+          ltrYieldBySource: {
+            listed: resolvedBySource.listed.ltrYieldPct,
+            whisper: resolvedBySource.whisper.ltrYieldPct,
+            user: resolvedBySource.user.ltrYieldPct,
+          },
+          askBySource: { listed: listedAsk, whisper: whisperAsk, user: fallbackAsk },
           mtrYieldPct,
           yieldSpreadPct: mtrYieldPct != null ? toNumber(row.yield_spread) : null,
           currentNoi: toNumber(row.current_noi) ?? fallbackNoi,
@@ -496,7 +566,8 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
            run.status AS run_status,
            run.started_at AS run_started_at,
            snap.snapshot,
-           lst.listing_price
+           lst.listing_price,
+           wsp.whisper_price
          FROM properties p
          JOIN LATERAL (
            SELECT r.id, r.status, r.started_at
@@ -523,6 +594,18 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
            ORDER BY (m.status = 'accepted') DESC, m.confidence DESC NULLS LAST, m.created_at DESC
            LIMIT 1
          ) lst ON TRUE
+         LEFT JOIN LATERAL (
+           SELECT w.amount_text::numeric AS whisper_price
+           FROM (
+             SELECT COALESCE(NULLIF(i.reviewed_payload->>'amount', ''), i.normalized_payload->>'amount') AS amount_text,
+                    i.created_at
+             FROM broker_comp_extracted_items i
+             WHERE i.property_id = p.id AND i.item_type = 'pricing_opinion' AND i.review_status <> 'rejected'
+           ) w
+           WHERE w.amount_text ~ '^[0-9]+(\\.[0-9]+)?$' AND w.amount_text::numeric > 0
+           ORDER BY w.created_at DESC
+           LIMIT 1
+         ) wsp ON TRUE
          ORDER BY run.started_at DESC
          LIMIT $1`,
         [limit]
@@ -543,9 +626,23 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
         const reconstructedNoi =
           gross != null && expenses != null ? gross + (toNumber(current?.otherIncome) ?? 0) - expenses : null;
         const noi = reconstructedNoi ?? toNumber(current?.noi);
+        // Snapshot ask is the OM's marketed price, so listed and user coincide
+        // here — pending rows have no manual price or stored signal yet.
         const ask = toNumber(info?.askingPrice) ?? toNumber(row.listing_price);
-        const resolved = resolveOperatingYield({ signalLtrPct: null, fallbackNoi: noi, fallbackAsk: ask });
-        if (resolved.ltrYieldPct == null && resolved.flag == null) continue;
+        const whisperAsk = toNumber(row.whisper_price);
+        const resolvedBySource: Record<LtrAskSource, ReturnType<typeof resolveOperatingYield>> = {
+          listed: deriveBasisYield(noi, ask),
+          whisper: deriveBasisYield(noi, whisperAsk),
+          user: resolveOperatingYield({ signalLtrPct: null, fallbackNoi: noi, fallbackAsk: ask }),
+        };
+        const resolved = resolvedBySource[askSource];
+        if (
+          resolvedBySource.listed.ltrYieldPct == null && resolvedBySource.listed.flag == null &&
+          resolvedBySource.whisper.ltrYieldPct == null && resolvedBySource.whisper.flag == null &&
+          resolvedBySource.user.ltrYieldPct == null && resolvedBySource.user.flag == null
+        ) {
+          continue;
+        }
         const units = toNumber(info?.totalUnits);
         const gsf = toNumber(info?.grossSquareFeet) ?? toNumber(info?.grossSf) ?? toNumber(info?.squareFootage);
         seen.add(propertyId);
@@ -562,8 +659,14 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
           lat: toNumber(row.lat),
           lng: toNumber(row.lng),
           units,
-          askingPrice: ask,
+          askingPrice: askSource === "whisper" ? whisperAsk : ask,
           ltrYieldPct: resolved.ltrYieldPct,
+          ltrYieldBySource: {
+            listed: resolvedBySource.listed.ltrYieldPct,
+            whisper: resolvedBySource.whisper.ltrYieldPct,
+            user: resolvedBySource.user.ltrYieldPct,
+          },
+          askBySource: { listed: ask, whisper: whisperAsk, user: ask },
           mtrYieldPct: null,
           yieldSpreadPct: null,
           currentNoi: noi,
@@ -572,7 +675,7 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
           expenseRatioPct: null,
           dealScore: null,
           signalAt: null,
-          yieldSource: resolved.flag == null ? "derived" : null,
+          yieldSource: resolved.yieldSource,
           yieldFlag: resolved.flag,
           yieldFlagDetail: resolved.flagDetail,
           sourcedAt: toIsoString(row.sourced_at),
@@ -678,6 +781,8 @@ router.get("/comps/operating", async (req: Request, res: Response) => {
     res.json({
       comps: rows,
       summary: {
+        /** Pricing basis every yield/stat in this response is quoted on. */
+        askSource,
         count: rows.length,
         withCoordinates: rows.filter((row) => row.lat != null && row.lng != null).length,
         // Flagged rows carry null yields, so every aggregate below already excludes them.

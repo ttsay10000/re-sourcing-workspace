@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveOperatingYield, sanitizeRatePct } from "./operatingYield.js";
+import { deriveBasisYield, resolveOperatingYield, sanitizeRatePct } from "./operatingYield.js";
 
 describe("resolveOperatingYield", () => {
   it("uses a positive stored signal as-is", () => {
@@ -43,5 +43,41 @@ describe("resolveOperatingYield", () => {
     expect(sanitizeRatePct(0)).toBeNull();
     expect(sanitizeRatePct(-1)).toBeNull();
     expect(sanitizeRatePct(null)).toBeNull();
+  });
+});
+
+describe("deriveBasisYield", () => {
+  it("computes NOI ÷ ask for the basis price", () => {
+    const result = deriveBasisYield(240_000, 4_000_000);
+    expect(result.ltrYieldPct).toBeCloseTo(6, 5);
+    expect(result.yieldSource).toBe("derived");
+    expect(result.flag).toBeNull();
+  });
+
+  it("treats a missing basis price as no-yield, not a data error", () => {
+    expect(deriveBasisYield(240_000, null)).toEqual({
+      ltrYieldPct: null,
+      yieldSource: null,
+      flag: null,
+      flagDetail: null,
+    });
+    expect(deriveBasisYield(null, 4_000_000).flag).toBeNull();
+  });
+
+  it("never lets a stored signal stand in — zero NOI still flags on every basis", () => {
+    const result = deriveBasisYield(0, 4_000_000);
+    expect(result.ltrYieldPct).toBeNull();
+    expect(result.flag).toBe("zero_noi");
+  });
+
+  it("flags negative computations like the underwriting resolver does", () => {
+    const result = deriveBasisYield(-50_000, 1_000_000);
+    expect(result.ltrYieldPct).toBeNull();
+    expect(result.flag).toBe("negative_yield");
+  });
+
+  it("ignores non-positive basis prices", () => {
+    expect(deriveBasisYield(240_000, 0).ltrYieldPct).toBeNull();
+    expect(deriveBasisYield(240_000, 0).flag).toBeNull();
   });
 });

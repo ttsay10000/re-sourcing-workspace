@@ -17,6 +17,9 @@ import {
 
 type YieldTrend = "up" | "down" | "flat" | null;
 
+/** Pricing basis the LTR yields are quoted on (mirrors the API's ask_source). */
+type AskSource = "listed" | "whisper" | "user";
+
 interface CompRow {
   propertyId: string;
   canonicalAddress: string;
@@ -28,8 +31,14 @@ interface CompRow {
   lat: number | null;
   lng: number | null;
   units: number | null;
+  /** The price behind ltrYieldPct — the active pricing basis's price. */
   askingPrice: number | null;
+  /** LTR yield on the active pricing basis. */
   ltrYieldPct: number | null;
+  /** LTR yield recomputed on every basis; null where that basis has no price/NOI. */
+  ltrYieldBySource?: Record<AskSource, number | null>;
+  /** listed = OM ask → matched listing; whisper = latest broker pricing opinion; user = entered/negotiated. */
+  askBySource?: Record<AskSource, number | null>;
   mtrYieldPct: number | null;
   yieldSpreadPct: number | null;
   currentNoi: number | null;
@@ -52,6 +61,7 @@ interface CompRow {
 interface CompsResponse {
   comps: CompRow[];
   summary: {
+    askSource?: AskSource;
     count: number;
     withCoordinates: number;
     flaggedCount?: number;
@@ -303,7 +313,11 @@ function TrendIndicator({ row }: { row: CompRow }) {
     );
   }
   const cls = row.yieldTrend === "up" ? styles.trendUp : row.yieldTrend === "down" ? styles.trendDown : styles.trendFlat;
-  const title = `First ${fmtPct(row.firstYieldPct, 2)} on ${fmtDateMDY(row.firstYieldAt)} → now ${fmtPct(row.ltrYieldPct, 2)}`;
+  // The trend tracks the stored underwriting signals, so "now" is the latest
+  // signal (first + delta) — not the displayed yield, whose pricing basis can differ.
+  const latestSignalPct =
+    row.firstYieldPct != null && row.yieldDeltaPct != null ? row.firstYieldPct + row.yieldDeltaPct : row.ltrYieldPct;
+  const title = `First ${fmtPct(row.firstYieldPct, 2)} on ${fmtDateMDY(row.firstYieldAt)} → now ${fmtPct(latestSignalPct, 2)}`;
   return (
     <span className={cls} title={title}>
       {TREND_GLYPH[row.yieldTrend]} {row.yieldTrend === "flat" ? "flat" : fmtDeltaPp(row.yieldDeltaPct)}
@@ -414,6 +428,31 @@ const MARKET_SOURCE_OPTIONS: Array<{ value: MarketSourceFilter; label: string }>
   { value: "broker_provided", label: "Broker only" },
 ];
 
+const ASK_SOURCE_OPTIONS: Array<{ value: AskSource; label: string; title: string }> = [
+  {
+    value: "listed",
+    label: "Listed",
+    title: "Yields on the marketed price — the OM's asking price, else the matched listing's price.",
+  },
+  {
+    value: "whisper",
+    label: "Whisper",
+    title: "Yields on the latest whisper price / broker pricing opinion saved for each deal (manual signal or comp-package extraction).",
+  },
+  {
+    value: "user",
+    label: "User input",
+    title: "Yields on your entered or negotiated pricing — the underwriting basis (stored deal signals; manual price when no signal).",
+  },
+];
+
+/** Inline tag for popup/KPI copy, e.g. "listed pricing". */
+const ASK_SOURCE_SHORT: Record<AskSource, string> = {
+  listed: "listed",
+  whisper: "whisper",
+  user: "user input",
+};
+
 /** Market cap rates arrive as decimals (0.0596). */
 function fmtCapRate(rate: number | null | undefined, digits = 2): string {
   return rate != null && Number.isFinite(rate) ? `${(rate * 100).toFixed(digits)}%` : EMPTY_VALUE;
@@ -477,6 +516,8 @@ export default function YieldMapPage() {
   const [hoodFilter, setHoodFilter] = useState("");
   const [dealSearch, setDealSearch] = useState("");
   const [colorBy, setColorBy] = useState<"yield" | "psf" | "stage" | "vsMarket">("yield");
+  // Listed pricing is the default read — negotiated/entered prices inflate yields.
+  const [askSource, setAskSource] = useState<AskSource>("listed");
   const [showAreas, setShowAreas] = useState(true);
   const [includePending, setIncludePending] = useState(false);
   const [quickViewId, setQuickViewId] = useState<string | null>(null);
@@ -512,7 +553,7 @@ export default function YieldMapPage() {
     if (options?.initial) setLoading(true);
     try {
       // Pending (awaiting-review) rows always come back; the toggle filters client-side.
-      const res = await fetch(`${API_BASE}/api/comps/operating?include_pending=1`, {
+      const res = await fetch(`${API_BASE}/api/comps/operating?include_pending=1&ask_source=${askSource}`, {
         credentials: "include",
         signal: options?.signal,
       });
@@ -526,7 +567,7 @@ export default function YieldMapPage() {
     } finally {
       if (options?.initial) setLoading(false);
     }
-  }, []);
+  }, [askSource]);
 
   const loadMarket = useCallback(
     async (options?: { signal?: AbortSignal }) => {
@@ -577,9 +618,15 @@ export default function YieldMapPage() {
     setRefreshing(false);
   }, [loadDeals, loadMarket, loadMarketComps, marketComps]);
 
+  // Re-runs when the pricing basis changes (loadDeals identity). Only the very
+  // first load gets the full-page banner; basis switches swap data in place.
+  const hasLoadedOnceRef = useRef(false);
   useEffect(() => {
     const controller = new AbortController();
-    void loadDeals({ signal: controller.signal, initial: true }).then(() => setLastRefreshedAt(new Date()));
+    void loadDeals({ signal: controller.signal, initial: !hasLoadedOnceRef.current }).then(() => {
+      hasLoadedOnceRef.current = true;
+      setLastRefreshedAt(new Date());
+    });
     return () => controller.abort();
   }, [loadDeals]);
 
@@ -713,6 +760,25 @@ export default function YieldMapPage() {
 
   const flaggedRows = useMemo(() => rows.filter((row) => row.yieldFlag != null), [rows]);
   const yieldRows = useMemo(() => rows.filter((row) => row.ltrYieldPct != null), [rows]);
+
+  /** How many filtered deals carry a yield on each pricing basis — labels the toggle. */
+  const askSourceCounts = useMemo(
+    () => ({
+      listed: rows.filter((row) => row.ltrYieldBySource?.listed != null).length,
+      whisper: rows.filter((row) => row.ltrYieldBySource?.whisper != null).length,
+      user: rows.filter((row) => row.ltrYieldBySource?.user != null).length,
+    }),
+    [rows]
+  );
+
+  /** "listed 4.82% · whisper 5.10% · user input 5.55%" — only bases with a yield. */
+  const basisComparisonLine = useCallback((row: CompRow): string | null => {
+    const parts = ASK_SOURCE_OPTIONS.map((option) => {
+      const value = row.ltrYieldBySource?.[option.value];
+      return value != null ? `${ASK_SOURCE_SHORT[option.value]} ${fmtPct(value, 2)}` : null;
+    }).filter((part): part is string => part != null);
+    return parts.length > 1 ? parts.join(" · ") : null;
+  }, []);
 
   const summaries = useMemo(() => (marketLayerOn ? market?.summaries ?? [] : []), [market, marketLayerOn]);
   const summaryById = useMemo(
@@ -1047,6 +1113,11 @@ export default function YieldMapPage() {
           : vsMarket?.psfDeltaPct != null
             ? `${vsMarket.psfDeltaPct >= 0 ? "+" : ""}${vsMarket.psfDeltaPct.toFixed(0)}% vs ${vsMarket.hoodName} $/SF (${fmtPsf(vsMarket.marketPsf)})`
             : null;
+      const basisLine = basisComparisonLine(row);
+      const missingBasisLine =
+        row.ltrYieldPct == null && row.yieldFlag == null && row.askBySource?.[askSource] == null
+          ? `No ${ASK_SOURCE_SHORT[askSource]} price on file — switch the pricing basis to see this deal's yield`
+          : null;
       return {
         id: row.propertyId,
         propertyId: row.propertyId,
@@ -1058,8 +1129,10 @@ export default function YieldMapPage() {
         lng: row.lng!,
         color,
         lines: [
-          `Cap rate ${fmtPct(row.ltrYieldPct, 2)} · ${fmtPsf(row.pricePsf)}/SF`,
+          `Cap rate ${fmtPct(row.ltrYieldPct, 2)} (${ASK_SOURCE_SHORT[askSource]}) · ${fmtPsf(row.pricePsf)}/SF`,
           `MTR ${fmtPct(row.mtrYieldPct, 2)} · NOI ${formatCurrencyExact(row.currentNoi)} · ${row.units ?? EMPTY_VALUE} units`,
+          ...(basisLine ? [`LTR by pricing: ${basisLine}`] : []),
+          ...(missingBasisLine ? [missingBasisLine] : []),
           ...(vsMarketLine ? [vsMarketLine] : []),
           row.yieldDeltaPct != null
             ? `Yield ${fmtDeltaPp(row.yieldDeltaPct)} since first sourced ${fmtDateMDY(row.firstYieldAt)}`
@@ -1099,7 +1172,7 @@ export default function YieldMapPage() {
     }));
 
     return [...dealPins, ...compPins];
-  }, [colorBy, geoRows, geoComps, metric, metricColor, dealMetricValue, vsMarketByPropertyId, displayHood, boardStageLabel]);
+  }, [colorBy, askSource, geoRows, geoComps, metric, metricColor, dealMetricValue, vsMarketByPropertyId, displayHood, boardStageLabel, basisComparisonLine]);
 
   // Comps slot into the deal list ordered by the active metric: cap rates rank
   // high-to-low, $/SF cheap-to-expensive (the buyer's read in both cases).
@@ -1185,7 +1258,7 @@ export default function YieldMapPage() {
       <PageHeader
         eyebrow="Pipeline · Living comps"
         title="Yield Map"
-        subtitle="Every deal with a calculated LTR yield (extracted NOI ÷ price) from OMs, broker docs, and notes — active, dead, or closed. Toggle $/PSF for the price-per-foot read, overlay broker-package comps, and layer market context from ingested research with provenance on every number."
+        subtitle="Every deal with a calculated LTR yield (extracted NOI ÷ price) from OMs, broker docs, and notes — active, dead, or closed. Yields quote on listed pricing by default; toggle to whisper or user-entered/negotiated pricing on the map. Toggle $/PSF for the price-per-foot read, overlay broker-package comps, and layer market context from ingested research with provenance on every number."
         actions={
           <div className={styles.headerActions}>
             <button
@@ -1280,7 +1353,12 @@ export default function YieldMapPage() {
               tone="brand"
               label={metric === "psf" ? "Median sale $/SF" : "Median LTR yield"}
               value={metric === "psf" ? `${fmtPsf(stats.medianPsf)}/SF` : formatPercent(stats.medianYieldPct, 2)}
-              sub={boroughFilter ? boroughFilter : "all boroughs"}
+              sub={`${boroughFilter ? boroughFilter : "all boroughs"}${metric === "psf" ? "" : ` · ${ASK_SOURCE_SHORT[askSource]} pricing`}`}
+              title={
+                metric === "psf"
+                  ? undefined
+                  : `Yields quoted on ${ASK_SOURCE_SHORT[askSource]} pricing — use the pricing-basis toggle on the map to switch between listed, whisper, and user-entered prices.`
+              }
             />
             <StatCard
               tone="warning"
@@ -1390,9 +1468,32 @@ export default function YieldMapPage() {
           <div className={styles.panel}>
             <div className={styles.mapHeader}>
               <span className={styles.mapTitle}>
-                Deal map — pins colored by {colorBy === "yield" ? "cap rate" : colorBy === "psf" ? "sale $/SF" : "deal stage"}
+                Deal map — pins colored by{" "}
+                {colorBy === "yield"
+                  ? `cap rate (${ASK_SOURCE_SHORT[askSource]} pricing)`
+                  : colorBy === "psf"
+                    ? "sale $/SF"
+                    : "deal stage"}
               </span>
               <div className={styles.mapControls}>
+                <div
+                  className={styles.colorToggle}
+                  role="group"
+                  aria-label="LTR pricing basis"
+                  title="Which price the LTR yields divide by: the listed ask, the broker's whisper price, or your entered/negotiated pricing. Counts show how many filtered deals carry each basis."
+                >
+                  {ASK_SOURCE_OPTIONS.map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      className={askSource === option.value ? styles.colorToggleActive : undefined}
+                      title={option.title}
+                      onClick={() => setAskSource(option.value)}
+                    >
+                      {option.label} ({askSourceCounts[option.value]})
+                    </button>
+                  ))}
+                </div>
                 <div className={styles.colorToggle} role="group" aria-label="Color pins by">
                   <button
                     type="button"
@@ -1719,8 +1820,19 @@ export default function YieldMapPage() {
                             >
                               {fmtPct(entry.deal.ltrYieldPct, 2)} ⏳
                             </span>
+                          ) : entry.deal.ltrYieldPct == null ? (
+                            <span
+                              className={styles.trendNone}
+                              title={
+                                entry.deal.askBySource?.[askSource] == null
+                                  ? `No ${ASK_SOURCE_SHORT[askSource]} price on file for this deal — switch the pricing basis to compare. ${basisComparisonLine(entry.deal) ?? ""}`.trim()
+                                  : "No NOI extracted yet for this deal."
+                              }
+                            >
+                              {EMPTY_VALUE}
+                            </span>
                           ) : (
-                            fmtPct(entry.deal.ltrYieldPct, 2)
+                            <span title={basisComparisonLine(entry.deal) ?? undefined}>{fmtPct(entry.deal.ltrYieldPct, 2)}</span>
                           )}
                         </td>
                         <td>
@@ -1855,7 +1967,7 @@ export default function YieldMapPage() {
             ) : null}
             <dl className={styles.quickViewGrid}>
               <div>
-                <dt>Cap rate (LTR)</dt>
+                <dt>Cap rate (LTR · {ASK_SOURCE_SHORT[askSource]})</dt>
                 <dd style={{ color: yieldColor(quickViewRow.ltrYieldPct) }}>{fmtPct(quickViewRow.ltrYieldPct, 2)}</dd>
               </div>
               <div>
@@ -1863,7 +1975,7 @@ export default function YieldMapPage() {
                 <dd>{fmtPct(quickViewRow.mtrYieldPct, 2)}</dd>
               </div>
               <div>
-                <dt>Ask</dt>
+                <dt>Ask ({ASK_SOURCE_SHORT[askSource]})</dt>
                 <dd>{formatCurrencyCompact(quickViewRow.askingPrice)}</dd>
               </div>
               <div>
@@ -1895,6 +2007,18 @@ export default function YieldMapPage() {
                 <dd>{fmtDateMDY(quickViewRow.firstYieldAt ?? quickViewRow.sourcedAt)}</dd>
               </div>
             </dl>
+            {(() => {
+              const parts = ASK_SOURCE_OPTIONS.map((option) => {
+                const yieldPct = quickViewRow.ltrYieldBySource?.[option.value];
+                const ask = quickViewRow.askBySource?.[option.value];
+                if (yieldPct == null && ask == null) return null;
+                return `${ASK_SOURCE_SHORT[option.value]} ${fmtPct(yieldPct, 2)}${
+                  ask != null ? ` @ ${formatCurrencyCompact(ask)}` : ""
+                }`;
+              }).filter((part): part is string => part != null);
+              if (parts.length === 0) return null;
+              return <p className={styles.quickViewMarket}>LTR by pricing basis: {parts.join(" · ")}</p>;
+            })()}
             {(() => {
               const vsMarket = vsMarketByPropertyId.get(quickViewRow.propertyId);
               if (!vsMarket) return null;
