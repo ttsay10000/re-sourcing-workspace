@@ -97,6 +97,7 @@ type ProgressRow = {
   displayAddress?: string | null;
   source?: string | null;
   price?: number | null;
+  whisperPrice?: number | null;
   units?: number | null;
   sqft?: number | null;
   pricePerSqft?: number | null;
@@ -362,6 +363,7 @@ function dealPathFormFromState(dealPath: UiV2DealPathState | null | undefined): 
     postTourDecision: dealPath?.postTourDecision ?? "pending",
     targetPrice: formValue(dealPath?.targetPrice),
     offerAmount: formValue(dealPath?.offerAmount),
+    finalPrice: formValue(dealPath?.finalPrice),
     loiRecipientEmail: extractLoiRecipientEmail(dealPath?.offerNotes),
     offerNotes: stripLoiRecipientLine(dealPath?.offerNotes),
     loiContingenciesText: (dealPath?.loiContingencies ?? []).join("\n"),
@@ -419,6 +421,7 @@ function dealPathPayload(form: DealPathFormState, mode: DealPathPromptMode = "ge
     postTourDecision,
     targetPrice: priceInputToPayload(form.targetPrice),
     offerAmount: priceInputToPayload(form.offerAmount),
+    finalPrice: priceInputToPayload(form.finalPrice),
     offerNotes: [loiRecipientEmail ? `LOI recipient: ${loiRecipientEmail}` : null, offerNotes || null].filter(Boolean).join("\n") || null,
     loiContingencies: form.loiContingenciesText
       .split(/\n|,/)
@@ -1528,7 +1531,11 @@ function ProgressPageContent() {
         setError("Choose a rejection reason before rejecting after a tour.");
         return;
       }
-      if (parsePriceInput(form.targetPrice) === "invalid" || parsePriceInput(form.offerAmount) === "invalid") {
+      if (
+        parsePriceInput(form.targetPrice) === "invalid" ||
+        parsePriceInput(form.offerAmount) === "invalid" ||
+        parsePriceInput(form.finalPrice) === "invalid"
+      ) {
         setError("Enter prices as plain numbers — e.g. 4500000, $4.5M, or 950K.");
         return;
       }
@@ -2417,6 +2424,8 @@ export default function ProgressPage() {
 
 type CardMetric = { label: string; value: string; tone?: "danger" };
 
+// Ask and Units intentionally live elsewhere on the card: units in the meta
+// line under the address, ask in the stage-aware pricing ladder.
 function cardMetricsForRow(row: DealFlowRow): CardMetric[] {
   return [
     row.ltrYocPct != null
@@ -2427,9 +2436,32 @@ function cardMetricsForRow(row: DealFlowRow): CardMetric[] {
       : null,
     row.pricePerSqft != null ? { label: "$/SF", value: formatWholeCurrency(row.pricePerSqft) } : null,
     row.sqft != null ? { label: "SF", value: formatCompactNumber(row.sqft) } : null,
-    row.price != null ? { label: "Ask", value: formatCurrency(row.price) } : null,
-    row.units != null ? { label: "Units", value: formatCompactNumber(row.units) } : null,
   ].filter((metric): metric is CardMetric => metric != null);
+}
+
+type CardPrice = { key: "ask" | "whisper" | "offer" | "final"; label: string; value: number | null };
+
+const OFFER_PRICE_STAGES = new Set(["offer_review", "negotiation", "contract_signed", "deal_closed"]);
+const FINAL_PRICE_STAGES = new Set(["negotiation", "contract_signed", "deal_closed"]);
+
+/**
+ * Stage-aware pricing ladder: Ask on every card, the broker's whisper signal
+ * whenever one is recorded, Offer once the deal reaches LOI Offered, and
+ * Final from Negotiation on. A stage-expected value that is still missing
+ * renders as "—" so the gap stays visible instead of silently disappearing.
+ */
+function cardPricesForRow(sectionId: string, row: DealFlowRow): CardPrice[] {
+  const prices: CardPrice[] = [{ key: "ask", label: "Ask", value: row.price ?? null }];
+  if (row.whisperPrice != null) prices.push({ key: "whisper", label: "Whisper", value: row.whisperPrice });
+  if (OFFER_PRICE_STAGES.has(sectionId)) prices.push({ key: "offer", label: "Offer", value: row.dealPath?.offerAmount ?? null });
+  if (FINAL_PRICE_STAGES.has(sectionId)) prices.push({ key: "final", label: "Final", value: row.dealPath?.finalPrice ?? null });
+  return prices;
+}
+
+/** Signed % versus ask, e.g. -11 for an offer 11% under ask. */
+function pctVsAsk(value: number | null, ask: number | null): number | null {
+  if (value == null || ask == null || ask <= 0) return null;
+  return ((value - ask) / ask) * 100;
 }
 
 function StatusColumn({
@@ -2569,7 +2601,9 @@ function PropertyMiniCard({
   onMoveStage?: (row: DealFlowRow) => void;
 }) {
   const address = row.displayAddress || row.canonicalAddress || row.propertyId;
-  const metrics = cardMetricsForRow(row).slice(0, 4);
+  const metrics = cardMetricsForRow(row);
+  const prices = cardPricesForRow(sectionId, row);
+  const askPrice = prices[0]?.value ?? null;
   const topFlag = flags[0] ?? null;
   const cta: PrimaryCta = primaryCtaForRow(sectionId, row, flags);
   const completeness = dataCompleteness(sectionId, row);
@@ -2579,6 +2613,9 @@ function PropertyMiniCard({
     .join(" · ");
   const dueLabel = topFlag ? formatDue(topFlag.dueInDays) : null;
   const FlagIcon = topFlag?.email ? MailWarning : Flag;
+  const autoMovedTourPassed = isAutoMovedTourPassed(row, sectionId);
+  const ageDays = stageAgeDays(row);
+  const showAlertRow = topFlag != null || autoMovedTourPassed || (ageDays != null && ageDays >= 1);
 
   // Clicking anywhere non-interactive on the card opens the in-page drawer.
   const handleCardClick = (event: ReactMouseEvent<HTMLElement>) => {
@@ -2623,20 +2660,6 @@ function PropertyMiniCard({
           <strong className={styles.cardTitle}>{streetAddressOnly(address)}</strong>
           <span className={styles.cardMeta}>{locationLine || (row.source ? labelFromKey(row.source) : "No source")}</span>
         </button>
-        {topFlag ? (
-          <button
-            type="button"
-            className={`${styles.cardFlag} ${styles[`severity_${topFlag.severity}`]}`}
-            title={`${topFlag.label} — ${topFlag.reason}${dueLabel ? ` (${dueLabel})` : ""}`}
-            aria-label={`${topFlag.label}: ${topFlag.recommendedAction}`}
-            onClick={(event) => {
-              event.stopPropagation();
-              onRunAction?.(row, topFlag.actionKind);
-            }}
-          >
-            <FlagIcon size={13} strokeWidth={2.2} aria-hidden="true" />
-          </button>
-        ) : null}
         <PromptMenu
           align="end"
           heading={address}
@@ -2706,7 +2729,27 @@ function PropertyMiniCard({
         </div>
       ) : null}
 
-      <div className={styles.cardChips}>
+      <div className={styles.cardPrices} aria-label="Deal pricing">
+        {prices.map((price) => {
+          const delta = price.key === "ask" ? null : pctVsAsk(price.value, askPrice);
+          return (
+            <div key={price.key} className={styles.cardPriceRow}>
+              <small>{price.label}</small>
+              {delta != null && Math.abs(delta) >= 0.5 ? (
+                <span className={styles.cardPriceDelta}>
+                  {delta > 0 ? "+" : "−"}
+                  {Math.abs(delta).toFixed(Math.abs(delta) >= 10 ? 0 : 1)}% vs ask
+                </span>
+              ) : null}
+              <strong className={price.value == null ? styles.cardPriceMissing : undefined}>
+                {price.value == null ? "—" : formatCurrency(price.value)}
+              </strong>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className={styles.cardDocsRow} aria-label="Workflow readiness">
         <span className={row.hasOm ? styles.workflowBadgeReady : styles.workflowBadgeMuted}>OM</span>
         <span className={row.hasComps ? styles.workflowBadgeReady : styles.workflowBadgeMuted}>Comps</span>
         <span className={row.hasDossier ? styles.workflowBadgeReady : styles.workflowBadgeMuted}>Dossier</span>
@@ -2716,26 +2759,40 @@ function PropertyMiniCard({
         >
           Data {completeness.done}/{completeness.total}
         </span>
-        <small className={scoreClass(row.dealScore)}>{row.dealScore == null ? "—" : Math.round(row.dealScore)}</small>
-        <AgingChip since={row.stageEnteredAt} className={styles.agingChip} />
-        {isAutoMovedTourPassed(row, sectionId) ? (
-          <span
-            className={styles.tourPassedChip}
-            title="Scheduled tour date has passed; the board moved this deal here automatically. Log the outcome."
-          >
-            Tour date passed — log outcome
-          </span>
-        ) : null}
-        {topFlag ? (
-          <span
-            className={`${styles.flagChip} ${styles[`chipSeverity_${topFlag.severity}`]}`}
-            title={topFlag.reason}
-          >
-            {topFlag.label}
-            {dueLabel ? ` · ${dueLabel}` : ""}
-          </span>
-        ) : null}
+        <small className={`${scoreClass(row.dealScore)} ${styles.cardScore}`} title="Deal score">
+          {row.dealScore == null ? "Score —" : `Score ${Math.round(row.dealScore)}`}
+        </small>
       </div>
+
+      {showAlertRow ? (
+        <div className={styles.cardAlertRow} aria-label="Deal alerts">
+          <AgingChip since={row.stageEnteredAt} className={styles.agingChip} />
+          {autoMovedTourPassed ? (
+            <span
+              className={styles.tourPassedChip}
+              title="Scheduled tour date has passed; the board moved this deal here automatically. Log the outcome."
+            >
+              Tour date passed — log outcome
+            </span>
+          ) : null}
+          {topFlag ? (
+            <button
+              type="button"
+              className={`${styles.flagChip} ${styles[`severity_${topFlag.severity}`]}`}
+              title={`${topFlag.reason} — ${topFlag.recommendedAction}`}
+              aria-label={`${topFlag.label}: ${topFlag.recommendedAction}`}
+              onClick={(event) => {
+                event.stopPropagation();
+                onRunAction?.(row, topFlag.actionKind);
+              }}
+            >
+              <FlagIcon size={11} strokeWidth={2.2} aria-hidden="true" />
+              {topFlag.label}
+              {dueLabel ? ` · ${dueLabel}` : ""}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
 
       {cadence ? (
         <div className={styles.cardTouchLine}>

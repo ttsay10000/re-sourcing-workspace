@@ -84,6 +84,7 @@ interface SavedProgressBaseRow {
   inquiry_filenames: string[] | null;
   generated_doc_count: number | string | null;
   broker_comp_package_count: number | string | null;
+  whisper_price: number | string | null;
   open_action_item_count: number | string | null;
   latest_inquiry_sent_at: Date | string | null;
   manual_broker_name: string | null;
@@ -145,6 +146,8 @@ interface ProgressPropertyRow {
   displayAddress: string;
   source: string | null;
   price: number | null;
+  /** Latest broker whisper / pricing-opinion signal, when one is recorded. */
+  whisperPrice: number | null;
   units: number | null;
   sqft: number | null;
   pricePerSqft: number | null;
@@ -796,6 +799,7 @@ function mapProgressRow(row: SavedProgressBaseRow): ProgressPropertyRow {
     displayAddress: saved.displayAddress,
     source: saved.source,
     price: saved.price,
+    whisperPrice: toPositiveNumber(row.whisper_price),
     units: saved.units,
     sqft: saved.sqft,
     pricePerSqft: saved.pricePerSqft,
@@ -934,6 +938,7 @@ function baseSelectSql(hasRejections: boolean, savedOnly: boolean, includeBroker
        COALESCE(idoc.inquiry_filenames, ARRAY[]::text[]) AS inquiry_filenames,
        COALESCE(gdoc.generated_doc_count, 0) AS generated_doc_count,
        COALESCE(bcp.broker_comp_package_count, 0) AS broker_comp_package_count,
+       wpx.whisper_price,
        COALESCE(ai.open_action_item_count, 0) AS open_action_item_count,
        pis.sent_at AS latest_inquiry_sent_at,
        ${brokerSelect(includeBroker)}
@@ -993,6 +998,22 @@ function baseSelectSql(hasRejections: boolean, savedOnly: boolean, includeBroker
        FROM broker_comp_packages
        WHERE property_id = p.id
      ) bcp ON true
+     LEFT JOIN LATERAL (
+       SELECT COALESCE(
+           CASE WHEN jsonb_typeof(i.reviewed_payload->'amount') = 'number' THEN (i.reviewed_payload->>'amount')::numeric END,
+           CASE WHEN jsonb_typeof(i.normalized_payload->'amount') = 'number' THEN (i.normalized_payload->>'amount')::numeric END
+         ) AS whisper_price
+       FROM broker_comp_extracted_items i
+       WHERE i.property_id = p.id
+         AND i.item_type = 'pricing_opinion'
+         AND i.review_status <> 'rejected'
+         AND (
+           jsonb_typeof(i.reviewed_payload->'amount') = 'number'
+           OR jsonb_typeof(i.normalized_payload->'amount') = 'number'
+         )
+       ORDER BY i.created_at DESC
+       LIMIT 1
+     ) wpx ON true
      LEFT JOIN LATERAL (
        SELECT COUNT(*)::int AS open_action_item_count
        FROM property_action_items

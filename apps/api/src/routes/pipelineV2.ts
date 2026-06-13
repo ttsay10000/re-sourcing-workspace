@@ -465,6 +465,7 @@ function normalizeDealPathState(input: unknown): UiV2DealPathState | null {
     postTourDecision,
     targetPrice: toFiniteNumber(input.targetPrice),
     offerAmount: toFiniteNumber(input.offerAmount),
+    finalPrice: toFiniteNumber(input.finalPrice),
     offerNotes: stringOrNull(input.offerNotes),
     loiContingencies,
     loiContingencyNotes: stringOrNull(input.loiContingencyNotes),

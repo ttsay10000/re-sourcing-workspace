@@ -118,6 +118,8 @@ export interface UiV2DealPathState {
   postTourDecision?: UiV2DealPathDecision | null;
   targetPrice?: number | null;
   offerAmount?: number | null;
+  /** Agreed/closing price once the deal reaches negotiation or contract. */
+  finalPrice?: number | null;
   offerNotes?: string | null;
   loiContingencies?: string[];
   loiContingencyNotes?: string | null;
