@@ -114,7 +114,7 @@ const COMMON_PIPELINE_TAGS = [
   "duplicate",
 ] as const;
 
-const SHEET_TABS = ["Overview", "Enrichment", "OM / Docs", "Market / Comps", "Underwriting", "Activity"] as const;
+const SHEET_TABS = ["Overview", "Rentals / Financials", "Enrichment", "OM / Docs", "Market / Comps", "Underwriting", "Activity"] as const;
 
 const LISTING_PULL_TOGGLE_KEY = "sourcing-os.pipeline.include-listing-pull";
 
@@ -126,6 +126,7 @@ function tabFromParam(value: string | null): SheetTab | null {
   const normalized = value.toLowerCase().replace(/[^a-z]/g, "");
   if (normalized === "overview") return "Overview";
   if (normalized === "dealpath" || normalized === "tour" || normalized === "tours") return "Activity";
+  if (normalized === "rentals" || normalized === "rentalsfinancials" || normalized === "financials") return "Rentals / Financials";
   if (normalized === "enrichment") return "Enrichment";
   if (normalized === "om" || normalized === "omdocs" || normalized === "docs") return "OM / Docs";
   if (normalized === "market" || normalized === "marketcomps" || normalized === "comps") return "Market / Comps";
@@ -5014,6 +5015,20 @@ export default function PipelineClient() {
                 </div>
               ) : null}
 
+              {sheetTab === "Rentals / Financials" ? (
+                <section className={styles.sheetPanel}>
+                  <div className={styles.sectionHeading}>
+                    <h3>Rentals &amp; financials</h3>
+                    {selectedId ? (
+                      <Link className={styles.iconLink} href={`/property/${selectedId}`}>
+                        Full property data
+                      </Link>
+                    ) : null}
+                  </div>
+                  <RentalsFinancialsPanel details={selectedProperty?.enrichmentDetails ?? null} />
+                </section>
+              ) : null}
+
               {sheetTab === "Enrichment" ? (
                 <section className={styles.sheetPanel}>
                   <h3>Enrichment summary</h3>
@@ -6472,7 +6487,7 @@ function PropertyDataPanel({ details, modules }: { details?: UiV2EnrichmentDetai
   });
   const listingFacts = details?.listingFacts ?? null;
   const factItems = factsFromListing(listingFacts);
-  if (modules.length === 0 && factItems.length === 0 && !details?.rentalFlow && !details?.omAnalysis) {
+  if (modules.length === 0 && factItems.length === 0) {
     return <div className={styles.emptyState}>No enrichment details are available yet.</div>;
   }
   return (
@@ -6510,7 +6525,20 @@ function PropertyDataPanel({ details, modules }: { details?: UiV2EnrichmentDetai
           </div>
         </section>
       ) : null}
+    </div>
+  );
+}
 
+function RentalsFinancialsPanel({ details }: { details?: UiV2EnrichmentDetailPayload | null }) {
+  if (!details?.rentalFlow && !details?.omAnalysis) {
+    return (
+      <div className={styles.emptyState}>
+        No rental or OM financial data yet — run the rental flow from the pipeline actions or upload an OM.
+      </div>
+    );
+  }
+  return (
+    <div className={styles.propertyDataPanel}>
       <RentalFlowPanel flow={details?.rentalFlow} />
       <OmAnalysisPanel analysis={details?.omAnalysis} />
     </div>
