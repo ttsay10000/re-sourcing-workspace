@@ -514,6 +514,24 @@ function searchableText(row: ProgressRow): string {
     .toLowerCase();
 }
 
+/** Per-column board sort, toggled from the small checkboxes in each column header. */
+type ColumnSortKey = "ltr_yield" | "price_psf";
+
+const COLUMN_SORT_OPTIONS: Array<{ key: ColumnSortKey; label: string; title: string }> = [
+  { key: "ltr_yield", label: "LTR yield", title: "Sort this column by LTR yield, highest first" },
+  { key: "price_psf", label: "$ PSF", title: "Sort this column by asking price per square foot, lowest first" },
+];
+
+/** Best-first ordering: highest yield wins, cheapest $/SF wins; missing values sink. */
+function compareRowsForColumnSort(left: ProgressRow, right: ProgressRow, key: ColumnSortKey): number {
+  const a = key === "ltr_yield" ? left.ltrYocPct : left.pricePerSqft;
+  const b = key === "ltr_yield" ? right.ltrYocPct : right.pricePerSqft;
+  if (a == null && b == null) return 0;
+  if (a == null) return 1;
+  if (b == null) return -1;
+  return key === "ltr_yield" ? b - a : a - b;
+}
+
 /** Shared 70/50 banding from lib/format, mapped onto this page's pill classes. */
 function scoreClass(score: number | null | undefined): string {
   const toneClass = {
@@ -695,6 +713,7 @@ function ProgressPageContent() {
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [flashColumnId, setFlashColumnId] = useState<string | null>(null);
   const [boardMode, setBoardMode] = useState<BoardMode>("board");
+  const [columnSorts, setColumnSorts] = useState<Record<string, ColumnSortKey>>({});
   const [snoozes, setSnoozes] = useState<Record<string, string>>({});
   const [showSnoozed, setShowSnoozed] = useState(false);
   const [queueSelectedIds, setQueueSelectedIds] = useState<Set<string>>(() => new Set());
@@ -1133,13 +1152,34 @@ function ProgressPageContent() {
     }));
   }, [boardFocus, query, sections]);
 
+  const toggleColumnSort = useCallback((sectionId: string, key: ColumnSortKey) => {
+    setColumnSorts((current) => {
+      const next = { ...current };
+      if (next[sectionId] === key) delete next[sectionId];
+      else next[sectionId] = key;
+      return next;
+    });
+  }, []);
+
+  // Columns with a checked sort checkbox reorder their rows; the board and
+  // keyboard navigation both read these rows so j/k order matches the screen.
+  const sortedSections = useMemo(
+    () =>
+      filteredSections.map((section) => {
+        const sortKey = columnSorts[section.id];
+        if (!sortKey || (section.rows ?? []).length < 2) return section;
+        return { ...section, rows: [...(section.rows ?? [])].sort((a, b) => compareRowsForColumnSort(a, b, sortKey)) };
+      }),
+    [columnSorts, filteredSections]
+  );
+
   const flowRows = useMemo(() => sections.flatMap((section) => section.rows ?? []), [sections]);
   const navigableRows = useMemo(
     () =>
-      filteredSections.flatMap((section, sectionIndex) =>
+      sortedSections.flatMap((section, sectionIndex) =>
         (section.rows ?? []).map((row, rowIndex) => ({ row: row as DealFlowRow, sectionIndex, rowIndex, sectionId: section.id }))
       ),
-    [filteredSections]
+    [sortedSections]
   );
 
   /* ── Workflow intelligence (deterministic; see actionFlags.ts) ── */
@@ -1730,7 +1770,7 @@ function ProgressPageContent() {
 
   const savedStatusSections = useMemo(
     () =>
-      filteredSections.map((section) => {
+      sortedSections.map((section) => {
         const group = SAVED_STATUS_GROUPS.find((candidate) => candidate.id === section.id);
         return {
           id: section.id,
@@ -1741,7 +1781,7 @@ function ProgressPageContent() {
           moveLabel: group?.moveLabel,
         };
       }),
-    [filteredSections]
+    [sortedSections]
   );
   const savedStageCounts = useMemo(
     () => new Map(filteredSections.map((section) => [section.id, section.count ?? section.rows?.length ?? 0])),
@@ -2069,6 +2109,8 @@ function ProgressPageContent() {
                   bulkMoving={bulkControlsBusy}
                   dragOver={dragOverSectionId === section.id}
                   flagsByProperty={effectiveFlagsByProperty}
+                  sortKey={columnSorts[section.id] ?? null}
+                  onToggleSort={(key) => toggleColumnSort(section.id, key)}
                   onToggleSelected={toggleSavedDealSelected}
                   onDragStartDeal={setDraggedDeal}
                   onDragEndDeal={() => {
@@ -2422,21 +2464,28 @@ export default function ProgressPage() {
   );
 }
 
-type CardMetric = { label: string; value: string; tone?: "danger" };
+type CardMetric = { label: string; value: string; tone?: "danger" | "muted" };
 
-// Ask and Units intentionally live elsewhere on the card: units in the meta
-// line under the address, ask in the stage-aware pricing ladder.
+/**
+ * Four uniform metric slots (LTR Yield, MTR Yield, $/SF, SF) render in a fixed
+ * order so the board scans like a table — missing data shows a muted "—"
+ * rather than swapping in whichever metrics happen to exist. Units live on the
+ * card's meta line ("Kips Bay · 3 units"); Ask lives in the stage-aware
+ * pricing ladder below, so neither needs a slot here.
+ */
 function cardMetricsForRow(row: DealFlowRow): CardMetric[] {
+  const slot = (label: string, value: string | null, danger = false): CardMetric => ({
+    label,
+    value: value ?? "—",
+    ...(value == null ? { tone: "muted" as const } : danger ? { tone: "danger" as const } : {}),
+  });
+  // Ask is intentionally omitted — the stage-aware pricing ladder owns it.
   return [
-    row.ltrYocPct != null
-      ? { label: "LTR Yield", value: formatPercent(row.ltrYocPct), ...(row.ltrYocPct <= 0 ? { tone: "danger" as const } : {}) }
-      : null,
-    row.mtrYocPct != null
-      ? { label: "MTR Yield", value: formatPercent(row.mtrYocPct), ...(row.mtrYocPct <= 0 ? { tone: "danger" as const } : {}) }
-      : null,
-    row.pricePerSqft != null ? { label: "$/SF", value: formatWholeCurrency(row.pricePerSqft) } : null,
-    row.sqft != null ? { label: "SF", value: formatCompactNumber(row.sqft) } : null,
-  ].filter((metric): metric is CardMetric => metric != null);
+    slot("LTR Yield", row.ltrYocPct != null ? formatPercent(row.ltrYocPct) : null, row.ltrYocPct != null && row.ltrYocPct <= 0),
+    slot("MTR Yield", row.mtrYocPct != null ? formatPercent(row.mtrYocPct) : null, row.mtrYocPct != null && row.mtrYocPct <= 0),
+    slot("$/SF", row.pricePerSqft != null ? formatWholeCurrency(row.pricePerSqft) : null),
+    slot("SF", row.sqft != null ? formatCompactNumber(row.sqft) : null),
+  ];
 }
 
 type CardPrice = { key: "ask" | "whisper" | "offer" | "final"; label: string; value: number | null };
@@ -2472,6 +2521,8 @@ function StatusColumn({
   bulkMoving = false,
   dragOver = false,
   flagsByProperty,
+  sortKey = null,
+  onToggleSort,
   onToggleSelected,
   onDragStartDeal,
   onDragEndDeal,
@@ -2493,6 +2544,8 @@ function StatusColumn({
   bulkMoving?: boolean;
   dragOver?: boolean;
   flagsByProperty: ReadonlyMap<string, ActionFlag[]>;
+  sortKey?: ColumnSortKey | null;
+  onToggleSort?: (key: ColumnSortKey) => void;
   onToggleSelected?: (propertyId: string, selected: boolean) => void;
   onDragStartDeal?: (row: DealFlowRow) => void;
   onDragEndDeal?: () => void;
@@ -2534,6 +2587,21 @@ function StatusColumn({
           <span className={styles.columnCount}>{section.rows.length}</span>
         </div>
         {statsLine ? <p className={styles.columnStats}>{statsLine}</p> : null}
+        {onToggleSort ? (
+          <div className={styles.columnSortRow} role="group" aria-label={`Sort ${section.label}`}>
+            <span className={styles.columnSortPrefix}>Sort</span>
+            {COLUMN_SORT_OPTIONS.map((option) => (
+              <label key={option.key} className={styles.columnSortOption} title={option.title}>
+                <input
+                  type="checkbox"
+                  checked={sortKey === option.key}
+                  onChange={() => onToggleSort(option.key)}
+                />
+                <span>{option.label}</span>
+              </label>
+            ))}
+          </div>
+        ) : null}
       </div>
       <div className={styles.columnBody}>
         {loading ? (
@@ -2721,7 +2789,10 @@ function PropertyMiniCard({
       {metrics.length > 0 ? (
         <div className={styles.cardMetrics} aria-label="Property metrics">
           {metrics.map((metric) => (
-            <span key={metric.label} className={metric.tone === "danger" ? styles.metricDanger : undefined}>
+            <span
+              key={metric.label}
+              className={metric.tone === "danger" ? styles.metricDanger : metric.tone === "muted" ? styles.metricMuted : undefined}
+            >
               <small>{metric.label}</small>
               <strong>{metric.value}</strong>
             </span>
