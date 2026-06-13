@@ -9,6 +9,12 @@
  * navigation AND full page reloads (state persists to localStorage).
  * Dismissing only hides the banner — the underlying request keeps running.
  *
+ * Running banners show a spinner plus a ticking time-to-completion countdown.
+ * Estimates start from per-kind seeds, then learn: every successful run's
+ * duration (per item) is recorded to localStorage and the median drives the
+ * next countdown. When server step progress is available it projects the real
+ * pace instead. Past the estimate, the chip reads "wrapping up…".
+ *
  * Refresh semantics: a banner backed by a server workflow run (workflowRunId)
  * resumes polling after a reload and picks up the real outcome. A banner owned
  * by an in-page fetch can't recover its promise after a reload, so it flips to
@@ -26,7 +32,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { Loader2, X, CheckCircle2, AlertTriangle, Info } from "lucide-react";
+import { Loader2, X, CheckCircle2, AlertTriangle, Info, Timer } from "lucide-react";
 import { API_BASE } from "@/lib/api";
 import styles from "./ProcessBanner.module.css";
 
@@ -45,6 +51,12 @@ export interface ProcessEntry {
   workflowRunId: string | null;
   /** 0-100 when a step total is known, otherwise null (indeterminate). */
   progressPct: number | null;
+  /** Estimated total duration in ms driving the countdown; null hides it. */
+  etaMs: number | null;
+  /** Key under which finished durations are learned (defaults to a slug of the label). */
+  estimateKind: string | null;
+  /** Unit count (files, URLs, properties) scaling the per-item estimate. */
+  estimateItems: number;
 }
 
 export interface ProcessHandle {
@@ -57,8 +69,19 @@ export interface ProcessHandle {
   fail: (message?: string) => void;
 }
 
+export interface ProcessStartOptions {
+  message?: string;
+  workflowRunId?: string | null;
+  /** Stable history key for the countdown estimate; defaults to a slug of the label. */
+  estimateKind?: string;
+  /** How many units this run processes (files, URLs, properties) — scales the estimate. */
+  estimateItems?: number;
+  /** Explicit total-duration estimate in ms; pass null to disable the countdown. */
+  estimatedMs?: number | null;
+}
+
 interface ProcessBannerContextValue {
-  start: (label: string, options?: { message?: string; workflowRunId?: string | null }) => ProcessHandle;
+  start: (label: string, options?: ProcessStartOptions) => ProcessHandle;
   entries: ProcessEntry[];
   dismiss: (id: string) => void;
   dismissAll: () => void;
@@ -71,6 +94,113 @@ const MAX_ENTRIES = 10;
 const WORKFLOW_POLL_INTERVAL_MS = 4_000;
 /** A running fetch-owned entry that hasn't reported progress for this long is presumed orphaned. */
 const RUNNING_STALL_MS = 30 * 60 * 1000;
+
+/** Finished durations per estimate kind, persisted so countdowns learn from real runs. */
+const DURATION_HISTORY_KEY = "sourcing-os.process-durations.v1";
+const DURATION_HISTORY_LIMIT = 8;
+/** Durations outside this window are treated as noise (instant failures, abandoned tabs). */
+const MIN_RECORDED_MS = 2_000;
+const MAX_RECORDED_MS = 4 * 60 * 60 * 1000;
+
+/**
+ * First-run countdown seeds (ms per item) used until learned history exists for
+ * a kind. Keys match the explicit `estimateKind` passed by pages or the slug of
+ * the banner label; dynamic labels ("Saved-search run: Foo") hit the prefix match.
+ */
+const ESTIMATE_SEEDS_MS: Record<string, number> = {
+  // OM / deal analysis
+  "om-analysis": 75_000,
+  "om-analysis-batch": 90_000,
+  "om-analysis-link": 75_000,
+  "om-analysis-refresh": 75_000,
+  "om-financials-refresh": 75_000,
+  "om-review-run": 75_000,
+  "om-pdf-upload": 75_000,
+  "broker-notes-analysis": 45_000,
+  "analysis-refresh": 30_000,
+  // market knowledge ingestion
+  "market-docs-ingest": 75_000,
+  "comp-package-upload": 75_000,
+  // property imports
+  "manual-property-import": 20_000,
+  "manual-property-add": 60_000,
+  "streeteasy-import": 45_000,
+  "full-streeteasy-pull": 60_000,
+  "saved-search-run": 180_000,
+  "send-to-property-data": 180_000,
+  "send-to-canonical": 20_000,
+  // pipeline refreshes
+  "enrichment-refresh": 20_000,
+  "rental-flow-refresh": 45_000,
+  // generated outputs
+  "dossier-generation": 95_000,
+  "dossier-rerun": 120_000,
+  "excel-workbook-generation": 60_000,
+  "property-creation": 45_000,
+};
+const FALLBACK_ESTIMATE_MS = 60_000;
+
+function slugifyKind(label: string): string {
+  return label
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function loadDurationHistory(): Record<string, number[]> {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(DURATION_HISTORY_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    if (parsed == null || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const history: Record<string, number[]> = {};
+    for (const [kind, values] of Object.entries(parsed as Record<string, unknown>)) {
+      if (!Array.isArray(values)) continue;
+      const numbers = values.filter(
+        (value): value is number => typeof value === "number" && Number.isFinite(value) && value > 0
+      );
+      if (numbers.length > 0) history[kind] = numbers.slice(-DURATION_HISTORY_LIMIT);
+    }
+    return history;
+  } catch {
+    return {};
+  }
+}
+
+function recordDuration(kind: string, perItemMs: number): void {
+  if (typeof window === "undefined") return;
+  if (!Number.isFinite(perItemMs) || perItemMs < MIN_RECORDED_MS || perItemMs > MAX_RECORDED_MS) return;
+  try {
+    const history = loadDurationHistory();
+    history[kind] = [...(history[kind] ?? []), Math.round(perItemMs)].slice(-DURATION_HISTORY_LIMIT);
+    window.localStorage.setItem(DURATION_HISTORY_KEY, JSON.stringify(history));
+  } catch {
+    // storage full/blocked — future countdowns just stay on seeds
+  }
+}
+
+function median(values: number[]): number {
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0 ? (sorted[mid - 1]! + sorted[mid]!) / 2 : sorted[mid]!;
+}
+
+function seedEstimateMs(kind: string): number {
+  const exact = ESTIMATE_SEEDS_MS[kind];
+  if (exact != null) return exact;
+  for (const [prefix, value] of Object.entries(ESTIMATE_SEEDS_MS)) {
+    if (kind.startsWith(`${prefix}-`)) return value;
+  }
+  return FALLBACK_ESTIMATE_MS;
+}
+
+/** Median of learned runs for this kind (falling back to the seed table), scaled by item count. */
+function estimateDurationMs(kind: string, items: number): number {
+  const learned = loadDurationHistory()[kind];
+  const perItem = learned && learned.length > 0 ? median(learned) : seedEstimateMs(kind);
+  return Math.max(3_000, Math.round(perItem * Math.max(1, items)));
+}
 
 const INTERRUPTED_MESSAGE =
   "The page reloaded while this was running. The server usually finishes anyway — check the results (or re-run), then dismiss.";
@@ -124,6 +254,12 @@ function loadPersistedEntries(): ProcessEntry[] {
                 : null,
           workflowRunId,
           progressPct: typeof entry.progressPct === "number" ? entry.progressPct : null,
+          etaMs: typeof entry.etaMs === "number" && Number.isFinite(entry.etaMs) ? entry.etaMs : null,
+          estimateKind: typeof entry.estimateKind === "string" ? entry.estimateKind : null,
+          estimateItems:
+            typeof entry.estimateItems === "number" && entry.estimateItems >= 1
+              ? Math.round(entry.estimateItems)
+              : 1,
         };
       })
       .filter((entry): entry is ProcessEntry => entry != null)
@@ -191,10 +327,34 @@ export function ProcessBannerProvider({ children }: { children: ReactNode }) {
     setEntries((current) => current.filter((entry) => entry.status === "running"));
   }, []);
 
+  /** Feed the finished run back into the per-kind history so the next countdown is accurate. */
+  const recordEntryDuration = useCallback((entry: ProcessEntry) => {
+    if (!entry.estimateKind || entry.status !== "running") return;
+    const elapsed = Date.now() - entry.startedAt;
+    recordDuration(entry.estimateKind, elapsed / Math.max(1, entry.estimateItems));
+  }, []);
+
+  const succeedEntry = useCallback(
+    (id: string, message: string | null) => {
+      const entry = entriesRef.current.find((candidate) => candidate.id === id);
+      if (entry) recordEntryDuration(entry);
+      patchEntry(id, { status: "success", message, progressPct: 100, finishedAt: Date.now() });
+    },
+    [patchEntry, recordEntryDuration]
+  );
+
   const start = useCallback<ProcessBannerContextValue["start"]>(
     (label, options) => {
       const id = makeId();
       const now = Date.now();
+      const estimateKind = options?.estimateKind?.trim() || slugifyKind(label) || null;
+      const estimateItems = Math.max(1, Math.round(options?.estimateItems ?? 1));
+      const etaMs =
+        options?.estimatedMs !== undefined
+          ? options.estimatedMs
+          : estimateKind
+            ? estimateDurationMs(estimateKind, estimateItems)
+            : null;
       const entry: ProcessEntry = {
         id,
         label,
@@ -205,6 +365,9 @@ export function ProcessBannerProvider({ children }: { children: ReactNode }) {
         finishedAt: null,
         workflowRunId: options?.workflowRunId ?? null,
         progressPct: null,
+        etaMs,
+        estimateKind,
+        estimateItems,
       };
       setEntries((current) => [...current.slice(-(MAX_ENTRIES - 1)), entry]);
       return {
@@ -212,12 +375,11 @@ export function ProcessBannerProvider({ children }: { children: ReactNode }) {
         update: (message, progressPct) =>
           patchEntry(id, { message, ...(progressPct !== undefined ? { progressPct } : {}) }),
         attachWorkflowRun: (runId) => patchEntry(id, { workflowRunId: runId }),
-        succeed: (message) =>
-          patchEntry(id, { status: "success", message: message ?? null, progressPct: 100, finishedAt: Date.now() }),
+        succeed: (message) => succeedEntry(id, message ?? null),
         fail: (message) => patchEntry(id, { status: "error", message: message ?? null, finishedAt: Date.now() }),
       };
     },
-    [patchEntry]
+    [patchEntry, succeedEntry]
   );
 
   // Safety net: a fetch-owned entry that stopped reporting (e.g. its page
@@ -265,15 +427,11 @@ export function ProcessBannerProvider({ children }: { children: ReactNode }) {
           const progressPct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : null;
           const message = step?.lastMessage ?? entry.message;
           if (run.status === "completed") {
-            patchEntry(entry.id, { status: "success", message, progressPct: 100, finishedAt: Date.now() });
+            succeedEntry(entry.id, message ?? null);
           } else if (run.status === "failed") {
             patchEntry(entry.id, { status: "error", message: message ?? "Run failed.", finishedAt: Date.now() });
           } else if (run.status === "partial") {
-            patchEntry(entry.id, {
-              status: "success",
-              message: message ?? "Completed with some issues.",
-              finishedAt: Date.now(),
-            });
+            succeedEntry(entry.id, message ?? "Completed with some issues.");
           } else {
             patchEntry(entry.id, { message, progressPct });
           }
@@ -288,7 +446,7 @@ export function ProcessBannerProvider({ children }: { children: ReactNode }) {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [entries, patchEntry]);
+  }, [entries, patchEntry, succeedEntry]);
 
   const contextValue = useMemo(
     () => ({ start, entries, dismiss: removeEntry, dismissAll }),
@@ -317,11 +475,60 @@ function finishedStamp(entry: ProcessEntry): string | null {
   return new Date(entry.finishedAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
 }
 
+/**
+ * Remaining ms for a running entry. Live step progress (when meaningful)
+ * projects the real pace; otherwise the static estimate counts down.
+ */
+function countdownMs(entry: ProcessEntry, now: number): number | null {
+  const elapsed = Math.max(0, now - entry.startedAt);
+  if (entry.progressPct != null && entry.progressPct >= 8 && elapsed >= 5_000) {
+    return Math.round((elapsed * 100) / entry.progressPct - elapsed);
+  }
+  if (entry.etaMs != null && entry.etaMs > 0) return entry.etaMs - elapsed;
+  return null;
+}
+
+function formatCountdown(ms: number): string {
+  const totalSeconds = Math.max(0, Math.ceil(ms / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
+  return `${seconds}s`;
+}
+
+/** Ticking time-to-completion chip; aria-hidden so the 1s tick doesn't spam screen readers. */
+function CountdownChip({ entry, now }: { entry: ProcessEntry; now: number }) {
+  const remaining = countdownMs(entry, now);
+  if (remaining == null) return null;
+  return (
+    <span
+      className={styles.eta}
+      aria-hidden="true"
+      title="Estimated time to completion — learned from previous runs"
+    >
+      <Timer size={12} strokeWidth={2.4} />
+      {remaining > 1_000 ? `~${formatCountdown(remaining)} left` : "wrapping up…"}
+    </span>
+  );
+}
+
 /** Slim banner stack — place directly under the app topbar. */
 export function ProcessBannerViewport() {
   const context = useContext(ProcessBannerContext);
-  if (!context || context.entries.length === 0) return null;
-  const { entries, dismiss, dismissAll } = context;
+  const entries = context?.entries ?? [];
+  const hasRunning = entries.some((entry) => entry.status === "running");
+  const [now, setNow] = useState(() => Date.now());
+  // Drive the countdown while anything is running; idle banners don't tick.
+  useEffect(() => {
+    if (!hasRunning) return;
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), 1_000);
+    return () => clearInterval(timer);
+  }, [hasRunning]);
+  if (!context || entries.length === 0) return null;
+  const { dismiss, dismissAll } = context;
   const terminalCount = entries.filter((entry) => entry.status !== "running").length;
   return (
     <div className={styles.viewport} role="status" aria-live="polite">
@@ -338,6 +545,7 @@ export function ProcessBannerViewport() {
             </span>
           ) : null}
           {entry.message ? <span className={styles.message}>{entry.message}</span> : null}
+          {entry.status === "running" ? <CountdownChip entry={entry} now={now} /> : null}
           {entry.status === "running" && entry.progressPct != null ? (
             <span className={styles.progress}>
               <span className={styles.progressTrack}>

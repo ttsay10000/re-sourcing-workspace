@@ -1648,6 +1648,8 @@ function ProgressPageContent() {
     setError(null);
     const banner = processBanner.start("OM analysis refresh", {
       message: `Re-reading OMs for ${selectedSavedDealsWithOm.length} deal${selectedSavedDealsWithOm.length === 1 ? "" : "s"} (AI extraction)…`,
+      estimateKind: "om-analysis-refresh",
+      estimateItems: selectedSavedDealsWithOm.length,
     });
     try {
       const summary = await runBulkPropertyAction({
@@ -1688,6 +1690,8 @@ function ProgressPageContent() {
     setError(null);
     const banner = processBanner.start("Dossier rerun", {
       message: `Re-running OM analysis + dossiers for ${selectedSavedDealsWithOm.length} deal${selectedSavedDealsWithOm.length === 1 ? "" : "s"}…`,
+      estimateKind: "dossier-rerun",
+      estimateItems: selectedSavedDealsWithOm.length,
     });
     try {
       const summary = await runBulkPropertyAction({
