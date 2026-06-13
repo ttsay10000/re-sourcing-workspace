@@ -237,7 +237,6 @@ Tables (migration `060_market_knowledge.sql`):
 - `market_documents.document_brief` — JSONB analyst brief per upload ({ title, whatItSays, comparedToPrior, discrepancies, incorporatedAt })
 - `market_llm_outputs` — raw model output for the merge step persisted under the new `knowledge` stage (prompt version `knowledge_v1`)
 
-<<<<<<< HEAD
 ## Market docs usability push: per-doc notes, live AI review, comp review gate (2026-06-12)
 
 Per-document analyst notes (ingest stage 3, before the knowledge merge):
