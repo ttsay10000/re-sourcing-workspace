@@ -190,7 +190,7 @@ interface PipelineDetailsState {
   actionRequired: string[];
   rejectedAt?: string | null;
   rejectionReason?: string | null;
-  rejection?: UiV2RejectionReason & { rejectedAt?: string | null };
+  rejection?: (UiV2RejectionReason & { rejectedAt?: string | null }) | null;
   previousStatus?: string | null;
   previousUiV2Status?: UiV2PipelineStatus | null;
   source?: string | null;
@@ -2862,17 +2862,13 @@ async function updatePipelineState(
   const propertyRepo = new PropertyRepo({ pool });
   const property = await propertyRepo.byId(propertyId);
   if (!property) return null;
-  const existing = readPipelineState(property.details);
-  const nextPipeline: PipelineDetailsState = {
-    ...existing,
-    ...patch,
-    tags: patch.tags ?? existing.tags,
-    missingFields: patch.missingFields ?? existing.missingFields,
-    actionRequired: patch.actionRequired ?? existing.actionRequired,
-    sourceLinks: patch.sourceLinks ?? existing.sourceLinks ?? {},
-    lastActivityAt: patch.lastActivityAt ?? new Date().toISOString(),
-  };
-  await propertyRepo.mergeDetails(propertyId, { pipeline: nextPipeline });
+  const nextPatch = Object.fromEntries(
+    Object.entries({
+      ...patch,
+      lastActivityAt: patch.lastActivityAt ?? new Date().toISOString(),
+    }).filter(([, value]) => value !== undefined)
+  );
+  await propertyRepo.mergeDetailsKey(propertyId, "pipeline", nextPatch);
   return propertyRepo.byId(propertyId);
 }
 
@@ -3180,7 +3176,7 @@ async function handleStatusUpdate(req: Request, res: Response): Promise<void> {
     } else {
       patch.rejectedAt = null;
       patch.rejectionReason = null;
-      patch.rejection = undefined;
+      patch.rejection = null;
       patch.tags = existing.tags.filter((tag) => {
         const normalized = normalizeTag(tag);
         return normalized !== "rejected" && normalized !== "archived";
@@ -3193,7 +3189,7 @@ async function handleStatusUpdate(req: Request, res: Response): Promise<void> {
       }
     }
     await updatePipelineState(pool, propertyId, patch);
-    void recordDealStageChange(pool, propertyId, status, { actor: actorName, source: "ui-v2-status" });
+    void recordDealStageChange(pool, propertyId, status, { actor: actorName, source: "ui-v2-status", allowBackward: true });
     const userId = await getDefaultUserId(pool);
     const savedDealsRepo = new SavedDealsRepo({ pool });
     const savedDeal = await savedDealsRepo.get(userId, propertyId);
@@ -3506,7 +3502,7 @@ router.post("/ui-v2/properties/:id/stage", async (req: Request, res: Response) =
     if (state !== "dead" && (existing.uiV2Status === "rejected" || existing.uiV2Status === "archived" || existing.status === "rejected_removed" || existing.rejectedAt)) {
       patch.rejectedAt = null;
       patch.rejectionReason = null;
-      patch.rejection = undefined;
+      patch.rejection = null;
       patch.tags = existing.tags.filter((tag) => {
         const normalized = normalizeTag(tag);
         return normalized !== "rejected" && normalized !== "archived";
@@ -3687,7 +3683,7 @@ async function handleDealPathUpdate(req: Request, res: Response): Promise<void> 
 
     await updatePipelineState(pool, propertyId, patch);
     if (patch.uiV2Status) {
-      void recordDealStageChange(pool, propertyId, patch.uiV2Status, { actor: actorName, source: "deal_path" });
+      await recordDealStageChange(pool, propertyId, patch.uiV2Status, { actor: actorName, source: "deal_path" });
     }
     await new PropertyPipelineEventRepo({ pool }).create({
       propertyId,

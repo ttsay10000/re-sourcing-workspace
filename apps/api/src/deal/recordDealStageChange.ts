@@ -15,7 +15,7 @@ export async function recordDealStageChange(
   pool: Pool,
   propertyId: string,
   newStatus: string,
-  options?: { actor?: string | null; source?: string | null; reason?: string | null }
+  options?: { actor?: string | null; source?: string | null; reason?: string | null; allowBackward?: boolean }
 ): Promise<void> {
   try {
     const target = STATUS_TO_CANONICAL[String(newStatus ?? "").trim().toLowerCase()];
@@ -29,6 +29,7 @@ export async function recordDealStageChange(
       source: options?.source ?? "status_change",
       reason: options?.reason ?? null,
       metadata: { status: newStatus },
+      allowBackward: options?.allowBackward ?? false,
     });
   } catch (err) {
     // Missing 056 columns (un-migrated DB) or transient failures must never

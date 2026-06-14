@@ -31,6 +31,11 @@ export interface RecordStageTransitionParams {
   source?: string | null;
   reason?: string | null;
   metadata?: Record<string, unknown> | null;
+  /**
+   * Manual board moves may go backward. Automatic recorders should leave this
+   * false so a stale workflow cannot overwrite a later user-selected stage.
+   */
+  allowBackward?: boolean;
 }
 
 export interface StageTransitionRepoOptions {
@@ -58,6 +63,9 @@ function mapRow(row: Record<string, unknown>): StageTransition {
     occurredAt: toIso(row.occurred_at),
   };
 }
+
+const DEAL_STAGE_ORDER = DEAL_STAGES as readonly string[];
+const DEAL_STAGE_RANK = new Map(DEAL_STAGE_ORDER.map((stage, index) => [stage, index + 1]));
 
 export function isDealStage(value: unknown): value is DealStage {
   return typeof value === "string" && (DEAL_STAGES as readonly string[]).includes(value);
@@ -88,17 +96,35 @@ export class StageTransitionRepo {
     const fromState = (current.rows[0].deal_state as string | null) ?? null;
     const fromStage = (current.rows[0].deal_stage as string | null) ?? null;
     if (fromState === params.toState && fromStage === params.toStage) return null;
+    const targetRank = DEAL_STAGE_RANK.get(params.toStage) ?? 0;
+    const allowBackward = params.allowBackward ?? true;
+    const allowTerminalMove = params.toState !== "active";
 
-    await this.db.query(
+    const updated = await this.db.query(
       `UPDATE properties
          SET deal_state = $2,
              deal_stage = $3,
              stage_entered_at = now(),
              stage_order = NULL,
              updated_at = now()
-       WHERE id = $1`,
-      [params.propertyId, params.toState, params.toStage]
+       WHERE id = $1
+         AND (
+           $4::boolean
+           OR $5::boolean
+           OR deal_stage IS NULL
+           OR COALESCE(array_position($6::text[], deal_stage), 0) <= $7
+         )`,
+      [
+        params.propertyId,
+        params.toState,
+        params.toStage,
+        allowBackward,
+        allowTerminalMove,
+        [...DEAL_STAGE_ORDER],
+        targetRank,
+      ]
     );
+    if (updated.rowCount === 0) return null;
 
     const inserted = await this.db.query(
       `INSERT INTO stage_transitions (
