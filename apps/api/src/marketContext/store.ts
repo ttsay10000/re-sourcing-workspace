@@ -305,6 +305,8 @@ export class InMemoryMarketContextStore implements MarketContextStore {
       lng: params.lng,
       reviewStatus: "pending",
       reviewedAt: null,
+      analysisExcludedAt: null,
+      analysisExcludedReason: null,
       createdAt,
     };
   }
@@ -334,7 +336,8 @@ export class InMemoryMarketContextStore implements MarketContextStore {
       (comp) =>
         comp.neighborhoodId != null &&
         neighborhoodIds.includes(comp.neighborhoodId) &&
-        comp.reviewStatus === "approved"
+        comp.reviewStatus === "approved" &&
+        comp.analysisExcludedAt == null
     );
   }
 

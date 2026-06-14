@@ -2,12 +2,13 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Badge, Dialog, PageHeader, SortableTh, StatCard, useTableSort } from "@/components/ui";
-import { dealFlowStageForStatus, STATUS_TO_CANONICAL } from "@re-sourcing/contracts";
+import { dealFlowStageForStatus, STATUS_TO_CANONICAL, type UiV2PropertyDetailPayload } from "@re-sourcing/contracts";
 import { API_BASE } from "@/lib/api";
 import { useProcessBanner, useProcessEntries } from "@/components/ProcessBanner";
 import { formatPercent, formatCurrencyCompact, formatCurrencyExact, labelFromKey, EMPTY_VALUE } from "@/lib/format";
 import styles from "./yieldMap.module.css";
 import { YieldMapCanvas, type MapPin, type AreaStat, type HollowPin, type MarketHood } from "./YieldMapCanvas";
+import { CanonicalPropertyDetail, type CanonicalProperty } from "../../property-data/CanonicalPropertyDetail";
 import {
   featureBBox,
   featureLabelPoint,
@@ -566,6 +567,81 @@ type TableEntry =
   | { kind: "deal"; rowId: string; deal: CompRow }
   | { kind: "comp"; rowId: string; comp: MarketComp };
 
+type PropertyDetailResponse = {
+  property: UiV2PropertyDetailPayload | null;
+  error?: string;
+  details?: string;
+};
+
+type PropertyWizardState = {
+  propertyId: string;
+  address: string;
+  property: CanonicalProperty | null;
+  loading: boolean;
+};
+
+function omStatusFromPropertyDetail(documentStatus: UiV2PropertyDetailPayload["documentStatus"]): "OM received" | "OM pending" | "Not received" {
+  if (documentStatus.hasOm || documentStatus.omStatus === "available") return "OM received";
+  if (documentStatus.omStatus === "requested" || documentStatus.latestRequestAt) return "OM pending";
+  return "Not received";
+}
+
+function canonicalPropertyFromDetail(detail: UiV2PropertyDetailPayload, row?: CompRow | null): CanonicalProperty {
+  const overview = detail.overview;
+  const fallbackDate = new Date().toISOString();
+  const brokerContacts = detail.broker
+    ? [
+        {
+          name: detail.broker.name?.trim() || "Broker",
+          firm: detail.broker.firm ?? null,
+          email: detail.broker.email ?? null,
+          phone: detail.broker.phone ?? null,
+        },
+      ]
+    : null;
+  return {
+    id: overview.propertyId,
+    canonicalAddress: overview.canonicalAddress || row?.canonicalAddress || overview.propertyId,
+    details: {
+      overview,
+      pipeline: {
+        status: detail.statusChip.status,
+        tags: detail.tags,
+        missingFields: [],
+      },
+      enrichment: detail.enrichmentDetails ?? null,
+      dealPath: detail.dealPath ?? null,
+      uiV2: detail,
+    },
+    createdAt: row?.sourcedAt ?? detail.dealPath?.updatedAt ?? fallbackDate,
+    updatedAt: detail.dealPath?.updatedAt ?? row?.sourcedAt ?? fallbackDate,
+    primaryListing: {
+      price: overview.askingPrice ?? detail.underwriting?.askingPrice ?? row?.askingPrice ?? null,
+      listedAt: null,
+      city: overview.city ?? null,
+      lastActivity: null,
+    },
+    listingAgentEnrichment: brokerContacts,
+    omStatus: omStatusFromPropertyDetail(detail.documentStatus),
+    recipientContactName: detail.broker?.name ?? null,
+    recipientContactEmail: detail.broker?.email ?? null,
+    lastInquirySentAt: detail.documentStatus.latestRequestAt ?? null,
+    dealScore: detail.underwriting?.dealScore ?? row?.dealScore ?? null,
+    pipelineStatus: String(detail.statusChip.status ?? row?.boardStatus ?? row?.dealStage ?? "new"),
+    enrichmentStatus: detail.enrichmentState.status,
+    rentalFlowStatus: detail.enrichmentDetails?.rentalFlow?.source ? "complete" : null,
+    underwritingStatus: detail.underwriting?.generationStatus ?? null,
+    dossierStatus: detail.underwriting?.generationStatus ?? null,
+    excelStatus: null,
+    propertyTags: detail.tags,
+    defaultTags: [],
+    missingFields: [],
+    actionRequired: detail.actionItems.map((item) => labelFromKey(item.actionType)),
+    rejectedAt: detail.statusChip.status === "rejected" ? detail.dealPath?.updatedAt ?? row?.sourcedAt ?? null : null,
+    rejectionReason: detail.dealPath?.rejectionReasonCode ?? null,
+  };
+}
+
 export default function YieldMapPage() {
   // Destructured because the hook values change identity with every banner
   // update — the underlying callbacks are stable, the wrapper object is not.
@@ -598,14 +674,55 @@ export default function YieldMapPage() {
   const [compsLoading, setCompsLoading] = useState(false);
   const [compsError, setCompsError] = useState<string | null>(null);
   const [activePinId, setActivePinId] = useState<string | null>(null);
+  const [propertyWizard, setPropertyWizard] = useState<PropertyWizardState | null>(null);
+  const [propertyWizardError, setPropertyWizardError] = useState<string | null>(null);
 
   // Hover is highlight-only in both directions (pin ⇄ table row) — it never
   // scrolls. Clicking a pin is the select action: it opens the property
   // wizard and scrolls the table to the matching row.
-  const selectPin = useCallback((id: string) => {
-    setQuickViewId(id);
-    document.getElementById(`yield-row-${id}`)?.scrollIntoView({ block: "nearest" });
+  const openPropertyWizard = useCallback(async (row: CompRow) => {
+    const address = row.canonicalAddress || row.propertyId;
+    setPropertyWizardError(null);
+    setPropertyWizard((current) => {
+      if (current?.propertyId === row.propertyId) return { ...current, address, loading: true };
+      return { propertyId: row.propertyId, address, property: null, loading: true };
+    });
+    try {
+      const res = await fetch(`${API_BASE}/api/ui-v2/properties/${encodeURIComponent(row.propertyId)}`, {
+        credentials: "include",
+      });
+      const payload = (await res.json().catch(() => ({}))) as PropertyDetailResponse;
+      if (!res.ok || payload.error || !payload.property) throw new Error(payload.error || payload.details || "Property not found.");
+      const property = canonicalPropertyFromDetail(payload.property, row);
+      setPropertyWizard((current) =>
+        current?.propertyId === row.propertyId ? { propertyId: row.propertyId, address, property, loading: false } : current
+      );
+    } catch (err) {
+      setPropertyWizardError(err instanceof Error ? err.message : "Failed to load property wizard.");
+      setPropertyWizard((current) => (current?.propertyId === row.propertyId ? { ...current, loading: false } : current));
+    }
   }, []);
+
+  const closePropertyWizard = useCallback(() => {
+    setPropertyWizard(null);
+    setPropertyWizardError(null);
+  }, []);
+
+  const refreshPropertyWizard = useCallback(() => {
+    if (!propertyWizard) return;
+    const row = (data?.comps ?? []).find((candidate) => candidate.propertyId === propertyWizard.propertyId);
+    if (row) void openPropertyWizard(row);
+  }, [data, openPropertyWizard, propertyWizard]);
+
+  const selectPin = useCallback(
+    (id: string) => {
+      document.getElementById(`yield-row-${id}`)?.scrollIntoView({ block: "nearest" });
+      const row = (data?.comps ?? []).find((candidate) => candidate.propertyId === id);
+      if (row) void openPropertyWizard(row);
+      else setQuickViewId(id);
+    },
+    [data, openPropertyWizard]
+  );
   const [market, setMarket] = useState<MarketSummariesResponse | null>(null);
   const [marketError, setMarketError] = useState<string | null>(null);
   const [marketSource, setMarketSource] = useState<MarketSourceFilter>("all");
@@ -884,9 +1001,10 @@ export default function YieldMapPage() {
   const compRows = useMemo(() => {
     if (!showComps) return [];
     const all = marketComps?.comps ?? [];
-    if (!boroughFilter) return all;
-    return all.filter((comp) => (comp.borough ?? "Unknown") === boroughFilter);
-  }, [showComps, marketComps, boroughFilter]);
+    return all
+      .filter((comp) => !boroughFilter || (comp.borough ?? "Unknown") === boroughFilter)
+      .filter((comp) => !hoodFilter || (comp.neighborhood ? labelFromKey(comp.neighborhood) : "Unknown") === hoodFilter);
+  }, [showComps, marketComps, boroughFilter, hoodFilter]);
 
   const geoRows = useMemo(() => rows.filter((row) => row.lat != null && row.lng != null), [rows]);
   const calcGeoRows = useMemo(() => geoRows.filter((row) => !row.yieldMapExcluded), [geoRows]);
@@ -1847,6 +1965,22 @@ export default function YieldMapPage() {
             )}
           </div>
 
+          {boroughFilter || hoodFilter ? (
+            <div className={styles.areaFilterBar}>
+              <span>Filtered by</span>
+              {hoodFilter ? (
+                <button type="button" onClick={() => setHoodFilter("")}>
+                  {hoodFilter} neighborhood ×
+                </button>
+              ) : null}
+              {boroughFilter ? (
+                <button type="button" onClick={() => setBoroughFilter("")}>
+                  {boroughFilter} borough ×
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+
           <div className={styles.dataGrid}>
             <div className={styles.sideColumn}>
               <div className={styles.panel}>
@@ -1867,7 +2001,14 @@ export default function YieldMapPage() {
                   </thead>
                   <tbody>
                     {hoodSort.sorted.map((stat) => (
-                      <tr key={stat.name}>
+                      <tr
+                        key={stat.name}
+                        className={hoodFilter === stat.name ? `${styles.clickableStatRow} ${styles.activeStatRow}` : styles.clickableStatRow}
+                        onClick={() => {
+                          setHoodFilter(stat.name);
+                          setBoroughFilter("");
+                        }}
+                      >
                         <td className={styles.dealAddressCell}>
                           <span className={styles.boroughName}>{stat.name}</span>
                           <div className={styles.dealNeighborhood}>{stat.borough ?? ""}</div>
@@ -1919,7 +2060,14 @@ export default function YieldMapPage() {
                   </thead>
                   <tbody>
                     {boroughSort.sorted.map((stat) => (
-                      <tr key={stat.name}>
+                      <tr
+                        key={stat.name}
+                        className={boroughFilter === stat.name ? `${styles.clickableStatRow} ${styles.activeStatRow}` : styles.clickableStatRow}
+                        onClick={() => {
+                          setBoroughFilter(stat.name);
+                          setHoodFilter("");
+                        }}
+                      >
                         <td className={styles.boroughName}>{stat.name}</td>
                         <td>{stat.count}</td>
                         <td className={styles.boroughMedian} style={{ color: metricColor(stat.medianValue) }}>
@@ -2188,9 +2336,16 @@ export default function YieldMapPage() {
               >
                 {quickViewRow.yieldMapExcluded ? "↺ Include in yield calcs" : "✂ Exclude from yield calcs"}
               </button>
-              <a className={styles.quickViewAction} href={`/pipeline?propertyId=${encodeURIComponent(quickViewRow.propertyId)}`}>
-                Open property wizard →
-              </a>
+              <button
+                type="button"
+                className={styles.quickViewAction}
+                onClick={() => {
+                  void openPropertyWizard(quickViewRow);
+                  setQuickViewId(null);
+                }}
+              >
+                Open property wizard
+              </button>
               <a
                 className={styles.quickViewActionSecondary}
                 href={`/deal-analysis?propertyId=${encodeURIComponent(quickViewRow.propertyId)}`}
@@ -2285,6 +2440,33 @@ export default function YieldMapPage() {
                 </p>
               );
             })()}
+          </div>
+        ) : null}
+      </Dialog>
+
+      <Dialog
+        open={propertyWizard != null}
+        onClose={closePropertyWizard}
+        title={propertyWizard?.address.split(",")[0] ?? "Property wizard"}
+        description="Yield Map"
+        size="lg"
+        className={styles.propertyWizardDialog}
+      >
+        {propertyWizard?.loading && !propertyWizard.property ? (
+          <p className={styles.dialogHint}>Loading property wizard…</p>
+        ) : null}
+        {propertyWizardError ? <p className={styles.dialogWarning}>{propertyWizardError}</p> : null}
+        {propertyWizard?.property ? (
+          <div className={styles.propertyWizardBody}>
+            <CanonicalPropertyDetail
+              property={propertyWizard.property}
+              isSaved
+              onRefreshPropertyData={refreshPropertyWizard}
+              onWorkflowActivity={() => {
+                void loadDeals();
+                refreshPropertyWizard();
+              }}
+            />
           </div>
         ) : null}
       </Dialog>

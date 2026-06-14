@@ -31,7 +31,6 @@ export type PipelineColumnId =
   | "units"
   | "sqft"
   | "score"
-  | "status"
   | "tracker"
   | "enrich"
   | "flow"
@@ -56,9 +55,6 @@ export const PIPELINE_COLUMNS: readonly PipelineColumnDef[] = [
   { id: "source", label: "Source", colClass: "colSource", widthPx: 109 },
   { id: "propertyType", label: "Property Type", colClass: "colPropertyType", widthPx: 131 },
   { id: "marketType", label: "Market", colClass: "colType", widthPx: 114 },
-  { id: "listedAt", label: "Date Listed", colClass: "colDate", widthPx: 96 },
-  { id: "createdAt", label: "Date Added", colClass: "colDate", widthPx: 96 },
-  { id: "updatedAt", label: "Updated", colClass: "colDate", widthPx: 96 },
   { id: "ask", label: "Ask", colClass: "colAsk", widthPx: 168 },
   { id: "psf", label: "$/SF", colClass: "colPsf", widthPx: 90 },
   { id: "yocLtr", label: "YoC LTR", colClass: "colYoc", widthPx: 88 },
@@ -66,10 +62,12 @@ export const PIPELINE_COLUMNS: readonly PipelineColumnDef[] = [
   { id: "units", label: "Units", colClass: "colUnit", widthPx: 70 },
   { id: "sqft", label: "SF", colClass: "colSqft", widthPx: 86 },
   { id: "score", label: "Score", colClass: "colScore", widthPx: 98 },
-  { id: "status", label: "Status", colClass: "colStatus", widthPx: 176 },
   { id: "tracker", label: "Tracker", colClass: "colOm", widthPx: 221 },
   { id: "enrich", label: "Enrich", colClass: "colEnrich", widthPx: 94 },
   { id: "flow", label: "Flow", colClass: "colFlow", widthPx: 77 },
+  { id: "listedAt", label: "Date Listed", colClass: "colDate", widthPx: 108 },
+  { id: "createdAt", label: "Date Added", colClass: "colDate", widthPx: 108 },
+  { id: "updatedAt", label: "Updated", colClass: "colDate", widthPx: 108 },
   { id: "tags", label: "Tags", colClass: "colTags", widthPx: 160 },
   { id: "actions", label: "Action", colClass: "colAction", widthPx: 144, locked: true },
 ];

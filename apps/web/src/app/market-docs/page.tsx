@@ -63,6 +63,17 @@ interface UploadItem {
   documentId?: string | null;
 }
 
+interface MarketPromptSection {
+  key: string;
+  label: string;
+  text: string;
+}
+
+interface MarketPromptsResponse {
+  version: string;
+  sections: MarketPromptSection[];
+}
+
 interface MarketDocRow {
   id: string;
   filename: string;
@@ -224,6 +235,9 @@ export default function MarketDocsPage() {
   const [reviewDocCount, setReviewDocCount] = useState(0);
   const [reviewBusy, setReviewBusy] = useState(false);
   const [reviewError, setReviewError] = useState<string | null>(null);
+  const [prompts, setPrompts] = useState<MarketPromptsResponse | null>(null);
+  const [promptsOpen, setPromptsOpen] = useState(false);
+  const [promptsError, setPromptsError] = useState<string | null>(null);
 
   // Ingest-log management state.
   const [showRemoved, setShowRemoved] = useState(false);
@@ -261,6 +275,21 @@ export default function MarketDocsPage() {
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  const loadPrompts = useCallback(() => {
+    fetch(`${API_BASE}/api/market-docs/prompts`, { credentials: "include" })
+      .then(async (res) => {
+        const payload = (await res.json().catch(() => ({}))) as MarketPromptsResponse & { error?: string };
+        if (!res.ok || payload.error) throw new Error(payload.error || `HTTP ${res.status}`);
+        setPrompts({ version: payload.version, sections: payload.sections ?? [] });
+        setPromptsError(null);
+      })
+      .catch((err) => setPromptsError(err instanceof Error ? err.message : "Failed to load prompt templates."));
+  }, []);
+
+  useEffect(() => {
+    loadPrompts();
+  }, [loadPrompts]);
 
   useEffect(() => {
     const interval = window.setInterval(() => setNow(Date.now()), 60_000);
@@ -520,6 +549,37 @@ export default function MarketDocsPage() {
               {uploadItems.filter((item) => item.state === "failed").length} failed
               {uploading ? " · working…" : ""}
             </span>
+          </div>
+        ) : null}
+      </Panel>
+
+      <Panel>
+        <div className={styles.promptHeader}>
+          <div>
+            <span className={styles.sectionTitle}>Prompt review</span>
+            <span className={styles.promptMeta}>
+              {prompts ? `${prompts.version} · ${prompts.sections.length} sections/templates` : "Loading prompt templates…"}
+            </span>
+          </div>
+          <div className={styles.promptActions}>
+            <Button variant="secondary" size="sm" onClick={loadPrompts}>
+              <RefreshCw size={13} strokeWidth={2.2} aria-hidden="true" />
+              Reload
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => setPromptsOpen((open) => !open)}>
+              {promptsOpen ? "Collapse" : "Open prompts"}
+            </Button>
+          </div>
+        </div>
+        {promptsError ? <div className={styles.uploadError}>{promptsError}</div> : null}
+        {promptsOpen && prompts ? (
+          <div className={styles.promptList}>
+            {prompts.sections.map((section) => (
+              <details key={section.key} className={styles.promptDetails}>
+                <summary>{section.label}</summary>
+                <pre>{section.text}</pre>
+              </details>
+            ))}
           </div>
         ) : null}
       </Panel>

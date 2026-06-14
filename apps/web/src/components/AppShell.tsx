@@ -8,7 +8,6 @@ import {
   Bookmark,
   Building2,
   Contact,
-  Database,
   FileText,
   History,
   Home,
@@ -70,16 +69,6 @@ const NAV_LINKS: NavLink[] = [
           pathname === "/pipeline" &&
           !pathname.startsWith("/pipeline/yield-map") &&
           !pathname.startsWith("/pipeline/comp-analysis"),
-      },
-      {
-        href: "/property-data",
-        label: "Property Data",
-        shortLabel: "D",
-        icon: Database,
-        matches: (pathname: string) =>
-          pathname === "/property-data" ||
-          pathname.startsWith("/property-data/") ||
-          pathname.startsWith("/property/"),
       },
       {
         href: "/pipeline/yield-map",

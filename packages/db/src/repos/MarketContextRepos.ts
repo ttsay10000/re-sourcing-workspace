@@ -132,6 +132,8 @@ function mapMarketComp(row: Row): MarketComp {
     lng: num(row.lng),
     reviewStatus: (str(row.review_status) ?? "pending") as MarketCompReviewStatus,
     reviewedAt: row.reviewed_at != null ? iso(row.reviewed_at) : null,
+    analysisExcludedAt: row.analysis_excluded_at != null ? iso(row.analysis_excluded_at) : null,
+    analysisExcludedReason: str(row.analysis_excluded_reason),
     createdAt: iso(row.created_at),
   };
 }
@@ -183,6 +185,8 @@ function mapNeighborhoodSummary(row: Row): NeighborhoodSummary & { topComps: Mar
       saleConditions: comp.saleConditions ?? [],
       reviewStatus: comp.reviewStatus ?? "approved",
       reviewedAt: comp.reviewedAt ?? null,
+      analysisExcludedAt: comp.analysisExcludedAt ?? null,
+      analysisExcludedReason: comp.analysisExcludedReason ?? null,
     })),
     updatedAt: iso(row.updated_at),
   };
@@ -394,6 +398,7 @@ export interface ListMarketCompsFilters {
   priceType?: string | null;
   unresolvedOnly?: boolean;
   reviewStatus?: MarketCompReviewStatus | null;
+  includeAnalysisExcluded?: boolean;
   limit?: number;
 }
 
@@ -438,7 +443,8 @@ export class MarketCompRepo {
     "price_per_unit", "units_total", "units_resi", "pct_rent_stabilized", "noi", "cap_rate", "grm", "asset_type",
     "buyer", "seller", "sale_conditions", "notes_short",
     "cherry_pick_risk", "is_subject_property", "confidence", "raw_text", "provenance",
-    "provenance_list", "lat", "lng", "review_status", "reviewed_at", "created_at",
+    "provenance_list", "lat", "lng", "review_status", "reviewed_at", "analysis_excluded_at",
+    "analysis_excluded_reason", "created_at",
   ] as const;
 
   private static readonly COLUMNS = MarketCompRepo.COLUMN_NAMES.join(", ");
@@ -570,6 +576,7 @@ export class MarketCompRepo {
        LEFT JOIN market_documents d ON d.id = c.document_id
        WHERE c.neighborhood_id = ANY($1)
          AND c.review_status = 'approved'
+         AND c.analysis_excluded_at IS NULL
          AND (c.document_id IS NULL OR d.excluded_at IS NULL)
        ORDER BY c.sale_date DESC NULLS LAST`,
       [neighborhoodIds]
@@ -597,7 +604,8 @@ export class MarketCompRepo {
   }
 
   /** Comp Analysis / Yield Map comp layer: approved comps with their source document's period for attribution. */
-  async listApprovedWithDocuments(limit = 500): Promise<PendingMarketCompRow[]> {
+  async listApprovedWithDocuments(limit = 500, includeAnalysisExcluded = false): Promise<PendingMarketCompRow[]> {
+    const excludedClause = includeAnalysisExcluded ? "" : "AND c.analysis_excluded_at IS NULL";
     const r = await this.client.query(
       `SELECT ${MarketCompRepo.prefixedColumns("c")},
               d.id AS doc_id, d.filename AS doc_filename, d.report_title AS doc_report_title,
@@ -607,6 +615,7 @@ export class MarketCompRepo {
        LEFT JOIN market_documents d ON d.id::text = c.provenance->>'document_id'
        WHERE c.review_status = 'approved'
          AND c.is_subject_property = false
+         ${excludedClause}
          AND (d.id IS NULL OR d.excluded_at IS NULL)
        ORDER BY c.sale_date DESC NULLS LAST, c.created_at DESC
        LIMIT $1`,
@@ -626,6 +635,23 @@ export class MarketCompRepo {
        WHERE id = ANY($1::uuid[])
        RETURNING id, neighborhood_id`,
       [ids, status]
+    );
+    return r.rows.map((row: Row) => ({ id: String(row.id), neighborhoodId: str(row.neighborhood_id) }));
+  }
+
+  async setAnalysisExcluded(
+    ids: string[],
+    excluded: boolean,
+    reason: string | null = null
+  ): Promise<Array<{ id: string; neighborhoodId: string | null }>> {
+    if (ids.length === 0) return [];
+    const r = await this.client.query(
+      `UPDATE market_comps
+       SET analysis_excluded_at = CASE WHEN $2 THEN now() ELSE NULL END,
+           analysis_excluded_reason = CASE WHEN $2 THEN $3 ELSE NULL END
+       WHERE id = ANY($1::uuid[])
+       RETURNING id, neighborhood_id`,
+      [ids, excluded, reason]
     );
     return r.rows.map((row: Row) => ({ id: String(row.id), neighborhoodId: str(row.neighborhood_id) }));
   }
@@ -691,6 +717,9 @@ export class MarketCompRepo {
     if (filters.reviewStatus) {
       values.push(filters.reviewStatus);
       where.push(`review_status = $${values.length}`);
+    }
+    if (!filters.includeAnalysisExcluded) {
+      where.push("c.analysis_excluded_at IS NULL");
     }
     values.push(Math.max(1, Math.min(filters.limit ?? 500, 2000)));
     const sql = `SELECT ${MarketCompRepo.prefixedColumns("c")} FROM market_comps c

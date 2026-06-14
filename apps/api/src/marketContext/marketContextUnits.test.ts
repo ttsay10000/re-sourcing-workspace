@@ -88,6 +88,10 @@ function marketComp(partial: Partial<MarketComp>): MarketComp {
     provenanceList: [provenance("broker_provided")],
     lat: null,
     lng: null,
+    reviewStatus: "approved",
+    reviewedAt: null,
+    analysisExcludedAt: null,
+    analysisExcludedReason: null,
     createdAt: new Date().toISOString(),
   };
   return { ...base, ...partial };

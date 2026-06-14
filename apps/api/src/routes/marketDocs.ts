@@ -35,6 +35,20 @@ import { runMarketLlm } from "../marketContext/llmAdapter.js";
 import { isReviewStale, refreshMarketReview } from "../marketContext/review.js";
 import { computeNeighborhoodRollup, effectiveSourceType, withReadTimeFallback } from "../marketContext/rollup.js";
 import { fallbackSubmarketsFor } from "../marketContext/neighborhoodResolve.js";
+import {
+  MARKET_PROMPT_V3_VERSION,
+  MARKET_PROMPT_V3_PILLAR_SUMMARY,
+  GEMINI_MARKET_EXTRACTION_CORE_PROMPT,
+  MARKET_COMPS_ROUTING_PROMPT,
+  GEMINI_MARKET_SPECIAL_RULES_PROMPT,
+  MARKET_DOCUMENT_REVIEW_PROMPT,
+  INDIVIDUAL_REVIEW_ANALYSIS_QUESTIONS_PROMPT,
+  LIVE_MARKET_ANALYSIS_PROMPT,
+  LIVE_MARKET_ANALYSIS_REQUIRED_BEHAVIOR_PROMPT,
+  buildGeminiMarketExtractionPrompt,
+  buildMarketDocumentReviewPrompt,
+  buildLiveMarketAnalysisPrompt,
+} from "../brokerComps/marketPromptV3.js";
 
 const router = Router();
 
@@ -228,6 +242,47 @@ router.get("/market-docs", async (_req: Request, res: Response) => {
     console.error("[market-docs list]", err);
     res.status(503).json({ error: "Failed to list market documents.", details: message });
   }
+});
+
+// Prompt transparency for analyst tuning: exact v3 prompt templates with runtime placeholders.
+router.get("/market-docs/prompts", async (_req: Request, res: Response) => {
+  const geminiTemplate = buildGeminiMarketExtractionPrompt({
+    filename: "[uploaded PDF filename]",
+    pageCount: null,
+    textPreview: "[selectable PDF text preview inserted here when available]",
+  });
+  const documentReviewTemplate = buildMarketDocumentReviewPrompt({
+    filename: "[uploaded PDF filename]",
+    geminiExtractionJson: {
+      schemaVersion: "market_doc_extraction_v3",
+      note: "runtime Gemini extraction JSON is inserted here",
+    },
+    textPreview: "[selectable PDF text preview inserted here when available]",
+  });
+  const liveReviewTemplate = buildLiveMarketAnalysisPrompt({
+    propertyContextJson: { note: "runtime current deal/property context JSON is inserted here" },
+    approvedDocumentReviews: ["included market_doc_review_v3 objects are inserted here"],
+    approvedMarketCompsTableRows: ["approved marketCompsTableRows are inserted here"],
+    approvedCompItems: ["approved broker comp items are inserted here"],
+    excludedOrWatchRows: ["excluded/watch rows are inserted here for caveat context"],
+    previousSnapshot: { note: "latest saved live_market_analysis_v3 snapshot is inserted here" },
+  });
+  res.json({
+    version: MARKET_PROMPT_V3_VERSION,
+    sections: [
+      { key: "pillar-summary", label: "Prompt pillars", text: MARKET_PROMPT_V3_PILLAR_SUMMARY },
+      { key: "gemini-core", label: "Gemini extraction core", text: GEMINI_MARKET_EXTRACTION_CORE_PROMPT },
+      { key: "comp-routing", label: "Market comps routing", text: MARKET_COMPS_ROUTING_PROMPT },
+      { key: "special-rules", label: "Document-type special rules", text: GEMINI_MARKET_SPECIAL_RULES_PROMPT },
+      { key: "document-review", label: "GPT individual document review", text: MARKET_DOCUMENT_REVIEW_PROMPT },
+      { key: "document-review-questions", label: "Individual review analysis questions", text: INDIVIDUAL_REVIEW_ANALYSIS_QUESTIONS_PROMPT },
+      { key: "live-review", label: "Live market review", text: LIVE_MARKET_ANALYSIS_PROMPT },
+      { key: "live-review-behavior", label: "Live review required behavior", text: LIVE_MARKET_ANALYSIS_REQUIRED_BEHAVIOR_PROMPT },
+      { key: "full-gemini-template", label: "Full Gemini prompt template", text: geminiTemplate },
+      { key: "full-document-review-template", label: "Full GPT document-review prompt template", text: documentReviewTemplate },
+      { key: "full-live-review-template", label: "Full live-review prompt template", text: liveReviewTemplate },
+    ],
+  });
 });
 
 // Full analyst notes for one document (the ingest log's Notes panel).

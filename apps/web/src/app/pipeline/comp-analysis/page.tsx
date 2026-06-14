@@ -37,6 +37,8 @@ interface MarketComp {
   pricePerUnit: number | null;
   percentSoldPct: number | null;
   psfOnly: boolean;
+  analysisExcluded: boolean;
+  analysisExcludedAt: string | null;
   origin: "broker_package" | "market_doc";
   source: {
     kind: "broker_package" | "market_doc";
@@ -197,6 +199,7 @@ export default function CompAnalysisPage() {
   const [originFilter, setOriginFilter] = useState<OriginFilter>("all");
   const [typeFilter, setTypeFilter] = useState("");
   const [search, setSearch] = useState("");
+  const [exclusionBusyId, setExclusionBusyId] = useState<string | null>(null);
 
   // Review queue: extracted comps awaiting approval before they join the table.
   const [queue, setQueue] = useState<CompReviewQueueResponse | null>(null);
@@ -208,7 +211,7 @@ export default function CompAnalysisPage() {
 
   const loadComps = useCallback((signal?: AbortSignal) => {
     setLoading(true);
-    fetch(`${API_BASE}/api/comps/market`, { credentials: "include", signal })
+    fetch(`${API_BASE}/api/comps/market?include_excluded=1`, { credentials: "include", signal })
       .then(async (res) => {
         const payload = (await res.json().catch(() => ({}))) as MarketCompsResponse & { error?: string };
         if (!res.ok || payload.error) throw new Error(payload.error || `HTTP ${res.status}`);
@@ -315,6 +318,29 @@ export default function CompAnalysisPage() {
     void applyDecisions([item], "approve", { [item.id]: reviewedFieldsFromDraft(draft) });
   }
 
+  async function toggleCompExclusion(comp: MarketComp) {
+    if (exclusionBusyId) return;
+    setExclusionBusyId(comp.itemId);
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/comps/market/${encodeURIComponent(comp.origin)}/${encodeURIComponent(comp.itemId)}/exclusion`,
+        {
+          method: "PATCH",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ excluded: !comp.analysisExcluded, reason: "Excluded from Comp Analysis" }),
+        }
+      );
+      const payload = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok || payload.error) throw new Error(payload.error || `HTTP ${res.status}`);
+      loadComps();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update comp exclusion.");
+    } finally {
+      setExclusionBusyId(null);
+    }
+  }
+
   const typeOptions = useMemo(
     () => [...new Set((data?.comps ?? []).map((comp) => comp.packageType))].sort(),
     [data]
@@ -336,6 +362,7 @@ export default function CompAnalysisPage() {
     }
     // Cap-rate-bearing comps first (highest cap rate leading), PSF-only after.
     return [...all].sort((a, b) => {
+      if (a.analysisExcluded !== b.analysisExcluded) return a.analysisExcluded ? 1 : -1;
       if (a.capRatePct != null && b.capRatePct != null) return b.capRatePct - a.capRatePct;
       if (a.capRatePct != null) return -1;
       if (b.capRatePct != null) return 1;
@@ -712,7 +739,7 @@ export default function CompAnalysisPage() {
               aria-label="Search comps"
             />
             <span className={styles.resultCount}>
-              {rows.length} of {summary.count}
+              {rows.filter((comp) => !comp.analysisExcluded).length} active · {rows.length} shown
             </span>
           </div>
 
@@ -722,6 +749,8 @@ export default function CompAnalysisPage() {
                 <thead>
                   <tr>
                     <th>Comp</th>
+                    <th>Period</th>
+                    <th>Type</th>
                     <th>Cap rate</th>
                     <th>$/PSF</th>
                     <th>Sale price</th>
@@ -731,13 +760,15 @@ export default function CompAnalysisPage() {
                     <th>Year</th>
                     <th>Sold</th>
                     <th>Source</th>
+                    <th>Active</th>
                   </tr>
                 </thead>
                 <tbody>
                   {rows.map((comp) => (
-                    <tr key={comp.itemId}>
+                    <tr key={comp.itemId} className={comp.analysisExcluded ? styles.excludedRow : undefined}>
                       <td className={styles.nameCell}>
                         <span className={styles.compName}>{compName(comp)}</span>
+                        {comp.analysisExcluded ? <Badge tone="warning">excluded</Badge> : null}
                         <div className={styles.compSub}>
                           {[
                             comp.address && comp.propertyName ? comp.address.split(",")[0] : null,
@@ -768,6 +799,12 @@ export default function CompAnalysisPage() {
                           </div>
                         ) : null}
                       </td>
+                      <td>
+                        {comp.source.period ??
+                          comp.saleDate ??
+                          (comp.packageCreatedAt ? new Date(comp.packageCreatedAt).getFullYear() : EMPTY_VALUE)}
+                      </td>
+                      <td>{comp.assetType ? packageTypeLabel(comp.assetType) : packageTypeLabel(comp.packageType)}</td>
                       <td className={styles.capCell} style={{ color: capRateColor(comp.capRatePct) }}>
                         {comp.capRatePct != null ? (
                           fmtPct(comp.capRatePct)
@@ -814,6 +851,20 @@ export default function CompAnalysisPage() {
                             </div>
                           </>
                         )}
+                      </td>
+                      <td>
+                        <Button
+                          size="sm"
+                          variant={comp.analysisExcluded ? "secondary" : "ghost"}
+                          onClick={() => void toggleCompExclusion(comp)}
+                          disabled={exclusionBusyId === comp.itemId}
+                        >
+                          {exclusionBusyId === comp.itemId
+                            ? "Saving…"
+                            : comp.analysisExcluded
+                              ? "Include"
+                              : "Exclude"}
+                        </Button>
                       </td>
                     </tr>
                   ))}

@@ -80,7 +80,7 @@ const SORT_OPTIONS: Array<{ value: UiV2PipelineSortField; label: string }> = [
   { value: "canonicalAddress", label: "Address" },
   { value: "source", label: "Source" },
   { value: "marketType", label: "Type" },
-  { value: "status", label: "Status" },
+  { value: "status", label: "Stage" },
   { value: "omStatus", label: "OM" },
   { value: "listedAt", label: "Date Listed" },
   { value: "createdAt", label: "Date Added" },
@@ -100,6 +100,8 @@ const MARKET_TYPE_OPTIONS: Array<{ value: UiV2MarketType; label: string }> = [
   { value: "off_market", label: "Off Market" },
   { value: "unknown", label: "Unknown" },
 ];
+
+const PIPELINE_PAGE_SIZE_OPTIONS = ["25", "50", "100", "all"] as const;
 
 const COMMON_PIPELINE_TAGS = [
   "high_priority",
@@ -1323,11 +1325,12 @@ function buildPipelineQueryString(queryString: string): string {
     "maxAskingPrice",
     "minLtrYoc",
     "includeRejected",
+    "limit",
   ]) {
     const value = incoming.get(key);
     if (value) outgoing.set(key, value);
   }
-  outgoing.set("limit", "100");
+  if (!outgoing.get("limit")) outgoing.set("limit", "100");
   return outgoing.toString();
 }
 
@@ -1489,6 +1492,7 @@ export default function PipelineClient() {
       sort: (searchParams.get("sort") ?? searchParams.get("sortBy") ?? "updatedAt") as UiV2PipelineSortField,
       sortDirection: (searchParams.get("sortDirection") ?? searchParams.get("direction") ?? "desc") as SortDirection,
       includeRejected: searchParams.get("includeRejected") === "true",
+      limit: searchParams.get("limit") ?? "100",
     }),
     [searchParams]
   );
@@ -3967,7 +3971,7 @@ export default function PipelineClient() {
           />
         </label>
         <label>
-          <span>Status</span>
+          <span>Stage</span>
           <select value={filterValues.status} onChange={onFilterChange("status")}>
             <option value="">All active</option>
             {UI_V2_PIPELINE_STATUS_OPTIONS.map((option) => (
@@ -4106,14 +4110,6 @@ export default function PipelineClient() {
           <button
             className={styles.secondaryButton}
             type="button"
-            disabled={selectedIds.length === 0 || busyAction?.startsWith("bulk:")}
-            onClick={refreshSelectedEnrichment}
-          >
-            {busyAction === "bulk:refresh" ? "Refreshing..." : "Refresh latest + rental"}
-          </button>
-          <button
-            className={styles.secondaryButton}
-            type="button"
             title="Re-run ONLY the broker contact lookup (directory + web search) for the selection. Skips properties that already have a sendable email."
             disabled={selectedIds.length === 0 || busyAction?.startsWith("bulk:")}
             onClick={refreshSelectedBrokerContacts}
@@ -4243,9 +4239,6 @@ export default function PipelineClient() {
               {showColumn("source") ? <th>{renderHeader("source", "Source")}</th> : null}
               {showColumn("propertyType") ? <th>{renderHeader("propertyType", "Property Type")}</th> : null}
               {showColumn("marketType") ? <th>{renderHeader("marketType", "Market")}</th> : null}
-              {showColumn("listedAt") ? <th>{renderHeader("listedAt", "Date Listed")}</th> : null}
-              {showColumn("createdAt") ? <th>{renderHeader("createdAt", "Date Added")}</th> : null}
-              {showColumn("updatedAt") ? <th>{renderHeader("updatedAt", "Updated")}</th> : null}
               {showColumn("ask") ? <th>{renderHeader("askingPrice", "Ask")}</th> : null}
               {showColumn("psf") ? <th>{renderHeader("pricePerSqft", "$/SF")}</th> : null}
               {showColumn("yocLtr") ? <th>{renderHeader("ltrYocPct", "YoC LTR")}</th> : null}
@@ -4253,10 +4246,12 @@ export default function PipelineClient() {
               {showColumn("units") ? <th>{renderHeader("units", "Units")}</th> : null}
               {showColumn("sqft") ? <th>{renderHeader("buildingSqft", "SF")}</th> : null}
               {showColumn("score") ? <th>{renderHeader("dealScore", "Score")}</th> : null}
-              {showColumn("status") ? <th>{renderHeader("status", "Status")}</th> : null}
               {showColumn("tracker") ? <th>{renderHeader("om", "Tracker")}</th> : null}
               {showColumn("enrich") ? <th>{renderHeader("enrichment", "Enrich")}</th> : null}
               {showColumn("flow") ? <th>{renderHeader("flow", "Flow")}</th> : null}
+              {showColumn("listedAt") ? <th>{renderHeader("listedAt", "Date Listed")}</th> : null}
+              {showColumn("createdAt") ? <th>{renderHeader("createdAt", "Date Added")}</th> : null}
+              {showColumn("updatedAt") ? <th>{renderHeader("updatedAt", "Updated")}</th> : null}
               {showColumn("tags") ? <th>{renderHeader("tags", "Tags")}</th> : null}
               <th>{renderHeader("actions", "Action")}</th>
             </tr>
@@ -4367,18 +4362,6 @@ export default function PipelineClient() {
                       </select>
                     </td>
                   ) : null}
-                  {showColumn("listedAt") ? (
-                    <td className={styles.dateCell}>{formatDate(row.listedAt)}</td>
-                  ) : null}
-                  {showColumn("createdAt") ? (
-                    <td className={styles.dateCell}>
-                      <strong>{formatDate(row.createdAt)}</strong>
-                      {rowIsNew ? <span className={styles.newBadge} title={newBadgeTitle(row)}>New</span> : null}
-                    </td>
-                  ) : null}
-                  {showColumn("updatedAt") ? (
-                    <td className={styles.dateCell}>{formatDate(row.updatedAt)}</td>
-                  ) : null}
                   {showColumn("ask") ? (
                     <td className={cx(styles.numericCell, styles.askCell)}>
                       <strong>{formatCurrency(row.askingPrice)}</strong>
@@ -4430,24 +4413,6 @@ export default function PipelineClient() {
                       </span>
                     </td>
                   ) : null}
-                  {showColumn("status") ? (
-                    <td onClick={stopRowClick}>
-                      <select
-                        className={`${styles.statusSelect} ${statusToneClass(row.statusChip.tone)}`}
-                        value={status}
-                        disabled={!row.statusChip.editable || busyAction === `${row.propertyId}:status`}
-                        onChange={(event) =>
-                          updateStatus(row.propertyId, event.target.value as UiV2PipelineStatus, "pipeline_table", event.currentTarget)
-                        }
-                      >
-                        {UI_V2_PIPELINE_STATUS_OPTIONS.map((option) => (
-                          <option key={option.status} value={option.status}>
-                            {option.label}
-                          </option>
-                        ))}
-                      </select>
-                    </td>
-                  ) : null}
                   {showColumn("tracker") ? (
                     <td className={styles.trackerCell}>
                       <div className={styles.trackerGroup} aria-label={`Tracker for ${row.displayAddress ?? row.canonicalAddress}`}>
@@ -4472,6 +4437,18 @@ export default function PipelineClient() {
                   ) : null}
                   {showColumn("flow") ? (
                     <td>{flowLabel(row)}</td>
+                  ) : null}
+                  {showColumn("listedAt") ? (
+                    <td className={styles.dateCell}>{formatDate(row.listedAt)}</td>
+                  ) : null}
+                  {showColumn("createdAt") ? (
+                    <td className={styles.dateCell}>
+                      <strong>{formatDate(row.createdAt)}</strong>
+                      {rowIsNew ? <span className={styles.newBadge} title={newBadgeTitle(row)}>New</span> : null}
+                    </td>
+                  ) : null}
+                  {showColumn("updatedAt") ? (
+                    <td className={styles.dateCell}>{formatDate(row.updatedAt)}</td>
                   ) : null}
                   {showColumn("tags") ? (
                     <td className={styles.tagsCell}>
@@ -4514,6 +4491,28 @@ export default function PipelineClient() {
         {!loading && rows.length === 0 ? <div className={styles.emptyState}>No properties match the current filters.</div> : null}
         {loading ? <div className={styles.tableOverlay}>Loading pipeline...</div> : null}
       </section>
+
+      <div className={styles.tableFooter}>
+        <span>
+          Showing {rows.length.toLocaleString("en-US")} of {total.toLocaleString("en-US")} matching properties
+        </span>
+        <label className={styles.pageSizeControl}>
+          <span>Rows</span>
+          <select
+            value={
+              PIPELINE_PAGE_SIZE_OPTIONS.includes(filterValues.limit as (typeof PIPELINE_PAGE_SIZE_OPTIONS)[number])
+                ? filterValues.limit
+                : "100"
+            }
+            onChange={(event) => replaceQueryParams({ limit: event.target.value })}
+          >
+            <option value="25">25</option>
+            <option value="50">50</option>
+            <option value="100">100</option>
+            <option value="all">All</option>
+          </select>
+        </label>
+      </div>
 
       {rowMenu && rowMenuRow ? renderRowActionPopover(rowMenuRow) : null}
 

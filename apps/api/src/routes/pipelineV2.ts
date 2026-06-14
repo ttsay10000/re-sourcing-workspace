@@ -94,7 +94,7 @@ import { resolvePreferredOmUnitCount } from "../om/authoritativeOm.js";
 const router = Router();
 
 const DEFAULT_LIMIT = 50;
-const MAX_LIMIT = 500;
+const MAX_LIMIT = 5000;
 const MANUAL_NEWNESS_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 const UI_V2_STATUSES = new Set<UiV2PipelineStatus>([
@@ -520,6 +520,8 @@ function parseNumberQuery(value: unknown): number | undefined {
 }
 
 function parseLimit(value: unknown): number {
+  const raw = firstQueryValue(value)?.toLowerCase();
+  if (raw === "all") return MAX_LIMIT;
   const parsed = parseNumberQuery(value);
   if (parsed == null) return DEFAULT_LIMIT;
   return Math.min(MAX_LIMIT, Math.max(1, Math.floor(parsed)));

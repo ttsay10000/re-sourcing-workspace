@@ -70,17 +70,17 @@ const reports = new Map<string, MarketDocIngestReport>();
 async function ingestAll(target: InMemoryMarketContextStore, llm: MarketLlmRunner, fixtures = ALL_FIXTURES) {
   const out = new Map<string, MarketDocIngestReport>();
   for (const doc of fixtures) {
-    out.set(
-      doc.id,
-      await ingestMarketDocument({
-        filename: doc.filename,
-        contentType: "text/plain",
-        buffer: Buffer.from(doc.text, "utf-8"),
-        store: target,
-        llm,
-        asOf: FIXTURE_AS_OF,
-      })
-    );
+    const report = await ingestMarketDocument({
+      filename: doc.filename,
+      contentType: "text/plain",
+      buffer: Buffer.from(doc.text, "utf-8"),
+      store: target,
+      llm,
+      asOf: FIXTURE_AS_OF,
+    });
+    out.set(doc.id, report);
+    const fixtureCompIds = target.comps.filter((comp) => comp.documentId === report.documentId).map((comp) => comp.id);
+    if (fixtureCompIds.length > 0) await target.setCompReviewStatus(fixtureCompIds, "approved");
   }
   return out;
 }

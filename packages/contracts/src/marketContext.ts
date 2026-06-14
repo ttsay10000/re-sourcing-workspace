@@ -159,6 +159,8 @@ export interface MarketComp {
   lng: number | null;
   reviewStatus: MarketCompReviewStatus;
   reviewedAt: string | null;
+  analysisExcludedAt: string | null;
+  analysisExcludedReason: string | null;
   createdAt: string;
 }
 

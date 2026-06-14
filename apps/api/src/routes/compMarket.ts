@@ -23,6 +23,8 @@ import { Router, type Request, type Response } from "express";
 import { getPool, MarketCompRepo } from "@re-sourcing/db";
 import { resolveBBLFromAddress } from "../enrichment/geoclient.js";
 import { stripUnitFromAddressLine } from "../enrichment/resolvePropertyBBL.js";
+import { resynthesizeNeighborhoods } from "../marketContext/ingestMarketDocument.js";
+import { PgMarketContextStore } from "../marketContext/store.js";
 
 const router = Router();
 
@@ -71,6 +73,8 @@ export interface MarketCompRow {
   confidence: number | null;
   reviewStatus: string;
   selectionDecision: string | null;
+  analysisExcluded: boolean;
+  analysisExcludedAt: string | null;
   origin: MarketCompOrigin;
   source: MarketCompSource;
   assetType: string | null;
@@ -188,6 +192,7 @@ router.get("/comps/market", async (req: Request, res: Response) => {
   const shouldGeocode = req.query.geocode === "1" || req.query.geocode === "true";
   const origin =
     req.query.origin === "broker" ? "broker_package" : req.query.origin === "market_doc" ? "market_doc" : "all";
+  const includeExcluded = req.query.include_excluded === "1" || req.query.includeExcluded === "true";
 
   try {
     const pool = getPool();
@@ -223,7 +228,7 @@ router.get("/comps/market", async (req: Request, res: Response) => {
          INNER JOIN properties p ON p.id = i.property_id
          WHERE i.item_type IN ('sale_comp', 'pricing_comp')
            AND i.review_status IN ('accepted', 'edited')
-           AND (i.selection_decision IS NULL OR i.selection_decision IN ('include', 'watch'))
+           ${includeExcluded ? "" : "AND (i.selection_decision IS NULL OR i.selection_decision IN ('include', 'watch'))"}
            AND pkg.status IN ('approved', 'needs_review', 'extracted', 'classified')
          ORDER BY pkg.created_at DESC, i.created_at DESC
          LIMIT $1`,
@@ -266,6 +271,8 @@ router.get("/comps/market", async (req: Request, res: Response) => {
           confidence: toNumber(row.confidence),
           reviewStatus: String(row.review_status),
           selectionDecision: (row.selection_decision as string | null) ?? null,
+          analysisExcluded: row.selection_decision === "exclude",
+          analysisExcludedAt: null,
           origin: "broker_package",
           source: {
             kind: "broker_package",
@@ -294,7 +301,7 @@ router.get("/comps/market", async (req: Request, res: Response) => {
       // Deals extracted from market documents (research reports, OMs, comp
       // lists) that the user approved in the review queue. Subject properties
       // never count as comps; asking-price rows keep their priceType label.
-      const docRows = await new MarketCompRepo({ pool }).listApprovedWithDocuments(limit);
+      const docRows = await new MarketCompRepo({ pool }).listApprovedWithDocuments(limit, includeExcluded);
       for (const { comp: docComp, document } of docRows) {
         const capRatePct = docComp.capRate != null ? docComp.capRate * 100 : null;
         const publisher = document?.publisher ?? docComp.provenance.publisher;
@@ -329,6 +336,8 @@ router.get("/comps/market", async (req: Request, res: Response) => {
           confidence: null,
           reviewStatus: docComp.reviewStatus,
           selectionDecision: null,
+          analysisExcluded: docComp.analysisExcludedAt != null,
+          analysisExcludedAt: docComp.analysisExcludedAt,
           origin: "market_doc",
           source: {
             kind: "market_doc",
@@ -428,20 +437,21 @@ router.get("/comps/market", async (req: Request, res: Response) => {
     comps.sort((a, b) => (b.packageCreatedAt ?? "").localeCompare(a.packageCreatedAt ?? ""));
     // Each origin queried up to `limit` rows; honor the contract on the union too.
     if (comps.length > limit) comps.length = limit;
-    const capRates = comps.map((comp) => comp.capRatePct).filter((value): value is number => value != null);
-    const psfs = comps.map((comp) => comp.pricePsf).filter((value): value is number => value != null);
+    const activeComps = comps.filter((comp) => !comp.analysisExcluded);
+    const capRates = activeComps.map((comp) => comp.capRatePct).filter((value): value is number => value != null);
+    const psfs = activeComps.map((comp) => comp.pricePsf).filter((value): value is number => value != null);
     res.json({
       comps,
       summary: {
-        count: comps.length,
+        count: activeComps.length,
         withCapRate: capRates.length,
-        psfOnly: comps.filter((comp) => comp.psfOnly).length,
-        withCoordinates: comps.filter((comp) => comp.lat != null && comp.lng != null).length,
+        psfOnly: activeComps.filter((comp) => comp.psfOnly).length,
+        withCoordinates: activeComps.filter((comp) => comp.lat != null && comp.lng != null).length,
         medianCapRatePct: median(capRates),
         medianPricePsf: median(psfs),
         originCounts: {
-          broker: comps.filter((comp) => comp.origin === "broker_package").length,
-          marketDoc: comps.filter((comp) => comp.origin === "market_doc").length,
+          broker: activeComps.filter((comp) => comp.origin === "broker_package").length,
+          marketDoc: activeComps.filter((comp) => comp.origin === "market_doc").length,
         },
       },
     });
@@ -454,6 +464,55 @@ router.get("/comps/market", async (req: Request, res: Response) => {
         ? " The database schema is behind — run `npm run db:migrate` (migration 059 adds comp_address_geocodes)."
         : "";
     res.status(500).json({ error: `Failed to load market comps.${migrationHint}`, details: message });
+  }
+});
+
+router.patch("/comps/market/:origin/:id/exclusion", async (req: Request, res: Response) => {
+  const origin = req.params.origin;
+  const id = req.params.id;
+  const excluded = req.body?.excluded === true;
+  const reason = typeof req.body?.reason === "string" && req.body.reason.trim() ? req.body.reason.trim().slice(0, 500) : null;
+  if (origin !== "broker_package" && origin !== "market_doc") {
+    res.status(400).json({ error: "origin must be broker_package or market_doc." });
+    return;
+  }
+  try {
+    const pool = getPool();
+    if (origin === "broker_package") {
+      const result = await pool.query(
+        `UPDATE broker_comp_extracted_items
+         SET selection_decision = $2,
+             include_in_dossier = CASE WHEN $2 = 'exclude' THEN false ELSE true END,
+             updated_at = now()
+         WHERE id = $1::uuid AND item_type IN ('sale_comp', 'pricing_comp')
+         RETURNING id`,
+        [id, excluded ? "exclude" : "include"]
+      );
+      if ((result.rowCount ?? 0) === 0) {
+        res.status(404).json({ error: "Broker comp not found.", itemId: id });
+        return;
+      }
+      res.json({ ok: true, itemId: id, excluded });
+      return;
+    }
+
+    const affected = await new MarketCompRepo({ pool }).setAnalysisExcluded([id], excluded, reason);
+    if (affected.length === 0) {
+      res.status(404).json({ error: "Market-doc comp not found.", itemId: id });
+      return;
+    }
+    const neighborhoodIds = [...new Set(affected.map((row) => row.neighborhoodId).filter((value): value is string => value != null))];
+    await resynthesizeNeighborhoods({
+      neighborhoodIds,
+      store: new PgMarketContextStore(pool),
+      llm: null,
+      documentId: null,
+    });
+    res.json({ ok: true, itemId: id, excluded, resynthesizedNeighborhoods: neighborhoodIds });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[comp market exclusion]", err);
+    res.status(503).json({ error: "Failed to update comp exclusion.", details: message });
   }
 });
 

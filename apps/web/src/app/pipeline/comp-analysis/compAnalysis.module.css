@@ -156,6 +156,15 @@
   background: var(--brand-soft);
 }
 
+.excludedRow {
+  background: #fff7ed;
+  opacity: 0.78;
+}
+
+.excludedRow:hover {
+  background: #ffedd5;
+}
+
 .nameCell {
   min-width: 180px;
   padding-right: 0.5rem;

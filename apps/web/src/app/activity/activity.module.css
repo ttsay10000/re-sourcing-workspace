@@ -145,6 +145,43 @@
   overflow-wrap: anywhere;
 }
 
+.runStepList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.15rem;
+}
+
+.runStepChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  max-width: 100%;
+  border: 1px solid var(--app-line);
+  border-radius: var(--radius-pill);
+  background: var(--app-surface-subtle);
+  color: var(--app-ink-secondary);
+  padding: 0.18rem 0.48rem;
+  font-size: var(--text-2xs);
+  line-height: 1.35;
+  white-space: nowrap;
+}
+
+.runStepChip strong {
+  color: var(--app-ink);
+  font-weight: 750;
+}
+
+.runStepChipWarn {
+  border-color: var(--app-amber-border);
+  background: var(--app-amber-soft);
+  color: var(--app-amber-text);
+}
+
+.runStepChipWarn strong {
+  color: var(--app-amber-text);
+}
+
 .eventLink {
   justify-self: start;
   color: var(--app-blue);

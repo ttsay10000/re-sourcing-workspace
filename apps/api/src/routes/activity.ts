@@ -10,6 +10,15 @@ import { getPool } from "@re-sourcing/db";
 
 const router = Router();
 
+type ActivityRunStep = {
+  label?: unknown;
+  status?: unknown;
+  totalItems?: unknown;
+  completedItems?: unknown;
+  failedItems?: unknown;
+  skippedItems?: unknown;
+};
+
 export interface ActivityFeedItem {
   /** "event" = property_pipeline_events row, "run" = workflow_runs row. */
   kind: "event" | "run";
@@ -24,6 +33,14 @@ export interface ActivityFeedItem {
   propertyId: string | null;
   address: string | null;
   createdAt: string;
+  runSteps?: Array<{
+    label: string;
+    status: string | null;
+    totalItems: number;
+    completedItems: number;
+    failedItems: number;
+    skippedItems: number;
+  }>;
 }
 
 function csvParam(value: unknown): string[] {
@@ -83,7 +100,8 @@ router.get("/ui-v2/activity", async (req: Request, res: Response) => {
            NULL::text AS status,
            e.property_id::text AS property_id,
            p.canonical_address AS address,
-           e.created_at
+           e.created_at,
+           NULL::jsonb AS run_steps
          FROM property_pipeline_events e
          JOIN properties p ON p.id = e.property_id
          UNION ALL
@@ -98,7 +116,22 @@ router.get("/ui-v2/activity", async (req: Request, res: Response) => {
            r.status,
            NULL::text AS property_id,
            NULL::text AS address,
-           r.started_at AS created_at
+           r.started_at AS created_at,
+           COALESCE((
+             SELECT jsonb_agg(
+               jsonb_build_object(
+                 'label', s.step_label,
+                 'status', s.status,
+                 'totalItems', s.total_items,
+                 'completedItems', s.completed_items,
+                 'failedItems', s.failed_items,
+                 'skippedItems', s.skipped_items
+               )
+               ORDER BY s.sort_order
+             )
+             FROM workflow_run_steps s
+             WHERE s.run_id = r.id
+           ), '[]'::jsonb) AS run_steps
          FROM workflow_runs r
        ) feed
        WHERE ${predicates.join(" AND ")}
@@ -120,6 +153,17 @@ router.get("/ui-v2/activity", async (req: Request, res: Response) => {
       address: (row.address as string | null) ?? null,
       createdAt:
         row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at ?? ""),
+      runSteps:
+        row.kind === "run" && Array.isArray(row.run_steps)
+          ? row.run_steps.map((step: ActivityRunStep) => ({
+              label: String(step?.label ?? "Stage"),
+              status: typeof step?.status === "string" ? step.status : null,
+              totalItems: Number(step?.totalItems ?? 0),
+              completedItems: Number(step?.completedItems ?? 0),
+              failedItems: Number(step?.failedItems ?? 0),
+              skippedItems: Number(step?.skippedItems ?? 0),
+            }))
+          : undefined,
     }));
     const nextBefore = items.length === limit ? items[items.length - 1]!.createdAt : null;
     res.json({ items, nextBefore });

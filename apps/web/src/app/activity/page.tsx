@@ -25,6 +25,14 @@ type ActivityItem = {
   propertyId: string | null;
   address: string | null;
   createdAt: string;
+  runSteps?: Array<{
+    label: string;
+    status: string | null;
+    totalItems: number;
+    completedItems: number;
+    failedItems: number;
+    skippedItems: number;
+  }>;
 };
 
 type ActivityResponse = {
@@ -101,6 +109,15 @@ function statusBadgeTone(status: string | null): BadgeTone {
     default:
       return "neutral";
   }
+}
+
+function runStepCounter(step: NonNullable<ActivityItem["runSteps"]>[number]): string {
+  const done = step.completedItems + step.failedItems + step.skippedItems;
+  const parts = [`${done}/${step.totalItems || done} processed`];
+  if (step.completedItems) parts.push(`${step.completedItems} ok`);
+  if (step.failedItems) parts.push(`${step.failedItems} failed`);
+  if (step.skippedItems) parts.push(`${step.skippedItems} skipped`);
+  return parts.join(" · ");
 }
 
 export default function ActivityPage() {
@@ -264,6 +281,20 @@ export default function ActivityPage() {
                         ) : null}
                       </div>
                       {item.body ? <span className={styles.eventBodyText}>{item.body}</span> : null}
+                      {item.kind === "run" && item.runSteps?.length ? (
+                        <div className={styles.runStepList} aria-label="Run stage counters">
+                          {item.runSteps.map((step) => (
+                            <span
+                              key={`${item.id}-${step.label}`}
+                              className={`${styles.runStepChip} ${step.failedItems > 0 ? styles.runStepChipWarn : ""}`}
+                              title={runStepCounter(step)}
+                            >
+                              <strong>{step.label}</strong>
+                              <span>{runStepCounter(step)}</span>
+                            </span>
+                          ))}
+                        </div>
+                      ) : null}
                       {item.propertyId ? (
                         <Link
                           href={`/pipeline?propertyId=${encodeURIComponent(item.propertyId)}`}
