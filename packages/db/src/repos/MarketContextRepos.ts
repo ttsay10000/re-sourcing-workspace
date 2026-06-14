@@ -110,9 +110,11 @@ function mapMarketComp(row: Row): MarketComp {
     saleDate: dateOnly(row.sale_date),
     gsf: num(row.gsf),
     pricePsf: num(row.price_psf),
+    pricePerUnit: num(row.price_per_unit),
     unitsTotal: int(row.units_total),
     unitsResi: int(row.units_resi),
     pctRentStabilized: num(row.pct_rent_stabilized),
+    noi: num(row.noi),
     capRate: num(row.cap_rate),
     grm: num(row.grm),
     assetType: str(row.asset_type) as MarketComp["assetType"],
@@ -174,6 +176,8 @@ function mapNeighborhoodSummary(row: Row): NeighborhoodSummary & { topComps: Mar
     topComps: jsonArray<MarketComp>(row.top_comps).map((comp) => ({
       ...comp,
       grm: comp.grm ?? null,
+      noi: comp.noi ?? null,
+      pricePerUnit: comp.pricePerUnit ?? null,
       buyer: comp.buyer ?? null,
       seller: comp.seller ?? null,
       saleConditions: comp.saleConditions ?? [],
@@ -362,9 +366,11 @@ export interface UpsertMarketCompParams {
   saleDate: string | null;
   gsf: number | null;
   pricePsf: number | null;
+  pricePerUnit: number | null;
   unitsTotal: number | null;
   unitsResi: number | null;
   pctRentStabilized: number | null;
+  noi: number | null;
   capRate: number | null;
   grm: number | null;
   assetType: MarketComp["assetType"];
@@ -429,7 +435,7 @@ export class MarketCompRepo {
   private static readonly COLUMN_NAMES = [
     "id", "document_id", "address", "address_normalized", "neighborhood_raw",
     "neighborhood_id", "borough", "sale_price", "price_type", "sale_date", "gsf", "price_psf",
-    "units_total", "units_resi", "pct_rent_stabilized", "cap_rate", "grm", "asset_type",
+    "price_per_unit", "units_total", "units_resi", "pct_rent_stabilized", "noi", "cap_rate", "grm", "asset_type",
     "buyer", "seller", "sale_conditions", "notes_short",
     "cherry_pick_risk", "is_subject_property", "confidence", "raw_text", "provenance",
     "provenance_list", "lat", "lng", "review_status", "reviewed_at", "created_at",
@@ -444,12 +450,12 @@ export class MarketCompRepo {
   async insert(params: UpsertMarketCompParams): Promise<MarketComp> {
     const r = await this.client.query(
       `INSERT INTO market_comps (document_id, address, address_normalized, neighborhood_raw,
-         neighborhood_id, borough, sale_price, price_type, sale_date, gsf, price_psf, units_total,
-         units_resi, pct_rent_stabilized, cap_rate, grm, asset_type, buyer, seller, sale_conditions,
+         neighborhood_id, borough, sale_price, price_type, sale_date, gsf, price_psf, price_per_unit,
+         units_total, units_resi, pct_rent_stabilized, noi, cap_rate, grm, asset_type, buyer, seller, sale_conditions,
          notes_short, cherry_pick_risk, is_subject_property, confidence, raw_text, provenance,
          provenance_list, lat, lng)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20::jsonb,
-               $21,$22,$23,$24,$25,$26::jsonb,$27::jsonb,$28,$29)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22::jsonb,
+               $23,$24,$25,$26,$27,$28::jsonb,$29::jsonb,$30,$31)
        RETURNING ${MarketCompRepo.COLUMNS}`,
       [
         params.documentId,
@@ -463,9 +469,11 @@ export class MarketCompRepo {
         params.saleDate,
         params.gsf,
         params.pricePsf,
+        params.pricePerUnit,
         params.unitsTotal,
         params.unitsResi,
         params.pctRentStabilized,
+        params.noi,
         params.capRate,
         params.grm,
         params.assetType,
@@ -491,10 +499,10 @@ export class MarketCompRepo {
     const r = await this.client.query(
       `UPDATE market_comps SET document_id=$2, address=$3, address_normalized=$4, neighborhood_raw=$5,
          neighborhood_id=$6, borough=$7, sale_price=$8, price_type=$9, sale_date=$10, gsf=$11,
-         price_psf=$12, units_total=$13, units_resi=$14, pct_rent_stabilized=$15, cap_rate=$16,
-         grm=$17, asset_type=$18, buyer=$19, seller=$20, sale_conditions=$21::jsonb, notes_short=$22,
-         cherry_pick_risk=$23, is_subject_property=$24, confidence=$25, raw_text=$26,
-         provenance=$27::jsonb, provenance_list=$28::jsonb, lat=$29, lng=$30, updated_at=now()
+         price_psf=$12, price_per_unit=$13, units_total=$14, units_resi=$15, pct_rent_stabilized=$16,
+         noi=$17, cap_rate=$18, grm=$19, asset_type=$20, buyer=$21, seller=$22, sale_conditions=$23::jsonb,
+         notes_short=$24, cherry_pick_risk=$25, is_subject_property=$26, confidence=$27, raw_text=$28,
+         provenance=$29::jsonb, provenance_list=$30::jsonb, lat=$31, lng=$32, updated_at=now()
        WHERE id = $1
        RETURNING ${MarketCompRepo.COLUMNS}`,
       [
@@ -510,9 +518,11 @@ export class MarketCompRepo {
         params.saleDate,
         params.gsf,
         params.pricePsf,
+        params.pricePerUnit,
         params.unitsTotal,
         params.unitsResi,
         params.pctRentStabilized,
+        params.noi,
         params.capRate,
         params.grm,
         params.assetType,
@@ -549,17 +559,19 @@ export class MarketCompRepo {
   }
 
   /**
-   * Rollup feed: rejected comps are out (user said the extraction is wrong, or
-   * the source document was removed — exclusion rejects its uncorroborated
-   * comps). Pending comps still count so map fills stay live at ingest time;
-   * the review gate applies to the Comp Analysis / comp-pin surfaces instead.
+   * Rollup feed: only analyst-approved comps count. Pending rows remain in the
+   * review queue until a human verifies the extraction; rejected rows and rows
+   * from excluded documents stay out of medians/map fills.
    */
   async listByNeighborhoods(neighborhoodIds: string[]): Promise<MarketComp[]> {
     if (neighborhoodIds.length === 0) return [];
     const r = await this.client.query(
-      `SELECT ${MarketCompRepo.COLUMNS} FROM market_comps
-       WHERE neighborhood_id = ANY($1) AND review_status != 'rejected'
-       ORDER BY sale_date DESC NULLS LAST`,
+      `SELECT ${MarketCompRepo.prefixedColumns("c")} FROM market_comps c
+       LEFT JOIN market_documents d ON d.id = c.document_id
+       WHERE c.neighborhood_id = ANY($1)
+         AND c.review_status = 'approved'
+         AND (c.document_id IS NULL OR d.excluded_at IS NULL)
+       ORDER BY c.sale_date DESC NULLS LAST`,
       [neighborhoodIds]
     );
     return r.rows.map((row: Row) => mapMarketComp(row));
@@ -593,7 +605,9 @@ export class MarketCompRepo {
               d.source_type AS doc_source_type, d.document_class AS doc_document_class
        FROM market_comps c
        LEFT JOIN market_documents d ON d.id::text = c.provenance->>'document_id'
-       WHERE c.review_status = 'approved' AND c.is_subject_property = false
+       WHERE c.review_status = 'approved'
+         AND c.is_subject_property = false
+         AND (d.id IS NULL OR d.excluded_at IS NULL)
        ORDER BY c.sale_date DESC NULLS LAST, c.created_at DESC
        LIMIT $1`,
       [Math.max(1, Math.min(limit, 2000))]
@@ -679,9 +693,11 @@ export class MarketCompRepo {
       where.push(`review_status = $${values.length}`);
     }
     values.push(Math.max(1, Math.min(filters.limit ?? 500, 2000)));
-    const sql = `SELECT ${MarketCompRepo.COLUMNS} FROM market_comps
-      ${where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""}
-      ORDER BY sale_date DESC NULLS LAST, created_at DESC
+    const sql = `SELECT ${MarketCompRepo.prefixedColumns("c")} FROM market_comps c
+      LEFT JOIN market_documents d ON d.id = c.document_id
+      ${where.length > 0 ? `WHERE ${where.join(" AND ")} AND ` : "WHERE "}
+      (c.document_id IS NULL OR d.excluded_at IS NULL)
+      ORDER BY c.sale_date DESC NULLS LAST, c.created_at DESC
       LIMIT $${values.length}`;
     const r = await this.client.query(sql, values);
     return r.rows.map((row: Row) => mapMarketComp(row));

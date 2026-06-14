@@ -6,7 +6,7 @@
  */
 import { beforeAll, describe, expect, it } from "vitest";
 import type { MarketComp, MarketDocIngestReport } from "@re-sourcing/contracts";
-import { ingestMarketDocument } from "./ingestMarketDocument.js";
+import { ingestMarketDocument, resynthesizeNeighborhoods } from "./ingestMarketDocument.js";
 import { InMemoryMarketContextStore } from "./store.js";
 import { FIXTURE_AS_OF, MARKET_DOC_FIXTURES, fixtureLlmRunner } from "./fixtures.js";
 import { loadSeedNeighborhoods } from "./seedNeighborhoods.js";
@@ -40,6 +40,16 @@ beforeAll(async () => {
     });
     reports.set(doc.id, report);
   }
+  await store.setCompReviewStatus(store.comps.map((comp) => comp.id), "approved");
+  await resynthesizeNeighborhoods({
+    neighborhoodIds: [
+      ...new Set(store.comps.map((comp) => comp.neighborhoodId).filter((id): id is string => id != null)),
+    ],
+    store,
+    llm: fixtureLlmRunner(),
+    documentId: null,
+    asOf: FIXTURE_AS_OF,
+  });
 });
 
 describe("acceptance 1 — Avison Young Monthly Jan–Feb 2026", () => {

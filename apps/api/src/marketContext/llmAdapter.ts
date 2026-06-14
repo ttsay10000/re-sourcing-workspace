@@ -12,7 +12,7 @@
 import https from "node:https";
 import { URL } from "node:url";
 import OpenAI from "openai";
-import { getOmAnalysisModel, getOmAnalysisReasoningEffort, supportsReasoningEffort } from "../enrichment/openaiModels.js";
+import { getMarketAnalysisModel, getMarketAnalysisReasoningEffort, supportsReasoningEffort } from "../enrichment/openaiModels.js";
 import { parseCompletionJsonContent } from "../om/omAnalysisShared.js";
 import { DEFAULT_GEMINI_OM_MODEL } from "../om/extractOmAnalysisFromGeminiPdfOnly.js";
 
@@ -76,7 +76,7 @@ function resolveGeminiModel(): string {
 }
 
 function resolveOpenAiModel(): string {
-  return process.env.MARKET_LLM_OPENAI_MODEL?.trim() || getOmAnalysisModel();
+  return process.env.MARKET_LLM_OPENAI_MODEL?.trim() || getMarketAnalysisModel();
 }
 
 function withDocumentText(prompt: string, documentText: string | null | undefined): string {
@@ -188,7 +188,7 @@ async function runOpenAi(request: MarketLlmRequest): Promise<MarketLlmResult> {
   }
   const openai = new OpenAI({ apiKey });
   const prompt = withDocumentText(request.prompt, request.documentText);
-  const reasoningEffort = getOmAnalysisReasoningEffort();
+  const reasoningEffort = getMarketAnalysisReasoningEffort();
 
   try {
     const completion = await openai.chat.completions.create({

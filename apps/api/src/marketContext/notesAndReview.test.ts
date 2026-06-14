@@ -50,16 +50,19 @@ describe("comp review gate in the ingest pipeline", () => {
     expect(store.comps.every((comp) => comp.reviewStatus === "pending")).toBe(true);
   });
 
-  it("pending comps still feed neighborhood rollups; rejected ones drop out", async () => {
+  it("pending comps stay out of rollups until approved; rejected ones stay out", async () => {
     const nolita = store.comps.filter((comp) => comp.neighborhoodId === "nolita");
     expect(nolita.length).toBeGreaterThanOrEqual(3);
     const before = await store.listCompsByNeighborhoods(["nolita"]);
-    expect(before.length).toBe(nolita.length);
+    expect(before.length).toBe(0);
+
+    await store.setCompReviewStatus([nolita[0].id], "approved");
+    const approved = await store.listCompsByNeighborhoods(["nolita"]);
+    expect(approved.map((comp) => comp.id)).toEqual([nolita[0].id]);
 
     await store.setCompReviewStatus([nolita[0].id], "rejected");
-    const after = await store.listCompsByNeighborhoods(["nolita"]);
-    expect(after.length).toBe(nolita.length - 1);
-    await store.setCompReviewStatus([nolita[0].id], "pending");
+    const rejected = await store.listCompsByNeighborhoods(["nolita"]);
+    expect(rejected.length).toBe(0);
   });
 
   it("a dedupe merge keeps the existing review decision, except rejected reopens as pending", async () => {

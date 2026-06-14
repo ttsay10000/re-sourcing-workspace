@@ -13,7 +13,7 @@ import type {
   MarketProvenance,
   MarketSaleCondition,
 } from "@re-sourcing/contracts";
-import { MARKET_PROMPT_VERSIONS, buildExtractionPrompt } from "./prompts.js";
+import { EXTRACTION_REFINE_PROMPT, MARKET_PROMPT_VERSIONS, buildExtractionPrompt } from "./prompts.js";
 import type { MarketLlmRequest, MarketLlmResult, MarketLlmRunner } from "./llmAdapter.js";
 
 /** Comp row as extracted (pre-persistence: no id, provenance injected). */
@@ -26,9 +26,11 @@ export interface ExtractedComp {
   saleDate: string | null;
   gsf: number | null;
   pricePsf: number | null;
+  pricePerUnit: number | null;
   unitsTotal: number | null;
   unitsResi: number | null;
   pctRentStabilized: number | null;
+  noi: number | null;
   capRate: number | null;
   grm: number | null;
   assetType: MarketAssetType | null;
@@ -216,9 +218,11 @@ export function coerceExtraction(
       saleDate: asIsoDate(row.sale_date),
       gsf: asNumber(row.gsf),
       pricePsf: asNumber(row.price_psf),
+      pricePerUnit: asNumber(row.price_per_unit),
       unitsTotal: asNumber(row.units_total),
       unitsResi: asNumber(row.units_resi),
       pctRentStabilized: asRate(row.pct_rent_stabilized),
+      noi: asNumber(row.noi),
       capRate: asRate(row.cap_rate),
       grm: asGrm(row.grm),
       assetType: ASSET_TYPES.includes(rawAssetType as MarketAssetType) ? (rawAssetType as MarketAssetType) : null,
@@ -267,6 +271,33 @@ export function coerceExtraction(
 export interface ExtractMarketDocumentResult extends ExtractionCoercionResult {
   llm: MarketLlmResult;
   promptVersion: string;
+  llmOutputs: Array<{ llm: MarketLlmResult; promptVersion: string }>;
+}
+
+function refinementInput(params: {
+  classification: MarketDocClassification;
+  filename: string;
+  sourceExtraction: Record<string, unknown> | null;
+}): string {
+  return JSON.stringify(
+    {
+      classification: {
+        source_type: params.classification.source_type,
+        publisher: params.classification.publisher,
+        branded: params.classification.branded,
+        document_class: params.classification.document_class,
+        report_title: params.classification.report_title,
+        period_covered: params.classification.period_covered,
+        geo_scope: params.classification.geo_scope,
+        coverage_universe: params.classification.coverage_universe,
+        subject_property: params.classification.subject_property,
+        filename: params.filename,
+      },
+      first_pass_extraction: params.sourceExtraction,
+    },
+    null,
+    2
+  );
 }
 
 export async function extractMarketDocument(params: {
@@ -284,8 +315,56 @@ export async function extractMarketDocument(params: {
     }),
     pdf: params.pdf,
     documentText: params.documentText,
+    provider: "gemini",
   };
-  const llm = await params.llm(request);
-  const coerced = coerceExtraction(llm.parsed, params.classification, params.documentId);
-  return { ...coerced, llm, promptVersion: MARKET_PROMPT_VERSIONS.extract };
+  const read = await params.llm(request);
+  const readCoerced = coerceExtraction(read.parsed, params.classification, params.documentId);
+  const readHasRows = readCoerced.comps.length + readCoerced.stats.length > 0;
+
+  let refine: MarketLlmResult;
+  let refinedCoerced: ExtractionCoercionResult;
+  try {
+    refine = await params.llm({
+      stage: "extract",
+      prompt: `${EXTRACTION_REFINE_PROMPT}\n\nSUPPLIED RECORDS:\n${refinementInput({
+        classification: params.classification,
+        filename: params.pdf.filename,
+        sourceExtraction: read.parsed,
+      })}`,
+      documentText: params.documentText,
+      provider: "openai",
+    });
+    refinedCoerced = coerceExtraction(refine.parsed, params.classification, params.documentId);
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err);
+    refine = {
+      provider: "openai",
+      model: "unknown",
+      rawOutput: null,
+      parsed: null,
+      error,
+    };
+    refinedCoerced = { comps: [], stats: [], flags: [`refine pass failed: ${error}`] };
+  }
+
+  const refinedHasRows = refinedCoerced.comps.length + refinedCoerced.stats.length > 0;
+  const useRefined = refine.parsed != null && (refinedHasRows || !readHasRows);
+  const chosen = useRefined ? refinedCoerced : readCoerced;
+  const chosenLlm = useRefined ? refine : read;
+  const chosenPromptVersion = useRefined ? MARKET_PROMPT_VERSIONS.extractRefine : MARKET_PROMPT_VERSIONS.extract;
+  const refinementFallbackFlags =
+    !useRefined && refine.error ? [`refine pass did not replace read pass: ${refine.error}`] : [];
+
+  return {
+    ...chosen,
+    flags: useRefined
+      ? [...readCoerced.flags.map((flag) => `read pass: ${flag}`), ...refinedCoerced.flags]
+      : [...readCoerced.flags, ...refinedCoerced.flags, ...refinementFallbackFlags],
+    llm: chosenLlm,
+    promptVersion: chosenPromptVersion,
+    llmOutputs: [
+      { llm: read, promptVersion: MARKET_PROMPT_VERSIONS.extract },
+      { llm: refine, promptVersion: MARKET_PROMPT_VERSIONS.extractRefine },
+    ],
+  };
 }

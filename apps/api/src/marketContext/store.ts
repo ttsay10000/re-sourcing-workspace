@@ -283,9 +283,11 @@ export class InMemoryMarketContextStore implements MarketContextStore {
       saleDate: params.saleDate,
       gsf: params.gsf,
       pricePsf: params.pricePsf,
+      pricePerUnit: params.pricePerUnit,
       unitsTotal: params.unitsTotal,
       unitsResi: params.unitsResi,
       pctRentStabilized: params.pctRentStabilized,
+      noi: params.noi,
       capRate: params.capRate,
       grm: params.grm,
       assetType: params.assetType,
@@ -332,7 +334,7 @@ export class InMemoryMarketContextStore implements MarketContextStore {
       (comp) =>
         comp.neighborhoodId != null &&
         neighborhoodIds.includes(comp.neighborhoodId) &&
-        comp.reviewStatus !== "rejected"
+        comp.reviewStatus === "approved"
     );
   }
 

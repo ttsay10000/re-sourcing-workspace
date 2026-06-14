@@ -128,9 +128,12 @@ export interface MarketComp {
   saleDate: string | null;
   gsf: number | null;
   pricePsf: number | null;
+  pricePerUnit: number | null;
   unitsTotal: number | null;
   unitsResi: number | null;
   pctRentStabilized: number | null;
+  /** NOI as printed/reviewed; null when absent. Never inferred from cap rate. */
+  noi: number | null;
   /** Decimal (0.0582 = 5.82%); null when printed "N/A" — never inferred. */
   capRate: number | null;
   /** Gross rent multiplier as printed (how sub-10-unit deals are quoted); never derived. */
@@ -554,10 +557,35 @@ export interface CompReviewQueueResponse {
   counts: { marketDoc: number; broker: number };
 }
 
+/** Analyst-verified field overrides submitted with a review decision. */
+export interface CompReviewReviewedFields {
+  address?: string | null;
+  neighborhood?: string | null;
+  borough?: string | null;
+  units?: number | null;
+  gsf?: number | null;
+  salePrice?: number | null;
+  saleDate?: string | null;
+  /** Percent points (5.82 = 5.82%). */
+  capRatePct?: number | null;
+  /** Gross rent multiplier as printed. */
+  grm?: number | null;
+  pricePsf?: number | null;
+  pricePerUnit?: number | null;
+  noi?: number | null;
+  assetType?: string | null;
+  priceType?: MarketPriceType | null;
+  /** Purchaser as printed. */
+  buyer?: string | null;
+  notes?: string | null;
+}
+
 export interface CompReviewDecision {
   id: string;
   source: CompReviewSource;
   action: "approve" | "reject";
+  /** Present when the analyst edited extracted fields before approval. */
+  reviewedFields?: CompReviewReviewedFields | null;
 }
 
 /** POST /api/comps/review response. */

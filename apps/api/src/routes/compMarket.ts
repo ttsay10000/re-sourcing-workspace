@@ -110,6 +110,17 @@ function packageTypeLabel(value: string): string {
   return value.replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
+function marketDocSourceLabel(input: {
+  publisher: string | null | undefined;
+  title: string | null | undefined;
+  period: string | null | undefined;
+  fallback: string | null | undefined;
+}): string {
+  const base = [input.publisher, input.title].filter((part): part is string => Boolean(part)).join(" — ");
+  const label = base || input.fallback || "Market document";
+  return input.period ? `${label} · ${input.period}` : label;
+}
+
 const BOROUGH_NAMES = ["manhattan", "bronx", "brooklyn", "queens", "staten island"];
 
 function normalizeBoroughName(value: string | null | undefined): string | null {
@@ -288,6 +299,7 @@ router.get("/comps/market", async (req: Request, res: Response) => {
         const capRatePct = docComp.capRate != null ? docComp.capRate * 100 : null;
         const publisher = document?.publisher ?? docComp.provenance.publisher;
         const title = document?.reportTitle ?? docComp.provenance.report_title;
+        const period = document?.periodCovered ?? null;
         const comp: MarketCompRow = {
           itemId: docComp.id,
           packageId: document?.id ?? docComp.documentId ?? docComp.id,
@@ -303,14 +315,15 @@ router.get("/comps/market", async (req: Request, res: Response) => {
           units: docComp.unitsTotal,
           yearCompleted: null,
           capRatePct,
-          noi: null,
+          noi: docComp.noi,
           salePrice: docComp.salePrice,
           saleDate: docComp.saleDate,
           pricePsf: docComp.pricePsf,
           pricePerUnit:
-            docComp.salePrice != null && docComp.unitsTotal != null && docComp.unitsTotal > 0
+            docComp.pricePerUnit ??
+            (docComp.salePrice != null && docComp.unitsTotal != null && docComp.unitsTotal > 0
               ? docComp.salePrice / docComp.unitsTotal
-              : null,
+              : null),
           percentSoldPct: null,
           psfOnly: capRatePct == null && docComp.pricePsf != null,
           confidence: null,
@@ -319,10 +332,15 @@ router.get("/comps/market", async (req: Request, res: Response) => {
           origin: "market_doc",
           source: {
             kind: "market_doc",
-            label: [publisher, title].filter(Boolean).join(" — ") || document?.filename || "Market document",
+            label: marketDocSourceLabel({
+              publisher,
+              title,
+              period,
+              fallback: document?.filename,
+            }),
             title,
             publisher,
-            period: document?.periodCovered ?? null,
+            period,
             documentId: document?.id ?? docComp.documentId,
             packageId: null,
           },

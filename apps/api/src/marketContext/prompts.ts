@@ -7,7 +7,8 @@
 
 export const MARKET_PROMPT_VERSIONS = {
   classify: "classify_v2",
-  extract: "extract_v2",
+  extract: "extract_read_v3",
+  extractRefine: "extract_refine_v3",
   synthesize: "synthesize_v1",
   knowledge: "knowledge_v2",
   notesRead: "notes_read_v2",
@@ -72,9 +73,11 @@ const EXTRACTION_SCHEMAS = `COMP SCHEMA (array "comps"):
   "sale_date": "2026-01-26",               // ISO date or null
   "gsf": 7667,
   "price_psf": 1533,
+  "price_per_unit": 1958333,
   "units_total": 6,
   "units_resi": 5,
   "pct_rent_stabilized": 0.0,              // fraction 0..1; null if not stated
+  "noi": 684250,                           // NOI exactly as printed; null if absent — NEVER inferred
   "cap_rate": 0.0582,                      // decimal; null if "N/A" — NEVER inferred
   "grm": 14.2,                             // gross rent multiplier as printed; null if absent — NEVER derived
   "asset_type": "mixed-use",               // multifamily | mixed-use | office | retail | development | conversion | null
@@ -123,8 +126,9 @@ export const EXTRACTION_PROMPT = `You are extracting structured real-estate data
 
 HARD RULES:
 1. EXTRACT, never infer. If a cap rate prints "N/A", output null. Never compute,
-   estimate, or back into any metric not printed in the document. GRM is printed
-   or null — never derived from price and rent, and never converted to/from cap rate.
+   estimate, or back into any metric not printed in the document. NOI and $/unit
+   are printed or null — never derived. GRM is printed or null — never derived
+   from price and rent, and never converted to/from cap rate.
 2. Record the geographic scope of every aggregate stat exactly as stated.
    "Manhattan below 96th Street" ≠ "Manhattan". Ariel splits Northern Manhattan
    separately; Avison Young tracks south of 96th only; Alpha covers all Manhattan.
@@ -159,6 +163,29 @@ HARD RULES:
 14. notes_short is the analyst's one-line read of the building: stories +
     walk-up/elevator, FM vs RS mix, renovation/vacancy state, retail component,
     anything price-explaining ("estate condition", "delivered vacant", "air rights").
+
+${EXTRACTION_SCHEMAS}`;
+
+export const EXTRACTION_REFINE_PROMPT = `You are the senior NYC multifamily acquisitions analyst reviewing a source-faithful
+market-document extraction. You receive: (1) the document classification, (2) the
+first-pass extraction JSON from the document reader, and (3) any extracted page
+text. Produce the final structured extraction for the database. Output ONLY valid
+JSON: {"comps": [...], "market_stats": [...]} matching the exact schemas below.
+
+REVIEW RULES:
+1. Preserve source fidelity. Do not invent values absent from the first-pass
+   extraction or document text. If a printed value is missing/ambiguous, set null
+   and lower confidence.
+2. Improve labels and completeness: normalize field names into the schema, add
+   material comp/stat rows that the first pass clearly missed, dedupe duplicated
+   rows, and keep source page numbers.
+3. The analyst lens matters: preserve sub-10-unit, free-market vs stabilized,
+   walk-up/elevator, buyer/seller, GRM, cap rate, $/SF, and sale-condition fields
+   because these feed acquisitions screening.
+4. Respect publisher scope and period exactly. Never blend or average across
+   geographies, periods, brokerages, or coverage universes.
+5. OM/BOV subject assets are asking rows; their internal comp tables are
+   cherry-picked unless corroborated later by research.
 
 ${EXTRACTION_SCHEMAS}`;
 

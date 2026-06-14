@@ -20,6 +20,7 @@ import {
 } from "@re-sourcing/db";
 import type {
   MarketComp,
+  MarketDocIngestReport,
   MarketDocument,
   MarketDocumentListItem,
   MarketHeadlinesResponse,
@@ -83,6 +84,59 @@ router.post(
       console.error("[market-docs upload]", err);
       res.status(503).json({ error: "Failed to ingest market document.", details: message });
     }
+  }
+);
+
+// Batch upload: process each file sequentially so one bad report never sinks
+// the batch. The existing single-file endpoint stays supported for current UI.
+router.post(
+  "/market-docs/batch",
+  (req, res, next) => {
+    uploadMemory.array("files", 10)(req, res, handleMarketDocMulterError(req, res, next));
+  },
+  async (req: Request, res: Response) => {
+    const files = ((req as Request & {
+      files?: Array<{ buffer: Buffer; originalname?: string; mimetype?: string }>;
+    }).files ?? []).filter((file) => file?.buffer);
+    if (files.length === 0) {
+      res.status(400).json({ error: "Missing files. Send multipart/form-data with field 'files'." });
+      return;
+    }
+    const store = new PgMarketContextStore(getPool());
+    const reports: MarketDocIngestReport[] = [];
+    for (const file of files) {
+      try {
+        reports.push(
+          await ingestMarketDocument({
+            filename: file.originalname?.trim() || "market-document.pdf",
+            contentType: file.mimetype || null,
+            buffer: file.buffer,
+            store,
+          })
+        );
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error("[market-docs batch upload]", err);
+        reports.push({
+          documentId: "",
+          sourceType: "broker_provided",
+          documentClass: "unknown",
+          publisher: null,
+          classifierConfidence: "low",
+          flagForReview: true,
+          nComps: 0,
+          nCompsMerged: 0,
+          nStats: 0,
+          unresolvedNeighborhoods: [],
+          affectedNeighborhoods: [],
+          flags: [`pre-insert failure: ${message}`],
+          status: "failed",
+          error: message,
+        });
+      }
+    }
+    const succeeded = reports.filter((report) => report.status !== "failed").length;
+    res.status(succeeded > 0 ? 201 : 200).json({ reports, count: reports.length, succeeded });
   }
 );
 

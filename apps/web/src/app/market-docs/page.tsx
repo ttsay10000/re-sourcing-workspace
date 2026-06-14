@@ -1,16 +1,22 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   AlertTriangle,
   Banknote,
   Building2,
+  CheckCircle2,
+  Clock3,
   Crosshair,
   FileText,
   RefreshCw,
+  RotateCcw,
   Sparkles,
+  StickyNote,
   TrendingUp,
+  Trash2,
+  Undo2,
   Users,
 } from "lucide-react";
 import type {
@@ -60,7 +66,7 @@ interface UploadItem {
 interface MarketDocRow {
   id: string;
   filename: string;
-  status: string;
+  status: "uploaded" | "classified" | "extracted" | "synthesized" | "failed";
   source_type: "broker_provided" | "market_research";
   publisher: string | null;
   branded: boolean;
@@ -90,6 +96,10 @@ function sourceBadge(doc: Pick<MarketDocRow, "source_type" | "publisher">) {
   );
 }
 
+function sourceTypeBadge(doc: Pick<MarketDocRow, "source_type">) {
+  return doc.source_type === "market_research" ? <Badge tone="brand">RESEARCH</Badge> : <Badge tone="info">BROKER</Badge>;
+}
+
 const DIRECTION_META: Record<MarketTrendDirection, { label: string; tone: "success" | "danger" | "warning" | "neutral" }> = {
   up: { label: "▲ up", tone: "success" },
   down: { label: "▼ down", tone: "danger" },
@@ -97,10 +107,62 @@ const DIRECTION_META: Record<MarketTrendDirection, { label: string; tone: "succe
   flat: { label: "— flat", tone: "neutral" },
 };
 
+type BadgeTone = "neutral" | "brand" | "success" | "warning" | "danger" | "info";
+
+const DOC_STATUS_META: Record<
+  MarketDocRow["status"],
+  { label: string; tone: BadgeTone; progress: number; detail: string }
+> = {
+  uploaded: { label: "Uploaded", tone: "neutral", progress: 25, detail: "Waiting for classification" },
+  classified: { label: "Classified", tone: "info", progress: 45, detail: "Source and period identified" },
+  extracted: { label: "Extracted", tone: "brand", progress: 72, detail: "Comps and stats extracted" },
+  synthesized: { label: "Synthesized", tone: "success", progress: 100, detail: "Notes and knowledge updated" },
+  failed: { label: "Failed", tone: "danger", progress: 100, detail: "Needs retry or removal" },
+};
+
 function formatWhen(iso: string | null | undefined): string {
   if (!iso) return "—";
   const date = new Date(iso);
   return Number.isNaN(date.getTime()) ? "—" : date.toLocaleString();
+}
+
+function formatRelativeTime(iso: string | null | undefined, now: number): string {
+  if (!iso) return "time unknown";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "time unknown";
+  const diffMs = date.getTime() - now;
+  const absSeconds = Math.abs(diffMs) / 1000;
+  const formatter = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+  if (absSeconds < 45) return "just now";
+  if (absSeconds < 90 * 60) return formatter.format(Math.round(diffMs / 60_000), "minute");
+  if (absSeconds < 36 * 60 * 60) return formatter.format(Math.round(diffMs / 3_600_000), "hour");
+  if (absSeconds < 45 * 24 * 60 * 60) return formatter.format(Math.round(diffMs / 86_400_000), "day");
+  return date.toLocaleDateString();
+}
+
+function titleizeToken(value: string): string {
+  return value
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function notesSignalCount(notes: MarketDocumentNotes | null | undefined): number {
+  if (!notes) return 0;
+  return (
+    notes.overview.length +
+    notes.neighborhoods.length +
+    notes.assetTypes.length +
+    notes.buyerActivity.length +
+    notes.notableTransactions.length +
+    notes.capRatePsf.length +
+    notes.financing.length +
+    notes.smallBuildingFocus.length +
+    notes.regulatory.length +
+    notes.risksWatchItems.length +
+    notes.investmentRelevance.length
+  );
 }
 
 /** Notes dialog section: skip silently when the report had nothing on the topic. */
@@ -123,7 +185,7 @@ function ReviewGroup({
   title,
   items,
 }: {
-  icon: React.ReactNode;
+  icon: ReactNode;
   title: string;
   items: string[];
 }) {
@@ -154,6 +216,7 @@ export default function MarketDocsPage() {
   const [documents, setDocuments] = useState<MarketDocRow[]>([]);
   const [listError, setListError] = useState<string | null>(null);
   const [knowledge, setKnowledge] = useState<MarketKnowledgeState | null>(null);
+  const [now, setNow] = useState(() => Date.now());
 
   // Live AI review state.
   const [review, setReview] = useState<MarketReviewRecord | null>(null);
@@ -199,7 +262,13 @@ export default function MarketDocsPage() {
     refresh();
   }, [refresh]);
 
+  useEffect(() => {
+    const interval = window.setInterval(() => setNow(Date.now()), 60_000);
+    return () => window.clearInterval(interval);
+  }, []);
+
   const refreshReview = useCallback(async () => {
+    if (reviewBusy) return;
     setReviewBusy(true);
     setReviewError(null);
     try {
@@ -214,7 +283,7 @@ export default function MarketDocsPage() {
     } finally {
       setReviewBusy(false);
     }
-  }, []);
+  }, [reviewBusy]);
 
   function patchUploadItem(index: number, patch: Partial<UploadItem>) {
     setUploadItems((current) => current.map((item, i) => (i === index ? { ...item, ...patch } : item)));
@@ -282,12 +351,16 @@ export default function MarketDocsPage() {
     }
     setUploading(false);
     refresh();
-    if (reports.length > 0) void refreshReview();
+    if (reports.length > 0) {
+      setReviewStale(true);
+      void refreshReview();
+    }
   }
 
   async function retryDocument(documentId: string) {
     if (retryingId) return;
     setRetryingId(documentId);
+    let shouldRefreshReview = false;
     const banner = processBanner.start("Market doc retry", { message: "Re-running ingestion…" });
     try {
       const res = await fetch(`${API_BASE}/api/market-docs/${encodeURIComponent(documentId)}/retry`, {
@@ -305,6 +378,8 @@ export default function MarketDocsPage() {
         setUploadItems((current) =>
           current.map((item) => (item.documentId === documentId ? { ...item, state: "done", error: null } : item))
         );
+        shouldRefreshReview = true;
+        setReviewStale(true);
         banner.succeed("Document ingested on retry.");
       }
     } catch (err) {
@@ -313,6 +388,7 @@ export default function MarketDocsPage() {
     } finally {
       setRetryingId(null);
       refresh();
+      if (shouldRefreshReview) void refreshReview();
     }
   }
 
@@ -326,7 +402,9 @@ export default function MarketDocsPage() {
       const payload = (await res.json().catch(() => ({}))) as { error?: string };
       if (!res.ok || payload.error) throw new Error(payload.error || `HTTP ${res.status}`);
       setRemoveTarget(null);
+      setReviewStale(true);
       refresh();
+      void refreshReview();
     } catch (err) {
       setListError(err instanceof Error ? err.message : "Failed to remove document.");
     } finally {
@@ -343,7 +421,9 @@ export default function MarketDocsPage() {
       });
       const payload = (await res.json().catch(() => ({}))) as { error?: string };
       if (!res.ok || payload.error) throw new Error(payload.error || `HTTP ${res.status}`);
+      setReviewStale(true);
       refresh();
+      void refreshReview();
     } catch (err) {
       setListError(err instanceof Error ? err.message : "Failed to restore document.");
     } finally {
@@ -371,6 +451,8 @@ export default function MarketDocsPage() {
   }, [documents]);
 
   const liveReview = review?.review ?? null;
+  const reviewIncludedCount = review?.includedDocumentIds.length ?? 0;
+  const reviewDocDelta = review ? reviewDocCount - reviewIncludedCount : 0;
 
   return (
     <div className={styles.page}>
@@ -444,30 +526,62 @@ export default function MarketDocsPage() {
 
       {/* ---- Live AI market review: the cross-document acquisitions read ---- */}
       <Panel>
-        <div className={styles.knowledgeHeader}>
-          <span className={styles.sectionTitle}>
-            <Sparkles size={14} strokeWidth={2} aria-hidden="true" style={{ verticalAlign: "-2px", marginRight: "0.3rem" }} />
-            Live AI market review
-          </span>
-          {review ? <Badge tone="brand">v{review.version}</Badge> : null}
-          {reviewStale ? (
-            <Badge tone="warning" title="Documents were added or removed since this review was generated.">
-              stale — refresh
-            </Badge>
-          ) : null}
-          <span className={styles.knowledgeMeta}>
-            {review
-              ? `generated ${formatWhen(review.createdAt)} from ${review.includedDocumentIds.length} document${review.includedDocumentIds.length === 1 ? "" : "s"}`
-              : `${reviewDocCount} document${reviewDocCount === 1 ? "" : "s"} ready`}
-            {review?.provider ? ` · ${review.provider}${review.model ? `/${review.model}` : ""}` : ""}
-          </span>
-          <span className={styles.reviewActions}>
-            <Button variant="secondary" size="sm" onClick={() => void refreshReview()} disabled={reviewBusy || uploading}>
+        <div className={`${styles.reviewHeader} ${reviewStale ? styles.reviewHeaderStale : ""}`}>
+          <div className={styles.reviewTitleBlock}>
+            <span className={styles.reviewEyebrow}>
+              <Sparkles size={15} strokeWidth={2.2} aria-hidden="true" />
+              Live AI market review
+            </span>
+            <span className={styles.reviewTitle}>
+              {review ? "Current acquisitions read across included documents" : "Generate the cross-report acquisitions read"}
+            </span>
+            <span className={styles.reviewMetaLine}>
+              {review
+                ? `Generated ${formatRelativeTime(review.createdAt, now)} from ${reviewIncludedCount} document${reviewIncludedCount === 1 ? "" : "s"}`
+                : `${reviewDocCount} active document${reviewDocCount === 1 ? "" : "s"} ready`}
+              {review?.provider ? ` · ${review.provider}${review.model ? `/${review.model}` : ""}` : ""}
+            </span>
+          </div>
+          <div className={styles.reviewStatusStack}>
+            <div className={styles.reviewBadgeRow}>
+              {review ? <Badge tone="brand">v{review.version}</Badge> : null}
+              {reviewBusy ? <Badge tone="info">refreshing</Badge> : null}
+              {reviewStale ? (
+                <Badge tone="warning" title="Documents were added, removed, restored, or retried since this review was generated.">
+                  stale
+                </Badge>
+              ) : review ? (
+                <Badge tone="success">
+                  <CheckCircle2 size={12} strokeWidth={2.4} aria-hidden="true" />
+                  current
+                </Badge>
+              ) : null}
+            </div>
+            <Button
+              variant={reviewStale || !review ? "primary" : "secondary"}
+              size="sm"
+              onClick={() => void refreshReview()}
+              disabled={reviewBusy || uploading || reviewDocCount === 0}
+            >
               <RefreshCw size={13} strokeWidth={2.2} aria-hidden="true" className={reviewBusy ? styles.spinning : undefined} />
               {reviewBusy ? "Reviewing…" : review ? "Refresh review" : "Generate review"}
             </Button>
-          </span>
+          </div>
         </div>
+        {reviewStale ? (
+          <div className={styles.staleReviewBanner}>
+            <AlertTriangle size={15} strokeWidth={2.1} aria-hidden="true" />
+            <span>
+              Review is behind the ingest log: last review used {reviewIncludedCount} document
+              {reviewIncludedCount === 1 ? "" : "s"}; {reviewDocCount} active document{reviewDocCount === 1 ? "" : "s"} would be included now
+              {reviewDocDelta !== 0 ? ` (${reviewDocDelta > 0 ? "+" : ""}${reviewDocDelta})` : ""}.
+            </span>
+            <Button variant="secondary" size="sm" onClick={() => void refreshReview()} disabled={reviewBusy || uploading || reviewDocCount === 0}>
+              <RefreshCw size={13} strokeWidth={2.2} aria-hidden="true" className={reviewBusy ? styles.spinning : undefined} />
+              Update review
+            </Button>
+          </div>
+        ) : null}
         {reviewError ? <div className={styles.uploadError}>{reviewError}</div> : null}
         {reviewBusy && !liveReview ? (
           <span className={styles.emptyNote}>Reading every included document&apos;s notes and writing the cross-report review…</span>
@@ -815,121 +929,232 @@ export default function MarketDocsPage() {
           ) : null}
         </div>
         {listError ? <div className={styles.uploadError}>{listError}</div> : null}
-        <table className={styles.table}>
-          <thead>
-            <tr>
-              <th>Document</th>
-              <th>Source</th>
-              <th>Class</th>
-              <th>Confidence</th>
-              <th>Comps</th>
-              <th>Stats</th>
-              <th>Status</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {visibleDocuments.map((doc) => (
-              <tr key={doc.id} className={doc.excludedAt ? styles.removedRow : undefined}>
-                <td className={styles.docCell}>
-                  <span className={styles.docName}>{doc.report_title ?? doc.filename}</span>
-                  {doc.period_covered ? <span className={styles.docMeta}>{doc.period_covered}</span> : null}
-                  {doc.excludedAt ? (
-                    <span className={styles.docMeta}>
-                      {doc.excludedReason === "duplicate" ? "excluded as duplicate" : "removed"} · {formatWhen(doc.excludedAt)}
-                    </span>
-                  ) : null}
-                  {!doc.excludedAt && doc.duplicateOfId ? (
-                    <span
-                      className={styles.docDiscrepancy}
-                      title={`Same publisher, period, and class as "${docTitleById.get(doc.duplicateOfId) ?? "an earlier upload"}".`}
-                    >
-                      possible duplicate of “{docTitleById.get(doc.duplicateOfId) ?? "earlier upload"}”
-                    </span>
-                  ) : null}
-                  {doc.documentBrief && doc.documentBrief.discrepancies.length > 0 ? (
-                    <span className={styles.docDiscrepancy}>
-                      {doc.documentBrief.discrepancies.length} discrepanc
-                      {doc.documentBrief.discrepancies.length === 1 ? "y" : "ies"} flagged
-                    </span>
-                  ) : null}
-                  {!doc.excludedAt && doc.pendingComps > 0 ? (
-                    <Link href="/pipeline/comp-analysis" className={styles.queueLink}>
-                      {doc.pendingComps} comp{doc.pendingComps === 1 ? "" : "s"} to review →
-                    </Link>
-                  ) : null}
-                </td>
-                <td>{sourceBadge(doc)}</td>
-                <td>{doc.document_class}</td>
-                <td>
-                  {doc.flagForReview ? (
-                    <Badge tone="warning">low — review</Badge>
-                  ) : (
-                    <Badge tone={doc.classifier_confidence === "high" ? "success" : "neutral"}>
-                      {doc.classifier_confidence}
-                    </Badge>
-                  )}
-                </td>
-                <td>{doc.ingestReport ? `${doc.ingestReport.nComps} (${doc.ingestReport.nCompsMerged} merged)` : "—"}</td>
-                <td>{doc.ingestReport?.nStats ?? "—"}</td>
-                <td>
-                  {doc.status === "failed" ? (
-                    <span className={styles.statusCell}>
-                      <Badge tone="danger" title={doc.error ?? undefined}>failed</Badge>
-                      {doc.error ? <span className={styles.statusError}>{doc.error}</span> : null}
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => void retryDocument(doc.id)}
-                        disabled={retryingId != null}
-                      >
-                        {retryingId === doc.id ? "Retrying…" : "Retry"}
-                      </Button>
-                    </span>
-                  ) : (
-                    <Badge tone={doc.status === "synthesized" ? "success" : "neutral"}>{doc.status}</Badge>
-                  )}
-                </td>
-                <td>
-                  <span className={styles.actionsCell}>
-                    {doc.llmNotes ? (
-                      <Button variant="ghost" size="sm" onClick={() => setNotesDoc(doc)}>
-                        <FileText size={13} strokeWidth={2} aria-hidden="true" />
-                        Notes
-                      </Button>
-                    ) : null}
-                    {doc.excludedAt ? (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => void restoreDocument(doc)}
-                        disabled={rowBusyId != null}
-                      >
-                        {rowBusyId === doc.id ? "Restoring…" : "Restore"}
-                      </Button>
-                    ) : (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => setRemoveTarget(doc)}
-                        disabled={rowBusyId != null}
-                      >
-                        Remove
-                      </Button>
-                    )}
-                  </span>
-                </td>
+        <div className={styles.tableScroller}>
+          <table className={styles.table}>
+            <thead>
+              <tr>
+                <th>Document & notes</th>
+                <th>Source / period</th>
+                <th>Extraction</th>
+                <th>Pipeline</th>
+                <th>Actions</th>
               </tr>
-            ))}
+            </thead>
+            <tbody>
+            {visibleDocuments.map((doc) => {
+              const statusMeta = DOC_STATUS_META[doc.status] ?? DOC_STATUS_META.uploaded;
+              const report = doc.ingestReport;
+              const noteCount = notesSignalCount(doc.llmNotes);
+              const duplicateTitle = doc.duplicateOfId ? docTitleById.get(doc.duplicateOfId) ?? "earlier upload" : null;
+              const docTitle = doc.report_title ?? doc.llmNotes?.title ?? doc.filename;
+              const notesGeneratedAt = doc.llmNotes?.generatedAt;
+              const unresolvedPreview = report?.unresolvedNeighborhoods.slice(0, 3) ?? [];
+              const unresolvedRemainder = report ? report.unresolvedNeighborhoods.length - unresolvedPreview.length : 0;
+              return (
+                <tr key={doc.id} className={doc.excludedAt ? styles.removedRow : undefined}>
+                  <td className={styles.docCell}>
+                    <div className={styles.docTitleRow}>
+                      <span className={styles.docName}>{docTitle}</span>
+                      {doc.excludedAt ? (
+                        <Badge tone={doc.excludedReason === "duplicate" ? "warning" : "neutral"}>
+                          {doc.excludedReason === "duplicate" ? "duplicate excluded" : "removed"}
+                        </Badge>
+                      ) : null}
+                    </div>
+                    {docTitle !== doc.filename ? <span className={styles.docMeta}>{doc.filename}</span> : null}
+                    <div className={styles.docChipRow}>
+                      {doc.documentBrief && doc.documentBrief.discrepancies.length > 0 ? (
+                        <Badge tone="warning">
+                          {doc.documentBrief.discrepancies.length} discrepanc
+                          {doc.documentBrief.discrepancies.length === 1 ? "y" : "ies"}
+                        </Badge>
+                      ) : null}
+                      {!doc.excludedAt && duplicateTitle ? <Badge tone="warning">possible duplicate</Badge> : null}
+                      {!doc.excludedAt && doc.pendingComps > 0 ? (
+                        <Link href="/pipeline/comp-analysis" className={styles.pendingCompPill}>
+                          {doc.pendingComps} comp{doc.pendingComps === 1 ? "" : "s"} pending
+                        </Link>
+                      ) : null}
+                    </div>
+                    {doc.llmNotes ? (
+                      <button type="button" className={styles.notesTeaser} onClick={() => setNotesDoc(doc)}>
+                        <StickyNote size={14} strokeWidth={2.1} aria-hidden="true" />
+                        <span>
+                          <strong>Analyst notes ready</strong>
+                          <small>
+                            {noteCount} signal{noteCount === 1 ? "" : "s"}
+                            {notesGeneratedAt ? ` · generated ${formatRelativeTime(notesGeneratedAt, now)}` : ""}
+                          </small>
+                        </span>
+                      </button>
+                    ) : (
+                      <span className={styles.notesPending}>
+                        <FileText size={13} strokeWidth={2} aria-hidden="true" />
+                        Notes pending
+                      </span>
+                    )}
+                    {!doc.excludedAt && duplicateTitle ? (
+                      <span
+                        className={styles.duplicateCallout}
+                        title={`Same publisher, period, and class as "${duplicateTitle}".`}
+                      >
+                        Possible duplicate of <strong>{duplicateTitle}</strong>
+                      </span>
+                    ) : null}
+                  </td>
+                  <td>
+                    <div className={styles.sourceStack}>
+                      {sourceTypeBadge(doc)}
+                      <span className={styles.sourceLine}>
+                        <strong>Publisher</strong>
+                        {doc.publisher ?? "Unknown"}
+                      </span>
+                      <span className={styles.sourceLine}>
+                        <strong>Period</strong>
+                        {doc.period_covered ?? "Not detected"}
+                      </span>
+                      <span className={styles.sourceLine}>
+                        <strong>Class</strong>
+                        {titleizeToken(doc.document_class)}
+                      </span>
+                      <span className={styles.sourceLine}>
+                        <strong>Confidence</strong>
+                        {doc.flagForReview ? (
+                          <Badge tone="warning">low — review</Badge>
+                        ) : (
+                          <Badge tone={doc.classifier_confidence === "high" ? "success" : "neutral"}>
+                            {doc.classifier_confidence}
+                          </Badge>
+                        )}
+                      </span>
+                    </div>
+                  </td>
+                  <td>
+                    <div className={styles.metricStack}>
+                      <span className={styles.metricPrimary}>
+                        {report ? `${report.nComps} comp${report.nComps === 1 ? "" : "s"}` : "No extraction yet"}
+                      </span>
+                      {report ? (
+                        <>
+                          <span className={styles.metricLine}>
+                            {report.nCompsMerged} merged · {doc.pendingComps || report.nCompsPendingReview || 0} pending review
+                          </span>
+                          <span className={styles.metricLine}>
+                            {report.nStats} stat{report.nStats === 1 ? "" : "s"} · {report.affectedNeighborhoods.length} neighborhood
+                            {report.affectedNeighborhoods.length === 1 ? "" : "s"} updated
+                          </span>
+                          {report.unresolvedNeighborhoods.length > 0 ? (
+                            <span className={styles.reportWarning}>
+                              Unresolved: {unresolvedPreview.join(", ")}
+                              {unresolvedRemainder > 0 ? ` +${unresolvedRemainder} more` : ""}
+                            </span>
+                          ) : null}
+                        </>
+                      ) : null}
+                      {!doc.excludedAt && doc.pendingComps > 0 ? (
+                        <Link href="/pipeline/comp-analysis" className={styles.reviewQueueLink}>
+                          Review queue →
+                        </Link>
+                      ) : null}
+                    </div>
+                  </td>
+                  <td>
+                    <div className={styles.statusBlock}>
+                      <div className={styles.statusLine}>
+                        <Badge tone={statusMeta.tone}>{statusMeta.label}</Badge>
+                        <span className={styles.statusTime}>
+                          <Clock3 size={12} strokeWidth={2} aria-hidden="true" />
+                          uploaded {formatRelativeTime(doc.createdAt, now)}
+                        </span>
+                      </div>
+                      <div
+                        className={styles.progressTrack}
+                        aria-label={`${statusMeta.label} progress`}
+                        title={`${statusMeta.progress}%`}
+                      >
+                        <span
+                          className={`${styles.progressFill} ${doc.status === "failed" ? styles.progressFillFailed : ""}`}
+                          style={{ width: `${statusMeta.progress}%` }}
+                        />
+                      </div>
+                      <span className={styles.statusDetail}>{statusMeta.detail}</span>
+                      {notesGeneratedAt ? (
+                        <span className={styles.statusDetail}>Notes {formatRelativeTime(notesGeneratedAt, now)}</span>
+                      ) : null}
+                      {doc.documentBrief?.incorporatedAt ? (
+                        <span className={styles.statusDetail}>
+                          Brief incorporated {formatRelativeTime(doc.documentBrief.incorporatedAt, now)}
+                        </span>
+                      ) : null}
+                      {doc.excludedAt ? (
+                        <span className={styles.statusDetail}>
+                          {doc.excludedReason === "duplicate" ? "Excluded as duplicate" : "Removed"} {formatRelativeTime(doc.excludedAt, now)}
+                        </span>
+                      ) : null}
+                      {doc.status === "failed" && doc.error ? <span className={styles.statusError}>{doc.error}</span> : null}
+                      {report?.flags.length ? <span className={styles.reportFlags}>{report.flags.join(" · ")}</span> : null}
+                    </div>
+                  </td>
+                  <td>
+                    <span className={styles.actionsCell}>
+                      {doc.llmNotes ? (
+                        <Button variant="secondary" size="sm" onClick={() => setNotesDoc(doc)}>
+                          <FileText size={13} strokeWidth={2} aria-hidden="true" />
+                          Open notes
+                        </Button>
+                      ) : (
+                        <Button variant="ghost" size="sm" disabled>
+                          <FileText size={13} strokeWidth={2} aria-hidden="true" />
+                          Notes pending
+                        </Button>
+                      )}
+                      {doc.status === "failed" ? (
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => void retryDocument(doc.id)}
+                          disabled={retryingId != null}
+                        >
+                          <RotateCcw size={13} strokeWidth={2} aria-hidden="true" />
+                          {retryingId === doc.id ? "Retrying…" : "Retry"}
+                        </Button>
+                      ) : null}
+                      {doc.excludedAt ? (
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => void restoreDocument(doc)}
+                          disabled={rowBusyId != null}
+                        >
+                          <Undo2 size={13} strokeWidth={2} aria-hidden="true" />
+                          {rowBusyId === doc.id ? "Restoring…" : "Restore"}
+                        </Button>
+                      ) : (
+                        <Button
+                          variant={doc.duplicateOfId ? "secondary" : "ghost"}
+                          size="sm"
+                          onClick={() => setRemoveTarget(doc)}
+                          disabled={rowBusyId != null}
+                        >
+                          <Trash2 size={13} strokeWidth={2} aria-hidden="true" />
+                          {doc.duplicateOfId ? "Exclude duplicate" : "Remove"}
+                        </Button>
+                      )}
+                    </span>
+                  </td>
+                </tr>
+              );
+            })}
             {visibleDocuments.length === 0 && !listError ? (
               <tr>
-                <td colSpan={8} className={styles.emptyRow}>
+                <td colSpan={5} className={styles.emptyRow}>
                   No market documents ingested yet — drop the first research report or broker package above.
                 </td>
               </tr>
             ) : null}
-          </tbody>
-        </table>
+            </tbody>
+          </table>
+        </div>
       </Panel>
 
       {/* ---- Per-document analyst notes dialog ---- */}
@@ -946,6 +1171,28 @@ export default function MarketDocsPage() {
       >
         {notesDoc?.llmNotes ? (
           <div className={styles.notesBody}>
+            <div className={styles.notesSummary}>
+              <span className={styles.notesSummaryTitle}>
+                <StickyNote size={15} strokeWidth={2.1} aria-hidden="true" />
+                Analyst notes
+              </span>
+              <span>
+                <strong>Source</strong>
+                {notesDoc.llmNotes.sourceLabel}
+              </span>
+              <span>
+                <strong>Period</strong>
+                {notesDoc.llmNotes.periodCovered ?? notesDoc.period_covered ?? "Not detected"}
+              </span>
+              <span>
+                <strong>Signals</strong>
+                {notesSignalCount(notesDoc.llmNotes)}
+              </span>
+              <span>
+                <strong>Generated</strong>
+                {formatRelativeTime(notesDoc.llmNotes.generatedAt, now)}
+              </span>
+            </div>
             <NotesSection title="Overview" items={notesDoc.llmNotes.overview} />
             {notesDoc.llmNotes.neighborhoods.length > 0 ? (
               <div className={styles.briefGroup}>

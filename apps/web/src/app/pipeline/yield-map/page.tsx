@@ -153,6 +153,8 @@ interface MarketComp {
   source?: {
     kind: "broker_package" | "market_doc";
     label: string;
+    title: string | null;
+    publisher: string | null;
     period: string | null;
   };
   propertyName: string | null;
@@ -521,6 +523,42 @@ function appendSourceChips(target: HTMLElement, comp: MarketContextComp): void {
 
 function compDisplayName(comp: MarketComp): string {
   return comp.propertyName ?? comp.address?.split(",")[0] ?? "Unnamed comp";
+}
+
+function marketCompSourcePrimary(comp: MarketComp): string {
+  const source = comp.source;
+  if (!source) return packageTypeLabel(comp.packageType);
+  if (source.kind !== "market_doc") return source.label || packageTypeLabel(comp.packageType);
+  const primary = [source.publisher, source.title].filter((part): part is string => Boolean(part)).join(" — ");
+  return primary || source.label || "Market document";
+}
+
+function marketCompSourceLabel(comp: MarketComp): string {
+  const primary = marketCompSourcePrimary(comp);
+  if (comp.source?.kind === "market_doc" && comp.source.period && !primary.includes(comp.source.period)) {
+    return `${primary} · ${comp.source.period}`;
+  }
+  return primary;
+}
+
+function marketCompTimeframeLabel(comp: MarketComp): string | null {
+  if (comp.source?.kind === "market_doc") {
+    if (comp.source.period) return `Report period ${comp.source.period}`;
+    if (comp.saleDate) return `Sale date ${comp.saleDate}`;
+    return "Report period not listed";
+  }
+  if (comp.packageCreatedAt) return `Package ${fmtMonthYear(comp.packageCreatedAt)}`;
+  return null;
+}
+
+function marketCompFlowLabel(comp: MarketComp): string {
+  return comp.source?.kind === "market_doc" ? "Report comp" : packageTypeLabel(comp.packageType);
+}
+
+function marketCompSourceTitle(comp: MarketComp): string {
+  return [marketCompFlowLabel(comp), marketCompSourceLabel(comp), marketCompTimeframeLabel(comp)]
+    .filter(Boolean)
+    .join(" · ");
 }
 
 /** A merged table line: a sourced deal or a broker-package comp, ordered together. */
@@ -1272,7 +1310,7 @@ export default function YieldMapPage() {
         ...(comp.psfOnly ? ["$/PSF only — no cap rate in package"] : []),
         comp.subjectAddress
           ? `Subject: ${comp.subjectAddress.split(",")[0]} · ${packageTypeLabel(comp.packageType)}`
-          : `Source: ${comp.source?.label ?? packageTypeLabel(comp.packageType)}${comp.source?.period ? ` · ${comp.source.period}` : ""}`,
+          : `Source: ${marketCompSourceLabel(comp)}`,
       ],
     }));
 
@@ -1288,7 +1326,14 @@ export default function YieldMapPage() {
       const haystack =
         entry.kind === "deal"
           ? [entry.deal.canonicalAddress, displayHood(entry.deal), entry.deal.borough, boardStageLabel(entry.deal)]
-          : [compDisplayName(entry.comp), entry.comp.neighborhood, entry.comp.borough, packageTypeLabel(entry.comp.packageType)];
+          : [
+              compDisplayName(entry.comp),
+              entry.comp.neighborhood,
+              entry.comp.borough,
+              packageTypeLabel(entry.comp.packageType),
+              marketCompSourceLabel(entry.comp),
+              marketCompTimeframeLabel(entry.comp),
+            ];
       return haystack.filter(Boolean).join(" ").toLowerCase().includes(search);
     };
     const entries: TableEntry[] = [
@@ -1323,7 +1368,7 @@ export default function YieldMapPage() {
       pricePerUnit: (entry: TableEntry) => (entry.kind === "deal" ? entry.deal.pricePerUnit : entry.comp.pricePerUnit),
       psf: (entry: TableEntry) => (entry.kind === "deal" ? entry.deal.pricePsf : entry.comp.pricePsf),
       stage: (entry: TableEntry) =>
-        entry.kind === "deal" ? boardStageLabel(entry.deal) : packageTypeLabel(entry.comp.packageType),
+        entry.kind === "deal" ? boardStageLabel(entry.deal) : marketCompSourceTitle(entry.comp),
     }),
     [boardStageLabel]
   );
@@ -1373,7 +1418,7 @@ export default function YieldMapPage() {
       <PageHeader
         eyebrow="Pipeline · Living comps"
         title="Yield Map"
-        subtitle="Every deal with a calculated LTR yield (extracted NOI ÷ price) from OMs, broker docs, and notes — active, dead, or closed. Yields quote on listed pricing by default; toggle to whisper or user-entered/negotiated pricing on the map. Toggle $/PSF for the price-per-foot read, overlay broker-package comps, and layer market context from ingested research with provenance on every number."
+        subtitle="Every deal with a calculated LTR yield (extracted NOI ÷ price) from OMs, broker docs, and notes — active, dead, or closed. Yields quote on listed pricing by default; toggle to whisper or user-entered/negotiated pricing on the map. Toggle $/PSF for the price-per-foot read, overlay broker/report comps, and layer market context from ingested research with provenance on every number."
         actions={
           <div className={styles.headerActions}>
             <button
@@ -1509,7 +1554,7 @@ export default function YieldMapPage() {
                 label="Comps overlaid"
                 value={compRows.length}
                 sub={`median cap ${fmtPct(marketComps.summary.medianCapRatePct, 2)} · ${marketComps.summary.psfOnly} $/PSF-only`}
-                title="Comparables extracted from uploaded broker comp packages. $/PSF-only comps have no cap rate — chase the broker for sale comps."
+                title="Comparables extracted from uploaded broker packages and approved market-doc reports. $/PSF-only comps have no cap rate."
               />
             ) : null}
             {marketLayerOn && summaries.length > 0 ? (
@@ -1592,7 +1637,7 @@ export default function YieldMapPage() {
           <div className={styles.panel}>
             <div className={styles.mapHeader}>
               <span className={styles.mapTitle}>
-                Deal map — pins colored by{" "}
+                Deals and Comp Flow map — pins colored by{" "}
                 {colorBy === "yield"
                   ? `cap rate (${ASK_SOURCE_SHORT[askSource]} pricing)`
                   : colorBy === "psf"
@@ -1788,7 +1833,7 @@ export default function YieldMapPage() {
                       }. `
                     : ""}
                   Hover a pin or table row to spotlight its match; click a pin to open the property wizard
-                  {showComps ? "; diamonds are broker-package comps" : ""}.
+                  {showComps ? "; diamonds are report/broker comps" : ""}.
                   {marketLayerOn
                     ? " Sources: Research = published market reports ingested on Market docs; Broker = comps from broker-provided documents."
                     : ""}
@@ -1896,7 +1941,10 @@ export default function YieldMapPage() {
             <div className={`${styles.panel} ${styles.tablePanel}`}>
               <div className={styles.tableTitleRow}>
                 <span className={styles.tableTitle}>
-                  All yield-bearing deals{showComps && compRows.length > 0 ? ` + ${compRows.length} comps` : ""}
+                  Deals and Comp Flow
+                  <span className={styles.tableTitleCount}>
+                    {rows.length} deals{showComps && compRows.length > 0 ? ` · ${compRows.length} comps` : ""}
+                  </span>
                 </span>
                 <input
                   type="search"
@@ -1904,10 +1952,10 @@ export default function YieldMapPage() {
                   value={dealSearch}
                   onChange={(event) => setDealSearch(event.target.value)}
                   placeholder="Filter by address, neighborhood, stage…"
-                  aria-label="Filter deals table"
+                  aria-label="Filter Deals and Comp Flow table"
                 />
               </div>
-              <table className={styles.table}>
+              <table className={styles.table} aria-label="Deals and Comp Flow">
                 <thead>
                   <tr>
                     <SortableTh label="Address" sortKey="address" firstDir="asc" activeKey={dealSort.sortKey} direction={dealSort.sortDir} onToggle={dealSort.toggle} />
@@ -1925,7 +1973,15 @@ export default function YieldMapPage() {
                     <SortableTh label="Units" sortKey="units" activeKey={dealSort.sortKey} direction={dealSort.sortDir} onToggle={dealSort.toggle} />
                     <SortableTh label="$/Unit" sortKey="pricePerUnit" activeKey={dealSort.sortKey} direction={dealSort.sortDir} onToggle={dealSort.toggle} />
                     <SortableTh label="$/SF" sortKey="psf" activeKey={dealSort.sortKey} direction={dealSort.sortDir} onToggle={dealSort.toggle} />
-                    <SortableTh label="Stage" sortKey="stage" firstDir="asc" activeKey={dealSort.sortKey} direction={dealSort.sortDir} onToggle={dealSort.toggle} />
+                    <SortableTh
+                      label="Flow / source"
+                      sortKey="stage"
+                      firstDir="asc"
+                      activeKey={dealSort.sortKey}
+                      direction={dealSort.sortDir}
+                      onToggle={dealSort.toggle}
+                      title="Deal-flow stage for owned deals; publisher/title/period for report comps."
+                    />
                     <th
                       className={styles.actionTh}
                       aria-label="Yield calculation inclusion"
@@ -2050,7 +2106,7 @@ export default function YieldMapPage() {
                             ) : (
                               <span
                                 className={styles.compLink}
-                                title={`From ${entry.comp.source?.label ?? "a market document"}${entry.comp.source?.period ? ` · ${entry.comp.source.period}` : ""}`}
+                                title={`From ${marketCompSourceLabel(entry.comp)}`}
                               >
                                 {compDisplayName(entry.comp)}
                               </span>
@@ -2081,8 +2137,14 @@ export default function YieldMapPage() {
                         <td style={metric === "psf" ? { color: psfColor(entry.comp.pricePsf), fontWeight: 750 } : undefined}>
                           {formatCurrencyExact(entry.comp.pricePsf)}
                         </td>
-                        <td className={styles.stageCell}>{packageTypeLabel(entry.comp.packageType)}</td>
-                        <td className={styles.actionCell} />
+                        <td className={`${styles.stageCell} ${styles.compSourceCell}`} colSpan={2} title={marketCompSourceTitle(entry.comp)}>
+                          <span className={styles.compSourceKicker}>{marketCompFlowLabel(entry.comp)}</span>
+                          <span className={styles.compSourceLabel}>{marketCompSourcePrimary(entry.comp)}</span>
+                          {(() => {
+                            const timeframe = marketCompTimeframeLabel(entry.comp);
+                            return timeframe ? <span className={styles.compSourceTimeframe}>{timeframe}</span> : null;
+                          })()}
+                        </td>
                       </tr>
                     )
                   )}

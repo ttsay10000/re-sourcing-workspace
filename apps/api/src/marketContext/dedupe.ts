@@ -95,9 +95,11 @@ function populatedFieldCount(comp: ExtractedComp | MarketComp): number {
     comp.saleDate,
     comp.gsf,
     comp.pricePsf,
+    comp.pricePerUnit,
     comp.unitsTotal,
     comp.unitsResi,
     comp.pctRentStabilized,
+    comp.noi,
     comp.capRate,
     comp.grm,
     comp.assetType,
@@ -158,9 +160,11 @@ export function mergeComps(existing: MarketComp, incoming: MergedComp): MergedCo
         saleDate: existing.saleDate,
         gsf: existing.gsf,
         pricePsf: existing.pricePsf,
+        pricePerUnit: existing.pricePerUnit,
         unitsTotal: existing.unitsTotal,
         unitsResi: existing.unitsResi,
         pctRentStabilized: existing.pctRentStabilized,
+        noi: existing.noi,
         capRate: existing.capRate,
         grm: existing.grm,
         assetType: existing.assetType,
@@ -187,9 +191,11 @@ export function mergeComps(existing: MarketComp, incoming: MergedComp): MergedCo
   base.saleDate = base.saleDate ?? other.saleDate;
   base.gsf = base.gsf ?? other.gsf;
   base.pricePsf = base.pricePsf ?? other.pricePsf;
+  base.pricePerUnit = base.pricePerUnit ?? other.pricePerUnit;
   base.unitsTotal = base.unitsTotal ?? other.unitsTotal;
   base.unitsResi = base.unitsResi ?? other.unitsResi;
   base.pctRentStabilized = base.pctRentStabilized ?? other.pctRentStabilized;
+  base.noi = base.noi ?? other.noi;
   base.capRate = base.capRate ?? other.capRate;
   base.grm = base.grm ?? other.grm;
   base.assetType = base.assetType ?? other.assetType;
@@ -208,6 +214,8 @@ export function mergeComps(existing: MarketComp, incoming: MergedComp): MergedCo
     base.salePrice = researchSide.salePrice ?? base.salePrice;
     base.capRate = researchSide.capRate ?? base.capRate;
     base.pricePsf = researchSide.pricePsf ?? base.pricePsf;
+    base.pricePerUnit = researchSide.pricePerUnit ?? base.pricePerUnit;
+    base.noi = researchSide.noi ?? base.noi;
     base.saleDate = researchSide.saleDate ?? base.saleDate;
     base.priceType = "closed";
     base.provenance = researchSide.provenance;

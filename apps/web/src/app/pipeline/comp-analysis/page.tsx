@@ -1,8 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import type { CompReviewQueueItem, CompReviewQueueResponse } from "@re-sourcing/contracts";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import type {
+  CompReviewDecision,
+  CompReviewQueueItem,
+  CompReviewQueueResponse,
+  CompReviewReviewedFields,
+  MarketPriceType,
+} from "@re-sourcing/contracts";
 import { Badge, Button, EmptyState, PageHeader, StatCard } from "@/components/ui";
 import { API_BASE } from "@/lib/api";
 import { formatCurrencyExact, formatPercent, EMPTY_VALUE } from "@/lib/format";
@@ -69,6 +75,35 @@ interface MarketCompsResponse {
 
 type MetricFilter = "all" | "capRate" | "psfOnly";
 type OriginFilter = "all" | "broker_package" | "market_doc";
+type ReviewFieldKey = keyof CompReviewReviewedFields;
+type ReviewFormState = Record<ReviewFieldKey, string>;
+
+const ASSET_TYPE_OPTIONS = ["multifamily", "mixed-use", "office", "retail", "development", "conversion"];
+const PRICE_TYPE_OPTIONS: MarketPriceType[] = ["closed", "asking", "in_contract", "unknown"];
+
+const REVIEW_FIELD_CONFIG = [
+  { key: "address", label: "Address", kind: "text", wide: true },
+  { key: "neighborhood", label: "Neighborhood", kind: "text" },
+  { key: "borough", label: "Borough", kind: "text" },
+  { key: "units", label: "Units", kind: "number" },
+  { key: "gsf", label: "GSF", kind: "number" },
+  { key: "salePrice", label: "Sale price", kind: "number" },
+  { key: "saleDate", label: "Sale date", kind: "text" },
+  { key: "capRatePct", label: "Cap rate %", kind: "number" },
+  { key: "grm", label: "GRM", kind: "number" },
+  { key: "pricePsf", label: "$/PSF", kind: "number" },
+  { key: "pricePerUnit", label: "$/Unit", kind: "number" },
+  { key: "noi", label: "NOI", kind: "number" },
+  { key: "assetType", label: "Asset type", kind: "assetType" },
+  { key: "priceType", label: "Price type", kind: "priceType" },
+  { key: "buyer", label: "Buyer", kind: "text" },
+  { key: "notes", label: "Notes", kind: "textarea", wide: true },
+] satisfies Array<{
+  key: ReviewFieldKey;
+  label: string;
+  kind: "text" | "number" | "assetType" | "priceType" | "textarea";
+  wide?: boolean;
+}>;
 
 function fmtPct(value: number | null | undefined, digits = 2): string {
   return value != null && Number.isFinite(value) ? `${value.toFixed(digits)}%` : EMPTY_VALUE;
@@ -76,6 +111,66 @@ function fmtPct(value: number | null | undefined, digits = 2): string {
 
 function fmtPsf(value: number | null | undefined): string {
   return value != null && Number.isFinite(value) ? `$${Math.round(value).toLocaleString("en-US")}` : EMPTY_VALUE;
+}
+
+function draftValue(value: string | number | null | undefined): string {
+  return value == null ? "" : String(value);
+}
+
+function draftFromItem(item: CompReviewQueueItem): ReviewFormState {
+  return {
+    address: draftValue(item.address),
+    neighborhood: draftValue(item.neighborhood),
+    borough: draftValue(item.borough),
+    units: draftValue(item.units),
+    gsf: draftValue(item.gsf),
+    salePrice: draftValue(item.salePrice),
+    saleDate: draftValue(item.saleDate),
+    capRatePct: draftValue(item.capRatePct),
+    grm: draftValue(item.grm),
+    pricePsf: draftValue(item.pricePsf),
+    pricePerUnit: draftValue(item.pricePerUnit),
+    noi: draftValue(item.noi),
+    assetType: draftValue(item.assetType),
+    priceType: draftValue(item.priceType),
+    buyer: draftValue(item.buyer),
+    notes: draftValue(item.notes),
+  };
+}
+
+function textOrNull(value: string): string | null {
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
+
+function numberOrNull(value: string): number | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const numeric = Number(trimmed.replace(/[$,%\s,]/g, ""));
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function reviewedFieldsFromDraft(draft: ReviewFormState): CompReviewReviewedFields {
+  return {
+    address: textOrNull(draft.address),
+    neighborhood: textOrNull(draft.neighborhood),
+    borough: textOrNull(draft.borough),
+    units: numberOrNull(draft.units),
+    gsf: numberOrNull(draft.gsf),
+    salePrice: numberOrNull(draft.salePrice),
+    saleDate: textOrNull(draft.saleDate),
+    capRatePct: numberOrNull(draft.capRatePct),
+    grm: numberOrNull(draft.grm),
+    pricePsf: numberOrNull(draft.pricePsf),
+    pricePerUnit: numberOrNull(draft.pricePerUnit),
+    noi: numberOrNull(draft.noi),
+    assetType: textOrNull(draft.assetType),
+    priceType: PRICE_TYPE_OPTIONS.includes(draft.priceType as MarketPriceType)
+      ? (draft.priceType as MarketPriceType)
+      : null,
+    buyer: textOrNull(draft.buyer),
+    notes: textOrNull(draft.notes),
+  };
 }
 
 function packageTypeLabel(value: string): string {
@@ -108,6 +203,8 @@ export default function CompAnalysisPage() {
   const [queueError, setQueueError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [decisionBusy, setDecisionBusy] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [drafts, setDrafts] = useState<Record<string, ReviewFormState>>({});
 
   const loadComps = useCallback((signal?: AbortSignal) => {
     setLoading(true);
@@ -133,6 +230,8 @@ export default function CompAnalysisPage() {
         setQueue(payload);
         setQueueError(null);
         setSelected(new Set());
+        setEditingId(null);
+        setDrafts({});
       })
       .catch((err) => {
         if (err instanceof DOMException && err.name === "AbortError") return;
@@ -147,20 +246,29 @@ export default function CompAnalysisPage() {
     return () => controller.abort();
   }, [loadComps, loadQueue]);
 
-  async function applyDecisions(items: CompReviewQueueItem[], action: "approve" | "reject") {
+  async function applyDecisions(
+    items: CompReviewQueueItem[],
+    action: "approve" | "reject",
+    reviewedFieldsById?: Record<string, CompReviewReviewedFields>
+  ) {
     if (items.length === 0 || decisionBusy) return;
     setDecisionBusy(true);
     try {
+      const decisions: CompReviewDecision[] = items.map((item) => {
+        const reviewedFields = reviewedFieldsById?.[item.id];
+        return reviewedFields
+          ? { id: item.id, source: item.source, action, reviewedFields }
+          : { id: item.id, source: item.source, action };
+      });
       const res = await fetch(`${API_BASE}/api/comps/review`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          decisions: items.map((item) => ({ id: item.id, source: item.source, action })),
-        }),
+        body: JSON.stringify({ decisions }),
       });
       const payload = (await res.json().catch(() => ({}))) as { error?: string };
       if (!res.ok || payload.error) throw new Error(payload.error || `HTTP ${res.status}`);
+      setEditingId(null);
       loadQueue();
       loadComps();
     } catch (err) {
@@ -180,6 +288,31 @@ export default function CompAnalysisPage() {
       else next.add(id);
       return next;
     });
+  }
+
+  function toggleEditor(item: CompReviewQueueItem) {
+    setDrafts((current) => (current[item.id] ? current : { ...current, [item.id]: draftFromItem(item) }));
+    setEditingId((current) => (current === item.id ? null : item.id));
+  }
+
+  function updateDraft(id: string, key: ReviewFieldKey, value: string) {
+    setDrafts((current) => {
+      const item = queueItems.find((candidate) => candidate.id === id);
+      const base = current[id] ?? (item ? draftFromItem(item) : null);
+      if (!base) return current;
+      return {
+        ...current,
+        [id]: {
+          ...base,
+          [key]: value,
+        },
+      };
+    });
+  }
+
+  function approveReviewed(item: CompReviewQueueItem) {
+    const draft = drafts[item.id] ?? draftFromItem(item);
+    void applyDecisions([item], "approve", { [item.id]: reviewedFieldsFromDraft(draft) });
   }
 
   const typeOptions = useMemo(
@@ -290,82 +423,186 @@ export default function CompAnalysisPage() {
                 </tr>
               </thead>
               <tbody>
-                {queueItems.map((item) => (
-                  <tr key={item.id}>
-                    <td className={styles.checkCell}>
-                      <input
-                        type="checkbox"
-                        aria-label={`Select ${item.address ?? "comp"}`}
-                        checked={selected.has(item.id)}
-                        onChange={() => toggleSelected(item.id)}
-                      />
-                    </td>
-                    <td className={styles.nameCell}>
-                      <span className={styles.compName}>{item.propertyName ?? item.address?.split(",")[0] ?? "Unnamed comp"}</span>
-                      <div className={styles.compSub}>
-                        {[item.neighborhood ?? item.borough, item.priceType && item.priceType !== "closed" ? item.priceType : null]
-                          .filter(Boolean)
-                          .join(" · ")}
-                        {item.cherryPickRisk ? " · ⚠ broker-picked set" : ""}
-                      </div>
-                      {item.buyer ? <div className={styles.compSub}>buyer: {item.buyer}</div> : null}
-                      {item.saleConditions.length > 0 ? (
-                        <div className={styles.flagRow}>
-                          {item.saleConditions.map((condition) => (
-                            <span key={condition} className={styles.flagChip} title="Printed sale condition — verify before approving.">
-                              {conditionLabel(condition)}
+                {queueItems.map((item) => {
+                  const draft = drafts[item.id] ?? draftFromItem(item);
+                  return (
+                    <Fragment key={item.id}>
+                      <tr>
+                        <td className={styles.checkCell}>
+                          <input
+                            type="checkbox"
+                            aria-label={`Select ${item.address ?? "comp"}`}
+                            checked={selected.has(item.id)}
+                            onChange={() => toggleSelected(item.id)}
+                          />
+                        </td>
+                        <td className={styles.nameCell}>
+                          <span className={styles.compName}>{item.propertyName ?? item.address?.split(",")[0] ?? "Unnamed comp"}</span>
+                          <div className={styles.compSub}>
+                            {[item.neighborhood ?? item.borough, item.priceType && item.priceType !== "closed" ? item.priceType : null]
+                              .filter(Boolean)
+                              .join(" · ")}
+                            {item.cherryPickRisk ? " · ⚠ broker-picked set" : ""}
+                          </div>
+                          {item.buyer ? <div className={styles.compSub}>buyer: {item.buyer}</div> : null}
+                          {item.saleConditions.length > 0 ? (
+                            <div className={styles.flagRow}>
+                              {item.saleConditions.map((condition) => (
+                                <span key={condition} className={styles.flagChip} title="Printed sale condition — verify before approving.">
+                                  {conditionLabel(condition)}
+                                </span>
+                              ))}
+                            </div>
+                          ) : null}
+                          {item.notes ? <div className={styles.compSub}>{item.notes}</div> : null}
+                        </td>
+                        <td style={{ color: capRateColor(item.capRatePct) }}>
+                          {item.capRatePct != null ? (
+                            fmtPct(item.capRatePct)
+                          ) : item.grm != null ? (
+                            <span className={styles.compSub} title="No cap rate printed — gross rent multiplier as printed.">
+                              {item.grm}x GRM
                             </span>
-                          ))}
-                        </div>
+                          ) : (
+                            EMPTY_VALUE
+                          )}
+                        </td>
+                        <td>{fmtPsf(item.pricePsf)}</td>
+                        <td>{formatCurrencyExact(item.salePrice)}</td>
+                        <td>{item.units ?? EMPTY_VALUE}</td>
+                        <td className={styles.soldCell}>{item.saleDate ?? EMPTY_VALUE}</td>
+                        <td>{item.assetType ? packageTypeLabel(item.assetType) : EMPTY_VALUE}</td>
+                        <td className={styles.packageCell}>
+                          {item.sourceLabel}
+                          {item.sourceDetail ? <div className={styles.compSub}>{item.sourceDetail}</div> : null}
+                        </td>
+                        <td>
+                          {item.confidence ? (
+                            <Badge tone={item.confidence === "high" ? "success" : item.confidence === "medium" ? "neutral" : "warning"}>
+                              {item.confidence}
+                            </Badge>
+                          ) : (
+                            EMPTY_VALUE
+                          )}
+                        </td>
+                        <td>
+                          <span className={styles.decisionCell}>
+                            <Button
+                              size="sm"
+                              variant="secondary"
+                              onClick={() => toggleEditor(item)}
+                              disabled={decisionBusy}
+                            >
+                              {editingId === item.id ? "Close" : "Review"}
+                            </Button>
+                            <Button size="sm" onClick={() => void applyDecisions([item], "approve")} disabled={decisionBusy}>
+                              Approve
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => void applyDecisions([item], "reject")}
+                              disabled={decisionBusy}
+                            >
+                              Reject
+                            </Button>
+                          </span>
+                        </td>
+                      </tr>
+                      {editingId === item.id ? (
+                        <tr className={styles.queueEditorRow}>
+                          <td colSpan={11}>
+                            <div className={styles.queueEditor}>
+                              <div className={styles.queueEditorHeader}>
+                                <span>Verify extracted fields</span>
+                                <span>{item.sourceLabel}</span>
+                              </div>
+                              <div className={styles.editorGrid}>
+                                {REVIEW_FIELD_CONFIG.map((field) => {
+                                  const fieldClass = [styles.editorField, field.wide ? styles.editorFieldWide : ""]
+                                    .filter(Boolean)
+                                    .join(" ");
+                                  if (field.kind === "priceType") {
+                                    return (
+                                      <label key={field.key} className={fieldClass}>
+                                        <span>{field.label}</span>
+                                        <select
+                                          value={draft[field.key]}
+                                          onChange={(event) => updateDraft(item.id, field.key, event.target.value)}
+                                        >
+                                          <option value="">None</option>
+                                          {PRICE_TYPE_OPTIONS.map((option) => (
+                                            <option key={option} value={option}>
+                                              {option.replace(/_/g, " ")}
+                                            </option>
+                                          ))}
+                                        </select>
+                                      </label>
+                                    );
+                                  }
+                                  if (field.kind === "assetType") {
+                                    return (
+                                      <label key={field.key} className={fieldClass}>
+                                        <span>{field.label}</span>
+                                        <select
+                                          value={draft[field.key]}
+                                          onChange={(event) => updateDraft(item.id, field.key, event.target.value)}
+                                        >
+                                          <option value="">None</option>
+                                          {ASSET_TYPE_OPTIONS.map((option) => (
+                                            <option key={option} value={option}>
+                                              {packageTypeLabel(option)}
+                                            </option>
+                                          ))}
+                                        </select>
+                                      </label>
+                                    );
+                                  }
+                                  if (field.kind === "textarea") {
+                                    return (
+                                      <label key={field.key} className={fieldClass}>
+                                        <span>{field.label}</span>
+                                        <textarea
+                                          rows={2}
+                                          value={draft[field.key]}
+                                          onChange={(event) => updateDraft(item.id, field.key, event.target.value)}
+                                        />
+                                      </label>
+                                    );
+                                  }
+                                  return (
+                                    <label key={field.key} className={fieldClass}>
+                                      <span>{field.label}</span>
+                                      <input
+                                        type="text"
+                                        inputMode={field.kind === "number" ? "decimal" : undefined}
+                                        value={draft[field.key]}
+                                        onChange={(event) => updateDraft(item.id, field.key, event.target.value)}
+                                      />
+                                    </label>
+                                  );
+                                })}
+                              </div>
+                              <div className={styles.editorActions}>
+                                <Button size="sm" onClick={() => approveReviewed(item)} disabled={decisionBusy}>
+                                  Approve reviewed fields
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => void applyDecisions([item], "reject")}
+                                  disabled={decisionBusy}
+                                >
+                                  Reject
+                                </Button>
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
                       ) : null}
-                      {item.notes ? <div className={styles.compSub}>{item.notes}</div> : null}
-                    </td>
-                    <td style={{ color: capRateColor(item.capRatePct) }}>
-                      {item.capRatePct != null ? (
-                        fmtPct(item.capRatePct)
-                      ) : item.grm != null ? (
-                        <span className={styles.compSub} title="No cap rate printed — gross rent multiplier as printed.">
-                          {item.grm}x GRM
-                        </span>
-                      ) : (
-                        EMPTY_VALUE
-                      )}
-                    </td>
-                    <td>{fmtPsf(item.pricePsf)}</td>
-                    <td>{formatCurrencyExact(item.salePrice)}</td>
-                    <td>{item.units ?? EMPTY_VALUE}</td>
-                    <td className={styles.soldCell}>{item.saleDate ?? EMPTY_VALUE}</td>
-                    <td>{item.assetType ? packageTypeLabel(item.assetType) : EMPTY_VALUE}</td>
-                    <td className={styles.packageCell}>
-                      {item.sourceLabel}
-                      {item.sourceDetail ? <div className={styles.compSub}>{item.sourceDetail}</div> : null}
-                    </td>
-                    <td>
-                      {item.confidence ? (
-                        <Badge tone={item.confidence === "high" ? "success" : item.confidence === "medium" ? "neutral" : "warning"}>
-                          {item.confidence}
-                        </Badge>
-                      ) : (
-                        EMPTY_VALUE
-                      )}
-                    </td>
-                    <td>
-                      <span className={styles.decisionCell}>
-                        <Button size="sm" onClick={() => void applyDecisions([item], "approve")} disabled={decisionBusy}>
-                          Approve
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => void applyDecisions([item], "reject")}
-                          disabled={decisionBusy}
-                        >
-                          Reject
-                        </Button>
-                      </span>
-                    </td>
-                  </tr>
-                ))}
+                    </Fragment>
+                  );
+                })}
               </tbody>
             </table>
           </div>

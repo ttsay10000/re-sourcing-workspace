@@ -53,9 +53,11 @@ function compToUpsertParams(comp: MergedComp, documentId: string | null): Upsert
     saleDate: comp.saleDate,
     gsf: comp.gsf,
     pricePsf: comp.pricePsf,
+    pricePerUnit: comp.pricePerUnit,
     unitsTotal: comp.unitsTotal,
     unitsResi: comp.unitsResi,
     pctRentStabilized: comp.pctRentStabilized,
+    noi: comp.noi,
     capRate: comp.capRate,
     grm: comp.grm,
     assetType: comp.assetType,
@@ -213,15 +215,17 @@ async function executeIngestPipeline(
     documentId: document.id,
     llm,
   });
-  await store.saveLlmOutput({
-    documentId: document.id,
-    stage: "extract",
-    promptVersion: extraction.promptVersion,
-    provider: extraction.llm.provider,
-    model: extraction.llm.model,
-    rawOutput: extraction.llm.rawOutput,
-    parsed: extraction.llm.parsed,
-  });
+  for (const output of extraction.llmOutputs) {
+    await store.saveLlmOutput({
+      documentId: document.id,
+      stage: "extract",
+      promptVersion: output.promptVersion,
+      provider: output.llm.provider,
+      model: output.llm.model,
+      rawOutput: output.llm.rawOutput,
+      parsed: output.llm.parsed,
+    });
+  }
 
   const flags = [...extraction.flags];
   if (classifyResult.flagForReview) flags.push("classifier confidence low — flagged for review");

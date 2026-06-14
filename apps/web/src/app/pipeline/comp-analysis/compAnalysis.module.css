@@ -274,6 +274,91 @@
   white-space: nowrap;
 }
 
+.queueEditorRow:hover {
+  background: transparent !important;
+}
+
+.queueEditorRow td {
+  padding: 0.25rem 0 0.65rem;
+  border-top: 0;
+}
+
+.queueEditor {
+  border: 1px solid #fde68a;
+  border-radius: var(--radius-md, 8px);
+  background: #fffbeb;
+  padding: 0.7rem;
+  display: grid;
+  gap: 0.65rem;
+}
+
+.queueEditorHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  color: var(--app-amber-text);
+  font-size: 0.74rem;
+  font-weight: 800;
+}
+
+.queueEditorHeader span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--app-muted);
+  font-weight: 700;
+}
+
+.editorGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+  gap: 0.5rem;
+}
+
+.editorField {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.editorFieldWide {
+  grid-column: span 2;
+}
+
+.editorField span {
+  color: var(--app-muted);
+  font-size: 0.66rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.editorField input,
+.editorField select,
+.editorField textarea {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--app-line);
+  border-radius: var(--radius-sm, 6px);
+  background: #fff;
+  color: var(--app-ink);
+  font: inherit;
+  font-size: 0.78rem;
+  padding: 0.36rem 0.45rem;
+}
+
+.editorField textarea {
+  resize: vertical;
+}
+
+.editorActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
 /* --- Source attribution + extraction flags on the main table --- */
 
 .sourceKind {
