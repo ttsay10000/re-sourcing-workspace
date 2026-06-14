@@ -1449,9 +1449,14 @@ function DealAnalysisPageContent() {
         title="OM Workspace Analysis"
         subtitle="Open saved property-backed OM workspaces, parse OM PDFs and broker financial files, and keep underwriting edits in sync with dossier outputs."
         actions={
-          <Button type="button" onClick={resetWorkspace}>
-            New OM workspace
-          </Button>
+          <>
+            <Link href="/progress" className={styles.headerLinkButton}>
+              Progress Board
+            </Link>
+            <Button type="button" onClick={resetWorkspace}>
+              New OM workspace
+            </Button>
+          </>
         }
       />
 

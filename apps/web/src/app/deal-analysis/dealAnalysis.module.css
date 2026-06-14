@@ -312,11 +312,10 @@
 }
 
 .workspaceRow {
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: var(--space-3);
   align-items: center;
-  flex-wrap: wrap;
   padding: 0.72rem 0.85rem;
   border: 1px solid var(--app-line);
   border-radius: var(--radius-md);
@@ -335,18 +334,24 @@
 }
 
 .workspaceRowInfo {
-  min-width: 260px;
-  flex: 1 1 320px;
+  min-width: 0;
 }
 
 .workspaceRowAddress {
+  display: block;
+  overflow: hidden;
   color: var(--app-ink);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .workspaceRowMeta {
+  overflow: hidden;
   color: var(--app-muted);
   font-size: var(--text-xs);
   line-height: var(--leading-normal);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .workspaceRowBadges {
@@ -354,17 +359,73 @@
   gap: var(--space-2);
   flex-wrap: wrap;
   align-items: center;
+  justify-content: flex-end;
+  min-width: 0;
 }
 
 .workspaceRowState {
   align-self: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 1.7rem;
+  border: 1px solid var(--app-line-strong);
+  border-radius: var(--radius-md);
+  padding: 0.26rem 0.62rem;
+  background: var(--app-surface-raised);
   color: var(--app-ink-secondary);
   font-size: var(--text-xs);
   font-weight: 700;
+  line-height: 1;
 }
 
 .workspaceRowStateActive {
+  border-color: var(--brand-border);
+  background: var(--brand-soft);
   color: var(--brand-strong);
+}
+
+.workspaceRow:hover:not(:disabled) .workspaceRowState:not(.workspaceRowStateActive) {
+  border-color: var(--brand-border);
+  background: var(--brand-soft);
+  color: var(--brand-strong);
+}
+
+.headerLinkButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 2.25rem;
+  border: 1px solid var(--app-line-strong);
+  border-radius: var(--radius-md);
+  padding: 0.42rem 0.78rem;
+  background: var(--app-surface);
+  color: var(--app-ink-secondary);
+  font-size: var(--text-sm);
+  font-weight: 700;
+  line-height: 1;
+  text-decoration: none;
+}
+
+.headerLinkButton:hover {
+  border-color: var(--brand-border);
+  background: var(--brand-soft);
+  color: var(--brand-strong);
+}
+
+@media (max-width: 760px) {
+  .workspaceRow {
+    grid-template-columns: 1fr;
+  }
+
+  .workspaceRowAddress,
+  .workspaceRowMeta {
+    white-space: normal;
+  }
+
+  .workspaceRowBadges {
+    justify-content: flex-start;
+  }
 }
 
 .listFootnote {
@@ -384,6 +445,18 @@
   display: grid;
   grid-template-columns: minmax(0, 1.1fr) minmax(320px, 0.9fr);
   gap: var(--space-4);
+}
+
+@media (max-width: 760px) {
+  .intakeGrid,
+  .outputsGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .intakeGrid > *,
+  .outputsGrid > * {
+    min-width: 0;
+  }
 }
 
 /* ─── Intake upload review list ─────────────────────────────────────────── */

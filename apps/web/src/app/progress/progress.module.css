@@ -1793,6 +1793,11 @@
   gap: 1.15rem;
 }
 
+.page:has(.modalOverlay) {
+  animation: none;
+  transform: none;
+}
+
 .nextActions {
   margin-bottom: 0.55rem;
   padding: 1.05rem 1.15rem;
@@ -2016,13 +2021,66 @@
 }
 
 .cardActions {
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  justify-content: initial;
+  gap: 0.42rem;
 }
 
 .cardActionButton {
-  flex: 1 1 auto;
+  width: 100%;
   min-height: 1.85rem;
   font-size: 0.7rem;
+}
+
+.dragHandle {
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 1.05rem;
+  height: 1.9rem;
+  margin-left: -0.18rem;
+  border-radius: 5px;
+  color: var(--app-muted);
+  cursor: grab;
+}
+
+.dragHandle:hover {
+  background: var(--app-surface-raised);
+  color: var(--stage-accent, var(--app-accent));
+}
+
+.miniRow {
+  cursor: default;
+}
+
+.miniRow[draggable="true"]:active .dragHandle {
+  cursor: grabbing;
+}
+
+.cardOmLink {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.26rem;
+  min-height: 1.85rem;
+  border: 1px solid var(--app-line-strong);
+  border-radius: 6px;
+  padding: 0.22rem 0.52rem;
+  background: var(--app-surface);
+  color: var(--app-ink-secondary);
+  font-size: 0.68rem;
+  font-weight: 800;
+  line-height: 1;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.cardOmLink:hover {
+  border-color: var(--stage-accent, var(--app-accent-teal));
+  background: color-mix(in srgb, var(--stage-accent, var(--app-accent-teal)) 10%, var(--app-surface));
+  color: var(--stage-accent, var(--app-accent-teal));
 }
 
 .cardMenuButton {
@@ -2036,11 +2094,28 @@
 
 .dealPathModal {
   width: min(100%, 54rem);
+  max-height: calc(100vh - clamp(2rem, 8vh, 4.5rem));
   gap: 1rem;
+}
+
+.modalOverlay {
+  align-items: flex-start;
+  justify-content: center;
+  overflow-y: auto;
+  padding: clamp(1rem, 4vh, 2.25rem) 1rem;
 }
 
 .modalHeader {
   padding: 1.1rem 1.15rem 0;
+}
+
+.dealPathModal .modalHeader {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  border-bottom: 1px solid var(--app-line);
+  background: var(--app-surface);
+  padding-bottom: 0.85rem;
 }
 
 .modalKicker {
@@ -2089,6 +2164,15 @@
   padding: 0 1.15rem 1.15rem;
 }
 
+.dealPathModal .modalActions {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  border-top: 1px solid var(--app-line);
+  background: var(--app-surface);
+  padding-top: 0.85rem;
+}
+
 @media (max-width: 720px) {
   .nextActions {
     margin-bottom: 0.35rem;
@@ -2105,5 +2189,13 @@
   .dealPathModalGrid,
   .cardMetrics {
     grid-template-columns: 1fr;
+  }
+
+  .cardActions {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .cardOmLink {
+    grid-column: 1 / -1;
   }
 }

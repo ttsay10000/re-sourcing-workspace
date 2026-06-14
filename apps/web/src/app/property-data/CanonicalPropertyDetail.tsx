@@ -3487,7 +3487,7 @@ export function CanonicalPropertyDetail({
               className="property-detail-rail-button"
               href={`/deal-analysis?property_id=${encodeURIComponent(property.id)}`}
             >
-              Open deal analysis
+              Open OM workspace
             </a>
           </>
         )}
@@ -3900,7 +3900,7 @@ export function CanonicalPropertyDetail({
               fontWeight: 700,
             }}
           >
-            Open deal analysis
+            Open OM workspace
           </a>
           <a
             href={`/dossier-assumptions?property_id=${encodeURIComponent(property.id)}`}

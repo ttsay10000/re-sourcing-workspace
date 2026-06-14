@@ -1,12 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
-import { Suspense, useCallback, useEffect, useMemo, useState, type DragEvent, type FormEvent } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useCallback, useEffect, useMemo, useState, type DragEvent, type FormEvent, type MouseEvent as ReactMouseEvent } from "react";
 import {
   ArrowRightLeft,
   CalendarCheck,
   ChevronRight,
+  FileText,
+  GripVertical,
   Mail,
   MailPlus,
   MoreHorizontal,
@@ -33,6 +35,8 @@ import styles from "./progress.module.css";
 const BULK_STAGE_MOVE_ID = "__bulk_stage_move__";
 const OM_ANALYSIS_BULK_ID = "__bulk_om_analysis__";
 const DOSSIER_BULK_ID = "__bulk_dossier__";
+
+const omWorkspaceHref = (propertyId: string) => `/deal-analysis?property_id=${encodeURIComponent(propertyId)}`;
 
 type Summary = {
   savedCount?: number;
@@ -902,6 +906,7 @@ async function rerunPropertyDossier(propertyId: string): Promise<DossierGenerate
 }
 
 function ProgressPageContent() {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const query = (searchParams.get("q") ?? "").trim().toLowerCase();
   const [summary, setSummary] = useState<Summary | null>(null);
@@ -947,6 +952,13 @@ function ProgressPageContent() {
     setFlashColumnId(sectionId);
     window.setTimeout(() => setFlashColumnId((current) => (current === sectionId ? null : current)), 1700);
   }, []);
+
+  const openOmWorkspace = useCallback(
+    (row: DealFlowRow) => {
+      router.push(omWorkspaceHref(row.propertyId));
+    },
+    [router]
+  );
 
   const loadProgress = useCallback(async (mode: "initial" | "refresh" = "initial") => {
     if (mode === "initial") setLoading(true);
@@ -1315,6 +1327,50 @@ function ProgressPageContent() {
       void moveSavedDeals([row], group.targetStage);
     },
     [moveDealsToTourRequested, moveSavedDeals, startDealPathEdit]
+  );
+
+  const startHandleStageDrag = useCallback(
+    (row: DealFlowRow, event: ReactMouseEvent<HTMLElement>, sourceSectionId: string) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setDraggedDeal(row);
+
+      const startX = event.clientX;
+      const startY = event.clientY;
+      let moved = false;
+
+      const stageAtPoint = (x: number, y: number) => {
+        const section = document.elementFromPoint(x, y)?.closest<HTMLElement>("section[data-stage-id]");
+        const stageId = section?.dataset.stageId ?? null;
+        if (!stageId || stageId === sourceSectionId) return null;
+        return MOVE_STAGE_OPTIONS.some((option) => option.id === stageId) ? stageId : null;
+      };
+
+      const handleMove = (moveEvent: MouseEvent) => {
+        const distance = Math.hypot(moveEvent.clientX - startX, moveEvent.clientY - startY);
+        if (!moved && distance < 4) return;
+        moved = true;
+        setDragOverSectionId(stageAtPoint(moveEvent.clientX, moveEvent.clientY));
+      };
+
+      const cleanup = () => {
+        document.removeEventListener("mousemove", handleMove);
+        document.removeEventListener("mouseup", handleUp);
+        setDraggedDeal(null);
+        setDragOverSectionId(null);
+      };
+
+      const handleUp = (upEvent: MouseEvent) => {
+        const targetStageId = moved ? stageAtPoint(upEvent.clientX, upEvent.clientY) : null;
+        cleanup();
+        if (targetStageId) moveRowToSectionId(row, targetStageId);
+      };
+
+      document.addEventListener("mousemove", handleMove);
+      document.addEventListener("mouseup", handleUp, { once: true });
+    },
+    [moveRowToSectionId]
   );
 
   const submitMoveStage = useCallback(() => {
@@ -1901,6 +1957,7 @@ function ProgressPageContent() {
         actions={
           <>
             <Link href="/saved" className={styles.secondaryLink}>Saved Deals</Link>
+            <Link href="/deal-analysis" className={styles.secondaryLink}>OM Workspace</Link>
             <Link href="/pipeline" className={styles.primaryLink}>Pipeline</Link>
           </>
         }
@@ -2098,6 +2155,7 @@ function ProgressPageContent() {
                 setDraggedDeal(null);
                 setDragOverSectionId(null);
               }}
+              onStartHandleStageDrag={startHandleStageDrag}
               onDragOverSection={(event) => {
                 if (!section.targetStage || draggedDeal == null) return;
                 event.preventDefault();
@@ -2106,6 +2164,7 @@ function ProgressPageContent() {
               onDropOnSection={() => dropSavedDeal(section)}
               editingPropertyId={editingDealPathId}
               onOpenPropertyWizard={(row) => void openPropertyWizard(row)}
+              onOpenOmWorkspace={openOmWorkspace}
               onStartDealPathEdit={startDealPathEdit}
               onCancelDealPathEdit={closeDealPathEdit}
               onStartReject={startReject}
@@ -2799,10 +2858,12 @@ function SavedDealMiniSection({
   onToggleSelected,
   onDragStartDeal,
   onDragEndDeal,
+  onStartHandleStageDrag,
   onDragOverSection,
   onDropOnSection,
   editingPropertyId = null,
   onOpenPropertyWizard,
+  onOpenOmWorkspace,
   onStartDealPathEdit,
   onCancelDealPathEdit,
   onStartReject,
@@ -2824,10 +2885,12 @@ function SavedDealMiniSection({
   onToggleSelected?: (propertyId: string, selected: boolean) => void;
   onDragStartDeal?: (row: DealFlowRow) => void;
   onDragEndDeal?: () => void;
+  onStartHandleStageDrag?: (row: DealFlowRow, event: ReactMouseEvent<HTMLElement>, sourceSectionId: string) => void;
   onDragOverSection?: (event: DragEvent<HTMLElement>) => void;
   onDropOnSection?: () => void;
   editingPropertyId?: string | null;
   onOpenPropertyWizard?: (row: DealFlowRow) => void;
+  onOpenOmWorkspace?: (row: DealFlowRow) => void;
   onStartDealPathEdit?: (row: DealFlowRow, options?: { mode?: DealPathPromptMode }) => void;
   onCancelDealPathEdit?: () => void;
   onStartReject?: (row: DealFlowRow) => void;
@@ -2924,6 +2987,16 @@ function SavedDealMiniSection({
                       onClick={(event) => event.stopPropagation()}
                     />
                   ) : null}
+                  {enableMoves && !compact ? (
+                    <span
+                      className={styles.dragHandle}
+                      title="Drag deal to another stage"
+                      aria-hidden="true"
+                      onMouseDown={(event) => onStartHandleStageDrag?.(row, event, section.id)}
+                    >
+                      <GripVertical size={15} strokeWidth={2.1} />
+                    </span>
+                  ) : null}
                   <PropertyThumb src={row.firstImageUrl} alt={address} size="lg" className={styles.miniThumb} />
                   <button
                     type="button"
@@ -2983,6 +3056,16 @@ function SavedDealMiniSection({
                     >
                       {primaryAction.label}
                     </button>
+                    <Link
+                      href={omWorkspaceHref(row.propertyId)}
+                      className={styles.cardOmLink}
+                      title="Open this property's OM workspace"
+                      draggable={false}
+                      onClick={(event) => event.stopPropagation()}
+                    >
+                      <FileText size={13} strokeWidth={2} aria-hidden="true" />
+                      <span>OM Workspace</span>
+                    </Link>
                     <PromptMenu
                       align="end"
                       heading={address}
@@ -3020,6 +3103,12 @@ function SavedDealMiniSection({
                               },
                             ]
                           : []),
+                        {
+                          label: "Open OM workspace",
+                          hint: "Uploads, OM parsing, underwriting edits",
+                          icon: FileText,
+                          onSelect: () => onOpenOmWorkspace?.(row),
+                        },
                         {
                           label: "Move to stage…",
                           icon: ArrowRightLeft,
