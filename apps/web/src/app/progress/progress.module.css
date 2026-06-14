@@ -1535,6 +1535,20 @@
   padding: 0.5rem 0.7rem;
 }
 
+.propertyWizardDialog {
+  width: min(96vw, 82rem);
+  max-height: min(92vh, 64rem);
+}
+
+.propertyWizardBody {
+  min-width: 0;
+}
+
+.propertyWizardBody :global(.property-detail-collapsible--workspace) {
+  border: 0;
+  box-shadow: none;
+}
+
 /* LOI generate control (was inline-styled). */
 .loiGenerate {
   display: grid;

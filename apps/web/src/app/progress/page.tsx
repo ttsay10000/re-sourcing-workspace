@@ -20,12 +20,14 @@ import {
   type DealFlowRecommendation,
   type DealFlowRecommendationsResponse,
   type DealFlowStageId,
+  type UiV2PropertyDetailPayload,
   type UiV2DealPathDecision,
   type UiV2DealPathState,
   type UiV2RejectionReasonCode,
 } from "@re-sourcing/contracts";
 import { AgingChip, BrokerContactDialog, Button, Dialog, FileDropzone, PageHeader, PromptMenu, PropertyThumb, StatCard } from "@/components/ui";
 import { RecommendationStepper, type StepperKind, type StepperRow } from "./RecommendationStepper";
+import { CanonicalPropertyDetail, type CanonicalProperty } from "../property-data/CanonicalPropertyDetail";
 import { API_BASE, apiFetch } from "@/lib/api";
 import styles from "./progress.module.css";
 const BULK_STAGE_MOVE_ID = "__bulk_stage_move__";
@@ -240,6 +242,19 @@ type MoveStageDialogState = {
   propertyId: string;
   address: string;
   targetSectionId: string;
+};
+
+type PropertyDetailResponse = {
+  property: UiV2PropertyDetailPayload | null;
+  error?: string;
+  details?: string;
+};
+
+type PropertyWizardState = {
+  propertyId: string;
+  address: string;
+  property: CanonicalProperty | null;
+  loading: boolean;
 };
 
 type RecommendationsState = {
@@ -529,6 +544,69 @@ function labelFromKey(value: string | null | undefined): string {
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
+}
+
+function omStatusFromPropertyDetail(documentStatus: UiV2PropertyDetailPayload["documentStatus"]): "OM received" | "OM pending" | "Not received" {
+  if (documentStatus.hasOm || documentStatus.omStatus === "available") return "OM received";
+  if (documentStatus.omStatus === "requested" || documentStatus.latestRequestAt) return "OM pending";
+  return "Not received";
+}
+
+function canonicalPropertyFromDetail(detail: UiV2PropertyDetailPayload, row?: DealFlowRow | null): CanonicalProperty {
+  const overview = detail.overview;
+  const fallbackDate = new Date().toISOString();
+  const brokerContacts = detail.broker
+    ? [
+        {
+          name: detail.broker.name?.trim() || "Broker",
+          firm: detail.broker.firm ?? null,
+          email: detail.broker.email ?? null,
+          phone: detail.broker.phone ?? null,
+        },
+      ]
+    : null;
+
+  return {
+    id: overview.propertyId,
+    canonicalAddress: overview.canonicalAddress || row?.canonicalAddress || row?.displayAddress || overview.propertyId,
+    details: {
+      overview,
+      pipeline: {
+        status: detail.statusChip.status,
+        tags: detail.tags,
+        missingFields: [],
+      },
+      enrichment: detail.enrichmentDetails ?? null,
+      dealPath: detail.dealPath ?? null,
+      uiV2: detail,
+    },
+    createdAt: row?.savedDeal?.createdAt ?? row?.updatedAt ?? detail.dealPath?.updatedAt ?? fallbackDate,
+    updatedAt: row?.updatedAt ?? detail.dealPath?.updatedAt ?? fallbackDate,
+    primaryListing: {
+      price: overview.askingPrice ?? detail.underwriting?.askingPrice ?? row?.price ?? null,
+      listedAt: null,
+      city: overview.city ?? null,
+      lastActivity: null,
+    },
+    listingAgentEnrichment: brokerContacts,
+    omStatus: omStatusFromPropertyDetail(detail.documentStatus),
+    recipientContactName: detail.broker?.name ?? null,
+    recipientContactEmail: detail.broker?.email ?? null,
+    lastInquirySentAt: detail.documentStatus.latestRequestAt ?? null,
+    dealScore: detail.underwriting?.dealScore ?? row?.dealScore ?? null,
+    pipelineStatus: String(detail.statusChip.status ?? row?.status ?? row?.stage ?? "new"),
+    enrichmentStatus: detail.enrichmentState.status,
+    rentalFlowStatus: detail.enrichmentDetails?.rentalFlow?.source ? "complete" : null,
+    underwritingStatus: detail.underwriting?.generationStatus ?? null,
+    dossierStatus: detail.underwriting?.generationStatus ?? null,
+    excelStatus: null,
+    propertyTags: detail.tags,
+    defaultTags: [],
+    missingFields: [],
+    actionRequired: detail.actionItems.map((item) => labelFromKey(item.actionType)),
+    rejectedAt: detail.statusChip.status === "rejected" ? detail.dealPath?.updatedAt ?? row?.updatedAt ?? null : null,
+    rejectionReason: detail.dealPath?.rejectionReasonCode ?? null,
+  };
 }
 
 function normalizeTag(value: string): string {
@@ -857,6 +935,8 @@ function ProgressPageContent() {
   const [focusedCardId, setFocusedCardId] = useState<string | null>(null);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [flashColumnId, setFlashColumnId] = useState<string | null>(null);
+  const [propertyWizard, setPropertyWizard] = useState<PropertyWizardState | null>(null);
+  const [propertyWizardError, setPropertyWizardError] = useState<string | null>(null);
 
   const scrollToColumn = useCallback((sectionId: string) => {
     document.getElementById(`board-column-${sectionId}`)?.scrollIntoView({
@@ -1256,6 +1336,42 @@ function ProgressPageContent() {
   }, [boardFocus, query, sections]);
 
   const flowRows = useMemo(() => sections.flatMap((section) => section.rows ?? []), [sections]);
+  const openPropertyWizard = useCallback(
+    async (row: DealFlowRow) => {
+      const address = row.displayAddress || row.canonicalAddress || row.propertyId;
+      setPropertyWizardError(null);
+      setPropertyWizard((current) => {
+        if (current?.propertyId === row.propertyId) return { ...current, address, loading: true };
+        return { propertyId: row.propertyId, address, property: null, loading: true };
+      });
+      try {
+        const response = await apiFetch<PropertyDetailResponse>(
+          `/api/ui-v2/properties/${encodeURIComponent(row.propertyId)}`
+        );
+        if (!response.property) throw new Error("Property not found.");
+        const property = canonicalPropertyFromDetail(response.property, row);
+        setPropertyWizard((current) =>
+          current?.propertyId === row.propertyId ? { propertyId: row.propertyId, address, property, loading: false } : current
+        );
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Failed to load property.";
+        setPropertyWizardError(message);
+        setPropertyWizard((current) =>
+          current?.propertyId === row.propertyId ? { ...current, loading: false } : current
+        );
+      }
+    },
+    []
+  );
+  const refreshPropertyWizard = useCallback(() => {
+    if (!propertyWizard) return;
+    const row = flowRows.find((candidate) => candidate.propertyId === propertyWizard.propertyId);
+    if (row) void openPropertyWizard(row);
+  }, [flowRows, openPropertyWizard, propertyWizard]);
+  const closePropertyWizard = useCallback(() => {
+    setPropertyWizard(null);
+    setPropertyWizardError(null);
+  }, []);
   const navigableRows = useMemo(
     () =>
       filteredSections.flatMap((section, sectionIndex) =>
@@ -1271,7 +1387,7 @@ function ProgressPageContent() {
     function onKeyDown(event: KeyboardEvent) {
       const target = event.target as HTMLElement | null;
       if (target && (/^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName) || target.isContentEditable)) return;
-      if (composerState || brokerEmailState || moveStageState || rejectState || stepper || editingDealPathId) return;
+      if (composerState || brokerEmailState || moveStageState || rejectState || stepper || editingDealPathId || propertyWizard) return;
       if (event.metaKey || event.ctrlKey || event.altKey) return;
 
       if (event.key === "?") {
@@ -1319,7 +1435,7 @@ function ProgressPageContent() {
       }
       if (event.key === "Enter") {
         event.preventDefault();
-        startDealPathEdit(focused.row);
+        void openPropertyWizard(focused.row);
         return;
       }
       if (event.key === "e") {
@@ -1352,9 +1468,10 @@ function ProgressPageContent() {
     navigableRows,
     openBrokerEmailDialog,
     openEmailComposer,
+    openPropertyWizard,
+    propertyWizard,
     rejectState,
     shortcutsOpen,
-    startDealPathEdit,
     stepper,
   ]);
   const filteredFlowRows = useMemo(() => filteredSections.flatMap((section) => section.rows ?? []), [filteredSections]);
@@ -1988,6 +2105,7 @@ function ProgressPageContent() {
               }}
               onDropOnSection={() => dropSavedDeal(section)}
               editingPropertyId={editingDealPathId}
+              onOpenPropertyWizard={(row) => void openPropertyWizard(row)}
               onStartDealPathEdit={startDealPathEdit}
               onCancelDealPathEdit={closeDealPathEdit}
               onStartReject={startReject}
@@ -2054,6 +2172,34 @@ function ProgressPageContent() {
           onSubmit={submitReject}
         />
       ) : null}
+
+      <Dialog
+        open={propertyWizard != null}
+        onClose={closePropertyWizard}
+        title={propertyWizard?.address ?? "Property wizard"}
+        description="Deal Progress"
+        size="lg"
+        className={styles.propertyWizardDialog}
+      >
+        {propertyWizard?.loading && !propertyWizard.property ? (
+          <p className={styles.dialogHint}>Loading property wizard…</p>
+        ) : null}
+        {propertyWizardError ? <p className={styles.dialogWarning}>{propertyWizardError}</p> : null}
+        {propertyWizard?.property ? (
+          <div className={styles.propertyWizardBody}>
+            <CanonicalPropertyDetail
+              property={propertyWizard.property}
+              isSaved
+              onRefreshPropertyData={refreshPropertyWizard}
+              onWorkflowActivity={() => {
+                void loadProgress("refresh");
+                refreshPropertyWizard();
+              }}
+              onDossierNotice={(_, dossierNotice) => setNotice(dossierNotice.message)}
+            />
+          </div>
+        ) : null}
+      </Dialog>
 
       <Dialog
         open={composerState != null}
@@ -2157,7 +2303,7 @@ function ProgressPageContent() {
         <dl className={styles.shortcutList}>
           <div><dt>j / k</dt><dd>Next / previous card</dd></div>
           <div><dt>h / l</dt><dd>Previous / next column</dd></div>
-          <div><dt>Enter</dt><dd>Open deal inputs</dd></div>
+          <div><dt>Enter</dt><dd>Open property wizard</dd></div>
           <div><dt>e</dt><dd>Email broker (or add email)</dd></div>
           <div><dt>m</dt><dd>Move to stage…</dd></div>
           <div><dt>Esc</dt><dd>Clear focus / close</dd></div>
@@ -2656,6 +2802,7 @@ function SavedDealMiniSection({
   onDragOverSection,
   onDropOnSection,
   editingPropertyId = null,
+  onOpenPropertyWizard,
   onStartDealPathEdit,
   onCancelDealPathEdit,
   onStartReject,
@@ -2680,6 +2827,7 @@ function SavedDealMiniSection({
   onDragOverSection?: (event: DragEvent<HTMLElement>) => void;
   onDropOnSection?: () => void;
   editingPropertyId?: string | null;
+  onOpenPropertyWizard?: (row: DealFlowRow) => void;
   onStartDealPathEdit?: (row: DealFlowRow, options?: { mode?: DealPathPromptMode }) => void;
   onCancelDealPathEdit?: () => void;
   onStartReject?: (row: DealFlowRow) => void;
@@ -2780,8 +2928,8 @@ function SavedDealMiniSection({
                   <button
                     type="button"
                     className={styles.miniRowLink}
-                    onClick={() => onStartDealPathEdit?.(row)}
-                    title="Review progress details"
+                    onClick={() => onOpenPropertyWizard?.(row)}
+                    title="Open property wizard"
                   >
                     <strong>{address}</strong>
                     <span>{locationLine || (row.source ? labelFromKey(row.source) : "No source")}</span>
